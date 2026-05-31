@@ -1,0 +1,24 @@
+[package]
+name = "aevia"
+version = "0.1.0"
+edition = "2024"
+authors = []
+description = "Aevia: High-performance scientific DSL with dimensional analysis"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Apich-Organization/aevia"
+homepage = "https://github.com/Apich-Organization/aevia"
+readme = "README.md"
+
+[dependencies]
+rssn-advanced = { path = "../rssn-advanced", version = "0.1.5" }
+dtact = "0.2"
+chumsky = "0.13"
+bincode-next = "3.0.0-rc.15"
+indexmap = { version = "2.0", features = ["serde"] }
+num-traits = "0.2"
+rust_decimal = "1.42"
+clap = { version = "4.5", features = ["derive"] }
+toml = "1.1"
+colored = "3.1"
+log = "0.4"
+miette = { version = "7.6", features = ["fancy"] }
