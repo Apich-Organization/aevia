@@ -66,6 +66,7 @@ pub enum Item {
         param_name: String,
         input_dim: Spanned<DimExpr>,
         output_dim: Spanned<DimExpr>,
+        visibility: Visibility,
         properties: OpProperties,
     },
 }

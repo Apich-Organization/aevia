@@ -10,6 +10,7 @@
 use crate::ast::{
     BinOp, Expr, FunctionBody, Item, SourceFile, Spanned, Stmt, UnOp,
 };
+use crate::modules::ImportBindings;
 use crate::types::{
     dim::{resolve, DimVector},
     env::TypeEnv,
@@ -35,10 +36,16 @@ impl CheckResult {
 
 /// Run the dimensional type checker over a parsed source file.
 pub fn check(file: &SourceFile) -> CheckResult {
+    check_with_imports(file, &ImportBindings::default())
+}
+
+/// Type-check with `use` import bindings from the module resolver.
+pub fn check_with_imports(file: &SourceFile, imports: &ImportBindings) -> CheckResult {
     let mut ctx = Ctx {
         env: TypeEnv::new(),
         errors: Vec::new(),
     };
+    crate::modules::apply_imports(&mut ctx.env, imports);
     // Pass 1: register all top-level type aliases and function signatures so
     // that forward references resolve correctly.
     for item in &file.items {
@@ -475,6 +482,17 @@ mod tests {
     fn test_type_alias_resolution() {
         let result = check_src("type Acc = m/s^2;\nfn f(a: Acc) -> Acc := a;");
         assert!(result.ok(), "errors: {:?}", result.errors.iter().map(|e| &e.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_use_import_fn() {
+        let mut imports = crate::modules::ImportBindings::default();
+        imports
+            .functions
+            .insert("energy".to_string(), crate::types::dim::DimVector::JOULE);
+        let file = parse_source("fn main() -> J := energy(1.0, 1.0);").unwrap();
+        let result = check_with_imports(&file, &imports);
+        assert!(result.ok(), "errors: {:?}", result.errors);
     }
 
     #[test]

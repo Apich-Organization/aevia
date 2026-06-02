@@ -1,0 +1,3 @@
+// @aevia-test: expect-error
+
+fn bad(x: m) -> s := x;

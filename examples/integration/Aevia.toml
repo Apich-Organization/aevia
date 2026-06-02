@@ -1,0 +1,9 @@
+[package]
+name = "integration"
+version = "0.1.0"
+authors = ["Aevia Examples"]
+
+[profile.release]
+opt-level = 3
+backend = "rssn"
+dimension-checking = "strict"

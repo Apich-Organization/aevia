@@ -1,0 +1,5 @@
+// @aevia-test: run-equals 9
+
+use physics::energy;
+
+fn main() -> J := energy(2.0, 3.0);

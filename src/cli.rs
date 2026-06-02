@@ -58,6 +58,9 @@ pub enum CliCommand {
     /// Generate documentation from doc comments
     Doc {
         paths: Vec<PathBuf>,
+        /// Output directory for Markdown files (default: print to stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Interactive REPL
     Shell,
@@ -101,7 +104,7 @@ fn dispatch_subcommand(sub: CliCommand) -> AeviaResult<()> {
         CliCommand::Check { paths } => commands::check(paths),
         CliCommand::Fmt { paths } => commands::fmt(paths),
         CliCommand::Lint { paths } => commands::lint(paths),
-        CliCommand::Doc { paths } => commands::doc(paths),
+        CliCommand::Doc { paths, output } => commands::doc(paths, output),
         CliCommand::Shell => commands::shell(),
         CliCommand::Test { path } => commands::test(&path),
     }

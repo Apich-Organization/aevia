@@ -1,0 +1,4 @@
+use physics::energy;
+use physics::displacement;
+fn main() -> J := energy(2.0, 3.0);
+fn runway_length() -> m := displacement(3.0, 9.8, 1.0);

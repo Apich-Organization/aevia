@@ -1,15 +1,11 @@
 //! CLI command implementations.
 
-mod stub;
-
 use crate::diagnostics::{AeviaError, AeviaResult};
 use crate::logging;
 use crate::project;
 use crate::ast::{Item, FunctionBody};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
-pub use stub::not_implemented;
 
 #[derive(Debug)]
 pub struct RunTarget {
@@ -27,12 +23,11 @@ pub fn build(paths: Vec<PathBuf>) -> AeviaResult<()> {
     logging::pass("build");
     let files = resolve_inputs(&paths)?;
     for file in files {
-        let content = std::fs::read_to_string(&file)
-            .map_err(|e| AeviaError::io(&file, e))?;
-        let parsed = crate::parser::items::parse_source(&content)
-            .map_err(|e| AeviaError::message(format!("parse error in {}: {}", file.display(), e)))?;
-        
-        let check_res = crate::types::checker::check(&parsed);
+        let program = crate::modules::load_program(&file)?;
+        let parsed = crate::modules::entry_ast(&program);
+        let imports = crate::modules::entry_imports(&program);
+
+        let check_res = crate::types::checker::check_with_imports(parsed, imports);
         if !check_res.ok() {
             let err_msg = check_res.errors.iter()
                 .map(|e| format!("{}", e))
@@ -42,8 +37,15 @@ pub fn build(paths: Vec<PathBuf>) -> AeviaResult<()> {
         }
 
         let mut lowerer = crate::lowering::Lowerer::new();
-        lowerer.register_items(&parsed);
-        
+        let mut op_reg = rssn_advanced::custom::descriptor::CustomOpRegistry::new();
+        for module in crate::modules::modules(&program) {
+            let reg = crate::ops::registry_from_items(&module.ast.items, &mut lowerer.builder)?;
+            for desc in reg.ops_iter() {
+                let _ = op_reg.register(desc.clone());
+            }
+        }
+        op_reg.register_with_builder(&mut lowerer.builder);
+        crate::modules::register_lowerer(&program, &mut lowerer);
         let mut main_func = None;
         for item in &parsed.items {
             if let Item::Function { name, .. } = &item.node {
@@ -97,12 +99,11 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
     }
     let _ = project::load_manifest_for(&file).ok();
     
-    let content = std::fs::read_to_string(&file)
-        .map_err(|e| AeviaError::io(&file, e))?;
-    let parsed = crate::parser::items::parse_source(&content)
-        .map_err(|e| AeviaError::message(format!("parse error in {}: {}", file.display(), e)))?;
-    
-    let check_res = crate::types::checker::check(&parsed);
+    let program = crate::modules::load_program(&file)?;
+    let parsed = crate::modules::entry_ast(&program);
+    let imports = crate::modules::entry_imports(&program);
+
+    let check_res = crate::types::checker::check_with_imports(parsed, imports);
     if !check_res.ok() {
         let err_msg = check_res.errors.iter()
             .map(|e| format!("{}", e))
@@ -112,7 +113,16 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
     }
 
     let mut lowerer = crate::lowering::Lowerer::new();
-    lowerer.register_items(&parsed);
+    let mut op_reg = rssn_advanced::custom::descriptor::CustomOpRegistry::new();
+    for module in crate::modules::modules(&program) {
+        let reg = crate::ops::registry_from_items(&module.ast.items, &mut lowerer.builder)?;
+        for desc in reg.ops_iter() {
+            let _ = op_reg.register(desc.clone());
+        }
+    }
+    op_reg.register_with_builder(&mut lowerer.builder);
+    crate::modules::register_lowerer(&program, &mut lowerer);
+    let op_reg = std::sync::Arc::new(op_reg);
 
     let mut main_func = None;
     for item in &parsed.items {
@@ -156,6 +166,8 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
         }
 
         let ast_proj = rssn_advanced::ast::convert::dag_to_ast(lowerer.builder.arena(), root);
+        op_reg.apply_to_jit(&mut compiler);
+
         let compiled_fn = compiler.compile(&ast_proj).map_err(|e| {
             AeviaError::message(format!("JIT compilation failed: {:?}", e))
         })?;
@@ -177,12 +189,11 @@ pub fn check(paths: Vec<PathBuf>) -> AeviaResult<()> {
     logging::pass("check");
     let files = resolve_inputs(&paths)?;
     for file in files {
-        let content = std::fs::read_to_string(&file)
-            .map_err(|e| AeviaError::io(&file, e))?;
-        let parsed = crate::parser::items::parse_source(&content)
-            .map_err(|e| AeviaError::message(format!("parse error in {}: {}", file.display(), e)))?;
-        
-        let check_res = crate::types::checker::check(&parsed);
+        let program = crate::modules::load_program(&file)?;
+        let parsed = crate::modules::entry_ast(&program);
+        let imports = crate::modules::entry_imports(&program);
+
+        let check_res = crate::types::checker::check_with_imports(parsed, imports);
         if !check_res.ok() {
             let err_msg = check_res.errors.iter()
                 .map(|e| format!("{}", e))
@@ -198,41 +209,105 @@ pub fn check(paths: Vec<PathBuf>) -> AeviaResult<()> {
 /// `aevia fmt`
 pub fn fmt(paths: Vec<PathBuf>) -> AeviaResult<()> {
     logging::pass("fmt");
-    let _ = resolve_inputs(&paths)?;
-    not_implemented("formatter", "Phase 1")
+    let files = resolve_inputs(&paths)?;
+    let mut changed = 0usize;
+    for file in &files {
+        if crate::fmt::format_file_in_place(file)? {
+            changed += 1;
+            logging::pass_detail("fmt", &format!("reformatted {}", file.display()));
+        }
+    }
+    logging::pass_detail(
+        "fmt",
+        &format!("{}/{} files updated", changed, files.len()),
+    );
+    Ok(())
 }
 
 /// `aevia lint`
 pub fn lint(paths: Vec<PathBuf>) -> AeviaResult<()> {
     logging::pass("lint");
-    let _ = resolve_inputs(&paths)?;
-    not_implemented("linter", "Phase 5")
+    let files = resolve_inputs(&paths)?;
+    let mut report = crate::lint::LintReport::default();
+    for file in &files {
+        let file_report = crate::lint::lint_file(file)?;
+        for lint in file_report.lints {
+            report.lints.push(lint);
+        }
+    }
+    emit_lint_report(&report);
+    if report.ok() {
+        logging::pass_detail("lint", &format!("{} files, no errors", files.len()));
+        Ok(())
+    } else {
+        Err(AeviaError::message(format!(
+            "lint failed with {} error(s)",
+            report.lints.iter().filter(|l| l.level == crate::lint::LintLevel::Error).count()
+        )))
+    }
 }
 
 /// `aevia doc`
-pub fn doc(paths: Vec<PathBuf>) -> AeviaResult<()> {
+pub fn doc(paths: Vec<PathBuf>, output: Option<PathBuf>) -> AeviaResult<()> {
     logging::pass("doc");
-    let _ = resolve_inputs(&paths)?;
-    not_implemented("documentation generator", "Phase 5")
+    let files = resolve_inputs(&paths)?;
+    for file in files {
+        if let Some(ref out_dir) = output {
+            crate::doc::generate_for_entry(&file, out_dir)?;
+            logging::pass_detail("doc", &format!("wrote docs to {}", out_dir.display()));
+        } else {
+            let program = crate::modules::load_program(&file)?;
+            for module in crate::modules::modules(&program) {
+                let md = crate::doc::render_markdown(&module.path, &module.ast);
+                print!("{md}");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `aevia shell`
 pub fn shell() -> AeviaResult<()> {
     logging::pass("shell");
-    not_implemented("interactive REPL", "Phase 5")
+    crate::shell::run()
 }
 
 /// `aevia test`
 pub fn test(path: &Path) -> AeviaResult<()> {
     logging::pass("test");
-    let tests_dir = path.join("tests");
-    if !tests_dir.is_dir() {
-        return Err(AeviaError::message(format!(
-            "no tests/ directory in {}",
-            path.display()
-        )));
+    let root = path
+        .canonicalize()
+        .map_err(|e| AeviaError::io(path, e))?;
+    let results = crate::test_runner::run_project(&root)?;
+    let passed = results.iter().filter(|r| r.passed).count();
+    for result in &results {
+        let status = if result.passed { "ok" } else { "FAIL" };
+        println!(
+            "  [{status}] {} — {}",
+            result.path.display(),
+            result.message
+        );
     }
-    not_implemented("test harness", "Phase 5")
+    logging::pass_detail("test", &format!("{passed}/{} passed", results.len()));
+    if passed == results.len() {
+        Ok(())
+    } else {
+        Err(AeviaError::message(format!(
+            "{} test(s) failed",
+            results.len() - passed
+        )))
+    }
+}
+
+fn emit_lint_report(report: &crate::lint::LintReport) {
+    use crate::lint::LintLevel;
+    for lint in &report.lints {
+        let level = match lint.level {
+            LintLevel::Error => "error",
+            LintLevel::Warning => "warning",
+        };
+        eprintln!("{level}: {}: {}", lint.file.display(), lint.message);
+    }
 }
 
 fn is_ae_file(path: &Path) -> bool {

@@ -73,7 +73,7 @@ pub fn create_new(name: &str, parent: &Path) -> AeviaResult<PathBuf> {
     )?;
     write_file(
         project_dir.join("tests/smoke.ae"),
-        "// Dimensional smoke test placeholder\n",
+        "// @aevia-test: check\n\nfn smoke() -> m := 1.0;\n",
     )?;
     write_file(
         project_dir.join("kernels/.gitkeep"),

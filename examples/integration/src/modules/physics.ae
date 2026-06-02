@@ -1,0 +1,12 @@
+type Velocity = m / s;
+
+pub fn energy(m: kg, v: Velocity) -> J := 0.5 * m * v * v;
+
+pub fn displacement(v0: Velocity, a: m/s^2, t: s) -> m := v0 * t + 0.5 * a * t * t;
+
+pub op scale_velocity(v: Velocity -> Velocity) {
+    properties {
+        vectorizable: true,
+        cost: 1.0,
+    }
+}

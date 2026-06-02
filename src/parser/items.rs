@@ -12,9 +12,10 @@
 //! Every node is annotated with a `miette::SourceSpan` via `Spanned<T>`.
 
 use crate::ast::{
-    Attribute, DimExpr, Field, FunctionBody, Item, OpProperties,
-    Param, SourceFile, Spanned, Stmt, Visibility,
+    Attribute, DimExpr, EGraphRule, Field, FunctionBody, Item, OpProperties,
+    Param, SimplifyRule, SourceFile, Spanned, Stmt, Visibility,
 };
+use rust_decimal::Decimal;
 use crate::parser::expr::{dim_expr_parser, expr_parser};
 use chumsky::prelude::*;
 use miette::SourceSpan;
@@ -194,28 +195,169 @@ fn field<'a>() -> impl Parser<'a, &'a str, Field, extra::Err<Simple<'a, char>>> 
 
 // ── Op properties block ───────────────────────────────────────────────────────
 
-/// Parses the `properties { ... }` block for `pub op` declarations.
-/// Supports: `vectorizable = true/false`, `commutative`, `associative`,
-/// `cost = <float>`, `simplify { ... }`, `egraph { ... }`.
-fn op_properties<'a>() -> impl Parser<'a, &'a str, OpProperties, extra::Err<Simple<'a, char>>> + Clone {
+fn bool_lit<'a>() -> impl Parser<'a, &'a str, bool, extra::Err<Simple<'a, char>>> + Clone {
+    choice((just("true").to(true), just("false").to(false)))
+}
+
+fn property_flag<'a>(
+    name: &'static str,
+) -> impl Parser<'a, &'a str, bool, extra::Err<Simple<'a, char>>> + Clone {
+    just(name)
+        .padded()
+        .then(just(':').padded().ignore_then(bool_lit()).or_not())
+        .map(|(_, v)| v.unwrap_or(true))
+}
+
+fn decimal_lit<'a>() -> impl Parser<'a, &'a str, Decimal, extra::Err<Simple<'a, char>>> + Clone {
+    any()
+        .filter(|c: &char| c.is_ascii_digit() || *c == '.')
+        .repeated()
+        .at_least(1)
+        .collect::<String>()
+        .map(|s| s.parse::<Decimal>().unwrap_or(Decimal::ONE))
+}
+
+fn rewrite_rule<'a>() -> impl Parser<'a, &'a str, (Spanned<crate::ast::Expr>, Spanned<crate::ast::Expr>), extra::Err<Simple<'a, char>>> + Clone {
+    expr_parser()
+        .padded()
+        .then_ignore(just("=>").padded().or(just("->").padded()))
+        .then(expr_parser().padded())
+}
+
+fn properties_inner<'a>() -> impl Parser<'a, &'a str, OpProperties, extra::Err<Simple<'a, char>>> + Clone {
+    let flag = choice((
+        property_flag("vectorizable").map(OpPatch::Vectorizable),
+        property_flag("commutative").map(OpPatch::Commutative),
+        property_flag("associative").map(OpPatch::Associative),
+        just("cost")
+            .padded()
+            .then_ignore(just(':').padded())
+            .ignore_then(decimal_lit())
+            .map(OpPatch::Cost),
+    ));
+
     just('{')
         .padded()
-        // We accept any non-brace content for now and return defaults.
-        // TODO(Phase 2): parse individual property lines.
         .ignore_then(
-            any()
-                .filter(|c: &char| *c != '}')
+            flag.padded()
+                .then_ignore(just(',').padded().or_not())
                 .repeated()
-                .ignored(),
+                .collect::<Vec<_>>(),
         )
         .then_ignore(just('}').padded())
-        .map(|_| OpProperties {
-            vectorizable: false,
-            commutative: false,
-            associative: false,
-            cost: None,
-            simplify_rules: Vec::new(),
-            egraph_rules: Vec::new(),
+        .map(apply_op_patches)
+}
+
+#[derive(Clone)]
+enum OpPatch {
+    Vectorizable(bool),
+    Commutative(bool),
+    Associative(bool),
+    Cost(Decimal),
+}
+
+fn empty_op_properties() -> OpProperties {
+    OpProperties {
+        vectorizable: false,
+        commutative: false,
+        associative: false,
+        cost: None,
+        simplify_rules: Vec::new(),
+        egraph_rules: Vec::new(),
+    }
+}
+
+fn apply_op_patches(patches: Vec<OpPatch>) -> OpProperties {
+    let mut props = empty_op_properties();
+    for patch in patches {
+        match patch {
+            OpPatch::Vectorizable(v) => props.vectorizable = v,
+            OpPatch::Commutative(v) => props.commutative = v,
+            OpPatch::Associative(v) => props.associative = v,
+            OpPatch::Cost(c) => props.cost = Some(c),
+        }
+    }
+    props
+}
+
+#[derive(Clone)]
+enum OpSection {
+    Properties(OpProperties),
+    Simplify(Vec<SimplifyRule>),
+    Egraph(Vec<EGraphRule>),
+}
+
+/// Parses the body of a `pub op` declaration: `properties`, `simplify`, `egraph` blocks.
+fn op_body<'a>() -> impl Parser<'a, &'a str, OpProperties, extra::Err<Simple<'a, char>>> + Clone {
+    let section = choice((
+        kw("properties")
+            .padded()
+            .ignore_then(properties_inner())
+            .map(OpSection::Properties),
+        kw("simplify")
+            .padded()
+            .ignore_then(
+                just('{')
+                    .padded()
+                    .ignore_then(
+                        rewrite_rule()
+                            .map_with(|(pattern, replacement), _e| {
+                                SimplifyRule {
+                                    pattern,
+                                    replacement,
+                                }
+                            })
+                            .padded()
+                            .repeated()
+                            .collect::<Vec<_>>(),
+                    )
+                    .then_ignore(just('}').padded()),
+            )
+            .map(OpSection::Simplify),
+        kw("egraph")
+            .padded()
+            .ignore_then(
+                just('{')
+                    .padded()
+                    .ignore_then(
+                        kw("rewrite")
+                            .padded()
+                            .or_not()
+                            .ignore_then(rewrite_rule())
+                            .map_with(|(pattern, replacement), _e| {
+                                EGraphRule {
+                                    pattern,
+                                    replacement,
+                                }
+                            })
+                            .padded()
+                            .repeated()
+                            .collect::<Vec<_>>(),
+                    )
+                    .then_ignore(just('}').padded()),
+            )
+            .map(OpSection::Egraph),
+    ));
+
+    just('{')
+        .padded()
+        .ignore_then(section.padded().repeated().collect::<Vec<_>>())
+        .then_ignore(just('}').padded())
+        .map(|sections| {
+            let mut props = empty_op_properties();
+            for section in sections {
+                match section {
+                    OpSection::Properties(p) => {
+                        props.vectorizable = p.vectorizable;
+                        props.commutative = p.commutative;
+                        props.associative = p.associative;
+                        props.cost = p.cost;
+                    }
+                    OpSection::Simplify(rules) => props.simplify_rules = rules,
+                    OpSection::Egraph(rules) => props.egraph_rules = rules,
+                }
+            }
+            props
         })
 }
 
@@ -336,14 +478,15 @@ fn op_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a
                 .then(dim())
                 .then_ignore(just(')').padded()),
         )
-        .then(op_properties())
-        .map_with(|(((_vis, name), ((param_name, input_dim), output_dim)), properties), e| {
+        .then(op_body())
+        .map_with(|(((vis, name), ((param_name, input_dim), output_dim)), properties), e| {
             Spanned::new(
                 Item::CustomOp {
                     name,
                     param_name,
                     input_dim,
                     output_dim,
+                    visibility: vis,
                     properties,
                 },
                 to_src(e.span()),
@@ -351,34 +494,77 @@ fn op_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a
         })
 }
 
-/// Any top-level item.
-fn item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a, char>>> + Clone {
-    choice((
-        op_item(),
-        fn_item(),
-        struct_item(),
-        type_alias_item(),
-        use_item(),
-    ))
-    .padded()
-}
-
 // ── Source file ───────────────────────────────────────────────────────────────
 
 /// Parse a complete `.ae` source file into a `SourceFile` AST node.
 pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::Err<Simple<'a, char>>> + Clone {
-    item()
-        .repeated()
-        .collect::<Vec<_>>()
-        .map(|items| SourceFile { doc: None, items })
+    recursive(|item| {
+        let mod_item = visibility()
+            .then_ignore(kw("mod").padded())
+            .then(ident().padded())
+            .then(
+                just(';')
+                    .padded()
+                    .to(None)
+                    .or(
+                        just('{')
+                            .padded()
+                            .ignore_then(item.repeated().collect::<Vec<_>>())
+                            .then_ignore(just('}').padded())
+                            .map(Some),
+                    ),
+            )
+            .map_with(|((vis, name), body), e| {
+                Spanned::new(
+                    Item::Module {
+                        name,
+                        body,
+                        visibility: vis,
+                    },
+                    to_src(e.span()),
+                )
+            });
+
+        choice((
+            op_item(),
+            fn_item(),
+            mod_item,
+            struct_item(),
+            type_alias_item(),
+            use_item(),
+        ))
         .padded()
+    })
+    .repeated()
+    .collect::<Vec<_>>()
+    .map(|items| SourceFile { doc: None, items })
+    .padded()
+}
+
+/// Remove `//` line comments so test directives and doc comments do not break the parser.
+pub fn strip_line_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                ""
+            } else if let Some(idx) = line.find("//") {
+                line[..idx].trim_end()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Parse a full `.ae` source string into a `SourceFile`, returning
 /// a human-readable error message on failure.
 pub fn parse_source(input: &str) -> Result<SourceFile, String> {
+    let input = strip_line_comments(input);
     source_file_parser()
-        .parse(input)
+        .parse(&input)
         .into_result()
         .map_err(|errs| {
             errs.into_iter()
@@ -466,6 +652,34 @@ mod tests {
         let f = parse("pub op differentiate(y: m -> m/s) {}");
         assert_eq!(f.items.len(), 1);
         assert!(matches!(f.items[0].node, Item::CustomOp { .. }));
+    }
+
+    #[test]
+    fn test_op_properties_parsed() {
+        let f = parse(
+            r#"pub op scale(x: m -> m) {
+                properties { vectorizable: true, cost: 2.5, }
+            }"#,
+        );
+        if let Item::CustomOp { properties, .. } = &f.items[0].node {
+            assert!(properties.vectorizable);
+            assert_eq!(properties.cost.map(|c| c.to_string()), Some("2.5".to_string()));
+        } else {
+            panic!("expected CustomOp");
+        }
+    }
+
+    #[test]
+    fn test_mod_inline() {
+        let f = parse("pub mod inner { fn helper(x: m) -> m := x; }");
+        assert_eq!(f.items.len(), 1);
+        if let Item::Module { name, body, visibility } = &f.items[0].node {
+            assert_eq!(name, "inner");
+            assert_eq!(*visibility, Visibility::Public);
+            assert!(body.as_ref().is_some_and(|b| !b.is_empty()));
+        } else {
+            panic!("expected Module");
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! diagnostics, and the top-level `check()` entry point.
 
 pub mod checker;
+pub use checker::check_with_imports;
 pub mod dim;
 pub mod env;
 pub mod error;
