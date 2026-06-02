@@ -224,6 +224,21 @@ fn rewrite_rule<'a>() -> impl Parser<'a, &'a str, (Spanned<crate::ast::Expr>, Sp
         .then(expr_parser().padded())
 }
 
+/// ` [after] rewrite pattern => replacement` inside an `egraph { }` block.
+fn egraph_rewrite_rule<'a>() -> impl Parser<'a, &'a str, EGraphRule, extra::Err<Simple<'a, char>>> + Clone {
+    kw("after")
+        .padded()
+        .or_not()
+        .map(|a| a.is_some())
+        .then_ignore(kw("rewrite").padded())
+        .then(rewrite_rule())
+        .map(|(after_builtins, (pattern, replacement))| EGraphRule {
+            pattern,
+            replacement,
+            after_builtins,
+        })
+}
+
 fn properties_inner<'a>() -> impl Parser<'a, &'a str, OpProperties, extra::Err<Simple<'a, char>>> + Clone {
     let flag = choice((
         property_flag("vectorizable").map(OpPatch::Vectorizable),
@@ -320,16 +335,7 @@ fn op_body<'a>() -> impl Parser<'a, &'a str, OpProperties, extra::Err<Simple<'a,
                 just('{')
                     .padded()
                     .ignore_then(
-                        kw("rewrite")
-                            .padded()
-                            .or_not()
-                            .ignore_then(rewrite_rule())
-                            .map_with(|(pattern, replacement), _e| {
-                                EGraphRule {
-                                    pattern,
-                                    replacement,
-                                }
-                            })
+                        egraph_rewrite_rule()
                             .padded()
                             .repeated()
                             .collect::<Vec<_>>(),
@@ -375,7 +381,9 @@ fn use_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'
         )
         .then(kw("as").padded().ignore_then(ident()).or_not())
         .then_ignore(just(';').padded())
-        .map_with(|(path, alias), e| Spanned::new(Item::Use { path, alias }, to_src(e.span())))
+        .map_with(|(path, alias), e| {
+            Spanned::new(Item::Use { path, alias }, to_src(e.span()))
+        })
 }
 
 /// `type Name = DimType;`
@@ -387,7 +395,14 @@ fn type_alias_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<S
         .then(dim())
         .then_ignore(just(';').padded())
         .map_with(|(name, dimension_expr), e| {
-            Spanned::new(Item::TypeAlias { name, dimension_expr }, to_src(e.span()))
+            Spanned::new(
+                Item::TypeAlias {
+                    name,
+                    dimension_expr,
+                    doc: None,
+                },
+                to_src(e.span()),
+            )
         })
 }
 
@@ -409,7 +424,15 @@ fn struct_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simpl
                 .then_ignore(just('}').padded()),
         )
         .map_with(|((vis, name), fields), e| {
-            Spanned::new(Item::Struct { name, fields, visibility: vis }, to_src(e.span()))
+            Spanned::new(
+                Item::Struct {
+                    name,
+                    fields,
+                    visibility: vis,
+                    doc: None,
+                },
+                to_src(e.span()),
+            )
         })
 }
 
@@ -457,6 +480,7 @@ fn fn_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a
                     body,
                     visibility: vis,
                     attributes: attrs,
+                    doc: None,
                 },
                 to_src(e.span()),
             )
@@ -488,6 +512,7 @@ fn op_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a
                     output_dim,
                     visibility: vis,
                     properties,
+                    doc: None,
                 },
                 to_src(e.span()),
             )
@@ -520,6 +545,7 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
                         name,
                         body,
                         visibility: vis,
+                        doc: None,
                     },
                     to_src(e.span()),
                 )
@@ -541,37 +567,22 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
     .padded()
 }
 
-/// Remove `//` line comments so test directives and doc comments do not break the parser.
-pub fn strip_line_comments(source: &str) -> String {
-    source
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") {
-                ""
-            } else if let Some(idx) = line.find("//") {
-                line[..idx].trim_end()
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Parse a full `.ae` source string into a `SourceFile`, returning
 /// a human-readable error message on failure.
 pub fn parse_source(input: &str) -> Result<SourceFile, String> {
-    let input = strip_line_comments(input);
-    source_file_parser()
-        .parse(&input)
+    let prepared = crate::parser::docs::prepare_source(input);
+    let mut file = source_file_parser()
+        .parse(&prepared.code)
         .into_result()
         .map_err(|errs| {
             errs.into_iter()
                 .map(|e| format!("{e:?}"))
                 .collect::<Vec<_>>()
                 .join("\n")
-        })
+        })?;
+    file.doc = prepared.module_doc;
+    crate::parser::docs::attach_item_docs(&mut file, prepared.item_docs);
+    Ok(file)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -609,7 +620,7 @@ mod tests {
     fn test_struct_item() {
         let f = parse("pub struct Particle { mass: kg, velocity: m/s }");
         assert_eq!(f.items.len(), 1);
-        if let Item::Struct { name, fields, visibility } = &f.items[0].node {
+        if let Item::Struct { name, fields, visibility, .. } = &f.items[0].node {
             assert_eq!(name, "Particle");
             assert_eq!(*visibility, Visibility::Public);
             assert_eq!(fields.len(), 2);
@@ -655,6 +666,22 @@ mod tests {
     }
 
     #[test]
+    fn test_egraph_after_builtins() {
+        let src = r#"
+            pub op f(x: m -> m) {
+                egraph { after rewrite f(y) => y }
+            }
+        "#;
+        let f = parse(src);
+        if let Item::CustomOp { properties, .. } = &f.items[0].node {
+            assert_eq!(properties.egraph_rules.len(), 1);
+            assert!(properties.egraph_rules[0].after_builtins);
+        } else {
+            panic!("expected CustomOp");
+        }
+    }
+
+    #[test]
     fn test_op_properties_parsed() {
         let f = parse(
             r#"pub op scale(x: m -> m) {
@@ -673,7 +700,7 @@ mod tests {
     fn test_mod_inline() {
         let f = parse("pub mod inner { fn helper(x: m) -> m := x; }");
         assert_eq!(f.items.len(), 1);
-        if let Item::Module { name, body, visibility } = &f.items[0].node {
+        if let Item::Module { name, body, visibility, .. } = &f.items[0].node {
             assert_eq!(name, "inner");
             assert_eq!(*visibility, Visibility::Public);
             assert!(body.as_ref().is_some_and(|b| !b.is_empty()));

@@ -1,5 +1,8 @@
 //! `op` DSL lowering to RSSN [`CustomOpRegistry`]. Phase 4.
 
+pub mod egraph;
+mod simplify;
+
 use crate::ast::{Item, OpProperties, SourceFile};
 use crate::diagnostics::AeviaResult;
 use rssn_advanced::custom::descriptor::{CustomOpDescriptor, CustomOpRegistry, EvalFn};
@@ -65,21 +68,8 @@ fn register_op(
         }
     }
 
-    // AST simplify / e-graph rules are stored for a future pattern-matching pass.
-    for rule in &props.simplify_rules {
-        let _ = &rule.pattern;
-        let _ = &rule.replacement;
-        desc = desc.simplify_rule(
-            format!("{}-simplify", name),
-            5,
-            |_b, _k, _children| None,
-        );
-    }
-    for rule in &props.egraph_rules {
-        let _ = &rule.pattern;
-        let _ = &rule.replacement;
-        desc = desc.egraph_rule(false, |_b, _k, _children| None);
-    }
+    desc = simplify::attach_simplify_rules(name, fn_id, &props.simplify_rules, desc);
+    desc = egraph::attach_egraph_rules(name, fn_id, &props.egraph_rules, desc);
 
     let _ = props.commutative;
     let _ = props.associative;

@@ -218,6 +218,7 @@ impl ModuleProgram {
                 Item::TypeAlias {
                     name: item_name,
                     dimension_expr,
+                    ..
                 } if item_name == name => {
                     let dim = resolve_dim(dimension_expr).ok_or_else(|| {
                         AeviaError::message(format!("unknown unit in alias `{name}`"))

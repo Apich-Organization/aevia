@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+pub mod docs;
 pub mod expr;
 pub mod items;
 

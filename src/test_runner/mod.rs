@@ -178,7 +178,13 @@ fn eval_main(path: &Path) -> AeviaResult<f64> {
         .find(|i| matches!(&i.node, Item::Function { name, .. } if name == "main"))
         .ok_or_else(|| AeviaError::message("no main function"))?;
 
-    let Item::Function { params, body, .. } = &main.node else {
+    let Item::Function {
+        params,
+        body,
+        attributes,
+        ..
+    } = &main.node
+    else {
         return Err(AeviaError::message("expected main"));
     };
 
@@ -192,6 +198,15 @@ fn eval_main(path: &Path) -> AeviaResult<f64> {
         FunctionBody::Expression(expr) => lowerer.lower_expr(expr, &mut env)?,
         FunctionBody::Block(stmts) => lowerer.lower_block(stmts, &mut env)?,
     };
+    let fusion_cfg = crate::fusion::FusionConfig::from_function(attributes, body);
+    let pipeline = crate::pipeline::optimize_with_fusion(
+        &mut lowerer.builder,
+        root,
+        &op_reg,
+        crate::pipeline::OptimizeConfig::default(),
+        fusion_cfg,
+    );
+    let root = pipeline.root;
 
     let mut compiler = rssn_advanced::jit::compiler::JitCompiler::try_new().map_err(|e| {
         AeviaError::message(format!("JIT init: {:?}", e))

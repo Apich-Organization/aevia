@@ -1,12 +1,22 @@
+//! Physics helpers for the integration example.
+
 type Velocity = m / s;
 
-pub fn energy(m: kg, v: Velocity) -> J := 0.5 * m * v * v;
+/// Kinetic energy: 0.5 * m * v^2
+pub fn energy(m: kg, v: Velocity) -> J := 0.5 * m * v^2;
 
-pub fn displacement(v0: Velocity, a: m/s^2, t: s) -> m := v0 * t + 0.5 * a * t * t;
+/// Constant-acceleration displacement: x = v0*t + 0.5*a*t^2
+pub fn displacement(v0: Velocity, a: m/s^2, t: s) -> m := v0 * t + 0.5 * a * t^2;
 
 pub op scale_velocity(v: Velocity -> Velocity) {
     properties {
         vectorizable: true,
         cost: 1.0,
+    }
+    simplify {
+        scale_velocity(0) => 0
+    }
+    egraph {
+        rewrite scale_velocity(y) => y
     }
 }

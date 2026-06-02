@@ -34,6 +34,7 @@ pub enum Item {
         name: String,
         body: Option<Vec<Spanned<Item>>>,
         visibility: Visibility,
+        doc: Option<String>,
     },
     /// Import statement, e.g., `use mechanics::kinematics::{Force as F};`
     Use {
@@ -44,12 +45,14 @@ pub enum Item {
     TypeAlias {
         name: String,
         dimension_expr: Spanned<DimExpr>,
+        doc: Option<String>,
     },
     /// Structural physical type, e.g., `pub struct Particle { ... }`
     Struct {
         name: String,
         fields: Vec<Field>,
         visibility: Visibility,
+        doc: Option<String>,
     },
     /// Function declaration, supporting expression-bodied (`:=`) and block-bodied (`{}`) forms.
     Function {
@@ -59,6 +62,7 @@ pub enum Item {
         body: FunctionBody,
         visibility: Visibility,
         attributes: Vec<Attribute>,
+        doc: Option<String>,
     },
     /// Custom mathematical operator declaration, e.g., `pub op custom(x: m -> m/s) { ... }`
     CustomOp {
@@ -68,7 +72,22 @@ pub enum Item {
         output_dim: Spanned<DimExpr>,
         visibility: Visibility,
         properties: OpProperties,
+        doc: Option<String>,
     },
+}
+
+impl Item {
+    /// Attach a doc comment extracted during parsing.
+    pub fn set_doc(&mut self, doc: Option<String>) {
+        match self {
+            Self::Module { doc: d, .. }
+            | Self::TypeAlias { doc: d, .. }
+            | Self::Struct { doc: d, .. }
+            | Self::Function { doc: d, .. }
+            | Self::CustomOp { doc: d, .. } => *d = doc,
+            Self::Use { .. } => {}
+        }
+    }
 }
 
 /// Visibility modifiers.
@@ -136,6 +155,8 @@ pub struct SimplifyRule {
 pub struct EGraphRule {
     pub pattern: Spanned<Expr>,
     pub replacement: Spanned<Expr>,
+    /// When true, run after RSSN built-in algebraic rules each saturation round.
+    pub after_builtins: bool,
 }
 
 /// Computational statements.

@@ -46,18 +46,21 @@ pub fn generate_for_entry(entry: &Path, output_dir: &Path) -> AeviaResult<()> {
 
 fn render_item(out: &mut String, item: &Item) {
     match item {
-        Item::TypeAlias { name, dimension_expr } => {
+        Item::TypeAlias { name, dimension_expr, .. } => {
             let _ = writeln!(
                 out,
                 "## type `{name}`\n\n```ae\ntype {name} = {};\n```\n",
                 format_dim(&dimension_expr.node)
             );
         }
-        Item::Struct { name, fields, visibility } => {
+        Item::Struct { name, fields, visibility, doc, .. } => {
             if !is_public(*visibility) {
                 return;
             }
             let _ = writeln!(out, "## struct `{name}`\n");
+            if let Some(d) = doc {
+                let _ = writeln!(out, "{d}\n");
+            }
             let _ = writeln!(out, "| Field | Dimension |");
             let _ = writeln!(out, "|-------|-----------|");
             for field in fields {
@@ -76,12 +79,16 @@ fn render_item(out: &mut String, item: &Item) {
             return_type,
             visibility,
             attributes,
+            doc,
             ..
         } => {
             if !is_public(*visibility) && *name != "main" {
                 return;
             }
             let _ = writeln!(out, "## fn `{name}`\n");
+            if let Some(d) = doc {
+                let _ = writeln!(out, "{d}\n");
+            }
             if !attributes.is_empty() {
                 let attrs: Vec<_> = attributes
                     .iter()
@@ -108,6 +115,8 @@ fn render_item(out: &mut String, item: &Item) {
             output_dim,
             visibility,
             properties,
+            doc,
+            ..
         } => {
             if !is_public(*visibility) {
                 return;
@@ -118,6 +127,9 @@ fn render_item(out: &mut String, item: &Item) {
                 format_dim(&input_dim.node),
                 format_dim(&output_dim.node)
             );
+            if let Some(d) = doc {
+                let _ = writeln!(out, "{d}\n");
+            }
             let _ = writeln!(
                 out,
                 "- vectorizable: {}\n- cost: {}\n",
@@ -128,11 +140,14 @@ fn render_item(out: &mut String, item: &Item) {
                     .unwrap_or_else(|| "default".to_string())
             );
         }
-        Item::Module { name, body, visibility } => {
+        Item::Module { name, body, visibility, doc, .. } => {
             if !is_public(*visibility) {
                 return;
             }
             let _ = writeln!(out, "## mod `{name}`\n");
+            if let Some(d) = doc {
+                let _ = writeln!(out, "{d}\n");
+            }
             if let Some(items) = body {
                 for child in items {
                     render_item(out, &child.node);

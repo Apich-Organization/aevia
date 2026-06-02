@@ -66,14 +66,14 @@ fn format_item(out: &mut String, item: &Item, indent: usize) {
                 let _ = write!(out, " as {a}");
             }
         }
-        Item::TypeAlias { name, dimension_expr } => {
+        Item::TypeAlias { name, dimension_expr, .. } => {
             let _ = write!(
                 out,
                 "{pad}type {name} = {}",
                 format_dim(&dimension_expr.node)
             );
         }
-        Item::Struct { name, fields, visibility } => {
+        Item::Struct { name, fields, visibility, .. } => {
             let _ = write!(out, "{}{}struct {name} {{ ", vis(*visibility), pad);
             for (i, field) in fields.iter().enumerate() {
                 if i > 0 {
@@ -90,6 +90,7 @@ fn format_item(out: &mut String, item: &Item, indent: usize) {
             body,
             visibility,
             attributes,
+            ..
         } => {
             for attr in attributes {
                 format_attribute(out, attr);
@@ -120,6 +121,7 @@ fn format_item(out: &mut String, item: &Item, indent: usize) {
             output_dim,
             visibility,
             properties,
+            ..
         } => {
             let _ = write!(
                 out,
@@ -131,7 +133,7 @@ fn format_item(out: &mut String, item: &Item, indent: usize) {
             );
             format_op_body(out, properties, indent);
         }
-        Item::Module { name, body, visibility } => {
+        Item::Module { name, body, visibility, .. } => {
             let _ = write!(out, "{}{}mod {name}", vis(*visibility), pad);
             match body {
                 None => {}

@@ -55,17 +55,52 @@ pub fn build(paths: Vec<PathBuf>) -> AeviaResult<()> {
             }
         }
 
-        if let Some(Item::Function { name, params, body, .. }) = main_func {
+        if let Some(Item::Function {
+            name,
+            params,
+            body,
+            attributes,
+            ..
+        }) = main_func
+        {
             let mut env = HashMap::new();
             for param in &params {
                 let id = lowerer.builder.variable(&param.name);
                 env.insert(param.name.clone(), id);
             }
-            
-            let _root = match &body {
+
+            let root = match &body {
                 FunctionBody::Expression(expr) => lowerer.lower_expr(expr, &mut env)?,
                 FunctionBody::Block(stmts) => lowerer.lower_block(stmts, &mut env)?,
             };
+            let fusion_cfg =
+                crate::fusion::FusionConfig::from_function(&attributes, &body);
+            let pipeline = crate::pipeline::optimize_with_fusion(
+                &mut lowerer.builder,
+                root,
+                &op_reg,
+                crate::pipeline::OptimizeConfig::default(),
+                fusion_cfg,
+            );
+            if let Some(stats) = pipeline.egraph {
+                logging::pass_detail(
+                    "build",
+                    &format!(
+                        "e-graph: {} merges in {} rounds (converged={})",
+                        stats.merges_performed, stats.rounds_completed, stats.converged
+                    ),
+                );
+            }
+            logging::pass_detail(
+                "build",
+                &format!(
+                    "fusion: {} kernels ({} arithmetic, {} DAG nodes)",
+                    pipeline.fusion.kernels.len(),
+                    pipeline.fusion.arithmetic_kernel_count(),
+                    pipeline.fusion.total_nodes()
+                ),
+            );
+            let _root = pipeline.root;
 
             let packed = lowerer.builder.packed_snapshot();
             let mut out_path = file.clone();
@@ -133,17 +168,33 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
         }
     }
 
-    if let Some(Item::Function { name, params, body, .. }) = main_func {
+    if let Some(Item::Function {
+        name,
+        params,
+        body,
+        attributes,
+        ..
+    }) = main_func
+    {
         let mut env = HashMap::new();
         for param in &params {
             let id = lowerer.builder.variable(&param.name);
             env.insert(param.name.clone(), id);
         }
-        
+
         let root = match &body {
             FunctionBody::Expression(expr) => lowerer.lower_expr(expr, &mut env)?,
             FunctionBody::Block(stmts) => lowerer.lower_block(stmts, &mut env)?,
         };
+        let fusion_cfg = crate::fusion::FusionConfig::from_function(&attributes, &body);
+        let pipeline = crate::pipeline::optimize_with_fusion(
+            &mut lowerer.builder,
+            root,
+            &op_reg,
+            crate::pipeline::OptimizeConfig::default(),
+            fusion_cfg,
+        );
+        let root = pipeline.root;
 
         // Compile and execute JIT
         let mut compiler = rssn_advanced::jit::compiler::JitCompiler::try_new().map_err(|e| {
@@ -168,6 +219,15 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
         let ast_proj = rssn_advanced::ast::convert::dag_to_ast(lowerer.builder.arena(), root);
         op_reg.apply_to_jit(&mut compiler);
 
+        if fusion_cfg.jit_kernel && pipeline.fusion.arithmetic_kernel_count() == 1 {
+            if let Ok(Some(_batch)) = compiler.compile_batch_f64x2(&ast_proj) {
+                logging::pass_detail(
+                    "run",
+                    &format!("`{}`: vector batch kernel available (f64x2)", name),
+                );
+            }
+        }
+
         let compiled_fn = compiler.compile(&ast_proj).map_err(|e| {
             AeviaError::message(format!("JIT compilation failed: {:?}", e))
         })?;
@@ -175,8 +235,15 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
         // Call with 1.0 arguments as defaults
         let args = vec![1.0; params.len()];
         let res = compiled_fn(args.as_ptr());
-        
-        logging::pass_detail("run", &format!("JIT compilation of `{}` succeeded", name));
+
+        logging::pass_detail(
+            "run",
+            &format!(
+                "JIT `{}` ok ({} fusion kernels)",
+                name,
+                pipeline.fusion.kernels.len()
+            ),
+        );
         println!("Result of calling `{}`: {}", name, res);
     } else {
         return Err(AeviaError::message(format!("no function found to run in {}", file.display())));

@@ -10,6 +10,7 @@
 use crate::ast::{
     BinOp, Expr, FunctionBody, Item, SourceFile, Spanned, Stmt, UnOp,
 };
+use rust_decimal::prelude::ToPrimitive;
 use crate::modules::ImportBindings;
 use crate::types::{
     dim::{resolve, DimVector},
@@ -107,7 +108,7 @@ impl Ctx {
 
     fn register_item(&mut self, item: &Spanned<Item>) {
         match &item.node {
-            Item::TypeAlias { name, dimension_expr } => {
+            Item::TypeAlias { name, dimension_expr, .. } => {
                 if let Some(dim) = resolve_with_env(dimension_expr, &self.env) {
                     self.env.register_alias(name.clone(), dim);
                 } else {
@@ -306,7 +307,7 @@ impl Ctx {
             Expr::BinaryOp { op, lhs, rhs } => {
                 let l = self.infer_expr(lhs);
                 let r = self.infer_expr(rhs);
-                self.check_binop(*op, l, r, expr.span)
+                self.check_binop(*op, l, r, &rhs.node, expr.span)
             }
 
             Expr::UnaryOp { op: UnOp::Neg, expr: inner } => {
@@ -371,6 +372,7 @@ impl Ctx {
         op: BinOp,
         lhs: Option<DimVector>,
         rhs: Option<DimVector>,
+        rhs_expr: &Expr,
         span: SourceSpan,
     ) -> Option<DimVector> {
         match op {
@@ -416,14 +418,47 @@ impl Ctx {
             // Modulo: result dimension matches LHS.
             BinOp::Mod => lhs,
 
-            // Exponentiation: only allowed with dimensionless RHS exponent.
-            // (The exponent must be a plain integer literal — enforced in
-            //  the parser by the `^` suffix syntax in dim_expr_parser.)
-            BinOp::Pow => {
-                // We can't statically determine the exponent value from the
-                // inferred type alone; defer to the AST power node.
-                lhs // Dimension raised to a power; we track this at DimExpr level.
-            }
+            // Exponentiation: RHS must be a dimensionless integer literal.
+            BinOp::Pow => match (lhs, rhs_expr) {
+                (Some(base), Expr::Literal { value, suffix: None }) => {
+                    if let Some(exp) = value.to_i64() {
+                        if exp >= 0 {
+                            Some(base.pow(exp as i32))
+                        } else {
+                            self.errors.push(TypeError::new(
+                                crate::types::error::TypeErrorCode::DimensionMismatch,
+                                "negative exponent is not supported in dimensional analysis",
+                                span,
+                            ));
+                            None
+                        }
+                    } else {
+                        self.errors.push(TypeError::new(
+                            crate::types::error::TypeErrorCode::DimensionMismatch,
+                            "exponent must be an integer literal",
+                            span,
+                        ));
+                        lhs
+                    }
+                }
+                (Some(_), Expr::Literal { suffix: Some(_), .. }) => {
+                    self.errors.push(TypeError::new(
+                        crate::types::error::TypeErrorCode::UnexpectedDimensionless,
+                        "exponent must be dimensionless",
+                        span,
+                    ));
+                    None
+                }
+                (Some(base), _) => {
+                    self.errors.push(TypeError::new(
+                        crate::types::error::TypeErrorCode::DimensionMismatch,
+                        "exponent must be a dimensionless integer literal",
+                        span,
+                    ));
+                    Some(base)
+                }
+                (None, _) => None,
+            },
 
             // Comparisons: operands must be same dimension; result is dimensionless.
             BinOp::Lt | BinOp::Gt | BinOp::Eq => {
@@ -482,6 +517,18 @@ mod tests {
     fn test_type_alias_resolution() {
         let result = check_src("type Acc = m/s^2;\nfn f(a: Acc) -> Acc := a;");
         assert!(result.ok(), "errors: {:?}", result.errors.iter().map(|e| &e.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_pow_integer_exponent() {
+        let result = check_src("fn sq(x: m) -> m^2 := x^2;");
+        assert!(result.ok(), "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn test_kinetic_energy_with_pow() {
+        let result = check_src("fn ke(m: kg, v: m/s) -> J := 0.5 * m * v^2;");
+        assert!(result.ok(), "errors: {:?}", result.errors);
     }
 
     #[test]
