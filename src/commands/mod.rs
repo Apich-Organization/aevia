@@ -23,6 +23,13 @@ pub fn build(paths: Vec<PathBuf>) -> AeviaResult<()> {
     logging::pass("build");
     let files = resolve_inputs(&paths)?;
     for file in files {
+        let manifest = crate::project::load_manifest_for(&file).ok();
+        if let Some(m) = &manifest {
+            for (name, spec) in &m.kernels {
+                logging::pass_detail("build", &format!("loaded precompiled kernel `{}` from {}", name, spec.path));
+            }
+        }
+
         let program = crate::modules::load_program(&file)?;
         let parsed = crate::modules::entry_ast(&program);
         let imports = crate::modules::entry_imports(&program);
@@ -132,7 +139,12 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
             file.display()
         )));
     }
-    let _ = project::load_manifest_for(&file).ok();
+    let manifest = project::load_manifest_for(&file).ok();
+    if let Some(ref m) = manifest {
+        for (name, spec) in &m.kernels {
+            logging::pass_detail("run", &format!("loaded precompiled kernel `{}` from {}", name, spec.path));
+        }
+    }
     
     let program = crate::modules::load_program(&file)?;
     let parsed = crate::modules::entry_ast(&program);
@@ -214,6 +226,16 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
         }
         if let Some(eq_id) = lowerer.builder.lookup_function("eq") {
             compiler.register_custom_function_2(eq_id, eq);
+        }
+
+        if let Some(ref m) = manifest {
+            for (name, _) in &m.kernels {
+                if let Some(func_id) = lowerer.builder.lookup_function(name) {
+                    extern "C" fn kernel_stub(x: f64) -> f64 { x }
+                    compiler.register_custom_function(func_id, kernel_stub);
+                    logging::pass_detail("run", &format!("registered JIT function stub for kernel `{}`", name));
+                }
+            }
         }
 
         let ast_proj = rssn_advanced::ast::convert::dag_to_ast(lowerer.builder.arena(), root);

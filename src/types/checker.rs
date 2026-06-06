@@ -358,9 +358,22 @@ impl Ctx {
                 last
             }
 
-            Expr::Loop { .. } | Expr::UnsafeTransmute { .. } => {
-                // Not type-checked in this phase.
-                None
+            Expr::Loop { body } => {
+                self.env.push_scope();
+                for stmt in body {
+                    self.check_stmt(stmt);
+                }
+                self.env.pop_scope();
+                Some(DimVector::DIMENSIONLESS)
+            }
+
+            Expr::UnsafeTransmute { expr: inner, assume_unit, .. } => {
+                let _ = self.infer_expr(inner);
+                if let Some(unit_span) = assume_unit {
+                    resolve_with_env(unit_span, &self.env)
+                } else {
+                    Some(DimVector::DIMENSIONLESS)
+                }
             }
         }
     }

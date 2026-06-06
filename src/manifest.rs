@@ -11,6 +11,12 @@ pub struct Manifest {
     pub package: PackageSection,
     pub profile: ProfileSection,
     pub dependencies: IndexMap<String, DependencySpec>,
+    pub kernels: IndexMap<String, KernelSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KernelSpec {
+    pub path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +87,7 @@ impl Manifest {
 
         let profile = parse_profile(root.get("profile"));
         let dependencies = parse_dependencies(root.get("dependencies"));
+        let kernels = parse_kernels(root.get("kernels"));
 
         Ok(Self {
             package: PackageSection {
@@ -90,6 +97,7 @@ impl Manifest {
             },
             profile,
             dependencies,
+            kernels,
         })
     }
 }
@@ -156,6 +164,35 @@ fn parse_dependencies(value: Option<&toml::Value>) -> IndexMap<String, Dependenc
     deps
 }
 
+fn parse_kernels(value: Option<&toml::Value>) -> IndexMap<String, KernelSpec> {
+    let mut kernels = IndexMap::new();
+    let Some(tbl) = value.and_then(|v| v.as_table()) else {
+        return kernels;
+    };
+
+    for (name, spec) in tbl {
+        if let Some(path) = spec.as_str() {
+            kernels.insert(
+                name.clone(),
+                KernelSpec {
+                    path: path.to_string(),
+                },
+            );
+        } else if let Some(spec_tbl) = spec.as_table() {
+            if let Some(path) = spec_tbl.get("path").and_then(|v| v.as_str()) {
+                kernels.insert(
+                    name.clone(),
+                    KernelSpec {
+                        path: path.to_string(),
+                    },
+                );
+            }
+        }
+    }
+
+    kernels
+}
+
 /// Locate `Aevia.toml` by walking up from `start`.
 pub fn find_project_root(start: &Path) -> AeviaResult<PathBuf> {
     let start = if start.is_file() {
@@ -200,6 +237,10 @@ dimension-checking = "strict"
 
 [dependencies]
 linear_algebra = { version = "1.4", registry = "aevia-central" }
+
+[kernels]
+my_gpu_kernel = "kernels/my_gpu_kernel.so"
+other_kernel = { path = "kernels/other.so" }
 "#;
         let m = Manifest::parse(text).unwrap();
         assert_eq!(m.package.name, "demo");
@@ -209,5 +250,8 @@ linear_algebra = { version = "1.4", registry = "aevia-central" }
             Some("rssn-gpu")
         );
         assert_eq!(m.dependencies.len(), 1);
+        assert_eq!(m.kernels.len(), 2);
+        assert_eq!(m.kernels.get("my_gpu_kernel").unwrap().path, "kernels/my_gpu_kernel.so");
+        assert_eq!(m.kernels.get("other_kernel").unwrap().path, "kernels/other.so");
     }
 }
