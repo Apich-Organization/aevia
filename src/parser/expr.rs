@@ -547,4 +547,35 @@ mod tests {
         let parsed = parse_expr("2 ^ 3").unwrap();
         assert!(matches!(parsed.node, Expr::BinaryOp { op: BinOp::Pow, .. }));
     }
+
+    #[test]
+    fn test_tensor_dim_1d() {
+        let parsed = dim_expr_parser().padded().parse("kg[1024]").into_result().unwrap();
+        if let DimExpr::Tensor { base, shape } = parsed.node {
+            assert!(matches!(base.node, DimExpr::Base(ref n) if n == "kg"));
+            assert_eq!(shape, vec![1024]);
+        } else {
+            panic!("expected Tensor, got {:?}", parsed.node);
+        }
+    }
+
+    #[test]
+    fn test_tensor_dim_2d() {
+        let parsed = dim_expr_parser().padded().parse("m[32, 64]").into_result().unwrap();
+        if let DimExpr::Tensor { base, shape } = parsed.node {
+            assert!(matches!(base.node, DimExpr::Base(ref n) if n == "m"));
+            assert_eq!(shape, vec![32, 64]);
+        } else {
+            panic!("expected Tensor, got {:?}", parsed.node);
+        }
+    }
+
+    #[test]
+    fn test_tensor_dim_resolves_element() {
+        use crate::types::dim::{resolve, DimVector};
+        use miette::SourceSpan;
+        let parsed = dim_expr_parser().padded().parse("kg[1024, 1024]").into_result().unwrap();
+        let span_wrapper = crate::ast::Spanned::new(parsed.node, SourceSpan::new(0.into(), 0));
+        assert_eq!(resolve(&span_wrapper), Some(DimVector::KG));
+    }
 }

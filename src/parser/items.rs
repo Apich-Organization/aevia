@@ -12,7 +12,7 @@
 //! Every node is annotated with a `miette::SourceSpan` via `Spanned<T>`.
 
 use crate::ast::{
-    Attribute, DimExpr, EGraphRule, Field, FunctionBody, Item, OpProperties,
+    Attribute, DimExpr, EGraphRule, Field, FunctionBody, Item, MacroRule, OpProperties,
     Param, SimplifyRule, SourceFile, Spanned, Stmt, Visibility,
 };
 use rust_decimal::Decimal;
@@ -601,6 +601,7 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
             struct_item(),
             type_alias_item(),
             use_item(),
+            macro_rules_item(),
         ))
         .padded()
     })
@@ -608,6 +609,65 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
     .collect::<Vec<_>>()
     .map(|items| SourceFile { doc: None, items })
     .padded()
+}
+
+/// Parses `macro_rules! name { (pattern) => { replacement } ... }`
+///
+/// Patterns and replacements are captured as raw strings — actual token-tree
+/// matching happens in the expansion pre-pass.
+fn macro_rules_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a, char>>> + Clone {
+    // Captures all characters between balanced `{...}` (including nested braces).
+    fn balanced_braces<'a>() -> impl Parser<'a, &'a str, String, extra::Err<Simple<'a, char>>> + Clone {
+        just('{').then(
+            recursive(|inner| {
+                choice((
+                    just('{').then(inner).then(just('}')).map(|((open, mid), close)| {
+                        let mut s = String::from(open);
+                        s.push_str(&mid);
+                        s.push(close);
+                        s
+                    }),
+                    none_of("}").map(|c: char| c.to_string()),
+                ))
+                .repeated()
+                .collect::<Vec<String>>()
+                .map(|parts| parts.concat())
+            })
+        )
+        .then(just('}'))
+        .map(|((_, mid), _)| mid)
+    }
+
+    // Captures all characters between balanced `(...)`
+    fn balanced_parens<'a>() -> impl Parser<'a, &'a str, String, extra::Err<Simple<'a, char>>> + Clone {
+        just('(').then(
+            none_of(")")
+                .repeated()
+                .collect::<String>()
+        )
+        .then(just(')'))
+        .map(|((_, mid), _)| mid)
+    }
+
+    let single_rule = balanced_parens()
+        .padded()
+        .then_ignore(just("=>").padded())
+        .then(balanced_braces().padded())
+        .map(|(pattern, replacement)| crate::ast::MacroRule { pattern, replacement });
+
+    kw("macro_rules!")
+        .padded()
+        .ignore_then(ident().padded())
+        .then(
+            single_rule
+                .padded()
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just('{').padded(), just('}').padded()),
+        )
+        .map_with(|(name, rules), e| {
+            Spanned::new(Item::MacroDef { name, rules }, to_src(e.span()))
+        })
 }
 
 /// Parse a full `.ae` source string into a `SourceFile`, returning

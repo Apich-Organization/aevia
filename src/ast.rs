@@ -74,6 +74,11 @@ pub enum Item {
         properties: OpProperties,
         doc: Option<String>,
     },
+    /// Declarative macro definition: `macro_rules! name { ($pat:kind, ...) => { body } }`
+    MacroDef {
+        name: String,
+        rules: Vec<MacroRule>,
+    },
 }
 
 impl Item {
@@ -85,9 +90,21 @@ impl Item {
             | Self::Struct { doc: d, .. }
             | Self::Function { doc: d, .. }
             | Self::CustomOp { doc: d, .. } => *d = doc,
-            Self::Use { .. } => {}
+            Self::Use { .. } | Self::MacroDef { .. } => {}
         }
     }
+}
+
+/// A single rule inside a `macro_rules!` definition.
+///
+/// Rules are stored as raw token strings for simplicity in the initial
+/// implementation. A future pass will parse them into pattern trees.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroRule {
+    /// Matcher pattern, e.g. `"($name:ident, $unit:expr)"`
+    pub pattern: String,
+    /// Replacement template, e.g. `"type $name = $unit;"`
+    pub replacement: String,
 }
 
 /// Visibility modifiers.
@@ -260,6 +277,12 @@ pub enum Expr {
         expr: Box<Spanned<Expr>>,
         assume_unit: Option<Spanned<DimExpr>>,
         assume_layout: Option<String>,
+    },
+    /// Invocation of a previously declared `macro_rules!` macro.
+    MacroCall {
+        name: String,
+        /// Raw token argument string passed to the macro, e.g. `"MyType, kg * m / s^2"`
+        args: String,
     },
 }
 
