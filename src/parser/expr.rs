@@ -71,7 +71,7 @@ pub fn dim_expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<DimExpr>, extra
         });
 
     // Left-associative * and / chain.
-    unit_with_pow.clone().then(
+    let chain = unit_with_pow.clone().then(
         choice((just('*').to(true), just('/').to(false)))
             .padded()
             .then(unit_with_pow)
@@ -87,6 +87,34 @@ pub fn dim_expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<DimExpr>, extra
                 Spanned::new(DimExpr::Div(Box::new(lhs), Box::new(rhs)), span)
             }
         })
+    });
+
+    let shape_suffix = just('[')
+        .ignore_then(
+            any()
+                .filter(|c: &char| c.is_ascii_digit())
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<char>>()
+                .map(|chars| {
+                    let s: String = chars.into_iter().collect();
+                    s.parse::<usize>().unwrap_or(0)
+                })
+                .padded()
+                .separated_by(just(',').padded())
+                .collect::<Vec<usize>>()
+        )
+        .then_ignore(just(']'));
+
+    chain.then(shape_suffix.or_not()).map_with(|(base_dim, shape_opt), e| {
+        if let Some(shape) = shape_opt {
+            Spanned::new(DimExpr::Tensor {
+                base: Box::new(base_dim),
+                shape,
+            }, to_src_span(e.span()))
+        } else {
+            base_dim
+        }
     })
 }
 

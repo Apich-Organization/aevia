@@ -182,6 +182,10 @@ fn resolve_inner(expr: &DimExpr) -> Option<DimVector> {
         DimExpr::Power(base, exp) => {
             Some(resolve_inner(&base.node)?.pow(*exp))
         }
+        DimExpr::Tensor { base, .. } => {
+            // Tensors carry SI element dimension; shape is not encoded in DimVector.
+            resolve_inner(&base.node)
+        }
     }
 }
 

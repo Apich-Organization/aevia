@@ -193,6 +193,11 @@ pub enum DimExpr {
     Div(Box<Spanned<DimExpr>>, Box<Spanned<DimExpr>>),
     /// Dimensional exponentiation, e.g., `s^2`
     Power(Box<Spanned<DimExpr>>, i32),
+    /// A multidimensional tensor type, e.g., `tensor[1024, 1024]` or `kg[1024]`
+    Tensor {
+        base: Box<Spanned<DimExpr>>,
+        shape: Vec<usize>,
+    },
 }
 
 /// Computational expressions.

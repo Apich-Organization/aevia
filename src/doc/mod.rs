@@ -176,6 +176,10 @@ pub fn format_dim(expr: &DimExpr) -> String {
             format_dim(&rhs.node)
         ),
         DimExpr::Power(base, exp) => format!("{}^{}", format_dim(&base.node), exp),
+        DimExpr::Tensor { base, shape } => {
+            let shape_strs: Vec<String> = shape.iter().map(|s| s.to_string()).collect();
+            format!("{}[{}]", format_dim(&base.node), shape_strs.join(", "))
+        }
     }
 }
 

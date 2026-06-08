@@ -93,6 +93,10 @@ fn resolve_compound_with_env(expr: &DimExpr, env: &TypeEnv) -> Option<DimVector>
         DimExpr::Power(base, exp) => {
             Some(resolve_compound_with_env(&base.node, env)?.pow(*exp))
         }
+        DimExpr::Tensor { base, .. } => {
+            // A tensor's element dimension is its base; shape is not tracked in DimVector.
+            resolve_compound_with_env(&base.node, env)
+        }
     }
 }
 

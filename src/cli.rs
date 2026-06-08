@@ -42,6 +42,8 @@ pub enum CliCommand {
     Run {
         /// Entry `.ae` file
         file: PathBuf,
+        /// Arguments for the function
+        args: Vec<f64>,
     },
     /// Type-check without compiling
     Check {
@@ -58,7 +60,7 @@ pub enum CliCommand {
     /// Generate documentation from doc comments
     Doc {
         paths: Vec<PathBuf>,
-        /// Output directory for Markdown files (default: print to stdout)
+        /// Output directory (optional)
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -77,7 +79,7 @@ pub fn execute() -> AeviaResult<()> {
     match cli.command {
         Some(sub) => dispatch_subcommand(sub),
         None => match cli.file {
-            Some(file) => commands::run(commands::RunTarget { file }),
+            Some(file) => commands::run(commands::RunTarget { file, args: vec![] }),
             None => {
                 Cli::parse_from(["aevia", "--help"]);
                 Ok(())
@@ -100,7 +102,7 @@ fn dispatch_subcommand(sub: CliCommand) -> AeviaResult<()> {
             Ok(())
         }
         CliCommand::Build { paths } => commands::build(paths),
-        CliCommand::Run { file } => commands::run(commands::RunTarget { file }),
+        CliCommand::Run { file, args } => commands::run(commands::RunTarget { file, args }),
         CliCommand::Check { paths } => commands::check(paths),
         CliCommand::Fmt { paths } => commands::fmt(paths),
         CliCommand::Lint { paths } => commands::lint(paths),

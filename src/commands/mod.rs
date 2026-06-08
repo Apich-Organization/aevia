@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub struct RunTarget {
     pub file: PathBuf,
+    pub args: Vec<f64>,
 }
 
 /// `aevia new`
@@ -131,7 +132,7 @@ pub fn build(paths: Vec<PathBuf>) -> AeviaResult<()> {
 /// `aevia run`
 pub fn run(target: RunTarget) -> AeviaResult<()> {
     logging::pass("run");
-    let RunTarget { file } = target;
+    let RunTarget { file, args: user_args } = target;
     let file = file.canonicalize().map_err(|e| AeviaError::io(&file, e))?;
     if !is_ae_file(&file) {
         return Err(AeviaError::message(format!(
@@ -254,8 +255,19 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
             AeviaError::message(format!("JIT compilation failed: {:?}", e))
         })?;
 
-        // Call with 1.0 arguments as defaults
-        let args = vec![1.0; params.len()];
+        let args = if user_args.is_empty() {
+            vec![1.0; params.len()]
+        } else {
+            if user_args.len() != params.len() {
+                return Err(AeviaError::message(format!(
+                    "arity mismatch: expected {} arguments for function `{}`, but got {}",
+                    params.len(),
+                    name,
+                    user_args.len()
+                )));
+            }
+            user_args
+        };
         let res = compiled_fn(args.as_ptr());
 
         logging::pass_detail(
