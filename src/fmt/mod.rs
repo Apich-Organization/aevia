@@ -1,7 +1,7 @@
 //! Source formatter (AST pretty-printer). Phase 5.
 
 use crate::ast::{
-    Attribute, BinOp, DimExpr, Expr, Field, FunctionBody, Item, OpProperties, Param, Spanned, Stmt,
+    Attribute, BinOp, DimExpr, Expr, Field, FunctionBody, Item, MatchArm, OpProperties, Param, Pattern, Spanned, Stmt,
     UnOp, Visibility,
 };
 use crate::diagnostics::{AeviaError, AeviaResult};
@@ -197,6 +197,7 @@ fn format_stmt(out: &mut String, stmt: &Stmt, _indent: usize) {
             out.push(';');
         }
         Stmt::Break => out.push_str("break;"),
+        Stmt::Continue => out.push_str("continue;"),
     }
 }
 
@@ -306,7 +307,22 @@ fn format_expr(expr: &Expr) -> String {
                 format_expr(&then_branch.node)
             );
             if let Some(e) = else_branch {
-                s.push_str(&format!(" else {{ {} }}", format_expr(&e.node)));
+                // If the else branch is an if, format as elseif.
+                if let Expr::If { cond: next_cond, then_branch: next_then, else_branch: next_else } = &e.node {
+                    s.push_str(&format!(" elseif {} {{ {} }}", format_expr(&next_cond.node), format_expr(&next_then.node)));
+                    let mut current_else = next_else;
+                    while let Some(next_node) = current_else {
+                        if let Expr::If { cond: next_cond, then_branch: next_then, else_branch: next_else } = &next_node.node {
+                            s.push_str(&format!(" elseif {} {{ {} }}", format_expr(&next_cond.node), format_expr(&next_then.node)));
+                            current_else = next_else;
+                        } else {
+                            s.push_str(&format!(" else {{ {} }}", format_expr(&next_node.node)));
+                            break;
+                        }
+                    }
+                } else {
+                    s.push_str(&format!(" else {{ {} }}", format_expr(&e.node)));
+                }
             }
             s
         }
@@ -314,6 +330,44 @@ fn format_expr(expr: &Expr) -> String {
             let mut s = String::from("loop { ");
             for stmt in body {
                 format_stmt(&mut s, &stmt.node, 0);
+                s.push(' ');
+            }
+            s.push_str("}");
+            s
+        }
+        Expr::While { cond, body } => {
+            let mut s = format!("while {} {{ ", format_expr(&cond.node));
+            for stmt in body {
+                format_stmt(&mut s, &stmt.node, 0);
+                s.push(' ');
+            }
+            s.push_str("}");
+            s
+        }
+        Expr::For { var, start, end, body } => {
+            let mut s = format!("for {var} in {}..{} {{ ", format_expr(&start.node), format_expr(&end.node));
+            for stmt in body {
+                format_stmt(&mut s, &stmt.node, 0);
+                s.push(' ');
+            }
+            s.push_str("}");
+            s
+        }
+        Expr::Match { scrutinee, arms } => {
+            let mut s = format!("match {} {{ ", format_expr(&scrutinee.node));
+            for (i, arm) in arms.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                let pat_str = match &arm.pattern {
+                    Pattern::Wildcard => "_".to_string(),
+                    Pattern::Literal(val) => val.to_string(),
+                    Pattern::Binding { name, type_guard: None } => name.clone(),
+                    Pattern::Binding { name, type_guard: Some(tg) } => {
+                        format!("{name}: {}", format_dim(&tg.node))
+                    }
+                };
+                s.push_str(&format!("{pat_str} => {}", format_expr(&arm.body.node)));
             }
             s.push_str(" }");
             s

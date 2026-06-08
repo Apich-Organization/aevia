@@ -142,7 +142,7 @@ fn walk_stmt_unsafe(path: &Path, stmt: &Stmt, report: &mut LintReport) {
         Stmt::Let { init, .. } => walk_expr(path, &init.node, report),
         Stmt::Assign { value, .. } => walk_expr(path, &value.node, report),
         Stmt::Expr(expr) => walk_expr(path, &expr.node, report),
-        Stmt::Break => {}
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -182,6 +182,25 @@ fn walk_expr(path: &Path, expr: &Expr, report: &mut LintReport) {
                 walk_stmt_unsafe(path, &stmt.node, report);
             }
         }
+        Expr::While { cond, body } => {
+            walk_expr(path, &cond.node, report);
+            for stmt in body {
+                walk_stmt_unsafe(path, &stmt.node, report);
+            }
+        }
+        Expr::For { start, end, body, .. } => {
+            walk_expr(path, &start.node, report);
+            walk_expr(path, &end.node, report);
+            for stmt in body {
+                walk_stmt_unsafe(path, &stmt.node, report);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            walk_expr(path, &scrutinee.node, report);
+            for arm in arms {
+                walk_expr(path, &arm.body.node, report);
+            }
+        }
         Expr::UnsafeTransmute { expr, .. } => walk_expr(path, &expr.node, report),
         Expr::Literal { .. } | Expr::Variable(_) => {}
     }
@@ -212,14 +231,18 @@ fn collect_body_uses(body: &crate::ast::FunctionBody, names: &mut HashSet<String
         crate::ast::FunctionBody::Expression(expr) => collect_expr_uses(&expr.node, names),
         crate::ast::FunctionBody::Block(stmts) => {
             for stmt in stmts {
-                match &stmt.node {
-                    Stmt::Let { init, .. } => collect_expr_uses(&init.node, names),
-                    Stmt::Assign { value, .. } => collect_expr_uses(&value.node, names),
-                    Stmt::Expr(expr) => collect_expr_uses(&expr.node, names),
-                    Stmt::Break => {}
-                }
+                collect_stmt_uses(&stmt.node, names);
             }
         }
+    }
+}
+
+fn collect_stmt_uses(stmt: &Stmt, names: &mut HashSet<String>) {
+    match stmt {
+        Stmt::Let { init, .. } => collect_expr_uses(&init.node, names),
+        Stmt::Assign { value, .. } => collect_expr_uses(&value.node, names),
+        Stmt::Expr(expr) => collect_expr_uses(&expr.node, names),
+        Stmt::Break | Stmt::Continue => {}
     }
 }
 
@@ -241,9 +264,7 @@ fn collect_expr_uses(expr: &Expr, names: &mut HashSet<String>) {
         Expr::UnaryOp { expr, .. } => collect_expr_uses(&expr.node, names),
         Expr::Block(stmts) => {
             for stmt in stmts {
-                if let Stmt::Expr(e) = &stmt.node {
-                    collect_expr_uses(&e.node, names);
-                }
+                collect_stmt_uses(&stmt.node, names);
             }
         }
         Expr::If { cond, then_branch, else_branch } => {
@@ -255,9 +276,26 @@ fn collect_expr_uses(expr: &Expr, names: &mut HashSet<String>) {
         }
         Expr::Loop { body } => {
             for stmt in body {
-                if let Stmt::Expr(e) = &stmt.node {
-                    collect_expr_uses(&e.node, names);
-                }
+                collect_stmt_uses(&stmt.node, names);
+            }
+        }
+        Expr::While { cond, body } => {
+            collect_expr_uses(&cond.node, names);
+            for stmt in body {
+                collect_stmt_uses(&stmt.node, names);
+            }
+        }
+        Expr::For { start, end, body, .. } => {
+            collect_expr_uses(&start.node, names);
+            collect_expr_uses(&end.node, names);
+            for stmt in body {
+                collect_stmt_uses(&stmt.node, names);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            collect_expr_uses(&scrutinee.node, names);
+            for arm in arms {
+                collect_expr_uses(&arm.body.node, names);
             }
         }
         Expr::UnsafeTransmute { expr, .. } => collect_expr_uses(&expr.node, names),

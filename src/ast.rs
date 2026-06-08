@@ -178,6 +178,8 @@ pub enum Stmt {
     },
     /// Loop break instruction.
     Break,
+    /// `continue;` inside a loop.
+    Continue,
 }
 
 /// Dimensional unit expressions (e.g. `m * kg / s^2`).
@@ -231,12 +233,51 @@ pub enum Expr {
     Loop {
         body: Vec<Spanned<Stmt>>,
     },
+    /// `while cond { body }` — loops while condition is non-zero.
+    While {
+        cond: Box<Spanned<Expr>>,
+        body: Vec<Spanned<Stmt>>,
+    },
+    /// `for var in start..end { body }` — range-based iteration.
+    For {
+        var: String,
+        start: Box<Spanned<Expr>>,
+        end: Box<Spanned<Expr>>,
+        body: Vec<Spanned<Stmt>>,
+    },
+    /// `match scrutinee { pattern => expr, ... }` — pattern matching.
+    Match {
+        scrutinee: Box<Spanned<Expr>>,
+        arms: Vec<MatchArm>,
+    },
     /// Unsafe transmute construct for tensors, e.g. `unsafe transmute(buffer) { assume_unit: kg/m^3, ... }`
     UnsafeTransmute {
         expr: Box<Spanned<Expr>>,
         assume_unit: Option<Spanned<DimExpr>>,
         assume_layout: Option<String>,
     },
+}
+
+/// A pattern inside a `match` arm.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// `_` — matches anything, binds nothing.
+    Wildcard,
+    /// `name` or `name: DimType` — binds the scrutinee to a variable,
+    /// with an optional dimensional type guard.
+    Binding {
+        name: String,
+        type_guard: Option<Spanned<DimExpr>>,
+    },
+    /// A numeric literal pattern, e.g. `0` or `1.0`.
+    Literal(Decimal),
+}
+
+/// A single arm of a `match` expression: `pattern => body`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Spanned<Expr>,
 }
 
 /// Binary mathematical and comparison operators.

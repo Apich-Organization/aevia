@@ -1,6 +1,6 @@
 //! Aevia mathematical and physical expression parser using Chumsky.
 
-use crate::ast::{BinOp, DimExpr, Expr, Spanned, UnOp};
+use crate::ast::{BinOp, DimExpr, Expr, MatchArm, Pattern, Spanned, Stmt, UnOp};
 use chumsky::prelude::*;
 use miette::SourceSpan;
 use rust_decimal::Decimal;
@@ -169,7 +169,188 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
             .ignore_then(expr.clone())
             .then_ignore(just(')').padded());
 
-        let atom = choice((literal, call_or_var, parens));
+        // `loop { stmts }`
+        let loop_kw = super::items::kw_pub("loop");
+        let loop_expr = loop_kw
+            .padded()
+            .ignore_then(super::items::block_body_with_expr(expr.clone()))
+            .map_with(|body, e| Spanned::new(Expr::Loop { body }, to_src_span(e.span())));
+
+        // `while cond { stmts }`
+        let while_expr = super::items::kw_pub("while")
+            .padded()
+            .ignore_then(expr.clone().padded())
+            .then(super::items::block_body_with_expr(expr.clone()))
+            .map_with(|(cond, body), e| {
+                Spanned::new(
+                    Expr::While { cond: Box::new(cond), body },
+                    to_src_span(e.span()),
+                )
+            });
+
+        // `for var in start..end { stmts }`
+        let for_expr = super::items::kw_pub("for")
+            .padded()
+            .ignore_then(ident.clone().padded())
+            .then_ignore(super::items::kw_pub("in").padded())
+            .then(expr.clone().padded())
+            .then_ignore(just("..").padded())
+            .then(expr.clone().padded())
+            .then(super::items::block_body_with_expr(expr.clone()))
+            .map_with(|(((var, start), end), body), e| {
+                Spanned::new(
+                    Expr::For {
+                        var,
+                        start: Box::new(start),
+                        end: Box::new(end),
+                        body,
+                    },
+                    to_src_span(e.span()),
+                )
+            });
+
+        // `if cond { then } [elseif cond { then }]* [else { else }]`
+        // Parsed as right-recursive nested Expr::If nodes.
+        let if_expr = {
+            let block_expr = super::items::block_body_with_expr(expr.clone()).map_with(|stmts, e| {
+                Spanned::new(Expr::Block(stmts), to_src_span(e.span()))
+            });
+
+            super::items::kw_pub("if")
+                .padded()
+                .ignore_then(expr.clone().padded())
+                .then(block_expr.clone())
+                .then(
+                    // `elseif` chains
+                    super::items::kw_pub("elseif")
+                        .padded()
+                        .ignore_then(expr.clone().padded())
+                        .then(block_expr.clone())
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                )
+                .then(
+                    // optional `else { ... }`
+                    super::items::kw_pub("else")
+                        .padded()
+                        .ignore_then(block_expr.clone())
+                        .or_not(),
+                )
+                .map_with(|(((cond, then_branch), elseif_arms), else_branch), e| {
+                    let span = to_src_span(e.span());
+                    // Build the final else node first (innermost).
+                    let mut current_else: Option<Box<Spanned<Expr>>> =
+                        else_branch.map(Box::new);
+                    // Fold elseif arms from right to left.
+                    for (ei_cond, ei_then) in elseif_arms.into_iter().rev() {
+                        let ei_span = merge_spans(ei_cond.span, ei_then.span);
+                        current_else = Some(Box::new(Spanned::new(
+                            Expr::If {
+                                cond: Box::new(ei_cond),
+                                then_branch: Box::new(ei_then),
+                                else_branch: current_else,
+                            },
+                            ei_span,
+                        )));
+                    }
+                    Spanned::new(
+                        Expr::If {
+                            cond: Box::new(cond),
+                            then_branch: Box::new(then_branch),
+                            else_branch: current_else,
+                        },
+                        span,
+                    )
+                })
+        };
+
+        // Pattern for a match arm.
+        let pattern = choice((
+            just('_').map(|_| Pattern::Wildcard),
+            // numeric literal pattern
+            any()
+                .filter(|c: &char| c.is_ascii_digit())
+                .repeated()
+                .at_least(1)
+                .collect::<String>()
+                .then(
+                    just('.')
+                        .then(
+                            any()
+                                .filter(|c: &char| c.is_ascii_digit())
+                                .repeated()
+                                .at_least(1)
+                                .collect::<String>(),
+                        )
+                        .or_not(),
+                )
+                .map(|(int, frac)| {
+                    let s = if let Some((_, f)) = frac {
+                        format!("{int}.{f}")
+                    } else {
+                        int
+                    };
+                    Pattern::Literal(Decimal::from_str(&s).unwrap_or(Decimal::ZERO))
+                }),
+            // binding with optional type guard
+            ident
+                .clone()
+                .then(
+                    just(':')
+                        .padded()
+                        .ignore_then(dim_expr_parser())
+                        .or_not(),
+                )
+                .map(|(name, type_guard)| Pattern::Binding { name, type_guard }),
+        ));
+
+        // `match scrutinee { pattern => expr, ... }`
+        let match_expr = super::items::kw_pub("match")
+            .padded()
+            .ignore_then(expr.clone().padded())
+            .then(
+                just('{')
+                    .padded()
+                    .ignore_then(
+                        pattern
+                            .padded()
+                            .then_ignore(just("=>").padded())
+                            .then(expr.clone().padded())
+                            .then_ignore(just(',').padded().or_not())
+                            .map(|(pat, body)| MatchArm { pattern: pat, body })
+                            .repeated()
+                            .collect::<Vec<_>>(),
+                    )
+                    .then_ignore(just('}').padded()),
+            )
+            .map_with(|(scrutinee, arms), e| {
+                Spanned::new(
+                    Expr::Match { scrutinee: Box::new(scrutinee), arms },
+                    to_src_span(e.span()),
+                )
+            });
+
+        // `continue` (no-op in lowering, signals loop continuation)
+        let continue_expr = super::items::kw_pub("continue")
+            .map_with(|_, e| {
+                // Desugar continue to a literal 0.0 (acts as a no-result placeholder)
+                Spanned::new(
+                    Expr::Literal { value: Decimal::ZERO, suffix: None },
+                    to_src_span(e.span()),
+                )
+            });
+
+        let atom = choice((
+            loop_expr,
+            while_expr,
+            for_expr,
+            if_expr,
+            match_expr,
+            continue_expr,
+            literal,
+            call_or_var,
+            parens,
+        ));
 
         // Unary negation (zero or more leading `-`).
         let unary = just('-')

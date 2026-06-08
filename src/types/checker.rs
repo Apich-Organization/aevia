@@ -8,7 +8,7 @@
 //!   5. Verifies function return expression vs. declared return type.
 
 use crate::ast::{
-    BinOp, Expr, FunctionBody, Item, SourceFile, Spanned, Stmt, UnOp,
+    BinOp, Expr, FunctionBody, Item, MatchArm, Pattern, SourceFile, Spanned, Stmt, UnOp,
 };
 use rust_decimal::prelude::ToPrimitive;
 use crate::modules::ImportBindings;
@@ -265,7 +265,7 @@ impl Ctx {
             Stmt::Expr(expr) => {
                 self.infer_expr(expr);
             }
-            Stmt::Break => {}
+            Stmt::Break | Stmt::Continue => {}
         }
     }
 
@@ -365,6 +365,87 @@ impl Ctx {
                 }
                 self.env.pop_scope();
                 Some(DimVector::DIMENSIONLESS)
+            }
+
+            Expr::While { cond, body } => {
+                // Condition should be dimensionless (comparison result).
+                self.infer_expr(cond);
+                self.env.push_scope();
+                for stmt in body {
+                    self.check_stmt(stmt);
+                }
+                self.env.pop_scope();
+                Some(DimVector::DIMENSIONLESS)
+            }
+
+            Expr::For { var, start, end, body } => {
+                // start and end must be dimensionless (loop counters).
+                let start_dim = self.infer_expr(start);
+                let end_dim = self.infer_expr(end);
+                if let (Some(s), Some(e)) = (&start_dim, &end_dim) {
+                    if !s.addable_with(*e) {
+                        self.errors.push(TypeError::dimension_mismatch(
+                            end.span,
+                            &e.to_string(),
+                            &s.to_string(),
+                        ));
+                    }
+                }
+                self.env.push_scope();
+                // Bind the loop variable as dimensionless.
+                self.env.define(var.clone(), DimVector::DIMENSIONLESS);
+                for stmt in body {
+                    self.check_stmt(stmt);
+                }
+                self.env.pop_scope();
+                Some(DimVector::DIMENSIONLESS)
+            }
+
+            Expr::Match { scrutinee, arms } => {
+                let scrutinee_dim = self.infer_expr(scrutinee);
+                let mut result_dim: Option<DimVector> = None;
+                for MatchArm { pattern, body } in arms {
+                    self.env.push_scope();
+                    match pattern {
+                        Pattern::Binding { name, type_guard } => {
+                            let bound_dim = if let Some(guard_span) = type_guard {
+                                // Verify the type guard matches the scrutinee dimension.
+                                let guard_dim = resolve_with_env(guard_span, &self.env);
+                                if let (Some(sd), Some(gd)) = (&scrutinee_dim, &guard_dim) {
+                                    if sd != gd {
+                                        self.errors.push(TypeError::annotation_conflict(
+                                            guard_span.span,
+                                            &gd.to_string(),
+                                            &sd.to_string(),
+                                        ));
+                                    }
+                                }
+                                guard_dim.or(scrutinee_dim)
+                            } else {
+                                scrutinee_dim
+                            };
+                            if let Some(dim) = bound_dim {
+                                self.env.define(name.clone(), dim);
+                            }
+                        }
+                        Pattern::Wildcard | Pattern::Literal(_) => {}
+                    }
+                    let arm_dim = self.infer_expr(body);
+                    self.env.pop_scope();
+                    // All arms must produce the same dimension.
+                    match (&result_dim, &arm_dim) {
+                        (Some(rd), Some(ad)) if rd != ad => {
+                            self.errors.push(TypeError::dimension_mismatch(
+                                body.span,
+                                &ad.to_string(),
+                                &rd.to_string(),
+                            ));
+                        }
+                        (None, _) => result_dim = arm_dim,
+                        _ => {}
+                    }
+                }
+                result_dim
             }
 
             Expr::UnsafeTransmute { expr: inner, assume_unit, .. } => {

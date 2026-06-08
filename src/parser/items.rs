@@ -62,6 +62,11 @@ fn kw<'a>(word: &'static str) -> impl Parser<'a, &'a str, (), extra::Err<Simple<
         .ignored()
 }
 
+/// Public re-export of `kw` for use by `expr.rs`.
+pub fn kw_pub<'a>(word: &'static str) -> impl Parser<'a, &'a str, (), extra::Err<Simple<'a, char>>> + Clone {
+    kw(word)
+}
+
 /// Visibility prefix: `pub(crate)`, `pub`, or nothing (Private).
 fn visibility<'a>() -> impl Parser<'a, &'a str, Visibility, extra::Err<Simple<'a, char>>> + Clone {
     choice((
@@ -106,7 +111,11 @@ fn dim<'a>() -> impl Parser<'a, &'a str, Spanned<DimExpr>, extra::Err<Simple<'a,
 // ── Statements ────────────────────────────────────────────────────────────────
 
 /// `let [mut] name [: DimType] = expr;`
-fn let_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone {
+/// `let [mut] name [: DimType] = expr;`
+fn let_stmt_with_expr<'a, P>(expr: P) -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone
+where
+    P: Parser<'a, &'a str, Spanned<crate::ast::Expr>, extra::Err<Simple<'a, char>>> + Clone + 'a
+{
     let is_mut = kw("mut").padded().or_not().map(|m| m.is_some());
 
     kw("let")
@@ -115,7 +124,7 @@ fn let_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'
         .then(ident().padded())
         .then(just(':').padded().ignore_then(dim()).or_not())
         .then_ignore(just('=').padded())
-        .then(expr_parser().padded())
+        .then(expr.padded())
         .then_ignore(just(';').padded())
         .map_with(|(((is_mut, name), declared_type), init), e| {
             Spanned::new(
@@ -130,14 +139,25 @@ fn let_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'
         })
 }
 
+fn let_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone {
+    let_stmt_with_expr(expr_parser())
+}
+
 /// `name = expr;` (re-assignment)
-fn assign_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone {
+fn assign_stmt_with_expr<'a, P>(expr: P) -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone
+where
+    P: Parser<'a, &'a str, Spanned<crate::ast::Expr>, extra::Err<Simple<'a, char>>> + Clone + 'a
+{
     ident()
         .padded()
         .then_ignore(just('=').padded())
-        .then(expr_parser().padded())
+        .then(expr.padded())
         .then_ignore(just(';').padded())
         .map_with(|(name, value), e| Spanned::new(Stmt::Assign { target: name, value }, to_src(e.span())))
+}
+
+fn assign_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone {
+    assign_stmt_with_expr(expr_parser())
 }
 
 /// `break;`
@@ -148,25 +168,48 @@ fn break_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple
         .map_with(|_, e| Spanned::new(Stmt::Break, to_src(e.span())))
 }
 
+/// `continue;`
+fn continue_stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone {
+    kw("continue")
+        .padded()
+        .then_ignore(just(';').padded())
+        .map_with(|_, e| Spanned::new(Stmt::Continue, to_src(e.span())))
+}
+
 /// Any statement inside a block body.
-fn stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone {
+fn stmt_with_expr<'a, P>(expr: P) -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone
+where
+    P: Parser<'a, &'a str, Spanned<crate::ast::Expr>, extra::Err<Simple<'a, char>>> + Clone + 'a
+{
     choice((
-        let_stmt(),
+        let_stmt_with_expr(expr.clone()),
         break_stmt(),
-        assign_stmt(),
+        continue_stmt(),
+        assign_stmt_with_expr(expr.clone()),
         // Bare expression statement (trailing `;`)
-        expr_parser().padded().then_ignore(just(';').padded()).map_with(|expr, e| {
+        expr.padded().then_ignore(just(';').padded()).map_with(|expr, e| {
             Spanned::new(Stmt::Expr(expr), to_src(e.span()))
         }),
     ))
 }
 
+fn stmt<'a>() -> impl Parser<'a, &'a str, Spanned<Stmt>, extra::Err<Simple<'a, char>>> + Clone {
+    stmt_with_expr(expr_parser())
+}
+
 /// A `{ stmt* }` block body.
-fn block_body<'a>() -> impl Parser<'a, &'a str, Vec<Spanned<Stmt>>, extra::Err<Simple<'a, char>>> + Clone {
+pub fn block_body_with_expr<'a, P>(expr: P) -> impl Parser<'a, &'a str, Vec<Spanned<Stmt>>, extra::Err<Simple<'a, char>>> + Clone
+where
+    P: Parser<'a, &'a str, Spanned<crate::ast::Expr>, extra::Err<Simple<'a, char>>> + Clone + 'a
+{
     just('{')
         .padded()
-        .ignore_then(stmt().repeated().collect::<Vec<_>>())
+        .ignore_then(stmt_with_expr(expr).repeated().collect::<Vec<_>>())
         .then_ignore(just('}').padded())
+}
+
+fn block_body<'a>() -> impl Parser<'a, &'a str, Vec<Spanned<Stmt>>, extra::Err<Simple<'a, char>>> + Clone {
+    block_body_with_expr(expr_parser())
 }
 
 // ── Function parameter / field ────────────────────────────────────────────────

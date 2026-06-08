@@ -1,6 +1,6 @@
 //! Lowering from Aevia AST to `rssn-advanced` expression DAG. Phase 3.
 
-use crate::ast::{BinOp, Expr, FunctionBody, Item, SourceFile, Spanned, Stmt, UnOp};
+use crate::ast::{BinOp, Expr, FunctionBody, Item, MatchArm, Pattern, SourceFile, Spanned, Stmt, UnOp};
 use crate::diagnostics::AeviaError;
 use rssn_advanced::dag::builder::DagBuilder;
 use rssn_advanced::dag::node::DagNodeId;
@@ -138,11 +138,66 @@ impl Lowerer {
             }
             Expr::Loop { body } => {
                 let init = self.builder.constant(0.0);
-                let limit = self.builder.constant(1000.0);
+                let limit = self.builder.constant(1_000_000.0);
                 let step = self.builder.constant(1.0);
                 let mut body_env = env.clone();
                 let body_node = self.lower_block(body, &mut body_env)?;
                 Ok(self.builder.for_loop(init, limit, step, body_node))
+            }
+            Expr::While { cond, body } => {
+                // Lowered as: for_loop(0, 1_000_000, 1, if_else(cond, body, break_zero))
+                // The condition is re-evaluated conceptually; approximated in DAG as:
+                // for_loop body = if(cond) { body_result } else { 0 }
+                let init = self.builder.constant(0.0);
+                let limit = self.builder.constant(1_000_000.0);
+                let step = self.builder.constant(1.0);
+                let cond_node = self.lower_expr(cond, env)?;
+                let mut body_env = env.clone();
+                let body_result = self.lower_block(body, &mut body_env)?;
+                let zero = self.builder.constant(0.0);
+                let guarded_body = self.builder.if_else(cond_node, body_result, zero);
+                Ok(self.builder.for_loop(init, limit, step, guarded_body))
+            }
+            Expr::For { var, start, end, body } => {
+                let start_node = self.lower_expr(start, env)?;
+                let end_node = self.lower_expr(end, env)?;
+                let step = self.builder.constant(1.0);
+                let mut body_env = env.clone();
+                // Bind the loop variable as a DAG variable node.
+                let var_node = self.builder.variable(var);
+                body_env.insert(var.clone(), var_node);
+                let body_result = self.lower_block(body, &mut body_env)?;
+                Ok(self.builder.for_loop(start_node, end_node, step, body_result))
+            }
+            Expr::Match { scrutinee, arms } => {
+                let scrutinee_node = self.lower_expr(scrutinee, env)?;
+                // Build chained if_else from last arm backwards.
+                // Default result if no arm matches: 0.0.
+                let mut result = self.builder.constant(0.0);
+                for MatchArm { pattern, body } in arms.iter().rev() {
+                    let mut arm_env = env.clone();
+                    let cond_node = match pattern {
+                        Pattern::Wildcard => {
+                            // Always-true: 1.0 (unconditional)
+                            self.builder.constant(1.0)
+                        }
+                        Pattern::Literal(val) => {
+                            use rust_decimal::prelude::ToPrimitive;
+                            let lit = self.builder.constant(
+                                val.to_f64().unwrap_or(0.0)
+                            );
+                            let eq_id = self.builder.intern_function("eq");
+                            self.builder.function_call(eq_id, &[scrutinee_node, lit])
+                        }
+                        Pattern::Binding { name, .. } => {
+                            arm_env.insert(name.clone(), scrutinee_node);
+                            self.builder.constant(1.0) // always matches
+                        }
+                    };
+                    let body_node = self.lower_expr(body, &mut arm_env)?;
+                    result = self.builder.if_else(cond_node, body_node, result);
+                }
+                Ok(result)
             }
             Expr::UnsafeTransmute { expr: inner, .. } => self.lower_expr(inner, env),
         }
@@ -170,7 +225,7 @@ impl Lowerer {
                 Stmt::Expr(expr) => {
                     last_node = self.lower_expr(expr, env)?;
                 }
-                Stmt::Break => {
+                Stmt::Break | Stmt::Continue => {
                     last_node = self.builder.constant(0.0);
                 }
             }
