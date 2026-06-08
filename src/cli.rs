@@ -67,7 +67,7 @@ pub enum CliCommand {
     /// Run project tests
     Test {
         /// Project root (defaults to current directory)
-        #[arg(short, long, default_value = ".")]
+        #[arg(default_value = ".")]
         path: PathBuf,
     },
 }

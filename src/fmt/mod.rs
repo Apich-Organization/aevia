@@ -416,4 +416,18 @@ mod tests {
         let out = format_source("type V = m / s;").unwrap();
         assert!(out.contains("type V = m / s"));
     }
+
+    #[test]
+    fn formats_control_flow() {
+        let src = "fn test(x: m) {\n    while x < 10.0_m {\n        let x = x + 1.0_m;\n        continue;\n    };\n}";
+        let out = format_source(src).unwrap();
+        assert!(out.contains("while x < 10.0_m { let x = x + 1.0_m; continue; };"));
+    }
+
+    #[test]
+    fn formats_for_and_match() {
+        let src = "fn test() {\n    for i in 0..10 {\n        match i {\n            1 => 1.0,\n            _ => 0.0,\n        };\n    };\n}";
+        let out = format_source(src).unwrap();
+        assert!(out.contains("for i in 0..10 { match i { 1 => 1.0, _ => 0.0 }; };"));
+    }
 }
