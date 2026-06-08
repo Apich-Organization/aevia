@@ -116,6 +116,7 @@ pub fn dim_expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<DimExpr>, extra
             base_dim
         }
     })
+    .boxed()
 }
 
 /// Create a parser for computational expressions with precedence climbing.
@@ -166,7 +167,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                     Expr::Literal { value: dec, suffix: suffix_opt },
                     to_src_span(e.span()),
                 )
-            });
+            })
+            .boxed();
 
         // Function call or bare variable.
         let call_or_var = ident
@@ -189,7 +191,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                 } else {
                     Spanned::new(Expr::Variable(name), span)
                 }
-            });
+            })
+            .boxed();
 
         // Parenthesised sub-expression.
         let parens = just('(')
@@ -202,7 +205,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
         let loop_expr = loop_kw
             .padded()
             .ignore_then(super::items::block_body_with_expr(expr.clone()))
-            .map_with(|body, e| Spanned::new(Expr::Loop { body }, to_src_span(e.span())));
+            .map_with(|body, e| Spanned::new(Expr::Loop { body }, to_src_span(e.span())))
+            .boxed();
 
         // `while cond { stmts }`
         let while_expr = super::items::kw_pub("while")
@@ -214,7 +218,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                     Expr::While { cond: Box::new(cond), body },
                     to_src_span(e.span()),
                 )
-            });
+            })
+            .boxed();
 
         // `for var in start..end { stmts }`
         let for_expr = super::items::kw_pub("for")
@@ -235,7 +240,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                     },
                     to_src_span(e.span()),
                 )
-            });
+            })
+            .boxed();
 
         // `if cond { then } [elseif cond { then }]* [else { else }]`
         // Parsed as right-recursive nested Expr::If nodes.
@@ -290,6 +296,7 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                         span,
                     )
                 })
+                .boxed()
         };
 
         // Pattern for a match arm.
@@ -356,7 +363,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                     Expr::Match { scrutinee: Box::new(scrutinee), arms },
                     to_src_span(e.span()),
                 )
-            });
+            })
+            .boxed();
 
         // `continue` (no-op in lowering, signals loop continuation)
         let continue_expr = super::items::kw_pub("continue")
@@ -366,7 +374,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                     Expr::Literal { value: Decimal::ZERO, suffix: None },
                     to_src_span(e.span()),
                 )
-            });
+            })
+            .boxed();
 
         let atom = choice((
             loop_expr,
@@ -461,6 +470,7 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
                 })
             })
     })
+    .boxed()
 }
 
 /// Parse a source string into a spanned expression, returning parse errors on failure.

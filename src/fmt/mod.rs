@@ -54,6 +54,7 @@ fn item_needs_semicolon(item: &Item) -> bool {
                 ..
             }
             | Item::CustomOp { .. }
+            | Item::MacroDef { .. }
     )
 }
 
@@ -142,6 +143,13 @@ fn format_item(out: &mut String, item: &Item, indent: usize) {
                     format_module_block(out, items, indent);
                 }
             }
+        }
+        Item::MacroDef { name, rules } => {
+            let _ = write!(out, "{pad}macro_rules! {name} {{");
+            for rule in rules {
+                let _ = write!(out, "\n{}    ({}) => {{ {} }}", pad, rule.pattern, rule.replacement);
+            }
+            let _ = write!(out, "\n{pad}}}");
         }
     }
 }

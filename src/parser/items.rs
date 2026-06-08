@@ -427,6 +427,7 @@ fn use_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'
         .map_with(|(path, alias), e| {
             Spanned::new(Item::Use { path, alias }, to_src(e.span()))
         })
+        .boxed()
 }
 
 /// `type Name = DimType;`
@@ -447,6 +448,7 @@ fn type_alias_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<S
                 to_src(e.span()),
             )
         })
+        .boxed()
 }
 
 /// `[pub] struct Name { fields }`
@@ -477,6 +479,7 @@ fn struct_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simpl
                 to_src(e.span()),
             )
         })
+        .boxed()
 }
 
 /// `[#[attr]]* [pub] fn name(params) [-> DimType] := expr;`
@@ -528,6 +531,7 @@ fn fn_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a
                 to_src(e.span()),
             )
         })
+        .boxed()
 }
 
 /// `[pub] op name(param: InputDim -> OutputDim) { properties }`
@@ -560,6 +564,7 @@ fn op_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a
                 to_src(e.span()),
             )
         })
+        .boxed()
 }
 
 // ── Source file ───────────────────────────────────────────────────────────────
@@ -609,63 +614,93 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
     .collect::<Vec<_>>()
     .map(|items| SourceFile { doc: None, items })
     .padded()
+    .boxed()
 }
 
 /// Parses `macro_rules! name { (pattern) => { replacement } ... }`
 ///
 /// Patterns and replacements are captured as raw strings — actual token-tree
 /// matching happens in the expansion pre-pass.
+///
+/// # Implementation note
+/// We deliberately avoid `recursive()` here: Chumsky's recursive parsers
+/// generate deeply nested generic types that cause extreme monomorphization
+/// cost (~30 min compile). Instead, we scan balanced delimiters manually
+/// with a plain loop via `try_map`.
 fn macro_rules_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a, char>>> + Clone {
-    // Captures all characters between balanced `{...}` (including nested braces).
-    fn balanced_braces<'a>() -> impl Parser<'a, &'a str, String, extra::Err<Simple<'a, char>>> + Clone {
-        just('{').then(
-            recursive(|inner| {
-                choice((
-                    just('{').then(inner).then(just('}')).map(|((open, mid), close)| {
-                        let mut s = String::from(open);
-                        s.push_str(&mid);
-                        s.push(close);
-                        s
-                    }),
-                    none_of("}").map(|c: char| c.to_string()),
-                ))
-                .repeated()
-                .collect::<Vec<String>>()
-                .map(|parts| parts.concat())
-            })
-        )
-        .then(just('}'))
-        .map(|((_, mid), _)| mid)
+    /// Scan `input` from `pos` past the matching closing delimiter `close`,
+    /// given that the opening delimiter has already been consumed.
+    fn scan_balanced(input: &str, pos: usize, open: char, close: char) -> Option<(String, usize)> {
+        let mut depth = 1usize;
+        let mut i = pos;
+        let bytes = input.as_bytes();
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c == open { depth += 1; }
+            else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((input[pos..i].to_string(), i + 1));
+                }
+            }
+            i += 1;
+        }
+        None
     }
 
-    // Captures all characters between balanced `(...)`
-    fn balanced_parens<'a>() -> impl Parser<'a, &'a str, String, extra::Err<Simple<'a, char>>> + Clone {
-        just('(').then(
-            none_of(")")
-                .repeated()
-                .collect::<String>()
-        )
-        .then(just(')'))
-        .map(|((_, mid), _)| mid)
+    /// Parse one `(pattern) => { replacement }` rule from a string slice.
+    fn parse_rules(body: &str) -> Vec<MacroRule> {
+        let mut rules = Vec::new();
+        let s = body.trim();
+        let mut i = 0;
+        while i < s.len() {
+            // skip whitespace
+            while i < s.len() && s.as_bytes()[i].is_ascii_whitespace() { i += 1; }
+            if i >= s.len() { break; }
+            // expect '('
+            if s.as_bytes()[i] != b'(' { break; }
+            i += 1;
+            let (pattern, next) = match scan_balanced(s, i, '(', ')') {
+                Some(r) => r,
+                None => break,
+            };
+            i = next;
+            // skip whitespace + '=>'
+            while i < s.len() && s.as_bytes()[i].is_ascii_whitespace() { i += 1; }
+            if s[i..].starts_with("=>") { i += 2; }
+            while i < s.len() && s.as_bytes()[i].is_ascii_whitespace() { i += 1; }
+            // expect '{'
+            if i >= s.len() || s.as_bytes()[i] != b'{' { break; }
+            i += 1;
+            let (replacement, next) = match scan_balanced(s, i, '{', '}') {
+                Some(r) => r,
+                None => break,
+            };
+            i = next;
+            rules.push(MacroRule { pattern: pattern.trim().to_string(), replacement: replacement.trim().to_string() });
+        }
+        rules
     }
 
-    let single_rule = balanced_parens()
-        .padded()
-        .then_ignore(just("=>").padded())
-        .then(balanced_braces().padded())
-        .map(|(pattern, replacement)| crate::ast::MacroRule { pattern, replacement });
-
-    kw("macro_rules!")
+    just("macro_rules!")
         .padded()
         .ignore_then(ident().padded())
         .then(
-            single_rule
-                .padded()
+            // Capture the entire outer `{ ... }` body as a raw string, then
+            // post-process it with `parse_rules` — no recursive() needed.
+            any()
+                .and_is(just('{').not())
                 .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just('{').padded(), just('}').padded()),
+                .ignored()
+                .ignore_then(
+                    none_of('}')
+                        .repeated()
+                        .collect::<String>()
+                        .delimited_by(just('{'), just('}'))
+                )
         )
-        .map_with(|(name, rules), e| {
+        .map_with(|(name, body), e| {
+            let rules = parse_rules(&body);
             Spanned::new(Item::MacroDef { name, rules }, to_src(e.span()))
         })
 }
@@ -821,5 +856,24 @@ mod tests {
         "#;
         let f = parse(src);
         assert_eq!(f.items.len(), 3);
+    }
+
+    #[test]
+    fn test_macro_rules_item() {
+        let src = r#"
+            macro_rules! create_unit_alias {
+                ($name:ident, $unit:expr) => { type $name = $unit; }
+            }
+        "#;
+        let f = parse(src);
+        assert_eq!(f.items.len(), 1);
+        if let Item::MacroDef { name, rules } = &f.items[0].node {
+            assert_eq!(name, "create_unit_alias");
+            assert_eq!(rules.len(), 1);
+            assert!(rules[0].pattern.contains("$name:ident"));
+            assert!(rules[0].replacement.contains("type $name"));
+        } else {
+            panic!("expected MacroDef, got {:?}", f.items[0].node);
+        }
     }
 }

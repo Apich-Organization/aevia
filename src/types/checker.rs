@@ -153,7 +153,7 @@ impl Ctx {
                 }
             }
             // CustomOp dimensions are verified during check_item.
-            Item::CustomOp { .. } | Item::Use { .. } | Item::Module { .. } => {}
+            Item::CustomOp { .. } | Item::Use { .. } | Item::Module { .. } | Item::MacroDef { .. } => {}
         }
     }
 
@@ -206,7 +206,7 @@ impl Ctx {
             }
             // Already registered; no further checking needed here.
             Item::TypeAlias { .. } | Item::Struct { .. }
-            | Item::Use { .. } | Item::Module { .. } => {}
+            | Item::Use { .. } | Item::Module { .. } | Item::MacroDef { .. } => {}
         }
     }
 
@@ -459,6 +459,11 @@ impl Ctx {
                 } else {
                     Some(DimVector::DIMENSIONLESS)
                 }
+            }
+
+            Expr::MacroCall { .. } => {
+                // Macro calls are not yet expanded; treat as dimensionless until the expansion pass runs.
+                Some(DimVector::DIMENSIONLESS)
             }
         }
     }

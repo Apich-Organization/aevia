@@ -200,6 +200,12 @@ impl Lowerer {
                 Ok(result)
             }
             Expr::UnsafeTransmute { expr: inner, .. } => self.lower_expr(inner, env),
+            Expr::MacroCall { name, .. } => {
+                // Macro calls must be expanded by the macro pre-pass before lowering.
+                Err(AeviaError::message(format!(
+                    "macro `{name}!` was not expanded before lowering; run the expansion pass first"
+                )))
+            }
         }
     }
 

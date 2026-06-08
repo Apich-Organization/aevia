@@ -155,6 +155,7 @@ fn render_item(out: &mut String, item: &Item) {
             }
         }
         Item::Use { .. } => {}
+        Item::MacroDef { .. } => {} // macro definitions produce no doc output
     }
 }
 
