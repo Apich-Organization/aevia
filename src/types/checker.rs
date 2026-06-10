@@ -148,6 +148,31 @@ impl Ctx {
             | Item::Use { .. }
             | Item::Module { .. }
             | Item::MacroDef { .. } => {}
+            Item::Const { name, dim, value, .. } => {
+                // Register the const's declared type (or infer from value).
+                let declared_dim = dim.as_ref().and_then(|d| resolve_with_env(d, &self.env));
+                let inferred = self.infer_expr(value);
+                match (declared_dim, inferred) {
+                    (Some(ddim), Some(inferred_pt)) => {
+                        if ddim != inferred_pt.dim {
+                            self.errors.push(TypeError::annotation_conflict(
+                                value.span,
+                                &ddim.to_string(),
+                                &inferred_pt.dim.to_string(),
+                            ));
+                        } else {
+                            self.env.define(name.clone(), PhysicalType { dim: ddim, shape: inferred_pt.shape });
+                        }
+                    }
+                    (Some(ddim), None) => {
+                        self.env.define(name.clone(), PhysicalType::scalar(ddim));
+                    }
+                    (None, Some(pt)) => {
+                        self.env.define(name.clone(), pt);
+                    }
+                    (None, None) => {}
+                }
+            }
         }
     }
 
@@ -201,7 +226,8 @@ impl Ctx {
             | Item::Struct { .. }
             | Item::Use { .. }
             | Item::Module { .. }
-            | Item::MacroDef { .. } => {}
+            | Item::MacroDef { .. }
+            | Item::Const { .. } => {}
         }
     }
 

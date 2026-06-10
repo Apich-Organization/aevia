@@ -67,6 +67,13 @@ fn format_item(out: &mut String, item: &Item, indent: usize) {
                 let _ = write!(out, " as {a}");
             }
         }
+        Item::Const { name, dim, value, visibility, .. } => {
+            let _ = write!(out, "{}{}const {name}", vis(*visibility), pad);
+            if let Some(d) = dim {
+                let _ = write!(out, ": {}", format_dim(&d.node));
+            }
+            let _ = write!(out, " = {}", format_expr(&value.node));
+        }
         Item::TypeAlias { name, dimension_expr, .. } => {
             let _ = write!(
                 out,
@@ -277,7 +284,7 @@ fn format_dim(expr: &DimExpr) -> String {
     crate::doc::format_dim(expr)
 }
 
-fn format_expr(expr: &Expr) -> String {
+pub fn format_expr(expr: &Expr) -> String {
     match expr {
         Expr::Literal { value, suffix } => {
             let mut s = value.to_string();

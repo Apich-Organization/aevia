@@ -534,6 +534,30 @@ fn fn_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a
         .boxed()
 }
 
+/// `[pub] const NAME [: DimType] = expr;`
+fn const_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a, char>>> + Clone {
+    visibility()
+        .then_ignore(kw("const").padded())
+        .then(ident().padded())
+        .then(just(':').padded().ignore_then(dim()).or_not())
+        .then_ignore(just('=').padded())
+        .then(expr_parser().padded())
+        .then_ignore(just(';').padded())
+        .map_with(|(((vis, name), dim), value), e| {
+            Spanned::new(
+                Item::Const {
+                    name,
+                    dim,
+                    value,
+                    visibility: vis,
+                    doc: None,
+                },
+                to_src(e.span()),
+            )
+        })
+        .boxed()
+}
+
 /// `[pub] op name(param: InputDim -> OutputDim) { properties }`
 fn op_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a, char>>> + Clone {
     visibility()
@@ -605,6 +629,7 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
             mod_item,
             struct_item(),
             type_alias_item(),
+            const_item(),
             use_item(),
             macro_rules_item(),
         ))

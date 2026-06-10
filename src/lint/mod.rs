@@ -122,6 +122,7 @@ fn lint_item_unsafe(path: &Path, item: &Item, report: &mut LintReport) {
         Item::Function { body, .. } => {
             walk_expr_unsafe(path, body, report);
         }
+        Item::Const { value, .. } => walk_expr(path, &value.node, report),
         _ => {}
     }
 }
@@ -223,6 +224,7 @@ fn collect_item_uses(item: &Item, names: &mut HashSet<String>) {
             }
         }
         Item::Function { body, .. } => collect_body_uses(body, names),
+        Item::Const { value, .. } => collect_expr_uses(&value.node, names),
         _ => {}
     }
 }

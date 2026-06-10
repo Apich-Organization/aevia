@@ -45,6 +45,7 @@ fn expand_item(item: &mut Item, macros: &HashMap<String, Vec<MacroRule>>) -> Aev
                 Ok(())
             }
         },
+        Item::Const { value, .. } => expand_expr(&mut value.node, macros),
         _ => Ok(()),
     }
 }

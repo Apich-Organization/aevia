@@ -10,6 +10,8 @@ use std::collections::HashMap;
 pub struct Lowerer {
     pub builder: DagBuilder,
     pub functions: HashMap<String, Item>,
+    /// Pre-lowered constant DAG nodes keyed by name.
+    pub const_nodes: HashMap<String, DagNodeId>,
 }
 
 impl Default for Lowerer {
@@ -24,6 +26,7 @@ impl Lowerer {
         Self {
             builder: DagBuilder::new(),
             functions: HashMap::new(),
+            const_nodes: HashMap::new(),
         }
     }
 
@@ -36,6 +39,15 @@ impl Lowerer {
                 }
                 Item::CustomOp { name, .. } => {
                     self.functions.insert(name.clone(), item.node.clone());
+                }
+                Item::Const { name, value, .. } => {
+                    // Lower the const value expression and store it as a named constant.
+                    let mut env = HashMap::new();
+                    if let Ok(node_id) = self.lower_expr(value, &mut env) {
+                        self.functions.insert(name.clone(), item.node.clone());
+                        // Also store the DAG node in a shared env for later reference.
+                        self.const_nodes.insert(name.clone(), node_id);
+                    }
                 }
                 _ => {}
             }
@@ -58,6 +70,8 @@ impl Lowerer {
             }
             Expr::Variable(name) => {
                 if let Some(&node_id) = env.get(name) {
+                    Ok(node_id)
+                } else if let Some(&node_id) = self.const_nodes.get(name) {
                     Ok(node_id)
                 } else {
                     // Default to creating a new variable node in the builder

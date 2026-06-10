@@ -2,6 +2,7 @@
 
 use crate::ast::{DimExpr, Item, Param, SourceFile, Visibility};
 use crate::diagnostics::AeviaResult;
+use crate::fmt::format_expr;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -156,6 +157,24 @@ fn render_item(out: &mut String, item: &Item) {
         }
         Item::Use { .. } => {}
         Item::MacroDef { .. } => {} // macro definitions produce no doc output
+        Item::Const { name, dim, value, visibility, doc } => {
+            if !is_public(*visibility) {
+                return;
+            }
+            let _ = writeln!(out, "## const `{name}`\n");
+            if let Some(d) = doc {
+                let _ = writeln!(out, "{d}\n");
+            }
+            let dim_str = dim
+                .as_ref()
+                .map(|d| format_dim(&d.node))
+                .unwrap_or_else(|| "inferred".to_string());
+            let _ = writeln!(
+                out,
+                "```ae\nconst {name}: {dim_str} = {};\n```\n",
+                format_expr(&value.node)
+            );
+        }
     }
 }
 
