@@ -399,6 +399,8 @@ fn format_expr(expr: &Expr) -> String {
             s
         }
         Expr::MacroCall { name, args } => format!("{name}!({args})"),
+        Expr::Print { expr } => format!("print({})", format_expr(&expr.node)),
+        Expr::Log { message } => format!("log(\"{message}\")"),
     }
 }
 

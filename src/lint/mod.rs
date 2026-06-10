@@ -202,7 +202,8 @@ fn walk_expr(path: &Path, expr: &Expr, report: &mut LintReport) {
             }
         }
         Expr::UnsafeTransmute { expr, .. } => walk_expr(path, &expr.node, report),
-        Expr::Literal { .. } | Expr::Variable(_) | Expr::MacroCall { .. } => {}
+        Expr::Print { expr } => walk_expr(path, &expr.node, report),
+        Expr::Literal { .. } | Expr::Variable(_) | Expr::MacroCall { .. } | Expr::Log { .. } => {}
     }
 }
 
@@ -300,7 +301,8 @@ fn collect_expr_uses(expr: &Expr, names: &mut HashSet<String>) {
         }
         Expr::UnsafeTransmute { expr, .. } => collect_expr_uses(&expr.node, names),
         Expr::MacroCall { name, .. } => { names.insert(name.clone()); }
-        Expr::Literal { .. } => {}
+        Expr::Print { expr } => collect_expr_uses(&expr.node, names),
+        Expr::Literal { .. } | Expr::Log { .. } => {}
     }
 }
 

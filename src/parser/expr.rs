@@ -191,6 +191,40 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
             })
             .boxed();
 
+        // `print(expr)` — built-in diagnostic output.
+        let print_expr = super::items::kw_pub("print")
+            .padded()
+            .ignore_then(
+                just('(')
+                    .padded()
+                    .ignore_then(expr.clone())
+                    .then_ignore(just(')').padded()),
+            )
+            .map_with(|inner, e| {
+                Spanned::new(Expr::Print { expr: Box::new(inner) }, to_src_span(e.span()))
+            })
+            .boxed();
+
+        // `log("message")` — built-in diagnostic message output.
+        let log_expr = super::items::kw_pub("log")
+            .padded()
+            .ignore_then(
+                just('(')
+                    .padded()
+                    .ignore_then(just('"'))
+                    .ignore_then(
+                        none_of('"')
+                            .repeated()
+                            .collect::<String>(),
+                    )
+                    .then_ignore(just('"'))
+                    .then_ignore(just(')').padded()),
+            )
+            .map_with(|message, e| {
+                Spanned::new(Expr::Log { message }, to_src_span(e.span()))
+            })
+            .boxed();
+
         // Function call or bare variable.
         let call_or_var = ident
             .then(
@@ -405,6 +439,8 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
             if_expr,
             match_expr,
             continue_expr,
+            print_expr,
+            log_expr,
             literal,
             macro_call,
             call_or_var,

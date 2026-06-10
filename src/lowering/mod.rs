@@ -206,6 +206,14 @@ impl Lowerer {
                     "macro `{name}!` was not expanded before lowering; run the expansion pass first"
                 )))
             }
+            Expr::Print { expr: inner } => {
+                // print() is a compile-time diagnostic; lower to the inner expression value.
+                self.lower_expr(inner, env)
+            }
+            Expr::Log { .. } => {
+                // log() is a compile-time diagnostic; lower to 0.0.
+                Ok(self.builder.constant(0.0))
+            }
         }
     }
 

@@ -119,7 +119,8 @@ fn expand_expr(expr: &mut Expr, macros: &HashMap<String, Vec<MacroRule>>) -> Aev
             Ok(())
         }
         Expr::UnsafeTransmute { expr: inner, .. } => expand_expr(&mut inner.node, macros),
-        Expr::Literal { .. } | Expr::Variable(_) => Ok(()),
+        Expr::Print { expr: inner } => expand_expr(&mut inner.node, macros),
+        Expr::Literal { .. } | Expr::Variable(_) | Expr::Log { .. } => Ok(()),
     }
 }
 

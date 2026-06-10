@@ -448,6 +448,17 @@ impl Ctx {
                 // Macro calls must be expanded before type-checking via the expansion pass.
                 Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
             }
+
+            Expr::Print { expr: inner } => {
+                // print(expr) — type-check the inner expression, return dimensionless.
+                let _ = self.infer_expr(inner);
+                Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
+            }
+
+            Expr::Log { .. } => {
+                // log("message") — always dimensionless.
+                Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
+            }
         }
     }
 

@@ -74,6 +74,14 @@ pub enum Item {
         properties: OpProperties,
         doc: Option<String>,
     },
+    /// Module-level constant declaration, e.g., `[pub] const G [: m/s^2] = 9.8;`
+    Const {
+        name: String,
+        dim: Option<Spanned<DimExpr>>,
+        value: Spanned<Expr>,
+        visibility: Visibility,
+        doc: Option<String>,
+    },
     /// Declarative macro definition: `macro_rules! name { ($pat:kind, ...) => { body } }`
     MacroDef {
         name: String,
@@ -89,7 +97,8 @@ impl Item {
             | Self::TypeAlias { doc: d, .. }
             | Self::Struct { doc: d, .. }
             | Self::Function { doc: d, .. }
-            | Self::CustomOp { doc: d, .. } => *d = doc,
+            | Self::CustomOp { doc: d, .. }
+            | Self::Const { doc: d, .. } => *d = doc,
             Self::Use { .. } | Self::MacroDef { .. } => {}
         }
     }
@@ -283,6 +292,14 @@ pub enum Expr {
         name: String,
         /// Raw token argument string passed to the macro, e.g. `"MyType, kg * m / s^2"`
         args: String,
+    },
+    /// Built-in `print(expr)` — outputs the value at runtime (diagnostic).
+    Print {
+        expr: Box<Spanned<Expr>>,
+    },
+    /// Built-in `log("message")` — outputs a string message at runtime (diagnostic).
+    Log {
+        message: String,
     },
 }
 
