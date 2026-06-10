@@ -161,6 +161,9 @@ fn format_item(out: &mut String, item: &Item, indent: usize) {
             }
             let _ = write!(out, "\n{pad}}}");
         }
+        Item::MacroCall { name, args } => {
+            let _ = write!(out, "{pad}{name}!({args})");
+        }
     }
 }
 

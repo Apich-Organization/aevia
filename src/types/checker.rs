@@ -155,7 +155,8 @@ impl Ctx {
             Item::CustomOp { .. }
             | Item::Use { .. }
             | Item::Module { .. }
-            | Item::MacroDef { .. } => {}
+            | Item::MacroDef { .. }
+            | Item::MacroCall { .. } => {}
             Item::Const { name, dim, value, .. } => {
                 // Register the const's declared type (or infer from value).
                 let declared_dim = dim.as_ref().and_then(|d| resolve_with_env(d, &self.env));
@@ -235,6 +236,7 @@ impl Ctx {
             | Item::Use { .. }
             | Item::Module { .. }
             | Item::MacroDef { .. }
+            | Item::MacroCall { .. }
             | Item::Const { .. } => {}
         }
     }

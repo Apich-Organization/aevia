@@ -12,13 +12,59 @@ use crate::parser::expr::parse_expr;
 /// Expand all macro calls in `file` in-place.
 ///
 /// Any `Item::MacroDef` in the file is used as a source of rules.
-/// After expansion, unexpanded `Expr::MacroCall` nodes should no longer exist.
+/// After expansion, unexpanded `Expr::MacroCall` and `Item::MacroCall` nodes should no longer exist.
 pub fn expand(file: &mut SourceFile) -> AeviaResult<()> {
     let macros = collect_macros(&file.items);
+    // First pass: expand item-level macro calls (produces new items).
+    expand_items(file, &macros)?;
+    // Second pass: expand expression-level macro calls within function bodies.
     for item in &mut file.items {
         expand_item(&mut item.node, &macros)?;
     }
     Ok(())
+}
+
+/// Expand top-level `Item::MacroCall` nodes by re-parsing the expansion result
+/// as a list of items and splicing them into the file.
+fn expand_items(file: &mut SourceFile, macros: &HashMap<String, Vec<MacroRule>>) -> AeviaResult<()> {
+    let mut new_items: Vec<Spanned<Item>> = Vec::new();
+    for item in std::mem::take(&mut file.items) {
+        if let Item::MacroCall { name, args } = &item.node {
+            let expanded = apply_macro_items(name, args, macros)?;
+            new_items.extend(expanded);
+        } else {
+            new_items.push(item);
+        }
+    }
+    file.items = new_items;
+    Ok(())
+}
+
+/// Apply a macro and parse the result as a list of items (SourceFile).
+fn apply_macro_items(
+    name: &str,
+    args: &str,
+    macros: &HashMap<String, Vec<MacroRule>>,
+) -> AeviaResult<Vec<Spanned<Item>>> {
+    let rules = macros.get(name).ok_or_else(|| {
+        AeviaError::message(format!("undefined macro `{name}!`"))
+    })?;
+
+    for rule in rules {
+        if let Some(bindings) = match_pattern(&rule.pattern, args) {
+            let expanded_src = substitute(&rule.replacement, &bindings);
+            let expanded_file = crate::parser::items::parse_source(&expanded_src).map_err(|errs| {
+                AeviaError::message(format!(
+                    "macro `{name}!` expansion failed to parse `{expanded_src}`: {errs}"
+                ))
+            })?;
+            return Ok(expanded_file.items);
+        }
+    }
+
+    Err(AeviaError::message(format!(
+        "no matching rule in macro `{name}!` for args `{args}`"
+    )))
 }
 
 fn collect_macros(items: &[Spanned<Item>]) -> HashMap<String, Vec<MacroRule>> {

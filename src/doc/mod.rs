@@ -155,8 +155,7 @@ fn render_item(out: &mut String, item: &Item) {
                 }
             }
         }
-        Item::Use { .. } => {}
-        Item::MacroDef { .. } => {} // macro definitions produce no doc output
+        Item::Use { .. } | Item::MacroDef { .. } | Item::MacroCall { .. } => {}
         Item::Const { name, dim, value, visibility, doc } => {
             if !is_public(*visibility) {
                 return;

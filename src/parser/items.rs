@@ -636,6 +636,7 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
             type_alias_item(),
             const_item(),
             use_item(),
+            macro_call_item(),
             macro_rules_item(),
         ))
         .padded()
@@ -645,6 +646,38 @@ pub fn source_file_parser<'a>() -> impl Parser<'a, &'a str, SourceFile, extra::E
     .map(|items| SourceFile { doc: None, items })
     .padded()
     .boxed()
+}
+
+/// Parses `name!(raw_args);` at the top level as an item-level macro invocation.
+fn macro_call_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a, char>>> + Clone {
+    // Collect raw content between `(` and `)` using balanced scanning.
+    let balanced_parens = recursive::<'_, '_, &str, String, extra::Err<Simple<'_, char>>, _, _>(
+        |content| {
+            choice((
+                just('(')
+                    .ignore_then(content)
+                    .then_ignore(just(')'))
+                    .map(|inner: String| format!("({inner})")),
+                none_of("()").repeated().at_least(1).collect::<String>(),
+            ))
+            .repeated()
+            .collect::<Vec<String>>()
+            .map(|parts| parts.join(""))
+        },
+    )
+    .boxed();
+
+    ident()
+        .padded()
+        .then_ignore(just('!').padded())
+        .then(
+            balanced_parens
+                .delimited_by(just('(').padded(), just(')').padded())
+        )
+        .then_ignore(just(';').padded())
+        .map_with(|(name, args), e| {
+            Spanned::new(Item::MacroCall { name, args }, to_src(e.span()))
+        })
 }
 
 /// Parses `macro_rules! name { (pattern) => { replacement } ... }`
