@@ -398,6 +398,7 @@ fn format_expr(expr: &Expr) -> String {
             }
             s
         }
+        Expr::MacroCall { name, args } => format!("{name}!({args})"),
     }
 }
 
