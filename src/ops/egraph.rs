@@ -36,6 +36,89 @@ pub fn attach_egraph_rules(
     builder
 }
 
+/// Attach a commutativity e-graph rule for binary ops: `op(a, b) => op(min(a,b), max(a,b))`.
+///
+/// This canonicalizes argument order so the e-graph treats `op(a, b)` and `op(b, a)` as equivalent.
+/// Only applies to calls with exactly 2 children.
+pub fn attach_commutativity_rule(
+    fn_id: FnId,
+    mut builder: CustomOpDescriptorBuilder,
+) -> CustomOpDescriptorBuilder {
+    builder = builder.egraph_rule(false, move |b, kind, children| {
+        merge_commutative(b, kind, children, fn_id)
+    });
+    builder
+}
+
+/// Attach an associativity e-graph rule: `op(op(a, b), c) => op(a, op(b, c))`.
+///
+/// This right-associates nested calls so the e-graph can discover equivalent groupings.
+/// Only applies when the left child is itself a call to the same op.
+pub fn attach_associativity_rule(
+    fn_id: FnId,
+    mut builder: CustomOpDescriptorBuilder,
+) -> CustomOpDescriptorBuilder {
+    builder = builder.egraph_rule(false, move |b, kind, children| {
+        merge_associative(b, kind, children, fn_id)
+    });
+    builder
+}
+
+/// For a binary call `op(a, b)`, canonicalize to `op(min_id, max_id)`.
+fn merge_commutative(
+    b: &mut DagBuilder,
+    kind: &SymbolKind,
+    children: &[DagNodeId],
+    fn_id: FnId,
+) -> Option<DagNodeId> {
+    let SymbolKind::Function(call_id) = *kind else {
+        return None;
+    };
+    if call_id != fn_id || children.len() != 2 {
+        return None;
+    }
+    let (a, c) = (children[0], children[1]);
+    // Canonical order: smaller id first.
+    if a.value() <= c.value() {
+        return None; // already canonical
+    }
+    Some(b.function_call(fn_id, &[c, a]))
+}
+
+/// For `op(op(a, b), c)`, rewrite to `op(a, op(b, c))`.
+fn merge_associative(
+    b: &mut DagBuilder,
+    kind: &SymbolKind,
+    children: &[DagNodeId],
+    fn_id: FnId,
+) -> Option<DagNodeId> {
+    let SymbolKind::Function(call_id) = *kind else {
+        return None;
+    };
+    if call_id != fn_id || children.len() != 2 {
+        return None;
+    }
+    let left = children[0];
+    let right = children[1];
+    // Check if left child is itself a call to the same op.
+    let left_node = b.arena().get(left)?;
+    let SymbolKind::Function(left_fn) = left_node.kind else {
+        return None;
+    };
+    if left_fn != fn_id {
+        return None;
+    }
+    let left_children = left_node.children.as_slice();
+    if left_children.len() != 2 {
+        return None;
+    }
+    let a = left_children[0];
+    let b_child = left_children[1];
+    // Build: op(a, op(b, c))
+    let inner = b.function_call(fn_id, &[b_child, right]);
+    Some(b.function_call(fn_id, &[a, inner]))
+}
+
 fn match_call_zero_literal(
     pattern: &crate::ast::Spanned<Expr>,
     replacement: &crate::ast::Spanned<Expr>,

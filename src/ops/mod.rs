@@ -71,8 +71,12 @@ fn register_op(
     desc = simplify::attach_simplify_rules(name, fn_id, &props.simplify_rules, desc);
     desc = egraph::attach_egraph_rules(name, fn_id, &props.egraph_rules, desc);
 
-    let _ = props.commutative;
-    let _ = props.associative;
+    if props.commutative {
+        desc = egraph::attach_commutativity_rule(fn_id, desc);
+    }
+    if props.associative {
+        desc = egraph::attach_associativity_rule(fn_id, desc);
+    }
 
     reg.register(desc.build())
         .map_err(|e| crate::diagnostics::AeviaError::message(format!("custom op `{name}`: {e}")))?;

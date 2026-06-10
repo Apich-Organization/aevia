@@ -303,6 +303,16 @@ pub enum Expr {
     Log {
         message: String,
     },
+    /// Struct literal, e.g., `Particle { mass: 10.0, velocity: 2.0 }`.
+    StructLit {
+        name: String,
+        fields: Vec<(String, Spanned<Expr>)>,
+    },
+    /// Field access, e.g., `p.mass`.
+    FieldAccess {
+        expr: Box<Spanned<Expr>>,
+        field: String,
+    },
 }
 
 /// A pattern inside a `match` arm.
