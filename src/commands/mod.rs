@@ -246,6 +246,81 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
         let ast_proj = rssn_advanced::ast::convert::dag_to_ast(lowerer.builder.arena(), root);
         op_reg.apply_to_jit(&mut compiler);
 
+        // Prepare call arguments before dispatch.
+        let args: Vec<f64> = if user_args.is_empty() {
+            vec![1.0; params.len()]
+        } else {
+            if user_args.len() != params.len() {
+                return Err(AeviaError::message(format!(
+                    "arity mismatch: expected {} arguments for function `{}`, but got {}",
+                    params.len(),
+                    name,
+                    user_args.len()
+                )));
+            }
+            user_args
+        };
+
+        // Read profile backend from the manifest (if any).
+        let requested_gpu = manifest
+            .as_ref()
+            .and_then(|m| m.profile.release.backend.as_deref())
+            .map(|b| b == "rssn-gpu")
+            .unwrap_or(false);
+
+        // ── GPU dispatch ───────────────────────────────────────────────────────
+        #[cfg(feature = "gpu")]
+        if requested_gpu {
+            let var_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+            let gpu_result: Option<f64> = rssn_advanced::gpu::compiler::compile_to_wgsl(
+                &ast_proj,
+                lowerer.builder.registry(),
+                lowerer.builder.fn_registry(),
+                &var_names,
+            )
+            .ok()
+            .and_then(|wgsl| {
+                rssn_advanced::gpu::compiler::GpuExecutor::new().and_then(|mut executor| {
+                    let cols: Vec<Vec<f64>> = args.iter().map(|&v| vec![v]).collect();
+                    let slices: Vec<&[f64]> = cols.iter().map(|c| c.as_slice()).collect();
+                    let mut out = vec![0.0f64; 1];
+                    executor.execute_batch(&wgsl, 1, &slices, &mut out).ok()?;
+                    Some(out[0])
+                })
+            });
+
+            match gpu_result {
+                Some(val) => {
+                    logging::pass_detail(
+                        "run",
+                        &format!(
+                            "GPU JIT `{}` ok ({} fusion kernels)",
+                            name,
+                            pipeline.fusion.kernels.len()
+                        ),
+                    );
+                    println!("Result of calling `{}` (GPU): {}", name, val);
+                    return Ok(());
+                }
+                None => {
+                    logging::pass_detail(
+                        "run",
+                        "GPU backend unavailable or compilation failed; falling back to CPU JIT",
+                    );
+                }
+            }
+        }
+
+        #[cfg(not(feature = "gpu"))]
+        if requested_gpu {
+            logging::pass_detail(
+                "run",
+                "GPU backend requested but aevia was not compiled with the `gpu` feature; \
+                 recompile with `--features gpu` to enable it. Using CPU JIT.",
+            );
+        }
+
+        // ── CPU JIT path (default / GPU fallback) ─────────────────────────────
         if fusion_cfg.jit_kernel && pipeline.fusion.arithmetic_kernel_count() == 1 {
             if let Ok(Some(_batch)) = compiler.compile_batch_f64x2(&ast_proj) {
                 logging::pass_detail(
@@ -259,19 +334,6 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
             AeviaError::message(format!("JIT compilation failed: {:?}", e))
         })?;
 
-        let args = if user_args.is_empty() {
-            vec![1.0; params.len()]
-        } else {
-            if user_args.len() != params.len() {
-                return Err(AeviaError::message(format!(
-                    "arity mismatch: expected {} arguments for function `{}`, but got {}",
-                    params.len(),
-                    name,
-                    user_args.len()
-                )));
-            }
-            user_args
-        };
         let res = compiled_fn(args.as_ptr());
 
         logging::pass_detail(
