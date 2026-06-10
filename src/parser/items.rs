@@ -682,22 +682,31 @@ fn macro_rules_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<
         rules
     }
 
+    // Collect the contents of a `{...}` block with proper brace balancing.
+    // We use recursive() + boxed() to erase the concrete type and keep
+    // monomorphization cost manageable.
+    let balanced_content = recursive::<'_, '_, &str, String, extra::Err<Simple<'_, char>>, _, _>(
+        |content| {
+            choice((
+                just('{')
+                    .ignore_then(content)
+                    .then_ignore(just('}'))
+                    .map(|inner: String| format!("{{{inner}}}")),
+                none_of("{}").repeated().at_least(1).collect::<String>(),
+            ))
+            .repeated()
+            .collect::<Vec<String>>()
+            .map(|parts| parts.join(""))
+        },
+    )
+    .boxed();
+
     just("macro_rules!")
         .padded()
         .ignore_then(ident().padded())
         .then(
-            // Capture the entire outer `{ ... }` body as a raw string, then
-            // post-process it with `parse_rules` — no recursive() needed.
-            any()
-                .and_is(just('{').not())
-                .repeated()
-                .ignored()
-                .ignore_then(
-                    none_of('}')
-                        .repeated()
-                        .collect::<String>()
-                        .delimited_by(just('{'), just('}'))
-                )
+            balanced_content
+                .delimited_by(just('{').padded(), just('}').padded())
         )
         .map_with(|(name, body), e| {
             let rules = parse_rules(&body);

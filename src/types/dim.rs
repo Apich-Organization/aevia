@@ -162,6 +162,52 @@ impl fmt::Display for DimVector {
     }
 }
 
+// ── PhysicalType ──────────────────────────────────────────────────────────────
+
+/// A full physical type: SI dimensional exponents paired with an optional tensor shape.
+///
+/// `shape = None` means a scalar; `shape = Some(dims)` means a rank-N tensor where
+/// each element carries the `dim` SI unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhysicalType {
+    pub dim: DimVector,
+    pub shape: Option<Vec<usize>>,
+}
+
+impl PhysicalType {
+    pub fn scalar(dim: DimVector) -> Self {
+        Self { dim, shape: None }
+    }
+
+    pub fn tensor(dim: DimVector, shape: Vec<usize>) -> Self {
+        Self { dim, shape: Some(shape) }
+    }
+
+    pub fn is_scalar(&self) -> bool {
+        self.shape.is_none()
+    }
+}
+
+impl fmt::Display for PhysicalType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.shape {
+            None => write!(f, "{}", self.dim),
+            Some(shape) => {
+                let s: Vec<String> = shape.iter().map(|n| n.to_string()).collect();
+                write!(f, "{}[{}]", self.dim, s.join(", "))
+            }
+        }
+    }
+}
+
+/// Extract the tensor shape from a `DimExpr` annotation, returning `None` for scalar types.
+pub fn tensor_shape(dim_expr: &Spanned<DimExpr>) -> Option<Vec<usize>> {
+    match &dim_expr.node {
+        DimExpr::Tensor { shape, .. } => Some(shape.clone()),
+        _ => None,
+    }
+}
+
 // ── DimExpr → DimVector resolution ────────────────────────────────────────────
 
 /// Resolve a parsed `DimExpr` (from the AST) into a `DimVector`.

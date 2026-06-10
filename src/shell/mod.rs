@@ -76,7 +76,9 @@ fn shell_check_file(path: &PathBuf) -> AeviaResult<()> {
 
 fn shell_load_file(path: &PathBuf) -> AeviaResult<()> {
     let program = crate::modules::load_program(path)?;
-    let ast = crate::modules::entry_ast(&program);
+    let mut ast_owned = crate::modules::entry_ast(&program).clone();
+    crate::macro_expand::expand(&mut ast_owned)?;
+    let ast = &ast_owned;
     let imports = crate::modules::entry_imports(&program);
     let result = crate::types::checker::check_with_imports(ast, imports);
     if !result.ok() {

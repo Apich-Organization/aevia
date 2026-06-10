@@ -170,6 +170,27 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
             })
             .boxed();
 
+        // `name!(raw_args)` — macro invocation.
+        // Must be tried before `call_or_var` so `name!` is consumed before `name(`.
+        let macro_call = ident.clone()
+            .then_ignore(just('!').padded())
+            .then(
+                just('(')
+                    .padded()
+                    .ignore_then(
+                        // Collect raw content up to the matching ')'.
+                        // Simple: no nested-paren awareness needed for common cases.
+                        none_of(')')
+                            .repeated()
+                            .collect::<String>(),
+                    )
+                    .then_ignore(just(')')),
+            )
+            .map_with(|(name, args), e| {
+                Spanned::new(Expr::MacroCall { name, args }, to_src_span(e.span()))
+            })
+            .boxed();
+
         // Function call or bare variable.
         let call_or_var = ident
             .then(
@@ -385,6 +406,7 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
             match_expr,
             continue_expr,
             literal,
+            macro_call,
             call_or_var,
             parens,
         ));

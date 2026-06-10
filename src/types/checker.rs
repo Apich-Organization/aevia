@@ -3,7 +3,7 @@
 //! Walks a parsed `SourceFile` AST and:
 //!   1. Registers all `type` aliases and `struct` fields into the environment.
 //!   2. Registers all top-level function signatures (params + return type).
-//!   3. Checks every expression for dimensional consistency.
+//!   3. Checks every expression for dimensional and shape consistency.
 //!   4. Verifies `let` annotation vs. inferred type.
 //!   5. Verifies function return expression vs. declared return type.
 
@@ -13,7 +13,7 @@ use crate::ast::{
 use rust_decimal::prelude::ToPrimitive;
 use crate::modules::ImportBindings;
 use crate::types::{
-    dim::{resolve, DimVector},
+    dim::{resolve, tensor_shape, DimVector, PhysicalType},
     env::TypeEnv,
     error::TypeError,
 };
@@ -22,7 +22,6 @@ use miette::SourceSpan;
 
 /// Result of checking a full source file.
 pub struct CheckResult {
-    /// All dimensional type errors found (may be empty = success).
     pub errors: Vec<TypeError>,
 }
 
@@ -33,47 +32,33 @@ impl CheckResult {
     }
 }
 
-// ── Public entry point ─────────────────────────────────────────────────────────
+// ── Public entry points ────────────────────────────────────────────────────────
 
-/// Run the dimensional type checker over a parsed source file.
 pub fn check(file: &SourceFile) -> CheckResult {
     check_with_imports(file, &ImportBindings::default())
 }
 
-/// Type-check with `use` import bindings from the module resolver.
 pub fn check_with_imports(file: &SourceFile, imports: &ImportBindings) -> CheckResult {
-    let mut ctx = Ctx {
-        env: TypeEnv::new(),
-        errors: Vec::new(),
-    };
+    let mut ctx = Ctx { env: TypeEnv::new(), errors: Vec::new() };
     crate::modules::apply_imports(&mut ctx.env, imports);
-    // Pass 1: register all top-level type aliases and function signatures so
-    // that forward references resolve correctly.
     for item in &file.items {
         ctx.register_item(item);
     }
-    // Pass 2: type-check all items.
     for item in &file.items {
         ctx.check_item(item);
     }
     CheckResult { errors: ctx.errors }
 }
 
-/// Resolve a `DimExpr` to a `DimVector`, using both the built-in base unit
-/// table **and** any user-defined type aliases registered in `env`.
-///
-/// This handles cases like `type Acc = m/s^2;  fn f(a: Acc) …` where `Acc`
-/// is a `Base("Acc")` node that `resolve()` alone won't recognise.
+// ── Dimension resolution helpers ───────────────────────────────────────────────
+
 fn resolve_with_env(span: &Spanned<crate::ast::DimExpr>, env: &TypeEnv) -> Option<DimVector> {
-    // First, attempt the purely structural resolution (base units + arithmetic).
     if let Some(dim) = resolve(span) {
         return Some(dim);
     }
-    // For a bare Base node that failed structural resolution, check the env alias table.
     if let DimExpr::Base(name) = &span.node {
         return env.lookup_alias(name);
     }
-    // For compound expressions containing unrecognised bases, walk and substitute.
     resolve_compound_with_env(&span.node, env)
 }
 
@@ -82,25 +67,41 @@ fn resolve_compound_with_env(expr: &DimExpr, env: &TypeEnv) -> Option<DimVector>
         DimExpr::Base(name) => {
             crate::types::dim::base_unit(name).or_else(|| env.lookup_alias(name))
         }
-        DimExpr::Mul(lhs, rhs) => {
-            Some(resolve_compound_with_env(&lhs.node, env)?
-                .mul(resolve_compound_with_env(&rhs.node, env)?))
-        }
-        DimExpr::Div(lhs, rhs) => {
-            Some(resolve_compound_with_env(&lhs.node, env)?
-                .div(resolve_compound_with_env(&rhs.node, env)?))
-        }
+        DimExpr::Mul(lhs, rhs) => Some(
+            resolve_compound_with_env(&lhs.node, env)?
+                .mul(resolve_compound_with_env(&rhs.node, env)?),
+        ),
+        DimExpr::Div(lhs, rhs) => Some(
+            resolve_compound_with_env(&lhs.node, env)?
+                .div(resolve_compound_with_env(&rhs.node, env)?),
+        ),
         DimExpr::Power(base, exp) => {
             Some(resolve_compound_with_env(&base.node, env)?.pow(*exp))
         }
-        DimExpr::Tensor { base, .. } => {
-            // A tensor's element dimension is its base; shape is not tracked in DimVector.
-            resolve_compound_with_env(&base.node, env)
+        DimExpr::Tensor { base, .. } => resolve_compound_with_env(&base.node, env),
+    }
+}
+
+/// Resolve a DimExpr to a full PhysicalType (dim + optional shape).
+fn resolve_phys(span: &Spanned<DimExpr>, env: &TypeEnv) -> Option<PhysicalType> {
+    let dim = resolve_with_env(span, env)?;
+    let shape = tensor_shape(span);
+    Some(PhysicalType { dim, shape })
+}
+
+// ── Internal display helpers ───────────────────────────────────────────────────
+
+fn shape_display(shape: &Option<Vec<usize>>) -> String {
+    match shape {
+        None => "scalar".to_string(),
+        Some(s) => {
+            let parts: Vec<String> = s.iter().map(|n| n.to_string()).collect();
+            format!("[{}]", parts.join(", "))
         }
     }
 }
 
-
+// ── Checker context ────────────────────────────────────────────────────────────
 
 struct Ctx {
     env: TypeEnv,
@@ -123,37 +124,30 @@ impl Ctx {
                 }
             }
             Item::Function { name, params, return_type, .. } => {
-                // Pre-register the return type so recursive calls can be checked.
                 if let Some(ret_span) = return_type {
                     if let Some(dim) = resolve_with_env(ret_span, &self.env) {
                         self.env.register_fn(name.clone(), dim);
                     }
                 } else {
-                    // Dimensionless return (no annotation).
                     self.env.register_fn(name.clone(), DimVector::DIMENSIONLESS);
                 }
-                // Register params as global stubs (will be re-scoped per call).
                 for param in params {
                     if resolve_with_env(&param.dim, &self.env).is_none() {
-                        self.errors.push(TypeError::unknown_unit(
-                            param.dim.span,
-                            &param.name,
-                        ));
+                        self.errors.push(TypeError::unknown_unit(param.dim.span, &param.name));
                     }
                 }
             }
-            Item::Struct { name: _, fields, .. } => {
+            Item::Struct { fields, .. } => {
                 for field in fields {
                     if resolve_with_env(&field.dim, &self.env).is_none() {
-                        self.errors.push(TypeError::unknown_unit(
-                            field.dim.span,
-                            &field.name,
-                        ));
+                        self.errors.push(TypeError::unknown_unit(field.dim.span, &field.name));
                     }
                 }
             }
-            // CustomOp dimensions are verified during check_item.
-            Item::CustomOp { .. } | Item::Use { .. } | Item::Module { .. } | Item::MacroDef { .. } => {}
+            Item::CustomOp { .. }
+            | Item::Use { .. }
+            | Item::Module { .. }
+            | Item::MacroDef { .. } => {}
         }
     }
 
@@ -161,13 +155,12 @@ impl Ctx {
 
     fn check_item(&mut self, item: &Spanned<Item>) {
         match &item.node {
-            Item::Function { name: _fn_name, params, return_type, body, .. } => {
+            Item::Function { params, return_type, body, .. } => {
                 self.env.push_scope();
 
-                // Bind parameters into scope.
                 for param in params {
-                    if let Some(dim) = resolve_with_env(&param.dim, &self.env) {
-                        self.env.define(param.name.clone(), dim);
+                    if let Some(pt) = resolve_phys(&param.dim, &self.env) {
+                        self.env.define(param.name.clone(), pt);
                     }
                 }
 
@@ -179,7 +172,7 @@ impl Ctx {
                     FunctionBody::Expression(expr) => {
                         if let Some(inferred) = self.infer_expr(expr) {
                             if let Some(declared) = declared_return {
-                                if declared != inferred {
+                                if declared != inferred.dim {
                                     self.errors.push(TypeError::return_type_mismatch(
                                         expr.span,
                                         &declared.to_string(),
@@ -204,9 +197,11 @@ impl Ctx {
                     self.errors.push(TypeError::unknown_unit(output_dim.span, "op output"));
                 }
             }
-            // Already registered; no further checking needed here.
-            Item::TypeAlias { .. } | Item::Struct { .. }
-            | Item::Use { .. } | Item::Module { .. } | Item::MacroDef { .. } => {}
+            Item::TypeAlias { .. }
+            | Item::Struct { .. }
+            | Item::Use { .. }
+            | Item::Module { .. }
+            | Item::MacroDef { .. } => {}
         }
     }
 
@@ -228,40 +223,46 @@ impl Ctx {
 
                 if let Some(declared_span) = declared_type {
                     match (resolve_with_env(declared_span, &self.env), inferred) {
-                        (Some(declared_dim), Some(inferred_dim)) => {
-                            if declared_dim != inferred_dim {
+                        (Some(declared_dim), Some(ref inferred_pt)) => {
+                            if declared_dim != inferred_pt.dim {
                                 self.errors.push(TypeError::annotation_conflict(
                                     init.span,
                                     &declared_dim.to_string(),
-                                    &inferred_dim.to_string(),
+                                    &inferred_pt.dim.to_string(),
                                 ));
                             } else {
-                                self.env.define(name.clone(), declared_dim);
+                                let declared_shape = tensor_shape(declared_span);
+                                // Shape annotation takes priority; fall back to inferred shape.
+                                let shape = declared_shape.or_else(|| inferred_pt.shape.clone());
+                                self.env.define(name.clone(), PhysicalType { dim: declared_dim, shape });
                             }
                         }
                         (None, _) => {
-                            self.errors.push(TypeError::unknown_unit(
-                                declared_span.span,
-                                name,
-                            ));
+                            self.errors.push(TypeError::unknown_unit(declared_span.span, name));
                         }
                         (Some(declared_dim), None) => {
-                            // Use the declared type even if we couldn't infer.
-                            self.env.define(name.clone(), declared_dim);
+                            let shape = tensor_shape(declared_span);
+                            self.env.define(name.clone(), PhysicalType { dim: declared_dim, shape });
                         }
                     }
-                } else if let Some(dim) = inferred {
-                    self.env.define(name.clone(), dim);
+                } else if let Some(pt) = inferred {
+                    self.env.define(name.clone(), pt);
                 }
             }
             Stmt::Assign { target, value } => {
                 let expected = self.env.lookup(target);
                 if let (Some(exp), Some(got)) = (expected, self.infer_expr(value)) {
-                    if exp != got {
+                    if exp.dim != got.dim {
                         self.errors.push(TypeError::dimension_mismatch(
                             value.span,
-                            &got.to_string(),
-                            &exp.to_string(),
+                            &got.dim.to_string(),
+                            &exp.dim.to_string(),
+                        ));
+                    } else if exp.shape.is_some() && exp.shape != got.shape {
+                        self.errors.push(TypeError::shape_mismatch(
+                            value.span,
+                            &shape_display(&got.shape),
+                            &shape_display(&exp.shape),
                         ));
                     }
                 }
@@ -275,14 +276,15 @@ impl Ctx {
 
     // ── Expression inference ──────────────────────────────────────────────
 
-    /// Infer the `DimVector` of an expression, recording any errors.
-    /// Returns `None` when the type cannot be determined (e.g. unknown var).
-    fn infer_expr(&mut self, expr: &Spanned<Expr>) -> Option<DimVector> {
+    fn infer_expr(&mut self, expr: &Spanned<Expr>) -> Option<PhysicalType> {
         match &expr.node {
             Expr::Literal { suffix, .. } => {
                 if let Some(unit_span) = suffix {
                     match resolve_with_env(unit_span, &self.env) {
-                        Some(dim) => Some(dim),
+                        Some(dim) => {
+                            let shape = tensor_shape(unit_span);
+                            Some(PhysicalType { dim, shape })
+                        }
                         None => {
                             self.errors.push(TypeError::unknown_unit(
                                 unit_span.span,
@@ -292,21 +294,11 @@ impl Ctx {
                         }
                     }
                 } else {
-                    Some(DimVector::DIMENSIONLESS)
+                    Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
                 }
             }
 
-            Expr::Variable(name) => {
-                match self.env.lookup(name) {
-                    Some(dim) => Some(dim),
-                    None => {
-                        // Unknown variable — soft failure: we can't infer but
-                        // don't emit a type error (it may be caught by a future
-                        // name-resolution pass).
-                        None
-                    }
-                }
-            }
+            Expr::Variable(name) => self.env.lookup(name),
 
             Expr::BinaryOp { op, lhs, rhs } => {
                 let l = self.infer_expr(lhs);
@@ -314,43 +306,39 @@ impl Ctx {
                 self.check_binop(*op, l, r, &rhs.node, expr.span)
             }
 
-            Expr::UnaryOp { op: UnOp::Neg, expr: inner } => {
-                self.infer_expr(inner) // negation preserves dimension
-            }
+            Expr::UnaryOp { op: UnOp::Neg, expr: inner } => self.infer_expr(inner),
 
             Expr::Call { func, args } => {
-                // Resolve argument types (for future argument-checking).
                 for arg in args {
                     self.infer_expr(arg);
                 }
-                // Return the registered return type of the function.
-                self.env.lookup_fn(func)
+                self.env.lookup_fn(func).map(PhysicalType::scalar)
             }
 
             Expr::If { cond, then_branch, else_branch } => {
-                self.infer_expr(cond); // condition is typically dimensionless
-                let then_dim = self.infer_expr(then_branch);
+                self.infer_expr(cond);
+                let then_pt = self.infer_expr(then_branch);
                 if let Some(else_expr) = else_branch {
-                    let else_dim = self.infer_expr(else_expr);
-                    match (then_dim, else_dim) {
-                        (Some(t), Some(e)) if t != e => {
+                    let else_pt = self.infer_expr(else_expr);
+                    match (then_pt, else_pt) {
+                        (Some(t), Some(e)) if t.dim != e.dim => {
                             self.errors.push(TypeError::dimension_mismatch(
                                 else_expr.span,
-                                &e.to_string(),
-                                &t.to_string(),
+                                &e.dim.to_string(),
+                                &t.dim.to_string(),
                             ));
                             None
                         }
                         (t, _) => t,
                     }
                 } else {
-                    then_dim
+                    then_pt
                 }
             }
 
             Expr::Block(stmts) => {
                 self.env.push_scope();
-                let mut last: Option<DimVector> = None;
+                let mut last: Option<PhysicalType> = None;
                 for stmt in stmts {
                     if let Stmt::Expr(inner) = &stmt.node {
                         last = self.infer_expr(inner);
@@ -368,130 +356,131 @@ impl Ctx {
                     self.check_stmt(stmt);
                 }
                 self.env.pop_scope();
-                Some(DimVector::DIMENSIONLESS)
+                Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
             }
 
             Expr::While { cond, body } => {
-                // Condition should be dimensionless (comparison result).
                 self.infer_expr(cond);
                 self.env.push_scope();
                 for stmt in body {
                     self.check_stmt(stmt);
                 }
                 self.env.pop_scope();
-                Some(DimVector::DIMENSIONLESS)
+                Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
             }
 
             Expr::For { var, start, end, body } => {
-                // start and end must be dimensionless (loop counters).
-                let start_dim = self.infer_expr(start);
-                let end_dim = self.infer_expr(end);
-                if let (Some(s), Some(e)) = (&start_dim, &end_dim) {
-                    if !s.addable_with(*e) {
+                let start_pt = self.infer_expr(start);
+                let end_pt = self.infer_expr(end);
+                if let (Some(s), Some(e)) = (&start_pt, &end_pt) {
+                    if !s.dim.addable_with(e.dim) {
                         self.errors.push(TypeError::dimension_mismatch(
                             end.span,
-                            &e.to_string(),
-                            &s.to_string(),
+                            &e.dim.to_string(),
+                            &s.dim.to_string(),
                         ));
                     }
                 }
                 self.env.push_scope();
-                // Bind the loop variable as dimensionless.
-                self.env.define(var.clone(), DimVector::DIMENSIONLESS);
+                self.env.define(var.clone(), PhysicalType::scalar(DimVector::DIMENSIONLESS));
                 for stmt in body {
                     self.check_stmt(stmt);
                 }
                 self.env.pop_scope();
-                Some(DimVector::DIMENSIONLESS)
+                Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
             }
 
             Expr::Match { scrutinee, arms } => {
-                let scrutinee_dim = self.infer_expr(scrutinee);
-                let mut result_dim: Option<DimVector> = None;
+                let scrutinee_pt = self.infer_expr(scrutinee);
+                let mut result_pt: Option<PhysicalType> = None;
                 for MatchArm { pattern, body } in arms {
                     self.env.push_scope();
                     match pattern {
                         Pattern::Binding { name, type_guard } => {
-                            let bound_dim = if let Some(guard_span) = type_guard {
-                                // Verify the type guard matches the scrutinee dimension.
-                                let guard_dim = resolve_with_env(guard_span, &self.env);
-                                if let (Some(sd), Some(gd)) = (&scrutinee_dim, &guard_dim) {
-                                    if sd != gd {
+                            let bound_pt = if let Some(guard_span) = type_guard {
+                                let guard_pt = resolve_phys(guard_span, &self.env);
+                                if let (Some(sd), Some(gd)) = (&scrutinee_pt, &guard_pt) {
+                                    if sd.dim != gd.dim {
                                         self.errors.push(TypeError::annotation_conflict(
                                             guard_span.span,
-                                            &gd.to_string(),
-                                            &sd.to_string(),
+                                            &gd.dim.to_string(),
+                                            &sd.dim.to_string(),
                                         ));
                                     }
                                 }
-                                guard_dim.or(scrutinee_dim)
+                                guard_pt.or_else(|| scrutinee_pt.clone())
                             } else {
-                                scrutinee_dim
+                                scrutinee_pt.clone()
                             };
-                            if let Some(dim) = bound_dim {
-                                self.env.define(name.clone(), dim);
+                            if let Some(pt) = bound_pt {
+                                self.env.define(name.clone(), pt);
                             }
                         }
                         Pattern::Wildcard | Pattern::Literal(_) => {}
                     }
-                    let arm_dim = self.infer_expr(body);
+                    let arm_pt = self.infer_expr(body);
                     self.env.pop_scope();
-                    // All arms must produce the same dimension.
-                    match (&result_dim, &arm_dim) {
-                        (Some(rd), Some(ad)) if rd != ad => {
+                    match (&result_pt, &arm_pt) {
+                        (Some(rd), Some(ad)) if rd.dim != ad.dim => {
                             self.errors.push(TypeError::dimension_mismatch(
                                 body.span,
-                                &ad.to_string(),
-                                &rd.to_string(),
+                                &ad.dim.to_string(),
+                                &rd.dim.to_string(),
                             ));
                         }
-                        (None, _) => result_dim = arm_dim,
+                        (None, _) => result_pt = arm_pt,
                         _ => {}
                     }
                 }
-                result_dim
+                result_pt
             }
 
             Expr::UnsafeTransmute { expr: inner, assume_unit, .. } => {
                 let _ = self.infer_expr(inner);
                 if let Some(unit_span) = assume_unit {
-                    resolve_with_env(unit_span, &self.env)
+                    resolve_with_env(unit_span, &self.env).map(PhysicalType::scalar)
                 } else {
-                    Some(DimVector::DIMENSIONLESS)
+                    Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
                 }
             }
 
             Expr::MacroCall { .. } => {
-                // Macro calls are not yet expanded; treat as dimensionless until the expansion pass runs.
-                Some(DimVector::DIMENSIONLESS)
+                // Macro calls must be expanded before type-checking via the expansion pass.
+                Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
             }
         }
     }
 
-    /// Check a binary operation for dimensional consistency and return the
-    /// resulting `DimVector`.
+    // ── Binary operation checking ─────────────────────────────────────────
+
     fn check_binop(
         &mut self,
         op: BinOp,
-        lhs: Option<DimVector>,
-        rhs: Option<DimVector>,
+        lhs: Option<PhysicalType>,
+        rhs: Option<PhysicalType>,
         rhs_expr: &Expr,
         span: SourceSpan,
-    ) -> Option<DimVector> {
+    ) -> Option<PhysicalType> {
         match op {
-            // Addition / subtraction require identical dimensions.
             BinOp::Add | BinOp::Sub => {
                 match (lhs, rhs) {
                     (Some(l), Some(r)) => {
-                        if l.addable_with(r) {
-                            Some(l)
-                        } else {
+                        if !l.dim.addable_with(r.dim) {
                             self.errors.push(TypeError::dimension_mismatch(
                                 span,
-                                &r.to_string(),
-                                &l.to_string(),
+                                &r.dim.to_string(),
+                                &l.dim.to_string(),
                             ));
                             None
+                        } else if l.shape != r.shape {
+                            self.errors.push(TypeError::shape_mismatch(
+                                span,
+                                &shape_display(&r.shape),
+                                &shape_display(&l.shape),
+                            ));
+                            None
+                        } else {
+                            Some(l)
                         }
                     }
                     (Some(l), None) => Some(l),
@@ -500,33 +489,41 @@ impl Ctx {
                 }
             }
 
-            // Multiplication: dimensions combine (add exponents).
             BinOp::Mul => {
                 match (lhs, rhs) {
-                    (Some(l), Some(r)) => Some(l.mul(r)),
+                    (Some(l), Some(r)) => {
+                        let result_dim = l.dim.mul(r.dim);
+                        let result_shape = self.mul_shapes(&l.shape, &r.shape, span);
+                        Some(PhysicalType { dim: result_dim, shape: result_shape })
+                    }
                     (Some(l), None) | (None, Some(l)) => Some(l),
                     (None, None) => None,
                 }
             }
 
-            // Division: dimensions combine (subtract exponents).
             BinOp::Div => {
                 match (lhs, rhs) {
-                    (Some(l), Some(r)) => Some(l.div(r)),
+                    (Some(l), Some(r)) => {
+                        let result_dim = l.dim.div(r.dim);
+                        // tensor / scalar → tensor; tensor / tensor → scalar
+                        let result_shape = match (&l.shape, &r.shape) {
+                            (Some(s), None) => Some(s.clone()),
+                            _ => None,
+                        };
+                        Some(PhysicalType { dim: result_dim, shape: result_shape })
+                    }
                     (Some(l), None) => Some(l),
                     (None, _) => None,
                 }
             }
 
-            // Modulo: result dimension matches LHS.
             BinOp::Mod => lhs,
 
-            // Exponentiation: RHS must be a dimensionless integer literal.
             BinOp::Pow => match (lhs, rhs_expr) {
                 (Some(base), Expr::Literal { value, suffix: None }) => {
                     if let Some(exp) = value.to_i64() {
                         if exp >= 0 {
-                            Some(base.pow(exp as i32))
+                            Some(PhysicalType { dim: base.dim.pow(exp as i32), shape: base.shape })
                         } else {
                             self.errors.push(TypeError::new(
                                 crate::types::error::TypeErrorCode::DimensionMismatch,
@@ -541,7 +538,7 @@ impl Ctx {
                             "exponent must be an integer literal",
                             span,
                         ));
-                        lhs
+                        Some(base)
                     }
                 }
                 (Some(_), Expr::Literal { suffix: Some(_), .. }) => {
@@ -563,18 +560,68 @@ impl Ctx {
                 (None, _) => None,
             },
 
-            // Comparisons: operands must be same dimension; result is dimensionless.
             BinOp::Lt | BinOp::Gt | BinOp::Eq => {
-                if let (Some(l), Some(r)) = (lhs, rhs) {
-                    if !l.addable_with(r) {
+                if let (Some(l), Some(r)) = (&lhs, &rhs) {
+                    if !l.dim.addable_with(r.dim) {
                         self.errors.push(TypeError::dimension_mismatch(
                             span,
-                            &r.to_string(),
-                            &l.to_string(),
+                            &r.dim.to_string(),
+                            &l.dim.to_string(),
+                        ));
+                    }
+                    if l.shape != r.shape {
+                        self.errors.push(TypeError::shape_mismatch(
+                            span,
+                            &shape_display(&r.shape),
+                            &shape_display(&l.shape),
                         ));
                     }
                 }
-                Some(DimVector::DIMENSIONLESS)
+                Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
+            }
+        }
+    }
+
+    /// Shape rules for multiplication:
+    /// - scalar × scalar → scalar
+    /// - scalar × tensor → tensor (broadcast)
+    /// - tensor × scalar → tensor (broadcast)
+    /// - tensor[M, N] × tensor[N, P] → tensor[M, P]  (2-D matrix mul)
+    /// - tensor[N] × tensor[N] → scalar               (dot product)
+    /// - same-shape tensors of other ranks → same shape (element-wise)
+    fn mul_shapes(
+        &mut self,
+        lhs: &Option<Vec<usize>>,
+        rhs: &Option<Vec<usize>>,
+        span: SourceSpan,
+    ) -> Option<Vec<usize>> {
+        match (lhs, rhs) {
+            (None, None) => None,
+            (Some(s), None) | (None, Some(s)) => Some(s.clone()),
+            (Some(ls), Some(rs)) => {
+                if ls.len() == 2 && rs.len() == 2 {
+                    if ls[1] != rs[0] {
+                        self.errors.push(TypeError::shape_mismatch(
+                            span,
+                            &format!("[{}, {}]", rs[0], rs[1]),
+                            &format!("[{}, {}]", ls[0], ls[1]),
+                        ));
+                        return None;
+                    }
+                    Some(vec![ls[0], rs[1]])
+                } else if ls.len() == 1 && rs.len() == 1 && ls[0] == rs[0] {
+                    // dot product → scalar
+                    None
+                } else if ls == rs {
+                    Some(ls.clone())
+                } else {
+                    self.errors.push(TypeError::shape_mismatch(
+                        span,
+                        &shape_display(&Some(rs.clone())),
+                        &shape_display(&Some(ls.clone())),
+                    ));
+                    None
+                }
             }
         }
     }
@@ -595,14 +642,12 @@ mod tests {
 
     #[test]
     fn test_expr_fn_correct() {
-        // force = mass * acceleration → Newton (kg·m/s²)
         let result = check_src("pub fn force(m: kg, a: m/s^2) -> N := m * a;");
         assert!(result.ok(), "errors: {:?}", result.errors.iter().map(|e| &e.message).collect::<Vec<_>>());
     }
 
     #[test]
     fn test_let_annotation_conflict() {
-        // Declares `x: s` but assigns `m` → conflict
         let result = check_src("fn bad(x: m) { let y: s = x; }");
         assert!(!result.ok());
         assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::AnnotationConflict));
@@ -610,7 +655,6 @@ mod tests {
 
     #[test]
     fn test_return_type_mismatch() {
-        // Returns `m` but declared `s`
         let result = check_src("fn wrong(x: m) -> s := x;");
         assert!(!result.ok());
         assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::ReturnTypeMismatch));
@@ -637,9 +681,7 @@ mod tests {
     #[test]
     fn test_use_import_fn() {
         let mut imports = crate::modules::ImportBindings::default();
-        imports
-            .functions
-            .insert("energy".to_string(), crate::types::dim::DimVector::JOULE);
+        imports.functions.insert("energy".to_string(), crate::types::dim::DimVector::JOULE);
         let file = parse_source("fn main() -> J := energy(1.0, 1.0);").unwrap();
         let result = check_with_imports(&file, &imports);
         assert!(result.ok(), "errors: {:?}", result.errors);
@@ -647,7 +689,6 @@ mod tests {
 
     #[test]
     fn test_add_mismatch() {
-        // Cannot add m + kg
         let result = check_src("fn bad(x: m, y: kg) -> m := x + y;");
         assert!(!result.ok());
         assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::DimensionMismatch));
@@ -655,7 +696,6 @@ mod tests {
 
     #[test]
     fn test_mul_infers_compound() {
-        // 0.5 * m * s^-1 → velocity
         let result = check_src("fn v(x: m, t: s) -> m/s := x / t;");
         assert!(result.ok(), "errors: {:?}", result.errors.iter().map(|e| &e.message).collect::<Vec<_>>());
     }
@@ -671,5 +711,34 @@ mod tests {
         let result = check_src("fn f(x: xyz) -> m := x;");
         assert!(!result.ok());
         assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::UnknownUnit));
+    }
+
+    #[test]
+    fn test_tensor_param_add_ok() {
+        // Two kg[1024] tensors can be added together.
+        let result = check_src("fn add_bufs(a: kg[1024], b: kg[1024]) -> kg[1024] := a + b;");
+        assert!(result.ok(), "errors: {:?}", result.errors.iter().map(|e| &e.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_tensor_shape_mismatch_add() {
+        let result = check_src("fn bad(a: kg[1024], b: kg[512]) -> kg[1024] := a + b;");
+        assert!(!result.ok());
+        assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::ShapeMismatch));
+    }
+
+    #[test]
+    fn test_tensor_matrix_mul() {
+        // Shape: [4, 4] × [4, 8] → [4, 8]; Dim: kg * kg → kg^2 per element.
+        let result = check_src("fn matmul(a: kg[4, 4], b: kg[4, 8]) -> kg^2[4, 8] := a * b;");
+        assert!(result.ok(), "errors: {:?}", result.errors.iter().map(|e| &e.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_tensor_matrix_mul_bad() {
+        // [4, 3] * [4, 4] → shape error: inner dims don't match
+        let result = check_src("fn bad(a: kg[4, 3], b: kg[4, 4]) := a * b;");
+        assert!(!result.ok());
+        assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::ShapeMismatch));
     }
 }

@@ -32,7 +32,9 @@ pub fn build(paths: Vec<PathBuf>) -> AeviaResult<()> {
         }
 
         let program = crate::modules::load_program(&file)?;
-        let parsed = crate::modules::entry_ast(&program);
+        let mut ast = crate::modules::entry_ast(&program).clone();
+        crate::macro_expand::expand(&mut ast)?;
+        let parsed = &ast;
         let imports = crate::modules::entry_imports(&program);
 
         let check_res = crate::types::checker::check_with_imports(parsed, imports);
@@ -148,7 +150,9 @@ pub fn run(target: RunTarget) -> AeviaResult<()> {
     }
     
     let program = crate::modules::load_program(&file)?;
-    let parsed = crate::modules::entry_ast(&program);
+    let mut ast = crate::modules::entry_ast(&program).clone();
+    crate::macro_expand::expand(&mut ast)?;
+    let parsed = &ast;
     let imports = crate::modules::entry_imports(&program);
 
     let check_res = crate::types::checker::check_with_imports(parsed, imports);
@@ -291,7 +295,9 @@ pub fn check(paths: Vec<PathBuf>) -> AeviaResult<()> {
     let files = resolve_inputs(&paths)?;
     for file in files {
         let program = crate::modules::load_program(&file)?;
-        let parsed = crate::modules::entry_ast(&program);
+        let mut ast = crate::modules::entry_ast(&program).clone();
+        crate::macro_expand::expand(&mut ast)?;
+        let parsed = &ast;
         let imports = crate::modules::entry_imports(&program);
 
         let check_res = crate::types::checker::check_with_imports(parsed, imports);

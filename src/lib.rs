@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod cli;
 pub mod commands;
+pub mod macro_expand;
 pub mod diagnostics;
 pub mod doc;
 pub mod fmt;

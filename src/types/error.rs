@@ -31,6 +31,8 @@ pub enum TypeErrorCode {
     ArgumentDimension,
     /// Used a dimensionless value where a physical dimension was expected.
     UnexpectedDimensionless,
+    /// Tensor shape mismatch (e.g. adding tensors of different shapes).
+    ShapeMismatch,
 }
 
 impl fmt::Display for TypeErrorCode {
@@ -42,6 +44,7 @@ impl fmt::Display for TypeErrorCode {
             Self::ReturnTypeMismatch      => "E[dim::return_type]",
             Self::ArgumentDimension       => "E[dim::argument]",
             Self::UnexpectedDimensionless => "E[dim::dimensionless]",
+            Self::ShapeMismatch           => "E[dim::shape_mismatch]",
         };
         write!(f, "{s}")
     }
@@ -133,6 +136,14 @@ impl TypeError {
         Self::new(
             TypeErrorCode::ReturnTypeMismatch,
             format!("return type mismatch: declared `{declared}`, body evaluates to `{inferred}`"),
+            span,
+        )
+    }
+
+    pub fn shape_mismatch(span: SourceSpan, got: &str, expected: &str) -> Self {
+        Self::new(
+            TypeErrorCode::ShapeMismatch,
+            format!("tensor shape mismatch: expected `{expected}`, found `{got}`"),
             span,
         )
     }
