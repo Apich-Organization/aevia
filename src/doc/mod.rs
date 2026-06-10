@@ -104,7 +104,7 @@ fn render_item(out: &mut String, item: &Item) {
             let _ = writeln!(out, "**Returns:** `{ret}`\n");
             let _ = writeln!(out, "| Parameter | Dimension |");
             let _ = writeln!(out, "|-----------|-----------|");
-            for Param { name, dim } in params {
+            for Param { name, dim, .. } in params {
                 let _ = writeln!(out, "| `{name}` | `{}` |", format_dim(&dim.node));
             }
             let _ = writeln!(out);

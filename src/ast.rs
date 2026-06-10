@@ -36,10 +36,11 @@ pub enum Item {
         visibility: Visibility,
         doc: Option<String>,
     },
-    /// Import statement, e.g., `use mechanics::kinematics::{Force as F};`
+    /// Import statement, e.g., `use mechanics::kinematics::{Force as F};` or `use math::*;`
     Use {
         path: Vec<String>,
         alias: Option<String>,
+        glob: bool,
     },
     /// Dimensional type alias, e.g., `type Acceleration = m / s^2;`
     TypeAlias {
@@ -140,6 +141,7 @@ pub struct Field {
 pub struct Param {
     pub name: String,
     pub dim: Spanned<DimExpr>,
+    pub is_mut: bool,
 }
 
 /// Function body representation.

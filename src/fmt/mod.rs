@@ -61,8 +61,11 @@ fn item_needs_semicolon(item: &Item) -> bool {
 fn format_item(out: &mut String, item: &Item, indent: usize) {
     let pad = "    ".repeat(indent);
     match item {
-        Item::Use { path, alias } => {
+        Item::Use { path, alias, glob } => {
             let _ = write!(out, "{pad}use {}", path.join("::"));
+            if *glob {
+                let _ = write!(out, "::*");
+            }
             if let Some(a) = alias {
                 let _ = write!(out, " as {a}");
             }
@@ -242,6 +245,9 @@ fn format_params(out: &mut String, params: &[Param]) {
     for (i, param) in params.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
+        }
+        if param.is_mut {
+            out.push_str("mut ");
         }
         let _ = write!(out, "{}: {}", param.name, format_dim(&param.dim.node));
     }

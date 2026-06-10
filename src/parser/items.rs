@@ -214,13 +214,14 @@ fn block_body<'a>() -> impl Parser<'a, &'a str, Vec<Spanned<Stmt>>, extra::Err<S
 
 // ── Function parameter / field ────────────────────────────────────────────────
 
-/// `name: DimType`
+/// `[mut] name: DimType`
 fn param<'a>() -> impl Parser<'a, &'a str, Param, extra::Err<Simple<'a, char>>> + Clone {
-    ident()
-        .padded()
+    kw("mut").padded().or_not()
+        .map(|m| m.is_some())
+        .then(ident().padded())
         .then_ignore(just(':').padded())
         .then(dim())
-        .map(|(name, dim)| Param { name, dim })
+        .map(|((is_mut, name), dim)| Param { name, dim, is_mut })
 }
 
 /// `[pub] name: DimType`
@@ -412,7 +413,7 @@ fn op_body<'a>() -> impl Parser<'a, &'a str, OpProperties, extra::Err<Simple<'a,
 
 // ── Top-level items ───────────────────────────────────────────────────────────
 
-/// `use path::to::item [as Alias];`
+/// `use path::to::item [as Alias];` or `use path::*;`
 fn use_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'a, char>>> + Clone {
     kw("use")
         .padded()
@@ -422,10 +423,14 @@ fn use_item<'a>() -> impl Parser<'a, &'a str, Spanned<Item>, extra::Err<Simple<'
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
+        .then(
+            just("::").padded().ignore_then(just('*').padded()).or_not()
+        )
         .then(kw("as").padded().ignore_then(ident()).or_not())
         .then_ignore(just(';').padded())
-        .map_with(|(path, alias), e| {
-            Spanned::new(Item::Use { path, alias }, to_src(e.span()))
+        .map_with(|((path, glob), alias), e| {
+            let is_glob = glob.is_some();
+            Spanned::new(Item::Use { path, alias, glob: is_glob }, to_src(e.span()))
         })
         .boxed()
 }

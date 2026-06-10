@@ -145,8 +145,12 @@ impl ModuleProgram {
         let mut bindings = ImportBindings::default();
 
         for item in &module.ast.items {
-            if let Item::Use { path: use_path, alias } = &item.node {
-                self.bind_use(path, use_path, alias.as_deref(), &mut bindings)?;
+            if let Item::Use { path: use_path, alias, glob } = &item.node {
+                if *glob {
+                    self.bind_glob_use(path, use_path, &mut bindings)?;
+                } else {
+                    self.bind_use(path, use_path, alias.as_deref(), &mut bindings)?;
+                }
             }
         }
         Ok(bindings)
@@ -181,6 +185,62 @@ impl ModuleProgram {
             }
             Export::Alias(dim) => {
                 bindings.aliases.insert(local.to_string(), dim);
+            }
+        }
+        Ok(())
+    }
+
+    fn bind_glob_use(
+        &self,
+        importer: &Path,
+        use_path: &[String],
+        bindings: &mut ImportBindings,
+    ) -> AeviaResult<()> {
+        if use_path.is_empty() {
+            return Err(AeviaError::message("empty use path"));
+        }
+
+        let (owner, items) = self.resolve_module_items(importer, use_path)?;
+        let same_crate = self.same_crate(importer, &owner);
+        let same_file = importer == owner;
+
+        for item in &items {
+            match &item.node {
+                Item::Function {
+                    name,
+                    return_type,
+                    visibility,
+                    ..
+                } if visible(*visibility, same_file, same_crate) => {
+                    let dim = return_type
+                        .as_ref()
+                        .and_then(resolve_dim)
+                        .unwrap_or(DimVector::DIMENSIONLESS);
+                    bindings.functions.insert(name.clone(), dim);
+                }
+                Item::TypeAlias {
+                    name,
+                    dimension_expr,
+                    ..
+                } => {
+                    // Type aliases have no visibility modifier — treat as public.
+                    if let Some(dim) = resolve_dim(dimension_expr) {
+                        bindings.aliases.insert(name.clone(), dim);
+                    }
+                }
+                Item::Const {
+                    name,
+                    dim,
+                    visibility,
+                    ..
+                } if visible(*visibility, same_file, same_crate) => {
+                    if let Some(dim_span) = dim {
+                        if let Some(d) = resolve_dim(dim_span) {
+                            bindings.functions.insert(name.clone(), d);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
