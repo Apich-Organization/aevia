@@ -225,26 +225,58 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
             })
             .boxed();
 
-        // Function call or bare variable.
+        // Enum for call_or_var suffix alternatives.
+        #[derive(Debug)]
+        enum CallSuffix {
+            StructLit(Vec<(String, Spanned<Expr>)>),
+            Call(Vec<Spanned<Expr>>),
+        }
+
+        // Struct literal: `Name { field: expr, ... }`
+        let struct_lit_suffix = just('{')
+            .padded()
+            .ignore_then(
+                ident
+                    .clone()
+                    .padded()
+                    .then_ignore(just(':').padded())
+                    .then(expr.clone().padded())
+                    .then_ignore(just(',').padded().or_not())
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
+            .then_ignore(just('}').padded())
+            .map(CallSuffix::StructLit)
+            .boxed();
+
+        // Function call: `name(args)`
+        let call_suffix = just('(')
+            .padded()
+            .ignore_then(
+                expr.clone()
+                    .padded()
+                    .separated_by(just(',').padded())
+                    .collect::<Vec<_>>(),
+            )
+            .then_ignore(just(')'))
+            .map(CallSuffix::Call)
+            .boxed();
+
+        // Function call, struct literal, or bare variable.
         let call_or_var = ident
             .then(
-                just('(')
-                    .padded()
-                    .ignore_then(
-                        expr.clone()
-                            .padded()
-                            .separated_by(just(',').padded())
-                            .collect::<Vec<_>>(),
-                    )
-                    .then_ignore(just(')'))
-                    .or_not(),
+                choice((struct_lit_suffix, call_suffix)).or_not(),
             )
-            .map_with(|(name, args_opt), e| {
+            .map_with(|(name, suffix_opt), e| {
                 let span = to_src_span(e.span());
-                if let Some(args) = args_opt {
-                    Spanned::new(Expr::Call { func: name, args }, span)
-                } else {
-                    Spanned::new(Expr::Variable(name), span)
+                match suffix_opt {
+                    Some(CallSuffix::StructLit(fields)) => {
+                        Spanned::new(Expr::StructLit { name, fields }, span)
+                    }
+                    Some(CallSuffix::Call(args)) => {
+                        Spanned::new(Expr::Call { func: name, args }, span)
+                    }
+                    None => Spanned::new(Expr::Variable(name), span),
                 }
             })
             .boxed();
@@ -447,12 +479,27 @@ pub fn expr_parser<'a>() -> impl Parser<'a, &'a str, Spanned<Expr>, extra::Err<S
             parens,
         ));
 
+        // Postfix field access: `expr.field`
+        let field_access = atom.then(
+            just('.').padded().ignore_then(ident.clone().padded()).repeated().collect::<Vec<_>>()
+        )
+        .map_with(|(mut inner, fields), e| {
+            let span = to_src_span(e.span());
+            for field in fields {
+                inner = Spanned::new(
+                    Expr::FieldAccess { expr: Box::new(inner), field },
+                    span,
+                );
+            }
+            inner
+        });
+
         // Unary negation (zero or more leading `-`).
         let unary = just('-')
             .padded()
             .repeated()
             .collect::<Vec<char>>()
-            .then(atom)
+            .then(field_access)
             .map_with(|(negs, mut inner), e| {
                 let span = to_src_span(e.span());
                 for _ in negs {

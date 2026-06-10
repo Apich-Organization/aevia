@@ -168,19 +168,25 @@ impl fmt::Display for DimVector {
 ///
 /// `shape = None` means a scalar; `shape = Some(dims)` means a rank-N tensor where
 /// each element carries the `dim` SI unit.
+/// `struct_name = Some(name)` means this is a struct type (composite of multiple fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalType {
     pub dim: DimVector,
     pub shape: Option<Vec<usize>>,
+    pub struct_name: Option<String>,
 }
 
 impl PhysicalType {
     pub fn scalar(dim: DimVector) -> Self {
-        Self { dim, shape: None }
+        Self { dim, shape: None, struct_name: None }
     }
 
     pub fn tensor(dim: DimVector, shape: Vec<usize>) -> Self {
-        Self { dim, shape: Some(shape) }
+        Self { dim, shape: Some(shape), struct_name: None }
+    }
+
+    pub fn struct_type(name: String) -> Self {
+        Self { dim: DimVector::DIMENSIONLESS, shape: None, struct_name: Some(name) }
     }
 
     pub fn is_scalar(&self) -> bool {

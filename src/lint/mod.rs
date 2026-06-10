@@ -204,6 +204,12 @@ fn walk_expr(path: &Path, expr: &Expr, report: &mut LintReport) {
         }
         Expr::UnsafeTransmute { expr, .. } => walk_expr(path, &expr.node, report),
         Expr::Print { expr } => walk_expr(path, &expr.node, report),
+        Expr::StructLit { fields, .. } => {
+            for (_, fexpr) in fields {
+                walk_expr(path, &fexpr.node, report);
+            }
+        }
+        Expr::FieldAccess { expr: inner, .. } => walk_expr(path, &inner.node, report),
         Expr::Literal { .. } | Expr::Variable(_) | Expr::MacroCall { .. } | Expr::Log { .. } => {}
     }
 }
@@ -304,6 +310,15 @@ fn collect_expr_uses(expr: &Expr, names: &mut HashSet<String>) {
         Expr::UnsafeTransmute { expr, .. } => collect_expr_uses(&expr.node, names),
         Expr::MacroCall { name, .. } => { names.insert(name.clone()); }
         Expr::Print { expr } => collect_expr_uses(&expr.node, names),
+        Expr::StructLit { fields, .. } => {
+            for (_, fexpr) in fields {
+                collect_expr_uses(&fexpr.node, names);
+            }
+        }
+        Expr::FieldAccess { expr: inner, field } => {
+            collect_expr_uses(&inner.node, names);
+            names.insert(field.clone());
+        }
         Expr::Literal { .. } | Expr::Log { .. } => {}
     }
 }

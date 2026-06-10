@@ -414,6 +414,16 @@ pub fn format_expr(expr: &Expr) -> String {
         Expr::MacroCall { name, args } => format!("{name}!({args})"),
         Expr::Print { expr } => format!("print({})", format_expr(&expr.node)),
         Expr::Log { message } => format!("log(\"{message}\")"),
+        Expr::StructLit { name, fields } => {
+            let fields_str: Vec<String> = fields
+                .iter()
+                .map(|(fname, fexpr)| format!("{fname}: {}", format_expr(&fexpr.node)))
+                .collect();
+            format!("{name} {{ {} }}", fields_str.join(", "))
+        }
+        Expr::FieldAccess { expr: inner, field } => {
+            format!("{}.{}", format_expr(&inner.node), field)
+        }
     }
 }
 

@@ -121,6 +121,13 @@ fn expand_expr(expr: &mut Expr, macros: &HashMap<String, Vec<MacroRule>>) -> Aev
         }
         Expr::UnsafeTransmute { expr: inner, .. } => expand_expr(&mut inner.node, macros),
         Expr::Print { expr: inner } => expand_expr(&mut inner.node, macros),
+        Expr::StructLit { fields, .. } => {
+            for (_, fexpr) in fields {
+                expand_expr(&mut fexpr.node, macros)?;
+            }
+            Ok(())
+        }
+        Expr::FieldAccess { expr: inner, .. } => expand_expr(&mut inner.node, macros),
         Expr::Literal { .. } | Expr::Variable(_) | Expr::Log { .. } => Ok(()),
     }
 }

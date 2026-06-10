@@ -228,6 +228,21 @@ impl Lowerer {
                 // log() is a compile-time diagnostic; lower to 0.0.
                 Ok(self.builder.constant(0.0))
             }
+            Expr::StructLit { name: _, fields } => {
+                // Lower each field expression. The struct is represented by its last field value.
+                // In a full implementation, each field would be stored separately.
+                let mut last = self.builder.constant(0.0);
+                for (_, field_expr) in fields {
+                    last = self.lower_expr(field_expr, env)?;
+                }
+                Ok(last)
+            }
+            Expr::FieldAccess { expr: inner, field } => {
+                // Lower the inner expression and create a variable node for the field.
+                // This is a simplified approach; full struct tracking would use separate DAG nodes per field.
+                let _ = self.lower_expr(inner, env)?;
+                Ok(self.builder.variable(field))
+            }
         }
     }
 

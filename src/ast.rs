@@ -88,6 +88,11 @@ pub enum Item {
         name: String,
         rules: Vec<MacroRule>,
     },
+    /// Top-level macro invocation: `name!(args);`
+    MacroCall {
+        name: String,
+        args: String,
+    },
 }
 
 impl Item {
@@ -100,7 +105,7 @@ impl Item {
             | Self::Function { doc: d, .. }
             | Self::CustomOp { doc: d, .. }
             | Self::Const { doc: d, .. } => *d = doc,
-            Self::Use { .. } | Self::MacroDef { .. } => {}
+            Self::Use { .. } | Self::MacroDef { .. } | Self::MacroCall { .. } => {}
         }
     }
 }

@@ -20,6 +20,8 @@ use crate::types::{
 use crate::ast::DimExpr;
 use miette::SourceSpan;
 
+use std::collections::HashMap;
+
 /// Result of checking a full source file.
 pub struct CheckResult {
     pub errors: Vec<TypeError>,
@@ -39,7 +41,7 @@ pub fn check(file: &SourceFile) -> CheckResult {
 }
 
 pub fn check_with_imports(file: &SourceFile, imports: &ImportBindings) -> CheckResult {
-    let mut ctx = Ctx { env: TypeEnv::new(), errors: Vec::new() };
+    let mut ctx = Ctx { env: TypeEnv::new(), errors: Vec::new(), struct_defs: HashMap::new() };
     crate::modules::apply_imports(&mut ctx.env, imports);
     for item in &file.items {
         ctx.register_item(item);
@@ -86,7 +88,7 @@ fn resolve_compound_with_env(expr: &DimExpr, env: &TypeEnv) -> Option<DimVector>
 fn resolve_phys(span: &Spanned<DimExpr>, env: &TypeEnv) -> Option<PhysicalType> {
     let dim = resolve_with_env(span, env)?;
     let shape = tensor_shape(span);
-    Some(PhysicalType { dim, shape })
+    Some(PhysicalType { dim, shape, struct_name: None })
 }
 
 // ── Internal display helpers ───────────────────────────────────────────────────
@@ -106,6 +108,8 @@ fn shape_display(shape: &Option<Vec<usize>>) -> String {
 struct Ctx {
     env: TypeEnv,
     errors: Vec<TypeError>,
+    /// Struct definitions: struct name -> list of (field_name, field_dim).
+    struct_defs: HashMap<String, Vec<(String, DimVector)>>,
 }
 
 impl Ctx {
@@ -137,12 +141,16 @@ impl Ctx {
                     }
                 }
             }
-            Item::Struct { fields, .. } => {
+            Item::Struct { name, fields, .. } => {
+                let mut field_dims = Vec::new();
                 for field in fields {
-                    if resolve_with_env(&field.dim, &self.env).is_none() {
+                    if let Some(dim) = resolve_with_env(&field.dim, &self.env) {
+                        field_dims.push((field.name.clone(), dim));
+                    } else {
                         self.errors.push(TypeError::unknown_unit(field.dim.span, &field.name));
                     }
                 }
+                self.struct_defs.insert(name.clone(), field_dims);
             }
             Item::CustomOp { .. }
             | Item::Use { .. }
@@ -161,7 +169,7 @@ impl Ctx {
                                 &inferred_pt.dim.to_string(),
                             ));
                         } else {
-                            self.env.define(name.clone(), PhysicalType { dim: ddim, shape: inferred_pt.shape });
+                            self.env.define(name.clone(), PhysicalType { dim: ddim, shape: inferred_pt.shape, struct_name: None });
                         }
                     }
                     (Some(ddim), None) => {
@@ -260,7 +268,7 @@ impl Ctx {
                                 let declared_shape = tensor_shape(declared_span);
                                 // Shape annotation takes priority; fall back to inferred shape.
                                 let shape = declared_shape.or_else(|| inferred_pt.shape.clone());
-                                self.env.define(name.clone(), PhysicalType { dim: declared_dim, shape });
+                                self.env.define(name.clone(), PhysicalType { dim: declared_dim, shape, struct_name: None });
                             }
                         }
                         (None, _) => {
@@ -268,7 +276,7 @@ impl Ctx {
                         }
                         (Some(declared_dim), None) => {
                             let shape = tensor_shape(declared_span);
-                            self.env.define(name.clone(), PhysicalType { dim: declared_dim, shape });
+                            self.env.define(name.clone(), PhysicalType { dim: declared_dim, shape, struct_name: None });
                         }
                     }
                 } else if let Some(pt) = inferred {
@@ -309,7 +317,7 @@ impl Ctx {
                     match resolve_with_env(unit_span, &self.env) {
                         Some(dim) => {
                             let shape = tensor_shape(unit_span);
-                            Some(PhysicalType { dim, shape })
+                            Some(PhysicalType { dim, shape, struct_name: None })
                         }
                         None => {
                             self.errors.push(TypeError::unknown_unit(
@@ -485,6 +493,67 @@ impl Ctx {
                 // log("message") — always dimensionless.
                 Some(PhysicalType::scalar(DimVector::DIMENSIONLESS))
             }
+
+            Expr::StructLit { name, fields } => {
+                // Look up struct definition and verify field dimensions.
+                if let Some(def_fields) = self.struct_defs.get(name).cloned() {
+                    for (field_name, field_expr) in fields {
+                        let inferred = self.infer_expr(field_expr);
+                        if let Some(expected_dim) = def_fields.iter().find(|(n, _)| n == field_name).map(|(_, d)| d) {
+                            if let Some(ref pt) = inferred {
+                                if pt.dim != *expected_dim {
+                                    self.errors.push(TypeError::dimension_mismatch(
+                                        field_expr.span,
+                                        &pt.dim.to_string(),
+                                        &expected_dim.to_string(),
+                                    ));
+                                }
+                            }
+                        } else {
+                            self.errors.push(TypeError::new(
+                                crate::types::error::TypeErrorCode::UnknownUnit,
+                                format!("struct `{name}` has no field `{field_name}`"),
+                                field_expr.span,
+                            ));
+                        }
+                    }
+                    Some(PhysicalType::struct_type(name.clone()))
+                } else {
+                    // Unknown struct — still infer field expressions for error reporting.
+                    for (_, field_expr) in fields {
+                        self.infer_expr(field_expr);
+                    }
+                    Some(PhysicalType::struct_type(name.clone()))
+                }
+            }
+
+            Expr::FieldAccess { expr: inner, field } => {
+                let inner_pt = self.infer_expr(inner);
+                if let Some(pt) = inner_pt {
+                    if let Some(struct_name) = &pt.struct_name {
+                        if let Some(def_fields) = self.struct_defs.get(struct_name) {
+                            if let Some((_, dim)) = def_fields.iter().find(|(n, _)| n == field) {
+                                return Some(PhysicalType::scalar(*dim));
+                            }
+                        }
+                        self.errors.push(TypeError::new(
+                            crate::types::error::TypeErrorCode::UnknownUnit,
+                            format!("struct `{struct_name}` has no field `{field}`"),
+                            expr.span,
+                        ));
+                        None
+                    } else {
+                        self.errors.push(TypeError::new(
+                            crate::types::error::TypeErrorCode::DimensionMismatch,
+                            "field access requires a struct type",
+                            expr.span,
+                        ));
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -531,7 +600,7 @@ impl Ctx {
                     (Some(l), Some(r)) => {
                         let result_dim = l.dim.mul(r.dim);
                         let result_shape = self.mul_shapes(&l.shape, &r.shape, span);
-                        Some(PhysicalType { dim: result_dim, shape: result_shape })
+                        Some(PhysicalType { dim: result_dim, shape: result_shape, struct_name: None })
                     }
                     (Some(l), None) | (None, Some(l)) => Some(l),
                     (None, None) => None,
@@ -547,7 +616,7 @@ impl Ctx {
                             (Some(s), None) => Some(s.clone()),
                             _ => None,
                         };
-                        Some(PhysicalType { dim: result_dim, shape: result_shape })
+                        Some(PhysicalType { dim: result_dim, shape: result_shape, struct_name: None })
                     }
                     (Some(l), None) => Some(l),
                     (None, _) => None,
@@ -560,7 +629,7 @@ impl Ctx {
                 (Some(base), Expr::Literal { value, suffix: None }) => {
                     if let Some(exp) = value.to_i64() {
                         if exp >= 0 {
-                            Some(PhysicalType { dim: base.dim.pow(exp as i32), shape: base.shape })
+                            Some(PhysicalType { dim: base.dim.pow(exp as i32), shape: base.shape, struct_name: None })
                         } else {
                             self.errors.push(TypeError::new(
                                 crate::types::error::TypeErrorCode::DimensionMismatch,
