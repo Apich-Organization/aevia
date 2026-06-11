@@ -63,6 +63,9 @@ pub enum CliCommand {
         /// Output directory (optional)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Generate HTML documentation instead of Markdown
+        #[arg(long)]
+        html: bool,
     },
     /// Interactive REPL
     Shell,
@@ -106,7 +109,7 @@ fn dispatch_subcommand(sub: CliCommand) -> AeviaResult<()> {
         CliCommand::Check { paths } => commands::check(paths),
         CliCommand::Fmt { paths } => commands::fmt(paths),
         CliCommand::Lint { paths } => commands::lint(paths),
-        CliCommand::Doc { paths, output } => commands::doc(paths, output),
+        CliCommand::Doc { paths, output, html } => commands::doc(paths, output, html),
         CliCommand::Shell => commands::shell(),
         CliCommand::Test { path } => commands::test(&path),
     }

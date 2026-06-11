@@ -417,11 +417,15 @@ pub fn lint(paths: Vec<PathBuf>) -> AeviaResult<()> {
 }
 
 /// `aevia doc`
-pub fn doc(paths: Vec<PathBuf>, output: Option<PathBuf>) -> AeviaResult<()> {
+pub fn doc(paths: Vec<PathBuf>, output: Option<PathBuf>, html: bool) -> AeviaResult<()> {
     logging::pass("doc");
     let files = resolve_inputs(&paths)?;
     for file in files {
-        if let Some(ref out_dir) = output {
+        if html {
+            let out_dir = output.clone().unwrap_or_else(|| PathBuf::from("doc"));
+            crate::doc::generate_html_for_entry(&file, &out_dir)?;
+            logging::pass_detail("doc", &format!("wrote HTML docs to {}", out_dir.display()));
+        } else if let Some(ref out_dir) = output {
             crate::doc::generate_for_entry(&file, out_dir)?;
             logging::pass_detail("doc", &format!("wrote docs to {}", out_dir.display()));
         } else {
