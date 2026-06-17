@@ -287,7 +287,15 @@ impl Ctx {
             }
             Stmt::Assign { target, value } => {
                 let expected = self.env.lookup(target);
-                if let (Some(exp), Some(got)) = (expected, self.infer_expr(value)) {
+                let inferred = self.infer_expr(value);
+                if expected.is_none() {
+                    self.errors.push(TypeError::new(
+                        crate::types::error::TypeErrorCode::UnknownUnit,
+                        format!("undefined variable `{target}`"),
+                        stmt.span,
+                    ));
+                }
+                if let (Some(exp), Some(got)) = (expected, inferred) {
                     if exp.dim != got.dim {
                         self.errors.push(TypeError::dimension_mismatch(
                             value.span,
@@ -323,8 +331,8 @@ impl Ctx {
                         }
                         None => {
                             self.errors.push(TypeError::unknown_unit(
-                                unit_span.span,
-                                "literal suffix",
+                                  unit_span.span,
+                                  "literal suffix",
                             ));
                             None
                         }
@@ -334,7 +342,18 @@ impl Ctx {
                 }
             }
 
-            Expr::Variable(name) => self.env.lookup(name),
+            Expr::Variable(name) => {
+                if let Some(pt) = self.env.lookup(name) {
+                    Some(pt)
+                } else {
+                    self.errors.push(TypeError::new(
+                        crate::types::error::TypeErrorCode::UnknownUnit,
+                        format!("undefined variable or constant `{name}`"),
+                        expr.span,
+                    ));
+                    None
+                }
+            }
 
             Expr::BinaryOp { op, lhs, rhs } => {
                 let l = self.infer_expr(lhs);
@@ -848,5 +867,12 @@ mod tests {
         let result = check_src("fn bad(a: kg[4, 3], b: kg[4, 4]) := a * b;");
         assert!(!result.ok());
         assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::ShapeMismatch));
+    }
+
+    #[test]
+    fn test_undefined_variable() {
+        let result = check_src("fn f() := notexist;");
+        assert!(!result.ok());
+        assert!(result.errors.iter().any(|e| e.code == TypeErrorCode::UnknownUnit && e.message.contains("undefined variable")));
     }
 }

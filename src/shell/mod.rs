@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 /// Run the interactive Aevia shell on stdin/stdout.
 pub fn run() -> AeviaResult<()> {
-    println!("Aevia shell — enter expressions or commands (:help, :quit)");
+    println!("Aevia shell — enter expressions or commands (help, quit)");
     let stdin = io::stdin();
     loop {
         print!("aevia> ");
@@ -21,27 +21,78 @@ pub fn run() -> AeviaResult<()> {
         if line.is_empty() {
             continue;
         }
-        if matches!(line, ":quit" | ":exit" | ":q") {
+        if matches!(line, ":quit" | ":exit" | ":q" | "quit" | "exit" | "q") {
             break;
         }
-        let _ = handle_line(line);
+        if let Err(e) = handle_line(line) {
+            eprintln!("error: {e}");
+        }
     }
     Ok(())
 }
 
+const KEYWORDS: &[&str] = &[
+    "fn", "let", "mut", "const", "struct", "type", "use", "mod", "op",
+    "if", "else", "elseif", "while", "for", "in", "loop", "match",
+    "continue", "break", "pub", "properties", "simplify", "egraph",
+    "after", "rewrite"
+];
+
+const VALID_ALIASES: &[&str] = &[
+    "Newton", "N", "Joule", "J", "Pascal", "Pa", "Watt", "W", "Hertz", "Hz",
+    "Velocity", "Acceleration"
+];
+
+fn is_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    if let Some(first) = chars.next() {
+        if !first.is_ascii_alphabetic() && first != '_' {
+            return false;
+        }
+        for c in chars {
+            if !c.is_ascii_alphanumeric() && c != '_' {
+                return false;
+            }
+        }
+        true
+    } else {
+        false
+    }
+}
+
 fn handle_line(line: &str) -> AeviaResult<()> {
     match line {
-        ":help" | ":h" => {
+        ":help" | ":h" | "help" | "h" => {
             print_help();
             Ok(())
+        }
+        cmd if cmd == ":check" || cmd == "check" => {
+            Err(AeviaError::message("check command requires a file path (e.g. `check file.ae`)"))
+        }
+        cmd if cmd == ":load" || cmd == "load" => {
+            Err(AeviaError::message("load command requires a file path (e.g. `load file.ae`)"))
         }
         cmd if cmd.starts_with(":check ") => {
             let path = PathBuf::from(cmd.trim_start_matches(":check ").trim());
             shell_check_file(&path)
         }
+        cmd if cmd.starts_with("check ") => {
+            let path = PathBuf::from(cmd.trim_start_matches("check ").trim());
+            shell_check_file(&path)
+        }
         cmd if cmd.starts_with(":load ") => {
             let path = PathBuf::from(cmd.trim_start_matches(":load ").trim());
             shell_load_file(&path)
+        }
+        cmd if cmd.starts_with("load ") => {
+            let path = PathBuf::from(cmd.trim_start_matches("load ").trim());
+            shell_load_file(&path)
+        }
+        cmd if cmd.starts_with(':') => {
+            Err(AeviaError::message(format!("command `{cmd}` not found")))
+        }
+        cmd if is_identifier(cmd) && !KEYWORDS.contains(&cmd) && !VALID_ALIASES.contains(&cmd) => {
+            Err(AeviaError::message(format!("command `{cmd}` not found")))
         }
         _ => eval_expression(line),
     }
@@ -50,11 +101,11 @@ fn handle_line(line: &str) -> AeviaResult<()> {
 fn print_help() {
     println!(
         r#"Commands:
-  <expr>           Evaluate an expression (e.g. 0.5 * 2.0 * 3.0^2)
-  :check <file.ae> Type-check a source file
-  :load <file.ae>  Load, type-check, compile, and JIT-run the main function
-  :help            Show this message
-  :quit            Exit"#
+  <expr>                Evaluate an expression (e.g. 0.5 * 2.0 * 3.0^2)
+  check <file.ae>       Type-check a source file (or :check)
+  load <file.ae>        Load, type-check, compile, and JIT-run the main function (or :load)
+  help                  Show this message (or :help)
+  quit                  Exit (or :quit)"#
     );
 }
 
@@ -235,4 +286,57 @@ fn eval_expression(line: &str) -> AeviaResult<()> {
     let value = compiled(args.as_ptr());
     println!("{value}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handle_line_help() {
+        assert!(handle_line("help").is_ok());
+        assert!(handle_line(":help").is_ok());
+        assert!(handle_line("h").is_ok());
+        assert!(handle_line(":h").is_ok());
+    }
+
+    #[test]
+    fn test_handle_line_missing_args() {
+        let r_check = handle_line("check");
+        assert!(r_check.is_err());
+        assert!(r_check.unwrap_err().to_string().contains("requires a file path"));
+
+        let r_check_colon = handle_line(":check");
+        assert!(r_check_colon.is_err());
+        assert!(r_check_colon.unwrap_err().to_string().contains("requires a file path"));
+
+        let r_load = handle_line("load");
+        assert!(r_load.is_err());
+        assert!(r_load.unwrap_err().to_string().contains("requires a file path"));
+
+        let r_load_colon = handle_line(":load");
+        assert!(r_load_colon.is_err());
+        assert!(r_load_colon.unwrap_err().to_string().contains("requires a file path"));
+    }
+
+    #[test]
+    fn test_handle_line_nonexistent_command() {
+        let r = handle_line(":notexist");
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("command `:notexist` not found"));
+    }
+
+    #[test]
+    fn test_handle_line_nonexistent_command_no_colon() {
+        let r = handle_line("notexist");
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("command `notexist` not found"));
+    }
+
+    #[test]
+    fn test_handle_line_undefined_variable() {
+        let r = handle_line("1 + notexist");
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("failed type check"));
+    }
 }
