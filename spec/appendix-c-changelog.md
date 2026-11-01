@@ -120,9 +120,9 @@
 3. **签名/重载/稳定键。** `OpKey { rule_set, name, signature_hash }`；
    `Signature`、`overloads`、`Stability`、`Since`、`Doc` 进入 manifest；
    CI 审计“每个算子有签名或 dynamic_reason”。
-4. **插件/宿主回调。** `#[aevia::op]` 把 Aevia 函数注册为 RSSN 算子；
+4. **插件/宿主回调。** `@op` 把 Aevia 函数注册为 RSSN 算子；
    插件可注册算子/重写/单位/量纲/JIT lowering。
-5. **量纲/单位统一。** 抽出 `rssn-dim`：`DimTerm`/`DimArena`/`UnitRegistry`；
+5. **量纲/单位统一。** 抽出 `rssn::dim`：`DimTerm`/`DimArena`/`UnitRegistry`；
    精确 `Scale { rat, pi }`、仿射 offset、用户单位/基量纲注册；Aevia 的
    `Units.SI` 是 registry 的生成视图，不再有第二张表。
 6. **中心 registry。** 内容寻址 + 签名 + capability；包清单/索引/发布/
@@ -141,17 +141,17 @@
 13. **稳定性模型取代 v1/v2。** `@stable`/`@experimental`/`@deprecated`；
     后端缺失报 `E1001`，不删语言特性。
 
-### 仍存在的风险（设计边界，不是版本待办）
+### 仍存在的风险（Revision 5 时点）
 
-- `Term` 的替换/自由符号 API 仍需 rssn 侧补齐；`diff` 闭包可能每次重跑
-  `compute`。
-- `compute` 的深拷贝和 `DimArena` 共享需要 rssn 侧优化；可用批处理规避。
-- `Solutions` 的 `multiplicities`/`conditions` 在 RSSN 结构化结果就绪前
-  可能只填默认值。
+- `compute` 的深拷贝和 `DimArena` 共享仍需 RSSN 优化；可用批处理规避。
+- `Solutions.multiplicities` 空表示“未报告”，不是“全 1”；`complete`
+  目前硬编码 true，不能当证明。
 - `Point` 的表示是 Float + UnitId；符号绝对温度仍用温差/`Dyn`。
 - 形式化语义/证明尚未做；用 conformance/属性测试/与 rssn 交叉检查。
 - GPU/分布式/稀疏的**后端实现**可能晚于语言设计；缺失时报 capability，
   不删语法。
+- `Term` 替换/自由符号、`fork/merge`、结构化结果已在 0.2.13 实现；
+  Revision 4 的对应风险已关闭。
 
 
 ---
@@ -168,3 +168,35 @@
 - [x] 检查单位表与 rssn 的一致性说明。
 - [x] 检查 `Point` 与 `Float`/`Real` 的交互。
 - [x] 检查 `RateOf` 的递归规则。
+
+## Revision 5 — 对齐 RSSN 0.2.13 实际实现
+
+RSSN 的适配已经落地，这一轮把规范从“设计契约”改成“实际 API 契约”：
+
+1. **Manifest 实际字段**：`KernelManifest` 有 `features`/`rule_sets`/`ops`/
+   `units: Vec<UnitValue>`/`base_dimensions`/`plugins`；`manifest_hash` 是
+   确定性 bincode 的 BLAKE3，JSON 只供人读。
+2. **实际入口名**：`Session::manifest() -> Arc`、`call_value`、`call_ho`、
+   `register(Box<dyn Plugin>)`；`OpInfo.keys`（不是 `key`）；`Value::Symbol`
+   （不是 `VString`）；`TypeExpr::Dim(Box<TypeExpr>, DimExpr)`（不是
+   `Real(dim)`）。
+3. **实际覆盖**：rssn 0.2.13 有 1369 个算子、30 个 rule set、799 有签名
+   （58.4%，其中 7 declared / 792 inferred）、570 个有 `dynamic_reason`、
+   0 unexplained；Aevia 的可信 typed façade 只有 7 个，其余 1362 个走
+   `Rssn.dynamic`。
+4. **量纲/单位**：`rssn::dim` 公开 `DimTerm`/`DimArena`/`Dimension`/
+   `UnitRegistry`/`UnitDef`/`Scale`；`DimTerm::factors(&arena)` 返回
+   `(String, BigRational)`；`Dimension` 仍是可打印字符串快照。
+5. **Term/线程**：`Term` 借 `&Session`，`TermRef` 是 owned handle；
+   `children`/`substitute`/`free_symbols`/`to_value`/`handle` 已实现；
+   `fork/merge` 已实现。
+6. **结构化结果**：`Solutions` 的 `multiplicities` 空表示“未报告”，不是
+   “全 1”；`OdeSolutionView`/`SimResult` 已实现。
+7. **JIT**：`Select`/`Extern1`/`Gather` 已 lowering；默认构建
+   `features.jit=false`，`@jit` 必须报 `E1001("core.jit")`。
+8. **当前唯一 P0 构建阻塞**：`signatures.overlay.json` 被 `.gitignore`
+   的 `**/*.json` 排除，干净 clone 下 `include_str!` 失败。需要把文件纳入
+   版本控制，或改成可选加载。
+9. **章节更新**：13 章、10.8、08.6/8.11/8.18/8.19、README 与根目录
+   `RSSN-INTEGRATION-REQUIREMENTS.md` 已按实际 API/数值重写。
+

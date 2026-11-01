@@ -47,7 +47,8 @@ name_list      ::= name { "," name }
 name           ::= IDENT | UIDENT
 
 top_decl       ::= { attribute } [ "private" ] decl
-attribute      ::= "@" IDENT [ "(" [ expr { "," expr } ] ")" ] NEWLINE?
+attr_arg       ::= [ IDENT "=" ] expr
+attribute      ::= "@" IDENT [ "(" [ attr_arg { "," attr_arg } ] ")" ] NEWLINE?
 decl           ::= dimension_decl
                  | unit_decl
                  | type_decl
@@ -67,7 +68,7 @@ unit_scale     ::= [ "-" ] number [ "/" number ]
                  | "pi" [ "/" number ]
 unit_name      ::= UNIT_NAME | IDENT | qname
 
-type_decl      ::= "type" UIDENT [ type_params ] "=" type_body NEWLINE?
+type_decl      ::= "type" UIDENT [ type_params ] [ "=" type_body ] NEWLINE?
 type_body      ::= type
                  | "|" constructor { "|" constructor }
                  | NEWLINE INDENT { "|" constructor NEWLINE } DEDENT
@@ -119,7 +120,9 @@ expr           ::= let_expr
 let_expr       ::= "let" [ "rec" ] pattern [ ":" type ] "=" expr "in" expr
 if_expr        ::= "if" expr "then" expr "else" expr
 
-match_expr     ::= "match" expr "with" NEWLINE INDENT { match_arm } DEDENT
+match_expr     ::= "match" expr "with" match_body
+match_body     ::= NEWLINE INDENT { match_arm } DEDENT
+                 | NEWLINE { match_arm }          # 分支与 match 同列
 match_arm      ::= "|" pattern [ "if" expr ] "->" expr NEWLINE?
 
 fn_expr        ::= "fn" ( "(" [ params ] ")" | IDENT ) [ ":" type ] "=>" expr
@@ -219,7 +222,8 @@ literal_pattern ::= INT | STRING | "true" | "false" | "(" ")"
 
 ```
 type           ::= [ "forall" type_param { "," type_param } "." ] fn_type
-fn_type        ::= type_atom [ "->" type ]
+fn_type        ::= type_postfix [ "->" type ]
+type_postfix   ::= type_atom { "[" IDENT "]" }
 type_atom      ::= "Int"
                  | "Real" [ "[" dim "]" ]
                  | "Float" [ "[" dim "]" ]
@@ -246,12 +250,13 @@ type_atom      ::= "Int"
                          [ "..." IDENT ] ] "}"
                  | "(" type { "," type } ")"
                  | qname [ "<" type_arg { "," type_arg } ">" ]
+                 | IDENT
                  | "(" type ")"
 
 field_type     ::= IDENT ":" type
 type_arg       ::= type | nat | dim | shape
 format_name    ::= IDENT | UIDENT
-shape          ::= nat | "?" | "[" [ shape_item { "," shape_item } ] "]"
+shape          ::= nat | "[" [ shape_item { "," shape_item } ] "]"
 shape_item     ::= nat | "?"
 row_type       ::= type { "+" type }
 nat            ::= INT | IDENT | nat "+" nat

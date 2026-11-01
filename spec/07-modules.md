@@ -207,7 +207,7 @@ kinematics/
 
 ```aevia
 # tests/fall_time.aev
-import Kinematics
+open Kinematics
 
 test "fall time from 20 m" =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
@@ -219,7 +219,7 @@ test "dimension rejection" =
 
 - `test` 声明是 `Bool` 表达式；`aevia test` 运行所有测试。
 - `approx_eq(a, b, tol)` 要求 `a`、`b` 同量纲，`tol` 同量纲。
-- 编译期错误测试用 `#[compile_fail]` 注释指令（当前规范用 `compile_fail` 块，
+- 编译期错误测试用 `@compile_fail` 属性（或 `compile_fail` 块，
   见 §8.13）。
 - 属性测试用 `forall`（§8.13）。
 

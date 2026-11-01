@@ -8,19 +8,21 @@
 
 国际单位制的七个基量纲，加上用户可扩展的基量纲：
 
-| 符号 | 别名 | 含义 |
+| 规范名 | 源码/显示别名 | 含义 |
 |---|---|---|
-| `L` | `Length` | 长度 |
-| `M` | `Mass` | 质量 |
-| `T` | `Time` | 时间 |
-| `I` | `Current` | 电流 |
-| `Θ` | `Temperature` | 热力学温度 |
-| `N` | `Amount` | 物质的量 |
-| `J` | `Luminosity` | 发光强度 |
+| `Length` | `L` | 长度 |
+| `Mass` | `M` | 质量 |
+| `Time` | `T` | 时间 |
+| `Current` | `I` | 电流 |
+| `Temperature` | `Θ` | 热力学温度 |
+| `Amount` | `Amt` | 物质的量 |
+| `Luminosity` | `Lum` | 发光强度 |
 
 - 基量纲是**生成元**，不是类型构造器；`L` 本身是一个量纲表达式。
 - 用户可以用 `dimension Currency` 声明新的基量纲；它加入全局基集合。
-- 基量纲名大小写敏感；单字母符号是规范名，单词别名用于可读性。
+- 基量纲名大小写敏感；**全名是规范名**（`Length`/`Mass`/`Time`/`Current`/
+  `Temperature`/`Amount`/`Luminosity`），单字母只是源码/显示别名。跨 FFI、
+  manifest 和 rssn::dim 一律用全名；单字母不得出现在边界。
 - `1` 表示无量纲（空乘积）。
 
 ### 4.1.1 派生别名
@@ -526,7 +528,7 @@ help: did you mean `2 * h / g`?
 
 ```
 Dyn            : Rep -> Type
-DimValue       : Type        # = rssn_dim::DimTerm（基量纲 + 有理指数）
+DimValue       : Type        # = rssn::dim::DimTerm（基量纲 + 有理指数）
 dyn            : Scalar<ρ,d> -> Dyn<ρ>          # d 必须是具体量纲
 check          : Dyn<ρ> -> Result<Scalar<ρ,d>, DimError>   # d 必须是具体量纲
 dyn_with       : (Scalar<ρ,d>, DimValue) -> Dyn<ρ>

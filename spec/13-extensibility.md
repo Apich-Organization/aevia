@@ -16,7 +16,7 @@
 1. **单一算子注册表。** RSSN 的 `OpTable` 是唯一事实来源。Aevia 不维护
    “支持哪些算子”的清单；它读取 RSSN 的 **Kernel Manifest**，生成
    `Rssn` 模块。新算子只要在 RSSN 注册，Aevia 下一次构建就能看见。
-2. **单一量纲/单位层。** `rssn-dim` 的 `DimTerm`/`DimArena`/`UnitRegistry`
+2. **单一量纲/单位层。** `rssn::dim` 的 `DimTerm`/`DimArena`/`UnitRegistry`
    是运行时与编译期共享的规范层。Aevia 的 `Dim` 是它的类型级镜像；
    `Units.SI` 由 registry 生成，不维护第二张单位表。
 3. **动态调用是正式能力。** 没有类型签名的算子仍可通过
@@ -45,14 +45,22 @@ KernelManifest
   features     : Features
   rule_sets    : [RuleSetInfo]
   ops          : [OpInfo]
-  units        : [UnitDef]
-  base_dims    : [BaseDimInfo]
+  units        : [UnitValue]
+  base_dimensions : [BaseDimInfo]
+  plugins      : [PluginInfo]
 ```
 
-`OpInfo` 必须包含：稳定键 `OpKey { rule_set, name, signature_hash }`、
-别名、类别、arity、`overloads`、flags、binder、cost、eval 类型、是否
-高阶、纯度、确定性、线程安全性、稳定性、since、文档、示例、量纲规则、
-后端支持。完整 schema 见根目录文档 §3.1。
+`OpInfo` 的实际字段：`keys: [OpKey]`（每个 overload 一个，`keys[0]` 是
+主重载）、`name`、`aliases`、`category`、`arity`、`overloads`、
+`signature_source`、`flags`、`binder`、`cost`、`eval`、`higher_order`、
+`purity`、`determinism`、`thread_safety`、`stability`、`since`、`doc`、
+`examples`、`dim_rule`、`backend_support`、`dynamic_reason`、`rule_set`、
+`jit`。完整 schema 见根目录文档 §3.1。
+
+`manifest_hash` 是确定性 bincode 的 BLAKE3；`to_json()` 只供人读。
+`units` 是 `UnitValue`（name/display/dimension/scale/offset/affine），不含
+`aliases`/`prefixable`/`category`/`since`；生成 `Units.SI` 的别名/前缀
+必须再读 `UnitRegistry`。
 
 ### 13.2.2 生成规则
 
@@ -60,27 +68,38 @@ Aevia 构建时：
 
 1. 读取 manifest；校验 `api_version`（不兼容报 `E1004`）。
 2. 对每个 `OpInfo`：
-   - 有签名：生成 `Rssn.<name>` 类型化声明；
-   - 无签名：生成 `Rssn.dynamic("<OpKey>", args)`；
+   - `signature_source = Declared | Overlay`：生成 `Rssn.<name>` 类型化声明；
+   - `signature_source = Inferred`：生成 `Rssn.dynamic`（推断签名默认
+     `(Real,...,Real) -> Real`，不可信，不能当 typed façade）；
+   - `signature_source = None`：生成 `Rssn.dynamic`；
    - 别名：生成 `Rssn.<alias>`；冲突时用 `Rssn.<rule_set>.<name>`。
 3. 生成 `Rssn.Version`、`Rssn.ManifestHash`、`Rssn.Capabilities`。
 4. 生成 LSP 补全、文档、签名存根。
+
+当前 RSSN 0.2.13 的实测覆盖：1369 个算子，799 有签名（58.4%），570 个
+有 `dynamic_reason`（request/variadic/fully_polymorphic），0 unexplained。
+但 799 里只有 **7 个 declared**、792 个 inferred、0 overlay；因此 Aevia 的
+**可信 typed façade 只有 7 个**，其余 792+570 全部走 `Rssn.dynamic`。
+`signature_source=Inferred` 不能生成 typed 声明，否则 `det(scalar)` 会通过
+类型检查、`det(tensor)` 被拒。等 overlay 补齐后 typed 覆盖率才会上升。
 
 Aevia 仓库**不允许**出现按算子名手写的绑定文件。只允许：
 
 ```
 tools/gen_rssn_module.aev        # 生成器
-rssn.signatures.overlay.toml     # 只补 RSSN 暂时缺的签名
+signatures.overlay.json          # RSSN 侧的签名修正；Aevia 只读镜像
 ```
 
 CI 检查：生成器输出与提交的生成文件一致；manifest 快照变化必须显式更新。
 
 ### 13.2.3 命名空间
 
-- 普通算子：`Rssn.sin`、`Rssn.integrate`。
-- 规则集限定：`Rssn.Calculus.diff`、`Rssn.Units.convert`。
+- 普通算子：`Rssn.<name>`（仅 `Declared|Overlay` 是 typed；`Inferred` 走
+  `Rssn.dynamic`）。
+- 规则集限定：`Rssn.<rule_set>.<name>` 只是命名空间；运行时仍按 name/arity。
 - 插件：`Rssn.<plugin>.<op>`。
-- 动态：`Rssn.dynamic("calculus/diff", args)`。
+- 动态：`Rssn.dynamic("diff", args)   # args: Tensor<1, Value>`。RSSN 0.2.13 的 `call_value` 只按
+  name/alias 查找，**不支持** `rule_set/name` 限定名；限定名要等 `call_key`。
 
 名字冲突时，短名只保留**最稳定**的那个（`Stable` 优先，`since` 早者
 优先）；其余必须用限定名。生成器在 manifest 中记录短名映射。
@@ -99,13 +118,14 @@ type Value =
     | VComplex(Complex[1])
     | VBool(Bool)
     | VString(String)
+    | VSymbol(String)                 # 自由符号，不是 String
     | VUnit(Unit[1])
     | VQuantity(Quantity)
-    | VTensor(TensorData)
+    | VTensor(TensorData)             # shape + 行主序 Value
     | VSparse(SparseData)
     | VRecord(Record)
     | VVariant(Variant)
-    | VTerm(TermRef)
+    | VTerm(TermRef)                  # owned handle
     | VFunction(Callback)
     | VDyn(Dyn<Real>)
     | VOpaque(Opaque)
@@ -113,6 +133,14 @@ type Value =
 
 `Value` 是**动态边界**的类型，不是核心语言的隐式子类型。核心语言仍然是
 静态的；`Value` 只出现在 `Rssn.dynamic`、插件、FFI、反射 API 中。
+
+**可入项图性**：`VInt`/`VReal`/`VFloat`/`VBool`/`VString`/`VSymbol`/
+`VUnit`/`VQuantity`/`VTensor`/`VDyn`/`VTerm` 可以经 `Session::term_of`
+进入项图；`VComplex` 仅在虚部为 0 时降为 `Float` 入图，有虚部返回
+`Unsupported("complex literals")`；`VSparse`/`VRecord`/`VVariant`/
+`VFunction`/`VOpaque` 在 0.2.13 的 `term_of_value` 返回 `Unsupported`，
+只能喂给 `eval_dyn` 算子或作为返回值。生成器必须按这个表决定 façade 是否接受该
+类型，不能假设所有 `Value` 都能参与重写。
 
 ### 13.3.2 调用
 
@@ -122,11 +150,13 @@ Rssn.dynamic : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.typed   : (String, Tensor<1, Value>, TypeRep) -> Result<a, OpError>
 ```
 
-- `Rssn.call` 按 `OpKey` 或短名查找；短名歧义报 `E1002`。
+- `Rssn.call` 只按短名/别名查找；0.2.13 不支持 `rule_set/name` 限定名，
+  也不接受 `OpKey` 作为运行时键。短名歧义报 `E1002`。
+- 参数用 `to_value(x)` 注入；返回值用 `from_value(v)` 转回静态类型。
 - 没有签名/实验性/插件算子走 `dynamic`。
 - `Rssn.typed` 在运行时把 `Value` 转成静态类型 `a`，做类型与量纲检查；
   失败返回 `OpError.Type`/`OpError.Dimension`。
-- 高阶算子用 `Rssn.call_ho(key, args, fns)`；`fns` 是 `Callback`，可以
+- 高阶算子用 `Rssn.call_ho(name, args, fns)`；`fns` 是 `Callback`，可以
   包装 Aevia 闭包。
 
 ### 13.3.3 错误
@@ -145,6 +175,10 @@ type OpError =
     | BudgetExceeded
     | Unsupported(String, String)   # backend, feature
     | Plugin(String)
+    | ForeignTerm(String, String)   # expected session, got session
+    | Codec(String)
+    | Host(String)
+    | Internal(String)
 ```
 
 `E1003` 是“没有匹配的算子/重载”，携带候选签名列表；`E1001` 是
@@ -165,6 +199,11 @@ RSSN 允许同名多签名。Aevia 的重载解析：
 4. 仍歧义报 `E1002`；
 5. 没有匹配时尝试 `Dynamic`；仍失败报 `E1003`。
 
+**运行时限制**：RSSN 0.2.13 的 `call_value` 只按 name+arity 选择第一个
+重载，`OpKey.signature_hash` 不参与运行时。若两个 overload 同 arity 但
+类型不同，Aevia 不生成 typed 声明，只生成 `dynamic`；等 RSSN 提供
+`call_key(&OpKey, ...)` 后再启用同 arity 多型 typed 调用。
+
 ### 13.4.2 签名覆盖
 
 RSSN 的 1000+ 算子不要求一次写完签名。规则：
@@ -173,7 +212,8 @@ RSSN 的 1000+ 算子不要求一次写完签名。规则：
 - 没有签名的算子仍可用，但 Aevia 只生成 `dynamic` 声明；
 - CI 的 `signature-audit` 报告覆盖率；覆盖率不达标不阻止构建，但阻止
   `Stable` 标记；
-- 新算子用 `#[rssn_op]` 自动生成签名；旧算子用推断 + overlay。
+- 新算子用 `OpDescriptor::new(...).signature(...)`（插件用
+  `Registry::register_op`）声明签名；旧算子用推断 + `signatures.overlay.json`。
 
 这保证“能力完整”和“类型体验”可以分开推进，但不会有算子被静默遗忘。
 
@@ -188,9 +228,12 @@ RSSN 的 1000+ 算子不要求一次写完签名。规则：
 ```toml
 # aevia.toml
 [plugin]
-kind = "aevia"          # 或 "cdylib"
+kind = "aevia"          # 0.2.13 只支持进程内 Aevia/Rust 插件
 abi = 1
 ```
+
+`kind = "cdylib"` 是设计目标，但 RSSN 0.2.13 没有动态库加载器；未实现前
+动态库插件报 `E1001("core.plugin.cdylib")`，进程内 `Plugin` trait 可用。
 
 ```aevia
 module MyDomain
@@ -205,10 +248,11 @@ dimension MyDim
 unit myunit : Length = 0.5 m
 ```
 
-编译后注册到 RSSN：
+编译后注册到 RSSN。Aevia 的 `Rssn.register` 是 `Session::register(Box<dyn Plugin>)` 的包装；
+`Rssn.register_plugin` 是同一函数的别名：
 
 ```aevia
-Rssn.register_plugin("mydomain", plugin)
+Rssn.register(plugin)          # -> Result<PluginId, PluginError>
 ```
 
 插件可以：
@@ -241,17 +285,19 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 
 ---
 
-## 13.6 量纲与单位：统一到 `rssn-dim`
+## 13.6 量纲与单位：统一到 `rssn::dim`
 
 ### 13.6.1 规范层
 
-`rssn-dim` 提供：
+`rssn::dim` 提供：
 
-- `DimTerm`：基量纲/变量的有理指数乘积，结构化访问 `factors()`/`vars()`；
+- `DimTerm`：基量纲/变量的有理指数乘积，结构化访问
+  `factors(&arena)`/`vars(&arena)`；
 - `DimArena`：基量纲/变量 interning，可快照/恢复；
 - `UnitRegistry`：单位名、别名、精确尺度 `Scale { rat, pi }`、仿射
   offset、前缀、显示、类别、since；
-- `Dimension`：可打印快照，但内部指数是有理数，不是字符串。
+- `Dimension`：**可打印快照**，指数是字符串；精确比较/计算用 `DimTerm`，
+  不要解析 `Dimension.factors`。
 
 Aevia 的 `Dim` 是 `DimTerm` 的类型级镜像；两者的规范形、基名、指数运算
 必须一致。编译器不复制单位表；`Units.SI` 是 registry 的生成视图。
@@ -269,6 +315,10 @@ unit myunit : Length = 0.5 m
 - 导出信息进入 manifest；下游包可以直接 `import` 并使用。
 - 用户单位可以是仿射的（`unit °X : Temperature = 1 K offset 273.15`），
   但仿射单位只能单独使用。
+- **0.2.13 限制**：`UnitRegistry::register` 的 `expr_to_dim` 仍只认 7 个
+  内置基名；`unit EUR : Currency` 会报 “not a base dimension”。在 RSSN
+  接受 `DimArena` 自定义基名之前，Aevia 只允许自定义基量纲的符号运算，
+  单位注册报 `E1001("core.units.custom_base")`。
 
 ### 13.6.3 `Dyn`
 
@@ -402,11 +452,11 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 - `Tensor<[n1, ..., nk], τ>`：形状细化；`n_i` 是类型级 `Nat`，可用
   `?` 表示未知。
 - `Matrix<n, m, τ>` 是 `Tensor<[n, m], τ>` 的别名。
-- 张量字面量自动获得细化形状；`zeros<[3,4]>()` 等构造器可显式指定。
+- 张量字面量自动获得细化形状；`zeros_of<[3,4]>()` 等构造器可显式指定。
 - `matmul : Tensor<[m,k],τ> × Tensor<[k,n],τ> -> Tensor<[m,n],τ>`；
   秩-only 版本保留，运行时检查。
-- `reshape<[n1..nk]>(a)`：如果 `a` 的形状静态已知，编译期检查元素数
-  相等；否则返回 `Result`。`reshape_dyn` 总是运行时检查。
+- `reshape<[n1, ..., nk]>(a)` 始终返回 `Result`；形状静态已知时元素数在
+  编译期检查、结果恒为 `Ok`，否则运行时检查。`reshape_dyn` 总是运行时检查。
 - 索引：细化形状 + 字面量索引 → 编译期越界检查；动态索引仍运行时检查。
 - 细化 → 秩-only 是安全隐式转换；秩-only → 细化用 `refine_shape`
   返回 `Option`/`Result`。
@@ -434,8 +484,8 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 - `column` 是类型级字段查找：`column(t, "time")` 的结果类型由 `ρ` 的字段
 类型决定。
 - `select`/`join`/`rename` 保持行多态；新增字段要求 `lacks` 约束。
-- 动态 CSV（未知 schema）返回 `Table<Dynamic>`；`to_table<ρ>` 做运行时
-  校验。
+- 动态 CSV（未知 schema）返回 `Table<Dynamic>`；`Dynamic` 是特殊记录类型，
+  不是普通字段可投影的行。`to_table<ρ>` 做运行时校验。
 - 这样数据管道和核心语言一样有静态 schema，不再只是“读入后赶紧转记录”。
 
 ### 13.9.4 设备、GPU、分布式
@@ -456,10 +506,13 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 
 **决定：`Sparse<F, shape, τ>` 是核心类型构造器，`F` 是格式类型。**
 
-- 格式：`Csr`、`Csc`、`Coo`、`Block`、`Bcsr`；用户可注册新格式。
+- 格式：`Csr`、`Csc`、`Coo`、`Block`、`Bcsr`；0.2.13 是封闭集合，用户
+  自定义格式要等 RSSN 开放 `Format` kind（当前插件只能注册算子/单位）。
 - `Layout` 类：`nnz`、`to_dense`、`from_dense`、`matmul`、`transpose`。
 - `@` 按布局分派：dense×sparse、sparse×dense、sparse×sparse。
-- `Sparse` 与 `Tensor` 之间显式转换；不隐式互转。
+- `Sparse` 与 `Tensor` 之间显式转换；不隐式互转。RSSN 的 `TypeExpr::Sparse`
+  只有 `rank`，所以 Aevia 的 `Sparse<F,shape,τ>` 在边界降为 rank + 运行时
+  shape；细化形状由 Aevia 自己检查。
 - 稀疏不是库补丁，而是类型系统的一部分；`shape` 细化同样适用。
 
 ### 13.9.6 效果与能力

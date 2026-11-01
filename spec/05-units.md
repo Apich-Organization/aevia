@@ -177,7 +177,10 @@ type  = Scalar<rep(number), dim(unit_expr)>
 
 ## 5.3 单位表
 
-标准库 `Units.SI` 提供以下单位（节选）：
+标准库 `Units.SI` 提供以下单位（节选）。**单位名与量纲别名不共享拼写**：
+`l`/`liter` 是升；不要写 `L` 作为单位（`L` 是 `Length` 的显示别名）；
+`T` 在单位列是特斯拉，在量纲列是 `Time` 的显示别名。规范名一律用全名
+（`Length`/`Mass`/`Time`/...），单字母只用于源码/显示。
 
 ### 5.3.1 SI 基单位
 
@@ -188,8 +191,8 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `s` | `T` | 秒，prefixable |
 | `A` | `I` | 安培，prefixable |
 | `K` | `Θ` | 开尔文，prefixable |
-| `mol` | `N` | 摩尔，prefixable |
-| `cd` | `J` | 坎德拉，prefixable |
+| `mol` | `Amt` | 摩尔，prefixable |
+| `cd` | `Lum` | 坎德拉，prefixable |
 
 ### 5.3.2 SI 派生单位
 
@@ -227,7 +230,7 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `°` / `deg` | `1` | `pi/180` |
 | `′` / `arcmin` | `1` | `pi/10800` |
 | `″` / `arcsec` | `1` | `pi/648000` |
-| `L` | `L^3` | `1/1000 m^3` |
+| `l` / `liter` | `L^3` | `1/1000 m^3` |
 | `t` | `M` | `1000 kg` |
 | `eV` | `Energy` | `1.602176634e-19 J` |
 | `Da` / `u` | `M` | `1.66053906660e-27 kg` |
@@ -273,6 +276,12 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `Units.CGS` | cm、g、dyn、erg、Gal、P |
 | `Units.Natural` | `c = 1`、`hbar = 1`、`eV` 系 |
 | `Units.Constants` | 物理常数（§5.8） |
+
+> **0.2.13 实现状态**：RSSN 的 `UnitRegistry` 当前有 59 个单位，覆盖 SI
+> 基/派生、常见英制、`degC`/`degF`；**没有** `au/pc/ly/Mpc`、`dyn/erg/Gal/P`
+> 和 CODATA 常数。`Units.Astronomy`/`CGS`/`Constants` 在 RSSN 注册这些
+> 条目之前是 Aevia 的本地 overlay，属于“单一事实来源”的显式例外；不能
+> 从 manifest 生成。
 
 `Units.Natural` 通过“单位制”而不是“改常数”实现：它导出一组新的单位，
 其中 `c`、`hbar` 的数值是 1。用户 `open Units.Natural` 后，`1 GeV` 等写法
@@ -498,7 +507,7 @@ Unit {
 
 ## 5.10 与 rssn 单位层的衔接
 
-rssn 的 `rssn-dim` 提供 `DimTerm`/`DimArena`/`UnitRegistry`；`units` 规则集
+rssn 的 `rssn::dim` 提供 `DimTerm`/`DimArena`/`UnitRegistry`；`units` 规则集
 只是 registry 的一个消费者。Aevia 的单位层是编译期视图，`Units.SI` 由
 `UnitRegistry` 生成，并且有 `Point` 类型。两者衔接方式：
 
@@ -509,9 +518,10 @@ rssn 的 `rssn-dim` 提供 `DimTerm`/`DimArena`/`UnitRegistry`；`units` 规则�
    输出，不进入 `compute`。
 3. **仿射单位在桥接层消解。** `Point` 在进入 rssn 前转成 K 的 `Float`；
    `to(°C, ...)` 只发生在显示层。
-4. **registry 往返。** `DimTerm -> Dimension -> DimTerm` 与
-   `UnitDef -> scale/offset -> UnitDef` 必须精确往返；启动时对基单位/
-   派生单位/仿射单位做快照校验。
+4. **registry 往返。** 仅对**纯有理指数**，经 `Dimension::exact_factors`
+   做 `DimTerm -> Dimension -> DimTerm` 精确往返；符号指数不支持往返，
+   不得解析 `Dimension.factors` 文本。`UnitDef -> scale/offset -> UnitDef`
+   必须精确往返。
 5. **rssn 的 `DimensionMode::Strict` 只用于 FFI/导出。** 静态路径的项图
    无量纲，用 `Off`；`Dyn<ρ>` 的量纲由宿主保存为 `DimTerm`，不依赖字符串。
 

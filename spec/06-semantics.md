@@ -319,9 +319,9 @@ shape1 ~ shape2:
 
 ### 6.6.6 归约
 
-- `sum` 空张量 = 0；`prod` 空张量 = 1；`mean` 空张量 = `Err`；
-  `min`/`max` 空张量 = `Err`。
-- `sum(a, axis)` 保留秩（该轴大小为 1，keepdims）；`sum_all(a)` 返回标量。
+- `sum` 空张量 = 0；`prod` 空张量 = 1；`mean` 空张量：`Float` 返回
+  `NaN`，`Real` 报 `E0802`；`min`/`max` 空张量报 `E0802`。
+- `sum(a, axis)` 保留秩（该轴大小为 1，keepdims）；`sum(a)` 返回标量。
 - `sum` 的实现对 `F64` 用 pairwise/Kahan 求和，减少误差；`Exact` 用精确
   有理数求和。
 - `var` 默认样本方差（除以 `n-1`）；`var(xs, population=true)` 除以 `n`。
@@ -362,7 +362,7 @@ eprintln : Show a => a -> IO Unit
 read_line: () -> IO String
 read_file: String -> IO (Result<String, IOError>)
 write_file: String * String -> IO (Result<(), IOError>)
-read_csv : String -> IO (Result<Table, DataError>)
+read_csv_dyn : String -> IO (Result<Table<Dynamic>, DataError>)
 plot     : PlotSpec -> IO Unit
 time_now : () -> IO Float[T]
 random   : () -> IO Float[1]

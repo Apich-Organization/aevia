@@ -17,6 +17,7 @@ NumPy + SymPy + Pint 拼成，量纲检查靠库、符号与数值靠两套 API�
 module Kinematics
 
 open Units.SI
+import Math { sqrt }
 
 let g = 9.80665 m/s^2
 
@@ -102,7 +103,7 @@ fn main(): IO Unit = do
 - `Complex[d]`：复数标量。
 
 十进制字面量默认是 `Float`，因为写 `0.1` 的人通常想要一个浮点数；写 `1/10`
-的人想要精确值。整数默认是 `Int`。`Real` 与 `Float` 混合运算时 `Float` 传染
+的人想要精确值。整数默认是 `Int`。`Real` 与 `Float` 混合运算时 `Real` 吸收 `Float`（精确优先）
 （与 rssn 的 float contagion 一致），但不会有隐式的 `Real → Float` 转换发生在
 你没写 `Float` 的地方。
 
@@ -141,7 +142,7 @@ Aevia 不需要 `quote`/`unquote`。`symbol("x")` 返回一个 `Real` 值；对�
 ### 原则六：单一注册表，反射优先
 
 Aevia 不手写 RSSN 算子绑定，也不维护第二张单位表。RSSN 的 `OpTable` 是
-唯一算子注册表，`rssn-dim` 是唯一量纲/单位层；Aevia 读取 Kernel Manifest，
+唯一算子注册表，`rssn::dim` 是唯一量纲/单位层；Aevia 读取 Kernel Manifest，
 生成 `Rssn` 模块（类型化 + `dynamic`）。新算子/新单位/新插件不需要改
 Aevia 编译器。这样 1000+ 算子可以持续增长，而不是靠“下个版本支持”追赶。
 
@@ -155,11 +156,11 @@ let t = 9.58 s                # Real[T]
 let v = d / t                 # Real[L/T]
 let E = 70 kg * v^2 / 2       # Real[M*L^2/T^2]
 
-let bad = d + t               # error[E0301]: Real[L] vs Real[T]
+let bad = d + t               # error[E0401]: dimension mismatch
 ```
 
 `70 kg` 是 `Real[M]`，`v^2` 是 `Real[L^2/T^2]`，乘积是 `Real[M*L^2/T^2]`。
-不需要写 `J`；`J` 只是 `M*L^2/T^2` 的打印别名。
+不需要写 `Energy`；`Energy` 只是 `M*L^2/T^2` 的打印别名。
 
 ### 量纲多态
 
@@ -193,12 +194,12 @@ let y = approx(df(2))                 # Ok(9.0)，Float
 ### 张量
 
 ```aevia
-let A = [[1.0, 2.0], [3.0, 4.0]]      # Tensor<[2,2], Float>
+let M = [[1.0, 2.0], [3.0, 4.0]]      # Tensor<[2,2], Float>
 let b = [5.0, 6.0]                    # Tensor<[2], Float>
-let x = match linsolve(A, b) with
+let x = match linsolve(M, b) with
         | Ok(v) -> v
         | Err(_) -> [0.0, 0.0]        # 示例；实际应处理错误
-let y = A @ x                         # matmul，等于 b
+let y = M @ x                         # matmul，等于 b
 
 let R = [[1.0, 2.0], [3.0, 4.0]] * ohm
 let I = [0.1, 0.2] * A

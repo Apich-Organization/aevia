@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>Aevia Language Specification — Revision 4</title>
+  <title>Aevia Language Specification — Revision 5</title>
   <style>
 
 code{white-space: pre-wrap;}
@@ -113,7 +113,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 2.5em 0; }
 </head>
 <body>
 <header id="title-block-header">
-<h1 class="title">Aevia Language Specification — Revision 4</h1>
+<h1 class="title">Aevia Language Specification — Revision 5</h1>
 </header>
 <nav id="TOC" role="doc-toc">
 <ul>
@@ -355,8 +355,7 @@ façade，不是手写绑定</a></li>
 线程与生命周期</a></li>
 <li><a href="#106-性能策略" id="toc-106-性能策略">10.6 性能策略</a></li>
 <li><a href="#107-错误映射" id="toc-107-错误映射">10.7 错误映射</a></li>
-<li><a href="#108-已知缺口与风险" id="toc-108-已知缺口与风险">10.8
-已知缺口与风险</a></li>
+<li><a href="#108-已知缺口与风险适配后" id="toc-108-已知缺口与风险适配后">10.8 已知缺口与风险（适配后）</a></li>
 <li><a href="#109-一个端到端的调用链" id="toc-109-一个端到端的调用链">10.9 一个端到端的调用链</a></li>
 </ul></li>
 <li><a href="#11--完整示例" id="toc-11--完整示例">11 — 完整示例</a>
@@ -415,8 +414,8 @@ façade，不是手写绑定</a></li>
 重载、签名与解析</a></li>
 <li><a href="#135-插件与用户扩展" id="toc-135-插件与用户扩展">13.5
 插件与用户扩展</a></li>
-<li><a href="#136-量纲与单位统一到-rssn-dim" id="toc-136-量纲与单位统一到-rssn-dim">13.6 量纲与单位：统一到
-<code>rssn-dim</code></a></li>
+<li><a href="#136-量纲与单位统一到-rssndim" id="toc-136-量纲与单位统一到-rssndim">13.6 量纲与单位：统一到
+<code>rssn::dim</code></a></li>
 <li><a href="#137-中心包-registry" id="toc-137-中心包-registry">13.7
 中心包 registry</a></li>
 <li><a href="#138-稳定性与-capability取代-v1v2" id="toc-138-稳定性与-capability取代-v1v2">13.8 稳定性与 capability（取代
@@ -491,11 +490,13 @@ v1/v2）</a></li>
 <li><a href="#revision-4--可扩展性与-rssn-集成" id="toc-revision-4--可扩展性与-rssn-集成">Revision 4 — 可扩展性与 RSSN
 集成</a></li>
 <li><a href="#待办清单审计后关闭" id="toc-待办清单审计后关闭">待办清单（审计后关闭）</a></li>
+<li><a href="#revision-5--对齐-rssn-0213-实际实现" id="toc-revision-5--对齐-rssn-0213-实际实现">Revision 5 — 对齐 RSSN
+0.2.13 实际实现</a></li>
 </ul></li>
 </ul>
 </nav>
 <h1 id="aevia-language-specification">Aevia Language Specification</h1>
-<p><strong>Single-file edition — Revision 4</strong></p>
+<p><strong>Single-file edition — Revision 5</strong></p>
 <blockquote>
 <p>本文件由 <code>spec/</code>
 下的章节按顺序合并生成；章节内的相对链接在单文件版中不再可用。</p>
@@ -539,8 +540,8 @@ evaluation are two phases of the same expression; units, dimensional
 inference, rewriting, numerical kernels, JIT compilation and physics
 simulations are provided by the backend. Aevia does not maintain a
 second operator list or a second unit table: it consumes the RSSN
-<strong>Kernel Manifest</strong> and <code>rssn-dim</code> registry, and
-generates its <code>Rssn</code> module from them. See <a href="13-extensibility.md">13 — Extensibility</a> and the <a href="../RSSN-INTEGRATION-REQUIREMENTS.md">backend requirements</a>.</p>
+<strong>Kernel Manifest</strong> and <code>rssn::dim</code> registry,
+and generates its <code>Rssn</code> module from them. See <a href="13-extensibility.md">13 — Extensibility</a> and the <a href="../RSSN-INTEGRATION-REQUIREMENTS.md">backend requirements</a>.</p>
 <blockquote>
 <p>This document is the <strong>normative design</strong>. It is written
 to be implementable: the grammar is complete, the typing rules are
@@ -661,7 +662,7 @@ wording is not normative).</p>
 <p>This is a <strong>design standard</strong>, not a frozen
 implementation. Chapters marked normative are intended to be implemented
 as written; the changelog records every audit round. The current text is
-<strong>Revision 4</strong>, after three rounds of independent audits
+<strong>Revision 5</strong>, after three rounds of independent audits
 plus the extensibility/backend-integration redesign. There is <strong>no
 v1/v2 language split</strong>: every capability is designed in; a
 backend that does not yet implement one reports a capability diagnostic
@@ -676,6 +677,7 @@ result a deliberate request.</p>
 <pre class="aevia"><code>module Kinematics
 
 open Units.SI
+import Math { sqrt }
 
 let g = 9.80665 m/s^2
 
@@ -709,6 +711,7 @@ API、单位错误往往在 运行时才暴露。Aevia
 module Kinematics
 
 open Units.SI
+import Math { sqrt }
 
 let g = 9.80665 m/s^2
 
@@ -808,9 +811,9 @@ registry，不是语言级宏或效果系统。
 <p>十进制字面量默认是 <code>Float</code>，因为写 <code>0.1</code>
 的人通常想要一个浮点数；写 <code>1/10</code> 的人想要精确值。整数默认是
 <code>Int</code>。<code>Real</code> 与 <code>Float</code> 混合运算时
-<code>Float</code> 传染 （与 rssn 的 float contagion
-一致），但不会有隐式的 <code>Real → Float</code> 转换发生在 你没写
-<code>Float</code> 的地方。</p>
+<code>Real</code> 吸收 <code>Float</code>（精确优先） （与 rssn 的 float
+contagion 一致），但不会有隐式的 <code>Real → Float</code> 转换发生在
+你没写 <code>Float</code> 的地方。</p>
 <p>这条规则让 <code>sin(1)</code> 保持为符号表达式
 <code>sin(1)</code>，而 <code>sin(1.0)</code> 直接得到
 <code>0.8414709848078965</code>。看起来微妙，但它迫使作者明确“我是在做精确推导还是在做
@@ -846,7 +849,7 @@ HM。</li>
 可靠，动态路径保持可用。</p>
 <h3 id="原则六单一注册表反射优先">原则六：单一注册表，反射优先</h3>
 <p>Aevia 不手写 RSSN 算子绑定，也不维护第二张单位表。RSSN 的
-<code>OpTable</code> 是 唯一算子注册表，<code>rssn-dim</code>
+<code>OpTable</code> 是 唯一算子注册表，<code>rssn::dim</code>
 是唯一量纲/单位层；Aevia 读取 Kernel Manifest， 生成 <code>Rssn</code>
 模块（类型化 + <code>dynamic</code>）。新算子/新单位/新插件不需要改
 Aevia 编译器。这样 1000+
@@ -858,11 +861,11 @@ let t = 9.58 s                # Real[T]
 let v = d / t                 # Real[L/T]
 let E = 70 kg * v^2 / 2       # Real[M*L^2/T^2]
 
-let bad = d + t               # error[E0301]: Real[L] vs Real[T]</code></pre>
+let bad = d + t               # error[E0401]: dimension mismatch</code></pre>
 <p><code>70 kg</code> 是 <code>Real[M]</code>，<code>v^2</code> 是
 <code>Real[L^2/T^2]</code>，乘积是 <code>Real[M*L^2/T^2]</code>。
-不需要写 <code>J</code>；<code>J</code> 只是 <code>M*L^2/T^2</code>
-的打印别名。</p>
+不需要写 <code>Energy</code>；<code>Energy</code> 只是
+<code>M*L^2/T^2</code> 的打印别名。</p>
 <h3 id="量纲多态">量纲多态</h3>
 <pre class="aevia"><code>fn mean&lt;d&gt;(xs: Tensor&lt;1, Real[d]&gt;): Real[d] =
     sum(xs) / length(xs)
@@ -885,12 +888,12 @@ let y = approx(df(2))                 # Ok(9.0)，Float</code></pre>
 同量纲的符号，把函数应用上去，求导，再代回。这个设计让求导对高阶函数、
 部分应用和用户自定义函数都成立。</p>
 <h3 id="张量">张量</h3>
-<pre class="aevia"><code>let A = [[1.0, 2.0], [3.0, 4.0]]      # Tensor&lt;[2,2], Float&gt;
+<pre class="aevia"><code>let M = [[1.0, 2.0], [3.0, 4.0]]      # Tensor&lt;[2,2], Float&gt;
 let b = [5.0, 6.0]                    # Tensor&lt;[2], Float&gt;
-let x = match linsolve(A, b) with
+let x = match linsolve(M, b) with
         | Ok(v) -&gt; v
         | Err(_) -&gt; [0.0, 0.0]        # 示例；实际应处理错误
-let y = A @ x                         # matmul，等于 b
+let y = M @ x                         # matmul，等于 b
 
 let R = [[1.0, 2.0], [3.0, 4.0]] * ohm
 let I = [0.1, 0.2] * A
@@ -1299,7 +1302,7 @@ SI）；在期望 <code>Float[L]</code> 处可 实例化为
 <tr>
 <th>记号</th>
 <th>含义</th>
-<th>结合性/优先级（见 §2.9）</th>
+<th>结合性/优先级（见 §2.6）</th>
 </tr>
 </thead>
 <tbody>
@@ -1547,7 +1550,7 @@ type Shape =
     | Rect(Real[L], Real[L])
 
 type Result&lt;a, e&gt; = | Ok(a) | Err(e)</code></pre>
-<pre><code>type_decl ::= &quot;type&quot; UIDENT [ type_params ] &quot;=&quot; type_body
+<pre><code>type_decl ::= &quot;type&quot; UIDENT [ type_params ] [ &quot;=&quot; type_body ]
 type_body ::= type
             | &quot;|&quot; constructor { &quot;|&quot; constructor }
             | NEWLINE INDENT { &quot;|&quot; constructor NEWLINE } DEDENT
@@ -1556,12 +1559,16 @@ constructor ::= UIDENT [ &quot;(&quot; [ type { &quot;,&quot; type } ] &quot;)&q
 <li><code>type Name = T</code>
 是<strong>透明别名</strong>：<code>Vec2</code> 与
 <code>{ x: Real[L], y: Real[L] }</code> 完全相同。</li>
+<li><code>type Name</code>（省略
+<code>= type_body</code>）是<strong>抽象类型</strong>，只能由标准库/插件提供
+构造器与操作；用户模块不能凭空实现它。<code>Table</code>/<code>Series</code>/<code>PlotSpec</code>
+等 内建类型用这种形式声明。</li>
 <li><code>type Name = | C1(...) | C2(...)</code>
 是<strong>名义变体类型</strong>；构造器是值/函数。 单行变体 MUST 以
 <code>|</code> 开头，以便与类型别名区分；缩进形式可以省略首个
 <code>|</code>（但建议保留）。</li>
 <li>递归类型允许，但递归出现必须位于函数箭头的右侧、记录字段、元组或构造器
-参数中（正性检查，§3.7）。</li>
+参数中（正性检查，§3.6.4）。</li>
 <li>构造器名在模块内全局可见；不同模块的同名构造器用
 <code>Module.Ctor</code> 限定。</li>
 </ul>
@@ -1622,8 +1629,9 @@ fn hot(x: Float[1]): Float[1] = ...
 
 @op(&quot;mydomain/softplus&quot;)
 fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))</code></pre>
-<pre><code>attribute ::= &quot;@&quot; IDENT [ &quot;(&quot; [ expr { &quot;,&quot; expr } ] &quot;)&quot; ] NEWLINE?
-top_decl  ::= { attribute } [ &quot;private&quot; ] decl</code></pre>
+<pre><code>attribute ::= &quot;@&quot; IDENT [ &quot;(&quot; [ attr_arg { &quot;,&quot; attr_arg } ] &quot;)&quot; ] NEWLINE?
+top_decl  ::= { attribute } [ &quot;private&quot; ] decl
+attr_arg  ::= [ IDENT &quot;=&quot; ] expr</code></pre>
 <ul>
 <li><code>@stable</code>/<code>@experimental</code>/<code>@deprecated</code>
 是稳定性标记（§13.8）。</li>
@@ -1675,7 +1683,9 @@ fn sign(x: Real[1]): Int =
     | 0 -&gt; 0
     | n if n &gt; 0 -&gt; 1
     | _ -&gt; -1</code></pre>
-<pre><code>match_expr ::= &quot;match&quot; expr &quot;with&quot; NEWLINE INDENT { match_arm } DEDENT
+<pre><code>match_expr ::= &quot;match&quot; expr &quot;with&quot; match_body
+match_body ::= NEWLINE INDENT { match_arm } DEDENT
+             | NEWLINE { match_arm }          # 分支与 match 同列
 match_arm  ::= &quot;|&quot; pattern [ &quot;if&quot; expr ] &quot;-&gt;&quot; expr NEWLINE?</code></pre>
 <ul>
 <li>分支按顺序尝试；<code>_</code> 是通配符。</li>
@@ -1752,8 +1762,8 @@ let o = Some(3)
 let n = None</code></pre>
 <p>构造器是普通函数/值；<code>Circle</code> 的类型是
 <code>Real[L] -&gt; Shape</code>，<code>None</code> 是
-<code>Option&lt;a&gt;</code>
-的多态值。构造器名大写开头是约定，不是语法要求。</p>
+<code>Option&lt;a&gt;</code> 的多态值。构造器名必须以大写
+<code>UIDENT</code> 开头；这是语法要求。</p>
 <h3 id="2310-张量">2.3.10 张量</h3>
 <pre class="aevia"><code>let v = [1.0, 2.0, 3.0]              # Tensor&lt;[3], Float&gt;
 let m = [[1.0, 2.0], [3.0, 4.0]]     # Tensor&lt;[2,2], Float&gt;
@@ -1818,10 +1828,8 @@ do_stmt ::= &quot;let&quot; pattern [ &quot;:&quot; type ] &quot;=&quot; expr NE
 monad。</li>
 </ul>
 <h3 id="2313-错误传播-">2.3.13 错误传播 <code>?</code></h3>
-<pre class="aevia"><code>fn load(path: String): Result&lt;Table, IOError&gt; =
-    let text = read_file(path)?          # read_file : String -&gt; Result&lt;String, IOError&gt;
-    let rows = parse_csv(text)?
-    Ok(rows)</code></pre>
+<pre class="aevia"><code>fn load(path: String): IO (Result&lt;Table&lt;Dynamic&gt;, DataError&gt;) =
+    read_csv_dyn(path)</code></pre>
 <p><code>e?</code> 要求
 <code>e : Result&lt;T, E&gt;</code>，所在函数返回
 <code>Result&lt;U, E&gt;</code>；成功时得到 <code>T</code>，
@@ -1890,7 +1898,8 @@ Point[Θ]
 Result&lt;T, E&gt;
 IO Unit</code></pre>
 <pre><code>type ::= [ &quot;forall&quot; type_param { &quot;,&quot; type_param } &quot;.&quot; ] fn_type
-fn_type ::= type_atom [ &quot;-&gt;&quot; type ]
+fn_type ::= type_postfix [ &quot;-&gt;&quot; type ]
+type_postfix ::= type_atom { &quot;[&quot; IDENT &quot;]&quot; }
 type_atom ::= &quot;Int&quot; | &quot;Real&quot; [ &quot;[&quot; dim &quot;]&quot; ] | &quot;Float&quot; [ &quot;[&quot; dim &quot;]&quot; ]
             | &quot;Complex&quot; [ &quot;[&quot; dim &quot;]&quot; ] | &quot;Bool&quot; | &quot;Prop&quot; | &quot;String&quot; | &quot;()&quot;
             | &quot;Tensor&quot; &quot;&lt;&quot; shape &quot;,&quot; type &quot;&gt;&quot;
@@ -1906,11 +1915,12 @@ type_atom ::= &quot;Int&quot; | &quot;Real&quot; [ &quot;[&quot; dim &quot;]&quo
             | &quot;{&quot; [ field_type { &quot;,&quot; field_type } [ &quot;,&quot; &quot;...&quot; IDENT ] ] &quot;}&quot;
             | &quot;(&quot; type { &quot;,&quot; type } &quot;)&quot;
             | qname [ &quot;&lt;&quot; type_arg { &quot;,&quot; type_arg } &quot;&gt;&quot; ]
+            | IDENT
             | &quot;(&quot; type &quot;)&quot;
 field_type ::= IDENT &quot;:&quot; type
 qname ::= UIDENT { &quot;.&quot; UIDENT }
 format_name ::= IDENT | UIDENT
-shape ::= nat | &quot;?&quot; | &quot;[&quot; [ shape_item { &quot;,&quot; shape_item } ] &quot;]&quot;
+shape ::= nat | &quot;[&quot; [ shape_item { &quot;,&quot; shape_item } ] &quot;]&quot;
 shape_item ::= nat | &quot;?&quot;
 row_type ::= type { &quot;+&quot; type }</code></pre>
 <p>注意：类型级乘积 <code>A * B</code>
@@ -1920,8 +1930,8 @@ row_type ::= type { &quot;+&quot; type }</code></pre>
 <li><code>Real</code> 不带方括号等价于
 <code>Real[1]</code>；<code>Float</code>、<code>Complex</code>
 同理。</li>
-<li><code>Tensor&lt;2, Float&gt;</code> 的 <code>2</code>
-是类型级自然数（kind <code>Nat</code>）。</li>
+<li><code>Tensor&lt;2, Float&gt;</code> 的 <code>2</code> 是秩（rank
+shape）；<code>Tensor&lt;[3,4], Float&gt;</code> 是细化形状。</li>
 <li><code>Point[Θ]</code> 是仿射点（§5.6）。</li>
 <li><code>Unit[d]</code> 是单位值的类型（§5.2）；<code>Unit</code>
 不带方括号等价于 <code>()</code>。</li>
@@ -2254,7 +2264,9 @@ fn main(): IO Unit = do
 </table>
 <p><code>Rep</code> 是一个封闭的
 kind，用户不能扩展。它的四个成员对应四种标量表示：</p>
-<pre><code>Rep ::= Int | Real | Float | Complex</code></pre>
+<pre><code>Rep ::= Int | Real | Float | Complex
+
+Format ::= Csr | Csc | Coo | Block | Bcsr</code></pre>
 <h2 id="32-类型">3.2 类型</h2>
 <h3 id="321-标量scalarρ-δ">3.2.1
 标量：<code>Scalar&lt;ρ, δ&gt;</code></h3>
@@ -2312,13 +2324,13 @@ IEEE 数；含符号的浮点 表达式由 <code>Real</code>
 Bool          : Type                        具体布尔
 Prop          : Type                        符号命题（§3.8.6）
 String        : Type
-Tensor        : Nat -&gt; Type -&gt; Type         秩-only 张量
+Tensor        : Shape -&gt; Type -&gt; Type       张量（秩或细化形状）
 Matrix        : Nat -&gt; Nat -&gt; Type -&gt; Type  = Tensor&lt;[n,m], τ&gt;
 Sparse        : Format -&gt; Shape -&gt; Type -&gt; Type  稀疏张量（§13.9.5）
 Point         : Dim -&gt; Type                  仿射点（Float 表示；可作张量元素）
 Unit          : Dim -&gt; Type                  单位值
-Table         : Row -&gt; Type                  行多态表（§13.9.3）
-Dynamic       : Row                         未知 schema 的行标记
+Table         : Type -&gt; Type                 行多态表；ρ 是封闭记录类型（§13.9.3）
+Dynamic       : Type                        特殊记录类型：未知 schema（仅用于 Table&lt;Dynamic&gt;）
 Device        : Type                         运行时设备（§13.9.4）
 Set           : Type -&gt; Type
 Option        : Type -&gt; Type
@@ -2342,6 +2354,7 @@ Json       : Type                  # JSON 值（不透明）
 Value      : Type                  # RSSN 动态值（§13.3）
 OpError    : Type                  # 动态调用错误（§13.3）
 Plugin     : Type                  # 插件句柄（§13.5）
+PluginId   : Type                  # 注册后的插件 id（§13.5）
 Callback   : Type                  # 高阶回调（§13.5）
 TypeRep    : Type                  # 运行时类型表示（§13.3）
 TermRef    : Type                  # RSSN 项句柄（§13.3）</code></pre>
@@ -2666,24 +2679,27 @@ Tensor&lt;[n1, ..., nk], τ&gt;     # 形状细化（refinement）
 Matrix&lt;n, m, τ&gt;              # = Tensor&lt;[n, m], τ&gt;</code></pre>
 <ul>
 <li><code>Tensor&lt;n, τ&gt;</code> 的 <code>n</code>
-是秩；形状是运行时值 <code>[d1, ..., dn]</code>。秩错误是
-编译错误，形状错误在细化类型下是编译错误，否则是运行时
+是秩；形状是运行时值 <code>[d1, ..., dn]</code>。它是
+<code>Tensor&lt;[?, ..., ?], τ&gt;</code>（n 个
+<code>?</code>）的糖：<code>n</code> 是秩，extents
+未知。秩错误是编译错误，形状 错误在细化类型下是编译错误，否则是运行时
 <code>E0802</code>。</li>
 <li><code>Tensor&lt;[n1, ..., nk], τ&gt;</code> 的 <code>n_i</code>
 是类型级 <code>Nat</code>，可用 <code>?</code> 表示未知。 这是
 <code>Tensor</code>
 的<strong>特殊类型形式</strong>（<code>Tensor&lt;shape, τ&gt;</code>），不是把
 shape
-列表当作普通类型参数；字面量自动获得细化形状，<code>zeros&lt;[3,4]&gt;()</code>
+列表当作普通类型参数；字面量自动获得细化形状，<code>zeros_of&lt;[3,4]&gt;()</code>
 等构造器 可显式指定。</li>
 <li>类型级 <code>Nat</code> 支持字面量、<code>+</code>、<code>*</code>
 和线性等式；不做一般递归/证明。
 这足以表达矩阵乘法、reshape、拼接，不需要完整依赖类型。</li>
 <li>细化 → 秩-only 是安全隐式转换；秩-only → 细化用
 <code>refine_shape(a) : Option&lt;Tensor&lt;[...],τ&gt;&gt;</code>（运行时检查）。</li>
-<li><code>reshape&lt;[n1..nk]&gt;(a)</code>：若 <code>a</code>
-的形状静态已知，编译期检查元素数相等； 否则返回
-<code>Result</code>。<code>reshape_dyn</code> 总是运行时检查。</li>
+<li><code>reshape&lt;[n1, ..., nk]&gt;(a)</code> 的签名始终返回
+<code>Result&lt;Tensor&lt;shape,τ&gt;, ShapeError&gt;</code>；形状静态已知时元素数在编译期
+检查、结果恒为 <code>Ok</code>，否则运行时检查。<code>reshape_dyn</code>
+总是运行时检查。</li>
 <li>索引：细化形状 + 字面量索引 →
 编译期越界检查；动态索引仍运行时检查。</li>
 </ul>
@@ -2744,9 +2760,9 @@ shape
 <p>标量与张量：</p>
 <pre><code>Scalar&lt;ρ1,d&gt; * Tensor&lt;n, Scalar&lt;ρ2,e&gt;&gt; : Tensor&lt;n, Scalar&lt;join,d*e&gt;&gt;
 Scalar&lt;ρ1,d&gt; + Tensor&lt;n, Scalar&lt;ρ2,e&gt;&gt; : Tensor&lt;n, Scalar&lt;join,d&gt;&gt;，要求 d=e
-Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; * Unit[e]      : Tensor&lt;n, Scalar&lt;ρ,d*e&gt;&gt;
-Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; / Unit[e]      : Tensor&lt;n, Scalar&lt;ρ,d/e&gt;&gt;
-Unit[e] * Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt;       : Tensor&lt;n, Scalar&lt;ρ,e*d&gt;&gt;</code></pre>
+Tensor&lt;shape, Scalar&lt;ρ,d&gt;&gt; * Unit[e]  : Tensor&lt;shape, Scalar&lt;ρ,d*e&gt;&gt;
+Tensor&lt;shape, Scalar&lt;ρ,d&gt;&gt; / Unit[e]  : Tensor&lt;shape, Scalar&lt;ρ,d/e&gt;&gt;
+Unit[e] * Tensor&lt;shape, Scalar&lt;ρ,d&gt;&gt;   : Tensor&lt;shape, Scalar&lt;ρ,e*d&gt;&gt;</code></pre>
 <p><strong>张量与张量的逐元素运算要求相同秩</strong>。同秩内形状可以相等或某一维为
 1 （广播）。细化类型在编译期检查；秩-only 在运行时检查。不做 NumPy
 式跨秩 广播；这条限制让结果秩始终静态已知，也避免
@@ -2801,6 +2817,18 @@ centroid : Tensor&lt;1, Point[d]&gt; -&gt; Point[d]</code></pre>
 <td><code>Tensor&lt;[m,n], Scalar&lt;ρ,d*e&gt;&gt;</code></td>
 <td><code>matmul</code>（细化）</td>
 </tr>
+<tr>
+<td><code>Tensor&lt;[m,k], Scalar&lt;ρ,d&gt;&gt;</code></td>
+<td><code>Tensor&lt;[k], Scalar&lt;ρ,e&gt;&gt;</code></td>
+<td><code>Tensor&lt;[m], Scalar&lt;ρ,d*e&gt;&gt;</code></td>
+<td><code>matvec</code>（细化）</td>
+</tr>
+<tr>
+<td><code>Tensor&lt;[k], Scalar&lt;ρ,d&gt;&gt;</code></td>
+<td><code>Tensor&lt;[k,n], Scalar&lt;ρ,e&gt;&gt;</code></td>
+<td><code>Tensor&lt;[n], Scalar&lt;ρ,d*e&gt;&gt;</code></td>
+<td><code>vecmat</code>（细化）</td>
+</tr>
 </tbody>
 </table>
 <p><code>A @ x</code> 是矩阵乘向量，<code>x @ A</code>
@@ -2821,7 +2849,7 @@ a[i..j, ..] : Tensor&lt;n, τ&gt;        切片保持秩</code></pre>
 <code>map</code>/<code>fold</code>/<code>sum</code>，不要用下标。</li>
 <li>细化形状 <code>Tensor&lt;[n1,...,nk], τ&gt;</code>
 下，字面量索引在编译期检查
-<code>0 &lt;= i &lt; n_i</code>；动态索引仍在运行时检查（<code>E0802</code>）。</li>
+<code>-n_i &lt;= i &lt; n_i</code>；动态索引仍在运行时检查（<code>E0802</code>）。</li>
 <li><code>a[i, j]</code>
 只接受<strong>全部是标量下标</strong>；混合下标与切片请写成
 <code>a[i][.., j]</code> 或
@@ -3520,45 +3548,45 @@ dim_of    : Dyn&lt;ρ&gt; -&gt; DimValue</code></pre>
 <table>
 <thead>
 <tr>
-<th>符号</th>
-<th>别名</th>
+<th>规范名</th>
+<th>源码/显示别名</th>
 <th>含义</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>L</code></td>
 <td><code>Length</code></td>
+<td><code>L</code></td>
 <td>长度</td>
 </tr>
 <tr>
-<td><code>M</code></td>
 <td><code>Mass</code></td>
+<td><code>M</code></td>
 <td>质量</td>
 </tr>
 <tr>
-<td><code>T</code></td>
 <td><code>Time</code></td>
+<td><code>T</code></td>
 <td>时间</td>
 </tr>
 <tr>
-<td><code>I</code></td>
 <td><code>Current</code></td>
+<td><code>I</code></td>
 <td>电流</td>
 </tr>
 <tr>
-<td><code>Θ</code></td>
 <td><code>Temperature</code></td>
+<td><code>Θ</code></td>
 <td>热力学温度</td>
 </tr>
 <tr>
-<td><code>N</code></td>
 <td><code>Amount</code></td>
+<td><code>Amt</code></td>
 <td>物质的量</td>
 </tr>
 <tr>
-<td><code>J</code></td>
 <td><code>Luminosity</code></td>
+<td><code>Lum</code></td>
 <td>发光强度</td>
 </tr>
 </tbody>
@@ -3568,7 +3596,9 @@ dim_of    : Dyn&lt;ρ&gt; -&gt; DimValue</code></pre>
 本身是一个量纲表达式。</li>
 <li>用户可以用 <code>dimension Currency</code>
 声明新的基量纲；它加入全局基集合。</li>
-<li>基量纲名大小写敏感；单字母符号是规范名，单词别名用于可读性。</li>
+<li>基量纲名大小写敏感；<strong>全名是规范名</strong>（<code>Length</code>/<code>Mass</code>/<code>Time</code>/<code>Current</code>/
+<code>Temperature</code>/<code>Amount</code>/<code>Luminosity</code>），单字母只是源码/显示别名。跨
+FFI、 manifest 和 rssn::dim 一律用全名；单字母不得出现在边界。</li>
 <li><code>1</code> 表示无量纲（空乘积）。</li>
 </ul>
 <h3 id="411-派生别名">4.1.1 派生别名</h3>
@@ -4192,7 +4222,7 @@ help: did you mean `2 * h / g`?</code></pre>
 把它们收进一个显式的、 运行时检查的类型。</p>
 <h3 id="492-表示">4.9.2 表示</h3>
 <pre><code>Dyn            : Rep -&gt; Type
-DimValue       : Type        # = rssn_dim::DimTerm（基量纲 + 有理指数）
+DimValue       : Type        # = rssn::dim::DimTerm（基量纲 + 有理指数）
 dyn            : Scalar&lt;ρ,d&gt; -&gt; Dyn&lt;ρ&gt;          # d 必须是具体量纲
 check          : Dyn&lt;ρ&gt; -&gt; Result&lt;Scalar&lt;ρ,d&gt;, DimError&gt;   # d 必须是具体量纲
 dyn_with       : (Scalar&lt;ρ,d&gt;, DimValue) -&gt; Dyn&lt;ρ&gt;
@@ -4703,7 +4733,13 @@ type  = Scalar&lt;rep(number), dim(unit_expr)&gt;</code></pre>
 时求值为 <code>0.5235987755982988</code>。</li>
 </ul>
 <h2 id="53-单位表">5.3 单位表</h2>
-<p>标准库 <code>Units.SI</code> 提供以下单位（节选）：</p>
+<p>标准库 <code>Units.SI</code>
+提供以下单位（节选）。<strong>单位名与量纲别名不共享拼写</strong>：
+<code>l</code>/<code>liter</code> 是升；不要写 <code>L</code>
+作为单位（<code>L</code> 是 <code>Length</code> 的显示别名）；
+<code>T</code> 在单位列是特斯拉，在量纲列是 <code>Time</code>
+的显示别名。规范名一律用全名
+（<code>Length</code>/<code>Mass</code>/<code>Time</code>/...），单字母只用于源码/显示。</p>
 <h3 id="531-si-基单位">5.3.1 SI 基单位</h3>
 <table>
 <thead>
@@ -4741,12 +4777,12 @@ type  = Scalar&lt;rep(number), dim(unit_expr)&gt;</code></pre>
 </tr>
 <tr>
 <td><code>mol</code></td>
-<td><code>N</code></td>
+<td><code>Amt</code></td>
 <td>摩尔，prefixable</td>
 </tr>
 <tr>
 <td><code>cd</code></td>
-<td><code>J</code></td>
+<td><code>Lum</code></td>
 <td>坎德拉，prefixable</td>
 </tr>
 </tbody>
@@ -4909,7 +4945,7 @@ type  = Scalar&lt;rep(number), dim(unit_expr)&gt;</code></pre>
 <td><code>pi/648000</code></td>
 </tr>
 <tr>
-<td><code>L</code></td>
+<td><code>l</code> / <code>liter</code></td>
 <td><code>L^3</code></td>
 <td><code>1/1000 m^3</code></td>
 </tr>
@@ -5105,6 +5141,15 @@ type  = Scalar&lt;rep(number), dim(unit_expr)&gt;</code></pre>
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>0.2.13 实现状态</strong>：RSSN 的 <code>UnitRegistry</code>
+当前有 59 个单位，覆盖 SI
+基/派生、常见英制、<code>degC</code>/<code>degF</code>；<strong>没有</strong>
+<code>au/pc/ly/Mpc</code>、<code>dyn/erg/Gal/P</code> 和 CODATA
+常数。<code>Units.Astronomy</code>/<code>CGS</code>/<code>Constants</code>
+在 RSSN 注册这些 条目之前是 Aevia 的本地
+overlay，属于“单一事实来源”的显式例外；不能 从 manifest 生成。</p>
+</blockquote>
 <p><code>Units.Natural</code>
 通过“单位制”而不是“改常数”实现：它导出一组新的单位， 其中
 <code>c</code>、<code>hbar</code> 的数值是 1。用户
@@ -5447,7 +5492,7 @@ let T3 = T1 + 10.0 K        # Point[Θ]</code></pre>
 </tbody>
 </table>
 <h2 id="510-与-rssn-单位层的衔接">5.10 与 rssn 单位层的衔接</h2>
-<p>rssn 的 <code>rssn-dim</code> 提供
+<p>rssn 的 <code>rssn::dim</code> 提供
 <code>DimTerm</code>/<code>DimArena</code>/<code>UnitRegistry</code>；<code>units</code>
 规则集 只是 registry 的一个消费者。Aevia
 的单位层是编译期视图，<code>Units.SI</code> 由 <code>UnitRegistry</code>
@@ -5464,10 +5509,12 @@ registry。</li>
 <li><strong>仿射单位在桥接层消解。</strong> <code>Point</code> 在进入
 rssn 前转成 K 的 <code>Float</code>； <code>to(°C, ...)</code>
 只发生在显示层。</li>
-<li><strong>registry 往返。</strong>
-<code>DimTerm -&gt; Dimension -&gt; DimTerm</code> 与
-<code>UnitDef -&gt; scale/offset -&gt; UnitDef</code>
-必须精确往返；启动时对基单位/ 派生单位/仿射单位做快照校验。</li>
+<li><strong>registry 往返。</strong> 仅对<strong>纯有理指数</strong>，经
+<code>Dimension::exact_factors</code> 做
+<code>DimTerm -&gt; Dimension -&gt; DimTerm</code>
+精确往返；符号指数不支持往返， 不得解析 <code>Dimension.factors</code>
+文本。<code>UnitDef -&gt; scale/offset -&gt; UnitDef</code>
+必须精确往返。</li>
 <li><strong>rssn 的 <code>DimensionMode::Strict</code> 只用于
 FFI/导出。</strong> 静态路径的项图 无量纲，用
 <code>Off</code>；<code>Dyn&lt;ρ&gt;</code> 的量纲由宿主保存为
@@ -5810,10 +5857,12 @@ let sol = dsolve(eq, y, t)           # Result&lt;(Real[T] -&gt; Real[L]), MathEr
 <h3 id="666-归约">6.6.6 归约</h3>
 <ul>
 <li><code>sum</code> 空张量 = 0；<code>prod</code> 空张量 =
-1；<code>mean</code> 空张量 = <code>Err</code>；
-<code>min</code>/<code>max</code> 空张量 = <code>Err</code>。</li>
+1；<code>mean</code> 空张量：<code>Float</code> 返回
+<code>NaN</code>，<code>Real</code> 报
+<code>E0802</code>；<code>min</code>/<code>max</code> 空张量报
+<code>E0802</code>。</li>
 <li><code>sum(a, axis)</code> 保留秩（该轴大小为
-1，keepdims）；<code>sum_all(a)</code> 返回标量。</li>
+1，keepdims）；<code>sum(a)</code> 返回标量。</li>
 <li><code>sum</code> 的实现对 <code>F64</code> 用 pairwise/Kahan
 求和，减少误差；<code>Exact</code> 用精确 有理数求和。</li>
 <li><code>var</code> 默认样本方差（除以
@@ -5859,7 +5908,7 @@ eprintln : Show a =&gt; a -&gt; IO Unit
 read_line: () -&gt; IO String
 read_file: String -&gt; IO (Result&lt;String, IOError&gt;)
 write_file: String * String -&gt; IO (Result&lt;(), IOError&gt;)
-read_csv : String -&gt; IO (Result&lt;Table, DataError&gt;)
+read_csv_dyn : String -&gt; IO (Result&lt;Table&lt;Dynamic&gt;, DataError&gt;)
 plot     : PlotSpec -&gt; IO Unit
 time_now : () -&gt; IO Float[T]
 random   : () -&gt; IO Float[1]</code></pre>
@@ -6254,7 +6303,7 @@ URL、内容哈希和签名。构建 MUST 使用锁文件；<code>aevia update</
 </ul>
 <h3 id="754-测试">7.5.4 测试</h3>
 <pre class="aevia"><code># tests/fall_time.aev
-import Kinematics
+open Kinematics
 
 test &quot;fall time from 20 m&quot; =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
@@ -6267,7 +6316,7 @@ test &quot;dimension rejection&quot; =
 表达式；<code>aevia test</code> 运行所有测试。</li>
 <li><code>approx_eq(a, b, tol)</code> 要求
 <code>a</code>、<code>b</code> 同量纲，<code>tol</code> 同量纲。</li>
-<li>编译期错误测试用 <code>#[compile_fail]</code> 注释指令（当前规范用
+<li>编译期错误测试用 <code>@compile_fail</code> 属性（或
 <code>compile_fail</code> 块， 见 §8.13）。</li>
 <li>属性测试用 <code>forall</code>（§8.13）。</li>
 </ul>
@@ -6556,12 +6605,13 @@ tril     : Tensor&lt;2, a&gt; -&gt; Tensor&lt;2, a&gt;
 triu     : Tensor&lt;2, a&gt; -&gt; Tensor&lt;2, a&gt;
 eye      : Int -&gt; Tensor&lt;2, Float&gt;
 zeros    : (Int, ..., Int) -&gt; Tensor&lt;n, Float&gt;       # n = 参数个数
-zeros&lt;shape&gt;() : Tensor&lt;shape, Float&gt;                 # 细化形状构造
-ones&lt;shape&gt;()  : Tensor&lt;shape, Float&gt;
+zeros_of&lt;shape&gt;() : Tensor&lt;shape, Float&gt;              # 细化形状构造
+ones_of&lt;shape&gt;()  : Tensor&lt;shape, Float&gt;
 ones     : (Int, ..., Int) -&gt; Tensor&lt;n, Float&gt;
 fill     : (Scalar&lt;ρ,d&gt;, Int, ..., Int) -&gt; Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt;
 linspace : (Scalar&lt;ρ,d&gt;, Scalar&lt;ρ,d&gt;, Int) -&gt; Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;
-reshape&lt;m&gt; : (Tensor&lt;n, a&gt;, Tensor&lt;1, Int&gt;) -&gt; Tensor&lt;m, a&gt;
+reshape&lt;shape&gt; : Tensor&lt;shape0, τ&gt; -&gt; Result&lt;Tensor&lt;shape, τ&gt;, ShapeError&gt;
+reshape_dyn : (Tensor&lt;n, τ&gt;, Tensor&lt;1, Int&gt;) -&gt; Result&lt;Tensor&lt;n, τ&gt;, ShapeError&gt;
 flatten  : Tensor&lt;n, a&gt; -&gt; Tensor&lt;1, a&gt;
 at       : (Tensor&lt;n, a&gt;, Int) -&gt; Tensor&lt;n-1, a&gt;     # 要求 n &gt;= 1
 set      : (Tensor&lt;n, a&gt;, Tensor&lt;1, Int&gt;, a) -&gt; Tensor&lt;n, a&gt;
@@ -6579,9 +6629,10 @@ std      : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;
 <code>ones</code>/<code>fill</code>
 是<strong>内建可变参数</strong>：<code>n</code> 由 <code>Int</code>
 实参的个数决定，不是用户
-可声明的函数；类型检查器特殊处理。<code>reshape</code>
-的目标秩必须显式给出
-（<code>reshape&lt;2&gt;(a, shape)</code>），因为运行时形状向量的长度无法静态推断。</p>
+可声明的函数；类型检查器特殊处理。<code>reshape&lt;[n1, ..., nk]&gt;(a)</code>
+的目标形状
+显式给出；元素数在编译期（形状已知时）或运行时检查。<code>reshape_dyn(a, shape)</code>
+用运行时形状向量，返回 <code>Result</code>。</p>
 <p><code>@</code>
 按秩分派：<code>A @ B</code>（2×2）、<code>A @ x</code>（2×1）、<code>x @ A</code>（1×2）、
 <code>x @ y</code>（1×1 点积）。<code>matmul</code> 只做
@@ -6593,18 +6644,27 @@ std      : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;
 type LinAlgError = | Singular | NotConverged | NotPositiveDefinite | ShapeMismatch</code></pre>
 <h3 id="841-稀疏">8.4.1 稀疏</h3>
 <pre><code>type Sparse&lt;F, shape, τ&gt;
-type Csr | Csc | Coo | Block | Bcsr
 
-from_dense : Tensor&lt;shape, τ&gt; -&gt; Sparse&lt;F, shape, τ&gt;
+from_dense&lt;F&gt; : Tensor&lt;shape, τ&gt; -&gt; Sparse&lt;F, shape, τ&gt;
 to_dense   : Sparse&lt;F, shape, τ&gt; -&gt; Tensor&lt;shape, τ&gt;
 nnz        : Sparse&lt;F, shape, τ&gt; -&gt; Int
-transpose  : Sparse&lt;F, shape, τ&gt; -&gt; Sparse&lt;F&#39;, shape&#39;, τ&gt;   # shape&#39; 是 shape 的逆序
-matmul     : Sparse&lt;F, [m,k], τ&gt; × Sparse&lt;G, [k,n], τ&gt; -&gt; Sparse&lt;H, [m,n], τ&gt;</code></pre>
-<p><code>Sparse</code> 是核心类型构造器，<code>F</code> 是
-<code>Format</code> kind；<code>Layout</code> 类提供
+transpose  : Sparse&lt;F, [m,n], τ&gt; -&gt; Sparse&lt;F, [n,m], τ&gt;
+matmul     : Sparse&lt;F, [m,k], Scalar&lt;ρ,d&gt;&gt; × Sparse&lt;G, [k,n], Scalar&lt;ρ,e&gt;&gt;
+           -&gt; Sparse&lt;Csr, [m,n], Scalar&lt;ρ,d*e&gt;&gt;</code></pre>
+<p><code>Csr</code>/<code>Csc</code>/<code>Coo</code>/<code>Block</code>/<code>Bcsr</code>
+是内建 <code>Format</code>
+标签（§3.1），不是值构造器。<code>Sparse</code>
+是核心类型构造器，<code>F</code> 是 <code>Format</code>
+kind；<code>Layout</code> 类提供
 <code>from_dense</code>/<code>to_dense</code>/<code>nnz</code>/<code>matmul</code>/<code>transpose</code>。<code>@</code>
-在 dense/sparse
-混合时按布局分派；不隐式互转。用户格式通过插件注册（§13.9.5）。</p>
+在 dense/sparse 混合时按布局分派；不隐式互转。0.2.13
+的格式是封闭集合；用户自定义格式要等 RSSN 开放
+<code>Format</code>（§13.9.5）。RSSN 的 <code>TypeExpr::Sparse</code>
+只有 rank，所以 <code>shape</code> 细化在 Aevia 侧检查，边界 降为 rank +
+运行时 shape。0.2.13 的 <code>term_of_value</code> 不接受
+<code>Value::Sparse</code> 进入项图，所以稀疏运算必须走
+<code>eval_dyn</code> 内核或 Aevia 自己的布局内核；
+不能把稀疏值直接喂给通用重写算子。</p>
 <h2 id="85-calculus">8.5 Calculus</h2>
 <pre><code>diff          : (Real[d] -&gt; Real[e]) -&gt; (Real[d] -&gt; Real[e/d])
 diff_at       : ((Real[d] -&gt; Real[e]), Real[d]) -&gt; Real[e/d]
@@ -6658,10 +6718,12 @@ least_squares: ((Tensor&lt;1, Real[d]&gt; -&gt; Tensor&lt;1, Real[e]&gt;), Tenso
 linsolve     : (Tensor&lt;2, Scalar&lt;ρ,d&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,e&gt;&gt;)
              -&gt; Result&lt;Tensor&lt;1, Scalar&lt;div_rep(ρ),e/d&gt;&gt;, LinAlgError&gt;</code></pre>
 <p><code>Solutions&lt;ρ,d&gt;</code> 是
-<code>{ roots: Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, multiplicities: Tensor&lt;1, Int&gt;, conditions: Tensor&lt;1, String&gt; }</code>，保留重数与参数条件；它不是
-<code>Set</code>。 <code>solve</code>
-返回实解；<code>solve_complex</code> 返回复解。数值求解失败返回
-<code>Err</code>。 <code>linsolve</code> 是线性方程组求解，避免与符号
+<code>{ variable: Option&lt;String&gt;, roots: Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;, multiplicities: Tensor&lt;1, Int&gt;, conditions: Tensor&lt;1, String&gt;, complete: Bool }</code>，保留重数与参数条件；它不是
+<code>Set</code>。RSSN 的 <code>solve_structured</code> 目前不报告重数时
+<code>multiplicities</code> 为空（“未报告”）， 不是“全 1”；Aevia
+保留这个空语义，不伪造。<code>solve</code> 返回实解；
+<code>solve_complex</code> 返回复解。数值求解失败返回
+<code>Err</code>。<code>linsolve</code> 是线性 方程组求解，避免与符号
 <code>solve</code> 同名。</p>
 <h2 id="87-stats">8.7 Stats</h2>
 <pre><code>mean      : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;
@@ -6778,8 +6840,7 @@ solve_advection : AdvectionSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError
 的完整类型规则见 <code>Pde</code> 模块文档；当前不把 PDE
 规格放进核心类型系统。</p>
 <h2 id="811-data">8.11 Data</h2>
-<pre><code>type Table&lt;ρ&gt;                  # 行多态静态 schema
-type Dynamic                   # 未知 schema 的标记
+<pre><code>type Table&lt;ρ&gt;                  # 行多态静态 schema；ρ 是记录类型
 type Column
 
 read_csv&lt;ρ&gt;   : String -&gt; IO (Result&lt;Table&lt;ρ&gt;, DataError&gt;)
@@ -6790,7 +6851,8 @@ write_npy     : (String, Tensor&lt;n, Float&gt;) -&gt; IO (Result&lt;(), DataErr
 read_json     : String -&gt; IO (Result&lt;Json, DataError&gt;)
 write_json    : (String, Json) -&gt; IO (Result&lt;(), DataError&gt;)
 
-column        : (Table&lt;ρ&gt;, String) -&gt; Result&lt;Tensor&lt;1, τ&gt;, DataError&gt;
+column        : (Table&lt;ρ&gt;, String) -&gt; Result&lt;Tensor&lt;1, ρ[name]&gt;, DataError&gt;
+column_dyn    : (Table&lt;ρ&gt;, String) -&gt; Result&lt;Tensor&lt;1, Value&gt;, DataError&gt;
 row           : (Table&lt;ρ&gt;, Int) -&gt; Result&lt;ρ, DataError&gt;
 select&lt;σ&gt;     : (Table&lt;ρ&gt;, Tensor&lt;1, String&gt;) -&gt; Table&lt;σ&gt;   # σ ⊆ ρ
 filter        : ((ρ -&gt; Bool), Table&lt;ρ&gt;) -&gt; Table&lt;ρ&gt;
@@ -6808,13 +6870,16 @@ schema</strong>：<code>ρ</code> 的字段名、类型、量纲在编译期
 <code>ρ</code>。<code>read_csv_dyn</code> 返回
 <code>Table&lt;Dynamic&gt;</code>，用于未知
 schema；<code>to_table&lt;ρ&gt;</code> 在运行时校验并转换。</p>
-<p><code>column</code> 的字段名是字符串字面量；类型检查器在
-<code>ρ</code> 中查找该字段，返回 其元素类型。字段不存在报
-<code>E0306</code>；量纲不匹配报
-<code>E0401</code>。<code>select</code>/
-<code>filter</code>/<code>join</code> 保持行多态；<code>join</code>
-的结果行是 <code>ρ + σ</code>（<code>+</code> 是类型级行
-并集；冲突字段报 <code>E0208</code>）。</p>
+<p><code>column</code>
+的字段名必须是<strong>字符串字面量</strong>；类型检查器把字面量提升为
+类型级 label，在 <code>ρ</code> 中查找 <code>ρ[name]</code>
+并返回其元素类型。字段不存在报 <code>E0306</code>；量纲不匹配报
+<code>E0401</code>。非字面量用 <code>column_dyn</code>（返回
+<code>Tensor&lt;1, Value&gt;</code>），不走静态
+schema。<code>select</code>/ <code>filter</code>/<code>join</code>
+保持行多态；<code>join</code> 的结果行是
+<code>ρ + σ</code>（<code>+</code> 是类型级行 并集；冲突字段报
+<code>E0208</code>）。</p>
 <p><code>read_npy</code> 的秩无法从文件静态推断，必须写
 <code>read_npy&lt;2&gt;(path)</code>；省略是 <code>E0314</code>。</p>
 <p>CSV
@@ -6958,12 +7023,14 @@ rssn 的 <code>SCENARIOS</code> 列表
 <code>nbody_gravity</code>、<code>kerr_geodesic</code>）。</p>
 <h2 id="818-device">8.18 Device</h2>
 <pre><code>type Device = | Cpu | Gpu(Int) | Distributed(Cluster)
+type Cluster                      # 不透明运行时拓扑
+type Mesh                         # 不透明分片拓扑
 to_device : (Tensor&lt;n,τ&gt;, Device) -&gt; IO (Tensor&lt;n,τ&gt;)
 on        : (Device, () -&gt; a) -&gt; IO a
 device_of : Tensor&lt;n,τ&gt; -&gt; Device</code></pre>
 <p>设备是运行时值，不是张量类型参数；没有 <code>core.gpu</code> 时
 <code>to_device</code>/<code>on</code> 报 <code>E1001</code>。分布式用
-<code>Sharded&lt;Mesh, Tensor&lt;...&gt;&gt;</code> 库类型。</p>
+<code>Sharded&lt;Mesh, Tensor&lt;n,τ&gt;&gt;</code> 库类型。</p>
 <h2 id="819-rssn-动态接口">8.19 Rssn 动态接口</h2>
 <pre><code>Rssn.Version       : String
 Rssn.ManifestHash  : String
@@ -6972,16 +7039,21 @@ Rssn.Capabilities  : Tensor&lt;1, String&gt;
 Rssn.call          : (String, Tensor&lt;1, Value&gt;) -&gt; Result&lt;Value, OpError&gt;
 Rssn.dynamic       : (String, Tensor&lt;1, Value&gt;) -&gt; Result&lt;Value, OpError&gt;
 Rssn.typed         : (String, Tensor&lt;1, Value&gt;, TypeRep) -&gt; Result&lt;a, OpError&gt;
+to_value           : a -&gt; Value
+from_value         : Value -&gt; Result&lt;a, OpError&gt;
+type_rep&lt;a&gt;()      : TypeRep
 Rssn.call_ho       : (String, Tensor&lt;1, Value&gt;, Tensor&lt;1, Callback&gt;)
                    -&gt; Result&lt;Value, OpError&gt;
-Rssn.register_plugin : (String, Plugin) -&gt; IO (Result&lt;(), PluginError&gt;)</code></pre>
+Rssn.register        : Plugin -&gt; Result&lt;PluginId, PluginError&gt;
+Rssn.register_plugin : Plugin -&gt; Result&lt;PluginId, PluginError&gt;   # alias</code></pre>
 <p><code>Rssn</code> 的成员由 Kernel Manifest 生成；上面的
-<code>call</code>/<code>dynamic</code> 是固定入口。 有签名的算子还会生成
-<code>Rssn.&lt;name&gt;</code>；别名生成
-<code>Rssn.&lt;alias&gt;</code>；冲突时用
+<code>call</code>/<code>dynamic</code> 是固定入口。 只有
+<code>signature_source = Declared | Overlay</code> 的算子生成
+<code>Rssn.&lt;name&gt;</code>
+类型化声明；<code>Inferred</code>/无签名/实验性/插件算子生成
+<code>dynamic</code>。别名生成 <code>Rssn.&lt;alias&gt;</code>；冲突时用
 <code>Rssn.&lt;rule_set&gt;.&lt;name&gt;</code>。<code>Rssn.dynamic</code>
-是<strong>正式能力</strong>，不是降级路径：
-没有签名的算子、实验性算子、插件算子都走它。</p>
+是 <strong>正式能力</strong>，不是降级路径。</p>
 <h2 id="820-库的组织">8.20 库的组织</h2>
 <pre><code>Prelude
 Math
@@ -7269,7 +7341,7 @@ Core IR（ANF，显式 let、闭包、模式匹配）
 <li>把 <code>Answer.term</code> 转回 Aevia 值。</li>
 </ol>
 <p>对 <code>Dyn&lt;ρ&gt;</code>，不比较静态量纲；把宿主保存的
-<code>rssn_dim::DimTerm</code> 作为运行时量纲。</p>
+<code>rssn::dim::DimTerm</code> 作为运行时量纲。</p>
 <h3 id="945-数值路径">9.4.5 数值路径</h3>
 <ul>
 <li><code>Float</code> 标量的四则运算直接走 f64，不进入 rssn。</li>
@@ -7304,24 +7376,36 @@ pairwise/Kahan。</li>
 <li>稀疏：<code>Sparse&lt;F,shape,τ&gt;</code> 与 dense 张量共享
 <code>@</code> 分派；<code>Layout</code> 类提供
 <code>nnz</code>/<code>to_dense</code>/<code>from_dense</code>/<code>matmul</code>/<code>transpose</code>。</li>
-<li>插件：<code>Rssn.register_plugin</code> 把算子/重写/单位注册进当前
-RSSN 会话； Aevia 通过 manifest 反射看到它们，不需要重新编译。</li>
+<li>插件：<code>Rssn.register</code>（别名
+<code>register_plugin</code>）把算子/重写/单位注册进当前 RSSN 会话；
+Aevia 通过 manifest 反射看到它们，不需要重新编译。</li>
 </ul>
 <h2 id="96-jit">9.6 JIT</h2>
-<h3 id="961-触发条件">9.6.1 触发条件</h3>
+<h3 id="961-触发条件与门控">9.6.1 触发条件与门控</h3>
+<p>先读 manifest 的 <code>Features</code>：</p>
 <ul>
-<li>函数只含 <code>Float</code>
-标量、算术、初等函数，<strong>不含</strong>
-<code>if</code>/<code>match</code>/张量索引；</li>
+<li><code>features.jit = false</code>：<code>@jit</code> 报
+<code>E1001(&quot;core.jit&quot;)</code>；函数只解释执行。</li>
+<li><code>features.jit_branch = false</code>：含
+<code>if</code>/<code>match</code> 的函数不 JIT。</li>
+<li><code>features.jit_index = false</code>：含张量索引的函数不
+JIT。</li>
+</ul>
+<p>满足门控后：</p>
+<ul>
+<li>函数只含 <code>Float</code> 标量、算术、初等函数；按上面的 flag 允许
+<code>if</code>/索引；</li>
 <li>被调用超过阈值（默认 1000 次）或显式 <code>@jit</code>；</li>
 <li>输入/输出类型固定（无符号、无 <code>Dyn</code>、无记录/变体）。</li>
 </ul>
 <h3 id="962-流程">9.6.2 流程</h3>
 <ol type="1">
 <li>把 Core IR 降成 rssn 项（<code>Float</code> 标量表达式）。</li>
-<li><code>Term::compile(&amp;[&quot;x&quot;, &quot;y&quot;])</code> 得到
-<code>Compiled</code>。</li>
-<li>缓存键：项结构哈希 + 输入名 + 后端版本。</li>
+<li>仅在 <code>features.jit</code> 为真时调用
+<code>Term::compile(&amp;[&quot;x&quot;, &quot;y&quot;])</code> 得到
+<code>Compiled</code>；否则不进入此路径。</li>
+<li>缓存键：项结构哈希 + 输入名 + <code>manifest_hash</code> +
+后端版本。</li>
 <li>调用时直接走机器码；失败回退解释器。</li>
 </ol>
 <p>rssn 的 <code>TieredBackend</code> 可以先解释、后台编译；Aevia
@@ -7329,6 +7413,9 @@ RSSN 会话； Aevia 通过 manifest 反射看到它们，不需要重新编译�
 <h3 id="963-限制">9.6.3 限制</h3>
 <ul>
 <li>符号值、记录、变体、闭包不进入 JIT。</li>
+<li><code>Select</code>/<code>Extern1</code>/<code>Gather</code> 已
+lowering，但受 <code>jit_branch</code>/<code>jit_index</code> 与构建
+feature 控制；默认构建 <code>features.jit=false</code>。</li>
 <li><code>Real</code> 的精确算术不进入 JIT；需要时先
 <code>to_float</code>。</li>
 <li>JIT 的结果与解释器 MUST 数值一致（同一 IEEE 语义）；不一致是
@@ -7563,16 +7650,21 @@ help: did you mean `2 * h / g`?</code></pre>
 <code>sin -&gt; rssn::sin</code>、<code>det -&gt; rssn::det</code>
 这样的绑定表。启动/ 构建时读取 RSSN 的 <strong>Kernel
 Manifest</strong>，生成 <code>Rssn</code> 模块：</p>
-<pre class="aevia"><code>Rssn.sin(x)                  # 有签名：类型化
-Rssn.Calculus.diff(f, x)     # 规则集限定
-Rssn.dynamic(&quot;special/meijer_g&quot;, args)   # 无签名/实验性/插件</code></pre>
+<pre class="aevia"><code>Rssn.dynamic(&quot;sin&quot;, [to_value(x)])  # Inferred：动态；Aevia 的 sin 是 typed
+Rssn.dynamic(&quot;diff&quot;, [f, x]) # Inferred/request：动态
+Rssn.dynamic(&quot;meijer_g&quot;, args) # 无签名/实验性/插件（name/alias）</code></pre>
 <ul>
-<li>有 <code>Signature</code> 的算子 → 类型化声明；</li>
-<li>无签名 → <code>dynamic</code> 声明，运行时检查类型/量纲；</li>
+<li><code>signature_source = Declared | Overlay</code> →
+类型化声明；</li>
+<li><code>Inferred</code> / 无签名 → <code>dynamic</code>
+声明，运行时检查类型/量纲；推断签名 默认
+<code>(Real,...,Real) -&gt; Real</code>，不可信，不能当 typed
+façade；</li>
 <li>新算子只要在 RSSN 注册，下一次构建就出现，不需要改 Aevia
 编译器；</li>
-<li>重载按 <code>OpKey { rule_set, name, signature_hash }</code>
-解析，不依赖注册顺序。</li>
+<li>静态重载用
+<code>OpKey { rule_set, name, signature_hash }</code>；运行时 0.2.13 仍
+按 name+arity 选择，同 arity 多型暂不生成 typed 声明（§13.4.1）。</li>
 </ul>
 <p>完整接口清单见根目录 <a href="../RSSN-INTEGRATION-REQUIREMENTS.md"><code>RSSN-INTEGRATION-REQUIREMENTS.md</code></a>，
 Aevia 侧规则见 <a href="13-extensibility.md">13 —
@@ -7965,7 +8057,7 @@ SI 数值；<code>Real</code>/ <code>Float</code>
 </ol>
 <p><code>Point</code> 在进入 rssn 前转成 K 的
 <code>Float</code>；<code>Dyn&lt;ρ&gt;</code> 的运行时量纲是
-<code>rssn_dim::DimTerm</code>。启动时做单位表一致性检查（§5.10），但只用于显示/
+<code>rssn::dim::DimTerm</code>。启动时做单位表一致性检查（§5.10），但只用于显示/
 导出；<code>Units.SI</code> 从 <code>UnitRegistry</code>
 生成，不维护第二张表。</p>
 <h3 id="1037-仿真">10.3.7 仿真</h3>
@@ -7979,10 +8071,10 @@ SI 数值；<code>Real</code>/ <code>Float</code>
 的错误是字符串，包装器按前缀映射成 <code>SimError</code> 枚举。</p>
 <h2 id="104-量纲桥">10.4 量纲桥</h2>
 <p>量纲/单位的唯一事实来源是 RSSN 的
-<code>rssn-dim</code>（<code>DimTerm</code>/<code>DimArena</code>/
+<code>rssn::dim</code>（<code>DimTerm</code>/<code>DimArena</code>/
 <code>UnitRegistry</code>）。Aevia 的 <code>Dim</code>
 是它的类型级镜像；<code>DimValue</code> 在运行时就是
-<code>rssn_dim::DimTerm</code>，不是字符串。桥接细节见根目录文档
+<code>rssn::dim::DimTerm</code>，不是字符串。桥接细节见根目录文档
 §3.5。</p>
 <h3 id="1041-静态到运行时">10.4.1 静态到运行时</h3>
 <p><strong>静态路径不把量纲传给 rssn。</strong> Aevia
@@ -7993,14 +8085,14 @@ SI 数值；<code>Real</code>/ <code>Float</code>
 <p>只有以下场景需要把量纲交给 rssn：</p>
 <ul>
 <li><code>Dyn&lt;ρ&gt;</code> 的运行时检查：宿主保存
-<code>rssn_dim::DimTerm</code>，不依赖字符串；</li>
-<li>FFI/导出：在边界用
-<code>Config::dimension_term(symbol, DimTerm)</code>，或全名
-（<code>Length</code>、<code>Mass</code>、<code>Time</code>、<code>Current</code>、<code>Temperature</code>、<code>Amount</code>、
-<code>Luminosity</code>）传给
-<code>Config::dimension</code>，<strong>绝不使用单字母</strong>（<code>L</code>
-是升， <code>T</code> 是特斯拉，<code>N</code> 是牛顿，<code>J</code>
-是焦耳）；</li>
+<code>rssn::dim::DimTerm</code>，不依赖字符串；</li>
+<li>FFI/导出：0.2.13 的 <code>Config</code> 只有
+<code>dimension(symbol, text)</code>，没有
+<code>dimension_term</code>；因此边界必须传<strong>全名</strong>（<code>Length</code>、<code>Mass</code>、<code>Time</code>、
+<code>Current</code>、<code>Temperature</code>、<code>Amount</code>、<code>Luminosity</code>），<strong>绝不使用单字母</strong>
+（<code>L</code> 是升，<code>T</code> 是特斯拉，<code>N</code>
+是牛顿，<code>J</code> 是焦耳）。静态路径不传量纲，
+所以这不影响正常程序。</li>
 <li>用户显式请求 rssn
 的量纲诊断：<code>Config::dimensions(Advisory)</code>。</li>
 </ul>
@@ -8156,98 +8248,80 @@ SI 数值；<code>Real</code>/ <code>Float</code>
 </table>
 <p><code>Answer.diagnostics</code> 转成 Aevia
 警告；<code>Advisory</code> 模式下不失败。</p>
-<h2 id="108-已知缺口与风险">10.8 已知缺口与风险</h2>
+<h2 id="108-已知缺口与风险适配后">10.8 已知缺口与风险（适配后）</h2>
+<p>RSSN 0.2.13 已经实现 Manifest、动态
+<code>Value</code>/<code>call_value</code>、签名/重载、
+插件、<code>rssn::dim</code>、<code>Term</code>
+遍历/替换、<code>fork/merge</code>、结构化结果和 JIT
+lowering。下面只列<strong>仍然存在</strong>的集成缺口；已关闭的旧缺口不再重复。</p>
 <ol type="1">
-<li><strong><code>Session</code> 单线程。</strong>
-每个线程一个会话；符号值不能跨线程。并行符号 计算受限。</li>
-<li><strong><code>Term</code> 生命周期。</strong> 需要 <code>u32</code>
-id + <code>term_by_id</code>；没有序列化。</li>
-<li><strong><code>compute</code> 克隆图。</strong>
-小算子开销大；必须区分“构造”和“求解”。</li>
-<li><strong>复数表示。</strong> rssn 的 <code>Number</code>
-没有复数；复数靠 <code>i</code> 项或宿主
-<code>Complex64</code>。符号复数与数值复数的路径要统一。</li>
-<li><strong>量纲 API 需要结构化/序列化接口。</strong>
-<code>rssn-dim</code> 必须公开
-<code>DimTerm</code>/<code>DimArena</code>/<code>UnitRegistry</code>
-的稳定访问器；Aevia 不解析 <code>Answer.dimension</code> 文本。</li>
-<li><strong>符号指数。</strong> rssn 支持 <code>L^n</code>，Aevia
-静态层不支持；<code>Dyn</code> 桥接。</li>
-<li><strong>单位表统一。</strong> <code>Units.SI</code> 从
-<code>UnitRegistry</code> 生成；Aevia 不再维护更大
-的第二张表。缺失单位在 RSSN 注册，用户单位也注册到同一个 registry。</li>
-<li><strong>仿射单位。</strong> rssn 把 <code>degC</code> 转 K；Aevia 的
-<code>Point</code> 是静态的，桥接时 消解。</li>
-<li><strong><code>det</code>/<code>product</code>
-的带量纲形式。</strong> 静态不可表达；<code>Dyn</code> 逃逸。</li>
-<li><strong>仿真参数是 JSON。</strong> 场景 manifest 生成包装器；JSON
-schema 需要 代码生成/校验，不能只靠手写。</li>
-<li><strong>JIT 只支持 <code>Float</code> 标量。</strong>
-记录/变体/符号不进 JIT。</li>
-<li><strong><code>Term::as_tensor</code> 只支持数值。</strong>
-符号张量用嵌套 <code>list</code> 项，运行时 自己遍历。</li>
-<li><strong>预算与中断。</strong> rssn 的预算在 <code>compute</code>
-内；Aevia 需要在外层加超时/ 取消（协作式）。</li>
-<li><strong>版本漂移。</strong> rssn 正在架构迁移；Aevia 必须 pin
-版本，并用一致性测试 锁定行为。</li>
-<li><strong><code>compute</code> 的克隆是深拷贝。</strong>
-<code>prepare</code> 克隆整个 <code>OpTable</code>（<code>Vec</code> +
-<code>HashMap</code>），单次 <code>simplify</code>
-的成本与算子表大小相关，而不是请求大小。 缓解：<code>OpTable</code> 用
-<code>Arc</code> 共享，新增 <code>Session::prepare(config)</code> 复用
-克隆；符号张量分块 compute。</li>
-<li><strong><code>DimArena</code> 在克隆间共享。</strong>
-<code>Graph::clone</code> 只克隆 <code>Arc</code>；在请求期
-<code>define_base_dimension</code> 会污染模板，并发请求的顺序会影响基维
-id。 缓解：基量纲只在模板构建期注册；请求期只读。</li>
-<li><strong><code>Term</code> 没有遍历/替换/自由符号 API。</strong>
-<code>diff</code> 返回的闭包不能高效 替换；<code>Real + Float</code>
-的闭包性检查也拿不到自由符号。缓解：给 <code>Term</code> 加
-<code>children</code>/<code>substitute</code>/<code>free_symbols</code>，或让桥接层直接使用
-<code>graph::Graph</code>；否则 <code>diff</code> 每次调用都要重跑
-<code>compute</code>。</li>
-<li><strong>JIT 不支持分支和索引。</strong> tape 的 <code>Select</code>
-没有 lowering，也没有 load/index 指令。缓解：当前 JIT 只支持无分支的
-<code>Float</code> 表达式；<code>if</code> 和张量索引由解释器执行，直到
-RSSN 提供 lowering。</li>
-<li><strong><code>Solutions</code> 没有后端结构。</strong> rssn 的
-<code>solve</code> 返回根列表，重数和
-条件在求解器内部。缓解：<code>Solutions</code> 只保证
-<code>roots</code>；<code>multiplicities</code> 全填
-1，<code>conditions</code> 为空，文档明确标注；RSSN
-结构化结果就绪后补齐。</li>
-<li><strong>ODE 方法/事件不齐。</strong> <code>radau5</code> 没有
-events；<code>rk4</code> 需要固定步数； <code>dopri5</code> 支持
-events。缓解：<code>OdeOpts</code> 增加 <code>steps</code>（仅 Rk4）；
-events 只允许 Dopri5，其他方法报 <code>E0807</code>。</li>
-<li><strong><code>par_map</code> 对符号值不安全。</strong>
-<code>TermId</code> 只在会话内有效；跨线程会
-静默用错项。缓解：<code>par_map</code> 要求
-<code>Parallel a</code>；符号 <code>Real</code> 用
-<code>fork/merge</code>（RSSN 提供后），当前串行。</li>
-<li><strong><code>assuming</code> 只支持单元谓词。</strong> rssn 的
-<code>Facts</code> 没有等式/一般不等式。 缓解：<code>assuming</code>
-只支持
-<code>x &gt; 0</code>、<code>x &gt;= 0</code>、<code>x != 0</code>、<code>x ∈ ℤ</code>；
-一般谓词走 <code>Rssn.assume</code> 动态接口，后端缺失报
+<li><strong><code>Session</code> 单线程。</strong> <code>Session</code>
+仍是 <code>RefCell</code>；跨线程要用
+<code>fork/merge</code>，不是共享会话。<code>par_map</code> 对符号值必须
+fork/merge。</li>
+<li><strong><code>compute</code> 深拷贝。</strong> <code>prepare</code>
+仍 <code>graph.clone()</code>；单次化简成本与
+图/算子表大小相关。<code>OpTable</code> 尚未用 <code>Arc</code>
+共享，<code>Session::prepare</code> 也未公开。</li>
+<li><strong><code>DimArena</code> 请求期污染。</strong>
+<code>Graph::clone</code> 共享 <code>Arc&lt;RwLock&gt;</code>；请求期
+<code>define_base_dimension</code> 会影响模板。Aevia
+必须只在启动期注册基量纲， 请求期只读。</li>
+<li><strong>JIT 默认关闭。</strong>
+<code>Select</code>/<code>Extern1</code>/<code>Gather</code> 已
+lowering，但默认 构建 <code>features.jit=false</code>；<code>@jit</code>
+必须读 <code>Features</code>，否则报
+<code>E1001(&quot;core.jit&quot;)</code>。</li>
+<li><strong><code>Solutions.multiplicities</code> 为空。</strong>
+<code>solve_structured</code> 不伪造重数； Aevia 的
+<code>Solutions</code> 必须保留“空 = 未报告”，不能填 1。</li>
+<li><strong>ODE 事件仍只覆盖部分方法。</strong> <code>events</code>
+主要在 <code>Dopri5</code>；<code>Rk4</code> 需要
+<code>steps</code>，<code>Radau</code> 不支持 events。Aevia 的
+<code>OdeOpts</code> 按此限制。</li>
+<li><strong><code>manifest.units</code> 是 <code>UnitValue</code>，不是
+<code>UnitDef</code>。</strong> 它缺
+<code>aliases</code>/<code>prefixable</code>/<code>category</code>/<code>since</code>；Aevia
+生成 <code>Units.SI</code> 时若 需要别名/前缀元数据，必须读
+<code>UnitRegistry</code>，不能只读 manifest。</li>
+<li><strong><code>signatures.overlay.json</code> 缺失。</strong>
+<code>include_str!</code> 依赖它，但 <code>.gitignore</code> 的
+<code>**/*.json</code> 把它排除；干净 clone 无法构建。需要把它
+纳入版本控制或改成可选加载。</li>
+<li><strong>签名覆盖率 58.4%，但可信 typed 只有 7 个。</strong> 799
+有签名（7 declared / 792 inferred）；推断签名默认
+<code>(Real,...,Real) -&gt; Real</code>，不可信。Aevia 只为
+declared/overlay 生成 typed，其余 1362 个走
+<code>Rssn.dynamic</code>。</li>
+<li><strong><code>assuming</code> 仍以单元谓词为主。</strong>
+一般等式/不等式走 <code>Rssn.assume</code> 动态入口；后端缺失报
 <code>E1001</code>。</li>
-<li><strong>没有 Kernel Manifest/签名/重载。</strong> RSSN 的
-<code>OpDescriptor</code> 只有 arity；Aevia 无法生成类型化
-façade。缓解：按根目录文档 §3.1/§3.3 增加
-manifest、<code>Signature</code>、<code>overloads</code>、<code>Stability</code>。</li>
-<li><strong>没有动态 <code>Value</code>/<code>call</code> ABI。</strong>
-Aevia 无法调用无签名算子。缓解： 按 §3.2 增加
-<code>Value</code>、<code>Kernel::call</code>、<code>OpError</code>。</li>
-<li><strong>单位表私有且尺度是 <code>f64</code>。</strong> Aevia
-无法枚举/注册单位，精确尺度 丢失。缓解：按 §3.5 抽出
-<code>rssn-dim</code>，公开
-<code>UnitRegistry</code>/<code>Scale</code>。</li>
-<li><strong><code>DimTerm</code> 不透明，<code>Dimension</code>
-指数是字符串。</strong> 无法可靠比较/
-序列化。缓解：公开结构化访问器，指数用 <code>BigRational</code>。</li>
-<li><strong><code>EvalFn</code> 是 fn pointer，不能捕获 Aevia
-闭包。</strong> 用户算子无法注册。 缓解：增加
-<code>EvalDyn</code>/<code>Plugin</code>/<code>HostCallback</code>（§3.4）。</li>
+<li><strong>复数表示。</strong> <code>Value::Complex</code> 有
+<code>Exact</code>/<code>Float</code>，但 <code>Number</code> 仍
+没有复数；符号复数靠 <code>i</code> 项，数值复数靠
+<code>Complex64</code>。两条路径需在 Aevia 侧统一。</li>
+<li><strong>符号指数。</strong> <code>DimTerm</code> 支持符号指数，但
+<code>DimExpr::to_term</code> 对 <code>Pow(..., Exp::Symbol)</code>
+仍报“不能 intern”；Aevia 的静态 <code>Dyn</code> 桥接 要避开。</li>
+<li><strong>仿真 JSON schema。</strong> <code>SimResult</code>
+有结构化结果，但场景参数仍是 JSON；Aevia 的 <code>Physics.*</code> 由
+manifest/schema 生成，不能手写。</li>
+<li><strong>预算/中断。</strong> rssn 的预算在 <code>compute</code>
+内；Aevia 外层超时/取消是 协作式的，不能强杀。</li>
+<li><strong>版本漂移。</strong>
+<code>api_version=1</code>、<code>rssn 0.2.13</code>；Aevia 必须 pin
+<code>api_version</code> + <code>manifest_hash</code>，并跑
+conformance。</li>
+<li><strong><code>manifest_hash</code> 是 bincode BLAKE3。</strong> JSON
+只供人读；Aevia 不能对 JSON 文本做哈希/比较。</li>
+<li><strong>自定义基量纲单位注册失败。</strong>
+<code>UnitRegistry::register</code> 的 <code>expr_to_dim</code> 只认 7
+个内置基名；<code>unit EUR : Currency</code> 报 “not a base
+dimension”。Aevia 报 <code>E1001(&quot;core.units.custom_base&quot;)</code>。</li>
+<li><strong><code>Value::Sparse</code> 不能入项图。</strong>
+<code>term_of_value</code> 对 Sparse/Record/ Variant/Function/Opaque
+返回 <code>Unsupported</code>；稀疏运算必须走 <code>eval_dyn</code> 或
+Aevia 本地布局内核。</li>
 </ol>
 <h3 id="1081-缓解措施">10.8.1 缓解措施</h3>
 <ul>
@@ -8334,6 +8408,8 @@ fn main(): IO Unit = do
 
 open Units.SI
 import Math { sqrt, sin, cos }
+import LinearAlgebra { linspace }
+import Ode { odeint }
 
 type State = {
     x:  Float[L],
@@ -8399,6 +8475,8 @@ fn main(): IO Unit = do
 <pre class="aevia"><code>module Symbolic
 
 import Math { exp }
+import Calculus { diff, defint, series }
+import Solve { solve }
 
 fn main(): IO Unit = do
     let x = symbol(&quot;x&quot;)
@@ -8595,8 +8673,7 @@ fn standardize&lt;d&gt;(xs: Tensor&lt;1, Real[d]&gt;): Tensor&lt;1, Real[1]&gt; 
 fn covariance&lt;d, e&gt;(xs: Tensor&lt;1, Real[d]&gt;, ys: Tensor&lt;1, Real[e]&gt;): Real[d*e] =
     mean((xs - mean(xs)) * (ys - mean(ys)))
 
-fn linear_fit&lt;d, e&gt;(xs: Tensor&lt;1, Real[d]&gt;, ys: Tensor&lt;1, Real[e]&gt;)
-    : { slope: Real[e/d], intercept: Real[e] } =
+fn linear_fit&lt;d, e&gt;(xs: Tensor&lt;1, Real[d]&gt;, ys: Tensor&lt;1, Real[e]&gt;): { slope: Real[e/d], intercept: Real[e] } =
     let mx = mean(xs)
     let my = mean(ys)
     let slope = sum((xs - mx) * (ys - my)) / sum((xs - mx)^2)
@@ -8665,8 +8742,9 @@ error[E0801]: division by zero
 
 open Units.SI
 import Math { exp }
-import LinearAlgebra { linsolve }
-import Plot { line, combine, plot }
+import LinearAlgebra { linsolve, linspace }
+import Calculus { diff }
+import Plot { line, combine, plot, label }
 
 fn kinetic(m: Float[M], v: Float[L/T]): Float[Energy] =
     m * v^2 / 2
@@ -8682,15 +8760,15 @@ fn main(): IO Unit = do
     println(&quot;f&#39; = {diff(fn t =&gt; exp(-t^2))(x)}&quot;)
 
     # 3. 线性代数
-    let A = [[2.0, 1.0], [1.0, 3.0]]
+    let M2 = [[2.0, 1.0], [1.0, 3.0]]
     let b = [1.0, 2.0]
-    match linsolve(A, b) with
+    match linsolve(M2, b) with
     | Ok(x) -&gt; println(&quot;x = {x}&quot;)
     | Err(e) -&gt; println(&quot;solve failed: {e}&quot;)
 
     # 4. 数据与绘图
     let ts = linspace(0.0 s, 1.0 s, 100)
-    let vs = map(fn t =&gt; 3.0 m/s * exp(-value_in(s, t) / 0.5), ts)
+    let vs = map(fn t =&gt; 3.0 m/s * exp(-(t / s) / 0.5), ts)
     let spec = label(line(ts, vs), &quot;v(t)&quot;)
     plot(combine([spec]))</code></pre>
 <p>这个程序把单位、符号、线性代数、张量、数据、绘图串在一起，展示了
@@ -8776,8 +8854,9 @@ FFT）需要运行时在唯一持有时优化；语义仍是纯的。</li>
 <li><code>Float</code>：IEEE double，适合数值计算、大数据、JIT。</li>
 <li>十进制字面量默认 <code>Float</code>，因为写 <code>0.1</code>
 的人通常想要浮点；写 <code>1/10</code> 的人想要精确。</li>
-<li>混合运算 <code>Float</code>
-传染，符合科学计算惯例；编译器提示可能的有损提升。</li>
+<li>混合运算 <code>Real</code> 吸收
+<code>Float</code>（精确优先），符合符号计算；热路径显式
+<code>Float</code>。</li>
 </ul>
 <p>如果只有一种数值类型：</p>
 <ul>
@@ -8941,8 +9020,8 @@ registry。影响：DSL/代码生成要用
 fork/merge</h3>
 <p>rssn 的 <code>Session</code>
 是单线程；符号值绑定会话。<code>par_map</code> 对 <code>Real</code> 用
-<code>fork/merge</code>（RSSN
-提供后），当前串行；数值张量并行。影响：符号并行的
+<code>fork/merge</code>（RSSN 0.2.13
+已提供）；数值张量并行。影响：符号并行的
 启动成本高。绕法：符号阶段串行，数值阶段并行。</p>
 <h3 id="1288-单位命名空间歧义">12.8.8 单位命名空间歧义</h3>
 <p><code>ms</code>
@@ -9101,7 +9180,7 @@ manifest/动态调用契约，避免“先做一个阉割版再 补”的历史�
 <ul>
 <li>词法/布局/解析/CST/AST；</li>
 <li>名字解析、模块骨架；</li>
-<li>类型/量纲代数、统一、泛化、默认化；<code>rssn-dim</code>
+<li>类型/量纲代数、统一、泛化、默认化；<code>rssn::dim</code>
 适配层；</li>
 <li>形状细化（<code>Tensor&lt;[3,4],τ&gt;</code>）与 <code>Nat</code>
 线性约束；</li>
@@ -9167,7 +9246,7 @@ lowering；</li>
 <li>量纲错误全部在编译期（除 <code>Dyn</code>/数据边界）；</li>
 <li>1000+ RSSN 算子通过 manifest 可见，无手写绑定；</li>
 <li>与 rssn 的算子 conformance 测试通过；</li>
-<li><code>rssn-dim</code>/<code>UnitRegistry</code> 往返一致；</li>
+<li><code>rssn::dim</code>/<code>UnitRegistry</code> 往返一致；</li>
 <li>插件/registry 安装/发布可用；</li>
 <li>形状细化、<code>Point</code>
 张量、<code>Table&lt;ρ&gt;</code>、<code>Sparse</code>、<code>Device</code>
@@ -9205,7 +9284,7 @@ lowering；</li>
 是唯一事实来源。Aevia 不维护 “支持哪些算子”的清单；它读取 RSSN 的
 <strong>Kernel Manifest</strong>，生成 <code>Rssn</code>
 模块。新算子只要在 RSSN 注册，Aevia 下一次构建就能看见。</li>
-<li><strong>单一量纲/单位层。</strong> <code>rssn-dim</code> 的
+<li><strong>单一量纲/单位层。</strong> <code>rssn::dim</code> 的
 <code>DimTerm</code>/<code>DimArena</code>/<code>UnitRegistry</code>
 是运行时与编译期共享的规范层。Aevia 的 <code>Dim</code>
 是它的类型级镜像； <code>Units.SI</code> 由 registry
@@ -9236,14 +9315,22 @@ RSSN 演进而腐烂。</li>
   features     : Features
   rule_sets    : [RuleSetInfo]
   ops          : [OpInfo]
-  units        : [UnitDef]
-  base_dims    : [BaseDimInfo]</code></pre>
-<p><code>OpInfo</code> 必须包含：稳定键
-<code>OpKey { rule_set, name, signature_hash }</code>、
-别名、类别、arity、<code>overloads</code>、flags、binder、cost、eval
-类型、是否
-高阶、纯度、确定性、线程安全性、稳定性、since、文档、示例、量纲规则、
-后端支持。完整 schema 见根目录文档 §3.1。</p>
+  units        : [UnitValue]
+  base_dimensions : [BaseDimInfo]
+  plugins      : [PluginInfo]</code></pre>
+<p><code>OpInfo</code> 的实际字段：<code>keys: [OpKey]</code>（每个
+overload 一个，<code>keys[0]</code> 是
+主重载）、<code>name</code>、<code>aliases</code>、<code>category</code>、<code>arity</code>、<code>overloads</code>、
+<code>signature_source</code>、<code>flags</code>、<code>binder</code>、<code>cost</code>、<code>eval</code>、<code>higher_order</code>、
+<code>purity</code>、<code>determinism</code>、<code>thread_safety</code>、<code>stability</code>、<code>since</code>、<code>doc</code>、
+<code>examples</code>、<code>dim_rule</code>、<code>backend_support</code>、<code>dynamic_reason</code>、<code>rule_set</code>、
+<code>jit</code>。完整 schema 见根目录文档 §3.1。</p>
+<p><code>manifest_hash</code> 是确定性 bincode 的
+BLAKE3；<code>to_json()</code> 只供人读。 <code>units</code> 是
+<code>UnitValue</code>（name/display/dimension/scale/offset/affine），不含
+<code>aliases</code>/<code>prefixable</code>/<code>category</code>/<code>since</code>；生成
+<code>Units.SI</code> 的别名/前缀 必须再读
+<code>UnitRegistry</code>。</p>
 <h3 id="1322-生成规则">13.2.2 生成规则</h3>
 <p>Aevia 构建时：</p>
 <ol type="1">
@@ -9251,8 +9338,14 @@ RSSN 演进而腐烂。</li>
 <code>E1004</code>）。</li>
 <li>对每个 <code>OpInfo</code>：
 <ul>
-<li>有签名：生成 <code>Rssn.&lt;name&gt;</code> 类型化声明；</li>
-<li>无签名：生成 <code>Rssn.dynamic(&quot;&lt;OpKey&gt;&quot;, args)</code>；</li>
+<li><code>signature_source = Declared | Overlay</code>：生成
+<code>Rssn.&lt;name&gt;</code> 类型化声明；</li>
+<li><code>signature_source = Inferred</code>：生成
+<code>Rssn.dynamic</code>（推断签名默认
+<code>(Real,...,Real) -&gt; Real</code>，不可信，不能当 typed
+façade）；</li>
+<li><code>signature_source = None</code>：生成
+<code>Rssn.dynamic</code>；</li>
 <li>别名：生成 <code>Rssn.&lt;alias&gt;</code>；冲突时用
 <code>Rssn.&lt;rule_set&gt;.&lt;name&gt;</code>。</li>
 </ul></li>
@@ -9260,18 +9353,32 @@ RSSN 演进而腐烂。</li>
 <code>Rssn.Version</code>、<code>Rssn.ManifestHash</code>、<code>Rssn.Capabilities</code>。</li>
 <li>生成 LSP 补全、文档、签名存根。</li>
 </ol>
+<p>当前 RSSN 0.2.13 的实测覆盖：1369 个算子，799 有签名（58.4%），570 个
+有 <code>dynamic_reason</code>（request/variadic/fully_polymorphic），0
+unexplained。 但 799 里只有 <strong>7 个 declared</strong>、792 个
+inferred、0 overlay；因此 Aevia 的 <strong>可信 typed façade 只有 7
+个</strong>，其余 792+570 全部走 <code>Rssn.dynamic</code>。
+<code>signature_source=Inferred</code> 不能生成 typed 声明，否则
+<code>det(scalar)</code> 会通过 类型检查、<code>det(tensor)</code>
+被拒。等 overlay 补齐后 typed 覆盖率才会上升。</p>
 <p>Aevia
 仓库<strong>不允许</strong>出现按算子名手写的绑定文件。只允许：</p>
 <pre><code>tools/gen_rssn_module.aev        # 生成器
-rssn.signatures.overlay.toml     # 只补 RSSN 暂时缺的签名</code></pre>
+signatures.overlay.json          # RSSN 侧的签名修正；Aevia 只读镜像</code></pre>
 <p>CI 检查：生成器输出与提交的生成文件一致；manifest
 快照变化必须显式更新。</p>
 <h3 id="1323-命名空间">13.2.3 命名空间</h3>
 <ul>
-<li>普通算子：<code>Rssn.sin</code>、<code>Rssn.integrate</code>。</li>
-<li>规则集限定：<code>Rssn.Calculus.diff</code>、<code>Rssn.Units.convert</code>。</li>
+<li>普通算子：<code>Rssn.&lt;name&gt;</code>（仅
+<code>Declared|Overlay</code> 是 typed；<code>Inferred</code> 走
+<code>Rssn.dynamic</code>）。</li>
+<li>规则集限定：<code>Rssn.&lt;rule_set&gt;.&lt;name&gt;</code>
+只是命名空间；运行时仍按 name/arity。</li>
 <li>插件：<code>Rssn.&lt;plugin&gt;.&lt;op&gt;</code>。</li>
-<li>动态：<code>Rssn.dynamic(&quot;calculus/diff&quot;, args)</code>。</li>
+<li>动态：<code>Rssn.dynamic(&quot;diff&quot;, args)   # args: Tensor&lt;1, Value&gt;</code>。RSSN
+0.2.13 的 <code>call_value</code> 只按 name/alias
+查找，<strong>不支持</strong> <code>rule_set/name</code>
+限定名；限定名要等 <code>call_key</code>。</li>
 </ul>
 <p>名字冲突时，短名只保留<strong>最稳定</strong>的那个（<code>Stable</code>
 优先，<code>since</code> 早者 优先）；其余必须用限定名。生成器在
@@ -9286,13 +9393,14 @@ manifest 中记录短名映射。</p>
     | VComplex(Complex[1])
     | VBool(Bool)
     | VString(String)
+    | VSymbol(String)                 # 自由符号，不是 String
     | VUnit(Unit[1])
     | VQuantity(Quantity)
-    | VTensor(TensorData)
+    | VTensor(TensorData)             # shape + 行主序 Value
     | VSparse(SparseData)
     | VRecord(Record)
     | VVariant(Variant)
-    | VTerm(TermRef)
+    | VTerm(TermRef)                  # owned handle
     | VFunction(Callback)
     | VDyn(Dyn&lt;Real&gt;)
     | VOpaque(Opaque)</code></pre>
@@ -9300,19 +9408,31 @@ manifest 中记录短名映射。</p>
 是<strong>动态边界</strong>的类型，不是核心语言的隐式子类型。核心语言仍然是
 静态的；<code>Value</code> 只出现在
 <code>Rssn.dynamic</code>、插件、FFI、反射 API 中。</p>
+<p><strong>可入项图性</strong>：<code>VInt</code>/<code>VReal</code>/<code>VFloat</code>/<code>VBool</code>/<code>VString</code>/<code>VSymbol</code>/
+<code>VUnit</code>/<code>VQuantity</code>/<code>VTensor</code>/<code>VDyn</code>/<code>VTerm</code>
+可以经 <code>Session::term_of</code> 进入项图；<code>VComplex</code>
+仅在虚部为 0 时降为 <code>Float</code> 入图，有虚部返回
+<code>Unsupported(&quot;complex literals&quot;)</code>；<code>VSparse</code>/<code>VRecord</code>/<code>VVariant</code>/
+<code>VFunction</code>/<code>VOpaque</code> 在 0.2.13 的
+<code>term_of_value</code> 返回 <code>Unsupported</code>， 只能喂给
+<code>eval_dyn</code> 算子或作为返回值。生成器必须按这个表决定 façade
+是否接受该 类型，不能假设所有 <code>Value</code> 都能参与重写。</p>
 <h3 id="1332-调用">13.3.2 调用</h3>
 <pre class="aevia"><code>Rssn.call    : (String, Tensor&lt;1, Value&gt;) -&gt; Result&lt;Value, OpError&gt;
 Rssn.dynamic : (String, Tensor&lt;1, Value&gt;) -&gt; Result&lt;Value, OpError&gt;
 Rssn.typed   : (String, Tensor&lt;1, Value&gt;, TypeRep) -&gt; Result&lt;a, OpError&gt;</code></pre>
 <ul>
-<li><code>Rssn.call</code> 按 <code>OpKey</code> 或短名查找；短名歧义报
-<code>E1002</code>。</li>
+<li><code>Rssn.call</code> 只按短名/别名查找；0.2.13 不支持
+<code>rule_set/name</code> 限定名， 也不接受 <code>OpKey</code>
+作为运行时键。短名歧义报 <code>E1002</code>。</li>
+<li>参数用 <code>to_value(x)</code> 注入；返回值用
+<code>from_value(v)</code> 转回静态类型。</li>
 <li>没有签名/实验性/插件算子走 <code>dynamic</code>。</li>
 <li><code>Rssn.typed</code> 在运行时把 <code>Value</code> 转成静态类型
 <code>a</code>，做类型与量纲检查； 失败返回
 <code>OpError.Type</code>/<code>OpError.Dimension</code>。</li>
 <li>高阶算子用
-<code>Rssn.call_ho(key, args, fns)</code>；<code>fns</code> 是
+<code>Rssn.call_ho(name, args, fns)</code>；<code>fns</code> 是
 <code>Callback</code>，可以 包装 Aevia 闭包。</li>
 </ul>
 <h3 id="1333-错误">13.3.3 错误</h3>
@@ -9327,7 +9447,11 @@ Rssn.typed   : (String, Tensor&lt;1, Value&gt;, TypeRep) -&gt; Result&lt;a, OpEr
     | Domain(String)
     | BudgetExceeded
     | Unsupported(String, String)   # backend, feature
-    | Plugin(String)</code></pre>
+    | Plugin(String)
+    | ForeignTerm(String, String)   # expected session, got session
+    | Codec(String)
+    | Host(String)
+    | Internal(String)</code></pre>
 <p><code>E1003</code>
 是“没有匹配的算子/重载”，携带候选签名列表；<code>E1001</code> 是 “后端
 capability 缺失”，携带 capability 名和最小 RSSN 版本。</p>
@@ -9345,6 +9469,12 @@ capability 缺失”，携带 capability 名和最小 RSSN 版本。</p>
 <li>没有匹配时尝试 <code>Dynamic</code>；仍失败报
 <code>E1003</code>。</li>
 </ol>
+<p><strong>运行时限制</strong>：RSSN 0.2.13 的 <code>call_value</code>
+只按 name+arity 选择第一个 重载，<code>OpKey.signature_hash</code>
+不参与运行时。若两个 overload 同 arity 但 类型不同，Aevia 不生成 typed
+声明，只生成 <code>dynamic</code>；等 RSSN 提供
+<code>call_key(&amp;OpKey, ...)</code> 后再启用同 arity 多型 typed
+调用。</p>
 <h3 id="1342-签名覆盖">13.4.2 签名覆盖</h3>
 <p>RSSN 的 1000+ 算子不要求一次写完签名。规则：</p>
 <ul>
@@ -9355,8 +9485,9 @@ capability 缺失”，携带 capability 名和最小 RSSN 版本。</p>
 <li>CI 的 <code>signature-audit</code>
 报告覆盖率；覆盖率不达标不阻止构建，但阻止 <code>Stable</code>
 标记；</li>
-<li>新算子用 <code>#[rssn_op]</code> 自动生成签名；旧算子用推断 +
-overlay。</li>
+<li>新算子用 <code>OpDescriptor::new(...).signature(...)</code>（插件用
+<code>Registry::register_op</code>）声明签名；旧算子用推断 +
+<code>signatures.overlay.json</code>。</li>
 </ul>
 <p>这保证“能力完整”和“类型体验”可以分开推进，但不会有算子被静默遗忘。</p>
 <hr />
@@ -9366,8 +9497,12 @@ overlay。</li>
 属性</strong>：</p>
 <div class="sourceCode" id="cb249"><pre class="sourceCode toml"><code class="sourceCode toml"><span id="cb249-1"><a href="#cb249-1" aria-hidden="true" tabindex="-1"></a><span class="co"># aevia.toml</span></span>
 <span id="cb249-2"><a href="#cb249-2" aria-hidden="true" tabindex="-1"></a><span class="kw">[plugin]</span></span>
-<span id="cb249-3"><a href="#cb249-3" aria-hidden="true" tabindex="-1"></a><span class="dt">kind</span> <span class="op">=</span> <span class="st">&quot;aevia&quot;</span>          <span class="co"># 或 &quot;cdylib&quot;</span></span>
+<span id="cb249-3"><a href="#cb249-3" aria-hidden="true" tabindex="-1"></a><span class="dt">kind</span> <span class="op">=</span> <span class="st">&quot;aevia&quot;</span>          <span class="co"># 0.2.13 只支持进程内 Aevia/Rust 插件</span></span>
 <span id="cb249-4"><a href="#cb249-4" aria-hidden="true" tabindex="-1"></a><span class="dt">abi</span> <span class="op">=</span> <span class="dv">1</span></span></code></pre></div>
+<p><code>kind = &quot;cdylib&quot;</code> 是设计目标，但 RSSN 0.2.13
+没有动态库加载器；未实现前 动态库插件报
+<code>E1001(&quot;core.plugin.cdylib&quot;)</code>，进程内 <code>Plugin</code>
+trait 可用。</p>
 <pre class="aevia"><code>module MyDomain
 
 @op(&quot;mydomain/softplus&quot;)
@@ -9378,8 +9513,10 @@ let softplus_rule = ()
 
 dimension MyDim
 unit myunit : Length = 0.5 m</code></pre>
-<p>编译后注册到 RSSN：</p>
-<pre class="aevia"><code>Rssn.register_plugin(&quot;mydomain&quot;, plugin)</code></pre>
+<p>编译后注册到 RSSN。Aevia 的 <code>Rssn.register</code> 是
+<code>Session::register(Box&lt;dyn Plugin&gt;)</code> 的包装；
+<code>Rssn.register_plugin</code> 是同一函数的别名：</p>
+<pre class="aevia"><code>Rssn.register(plugin)          # -&gt; Result&lt;PluginId, PluginError&gt;</code></pre>
 <p>插件可以：</p>
 <ul>
 <li>注册算子 + 签名 + eval 回调；</li>
@@ -9407,18 +9544,19 @@ capabilities（<code>fs</code>、<code>net</code>、<code>unsafe</code>）；未
 <li>插件 ABI 版本不匹配报 <code>E1006</code>。</li>
 </ul>
 <hr />
-<h2 id="136-量纲与单位统一到-rssn-dim">13.6 量纲与单位：统一到
-<code>rssn-dim</code></h2>
+<h2 id="136-量纲与单位统一到-rssndim">13.6 量纲与单位：统一到
+<code>rssn::dim</code></h2>
 <h3 id="1361-规范层">13.6.1 规范层</h3>
-<p><code>rssn-dim</code> 提供：</p>
+<p><code>rssn::dim</code> 提供：</p>
 <ul>
 <li><code>DimTerm</code>：基量纲/变量的有理指数乘积，结构化访问
-<code>factors()</code>/<code>vars()</code>；</li>
+<code>factors(&amp;arena)</code>/<code>vars(&amp;arena)</code>；</li>
 <li><code>DimArena</code>：基量纲/变量 interning，可快照/恢复；</li>
 <li><code>UnitRegistry</code>：单位名、别名、精确尺度
 <code>Scale { rat, pi }</code>、仿射
 offset、前缀、显示、类别、since；</li>
-<li><code>Dimension</code>：可打印快照，但内部指数是有理数，不是字符串。</li>
+<li><code>Dimension</code>：<strong>可打印快照</strong>，指数是字符串；精确比较/计算用
+<code>DimTerm</code>， 不要解析 <code>Dimension.factors</code>。</li>
 </ul>
 <p>Aevia 的 <code>Dim</code> 是 <code>DimTerm</code>
 的类型级镜像；两者的规范形、基名、指数运算
@@ -9437,6 +9575,12 @@ unit myunit : Length = 0.5 m</code></pre>
 并使用。</li>
 <li>用户单位可以是仿射的（<code>unit °X : Temperature = 1 K offset 273.15</code>），
 但仿射单位只能单独使用。</li>
+<li><strong>0.2.13 限制</strong>：<code>UnitRegistry::register</code> 的
+<code>expr_to_dim</code> 仍只认 7 个
+内置基名；<code>unit EUR : Currency</code> 会报 “not a base
+dimension”。在 RSSN 接受 <code>DimArena</code> 自定义基名之前，Aevia
+只允许自定义基量纲的符号运算， 单位注册报
+<code>E1001(&quot;core.units.custom_base&quot;)</code>。</li>
 </ul>
 <h3 id="1363-dyn">13.6.3 <code>Dyn</code></h3>
 <p><code>Dyn&lt;ρ&gt;</code> 的运行时量纲是
@@ -9551,13 +9695,14 @@ refinement）</h3>
 是类型级 <code>Nat</code>，可用 <code>?</code> 表示未知。</li>
 <li><code>Matrix&lt;n, m, τ&gt;</code> 是
 <code>Tensor&lt;[n, m], τ&gt;</code> 的别名。</li>
-<li>张量字面量自动获得细化形状；<code>zeros&lt;[3,4]&gt;()</code>
+<li>张量字面量自动获得细化形状；<code>zeros_of&lt;[3,4]&gt;()</code>
 等构造器可显式指定。</li>
 <li><code>matmul : Tensor&lt;[m,k],τ&gt; × Tensor&lt;[k,n],τ&gt; -&gt; Tensor&lt;[m,n],τ&gt;</code>；
 秩-only 版本保留，运行时检查。</li>
-<li><code>reshape&lt;[n1..nk]&gt;(a)</code>：如果 <code>a</code>
-的形状静态已知，编译期检查元素数 相等；否则返回
-<code>Result</code>。<code>reshape_dyn</code> 总是运行时检查。</li>
+<li><code>reshape&lt;[n1, ..., nk]&gt;(a)</code> 始终返回
+<code>Result</code>；形状静态已知时元素数在 编译期检查、结果恒为
+<code>Ok</code>，否则运行时检查。<code>reshape_dyn</code>
+总是运行时检查。</li>
 <li>索引：细化形状 + 字面量索引 →
 编译期越界检查；动态索引仍运行时检查。</li>
 <li>细化 → 秩-only 是安全隐式转换；秩-only → 细化用
@@ -9599,8 +9744,9 @@ schema</h3>
 <li><code>select</code>/<code>join</code>/<code>rename</code>
 保持行多态；新增字段要求 <code>lacks</code> 约束。</li>
 <li>动态 CSV（未知 schema）返回
-<code>Table&lt;Dynamic&gt;</code>；<code>to_table&lt;ρ&gt;</code>
-做运行时 校验。</li>
+<code>Table&lt;Dynamic&gt;</code>；<code>Dynamic</code> 是特殊记录类型，
+不是普通字段可投影的行。<code>to_table&lt;ρ&gt;</code>
+做运行时校验。</li>
 <li>这样数据管道和核心语言一样有静态
 schema，不再只是“读入后赶紧转记录”。</li>
 </ul>
@@ -9622,13 +9768,17 @@ schema，不再只是“读入后赶紧转记录”。</li>
 <p><strong>决定：<code>Sparse&lt;F, shape, τ&gt;</code>
 是核心类型构造器，<code>F</code> 是格式类型。</strong></p>
 <ul>
-<li>格式：<code>Csr</code>、<code>Csc</code>、<code>Coo</code>、<code>Block</code>、<code>Bcsr</code>；用户可注册新格式。</li>
+<li>格式：<code>Csr</code>、<code>Csc</code>、<code>Coo</code>、<code>Block</code>、<code>Bcsr</code>；0.2.13
+是封闭集合，用户 自定义格式要等 RSSN 开放 <code>Format</code>
+kind（当前插件只能注册算子/单位）。</li>
 <li><code>Layout</code>
 类：<code>nnz</code>、<code>to_dense</code>、<code>from_dense</code>、<code>matmul</code>、<code>transpose</code>。</li>
 <li><code>@</code>
 按布局分派：dense×sparse、sparse×dense、sparse×sparse。</li>
 <li><code>Sparse</code> 与 <code>Tensor</code>
-之间显式转换；不隐式互转。</li>
+之间显式转换；不隐式互转。RSSN 的 <code>TypeExpr::Sparse</code> 只有
+<code>rank</code>，所以 Aevia 的 <code>Sparse&lt;F,shape,τ&gt;</code>
+在边界降为 rank + 运行时 shape；细化形状由 Aevia 自己检查。</li>
 <li>稀疏不是库补丁，而是类型系统的一部分；<code>shape</code>
 细化同样适用。</li>
 </ul>
@@ -9832,7 +9982,8 @@ name_list      ::= name { &quot;,&quot; name }
 name           ::= IDENT | UIDENT
 
 top_decl       ::= { attribute } [ &quot;private&quot; ] decl
-attribute      ::= &quot;@&quot; IDENT [ &quot;(&quot; [ expr { &quot;,&quot; expr } ] &quot;)&quot; ] NEWLINE?
+attr_arg       ::= [ IDENT &quot;=&quot; ] expr
+attribute      ::= &quot;@&quot; IDENT [ &quot;(&quot; [ attr_arg { &quot;,&quot; attr_arg } ] &quot;)&quot; ] NEWLINE?
 decl           ::= dimension_decl
                  | unit_decl
                  | type_decl
@@ -9852,7 +10003,7 @@ unit_scale     ::= [ &quot;-&quot; ] number [ &quot;/&quot; number ]
                  | &quot;pi&quot; [ &quot;/&quot; number ]
 unit_name      ::= UNIT_NAME | IDENT | qname
 
-type_decl      ::= &quot;type&quot; UIDENT [ type_params ] &quot;=&quot; type_body NEWLINE?
+type_decl      ::= &quot;type&quot; UIDENT [ type_params ] [ &quot;=&quot; type_body ] NEWLINE?
 type_body      ::= type
                  | &quot;|&quot; constructor { &quot;|&quot; constructor }
                  | NEWLINE INDENT { &quot;|&quot; constructor NEWLINE } DEDENT
@@ -9904,7 +10055,9 @@ test_decl      ::= &quot;test&quot; STRING &quot;=&quot; expr NEWLINE?</code></p
 let_expr       ::= &quot;let&quot; [ &quot;rec&quot; ] pattern [ &quot;:&quot; type ] &quot;=&quot; expr &quot;in&quot; expr
 if_expr        ::= &quot;if&quot; expr &quot;then&quot; expr &quot;else&quot; expr
 
-match_expr     ::= &quot;match&quot; expr &quot;with&quot; NEWLINE INDENT { match_arm } DEDENT
+match_expr     ::= &quot;match&quot; expr &quot;with&quot; match_body
+match_body     ::= NEWLINE INDENT { match_arm } DEDENT
+                 | NEWLINE { match_arm }          # 分支与 match 同列
 match_arm      ::= &quot;|&quot; pattern [ &quot;if&quot; expr ] &quot;-&gt;&quot; expr NEWLINE?
 
 fn_expr        ::= &quot;fn&quot; ( &quot;(&quot; [ params ] &quot;)&quot; | IDENT ) [ &quot;:&quot; type ] &quot;=&gt;&quot; expr
@@ -10004,7 +10157,8 @@ literal_pattern ::= INT | STRING | &quot;true&quot; | &quot;false&quot; | &quot;
 </ul>
 <h2 id="a5-类型">A.5 类型</h2>
 <pre><code>type           ::= [ &quot;forall&quot; type_param { &quot;,&quot; type_param } &quot;.&quot; ] fn_type
-fn_type        ::= type_atom [ &quot;-&gt;&quot; type ]
+fn_type        ::= type_postfix [ &quot;-&gt;&quot; type ]
+type_postfix   ::= type_atom { &quot;[&quot; IDENT &quot;]&quot; }
 type_atom      ::= &quot;Int&quot;
                  | &quot;Real&quot; [ &quot;[&quot; dim &quot;]&quot; ]
                  | &quot;Float&quot; [ &quot;[&quot; dim &quot;]&quot; ]
@@ -10031,12 +10185,13 @@ type_atom      ::= &quot;Int&quot;
                          [ &quot;...&quot; IDENT ] ] &quot;}&quot;
                  | &quot;(&quot; type { &quot;,&quot; type } &quot;)&quot;
                  | qname [ &quot;&lt;&quot; type_arg { &quot;,&quot; type_arg } &quot;&gt;&quot; ]
+                 | IDENT
                  | &quot;(&quot; type &quot;)&quot;
 
 field_type     ::= IDENT &quot;:&quot; type
 type_arg       ::= type | nat | dim | shape
 format_name    ::= IDENT | UIDENT
-shape          ::= nat | &quot;?&quot; | &quot;[&quot; [ shape_item { &quot;,&quot; shape_item } ] &quot;]&quot;
+shape          ::= nat | &quot;[&quot; [ shape_item { &quot;,&quot; shape_item } ] &quot;]&quot;
 shape_item     ::= nat | &quot;?&quot;
 row_type       ::= type { &quot;+&quot; type }
 nat            ::= INT | IDENT | nat &quot;+&quot; nat
@@ -11072,10 +11227,10 @@ RSSN Kernel Manifest，生成 <code>Rssn</code> 模块。有签名 →
 <code>OpKey { rule_set, name, signature_hash }</code>；
 <code>Signature</code>、<code>overloads</code>、<code>Stability</code>、<code>Since</code>、<code>Doc</code>
 进入 manifest； CI 审计“每个算子有签名或 dynamic_reason”。</li>
-<li><strong>插件/宿主回调。</strong> <code>#[aevia::op]</code> 把 Aevia
+<li><strong>插件/宿主回调。</strong> <code>@op</code> 把 Aevia
 函数注册为 RSSN 算子； 插件可注册算子/重写/单位/量纲/JIT lowering。</li>
 <li><strong>量纲/单位统一。</strong> 抽出
-<code>rssn-dim</code>：<code>DimTerm</code>/<code>DimArena</code>/<code>UnitRegistry</code>；
+<code>rssn::dim</code>：<code>DimTerm</code>/<code>DimArena</code>/<code>UnitRegistry</code>；
 精确 <code>Scale { rat, pi }</code>、仿射
 offset、用户单位/基量纲注册；Aevia 的 <code>Units.SI</code> 是 registry
 的生成视图，不再有第二张表。</li>
@@ -11102,21 +11257,22 @@ handlers/宏；扩展点是算子/插件/ registry；<code>IO</code>
 <code>@stable</code>/<code>@experimental</code>/<code>@deprecated</code>；
 后端缺失报 <code>E1001</code>，不删语言特性。</li>
 </ol>
-<h3 id="仍存在的风险设计边界不是版本待办">仍存在的风险（设计边界，不是版本待办）</h3>
+<h3 id="仍存在的风险revision-5-时点">仍存在的风险（Revision 5
+时点）</h3>
 <ul>
-<li><code>Term</code> 的替换/自由符号 API 仍需 rssn
-侧补齐；<code>diff</code> 闭包可能每次重跑 <code>compute</code>。</li>
-<li><code>compute</code> 的深拷贝和 <code>DimArena</code> 共享需要 rssn
-侧优化；可用批处理规避。</li>
-<li><code>Solutions</code> 的
-<code>multiplicities</code>/<code>conditions</code> 在 RSSN
-结构化结果就绪前 可能只填默认值。</li>
+<li><code>compute</code> 的深拷贝和 <code>DimArena</code> 共享仍需 RSSN
+优化；可用批处理规避。</li>
+<li><code>Solutions.multiplicities</code> 空表示“未报告”，不是“全
+1”；<code>complete</code> 目前硬编码 true，不能当证明。</li>
 <li><code>Point</code> 的表示是 Float +
 UnitId；符号绝对温度仍用温差/<code>Dyn</code>。</li>
 <li>形式化语义/证明尚未做；用 conformance/属性测试/与 rssn
 交叉检查。</li>
 <li>GPU/分布式/稀疏的<strong>后端实现</strong>可能晚于语言设计；缺失时报
 capability， 不删语法。</li>
+<li><code>Term</code>
+替换/自由符号、<code>fork/merge</code>、结构化结果已在 0.2.13 实现；
+Revision 4 的对应风险已关闭。</li>
 </ul>
 <hr />
 <h2 id="待办清单审计后关闭">待办清单（审计后关闭）</h2>
@@ -11141,5 +11297,47 @@ capability， 不删语法。</li>
 <li><label><input type="checkbox" checked></input>检查 <code>RateOf</code>
 的递归规则。</label></li>
 </ul>
+<h2 id="revision-5--对齐-rssn-0213-实际实现">Revision 5 — 对齐 RSSN
+0.2.13 实际实现</h2>
+<p>RSSN 的适配已经落地，这一轮把规范从“设计契约”改成“实际 API
+契约”：</p>
+<ol type="1">
+<li><strong>Manifest 实际字段</strong>：<code>KernelManifest</code> 有
+<code>features</code>/<code>rule_sets</code>/<code>ops</code>/
+<code>units: Vec&lt;UnitValue&gt;</code>/<code>base_dimensions</code>/<code>plugins</code>；<code>manifest_hash</code>
+是 确定性 bincode 的 BLAKE3，JSON 只供人读。</li>
+<li><strong>实际入口名</strong>：<code>Session::manifest() -&gt; Arc</code>、<code>call_value</code>、<code>call_ho</code>、
+<code>register(Box&lt;dyn Plugin&gt;)</code>；<code>OpInfo.keys</code>（不是
+<code>key</code>）；<code>Value::Symbol</code> （不是
+<code>VString</code>）；<code>TypeExpr::Dim(Box&lt;TypeExpr&gt;, DimExpr)</code>（不是
+<code>Real(dim)</code>）。</li>
+<li><strong>实际覆盖</strong>：rssn 0.2.13 有 1369 个算子、30 个 rule
+set、799 有签名 （58.4%，其中 7 declared / 792 inferred）、570 个有
+<code>dynamic_reason</code>、 0 unexplained；Aevia 的可信 typed façade
+只有 7 个，其余 1362 个走 <code>Rssn.dynamic</code>。</li>
+<li><strong>量纲/单位</strong>：<code>rssn::dim</code> 公开
+<code>DimTerm</code>/<code>DimArena</code>/<code>Dimension</code>/
+<code>UnitRegistry</code>/<code>UnitDef</code>/<code>Scale</code>；<code>DimTerm::factors(&amp;arena)</code>
+返回 <code>(String, BigRational)</code>；<code>Dimension</code>
+仍是可打印字符串快照。</li>
+<li><strong>Term/线程</strong>：<code>Term</code> 借
+<code>&amp;Session</code>，<code>TermRef</code> 是 owned handle；
+<code>children</code>/<code>substitute</code>/<code>free_symbols</code>/<code>to_value</code>/<code>handle</code>
+已实现； <code>fork/merge</code> 已实现。</li>
+<li><strong>结构化结果</strong>：<code>Solutions</code> 的
+<code>multiplicities</code> 空表示“未报告”，不是 “全
+1”；<code>OdeSolutionView</code>/<code>SimResult</code> 已实现。</li>
+<li><strong>JIT</strong>：<code>Select</code>/<code>Extern1</code>/<code>Gather</code>
+已 lowering；默认构建 <code>features.jit=false</code>，<code>@jit</code>
+必须报 <code>E1001(&quot;core.jit&quot;)</code>。</li>
+<li><strong>当前唯一 P0
+构建阻塞</strong>：<code>signatures.overlay.json</code> 被
+<code>.gitignore</code> 的 <code>**/*.json</code> 排除，干净 clone 下
+<code>include_str!</code> 失败。需要把文件纳入
+版本控制，或改成可选加载。</li>
+<li><strong>章节更新</strong>：13 章、10.8、08.6/8.11/8.18/8.19、README
+与根目录 <code>RSSN-INTEGRATION-REQUIREMENTS.md</code> 已按实际
+API/数值重写。</li>
+</ol>
 </body>
 </html>

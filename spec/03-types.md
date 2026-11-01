@@ -24,6 +24,8 @@ Aevia 的类型系统是 **HM 推断 + 量纲代数 + 类型类 + 行多态**。
 
 ```
 Rep ::= Int | Real | Float | Complex
+
+Format ::= Csr | Csc | Coo | Block | Bcsr
 ```
 
 ## 3.2 类型
@@ -64,13 +66,13 @@ Scalar : Rep -> Dim -> Type
 Bool          : Type                        具体布尔
 Prop          : Type                        符号命题（§3.8.6）
 String        : Type
-Tensor        : Nat -> Type -> Type         秩-only 张量
+Tensor        : Shape -> Type -> Type       张量（秩或细化形状）
 Matrix        : Nat -> Nat -> Type -> Type  = Tensor<[n,m], τ>
 Sparse        : Format -> Shape -> Type -> Type  稀疏张量（§13.9.5）
 Point         : Dim -> Type                  仿射点（Float 表示；可作张量元素）
 Unit          : Dim -> Type                  单位值
-Table         : Row -> Type                  行多态表（§13.9.3）
-Dynamic       : Row                         未知 schema 的行标记
+Table         : Type -> Type                 行多态表；ρ 是封闭记录类型（§13.9.3）
+Dynamic       : Type                        特殊记录类型：未知 schema（仅用于 Table<Dynamic>）
 Device        : Type                         运行时设备（§13.9.4）
 Set           : Type -> Type
 Option        : Type -> Type
@@ -98,6 +100,7 @@ Json       : Type                  # JSON 值（不透明）
 Value      : Type                  # RSSN 动态值（§13.3）
 OpError    : Type                  # 动态调用错误（§13.3）
 Plugin     : Type                  # 插件句柄（§13.5）
+PluginId   : Type                  # 注册后的插件 id（§13.5）
 Callback   : Type                  # 高阶回调（§13.5）
 TypeRep    : Type                  # 运行时类型表示（§13.3）
 TermRef    : Type                  # RSSN 项句柄（§13.3）
@@ -342,18 +345,20 @@ Tensor<[n1, ..., nk], τ>     # 形状细化（refinement）
 Matrix<n, m, τ>              # = Tensor<[n, m], τ>
 ```
 
-- `Tensor<n, τ>` 的 `n` 是秩；形状是运行时值 `[d1, ..., dn]`。秩错误是
-  编译错误，形状错误在细化类型下是编译错误，否则是运行时 `E0802`。
+- `Tensor<n, τ>` 的 `n` 是秩；形状是运行时值 `[d1, ..., dn]`。它是
+  `Tensor<[?, ..., ?], τ>`（n 个 `?`）的糖：`n` 是秩，extents 未知。秩错误是编译错误，形状
+  错误在细化类型下是编译错误，否则是运行时 `E0802`。
 - `Tensor<[n1, ..., nk], τ>` 的 `n_i` 是类型级 `Nat`，可用 `?` 表示未知。
   这是 `Tensor` 的**特殊类型形式**（`Tensor<shape, τ>`），不是把 shape
-  列表当作普通类型参数；字面量自动获得细化形状，`zeros<[3,4]>()` 等构造器
+  列表当作普通类型参数；字面量自动获得细化形状，`zeros_of<[3,4]>()` 等构造器
   可显式指定。
 - 类型级 `Nat` 支持字面量、`+`、`*` 和线性等式；不做一般递归/证明。
   这足以表达矩阵乘法、reshape、拼接，不需要完整依赖类型。
 - 细化 → 秩-only 是安全隐式转换；秩-only → 细化用
   `refine_shape(a) : Option<Tensor<[...],τ>>`（运行时检查）。
-- `reshape<[n1..nk]>(a)`：若 `a` 的形状静态已知，编译期检查元素数相等；
-  否则返回 `Result`。`reshape_dyn` 总是运行时检查。
+- `reshape<[n1, ..., nk]>(a)` 的签名始终返回
+  `Result<Tensor<shape,τ>, ShapeError>`；形状静态已知时元素数在编译期
+  检查、结果恒为 `Ok`，否则运行时检查。`reshape_dyn` 总是运行时检查。
 - 索引：细化形状 + 字面量索引 → 编译期越界检查；动态索引仍运行时检查。
 
 选择理由：形状细化捕获 `3×4`/`4×3`、矩阵乘法维度、reshape 元素数等错误，
@@ -391,9 +396,9 @@ Matrix<n, m, τ>              # = Tensor<[n, m], τ>
 ```
 Scalar<ρ1,d> * Tensor<n, Scalar<ρ2,e>> : Tensor<n, Scalar<join,d*e>>
 Scalar<ρ1,d> + Tensor<n, Scalar<ρ2,e>> : Tensor<n, Scalar<join,d>>，要求 d=e
-Tensor<n, Scalar<ρ,d>> * Unit[e]      : Tensor<n, Scalar<ρ,d*e>>
-Tensor<n, Scalar<ρ,d>> / Unit[e]      : Tensor<n, Scalar<ρ,d/e>>
-Unit[e] * Tensor<n, Scalar<ρ,d>>       : Tensor<n, Scalar<ρ,e*d>>
+Tensor<shape, Scalar<ρ,d>> * Unit[e]  : Tensor<shape, Scalar<ρ,d*e>>
+Tensor<shape, Scalar<ρ,d>> / Unit[e]  : Tensor<shape, Scalar<ρ,d/e>>
+Unit[e] * Tensor<shape, Scalar<ρ,d>>   : Tensor<shape, Scalar<ρ,e*d>>
 ```
 
 **张量与张量的逐元素运算要求相同秩**。同秩内形状可以相等或某一维为 1
@@ -422,6 +427,8 @@ centroid : Tensor<1, Point[d]> -> Point[d]
 | `Tensor<1, Scalar<ρ,d>>` | `Tensor<2, Scalar<ρ,e>>` | `Tensor<1, Scalar<ρ,d*e>>` | `vecmat` |
 | `Tensor<1, Scalar<ρ,d>>` | `Tensor<1, Scalar<ρ,e>>` | `Scalar<ρ,d*e>` | `dot` |
 | `Tensor<[m,k], Scalar<ρ,d>>` | `Tensor<[k,n], Scalar<ρ,e>>` | `Tensor<[m,n], Scalar<ρ,d*e>>` | `matmul`（细化） |
+| `Tensor<[m,k], Scalar<ρ,d>>` | `Tensor<[k], Scalar<ρ,e>>` | `Tensor<[m], Scalar<ρ,d*e>>` | `matvec`（细化） |
+| `Tensor<[k], Scalar<ρ,d>>` | `Tensor<[k,n], Scalar<ρ,e>>` | `Tensor<[n], Scalar<ρ,d*e>>` | `vecmat`（细化） |
 
 `A @ x` 是矩阵乘向量，`x @ A` 是向量乘矩阵，`x @ y` 是点积。细化形状下，
 `m/k/n` 在编译期检查；秩-only 在运行时检查。`@` 的优先级与 `*` 相同，
@@ -443,7 +450,7 @@ a[i..j, ..] : Tensor<n, τ>        切片保持秩
 
 - 索引要求秩已知；秩多态的代码用 `map`/`fold`/`sum`，不要用下标。
 - 细化形状 `Tensor<[n1,...,nk], τ>` 下，字面量索引在编译期检查
-  `0 <= i < n_i`；动态索引仍在运行时检查（`E0802`）。
+  `-n_i <= i < n_i`；动态索引仍在运行时检查（`E0802`）。
 - `a[i, j]` 只接受**全部是标量下标**；混合下标与切片请写成
   `a[i][.., j]` 或 `a[i, ..][j]`，避免“结果秩是切片个数”的复杂类型规则。
 - 越界是运行时错误；字面量下标可以静态检查。

@@ -99,7 +99,7 @@ type Result<a, e> = | Ok(a) | Err(e)
 ```
 
 ```
-type_decl ::= "type" UIDENT [ type_params ] "=" type_body
+type_decl ::= "type" UIDENT [ type_params ] [ "=" type_body ]
 type_body ::= type
             | "|" constructor { "|" constructor }
             | NEWLINE INDENT { "|" constructor NEWLINE } DEDENT
@@ -108,11 +108,14 @@ constructor ::= UIDENT [ "(" [ type { "," type } ] ")" ]
 
 - `type Name = T` 是**透明别名**：`Vec2` 与 `{ x: Real[L], y: Real[L] }`
   完全相同。
+- `type Name`（省略 `= type_body`）是**抽象类型**，只能由标准库/插件提供
+  构造器与操作；用户模块不能凭空实现它。`Table`/`Series`/`PlotSpec` 等
+  内建类型用这种形式声明。
 - `type Name = | C1(...) | C2(...)` 是**名义变体类型**；构造器是值/函数。
   单行变体 MUST 以 `|` 开头，以便与类型别名区分；缩进形式可以省略首个
   `|`（但建议保留）。
 - 递归类型允许，但递归出现必须位于函数箭头的右侧、记录字段、元组或构造器
-  参数中（正性检查，§3.7）。
+  参数中（正性检查，§3.6.4）。
 - 构造器名在模块内全局可见；不同模块的同名构造器用 `Module.Ctor` 限定。
 
 ### 2.2.4 类型类与实例
@@ -193,8 +196,9 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 ```
 
 ```
-attribute ::= "@" IDENT [ "(" [ expr { "," expr } ] ")" ] NEWLINE?
+attribute ::= "@" IDENT [ "(" [ attr_arg { "," attr_arg } ] ")" ] NEWLINE?
 top_decl  ::= { attribute } [ "private" ] decl
+attr_arg  ::= [ IDENT "=" ] expr
 ```
 
 - `@stable`/`@experimental`/`@deprecated` 是稳定性标记（§13.8）。
@@ -272,7 +276,9 @@ fn sign(x: Real[1]): Int =
 ```
 
 ```
-match_expr ::= "match" expr "with" NEWLINE INDENT { match_arm } DEDENT
+match_expr ::= "match" expr "with" match_body
+match_body ::= NEWLINE INDENT { match_arm } DEDENT
+             | NEWLINE { match_arm }          # 分支与 match 同列
 match_arm  ::= "|" pattern [ "if" expr ] "->" expr NEWLINE?
 ```
 
@@ -364,7 +370,7 @@ let n = None
 ```
 
 构造器是普通函数/值；`Circle` 的类型是 `Real[L] -> Shape`，`None` 是
-`Option<a>` 的多态值。构造器名大写开头是约定，不是语法要求。
+`Option<a>` 的多态值。构造器名必须以大写 `UIDENT` 开头；这是语法要求。
 
 ### 2.3.10 张量
 
@@ -439,10 +445,8 @@ do_stmt ::= "let" pattern [ ":" type ] "=" expr NEWLINE
 ### 2.3.13 错误传播 `?`
 
 ```aevia
-fn load(path: String): Result<Table, IOError> =
-    let text = read_file(path)?          # read_file : String -> Result<String, IOError>
-    let rows = parse_csv(text)?
-    Ok(rows)
+fn load(path: String): IO (Result<Table<Dynamic>, DataError>) =
+    read_csv_dyn(path)
 ```
 
 `e?` 要求 `e : Result<T, E>`，所在函数返回 `Result<U, E>`；成功时得到 `T`，
@@ -520,7 +524,8 @@ IO Unit
 
 ```
 type ::= [ "forall" type_param { "," type_param } "." ] fn_type
-fn_type ::= type_atom [ "->" type ]
+fn_type ::= type_postfix [ "->" type ]
+type_postfix ::= type_atom { "[" IDENT "]" }
 type_atom ::= "Int" | "Real" [ "[" dim "]" ] | "Float" [ "[" dim "]" ]
             | "Complex" [ "[" dim "]" ] | "Bool" | "Prop" | "String" | "()"
             | "Tensor" "<" shape "," type ">"
@@ -536,11 +541,12 @@ type_atom ::= "Int" | "Real" [ "[" dim "]" ] | "Float" [ "[" dim "]" ]
             | "{" [ field_type { "," field_type } [ "," "..." IDENT ] ] "}"
             | "(" type { "," type } ")"
             | qname [ "<" type_arg { "," type_arg } ">" ]
+            | IDENT
             | "(" type ")"
 field_type ::= IDENT ":" type
 qname ::= UIDENT { "." UIDENT }
 format_name ::= IDENT | UIDENT
-shape ::= nat | "?" | "[" [ shape_item { "," shape_item } ] "]"
+shape ::= nat | "[" [ shape_item { "," shape_item } ] "]"
 shape_item ::= nat | "?"
 row_type ::= type { "+" type }
 ```
@@ -549,7 +555,7 @@ row_type ::= type { "+" type }
 量纲表达式里。
 
 - `Real` 不带方括号等价于 `Real[1]`；`Float`、`Complex` 同理。
-- `Tensor<2, Float>` 的 `2` 是类型级自然数（kind `Nat`）。
+- `Tensor<2, Float>` 的 `2` 是秩（rank shape）；`Tensor<[3,4], Float>` 是细化形状。
 - `Point[Θ]` 是仿射点（§5.6）。
 - `Unit[d]` 是单位值的类型（§5.2）；`Unit` 不带方括号等价于 `()`。
 - 类型参数 `<d: Dim>`、`<n: Nat>`、`<r: Row>` 的 kind 可省略，由使用位置

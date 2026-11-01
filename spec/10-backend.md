@@ -11,15 +11,17 @@ Aevia **不维护** `sin -> rssn::sin`、`det -> rssn::det` 这样的绑定表�
 构建时读取 RSSN 的 **Kernel Manifest**，生成 `Rssn` 模块：
 
 ```aevia
-Rssn.sin(x)                  # 有签名：类型化
-Rssn.Calculus.diff(f, x)     # 规则集限定
-Rssn.dynamic("special/meijer_g", args)   # 无签名/实验性/插件
+Rssn.dynamic("sin", [to_value(x)])  # Inferred：动态；Aevia 的 sin 是 typed
+Rssn.dynamic("diff", [f, x]) # Inferred/request：动态
+Rssn.dynamic("meijer_g", args) # 无签名/实验性/插件（name/alias）
 ```
 
-- 有 `Signature` 的算子 → 类型化声明；
-- 无签名 → `dynamic` 声明，运行时检查类型/量纲；
+- `signature_source = Declared | Overlay` → 类型化声明；
+- `Inferred` / 无签名 → `dynamic` 声明，运行时检查类型/量纲；推断签名
+  默认 `(Real,...,Real) -> Real`，不可信，不能当 typed façade；
 - 新算子只要在 RSSN 注册，下一次构建就出现，不需要改 Aevia 编译器；
-- 重载按 `OpKey { rule_set, name, signature_hash }` 解析，不依赖注册顺序。
+- 静态重载用 `OpKey { rule_set, name, signature_hash }`；运行时 0.2.13 仍
+  按 name+arity 选择，同 arity 多型暂不生成 typed 声明（§13.4.1）。
 
 完整接口清单见根目录 [`RSSN-INTEGRATION-REQUIREMENTS.md`](../RSSN-INTEGRATION-REQUIREMENTS.md)，
 Aevia 侧规则见 [13 — Extensibility](13-extensibility.md)。
@@ -215,7 +217,7 @@ Aevia 的静态路径不依赖它。单位只在两个边界出现：
 2. **导出/FFI**：写 CSV/NPY/JSON 时在宿主侧附单位元数据，不进入项图。
 
 `Point` 在进入 rssn 前转成 K 的 `Float`；`Dyn<ρ>` 的运行时量纲是
-`rssn_dim::DimTerm`。启动时做单位表一致性检查（§5.10），但只用于显示/
+`rssn::dim::DimTerm`。启动时做单位表一致性检查（§5.10），但只用于显示/
 导出；`Units.SI` 从 `UnitRegistry` 生成，不维护第二张表。
 
 ### 10.3.7 仿真
@@ -232,9 +234,9 @@ reshape 成 `Tensor<2, Int>`；`sim` 的错误是字符串，包装器按前缀�
 
 ## 10.4 量纲桥
 
-量纲/单位的唯一事实来源是 RSSN 的 `rssn-dim`（`DimTerm`/`DimArena`/
+量纲/单位的唯一事实来源是 RSSN 的 `rssn::dim`（`DimTerm`/`DimArena`/
 `UnitRegistry`）。Aevia 的 `Dim` 是它的类型级镜像；`DimValue` 在运行时就是
-`rssn_dim::DimTerm`，不是字符串。桥接细节见根目录文档 §3.5。
+`rssn::dim::DimTerm`，不是字符串。桥接细节见根目录文档 §3.5。
 
 ### 10.4.1 静态到运行时
 
@@ -244,11 +246,12 @@ reshape 成 `Tensor<2, Int>`；`sim` 的错误是字符串，包装器按前缀�
 
 只有以下场景需要把量纲交给 rssn：
 
-- `Dyn<ρ>` 的运行时检查：宿主保存 `rssn_dim::DimTerm`，不依赖字符串；
-- FFI/导出：在边界用 `Config::dimension_term(symbol, DimTerm)`，或全名
-  （`Length`、`Mass`、`Time`、`Current`、`Temperature`、`Amount`、
-  `Luminosity`）传给 `Config::dimension`，**绝不使用单字母**（`L` 是升，
-  `T` 是特斯拉，`N` 是牛顿，`J` 是焦耳）；
+- `Dyn<ρ>` 的运行时检查：宿主保存 `rssn::dim::DimTerm`，不依赖字符串；
+- FFI/导出：0.2.13 的 `Config` 只有 `dimension(symbol, text)`，没有
+  `dimension_term`；因此边界必须传**全名**（`Length`、`Mass`、`Time`、
+  `Current`、`Temperature`、`Amount`、`Luminosity`），**绝不使用单字母**
+  （`L` 是升，`T` 是特斯拉，`N` 是牛顿，`J` 是焦耳）。静态路径不传量纲，
+  所以这不影响正常程序。
 - 用户显式请求 rssn 的量纲诊断：`Config::dimensions(Advisory)`。
 
 基量纲在模板构建期注册，不在每次请求的 `prepare` 里注册；否则
@@ -350,69 +353,58 @@ struct RssnBridge {
 
 `Answer.diagnostics` 转成 Aevia 警告；`Advisory` 模式下不失败。
 
-## 10.8 已知缺口与风险
+## 10.8 已知缺口与风险（适配后）
 
-1. **`Session` 单线程。** 每个线程一个会话；符号值不能跨线程。并行符号
-   计算受限。
-2. **`Term` 生命周期。** 需要 `u32` id + `term_by_id`；没有序列化。
-3. **`compute` 克隆图。** 小算子开销大；必须区分“构造”和“求解”。
-4. **复数表示。** rssn 的 `Number` 没有复数；复数靠 `i` 项或宿主
-   `Complex64`。符号复数与数值复数的路径要统一。
-5. **量纲 API 需要结构化/序列化接口。** `rssn-dim` 必须公开
-   `DimTerm`/`DimArena`/`UnitRegistry` 的稳定访问器；Aevia 不解析
-   `Answer.dimension` 文本。
-6. **符号指数。** rssn 支持 `L^n`，Aevia 静态层不支持；`Dyn` 桥接。
-7. **单位表统一。** `Units.SI` 从 `UnitRegistry` 生成；Aevia 不再维护更大
-   的第二张表。缺失单位在 RSSN 注册，用户单位也注册到同一个 registry。
-8. **仿射单位。** rssn 把 `degC` 转 K；Aevia 的 `Point` 是静态的，桥接时
-   消解。
-9. **`det`/`product` 的带量纲形式。** 静态不可表达；`Dyn` 逃逸。
-10. **仿真参数是 JSON。** 场景 manifest 生成包装器；JSON schema 需要
-    代码生成/校验，不能只靠手写。
-11. **JIT 只支持 `Float` 标量。** 记录/变体/符号不进 JIT。
-12. **`Term::as_tensor` 只支持数值。** 符号张量用嵌套 `list` 项，运行时
-    自己遍历。
-13. **预算与中断。** rssn 的预算在 `compute` 内；Aevia 需要在外层加超时/
-    取消（协作式）。
-14. **版本漂移。** rssn 正在架构迁移；Aevia 必须 pin 版本，并用一致性测试
-    锁定行为。
-15. **`compute` 的克隆是深拷贝。** `prepare` 克隆整个 `OpTable`（`Vec` +
-    `HashMap`），单次 `simplify` 的成本与算子表大小相关，而不是请求大小。
-    缓解：`OpTable` 用 `Arc` 共享，新增 `Session::prepare(config)` 复用
-    克隆；符号张量分块 compute。
-16. **`DimArena` 在克隆间共享。** `Graph::clone` 只克隆 `Arc`；在请求期
-    `define_base_dimension` 会污染模板，并发请求的顺序会影响基维 id。
-    缓解：基量纲只在模板构建期注册；请求期只读。
-17. **`Term` 没有遍历/替换/自由符号 API。** `diff` 返回的闭包不能高效
-    替换；`Real + Float` 的闭包性检查也拿不到自由符号。缓解：给 `Term`
-    加 `children`/`substitute`/`free_symbols`，或让桥接层直接使用
-    `graph::Graph`；否则 `diff` 每次调用都要重跑 `compute`。
-18. **JIT 不支持分支和索引。** tape 的 `Select` 没有 lowering，也没有
-    load/index 指令。缓解：当前 JIT 只支持无分支的 `Float` 表达式；`if`
-    和张量索引由解释器执行，直到 RSSN 提供 lowering。
-19. **`Solutions` 没有后端结构。** rssn 的 `solve` 返回根列表，重数和
-    条件在求解器内部。缓解：`Solutions` 只保证 `roots`；`multiplicities`
-    全填 1，`conditions` 为空，文档明确标注；RSSN 结构化结果就绪后补齐。
-20. **ODE 方法/事件不齐。** `radau5` 没有 events；`rk4` 需要固定步数；
-    `dopri5` 支持 events。缓解：`OdeOpts` 增加 `steps`（仅 Rk4）；
-    events 只允许 Dopri5，其他方法报 `E0807`。
-21. **`par_map` 对符号值不安全。** `TermId` 只在会话内有效；跨线程会
-    静默用错项。缓解：`par_map` 要求 `Parallel a`；符号 `Real` 用
-    `fork/merge`（RSSN 提供后），当前串行。
-22. **`assuming` 只支持单元谓词。** rssn 的 `Facts` 没有等式/一般不等式。
-    缓解：`assuming` 只支持 `x > 0`、`x >= 0`、`x != 0`、`x ∈ ℤ`；
-    一般谓词走 `Rssn.assume` 动态接口，后端缺失报 `E1001`。
-23. **没有 Kernel Manifest/签名/重载。** RSSN 的 `OpDescriptor` 只有
-    arity；Aevia 无法生成类型化 façade。缓解：按根目录文档 §3.1/§3.3
-    增加 manifest、`Signature`、`overloads`、`Stability`。
-24. **没有动态 `Value`/`call` ABI。** Aevia 无法调用无签名算子。缓解：
-    按 §3.2 增加 `Value`、`Kernel::call`、`OpError`。
-25. **单位表私有且尺度是 `f64`。** Aevia 无法枚举/注册单位，精确尺度
-    丢失。缓解：按 §3.5 抽出 `rssn-dim`，公开 `UnitRegistry`/`Scale`。
-26. **`DimTerm` 不透明，`Dimension` 指数是字符串。** 无法可靠比较/
-    序列化。缓解：公开结构化访问器，指数用 `BigRational`。
-27. **`EvalFn` 是 fn pointer，不能捕获 Aevia 闭包。** 用户算子无法注册。
-    缓解：增加 `EvalDyn`/`Plugin`/`HostCallback`（§3.4）。
+RSSN 0.2.13 已经实现 Manifest、动态 `Value`/`call_value`、签名/重载、
+插件、`rssn::dim`、`Term` 遍历/替换、`fork/merge`、结构化结果和 JIT
+lowering。下面只列**仍然存在**的集成缺口；已关闭的旧缺口不再重复。
+
+1. **`Session` 单线程。** `Session` 仍是 `RefCell`；跨线程要用
+   `fork/merge`，不是共享会话。`par_map` 对符号值必须 fork/merge。
+2. **`compute` 深拷贝。** `prepare` 仍 `graph.clone()`；单次化简成本与
+   图/算子表大小相关。`OpTable` 尚未用 `Arc` 共享，`Session::prepare`
+   也未公开。
+3. **`DimArena` 请求期污染。** `Graph::clone` 共享 `Arc<RwLock>`；请求期
+   `define_base_dimension` 会影响模板。Aevia 必须只在启动期注册基量纲，
+   请求期只读。
+4. **JIT 默认关闭。** `Select`/`Extern1`/`Gather` 已 lowering，但默认
+   构建 `features.jit=false`；`@jit` 必须读 `Features`，否则报
+   `E1001("core.jit")`。
+5. **`Solutions.multiplicities` 为空。** `solve_structured` 不伪造重数；
+   Aevia 的 `Solutions` 必须保留“空 = 未报告”，不能填 1。
+6. **ODE 事件仍只覆盖部分方法。** `events` 主要在 `Dopri5`；`Rk4` 需要
+   `steps`，`Radau` 不支持 events。Aevia 的 `OdeOpts` 按此限制。
+7. **`manifest.units` 是 `UnitValue`，不是 `UnitDef`。** 它缺
+   `aliases`/`prefixable`/`category`/`since`；Aevia 生成 `Units.SI` 时若
+   需要别名/前缀元数据，必须读 `UnitRegistry`，不能只读 manifest。
+8. **`signatures.overlay.json` 缺失。** `include_str!` 依赖它，但
+   `.gitignore` 的 `**/*.json` 把它排除；干净 clone 无法构建。需要把它
+   纳入版本控制或改成可选加载。
+9. **签名覆盖率 58.4%，但可信 typed 只有 7 个。** 799 有签名（7 declared
+   / 792 inferred）；推断签名默认 `(Real,...,Real) -> Real`，不可信。Aevia
+   只为 declared/overlay 生成 typed，其余 1362 个走 `Rssn.dynamic`。
+10. **`assuming` 仍以单元谓词为主。** 一般等式/不等式走
+    `Rssn.assume` 动态入口；后端缺失报 `E1001`。
+11. **复数表示。** `Value::Complex` 有 `Exact`/`Float`，但 `Number` 仍
+    没有复数；符号复数靠 `i` 项，数值复数靠 `Complex64`。两条路径需在
+    Aevia 侧统一。
+12. **符号指数。** `DimTerm` 支持符号指数，但 `DimExpr::to_term` 对
+    `Pow(..., Exp::Symbol)` 仍报“不能 intern”；Aevia 的静态 `Dyn` 桥接
+    要避开。
+13. **仿真 JSON schema。** `SimResult` 有结构化结果，但场景参数仍是
+    JSON；Aevia 的 `Physics.*` 由 manifest/schema 生成，不能手写。
+14. **预算/中断。** rssn 的预算在 `compute` 内；Aevia 外层超时/取消是
+    协作式的，不能强杀。
+15. **版本漂移。** `api_version=1`、`rssn 0.2.13`；Aevia 必须 pin
+    `api_version` + `manifest_hash`，并跑 conformance。
+16. **`manifest_hash` 是 bincode BLAKE3。** JSON 只供人读；Aevia 不能对
+    JSON 文本做哈希/比较。
+17. **自定义基量纲单位注册失败。** `UnitRegistry::register` 的
+    `expr_to_dim` 只认 7 个内置基名；`unit EUR : Currency` 报
+    “not a base dimension”。Aevia 报 `E1001("core.units.custom_base")`。
+18. **`Value::Sparse` 不能入项图。** `term_of_value` 对 Sparse/Record/
+    Variant/Function/Opaque 返回 `Unsupported`；稀疏运算必须走 `eval_dyn`
+    或 Aevia 本地布局内核。
 
 ### 10.8.1 缓解措施
 

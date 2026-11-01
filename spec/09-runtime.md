@@ -199,7 +199,7 @@ SymbolicCtx {
    （内部错误），并打印请求、答案、两边量纲。
 4. 把 `Answer.term` 转回 Aevia 值。
 
-对 `Dyn<ρ>`，不比较静态量纲；把宿主保存的 `rssn_dim::DimTerm` 作为运行时量纲。
+对 `Dyn<ρ>`，不比较静态量纲；把宿主保存的 `rssn::dim::DimTerm` 作为运行时量纲。
 
 ### 9.4.5 数值路径
 
@@ -225,22 +225,31 @@ SymbolicCtx {
   传输与作用域执行。CPU 是默认；GPU/分布式是运行时目标，不是类型参数。
 - 稀疏：`Sparse<F,shape,τ>` 与 dense 张量共享 `@` 分派；`Layout` 类提供
   `nnz`/`to_dense`/`from_dense`/`matmul`/`transpose`。
-- 插件：`Rssn.register_plugin` 把算子/重写/单位注册进当前 RSSN 会话；
+- 插件：`Rssn.register`（别名 `register_plugin`）把算子/重写/单位注册进当前 RSSN 会话；
   Aevia 通过 manifest 反射看到它们，不需要重新编译。
 
 ## 9.6 JIT
 
-### 9.6.1 触发条件
+### 9.6.1 触发条件与门控
 
-- 函数只含 `Float` 标量、算术、初等函数，**不含** `if`/`match`/张量索引；
+先读 manifest 的 `Features`：
+
+- `features.jit = false`：`@jit` 报 `E1001("core.jit")`；函数只解释执行。
+- `features.jit_branch = false`：含 `if`/`match` 的函数不 JIT。
+- `features.jit_index = false`：含张量索引的函数不 JIT。
+
+满足门控后：
+
+- 函数只含 `Float` 标量、算术、初等函数；按上面的 flag 允许 `if`/索引；
 - 被调用超过阈值（默认 1000 次）或显式 `@jit`；
 - 输入/输出类型固定（无符号、无 `Dyn`、无记录/变体）。
 
 ### 9.6.2 流程
 
 1. 把 Core IR 降成 rssn 项（`Float` 标量表达式）。
-2. `Term::compile(&["x", "y"])` 得到 `Compiled`。
-3. 缓存键：项结构哈希 + 输入名 + 后端版本。
+2. 仅在 `features.jit` 为真时调用 `Term::compile(&["x", "y"])` 得到
+   `Compiled`；否则不进入此路径。
+3. 缓存键：项结构哈希 + 输入名 + `manifest_hash` + 后端版本。
 4. 调用时直接走机器码；失败回退解释器。
 
 rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策略。
@@ -248,6 +257,8 @@ rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策�
 ### 9.6.3 限制
 
 - 符号值、记录、变体、闭包不进入 JIT。
+- `Select`/`Extern1`/`Gather` 已 lowering，但受 `jit_branch`/`jit_index`
+  与构建 feature 控制；默认构建 `features.jit=false`。
 - `Real` 的精确算术不进入 JIT；需要时先 `to_float`。
 - JIT 的结果与解释器 MUST 数值一致（同一 IEEE 语义）；不一致是 bug。
 

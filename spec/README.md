@@ -12,7 +12,7 @@ scientific-computing engine. Symbolic and numeric evaluation are two phases of
 the same expression; units, dimensional inference, rewriting, numerical kernels,
 JIT compilation and physics simulations are provided by the backend. Aevia does
 not maintain a second operator list or a second unit table: it consumes the
-RSSN **Kernel Manifest** and `rssn-dim` registry, and generates its `Rssn`
+RSSN **Kernel Manifest** and `rssn::dim` registry, and generates its `Rssn`
 module from them. See [13 — Extensibility](13-extensibility.md) and the
 [backend requirements](../RSSN-INTEGRATION-REQUIREMENTS.md).
 
@@ -60,7 +60,7 @@ diagnostic category (the exact wording is not normative).
 
 This is a **design standard**, not a frozen implementation. Chapters marked
 normative are intended to be implemented as written; the changelog records every
-audit round. The current text is **Revision 4**, after three rounds of
+audit round. The current text is **Revision 5**, after three rounds of
 independent audits plus the extensibility/backend-integration redesign. There is
 **no v1/v2 language split**: every capability is designed in; a backend that
 does not yet implement one reports a capability diagnostic (`E1001`) instead of
@@ -77,6 +77,7 @@ removing the language feature.
 module Kinematics
 
 open Units.SI
+import Math { sqrt }
 
 let g = 9.80665 m/s^2
 

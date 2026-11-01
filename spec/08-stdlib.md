@@ -263,12 +263,13 @@ tril     : Tensor<2, a> -> Tensor<2, a>
 triu     : Tensor<2, a> -> Tensor<2, a>
 eye      : Int -> Tensor<2, Float>
 zeros    : (Int, ..., Int) -> Tensor<n, Float>       # n = 参数个数
-zeros<shape>() : Tensor<shape, Float>                 # 细化形状构造
-ones<shape>()  : Tensor<shape, Float>
+zeros_of<shape>() : Tensor<shape, Float>              # 细化形状构造
+ones_of<shape>()  : Tensor<shape, Float>
 ones     : (Int, ..., Int) -> Tensor<n, Float>
 fill     : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>
 linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>
-reshape<m> : (Tensor<n, a>, Tensor<1, Int>) -> Tensor<m, a>
+reshape<shape> : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>
+reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>
 flatten  : Tensor<n, a> -> Tensor<1, a>
 at       : (Tensor<n, a>, Int) -> Tensor<n-1, a>     # 要求 n >= 1
 set      : (Tensor<n, a>, Tensor<1, Int>, a) -> Tensor<n, a>
@@ -284,8 +285,9 @@ std      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 
 `zeros<Float>(3, 4)` 的 `n=2`；`zeros<Int>` 显式指定元素类型。`zeros`/
 `ones`/`fill` 是**内建可变参数**：`n` 由 `Int` 实参的个数决定，不是用户
-可声明的函数；类型检查器特殊处理。`reshape` 的目标秩必须显式给出
-（`reshape<2>(a, shape)`），因为运行时形状向量的长度无法静态推断。
+可声明的函数；类型检查器特殊处理。`reshape<[n1, ..., nk]>(a)` 的目标形状
+显式给出；元素数在编译期（形状已知时）或运行时检查。`reshape_dyn(a,
+shape)` 用运行时形状向量，返回 `Result`。
 
 `@` 按秩分派：`A @ B`（2×2）、`A @ x`（2×1）、`x @ A`（1×2）、
 `x @ y`（1×1 点积）。`matmul` 只做 2×2；`matvec`/`vecmat`/`dot` 是显式
@@ -303,18 +305,22 @@ type LinAlgError = | Singular | NotConverged | NotPositiveDefinite | ShapeMismat
 
 ```
 type Sparse<F, shape, τ>
-type Csr | Csc | Coo | Block | Bcsr
 
-from_dense : Tensor<shape, τ> -> Sparse<F, shape, τ>
+from_dense<F> : Tensor<shape, τ> -> Sparse<F, shape, τ>
 to_dense   : Sparse<F, shape, τ> -> Tensor<shape, τ>
 nnz        : Sparse<F, shape, τ> -> Int
-transpose  : Sparse<F, shape, τ> -> Sparse<F', shape', τ>   # shape' 是 shape 的逆序
-matmul     : Sparse<F, [m,k], τ> × Sparse<G, [k,n], τ> -> Sparse<H, [m,n], τ>
+transpose  : Sparse<F, [m,n], τ> -> Sparse<F, [n,m], τ>
+matmul     : Sparse<F, [m,k], Scalar<ρ,d>> × Sparse<G, [k,n], Scalar<ρ,e>>
+           -> Sparse<Csr, [m,n], Scalar<ρ,d*e>>
 ```
 
-`Sparse` 是核心类型构造器，`F` 是 `Format` kind；`Layout` 类提供
+`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。`Sparse` 是核心类型构造器，`F` 是 `Format` kind；`Layout` 类提供
 `from_dense`/`to_dense`/`nnz`/`matmul`/`transpose`。`@` 在 dense/sparse
-混合时按布局分派；不隐式互转。用户格式通过插件注册（§13.9.5）。
+混合时按布局分派；不隐式互转。0.2.13 的格式是封闭集合；用户自定义格式要等 RSSN 开放 `Format`（§13.9.5）。RSSN
+的 `TypeExpr::Sparse` 只有 rank，所以 `shape` 细化在 Aevia 侧检查，边界
+降为 rank + 运行时 shape。0.2.13 的 `term_of_value` 不接受 `Value::Sparse`
+进入项图，所以稀疏运算必须走 `eval_dyn` 内核或 Aevia 自己的布局内核；
+不能把稀疏值直接喂给通用重写算子。
 
 ## 8.5 Calculus
 
@@ -375,10 +381,14 @@ linsolve     : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
              -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>
 ```
 
-`Solutions<ρ,d>` 是 `{ roots: Tensor<1, Scalar<ρ,d>>, multiplicities: Tensor<1, Int>,
-conditions: Tensor<1, String> }`，保留重数与参数条件；它不是 `Set`。
-`solve` 返回实解；`solve_complex` 返回复解。数值求解失败返回 `Err`。
-`linsolve` 是线性方程组求解，避免与符号 `solve` 同名。
+`Solutions<ρ,d>` 是
+`{ variable: Option<String>, roots: Tensor<1, Scalar<ρ,d>>,
+   multiplicities: Tensor<1, Int>, conditions: Tensor<1, String>,
+   complete: Bool }`，保留重数与参数条件；它不是 `Set`。RSSN 的
+`solve_structured` 目前不报告重数时 `multiplicities` 为空（“未报告”），
+不是“全 1”；Aevia 保留这个空语义，不伪造。`solve` 返回实解；
+`solve_complex` 返回复解。数值求解失败返回 `Err`。`linsolve` 是线性
+方程组求解，避免与符号 `solve` 同名。
 
 ## 8.7 Stats
 
@@ -518,8 +528,7 @@ PDE 的完整类型规则见 `Pde` 模块文档；当前不把 PDE 规格放进�
 ## 8.11 Data
 
 ```
-type Table<ρ>                  # 行多态静态 schema
-type Dynamic                   # 未知 schema 的标记
+type Table<ρ>                  # 行多态静态 schema；ρ 是记录类型
 type Column
 
 read_csv<ρ>   : String -> IO (Result<Table<ρ>, DataError>)
@@ -530,7 +539,8 @@ write_npy     : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)
 read_json     : String -> IO (Result<Json, DataError>)
 write_json    : (String, Json) -> IO (Result<(), DataError>)
 
-column        : (Table<ρ>, String) -> Result<Tensor<1, τ>, DataError>
+column        : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>
+column_dyn    : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>
 row           : (Table<ρ>, Int) -> Result<ρ, DataError>
 select<σ>     : (Table<ρ>, Tensor<1, String>) -> Table<σ>   # σ ⊆ ρ
 filter        : ((ρ -> Bool), Table<ρ>) -> Table<ρ>
@@ -547,8 +557,10 @@ type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 `DataError.Schema`，用户可给显式 `ρ`。`read_csv_dyn` 返回
 `Table<Dynamic>`，用于未知 schema；`to_table<ρ>` 在运行时校验并转换。
 
-`column` 的字段名是字符串字面量；类型检查器在 `ρ` 中查找该字段，返回
-其元素类型。字段不存在报 `E0306`；量纲不匹配报 `E0401`。`select`/
+`column` 的字段名必须是**字符串字面量**；类型检查器把字面量提升为
+类型级 label，在 `ρ` 中查找 `ρ[name]` 并返回其元素类型。字段不存在报
+`E0306`；量纲不匹配报 `E0401`。非字面量用 `column_dyn`（返回
+`Tensor<1, Value>`），不走静态 schema。`select`/
 `filter`/`join` 保持行多态；`join` 的结果行是 `ρ + σ`（`+` 是类型级行
 并集；冲突字段报 `E0208`）。
 
@@ -703,13 +715,15 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 
 ```
 type Device = | Cpu | Gpu(Int) | Distributed(Cluster)
+type Cluster                      # 不透明运行时拓扑
+type Mesh                         # 不透明分片拓扑
 to_device : (Tensor<n,τ>, Device) -> IO (Tensor<n,τ>)
 on        : (Device, () -> a) -> IO a
 device_of : Tensor<n,τ> -> Device
 ```
 
 设备是运行时值，不是张量类型参数；没有 `core.gpu` 时 `to_device`/`on`
-报 `E1001`。分布式用 `Sharded<Mesh, Tensor<...>>` 库类型。
+报 `E1001`。分布式用 `Sharded<Mesh, Tensor<n,τ>>` 库类型。
 
 ## 8.19 Rssn 动态接口
 
@@ -721,15 +735,20 @@ Rssn.Capabilities  : Tensor<1, String>
 Rssn.call          : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.dynamic       : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.typed         : (String, Tensor<1, Value>, TypeRep) -> Result<a, OpError>
+to_value           : a -> Value
+from_value         : Value -> Result<a, OpError>
+type_rep<a>()      : TypeRep
 Rssn.call_ho       : (String, Tensor<1, Value>, Tensor<1, Callback>)
                    -> Result<Value, OpError>
-Rssn.register_plugin : (String, Plugin) -> IO (Result<(), PluginError>)
+Rssn.register        : Plugin -> Result<PluginId, PluginError>
+Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 ```
 
 `Rssn` 的成员由 Kernel Manifest 生成；上面的 `call`/`dynamic` 是固定入口。
-有签名的算子还会生成 `Rssn.<name>`；别名生成 `Rssn.<alias>`；冲突时用
-`Rssn.<rule_set>.<name>`。`Rssn.dynamic` 是**正式能力**，不是降级路径：
-没有签名的算子、实验性算子、插件算子都走它。
+只有 `signature_source = Declared | Overlay` 的算子生成 `Rssn.<name>`
+类型化声明；`Inferred`/无签名/实验性/插件算子生成 `dynamic`。别名生成
+`Rssn.<alias>`；冲突时用 `Rssn.<rule_set>.<name>`。`Rssn.dynamic` 是
+**正式能力**，不是降级路径。
 
 ## 8.20 库的组织
 

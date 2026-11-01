@@ -48,6 +48,8 @@ module Projectile
 
 open Units.SI
 import Math { sqrt, sin, cos }
+import LinearAlgebra { linspace }
+import Ode { odeint }
 
 type State = {
     x:  Float[L],
@@ -116,6 +118,8 @@ odeint : ((Float[T], s) -> RateOf<s>) -> s -> Tensor<1, Float[T]> -> Tensor<1, s
 module Symbolic
 
 import Math { exp }
+import Calculus { diff, defint, series }
+import Solve { solve }
 
 fn main(): IO Unit = do
     let x = symbol("x")
@@ -319,8 +323,7 @@ fn standardize<d>(xs: Tensor<1, Real[d]>): Tensor<1, Real[1]> =
 fn covariance<d, e>(xs: Tensor<1, Real[d]>, ys: Tensor<1, Real[e]>): Real[d*e] =
     mean((xs - mean(xs)) * (ys - mean(ys)))
 
-fn linear_fit<d, e>(xs: Tensor<1, Real[d]>, ys: Tensor<1, Real[e]>)
-    : { slope: Real[e/d], intercept: Real[e] } =
+fn linear_fit<d, e>(xs: Tensor<1, Real[d]>, ys: Tensor<1, Real[e]>): { slope: Real[e/d], intercept: Real[e] } =
     let mx = mean(xs)
     let my = mean(ys)
     let slope = sum((xs - mx) * (ys - my)) / sum((xs - mx)^2)
@@ -397,8 +400,9 @@ module Full
 
 open Units.SI
 import Math { exp }
-import LinearAlgebra { linsolve }
-import Plot { line, combine, plot }
+import LinearAlgebra { linsolve, linspace }
+import Calculus { diff }
+import Plot { line, combine, plot, label }
 
 fn kinetic(m: Float[M], v: Float[L/T]): Float[Energy] =
     m * v^2 / 2
@@ -414,15 +418,15 @@ fn main(): IO Unit = do
     println("f' = {diff(fn t => exp(-t^2))(x)}")
 
     # 3. 线性代数
-    let A = [[2.0, 1.0], [1.0, 3.0]]
+    let M2 = [[2.0, 1.0], [1.0, 3.0]]
     let b = [1.0, 2.0]
-    match linsolve(A, b) with
+    match linsolve(M2, b) with
     | Ok(x) -> println("x = {x}")
     | Err(e) -> println("solve failed: {e}")
 
     # 4. 数据与绘图
     let ts = linspace(0.0 s, 1.0 s, 100)
-    let vs = map(fn t => 3.0 m/s * exp(-value_in(s, t) / 0.5), ts)
+    let vs = map(fn t => 3.0 m/s * exp(-(t / s) / 0.5), ts)
     let spec = label(line(ts, vs), "v(t)")
     plot(combine([spec]))
 ```
