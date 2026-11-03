@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/aevia-dim",
+    "crates/aevia-syntax",
+    "crates/aevia-types",
+    "crates/aevia-ir",
+    "crates/aevia-core",
+    "crates/aevia-rssn",
+    "crates/aevia-std",
+    "crates/aevia-fmt",
+    "crates/aevia-doc",
+    "crates/aevia-analysis",
+    "crates/aevia-lsp",
+    "crates/aevia-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/Apich-Organization/aevia"
+
+[workspace.dependencies]
+num-bigint = "0.4"
+num-rational = "0.4"
+# The `f64` linear-algebra backend: blocked GEMM and LAPACK-class factorisations.
+# `std` and `rayon` only — the sparse, `rand` and `npy` features are not used
+# here, and `rssn` (which already depends on `faer`) turns them back on anyway.
+faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
+num-integer = "0.1"
+num-traits = "0.2"
+indexmap = "2"
+unicode-ident = "1"
+unicode-normalization = "0.1"
+serde_json = "1"
+
+aevia-dim = { path = "crates/aevia-dim" }
+aevia-syntax = { path = "crates/aevia-syntax" }
+aevia-types = { path = "crates/aevia-types" }
+aevia-ir = { path = "crates/aevia-ir" }
+aevia-core = { path = "crates/aevia-core" }
+aevia-rssn = { path = "crates/aevia-rssn" }
+aevia-fmt = { path = "crates/aevia-fmt" }
+aevia-doc = { path = "crates/aevia-doc" }
+aevia-analysis = { path = "crates/aevia-analysis" }
+aevia-lsp = { path = "crates/aevia-lsp" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

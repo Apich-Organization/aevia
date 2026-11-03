@@ -1,0 +1,4 @@
+# The interpreter is recursive; deep but legal programs need more stack than
+# the default test threads provide. The CLI uses its own 256 MiB thread.
+[env]
+RUST_MIN_STACK = "67108864"
