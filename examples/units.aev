@@ -1,0 +1,16 @@
+module Units
+
+## Units are compile-time scales: `3.2 km` and `3200 m` are the same value with
+## the same type, and `to` only changes how it is printed (§5.4).
+
+fn main(): IO Unit = do
+    let d = 3.2 km
+    println("{d} = {value_in(m, d)} m")
+    println("{to(m, d)}")
+
+    let t = 25.0 °C
+    println("absolute temperature: {t}")
+    println("in kelvin: {value_in(K, t)} K")
+
+    let work = 1.5 kg*m^2/s^2
+    println("energy: {work}")

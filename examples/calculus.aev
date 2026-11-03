@@ -1,0 +1,27 @@
+## Calculus, algebra and equations, all answered by the rssn kernel.
+##
+## Every heavy request goes through the Kernel Manifest: nothing here is a
+## hand-written binding, and an operator added to rssn would appear without a
+## change to this program.
+
+let f = fn t => t^3 - 3*t + 1
+
+fn main(): IO Unit = do
+    # Differentiation and evaluation.
+    let df = diff(f)
+    println("f'(2)      = {df(2)}")
+
+    # Antiderivatives are functions: `antiderivative(g)` is `Real[L] -> Real[L^2]`.
+    let g = fn t: Real[L] => t
+    println("∫x dx at 2 = {antiderivative(g)(2.0 m)}")
+
+    # A definite integral keeps the dimension of `f(x)·dx`.
+    println("∫₀³ x² dx  = {defint(fn t => t^2, 0.0, 3.0)}")
+
+    # Limits and series.
+    println("lim sin/x  = {limit(fn t => sin(t) / t, 0.0)}")
+    println("e^x to x³  = {series(fn t => exp(t), 0.0, 3)}")
+
+    # Equations: `solve` gives every root, `nsolve` one numeric root.
+    println("roots of x²-4 = {solve(fn t => t^2 - 4)}")
+    println("cos x = x     = {nsolve(fn t => cos(t) - t, 1.0)}")

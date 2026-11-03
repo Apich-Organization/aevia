@@ -1,0 +1,9 @@
+## A two-file program: `aevia run examples/modules/main.aev`.
+##
+## Module paths resolve against the entry file's directory, so this imports
+## `examples/modules/Geometry/Shapes.aev` and nothing else.
+import Geometry.Shapes as Shapes
+
+fn main(): IO Unit = do
+    println("circle    = {Shapes.circle(2.0 m)}")
+    println("rectangle = {Shapes.rectangle(3.0 m, 4.0 m)}")

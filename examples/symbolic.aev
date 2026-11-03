@@ -1,0 +1,16 @@
+module Symbolic
+
+## Symbolic and numeric evaluation are two phases of the same expression
+## (§0.5, §6.13): `diff` returns a function, and calling it substitutes.
+
+let x = symbol("x")
+let f = fn t => t^3 - 3*t + 1
+let df = diff(f)
+
+fn main(): IO Unit = do
+    println("f(x)  = {f(x)}")
+    println("f'(x) = {df(x)}")
+    println("f'(2) = {df(2)}")
+    match approx(df(2)) with
+    | Ok(v) -> println("approx(f'(2)) = {v}")
+    | Err(e) -> println("approx failed: {e}")
