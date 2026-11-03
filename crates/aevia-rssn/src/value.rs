@@ -7,11 +7,12 @@
 //! keeps the dependency direction one-way: `aevia-core` knows this module,
 //! this module knows `rssn`, and `rssn` knows nothing about either.
 
-use crate::error::KernelError;
+use crate::error::{Failure, KernelError};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, ToPrimitive};
 use rssn::graph::Number;
+use rssn::kernel::result::Solutions;
 use rssn::kernel::value::{
     ComplexValue, OpaqueValue, QuantityValue, RecordValue, SessionId, TensorValue, TermRef,
     UnitValue, Value, VariantValue,
@@ -509,6 +510,42 @@ impl Val {
                     "a host callback cannot cross back into Aevia",
                 ));
             }
+        })
+    }
+
+    /// A solver's [`Solutions`] as the record §8.6 names.
+    ///
+    /// The kernel already defines the mapping — [`Solutions::to_value`] writes
+    /// `variable`, `roots`, `multiplicities`, `conditions` and `complete` in
+    /// that order — so the bridge does not re-derive any of them. Flattening
+    /// to a bare root list, which is what the bridge used to do, threw away
+    /// three of the five fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a root or condition expression that belongs to another session.
+    pub fn from_solutions(solutions: &Solutions, session: SessionId) -> Result<Self, KernelError> {
+        Self::from_rssn(&solutions.to_value(), session)
+    }
+
+    /// The [`Solutions`] this value denotes, when it is that record.
+    ///
+    /// The inverse of [`Val::from_solutions`]: a `Solutions` that goes to the
+    /// kernel and comes back is unchanged, including the difference between
+    /// "no multiplicities reported" (empty) and a reported `1`.
+    ///
+    /// # Errors
+    ///
+    /// `E0809` when the value is not a record, a field is missing or
+    /// mistyped, or the multiplicities do not line up with the roots.
+    pub fn to_solutions(&self, session: SessionId) -> Result<Solutions, KernelError> {
+        let value = self.to_rssn(session)?;
+        Solutions::from_value(&value).map_err(|error| {
+            KernelError::of(
+                "E0809",
+                Failure::Kernel,
+                format!("this value is not a `Solutions` record: {error}"),
+            )
         })
     }
 

@@ -1357,15 +1357,8 @@ pub fn call(
             // dimensionless at run time; the static type is `Solutions<Real,d>`.
             let (variable, applied) = apply_to_fresh(interp, name, &args, span, Dim::one())?;
             let symbol = symbolic_variable(&variable, Dim::one());
-            let roots_dim = Dim::one();
-            match bridge::call("solve", &[applied, symbol], roots_dim.clone()) {
-                Ok(roots) => {
-                    let roots = match roots {
-                        Value::Tensor(tensor) => Value::Tensor(tensor),
-                        other => build_tensor(vec![other], vec![1], roots_dim),
-                    };
-                    Ok(ok(solutions_value(&variable, roots)))
-                }
+            match solve("solve", &applied, &symbol) {
+                Ok(solutions) => Ok(ok(solutions_value(&solutions, Dim::one()))),
                 Err(error) => Ok(err(Value::string(error.message))),
             }
         }
@@ -2792,14 +2785,8 @@ pub fn call(
         "solve_complex" => {
             let (variable, applied) = apply_to_fresh(interp, name, &args, span, Dim::one())?;
             let symbol = symbolic_variable(&variable, Dim::one());
-            match bridge::call("solve_complex", &[applied, symbol], Dim::one()) {
-                Ok(roots) => {
-                    let roots = match roots {
-                        Value::Tensor(tensor) => Value::Tensor(tensor),
-                        other => build_tensor(vec![other], vec![1], Dim::one()),
-                    };
-                    Ok(ok(solutions_value(&variable, roots)))
-                }
+            match solve("solve_complex", &applied, &symbol) {
+                Ok(solutions) => Ok(ok(solutions_value(&solutions, Dim::one()))),
                 Err(error) => Ok(err(Value::string(error.message))),
             }
         }
@@ -3732,69 +3719,70 @@ fn math_result(result: Result<Value, EvalError>) -> Result<Value, EvalError> {
     })
 }
 
-/// Builds the `Solutions` record of §8.6.
+/// Runs a solver and returns its structured answer, as §8.6's record.
 ///
-/// `variable` names the symbol the solver solved for and `complete` says
-/// whether the solver claimed to be exhaustive; both are required by §8.6 and
-/// neither can be inferred from the roots. `complete` is `false` because this
-/// bridge does not carry the solver's completeness claim — §8.6 says `false`
-/// is the default and that it is not a proof of incompleteness.
-fn solutions_value(variable: &str, roots: Value) -> Value {
-    let multiplicities = multiplicities_of(&roots);
-    let mut fields = IndexMap::new();
-    fields.insert(
-        "variable".to_string(),
-        make_variant(
-            adt::OPTION_ID,
-            1,
-            "Some",
-            vec![Value::string(crate::kernel::clean_internal_names(variable))],
-        ),
-    );
-    fields.insert("roots".to_string(), roots);
-    fields.insert("multiplicities".to_string(), multiplicities);
-    fields.insert(
-        "conditions".to_string(),
-        build_tensor(Vec::new(), vec![0], Dim::one()),
-    );
-    fields.insert("complete".to_string(), Value::Bool(false));
-    Value::Record(Rc::new(RecordValue { fields }))
+/// The answer is the kernel's `Solutions` record — `variable`, `roots`,
+/// `multiplicities`, `conditions`, `complete` — not a bare root list. Three of
+/// those fields cannot be read off a list, so flattening them away (which is
+/// what `solve` used to do) made `complete` a constant `false` and left the
+/// solver's multiplicities behind.
+///
+/// # Errors
+///
+/// Propagates the kernel's diagnostic.
+fn solve(
+    operator: &str,
+    equation: &Value,
+    variable: &Value,
+) -> Result<aevia_rssn::Val, EvalError> {
+    let equation = bridge::to_val(equation)?;
+    let variable = bridge::to_val(variable)?;
+    aevia_rssn::kernel()
+        .solve_structured(operator, &equation, &variable)
+        .map_err(|failure| bridge::error(&failure))
 }
 
-/// The multiplicity of each root, when the solver returned a repeated root.
+/// The `Solutions` record of §8.6, from the kernel's own record.
 ///
-/// An empty tensor means "not reported" (§8.6), which is the honest answer
-/// when every root appears once.
-fn multiplicities_of(roots: &Value) -> Value {
-    let Value::Tensor(tensor) = roots else {
-        return build_tensor(Vec::new(), vec![0], Dim::one());
+/// The kernel's `Solutions` is already a record with these five field names,
+/// so the bridge hands it over unchanged. The one field whose *type* differs
+/// is `variable`: the kernel writes a symbol (or the empty string for "none")
+/// and §8.6 types it `Option<String>`, so it is reshaped here.
+///
+/// Nothing is derived. `multiplicities` is whatever the solver reported —
+/// empty when it did not distinguish the roots, which is not the same as a
+/// reported `1` — and `complete` is the solver's claim, not a constant.
+fn solutions_value(solutions: &aevia_rssn::Val, roots_dim: Dim) -> Value {
+    let aevia_rssn::Val::Record(fields) = solutions else {
+        // The bridge always answers with the record; a value of any other
+        // shape is a bridge defect, and showing it is better than inventing
+        // five fields around it.
+        return bridge::from_val(solutions, roots_dim);
     };
-    let elements = tensor.elements();
-    if elements.len() < 2 {
-        return build_tensor(Vec::new(), vec![0], Dim::one());
+    let mut converted = IndexMap::new();
+    for (name, value) in fields {
+        let field = match name.as_str() {
+            "variable" => match value {
+                aevia_rssn::Val::Symbol(name) | aevia_rssn::Val::Str(name)
+                    if !name.is_empty() =>
+                {
+                    make_variant(
+                        adt::OPTION_ID,
+                        1,
+                        "Some",
+                        vec![Value::string(crate::kernel::clean_internal_names(name))],
+                    )
+                }
+                _ => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
+            },
+            // The roots are values of the unknown, so they carry its
+            // dimension; the three metadata fields do not.
+            "roots" => bridge::from_val(value, roots_dim.clone()),
+            _ => bridge::from_val(value, Dim::one()),
+        };
+        converted.insert(name.clone(), field);
     }
-    let mut counts = Vec::with_capacity(elements.len());
-    let mut repeated = false;
-    for element in &elements {
-        let count = elements
-            .iter()
-            .filter(|other| crate::value::equal(element, other).unwrap_or(false))
-            .count();
-        repeated |= count > 1;
-        counts.push(count);
-    }
-    if !repeated {
-        return build_tensor(Vec::new(), vec![0], Dim::one());
-    }
-    let len = counts.len();
-    build_tensor(
-        counts
-            .into_iter()
-            .map(|count| Value::int(i64::try_from(count).unwrap_or(i64::MAX)))
-            .collect(),
-        vec![len],
-        Dim::one(),
-    )
+    Value::Record(Rc::new(RecordValue { fields: converted }))
 }
 
 /// Decides a proposition when it reduces to a comparison of numbers.

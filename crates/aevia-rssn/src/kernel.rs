@@ -14,6 +14,7 @@ use num_rational::BigRational;
 use rssn::api::{Config, Session};
 use rssn::kernel::call::{CallCtx, OpError};
 use rssn::kernel::manifest::KernelManifest;
+use rssn::kernel::result::Solutions;
 use rssn::kernel::signature::{OpKey, Signature};
 use rssn::kernel::value::{SessionId, TermRef, Value};
 use std::cell::RefCell;
@@ -229,6 +230,70 @@ impl Kernel {
             .call_key(key, &converted, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
         Val::from_rssn(&value, self.id)
+    }
+
+    /// The solver's structured answer for `equation = 0`, as §8.6's record.
+    ///
+    /// `operator` is `solve` or `solve_complex`. `solve` goes through the
+    /// kernel's own [`Session::solve_structured`], so the completeness claim
+    /// is the solver's: a list answer is the exhaustive form (`complete`),
+    /// a bare value is one root found on the way and claims nothing about the
+    /// others. `solve_complex` has no structured entry point in the kernel,
+    /// so the same classification is applied to its answer here.
+    ///
+    /// The answer is a [`Val::Record`] of the five fields, not a bare list of
+    /// roots: multiplicities, conditions and completeness cannot be recovered
+    /// from a list, and dropping them is what made `s.complete` a constant.
+    ///
+    /// # Errors
+    ///
+    /// `E1003` when the equation or the unknown has no term form, plus
+    /// whatever the solver reports.
+    pub fn solve_structured(
+        &self,
+        operator: &str,
+        equation: &Val,
+        variable: &Val,
+    ) -> Result<Val, KernelError> {
+        let name = match variable {
+            Val::Symbol(name) => Some(name.clone()),
+            _ => None,
+        };
+        let solutions = if operator == "solve" {
+            let equation = self.term(self.term_of(equation)?)?;
+            let variable = self.term(self.term_of(variable)?)?;
+            let mut solutions = self
+                .session
+                .solve_structured(equation, variable)
+                .map_err(|error| from_op_error(&error).at_operator(operator))?;
+            // The kernel names the unknown from the term it was handed. The
+            // caller's spelling is the one §8.6 means by `variable`, and it is
+            // the only one the runtime can clean of internal suffixes.
+            solutions.variable = name;
+            solutions
+        } else {
+            let converted = self.convert(operator, &[equation.clone(), variable.clone()])?;
+            let value = self
+                .session
+                .call_value(operator, &converted, &CallCtx::new())
+                .map_err(|error| from_op_error(&error).at_operator(operator))?;
+            // The kernel's classification, verbatim: `Session::solve_structured`
+            // reads a `Tensor`/`Sparse` answer as the exhaustive form and any
+            // other value as a single root that is not a claim of totality.
+            let (roots, complete) = match value {
+                Value::Tensor(tensor) => (tensor.data, true),
+                Value::Sparse(sparse) => (sparse.data, true),
+                other => (vec![other], false),
+            };
+            Solutions {
+                variable: name,
+                roots,
+                multiplicities: Vec::new(),
+                conditions: Vec::new(),
+                complete,
+            }
+        };
+        Val::from_solutions(&solutions, self.id)
     }
 
     /// Every typed overload of `name`.

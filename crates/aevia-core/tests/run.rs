@@ -778,20 +778,58 @@ let b = linsolve([[2, 1], [1, 3]], [3, 5])
     assert_eq!(repr(source, "b"), "Ok([4/5, 7/5])");
 }
 
-#[test]
-fn solutions_carry_variable_and_completeness() {
-    // §8.6 requires `variable` and `complete` as well as the three fields the
-    // checker knows. They are inspected on the value because the record type
-    // in `aevia-types` has not grown them yet (see the report).
-    let solved = value("let s = solve(fn t => t^2 - 4)
-", "s");
+/// The `Solutions` record of §8.6, with the `Ok` wrapper removed.
+fn solutions_of(source: &str, name: &str) -> std::rc::Rc<aevia_core::value::RecordValue> {
+    let solved = value(source, name);
     let Value::Variant(result) = solved else {
-        panic!("expected a Result");
+        panic!("expected a Result, found {}", solved.type_name());
     };
     assert_eq!(result.index, 0, "solve must succeed");
-    let Some(Value::Record(solutions)) = result.fields.first() else {
+    let Some(Value::Record(record)) = result.fields.first() else {
         panic!("expected a Solutions record");
     };
+    std::rc::Rc::clone(record)
+}
+
+/// The elements of a `Tensor<1, _>` field of a `Solutions` record.
+fn field_elements(
+    record: &aevia_core::value::RecordValue,
+    field: &str,
+) -> Vec<Value> {
+    match record.fields.get(field) {
+        Some(Value::Tensor(tensor)) => tensor.elements(),
+        other => panic!("`{field}` should be a tensor, found {other:?}"),
+    }
+}
+
+/// A `Bool` field of a `Solutions` record.
+fn bool_field(record: &aevia_core::value::RecordValue, field: &str) -> bool {
+    match record.fields.get(field) {
+        Some(Value::Bool(flag)) => *flag,
+        other => panic!("`{field}` should be a Bool, found {other:?}"),
+    }
+}
+
+/// The roots as integers, sorted, so the assertion does not depend on the
+/// order the solver happens to produce.
+fn integer_roots(record: &aevia_core::value::RecordValue) -> Vec<i64> {
+    let mut roots: Vec<i64> = field_elements(record, "roots")
+        .iter()
+        .map(|root| match root {
+            Value::Num(number) => match &number.kind {
+                NumKind::Int(value) => value.to_string().parse().expect("an Int fits an i64"),
+                other => panic!("expected an integer root, found {}", other.type_name()),
+            },
+            other => panic!("expected a number, found {}", other.type_name()),
+        })
+        .collect();
+    roots.sort_unstable();
+    roots
+}
+
+#[test]
+fn solutions_carry_variable_and_completeness() {
+    let solutions = solutions_of("let s = solve(fn t => t^2 - 4)\n", "s");
     for field in [
         "variable",
         "roots",
@@ -817,13 +855,54 @@ fn solutions_carry_variable_and_completeness() {
         }
         other => panic!("expected an Option, found {other:?}"),
     }
-    match solutions.fields.get("complete") {
-        Some(Value::Bool(complete)) => assert!(
-            !*complete,
-            "this bridge carries no completeness claim, so it cannot claim one"
-        ),
-        other => panic!("expected a Bool, found {other:?}"),
+    // The kernel answered with its exhaustive list form, so it claims
+    // completeness; the bridge used to hardcode `false` here.
+    assert!(
+        bool_field(&solutions, "complete"),
+        "a list answer is the solver's exhaustive form"
+    );
+    assert_eq!(integer_roots(&solutions), vec![-2, 2]);
+    // §8.6 promises the program can read the flag, not just the host: the
+    // record's `complete` field is in scope and typed `Bool`.
+    let claimed = value(
+        "let c = match solve(fn t => t^2 - 4) with
+| Ok(s) -> s.complete
+| Err(_) -> false
+",
+        "c",
+    );
+    match claimed {
+        Value::Bool(flag) => assert!(flag, "the program sees the solver's claim"),
+        other => panic!("`s.complete` should be a Bool, found {}", other.type_name()),
     }
+}
+
+/// A repeated root: the kernel lists it once and does *not* report a
+/// multiplicity, so `multiplicities` is empty — "not distinguished", which
+/// §8.6 keeps distinct from a reported `1`. Asserting `[2]` would be a
+/// fiction: the solver never computed it.
+#[test]
+fn a_repeated_root_reports_no_multiplicity() {
+    let solutions = solutions_of("let s = solve(fn t => (t - 1)^2)\n", "s");
+    assert_eq!(integer_roots(&solutions), vec![1]);
+    assert!(
+        field_elements(&solutions, "multiplicities").is_empty(),
+        "empty means the solver did not distinguish the roots"
+    );
+    assert!(bool_field(&solutions, "complete"));
+}
+
+/// When the solver's answer is a single term rather than a list, the kernel
+/// does not claim completeness, and the bridge passes that claim through
+/// instead of defaulting it. (The term happens to be a `list(...)` the kernel
+/// cannot split into roots — see the report; the flag is still the solver's.)
+#[test]
+fn an_answer_that_is_not_a_list_does_not_claim_completeness() {
+    let solutions = solutions_of("let s = solve(fn t => sin(t) - 1/2)\n", "s");
+    assert!(
+        !bool_field(&solutions, "complete"),
+        "`complete` must be the solver's claim, not a constant"
+    );
 }
 
 #[test]
@@ -1008,3 +1087,4 @@ fn nan_and_i_have_the_types_the_checker_promises() {
         matches!(unit_imaginary.kind, NumKind::Complex(re, im) if re == 0.0 && im == 1.0)
     );
 }
+

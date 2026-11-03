@@ -8,6 +8,7 @@
 
 use aevia_rssn::{Failure, Num, OpEntry, Sig, SigType, UnitVal, Val, kernel, registry};
 use num_bigint::BigInt;
+use rssn::kernel::result::{Condition, ConditionKind, Solutions};
 use rssn::kernel::signature::DimExpr;
 use rssn::kernel::value::{SparseValue, Value};
 
@@ -580,4 +581,109 @@ fn a_fixed_arity_operator_is_not_variadic() {
     let sin = registry().op("sin").expect("sin");
     assert!(!sin.is_variadic());
     assert_eq!(sin.arity, (1, Some(1)));
+}
+
+// ---------------------------------------------------------------------------
+// 8. `Solutions` crosses as the record of §8.6
+// ---------------------------------------------------------------------------
+
+/// A `Solutions` built by hand with every field populated survives the trip
+/// unchanged. Flattening it to a root list used to lose `multiplicities`,
+/// `conditions` and `complete`; the record carries all five fields, and the
+/// round trip is exact — including multiplicities that are *reported* (`2, 1`)
+/// rather than inferred from a repeated entry.
+#[test]
+fn a_solution_set_round_trips_through_the_bridge() {
+    let solutions = Solutions {
+        variable: Some(String::from("x")),
+        roots: vec![Value::int(1_i32), Value::int(-1_i32)],
+        multiplicities: vec![2, 1],
+        conditions: vec![
+            Condition::new(ConditionKind::NonZero, "a != 0")
+                .with_expression(Value::Symbol(String::from("a"))),
+        ],
+        complete: true,
+    };
+    let kernel = kernel::kernel();
+    let value =
+        Val::from_solutions(&solutions, kernel.id()).expect("a solution set is a record");
+    let Val::Record(fields) = &value else {
+        panic!("a `Solutions` must cross as a record, found {value:?}");
+    };
+    assert_eq!(
+        fields
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["variable", "roots", "multiplicities", "conditions", "complete"],
+        "the field names are §8.6's, in declaration order"
+    );
+    let back = value
+        .to_solutions(kernel.id())
+        .expect("the record is a `Solutions`");
+    assert_eq!(back, solutions);
+    assert_eq!(back.multiplicity(0), 2);
+    assert_eq!(back.multiplicity(1), 1);
+}
+
+/// "No multiplicities reported" is not "every multiplicity is one": an empty
+/// list stays empty across the bridge, so the runtime can keep the
+/// distinction §8.6 draws.
+#[test]
+fn an_unreported_multiplicity_stays_empty() {
+    let solutions = Solutions {
+        variable: Some(String::from("x")),
+        roots: vec![Value::int(1_i32)],
+        multiplicities: Vec::new(),
+        conditions: Vec::new(),
+        complete: false,
+    };
+    let kernel = kernel::kernel();
+    let value = Val::from_solutions(&solutions, kernel.id()).expect("a record");
+    let back = value.to_solutions(kernel.id()).expect("a `Solutions`");
+    assert!(back.multiplicities.is_empty(), "empty must not become `1`");
+    assert!(!back.complete);
+    assert_eq!(back.multiplicity(0), 1, "the accessor's default is not a claim");
+}
+
+/// A value that is not a `Solutions` record is refused, not read as one.
+#[test]
+fn a_value_that_is_not_a_solution_set_is_refused() {
+    let kernel = kernel::kernel();
+    let error = Val::list(vec![])
+        .to_solutions(kernel.id())
+        .expect_err("a list of roots is not a `Solutions`");
+    assert_eq!(error.code, "E0809");
+    assert_eq!(error.kind, Failure::Kernel);
+}
+
+/// `solve_complex` has no structured entry point in the kernel, so the bridge
+/// applies the kernel's classification to its answer. It must still produce
+/// the same five-field record, with the unknown named.
+#[test]
+fn a_complex_solution_set_is_the_same_record() {
+    use aevia_rssn::Expr;
+
+    let kernel = kernel::kernel();
+    let x = Val::Symbol(String::from("x"));
+    let equation = kernel
+        .build(&Expr::App(
+            String::from("add"),
+            vec![
+                Expr::App(
+                    String::from("pow"),
+                    vec![Expr::Sym(String::from("x")), Expr::Num(Num::Int(BigInt::from(2)))],
+                ),
+                Expr::Num(Num::Int(BigInt::from(1))),
+            ],
+        ))
+        .expect("x^2 + 1 builds");
+    let record = kernel
+        .solve_structured("solve_complex", &equation, &x)
+        .expect("the complex roots of x^2 + 1");
+    let solutions = record
+        .to_solutions(kernel.id())
+        .expect("the answer is a `Solutions`");
+    assert_eq!(solutions.variable.as_deref(), Some("x"));
+    assert!(!solutions.roots.is_empty(), "x^2 + 1 has complex roots");
 }

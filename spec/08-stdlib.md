@@ -386,18 +386,25 @@ linsolve     : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
    multiplicities: Tensor<1, Int>, conditions: Tensor<1, Condition>,
    complete: Bool }`，保留重数与参数条件；它不是 `Set`。
 
-- `multiplicities` 为空表示**未报告**。RSSN 的 `multiplicity()` 访问器对
-  空表返回 1，但那是“没有信息时的默认回答”，不是声明；Aevia 保留空语义，
-  不把它当“全 1”。
-- `complete = true` 表示求解器返回了穷尽形式（RSSN 的 `list(...)`）；
-  返回单个值时 RSSN 给 `false`，`Solutions::new` 也默认 `false`，要声明
-  穷尽必须显式 `.complete()`。**`complete` 不是数学证明**，只是“求解器
-  没有声明不完整”。
+这个记录就是 RSSN `Solutions` 的记录（`Solutions::to_value`）：字段名、顺序和
+含义一一对应，桥不做重新解释，因此内核说“没报告重数”就是空表，说“不完整”
+就是 `false`。唯一的改形是 `variable`——RSSN 侧是符号（无未知量时是空串），
+Aevia 侧是 `Option<String>`。
 
-`Condition` 是 `{ kind: ConditionKind, text: String,
-expression: Option<Value> }`；`ConditionKind` 是 RSSN `ConditionKind` 的
-镜像（`NonZero`、`Positive`、`Real` 等），`text` 是给人读的谓词，
-`expression` 是可选的结构化条件值（RSSN 侧是 `Value`）。
+- `multiplicities` 是求解器给出的重数表，空表示**未报告**。RSSN 的
+  `multiplicity()` 访问器对空表返回 1，但那是“没有信息时的默认回答”，
+  不是声明；Aevia 保留空语义，不把它当“全 1”，也不从重复的根里反推重数。
+  RSSN 的 `solve` 目前只返回互异的根并且不填重数，所以 `solve` 的
+  `multiplicities` 总是空表：这是求解器没有报告，不是桥丢了字段。
+- `complete` 是求解器的声明：`true` 表示它返回了穷尽形式（RSSN 的
+  `list(...)`），返回单个值时 RSSN 给 `false`。桥原样传递这个值，不写成常量。
+  **`complete` 不是数学证明**，只是“求解器没有声明不完整”。
+
+`Condition` 是 `{ kind: String, text: String, expression: Option<Value> }`：
+`kind` 是 RSSN `ConditionKind` 的小写名（`nonzero`、`positive`、`real` 等），
+`text` 是给人读的谓词，`expression` 是求解器保留的结构化条件值（RSSN 侧是
+`Value`），求解器没有保留时该字段缺省。语言里没有与 `ConditionKind` 同名的
+类型，所以元素类型是不透明的 `Condition`，字段按值读取。
 
 `solve` 返回实解；`solve_complex` 返回复解。数值求解失败返回 `Err`。
 `linsolve` 是线性方程组求解，避免与符号 `solve` 同名。
