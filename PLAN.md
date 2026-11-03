@@ -266,7 +266,7 @@ the same checker.
 
 ## 5. Progress
 
-Verified by `cargo test --workspace` (769 tests) and by running every
+Verified by `cargo test --workspace` (790 tests) and by running every
 `examples/*.aev`.
 
 | Work stream | State |
@@ -281,9 +281,10 @@ Verified by `cargo test --workspace` (769 tests) and by running every
 
 Remaining work, in dependency order:
 
-1. **A slice step.** `reverse` reaches the reversed view, but `xs[::-1]` does
-   not parse: `Parser::slice` has no step component. The runtime is there; the
-   syntax is a language change and has not been made.
+1. **What the kernel still does not report.** `solve_structured` never fills
+   `multiplicities`, so the field is empty ("not distinguished") rather than
+   wrong; no solver produces `conditions`. The bridge carries all five fields,
+   but three of them are only as good as the kernel's answer.
 2. **The rest of the kernel list.** P1/P2 of
    `.workbuddy-ai/audit/kernel-requirements.md`: a unit that crosses into the
    term graph loses its dimension, `CallCtx` traces and substitutions are

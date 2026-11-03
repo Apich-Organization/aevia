@@ -8,13 +8,14 @@ do and why.
 
 Last update: after the conformance audit in `.workbuddy-ai/audit/` and the four
 work streams that closed its findings (syntax, types, runtime, bridge) plus the
-standard library, and after the Core IR landed (W3). `cargo test --workspace`
-runs **769** tests, all green.
+standard library, after the Core IR landed (W3), and after the slice step
+(`.workbuddy-ai/audit/slice-step.md`). `cargo test --workspace` runs **790**
+tests, all green.
 
 ## How to verify
 
 ```console
-cargo test --workspace -- --test-threads=2   # 769 tests
+cargo test --workspace -- --test-threads=2   # 790 tests
 cargo run -p aevia-cli -- rssn               # manifest audit
 cargo run -p aevia-cli -- run examples/calculus.aev
 ```
@@ -143,10 +144,20 @@ and a rendering that parses back to the same dimension.
   checks dimensions; `gamma` is Γ, not log Γ; `zeros<Int>`/`ones<Int>` produce
   exact storage.
 * `Solutions` carries `variable`, `roots`, `multiplicities`, `conditions` and
-  `complete`; `sum(f, a, b)` exists; `det`/`inv`/`linsolve` have an exact path
+  `complete` — it is the kernel's own record, not a flattened root list, so
+  `complete` is the solver's claim rather than a constant; `sum(f, a, b)`
+  exists; `det`/`inv`/`linsolve` have an exact path
   for exact input (`det([[1,2],[2,4]])` is `0`, not `-0`).
 * Tensors: construction, broadcasting, indexing, slicing, `@` by rank,
   reductions. Empty tensors are legal.
+* **A slice step is real syntax.** `xs[a:b:s]` parses, types (the step must be
+  an `Int`; a known `0` is `E0802` at check time, a computed one at run time)
+  and lowers to the same view machinery, so a negative step shares the buffer
+  instead of copying it: `xs[::-1]` is `reverse(xs)` with the same offset,
+  stride and reversed axis, and `Rc::ptr_eq` holds. The length is the exact
+  count `ceil((b - a) / s)` in the walk's direction, so a slice that passes its
+  stop at once is empty (`xs[0:0:1]`, `xs[5:2:1]`) rather than one element.
+  `a..b` keeps its node, its typing and its lowering, step absent.
 * **Recursion is bounded by calls, not AST nodes**, so a legal flat 2100-term
   chain runs and a runaway recursion is `E0805` with a call stack. The `do`
   statement loop and `run_io` are iterative.
@@ -337,12 +348,13 @@ nothing rather than a guess.
 |---|---|
 | Runtime | Tail calls are trampolined, but a *non-tail* recursion is still bounded by `max_depth` (2048) and relies on the 256 MiB thread for legal deep programs |
 | Runtime | The IR does not yet make boxing or drop-point decisions, and `@jit` has no lowering hook |
-| Runtime | Tensors have a dense `f64` path and **strided views**: a slice shares the buffer and carries an offset, one stride per dimension, and a direction per axis, so `reverse` of a vector is a view rather than a copy. `faer` backs `@`, `det`, `inv` and `linsolve` (12× on a 256×256 `f64` matmul). A slice *step* (`xs[::-1]`) is not parseable — `reverse` is the reachable form |
+| Runtime | Tensors have a dense `f64` path and **strided views**: a slice shares the buffer and carries an offset, one stride per dimension, and a direction per axis, so `reverse` of a vector is a view rather than a copy. **A slice step parses, types and lowers**: `xs[a:b:s]` multiplies the stride by the step and flips the axis for a negative one, so `xs[::-1]` is `reverse(xs)` as a view over the same buffer, and a zero step is `E0802` (static when the literal is known). `faer` backs `@`, `det`, `inv` and `linsolve` (12× on a 256×256 `f64` matmul) |
 | Types | `Dyn` operations have a runtime (§4.9) but no checker signature (§3.11) |
 | Types | Type-level `Nat` variables and linear equations (§3.5.1) |
 | Types | `Dyn` in a `check<d>` position needs the checker to materialise `d` |
 | Parser | `reshape<[3, 2]>`: an expression's `<…>` list parses types, not shape arguments (`type_arg`) |
 | CLI | `clean`, `--out` for `rssn --emit`, and a `--locked` mode are absent |
+| Kernel | `Solutions` crosses as the record §8.6 names, but the solver reports no multiplicities: `solve` returns distinct roots and `solve_structured` fills `Vec::new()`, so `multiplicities` is always empty for `solve`. A *symbolic* root list crosses as one opaque `list(...)` term (`Value::Tensor` cannot hold terms), which also makes `complete` `false` for e.g. `solve(fn t => sin(t) - 1/2)` although the solver did answer with a list |
 | Kernel | Still open in `rssn`: `term_of_value` turns a `Value::Unit` into a bare symbol (the dimension is lost in the term graph); `CallCtx::substitutions`/`trace` are no-ops; `manifest.units` ignores the session registry; `DimExpr::from_term` is not `to_term`'s inverse. The rank-2 tensor and overload-lattice defects are fixed |
 
 ## Test coverage
@@ -351,19 +363,19 @@ Counts are per crate, from `cargo test --workspace`.
 
 | Crate | Tests | Covers |
 |---|---|---|
-| `aevia-syntax` | 112 | lexer, layout, declarations, attributes, records, recovery, types |
+| `aevia-syntax` | 114 | lexer, layout, declarations, attributes, records, recovery, types |
 | `aevia-types` | 106 | unification, rows, generalisation, classes, the soundness regressions |
 | `aevia-dim` | 20 | dimension algebra, units, exact rationals |
 | `aevia-ir` | 9 | ANF naming, capture order and threading, spans, tail positions, pinned call sites, `do` thunk scoping |
-| `aevia-core` | 226 | semantics, exactness, IO, stack safety, tail calls, IR parity, classes, `Dyn`, shapes, modules, packages, tensor views, the `faer` dispatch, the kernel bridge, standard-library coverage |
-| `aevia-rssn` | 46 | manifest conformance, codegen, pinned keys, generated modules |
+| `aevia-core` | 239 | semantics, exactness, IO, stack safety, tail calls, IR parity, classes, `Dyn`, shapes, modules, packages, tensor views and slice steps, the `faer` dispatch, the kernel bridge, standard-library coverage |
+| `aevia-rssn` | 50 | manifest conformance, codegen, pinned keys, generated modules |
 | `aevia-std` | 125 | linear algebra (with the `faer` backend), statistics, special functions, distributions, FFT, interpolation, ODE, PDE, tables |
 | `aevia-analysis` | 58 | position mapping, diagnostics, hover, completion, definition, symbols, formatting, the boundary test |
 | `aevia-lsp` | 21 | framing, lifecycle, incremental sync, every request, an end-to-end protocol script |
 | `aevia-cli` | 20 | commands, options, the REPL session, package commands |
-| `aevia-fmt` | 23 | idempotence and AST preservation over every example and test file |
+| `aevia-fmt` | 25 | idempotence and AST preservation over every example and test file |
 | `aevia-doc` | 3 | `##` extraction, index, undocumented declarations |
-| **total** | **769** | |
+| **total** | **790** | |
 
 `tests/*.aev` are run with `aevia test`.
 
