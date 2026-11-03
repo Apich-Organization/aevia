@@ -1,0 +1,22 @@
+[package]
+name = "aevia-analysis"
+description = "Semantic queries over Aevia sources, with no knowledge of any editor protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The boundary this crate exists for: no LSP, no JSON-RPC, no editor. The list
+# below is the compiler and nothing else. `tests/boundary.rs` fails the build's
+# test run if a protocol crate is ever added here.
+[dependencies]
+aevia-syntax.workspace = true
+aevia-types.workspace = true
+aevia-core.workspace = true
+aevia-fmt.workspace = true
+aevia-rssn.workspace = true
+unicode-ident.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

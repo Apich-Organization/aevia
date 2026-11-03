@@ -1,0 +1,117 @@
+//! The names the prelude binds.
+//!
+//! `aevia_types::builtins` decides what a builtin *means*, but it answers one
+//! question at a time (`schemes("sqrt")`), so it cannot be enumerated. The
+//! list below is the set of names that function accepts, transcribed from it;
+//! [`NAMES`] is filtered through `builtins::is_builtin` before use, and
+//! `tests::every_prelude_name_is_a_builtin` fails if a name here stops being
+//! one. The list is the only thing this crate knows that the checker does not
+//! expose, and it is checked rather than trusted.
+//!
+//! It is not a second copy of the *types*: the scheme always comes from the
+//! checker, so a completion can never disagree with what `check_module` would
+//! infer.
+
+use aevia_types::builtins;
+
+/// Every name `aevia_types::builtins::schemes` answers for.
+pub const NAMES: &[&str] = &[
+    "pi", "e", "oo", "nan", "i", "sqrt",
+    "cbrt", "exp", "ln", "log", "log2", "log10",
+    "sin", "cos", "tan", "asin", "acos", "atan",
+    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+    "gamma", "lgamma", "erf", "erfc", "zeta", "atan2",
+    "hypot", "abs", "sign", "min", "max", "clamp",
+    "floor", "ceil", "round", "trunc", "mod", "rem",
+    "div", "quot", "gcd", "lcm", "factorial", "double_factorial",
+    "to_float", "to_real", "to_int", "to", "delta_to", "value_in",
+    "base", "point", "linspace", "range", "length", "shape",
+    "rank", "sum", "prod", "mean", "var", "std",
+    "min_all", "max_all", "norm", "normalize", "dot", "matmul",
+    "matvec", "vecmat", "outer", "transpose", "trace", "det",
+    "inv", "linsolve", "eye", "diag", "flatten", "at",
+    "map", "map2", "filter", "fold", "fold_left", "sort_by",
+    "sort_float", "zip", "zip_with", "enumerate", "take", "drop",
+    "reverse", "sort", "concat", "any", "all", "find",
+    "centroid", "join", "split", "replace", "trim", "upper",
+    "lower", "contains", "starts_with", "ends_with", "parse_int", "parse_float",
+    "format", "chars", "and_then", "unwrap_or", "is_some", "is_none",
+    "map_err", "show", "repr", "to_latex", "to_typst", "print",
+    "println", "eprintln", "read_file", "write_file", "read_line", "time_now",
+    "random", "read_csv_dyn", "diff", "diff_at", "antiderivative", "defint",
+    "limit", "series", "solve", "nsolve", "eval", "simplify",
+    "approx", "subst", "to_value", "from_value", "decide", "assuming",
+    "by_cases", "assert", "assert_eq", "approx_eq", "forall", "line",
+    "scatter", "label", "combine", "plot", "save", "id",
+    "const", "compose", "flip", "curry", "uncurry", "apply",
+    "partial", "not", "xor", "compare", "partial_compare", "total_compare",
+    "sym_eq", "sym_ne", "sym_lt", "zero", "beta", "bessel_j0",
+    "bessel_j1", "bessel_y0", "bessel_y1", "j1", "y1", "bessel_jn",
+    "bessel_yn", "legendre_p", "hermite_h", "laguerre_l", "chebyshev_t", "chebyshev_u",
+    "lstsq", "eig", "eigvals", "svd", "qr", "lu",
+    "cholesky", "tril", "triu", "reshape", "reshape_dyn", "set",
+    "map_indexed", "approx_map", "det_unit", "from_dense", "to_dense", "nnz",
+    "zeros_of", "ones_of", "numeric_deriv", "quadrature", "product", "product_dyn",
+    "sum_f", "grad", "grad_f", "jacobian", "hessian", "divergence",
+    "curl", "laplacian", "solve_complex", "nsolve_f", "root", "solve_system",
+    "minimize", "maximize", "minimize_f", "least_squares", "median", "quantile",
+    "cov", "corr", "skewness", "kurtosis", "histogram", "mode",
+    "pdf", "cdf", "sample", "sample_n", "fft", "ifft",
+    "fft_norm", "rfft", "irfft", "fftfreq", "interp1", "spline",
+    "interp2", "polyfit", "chebyshev_fit", "polyval", "odeint", "odeint_with",
+    "solve_ivp", "solve_poisson", "solve_heat", "solve_wave", "solve_advection", "read_csv",
+    "write_csv", "read_npy", "write_npy", "read_json", "write_json", "column",
+    "column_dyn", "row", "select", "schema", "to_table", "to_dynamic",
+    "line_with", "scatter_with", "errorbar", "errorbar_with", "hist", "hist_with",
+    "heatmap", "heatmap_with", "default_plot_opts", "compile_fail", "measure", "value",
+    "uncertainty", "complex", "re", "im", "conj", "magnitude",
+    "arg", "complex_sqrt", "complex_exp", "complex_ln", "complex_sin", "complex_cos",
+    "factor", "is_prime", "primes", "binomial", "permutations", "polygon_area",
+    "distance", "simulate", "to_device", "on", "device_of", "type_rep",
+];
+
+/// The prelude names that are still builtins.
+///
+/// A name that the checker no longer knows is dropped rather than offered: an
+/// editor that completes `foo` into an error is worse than one that stays
+/// quiet, and the test below makes the drift visible either way.
+pub fn names() -> impl Iterator<Item = &'static str> {
+    NAMES.iter().copied().filter(|name| builtins::is_builtin(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_prelude_name_is_a_builtin() {
+        let stale: Vec<&str> = NAMES
+            .iter()
+            .copied()
+            .filter(|name| !builtins::is_builtin(name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these names are in the prelude list but not in the checker: {stale:?}"
+        );
+    }
+
+    #[test]
+    fn the_list_has_no_duplicates() {
+        let mut sorted = NAMES.to_vec();
+        sorted.sort_unstable();
+        let before = sorted.len();
+        sorted.dedup();
+        assert_eq!(before, sorted.len(), "the prelude list repeats a name");
+    }
+
+    #[test]
+    fn a_scheme_is_available_for_every_name() {
+        for name in names() {
+            assert!(
+                builtins::schemes(name).is_some(),
+                "`{name}` is listed but has no scheme"
+            );
+        }
+    }
+}
