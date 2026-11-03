@@ -60,8 +60,9 @@ diagnostic category (the exact wording is not normative).
 
 This is a **design standard**, not a frozen implementation. Chapters marked
 normative are intended to be implemented as written; the changelog records every
-audit round. The current text is **Revision 5**, after three rounds of
-independent audits plus the extensibility/backend-integration redesign. There is
+audit round. The current text is **Revision 8**, after six rounds of
+independent audits plus the extensibility/backend-integration redesign and the
+alignment with `rssn 0.2.13` (commit `95099fa0`). There is
 **no v1/v2 language split**: every capability is designed in; a backend that
 does not yet implement one reports a capability diagnostic (`E1001`) instead of
 removing the language feature.

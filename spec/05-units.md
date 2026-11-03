@@ -13,11 +13,12 @@
 ## 5.1 单位声明
 
 ```aevia
+# 生成器为每个 dimension 在 Config 上声明一次 base_dimension(name)
 dimension Currency                  # 自定义基量纲
 unit USD : Currency = 1             # 基单位
 unit EUR : Currency = 1.08 USD      # 派生单位
 
-unit m : L = 1 prefixable           # 基单位，允许 SI 前缀
+unit m : Length = 1 prefixable      # 基单位，允许 SI 前缀
 unit km : L = 1000 m                # 显式派生
 unit h : T = 3600 s
 unit N : M*L/T^2 = 1 kg*m/s^2
@@ -36,7 +37,7 @@ unit_scale ::= number [ "/" number ] | "pi" [ "/" number ]
 - `dimension`/`unit` 默认**导出**；`private` 只在本模块可见。导出的
   量纲/单位进入 Kernel Manifest 和 registry，下游包可以直接 `import`。
 - 用户自定义量纲别名可以导出（例如 `dimension Currency`），不需要改
-  标准库；`Units.SI` 只是 registry 的一个视图。
+  标准库；`Units.*` 是 `manifest.units` 的生成视图。
 
 - `unit_name` 是标识符或带 `°` 的特殊名（`°C`、`°F`）。
 - `unit_scale` 是正有理数，或 `pi` 的有理倍数。`1/1000`、`pi/180` 合法；
@@ -177,9 +178,20 @@ type  = Scalar<rep(number), dim(unit_expr)>
 
 ## 5.3 单位表
 
-标准库 `Units.SI` 提供以下单位（节选）。**单位名与量纲别名不共享拼写**：
-`l`/`liter` 是升；不要写 `L` 作为单位（`L` 是 `Length` 的显示别名）；
-`T` 在单位列是特斯拉，在量纲列是 `Time` 的显示别名。规范名一律用全名
+标准库 `Units.SI` 提供以下单位（节选）。
+
+**单位名与量纲名是两个命名空间**，同一个拼写可以两边各有一个含义；解析器
+按位置区分，不需要用户加限定：
+
+| 拼写 | 单位位 | 量纲位 |
+|---|---|---|
+| `L` | 升（`liter`/`litre` 的别名，`prefixable`） | `Length` 的显示别名 |
+| `T` | 特斯拉 | `Time` 的显示别名 |
+| `G` | 高斯（`1e-4 T`） | 不是引力常数 |
+| `h` | 小时 | 不是普朗克常数 |
+
+`manifest.units` 里 `L` 与 `l` 同时存在（都是升），`L` 带
+`aliases = ["liter", "litre"]`。规范名一律用全名
 （`Length`/`Mass`/`Time`/...），单字母只用于源码/显示。
 
 ### 5.3.1 SI 基单位
@@ -211,8 +223,8 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `Wb` | `M*L^2/(I*T^2)` | `V*s` |
 | `T` | `M/(I*T^2)` | `Wb/m^2` |
 | `H` | `M*L^2/(I^2*T^2)` | `Wb/A` |
-| `lm` | `J` | `cd*sr` |
-| `lx` | `J/L^2` | `lm/m^2` |
+| `lm` | `Lum` | `cd*sr` |
+| `lx` | `Lum/L^2` | `lm/m^2` |
 | `Bq` | `1/T` | `1/s` |
 | `Gy` | `L^2/T^2` | `J/kg` |
 | `Sv` | `L^2/T^2` | `J/kg` |
@@ -262,9 +274,14 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `B` | `1` | `8 bit` |
 | `KiB` | `1` | `1024 B` |
 
-信息单位是否应该是无量纲？当前规范是；如果需要独立的 `Information` 基量纲，用户
-可以 `dimension Information` 并声明自己的单位。标准库不强制，因为大量
-公式把 bit 当无量纲概率/熵使用。
+信息单位是否应该是无量纲？当前规范是；如果需要独立的 `Information` 基量纲，
+用户可以 `dimension Information`。标准库不强制，因为大量公式把 bit 当
+无量纲概率/熵使用。
+
+> **0.2.13（`111b71d0` 起）**：`dimension Information` 与
+> `unit bit2 : Information` 都可用，前提是在 `Config` 上声明
+> `base_dimension("Information")`（`prepare` 在克隆图上定义它）。`Dim` 的内部表示是“7 个 SI 基 +
+> 有序旁表”，`expr_to_dim` 接受任意基名。
 
 ### 5.3.4 单位模块
 
@@ -272,16 +289,26 @@ type  = Scalar<rep(number), dim(unit_expr)>
 |---|---|
 | `Units.SI` | 基单位、派生单位、前缀、常用非 SI |
 | `Units.Imperial` | 英制长度/质量/体积/压强/温度 |
-| `Units.Astronomy` | au、pc、ly、Mpc、太阳质量、木星质量 |
-| `Units.CGS` | cm、g、dyn、erg、Gal、P |
+| `Units.Astronomy` | au、pc、ly、太阳/地球/木星质量、太阳半径（Mpc 由 `pc` 加前缀） |
+| `Units.CGS` | cm、g、dyn、erg、Gal、P、St、G、Mx、Ba、Oe |
 | `Units.Natural` | `c = 1`、`hbar = 1`、`eV` 系 |
 | `Units.Constants` | 物理常数（§5.8） |
 
-> **0.2.13 实现状态**：RSSN 的 `UnitRegistry` 当前有 59 个单位，覆盖 SI
-> 基/派生、常见英制、`degC`/`degF`；**没有** `au/pc/ly/Mpc`、`dyn/erg/Gal/P`
-> 和 CODATA 常数。`Units.Astronomy`/`CGS`/`Constants` 在 RSSN 注册这些
-> 条目之前是 Aevia 的本地 overlay，属于“单一事实来源”的显式例外；不能
-> 从 manifest 生成。
+> **0.2.13 实现状态（commit `95099fa0`）**：`manifest.units` 有 75 项，覆盖
+> SI 基/派生、常见英制、`degC`/`degF`、角度，以及：
+>
+> - **天文**：`au`（精确）、`ly`、`pc`、`Rsun`、`Msun`、`Mearth`、`jup`；
+> - **CGS**：`dyn`、`erg`、`Gal`、`P`、`St`、`G`（高斯，`1/10000 T`）、
+>   `Mx`、`Ba`、`Oe`（scale 带 `pi^-1`）。
+>
+> 因此 `Units.Astronomy` 与 `Units.CGS` 可以从 manifest 生成。`Mpc` 由
+> `pc` 加前缀得到（`pc` 是 `prefixable`）。
+>
+> `Units.Constants` 也从 `manifest.constants` 生成（30 条、18 条精确），
+> 不再需要 Aevia 本地 overlay——这是“单一事实来源”最后一个例外被消除。
+>
+> 每个 `UnitValue` 都带 `aliases`/`prefixable`/`category`/`since`，所以生成
+> 单位表不需要再读 `UnitRegistry`。
 
 `Units.Natural` 通过“单位制”而不是“改常数”实现：它导出一组新的单位，
 其中 `c`、`hbar` 的数值是 1。用户 `open Units.Natural` 后，`1 GeV` 等写法
@@ -461,34 +488,71 @@ Unit {
 
 ## 5.8 物理常数
 
-`Units.Constants` 提供 CODATA 2022 的常数（节选）：
+`Units.Constants` 由 `manifest.constants` 生成（30 条，18 条精确、
+12 条测量）。符号与 RSSN 完全一致，不改名：
 
-| 常数 | 类型 | 值 |
+| 常数 | SI 单位 | 类型 |
 |---|---|---|
-| `c` | `Real[L/T]` | `299792458 m/s`（精确） |
-| `g_0` | `Real[L/T^2]` | `9.80665 m/s^2`（精确） |
-| `h` | `Real[Energy*T]` | `6.62607015e-34 J*s`（精确） |
-| `hbar` | `Float[Energy*T]` | `1.054571817e-34 J*s` |
-| `k_B` | `Real[Energy/Θ]` | `1.380649e-23 J/K`（精确） |
-| `N_A` | `Real[1/N]` | `6.02214076e23 /mol`（精确） |
-| `e` | `Real[Charge]` | `1.602176634e-19 C`（精确） |
-| `m_e` | `Float[M]` | `9.1093837015e-31 kg` |
-| `m_p` | `Float[M]` | `1.67262192369e-27 kg` |
-| `G` | `Float[L^3/(M*T^2)]` | `6.67430e-11 m^3/(kg*s^2)` |
-| `eps_0` | `Float[Capacitance/L]` | `8.8541878128e-12 F/m` |
-| `mu_0` | `Float[Inductance/L]` | `1.25663706212e-6 H/m` |
-| `alpha` | `Float[1]` | `7.2973525693e-3` |
-| `R` | `Float[Energy/(N*Θ)]` | `8.31446261815324 J/(mol*K)` |
-| `F` | `Real[Charge/N]` | `96485.33212 C/mol` |
-| `sigma_SB` | `Float[Power/(L^2*Θ^4)]` | `5.670374419e-8 W/(m^2*K^4)` |
+| `c` | `m/s` | 精确 |
+| `g_n` | `m/s^2` | 精确 |
+| `h` | `J*s` | 精确 |
+| `hbar` | `J*s` | 精确 |
+| `k_B` | `J/K` | 精确 |
+| `N_A` | `1/mol` | 精确 |
+| `e` | `C` | 精确 |
+| `F` | `C/mol` | 精确 |
+| `R` | `J/(mol*K)` | 精确 |
+| `M_u` | `kg/mol` | 精确 |
+| `T_tp` | `K` | 精确 |
+| `atm` | `Pa` | 精确 |
+| `G_0` | `S` | 精确 |
+| `K_J` | `Hz/V` | 精确 |
+| `R_K` | `ohm` | 精确 |
+| `Phi_0` | `Wb` | 精确 |
+| `K_cd` | `lm/W` | 精确 |
+| `dnu_Cs` | `Hz` | 精确 |
+| `G` | `m^3/(kg*s^2)` | 测量 |
+| `alpha` | `1` | 测量 |
+| `R_inf` | `1/m` | 测量 |
+| `a_0` | `m` | 测量 |
+| `epsilon_0` | `F/m` | 测量 |
+| `mu_0` | `N/A^2` | 测量 |
+| `mu_B` | `J/T` | 测量 |
+| `m_e` | `kg` | 测量 |
+| `m_p` | `kg` | 测量 |
+| `m_n` | `kg` | 测量 |
+| `m_u` | `kg` | 测量 |
+| `sigma_SB` | `W/(m^2*K^4)` | 测量 |
 
-- 精确常数用 `Real`（有理数或符号）；测量常数用 `Float`。
-- 常数不是单位；它们有量纲，可以参与运算。
-- `pi`、`e`（自然常数）、`i` 在 `Math` 中，不在 `Units.Constants`。
-  注意 `e` 与基本电荷 `e` 重名；基本电荷用 `e_charge` 或 `q_e`。标准库
-  用 `q_e`，避免与自然常数冲突。
+- `exact = true` 的常数是**定义值或其精确派生**（来源见 `source`：
+  SI 2019 定义、CGPM 1901/1954 等），没有 `uncertainty`；`exact = false`
+  的是 CODATA 2022 测量值，带标准不确定度。
+- 两类值在 manifest 里都是**精确有理数**（`ScaleValue`），不是 `Float`；
+  `exact` 只表示“这是定义值”，不表示存储类型。只有换算成 `quantity`
+  且尺度带 `pi` 时才降为 `Float`。
+- 常数不是单位：它们有量纲、可参与运算，但不能出现在 `quantity(v, u)` 的
+  单位位置，也不在 `UnitRegistry` 里。
+- `pi`、`e`（自然常数）、`i` 在 `Math` 中。`Units.Constants.e` 是**基本
+  电荷**，与 `Math.e` 同名：`open Units.Constants` 与 `Math.e` 同时可见
+  时，`e` 必须限定（`Math.e` / `Units.Constants.e`）。`e_charge` 是
+  `Units.Constants.e` 的别名，供不想限定的代码使用。
 - 常数的不确定度：核心语言不携带不确定度；需要时用 `Measurement` 库类型
   （§8.14）。
+
+`Units.Constants` 的每个条目是：
+
+```
+type ConstantInfo = {
+    name: String,              # "speed of light in vacuum"
+    symbol: String,            # "c"
+    value: Scalar<Real, d>,    # 相干 SI 值
+    dimension: Dim,
+    unit: String,              # "m/s"
+    exact: Bool,
+    uncertainty: Option<Scalar<Float, d>>,
+    source: String,
+}
+```
 
 ## 5.9 单位错误
 
@@ -508,11 +572,13 @@ Unit {
 ## 5.10 与 rssn 单位层的衔接
 
 rssn 的 `rssn::dim` 提供 `DimTerm`/`DimArena`/`UnitRegistry`；`units` 规则集
-只是 registry 的一个消费者。Aevia 的单位层是编译期视图，`Units.SI` 由
-`UnitRegistry` 生成，并且有 `Point` 类型。两者衔接方式：
+只是 registry 的一个消费者。Aevia 的单位层是编译期视图，`Units.*` 由
+`manifest.units`（`UnitValue`）生成，并且有 `Point` 类型。两者衔接方式：
 
-1. **单一 registry。** `Units.SI` 是 `UnitRegistry` 的生成视图；Aevia 不
-   维护第二张表。用户 `dimension`/`unit` 声明注册进同一个 registry。
+1. **单一事实来源。** `Units.*` 是 `manifest.units` 的生成视图（`UnitValue`
+   已带 `aliases`/`prefixable`/`category`/`since`）；`UnitRegistry` 只用于
+   `resolve`/`format` 这类运行时服务。Aevia 不维护第二张表；用户
+   `dimension`/`unit` 声明注册进同一个 registry，再回流到 manifest。
 2. **项图不带单位。** `Real`/`Float` 值在宿主侧是相干 SI 数值；需要
    rssn 排版/导出时，才用 `quantity(v, "<相干 SI 单位>")` 包一层，仅用于
    输出，不进入 `compute`。

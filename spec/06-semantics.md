@@ -116,8 +116,8 @@ F64(_) 与 Exact(_) 或 Sym(_)：
 
 ### 6.3.3 符号项的构造
 
-`build(op, args)` 调用 rssn 的算子构造（`Session::call`），不立即运行重写
-引擎。这样 `x + 1` 是 O(1) 的项构造，不会为每个 `+` 触发一次 e-graph 搜索。
+`build(op, args)` 调用 rssn 的算子构造（`Session::call_value`），不立即运行
+全局重写引擎。这样 `x + 1` 是 O(1) 的项构造，不会为每个 `+` 触发一次 e-graph 搜索。
 
 只有以下边界触发 `compute`：
 
@@ -305,7 +305,7 @@ shape1 ~ shape2:
 - `set(a, idx, v)` 是函数式更新：返回新张量，原张量不变；唯一持有时原地。
 - `at(a, i)` 是秩多态索引：`Tensor<n,τ> -> Tensor<n-1,τ>`，要求 `n>=1`。
 - `a @ b` 按秩分派：2×2 → `matmul`，2×1 → `matvec`，1×2 → `vecmat`，
-  1×1 → `dot`（§3.5.3a）。
+  1×1 → `dot`（§3.5.3.1）。
 
 ### 6.6.5 线性代数
 
@@ -339,7 +339,7 @@ shape1 ~ shape2:
 - `Map<a,b>` 同理，要求 `TotalOrd a`；标准库提供 `Map`，核心语言不特殊
   对待。
 - `Solutions<ρ,d>` 是符号解集合：`{ roots: Tensor<1, Scalar<ρ,d>>,
-  multiplicities: Tensor<1, Int>, conditions: Tensor<1, String> }`。它不要求
+  multiplicities: Tensor<1, Int>, conditions: Tensor<1, Condition> }`。它不要求
   `Ord`，保留重数和参数条件。
 
 ## 6.8 IO

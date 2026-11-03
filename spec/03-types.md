@@ -220,6 +220,23 @@ symfun  : String -> SymFun<d,e>    # 每次调用分配新鲜弱变量 d,e
   且 `d` 弱，`mk` 不能被泛化成 `∀d`。
 - 空张量 `[]` 不引入弱变量；它必须有期望类型，否则 `E0314`。
 
+**`Symbol` 与 `Real[δ]` 的关系。** RSSN 的 `TypeExpr` 有一个独立的
+`Symbol` 变体（自由符号，区别于 `String`），而 Aevia 把 `symbol("x")` 的
+静态类型写成 `Real[δ]`（`δ` 弱）。两者是同一运行时值的两种视图：
+
+- Aevia 的 `Symbol` **就是** `Real[δ]`，`δ` 是该符号的弱量纲变量；不新增
+  第五种 `Symbol` 值类型；
+- 边界上 `Value::Symbol` 对应 `TypeExpr::Symbol`；Aevia 生成 façade 时把
+  RSSN 签名里的 `Symbol` 参数读作 `Real[δ]`（新鲜弱变量），把
+  `Real[d]` 参数读作 `Dim(Real, d)`；
+- 因此 `diff` 的 overlay 签名 `(Term, Symbol) -> Term` 在 Aevia 里读作
+  `(Dyn<term>, Real[δ]) -> Dyn<term>`，弱变量在调用点统一。
+
+`diff`/`solve` 现在正是这样声明的（`signatures.overlay.json` 的 13 条之一），
+所以它们有精确的 `Symbol` 参数；`Symbol` 不再是只能写成 `Var("Symbol")`
+的模糊类型。没有 overlay 的算子仍由 `Derived` 给出保守签名（`(Term,…) ->
+Term`），那也足以生成 typed 声明。
+
 ### 3.3.4 值限制？
 
 Aevia 是纯语言，没有可变引用，因此**不需要** ML 的值限制。泛化可以应用于
@@ -416,7 +433,7 @@ centroid : Tensor<1, Point[d]> -> Point[d]
 
 `mean` 只接受数值张量；点的平均用 `centroid`。
 
-### 3.5.3a `@` 的秩分派
+### 3.5.3.1 `@` 的秩分派
 
 `@` 不是单一函数，而是按秩分派的矩阵乘法：
 
@@ -673,7 +690,7 @@ instance Show for Real[d] where
 
 - `Num`/`Fractional`/`Floating` 不适用于带量纲的标量，因为 `*` 会改变
   量纲，不满足 `a -> a -> a`。带量纲的算术是语言内置规则，不是类型类。
-- `Real` 不是 `Eq`：`x == y` 对 `Real` 返回 `Prop`（§3.9），不是 `Bool`。
+- `Real` 不是 `Eq`：`x == y` 对 `Real` 返回 `Prop`（§3.8.6），不是 `Bool`。
   需要具体相等时用 `decide(x == y)` 或 `approx_eq`。
 - `Float` 是 `Eq`（IEEE：`NaN != NaN`），但**不是** `TotalOrd`；`Set<Float>`
   不合法。需要排序时用 `sort_float`（NaN 最后）或 `TotalFloat` 包装。

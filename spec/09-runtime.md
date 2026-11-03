@@ -145,7 +145,7 @@ rssn 的 `Session` 拥有一个项图，`Term<'s>` 是带生命周期的句柄�
 - 跨调用的项用 `u32` id 保存；需要时 `Session::term_by_id(id)` 取回。
 - `TermId` 包含 `session_id`，防止跨会话误用。
 - `compute` 会克隆模板图；对重型请求可接受，对每个 `+` 不可接受。因此
-  算术只构造项（`Session::call`），不调用 `compute`。
+  算术只构造项（`Session::call_value`），不调用 `compute`。
 
 ### 9.4.2 符号表
 

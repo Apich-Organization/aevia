@@ -383,12 +383,24 @@ linsolve     : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
 
 `Solutions<ρ,d>` 是
 `{ variable: Option<String>, roots: Tensor<1, Scalar<ρ,d>>,
-   multiplicities: Tensor<1, Int>, conditions: Tensor<1, String>,
-   complete: Bool }`，保留重数与参数条件；它不是 `Set`。RSSN 的
-`solve_structured` 目前不报告重数时 `multiplicities` 为空（“未报告”），
-不是“全 1”；Aevia 保留这个空语义，不伪造。`solve` 返回实解；
-`solve_complex` 返回复解。数值求解失败返回 `Err`。`linsolve` 是线性
-方程组求解，避免与符号 `solve` 同名。
+   multiplicities: Tensor<1, Int>, conditions: Tensor<1, Condition>,
+   complete: Bool }`，保留重数与参数条件；它不是 `Set`。
+
+- `multiplicities` 为空表示**未报告**。RSSN 的 `multiplicity()` 访问器对
+  空表返回 1，但那是“没有信息时的默认回答”，不是声明；Aevia 保留空语义，
+  不把它当“全 1”。
+- `complete = true` 表示求解器返回了穷尽形式（RSSN 的 `list(...)`）；
+  返回单个值时 RSSN 给 `false`，`Solutions::new` 也默认 `false`，要声明
+  穷尽必须显式 `.complete()`。**`complete` 不是数学证明**，只是“求解器
+  没有声明不完整”。
+
+`Condition` 是 `{ kind: ConditionKind, text: String,
+expression: Option<Value> }`；`ConditionKind` 是 RSSN `ConditionKind` 的
+镜像（`NonZero`、`Positive`、`Real` 等），`text` 是给人读的谓词，
+`expression` 是可选的结构化条件值（RSSN 侧是 `Value`）。
+
+`solve` 返回实解；`solve_complex` 返回复解。数值求解失败返回 `Err`。
+`linsolve` 是线性方程组求解，避免与符号 `solve` 同名。
 
 ## 8.7 Stats
 
@@ -464,7 +476,7 @@ type AxisScale = | Linear | Log
 ## 8.9 ODE
 
 ```
-type OdeMethod = | Rk4 | Dopri5 | Radau
+type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23
 type OdeOpts<s> = {
     rtol: Float[1],
     atol: Float[1],
@@ -498,10 +510,11 @@ RateOf<{ l1: τ1, ..., ln: τn }> = { l1: RateOf<τ1>, ..., ln: RateOf<τn> }
 不需要用户写实例，也不需要 `OdeState` 类。ODE 右端函数（例如 `rhs`）必须
 是双参 `(t, s)`；时间参数即使不用也要写 `_`。
 
-`events` 在 `Float[1]` 变号时终止并插值；events 目前只在 `Dopri5` 实现；其他方法
-设置 `events` 报 `E0807`。`Rk4` 必须给 `steps`。`odeint_with` 返回实际
-到达的 `t`/`y`。`odeint` 是默认参数（`rtol=1e-8`、`atol=1e-10`、`Dopri5`）
-的简写。
+`events` 在 `Float[1]` 变号时终止并插值。`Dopri5`、`Radau`、`Bdf`、
+`Rosenbrock23` 与定步长的 `Rk4` 都支持事件（RSSN 的
+`solve_fixed_events`）；差别是定步长必须给 `steps`，事件定位精度也随
+步长而定。`odeint_with` 返回实际到达的 `t`/`y`。`odeint` 是默认参数
+（`rtol=1e-8`、`atol=1e-10`、`Dopri5`）的简写。
 
 **展平契约**：桥接层按记录的**字段声明顺序**、深度优先、张量行主序，把
 `s` 展平成 `Vec<f64>`；求解后按同一顺序还原。嵌套记录递归展平；`Tensor<n,
@@ -735,6 +748,12 @@ Rssn.Capabilities  : Tensor<1, String>
 Rssn.call          : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.dynamic       : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.typed         : (String, Tensor<1, Value>, TypeRep) -> Result<a, OpError>
+Rssn.call_key      : (OpKey, Tensor<1, Value>) -> Result<Value, OpError>
+Rssn.resolve_overload : (String, Tensor<1, Value>) -> Result<OpKey, OpError>
+Rssn.overloads     : String -> Tensor<1, (OpKey, Signature)>
+Rssn.ValueKinds    : Tensor<1, ValueKindInfo>
+Rssn.Constants     : Tensor<1, ConstantInfo>
+Rssn.Units         : Tensor<1, UnitInfo>
 to_value           : a -> Value
 from_value         : Value -> Result<a, OpError>
 type_rep<a>()      : TypeRep
@@ -744,11 +763,29 @@ Rssn.register        : Plugin -> Result<PluginId, PluginError>
 Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 ```
 
-`Rssn` 的成员由 Kernel Manifest 生成；上面的 `call`/`dynamic` 是固定入口。
-只有 `signature_source = Declared | Overlay` 的算子生成 `Rssn.<name>`
-类型化声明；`Inferred`/无签名/实验性/插件算子生成 `dynamic`。别名生成
-`Rssn.<alias>`；冲突时用 `Rssn.<rule_set>.<name>`。`Rssn.dynamic` 是
-**正式能力**，不是降级路径。
+`OpKey` 是 `{ rule_set: String, name: String, signature_hash: [UInt8; 16] }`；
+`signature_hash` 全零表示该算子没有声明重载。`Rssn.call` 是
+`Rssn.dynamic` 的别名（两者都收短名 + `Value` 数组），保留它是为了让
+“调用一个算子”和“走动态边界”在源码里读起来不同。
+
+`Rssn` 的成员由 Kernel Manifest 生成；上面的 `call`/`dynamic`/`call_key`
+是固定入口。`signature_source = Declared | Overlay | Derived` 的算子都生成
+`Rssn.<name>` 类型化声明（每条 overload 一个），并绑定生成时的 `OpKey`，
+调用走 `Rssn.call_key(key, …)`；只有 `None`（叶子/无调用）与插件算子生成
+`dynamic`。别名生成 `Rssn.<alias>`；冲突时用
+`Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。
+
+`Derived` 是“由注册信息推出”的保守签名：`eval` → `(Real,…) -> Real`
+（谓词 `-> Bool`），非叶子另加 `(Term,…) -> Term`。它不区分
+`Tensor`/`Quantity`/`Int`，所以 IDE 要把它标成“保守推断”。当前
+1369 个算子里 7 个 declared、13 个 overlay、1349 个 derived。
+
+`Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、
+实验性入口都走它。多注册时 RSSN 在运行时按
+`Exact > Widened > Shaped > Generic > No` 选择，并列时报 `E1002`；参数不被
+任何 overload 接受时报 `OpError::Type`（`check_args`）。标准集每个名字只有
+1 个注册，所以这条路径不做注册级评分，但**会**做签名级校验。
+`Rssn.call_key` 则不解析，直接执行给定 `OpKey`。
 
 ## 8.20 库的组织
 

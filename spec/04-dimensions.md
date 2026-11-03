@@ -49,7 +49,7 @@ dimension Inductance    = M*L^2/(I^2*T^2)
 dimension MagneticFlux  = M*L^2/(I*T^2)
 dimension MagneticFluxDensity = M/(I*T^2)
 dimension Entropy       = M*L^2/(T^2*Θ)
-dimension MolarMass     = M/N
+dimension MolarMass     = M/Amt
 dimension Conductance   = 1/Resistance
 dimension Angle         = 1
 dimension SolidAngle    = 1
@@ -74,7 +74,7 @@ dimension SolidAngle    = 1
 - `q` 是有理数字面量：`2`、`-1`、`1/2`、`-3/4`。
 
 **静态量纲的指数只能是编译期有理数。** 这一点必须与 rssn 区分：rssn 的
-`graph::dim` 支持符号指数（`L^n`、`L^(a+b)`），因为它在项图上做推断；Aevia
+`graph::dim` 支持**单个**符号指数（`L^n`），因为它在项图上做推断；Aevia
 的静态类型系统不支持，因为 `n` 是运行时值时，类型层无法表示 `d^n`。这类
 情况走 `Dyn`（§4.9）。
 
@@ -667,6 +667,10 @@ Aevia 的 `Dim` 使用相同的基名和规范形。两者不一致会导致：
 符号指数 `L^n` 需要类型层携带 `n` 的表达式，统一变成多项式方程，可能不可
 判定。rssn 在项级支持它，因为那里可以返回“符号约束”而不是拒绝。Aevia
 选择静态保守 + `Dyn` 逃逸：静态路径可判定、可解释；动态路径显式、可检查。
+
+0.2.13 起 rssn 的 `DimExpr::to_term` 也能把 `Length^n` intern 成原子，
+所以 `Dyn` 逃逸路径不再在桥接层报错。这不改变语言决定：静态类型位置仍然
+只接受有理指数，符号指数只能出现在 `Dyn<ρ>` 的运行时量纲里。
 
 ### 4.12.4 为什么 `Angle = 1`
 

@@ -18,10 +18,12 @@
    `Rssn` 模块。新算子只要在 RSSN 注册，Aevia 下一次构建就能看见。
 2. **单一量纲/单位层。** `rssn::dim` 的 `DimTerm`/`DimArena`/`UnitRegistry`
    是运行时与编译期共享的规范层。Aevia 的 `Dim` 是它的类型级镜像；
-   `Units.SI` 由 registry 生成，不维护第二张单位表。
+   `Units.*` 由 `manifest.units` 生成，不维护第二张单位表。
 3. **动态调用是正式能力。** 没有类型签名的算子仍可通过
-   `Rssn.dynamic(key, args)` 调用；类型化 façade 是静态体验的增量，不是
-   能力门槛。动态调用在运行时做类型/量纲检查，失败返回结构化 `OpError`。
+   `Rssn.dynamic(name, args)` 调用；类型化 façade 是静态体验的增量，不是
+   能力门槛。RSSN 在动态路径上做**签名级**校验（`check_args`），但不做
+   量纲/类型推导；`Dyn<term>` 兜底让这条校验对多数 derived 算子很弱，
+   完整检查仍由 Aevia 静态检查器或 `Rssn.typed` 负责。
 
 这三条合起来解决两个长期问题：
 
@@ -48,6 +50,8 @@ KernelManifest
   units        : [UnitValue]
   base_dimensions : [BaseDimInfo]
   plugins      : [PluginInfo]
+  constants    : [ConstantValue]
+  value_kinds  : [ValueKindInfo]
 ```
 
 `OpInfo` 的实际字段：`keys: [OpKey]`（每个 overload 一个，`keys[0]` 是
@@ -58,9 +62,20 @@ KernelManifest
 `jit`。完整 schema 见根目录文档 §3.1。
 
 `manifest_hash` 是确定性 bincode 的 BLAKE3；`to_json()` 只供人读。
-`units` 是 `UnitValue`（name/display/dimension/scale/offset/affine），不含
-`aliases`/`prefixable`/`category`/`since`；生成 `Units.SI` 的别名/前缀
-必须再读 `UnitRegistry`。
+`units` 是 `UnitValue`，0.2.13 起带
+`name`/`display`/`dimension`/`scale`/`offset`/`affine`/`aliases`/
+`prefixable`/`category`/`since`，生成 `Units.*` 只读 manifest 即可。
+
+`value_kinds: [ValueKindInfo]` 描述每个 `Value` 变体能否入项图
+（`in_term_graph`）以及不能时的替代做法；生成器按它决定 façade 的参数
+位置能不能接受该类型（§13.3.1）。
+
+`constants: [ConstantValue]` 是物理常数表（30 条、18 条精确），字段
+`name`/`symbol`/`value: ScaleValue`/`dimension: DimExpr`/`unit`/`exact`/
+`uncertainty`/`source`；`Units.Constants` 由它生成（§13.6.5）。
+
+`features.plugin_kinds` 说明这个构建能加载哪种插件（默认
+`["in-process"]`；开 `plugin-cdylib` 后多一个 `"cdylib"`）。
 
 ### 13.2.2 生成规则
 
@@ -68,20 +83,46 @@ Aevia 构建时：
 
 1. 读取 manifest；校验 `api_version`（不兼容报 `E1004`）。
 2. 对每个 `OpInfo`：
-   - `signature_source = Declared | Overlay`：生成 `Rssn.<name>` 类型化声明；
-   - `signature_source = Inferred`：生成 `Rssn.dynamic`（推断签名默认
-     `(Real,...,Real) -> Real`，不可信，不能当 typed façade）；
+   - `signature_source = Declared | Overlay | Derived`：生成
+     `Rssn.<name>` 类型化声明（**每条 overload 一个**）；
    - `signature_source = None`：生成 `Rssn.dynamic`；
    - 别名：生成 `Rssn.<alias>`；冲突时用 `Rssn.<rule_set>.<name>`。
-3. 生成 `Rssn.Version`、`Rssn.ManifestHash`、`Rssn.Capabilities`。
-4. 生成 LSP 补全、文档、签名存根。
+3. typed 声明同时记住 `OpInfo.keys` 里对应的 `OpKey`，调用走
+   `Rssn.call_key(key, …)`，静态选择与运行时执行不会分歧。
+4. 生成 `Rssn.Version`、`Rssn.ManifestHash`、`Rssn.Capabilities`、
+   `Rssn.ValueKinds`、`Rssn.Constants`、`Rssn.Units`。
+5. 生成 LSP 补全、文档、签名存根；存根里记录每条声明的来源。
 
-当前 RSSN 0.2.13 的实测覆盖：1369 个算子，799 有签名（58.4%），570 个
-有 `dynamic_reason`（request/variadic/fully_polymorphic），0 unexplained。
-但 799 里只有 **7 个 declared**、792 个 inferred、0 overlay；因此 Aevia 的
-**可信 typed façade 只有 7 个**，其余 792+570 全部走 `Rssn.dynamic`。
-`signature_source=Inferred` 不能生成 typed 声明，否则 `det(scalar)` 会通过
-类型检查、`det(tensor)` 被拒。等 overlay 补齐后 typed 覆盖率才会上升。
+当前 RSSN 0.2.13（`95099fa0`）的实测覆盖：1369 个算子 **100% 有签名**，
+0 unexplained。来源是 **7 declared + 13 overlay + 1349 derived**；
+overload 分布是 1190 个 1 条、177 个 2 条、2 个 3 条。
+
+**精度分档**（生成器必须区分）：
+
+| 来源 | 数量 | 精度 | 生成什么 |
+|---|---|---|---|
+| `Declared` | 7 | 精确 | typed |
+| `Overlay` | 13 | 精确 | typed |
+| `Derived` | 1349 | 形态级 | typed，但只有 `Real`/`Bool`/`Term` |
+| `None` | 0 | 无（叶子/无调用） | `dynamic` |
+
+`Derived` 的规则是“由注册信息推出”，不是猜名字：
+
+| 注册信息 | 推出的签名 |
+|---|---|
+| 有 `eval` | `(Real, …) -> Real` |
+| 有 `eval` + `PREDICATE` | `(Real, …) -> Bool` |
+| 非叶子 | 另加 `(Term, …) -> Term` |
+| `Binder` 在第 k 位 | 第 k 个参数是 `Symbol` |
+| `Arity::Variadic` | 尾参数变长 |
+| `OpFlags::LEAF` | 无签名（`DynamicReason::OpaquePayload`） |
+
+因此 `sin` 有两条重载：`(Real) -> Real` 与 `(Term) -> Term`（它有 `eval`）。
+`det` 是 `HEAVY` 请求、没有 `eval`，所以没有 overlay 时**只有一条**
+`(Term) -> Term`——连数值形态都没有，`det(matrix)` 的静态类型会是
+`Dyn<term>`；overlay 把它补成 `(Tensor<[n,n],Real>) -> Real`。这就是为什么
+“100% typed”不等于“100% 精确”：1349 个算子的签名不区分
+`Tensor`/`Quantity`/`Int`，Aevia 的 IDE 应把它们标成“保守推断”。
 
 Aevia 仓库**不允许**出现按算子名手写的绑定文件。只允许：
 
@@ -94,12 +135,15 @@ CI 检查：生成器输出与提交的生成文件一致；manifest 快照变�
 
 ### 13.2.3 命名空间
 
-- 普通算子：`Rssn.<name>`（仅 `Declared|Overlay` 是 typed；`Inferred` 走
-  `Rssn.dynamic`）。
+- 普通算子：`Rssn.<name>`（`Declared|Overlay|Derived` 都生成 typed；
+  只有 `None` 与插件算子走 `Rssn.dynamic`）。
 - 规则集限定：`Rssn.<rule_set>.<name>` 只是命名空间；运行时仍按 name/arity。
 - 插件：`Rssn.<plugin>.<op>`。
-- 动态：`Rssn.dynamic("diff", args)   # args: Tensor<1, Value>`。RSSN 0.2.13 的 `call_value` 只按
-  name/alias 查找，**不支持** `rule_set/name` 限定名；限定名要等 `call_key`。
+- 动态：`Rssn.dynamic("diff", args)   # args: Tensor<1, Value>`。RSSN 的
+  `call_value` 只按 name/alias 查找，**不支持** `rule_set/name` 限定名；
+  限定名是 Aevia 的命名空间，不是运行时键。要钉死重载用
+  `Rssn.call_key(key, args)`，`key` 来自 `Rssn.overloads(name)` 或
+  `OpInfo.keys`。
 
 名字冲突时，短名只保留**最稳定**的那个（`Stable` 优先，`since` 早者
 优先）；其余必须用限定名。生成器在 manifest 中记录短名映射。
@@ -134,13 +178,18 @@ type Value =
 `Value` 是**动态边界**的类型，不是核心语言的隐式子类型。核心语言仍然是
 静态的；`Value` 只出现在 `Rssn.dynamic`、插件、FFI、反射 API 中。
 
-**可入项图性**：`VInt`/`VReal`/`VFloat`/`VBool`/`VString`/`VSymbol`/
-`VUnit`/`VQuantity`/`VTensor`/`VDyn`/`VTerm` 可以经 `Session::term_of`
-进入项图；`VComplex` 仅在虚部为 0 时降为 `Float` 入图，有虚部返回
-`Unsupported("complex literals")`；`VSparse`/`VRecord`/`VVariant`/
-`VFunction`/`VOpaque` 在 0.2.13 的 `term_of_value` 返回 `Unsupported`，
-只能喂给 `eval_dyn` 算子或作为返回值。生成器必须按这个表决定 façade 是否接受该
-类型，不能假设所有 `Value` 都能参与重写。
+**可入项图性**：这张表由 `manifest.value_kinds` 给出，Aevia 不维护第二份。
+0.2.13 的取值是：
+
+- `in_term_graph = true`：`VInt`/`VReal`/`VFloat`/`VBool`/`VString`/
+  `VSymbol`/`VUnit`/`VQuantity`/`VTensor`/`VTerm`/`VDyn`；
+- `in_term_graph = false`：`VComplex`（仅虚部为 0 时降为 `Float` 入图，
+  否则 `Unsupported("complex literals")`）、`VSparse`/`VRecord`/
+  `VVariant`/`VFunction`/`VOpaque`（`term_of_value` 返回
+  `Unsupported`）。
+
+`false` 的变体只能喂给有 `eval_dyn` 的算子，或作为返回值；生成器不能假设
+所有 `Value` 都能参与重写。
 
 ### 13.3.2 调用
 
@@ -148,12 +197,23 @@ type Value =
 Rssn.call    : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.dynamic : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.typed   : (String, Tensor<1, Value>, TypeRep) -> Result<a, OpError>
+Rssn.overloads       : String -> Tensor<1, (OpKey, Signature)>
+Rssn.resolve_overload: (String, Tensor<1, Value>) -> Result<OpKey, OpError>
+Rssn.call_key        : (OpKey, Tensor<1, Value>) -> Result<Value, OpError>
+Rssn.Constants       : Tensor<1, ConstantInfo>
+Rssn.Units           : Tensor<1, UnitInfo>
 ```
 
-- `Rssn.call` 只按短名/别名查找；0.2.13 不支持 `rule_set/name` 限定名，
-  也不接受 `OpKey` 作为运行时键。短名歧义报 `E1002`。
+- `Rssn.call` 是 `Rssn.dynamic` 的别名，只按短名/别名查找；不支持
+  `rule_set/name` 限定名。短名歧义报 `E1002`。
+- `Rssn.call_key` 是唯一“不解析、直接执行”的入口；`key` 必须来自
+  `OpInfo.keys`/`Rssn.overloads`。`signature_hash` 全零表示“该算子没有
+  声明重载”。
+- `Rssn.resolve_overload` 暴露运行时选择结果，供缓存/诊断用。
 - 参数用 `to_value(x)` 注入；返回值用 `from_value(v)` 转回静态类型。
-- 没有签名/实验性/插件算子走 `dynamic`。
+- 没有签名（`SignatureSource::None`）的算子、插件算子、实验性入口走
+  `dynamic`。标准集当前没有 `None`，所以 `dynamic` 在标准集上只是插件
+  通道。
 - `Rssn.typed` 在运行时把 `Value` 转成静态类型 `a`，做类型与量纲检查；
   失败返回 `OpError.Type`/`OpError.Dimension`。
 - 高阶算子用 `Rssn.call_ho(name, args, fns)`；`fns` 是 `Callback`，可以
@@ -168,6 +228,7 @@ type OpError =
     | UnknownOp(String)
     | Arity(Int, Int)
     | Type(TypeRep, TypeRep, Int)
+    | Ambiguous(String, Int)         # name, 并列数
     | Dimension(DimError)
     | NotNumeric(String)
     | NotReduced(String)
@@ -190,32 +251,92 @@ type OpError =
 
 ### 13.4.1 重载
 
-RSSN 允许同名多签名。Aevia 的重载解析：
+RSSN 允许同名多签名，判定规则在 `kernel::overload` 里：
+
+```aevia
+type Match = | No | Generic | Shaped | Widened | Exact   # 有序
+matches_type : (TypeExpr, TypeExpr) -> Match
+score        : (Signature, Tensor<1, Value>) -> Option<Nat>
+best         : (Tensor<1, Signature>, Tensor<1, Value>) -> Best
+type Best    = | None | Unique(Int) | Ambiguous(Tensor<1, Int>)
+```
+
+- 每个参数单独分类，整个调用的分数是**最弱**的那个参数；
+- `Int -> Real`、`Int|Real|Float -> Complex` 是 `Widened`，反向不成立；
+- 同构造器但元素/量纲未被签名钉死是 `Shaped`；类型变量和 `Dyn` 是
+  `Generic`；
+- `best` 内部并列最高 → `Ambiguous`，不静默取第一个。
+
+**当前标准集的实际情况**：1369 个算子分布在 1369 个唯一名字上，每个名字
+只有 1 个注册；但**每个注册内部有 1–3 条重载**（1190 个 1 条、177 个 2 条、
+2 个 3 条），因为有 `eval` 的算子同时有数值与符号两条。所以要把两件事分开：
+
+- **注册选择**（`resolve_op`）在 `fitting.len() == 1` 处直接返回，对标准集
+  不做评分；跨注册并列只可能由插件触发。
+- **重载选择**（`resolve_overload` → `overload::best`）对注册内的 2–3 条
+  签名**真的执行**：`sin(0.5)` 选 `(Real) -> Real`，`sin(x)`（`x` 是
+  `Symbol`）选 `(Term) -> Term`。但实参本身是 `Term`/`Dyn` 时，数值重载
+  的 `Real` 也会以 `(_, Dyn(_)) → Generic` 通过，两条同分 → `Ambiguous`。
+  所以 `resolve_overload` 只适合具体类型的实参；符号表达式用
+  `OpInfo.keys` 的 key。
+
+`call_value` 按 name/arity 选注册，然后调 `check_args`：没有任何 overload
+接受参数时返回 `OpError::Type`。但符号重载的 `Dyn<term>` 对任何值都是
+`Generic`，所以 1349 个 derived 算子几乎总能通过——这条检查只在签名全部
+具体（`eq`/`lit`/`pow`）时才真正拦得住。它不在数值/符号之间做选择（那由
+算子的 `eval` 决定）。
+
+Aevia 的静态解析规则（与 RSSN 的格同构，供 Aevia 自己的重载/插件使用）：
 
 1. 按 arity 过滤；
-2. 按参数类型/量纲匹配；
-3. 多个候选时选最具体（`Tensor<[3,4],T>` 比 `Tensor<2,T>` 具体；
-   `Float[L]` 比 `Real[d]` 具体）；
-4. 仍歧义报 `E1002`；
-5. 没有匹配时尝试 `Dynamic`；仍失败报 `E1003`。
+2. 逐参数分类，取最弱；
+3. 分数最高且唯一 → 选中；
+4. 并列最高 → `E1002`；
+5. 没有匹配 → 尝试 `Dynamic`；仍失败 → `E1003`。
 
-**运行时限制**：RSSN 0.2.13 的 `call_value` 只按 name+arity 选择第一个
-重载，`OpKey.signature_hash` 不参与运行时。若两个 overload 同 arity 但
-类型不同，Aevia 不生成 typed 声明，只生成 `dynamic`；等 RSSN 提供
-`call_key(&OpKey, ...)` 后再启用同 arity 多型 typed 调用。
+运行时三条入口，职责不同：
+
+- `Session::call_key(&OpKey, …)`（固有方法）**不解析、不校验参数**，按
+  `rule_set` + `signature_hash` 找注册；钉死重载，参数由调用方保证。
+- `Session::call_value(name, …)` 按 name/arity 找注册；多个候选时用
+  `overload::score` 选最具体，并列报 `OpError::Ambiguous`；参数不被任何
+  overload 接受时报 `OpError::Type`（`check_args`）。
+- `Kernel::call(&OpKey, …)` 转发 `call_key`，因此**也钉死**重载；通过
+  `dyn Kernel` 传递不会丢信息。
+
+`Session::resolve_overload(name, args)` 用于“先解析、再缓存”：
+
+- `best` 为 `Unique` → 返回带 `signature_hash` 的 key，可直接给 `call_key`；
+- 算子完全没有签名 → 返回零 hash 的 key，`call_key` 接受它；
+- 并列 → `Err(OpError::Ambiguous)`，**不会**给出不可执行的零 hash key。
+
+所以 `resolve_overload` 的返回值总是可以安全地交给 `call_key`。
+
+`OpKey.signature_hash` 是 `Signature::hash()` 的前 16 字节（确定性 bincode
+的 BLAKE3），伪造/过期的 key 返回 `UnknownOp`。
 
 ### 13.4.2 签名覆盖
 
-RSSN 的 1000+ 算子不要求一次写完签名。规则：
+0.2.13 起覆盖率是 100%：1369 个算子都有签名（`0 unexplained`）。
+签名有四个来源，优先级从高到低：
 
-- 每个算子必须有 `Signature` 或 `dynamic_reason`；
-- 没有签名的算子仍可用，但 Aevia 只生成 `dynamic` 声明；
-- CI 的 `signature-audit` 报告覆盖率；覆盖率不达标不阻止构建，但阻止
-  `Stable` 标记；
-- 新算子用 `OpDescriptor::new(...).signature(...)`（插件用
-  `Registry::register_op`）声明签名；旧算子用推断 + `signatures.overlay.json`。
+1. `Declared`：`OpDescriptor::new(...).signature(...)`，算子自己写；
+2. `Overlay`：`signatures.overlay.json` 里人工写的修正（当前 13 条）；
+3. `Derived`：`kernel::infer::derive` 从注册信息推出（当前 1349 条）；
+4. `None`：叶子/无调用形式，`dynamic_reason` 说明原因（标准集没有）。
 
-这保证“能力完整”和“类型体验”可以分开推进，但不会有算子被静默遗忘。
+规则：
+
+- `Derived` 是**推导**，不是猜测：它只读 `eval`/`PREDICATE`/`Binder`/
+  `Variadic`/`LEAF`，不读算子名；所以它是“保守但可靠”的。
+- 精度不够时写 overlay，而不是改推导器。overlay 只应该出现在“这条签名
+  必须精确”的算子上（张量、符号、单位参数）。
+- CI 的 `signature-audit` 报告覆盖率与来源分布；`Derived` 占比高不阻止
+  构建，但阻止把对应算子标成“精确”。
+- 插件用 `Registry::register_op` 声明签名；`Registry` 拒绝“既无签名又无
+  `dynamic_reason`”的注册。
+
+这保证“能力完整”和“类型精度”可以分开推进，但不会有算子被静默遗忘。
 
 ---
 
@@ -228,12 +349,26 @@ RSSN 的 1000+ 算子不要求一次写完签名。规则：
 ```toml
 # aevia.toml
 [plugin]
-kind = "aevia"          # 0.2.13 只支持进程内 Aevia/Rust 插件
+kind = "aevia"          # 进程内；对应 RSSN 的 PluginKind::InProcess
 abi = 1
 ```
 
-`kind = "cdylib"` 是设计目标，但 RSSN 0.2.13 没有动态库加载器；未实现前
-动态库插件报 `E1001("core.plugin.cdylib")`，进程内 `Plugin` trait 可用。
+`kind` 的两个取值对应 RSSN 的 `PluginKind`：
+
+| `[plugin] kind` | RSSN | 加载方式 |
+|---|---|---|
+| `"aevia"` / `"in-process"` | `PluginKind::InProcess` | `Session::register(Box<dyn Plugin>)` |
+| `"cdylib"` | `PluginKind::Cdylib` | `Session::load_plugin(path)`（需 `plugin-cdylib`） |
+
+`cdylib` 的 C ABI 是**字节缓冲**：入口符号 `rssn_plugin_v1`，参数与返回值
+都是 bincode 编码的 `Vec<Value>`/`Result<Value, String>`，不是
+`#[repr(C)]` 的 `Value` 镜像。`cdylib::load` 会校验 `PLUGIN_ABI` 和
+`RssnPluginDesc`；`Session::load_plugin` = `load` + `register`。
+
+这个模块由 `plugin-cdylib` feature 控制（默认关闭，`full` 才包含），因为
+加载动态库会在宿主进程里执行任意代码、没有沙箱。Aevia 在加载前必须查
+`manifest.features.plugin_kinds`：没有 `"cdylib"` 时报
+`E1001("core.plugin.cdylib")`，而不是让加载器抛一个底层错误。
 
 ```aevia
 module MyDomain
@@ -276,6 +411,10 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 限制：回调必须是纯的、线程安全的（或标记 `SessionBound`）；符号重写
 规则必须显式注册，不能从函数体自动推导。
 
+`@op("mydomain/softplus")` 里的 `mydomain/` 是**算子名的一部分**（插件
+命名空间），不是 `rule_set/name` 限定符；运行时 `call_value` 仍按完整
+字符串查找，不能拆成 `rule_set` + `name`。
+
 ### 13.5.3 安全
 
 - 插件必须签名；默认只加载 registry 信任的插件。
@@ -300,25 +439,45 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
   不要解析 `Dimension.factors`。
 
 Aevia 的 `Dim` 是 `DimTerm` 的类型级镜像；两者的规范形、基名、指数运算
-必须一致。编译器不复制单位表；`Units.SI` 是 registry 的生成视图。
+必须一致。编译器不复制单位表；`Units.*` 是 `manifest.units` 的生成视图
+（`UnitValue` 已带别名/前缀/类别/since，不必再读 `UnitRegistry`）。
+
+结构化入口是 `Config::dimension_term(symbol, DimExpr)`：它不解析文本，未知
+基名会被 intern，结构化假设在文本假设之后应用（同名时结构化胜）。
+
+自定义基量纲由 `Config::base_dimension(name)` 声明（幂等）：它把基名送进
+`DimArena`，`Dim` 的内部表示从固定的 7 个 SI 指数扩成“7 个 SI + 有序
+旁表”，`expr_to_dim` 接受任意基名。这是 `unit EUR : Currency` 能成立的
+前提——`dimension_term` 只能为 arena 里已有的基名产出 `DimTerm`。
 
 ### 13.6.2 单位声明
 
 ```aevia
-dimension Currency
+dimension Currency            # 自定义基量纲
+unit USD : Currency = 1       # 基单位
 unit EUR : Currency = 1.08 USD
-unit myunit : Length = 0.5 m
+unit myunit : Length = 0.5 m  # 内置基量纲
 ```
 
-- `dimension` 注册到 `DimArena`；`unit` 注册到 `UnitRegistry`。
+生成器为每个 `dimension` 在 `Config` 上声明一次
+`base_dimension("<Name>")`，然后才注册单位；否则单位注册成功但 `DimTerm`
+无法生成（arena 里没有该基名）。
+
+- `dimension` 注册到 `DimArena`（编译期经 `DimExpr`，运行时经
+  `Config::dimension_term` / `Graph::assume_dimension_value`）；`unit`
+  注册到 `UnitRegistry`。
 - 默认导出；`private` 只在本模块可见。
 - 导出信息进入 manifest；下游包可以直接 `import` 并使用。
 - 用户单位可以是仿射的（`unit °X : Temperature = 1 K offset 273.15`），
   但仿射单位只能单独使用。
-- **0.2.13 限制**：`UnitRegistry::register` 的 `expr_to_dim` 仍只认 7 个
-  内置基名；`unit EUR : Currency` 会报 “not a base dimension”。在 RSSN
-  接受 `DimArena` 自定义基名之前，Aevia 只允许自定义基量纲的符号运算，
-  单位注册报 `E1001("core.units.custom_base")`。
+- 自定义基量纲（`111b71d0` 起）：`Config::base_dimension` 声明基名，
+  `expr_to_dim` 接受任意基名，`Dim` 用旁表保存非 SI 指数；所以
+  `dimension Currency` + `unit EUR : Currency` 都可用。
+  `features.user_base_dimensions` 是**硬编码 true**（不是 feature 门控），
+  所以每个构建都支持；唯一按构建变化的是 `jit*` 与 `plugin_kinds`。
+- 基名经 `Config::base_dimension(name)` 声明即可：`prepare` 在**克隆的**
+  图上 `define_base_dimension`；`DimArena` 是写时复制，第一次写就 detach，
+  所以不会污染模板或并发请求（§13.6.6）。
 
 ### 13.6.3 `Dyn`
 
@@ -331,6 +490,47 @@ unit myunit : Length = 0.5 m
 `Point[d]` 是静态包装；运行时是 `Float` + `UnitId`。`UnitRegistry` 的
 `affine`/`offset` 是唯一事实来源。`Point` 的算术规则在 Aevia 层实现，
 RSSN 的 `quantity`/`convert` 负责显示/换算。
+
+### 13.6.5 物理常数
+
+`manifest.constants` 是 `Vec<ConstantValue>`（30 条、18 条精确）：
+
+```rust
+pub struct ConstantValue {
+    pub name: String,        // "speed of light in vacuum"
+    pub symbol: String,      // "c"
+    pub value: ScaleValue,   // 精确有理数，相干 SI
+    pub dimension: DimExpr,
+    pub unit: String,        // "m/s"
+    pub exact: bool,
+    pub uncertainty: Option<ScaleValue>,
+    pub source: String,      // "SI 2019 definition" / "CODATA 2022"
+}
+```
+
+`Units.Constants` 由它生成，规则：
+
+- 符号原样使用（`c`、`g_n`、`h`、`hbar`、`k_B`、`N_A`、`e`、`G`、
+  `alpha`、`R`、`F`、`sigma_SB`、`m_e`、`m_p`、`m_n`、`a_0`、`R_inf`、
+  `mu_0`、`epsilon_0`、`mu_B`、`M_u`、`m_u`、`T_tp`、`atm`、`G_0`、`K_J`、
+  `R_K`、`Phi_0`、`K_cd`、`dnu_Cs`）；
+- `exact = true` 的常数没有 `uncertainty`；`exact = false` 的有；
+- 常数是**值**，不是单位：不能出现在 `quantity(v, u)` 的单位位置；
+- `e` 是基本电荷，与 `Math.e` 同名。`open Units.Constants` 与 `Math.e`
+  同时可见时，`e` 必须限定（`Math.e` / `Units.Constants.e`）。
+
+### 13.6.6 线程与 arena 隔离
+
+`DimArena` 在模板里是 `Arc<RwLock>`，`Graph::clone` **共享**它；写入时
+`with_dim_arena_mut`/`define_base_dimension` 先看 `Arc::strong_count`，大于 1
+就克隆一份再写（写时复制）。因此：
+
+- `Config::base_dimension(name)` 是安全路径：`prepare` 在克隆图上
+  `define_base_dimension`，第一次写就 detach，请求之间互不影响；
+- 不定义任何基量纲的请求共享模板的 arena，不付拷贝成本；
+- 不要直接对 `Session` 的模板图调用 `define_base_dimension`——那会让后续
+  请求都看到这个基名；
+- 跨线程仍用 `Session::fork`/`merge`，不共享 `Session`（它是 `RefCell`）。
 
 ---
 
