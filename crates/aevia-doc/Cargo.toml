@@ -1,0 +1,15 @@
+[package]
+name = "aevia-doc"
+description = "Markdown API documentation for Aevia packages"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-syntax.workspace = true
+aevia-fmt.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

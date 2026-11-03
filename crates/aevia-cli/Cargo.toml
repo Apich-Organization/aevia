@@ -1,0 +1,24 @@
+[package]
+name = "aevia-cli"
+description = "Command line interface for the Aevia language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aevia"
+path = "src/main.rs"
+
+[dependencies]
+aevia-dim.workspace = true
+aevia-syntax.workspace = true
+aevia-types.workspace = true
+aevia-core.workspace = true
+aevia-rssn.workspace = true
+aevia-fmt.workspace = true
+aevia-doc.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
