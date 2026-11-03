@@ -1,0 +1,27 @@
+[package]
+name = "aevia-rssn"
+description = "Bridge between Aevia and the rssn scientific computing kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-dim.workspace = true
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+rssn = { path = "../../../rssn", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+num-traits.workspace = true
+# Test-only edge: the conformance test feeds the generated modules back through
+# the real parser and the real checker. `aevia-types` depends on this crate, so
+# this is a dev-dependency cycle, which cargo allows and the library build never
+# sees.
+aevia-syntax.workspace = true
+aevia-types.workspace = true
