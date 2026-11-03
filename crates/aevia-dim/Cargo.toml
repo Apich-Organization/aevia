@@ -1,0 +1,19 @@
+[package]
+name = "aevia-dim"
+description = "Dimension algebra and unit registry for the Aevia language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-bigint.workspace = true
+num-rational.workspace = true
+num-integer.workspace = true
+num-traits.workspace = true
+indexmap.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

@@ -1,0 +1,20 @@
+[package]
+name = "aevia-syntax"
+description = "Lexer, layout, parser and AST for the Aevia language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-dim.workspace = true
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+unicode-ident.workspace = true
+unicode-normalization.workspace = true
+indexmap.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

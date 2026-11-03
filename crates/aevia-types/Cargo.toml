@@ -1,0 +1,20 @@
+[package]
+name = "aevia-types"
+description = "Type and dimension inference for the Aevia language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-dim.workspace = true
+aevia-syntax.workspace = true
+aevia-rssn.workspace = true
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+indexmap.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

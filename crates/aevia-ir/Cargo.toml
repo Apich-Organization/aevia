@@ -1,0 +1,18 @@
+[package]
+name = "aevia-ir"
+description = "Core IR of the Aevia language: ANF, closure conversion and lowering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-dim.workspace = true
+aevia-syntax.workspace = true
+aevia-types.workspace = true
+num-bigint.workspace = true
+num-rational.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
