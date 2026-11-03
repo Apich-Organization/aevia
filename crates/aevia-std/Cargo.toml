@@ -1,0 +1,29 @@
+[package]
+name = "aevia-std"
+description = "The Aevia standard library: numerics behind chapter 8 of the specification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-bigint.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+nalgebra = { version = "0.35", default-features = false, features = ["std", "macros"] }
+faer.workspace = true
+rustfft = "6.4"
+# The simulation scenarios of §8.17 are rssn's; the typed wrappers call them
+# rather than reimplementing twenty solvers.
+rssn = { path = "../../../rssn", default-features = false }
+
+# `tests/exactness.rs` runs an Aevia program end to end, which needs the
+# runtime. A dev-dependency cycle is allowed, and this is the only way to put
+# the exactness contract in a file this crate owns: the property is about a
+# `Value`, and `Value` lives in `aevia-core`.
+[dev-dependencies]
+aevia-core = { path = "../aevia-core" }
+
+[lints.rust]
+unsafe_code = "forbid"
