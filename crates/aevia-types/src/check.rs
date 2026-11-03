@@ -3101,12 +3101,35 @@ impl Checker {
                     }
                     consumed.push(position);
                 }
-                SliceAst::Range { start, end, .. } => {
+                SliceAst::Range {
+                    start, end, step, ..
+                } => {
                     sliced = true;
                     for part in [start, end].into_iter().flatten() {
                         let ty = self.synth(part);
                         if let Err(error) = self.infer.unify(&ty, &Type::int()) {
                             self.report_unify(error, part.span);
+                        }
+                    }
+                    // §6.6.4: the step is an `Int`, not a `Float` and not a
+                    // quantity — a step is a number of positions, so it has no
+                    // dimension and no fractional part. A known zero is
+                    // rejected here; a computed one is `E0802` at run time.
+                    if let Some(step) = step {
+                        let ty = self.synth(step);
+                        if self.infer.unify(&ty, &Type::int()).is_err() {
+                            self.error(
+                                "E0302",
+                                "a slice step must be an Int".to_string(),
+                                step.span,
+                            );
+                        } else if literal_index(step) == Some(0) {
+                            self.error_help(
+                                "E0802",
+                                "a slice step of zero never advances".to_string(),
+                                step.span,
+                                "omit the step to walk by one",
+                            );
                         }
                     }
                 }

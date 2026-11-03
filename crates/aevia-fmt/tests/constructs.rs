@@ -205,3 +205,39 @@ fn a_comment_inside_an_expression_is_moved_but_kept() {
     let formatted = round_trip(source);
     assert!(formatted.contains("# why"), "{formatted}");
 }
+
+#[test]
+fn a_slice_step_round_trips() {
+    // A step is written in the `a:b:s` spelling, which is the only one that
+    // carries one; the fingerprint includes it, so a printer that dropped it
+    // would fail the tree comparison rather than only the text comparison.
+    for source in [
+        "let a = b[1:5:2]
+",
+        "let a = b[::-1]
+",
+        "let a = b[::2]
+",
+        "let a = b[:3:2]
+",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn a_colon_slice_without_a_step_is_the_range_it_means() {
+    // `b[1:5]` and `b[1..5]` are the same node, so the formatter writes the
+    // older spelling and the tree is unchanged.
+    assert_eq!(round_trip("let a = b[1:5]
+"), "let a = b[1..5]
+");
+    // The same rule on an axis of a matrix: a full slice with no step is the
+    // `..` form, while the stepped axis keeps its `:` spelling.
+    assert_eq!(
+        round_trip("let a = m[::, ::-1]
+"),
+        "let a = m[.., ::-1]
+"
+    );
+}

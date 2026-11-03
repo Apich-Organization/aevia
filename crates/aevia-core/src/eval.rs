@@ -44,7 +44,7 @@ pub struct Frame {
 pub(crate) enum SliceValue {
     /// `a[i]`.
     Index(Option<f64>),
-    /// `a[i..j]`, `a[i..]`, `a[..j]`, `a[..]`.
+    /// `a[i..j]`, `a[i..]`, `a[..j]`, `a[..]`, `a[i:j:s]`.
     Range {
         /// The start.
         start: Option<f64>,
@@ -52,6 +52,9 @@ pub(crate) enum SliceValue {
         end: Option<f64>,
         /// Whether the range is inclusive.
         inclusive: bool,
+        /// The step, when written. `None` means one; `NaN` means the
+        /// expression was not a number.
+        step: Option<f64>,
     },
 }
 
@@ -2329,6 +2332,7 @@ impl Interp {
                     start,
                     end,
                     inclusive,
+                    step,
                 } => {
                     let start = match start {
                         Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
@@ -2338,10 +2342,15 @@ impl Interp {
                         Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
                         None => None,
                     };
+                    let step = match step {
+                        Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(f64::NAN)),
+                        None => None,
+                    };
                     resolved.push(SliceValue::Range {
                         start,
                         end,
                         inclusive: *inclusive,
+                        step,
                     });
                 }
             }
@@ -2422,7 +2431,16 @@ impl Interp {
             }
         }
         // Slicing: one range per axis, producing a new tensor.
+        //
+        // A written step turns the axis into a *walk* — it may skip elements
+        // or run backwards — which is collected into `walks` beside the
+        // windows. The two are kept apart on purpose: a slice without a step
+        // keeps the exact behaviour it had, including the `E0802` on an
+        // inverted range, while a walk that passes its end immediately is an
+        // empty slice (§6.6.4).
         let mut ranges = Vec::with_capacity(indices.len());
+        let mut walks: Vec<(usize, usize, isize)> = Vec::with_capacity(indices.len());
+        let mut stepped = false;
         for (axis, index) in indices.iter().enumerate() {
             let extent = tensor.shape.get(axis).copied().unwrap_or(0);
             match index {
@@ -2431,12 +2449,19 @@ impl Interp {
                     let normalized = normalize_index(coordinate, extent)
                         .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
                     ranges.push((normalized, normalized + 1));
+                    walks.push((normalized, 1, 1));
                 }
                 SliceValue::Range {
                     start,
                     end,
                     inclusive,
+                    step,
                 } => {
+                    if let Some(step) = step {
+                        stepped = true;
+                        walks.push(walk_range(*start, *end, *step, extent, span)?);
+                        continue;
+                    }
                     let start_value = start.map_or(0, |value| value as isize);
                     let end_value = end.map_or(extent as isize, |value| value as isize);
                     let start = normalize_bound(start_value, extent, false);
@@ -2445,8 +2470,39 @@ impl Interp {
                         return Err(EvalError::new("E0802", "empty slice").at(span));
                     }
                     ranges.push((start, end));
+                    walks.push((start, end - start, 1));
                 }
             }
+        }
+        if stepped {
+            while walks.len() < tensor.rank() {
+                let extent = tensor.shape[walks.len()];
+                walks.push((0, extent, 1));
+            }
+            let new_shape: Vec<usize> = walks.iter().map(|(_, count, _)| *count).collect();
+            // A stepped slice of an `f64` tensor is still a view: the stride
+            // is multiplied by the step and a negative step flips the axis, so
+            // `xs[::-1]` allocates nothing and shares the buffer `reverse(xs)`
+            // returns.
+            if let Some(sliced) = tensor.slice_step_view(&walks) {
+                return Ok(Value::Tensor(Rc::new(sliced)));
+            }
+            let count = TensorData::element_count(&new_shape);
+            let mut elements = Vec::with_capacity(count);
+            for index in 0..count {
+                let coordinates = unravel(index, &new_shape);
+                let full: Vec<isize> = coordinates
+                    .iter()
+                    .zip(walks.iter())
+                    .map(|(coordinate, (start, _, step))| {
+                        (*start as isize) + (*coordinate as isize) * *step
+                    })
+                    .collect();
+                if let Some(element) = tensor.get(&full) {
+                    elements.push(element);
+                }
+            }
+            return Ok(build_tensor(elements, new_shape, tensor.dim.clone()));
         }
         while ranges.len() < tensor.rank() {
             let extent = tensor.shape[ranges.len()];
@@ -2851,6 +2907,74 @@ fn normalize_bound(value: isize, extent: usize, inclusive: bool) -> usize {
     } else {
         clamped
     }
+}
+
+/// One axis of a stepped slice, as `(first index, element count, step)`.
+///
+/// The count is the exact number of indices the walk visits (§6.6.4):
+/// `ceil((stop - first) / step)` forwards, and the mirror image backwards. A
+/// walk whose first index is already at or past the stop visits nothing — that
+/// is an empty slice, not one element — so `xs[0:0:1]` and `xs[5:2:1]` are
+/// empty.
+///
+/// A missing bound follows the direction of the walk: `xs[::2]` starts at 0
+/// and runs to the end, while `xs[::-1]` starts at the last index and runs to
+/// just before the first, which is what makes it `reverse(xs)`.
+///
+/// A step of zero would never advance and a fractional one names a position
+/// that does not exist. The checker rejects both when the value is a literal;
+/// this is the same rule for a computed one, and it is an error rather than a
+/// division by zero or a loop that never ends.
+fn walk_range(
+    start: Option<f64>,
+    end: Option<f64>,
+    step: f64,
+    extent: usize,
+    span: Span,
+) -> Result<(usize, usize, isize), EvalError> {
+    if !step.is_finite() || step.fract() != 0.0 || step == 0.0 {
+        return Err(EvalError::new("E0802", "a slice step must be a non-zero Int").at(span));
+    }
+    let step = step as isize;
+    let extent = isize::try_from(extent).unwrap_or(isize::MAX);
+    if extent <= 0 {
+        return Ok((0, 0, step));
+    }
+    let forward = step > 0;
+    // A negative bound counts from the end, exactly as an index does. The
+    // clamp keeps a start past the end past the end, so `xs[7:8:1]` is empty
+    // rather than the last element.
+    let from_end = |value: isize| if value < 0 { extent + value } else { value };
+    let first = match start {
+        Some(value) => {
+            let high = if forward { extent } else { extent - 1 };
+            from_end(value as isize).clamp(0, high)
+        }
+        None if forward => 0,
+        None => extent - 1,
+    };
+    let stop = match end {
+        Some(value) => {
+            let high = if forward { extent } else { extent - 1 };
+            from_end(value as isize).clamp(-1, high)
+        }
+        None if forward => extent,
+        None => -1,
+    };
+    // `i128` because the step may be any `Int` the source wrote: a step near
+    // `isize::MAX` must count one element, not overflow on `span + step`.
+    let (span, divisor) = if forward {
+        (stop as i128 - first as i128, step as i128)
+    } else {
+        (first as i128 - stop as i128, -(step as i128))
+    };
+    let count = if span <= 0 {
+        0
+    } else {
+        // `ceil(span / divisor)`, in integers, with both terms positive.
+        ((span + divisor - 1) / divisor) as usize
+    };
+    Ok((if count == 0 { 0 } else { first as usize }, count, step))
 }
 
 fn broadcast_shape(left: &[usize], right: &[usize]) -> Option<Vec<usize>> {

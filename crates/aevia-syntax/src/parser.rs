@@ -1855,7 +1855,30 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// One index or slice (§A.4: `slice`).
+    ///
+    /// Three spellings reach this function:
+    ///
+    /// * `i` — an index;
+    /// * `a..b` / `a..=b` — the half-open / inclusive range, untouched;
+    /// * `a:b:s` — a slice with a step, where either bound and the step may be
+    ///   omitted. `a:b` builds the same node `a..b` does, so the older form
+    ///   keeps its exact meaning and the step is an additive third component.
+    ///
+    /// `::` lexes as one token ([`Punct::ColonColon`]) because it is also the
+    /// cons operator and the module separator. At the *start* of a slice there
+    /// is no left operand to cons onto, so `xs[::2]` is read as two slice
+    /// colons; after an expression the cons reading wins and the slice needs
+    /// its end written out.
     fn slice(&mut self) -> SliceAst {
+        if self.at_punct(Punct::Colon) {
+            self.bump();
+            return self.slice_tail(None);
+        }
+        if self.at_punct(Punct::ColonColon) {
+            self.bump();
+            return self.slice_step(None, None);
+        }
         if self.at_punct(Punct::DotDot) {
             self.bump();
             if self.at_punct(Punct::RBracket) || self.at_punct(Punct::Comma) {
@@ -1863,6 +1886,7 @@ impl<'a> Parser<'a> {
                     start: None,
                     end: None,
                     inclusive: false,
+                    step: None,
                 };
             }
             let end = self.expr();
@@ -1870,15 +1894,23 @@ impl<'a> Parser<'a> {
                 start: None,
                 end: Some(end),
                 inclusive: false,
+                step: None,
             };
         }
-        let start = self.expr();
+        // The bounds are parsed *below* `annot_expr`: inside `[...]` a `:` is
+        // a slice separator, so `xs[a : b]` is a slice and not a type
+        // ascription. An annotated index is written `xs[(a : T)]`.
+        let start = self.pipe_expr();
+        if self.eat_punct(Punct::Colon) {
+            return self.slice_tail(Some(start));
+        }
         if self.eat_punct(Punct::DotDot) {
             if self.at_punct(Punct::RBracket) || self.at_punct(Punct::Comma) {
                 return SliceAst::Range {
                     start: Some(start),
                     end: None,
                     inclusive: false,
+                    step: None,
                 };
             }
             let end = self.expr();
@@ -1886,6 +1918,7 @@ impl<'a> Parser<'a> {
                 start: Some(start),
                 end: Some(end),
                 inclusive: false,
+                step: None,
             };
         }
         if self.eat_punct(Punct::DotDotEq) {
@@ -1894,9 +1927,56 @@ impl<'a> Parser<'a> {
                 start: Some(start),
                 end: Some(end),
                 inclusive: true,
+                step: None,
             };
         }
         SliceAst::Index(start)
+    }
+
+    /// The rest of a `:` slice, after its first `:` and its start.
+    ///
+    /// A second `:` is only an omitted end when there is no start either —
+    /// `xs[::2]` — because after an expression `::` is the cons operator
+    /// (§A.4), and `xs[1::2]` must keep meaning `xs[1 :: 2]`. A slice with a
+    /// start and a step therefore names its end: `xs[1:5:2]`.
+    fn slice_tail(&mut self, start: Option<Expr>) -> SliceAst {
+        if self.at_punct(Punct::RBracket) || self.at_punct(Punct::Comma) {
+            return SliceAst::Range {
+                start,
+                end: None,
+                inclusive: false,
+                step: None,
+            };
+        }
+        if start.is_none() && self.eat_punct(Punct::Colon) {
+            return self.slice_step(None, None);
+        }
+        let end = self.pipe_expr();
+        if self.eat_punct(Punct::Colon) {
+            return self.slice_step(start, Some(end));
+        }
+        SliceAst::Range {
+            start,
+            end: Some(end),
+            inclusive: false,
+            step: None,
+        }
+    }
+
+    /// The step of a `:` slice; a trailing `:` with nothing after it means no
+    /// step, so `xs[1:3:]` is `xs[1:3]`.
+    fn slice_step(&mut self, start: Option<Expr>, end: Option<Expr>) -> SliceAst {
+        let step = if self.at_punct(Punct::RBracket) || self.at_punct(Punct::Comma) {
+            None
+        } else {
+            Some(self.pipe_expr())
+        };
+        SliceAst::Range {
+            start,
+            end,
+            inclusive: false,
+            step,
+        }
     }
 
     fn primary(&mut self) -> Expr {
@@ -3267,6 +3347,47 @@ mod tests {
             panic!("expected index");
         };
         assert_eq!(indices.len(), 2);
+    }
+
+    #[test]
+    fn parses_slice_steps() {
+        // The step is the third component and only the `:` spelling carries
+        // it; `a..b` keeps its two-component node with no step.
+        let expr = parse_expr_source("m[1:5:2, ::-1, :, 3]");
+        let ExprKind::Index { indices, .. } = &expr.kind else {
+            panic!("expected index");
+        };
+        assert_eq!(indices.len(), 4);
+        let steps: Vec<bool> = indices
+            .iter()
+            .map(|index| match index {
+                SliceAst::Range { step, .. } => step.is_some(),
+                SliceAst::Index(_) => false,
+            })
+            .collect();
+        assert_eq!(steps, vec![true, true, false, false]);
+        let SliceAst::Range {
+            start, end, step, ..
+        } = &indices[0]
+        else {
+            panic!("expected a range");
+        };
+        assert!(start.is_some() && end.is_some() && step.is_some());
+        let SliceAst::Range { start, end, step, .. } = &indices[1] else {
+            panic!("expected a range");
+        };
+        assert!(start.is_none() && end.is_none() && step.is_some());
+    }
+
+    #[test]
+    fn a_slice_step_does_not_steal_the_cons_operator() {
+        // `1::2` is a cons expression, and inside an index it stays one.
+        let expr = parse_expr_source("xs[1::rest]");
+        let ExprKind::Index { indices, .. } = &expr.kind else {
+            panic!("expected index");
+        };
+        assert_eq!(indices.len(), 1);
+        assert!(matches!(indices[0], SliceAst::Index(_)));
     }
 
     #[test]

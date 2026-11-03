@@ -304,6 +304,8 @@ pub enum Slice {
         end: Option<Atom>,
         /// Whether the range is inclusive.
         inclusive: bool,
+        /// The step, when written. `None` means one.
+        step: Option<Atom>,
     },
 }
 

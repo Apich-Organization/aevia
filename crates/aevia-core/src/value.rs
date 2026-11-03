@@ -941,6 +941,64 @@ impl TensorData {
         })
     }
 
+    /// The sub-tensor named by one `(first, count, step)` walk per axis, as a
+    /// view (§6.6.4).
+    ///
+    /// The stride of an axis is multiplied by the step and a negative step
+    /// flips the axis's direction, so a stepped slice moves no data: `xs[::2]`
+    /// reads every second element of the same buffer and `xs[::-1]` is that
+    /// buffer walked backwards from its end. That is what makes a negative
+    /// step a view rather than a copy, and why `Rc::ptr_eq` holds between it
+    /// and its source.
+    ///
+    /// Returns `None` for a class that is not in an `f64` buffer, for a walk
+    /// that leaves the buffer, and for an empty result (an empty tensor stays
+    /// [`Storage::Boxed`], as everywhere else).
+    #[must_use]
+    pub fn slice_step_view(&self, walks: &[(usize, usize, isize)]) -> Option<Self> {
+        let (data, offset, strides, reversed) = self.f64_window()?;
+        if walks.len() != self.rank() {
+            return None;
+        }
+        let mut shape = Vec::with_capacity(walks.len());
+        let mut new_strides = Vec::with_capacity(walks.len());
+        let mut new_reversed = Vec::with_capacity(walks.len());
+        let mut start = offset;
+        for (axis, (first, count, step)) in walks.iter().enumerate() {
+            if *count > 0 && *first >= self.shape[axis] {
+                return None;
+            }
+            let magnitude = usize::try_from(step.unsigned_abs()).ok()?;
+            if magnitude == 0 {
+                return None;
+            }
+            // The first element of the walk, in the parent's window.
+            let base = signed_stride(strides[axis], reversed[axis])?;
+            start = start.checked_add_signed(base.checked_mul(isize::try_from(*first).ok()?)?)?;
+            shape.push(*count);
+            new_strides.push(strides[axis].checked_mul(magnitude)?);
+            // The walk runs backwards exactly when the parent's direction and
+            // the step's sign disagree.
+            new_reversed.push(reversed[axis] != (*step < 0));
+        }
+        let len: usize = shape.iter().product();
+        if len == 0 || !window_fits(&shape, &new_strides, &new_reversed, start, data.len()) {
+            return None;
+        }
+        Some(Self {
+            shape,
+            storage: Storage::View(View {
+                data,
+                offset: start,
+                strides: new_strides,
+                reversed: new_reversed,
+                len,
+            }),
+            dim: self.dim.clone(),
+            display: self.display.clone(),
+        })
+    }
+
     /// The sub-tensor at `fixed` coordinates, keeping the trailing axes, as a
     /// view.
     ///

@@ -740,13 +740,16 @@ impl Lowerer {
                             start,
                             end,
                             inclusive,
+                            step,
                         } => {
                             let start = start.as_ref().map(|expr| self.value(expr, builder));
                             let end = end.as_ref().map(|expr| self.value(expr, builder));
+                            let step = step.as_ref().map(|expr| self.value(expr, builder));
                             lowered.push(Slice::Range {
                                 start,
                                 end,
                                 inclusive: *inclusive,
+                                step,
                             });
                         }
                     }

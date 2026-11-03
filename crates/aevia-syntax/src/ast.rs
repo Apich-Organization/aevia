@@ -382,7 +382,10 @@ pub enum DoStmt {
 pub enum SliceAst {
     /// `i`
     Index(Expr),
-    /// `a..b`, `a..`, `..b`, `..`
+    /// `a..b`, `a..`, `..b`, `..`, `a:b:step`
+    ///
+    /// The `..`/`..=` forms never carry a step; the `:` form carries one when
+    /// it is written, and its absence means `1`.
     Range {
         /// The start, when written.
         start: Option<Expr>,
@@ -390,6 +393,8 @@ pub enum SliceAst {
         end: Option<Expr>,
         /// Whether the range is inclusive (`..=`).
         inclusive: bool,
+        /// The step, when written (`a:b:s`). `None` means `1`.
+        step: Option<Expr>,
     },
 }
 

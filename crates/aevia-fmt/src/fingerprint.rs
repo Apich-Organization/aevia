@@ -519,6 +519,7 @@ fn expr_into(out: &mut String, expr: &Expr) {
                         start,
                         end,
                         inclusive,
+                        step,
                     } => {
                         out.push_str("range(");
                         if let Some(start) = start {
@@ -527,6 +528,10 @@ fn expr_into(out: &mut String, expr: &Expr) {
                         out.push_str(if *inclusive { "..=" } else { ".." });
                         if let Some(end) = end {
                             expr_into(out, end);
+                        }
+                        if let Some(step) = step {
+                            out.push_str(":");
+                            expr_into(out, step);
                         }
                         out.push(')');
                     }

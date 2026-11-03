@@ -611,6 +611,7 @@ fn eval_rhs(
                         start,
                         end,
                         inclusive,
+                        step,
                     } => {
                         let start = match start {
                             Some(atom) => Some(
@@ -628,10 +629,23 @@ fn eval_rhs(
                             ),
                             None => None,
                         };
+                        // A step that is not a number is `NaN` here, which the
+                        // slicer refuses: `0` would be a plausible-looking
+                        // step and `1` a plausible-looking default, and neither
+                        // is what the program said.
+                        let step = match step {
+                            Some(atom) => Some(
+                                eval_atom(interp, atom, frame, env, span)?
+                                    .as_f64()
+                                    .unwrap_or(f64::NAN),
+                            ),
+                            None => None,
+                        };
                         resolved.push(SliceValue::Range {
                             start,
                             end,
                             inclusive: *inclusive,
+                            step,
                         });
                     }
                 }

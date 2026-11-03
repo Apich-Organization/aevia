@@ -802,13 +802,26 @@ impl Printer {
                             start,
                             end,
                             inclusive,
+                            step,
                         } => {
+                            // A step is written in the `a:b:s` spelling, which
+                            // is the only one that carries one; a slice
+                            // without a step keeps the `..` spelling it had.
+                            let separator = match step {
+                                Some(_) => ":",
+                                None if *inclusive => "..=",
+                                None => "..",
+                            };
                             if let Some(start) = start {
                                 self.expr(start, Ctx::bracketed());
                             }
-                            self.push(if *inclusive { "..=" } else { ".." });
+                            self.push(separator);
                             if let Some(end) = end {
                                 self.expr(end, Ctx::bracketed());
+                            }
+                            if let Some(step) = step {
+                                self.push(":");
+                                self.expr(step, Ctx::bracketed());
                             }
                         }
                     }
