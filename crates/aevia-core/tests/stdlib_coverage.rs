@@ -10,7 +10,7 @@
 //!   dispatch arm for it (`call` returns something other than "no
 //!   implementation"); or
 //! * the name is a documented capability gap: `E1001` whose message names a
-//!   capability from §10's table.
+//!   capability from §10/§13.8.
 //!
 //! A name that is typed but has no arm fails the test, and so does a name whose
 //! `E1001` does not name a capability: a missing *implementation* is a bug,
@@ -70,48 +70,38 @@ const EXTRA_NAMES: &[&str] = &[
     "write_file",
 ];
 
-/// The capabilities §10 declares. An `E1001` that names one of these is a
-/// documented gap; an `E1001` that names nothing is a missing implementation.
-const CAPABILITIES: &[&str] = &[
-    "core.dynamic_call",
-    "core.gpu",
-    "core.jit",
-    "core.distributed",
-    "core.plugin",
-    "core.symbolic",
-    "core.tensor",
-    "core.ode",
-    "io.binary",
-];
-
-/// Names §8 declares that this build cannot resolve, with the reason and the
-/// crate that must change.
+/// The capabilities a documented `E1001` gap may name.
 ///
-/// Each entry is asserted to *still be blocked*, so a name cannot quietly join
-/// this list: if it starts resolving, the test fails and the entry must be
-/// deleted.
-const BLOCKED: &[(&str, &str)] = &[
-    (
-        "Rssn.typed",
-        "the runtime arm exists (`rssn_module::call` handles `typed`), but \
-         `check.rs::rssn_member` has no signature for it, so a program cannot \
-         name it; the checker needs a `TypeRep` type",
-    ),
-    (
-        "Rssn.call_ho",
-        "as `Rssn.typed`: the checker has no signature for a higher-order \
-         dynamic call",
-    ),
-    (
-        "Rssn.register",
-        "as `Rssn.typed`: plugin registration needs a `Plugin` type the \
-         checker does not have",
-    ),
-    (
-        "Rssn.register_plugin",
-        "as `Rssn.typed`: alias of `Rssn.register`, blocked for the same reason",
-    ),
-];
+/// This is the union of the two things that can be missing in this build:
+///
+/// * a **kernel** capability — the rows derived from the Kernel Manifest's
+///   `Features` (`aevia-rssn`'s one table) plus the capability names §10/§13.8
+///   declare that the manifest has no feature for (`io.binary`, `core.gpu`,
+///   `core.distributed`);
+/// * a **host-bridge** capability — `core.callback` and `core.plugin.source`
+///   are rows of the same table with `enabled = false`: the kernel offers
+///   `call_ho` and in-process plugins, but no Aevia value can satisfy their
+///   ABI (§8.19/§13.5).
+///
+/// Reading the enabled rows from the live manifest instead of typing the list
+/// is what keeps this test honest when the kernel gains a capability.
+fn capabilities() -> Vec<String> {
+    let mut names: Vec<String> = aevia_rssn::registry()
+        .capabilities
+        .table()
+        .into_iter()
+        .map(|row| row.name)
+        .collect();
+    // Names §10/§13.8 declare that the manifest has no `Features` field for.
+    names.extend(
+        ["core.gpu", "core.distributed", "io.binary"]
+            .into_iter()
+            .map(str::to_string),
+    );
+    names.sort();
+    names.dedup();
+    names
+}
 
 fn declared() -> Vec<&'static str> {
     NAMES
@@ -135,8 +125,12 @@ fn probe() -> Vec<Value> {
     vec![Value::int(1)]
 }
 
-fn is_blocked(name: &str) -> bool {
-    BLOCKED.iter().any(|(blocked, _)| *blocked == name)
+/// Whether an `E1001` message names one of the capabilities this build may
+/// genuinely lack.
+fn names_a_capability(message: &str) -> bool {
+    capabilities()
+        .iter()
+        .any(|capability| message.contains(capability))
 }
 
 #[test]
@@ -159,9 +153,6 @@ fn the_checked_in_list_is_the_one_the_specification_declares() {
 fn every_declared_name_is_typed() {
     let mut missing = Vec::new();
     for name in declared() {
-        if is_blocked(name) {
-            continue;
-        }
         if let Some(member) = name.strip_prefix("Rssn.") {
             if aevia_core::rssn_module::is_entry_point(member)
                 || aevia_core::rssn_module::is_data_member(member)
@@ -187,15 +178,44 @@ fn every_declared_name_is_typed() {
     );
 }
 
+/// The four `Rssn` entry points §8.19 declares are *reachable from source*, not
+/// merely present in a runtime list: a program has to be able to name them and
+/// the checker has to give them a type. `is_entry_point` alone is a claim about
+/// the runtime and would pass even while `rssn_member` reported `E0301`.
+#[test]
+fn the_fixed_entry_points_are_reachable_from_source() {
+    for (member, source) in [
+        ("typed", "let f = Rssn.typed\n"),
+        ("call_ho", "let f = Rssn.call_ho\n"),
+        ("register", "let f = Rssn.register\n"),
+        ("register_plugin", "let f = Rssn.register_plugin\n"),
+    ] {
+        assert!(
+            aevia_core::rssn_module::is_entry_point(member),
+            "`Rssn.{member}` is not an entry point"
+        );
+        let compilation = aevia_core::compile("rssn.aev", source);
+        let errors: Vec<String> = compilation
+            .diagnostics
+            .items
+            .iter()
+            .filter(|item| item.severity == aevia_syntax::Severity::Error)
+            .map(|item| format!("{}: {}", item.code, item.message))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "`Rssn.{member}` is not reachable from source: {errors:?}"
+        );
+    }
+}
+
 #[test]
 fn every_declared_name_is_implemented_or_a_named_capability_gap() {
     let mut missing = Vec::new();
     for name in declared() {
-        if is_blocked(name) {
-            continue;
-        }
         if let Some(member) = name.strip_prefix("Rssn.") {
             // A `Rssn` member is implemented by the bridge, not by `call`.
+            // Reachability from source is asserted separately, above.
             if aevia_core::rssn_module::is_entry_point(member)
                 || aevia_core::rssn_module::is_data_member(member)
             {
@@ -210,10 +230,7 @@ fn every_declared_name_is_implemented_or_a_named_capability_gap() {
         match builtins::call_simple(name, probe()) {
             Ok(_) => {}
             Err(error) if error.code == "E1001" => {
-                let named = CAPABILITIES
-                    .iter()
-                    .any(|capability| error.message.contains(capability));
-                if !named {
+                if !names_a_capability(&error.message) {
                     missing.push(format!("{name} (E1001 without a capability: {})", error.message));
                 }
             }
@@ -235,10 +252,7 @@ fn every_other_builtin_is_implemented() {
         match builtins::call_simple(name, probe()) {
             Ok(_) => {}
             Err(error) if error.code == "E1001" => {
-                let named = CAPABILITIES
-                    .iter()
-                    .any(|capability| error.message.contains(capability));
-                if !named {
+                if !names_a_capability(&error.message) {
                     missing.push(format!("{name} (E1001 without a capability)"));
                 }
             }
@@ -251,21 +265,26 @@ fn every_other_builtin_is_implemented() {
     );
 }
 
+/// Implementing NPY locally (§8.11) closed the last two documented gaps: no
+/// chapter-8 name may be an `E1001` capability gap any more.
 #[test]
-fn a_blocked_name_is_still_blocked() {
-    for (name, reason) in BLOCKED {
-        // The blocker is the *checker*: a program that names the member gets a
-        // diagnostic. A runtime arm existing (as `Rssn.typed` now does) does
-        // not make the name reachable, so the test asks the checker rather
-        // than the bridge.
-        let source = format!("let x = {name}\n");
-        let compilation = aevia_core::compile("blocked.aev", &source);
-        assert!(
-            compilation.diagnostics.has_errors(),
-            "`{name}` now resolves from source; delete it from BLOCKED and from \
-             the report ({reason})"
-        );
+fn chapter_eight_has_no_capability_gaps() {
+    let mut gaps = Vec::new();
+    for name in declared() {
+        if name.starts_with("Rssn.") || adt::find_prelude_ctor(name).is_some() {
+            continue;
+        }
+        if let Err(error) = builtins::call_simple(name, probe()) {
+            if error.code == "E1001" {
+                gaps.push((name.to_string(), error.message));
+            }
+        }
     }
+    gaps.sort();
+    assert!(
+        gaps.is_empty(),
+        "chapter 8 still has capability gap(s): {gaps:?}"
+    );
 }
 
 #[test]
@@ -274,9 +293,6 @@ fn the_coverage_is_reported() {
     let mut implemented = 0usize;
     let mut gaps = Vec::new();
     for name in declared() {
-        if is_blocked(name) {
-            continue;
-        }
         if let Some(member) = name.strip_prefix("Rssn.") {
             if aevia_core::rssn_module::is_entry_point(member)
                 || aevia_core::rssn_module::is_data_member(member)
@@ -295,19 +311,19 @@ fn the_coverage_is_reported() {
             Err(_) => implemented += 1,
         }
     }
-    let blocked = BLOCKED.len();
-    let percent = 100.0 * implemented as f64 / total as f64;
+    let accounted = implemented + gaps.len();
+    let percent = 100.0 * accounted as f64 / total as f64;
     eprintln!(
-        "chapter 8: {implemented}/{total} names implemented ({percent:.1}%), \
-         {} documented capability gap(s), {blocked} blocked",
+        "chapter 8: {implemented}/{total} names implemented, {} documented capability \
+         gap(s), 0 blocked — {percent:.1}% accounted for",
         gaps.len()
     );
     for (name, message) in &gaps {
         eprintln!("  gap: {name} — {message}");
     }
     assert_eq!(
-        implemented + gaps.len() + blocked,
-        total,
-        "every name is implemented, a named gap, or blocked"
+        accounted, total,
+        "every name is implemented or a named capability gap"
     );
+    assert_eq!(percent, 100.0);
 }

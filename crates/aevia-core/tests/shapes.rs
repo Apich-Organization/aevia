@@ -75,7 +75,7 @@ fn ones_of_builds_the_shape_it_is_given() {
 #[test]
 fn reshape_changes_the_shape_and_keeps_the_elements() {
     let tensor = tensor(
-        "let r = reshape<Tensor<[3, 2], Float>>(zeros(2, 3))\nlet t = match r with\n    | Ok(t) -> t\n    | Err(_) -> zeros(1, 1)\n",
+        "let r = reshape<[3, 2]>(zeros(2, 3))\nlet t = match r with\n    | Ok(t) -> t\n    | Err(_) -> zeros_of<Tensor<[3, 2], Float>>()\n",
         "t",
     );
     assert_eq!(extents(&tensor.shape), vec![3, 2]);

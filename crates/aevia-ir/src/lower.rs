@@ -31,21 +31,25 @@ use aevia_syntax::ast::{
 };
 use aevia_syntax::Span;
 use aevia_types::check::{DictionaryUse, RssnCall};
+use aevia_types::ty::Rep;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Lowers a whole module.
+/// Lowers a whole module with the checker's per-literal representation table.
 ///
-/// `rssn_calls` and `dictionaries` are the checker's records: the IR does not
-/// rediscover the overload of a `Rssn.<op>` call or the instance of a class
-/// method, it carries the span the checker pinned (PLAN D1, D3).
+/// The table (`CheckedModule::literal_reps`) is what makes a numeric literal's
+/// runtime representation agree with its static type: a literal in a `Float`
+/// context is `Float`, one in a `Real` context is exact (§3.10.1, §6.3.2). The
+/// other entry points pass an empty table, which leaves every literal at its
+/// uncoerced representation.
 #[must_use]
-pub fn lower_module(
+pub fn lower_module_with_literals(
     module: &aevia_syntax::ast::Module,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
+    literal_reps: &HashMap<Span, Rep>,
 ) -> Module {
-    let mut lowerer = Lowerer::new(rssn_calls, dictionaries);
+    let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
     let mut out = Module::default();
     for decl in &module.decls {
         match &decl.kind {
@@ -91,6 +95,16 @@ pub fn lower_module(
     out
 }
 
+/// Lowers a whole module without a literal-representation table.
+#[must_use]
+pub fn lower_module(
+    module: &aevia_syntax::ast::Module,
+    rssn_calls: &[RssnCall],
+    dictionaries: &[DictionaryUse],
+) -> Module {
+    lower_module_with_literals(module, rssn_calls, dictionaries, &HashMap::new())
+}
+
 /// One lowered top-level declaration, for the REPL (§9.8).
 #[derive(Debug)]
 pub enum LoweredDecl {
@@ -103,13 +117,28 @@ pub enum LoweredDecl {
 }
 
 /// Lowers one declaration, for an incremental session.
+///
+/// # Panics
+///
+/// Does not panic; kept for the same reason as [`lower_module`].
 #[must_use]
 pub fn lower_decl(
     decl: &Decl,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
 ) -> Option<LoweredDecl> {
-    let mut lowerer = Lowerer::new(rssn_calls, dictionaries);
+    lower_decl_with_literals(decl, rssn_calls, dictionaries, &HashMap::new())
+}
+
+/// Lowers one declaration with the checker's literal-representation table.
+#[must_use]
+pub fn lower_decl_with_literals(
+    decl: &Decl,
+    rssn_calls: &[RssnCall],
+    dictionaries: &[DictionaryUse],
+    literal_reps: &HashMap<Span, Rep>,
+) -> Option<LoweredDecl> {
+    let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
     match &decl.kind {
         DeclKind::Fn {
             name, args, body, ..
@@ -182,29 +211,41 @@ struct Builder {
 struct Lowerer {
     /// Spans at which the checker pinned a `Rssn.<op>` overload.
     rssn: HashMap<Span, ()>,
-    /// Spans at which the checker resolved a class method, with the method.
-    dictionaries: HashMap<Span, Vec<String>>,
+    /// Spans at which the checker resolved a class method, with the record.
+    dictionaries: HashMap<Span, Vec<DictionaryUse>>,
+    /// The instantiated representation of every numeric literal, by span.
+    literal_reps: HashMap<Span, Rep>,
     fns: Vec<FnState>,
 }
 
 impl Lowerer {
-    fn new(rssn_calls: &[RssnCall], dictionaries: &[DictionaryUse]) -> Self {
+    fn new(
+        rssn_calls: &[RssnCall],
+        dictionaries: &[DictionaryUse],
+        literal_reps: &HashMap<Span, Rep>,
+    ) -> Self {
         let mut rssn = HashMap::with_capacity(rssn_calls.len());
         for call in rssn_calls {
             rssn.insert(call.span, ());
         }
-        let mut table: HashMap<Span, Vec<String>> = HashMap::new();
+        let mut table: HashMap<Span, Vec<DictionaryUse>> = HashMap::new();
         for use_site in dictionaries {
             table
                 .entry(use_site.span)
                 .or_default()
-                .push(use_site.method.clone());
+                .push(use_site.clone());
         }
         Self {
             rssn,
             dictionaries: table,
+            literal_reps: literal_reps.clone(),
             fns: Vec::new(),
         }
+    }
+
+    /// The representation the checker instantiated for the literal at `span`.
+    fn literal_rep(&self, span: Span) -> Option<Rep> {
+        self.literal_reps.get(&span).copied()
     }
 
     // ----- slots, scopes and captures -------------------------------------
@@ -312,7 +353,7 @@ impl Lowerer {
         let body_block = self.block(body);
         let state = self.fns.pop().expect("the function state");
         Rc::new(Function {
-            name: state.name,
+            name: Rc::from(state.name),
             params: patterns,
             body: Rc::new(body_block),
             captures: state.captures,
@@ -581,8 +622,32 @@ impl Lowerer {
         match &expr.kind {
             ExprKind::Error | ExprKind::UnitLit => Atom::Unit,
             ExprKind::Bool(value) => Atom::Bool(*value),
-            ExprKind::Int(value) => Atom::Int(value.clone()),
-            ExprKind::Float(text) => Atom::Float(text.clone()),
+            // §3.10.1 / §6.3.2: the checker's per-literal representation is the
+            // runtime's. A literal in a `Float` context is an f64 atom; one in a
+            // `Real` context is exact; `Int` stays exact and integral.
+            ExprKind::Int(value) => match self.literal_rep(expr.span) {
+                Some(Rep::Float) => Atom::Float(
+                    num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+                ),
+                Some(Rep::Real) => Atom::Exact(num_rational::BigRational::from_integer(value.clone())),
+                Some(Rep::Complex) => Atom::Complex {
+                    re: num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+                    im: 0.0,
+                },
+                _ => Atom::Int(value.clone()),
+            },
+            ExprKind::Float(text) => match self.literal_rep(expr.span) {
+                Some(Rep::Real) => Atom::Exact(
+                    exact_decimal(text).unwrap_or_else(|| {
+                        num_rational::BigRational::from_integer(num_bigint::BigInt::from(0))
+                    }),
+                ),
+                Some(Rep::Complex) => Atom::Complex {
+                    re: parse_float_literal(text),
+                    im: 0.0,
+                },
+                _ => Atom::Float(parse_float_literal(text)),
+            },
             ExprKind::Str(pieces) => {
                 if pieces
                     .iter()
@@ -787,14 +852,22 @@ impl Lowerer {
                     expr.span,
                 )
             }
-            ExprKind::Quantity { value, unit } => self.emit(
-                builder,
-                Rhs::Quantity {
-                    value: value.clone(),
-                    unit: unit.clone(),
-                },
-                expr.span,
-            ),
+            ExprKind::Quantity { value, unit } => {
+                // §3.10.1: the checker instantiated this literal as `Float` (or
+                // as `Real`); the flag carries that decision into evaluation so
+                // a `Float`-context quantity is a float and a `Real`-context one
+                // stays exact (§6.3.2).
+                let as_float = matches!(self.literal_rep(expr.span), Some(Rep::Float));
+                self.emit(
+                    builder,
+                    Rhs::Quantity {
+                        value: value.clone(),
+                        unit: unit.clone(),
+                        as_float,
+                    },
+                    expr.span,
+                )
+            }
         }
     }
 
@@ -868,12 +941,15 @@ impl Lowerer {
                 });
             }
         }
-        // A class method the checker resolved to an instance (§3.8.1).
+        // A class method the checker resolved to an instance (§3.8.1,
+        // round-2 decision 1c): the IR carries the pinned target, not a name to
+        // resolve again.
         if let ExprKind::Var(name) = &callee.kind {
-            if self
+            if let Some(use_site) = self
                 .dictionaries
                 .get(&expr.span)
-                .is_some_and(|methods| methods.iter().any(|method| method == name))
+                .and_then(|sites| sites.iter().find(|site| &site.method == name))
+                .cloned()
             {
                 let values = self.values(args, builder);
                 return Rhs::Call(Call {
@@ -881,6 +957,7 @@ impl Lowerer {
                     args: values,
                     kind: CallKind::Dictionary {
                         method: name.clone(),
+                        target: Some(use_site.target),
                     },
                     span: expr.span,
                 });
@@ -981,7 +1058,7 @@ impl Lowerer {
         };
         let state = self.fns.pop().expect("the thunk state");
         Rc::new(Function {
-            name: state.name,
+            name: Rc::from(state.name),
             params,
             body: Rc::new(block),
             captures: state.captures,
@@ -989,6 +1066,25 @@ impl Lowerer {
             span,
         })
     }
+}
+
+/// The exact rational a decimal literal denotes (§6.3.2).
+///
+/// `parse_decimal` handles the exponent and `_` forms the lexer accepts, so a
+/// literal in a `Real` context is the same number the exact arithmetic expects
+/// rather than an `f64` that only looks like it.
+fn exact_decimal(text: &str) -> Option<num_rational::BigRational> {
+    aevia_dim::parse_decimal(text)
+}
+
+/// The `f64` a float literal denotes.
+///
+/// The lexer has already validated the literal (a malformed one is `E0106`
+/// there), so this parse cannot fail from a parsed program; the `NaN` fallback
+/// is defensive and never reachable from source. Parsing once here is what
+/// keeps a tight numeric loop from re-parsing the same text on every step.
+fn parse_float_literal(text: &str) -> f64 {
+    text.replace('_', "").parse().unwrap_or(f64::NAN)
 }
 
 /// Whether an expression names the `Rssn` module itself.

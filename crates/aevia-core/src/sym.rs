@@ -17,7 +17,86 @@ use num_rational::BigRational;
 use num_traits::{One, Signed, ToPrimitive, Zero};
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+
+/// A structural hash of a term, without allocating a key string.
+///
+/// `Term::add`/`Term::mul` used to key their operand groups by
+/// `format!("{term:?}")`: one `String` allocation per operand and a linear
+/// string comparison per probe, which is O(n²) allocations and time to build an
+/// n-operand sum. A structural hash plus `Term`'s own `Eq` is the same
+/// equivalence relation over a `u64` and an in-place comparison, so the
+/// canonical printing order is unchanged.
+#[must_use]
+fn term_hash(term: &Term) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    term.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl Hash for Term {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Num(value) => {
+                0u8.hash(state);
+                value.hash(state);
+            }
+            Self::Sym(name) => {
+                1u8.hash(state);
+                name.hash(state);
+            }
+            Self::Add(items) => {
+                2u8.hash(state);
+                items.hash(state);
+            }
+            Self::Mul(items) => {
+                3u8.hash(state);
+                items.hash(state);
+            }
+            Self::Pow(base, exponent) => {
+                4u8.hash(state);
+                base.hash(state);
+                exponent.hash(state);
+            }
+            Self::Fun(function, args) => {
+                5u8.hash(state);
+                function.as_str().hash(state);
+                args.hash(state);
+            }
+            Self::Foreign { sym, text } => {
+                6u8.hash(state);
+                sym.hash(state);
+                text.hash(state);
+            }
+        }
+    }
+}
+
+/// Moves the operands of a sum into `flat`, consuming the term instead of
+/// cloning it (the clone was the other O(n) allocation per add).
+fn flatten_add_owned(term: Term, flat: &mut Vec<Term>) {
+    match term {
+        Term::Add(items) => {
+            for item in items {
+                flatten_add_owned(item, flat);
+            }
+        }
+        other => flat.push(other),
+    }
+}
+
+/// Moves the factors of a product into `flat`, consuming the term.
+fn flatten_mul_owned(term: Term, flat: &mut Vec<Term>) {
+    match term {
+        Term::Mul(items) => {
+            for item in items {
+                flatten_mul_owned(item, flat);
+            }
+        }
+        other => flat.push(other),
+    }
+}
 
 /// A symbolic expression.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -224,23 +303,28 @@ impl Term {
     #[must_use]
     pub fn add(left: Term, right: Term) -> Term {
         let mut flat = Vec::new();
-        flatten_add(left, &mut flat);
-        flatten_add(right, &mut flat);
+        flatten_add_owned(left, &mut flat);
+        flatten_add_owned(right, &mut flat);
         let mut constant = BigRational::zero();
-        let mut groups: Vec<(String, Term, BigRational)> = Vec::new();
+        // `(hash, term, count)` in first-occurrence order: a structural hash
+        // replaces the old `format!("{term:?}")` key (see [`term_hash`]), so
+        // the printed order and the like-term merge are unchanged.
+        let mut groups: Vec<(u64, Term, BigRational)> = Vec::new();
         for term in flat {
             if let Term::Num(value) = &term {
                 constant += value;
                 continue;
             }
-            let key = format!("{term:?}");
-            if let Some(entry) = groups.iter_mut().find(|(existing, _, _)| *existing == key) {
-                entry.2 += BigRational::one();
-            } else {
-                groups.push((key, term, BigRational::one()));
+            let hash = term_hash(&term);
+            match groups
+                .iter_mut()
+                .find(|(existing_hash, existing, _)| *existing_hash == hash && *existing == term)
+            {
+                Some((_, _, count)) => *count += BigRational::one(),
+                None => groups.push((hash, term, BigRational::one())),
             }
         }
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(groups.len() + 1);
         for (_, term, count) in groups {
             if count.is_one() {
                 items.push(term);
@@ -264,31 +348,35 @@ impl Term {
     #[must_use]
     pub fn mul(left: Term, right: Term) -> Term {
         let mut flat = Vec::new();
-        flatten_mul(left, &mut flat);
-        flatten_mul(right, &mut flat);
+        flatten_mul_owned(left, &mut flat);
+        flatten_mul_owned(right, &mut flat);
         let mut constant = BigRational::one();
-        let mut factors: Vec<(String, Term, BigRational)> = Vec::new();
+        let mut factors: Vec<(u64, Term, BigRational)> = Vec::new();
         for term in flat {
             match term {
                 Term::Num(value) => constant *= value,
                 Term::Pow(base, exponent) => {
-                    let key = format!("{base:?}");
-                    if let Some(entry) =
-                        factors.iter_mut().find(|(existing, _, _)| *existing == key)
+                    let hash = term_hash(&base);
+                    match factors
+                        .iter_mut()
+                        .find(|(existing_hash, existing, _)| {
+                            *existing_hash == hash && *existing == *base
+                        })
                     {
-                        entry.2 += exponent;
-                    } else {
-                        factors.push((key, *base, exponent));
+                        Some((_, _, existing)) => *existing += exponent,
+                        None => factors.push((hash, *base, exponent)),
                     }
                 }
                 other => {
-                    let key = format!("{other:?}");
-                    if let Some(entry) =
-                        factors.iter_mut().find(|(existing, _, _)| *existing == key)
+                    let hash = term_hash(&other);
+                    match factors
+                        .iter_mut()
+                        .find(|(existing_hash, existing, _)| {
+                            *existing_hash == hash && *existing == other
+                        })
                     {
-                        entry.2 += BigRational::one();
-                    } else {
-                        factors.push((key, other, BigRational::one()));
+                        Some((_, _, count)) => *count += BigRational::one(),
+                        None => factors.push((hash, other, BigRational::one())),
                     }
                 }
             }
@@ -338,6 +426,26 @@ impl Term {
             // are the same term and `sqrt(2)^2` folds (§6.3.1).
             if exponent == BigRational::new(BigInt::one(), BigInt::from(2)) {
                 return Term::fun(Fun::Sqrt, vec![base]);
+            }
+            // A rational power of an exact number is exact when the root is:
+            // `(1/4)^(1/2) = 1/2`, `8^(1/3) = 2`, `(-8)^(1/3) = -2`. Otherwise
+            // the term stays formal (`2^(1/2)` is `sqrt(2)`).
+            if !exponent.denom().is_one() {
+                if let Some(degree) = exponent.denom().to_u32() {
+                    if let (Some(numerator_root), Some(denominator_root)) = (
+                        perfect_root(value.numer(), degree),
+                        perfect_root(value.denom(), degree),
+                    ) {
+                        let mut root = BigRational::new(numerator_root, denominator_root);
+                        let power = exponent.numer().clone();
+                        if power.is_negative() {
+                            root = root.recip();
+                        }
+                        if let Some(power) = power.abs().to_i32() {
+                            return rational(aevia_dim::rat::pow_int(&root, power));
+                        }
+                    }
+                }
             }
         }
         // `sqrt(u)^(2k) = u^k`, so `sqrt(2)^2` is exactly `2` and not a float
@@ -630,28 +738,6 @@ impl Term {
     }
 }
 
-fn flatten_add(term: Term, out: &mut Vec<Term>) {
-    match term {
-        Term::Add(items) => {
-            for item in items {
-                flatten_add(item, out);
-            }
-        }
-        other => out.push(other),
-    }
-}
-
-fn flatten_mul(term: Term, out: &mut Vec<Term>) {
-    match term {
-        Term::Mul(items) => {
-            for item in items {
-                flatten_mul(item, out);
-            }
-        }
-        other => out.push(other),
-    }
-}
-
 fn exact_function(function: Fun, value: &BigRational) -> Option<BigRational> {
     match function {
         Fun::Sqrt if value.is_positive() => {
@@ -669,13 +755,68 @@ fn exact_function(function: Fun, value: &BigRational) -> Option<BigRational> {
 }
 
 fn perfect_root(value: &BigInt, degree: u32) -> Option<BigInt> {
+    // An even root of a negative number is not real; an odd root keeps the
+    // sign, so `(-8)^(1/3) = -2` (§6.3.4 leaves only negative *even* roots
+    // formal).
+    let negative = value.is_negative();
+    if negative && degree % 2 == 0 {
+        return None;
+    }
     let approximate = value.to_f64()?;
     let root = approximate.abs().powf(1.0 / f64::from(degree));
     let candidate = BigInt::from(root.round() as i64);
+    let candidate = if negative { -candidate } else { candidate };
     if candidate.pow(degree) == *value {
         Some(candidate)
     } else {
         None
+    }
+}
+
+/// Whether a term is the positive infinity constant (`oo`, possibly held as a
+/// kernel handle whose rendered text is `oo`).
+fn is_infinity_term(term: &Term) -> bool {
+    match term {
+        Term::Sym(name) => name == "oo",
+        Term::Foreign { text, .. } => text.as_ref() == "oo",
+        _ => false,
+    }
+}
+
+/// `-1`/`+1` for a symbolic infinity term, `None` otherwise.
+fn infinity_sign_of(term: &Term) -> Option<i8> {
+    if is_infinity_term(term) {
+        return Some(1);
+    }
+    match term {
+        Term::Mul(items) => match items.as_slice() {
+            [Term::Num(coefficient), rest]
+                if coefficient == &BigRational::from_integer(BigInt::from(-1))
+                    && is_infinity_term(rest) =>
+            {
+                Some(-1)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether an infinity occurs anywhere in `term`.
+///
+/// The exact (Real) arithmetic path is *partial* on the extended reals: when an
+/// operation on `oo` would collapse to a finite number only through an
+/// undefined form (`oo * 0`, `oo / oo`, `oo ^ 0`, …), the evaluator keeps the
+/// expression unevaluated instead of inventing a finite answer. The Float path
+/// stays IEEE, where the same operations are `nan`.
+#[must_use]
+pub fn contains_infinity(term: &Term) -> bool {
+    match term {
+        Term::Num(_) => false,
+        Term::Sym(_) | Term::Foreign { .. } => infinity_sign_of(term).is_some(),
+        Term::Add(items) | Term::Mul(items) => items.iter().any(contains_infinity),
+        Term::Pow(base, _) => contains_infinity(base),
+        Term::Fun(_, args) => args.iter().any(contains_infinity),
     }
 }
 
@@ -721,6 +862,11 @@ impl Term {
             Self::Add(items) => {
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
+                        // `… - oo` is the negative-infinity term, not `-1*oo`.
+                        if infinity_sign_of(item) == Some(-1) {
+                            f.write_str(" - oo")?;
+                            continue;
+                        }
                         if is_negative(item) {
                             f.write_str(" - ")?;
                             absolute(item).render(f, repr)?;
@@ -733,6 +879,32 @@ impl Term {
                 Ok(())
             }
             Self::Mul(items) => {
+                // `a * b^-1` reads as `a/b`; this is also how an unevaluated
+                // quotient such as `oo / oo` stays legible.
+                if let [numerator, Self::Pow(denominator, exponent)] = items.as_slice() {
+                    if exponent == &BigRational::from_integer(BigInt::from(-1)) {
+                        numerator.render(f, repr)?;
+                        f.write_str("/")?;
+                        if matches!(**denominator, Self::Add(_) | Self::Mul(_)) {
+                            f.write_str("(")?;
+                            denominator.render(f, repr)?;
+                            f.write_str(")")?;
+                        } else {
+                            denominator.render(f, repr)?;
+                        }
+                        return Ok(());
+                    }
+                }
+                // `-1 * oo` is the extended-real negative infinity and reads as
+                // `-oo`, not `-1*oo` (§6.3.4: `ln(0)` returns `-oo`).
+                if let [Self::Num(coefficient), rest] = items.as_slice() {
+                    if coefficient == &BigRational::from_integer(BigInt::from(-1))
+                        && is_infinity_term(rest)
+                    {
+                        f.write_str("-oo")?;
+                        return Ok(());
+                    }
+                }
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
                         f.write_str("*")?;
@@ -749,7 +921,10 @@ impl Term {
                 Ok(())
             }
             Self::Pow(base, exponent) => {
-                let needs_parens = matches!(**base, Self::Add(_) | Self::Mul(_));
+                // A negative base needs parentheses: `-8^(1/3)` would read as
+                // the negation of `8^(1/3)`, not as `(-8)^(1/3)`.
+                let needs_parens = matches!(**base, Self::Add(_) | Self::Mul(_))
+                    || matches!(&**base, Self::Num(value) if value.is_negative());
                 if needs_parens {
                     f.write_str("(")?;
                     base.render(f, repr)?;

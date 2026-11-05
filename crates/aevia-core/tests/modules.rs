@@ -56,6 +56,51 @@ fn run(entry: &Path) -> String {
 }
 
 #[test]
+fn a_declared_module_name_must_match_its_import_path() {
+    let scratch = Scratch::new("e0601");
+    // The file is imported as `Widgets` but declares `Gadgets`.
+    scratch.write("Widgets.aev", "module Gadgets\n\nlet n = 1\n");
+    let entry = scratch.write(
+        "main.aev",
+        "import Widgets\n\nfn main(): IO Unit = println(\"{Widgets.n}\")\n",
+    );
+    let program = driver::load(&entry);
+    assert!(
+        program
+            .diagnostics
+            .items
+            .iter()
+            .any(|item| item.code == "E0601"),
+        "a name/path mismatch is E0601, found {:?}",
+        program
+            .diagnostics
+            .items
+            .iter()
+            .map(|item| (&item.code, &item.message))
+            .collect::<Vec<_>>()
+    );
+
+    // A matching declaration loads clean.
+    let scratch = Scratch::new("e0601-ok");
+    scratch.write("Widgets.aev", "module Widgets\n\nlet n = 1\n");
+    let entry = scratch.write(
+        "main.aev",
+        "import Widgets\n\nfn main(): IO Unit = println(\"{Widgets.n}\")\n",
+    );
+    let program = driver::load(&entry);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "diagnostics: {:?}",
+        program
+            .diagnostics
+            .items
+            .iter()
+            .map(|item| (&item.code, &item.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn a_qualified_import_resolves() {
     let scratch = Scratch::new("qualified");
     scratch.write(

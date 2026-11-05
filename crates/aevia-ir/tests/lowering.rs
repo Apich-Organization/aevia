@@ -261,6 +261,276 @@ fn a_pinned_rssn_call_carries_its_overload() {
 }
 
 #[test]
+fn the_core_ir_represents_every_form_of_the_chapter_9_grammar() {
+    // §9.2.2 lists the core forms: let, lambda, app, if, match, prim,
+    // construct, project, update, tensor_lit, index, slice, do, return,
+    // literal, var. This test lowers one program that writes each and checks
+    // that the corresponding node exists, so the IR cannot quietly lose a form
+    // the specification requires (and both evaluators keep a place to meet).
+    let module = lower(
+        r#"type Pair = | Pair(Float, Float)
+
+fn f(a: Float): Float =
+    let b = a * 2.0
+    let record = { x = b, y = a }
+    let updated = { record with x = 0.0 }
+    let tensor = [updated.x, updated.y, b]
+    let first = tensor[0]
+    let window = tensor[0..2]
+    let pair = Pair(first, b)
+    let choose = if first > 0.0 then 1.0 else 0.0 - 1.0
+    let nested = fn (n: Float) => n + choose
+    nested(first - b)
+
+fn main(): IO Unit = do
+    let value = f(1.0)
+    println(show(value))
+"#,
+    );
+    let mut forms = Vec::new();
+    for decl in &module.fns {
+        collect_forms(&decl.function.body, &mut forms);
+    }
+    for decl in &module.lets {
+        collect_forms(&decl.block, &mut forms);
+    }
+    let mut kinds: Vec<&str> = forms.clone();
+    kinds.sort_unstable();
+    kinds.dedup();
+    for required in [
+        "let",       // let x = core in core
+        "lambda",    // fn (n) => ...
+        "app",       // call / constructor application
+        "if",        // branch
+        "prim",      // arithmetic, comparison, boolean operator
+        "project",   // record field read
+        "update",    // record update
+        "tensor_lit",// tensor literal
+        "index",     // indexing / slicing
+        "do",        // IO action plan
+        "return",    // a block's tail value
+        "literal",   // Int/Float/String/Bool atom
+        "var",       // a slot / capture / global read
+    ] {
+        assert!(
+            kinds.contains(&required),
+            "the IR has no `{required}` form; found {kinds:?}"
+        );
+    }
+    // `construct(tag, args)` is a call to the constructor as a value.
+    assert!(
+        forms.contains(&"construct"),
+        "a constructor application lowers to a call of the constructor"
+    );
+    // `match` needs a program of its own (it is a tail form).
+    let matched = lower(
+        r#"fn classify(n: Int): Int =
+    match n with
+    | 0 -> 1
+    | _ -> 2
+"#,
+    );
+    let mut forms = Vec::new();
+    collect_forms(&top_function(&matched, "classify").body, &mut forms);
+    assert!(forms.contains(&"match"), "the IR has no `match` form");
+    // Every `slice` index keeps the step slot, so a stepped view stays
+    // expressible in the core.
+    let stepped = lower("let xs = [1.0, 2.0, 3.0]\nlet s = xs[0:3:2]\n");
+    let mut forms = Vec::new();
+    collect_forms(&stepped.lets[1].block, &mut forms);
+    assert!(forms.contains(&"slice"), "a stepped slice is a slice node");
+}
+
+/// Names the chapter-9 core form each IR node realises, recursively.
+fn collect_forms(block: &aevia_ir::Block, out: &mut Vec<&'static str>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Let(item) => collect_rhs_forms(&item.rhs, out),
+            Stmt::Bind { atom, .. } => {
+                out.push("let");
+                collect_atom_form(atom, out);
+            }
+        }
+    }
+    match &block.tail {
+        Tail::Return { atom, .. } => {
+            out.push("return");
+            collect_atom_form(atom, out);
+        }
+        Tail::Call(call) => {
+            out.push("app");
+            collect_call_forms(call, out);
+        }
+        Tail::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            out.push("if");
+            collect_atom_form(cond, out);
+            collect_forms(then_block, out);
+            collect_forms(else_block, out);
+        }
+        Tail::Match {
+            scrutinee, arms, ..
+        } => {
+            out.push("match");
+            collect_atom_form(scrutinee, out);
+            for arm in arms {
+                collect_forms(&arm.body, out);
+                if let Some(guard) = &arm.guard {
+                    collect_forms(guard, out);
+                }
+            }
+        }
+    }
+}
+
+/// The atom a call names, its arguments, and the constructor case of `app`.
+fn collect_call_forms(call: &aevia_ir::Call, out: &mut Vec<&'static str>) {
+    if matches!(&call.callee, Atom::Global(name) if name.chars().next().is_some_and(char::is_uppercase))
+    {
+        out.push("construct");
+    }
+    collect_atom_form(&call.callee, out);
+    for argument in &call.args {
+        collect_atom_form(argument, out);
+    }
+}
+
+fn collect_rhs_forms(rhs: &Rhs, out: &mut Vec<&'static str>) {
+    match rhs {
+        Rhs::Atom(atom) => collect_atom_form(atom, out),
+        Rhs::Error { .. } => {}
+        Rhs::Unary { operand, .. } => {
+            out.push("prim");
+            collect_atom_form(operand, out);
+        }
+        Rhs::Binary { left, right, .. } => {
+            out.push("prim");
+            collect_atom_form(left, out);
+            collect_atom_form(right, out);
+        }
+        Rhs::AndOr { left, right, .. } => {
+            out.push("prim");
+            collect_atom_form(left, out);
+            collect_forms(right, out);
+        }
+        Rhs::Call(call) => {
+            out.push("app");
+            collect_call_forms(call, out);
+        }
+        Rhs::Closure(function) | Rhs::RecClosure { function, .. } => {
+            out.push("lambda");
+            collect_forms(&function.body, out);
+        }
+        Rhs::Block(block) => {
+            out.push("let");
+            collect_forms(block, out);
+        }
+        Rhs::Field { base, .. } => {
+            out.push("project");
+            collect_atom_form(base, out);
+        }
+        Rhs::Record { base, fields } => {
+            out.push(if base.is_some() { "update" } else { "let" });
+            if let Some(base) = base {
+                collect_atom_form(base, out);
+            }
+            for (_, atom) in fields {
+                collect_atom_form(atom, out);
+            }
+        }
+        Rhs::Tuple(items) | Rhs::Tensor(items) => {
+            if matches!(rhs, Rhs::Tuple(_)) {
+                out.push("construct");
+            } else {
+                out.push("tensor_lit");
+            }
+            for atom in items {
+                collect_atom_form(atom, out);
+            }
+        }
+        Rhs::Index { base, indices } => {
+            out.push("index");
+            collect_atom_form(base, out);
+            for index in indices {
+                match index {
+                    aevia_ir::Slice::Index(atom) => collect_atom_form(atom, out),
+                    aevia_ir::Slice::Range {
+                        start,
+                        end,
+                        step,
+                        ..
+                    } => {
+                        out.push("slice");
+                        if step.is_some() {
+                            out.push("slice_step");
+                        }
+                        for atom in start.iter().chain(end.iter()).chain(step.iter()) {
+                            collect_atom_form(atom, out);
+                        }
+                    }
+                }
+            }
+        }
+        Rhs::Quantity { .. } => out.push("literal"),
+        Rhs::Str(parts) => {
+            for part in parts {
+                match part {
+                    aevia_ir::StrPart::Text(_) => out.push("literal"),
+                    aevia_ir::StrPart::Atom(atom) => {
+                        out.push("literal");
+                        collect_atom_form(atom, out);
+                    }
+                }
+            }
+        }
+        Rhs::Try(atom) => {
+            out.push("app");
+            collect_atom_form(atom, out);
+        }
+        Rhs::Factorial { value, .. } => {
+            out.push("prim");
+            collect_atom_form(value, out);
+        }
+        Rhs::Do(plan) => {
+            out.push("do");
+            for action in &plan.prefix {
+                collect_atom_form(&action.atom, out);
+            }
+            match &plan.terminal {
+                aevia_ir::DoTerminal::End => {}
+                aevia_ir::DoTerminal::Let { thunk } => collect_forms(&thunk.body, out),
+                aevia_ir::DoTerminal::Bind {
+                    action,
+                    continuation,
+                    ..
+                } => {
+                    collect_atom_form(action, out);
+                    collect_forms(&continuation.body, out);
+                }
+            }
+        }
+        Rhs::RssnMember { .. } => out.push("var"),
+    }
+}
+
+fn collect_atom_form(atom: &Atom, out: &mut Vec<&'static str>) {
+    match atom {
+        Atom::Local(_) | Atom::Capture(_) | Atom::Global(_) => out.push("var"),
+        Atom::Int(_)
+        | Atom::Exact(_)
+        | Atom::Float(_)
+        | Atom::Complex { .. }
+        | Atom::Bool(_)
+        | Atom::Str(_)
+        | Atom::Unit => out.push("literal"),
+    }
+}
+
+#[test]
 fn a_do_block_binds_its_pattern_inside_the_thunk() {
     // The `let` is deferred: its value is lowered in the thunk, and the rest of
     // the block reads the binding as a slot of that frame.

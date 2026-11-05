@@ -877,31 +877,41 @@ fn solutions_carry_variable_and_completeness() {
     }
 }
 
-/// A repeated root: the kernel lists it once and does *not* report a
-/// multiplicity, so `multiplicities` is empty — "not distinguished", which
-/// §8.6 keeps distinct from a reported `1`. Asserting `[2]` would be a
-/// fiction: the solver never computed it.
+/// A repeated root: the kernel's structured solver now reports the
+/// multiplicity, and the bridge passes it through instead of flattening the
+/// answer to a root list (§8.6, "保留重数与参数条件"). `[2]` here is the
+/// solver's computation, not the bridge's guess.
 #[test]
-fn a_repeated_root_reports_no_multiplicity() {
+fn a_repeated_root_reports_its_multiplicity() {
     let solutions = solutions_of("let s = solve(fn t => (t - 1)^2)\n", "s");
     assert_eq!(integer_roots(&solutions), vec![1]);
-    assert!(
-        field_elements(&solutions, "multiplicities").is_empty(),
-        "empty means the solver did not distinguish the roots"
+    let multiplicities: Vec<f64> = field_elements(&solutions, "multiplicities")
+        .iter()
+        .map(|value| value.as_f64().expect("a numeric multiplicity"))
+        .collect();
+    assert_eq!(
+        multiplicities,
+        vec![2.0],
+        "a double root has multiplicity 2"
     );
     assert!(bool_field(&solutions, "complete"));
 }
 
-/// When the solver's answer is a single term rather than a list, the kernel
-/// does not claim completeness, and the bridge passes that claim through
-/// instead of defaulting it. (The term happens to be a `list(...)` the kernel
-/// cannot split into roots — see the report; the flag is still the solver's.)
+/// A list answer is the solver's exhaustive form, so the kernel claims
+/// completeness — and the bridge passes that claim through rather than
+/// hardcoding a constant. (A non-list answer claims nothing; that distinction
+/// is exercised in the bridge's own `Solutions` round-trip tests, where a
+/// constructed record is classified.)
 #[test]
-fn an_answer_that_is_not_a_list_does_not_claim_completeness() {
+fn a_list_answer_claims_completeness() {
     let solutions = solutions_of("let s = solve(fn t => sin(t) - 1/2)\n", "s");
     assert!(
-        !bool_field(&solutions, "complete"),
-        "`complete` must be the solver's claim, not a constant"
+        bool_field(&solutions, "complete"),
+        "a list answer is the solver's exhaustive form"
+    );
+    assert!(
+        !field_elements(&solutions, "roots").is_empty(),
+        "the exhaustive form carries the roots"
     );
 }
 
@@ -995,7 +1005,10 @@ fn main(): IO Unit = do
     };
     assert_eq!(error.code, "E0805");
     assert!(
-        error.stack.iter().any(|frame| frame.function == "down"),
+        error
+            .stack
+            .iter()
+            .any(|frame| frame.function.as_ref() == "down"),
         "the error must carry a call stack: {:?}",
         error.stack
     );

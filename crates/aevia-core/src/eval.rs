@@ -8,15 +8,20 @@
 //! Float < Complex` while keeping exactness when it can.
 
 use crate::value::{
-    self, ctor_name, format_scalar, make_variant, Closure, ClosureBody, ClosureEnv, IoAction,
-    NativeFn, NumKind, NumVal, PropValue, RecordValue, Scope, Storage, TensorData, Value,
+    self, ctor_name, format_scalar, make_variant, Closure, ClosureBody, ClosureEnv, DynValue,
+    IoAction, NativeFn, NumKind, NumVal, PropValue, RecordValue, Scope, Storage, TensorData, Value,
 };
 use aevia_dim::{Dim, DimEnv, UnitDef, UnitTable};
 use aevia_syntax::ast::*;
 use aevia_syntax::{Diagnostic, Span};
 use aevia_types::adt;
-use aevia_types::check::{CheckedModule, DictionaryUse, Export};
+use aevia_types::check::{
+    BuiltinDispatch, CheckedModule, DictTarget, DictionaryUse, Export, InstanceExport,
+    ModuleInterface,
+};
 use aevia_types::class::{has_variables, ClassTable, Resolution};
+use aevia_types::keys::{self, ClassKey, InstanceKey, RepKind, StorageClass, Witness};
+use aevia_types::ty::Rep;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -29,7 +34,11 @@ use std::rc::Rc;
 #[derive(Clone, Debug)]
 pub struct Frame {
     /// The function that was called.
-    pub function: String,
+    ///
+    /// `Rc<str>` rather than `String`: a frame is pushed on every call, and a
+    /// per-call `String` clone was one allocation per call (round-2 performance
+    /// work). The name is interned once, when the function is lowered.
+    pub function: Rc<str>,
     /// Where it was called.
     pub span: Span,
 }
@@ -60,19 +69,22 @@ pub(crate) enum SliceValue {
 
 /// One `instance` method body, as the runtime sees it.
 ///
-/// The body is bound under the mangled global the checker uses
-/// (`Class@Head::method`), which no program can write; this entry is the index
-/// that lets a call site find it again (§3.8.1).
+/// The body is bound under `InstanceKey::mangle() :: method`, the name the
+/// checker also derives from the symbolic key, so two instances with primitive
+/// heads (`Pretty@Int` and `Pretty@String`) cannot overwrite one global
+/// (§3.8.1, round-2 decision 1a).
 #[derive(Clone, Debug)]
 pub(crate) struct InstanceEntry {
+    /// The symbolic identity the checker proved. `None` only for an entry the
+    /// runtime built without checker data (the legacy fallback).
+    pub(crate) key: Option<aevia_types::keys::InstanceKey>,
+    /// The witness of the head type, for `DictTarget::Witness` dispatch.
+    pub(crate) witness: Option<aevia_types::keys::Witness>,
     /// The head as the *source* spells it, when that spelling is also the
-    /// name the checked type prints as (a nominal type). `None` for a head
-    /// that has to be found by the single-instance rule.
+    /// name the checked type prints as (a nominal type). Kept for the legacy
+    /// shape dispatch.
     pub(crate) head: Option<String>,
-    /// The head as a predicate over a runtime value. The checker's record is
-    /// a snapshot taken while the body was checked, so at a polymorphic call
-    /// site it names a type variable; the argument is the only thing that is
-    /// concrete at run time.
+    /// The head as a predicate over a runtime value.
     pub(crate) shape: HeadShape,
     /// The mangled global the body is bound to.
     pub(crate) global: String,
@@ -257,7 +269,7 @@ impl EvalError {
     pub fn trace(&self) -> Vec<String> {
         let mut notes = Vec::with_capacity(self.stack.len());
         for (depth, frame) in self.stack.iter().enumerate() {
-            notes.push(format!("{} in `{}`", depth + 1, frame.function));
+            notes.push(format!("{} in `{}`", depth + 1, frame.function.as_ref()));
         }
         notes
     }
@@ -347,6 +359,19 @@ pub struct Interp {
     pub(crate) nodes: usize,
     /// The call stack, outermost first.
     pub(crate) frames: Vec<Frame>,
+    /// The interned name a nameless closure reports in a stack frame.
+    pub(crate) lambda_name: Rc<str>,
+    /// Whether the kernel constants (`pi`, `oo`, `e`, `nan`, `i`) have been
+    /// seeded.
+    ///
+    /// Seeding asks the kernel for symbolic values and dominates an empty
+    /// program's cold start, so it is deferred until the program actually names
+    /// one of them (§9.13 startup budget). A program that never mentions `pi`
+    /// never pays for it; one that does pays on its first lookup, not knowing
+    /// the difference.
+    pub(crate) constants_seeded: bool,
+    /// The program arguments `args()` reports (§9.12), set by the host.
+    pub program_args: Vec<String>,
     /// The overload the checker pinned for each `Rssn.<op>` call site, keyed
     /// by the call's span (PLAN D1).
     ///
@@ -365,6 +390,44 @@ pub struct Interp {
     pub rssn_call_sites: Vec<aevia_types::check::RssnCall>,
     /// The checker's class-method records, kept whole for the same reason.
     pub dictionary_sites: Vec<DictionaryUse>,
+    /// The concrete dimension the checker materialised for each `dyn`/`check`
+    /// call site, keyed by span (§4.9.4).
+    ///
+    /// `dyn`/`check` are type-directed: the static `d` never appears in the
+    /// argument list, so the checker records it here and `check` compares it
+    /// with the value's carried dimension at that span. Without the lookup a
+    /// `check` can never fail and `E0412` is unreachable.
+    pub dyn_calls: HashMap<Span, Dim>,
+    /// Host registrations (`@op`/`@rule`) the checker accepted (§13.5.2).
+    ///
+    /// Publishing them to the kernel is a bridge step this build does not
+    /// implement; the runtime reports the named `core.plugin.source` gap
+    /// instead of silently dropping them.
+    pub registrations: Vec<aevia_types::check::HostRegistration>,
+    /// The representation the checker instantiated for every numeric literal,
+    /// keyed by the literal's span (§3.10.1, §6.3.2).
+    ///
+    /// §3.10.1 lets a literal take the representation of its context; without
+    /// this table the runtime guessed (`1` stayed an `Int` where the checker
+    /// had a `Float`), which is the measured static/runtime disagreement. The
+    /// IR lowering reads the same table, so both evaluators agree.
+    pub literal_reps: HashMap<Span, Rep>,
+    /// The non-derived `instance` exports of the module being loaded, in
+    /// declaration order. The source `instance` declarations are matched to
+    /// them so a body can be bound under the same `InstanceKey::mangle()` name
+    /// the checker derived (round-2 decision 1a).
+    pub instance_exports: Vec<InstanceExport>,
+    /// How many `instance` declarations of the current module have been bound.
+    pub(crate) next_instance_export: usize,
+    /// `ClassKey` by source name, for user classes declared in a loaded module
+    /// (a class's defining module is part of its identity, §3.8.1).
+    pub(crate) class_keys: HashMap<String, ClassKey>,
+    /// The module currently being loaded, for constructor identity (§3.6.2).
+    ///
+    /// User types are nominal per module (D6), so `A.Circle` and `B.Circle` are
+    /// different constructors; name-only lookup would pick whichever module was
+    /// checked first.
+    pub current_module: keys::ModulePath,
     /// Instance bodies, by `Class::method`, in declaration order.
     pub(crate) instance_methods: HashMap<String, Vec<InstanceEntry>>,
     /// The class that declares each instance method, so a method used as a
@@ -382,11 +445,45 @@ pub struct Interp {
     pub(crate) aliases: HashMap<String, aevia_types::ty::Type>,
 }
 
+/// The `(value, uncertainty)` pair of a §8.14 measurement record.
+///
+/// The runtime recognises the library type structurally: `Measurement<d>` is a
+/// record with exactly those two `Real[d]` fields. A record that merely has a
+/// field of that name is not a measurement (the checker's type is the real
+/// gate; the runtime only needs a safe, total recogniser).
+fn measurement_parts(value: &Value) -> Option<(NumVal, NumVal)> {
+    let Value::Record(record) = value else {
+        return None;
+    };
+    if record.fields.len() != 2 {
+        return None;
+    }
+    match (
+        record.fields.get("value"),
+        record.fields.get("uncertainty"),
+    ) {
+        (Some(Value::Num(value)), Some(Value::Num(uncertainty)))
+            if value.dim == uncertainty.dim =>
+        {
+            Some((value.clone(), uncertainty.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// A measurement record, fields in spec order (§8.14).
+fn measurement_record(value: NumVal, uncertainty: NumVal) -> Value {
+    let mut fields = IndexMap::new();
+    fields.insert("value".to_string(), Value::Num(value));
+    fields.insert("uncertainty".to_string(), Value::Num(uncertainty));
+    Value::Record(Rc::new(RecordValue { fields }))
+}
+
 impl Interp {
     /// Creates an interpreter from a checked module.
     #[must_use]
     pub fn new(checked: &CheckedModule) -> Self {
-        let mut interp = Self {
+        Self {
             globals: HashMap::new(),
             units: checked.units.clone(),
             dims: checked.dims.clone(),
@@ -406,6 +503,9 @@ impl Interp {
             depth: 0,
             nodes: 0,
             frames: Vec::new(),
+            lambda_name: Rc::from("<lambda>"),
+            constants_seeded: false,
+            program_args: Vec::new(),
             rssn_calls: checked
                 .rssn_calls
                 .iter()
@@ -414,13 +514,41 @@ impl Interp {
             dictionaries: dictionary_table(&checked.dictionaries),
             rssn_call_sites: checked.rssn_calls.clone(),
             dictionary_sites: checked.dictionaries.clone(),
+            dyn_calls: checked
+                .dyn_calls
+                .iter()
+                .map(|call| (call.span, call.dim.clone()))
+                .collect(),
+            registrations: checked.registrations.clone(),
+            literal_reps: checked.literal_reps.clone(),
+            instance_exports: checked
+                .instances
+                .iter()
+                .filter(|export| !export.derived)
+                .cloned()
+                .collect(),
+            next_instance_export: 0,
+            class_keys: checked
+                .classes
+                .keys()
+                .map(|key| (key.name.clone(), key.clone()))
+                .collect(),
+            current_module: checked.module_path(),
             instance_methods: HashMap::new(),
             method_classes: HashMap::new(),
             prelude_classes: ClassTable::prelude(),
             aliases: checked.aliases.iter().map(|(name, ty)| (name.clone(), ty.clone())).collect(),
-        };
-        interp.seed_constants();
-        interp
+        }
+    }
+
+    /// Sets the arguments `args()` returns (§9.12).
+    ///
+    /// The host calls this before `run_main`; the interpreter holds them as
+    /// plain strings and `args()` answers a rank-1 `Tensor<1, String>`, so a
+    /// program can index them like any other vector. Building the tensor is
+    /// deferred to the call, so setting them cannot fail.
+    pub fn set_args(&mut self, arguments: impl IntoIterator<Item = String>) {
+        self.program_args = arguments.into_iter().collect();
     }
 
     /// Binds the prelude constants that are values rather than functions.
@@ -431,6 +559,7 @@ impl Interp {
     /// approximated, because a float `pi` would be a wrong answer that looks
     /// right.
     pub fn seed_constants(&mut self) {
+        self.constants_seeded = true;
         let one = aevia_dim::Dim::one();
         for name in ["pi", "oo"] {
             if let Ok(value) = crate::kernel::call(name, &[], one.clone()) {
@@ -484,26 +613,87 @@ impl Interp {
         }
     }
 
-    /// Binds one `instance` method body under the mangled global the checker
-    /// uses, and indexes it for dispatch (§3.8.1).
+    /// Switches the interpreter to the module about to be loaded.
     ///
-    /// The global is `Class@Head::method`. No program can write that name, so
-    /// an instance body cannot shadow the class method — which is exactly what
-    /// the checker relies on when it records the instance per call site
-    /// instead of installing the method as a global.
+    /// The checker's non-derived `InstanceExport`s are what name an instance
+    /// body's global (`InstanceKey::mangle()`), so each module's load starts
+    /// with its own list; a module's instances are matched to its `instance`
+    /// declarations in order. The entry module is already set by
+    /// [`Interp::new`], so a single-file program needs no call.
+    pub fn prepare_module(&mut self, checked: &CheckedModule) {
+        self.current_module = checked.module_path();
+        self.instance_exports = checked
+            .instances
+            .iter()
+            .filter(|export| !export.derived)
+            .cloned()
+            .collect();
+        self.next_instance_export = 0;
+        self.add_interface(&checked.interface());
+    }
+
+    /// Makes an imported module's classes, instances and alias definitions
+    /// reachable (§7.4): an importer can use a class it did not declare, and an
+    /// alias expands to its definition instead of looking opaque.
+    pub fn add_interface(&mut self, interface: &ModuleInterface) {
+        for key in interface.classes.keys() {
+            self.class_keys
+                .entry(key.name.clone())
+                .or_insert_with(|| key.clone());
+        }
+        for (name, alias) in &interface.aliases {
+            self.aliases
+                .entry(name.clone())
+                .or_insert_with(|| alias.body.clone());
+        }
+    }
+
+    /// The next `instance` declaration's export, if the checker supplied one.
+    pub(crate) fn take_instance_export(&mut self) -> Option<InstanceExport> {
+        let export = self.instance_exports.get(self.next_instance_export).cloned();
+        if export.is_some() {
+            self.next_instance_export += 1;
+        }
+        export
+    }
+
+    /// The global name of one instance method body.
+    ///
+    /// `InstanceKey::mangle()` is the single spelling the checker and the
+    /// runtime both use (round-2 decision 1a); `Pretty@Int` and
+    /// `Pretty@String` therefore get different globals.
+    #[must_use]
+    pub fn instance_global(key: &InstanceKey, method: &str) -> String {
+        format!("{}::{method}", key.mangle())
+    }
+
+    /// Binds one `instance` method body under its mangled global (§3.8.1).
+    ///
+    /// `export` is the checker's symbolic record for this instance: it names
+    /// the global and carries the head type whose witness dispatch compares.
+    /// Without one (an interpreter built from a default checked module) the
+    /// legacy source-spelling mangling is used, so the runtime API stays
+    /// callable without a checker.
     pub fn register_instance(
         &mut self,
         class: &str,
         head: &Ty,
+        export: Option<&InstanceExport>,
         method: &aevia_syntax::ast::InstanceMethod,
         env: &Rc<Scope>,
     ) {
         let spelled = instance_head_name(head);
-        let name = format!(
-            "{class}@{}::{}",
-            spelled.as_deref().unwrap_or("?"),
-            method.name
-        );
+        let (key, witness) = export.map_or((None, None), |export| {
+            (Some(export.key.clone()), keys::witness_of(&export.head))
+        });
+        let name = match &key {
+            Some(key) => Self::instance_global(key, &method.name),
+            None => format!(
+                "{class}@{}::{}",
+                spelled.as_deref().unwrap_or("?"),
+                method.name
+            ),
+        };
         let closure = Value::Closure(Rc::new(Closure::ast(
             method.params.iter().map(|param| param.pattern.clone()).collect(),
             method.body.clone(),
@@ -517,6 +707,8 @@ impl Interp {
             .entry(format!("{class}::{}", method.name))
             .or_default()
             .push(InstanceEntry {
+                key,
+                witness,
                 head: spelled,
                 shape: head_shape(head, &self.aliases),
                 global: name,
@@ -555,6 +747,57 @@ impl Interp {
         args: &[Value],
     ) -> Option<Dispatch> {
         let entries = self.instance_methods.get(&format!("{}::{method}", use_site.class));
+        // The checker pinned the target (round-2 decision 1c); this is the
+        // authority. A concrete instance runs by its symbolic key (so two
+        // primitive heads never share a global), a quantified site dispatches
+        // among the proved candidates by value witness, and §3.8.4's
+        // structural `Show` falls through to the builtin printer.
+        match &use_site.target {
+            DictTarget::Instance(key) => {
+                let global = Self::instance_global(key, method);
+                if let Some(body) = self.globals.get(&global).cloned() {
+                    return Some(Dispatch::Instance(body));
+                }
+                // The body may still be under the legacy spelling when the
+                // caller loaded a default checked module; the shape fallback
+                // below finds it.
+            }
+            DictTarget::Builtin(BuiltinDispatch::ShowStructural) => {
+                return Some(Dispatch::Builtin);
+            }
+            DictTarget::Witness { candidates } => {
+                if let (Some(pool), Some(first)) = (entries, args.first()) {
+                    if let Some(witness) = witness_of_value(first) {
+                        let mut chosen: Option<&InstanceEntry> = None;
+                        let mut ambiguous = false;
+                        for entry in pool {
+                            let Some(entry_key) = &entry.key else { continue };
+                            if !candidates.contains(entry_key) {
+                                continue;
+                            }
+                            if entry.witness.as_ref() != Some(&witness) {
+                                continue;
+                            }
+                            if chosen.is_some() {
+                                ambiguous = true;
+                            }
+                            chosen = Some(entry);
+                        }
+                        if !ambiguous {
+                            if let Some(entry) = chosen {
+                                if let Some(body) = self.globals.get(&entry.global).cloned() {
+                                    return Some(Dispatch::Instance(body));
+                                }
+                            }
+                        }
+                        // An ambiguous or unmatched witness is not guessed at:
+                        // `resolve_dictionary` reports `E0310` with the class
+                        // and head, which is the runtime defence behind the
+                        // checker's `E0311` witness-disjointness rule.
+                    }
+                }
+            }
+        }
         // (a) The argument's runtime shape decides. At a concrete call site it
         //     agrees with the record; inside a polymorphic function it is the
         //     only thing that is concrete, because the instance depends on the
@@ -732,14 +975,11 @@ impl Interp {
             ExprKind::Error => Ok(Value::Unit),
             ExprKind::UnitLit => Ok(Value::Unit),
             ExprKind::Bool(value) => Ok(Value::Bool(*value)),
-            ExprKind::Int(value) => Ok(Value::Num(NumVal::int(value.clone()))),
-            ExprKind::Float(text) => {
-                let cleaned = text.replace('_', "");
-                let value: f64 = cleaned
-                    .parse()
-                    .map_err(|_| EvalError::new("E0106", "invalid float literal").at(expr.span))?;
-                Ok(Value::Num(NumVal::float(value, Dim::one())))
-            }
+            // §3.10.1 / §6.3.2: the checker's instantiated representation is
+            // the runtime's, so a literal in a `Float` context is an f64 and one
+            // in a `Real` context is exact.
+            ExprKind::Int(value) => Ok(Value::Num(self.integer_literal(value, expr.span))),
+            ExprKind::Float(text) => Ok(Value::Num(self.float_literal(text, expr.span))),
             ExprKind::Str(pieces) => {
                 let mut out = String::new();
                 for piece in pieces {
@@ -753,7 +993,10 @@ impl Interp {
                 }
                 Ok(Value::string(out))
             }
-            ExprKind::Quantity { value, unit } => self.quantity(value, unit, expr.span),
+            ExprKind::Quantity { value, unit } => {
+                let as_float = self.literal_rep(expr.span) == Some(Rep::Float);
+                self.quantity(value, unit, expr.span, as_float)
+            }
             ExprKind::Var(name) => self.lookup(name, env, expr.span),
             ExprKind::QName(path) => {
                 if path.len() == 2 && path[0] == "Rssn" {
@@ -1113,6 +1356,12 @@ impl Interp {
         scope: Option<&Rc<Scope>>,
         span: Span,
     ) -> Result<Value, EvalError> {
+        // The kernel constants are seeded on first use: building `pi`/`e` asks
+        // the kernel for symbolic values, which dominated an empty program's
+        // cold start (§9.13). A name the program never mentions never pays.
+        if !self.constants_seeded && matches!(name, "pi" | "oo" | "e" | "nan" | "i") {
+            self.seed_constants();
+        }
         if let Some(scope) = scope {
             if let Some(value) = scope.lookup(name) {
                 return Ok(value);
@@ -1120,22 +1369,6 @@ impl Interp {
         }
         if let Some(value) = self.globals.get(name) {
             return Ok(value.clone());
-        }
-        if let Some(unit) = self.units.lookup(name) {
-            return Ok(Value::UnitOf(Rc::new(unit)));
-        }
-        if let Some((adt, index, registered)) = adt::find_ctor(name) {
-            let arity = registered
-                .ctors
-                .get(index)
-                .map_or(0, |ctor| ctor.fields.len());
-            return Ok(Value::Ctor {
-                adt,
-                index,
-                name: name.to_string(),
-                arity,
-                args: Vec::new(),
-            });
         }
         // §3.8.1: a class method is a value, so `map(pretty, xs)` and
         // `let f = pretty` are legal. It carries no call-site record, so the
@@ -1146,6 +1379,14 @@ impl Interp {
                 move |interp, args, span| interp.call_class_method(&class, &method, args, span),
             )))));
         }
+        // Builtin functions are resolved *before* units: several unit names are
+        // also function names — `dyn` is the CGS force unit and `at` the
+        // technical atmosphere, while `dyn`/`at`/`check` are language
+        // primitives the checker types as calls. Resolving the unit first made
+        // `dyn(3 m)` "Unit is not a function" at run time while it type-checked
+        // as the primitive. A unit in *call* position is never what the program
+        // meant; as a value it is still reachable through the unit table and
+        // the `N unit` literal syntax.
         if aevia_types::builtins::is_builtin(name) || aevia_types::builtins::is_special(name) {
             return Ok(Value::Ctor {
                 adt: u32::MAX,
@@ -1155,7 +1396,76 @@ impl Interp {
                 args: Vec::new(),
             });
         }
+        if let Some(unit) = self.units.lookup(name) {
+            return Ok(Value::UnitOf(Rc::new(unit)));
+        }
+        if let Some((adt, index, registered)) = adt::find_ctor(name) {
+            let arity = registered
+                .ctors
+                .get(index)
+                .map_or(0, |ctor| ctor.fields.len());
+            // A nullary constructor referenced as a value *is* its variant
+            // (§3.6.2): `let x: M = A` stores `A`, not a zero-argument
+            // constructor waiting to be applied. Only a constructor with fields
+            // stays applicable.
+            if arity == 0 {
+                return Ok(make_variant(adt, index, name, Vec::new()));
+            }
+            return Ok(Value::Ctor {
+                adt,
+                index,
+                name: name.to_string(),
+                arity,
+                args: Vec::new(),
+            });
+        }
         Err(EvalError::new("E0301", format!("unbound name `{name}`")).at(span))
+    }
+
+    /// The representation the checker instantiated for the literal at `span`.
+    fn literal_rep(&self, span: Span) -> Option<Rep> {
+        self.literal_reps.get(&span).copied()
+    }
+
+    /// An integer literal in the representation its context chose (§3.10.1).
+    fn integer_literal(&self, value: &BigInt, span: Span) -> NumVal {
+        match self.literal_rep(span) {
+            Some(Rep::Float) => NumVal::float(
+                num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+                Dim::one(),
+            ),
+            Some(Rep::Real) => NumVal::exact(BigRational::from_integer(value.clone()), Dim::one()),
+            Some(Rep::Complex) => NumVal {
+                kind: NumKind::Complex(
+                    num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+                    0.0,
+                ),
+                dim: Dim::one(),
+                display: None,
+            },
+            _ => NumVal::int(value.clone()),
+        }
+    }
+
+    /// A decimal literal in the representation its context chose.
+    ///
+    /// A `Real` context keeps the exact rational the decimal text denotes
+    /// (§6.3.2); a `Float` context uses the nearest `f64`.
+    fn float_literal(&self, text: &str, span: Span) -> NumVal {
+        let cleaned = text.replace('_', "");
+        let as_float = || cleaned.parse::<f64>().unwrap_or(f64::NAN);
+        match self.literal_rep(span) {
+            Some(Rep::Real) => aevia_dim::parse_decimal(&cleaned)
+                .map_or_else(|| NumVal::float(as_float(), Dim::one()), |value| {
+                    NumVal::exact(value, Dim::one())
+                }),
+            Some(Rep::Complex) => NumVal {
+                kind: NumKind::Complex(as_float(), 0.0),
+                dim: Dim::one(),
+                display: None,
+            },
+            _ => NumVal::float(as_float(), Dim::one()),
+        }
     }
 
     pub(crate) fn quantity(
@@ -1163,6 +1473,7 @@ impl Interp {
         value: &NumberLit,
         unit: &aevia_dim::UnitExpr,
         span: Span,
+        as_float: bool,
     ) -> Result<Value, EvalError> {
         let resolved = self
             .units
@@ -1183,6 +1494,15 @@ impl Interp {
         if resolved.affine {
             let coefficient = value.as_f64();
             let coherent = resolved.to_coherent(coefficient);
+            let mut num = NumVal::float(coherent, resolved.dim);
+            num.display = Some(display);
+            return Ok(Value::Num(num));
+        }
+        // §3.10.1: the literal's context chose `Float`, so its value is an f64
+        // — including a unit literal such as `2.0 m` in a `Float[L]` slot.
+        if as_float {
+            let coefficient = value.as_f64();
+            let coherent = coefficient * resolved.scale.to_f64();
             let mut num = NumVal::float(coherent, resolved.dim);
             num.display = Some(display);
             return Ok(Value::Num(num));
@@ -1225,7 +1545,21 @@ impl Interp {
     pub(crate) fn unary(&mut self, op: UnOp, value: Value, span: Span) -> Result<Value, EvalError> {
         match op {
             UnOp::Pos => Ok(value),
-            UnOp::Neg => match value {
+            UnOp::Neg => {
+                // §8.14: negating a measurement negates its value; the
+                // uncertainty is a magnitude and stays positive.
+                if let Some((value, uncertainty)) = measurement_parts(&value) {
+                    let negated = self.unary(UnOp::Neg, Value::Num(value), span)?;
+                    let Value::Num(negated) = negated else {
+                        return Err(EvalError::new(
+                            "E0809",
+                            "the negation of a measurement value is not a scalar",
+                        )
+                        .at(span));
+                    };
+                    return Ok(measurement_record(negated, uncertainty));
+                }
+                match value {
                 Value::Num(mut num) => {
                     num.kind = match num.kind {
                         NumKind::Int(value) => NumKind::Int(-value),
@@ -1246,12 +1580,31 @@ impl Interp {
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok(build_tensor(elements, tensor.shape.clone(), tensor.dim.clone()))
                 }
+                // §4.9.3: unary `-` preserves the dimension of a `Dyn` and
+                // negates its payload (the dimension lives beside the value).
+                Value::Dyn(dynamic) => {
+                    let payload = self.unary(UnOp::Neg, Value::Num(dynamic.payload()), span)?;
+                    let Value::Num(mut payload) = payload else {
+                        return Err(EvalError::new(
+                            "E0809",
+                            "the negation of a Dyn payload is not a scalar",
+                        )
+                        .at(span));
+                    };
+                    payload.dim = Dim::one();
+                    Ok(Value::Dyn(Rc::new(DynValue {
+                        value: payload,
+                        dim: dynamic.dim.clone(),
+                        display: dynamic.display.clone(),
+                    })))
+                }
                 other => Err(EvalError::new(
                     "E0302",
                     format!("`-` is not defined for {}", other.type_name()),
                 )
                 .at(span)),
-            },
+                }
+            }
             UnOp::Not => match value {
                 Value::Bool(value) => Ok(Value::Bool(!value)),
                 Value::Prop(prop) => Ok(Value::Prop(Rc::new(PropValue {
@@ -1275,6 +1628,12 @@ impl Interp {
         right: Value,
         span: Span,
     ) -> Result<Value, EvalError> {
+        // §8.14: measurement arithmetic is the library type's own operator set,
+        // with independent-error propagation. It is handled before the numeric
+        // cases because both operands are records, not scalars.
+        if let Some(result) = self.measurement_binary(op, &left, &right, span)? {
+            return Ok(result);
+        }
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
                 self.arithmetic(op, left, right, span)
@@ -1314,6 +1673,182 @@ impl Interp {
                 Err(EvalError::new("E0809", "pipes must be desugared").at(span))
             }
         }
+    }
+
+    /// §8.14 measurement arithmetic: independent-error propagation.
+    ///
+    /// Returns `None` when neither operand is a measurement, so the ordinary
+    /// numeric cases stay in charge. `+`/`-` need one dimension (`E0401`);
+    /// products and quotients combine their dimensions through the ordinary
+    /// scalar operators, and the uncertainty follows the first-order
+    /// quadrature rule the spec states ("平方和开根").
+    fn measurement_binary(
+        &mut self,
+        op: BinOp,
+        left: &Value,
+        right: &Value,
+        span: Span,
+    ) -> Result<Option<Value>, EvalError> {
+        let left_measurement = measurement_parts(left);
+        let right_measurement = measurement_parts(right);
+        match (left_measurement, right_measurement) {
+            (Some((left_value, left_uncertainty)), Some((right_value, right_uncertainty))) => {
+                match op {
+                    BinOp::Add | BinOp::Sub => {
+                        if left_value.dim != right_value.dim {
+                            return Err(EvalError::new(
+                                "E0401",
+                                "measurement `+`/`-` need the same dimension",
+                            )
+                            .at(span));
+                        }
+                        let value = self.binary(
+                            op,
+                            Value::Num(left_value),
+                            Value::Num(right_value),
+                            span,
+                        )?;
+                        let uncertainty = self.quadrature(
+                            Value::Num(left_uncertainty),
+                            Value::Num(right_uncertainty),
+                            span,
+                        )?;
+                        self.finish_measurement(value, uncertainty, span)
+                    }
+                    BinOp::Mul => {
+                        let product = self.binary(
+                            BinOp::Mul,
+                            Value::Num(left_value.clone()),
+                            Value::Num(right_value.clone()),
+                            span,
+                        )?;
+                        let first = self.binary(
+                            BinOp::Mul,
+                            Value::Num(left_uncertainty),
+                            Value::Num(right_value),
+                            span,
+                        )?;
+                        let second = self.binary(
+                            BinOp::Mul,
+                            Value::Num(right_uncertainty),
+                            Value::Num(left_value),
+                            span,
+                        )?;
+                        let uncertainty = self.quadrature(first, second, span)?;
+                        self.finish_measurement(product, uncertainty, span)
+                    }
+                    BinOp::Div => {
+                        let quotient = self.binary(
+                            BinOp::Div,
+                            Value::Num(left_value.clone()),
+                            Value::Num(right_value.clone()),
+                            span,
+                        )?;
+                        let first = self.binary(
+                            BinOp::Div,
+                            Value::Num(left_uncertainty),
+                            Value::Num(right_value.clone()),
+                            span,
+                        )?;
+                        let square = self.binary(
+                            BinOp::Mul,
+                            Value::Num(right_value.clone()),
+                            Value::Num(right_value),
+                            span,
+                        )?;
+                        let numerator = self.binary(
+                            BinOp::Mul,
+                            Value::Num(right_uncertainty),
+                            Value::Num(left_value),
+                            span,
+                        )?;
+                        let second = self.binary(BinOp::Div, numerator, square, span)?;
+                        let uncertainty = self.quadrature(first, second, span)?;
+                        self.finish_measurement(quotient, uncertainty, span)
+                    }
+                    _ => Ok(None),
+                }
+            }
+            // A scalar scales a measurement; `measurement + scalar` is not a
+            // declared operator, so it stays an `E0302` from the normal path.
+            (Some((measurement_value, measurement_uncertainty)), None) => {
+                let Value::Num(scalar) = right.clone() else {
+                    return Ok(None);
+                };
+                match op {
+                    BinOp::Mul | BinOp::Div => {
+                        let value = self.binary(
+                            op,
+                            Value::Num(measurement_value),
+                            Value::Num(scalar.clone()),
+                            span,
+                        )?;
+                        let magnitude =
+                            self.call_named("abs", vec![Value::Num(scalar)], span)?;
+                        let uncertainty = self.binary(
+                            op,
+                            Value::Num(measurement_uncertainty),
+                            magnitude,
+                            span,
+                        )?;
+                        self.finish_measurement(value, uncertainty, span)
+                    }
+                    _ => Ok(None),
+                }
+            }
+            (None, Some((measurement_value, measurement_uncertainty))) => {
+                let Value::Num(scalar) = left.clone() else {
+                    return Ok(None);
+                };
+                if op != BinOp::Mul {
+                    return Ok(None);
+                }
+                let value = self.binary(
+                    BinOp::Mul,
+                    Value::Num(scalar.clone()),
+                    Value::Num(measurement_value),
+                    span,
+                )?;
+                let magnitude = self.call_named("abs", vec![Value::Num(scalar)], span)?;
+                let uncertainty = self.binary(
+                    BinOp::Mul,
+                    Value::Num(measurement_uncertainty),
+                    magnitude,
+                    span,
+                )?;
+                self.finish_measurement(value, uncertainty, span)
+            }
+            (None, None) => Ok(None),
+        }
+    }
+
+    /// `sqrt(a² + b²)`, the independent-error combination (§8.14).
+    fn quadrature(
+        &mut self,
+        first: Value,
+        second: Value,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let first_squared = self.binary(BinOp::Mul, first.clone(), first, span)?;
+        let second_squared = self.binary(BinOp::Mul, second.clone(), second, span)?;
+        let sum = self.binary(BinOp::Add, first_squared, second_squared, span)?;
+        self.call_named("sqrt", vec![sum], span)
+    }
+
+    fn finish_measurement(
+        &mut self,
+        value: Value,
+        uncertainty: Value,
+        span: Span,
+    ) -> Result<Option<Value>, EvalError> {
+        let (Value::Num(value), Value::Num(uncertainty)) = (value, uncertainty) else {
+            return Err(EvalError::new(
+                "E0809",
+                "measurement arithmetic produced a non-scalar",
+            )
+            .at(span));
+        };
+        Ok(Some(measurement_record(value, uncertainty)))
     }
 
     fn arithmetic(
@@ -1383,6 +1918,22 @@ impl Interp {
                 result.display = Some(unit.clone());
                 Ok(Value::Num(result))
             }
+            // §3.5.3 / §4.5.2: a unit scales a tensor elementwise. The
+            // coefficient of every element is unchanged — only the element
+            // dimension and the display metadata move — so the buffer is
+            // shared. `Float` stays `Float`, `Real` stays `Real`.
+            (Value::Tensor(tensor), Value::UnitOf(unit)) => {
+                self.tensor_with_unit(op, tensor, unit, false, span)
+            }
+            (Value::UnitOf(unit), Value::Tensor(tensor)) => {
+                self.tensor_with_unit(op, tensor, unit, true, span)
+            }
+            // §4.9.3: the `Dyn` escape layer's arithmetic. Dimensions are
+            // checked/combined at run time because they are data there.
+            (Value::Dyn(left), Value::Dyn(right)) => self.dyn_arithmetic(op, left, right, span),
+            (Value::Dyn(dynamic), Value::Num(exponent)) if op == BinOp::Pow => {
+                self.dyn_pow(dynamic, exponent, span)
+            }
             _ => Err(EvalError::new(
                 "E0302",
                 format!(
@@ -1419,29 +1970,63 @@ impl Interp {
         if left.is_symbolic() || right.is_symbolic() {
             let a = self.num_to_term(&left);
             let b = self.num_to_term(&right);
+            // The exact/Real path is *partial* on the extended reals: an
+            // undefined form such as `oo * 0`, `oo / oo` or `oo ^ 0` must not
+            // collapse to a finite answer. Such a collapse is recognised by the
+            // result being a plain number while an infinity occurred; the
+            // expression is then kept, readable, as a symbolic term (§6.3.4).
+            let has_infinity =
+                crate::sym::contains_infinity(&a) || crate::sym::contains_infinity(&b);
+            let power = if op == BinOp::Pow {
+                Some(
+                    right
+                        .to_rational()
+                        .ok_or_else(|| EvalError::new("E0402", "invalid exponent").at(span))?,
+                )
+            } else {
+                None
+            };
             let term = match op {
-                BinOp::Add => crate::sym::Term::add(a, b),
-                BinOp::Sub => crate::sym::Term::sub(a, b),
-                BinOp::Mul => crate::sym::Term::mul(a, b),
+                BinOp::Add => crate::sym::Term::add(a.clone(), b.clone()),
+                BinOp::Sub => crate::sym::Term::sub(a.clone(), b.clone()),
+                BinOp::Mul => crate::sym::Term::mul(a.clone(), b.clone()),
                 BinOp::Div => {
                     let inverse = crate::sym::Term::pow(
-                        b,
+                        b.clone(),
                         BigRational::from_integer(BigInt::from(-1)),
                     );
-                    crate::sym::Term::mul(a, inverse)
+                    crate::sym::Term::mul(a.clone(), inverse)
                 }
                 BinOp::Pow => {
-                    let exponent = right
-                        .to_rational()
-                        .ok_or_else(|| EvalError::new("E0402", "invalid exponent").at(span))?;
-                    crate::sym::Term::pow(a, exponent)
+                    let exponent = power.clone().expect("computed above");
+                    crate::sym::Term::pow(a.clone(), exponent)
                 }
                 _ => return Err(EvalError::new("E0809", "unexpected operator").at(span)),
             };
-            // §6.3.2: a symbolic operation that collapses to a rational is
-            // that rational. `x - x` is exactly `0`, not a symbolic zero that
-            // cannot be compared.
             if let crate::sym::Term::Num(value) = &term {
+                if has_infinity {
+                    let unevaluated = match op {
+                        BinOp::Add => crate::sym::Term::Add(vec![a, b]),
+                        BinOp::Sub => crate::sym::Term::Add(vec![a, crate::sym::Term::neg(b)]),
+                        BinOp::Mul => crate::sym::Term::Mul(vec![a, b]),
+                        BinOp::Div => crate::sym::Term::Mul(vec![
+                            a,
+                            crate::sym::Term::pow(
+                                b,
+                                BigRational::from_integer(BigInt::from(-1)),
+                            ),
+                        ]),
+                        BinOp::Pow => crate::sym::Term::Pow(
+                            Box::new(a),
+                            power.expect("computed above"),
+                        ),
+                        _ => crate::sym::Term::Num(value.clone()),
+                    };
+                    return Ok(NumVal::symbolic(unevaluated, dim));
+                }
+                // §6.3.2: a symbolic operation that collapses to a rational is
+                // that rational. `x - x` is exactly `0`, not a symbolic zero that
+                // cannot be compared.
                 return Ok(NumVal::exact(value.clone(), dim));
             }
             return Ok(NumVal::symbolic(term, dim));
@@ -1553,6 +2138,133 @@ impl Interp {
             return Ok(NumVal::symbolic(term, dim));
         }
         Err(EvalError::new("E0809", "unexpected operator").at(span))
+    }
+
+    /// The element dimension and display unit of a tensor scaled by a unit.
+    ///
+    /// §3.5.3 / §4.5.2: `A * u` multiplies every element's dimension by the
+    /// unit's, `A / u` divides it. The element *representation* and every
+    /// coefficient are unchanged — this is metadata, not an arithmetic pass —
+    /// so the storage (and therefore the buffer) is shared.
+    ///
+    /// §5.4.2's display rule follows the scalar `x * u` behaviour in this
+    /// runtime: the unit becomes the display of the result, so `(A * km)` shows
+    /// its elements in kilometres and `to`/`value_in` convert from there. A
+    /// division has no single unit that displays `d/u`, so its display is
+    /// dropped and the result prints in SI.
+    fn tensor_with_unit(
+        &mut self,
+        op: BinOp,
+        tensor: &Rc<TensorData>,
+        unit: &Rc<UnitDef>,
+        unit_on_left: bool,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let dim = match op {
+            BinOp::Mul => tensor.dim.mul(&unit.dim),
+            BinOp::Div if !unit_on_left => tensor.dim.div(&unit.dim),
+            _ => {
+                return Err(EvalError::new(
+                    "E0302",
+                    format!(
+                        "`{}` is not defined between a tensor and a unit",
+                        op.as_str()
+                    ),
+                )
+                .at(span))
+            }
+        };
+        let display = if op == BinOp::Mul {
+            Some(unit.clone())
+        } else {
+            None
+        };
+        Ok(Value::Tensor(Rc::new(TensorData {
+            shape: tensor.shape.clone(),
+            storage: tensor.storage.clone(),
+            dim,
+            display,
+        })))
+    }
+
+    /// `Dyn ⊕ Dyn` for `+`, `-`, `*` and `/` (§4.9.3).
+    ///
+    /// `+`/`-` require equal run-time dimensions; a mismatch is `E0412`,
+    /// the fatal `Dyn` dimension check (the recoverable variants are
+    /// `try_add`/`try_mul`, which this build does not have yet — the error is
+    /// therefore reported, never silently accepted). `*` adds the dimensions
+    /// and `/` subtracts them; the payloads are the dimensionless parts, so the
+    /// ordinary scalar arithmetic gives the coefficient.
+    fn dyn_arithmetic(
+        &mut self,
+        op: BinOp,
+        left: &Rc<DynValue>,
+        right: &Rc<DynValue>,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let dim = match op {
+            BinOp::Add | BinOp::Sub => {
+                if left.dim != right.dim {
+                    return Err(EvalError::new(
+                        "E0412",
+                        format!(
+                            "Dyn dimension check failed: `{}` and `{}`",
+                            left.dim.to_plain_string(),
+                            right.dim.to_plain_string()
+                        ),
+                    )
+                    .at(span)
+                    .with_note(
+                        "`+` and `-` on Dyn require equal runtime dimensions (§4.9.3)"
+                            .to_string(),
+                    ));
+                }
+                left.dim.clone()
+            }
+            BinOp::Mul => left.dim.mul(&right.dim),
+            BinOp::Div => left.dim.div(&right.dim),
+            _ => {
+                return Err(EvalError::new(
+                    "E0302",
+                    format!("`{}` is not defined on Dyn", op.as_str()),
+                )
+                .at(span))
+            }
+        };
+        let payload = self.scalar_arithmetic(op, left.payload(), right.payload(), span)?;
+        Ok(Value::Dyn(Rc::new(DynValue {
+            value: payload,
+            dim,
+            display: None,
+        })))
+    }
+
+    /// `Dyn ^ Int` (§4.9.3): the dimension exponent is multiplied by the
+    /// integer, the payload is raised to it.
+    fn dyn_pow(
+        &mut self,
+        dynamic: &Rc<DynValue>,
+        exponent: &NumVal,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let exponent = exponent.to_rational().ok_or_else(|| {
+            EvalError::new("E0302", "`Dyn ^ n` needs an Int exponent (§4.9.3)").at(span)
+        })?;
+        if !exponent.denom().is_one() {
+            return Err(EvalError::new(
+                "E0302",
+                "`Dyn ^ n` needs an Int exponent (§4.9.3); a fractional exponent \
+                 needs `pow_dyn` with an explicit dimension",
+            )
+            .at(span));
+        }
+        let integer = NumVal::int(exponent.numer().clone());
+        let payload = self.scalar_arithmetic(BinOp::Pow, dynamic.payload(), integer, span)?;
+        Ok(Value::Dyn(Rc::new(DynValue {
+            value: payload,
+            dim: dynamic.dim.pow(&exponent),
+            display: None,
+        })))
     }
 
     fn num_to_term(&self, num: &NumVal) -> crate::sym::Term {
@@ -1919,10 +2631,15 @@ impl Interp {
                     function: closure
                         .name
                         .clone()
-                        .unwrap_or_else(|| "<lambda>".to_string()),
+                        .unwrap_or_else(|| self.lambda_name.clone()),
                     span,
                 });
-                let outcome = self.eval(body, &scope);
+                // §9.3.4: the trace must name the function that failed, so the
+                // error is given the call stack while its own frame is still
+                // on it — popping first dropped the innermost frame.
+                let outcome = self
+                    .eval(body, &scope)
+                    .map_err(|error| error.with_stack(self.frames.clone()));
                 self.frames.pop();
                 match outcome {
                     // `?` returns from the enclosing function by unwinding to
@@ -2682,7 +3399,10 @@ impl Interp {
                             adt::RESULT_ID,
                             1,
                             "Err",
-                            vec![Value::string(error.to_string())],
+                            vec![Value::string(format!(
+                                "{}: {error}",
+                                io_error_code(&error)
+                            ))],
                         ),
                     };
                 }
@@ -2693,7 +3413,49 @@ impl Interp {
                             adt::RESULT_ID,
                             1,
                             "Err",
-                            vec![Value::string(error.to_string())],
+                            vec![Value::string(format!(
+                                "{}: {error}",
+                                io_error_code(&error)
+                            ))],
+                        ),
+                    };
+                }
+                IoAction::ReadNpy(path) => {
+                    let result = match std::fs::read(path) {
+                        Ok(bytes) => match crate::builtins::npy_decode(&bytes) {
+                            Ok(tensor) => make_variant(
+                                adt::RESULT_ID,
+                                0,
+                                "Ok",
+                                vec![Value::Tensor(Rc::new(tensor))],
+                            ),
+                            Err(message) => {
+                                make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)])
+                            }
+                        },
+                        Err(error) => make_variant(
+                            adt::RESULT_ID,
+                            1,
+                            "Err",
+                            vec![Value::string(format!(
+                                "{}: {error}",
+                                io_error_code(&error)
+                            ))],
+                        ),
+                    };
+                    last = result;
+                }
+                IoAction::WriteNpy { path, bytes } => {
+                    last = match std::fs::write(path, bytes) {
+                        Ok(()) => make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::Unit]),
+                        Err(error) => make_variant(
+                            adt::RESULT_ID,
+                            1,
+                            "Err",
+                            vec![Value::string(format!(
+                                "{}: {error}",
+                                io_error_code(&error)
+                            ))],
                         ),
                     };
                 }
@@ -2715,12 +3477,12 @@ impl Interp {
                 }
                 IoAction::Plot(html) => {
                     std::fs::write("plot.html", html)
-                        .map_err(|error| EvalError::new("E0810", error.to_string()))?;
+                        .map_err(|error| io_error("E0905", "plot rendering failed", &error))?;
                     last = Value::Unit;
                 }
                 IoAction::Save { path, html } => {
                     std::fs::write(path, html)
-                        .map_err(|error| EvalError::new("E0810", error.to_string()))?;
+                        .map_err(|error| io_error("E0905", "plot rendering failed", &error))?;
                     last = Value::Unit;
                 }
                 IoAction::Defer(thunk) => {
@@ -2768,12 +3530,35 @@ impl Interp {
     /// Advanced only when a `random` action runs (§6.10): a `let` that is never
     /// executed must not perturb the sequence.
     pub fn next_random(&mut self) -> f64 {
-        self.seed = self
-            .seed
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1);
-        (self.seed >> 11) as f64 / (1u64 << 53) as f64
+        next_unit(&mut self.seed)
     }
+}
+
+/// The appendix-B code for an IO failure (§9.12).
+fn io_error_code(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "E0901",
+        std::io::ErrorKind::PermissionDenied => "E0902",
+        _ => "E0901",
+    }
+}
+
+/// A fatal IO error with the taxonomy code and the OS message.
+fn io_error(code: &'static str, context: &str, error: &std::io::Error) -> EvalError {
+    EvalError::new(code, format!("{context}: {error}"))
+}
+
+/// The next value of the deterministic LCG in `[0, 1)`.
+///
+/// Shared by the session RNG and the seeded `sample_n`, so a seeded sample is
+/// reproducible across processes: the same seed always produces the same
+/// sequence, and a seeded call does not perturb the session's sequence.
+#[must_use]
+pub fn next_unit(state: &mut u64) -> f64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1);
+    (*state >> 11) as f64 / (1u64 << 53) as f64
 }
 
 impl EvalError {
@@ -3087,6 +3872,54 @@ pub fn build_tensor(elements: Vec<Value>, shape: Vec<usize>, dim: Dim) -> Value 
             display,
         }));
     }
+    // §6.6.1: mixing numeric phases widens the storage — `[1, 2.0]` is an
+    // `F64` tensor, not a boxed one — so the elementwise class is the widest
+    // one that holds every element. This runs after the all-`Float` case so a
+    // pure `Float` literal keeps its fast path, and it only applies when every
+    // element is numeric: a tensor of records or variants stays `Boxed`.
+    if elements.iter().any(|element| {
+        matches!(
+            element,
+            Value::Num(NumVal {
+                kind: NumKind::Float(_),
+                ..
+            })
+        )
+    }) && elements.iter().all(|element| {
+        matches!(
+            element,
+            Value::Num(NumVal {
+                kind: NumKind::Int(_) | NumKind::Exact(_) | NumKind::Float(_),
+                ..
+            })
+        )
+    }) {
+        let mut values = Vec::with_capacity(elements.len());
+        let mut converted = true;
+        let mut display = None;
+        for element in &elements {
+            if let Value::Num(num) = element {
+                match num.to_f64() {
+                    Some(value) => values.push(value),
+                    None => {
+                        converted = false;
+                        break;
+                    }
+                }
+                if display.is_none() {
+                    display = num.display.clone();
+                }
+            }
+        }
+        if converted {
+            return Value::Tensor(Rc::new(TensorData {
+                shape,
+                storage: Storage::Dense(Rc::new(values)),
+                dim,
+                display,
+            }));
+        }
+    }
     if elements.iter().all(|element| {
         matches!(
             element,
@@ -3150,6 +3983,109 @@ pub fn render_scalar(num: &NumVal) -> String {
     format_scalar(num)
 }
 
+/// The run-time witness of a value, mirroring `aevia_types::keys::witness_of`.
+///
+/// A quantified class-method site dispatches by this witness (§3.8.3): the
+/// checker proved the candidate instances' witnesses pairwise disjoint, so at
+/// most one candidate can accept the argument. `None` means the value has no
+/// witness at all (a function, a `Dyn`, an empty boxed tensor), and the runtime
+/// then refuses to guess.
+#[must_use]
+pub fn witness_of_value(value: &Value) -> Option<Witness> {
+    match value {
+        Value::Num(num) => Some(Witness::Num(match &num.kind {
+            NumKind::Int(_) => RepKind::Int,
+            NumKind::Exact(_) | NumKind::Sym(_) => RepKind::Real,
+            NumKind::Float(_) => RepKind::Float,
+            NumKind::Complex(..) => RepKind::Complex,
+        })),
+        Value::Tensor(tensor) => {
+            let storage = match &tensor.storage {
+                Storage::Dense(_) | Storage::View(_) => StorageClass::Float,
+                Storage::Exact(_) => StorageClass::Exact,
+                // A `Bool` tensor has no element representation in the witness
+                // table (`witness_of` requires a scalar element).
+                Storage::Bool(_) => return None,
+                Storage::Boxed(items) => match items.first() {
+                    Some(Value::Num(num)) => match &num.kind {
+                        NumKind::Int(_) | NumKind::Exact(_) | NumKind::Sym(_) => {
+                            StorageClass::Exact
+                        }
+                        NumKind::Float(_) => StorageClass::Float,
+                        NumKind::Complex(..) => StorageClass::Complex,
+                    },
+                    _ => return None,
+                },
+            };
+            Some(Witness::Tensor {
+                rank: u32::try_from(tensor.rank()).ok()?,
+                storage,
+            })
+        }
+        Value::Variant(variant) => {
+            let args = variant
+                .fields
+                .iter()
+                .map(witness_of_value)
+                .collect::<Option<Vec<Witness>>>()?;
+            Some(Witness::Adt(adt::key_of(variant.adt), args))
+        }
+        Value::Record(record) => {
+            let mut labels: Vec<String> = record.fields.keys().cloned().collect();
+            labels.sort();
+            Some(Witness::Record(labels))
+        }
+        Value::Bool(_) => Some(Witness::Bool),
+        Value::Str(_) => Some(Witness::String),
+        Value::Unit => Some(Witness::Unit),
+        Value::Prop(_) => Some(Witness::Prop),
+        Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => None,
+        Value::Dyn(_) | Value::UnitOf(_) | Value::Error => None,
+    }
+}
+
+/// Finds a user constructor by its defining module and name (§3.6.2/D6).
+///
+/// `adt::find_ctor` searches every registered type and returns the first name
+/// match; two modules may both declare `type Shape = | Circle(…)`, so a
+/// name-only lookup would construct whichever module was checked first. This
+/// scans for the nominal identity instead.
+#[must_use]
+pub fn ctor_in_module(
+    module: &keys::ModulePath,
+    name: &str,
+) -> Option<(adt::AdtId, usize, adt::Adt)> {
+    (0..adt::count()).find_map(|index| {
+        let id = u32::try_from(index).ok()?;
+        let registered = adt::get(id)?;
+        if adt::key_of(id).module != *module {
+            return None;
+        }
+        let position = registered.ctors.iter().position(|ctor| ctor.name == name)?;
+        Some((id, position, registered))
+    })
+}
+
+/// A constructor value of one module's type, ready to apply.
+///
+/// A constructor with no fields is already its variant; only a constructor with
+/// fields is a value that still needs arguments (§3.6.2).
+#[must_use]
+pub fn ctor_value(module: &keys::ModulePath, name: &str) -> Option<Value> {
+    let (adt, index, registered) = ctor_in_module(module, name)?;
+    let arity = registered.ctors.get(index).map_or(0, |ctor| ctor.fields.len());
+    if arity == 0 {
+        return Some(make_variant(adt, index, name, Vec::new()));
+    }
+    Some(Value::Ctor {
+        adt,
+        index,
+        name: name.to_string(),
+        arity,
+        args: Vec::new(),
+    })
+}
+
 /// Constructor name lookup, re-exported for the runtime's pattern matching.
 #[must_use]
 pub fn variant_name(adt: adt::AdtId, index: usize) -> Option<String> {
@@ -3160,4 +4096,47 @@ pub fn variant_name(adt: adt::AdtId, index: usize) -> Option<String> {
 #[must_use]
 pub fn main_action(interp: &Interp) -> Option<Value> {
     interp.globals.get("main").cloned()
+}
+
+#[cfg(test)]
+mod measurement_tests {
+    //! §8.14 unary negation: the value negates, the uncertainty (a magnitude)
+    //! does not.
+    use super::*;
+
+    fn interpreter() -> Interp {
+        let compilation = crate::compile("measure-unit.aev", "fn main(): IO Unit = do\n    println(\"\")\n");
+        assert!(!compilation.diagnostics.has_errors());
+        let mut interp = Interp::new(&compilation.checked).with_buffer();
+        let diagnostics = interp.load(&compilation.module.expect("a module"));
+        assert!(!diagnostics.has_errors());
+        interp
+    }
+
+    #[test]
+    fn negating_a_measurement_keeps_the_uncertainty_positive() {
+        let mut interp = interpreter();
+        let measurement = measurement_record(
+            NumVal::float(2.5, Dim::one()),
+            NumVal::float(0.3, Dim::one()),
+        );
+        let negated = interp
+            .unary(UnOp::Neg, measurement, Span::default())
+            .expect("the negation runs");
+        let (value, uncertainty) = measurement_parts(&negated).expect("still a measurement");
+        assert_eq!(value.to_f64(), Some(-2.5));
+        assert_eq!(uncertainty.to_f64(), Some(0.3));
+
+        // `scalar - measurement` is not a declared §8.14 operator: it stays an
+        // `E0302` from the ordinary numeric path.
+        let error = interp
+            .apply_binary(
+                "-",
+                Value::Num(NumVal::float(0.0, Dim::one())),
+                negated,
+                Span::default(),
+            )
+            .expect_err("scalar - measurement is not declared");
+        assert_eq!(error.code, "E0302");
+    }
 }

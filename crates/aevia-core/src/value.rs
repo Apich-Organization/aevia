@@ -389,12 +389,41 @@ pub struct TensorData {
 /// The row-major strides of a shape: `strides[last] = 1`, and each earlier
 /// stride is the product of the extents after it.
 #[must_use]
-fn row_major_strides(shape: &[usize]) -> Vec<usize> {
+pub(crate) fn row_major_strides(shape: &[usize]) -> Vec<usize> {
     let mut strides = vec![1usize; shape.len()];
     for axis in (0..shape.len().saturating_sub(1)).rev() {
         strides[axis] = strides[axis + 1] * shape[axis + 1];
     }
     strides
+}
+
+/// The compensated (Kahan–Babuška/Neumaier) sum of an `f64` sequence
+/// (§6.6.6, §9.5).
+///
+/// A plain left-to-right fold loses the small terms as soon as one term is
+/// much larger than the running total: ten tenths sum to `0.9999999999999999`
+/// and `1e16 + 1 - 1e16` folds to `0`, while the exact answers are `1` and `1`.
+/// The compensation accumulates the rounding error of each step in a second
+/// accumulator, which is what makes the reduction "pairwise/Kahan" in the sense
+/// the standard requires: the error no longer grows with the sequence length,
+/// and a result that is exactly representable comes out exactly.
+#[must_use]
+pub fn kahan_sum(data: &[f64]) -> f64 {
+    let mut total = 0.0f64;
+    let mut compensation = 0.0f64;
+    for value in data {
+        let next = total + value;
+        // Add back the part of the addition that was rounded away. The branch
+        // is Neumaier's correction: it also recovers the small term when the
+        // large term comes last, which the original Kahan step does not.
+        if total.abs() >= value.abs() {
+            compensation += (total - next) + value;
+        } else {
+            compensation += (value - next) + total;
+        }
+        total = next;
+    }
+    total + compensation
 }
 
 impl TensorData {
@@ -735,7 +764,8 @@ impl TensorData {
         Some(self.dense_with(out, dim, None))
     }
 
-    /// The `+` reduction over an `f64` tensor, folded left to right.
+    /// The `+` reduction over an `f64` tensor, using the compensated
+    /// summation §6.6.6 and §9.5 ask for.
     ///
     /// A strided view is materialised first, so the fold order — and
     /// therefore the bits — is the one the boxed reduction produces.
@@ -745,13 +775,12 @@ impl TensorData {
     #[must_use]
     pub fn dense_sum(&self) -> Option<NumVal> {
         let data = self.dense_flat()?;
-        let (&first, rest) = data.split_first()?;
-        let mut total = first;
-        for value in rest {
-            total += value;
+        if data.is_empty() {
+            return None;
         }
+        let total = kahan_sum(&data);
         let mut num = NumVal::float(total, self.dim.clone());
-        if rest.is_empty() {
+        if data.len() == 1 {
             num.display = self.display.clone();
         }
         Some(num)
@@ -1154,18 +1183,41 @@ impl TensorData {
         })
     }
 
-    /// The storage a reshape can reuse.
+    /// The storage a reshape can reuse, when the elements of `shape` are the
+    /// elements this tensor holds.
     ///
-    /// A view's strides describe the shape it was sliced from, so they cannot
-    /// be carried across a change of shape: it is materialised. Every other
-    /// class is a flat buffer whose layout is implied by the new shape.
+    /// §6.6.4 and §9.5: `reshape` is a **view when the elements are
+    /// contiguous, a copy otherwise**. A dense buffer is already contiguous
+    /// and is shared as-is; a view whose strides are the row-major strides of
+    /// its own shape (`m[1..3, 0..3]`) names a contiguous window of its parent
+    /// buffer, so the new shape gets fresh row-major strides over that same
+    /// window and the buffer is shared (`Rc::ptr_eq` holds). A strided or
+    /// reversed view has no single contiguous buffer to point into, so it is
+    /// materialised in row-major order.
     ///
     /// Returns `None` for a view over a buffer that is not `f64`, which cannot
     /// be constructed today.
     #[must_use]
-    pub fn reshape_storage(&self) -> Option<Storage> {
+    pub fn reshape_storage(&self, shape: &[usize]) -> Option<Storage> {
+        let len = Self::element_count(shape);
         match &self.storage {
-            Storage::View(_) => Some(Storage::Dense(Rc::new(self.dense_flat()?.into_owned()))),
+            Storage::View(view) => {
+                // `len == 0` cannot be a view (empty tensors stay boxed), but
+                // guarding it keeps the offset arithmetic honest.
+                if len == 0 {
+                    return Some(Storage::Dense(Rc::new(Vec::new())));
+                }
+                if self.dense().is_some() {
+                    return Some(Storage::View(View {
+                        data: view.data.clone(),
+                        offset: view.offset,
+                        strides: row_major_strides(shape),
+                        reversed: vec![false; shape.len()],
+                        len,
+                    }));
+                }
+                Some(Storage::Dense(Rc::new(self.dense_flat()?.into_owned())))
+            }
             other => Some(other.clone()),
         }
     }
@@ -1374,7 +1426,10 @@ pub struct Closure {
     /// The captured environment.
     pub env: ClosureEnv,
     /// The name, for diagnostics.
-    pub name: Option<String>,
+    ///
+    /// `Rc<str>`: the stack frame clones the name on every call, and cloning a
+    /// `String` made every call allocate.
+    pub name: Option<Rc<str>>,
 }
 
 impl Closure {
@@ -1385,7 +1440,7 @@ impl Closure {
             params,
             body: ClosureBody::Ast(body),
             env: ClosureEnv::Ast(env),
-            name,
+            name: name.map(Rc::from),
         }
     }
 
@@ -1437,6 +1492,19 @@ pub enum IoAction {
         path: String,
         /// The contents.
         contents: String,
+    },
+    /// Reads an NPY file into a rank-1/rank-2 float tensor (§8.11).
+    ///
+    /// NPY is binary, so it does not fit [`Self::ReadFile`]'s UTF-8 text; the
+    /// decode happens when the action runs, and a malformed file becomes the
+    /// typed `Err` the spec asks for.
+    ReadNpy(String),
+    /// Writes pre-encoded NPY bytes (§8.11).
+    WriteNpy {
+        /// The path.
+        path: String,
+        /// The encoded file.
+        bytes: Vec<u8>,
     },
     /// Reads one line from stdin.
     ReadLine,
@@ -1657,46 +1725,12 @@ pub fn format_float_repr(value: f64) -> String {
 }
 
 /// The SI spelling of a dimension, used when no display unit is attached.
+///
+/// The spelling itself lives in `aevia-dim` so diagnostics and value display
+/// agree: a Brownian increment's `s^(1/2)` must not render as `s^1` (§8.9.1).
 #[must_use]
 pub fn si_unit_text(dim: &Dim) -> String {
-    if dim.is_one() {
-        return String::new();
-    }
-    let mut numerator = Vec::new();
-    let mut denominator = Vec::new();
-    for (base, exponent) in dim.base_factors() {
-        let symbol = match base {
-            "Length" => "m",
-            "Mass" => "kg",
-            "Time" => "s",
-            "Current" => "A",
-            "Temperature" => "K",
-            "Amount" => "mol",
-            "Luminosity" => "cd",
-            other => other,
-        };
-        let target = if exponent.is_negative() {
-            &mut denominator
-        } else {
-            &mut numerator
-        };
-        let magnitude = exponent.abs();
-        if magnitude.is_one() {
-            target.push(symbol.to_string());
-        } else {
-            target.push(format!("{symbol}^{}", magnitude.numer()));
-        }
-    }
-    let numerator = if numerator.is_empty() {
-        "1".to_string()
-    } else {
-        numerator.join("*")
-    };
-    if denominator.is_empty() {
-        numerator
-    } else {
-        format!("{numerator}/{}", denominator.join("*"))
-    }
+    dim.to_si_symbol_string()
 }
 
 /// Renders a scalar with its display unit or dimension.

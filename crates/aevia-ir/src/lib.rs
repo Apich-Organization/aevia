@@ -31,6 +31,7 @@ use aevia_dim::UnitExpr;
 use aevia_syntax::ast::{BinOp, NumberLit, PatLit, Ty, UnOp};
 use aevia_syntax::Span;
 use num_bigint::BigInt;
+use num_rational::BigRational;
 use std::rc::Rc;
 
 /// An index into the current frame's slot vector.
@@ -51,10 +52,22 @@ pub enum Atom {
     Global(String),
     /// An integer literal.
     Int(BigInt),
-    /// A float literal, kept as source text so the runtime reports the same
-    /// `E0106` an invalid literal would (it is unreachable from the parser, but
-    /// the two paths must agree on it).
-    Float(String),
+    /// An exact rational literal, for a decimal written in a `Real` context.
+    Exact(BigRational),
+    /// A float literal, already parsed to the `f64` it denotes.
+    ///
+    /// The lexer validates every numeric literal (a malformed one is `E0106`
+    /// before lowering), so parsing here cannot fail; doing it once at lowering
+    /// instead of on every evaluation keeps a tight numeric loop free of a
+    /// `String` allocation and a `strtod` per step.
+    Float(f64),
+    /// A complex literal, for a numeric literal in a `Complex` context.
+    Complex {
+        /// Real part.
+        re: f64,
+        /// Imaginary part.
+        im: f64,
+    },
     /// A boolean literal.
     Bool(bool),
     /// A string literal with no interpolation.
@@ -76,7 +89,10 @@ pub enum Capture {
 #[derive(Debug)]
 pub struct Function {
     /// The name, for stack frames.
-    pub name: String,
+    ///
+    /// `Rc<str>`: a stack frame pushes the name once per *call*, so a `String`
+    /// here was one allocation per call (and per tail step's frame update).
+    pub name: Rc<str>,
     /// The parameter patterns, in order.
     pub params: Vec<Pattern>,
     /// The body.
@@ -266,6 +282,14 @@ pub enum Rhs {
         value: NumberLit,
         /// The unit expression.
         unit: UnitExpr,
+        /// Whether the checker instantiated this literal as `Float` (§3.10.1).
+        ///
+        /// §3.10.1 lets a numeric literal take the representation of its
+        /// context (so `fn f(x: Float) = x + 1` adds floats), while §6.3.2
+        /// keeps a literal in a `Real` context exact. The checker records the
+        /// instantiation per literal; this flag carries the decision into the
+        /// quantity's evaluation so the two paths agree.
+        as_float: bool,
     },
     /// A string with interpolations.
     Str(Vec<StrPart>),
@@ -337,6 +361,13 @@ pub enum CallKind {
     Dictionary {
         /// The method name.
         method: String,
+        /// What the checker proved the call must execute (round-2 decision 1c).
+        ///
+        /// `Instance(key)` names one instance symbolically, `Witness` a
+        /// quantified site's disjoint candidates, `Builtin(ShowStructural)`
+        /// §3.8.4's structural printer. The evaluator dispatches from this, not
+        /// from a mangled global guessed at run time.
+        target: Option<aevia_types::check::DictTarget>,
     },
     /// A builtin that reads an explicit type argument (`zeros<Int>(3)`).
     Typed {

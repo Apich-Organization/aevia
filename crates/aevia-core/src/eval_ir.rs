@@ -192,17 +192,31 @@ pub(crate) fn run_closure(
         if let Some(current) = interp.frames.last_mut() {
             // A self tail call keeps the name, and cloning it per iteration was
             // one allocation per loop step.
-            if current.function != *function.name {
+            if current.function.as_ref() != function.name.as_ref() {
                 current.function = function.name.clone();
             }
             current.span = next_span;
         }
     };
+    // §9.3.4: the failing function's own frame is part of the trace, so the
+    // stack is taken before the frame is popped. It is taken *only* when the
+    // error has no stack yet: cloning a `Vec<String>` on every return was the
+    // cheapest thing a tail loop did, and a nested `apply` already attached the
+    // same stack on its way out.
+    let needs_stack = matches!(
+        &outcome,
+        Err(error) if error.payload.is_none() && error.stack.is_empty()
+    );
+    let stack = needs_stack.then(|| interp.frames.clone());
     interp.frames.pop();
     match outcome {
         // `?` returns from the enclosing function by unwinding to its call,
         // which is where the `Err`/`None` payload belongs.
         Err(error) if error.payload.is_some() => Ok(error.payload.expect("checked above")),
+        Err(error) => Err(match stack {
+            Some(stack) => error.with_stack(stack),
+            None => error,
+        }),
         other => other,
     }
 }
@@ -329,7 +343,7 @@ fn eval_call(
             let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
             Ok(Flow::Value(interp.call_rssn(name, call.span, values)?))
         }
-        CallKind::Dictionary { method } => {
+        CallKind::Dictionary { method, target: _ } => {
             let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
             match interp.dictionary_use(call.span, method) {
                 Some(use_site) => {
@@ -433,13 +447,13 @@ fn eval_atom(
             })?,
         Atom::Global(name) => interp.lookup_global(name, env.scope.as_ref(), span)?,
         Atom::Int(value) => Value::Num(NumVal::int(value.clone())),
-        Atom::Float(text) => {
-            let cleaned = text.replace('_', "");
-            let value: f64 = cleaned
-                .parse()
-                .map_err(|_| EvalError::new("E0106", "invalid float literal").at(span))?;
-            Value::Num(NumVal::float(value, aevia_dim::Dim::one()))
-        }
+        Atom::Exact(value) => Value::Num(NumVal::exact(value.clone(), aevia_dim::Dim::one())),
+        Atom::Float(value) => Value::Num(NumVal::float(*value, aevia_dim::Dim::one())),
+        Atom::Complex { re, im } => Value::Num(NumVal {
+            kind: NumKind::Complex(*re, *im),
+            dim: aevia_dim::Dim::one(),
+            display: None,
+        }),
         Atom::Bool(value) => Value::Bool(*value),
         Atom::Str(text) => Value::string(text.clone()),
         Atom::Unit => Value::Unit,
@@ -652,7 +666,11 @@ fn eval_rhs(
             }
             interp.index_resolved(base, &resolved, span)
         }
-        Rhs::Quantity { value, unit } => interp.quantity(value, unit, span),
+        Rhs::Quantity {
+            value,
+            unit,
+            as_float,
+        } => interp.quantity(value, unit, span, *as_float),
         Rhs::Str(parts) => {
             let mut out = String::new();
             for part in parts {

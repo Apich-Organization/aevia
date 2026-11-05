@@ -28,6 +28,7 @@ apply
 approx_eq
 approx_map
 arg
+args
 asin
 asinh
 assert
@@ -116,6 +117,7 @@ fold_left
 forall
 format
 from_dense
+from_json
 from_value
 gamma
 gcd
@@ -196,6 +198,7 @@ ones
 ones_of
 oo
 outer
+par_map
 parse_float
 parse_int
 partial
@@ -231,6 +234,7 @@ reshape
 reshape_dyn
 reverse
 rfft
+rng
 root
 round
 row
@@ -240,6 +244,10 @@ save
 scatter
 scatter_with
 schema
+sde_ensemble_seed
+sde_order
+sdeint_diag
+sdeint_general
 select
 series
 set
@@ -280,6 +288,7 @@ to_device
 to_dynamic
 to_float
 to_int
+to_json
 to_latex
 to_real
 to_table
@@ -300,6 +309,7 @@ upper
 value
 var
 vecmat
+wiener
 write_csv
 write_json
 write_npy

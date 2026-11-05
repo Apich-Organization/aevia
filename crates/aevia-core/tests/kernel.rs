@@ -6,8 +6,10 @@
 //! a digit, which is true of almost any answer — `contains("-2")` and
 //! `contains('2')` are satisfied by the same character.
 
-use aevia_core::value::{NumKind, Value};
+use aevia_core::value::{NumKind, Storage, TensorData, Value};
 use aevia_core::{compile, Interp};
+use aevia_dim::Dim;
+use std::rc::Rc;
 
 fn build(source: &str) -> (aevia_syntax::Module, aevia_types::CheckedModule) {
     let compilation = compile("test.aev", source);
@@ -405,3 +407,131 @@ fn a_matrix_returning_operator_returns_a_tensor_of_the_declared_rank() {
         .collect();
     assert_eq!(elements, ["1", "3", "2", "4"], "row-major order");
 }
+
+// --- the runtime side of the bridge contract -------------------------------
+
+/// A rank-1 tensor of values, for the variadic ABI.
+fn list_of(items: Vec<Value>) -> Value {
+    let len = items.len();
+    Value::Tensor(Rc::new(TensorData {
+        shape: vec![len],
+        storage: Storage::Boxed(items),
+        dim: Dim::one(),
+        display: None,
+    }))
+}
+
+/// §8.19's variadic ABI: a variadic operator is typed `[α] -> R` and the list
+/// the call site passes is **one** argument statically and N positional values
+/// at the kernel. Passing the list through as one argument is what made
+/// `Rssn.and([true, false])` answer a term where the checker promised a Bool.
+#[test]
+fn a_variadic_call_spreads_its_list_into_positional_arguments() {
+    use aevia_rssn::SigType;
+
+    let entry = aevia_rssn::registry()
+        .ops()
+        .find(|op| {
+            op.is_variadic()
+                && op
+                    .signatures
+                    .iter()
+                    .any(|signature| signature.variadic.is_some())
+        })
+        .expect("the manifest registers a variadic operator");
+    let (index, signature) = entry
+        .signatures
+        .iter()
+        .enumerate()
+        .find(|(_, signature)| signature.variadic.is_some())
+        .expect("a variadic signature");
+    let (_, _, elem) = signature.variadic.as_ref().expect("a variadic tail");
+    let (first, second) = match elem {
+        SigType::Bool => (Value::Bool(true), Value::Bool(false)),
+        SigType::Int => (Value::int(1), Value::int(2)),
+        SigType::Real | SigType::Float => (
+            Value::Num(aevia_core::value::NumVal::float(1.0, Dim::one())),
+            Value::Num(aevia_core::value::NumVal::float(2.0, Dim::one())),
+        ),
+        other => panic!(
+            "`{}`'s variadic element is {other:?}; extend the test rather than skip it",
+            entry.name
+        ),
+    };
+    let key = entry.keys[index].clone();
+    let answer = aevia_core::rssn_module::call_operator(
+        &key,
+        vec![list_of(vec![first, second])],
+        aevia_syntax::Span::default(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "`{}` must accept a spread list argument: {} {}",
+            entry.name, error.code, error.message
+        )
+    });
+    // It ran the operator, not "the list is one argument": a `Bool` result is
+    // the shape the static type promises, and `show` would have been the whole
+    // list if the spread had not happened.
+    assert!(
+        !matches!(answer, Value::Tensor(_)),
+        "the list leaked through as one argument: found {}",
+        answer.type_name()
+    );
+}
+
+/// A pinned key that no longer names a live overload is an error naming the
+/// operator; the runtime must not fall back to re-resolving the call by name.
+#[test]
+fn an_unknown_pinned_key_is_reported_not_re_resolved() {
+    let forged = aevia_rssn::OpKey::new("trig", "sin", None);
+    let error = aevia_core::rssn_module::call_operator(
+        &forged,
+        vec![Value::Num(aevia_core::value::NumVal::float(0.5, Dim::one()))],
+        aevia_syntax::Span::default(),
+    )
+    .expect_err("a key no overload has cannot execute");
+    assert_eq!(error.code, "E1003", "{}", error.message);
+    assert!(
+        error.message.contains("sin"),
+        "the diagnostic must name the operator: {}",
+        error.message
+    );
+}
+
+/// `Value::Unit`/`Value::Quantity` cross as themselves, not as opaque strings:
+/// `Rssn.quantity(3.0, m)` answers a length whose display unit is the metre,
+/// through the same dynamic entry point a program uses.
+#[test]
+fn a_quantity_crosses_the_dynamic_boundary_as_a_quantity() {
+    let metre = aevia_rssn::unit_defs()
+        .into_iter()
+        .find(|unit| unit.name == "m")
+        .expect("the metre");
+    let answer = aevia_core::rssn_module::call(
+        "dynamic",
+        vec![
+            Value::string("quantity"),
+            list_of(vec![
+                Value::Num(aevia_core::value::NumVal::float(3.0, Dim::one())),
+                Value::UnitOf(Rc::new(metre)),
+            ]),
+        ],
+        aevia_syntax::Span::default(),
+    )
+    .expect("`Rssn.dynamic` is an entry point");
+    let Value::Variant(result) = answer else {
+        panic!("`Rssn.dynamic` must return a Result");
+    };
+    assert_eq!(result.index, 0, "`quantity(3.0, m)` failed");
+    let Some(Value::Num(number)) = result.fields.first() else {
+        panic!("a quantity must come back as a number, not as text");
+    };
+    assert_eq!(number.dim, Dim::base("Length"), "the dimension survived");
+    assert_eq!(
+        number.display.as_ref().map(|unit| unit.name.as_str()),
+        Some("m"),
+        "the display unit survived"
+    );
+}
+

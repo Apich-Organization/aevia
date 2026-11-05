@@ -408,10 +408,24 @@ fn a_shape_type_argument_is_read_when_it_is_present() {
     let error = call_error("reshape", vec![tensor(vec![2], vec![1.0, 2.0])]);
     assert_eq!(error.code, "E0310");
     assert!(error.message.contains("shape type argument"), "{}", error.message);
-    // A binary file action is still a named capability gap.
-    let error = call_error("read_npy", vec![Value::string("x.npy")]);
-    assert_eq!(error.code, "E1001");
-    assert!(error.message.contains("io.binary"), "{}", error.message);
+    // NPY is implemented (§8.11): `read_npy` builds the IO action, and only
+    // running it can fail (a missing file is the IO taxonomy's `E0901`).
+    assert!(
+        matches!(call("read_npy", vec![Value::string("x.npy")]), Value::Io(_)),
+        "`read_npy` builds an IO action"
+    );
+    // The extension check is the recoverable `Err(E0904)` value, not a panic.
+    let refused = call("read_npy", vec![Value::string("x.txt")]);
+    match &refused {
+        Value::Variant(result) => {
+            assert_eq!(result.name, "Err");
+            let Value::Str(message) = &result.fields[0] else {
+                panic!("the byte payload is a message");
+            };
+            assert!(message.contains("E0904"), "{message}");
+        }
+        other => panic!("expected a Result, found {}", other.type_name()),
+    }
 }
 
 #[test]
@@ -539,9 +553,15 @@ fn quadrature_minimisation_and_root_finding() {
 #[test]
 fn an_ode_solution_reaches_the_expected_state() {
     // y' = y, y(0) = 1: y(1) = e. The time grid carries `T`, as §8.9 says.
+    //
+    // The right-hand side returns `RateOf<s>`, not `s`: differentiating a
+    // state with respect to `t` divides its dimension by `T`. A dimensionless
+    // `y` therefore has a rate of `1/T`, which is why the body divides by
+    // `1.0 s` — without that the program claims `dy/dt` and `y` share a
+    // dimension, which is the `E0401` the checker now reports.
     let solution = run_value(
         r#"
-fn rhs(t: Float[T], s: Tensor<1, Float[1]>): Tensor<1, Float[1]> = [s[0]]
+fn rhs(t: Float[T], s: Tensor<1, Float[1]>): Tensor<1, Float[1/T]> = [s[0] / (1.0 s)]
 
 let y = odeint(rhs, [1.0], [0.0 s, 0.5 s, 1.0 s])
 "#,

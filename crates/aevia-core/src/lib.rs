@@ -93,14 +93,42 @@ pub fn compile(name: &str, source: &str) -> Compilation {
 }
 
 impl Interp {
+    /// Reports `@op`/`@rule` host registrations the checker accepted (§13.5.2).
+    ///
+    /// Publishing an Aevia function as a kernel operator or rewrite rule needs
+    /// the plugin-source ABI; this build has `core.plugin.source` disabled, so
+    /// a registration that reaches the runtime is exactly that named
+    /// capability gap. Dropping it silently would make `@op` look like it
+    /// worked when nothing was registered.
+    pub fn publish_registrations(&mut self) -> Diagnostics {
+        let mut diagnostics = Diagnostics::new();
+        for registration in &self.registrations {
+            let kind = match registration.kind {
+                aevia_types::check::HostRegistrationKind::Op => "op",
+                aevia_types::check::HostRegistrationKind::Rule => "rule",
+            };
+            diagnostics.push(Diagnostic::error(
+                "E1001",
+                format!(
+                    "`@{kind}(\"{}\")` needs the `core.plugin.source` capability, which this \
+                     build does not have; the function is not registered with the kernel",
+                    registration.name
+                ),
+                registration.span,
+            ));
+        }
+        diagnostics
+    }
+
     /// Evaluates a module's top-level declarations.
     ///
     /// Returns the diagnostics raised while initialising the module; they are
     /// returned rather than printed so the caller can render them with source
     /// context.
     pub fn load(&mut self, module: &Module) -> Diagnostics {
+        let mut diagnostics = self.publish_registrations();
         let root = Scope::root();
-        let diagnostics = self.load_into(module, &root);
+        diagnostics.extend(self.load_into(module, &root));
         // A single-file program keeps its names unqualified, which is what
         // `eval_toplevel` and the REPL expect.
         for name in top_level_names(module) {
@@ -116,8 +144,9 @@ impl Interp {
     /// Each module gets its own scope, so two modules may both define a
     /// private helper without one shadowing the other.
     pub fn load_qualified(&mut self, module: &Module, path: &[String]) -> Diagnostics {
+        let mut diagnostics = self.publish_registrations();
         let scope = Scope::child(&Scope::root());
-        let diagnostics = self.load_into(module, &scope);
+        diagnostics.extend(self.load_into(module, &scope));
         let names = top_level_names(module);
         if path.is_empty() {
             for name in names {
@@ -174,11 +203,16 @@ impl Interp {
                 methods,
             } = &decl.kind
             {
+                let export = self.take_instance_export();
                 for method in methods {
-                    self.register_instance(class, ty, method, &root);
+                    self.register_instance(class, ty, export.as_ref(), method, &root);
                 }
             }
         }
+        // Constructors are values too, and a construction inside this module
+        // must use *this module's* nominal identity (D6), not the first
+        // same-named type in the process registry.
+        bind_module_constructors(self, module, &root);
         // Then the bindings, in passes: `let a = b + 1` before `let b = 41` is
         // legal (§7.1.2), so a pass that hits an unbound name retries once the
         // names after it are bound.
@@ -237,10 +271,11 @@ impl Interp {
     /// forward reference is deferred rather than reported.
     fn load_into_ir(&mut self, module: &Module, root: &Rc<Scope>) -> Diagnostics {
         let mut diagnostics = Diagnostics::new();
-        let lowered = aevia_ir::lower::lower_module(
+        let lowered = aevia_ir::lower::lower_module_with_literals(
             module,
             &self.rssn_call_sites,
             &self.dictionary_sites,
+            &self.literal_reps,
         );
         let root = root.clone();
         for decl in &lowered.fns {
@@ -248,16 +283,19 @@ impl Interp {
             root.vars.borrow_mut().insert(decl.name.clone(), closure);
         }
         for instance in &lowered.instances {
+            let export = self.take_instance_export();
             for method in &instance.methods {
                 self.register_instance_function(
                     &instance.class,
                     &instance.head,
+                    export.as_ref(),
                     &method.name,
                     &method.function,
                     &root,
                 );
             }
         }
+        bind_module_constructors(self, module, &root);
         let mut pending: Vec<usize> = (0..lowered.lets.len()).collect();
         while !pending.is_empty() {
             let mut deferred = Vec::new();
@@ -305,15 +343,22 @@ impl Interp {
         &mut self,
         class: &str,
         head: &aevia_syntax::ast::Ty,
+        export: Option<&aevia_types::check::InstanceExport>,
         method: &str,
         function: &Rc<aevia_ir::Function>,
         env: &Rc<Scope>,
     ) {
         let spelled = crate::eval::instance_head_name(head);
-        let name = format!(
-            "{class}@{}::{method}",
-            spelled.as_deref().unwrap_or("?")
-        );
+        let (key, witness) = export.map_or((None, None), |export| {
+            (
+                Some(export.key.clone()),
+                aevia_types::keys::witness_of(&export.head),
+            )
+        });
+        let name = match &key {
+            Some(key) => Interp::instance_global(key, method),
+            None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
+        };
         let closure = crate::eval_ir::module_closure(function, env);
         self.globals.insert(name.clone(), closure);
         self.method_classes.insert(method.to_string(), class.to_string());
@@ -321,6 +366,8 @@ impl Interp {
             .entry(format!("{class}::{method}"))
             .or_default()
             .push(crate::eval::InstanceEntry {
+                key,
+                witness,
                 head: spelled,
                 shape: crate::eval::head_shape(head, &self.aliases),
                 global: name,
@@ -352,10 +399,11 @@ impl Interp {
     pub fn load_decl(&mut self, decl: &aevia_syntax::Decl) -> Result<(), EvalError> {
         use aevia_syntax::{DeclKind, PatKind};
         if self.mode == Mode::Ir {
-            if let Some(lowered) = aevia_ir::lower::lower_decl(
+            if let Some(lowered) = aevia_ir::lower::lower_decl_with_literals(
                 decl,
                 &self.rssn_call_sites,
                 &self.dictionary_sites,
+                &self.literal_reps,
             ) {
                 return self.load_lowered(lowered);
             }
@@ -391,8 +439,9 @@ impl Interp {
                 ty,
                 methods,
             } => {
+                let export = self.take_instance_export();
                 for method in methods {
-                    self.register_instance(class, ty, method, &root);
+                    self.register_instance(class, ty, export.as_ref(), method, &root);
                 }
                 Ok(())
             }
@@ -423,10 +472,12 @@ impl Interp {
                 Ok(())
             }
             aevia_ir::lower::LoweredDecl::Instance(instance) => {
+                let export = self.take_instance_export();
                 for method in &instance.methods {
                     self.register_instance_function(
                         &instance.class,
                         &instance.head,
+                        export.as_ref(),
                         &method.name,
                         &method.function,
                         &root,
@@ -477,6 +528,29 @@ impl Interp {
         scope: &Rc<Scope>,
     ) -> Result<(), EvalError> {
         self.bind_pattern_entry(pattern, value, scope)
+    }
+}
+
+/// Binds a module's variant constructors into its scope.
+///
+/// A user type is nominal per module (D6), so `A.Circle` and `B.Circle` are
+/// different constructors even though both are spelled `Circle`; the runtime
+/// must take the id from the defining module rather than the name-keyed global
+/// registry.
+fn bind_module_constructors(interp: &Interp, module: &Module, root: &Rc<Scope>) {
+    for decl in &module.decls {
+        let aevia_syntax::DeclKind::Type {
+            body: aevia_syntax::ast::TypeBody::Variants(ctors),
+            ..
+        } = &decl.kind
+        else {
+            continue;
+        };
+        for ctor in ctors {
+            if let Some(value) = crate::eval::ctor_value(&interp.current_module, &ctor.name) {
+                root.vars.borrow_mut().insert(ctor.name.clone(), value);
+            }
+        }
     }
 }
 

@@ -6,18 +6,30 @@
 //! pinned. Adding an operator to rssn makes `Rssn.<name>` work without a
 //! change in this file.
 //!
-//! # Two entry points, one decision
+//! # The fixed members of §8.19
+//!
+//! Besides the operators, §8.19 declares a handful of *fixed* entry points:
+//! `call`/`dynamic`, `typed`, `call_ho`, `call_key`, `register`/
+//! `register_plugin`, `resolve_overload`, `overloads`, and the data members
+//! (`Version`, `ManifestHash`, `Capabilities`, `Units`, `Constants`,
+//! `ValueKinds`). They are dispatched below. Two of them need a value this
+//! build cannot construct, and say so with `E1001` naming the capability
+//! instead of failing deep inside the conversion:
+//!
+//! * `call_ho` takes `Tensor<1, Callback>`; the kernel's host-callback ABI is
+//!   `Send + Sync` and this evaluator is single-threaded, so `core.callback` is
+//!   off. The empty list *is* the dynamic call and runs.
+//! * `register`/`register_plugin` take a `Plugin`; a kernel `Plugin` is a Rust
+//!   host object and source-level `@op` packaging (§13.5.2) is not
+//!   implemented, so `core.plugin.source` is off.
+//!
+//! # Two operator paths, one decision
 //!
 //! [`call_operator`] takes an explicit [`OpKey`] and never resolves anything:
-//! that is the path PLAN D1 requires, and the one the checker will use once it
-//! pins keys into the Core IR. [`call`] is the *compatibility* path: the
-//! checker types `Rssn.<op>` as its first overload today, so the runtime still
-//! has to choose by argument types, and the choice is made here — once —
-//! through [`aevia_rssn::kernel::Kernel::resolve`], which is the kernel's own
-//! lattice. It reports `E1002` on a tie instead of silently picking one.
-//!
-//! The compatibility path is marked `TODO(D1)` and is deleted when the checker
-//! lands.
+//! that is the path PLAN D1 requires, and the one the checker pins. [`call`]'s
+//! operator arm is unreachable from a checked call site — the evaluator uses
+//! [`call_operator`] — so an operator that reaches it is `E1005` rather than a
+//! re-resolution.
 
 use crate::eval::EvalError;
 use crate::kernel as bridge;
@@ -57,6 +69,8 @@ pub fn call(name: &str, args: Vec<Value>, span: Span) -> Result<Value, EvalError
         )),
         "call" | "dynamic" => dynamic_call(&args, span),
         "typed" => typed_call(&args, span),
+        "call_ho" => call_ho(&args, span),
+        "register" | "register_plugin" => register(&args, span),
         "call_key" => call_key(&args, span),
         "invoke" => invoke(&args, span),
         "resolve_overload" => resolve(&args, span),
@@ -88,6 +102,9 @@ pub fn is_entry_point(name: &str) -> bool {
             | "call"
             | "dynamic"
             | "typed"
+            | "call_ho"
+            | "register"
+            | "register_plugin"
             | "call_key"
             | "invoke"
             | "resolve_overload"
@@ -279,8 +296,91 @@ fn dynamic_call(args: &[Value], span: Span) -> Result<Value, EvalError> {
         .require("core.dynamic_call")
         .map_err(|failure| bridge::error(&failure).at(span))?;
     let values = dynamic_arguments(args.get(1), span)?;
+    forward(&name, &values, span, false)
+}
+
+/// `Rssn.call_ho(name, values, callbacks)`.
+///
+/// §8.19 types the last argument as `Tensor<1, Callback>`. No Aevia expression
+/// can produce a `Callback`: the kernel's host-callback ABI is a
+/// `Send + Sync` trait object and this evaluator is a single-threaded `Rc`
+/// graph, so an Aevia closure cannot be converted into one. That is exactly the
+/// missing `core.callback` capability, and a non-empty list says so as
+/// `E1001`.
+///
+/// An *empty* list is the one case with a faithful meaning: the kernel's
+/// `call_ho` with no callbacks is its dynamic call. It is forwarded there so
+/// the entry point is not a dead name — and the callback-free result must equal
+/// `Rssn.dynamic`'s, which the tests assert.
+fn call_ho(args: &[Value], span: Span) -> Result<Value, EvalError> {
+    let name = args
+        .first()
+        .map(show)
+        .ok_or_else(|| EvalError::new("E0315", "`Rssn.call_ho` needs a name").at(span))?;
+    if args.len() != 3 {
+        return Err(EvalError::new(
+            "E0315",
+            format!("`Rssn.call_ho` takes 3 arguments, found {}", args.len()),
+        )
+        .at(span));
+    }
+    let callbacks = dynamic_arguments(args.get(2), span)?;
+    if !callbacks.is_empty() {
+        return Err(capability_gap(
+            "core.callback",
+            "an Aevia closure cannot cross to the kernel: its host-callback ABI is \
+             `Send + Sync` and this evaluator is single-threaded, so no `Callback` \
+             value is constructible from source",
+            span,
+        ));
+    }
+    registry()
+        .capabilities
+        .require("core.dynamic_call")
+        .map_err(|failure| bridge::error(&failure).at(span))?;
+    let values = dynamic_arguments(args.get(1), span)?;
+    forward(&name, &values, span, true)
+}
+
+/// `Rssn.register(plugin)` and its alias `Rssn.register_plugin(plugin)`.
+///
+/// §8.19 types the argument as `Plugin`, the handle §13.5.1 registers with
+/// `Session::register(Box<dyn Plugin>)`. No Aevia expression can produce one:
+/// a kernel `Plugin` is a Rust host object registered through the embedding
+/// API, and the source-level form (§13.5.2, `@op` packaging) is not
+/// implemented. The runtime reports `E1001("core.plugin.source")` rather than
+/// pretending to register something; `core.plugin` itself is *not* claimed
+/// missing, because in-process host plugins exist in this build.
+fn register(args: &[Value], span: Span) -> Result<Value, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::new(
+            "E0315",
+            format!("`Rssn.register` takes 1 argument, found {}", args.len()),
+        )
+        .at(span));
+    }
+    Err(capability_gap(
+        "core.plugin.source",
+        "no Aevia source expression can construct a `Plugin` value: Rust host \
+         plugins are registered through the embedding API (§13.5.1), and \
+         source-level `@op` packaging (§13.5.2) is the missing feature",
+        span,
+    ))
+}
+
+/// The dynamic call behind `Rssn.dynamic` and a callback-free `Rssn.call_ho`.
+///
+/// The two differ only in which kernel entry point runs: with no callbacks,
+/// `Session::call_ho` *is* `Session::call_value`. The conversion and the
+/// `Result`-as-value channel are shared so the two cannot drift.
+fn forward(
+    name: &str,
+    values: &[Value],
+    _span: Span,
+    higher_order: bool,
+) -> Result<Value, EvalError> {
     let mut converted = Vec::with_capacity(values.len());
-    for value in &values {
+    for value in values {
         match bridge::to_val(value) {
             Ok(value) => converted.push(value),
             Err(error) => return Ok(err(Value::string(error.message))),
@@ -288,9 +388,14 @@ fn dynamic_call(args: &[Value], span: Span) -> Result<Value, EvalError> {
     }
     let kernel = aevia_rssn::kernel();
     let dim = registry()
-        .op(&name)
+        .op(name)
         .map_or_else(Dim::one, |entry| signature_dim(entry, None));
-    match kernel.call(&name, &converted) {
+    let result = if higher_order {
+        kernel.call_ho(name, &converted)
+    } else {
+        kernel.call(name, &converted)
+    };
+    match result {
         Ok(value) => Ok(ok(bridge::from_val(&value, dim))),
         // The error payload keeps its code: `Err(e)` with the whole structure
         // of `OpError` is not representable in Aevia, but a bare message would
@@ -300,6 +405,21 @@ fn dynamic_call(args: &[Value], span: Span) -> Result<Value, EvalError> {
             failure.code, failure.message
         )))),
     }
+}
+
+/// An `E1001` naming a capability this build does not provide.
+///
+/// The capability comes from the one table in [`aevia_rssn::Capabilities`], so
+/// the message and `Rssn.Capabilities` cannot disagree; the debug assertion
+/// catches the day a capability is turned on while the arm that reports it
+/// missing is still there.
+fn capability_gap(capability: &str, why: &str, span: Span) -> EvalError {
+    debug_assert!(
+        !registry().capabilities.has(capability),
+        "`{capability}` is provided by this build, so an arm reporting it missing is stale"
+    );
+    let failure = aevia_rssn::KernelError::capability(capability);
+    bridge::error(&failure).at(span).with_note(why)
 }
 
 /// `Rssn.call_key(name, hash, values)`.

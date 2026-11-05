@@ -457,13 +457,20 @@ fn a_contiguous_view_takes_the_f64_path_and_a_strided_one_materialises() {
 }
 
 #[test]
-fn reshaping_a_view_materialises_in_row_major_order() {
-    // `reshape<[3, 2]>` in source does not reach `type_arg` from an
-    // expression's `<…>` list yet (STATUS.md, "Parser"), so the type argument
-    // is built as the AST node the runtime already reads.
-    let mut interp = session(&format!("{MATRIX}let s = m[1..3, 0..3]\n"));
+fn reshape_is_a_view_of_a_contiguous_window_and_a_copy_otherwise() {
+    // §6.6.4 / §9.5: "reshape 在连续内存上返回视图，否则复制." The row window
+    // `m[1..3, 0..3]` is contiguous, so the reshaped tensor must share the
+    // parent's buffer; a column window is strided, so it is materialised.
+    let mut interp = session(&format!(
+        "{MATRIX}let s = m[1..3, 0..3]\nlet c = m[0..3, 1..2]\n"
+    ));
     let view = interp.eval_toplevel("s").expect("s");
     assert!(tensor_of(&view).is_view(), "the operand is a view");
+    assert!(
+        tensor_of(&view).is_contiguous(),
+        "the row window is contiguous"
+    );
+    let source = interp.eval_toplevel("m").expect("m");
 
     let ty = Ty::new(
         TyKind::ShapeArg(ShapeAst::Refined(vec![
@@ -474,9 +481,6 @@ fn reshaping_a_view_materialises_in_row_major_order() {
     );
     let reshaped = call_typed(&mut interp, "reshape", &[ty], vec![view], Span::default())
         .expect("a 2×3 window has six elements");
-
-    // The reshaped tensor is a flat buffer: a view's strides describe the
-    // shape they were sliced from and cannot survive a new one.
     let Value::Variant(result) = &reshaped else {
         panic!("reshape answers with a Result");
     };
@@ -484,8 +488,14 @@ fn reshaping_a_view_materialises_in_row_major_order() {
     let Value::Tensor(payload) = &result.fields[0] else {
         panic!("the `Ok` payload is a tensor");
     };
-    assert!(!payload.is_view(), "reshape materialises a view");
     assert_eq!(payload.shape, vec![3, 2], "the new shape");
+    assert!(
+        Rc::ptr_eq(
+            payload.buffer().expect("reshaped buffer"),
+            tensor_of(&source).buffer().expect("source buffer")
+        ),
+        "a contiguous reshape is a view of the same buffer, not a copy"
+    );
     assert_eq!(
         payload
             .elements()
@@ -494,6 +504,48 @@ fn reshaping_a_view_materialises_in_row_major_order() {
             .collect::<Vec<_>>(),
         vec![4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
         "the elements keep the view's row-major order"
+    );
+
+    // The strided column window cannot be a view: no strides of the new shape
+    // describe it, so it is copied in row-major (logical) order.
+    let column = interp.eval_toplevel("c").expect("c");
+    assert!(
+        !tensor_of(&column).is_contiguous(),
+        "the column window is strided"
+    );
+    let ty = Ty::new(
+        TyKind::ShapeArg(ShapeAst::Refined(vec![
+            ShapeItem::Known(NatAst::Lit(1)),
+            ShapeItem::Known(NatAst::Lit(3)),
+        ])),
+        Span::default(),
+    );
+    let reshaped = call_typed(&mut interp, "reshape", &[ty], vec![column], Span::default())
+        .expect("a 3-element column has three elements");
+    let Value::Variant(result) = &reshaped else {
+        panic!("reshape answers with a Result");
+    };
+    assert_eq!(result.index, 0, "the reshape succeeds");
+    let Value::Tensor(payload) = &result.fields[0] else {
+        panic!("the `Ok` payload is a tensor");
+    };
+    assert_eq!(payload.shape, vec![1, 3]);
+    assert!(!payload.is_view(), "a strided reshape materialises");
+    assert!(
+        !Rc::ptr_eq(
+            payload.buffer().expect("materialised buffer"),
+            tensor_of(&source).buffer().expect("source buffer")
+        ),
+        "the copy is a fresh allocation"
+    );
+    assert_eq!(
+        payload
+            .elements()
+            .iter()
+            .map(|element| element.as_f64().unwrap_or(f64::NAN))
+            .collect::<Vec<_>>(),
+        vec![2.0, 5.0, 8.0],
+        "the strided window is walked in row-major order"
     );
 }
 

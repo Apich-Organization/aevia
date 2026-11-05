@@ -122,7 +122,7 @@ pub fn call_typed(
             }
             // A view's strides describe the shape it was sliced from, so they
             // cannot survive a change of shape; it is materialised.
-            let Some(storage) = tensor.reshape_storage() else {
+            let Some(storage) = tensor.reshape_storage(&shape) else {
                 return Ok(err(shape_error(
                     "this tensor's elements cannot be reshaped".to_string(),
                 )));
@@ -172,6 +172,7 @@ fn nat_value(nat: &NatAst) -> Option<usize> {
     match nat {
         NatAst::Lit(value) => Some(*value),
         NatAst::Add(left, right) => Some(nat_value(left)? + nat_value(right)?),
+        NatAst::Mul(left, right) => Some(nat_value(left)? * nat_value(right)?),
         NatAst::Var(_) => None,
     }
 }
@@ -561,13 +562,45 @@ pub fn call(
                 let axis = expect_int(&args, 1, name, span)?.max(0) as usize;
                 return sum_axis(interp, &tensor, axis, span);
             }
+            // §6.6.6: the empty sum is 0, in the phase the elements would have
+            // had — a `Float` tensor answers `0.0`, an exact one `0`.
+            if tensor.storage.is_empty() {
+                return Ok(Value::Num(zero_of(&tensor)));
+            }
             // §9.13: a dense buffer folds without boxing a `Value` per step.
-            // The fold order is the boxed one's, so the total is identical.
+            // The fold is the compensated one (§6.6.6), and the boxed `Float`
+            // path uses the same fold so the class stays unobservable.
             if let Some(num) = tensor.dense_sum() {
                 return Ok(Value::Num(num));
             }
+            let elements = tensor.elements();
+            if elements.iter().all(|element| {
+                matches!(
+                    element,
+                    Value::Num(NumVal {
+                        kind: NumKind::Float(_),
+                        ..
+                    })
+                )
+            }) {
+                let values: Vec<f64> = elements
+                    .iter()
+                    .map(|element| element.as_f64().unwrap_or(f64::NAN))
+                    .collect();
+                let mut total = NumVal::float(
+                    crate::value::kahan_sum(&values),
+                    tensor.dim.clone(),
+                );
+                // A one-element reduction is the element itself, display unit
+                // included — the dense path keeps it for the same reason, and
+                // the two classes must stay indistinguishable.
+                if let [Value::Num(only)] = elements.as_slice() {
+                    total.display = only.display.clone();
+                }
+                return Ok(Value::Num(total));
+            }
             let mut total: Option<Value> = None;
-            for element in tensor.elements() {
+            for element in elements {
                 total = Some(match total {
                     None => element,
                     Some(acc) => interp
@@ -580,7 +613,17 @@ pub fn call(
         }
         "mean" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
+            // §6.6.6: the mean of an empty `Float` tensor is `NaN` (IEEE), and
+            // the mean of an empty `Real` tensor is `E0802` — `Real` has no
+            // NaN. The storage class is the phase here: an `f64` buffer is
+            // what `Float` storage looks like.
             if tensor.storage.is_empty() {
+                if tensor.dense_flat().is_some() {
+                    return Ok(Value::Num(NumVal::float(
+                        f64::NAN,
+                        tensor.dim.clone(),
+                    )));
+                }
                 return Err(EvalError::new("E0802", "`mean` of an empty tensor").at(span));
             }
             // §8.7 types `mean` as `div_rep(ρ)`, which is `Real` for exact
@@ -588,7 +631,7 @@ pub fn call(
             // buffer — dense or a view — is `Float` by construction, so it
             // takes the float branch without boxing an element.
             if let Some(values) = tensor.dense_flat() {
-                let total: f64 = values.iter().sum();
+                let total = crate::value::kahan_sum(&values);
                 return Ok(Value::Num(NumVal::float(
                     total / values.len() as f64,
                     tensor.dim.clone(),
@@ -600,7 +643,7 @@ pub fn call(
                 return Ok(exact_number(value, tensor.dim.clone()));
             }
             let values = tensor_values(&tensor)?;
-            let total: f64 = values.iter().sum();
+            let total = crate::value::kahan_sum(&values);
             Ok(Value::Num(NumVal::float(
                 total / values.len() as f64,
                 tensor.dim.clone(),
@@ -660,6 +703,41 @@ pub fn call(
         }
         "min_all" | "max_all" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
+            // §8.1: `min`/`max` are the *binary* functions; the tensor reduction
+            // is only the whole-tensor `min_all`/`max_all` (no axis form and no
+            // `argmin`/`argmax` is declared). §9.13: a dense `f64` buffer is
+            // scanned once without boxing a `Value` per element. The comparison
+            // order and the NaN rule are exactly the element-wise loop's: a
+            // comparison with NaN is false, so a NaN never displaces the current
+            // best and a leading NaN stays sticky — the Float/TotalOrd rule from
+            // §6.6.6, not a second semantics.
+            if let Some(values) = tensor.dense_flat() {
+                let find_min = name == "min_all";
+                let mut best: Option<(usize, f64)> = None;
+                for (index, value) in values.iter().copied().enumerate() {
+                    best = Some(match best {
+                        None => (index, value),
+                        Some((best_index, current)) => {
+                            let take = if find_min {
+                                value < current
+                            } else {
+                                value > current
+                            };
+                            if take {
+                                (index, value)
+                            } else {
+                                (best_index, current)
+                            }
+                        }
+                    });
+                }
+                let Some((_, value)) = best else {
+                    return Err(EvalError::new("E0802", "empty tensor").at(span));
+                };
+                let mut num = NumVal::float(value, tensor.dim.clone());
+                num.display = tensor.display.clone();
+                return Ok(Value::Num(num));
+            }
             let mut best: Option<Value> = None;
             for element in tensor.elements() {
                 let value = element.as_f64().unwrap_or(f64::NAN);
@@ -870,6 +948,34 @@ pub fn call(
                 Ok(build_tensor(elements, remaining.to_vec(), tensor.dim.clone()))
             }
         }
+        // §6.10 / §3.8.4: explicit parallelism, gated by the checker's
+        // `Parallel` constraint (only `Int`/`Float` and tensors of them reach
+        // here; symbolic `Real` is rejected statically). The *guarantee* is
+        // that the result order is the input order, and that holds however the
+        // work is scheduled. This build runs the map sequentially — the
+        // interpreter is `!Send`, so a worker cannot borrow it — which is a
+        // documented deviation from §9.7.2's rayon wording, not from its
+        // result.
+        "par_map" => {
+            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+            let tensor = expect_tensor(&args, 1, name, span)?;
+            if tensor.rank() != 1 {
+                return Err(EvalError::new(
+                    "E0802",
+                    "`par_map` expects a rank-1 tensor",
+                )
+                .at(span));
+            }
+            let mut elements = Vec::with_capacity(tensor.storage.len());
+            for element in tensor.elements() {
+                elements.push(interp.apply(function.clone(), vec![element], span)?);
+            }
+            let dim = elements
+                .first()
+                .map_or_else(Dim::one, crate::value::value_dim);
+            let len = elements.len();
+            Ok(build_tensor(elements, vec![len], dim))
+        }
         "map" => {
             let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
             match args.get(1) {
@@ -1042,6 +1148,11 @@ pub fn call(
         }
         "prod" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
+            // §6.6.6: the empty product is 1, in the phase the elements would
+            // have had.
+            if tensor.storage.is_empty() {
+                return Ok(Value::Num(one_of(&tensor)));
+            }
             if let Some(num) = tensor.dense_prod() {
                 return Ok(Value::Num(num));
             }
@@ -1419,6 +1530,13 @@ pub fn call(
             };
             match aevia_rssn::kernel().compute(handle, &aevia_rssn::Opts::numeric(1e-12)) {
                 Ok(computed) => match computed.numeric {
+                    // §6.3.4: a *formal* expression outside its domain — the
+                    // numeric target answers `NaN` for `asin(2)` — is a domain
+                    // error `E0806`, not a successful `NaN`. A concrete `NaN`
+                    // program value still approximates to itself above.
+                    Some(number) if number.is_nan() => Ok(err(Value::string(
+                        "E0806: the expression has no real value (domain error)",
+                    ))),
                     Some(number) => Ok(ok(Value::Num(NumVal::float(number, dim)))),
                     None => Ok(err(Value::string("not numeric"))),
                 },
@@ -1463,11 +1581,39 @@ pub fn call(
             })))
         }
         "read_line" => Ok(Value::Io(Rc::new(crate::value::IoAction::ReadLine))),
+        // §9.12: the program arguments the host set with `Interp::set_args`,
+        // as a rank-1 `Tensor<1, String>`.
+        "args" => {
+            if !args.is_empty() {
+                return Err(arity(name, 0, args.len(), span));
+            }
+            let elements: Vec<Value> = interp
+                .program_args
+                .iter()
+                .map(|argument| Value::string(argument.clone()))
+                .collect();
+            let len = elements.len();
+            Ok(build_tensor(elements, vec![len], Dim::one()))
+        }
         // §6.8.2: the clock is read when the action runs, and `random` advances
         // the RNG then too — building the description must not consume a value
         // from the sequence (§6.10).
         "time_now" => Ok(Value::Io(Rc::new(crate::value::IoAction::TimeNow))),
         "random" => Ok(Value::Io(Rc::new(crate::value::IoAction::Random))),
+        // §6.10: the pure, seeded generator. `rng(seed)` answers `() -> Float`,
+        // a closure over its own LCG state, so the same seed always produces
+        // the same stream and nothing is consumed from the session's RNG — the
+        // purity the standard asks for ("rng(seed) 是纯的、确定的").
+        "rng" => {
+            let seed = expect_int(&args, 0, name, span)?;
+            let state = Rc::new(std::cell::RefCell::new(seed as u64));
+            Ok(Value::Native(Rc::new(NativeFn(Box::new(
+                move |_interp: &mut Interp, _args: Vec<Value>, _span: Span| {
+                    let value = crate::eval::next_unit(&mut state.borrow_mut());
+                    Ok(Value::float(value))
+                },
+            )))))
+        }
 
         // ----- testing ----------------------------------------------------
         "assert" => match args.first() {
@@ -2235,7 +2381,7 @@ pub fn call(
                     shape
                 ))));
             }
-            let Some(storage) = tensor.reshape_storage() else {
+            let Some(storage) = tensor.reshape_storage(&shape) else {
                 return Ok(err(shape_error(
                     "this tensor's elements cannot be reshaped".to_string(),
                 )));
@@ -2342,6 +2488,16 @@ pub fn call(
         }
         "check" => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
+            // §4.9.4: `check<d>(x)` is type-directed — the concrete `d` never
+            // reaches the runtime in the argument list, so the checker records
+            // it by span. Compare it with the dimension the value carries; a
+            // mismatch is the appendix-B `E0412` class, carried as the
+            // recoverable `Err(DimError)` the signature promises.
+            if let Some(expected) = interp.dyn_calls.get(&span) {
+                if dynamic.dim != *expected {
+                    return Ok(err(dim_error(expected, &dynamic.dim)));
+                }
+            }
             Ok(ok(Value::Num(dynamic.as_scalar())))
         }
         "check_with" => {
@@ -2908,12 +3064,19 @@ pub fn call(
             let distribution = distribution_from(&args, name, span)?;
             let count = expect_int(&args, 1, name, span)?.max(0) as usize;
             let dim = distribution_dim(&args, span)?;
+            // §8.7.1 types the third argument as `Option<Int>`: a *seed*.
+            // A seeded call is reproducible and does not perturb the session's
+            // sequence; `None` (or a missing argument, or the `()` shape a
+            // direct dispatch uses) draws from the session's RNG, which is the
+            // historical behaviour. Ignoring the seed made `sample_n` depend on
+            // whatever happened to run before it, which is not a pure function.
+            let mut seed = sample_seed(&args, span)?;
             let mut values = Vec::with_capacity(count);
-            // `sample_n` is a pure function in §8.7.1 (its result is a tensor,
-            // not an action), so it draws from the interpreter's seeded RNG
-            // rather than from an IO action.
             for _ in 0..count {
-                let uniform = interp.next_random();
+                let uniform = match seed.as_mut() {
+                    Some(state) => crate::eval::next_unit(state),
+                    None => interp.next_random(),
+                };
                 let value = distribution
                     .quantile(uniform)
                     .map_err(|error| numeric_error(name, error, span))?;
@@ -3045,9 +3208,7 @@ pub fn call(
                     rebuild_state(&shape, state),
                 ];
                 match interp.apply(function.clone(), argument, span) {
-                    Ok(value) => flatten_state(&value)
-                        .map(|(_, flat)| flat)
-                        .unwrap_or_else(|_| vec![0.0; state.len()]),
+                    Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
                     Err(error) => {
                         if failure.is_none() {
                             failure = Some(error);
@@ -3115,9 +3276,7 @@ pub fn call(
                     rebuild_state(&shape, state),
                 ];
                 match interp.apply(function.clone(), argument, span) {
-                    Ok(value) => flatten_state(&value)
-                        .map(|(_, flat)| flat)
-                        .unwrap_or_else(|_| vec![0.0; state.len()]),
+                    Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
                     Err(error) => {
                         if failure.is_none() {
                             failure = Some(error);
@@ -3141,6 +3300,11 @@ pub fn call(
                 ("t", float_tensor(vec![grid.len()], grid, time_dim)),
                 ("y", build_tensor(elements, vec![len], dim)),
             ]))
+        }
+
+        // ----- §8.9.1 stochastic differential equations -------------------
+        "wiener" | "sde_order" | "sde_ensemble_seed" | "sdeint_diag" | "sdeint_general" => {
+            sde_call(interp, name, &args, span)
         }
 
         // ----- §8.10 PDE --------------------------------------------------
@@ -3245,13 +3409,101 @@ pub fn call(
         }
 
         // ----- §8.11 data -------------------------------------------------
+        "read_npy" => {
+            let path = expect_str(&args, 0, name, span)?;
+            let extension = std::path::Path::new(&path)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if extension != "npy" {
+                return Ok(err(Value::string(format!(
+                    "E0904: `read_npy` reads .npy files, not `{}`",
+                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                ))));
+            }
+            Ok(Value::Io(Rc::new(crate::value::IoAction::ReadNpy(path))))
+        }
+        "write_npy" => {
+            let path = expect_str(&args, 0, name, span)?;
+            let extension = std::path::Path::new(&path)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if extension != "npy" {
+                return Ok(err(Value::string(format!(
+                    "E0904: `write_npy` writes .npy files, not `{}`",
+                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                ))));
+            }
+            let value = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+            let Value::Tensor(tensor) = value else {
+                return Ok(err(Value::string(format!(
+                    "E0902: `write_npy` needs a tensor, found {}",
+                    value.type_name()
+                ))));
+            };
+            match npy_encode(&tensor) {
+                Ok(bytes) => Ok(Value::Io(Rc::new(crate::value::IoAction::WriteNpy {
+                    path,
+                    bytes,
+                }))),
+                Err(message) => Ok(err(Value::string(message))),
+            }
+        }
         "read_csv" | "read_csv_dyn" => {
             let path = expect_str(&args, 0, name, span)?;
+            // Appendix B E0904: an extension this reader cannot decode is a
+            // typed `Err`, not a generic parse failure later.
+            let extension = std::path::Path::new(&path)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !matches!(extension.as_str(), "csv" | "tsv") {
+                return Ok(err(Value::string(format!(
+                    "E0904: `read_csv` reads .csv/.tsv files, not `{}`",
+                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                ))));
+            }
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
                 action: Rc::new(crate::value::IoAction::ReadFile(path)),
                 func: native(move |_interp, values, span| {
+                    // The bind continuation receives the `Result` from
+                    // `read_file`: unwrap `Ok(contents)`, propagate `Err` with
+                    // its taxonomy (E0901/E0902).
                     let text = match values.first() {
-                        Some(Value::Str(text)) => text.to_string(),
+                        Some(Value::Variant(result))
+                            if result.adt == adt::RESULT_ID && result.index == 0 =>
+                        {
+                            match result.fields.first() {
+                                Some(Value::Str(text)) => text.to_string(),
+                                other => {
+                                    let reason = Value::string(format!(
+                                        "the file could not be read: {}",
+                                        other.map_or("nothing", Value::type_name)
+                                    ));
+                                    let failed = Value::Io(Rc::new(
+                                        crate::value::IoAction::Pure(err(reason)),
+                                    ));
+                                    return Ok(failed);
+                                }
+                            }
+                        }
+                        Some(Value::Variant(previous))
+                            if previous.adt == adt::RESULT_ID && previous.index == 1 =>
+                        {
+                            let failed = previous
+                                .fields
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| Value::string("E0901: the file could not be read"));
+                            let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                                failed,
+                            ))));
+                            return Ok(failed);
+                        }
                         other => {
                             let reason = Value::string(format!(
                                 "the file could not be read: {}",
@@ -3265,7 +3517,7 @@ pub fn call(
                     };
                     let result = match aevia_std::table::parse_csv(&text) {
                         Ok(table) => ok(table_value(&table)),
-                        Err(error) => err(Value::string(error.to_string())),
+                        Err(error) => err(Value::string(format!("E0903: {error}"))),
                     };
                     let _ = span;
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(result))))
@@ -3281,28 +3533,90 @@ pub fn call(
                     path,
                     contents: text,
                 }),
-                func: native(|_interp, _values, _span| {
+                func: native(|_interp, values, _span| {
+                    // Propagate a failed write with its taxonomy code instead of
+                    // reporting success.
+                    if let Some(Value::Variant(result)) = values.first() {
+                        if result.adt == adt::RESULT_ID && result.index == 1 {
+                            let failed = result
+                                .fields
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    Value::string("E0901: the file could not be written")
+                                });
+                            return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                                failed,
+                            )))));
+                        }
+                    }
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(ok(
                         Value::Unit,
                     )))))
                 }),
             })))
         }
-        "read_npy" | "write_npy" => Err(EvalError::new(
-            "E1001",
-            format!(
-                "`{name}` needs a binary file action, which this build does not have \
-                 (`io.binary`); `IoAction` carries text only"
-            ),
-        )
-        .at(span)),
+        // §8.17: `Json` is the *decoded* value channel. `read_json` and
+        // `simulate` already decode on the way in (`value_from_json`) and
+        // `simulate`/`write_json` encode on the way out (`json_from_value`), so
+        // `to_json`/`from_json` are the identity over that representation.
+        // Returning JSON *text* here would make `simulate("ising", to_json(p))`
+        // send a JSON string literal instead of the object.
+        "to_json" => args
+            .first()
+            .cloned()
+            .ok_or_else(|| arity(name, 1, 0, span)),
+        "from_json" => {
+            let value = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+            Ok(ok(value))
+        }
         "read_json" => {
             let path = expect_str(&args, 0, name, span)?;
+            let extension = std::path::Path::new(&path)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if extension != "json" {
+                return Ok(err(Value::string(format!(
+                    "E0904: `read_json` reads .json files, not `{}`",
+                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                ))));
+            }
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
                 action: Rc::new(crate::value::IoAction::ReadFile(path)),
                 func: native(|_interp, values, _span| {
                     let text = match values.first() {
-                        Some(Value::Str(text)) => text.to_string(),
+                        Some(Value::Variant(result))
+                            if result.adt == adt::RESULT_ID && result.index == 0 =>
+                        {
+                            match result.fields.first() {
+                                Some(Value::Str(text)) => text.to_string(),
+                                other => {
+                                    let reason = Value::string(format!(
+                                        "the file could not be read: {}",
+                                        other.map_or("nothing", Value::type_name)
+                                    ));
+                                    let failed = Value::Io(Rc::new(
+                                        crate::value::IoAction::Pure(err(reason)),
+                                    ));
+                                    return Ok(failed);
+                                }
+                            }
+                        }
+                        Some(Value::Variant(previous))
+                            if previous.adt == adt::RESULT_ID && previous.index == 1 =>
+                        {
+                            let failed = previous
+                                .fields
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| Value::string("E0901: the file could not be read"));
+                            let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                                failed,
+                            ))));
+                            return Ok(failed);
+                        }
                         other => {
                             let reason = Value::string(format!(
                                 "the file could not be read: {}",
@@ -3316,7 +3630,7 @@ pub fn call(
                     };
                     let result = match aevia_std::table::parse_json(&text) {
                         Ok(json) => ok(value_from_json(&json)),
-                        Err(error) => err(Value::string(error.to_string())),
+                        Err(error) => err(Value::string(format!("E0903: {error}"))),
                     };
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(result))))
                 }),
@@ -3333,7 +3647,21 @@ pub fn call(
                     path,
                     contents: text,
                 }),
-                func: native(|_interp, _values, _span| {
+                func: native(|_interp, values, _span| {
+                    if let Some(Value::Variant(result)) = values.first() {
+                        if result.adt == adt::RESULT_ID && result.index == 1 {
+                            let failed = result
+                                .fields
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    Value::string("E0901: the file could not be written")
+                                });
+                            return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                                failed,
+                            )))));
+                        }
+                    }
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(ok(
                         Value::Unit,
                     )))))
@@ -3712,11 +4040,32 @@ fn argument_dim(
 }
 
 /// Wraps a fallible kernel answer in `Result<_, MathError>`.
+///
+/// A heavy request is a simplification boundary (§6.3.3), so an answer that is
+/// a *closed* symbolic form is folded to the number it denotes: `limit(sin(t)/t,
+/// 0)` answering `cos(0)` is the same answer as `1`, and leaving the unevaluated
+/// form to the program would make the result depend on which phase the argument
+/// happened to be written in (an exact `0` and a float `0.0` must agree).
+/// Answers with free symbols are untouched.
 fn math_result(result: Result<Value, EvalError>) -> Result<Value, EvalError> {
     Ok(match result {
-        Ok(value) => ok(value),
+        Ok(value) => ok(fold_closed(value)),
         Err(error) => err(Value::string(error.message)),
     })
+}
+
+/// Folds a symbolic answer with no free symbols to its numeric value.
+fn fold_closed(value: Value) -> Value {
+    let Value::Num(num) = &value else {
+        return value;
+    };
+    if !num.is_symbolic() {
+        return value;
+    }
+    let Ok(term) = value_to_term(&value) else {
+        return value;
+    };
+    bridge::fold(&term, num.dim.clone()).unwrap_or(value)
 }
 
 /// Runs a solver and returns its structured answer, as §8.6's record.
@@ -3790,13 +4139,21 @@ fn solutions_value(solutions: &aevia_rssn::Val, roots_dim: Dim) -> Value {
 /// Exact operands are compared as rationals (§6.12.1): routing them through
 /// `f64` made `decide(1/3 + 1/3 == 2/3)` depend on the rounding of `1/3`.
 fn decide(args: &[Value], span: Span) -> Value {
-    let Some(Value::Prop(prop)) = args.first() else {
-        return make_variant(adt::OPTION_ID, 0, "None", Vec::new());
-    };
     let _ = span;
-    match decide_prop(prop) {
-        Some(verdict) => make_variant(adt::OPTION_ID, 1, "Some", vec![Value::Bool(verdict)]),
-        None => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
+    match args.first() {
+        // §6.12.1: `Real == Real` is typed `Prop`, but after type erasure the
+        // evaluator can hold the already-decided `Bool` (two exact values are
+        // compared at run time). A decided proposition is its own verdict, so
+        // `decide(x == x)` on exact values answers `Some(true)` instead of
+        // `None` — the alternative is a guarantee the checker cannot see.
+        Some(Value::Bool(verdict)) => {
+            make_variant(adt::OPTION_ID, 1, "Some", vec![Value::Bool(*verdict)])
+        }
+        Some(Value::Prop(prop)) => match decide_prop(prop) {
+            Some(verdict) => make_variant(adt::OPTION_ID, 1, "Some", vec![Value::Bool(verdict)]),
+            None => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
+        },
+        _ => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
     }
 }
 
@@ -4294,7 +4651,11 @@ fn expect_dim_value(
         })
 }
 
-/// The `DimError` a failed `check_with` returns (§4.9.2).
+/// The `DimError` a failed `check`/`check_with` returns (§4.9.2).
+///
+/// This is the appendix-B `E0412` class — "`Dyn` runtime dimension check
+/// failed" — travelling as the recoverable `Err` payload the signature
+/// promises, not as a fatal diagnostic.
 fn dim_error(expected: &Dim, found: &Dim) -> Value {
     let id = adt::intern(adt::Adt {
         name: "DimError".to_string(),
@@ -4384,13 +4745,49 @@ fn fun_of(name: &str) -> Fun {
 ///   is `2`, and `sqrt(2)` is `sqrt(2)`, because `1.4142135623730951` is a
 ///   different number and `sqrt(2)^2` would then be `2.0000000000000004`.
 fn unary_math(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     name: &str,
     args: &[Value],
     span: Span,
     kind: MathKind,
 ) -> Result<Value, EvalError> {
+    // §4.9.3: `sqrt : Dyn<ρ> -> Dyn<ρ>` divides the dimension exponent by 2.
+    // The other elementary functions are not defined on `Dyn` — it must be
+    // `check`ed back into a `Scalar` first (§4.9.4).
+    if let Some(Value::Dyn(dynamic)) = args.first() {
+        if name == "sqrt" {
+            let root = unary_math(
+                interp,
+                name,
+                &[Value::Num(dynamic.payload())],
+                span,
+                MathKind::Root(2),
+            )?;
+            let Value::Num(mut root) = root else {
+                return Err(EvalError::new("E0809", "sqrt of a Dyn payload is not a scalar").at(span));
+            };
+            root.dim = Dim::one();
+            let half = BigRational::new(BigInt::one(), BigInt::from(2));
+            return Ok(Value::Dyn(Rc::new(DynValue {
+                value: root,
+                dim: dynamic.dim.pow(&half),
+                display: None,
+            })));
+        }
+        return Err(EvalError::new(
+            "E0302",
+            format!("`{name}` is not defined on Dyn; `check` it first (§4.9.4)"),
+        )
+        .at(span));
+    }
     let num = expect_num(args, 0, name, span)?;
+    // §6.3.4's extended-real boundary: `ln(0)` is `-oo`, `ln(oo)` is `oo`,
+    // `exp(oo)` is `oo`, `exp(-oo)` is `0`. These are the spec's statements, not
+    // a numeric approximation; a symbolic `ln(0)` left in the term tree would
+    // print the unevaluated form the spec says it replaced.
+    if let Some(special) = special_value(interp, name, &num, span)? {
+        return Ok(special);
+    }
     match kind {
         MathKind::Root(degree) => {
             let exponent = BigRational::new(BigInt::one(), BigInt::from(degree));
@@ -4476,6 +4873,92 @@ fn domain_error(name: &str, num: &NumVal, span: Span) -> EvalError {
     .at(span)
 }
 
+/// §6.3.4's extended-real boundary values: `ln(0) = -oo`, `ln(oo) = oo`,
+/// `exp(oo) = oo`, `exp(-oo) = 0`.
+///
+/// These are spec statements, not approximations: leaving `ln(0)` as a symbolic
+/// term would print the unevaluated form the spec says it replaced. `ln(-oo)`
+/// stays symbolic because the spec only defines the logarithm on nonnegative
+/// reals (§6.3.4), and `nan` never takes a special value.
+fn special_value(
+    interp: &mut Interp,
+    name: &str,
+    num: &NumVal,
+    span: Span,
+) -> Result<Option<Value>, EvalError> {
+    match name {
+        "ln" | "log" => {
+            if infinity_sign(num) == Some(1) {
+                return Ok(Some(Value::Num(num.clone())));
+            }
+            if is_exact_zero(num) {
+                return Ok(Some(negative_infinity(interp, &num.dim, span)?));
+            }
+        }
+        "exp" => match infinity_sign(num) {
+            Some(1) => return Ok(Some(Value::Num(num.clone()))),
+            Some(-1) => {
+                return Ok(Some(Value::Num(NumVal::exact(
+                    BigRational::zero(),
+                    num.dim.clone(),
+                ))))
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    Ok(None)
+}
+
+/// `-1`/`+1` when `num` is `-oo`/`oo`, in either the `Real` symbolic form or
+/// the `Float` IEEE form.
+fn infinity_sign(num: &NumVal) -> Option<i8> {
+    match &num.kind {
+        NumKind::Float(value) if value.is_infinite() => Some(if *value > 0.0 { 1 } else { -1 }),
+        NumKind::Sym(term) => infinity_term_sign(term),
+        _ => None,
+    }
+}
+
+fn infinity_term_sign(term: &Term) -> Option<i8> {
+    match term {
+        Term::Sym(name) if name == "oo" => Some(1),
+        Term::Foreign { text, .. } if text.as_ref() == "oo" => Some(1),
+        Term::Foreign { text, .. } if text.as_ref() == "-oo" => Some(-1),
+        Term::Mul(items) => match items.as_slice() {
+            [Term::Num(coefficient), rest]
+                if coefficient == &BigRational::from_integer(BigInt::from(-1))
+                    && infinity_term_sign(rest) == Some(1) =>
+            {
+                Some(-1)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_exact_zero(num: &NumVal) -> bool {
+    match &num.kind {
+        NumKind::Int(value) => value.is_zero(),
+        NumKind::Exact(value) => value.is_zero(),
+        _ => false,
+    }
+}
+
+/// The `Real` value `-oo` in the same dimension as `dim`.
+fn negative_infinity(interp: &mut Interp, dim: &Dim, span: Span) -> Result<Value, EvalError> {
+    let infinity = interp.lookup_global("oo", None, span)?;
+    let Value::Num(number) = infinity else {
+        return Err(EvalError::new("E0809", "`oo` is not a scalar").at(span));
+    };
+    if let NumKind::Float(value) = number.kind {
+        return Ok(Value::Num(NumVal::float(-value, dim.clone())));
+    }
+    let term = value_to_term(&Value::Num(number))?;
+    Ok(Value::Num(NumVal::symbolic(Term::neg(term), dim.clone())))
+}
+
 fn exact_root(value: &BigRational, degree: u32) -> Option<BigRational> {
     if value.is_negative() {
         return None;
@@ -4507,6 +4990,27 @@ where
     Ok(Value::Num(function(num)))
 }
 
+/// The additive identity of a tensor's element phase (§6.6.6).
+///
+/// An empty `f64` buffer is a `Float` tensor, so its empty sum is `0.0`; every
+/// other storage class is exact, so its empty sum is the exact `0`.
+fn zero_of(tensor: &TensorData) -> NumVal {
+    if tensor.dense_flat().is_some() {
+        NumVal::float(0.0, tensor.dim.clone())
+    } else {
+        NumVal::exact(BigRational::zero(), tensor.dim.clone())
+    }
+}
+
+/// The multiplicative identity of a tensor's element phase (§6.6.6).
+fn one_of(tensor: &TensorData) -> NumVal {
+    if tensor.dense_flat().is_some() {
+        NumVal::float(1.0, tensor.dim.clone())
+    } else {
+        NumVal::int(BigInt::one())
+    }
+}
+
 fn sum_axis(
     interp: &mut Interp,
     tensor: &TensorData,
@@ -4519,9 +5023,108 @@ fn sum_axis(
     let mut shape = tensor.shape.clone();
     shape[axis] = 1;
     let count = TensorData::element_count(&shape);
-    let mut elements = Vec::with_capacity(count);
+    // §6.6.6: the empty reduction is the phase's zero — `0.0` for a `Float`
+    // tensor, the exact `0` for an `Exact`/boxed one.
+    if tensor.shape[axis] == 0 {
+        let zero = Value::Num(zero_of(tensor));
+        return Ok(build_tensor(vec![zero; count], shape, tensor.dim.clone()));
+    }
+    // §9.13: the dense `f64` fast path. `dense_flat` borrows a dense buffer or a
+    // contiguous window and materialises a strided view once at the kernel
+    // boundary, so the fold below walks plain `f64`s instead of boxing a
+    // `Value` per element. The compensated (Neumaier) step is the same one
+    // `value::kahan_sum` performs, so the class stays unobservable.
+    if let Some(values) = tensor.dense_flat() {
+        let strides = crate::value::row_major_strides(&tensor.shape);
+        let axis_stride = strides[axis];
+        let extent = tensor.shape[axis];
+        let mut out = Vec::with_capacity(count);
+        for index in 0..count {
+            // The base index in the *source* buffer, computed without a
+            // per-output coordinate vector: for a 512×512 axis-0 reduction the
+            // unravel allocation was one allocation per output.
+            let mut base = 0usize;
+            let mut remainder = index;
+            for dim in (0..shape.len()).rev() {
+                let extent = shape[dim].max(1);
+                let coordinate = remainder % extent;
+                remainder /= extent;
+                if dim != axis {
+                    base += coordinate * strides[dim];
+                }
+            }
+            let mut total = 0.0f64;
+            let mut compensation = 0.0f64;
+            for step in 0..extent {
+                let value = values[base + step * axis_stride];
+                let next = total + value;
+                if total.abs() >= value.abs() {
+                    compensation += (total - next) + value;
+                } else {
+                    compensation += (value - next) + total;
+                }
+                total = next;
+            }
+            out.push(Value::Num(NumVal::float(
+                total + compensation,
+                tensor.dim.clone(),
+            )));
+        }
+        return Ok(build_tensor(out, shape, tensor.dim.clone()));
+    }
+    sum_axis_elementwise(interp, tensor, axis, &shape, count, span)
+}
+
+/// The non-`f64` axis reduction: exact elements keep exact arithmetic, and a
+/// boxed `Float` class is folded with the same compensated sum as the dense
+/// path so the storage class cannot change an answer.
+fn sum_axis_elementwise(
+    interp: &mut Interp,
+    tensor: &TensorData,
+    axis: usize,
+    shape: &[usize],
+    count: usize,
+    span: Span,
+) -> Result<Value, EvalError> {
+    let elements = tensor.elements();
+    let all_float = elements.iter().all(|element| {
+        matches!(
+            element,
+            Value::Num(NumVal {
+                kind: NumKind::Float(_),
+                ..
+            })
+        )
+    });
+    let mut out = Vec::with_capacity(count);
     for index in 0..count {
-        let coordinates = unravel(index, &shape);
+        let coordinates = unravel(index, shape);
+        if all_float {
+            let mut group: Vec<f64> = Vec::with_capacity(tensor.shape[axis]);
+            for step in 0..tensor.shape[axis] {
+                let mut point = coordinates.clone();
+                point[axis] = step;
+                let point: Vec<isize> = point.iter().map(|value| *value as isize).collect();
+                if let Some(Value::Num(num)) = tensor.get(&point) {
+                    group.push(num.to_f64().unwrap_or(f64::NAN));
+                }
+            }
+            // A one-element reduction is the element itself, display unit
+            // included; longer groups take the compensated sum.
+            let value = if tensor.shape[axis] == 1 {
+                let mut point = coordinates.clone();
+                point[axis] = 0;
+                let point: Vec<isize> = point.iter().map(|value| *value as isize).collect();
+                match tensor.get(&point) {
+                    Some(Value::Num(only)) => only,
+                    _ => NumVal::float(crate::value::kahan_sum(&group), tensor.dim.clone()),
+                }
+            } else {
+                NumVal::float(crate::value::kahan_sum(&group), tensor.dim.clone())
+            };
+            out.push(Value::Num(value));
+            continue;
+        }
         let mut total: Option<Value> = None;
         for step in 0..tensor.shape[axis] {
             let mut point = coordinates.clone();
@@ -4534,9 +5137,9 @@ fn sum_axis(
                 });
             }
         }
-        elements.push(total.unwrap_or_else(|| Value::float(0.0)));
+        out.push(total.unwrap_or_else(|| Value::Num(zero_of(tensor))));
     }
-    Ok(build_tensor(elements, shape, tensor.dim.clone()))
+    Ok(build_tensor(out, shape.to_vec(), tensor.dim.clone()))
 }
 
 fn unravel(mut index: usize, shape: &[usize]) -> Vec<usize> {
@@ -5060,7 +5663,603 @@ enum StateShape {
     Record(Vec<(String, StateShape)>),
 }
 
-/// Flattens a state in field order, depth first, tensors row-major (§8.9).
+/// The flat rate vector an ODE right-hand side returned (§8.9).
+///
+/// The right-hand side must answer one rate per state component, flattened by
+/// the same contract as the state itself: record field order, depth first,
+/// tensor rows in row-major order. A different count is an error rather than a
+/// silently misaligned integration — the vectors are zipped, so a short answer
+/// would otherwise leave the tail at zero and still report success.
+fn ode_rates(
+    value: &Value,
+    expected: usize,
+    span: Span,
+    failure: &mut Option<EvalError>,
+) -> Vec<f64> {
+    match flatten_state(value) {
+        Ok((_, flat)) if flat.len() == expected => flat,
+        Ok((_, flat)) => {
+            if failure.is_none() {
+                *failure = Some(
+                    EvalError::new(
+                        "E0302",
+                        format!(
+                            "the ODE right-hand side returned {} rate(s) for a state of {} \
+                             component(s) (§8.9)",
+                            flat.len(),
+                            expected
+                        ),
+                    )
+                    .at(span),
+                );
+            }
+            vec![0.0; expected]
+        }
+        Err(error) => {
+            if failure.is_none() {
+                *failure = Some(error);
+            }
+            vec![0.0; expected]
+        }
+    }
+}
+
+// ----- §8.9.1 stochastic differential equations ---------------------------
+
+use aevia_std::sde::SdeError;
+
+// ----- §8.11 NPY codec -----------------------------------------------------
+
+const NPY_MAGIC: &[u8] = b"\x93NUMPY";
+
+/// Encodes a rank-1/rank-2 float tensor as a NumPy `.npy` file (version 1.0,
+/// little-endian `float64`, C order).
+///
+/// The header is padded so the data starts on a 64-byte boundary, exactly as
+/// NumPy writes it; `write_npy`'s round trip and the byte-exact test both rely
+/// on this.
+pub fn npy_encode(tensor: &crate::value::TensorData) -> Result<Vec<u8>, String> {
+    if tensor.rank() > 2 {
+        return Err(format!(
+            "E0902: `write_npy` writes rank-1 or rank-2 tensors, not rank {}",
+            tensor.rank()
+        ));
+    }
+    let Some(values) = tensor.dense_flat() else {
+        return Err("E0902: `write_npy` needs a dense float tensor".to_string());
+    };
+    let shape = if tensor.shape.is_empty() {
+        "()".to_string()
+    } else if tensor.shape.len() == 1 {
+        format!("({},)", tensor.shape[0])
+    } else {
+        format!("({}, {})", tensor.shape[0], tensor.shape[1])
+    };
+    let mut header =
+        format!("{{'descr': '<f8', 'fortran_order': False, 'shape': {shape}, }}");
+    // magic(6) + version(2) + header length(2) + header must be a multiple of 64.
+    let padding = (64 - ((10 + header.len() + 1) % 64)) % 64;
+    header.push_str(&" ".repeat(padding));
+    header.push('\n');
+    let header_len = u16::try_from(header.len())
+        .map_err(|_| "E0903: the NPY header is too large".to_string())?;
+    let mut bytes = Vec::with_capacity(10 + header.len() + values.len() * 8);
+    bytes.extend_from_slice(NPY_MAGIC);
+    bytes.push(1); // major
+    bytes.push(0); // minor
+    bytes.extend_from_slice(&header_len.to_le_bytes());
+    bytes.extend_from_slice(header.as_bytes());
+    for value in values.iter() {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(bytes)
+}
+
+/// Decodes a `.npy` file (§8.11).
+///
+/// # Errors
+///
+/// `E0903` for malformed/truncated data, `E0904` for an unsupported dtype or
+/// Fortran order. The message carries the code, because the language-level
+/// result is `Result<Tensor<…>, DataError>`.
+pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
+    if bytes.len() < 10 || &bytes[..6] != NPY_MAGIC {
+        return Err("E0903: not a NumPy `.npy` file (bad magic)".to_string());
+    }
+    let major = bytes[6];
+    let header_len = match major {
+        1 => usize::from(u16::from_le_bytes([bytes[8], bytes[9]])),
+        2 | 3 => {
+            if bytes.len() < 12 {
+                return Err("E0903: truncated NPY header".to_string());
+            }
+            usize::try_from(u32::from_le_bytes([
+                bytes[8], bytes[9], bytes[10], bytes[11],
+            ]))
+            .unwrap_or(0)
+        }
+        _ => {
+            return Err(format!(
+                "E0904: unsupported NPY version {major}.{}",
+                bytes[7]
+            ))
+        }
+    };
+    if header_len > 10 * 1024 {
+        return Err("E0903: the NPY header exceeds 10 KiB".to_string());
+    }
+    let start = if major == 1 { 10 } else { 12 };
+    if bytes.len() < start + header_len {
+        return Err("E0903: the NPY header is truncated".to_string());
+    }
+    let header = std::str::from_utf8(&bytes[start..start + header_len])
+        .map_err(|_| "E0903: the NPY header is not UTF-8".to_string())?;
+
+    let descr_start = header
+        .find("'descr': '")
+        .ok_or_else(|| "E0903: the NPY header has no `descr`".to_string())?
+        + "'descr': '".len();
+    let descr_end = header[descr_start..]
+        .find('\'')
+        .map(|offset| descr_start + offset)
+        .ok_or_else(|| "E0903: the NPY `descr` is unterminated".to_string())?;
+    let descr = &header[descr_start..descr_end];
+    let width = match descr {
+        "<f8" | "|f8" | "=f8" => 8usize,
+        "<f4" | "|f4" | "=f4" => 4usize,
+        _ => {
+            return Err(format!(
+                "E0904: unsupported NPY dtype `{descr}` (only little-endian f4/f8)"
+            ))
+        }
+    };
+    if header.contains("'fortran_order': True") {
+        return Err("E0904: Fortran-ordered NPY is not supported".to_string());
+    }
+    let shape_text = header
+        .find("'shape': (")
+        .ok_or_else(|| "E0903: the NPY header has no `shape`".to_string())?
+        + "'shape': (".len();
+    let shape_end = header[shape_text..]
+        .find(')')
+        .map(|offset| shape_text + offset)
+        .ok_or_else(|| "E0903: the NPY `shape` is unterminated".to_string())?;
+    let mut shape = Vec::new();
+    for part in header[shape_text..shape_end].split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let extent = part
+            .parse::<usize>()
+            .map_err(|_| format!("E0903: bad NPY shape entry `{part}`"))?;
+        shape.push(extent);
+    }
+    let count: usize = shape.iter().product();
+    let data = &bytes[start + header_len..];
+    let expected = count
+        .checked_mul(width)
+        .ok_or_else(|| "E0903: NPY shape overflows".to_string())?;
+    if data.len() != expected {
+        return Err(format!(
+            "E0903: NPY data is {} byte(s), the shape needs {expected}",
+            data.len()
+        ));
+    }
+    let mut values = Vec::with_capacity(count);
+    for chunk in data.chunks_exact(width) {
+        let value = if width == 8 {
+            f64::from_le_bytes(chunk.try_into().expect("eight bytes"))
+        } else {
+            f64::from(f32::from_le_bytes(chunk.try_into().expect("four bytes")))
+        };
+        values.push(value);
+    }
+    Ok(crate::value::TensorData {
+        shape,
+        storage: crate::value::Storage::Dense(std::rc::Rc::new(values)),
+        dim: aevia_dim::Dim::one(),
+        display: None,
+    })
+}
+
+/// The Aevia spelling of an `SdeMethod` constructor → the standard scheme.
+fn sde_method_named(name: &str) -> Option<aevia_std::sde::Method> {
+    Some(match name {
+        "EulerMaruyama" => aevia_std::sde::Method::EulerMaruyama,
+        "Milstein" => aevia_std::sde::Method::Milstein,
+        "MilsteinStratonovich" => aevia_std::sde::Method::MilsteinStratonovich,
+        "HeunStratonovich" => aevia_std::sde::Method::HeunStratonovich,
+        "SrkPlaten" => aevia_std::sde::Method::SrkPlaten,
+        "MilsteinNoncommutative" => aevia_std::sde::Method::MilsteinNoncommutative,
+        _ => return None,
+    })
+}
+
+/// The `SdeMethod` value the `SdePath` record reports.
+fn sde_method_value(method: aevia_std::sde::Method) -> Value {
+    let (index, name) = match method {
+        aevia_std::sde::Method::EulerMaruyama => (0, "EulerMaruyama"),
+        aevia_std::sde::Method::Milstein => (1, "Milstein"),
+        aevia_std::sde::Method::MilsteinStratonovich => (2, "MilsteinStratonovich"),
+        aevia_std::sde::Method::HeunStratonovich => (3, "HeunStratonovich"),
+        aevia_std::sde::Method::SrkPlaten => (4, "SrkPlaten"),
+        aevia_std::sde::Method::MilsteinNoncommutative => (5, "MilsteinNoncommutative"),
+    };
+    let id = adt::intern(adt::Adt {
+        name: "SdeMethod".to_string(),
+        params: Vec::new(),
+        ctors: Vec::new(),
+    });
+    make_variant(id, index, name, Vec::new())
+}
+
+/// The noise structure a `SdeOpts` record names.
+///
+/// The checker's option schema is deliberately loose (§8.9.1): the record is
+/// validated at run time, and a malformed option is the recoverable
+/// `SdeError::Invalid` (`E0802`), never a silent default.
+fn sde_structure(value: &Value) -> Result<aevia_std::sde::Structure, SdeError> {
+    let Value::Variant(variant) = value else {
+        return Err(SdeError::Invalid(
+            "`structure` must be an `SdeStructure`".to_string(),
+        ));
+    };
+    match variant.name.as_str() {
+        "Diagonal" => Ok(aevia_std::sde::Structure::Diagonal),
+        "General" | "GeneralNoncommutative" => {
+            let noise = variant
+                .fields
+                .first()
+                .and_then(Value::as_f64)
+                .ok_or_else(|| {
+                    SdeError::Invalid("`General` carries its noise-channel count".to_string())
+                })?;
+            Ok(aevia_std::sde::Structure::General {
+                noise: usize::try_from(noise.max(0.0) as u64).unwrap_or(0),
+                commutative: variant.name == "General",
+            })
+        }
+        other => Err(SdeError::Invalid(format!(
+            "`{other}` is not an `SdeStructure`"
+        ))),
+    }
+}
+
+fn sde_float_field(record: &RecordValue, field: &str) -> Result<f64, SdeError> {
+    record
+        .fields
+        .get(field)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| SdeError::Invalid(format!("the SDE options need `{field}`")))
+}
+
+fn sde_int_field(record: &RecordValue, field: &str) -> Result<i64, SdeError> {
+    record
+        .fields
+        .get(field)
+        .and_then(Value::as_f64)
+        .map(|value| value as i64)
+        .ok_or_else(|| SdeError::Invalid(format!("the SDE options need `{field}`")))
+}
+
+fn sde_dim_field(record: &RecordValue, field: &str) -> Result<NumVal, SdeError> {
+    match record.fields.get(field) {
+        Some(Value::Num(num)) => Ok(num.clone()),
+        _ => Err(SdeError::Invalid(format!(
+            "the SDE options need `{field}`"
+        ))),
+    }
+}
+
+/// The `SdeOpts<T>` record as the standard library's `Options`, plus the time
+/// dimension the path's `t` tensor reports.
+fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError> {
+    let Value::Variant(option) = value else {
+        return Err(SdeError::Invalid(
+            "the fourth argument must be `SdeOpts`".to_string(),
+        ));
+    };
+    let Some(Value::Record(record)) = option.fields.first() else {
+        return Err(SdeError::Invalid(
+            "`SdeOpts` carries an options record".to_string(),
+        ));
+    };
+    let method = match record.fields.get("method") {
+        Some(Value::Variant(method)) => sde_method_named(&method.name).ok_or_else(|| {
+            SdeError::Invalid(format!("`{}` is not an `SdeMethod`", method.name))
+        })?,
+        _ => return Err(SdeError::Invalid("the SDE options need `method`".to_string())),
+    };
+    let structure = sde_structure(
+        record
+            .fields
+            .get("structure")
+            .ok_or_else(|| SdeError::Invalid("the SDE options need `structure`".to_string()))?,
+    )?;
+    let seed = sde_int_field(record, "seed")?.max(0) as u64;
+    let terms = sde_int_field(record, "terms")?.max(0) as usize;
+    let t0 = sde_dim_field(record, "t0")?;
+    let t0_value = t0
+        .to_f64()
+        .ok_or_else(|| SdeError::Invalid("`t0` must be concrete".to_string()))?;
+    let time_dim = t0.dim.clone();
+    let options = match option.name.as_str() {
+        "Fixed" => aevia_std::sde::Options::fixed(
+            method,
+            structure,
+            seed,
+            t0_value,
+            sde_float_field(record, "dt")?,
+            sde_int_field(record, "steps")?.max(0) as usize,
+        )
+        .with_terms(terms),
+        "Adaptive" => aevia_std::sde::Options::adaptive(
+            method,
+            structure,
+            seed,
+            t0_value,
+            sde_float_field(record, "t1")?,
+            sde_float_field(record, "rtol")?,
+            sde_float_field(record, "atol")?,
+            sde_int_field(record, "max_steps")?.max(0) as usize,
+            sde_int_field(record, "cells")?.max(0) as usize,
+        )
+        .with_terms(terms),
+        other => {
+            return Err(SdeError::Invalid(format!(
+                "`{other}` is not a step policy (`Fixed`/`Adaptive`)"
+            )))
+        }
+    };
+    Ok((options, time_dim))
+}
+
+/// An `SdeError` as the opaque error value the `Result` carries.
+fn sde_error_value(error: &SdeError) -> Value {
+    let (index, name, payload): (usize, &str, Vec<Value>) = match error {
+        SdeError::Invalid(message) => (0, "Invalid", vec![Value::string(message.clone())]),
+        SdeError::Shape(message) => (1, "Shape", vec![Value::string(message.clone())]),
+        SdeError::NonFinite(message) => (2, "NonFinite", vec![Value::string(message.clone())]),
+        SdeError::StepLimit(message) => (3, "StepLimit", vec![Value::string(message.clone())]),
+        SdeError::Unsupported {
+            capability,
+            detail,
+        } => (
+            4,
+            "Unsupported",
+            vec![Value::string(*capability), Value::string(detail.clone())],
+        ),
+    };
+    let id = adt::intern(adt::Adt {
+        name: "SdeError".to_string(),
+        params: Vec::new(),
+        ctors: Vec::new(),
+    });
+    make_variant(id, index, name, payload)
+}
+
+/// The five §8.9.1 names.
+fn sde_call(
+    interp: &mut Interp,
+    name: &str,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    match name {
+        "wiener" => {
+            let seed = expect_int(args, 0, name, span)?.max(0) as u64;
+            let noise = expect_int(args, 1, name, span)?.max(0) as usize;
+            let steps = expect_int(args, 2, name, span)?.max(0) as usize;
+            let dt = expect_num(args, 3, name, span)?;
+            let dt_value = dt
+                .to_f64()
+                .ok_or_else(|| EvalError::new("E0302", "`wiener` needs a concrete `dt`").at(span))?;
+            let increments = aevia_std::sde::wiener(seed, noise, steps, dt_value);
+            let flat: Vec<f64> = increments.into_iter().flatten().collect();
+            let half = BigRational::new(BigInt::one(), BigInt::from(2));
+            Ok(float_tensor(
+                vec![steps, noise],
+                flat,
+                dt.dim.pow(&half),
+            ))
+        }
+        "sde_order" => {
+            let Some(Value::Variant(method)) = args.first() else {
+                return Err(EvalError::new("E0302", "`sde_order` expects an `SdeMethod`").at(span));
+            };
+            let method = sde_method_named(&method.name).ok_or_else(|| {
+                EvalError::new(
+                    "E0302",
+                    format!("`{}` is not an `SdeMethod`", method.name),
+                )
+                .at(span)
+            })?;
+            let order = aevia_std::sde::sde_order(method);
+            Ok(record_of(vec![
+                ("strong", Value::float(order.strong)),
+                ("weak", Value::float(order.weak)),
+            ]))
+        }
+        "sde_ensemble_seed" => {
+            let seed = expect_int(args, 0, name, span)?.max(0) as u64;
+            let index = expect_int(args, 1, name, span)?.max(0) as usize;
+            Ok(Value::Num(NumVal::int(BigInt::from(
+                aevia_std::sde::ensemble_seed(seed, index),
+            ))))
+        }
+        _ => sde_integrate(interp, name, args, span),
+    }
+}
+
+/// `sdeint_diag` / `sdeint_general` (§8.9.1).
+fn sde_integrate(
+    interp: &mut Interp,
+    name: &str,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    let drift = args
+        .first()
+        .cloned()
+        .ok_or_else(|| arity(name, 4, 0, span))?;
+    let diffusion = args
+        .get(1)
+        .cloned()
+        .ok_or_else(|| arity(name, 4, 1, span))?;
+    let initial = args
+        .get(2)
+        .cloned()
+        .ok_or_else(|| arity(name, 4, 2, span))?;
+    let options_value = args
+        .get(3)
+        .cloned()
+        .ok_or_else(|| arity(name, 4, 3, span))?;
+    let general = name == "sdeint_general";
+    let (options, time_dim) = match sde_options(&options_value) {
+        Ok(pair) => pair,
+        Err(error) => return Ok(err(sde_error_value(&error))),
+    };
+    // The step-policy stubs carry a dimension-free `T` field only for typing;
+    // the path reports the initial time's dimension.
+    let (shape, flat) = flatten_state(&initial)?;
+    let state_count = flat.len();
+    let noise = options.structure.noise(state_count);
+    let diagonal = matches!(options.structure, aevia_std::sde::Structure::Diagonal);
+    if diagonal == general {
+        return Ok(err(sde_error_value(&SdeError::Invalid(if general {
+            "`sdeint_general` needs a `General`/`GeneralNoncommutative` structure".to_string()
+        } else {
+            "`sdeint_diag` needs the `Diagonal` structure; use `sdeint_general`".to_string()
+        }))));
+    }
+    if general && matches!(shape, StateShape::Record(_)) {
+        return Ok(err(sde_error_value(&SdeError::Unsupported {
+            capability: "sde.general.record",
+            detail: "general noise with a record state is not statically expressible in this build"
+                .to_string(),
+        })));
+    }
+    let coefficients = if diagonal {
+        state_count
+    } else {
+        match state_count.checked_mul(noise) {
+            Some(count) => count,
+            None => {
+                return Ok(err(sde_error_value(&SdeError::Shape(
+                    "the state × noise size overflows".to_string(),
+                ))))
+            }
+        }
+    };
+    let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
+    let interpreter = std::cell::RefCell::new(interp);
+    let drift_shape = shape.clone();
+    let drift_time = time_dim.clone();
+    let drift_value = drift;
+    let drift_failure = &failure;
+    let drift_interp = &interpreter;
+    let drift_fn = move |t: f64, state: &[f64]| -> Result<Vec<f64>, SdeError> {
+        let mut interp = drift_interp.borrow_mut();
+        let argument = vec![
+            Value::Num(NumVal::float(t, drift_time.clone())),
+            rebuild_state(&drift_shape, state),
+        ];
+        match interp.apply(drift_value.clone(), argument, span) {
+            Ok(value) => match flatten_state(&value) {
+                Ok((_, rates)) if rates.len() == state.len() => Ok(rates),
+                Ok((_, rates)) => Err(SdeError::Shape(format!(
+                    "the drift returned {} rate(s) for a state of {}",
+                    rates.len(),
+                    state.len()
+                ))),
+                Err(error) => {
+                    if drift_failure.borrow().is_none() {
+                        *drift_failure.borrow_mut() = Some(error);
+                    }
+                    Err(SdeError::Invalid("the drift failed".to_string()))
+                }
+            },
+            Err(error) => {
+                if drift_failure.borrow().is_none() {
+                    *drift_failure.borrow_mut() = Some(error);
+                }
+                Err(SdeError::Invalid("the drift failed".to_string()))
+            }
+        }
+    };
+    let diffusion_shape = shape.clone();
+    let diffusion_time = time_dim.clone();
+    let diffusion_value = diffusion;
+    let expected = coefficients;
+    let diffusion_failure = &failure;
+    let diffusion_interp = &interpreter;
+    let diffusion_fn = move |t: f64, state: &[f64]| -> Result<Vec<f64>, SdeError> {
+        let mut interp = diffusion_interp.borrow_mut();
+        let argument = vec![
+            Value::Num(NumVal::float(t, diffusion_time.clone())),
+            rebuild_state(&diffusion_shape, state),
+        ];
+        match interp.apply(diffusion_value.clone(), argument, span) {
+            Ok(value) => match flatten_state(&value) {
+                Ok((_, values)) if values.len() == expected => Ok(values),
+                Ok((_, values)) => Err(SdeError::Shape(format!(
+                    "the diffusion returned {} coefficient(s); this structure needs {expected}",
+                    values.len(),
+                ))),
+                Err(error) => {
+                    if diffusion_failure.borrow().is_none() {
+                        *diffusion_failure.borrow_mut() = Some(error);
+                    }
+                    Err(SdeError::Invalid("the diffusion failed".to_string()))
+                }
+            },
+            Err(error) => {
+                if diffusion_failure.borrow().is_none() {
+                    *diffusion_failure.borrow_mut() = Some(error);
+                }
+                Err(SdeError::Invalid("the diffusion failed".to_string()))
+            }
+        }
+    };
+    let result = aevia_std::sde::integrate(drift_fn, diffusion_fn, &flat, &options);
+    let _interp = interpreter.into_inner();
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    match result {
+        Ok(path) => {
+            let states: Vec<Value> = path
+                .y
+                .iter()
+                .map(|state| rebuild_state(&shape, state))
+                .collect();
+            let len = states.len();
+            Ok(ok(record_of(vec![
+                (
+                    "t",
+                    float_tensor(vec![path.t.len()], path.t.clone(), time_dim),
+                ),
+                (
+                    "y",
+                    build_tensor(states, vec![len], crate::value::value_dim(&initial)),
+                ),
+                ("steps", Value::Num(NumVal::int(BigInt::from(path.steps)))),
+                (
+                    "rejected",
+                    Value::Num(NumVal::int(BigInt::from(path.rejected))),
+                ),
+                ("nfev", Value::Num(NumVal::int(BigInt::from(path.nfev)))),
+                ("seed", Value::Num(NumVal::int(BigInt::from(path.seed)))),
+                ("noise", Value::Num(NumVal::int(BigInt::from(noise)))),
+                ("method", sde_method_value(path.method)),
+            ])))
+        }
+        Err(error) => Ok(err(sde_error_value(&error))),
+    }
+}
+
+
 ///
 /// # Errors
 ///
@@ -5135,7 +6334,10 @@ fn rebuild_state_at(shape: &StateShape, flat: &[f64], cursor: &mut usize) -> Val
 ///
 /// `E1001` naming `core.ode` when the record asks for a stiff method: this
 /// build has `Rk4` and `Dopri5` only, and answering a stiff problem with an
-/// explicit method would be a wrong number rather than a slow one.
+/// explicit method would be a wrong number rather than a slow one. `E1001`
+/// naming `core.ode.events` for a non-`None` `events` field: the linked kernel
+/// does not expose `solve_fixed_events`, and silently integrating past an event
+/// would answer a different problem than the one asked.
 fn ode_options(args: &[Value], index: usize, span: Span) -> Result<aevia_std::ode::Options, EvalError> {
     let mut options = aevia_std::ode::Options::default();
     let Some(Value::Record(record)) = args.get(index) else {
@@ -5149,6 +6351,32 @@ fn ode_options(args: &[Value], index: usize, span: Span) -> Result<aevia_std::od
     }
     if let Some(steps) = record.fields.get("steps").and_then(Value::as_f64) {
         options.steps = steps.max(1.0) as usize;
+    }
+    // §8.9: `events` terminates and interpolates at a sign change. This build's
+    // kernel has no event support, so a request for it is a *named* capability
+    // gap — never an option that the runtime quietly drops.
+    match record.fields.get("events") {
+        None => {}
+        Some(Value::Variant(option)) if option.adt == adt::OPTION_ID => {
+            if option.name != "None" {
+                return Err(EvalError::new(
+                    "E1001",
+                    "the `events` option needs the `core.ode.events` capability, which this \
+                     build does not have; integrate without `events` or split the interval at \
+                     the event time",
+                )
+                .at(span));
+            }
+        }
+        // A direct dispatch may pass `()` where the source would write `None`.
+        Some(Value::Unit) => {}
+        Some(_) => {
+            return Err(EvalError::new(
+                "E0302",
+                "`events` must be `Option<(Float[T], s) -> Float[1]>`",
+            )
+            .at(span))
+        }
     }
     if let Some(Value::Variant(method)) = record.fields.get("method") {
         options.method = match method.name.as_str() {
@@ -5393,6 +6621,21 @@ fn json_from_value(value: &Value) -> Result<aevia_std::table::Json, EvalError> {
                 .map(|(name, field)| Ok((name.clone(), json_from_value(field)?)))
                 .collect::<Result<_, EvalError>>()?,
         ),
+        Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
+            // §8.17: a record field typed `Option<Int>` (e.g. `seed`) must
+            // cross the JSON boundary. `None` is JSON null, `Some(x)` is `x`;
+            // anything else keeps the historical variant encoding below.
+            if variant.index == 0 {
+                Json::Null
+            } else {
+                match variant.fields.first() {
+                    Some(value) => json_from_value(value)?,
+                    // A malformed `Some` has no payload; JSON null is the only
+                    // honest encoding rather than inventing one.
+                    None => Json::Null,
+                }
+            }
+        }
         Value::Variant(variant) if variant.fields.is_empty() => {
             Json::String(variant.name.clone())
         }
@@ -5756,9 +6999,16 @@ fn complex_tensor(shape: Vec<usize>, data: &[aevia_std::Complex], dim: Dim) -> V
 }
 
 /// A numeric kernel failure as a runtime diagnostic.
+///
+/// Appendix B §B.10 gives each recoverable failure its own code: a domain
+/// error is `E0806`, a non-converging iteration is `E0807`, and a shape/index
+/// refusal is `E0802`. Collapsing every non-domain failure into `E0802` made a
+/// solver that ran out of iterations report a shape error, which sends the
+/// reader looking in the wrong place.
 fn numeric_error(name: &str, error: aevia_std::NumericError, span: Span) -> EvalError {
     let code = match &error {
         aevia_std::NumericError::Domain(_) => "E0806",
+        aevia_std::NumericError::NotConverged => "E0807",
         _ => "E0802",
     };
     EvalError::new(code, format!("`{name}`: {error}")).at(span)
@@ -6073,6 +7323,48 @@ fn distribution_dim(args: &[Value], span: Span) -> Result<Dim, EvalError> {
     Ok(Dim::one())
 }
 
+/// The seed of a `sample_n` call (§8.7.1).
+///
+/// The third argument is `Option<Int>`. `Some(seed)` makes the sample
+/// reproducible and leaves the session's RNG untouched; `None` draws from the
+/// session's RNG. A direct dispatch has no `Option` value to pass and uses
+/// `()`, which is read as `None` so the runtime entry point stays callable.
+fn sample_seed(args: &[Value], span: Span) -> Result<Option<u64>, EvalError> {
+    let Some(argument) = args.get(2) else {
+        return Ok(None);
+    };
+    match argument {
+        Value::Unit => Ok(None),
+        Value::Variant(option) if option.adt == adt::OPTION_ID => {
+            if option.name != "Some" {
+                return Ok(None);
+            }
+            let Some(Value::Num(seed)) = option.fields.first() else {
+                return Err(EvalError::new(
+                    "E0302",
+                    "the seed of `sample_n` must be an Int",
+                )
+                .at(span));
+            };
+            match &seed.kind {
+                NumKind::Int(value) => value.to_u64().map(Some).ok_or_else(|| {
+                    EvalError::new("E0302", "the seed of `sample_n` is out of range").at(span)
+                }),
+                _ => Err(EvalError::new(
+                    "E0302",
+                    "the seed of `sample_n` must be an Int",
+                )
+                .at(span)),
+            }
+        }
+        _ => Err(EvalError::new(
+            "E0302",
+            "`sample_n` expects `Option<Int>` as its seed",
+        )
+        .at(span)),
+    }
+}
+
 /// The exact argument of a classical polynomial, when it has one.
 fn classical_polynomial(args: &[Value], name: &str, span: Span) -> Result<Value, EvalError> {
     let order = expect_int(args, 0, name, span)?;
@@ -6147,4 +7439,46 @@ fn join_tables(args: &[Value], name: &str, span: Span) -> Result<Value, EvalErro
         units,
         rows,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{json_from_value, numeric_error};
+    use crate::value::{make_variant, Value};
+    use aevia_std::table::Json;
+    use aevia_syntax::Span;
+    use aevia_types::adt;
+
+    /// §6.9.2 / appendix B §B.10: each recoverable numeric failure has its own
+    /// code. A non-converging iteration is `E0807`, not the shape/index
+    /// `E0802` it used to share with every non-domain failure.
+    #[test]
+    fn numeric_kernel_failures_keep_their_documented_codes() {
+        let code = |error| numeric_error("probe", error, Span::default()).code;
+        assert_eq!(code(aevia_std::NumericError::NotConverged), "E0807");
+        assert_eq!(code(aevia_std::NumericError::Domain("x".into())), "E0806");
+        assert_eq!(
+            code(aevia_std::NumericError::ShapeMismatch("x".into())),
+            "E0802"
+        );
+        assert_eq!(code(aevia_std::NumericError::NotSquare), "E0802");
+        assert_eq!(code(aevia_std::NumericError::Empty), "E0802");
+    }
+
+    /// §8.17: an `Option` field crossing the JSON boundary is `null` for
+    /// `None` and the payload for `Some`, so `Physics.*` wrappers with an
+    /// optional field can reach `simulate`.
+    #[test]
+    fn an_option_field_encodes_as_null_or_its_payload() {
+        let none = make_variant(adt::OPTION_ID, 0, "None", Vec::new());
+        assert!(matches!(json_from_value(&none).expect("none encodes"), Json::Null));
+        let some = make_variant(adt::OPTION_ID, 1, "Some", vec![Value::int(7)]);
+        assert!(
+            matches!(
+                json_from_value(&some).expect("some encodes"),
+                Json::Number(number) if number == 7.0
+            ),
+            "Some(x) encodes as x"
+        );
+    }
 }

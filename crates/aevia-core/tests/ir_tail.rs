@@ -149,3 +149,45 @@ fn main(): IO Unit = do
     .expect("the loop terminates");
     assert_eq!(output, "400000\n");
 }
+
+/// Measurement harness (ignored by default): the wall-clock cost of one
+/// trampoline step, Int and Float.
+///
+/// Run with:
+/// `cargo test -p aevia-core --test ir_tail -- --ignored --nocapture`.
+///
+/// These are debug-build numbers in the same unit as the performance
+/// research's baselines (30.7 µs/step Int, 22.2 µs/step Float before the
+/// unconditional stack clone and the per-evaluation literal parse were
+/// removed), so a regression or a win is visible. The test asserts nothing: a
+/// timing assertion would be flaky on a shared build machine.
+#[test]
+#[ignore = "measurement harness"]
+fn bench_tail_call_step() {
+    const STEPS: u64 = 100_000;
+    let cases = [
+        (
+            "int",
+            format!(
+                "fn count(n: Int, acc: Int): Int =\n    if n == 0 then acc else count(n - 1, acc + 1)\n\nfn main(): IO Unit = do\n    println(count({STEPS}, 0))\n"
+            ),
+        ),
+        (
+            "float",
+            format!(
+                "fn count(n: Int, acc: Float): Float =\n    if n == 0 then acc else count(n - 1, acc + 0.5)\n\nfn main(): IO Unit = do\n    println(show(count({STEPS}, 0.0)))\n"
+            ),
+        ),
+    ];
+    for (label, source) in cases {
+        // One warm-up run so the reported number is not the first-run cost.
+        run_with_stack(&source, Mode::Ir, 2 * 1024 * 1024).expect("warm-up runs");
+        let start = std::time::Instant::now();
+        run_with_stack(&source, Mode::Ir, 2 * 1024 * 1024).expect("the loop runs");
+        let elapsed = start.elapsed().as_secs_f64();
+        println!(
+            "{label}: {:.2} µs/step over {STEPS} steps ({elapsed:.3} s)",
+            elapsed * 1e6 / STEPS as f64
+        );
+    }
+}
