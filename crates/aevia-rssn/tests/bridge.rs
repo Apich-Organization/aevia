@@ -58,12 +58,118 @@ fn an_unknown_name_is_e1003() {
     assert_eq!(error.kind, Failure::Unknown);
 }
 
+/// The SDE noise operators the kernel added are typed, not dynamic: the
+/// overlay fixes their dimensions, so the bridge's generated module can declare
+/// `sde_wiener` with a `sqrt(T)` result and `sde_levy_areas` with a length-`T`
+/// result. `sde_wiener(seed, m, steps, h)` roots the fourth argument (the step)
+/// — that is the kernel's `DimRule::RootOf`, whose type-level face is the
+/// `^(1/2)` in the return element; the bridge mirrors the signature and does not
+/// re-derive dimension rules.
+#[test]
+fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
+    use aevia_rssn::{SigType, registry};
+    let registry = registry();
+    let text = aevia_rssn::codegen::operators(&registry);
+
+    let wiener = registry.op("sde_wiener").expect("sde_wiener is registered");
+    assert_eq!(wiener.source, aevia_rssn::Source::Overlay);
+    assert_eq!(wiener.signatures.len(), 1, "one overload");
+    assert_eq!(wiener.keys.len(), wiener.signatures.len(), "one key per overload");
+    let SigType::Tensor {
+        rank: Some(2),
+        elem,
+    } = &wiener.signatures[0].ret
+    else {
+        panic!("`sde_wiener` must return a rank-2 tensor: {:?}", wiener.signatures[0]);
+    };
+    let SigType::Dim(inner, dim) = &**elem else {
+        panic!("`sde_wiener` elements must be dimensioned reals: {elem:?}");
+    };
+    assert!(
+        matches!(&**inner, SigType::Real | SigType::Float),
+        "the element base must be real: {inner:?}"
+    );
+    assert_eq!(
+        dim.to_plain_string().matches("^(1/2)").count(),
+        1,
+        "a Brownian increment over `h` is `sqrt(h)`: {}",
+        dim.to_plain_string()
+    );
+    assert_eq!(dim.vars().len(), 1, "one dimension variable");
+    assert!(
+        text.contains("Rssn.invoke(\"sde_wiener\", "),
+        "`sde_wiener` has no generated declaration"
+    );
+
+    let areas = registry
+        .op("sde_levy_areas")
+        .expect("sde_levy_areas is registered");
+    assert_eq!(areas.source, aevia_rssn::Source::Overlay);
+    assert_eq!(areas.signatures.len(), 1);
+    assert_eq!(areas.keys.len(), areas.signatures.len());
+    let SigType::Tensor {
+        rank: Some(1),
+        elem,
+    } = &areas.signatures[0].ret
+    else {
+        panic!("`sde_levy_areas` must return a rank-1 tensor: {:?}", areas.signatures[0]);
+    };
+    let SigType::Dim(_, dim) = &**elem else {
+        panic!("`sde_levy_areas` elements must be dimensioned reals: {elem:?}");
+    };
+    assert!(
+        !dim.to_plain_string().contains('^'),
+        "an iterated integral `I_jl` has the dimension of the step, not its root: {}",
+        dim.to_plain_string()
+    );
+    assert!(
+        text.contains("Rssn.invoke(\"sde_levy_areas\", "),
+        "`sde_levy_areas` has no generated declaration"
+    );
+}
+
+/// The kernel's SDE scheme introspection is typed too: `sde_scheme_info(name)`
+/// answers a `Tensor<1, Real>` of scheme flags, with a `String` argument and an
+/// overlay signature, so the generated `Rssn` module declares it rather than
+/// reaching it through `Rssn.dynamic`. It is *complementary* to §8.9.1's
+/// `sde_order` (which answers strong/weak order for a language method value):
+/// the kernel reports its scheme flags, the stdlib reports the language's
+/// order table, and neither wraps the other.
+#[test]
+fn sde_scheme_info_is_a_typed_overlay_operator() {
+    use aevia_rssn::{SigType, registry};
+    let registry = registry();
+    let op = registry
+        .op("sde_scheme_info")
+        .expect("sde_scheme_info is registered");
+    assert_eq!(op.source, aevia_rssn::Source::Overlay);
+    assert_eq!(op.signatures.len(), 1, "one overload");
+    assert_eq!(op.keys.len(), op.signatures.len(), "one key per overload");
+    let signature = &op.signatures[0];
+    assert_eq!(signature.params, vec![SigType::Str], "the scheme name is a String");
+    assert_eq!(
+        signature.ret,
+        SigType::Tensor {
+            rank: Some(1),
+            elem: Box::new(SigType::Real),
+        },
+        "the flags are a rank-1 tensor of exact reals"
+    );
+    let text = aevia_rssn::codegen::operators(&registry);
+    assert!(
+        text.contains("Rssn.invoke(\"sde_scheme_info\", "),
+        "`sde_scheme_info` has no generated declaration"
+    );
+    // The live manifest is the one the registry mirrors; the generated module
+    // states its hash (the test above pins that connection).
+    assert!(registry.op_count() > 1300, "the manifest's operators are live");
+}
+
 /// The same ambiguity, through the runtime entry point: a rank-2 tensor whose
 /// elements are kernel terms. The compatibility path resolves once and reports
 /// the tie; it never falls back to a second resolver.
 #[test]
-fn the_runtime_reports_the_ambiguity_instead_of_choosing() {
-    let kernel = kernel::kernel();
+fn the_runtime_reports_the_ambiguity_instead_of_choosing() {    let kernel = kernel::kernel();
     let cell = || {
         let handle = kernel
             .term_of(&Val::Symbol("x".to_string()))
@@ -140,6 +246,45 @@ fn every_overload_has_exactly_one_key() {
 // ---------------------------------------------------------------------------
 // 2. The dimension mirror
 // ---------------------------------------------------------------------------
+
+/// An exact integral value crosses as the kernel's `Int`, never as a
+/// non-normal `Rat` with denominator one.
+///
+/// The kernel's `Number` invariant is "a `Rat` has denominator > 1"
+/// (`Number::rat` collapses integral rationals); a `Rat(n/1)` misses structural
+/// rewrite patterns such as `cos(0) => 1`, because the pattern is `Int(0)`. The
+/// runtime's literal coercion can produce an exact `0` from a `Real` context, so
+/// this bridge is exactly where the bad form used to be created.
+#[test]
+fn an_integral_exact_value_crosses_in_normal_form() {
+    use num_rational::BigRational;
+    use rssn::graph::Number;
+
+    let kernel = kernel::kernel();
+    let two = Val::Num(Num::Rat(BigRational::from_integer(BigInt::from(2))));
+    assert_eq!(
+        two.to_rssn(kernel.id()).expect("an exact number"),
+        Value::Int(BigInt::from(2)),
+        "a whole rational is `Value::Int`, not `Value::Real(Rat(2/1))`"
+    );
+    let third = Val::Num(Num::Rat(BigRational::new(
+        BigInt::from(1),
+        BigInt::from(3),
+    )));
+    assert_eq!(
+        third.to_rssn(kernel.id()).expect("an exact number"),
+        Value::Real(Number::Rat(BigRational::new(
+            BigInt::from(1),
+            BigInt::from(3)
+        ))),
+        "a genuine fraction stays an exact rational"
+    );
+    assert_eq!(
+        Num::Rat(BigRational::from_integer(BigInt::from(-7))).to_number(),
+        Number::Int(BigInt::from(-7)),
+        "`Num::to_number` keeps the same normal form"
+    );
+}
 
 /// `Real[Any]` says "any dimension". Reading it as `1` turns the loosest
 /// signature in the manifest into the strictest type in the language: it would
@@ -380,6 +525,42 @@ fn a_kernel_failure_is_e0899_and_is_not_retried() {
     assert_eq!(error.variant(), Some("BudgetExceeded"));
 }
 
+/// A request the kernel cannot reduce is `E0807`, not "the operator failed":
+/// the difference is what tells a caller to try a numeric path (`nsolve`,
+/// `approx`) instead of reporting a bug.
+#[test]
+fn an_unreduced_request_is_e0807() {
+    use rssn::kernel::call::OpError;
+    let error =
+        aevia_rssn::error::from_op_error(&OpError::NotReduced("integral".to_string()))
+            .at_operator("integral");
+    assert_eq!(error.code, "E0807");
+    assert_eq!(error.kind, Failure::Other);
+    assert_eq!(error.variant(), Some("NotReduced"));
+    assert_eq!(error.operator.as_deref(), Some("integral"));
+    assert!(
+        error.help.is_some(),
+        "the diagnostic must suggest the numeric path"
+    );
+}
+
+/// `Rssn.call_ho` with no callbacks is the dynamic call; the bridge method must
+/// answer exactly what the name-based call answers.
+#[test]
+fn the_callback_free_call_ho_is_the_dynamic_call() {
+    let kernel = kernel::kernel();
+    let direct = kernel
+        .call("sin", &[Val::Num(Num::Float(0.5))])
+        .expect("`sin(0.5)`");
+    let higher_order = kernel
+        .call_ho("sin", &[Val::Num(Num::Float(0.5))])
+        .expect("a callback-free `call_ho`");
+    assert_eq!(
+        direct, higher_order,
+        "with an empty callback list the two kernel entry points are one call"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 5. Lossy conversions that could be fixed
 // ---------------------------------------------------------------------------
@@ -453,6 +634,32 @@ fn a_missing_capability_names_itself() {
         error.message
     );
     assert!(capabilities.require("core.dynamic_call").is_ok());
+}
+
+/// The kernel's SDE noise primitives are a kernel capability (`Features.sde`,
+/// task-12), so the single capability table carries a `core.sde` row with the
+/// `sde` binding, and the generated `Rssn` module declares it. A build without
+/// the rule set flips one row instead of losing the name in two consumers.
+#[test]
+fn the_sde_capability_is_a_row_and_a_binding() {
+    let capabilities = &registry().capabilities;
+    let row = capabilities
+        .table()
+        .into_iter()
+        .find(|row| row.name == "core.sde")
+        .expect("the capability table has a `core.sde` row");
+    assert_eq!(row.binding, "sde", "`Rssn.sde` is the binding");
+    assert_eq!(
+        row.enabled,
+        kernel::kernel().manifest().features.sde,
+        "the row is the manifest's `Features.sde`"
+    );
+    assert_eq!(row.enabled, capabilities.has("core.sde"));
+    let text = aevia_rssn::codegen::operators(&registry());
+    assert!(
+        text.contains(&format!("let sde: Bool = {}", row.enabled)),
+        "`Rssn.aev` must declare the capability binding"
+    );
 }
 
 /// The requirement is read from the operator, not from a list of names: an
@@ -548,6 +755,39 @@ fn the_capability_table_is_the_single_source() {
             "plugin kind `{kind}` has no row"
         );
     }
+}
+
+/// The two host-bridge capabilities are rows of the one table and are
+/// genuinely disabled. `core.callback` says an Aevia closure cannot cross as a
+/// kernel host callback; `core.plugin.source` says no Aevia expression can
+/// construct a `Plugin` for `Rssn.register`. `core.plugin` itself stays
+/// enabled: in-process Rust host plugins exist, and claiming otherwise would
+/// be false.
+#[test]
+fn the_host_bridge_capabilities_are_disabled_rows() {
+    let capabilities = &registry().capabilities;
+    for name in ["core.callback", "core.plugin.source"] {
+        let row = capabilities
+            .table()
+            .into_iter()
+            .find(|row| row.name == name)
+            .unwrap_or_else(|| panic!("`{name}` has no row in the capability table"));
+        assert!(!row.enabled, "`{name}` must be disabled in this build");
+        assert!(!capabilities.has(name), "`has` must agree with the row");
+        let error = capabilities.require(name).expect_err("the capability is off");
+        assert_eq!(error.code, "E1001");
+        assert_eq!(error.kind, Failure::Capability);
+        assert!(
+            error.message.contains(name),
+            "the message must name the capability: {}",
+            error.message
+        );
+    }
+    assert!(
+        capabilities.has("core.plugin"),
+        "`core.plugin` is an enabled kernel capability; only the source-level \
+         plugin packaging is missing"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -687,3 +927,232 @@ fn a_complex_solution_set_is_the_same_record() {
     assert_eq!(solutions.variable.as_deref(), Some("x"));
     assert!(!solutions.roots.is_empty(), "x^2 + 1 has complex roots");
 }
+
+// ---------------------------------------------------------------------------
+// 9. Kernel properties the bridge's correctness rests on
+// ---------------------------------------------------------------------------
+//
+// These are the items the second review found broken in the kernel. The bridge
+// must not merely *assume* they are fixed: each test asserts the live kernel
+// behaviour the static lattice and the pinned key depend on.
+
+/// `matches_type` compares a tensor's rank and a unit's dimension. If it did
+/// not, a rank-1 value would be `Shaped` against a rank-2 parameter and beat
+/// the `Dyn` overload, so the checker and the kernel would disagree about the
+/// chosen overload.
+#[test]
+fn the_match_lattice_compares_rank_and_dimension() {
+    use rssn::kernel::overload::{Match, matches_type};
+    use rssn::kernel::signature::{DimExpr, NatExpr, TypeExpr};
+
+    let tensor = |rank: u64| TypeExpr::Tensor {
+        rank: NatExpr::Lit(rank),
+        shape: None,
+        elem: Box::new(TypeExpr::Real),
+    };
+    assert_eq!(matches_type(&tensor(2), &tensor(2)), Match::Exact);
+    assert_eq!(
+        matches_type(&tensor(2), &tensor(1)),
+        Match::No,
+        "a rank-1 tensor must not match a rank-2 parameter"
+    );
+
+    let length = DimExpr::base("Length");
+    let time = DimExpr::base("Time");
+    assert_eq!(
+        matches_type(&TypeExpr::Unit(length.clone()), &TypeExpr::Unit(length.clone())),
+        Match::Exact
+    );
+    assert_eq!(
+        matches_type(&TypeExpr::Unit(length.clone()), &TypeExpr::Unit(time)),
+        Match::No,
+        "a time is not a length"
+    );
+    // A unit is a dimension carrier: `Real[L]` and `Unit[L]` may meet.
+    assert_eq!(
+        matches_type(
+            &TypeExpr::Dim(Box::new(TypeExpr::Real), length.clone()),
+            &TypeExpr::Unit(length)
+        ),
+        Match::Exact
+    );
+}
+
+/// The rank fix is visible through the bridge's own resolver: `det` has a
+/// `Tensor<2, Real>` overload and a `Dyn` one, and a rank-1 tensor must fall
+/// through to the `Dyn` overload instead of being scored `Shaped` against the
+/// matrix overload.
+#[test]
+fn a_rank_mismatch_resolves_to_the_dynamic_overload() {
+    use aevia_rssn::{SigType, resolve_key};
+
+    let det = registry().op("det").expect("det");
+    let key = resolve_key(
+        "det",
+        &[SigType::Tensor {
+            rank: Some(1),
+            elem: Box::new(SigType::Real),
+        }],
+    )
+    .expect("the `Dyn` overload accepts a rank-1 tensor");
+    assert_eq!(key, det.keys[1], "the symbolic overload");
+    assert_ne!(key, det.keys[0], "not the rank-2 numeric overload");
+}
+
+/// `call_key` executes only the overload the key names: the kernel checks the
+/// pinned signature against the arguments, so a key whose overload does not
+/// accept them is `UnknownOp`, never a different overload's execution.
+#[test]
+fn a_pinned_key_is_validated_against_its_own_overload() {
+    use rssn::kernel::call::OpError;
+
+    let quantity = registry().op("quantity").expect("quantity");
+    // Overload 2 of `quantity` is `(Dyn, Symbol)`: its second parameter is a
+    // free symbol, not a unit.
+    let key = quantity.keys[1].clone();
+    let error = kernel::kernel()
+        .call_key(
+            &key,
+            &[Val::Num(Num::Float(3.0)), Val::Unit(metre())],
+        )
+        .expect_err("a unit does not satisfy the `Symbol` parameter");
+    assert_eq!(error.variant(), Some("UnknownOp"));
+    match error.cause.as_deref() {
+        Some(OpError::UnknownOp(reported)) => assert_eq!(reported, &key),
+        other => panic!("expected `UnknownOp`, found {other:?}"),
+    }
+}
+
+/// Every manifest key is the hash of the overload it names, and two overloads
+/// of one operator never share a key. The old `Signature::hash` returned the
+/// hash of the empty encoding on failure, which would have made every key
+/// collide. A key must also carry the operator identity it was generated for,
+/// or `call_key` would look the wrong registration up.
+#[test]
+fn every_key_is_the_hash_of_distinct_signatures() {
+    for op in registry().ops() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (index, signature) in op.raw.iter().enumerate() {
+            let key = op
+                .keys
+                .get(index)
+                .unwrap_or_else(|| panic!("`{}` has no key for overload {index}", op.name));
+            assert_eq!(key.name, op.name, "key {index} names another operator");
+            assert_eq!(
+                key.rule_set, op.rule_set,
+                "key {index} names another rule set"
+            );
+            assert_eq!(
+                signature.hash(),
+                key.signature_hash,
+                "key {index} of `{}` is not its signature's hash",
+                op.name
+            );
+            assert!(
+                key.signature_hash.iter().any(|byte| *byte != 0),
+                "key {index} of `{}` is the all-zero hash",
+                op.name
+            );
+            assert!(
+                seen.insert(key.signature_hash),
+                "`{}` has two overloads with one key",
+                op.name
+            );
+        }
+    }
+}
+
+/// An ambiguous resolution reports how many overloads *tied*, not how many the
+/// operator has. `quantity` has three overloads; a float and a unit make two
+/// of them tie, and the diagnostic must say two.
+#[test]
+fn an_ambiguity_reports_the_tied_count() {
+    let error = kernel::kernel()
+        .resolve(
+            "quantity",
+            &[Val::Num(Num::Float(3.0)), Val::Unit(metre())],
+        )
+        .expect_err("two overloads tie");
+    assert_eq!(error.kind, Failure::Ambiguous);
+    assert!(
+        error.message.contains("2 overloads"),
+        "the message must quote the tied count, not the overload count: {}",
+        error.message
+    );
+    assert_eq!(
+        registry().op("quantity").map(|op| op.keys.len()),
+        Some(3),
+        "the operator really has three overloads"
+    );
+}
+
+/// `manifest.units` is the session's unit registry, not a process-wide table:
+/// a unit registered on one session appears in that session's manifest and in
+/// no other. Aevia generates `Units.*` from that manifest, so the distinction
+/// is the difference between "this program's unit" and "every program's unit".
+#[test]
+fn a_session_unit_reaches_its_own_manifest() {
+    use num_rational::BigRational;
+    use rssn::api::Session;
+    use rssn::dim::{DimExpr, Scale, UnitDef};
+
+    let furlong = UnitDef::linear(
+        "furlong",
+        DimExpr::base("Length"),
+        Scale {
+            rat: BigRational::new(BigInt::from(201_168), BigInt::from(1_000)),
+            pi: 0,
+        },
+    );
+    let mut first = Session::new();
+    let second = Session::new();
+    first
+        .register_unit(furlong)
+        .expect("a session may register a unit");
+    assert!(
+        first.manifest().units.iter().any(|unit| unit.name == "furlong"),
+        "the registered unit must reach the session's manifest"
+    );
+    assert!(
+        !second
+            .manifest()
+            .units
+            .iter()
+            .any(|unit| unit.name == "furlong"),
+        "a unit is session-scoped, not process-wide"
+    );
+}
+
+/// `DimExpr::try_from_term` is `to_term`'s inverse. The static form is
+/// canonicalised on the way back (an exponent of `-1` comes back as
+/// `Inverse`, a product may be reordered), so the assertion compares the
+/// `DimTerm` the recovered expression denotes: writing a dimension and reading
+/// it back must not drop or change a factor.
+#[test]
+fn the_dimension_term_round_trip_is_exact() {
+    use rssn::dim::{DimArena, DimExpr};
+    use rssn::kernel::signature::{Exp, Rational};
+
+    let mut arena = DimArena::new();
+    let expressions = [
+        DimExpr::Dimless,
+        DimExpr::base("Length"),
+        DimExpr::base("Length").pow(Exp::Rat(Rational::new(2, 1))),
+        DimExpr::base("Length").pow(Exp::Rat(Rational::new(-1, 1))),
+        DimExpr::Mul(vec![
+            DimExpr::base("Length"),
+            DimExpr::base("Time").pow(Exp::Rat(Rational::new(-2, 1))),
+        ]),
+        DimExpr::base("Length").pow(Exp::Symbol("n".to_string())),
+    ];
+    for expression in expressions {
+        let term = expression.to_term(&mut arena).expect("to_term");
+        let back = DimExpr::try_from_term(&term, &arena).expect("try_from_term");
+        let again = back.to_term(&mut arena).expect("to_term of the recovered form");
+        assert_eq!(
+            again, term,
+            "`to_term(try_from_term(term))` must be `term` for {expression:?}"
+        );
+    }
+}
+

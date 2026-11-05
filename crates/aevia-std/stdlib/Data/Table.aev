@@ -1,0 +1,16 @@
+## The `Data/Table` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Data.Table
+
+let column = column
+let column_dyn = column_dyn
+let filter = filter
+let join = join
+let row = row
+let schema = schema
+let select = select
+let to_dynamic = to_dynamic
+let to_table = to_table
+type Table<a> = Table<a>

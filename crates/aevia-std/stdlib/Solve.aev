@@ -1,0 +1,13 @@
+## The `Solve` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Solve
+
+let linsolve = linsolve
+let nsolve = nsolve
+let nsolve_f = nsolve_f
+let root = root
+let solve = solve
+let solve_complex = solve_complex
+let solve_system = solve_system

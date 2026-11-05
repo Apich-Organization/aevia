@@ -1,0 +1,10 @@
+## The `Data/Json` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Data.Json
+
+let from_json = from_json
+let read_json = read_json
+let to_json = to_json
+let write_json = write_json

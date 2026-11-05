@@ -181,14 +181,19 @@ impl KernelError {
     }
 
     /// A capability the build does not provide.
+    ///
+    /// The message names the capability rather than the feature that would
+    /// provide it: a capability can be missing because the kernel was built
+    /// without a feature *or* because the host bridge was not written yet, and
+    /// only the named capability tells a user which.
     #[must_use]
     pub fn capability(name: &str) -> Self {
         Self::of(
             "E1001",
             Failure::Capability,
-            format!("this build of rssn does not provide `{name}`"),
+            format!("this build does not provide `{name}`"),
         )
-        .with_help("rebuild rssn with the feature that provides it")
+        .with_help("this is a gap in the build, not in the program")
     }
 }
 

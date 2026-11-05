@@ -1,0 +1,25 @@
+## The `Calculus` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Calculus
+
+let antiderivative = antiderivative
+let curl = curl
+let defint = defint
+let diff = diff
+let diff_at = diff_at
+let divergence = divergence
+let grad = grad
+let grad_f = grad_f
+let hessian = hessian
+let jacobian = jacobian
+let laplacian = laplacian
+let limit = limit
+let numeric_deriv = numeric_deriv
+let product = product
+let product_dyn = product_dyn
+let quadrature = quadrature
+let series = series
+let sum = sum
+let sum_f = sum_f

@@ -1,0 +1,8 @@
+## The `Math/Geometry` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Math.Geometry
+
+let distance = distance
+let polygon_area = polygon_area

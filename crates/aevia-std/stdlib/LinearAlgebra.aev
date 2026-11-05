@@ -1,0 +1,50 @@
+## The `LinearAlgebra` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module LinearAlgebra
+
+let approx_map = approx_map
+let at = at
+let cholesky = cholesky
+let det = det
+let det_unit = det_unit
+let diag = diag
+let dot = dot
+let eig = eig
+let eigvals = eigvals
+let eye = eye
+let flatten = flatten
+let inv = inv
+let linsolve = linsolve
+let linspace = linspace
+let lstsq = lstsq
+let lu = lu
+let map_indexed = map_indexed
+let matmul = matmul
+let matvec = matvec
+let mean = mean
+let norm = norm
+let normalize = normalize
+let ones_of = ones_of
+let outer = outer
+let qr = qr
+let rank = rank
+let reshape = reshape
+let reshape_dyn = reshape_dyn
+let set = set
+let std = std
+let sum = sum
+let svd = svd
+let trace = trace
+let transpose = transpose
+let tril = tril
+let triu = triu
+let var = var
+let vecmat = vecmat
+let zeros_of = zeros_of
+
+## Not re-exported (see the module header of `tests/stdlib_modules.rs`):
+##   fill — call form: the checker special-cases its call position and has no value scheme
+##   ones — call form: the checker special-cases its call position and has no value scheme
+##   zeros — call form: the checker special-cases its call position and has no value scheme

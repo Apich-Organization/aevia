@@ -10,9 +10,12 @@
 //!
 //! * [`spec`] reads the list of names chapter 8 promises, so the coverage test
 //!   is derived from the document rather than from a hand-written list;
+//! * [`stdlib`] embeds the §8.20 module tree (`Math`, `Units.SI`, `Data.Csv`,
+//!   `Physics.Ising`, …) so `import Math { sqrt }` resolves: the modules are
+//!   sources this crate ships, not a second implementation;
 //! * [`linalg`], [`stats`], [`dist`], [`calc`], [`fft`], [`interp`], [`ode`],
-//!   [`pde`], [`complex`], [`number`], [`geom`] and [`table`] are the numeric
-//!   and data kernels, all on `f64`/`BigRational` slices;
+//!   [`sde`], [`pde`], [`complex`], [`number`], [`geom`] and [`table`] are the
+//!   numeric and data kernels, all on `f64`/`BigRational` slices;
 //! * `aevia-core` converts between those slices and runtime values.
 //!
 //! Where a result can be exact it is kept exact: `median` of `[1, 2, 4]` is the
@@ -33,10 +36,12 @@ pub mod linalg;
 pub mod number;
 pub mod ode;
 pub mod pde;
+pub mod sde;
 pub mod sim;
 pub mod spec;
 pub mod special;
 pub mod stats;
+pub mod stdlib;
 pub mod table;
 
 /// Why a numeric kernel refused.

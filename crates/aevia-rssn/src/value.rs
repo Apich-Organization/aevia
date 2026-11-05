@@ -90,10 +90,18 @@ impl Num {
     }
 
     /// Converts to an rssn number.
+    ///
+    /// An integral rational is collapsed to `Number::Int`: the kernel's `Number`
+    /// invariant is that `Rat` never has denominator one (`Number::rat`
+    /// enforces it), and a non-normal form misses the kernel's structural
+    /// rewrite patterns — `cos(0/1)` would not fold to `1` while `cos(0)` does.
+    /// The kernel also normalises at its ABI boundary; doing it here as well
+    /// keeps the bridge from handing out a form the invariant forbids.
     #[must_use]
     pub fn to_number(&self) -> Number {
         match self {
             Self::Int(value) => Number::Int(value.clone()),
+            Self::Rat(value) if value.is_integer() => Number::Int(value.to_integer()),
             Self::Rat(value) => Number::Rat(value.clone()),
             Self::Float(value) => Number::Float(*value),
         }
@@ -313,7 +321,13 @@ impl Val {
     pub fn to_rssn(&self, session: SessionId) -> Result<Value, KernelError> {
         Ok(match self {
             Self::Num(Num::Int(value)) => Value::Int(value.clone()),
-            Self::Num(Num::Rat(value)) => Value::Real(Number::Rat(value.clone())),
+            // `Num::to_number` collapses an integral rational to `Int`; an
+            // exact integer is `Value::Int` in the kernel's model, and a
+            // non-normal `Rat` would miss the structural rewrites.
+            Self::Num(number @ Num::Rat(_)) => match number.to_number() {
+                Number::Int(value) => Value::Int(value),
+                other => Value::Real(other),
+            },
             Self::Num(Num::Float(value)) => Value::Float(*value),
             Self::Bool(value) => Value::Bool(*value),
             Self::Str(value) => Value::String(value.clone()),

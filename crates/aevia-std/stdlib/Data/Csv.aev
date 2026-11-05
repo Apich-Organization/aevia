@@ -1,0 +1,12 @@
+## The `Data/Csv` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Data.Csv
+
+let column = column
+let column_dyn = column_dyn
+let read_csv = read_csv
+let read_csv_dyn = read_csv_dyn
+let write_csv = write_csv
+type Table<a> = Table<a>

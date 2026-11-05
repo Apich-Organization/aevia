@@ -1,0 +1,12 @@
+## The `Interpolate` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Interpolate
+
+let chebyshev_fit = chebyshev_fit
+let interp1 = interp1
+let interp2 = interp2
+let polyfit = polyfit
+let polyval = polyval
+let spline = spline

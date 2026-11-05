@@ -1,0 +1,10 @@
+## The `Stats/Distributions` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Stats.Distributions
+
+let cdf = cdf
+let pdf = pdf
+let sample = sample
+let sample_n = sample_n

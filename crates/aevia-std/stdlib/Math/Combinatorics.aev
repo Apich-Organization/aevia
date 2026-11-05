@@ -1,0 +1,8 @@
+## The `Math/Combinatorics` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Math.Combinatorics
+
+let binomial = binomial
+let permutations = permutations

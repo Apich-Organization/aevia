@@ -1,0 +1,21 @@
+## The `Plot` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Plot
+
+let combine = combine
+let default_plot_opts = default_plot_opts
+let errorbar = errorbar
+let errorbar_with = errorbar_with
+let heatmap = heatmap
+let heatmap_with = heatmap_with
+let hist = hist
+let hist_with = hist_with
+let label = label
+let line = line
+let line_with = line_with
+let plot = plot
+let save = save
+let scatter = scatter
+let scatter_with = scatter_with

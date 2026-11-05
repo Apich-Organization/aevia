@@ -65,10 +65,18 @@ pub fn check_compatibility(registry: &Registry) -> Result<(), KernelError> {
 
 /// Spellings the kernel does not index, mapped to the name it uses.
 ///
-/// The kernel names units in ASCII (`ohm`, `angstrom`); the specification
-/// writes them as symbols. The table stays the kernel's — this only adds
-/// spellings, never a unit.
-const SPELLINGS: [(&str, &str); 3] = [("Ω", "ohm"), ("Å", "angstrom"), ("µ", "u")];
+/// The kernel names units in ASCII (`ohm`, `angstrom`, `deg`, `arcmin`,
+/// `arcsec`); the specification writes the symbols. The table stays the
+/// kernel's — this only adds spellings §5.3 declares, never a unit.
+const SPELLINGS: [(&str, &str); 7] = [
+    ("Ω", "ohm"),
+    ("Å", "angstrom"),
+    ("µ", "u"),
+    ("°", "deg"),
+    ("degree", "deg"),
+    ("′", "arcmin"),
+    ("″", "arcsec"),
+];
 
 /// The kernel's unit table, as Aevia unit definitions.
 ///

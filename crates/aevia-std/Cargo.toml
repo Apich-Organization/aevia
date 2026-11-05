@@ -22,8 +22,20 @@ rssn = { path = "../../../rssn", default-features = false }
 # runtime. A dev-dependency cycle is allowed, and this is the only way to put
 # the exactness contract in a file this crate owns: the property is about a
 # `Value`, and `Value` lives in `aevia-core`.
+#
+# `aevia-rssn` is a test-only dependency for the same reason: the embedded
+# `Units.Constants` module is generated from the live Kernel Manifest, and the
+# test that regenerates it (and the one that checks the checked-in copy against
+# the live manifest) need the manifest index. The library itself must not see
+# the bridge — unit values are ambient and the standard library has no operator
+# table.
 [dev-dependencies]
 aevia-core = { path = "../aevia-core" }
+aevia-rssn.workspace = true
+# `tests/spec_signatures.rs` compares every §8.1–§8.16 declared signature with
+# the checker's scheme through `aevia_types::builtins::schemes`; the library
+# itself must not see the checker.
+aevia-types = { path = "../aevia-types" }
 
 [lints.rust]
 unsafe_code = "forbid"

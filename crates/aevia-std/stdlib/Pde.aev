@@ -1,0 +1,10 @@
+## The `Pde` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Pde
+
+let solve_advection = solve_advection
+let solve_heat = solve_heat
+let solve_poisson = solve_poisson
+let solve_wave = solve_wave

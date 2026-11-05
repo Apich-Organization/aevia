@@ -1,0 +1,102 @@
+## The `Prelude` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Prelude
+
+let abs = abs
+let all = all
+let and_then = and_then
+let any = any
+let apply = apply
+let assuming = assuming
+let by_cases = by_cases
+let ceil = ceil
+let clamp = clamp
+let compare = compare
+let compose = compose
+let concat = concat
+let const = const
+let contains = contains
+let curry = curry
+let decide = decide
+let div = div
+let drop = drop
+let ends_with = ends_with
+let enumerate = enumerate
+let eprintln = eprintln
+let factorial = factorial
+let filter = filter
+let find = find
+let flatten = flatten
+let flip = flip
+let floor = floor
+let fold = fold
+let fold_left = fold_left
+let format = format
+let gcd = gcd
+let id = id
+let is_none = is_none
+let is_some = is_some
+let join = join
+let lcm = lcm
+let length = length
+let lower = lower
+let map = map
+let map2 = map2
+let map_err = map_err
+let max = max
+let mean = mean
+let min = min
+let mod = mod
+let not = not
+let par_map = par_map
+let parse_float = parse_float
+let parse_int = parse_int
+let partial_compare = partial_compare
+let print = print
+let println = println
+let prod = prod
+let quot = quot
+let range = range
+let rank = rank
+let rem = rem
+let replace = replace
+let repr = repr
+let reverse = reverse
+let rng = rng
+let round = round
+let shape = shape
+let show = show
+let sign = sign
+let sort = sort
+let sort_by = sort_by
+let sort_float = sort_float
+let split = split
+let starts_with = starts_with
+let sum = sum
+let sym_eq = sym_eq
+let sym_lt = sym_lt
+let sym_ne = sym_ne
+let take = take
+let to_float = to_float
+let to_int = to_int
+let to_latex = to_latex
+let to_real = to_real
+let to_typst = to_typst
+let total_compare = total_compare
+let trim = trim
+let trunc = trunc
+let uncurry = uncurry
+let unwrap_or = unwrap_or
+let upper = upper
+let xor = xor
+let zero = zero
+let zip = zip
+let zip_with = zip_with
+
+## Not re-exported (see the module header of `tests/stdlib_modules.rs`):
+##   Err — constructor or qualified name: ambient from the Prelude
+##   None — constructor or qualified name: ambient from the Prelude
+##   Ok — constructor or qualified name: ambient from the Prelude
+##   Some — constructor or qualified name: ambient from the Prelude

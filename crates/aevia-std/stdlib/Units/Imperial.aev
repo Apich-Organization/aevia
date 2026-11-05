@@ -1,0 +1,8 @@
+## The `Units.Imperial` module of §8.20.
+##
+## The imperial units of §5.3.3 live in the kernel's unit table and are
+## ambient `Unit[d]` values (§5.1), exactly like the SI ones; `Units.SI`'s
+## header explains why no binding is declared here. The table itself:
+## `ft`, `in`, `yd`, `mi`, `nmi`, `acre`, `gal` (US gallon), `oz`, `lb`,
+## `psi`, `°F`.
+module Units.Imperial

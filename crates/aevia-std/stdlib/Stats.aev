@@ -1,0 +1,18 @@
+## The `Stats` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Stats
+
+let centroid = centroid
+let corr = corr
+let cov = cov
+let histogram = histogram
+let kurtosis = kurtosis
+let mean = mean
+let median = median
+let mode = mode
+let quantile = quantile
+let skewness = skewness
+let std = std
+let var = var

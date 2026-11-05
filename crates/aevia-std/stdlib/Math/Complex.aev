@@ -1,0 +1,17 @@
+## The `Math/Complex` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Math.Complex
+
+let arg = arg
+let complex = complex
+let complex_exp = complex_exp
+let complex_ln = complex_ln
+let complex_sin = complex_sin
+let complex_sqrt = complex_sqrt
+let conj = conj
+let cos = cos
+let im = im
+let magnitude = magnitude
+let re = re

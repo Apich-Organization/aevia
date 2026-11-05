@@ -1,0 +1,11 @@
+## The `LinearAlgebra/Sparse` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module LinearAlgebra.Sparse
+
+let from_dense = from_dense
+let matmul = matmul
+let nnz = nnz
+let to_dense = to_dense
+let transpose = transpose

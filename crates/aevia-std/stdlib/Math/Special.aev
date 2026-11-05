@@ -1,0 +1,23 @@
+## The `Math/Special` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Math.Special
+
+let bessel_j0 = bessel_j0
+let bessel_jn = bessel_jn
+let bessel_y0 = bessel_y0
+let bessel_yn = bessel_yn
+let beta = beta
+let chebyshev_t = chebyshev_t
+let chebyshev_u = chebyshev_u
+let erf = erf
+let erfc = erfc
+let gamma = gamma
+let hermite_h = hermite_h
+let j1 = j1
+let laguerre_l = laguerre_l
+let legendre_p = legendre_p
+let lgamma = lgamma
+let y1 = y1
+let zeta = zeta

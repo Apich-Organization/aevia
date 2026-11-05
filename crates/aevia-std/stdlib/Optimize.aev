@@ -1,0 +1,10 @@
+## The `Optimize` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Optimize
+
+let least_squares = least_squares
+let maximize = maximize
+let minimize = minimize
+let minimize_f = minimize_f

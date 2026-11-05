@@ -346,6 +346,8 @@ pub struct Capabilities {
     pub structured_results: bool,
     /// Higher-order operators accept callbacks.
     pub higher_order: bool,
+    /// The kernel's SDE noise primitives are available.
+    pub sde: bool,
     /// How a plugin may reach this build.
     pub plugin_kinds: Vec<String>,
 }
@@ -370,6 +372,28 @@ impl Capabilities {
                 self.parallel_symbolic,
             ),
             row("core.higher_order", "higher_order", self.higher_order),
+            // The SDE noise primitives are the kernel's (`sde_wiener`,
+            // `sde_levy_areas`); the solver loops live in `aevia-std` because
+            // they need Aevia closures. A host gates its SDE surface on this
+            // row, exactly as it gates ODE on `core.higher_order`-style flags.
+            row("core.sde", "sde", self.sde),
+            // Host-bridge capabilities. They are rows even though the kernel
+            // lists no `Features` field for them, because the table is the one
+            // place a capability may be named: `Rssn.call_ho` and
+            // `Rssn.register` report `E1001` with these names, and a future
+            // bridge that lands the conversion flips the row instead of
+            // hunting for the message that hard-coded it.
+            //
+            // Both are genuinely false in this build:
+            // * `core.callback` — the kernel's `HostCallback` is `Send + Sync`
+            //   and Aevia's evaluator is single-threaded, so an Aevia closure
+            //   cannot cross as a callback (§8.19);
+            // * `core.plugin.source` — no Aevia source expression can produce
+            //   a `Plugin` value: Rust host plugins register through
+            //   `Session::register` (§13.5.1) and source-level `@op` packaging
+            //   (§13.5.2) is not implemented.
+            row("core.callback", "callback", false),
+            row("core.plugin.source", "plugin_source", false),
             row(
                 "core.structured_results",
                 "structured_results",
@@ -618,6 +642,7 @@ impl Registry {
                 user_base_dimensions: features.user_base_dimensions,
                 structured_results: features.structured_results,
                 higher_order: features.higher_order,
+                sde: features.sde,
                 plugin_kinds: features.plugin_kinds.clone(),
             },
             version: manifest.rssn_version.clone(),
@@ -743,26 +768,59 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-fn convert_signature(signature: &Signature) -> Sig {
-    Sig {
-        params: signature.params.iter().map(convert_type).collect(),
-        ret: convert_type(&signature.ret),
-        variadic: signature
-            .variadic
-            .as_ref()
-            .map(variadic_bounds),
+/// The dimension variables of one signature.
+///
+/// A kernel signature names its dimension parameters (`T`), and the same name
+/// means the same Aevia dimension variable in every parameter and in the
+/// result (`sde_wiener` puts `T` under a square root: `Real[T]` in, `T^(1/2)`
+/// out). The conversion therefore shares one mapping per signature; without it
+/// every occurrence would become an unrelated variable and the emitted source
+/// could not express the relationship. `Any` is *not* shared: each occurrence
+/// is an independently unpinned dimension.
+#[derive(Default)]
+struct SignatureDims {
+    named: std::collections::HashMap<String, u32>,
+}
+
+impl SignatureDims {
+    /// The variable for a signature dimension parameter named `name`.
+    fn var(&mut self, name: &str) -> Dim {
+        let id = *self
+            .named
+            .entry(name.to_string())
+            .or_insert_with(fresh_dim);
+        Dim::var(id)
     }
 }
 
-fn variadic_bounds(variadic: &Variadic) -> (usize, Option<usize>, SigType) {
+fn convert_signature(signature: &Signature) -> Sig {
+    let mut dims = SignatureDims::default();
+    Sig {
+        params: signature
+            .params
+            .iter()
+            .map(|ty| convert_type_with(ty, &mut dims))
+            .collect(),
+        ret: convert_type_with(&signature.ret, &mut dims),
+        variadic: signature
+            .variadic
+            .as_ref()
+            .map(|variadic| variadic_bounds_with(variadic, &mut dims)),
+    }
+}
+
+fn variadic_bounds_with(
+    variadic: &Variadic,
+    dims: &mut SignatureDims,
+) -> (usize, Option<usize>, SigType) {
     (
         usize::from(variadic.min),
         variadic.max.map(usize::from),
-        convert_type(&variadic.elem),
+        convert_type_with(&variadic.elem, dims),
     )
 }
 
-fn convert_type(ty: &TypeExpr) -> SigType {
+fn convert_type_with(ty: &TypeExpr, dims: &mut SignatureDims) -> SigType {
     match ty {
         TypeExpr::Int => SigType::Int,
         TypeExpr::Real => SigType::Real,
@@ -771,36 +829,46 @@ fn convert_type(ty: &TypeExpr) -> SigType {
         TypeExpr::Bool => SigType::Bool,
         TypeExpr::String => SigType::Str,
         TypeExpr::Symbol => SigType::Symbol,
-        TypeExpr::Unit(dim) => SigType::Unit(convert_dim(dim)),
-        TypeExpr::Point(dim) => SigType::Point(convert_dim(dim)),
-        TypeExpr::Dim(inner, dim) => {
-            SigType::Dim(Box::new(convert_type(inner)), convert_dim(dim))
-        }
+        TypeExpr::Unit(dim) => SigType::Unit(convert_dim_with(dim, dims)),
+        TypeExpr::Point(dim) => SigType::Point(convert_dim_with(dim, dims)),
+        TypeExpr::Dim(inner, dim) => SigType::Dim(
+            Box::new(convert_type_with(inner, dims)),
+            convert_dim_with(dim, dims),
+        ),
         TypeExpr::Tensor { rank, elem, .. } => SigType::Tensor {
             rank: convert_rank(rank),
-            elem: Box::new(convert_type(elem)),
+            elem: Box::new(convert_type_with(elem, dims)),
         },
         TypeExpr::Sparse { rank, elem, .. } => SigType::Sparse {
             rank: convert_rank(rank),
-            elem: Box::new(convert_type(elem)),
+            elem: Box::new(convert_type_with(elem, dims)),
         },
         TypeExpr::Record(fields) => SigType::Record(
             fields
                 .iter()
-                .map(|(name, ty)| (name.clone(), convert_type(ty)))
+                .map(|(name, ty)| (name.clone(), convert_type_with(ty, dims)))
                 .collect(),
         ),
         TypeExpr::Variant(variants) => SigType::Variant(
             variants
                 .iter()
                 .map(|(name, payload)| {
-                    (name.clone(), payload.iter().map(convert_type).collect())
+                    (
+                        name.clone(),
+                        payload
+                            .iter()
+                            .map(|ty| convert_type_with(ty, dims))
+                            .collect(),
+                    )
                 })
                 .collect(),
         ),
         TypeExpr::Function(params, ret) => SigType::Func(
-            params.iter().map(convert_type).collect(),
-            Box::new(convert_type(ret)),
+            params
+                .iter()
+                .map(|ty| convert_type_with(ty, dims))
+                .collect(),
+            Box::new(convert_type_with(ret, dims)),
         ),
         TypeExpr::Table(_) => SigType::Table,
         TypeExpr::Dyn(_) => SigType::Dyn,
@@ -880,49 +948,56 @@ pub fn to_type_expr(ty: &SigType) -> TypeExpr {
     }
 }
 
-/// Converts a dimension expression to Aevia's algebra.
+/// Converts a dimension expression to Aevia's algebra with fresh variables.
+///
+/// A signature dimension variable (`TypeParamKind::Dim`, e.g. `T`) shares one
+/// Aevia variable across a whole signature when converted through
+/// [`convert_signature`]; this wrapper allocates fresh ids, for callers that
+/// only convert one expression.
 ///
 /// `Any` and a signature dimension variable mean "some dimension, not pinned";
-/// they become a **fresh** dimension variable rather than the dimensionless
-/// scalar. Reading them as `1` turns the loosest possible signature into the
-/// strictest possible type: `Real[Any] -> Real` would only accept a plain
-/// `Real`, which is the one thing the kernel does *not* promise.
+/// they become a dimension variable rather than the dimensionless scalar.
+/// Reading them as `1` turns the loosest possible signature into the strictest
+/// possible type: `Real[Any] -> Real` would only accept a plain `Real`, which
+/// is the one thing the kernel does *not* promise. Two `Any`s in one signature
+/// are independent variables.
 ///
 /// A symbolic exponent still has no static mirror (the language rejects
 /// `L^n`, §4.12.3), so that one keeps falling back to `1`; see
 /// `.workbuddy-ai/audit/bridge-fixed.md` for the requirement it places on the
 /// checker.
-///
-/// # Freshness
-///
-/// Every call that meets an `Any` allocates a new variable id, so two `Any`s
-/// in one signature are independent. The ids are drawn from a high range so
-/// that they do not collide with the checker's own inference variables; the
-/// checker must still freshen them when it instantiates a signature.
 #[must_use]
 pub fn convert_dim(dim: &DimExpr) -> Dim {
+    convert_dim_with(dim, &mut SignatureDims::default())
+}
+
+/// The shared form of [`convert_dim`]: named signature variables are interned.
+fn convert_dim_with(dim: &DimExpr, dims: &mut SignatureDims) -> Dim {
     match dim {
         DimExpr::Base(name) => Dim::base(name),
         DimExpr::Mul(factors) => factors
             .iter()
-            .fold(Dim::one(), |acc, factor| acc.mul(&convert_dim(factor))),
+            .fold(Dim::one(), |acc, factor| {
+                acc.mul(&convert_dim_with(factor, dims))
+            }),
         DimExpr::Pow(base, Exp::Rat(exponent)) => {
             let Some(exponent) = convert_exponent(exponent) else {
                 return Dim::one();
             };
-            convert_dim(base).pow(&exponent)
+            convert_dim_with(base, dims).pow(&exponent)
         }
         DimExpr::Pow(_, Exp::Symbol(_)) => Dim::one(),
-        DimExpr::Inverse(base) => convert_dim(base).pow(&num_rational::BigRational::from_integer(
-            num_bigint::BigInt::from(-1),
-        )),
+        DimExpr::Inverse(base) => convert_dim_with(base, dims).pow(
+            &num_rational::BigRational::from_integer(num_bigint::BigInt::from(-1)),
+        ),
         DimExpr::Dimless => Dim::one(),
         // `NonMetric` says "not a scalar at all" and `Container` "a structured
         // container"; neither is a dimension, and neither is `1`. They cannot
         // be stated in the dimension algebra, so they stay dimensionless and
         // the kernel checks them at run time.
         DimExpr::NonMetric | DimExpr::Container => Dim::one(),
-        DimExpr::Any | DimExpr::Var(_) => Dim::var(fresh_dim()),
+        DimExpr::Var(name) => dims.var(name),
+        DimExpr::Any => Dim::var(fresh_dim()),
     }
 }
 

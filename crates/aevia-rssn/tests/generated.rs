@@ -11,7 +11,7 @@
 //! sees it.
 
 use aevia_rssn::{codegen, kernel, registry};
-use aevia_syntax::{Diagnostic, SourceMap, lex, parse_module};
+use aevia_syntax::{SourceMap, lex, parse_module};
 
 /// Parses a generated module, returning it or panicking with the first
 /// diagnostic.
@@ -39,62 +39,57 @@ fn the_generated_modules_parse() {
     }
 }
 
-/// The one diagnostic the checker cannot avoid today.
+/// A pinned literal key types the call from the manifest overload, and only a
+/// pinned key does: this is the property that makes the emitted facade
+/// checkable without weakening `Rssn.invoke` for non-literal callers.
 ///
-/// `Rssn.invoke(name, hash, values)` is typed as returning the dynamic value
-/// type, so a generated `fn` that declares `: Real` cannot derive that type
-/// from its body. That is a checker decision (`aevia-types/src/check.rs`,
-/// `invoke` in `rssn_member` and the `is_rssn_member(callee, "invoke")` arm),
-/// not something the generator can fix: the pinned key *is* the static claim,
-/// and the primitive that carries it has no typed form yet. Recorded as a
-/// requirement in `.workbuddy-ai/audit/bridge-fixed.md`; until it lands, this
-/// is the only error a generated module is allowed to have.
-fn is_the_invoke_typing_gap(diagnostic: &Diagnostic) -> bool {
-    diagnostic.code == "E0302" && diagnostic.label.contains("found Value")
-}
-
-/// Every generated module, type-checked.
-///
-/// `Units.aev` and `Constants.aev` must be clean — that is where the duplicate
-/// `m_u` and the folded `hbar` lived. `Rssn.aev` must have no error other than
-/// the `Rssn.invoke` typing gap above: a duplicate `fn`, an unknown unit, a
-/// dimension the language cannot write, or a malformed pinned hash would all
-/// show up as something else.
+/// The whole-module acceptance test lives in its own test target
+/// (`tests/emit_typecheck.rs`): checking a generated module leaves global
+/// checker state that a second `check_module` call in the same process sees
+/// (the module's opaque `type Value`/`Symbol` registrations), and the
+/// acceptance must be a clean-process measurement.
 #[test]
-fn the_generated_modules_type_check() {
-    let mut unexplained: Vec<String> = Vec::new();
-    let mut gap = 0usize;
-    for (name, text) in codegen::files(registry()) {
-        let module = parse(&name, &text);
-        let checked = aevia_types::check_module(0, &module);
-        for diagnostic in &checked.diagnostics.items {
-            if is_the_invoke_typing_gap(diagnostic) {
-                gap += 1;
-                continue;
-            }
-            unexplained.push(format!("{name}: {diagnostic:?}"));
-        }
-        if name != "Rssn.aev" && checked.diagnostics.has_errors() {
-            panic!(
-                "{name} does not type-check: {}",
-                checked.diagnostics.render(&SourceMap::new())
-            );
-        }
-    }
-    assert!(
-        unexplained.is_empty(),
-        "{} generated diagnostic(s) that are not the known `Rssn.invoke` typing gap:\n{}",
-        unexplained.len(),
-        unexplained.join("\n")
+fn a_literal_key_types_the_invoke_result() {
+    let entry = registry().op("E").expect("`E` is in the manifest");
+    let hash: String = entry
+        .keys
+        .first()
+        .expect("`E` pins a key")
+        .signature_hash
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let source = format!(
+        "module InvokeTyping\n\nlet e: Real = Rssn.invoke(\"E\", \"{hash}\", [])\n"
     );
-    // The gap is per declaration with a declared return type; a cascade would
-    // mean something else is wrong.
-    let declarations = codegen::operators(registry())
-        .matches(" = Rssn.invoke(")
-        .count();
+    let module = parse("InvokeTyping.aev", &source);
+    let checked = aevia_types::check_module(0, &module);
     assert!(
-        gap <= declarations,
-        "{gap} diagnostics for {declarations} declarations: the checker is cascading"
+        !checked.diagnostics.has_errors(),
+        "a pinned literal key must type the result: {}",
+        checked.diagnostics.render(&SourceMap::new())
+    );
+
+    // The pinned key really is the static claim: the wrong annotation is
+    // rejected instead of being accepted as `Value`.
+    let wrong = "module InvokeTypingWrong\n\nlet e: Bool = Rssn.invoke(\"E\", \"";
+    let source = format!("{wrong}{hash}\", [])\n");
+    let module = parse("InvokeTypingWrong.aev", &source);
+    let checked = aevia_types::check_module(0, &module);
+    assert!(
+        checked.diagnostics.has_errors(),
+        "`E` is a `Real`, not a `Bool`"
+    );
+
+    // An unknown hash is not a static claim: it keeps the dynamic `Value`
+    // type, so annotating it `Real` is the ordinary `E0302` and the runtime
+    // `E1005` remains the diagnostic of record for the call itself.
+    let source = "module InvokeTypingUnknown\n\nlet e: Real = Rssn.invoke(\"E\", \"00000000000000000000000000000000\", [])\n";
+    let module = parse("InvokeTypingUnknown.aev", source);
+    let checked = aevia_types::check_module(0, &module);
+    assert!(
+        checked.diagnostics.has_errors(),
+        "an unknown pinned hash stays dynamic and cannot satisfy `Real`"
     );
 }
 
@@ -124,6 +119,303 @@ fn the_operator_count_is_the_manifest_count() {
         overloads,
         "every overload needs exactly one declaration"
     );
+}
+
+/// The overlay set the kernel carries: the original precision levers plus the
+/// logic/signal and SDE-noise ones. They are listed by name so a registration
+/// that silently lost its overlay (falling back to `Derived`) is caught — the
+/// count itself is the manifest's, not a constant typed here.
+const OVERLAY_OPERATORS: [&str; 24] = [
+    "diff",
+    "solve",
+    "taylor",
+    "quantity",
+    "convert",
+    "det",
+    "trace",
+    "norm",
+    "transpose",
+    "rank",
+    "dot",
+    "cross",
+    "identity",
+    "and",
+    "or",
+    "xor",
+    "not",
+    "implies",
+    "iff",
+    "fftconv",
+    "interpolate",
+    "sum",
+    "sde_levy_areas",
+    "sde_wiener",
+];
+
+/// Every operator in [`OVERLAY_OPERATORS`] really has an overlay signature and
+/// a generated declaration that pins a key. A name whose operator fell back to
+/// `Derived` (`det : (Term) -> Term`) would still have a declaration, so the
+/// source distribution is asserted too.
+#[test]
+fn the_known_overlay_operators_are_typed() {
+    let text = codegen::operators(registry());
+    for name in OVERLAY_OPERATORS {
+        let op = registry()
+            .op(name)
+            .unwrap_or_else(|| panic!("the manifest has no operator `{name}`"));
+        assert_eq!(
+            op.source,
+            aevia_rssn::Source::Overlay,
+            "`{name}` must carry an overlay signature, not a derived one"
+        );
+        assert!(
+            !op.signatures.is_empty(),
+            "`{name}` has an overlay but no signature"
+        );
+        assert!(
+            text.contains(&format!("Rssn.invoke(\"{name}\", ")),
+            "`{name}` has no generated declaration"
+        );
+        assert!(
+            !text.contains(&format!(
+                "## No signature: reach it with Rssn.dynamic(\"{name}\", [...])"
+            )),
+            "`{name}` is declared dynamic even though it has an overlay"
+        );
+    }
+}
+
+/// The generated module records the manifest it came from, and the registry's
+/// copy of the version, ABI and hash is the live manifest's. This is the
+/// assertion that would catch a stale constant: the kernel's numbers move
+/// between releases and the bridge must follow them, not remember them.
+#[test]
+fn the_generated_module_records_the_live_manifest() {
+    let manifest = kernel::kernel().manifest();
+    let registry = registry();
+    assert_eq!(registry.version, manifest.rssn_version, "the rssn version");
+    assert_eq!(registry.api_version, manifest.api_version, "the ABI version");
+    let hash: String = manifest
+        .manifest_hash
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(registry.manifest_hash, hash, "the manifest hash");
+    assert_eq!(
+        aevia_rssn::SUPPORTED_API_VERSION,
+        manifest.api_version,
+        "this build understands the manifest's ABI"
+    );
+    let text = codegen::operators(registry);
+    assert!(
+        text.contains(&format!(
+            "## rssn {}, api {}, manifest {}",
+            manifest.rssn_version, manifest.api_version, hash
+        )),
+        "the module must state the manifest it was generated from"
+    );
+}
+
+/// The distribution of signature sources in the registry is the manifest's:
+/// `Declared`/`Overlay`/`Derived`/`None` are counted from `OpInfo`, not from a
+/// list kept here, and every `None` operator is documented as reachable through
+/// `Rssn.dynamic` instead of silently having no declaration.
+#[test]
+fn the_source_distribution_is_the_manifests() {
+    use rssn::kernel::manifest::SignatureSource;
+    let manifest = kernel::kernel().manifest();
+    let mut expected = [0usize; 4];
+    for op in &manifest.ops {
+        let slot = match op.signature_source {
+            SignatureSource::Declared => 0,
+            SignatureSource::Overlay => 1,
+            SignatureSource::Derived => 2,
+            SignatureSource::None => 3,
+        };
+        expected[slot] += 1;
+    }
+    let observed = [
+        registry().ops().filter(|op| op.source == aevia_rssn::Source::Declared).count(),
+        registry().ops().filter(|op| op.source == aevia_rssn::Source::Overlay).count(),
+        registry().ops().filter(|op| op.source == aevia_rssn::Source::Derived).count(),
+        registry().ops().filter(|op| op.source == aevia_rssn::Source::None).count(),
+    ];
+    assert_eq!(
+        observed, expected,
+        "the registry's source distribution is not the manifest's"
+    );
+
+    let text = codegen::operators(registry());
+    for op in registry().ops().filter(|op| op.source == aevia_rssn::Source::None) {
+        assert!(
+            text.contains(&format!(
+                "## No signature: reach it with Rssn.dynamic(\"{}\", [...])",
+                op.name
+            )),
+            "`{}` has no signature and must be documented as a dynamic call",
+            op.name
+        );
+    }
+}
+
+/// Whether every type in a signature has a source spelling. The generator falls
+/// back to `Dyn<term>` for the ones that do not (unknown rank, a type variable,
+/// a host type, an unpinned dimension), so exact-signature assertions apply
+/// only where the manifest states a writable type.
+fn spellable(ty: &aevia_rssn::SigType) -> bool {
+    use aevia_rssn::SigType;
+    match ty {
+        SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
+            rank.is_some() && spellable(elem)
+        }
+        SigType::Unit(dim) | SigType::Point(dim) => dim.is_concrete(),
+        SigType::Dim(inner, dim) => dim.is_concrete() && spellable(inner),
+        SigType::Record(fields) => fields.iter().all(|(_, ty)| spellable(ty)),
+        SigType::Func(params, ret) => params.iter().all(spellable) && spellable(ret),
+        SigType::Variant(_)
+        | SigType::Table
+        | SigType::Device
+        | SigType::Opaque(_)
+        | SigType::Var(_)
+        | SigType::Never => false,
+        _ => true,
+    }
+}
+
+/// Every `Overlay` signature is generated *exactly*: the declaration's return
+/// type is the manifest's, not the `Dyn<term>` the conservative `Derived`
+/// source would produce. The overlay set grew between kernel releases (it is
+/// the precision lever, not a fixed list), so the count comes from the live
+/// manifest and every overlay operator is checked — not a chosen few.
+#[test]
+fn every_overlay_signature_is_generated_exactly() {
+    use aevia_rssn::registry::render_type;
+    let text = codegen::operators(registry());
+    let overlay: Vec<_> = registry()
+        .ops()
+        .filter(|op| op.source == aevia_rssn::Source::Overlay)
+        .collect();
+    assert!(
+        !overlay.is_empty(),
+        "the manifest states overlay signatures, so the module must use them"
+    );
+    let mut checked = 0usize;
+    for op in overlay {
+        assert!(
+            !op.signatures.is_empty(),
+            "overlay operator `{}` has no signature to generate",
+            op.name
+        );
+        assert_eq!(
+            op.keys.len(),
+            op.signatures.len(),
+            "overlay operator `{}` must pin one key per overload",
+            op.name
+        );
+        for (index, signature) in op.signatures.iter().enumerate() {
+            if !spellable(&signature.ret) || !signature.params.iter().all(spellable) {
+                continue;
+            }
+            checked += 1;
+            let key = &op.keys[index];
+            let hash: String = key
+                .signature_hash
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            let marker = format!("Rssn.invoke(\"{}\", \"{hash}\", ", op.name);
+            let declaration = text
+                .lines()
+                .find(|line| line.contains(&marker))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "overload {index} of `{}` has no declaration pinning its key",
+                        op.name
+                    )
+                });
+            // `fn name(params): Ret = Rssn.invoke(…)` or a nullary
+            // `let name: Ret = Rssn.invoke(…)`: the declared type is the last
+            // `: …` before the call.
+            let (signature_part, _) = declaration
+                .rsplit_once(" = Rssn.invoke(")
+                .unwrap_or_else(|| panic!("malformed declaration: {declaration}"));
+            let (_, declared_return) = signature_part
+                .rsplit_once(": ")
+                .unwrap_or_else(|| panic!("no declared return type: {declaration}"));
+            let expected_return = render_type(&signature.ret);
+            assert_eq!(
+                declared_return, expected_return,
+                "overload {index} of `{}` does not state its overlay return type: {declaration}",
+                op.name
+            );
+        }
+    }
+    assert!(
+        checked > 0,
+        "no overlay signature had a source-writable type to assert"
+    );
+}
+
+/// One `let` in `Units.aev` per manifest unit, or a comment saying the unit's
+/// every spelling is a keyword. A unit silently dropped here would not resolve
+/// from source even though the kernel knows it.
+#[test]
+fn the_units_module_covers_every_manifest_unit() {
+    let manifest = kernel::kernel().manifest();
+    let text = codegen::units(registry());
+    let bindings = text.lines().filter(|line| line.starts_with("let ")).count();
+    let unwritable = text
+        .lines()
+        .filter(|line| line.contains("cannot be written in Aevia source"))
+        .count();
+    assert_eq!(
+        bindings + unwritable,
+        manifest.units.len(),
+        "Units.aev covers {} of {} manifest units",
+        bindings + unwritable,
+        manifest.units.len()
+    );
+    // A module cannot define one name twice.
+    let mut names: Vec<&str> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("let "))
+        .filter_map(|line| line.split(':').next())
+        .collect();
+    let total = names.len();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), total, "a unit binding is declared twice");
+}
+
+/// One binding per manifest constant, and the generated capability flags are
+/// the bridge's one capability table — not a second list.
+#[test]
+fn the_constants_and_capabilities_are_the_manifests() {
+    let manifest = kernel::kernel().manifest();
+    let registry = registry();
+    let text = codegen::constants(registry);
+    let pi_binding = usize::from(
+        registry
+            .constants
+            .iter()
+            .any(|constant| constant.value.pi != 0),
+    );
+    let bindings = text.lines().filter(|line| line.starts_with("let ")).count();
+    assert_eq!(
+        bindings - pi_binding,
+        manifest.constants.len(),
+        "Constants.aev does not bind every manifest constant"
+    );
+
+    let operators = codegen::operators(registry);
+    for row in registry.capabilities.table() {
+        assert!(
+            operators.contains(&format!("let {}: Bool = {}", row.binding, row.enabled)),
+            "the generated module does not state capability `{}` as {}",
+            row.name,
+            row.enabled
+        );
+    }
 }
 
 /// Every quoted hash in the module is a key the manifest actually states, and
@@ -241,5 +533,132 @@ fn hbar_is_written_exactly() {
     assert!(
         longest <= 20,
         "a {longest}-digit expansion means the value was folded through f64"
+    );
+}
+
+/// A dimension parameter in an overlay signature is **spelled**, not hidden
+/// behind `Dyn<term>`: the manifest's `Real[T]` / `T^(1/2)` reaches the emitted
+/// source. This closes the codegen limitation documented in §10.0/§13.2.2.
+#[test]
+fn dimension_parameters_are_spelled_not_dyn() {
+    let text = codegen::operators(registry());
+    let first_line = |prefix: &str| -> String {
+        text.lines()
+            .find(|line| line.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no declaration starts with `{prefix}`"))
+            .to_string()
+    };
+    let wiener = first_line("fn sde_wiener(");
+    assert!(
+        wiener.contains("a3: Real[T]") && wiener.contains("Tensor<2, Real[T^(1/2)]>"),
+        "`sde_wiener` must keep its dimension parameter: {wiener}"
+    );
+    assert!(
+        !wiener.contains("Dyn<term>"),
+        "a dimension-parametric signature must not fall back to `Dyn`: {wiener}"
+    );
+    let areas = first_line("fn sde_levy_areas(");
+    assert!(
+        areas.contains("a1: Real[T]") && areas.contains("Tensor<1, Real[T]>"),
+        "`sde_levy_areas` must keep its dimension parameter: {areas}"
+    );
+    assert!(!areas.contains("Dyn<term>"), "{areas}");
+    // The unit argument is a dimension too: the kernel states `Unit[any]`, so
+    // the declaration spells the fresh variable instead of `Dyn<term>`.
+    for name in ["fn quantity(", "fn convert("] {
+        let line = first_line(name);
+        assert!(
+            line.contains("a1: Unit[T]"),
+            "`{name}` must spell its unit dimension: {line}"
+        );
+    }
+    // Count them live rather than pinning: the kernel may add dimension-
+    // parametric operators, and that is exactly what this test should accept.
+    let dimensioned = text
+        .lines()
+        .filter(|line| {
+            line.contains(" = Rssn.invoke(")
+                && ["Real[T", "Unit[T", "Point[T"]
+                    .iter()
+                    .any(|needle| line.contains(needle))
+        })
+        .count();
+    assert!(
+        dimensioned >= 4,
+        "only {dimensioned} declaration(s) carry a dimension variable"
+    );
+}
+
+/// The `Dyn<term>` fallback becomes *documented and narrow*: it stays only
+/// where Aevia source cannot state the type (unknown tensor rank, table row,
+/// host type, type parameter, or a kernel signature whose own type is `Dyn`).
+#[test]
+fn genuinely_open_types_still_say_dyn() {
+    use aevia_dim::{Dim, ratio};
+    use aevia_rssn::SigType;
+
+    let var = Dim::var(1);
+    assert_eq!(
+        codegen::declaration_type(&SigType::Dim(Box::new(SigType::Real), var.clone())),
+        "Real[T]"
+    );
+    let half = ratio(1, 2);
+    assert_eq!(
+        codegen::declaration_type(&SigType::Dim(
+            Box::new(SigType::Real),
+            var.clone().pow(&half)
+        )),
+        "Real[T^(1/2)]"
+    );
+    assert_eq!(
+        codegen::declaration_type(&SigType::Tensor {
+            rank: Some(2),
+            elem: Box::new(SigType::Dim(Box::new(SigType::Real), var.pow(&half))),
+        }),
+        "Tensor<2, Real[T^(1/2)]>"
+    );
+    // Genuinely unrepresentable in a declaration.
+    assert_eq!(
+        codegen::declaration_type(&SigType::Tensor {
+            rank: None,
+            elem: Box::new(SigType::Real),
+        }),
+        "Dyn<term>",
+        "an unknown tensor rank has no declaration spelling"
+    );
+    assert_eq!(codegen::declaration_type(&SigType::Table), "Dyn<term>");
+    assert_eq!(
+        codegen::declaration_type(&SigType::Opaque("HostType".to_string())),
+        "Dyn<term>"
+    );
+    assert_eq!(
+        codegen::declaration_type(&SigType::Var("a".to_string())),
+        "Dyn<term>"
+    );
+    // A manifest signature that itself says `Dyn` keeps saying it: the kernel
+    // deliberately leaves the representation unknown (`quantity`'s value arg).
+    let quantity = registry().op("quantity").expect("quantity is registered");
+    assert_eq!(
+        codegen::declaration_type(&quantity.signatures[0].params[0]),
+        "Dyn<term>",
+        "the manifest states `Dyn<term, any>` here; a declaration cannot be more precise than the kernel"
+    );
+}
+
+/// The precise spelling is not just text: a declaration using `Real[T]`,
+/// `Real[T^(1/2)]` and a dimensioned tensor parses and type-checks. This is the
+/// smallest independent proof that `--emit`'s new spelling is legal Aevia.
+#[test]
+fn a_dimension_parametric_declaration_type_checks() {
+    let source = "module DimSpelling\n\n\
+        fn f(a: Real[T]): Real[T^(1/2)] = sqrt(a)\n\
+        \n\
+        fn g(a: Tensor<2, Real[T]>): Tensor<2, Real[T]> = a\n";
+    let module = parse("DimSpelling.aev", source);
+    let checked = aevia_types::check_module(0, &module);
+    assert!(
+        !checked.diagnostics.has_errors(),
+        "the dimension-parametric spelling does not type-check: {}",
+        checked.diagnostics.render(&SourceMap::new())
     );
 }

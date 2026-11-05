@@ -1,0 +1,23 @@
+## `Physics.Geodesic` of §8.17/§8.20: the typed wrapper over the dynamic
+## `simulate` entry point.
+##
+## Same shape as `Physics.Ising`: the record is encoded with `to_json`, the
+## kernel scenario runs by name, and `from_json` produces the declared result.
+## The kernel owns the scenario registry, so no scenario list is duplicated.
+module Physics.Geodesic
+
+type Params = {
+    black_hole_mass: Float[M],
+    initial_state: Tensor<1, Float[1]>,
+    proper_time_end: Float[T],
+    initial_dt: Float[T],
+}
+
+type GeodesicResult = {
+    orbit: Tensor<2, Float[1]>,
+}
+
+fn run(p: Params): Result<GeodesicResult, SimError> =
+    match simulate("geodesic", to_json(p)) with
+    | Ok(json) -> from_json(json)
+    | Err(error) -> Err(error)

@@ -8,9 +8,27 @@
 //! Three files come out, because one file is one module: `Rssn.aev` for the
 //! operators and capabilities, `Units.aev` and `Constants.aev` for the two
 //! tables.
+//!
+//! # Dimension parameters in declarations
+//!
+//! A manifest signature can be dimension-parametric (`sde_wiener` takes
+//! `Real[T]` and returns `Tensor<2, Real[T^(1/2)]>`); the emitted declaration
+//! spells that with Aevia dimension variables (`T`, `T2`, …) rather than
+//! `Dyn<term>`, and the names are shared across the parameters and the result
+//! of one declaration. `Dyn<term>` is now only for genuinely unrepresentable
+//! types: a kernel signature that itself says `Dyn(rep, dim = any)` (the
+//! manifest deliberately leaves the representation and dimension open, e.g.
+//! `quantity`/`convert` values), a **rank-variable** tensor (`Tensor<n, τ>` — a
+//! declaration needs a concrete rank; the checker answers `E0304`, and the
+//! refined-shape spelling `Tensor<[n], τ>` fixes the rank instead), a type
+//! parameter, a table row, a device handle, a variant, a host opaque type, or
+//! `Never`. The generated module is a typed façade: each `Rssn.invoke` result
+//! is dynamically typed by the checker, so the module is checked with that one
+//! documented gap (see `tests/generated.rs::is_the_invoke_typing_gap`), while
+//! `Units.aev` and `Constants.aev` type-check cleanly.
 
 use crate::registry::{OpEntry, Registry, SigType, Source, render_type};
-use num_traits::One;
+use num_traits::{One, Signed};
 use std::fmt::Write as _;
 
 /// Renders the generated modules as `(file name, source)` pairs.
@@ -351,6 +369,7 @@ fn declaration(op: &OpEntry) -> String {
             continue;
         };
         let hash = hex(&key.signature_hash);
+        let mut dims = DimNames::default();
         if signature.params.is_empty() && signature.variadic.is_none() {
             // A nullary operator is a constant: `Rssn.E` reads better than
             // `Rssn.E()` and matches how the manifest names it.
@@ -358,7 +377,7 @@ fn declaration(op: &OpEntry) -> String {
                 out,
                 "let {name}: {ret} = Rssn.invoke(\"{op_name}\", \"{hash}\", [])",
                 name = value_name(&name),
-                ret = render(&signature.ret),
+                ret = render_with(&mut dims, &signature.ret),
                 op_name = escape(&op.name),
             );
             continue;
@@ -367,7 +386,9 @@ fn declaration(op: &OpEntry) -> String {
             .params
             .iter()
             .enumerate()
-            .map(|(position, ty)| format!("a{position}: {}", render(ty)))
+            .map(|(position, ty)| {
+                format!("a{position}: {}", render_with(&mut dims, ty))
+            })
             .collect();
         // The dynamic ABI takes `Value`s, so every argument crosses the
         // boundary through `to_value`, exactly as the specification writes it.
@@ -392,7 +413,7 @@ fn declaration(op: &OpEntry) -> String {
             out,
             "fn {name}({params}): {ret} = Rssn.invoke(\"{op_name}\", \"{hash}\", {args})",
             params = params.join(", "),
-            ret = render(&signature.ret),
+            ret = render_with(&mut dims, &signature.ret),
             op_name = escape(&op.name),
             args = arguments,
         );
@@ -411,47 +432,132 @@ fn stability(value: rssn::kernel::signature::Stability) -> &'static str {
 
 /// A type that can be written in a declaration.
 ///
-/// `render_type` is for humans and may say `Tensor<_, T>`; a declaration
-/// cannot, so an unknown rank or an unbound type parameter becomes `Dyn<term>`
-/// — "the kernel decides", which is the truth.
+/// Dimensions are the interesting part: a signature parameter can be a
+/// dimension *variable* (`Real[T]`, `Tensor<2, Real[T^(1/2)]>`), and the
+/// emitted source spells it with an Aevia dimension variable instead of
+/// falling back to `Dyn<term>`. A declaration cannot bind a dimension variable
+/// — it is implicitly quantified by the checker, exactly as `Float[T]` in a
+/// user signature is — so the names are local to the declaration and assigned
+/// in first-appearance order (`T`, `T2`, …), sharing one mapping across the
+/// parameters and the result.
+///
+/// `Dyn<term>` remains only where the Aevia source genuinely cannot state the
+/// type: an unknown tensor rank (`Tensor<_, τ>` has no declaration spelling), a
+/// type-parameter reference (`TypeParamKind::Type`), a table with an unknown
+/// row, a device handle, a variant, a host opaque type, or `Never`.
 fn render(ty: &SigType) -> String {
+    render_with(&mut DimNames::default(), ty)
+}
+
+/// The declaration spelling of one type, for conformance tests.
+///
+/// The same renderer `--emit` uses, so a test can pin the spelling of a
+/// hand-built `SigType` (including the `Dyn<term>` cases) without going through
+/// the live manifest.
+#[must_use]
+pub fn declaration_type(ty: &SigType) -> String {
+    render(ty)
+}
+
+/// Names for the dimension variables of one declaration (`T`, `T2`, …).
+#[derive(Default)]
+struct DimNames {
+    names: std::collections::BTreeMap<u32, String>,
+    next: usize,
+}
+
+impl DimNames {
+    fn name(&mut self, id: u32) -> String {
+        if let Some(name) = self.names.get(&id) {
+            return name.clone();
+        }
+        let name = if self.next == 0 {
+            "T".to_string()
+        } else {
+            format!("T{}", self.next + 1)
+        };
+        self.next += 1;
+        self.names.insert(id, name.clone());
+        name
+    }
+}
+
+fn render_with(dims: &mut DimNames, ty: &SigType) -> String {
     match ty {
         SigType::Tensor { rank: None, .. } | SigType::Sparse { rank: None, .. } => {
             "Dyn<term>".to_string()
         }
-        SigType::Tensor { rank, elem } => {
-            format!("Tensor<{}, {}>", rank.unwrap_or(1), render(elem))
-        }
-        SigType::Sparse { rank, elem } => {
-            format!("Tensor<{}, {}>", rank.unwrap_or(1), render(elem))
+        SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
+            format!("Tensor<{}, {}>", rank.unwrap_or(1), render_with(dims, elem))
         }
         SigType::Var(_) | SigType::Table | SigType::Device | SigType::Never => {
             "Dyn<term>".to_string()
         }
         // A host type has no Aevia spelling; the kernel decides.
         SigType::Opaque(_) => "Dyn<term>".to_string(),
-        // A dimension the signature does not pin down (`Real[Any]`) becomes a
-        // dimension variable in the mirror, and a variable has no source
-        // spelling: `Real[d16777216]` is not a type this language can write.
-        // The honest declaration is "the kernel decides".
-        SigType::Unit(dim) | SigType::Point(dim) if !dim.is_concrete() => "Dyn<term>".to_string(),
-        SigType::Dim(_, dim) if !dim.is_concrete() => "Dyn<term>".to_string(),
+        SigType::Unit(dim) => format!("Unit[{}]", render_dim(dims, dim)),
+        SigType::Point(dim) => format!("Point[{}]", render_dim(dims, dim)),
         SigType::Dim(inner, dim) => {
-            format!("{}[{}]", render(inner), dim.to_plain_string())
+            format!("{}[{}]", render_with(dims, inner), render_dim(dims, dim))
         }
         SigType::Func(params, ret) => {
-            let types: Vec<String> = params.iter().map(render).collect();
-            format!("({}) -> {}", types.join(", "), render(ret))
+            let types: Vec<String> = params.iter().map(|ty| render_with(dims, ty)).collect();
+            format!("({}) -> {}", types.join(", "), render_with(dims, ret))
         }
         SigType::Record(fields) => {
             let items: Vec<String> = fields
                 .iter()
-                .map(|(name, ty)| format!("{name}: {}", render(ty)))
+                .map(|(name, ty)| format!("{name}: {}", render_with(dims, ty)))
                 .collect();
             format!("{{ {} }}", items.join(", "))
         }
         SigType::Variant(_) => "Dyn<term>".to_string(),
         other => render_type(other),
+    }
+}
+
+/// The Aevia spelling of a dimension: canonical base names, and a generated
+/// variable name (`T`) for a dimension variable, so a declaration can state
+/// `Real[T^(1/2)]`.
+fn render_dim(dims: &mut DimNames, dim: &aevia_dim::Dim) -> String {
+    if dim.is_one() {
+        return "1".to_string();
+    }
+    if dim.is_concrete() {
+        return dim.to_plain_string();
+    }
+    let mut numerator = Vec::new();
+    let mut denominator = Vec::new();
+    for (atom, exponent) in dim.factors() {
+        let name = match atom {
+            aevia_dim::Atom::Base(name) => name.to_string(),
+            aevia_dim::Atom::Var(id) => dims.name(*id),
+        };
+        let (target, magnitude) = if exponent.is_negative() {
+            (&mut denominator, -exponent.clone())
+        } else {
+            (&mut numerator, exponent.clone())
+        };
+        if magnitude.is_one() {
+            target.push(name);
+        } else if magnitude.is_integer() {
+            target.push(format!("{name}^{}", magnitude.numer()));
+        } else {
+            target.push(format!(
+                "{name}^({})",
+                aevia_dim::format_rational(&magnitude)
+            ));
+        }
+    }
+    let numerator = if numerator.is_empty() {
+        "1".to_string()
+    } else {
+        numerator.join("*")
+    };
+    match denominator.len() {
+        0 => numerator,
+        1 => format!("{numerator}/{}", denominator[0]),
+        _ => format!("{numerator}/({})", denominator.join("*")),
     }
 }
 

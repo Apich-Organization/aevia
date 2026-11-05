@@ -1,0 +1,11 @@
+## The `Math/NumberTheory` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Math.NumberTheory
+
+let factor = factor
+let gcd = gcd
+let is_prime = is_prime
+let lcm = lcm
+let primes = primes

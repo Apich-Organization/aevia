@@ -242,6 +242,51 @@ impl Dim {
         })
     }
 
+    /// Renders with SI *symbols* (`m/s`, `m^(3/2)`, `1/T`), for value display.
+    ///
+    /// `aevia-core`'s value renderer uses this spelling for the suffix after a
+    /// scalar or tensor element. Negative exponents move into a denominator,
+    /// a product in the denominator is parenthesised, and a rational exponent is
+    /// parenthesised so the text still means the same dimension: a Brownian
+    /// increment is `s^(1/2)`, never `s^1` (§8.9.1). Variables keep the `d<id>`
+    /// spelling so display text cannot collide with a base name.
+    #[must_use]
+    pub fn to_si_symbol_string(&self) -> String {
+        if self.is_one() {
+            return String::new();
+        }
+        let mut numerator = Vec::new();
+        let mut denominator = Vec::new();
+        for (atom, exponent) in &self.factors {
+            let name = match atom {
+                Atom::Base(name) => si_symbol(name).to_string(),
+                Atom::Var(id) => format!("d{id}"),
+            };
+            let (target, magnitude) = if exponent.is_negative() {
+                (&mut denominator, -exponent.clone())
+            } else {
+                (&mut numerator, exponent.clone())
+            };
+            if magnitude.is_one() {
+                target.push(name);
+            } else if magnitude.is_integer() {
+                target.push(format!("{name}^{}", magnitude.numer()));
+            } else {
+                target.push(format!("{name}^({})", format_rational(&magnitude)));
+            }
+        }
+        let numerator = if numerator.is_empty() {
+            "1".to_string()
+        } else {
+            numerator.join("*")
+        };
+        match denominator.len() {
+            0 => numerator,
+            1 => format!("{numerator}/{}", denominator[0]),
+            _ => format!("{numerator}/({})", denominator.join("*")),
+        }
+    }
+
     /// Parses a dimension expression with canonical names.
     ///
     /// # Errors
@@ -300,6 +345,24 @@ fn format_exponent(exponent: &BigRational) -> String {
         exponent.numer().to_string()
     } else {
         format!("({})", format_rational(exponent))
+    }
+}
+
+/// The SI symbol of a canonical base dimension, for display.
+///
+/// A base that is not one of the seven SI generators (a user-declared
+/// `dimension` in a `DimEnv`, say) keeps its own name: inventing a symbol for
+/// it would make the display ambiguous.
+fn si_symbol(base: &str) -> &str {
+    match base {
+        "Length" => "m",
+        "Mass" => "kg",
+        "Time" => "s",
+        "Current" => "A",
+        "Temperature" => "K",
+        "Amount" => "mol",
+        "Luminosity" => "cd",
+        other => other,
     }
 }
 
@@ -855,5 +918,40 @@ mod tests {
         let dim = env.parse("M*L^2/T^2").unwrap();
         assert_eq!(dim.to_plain_string(), "Length^2*Mass/Time^2");
         assert_eq!(Dim::parse_plain(&dim.to_plain_string()).unwrap(), dim);
+    }
+
+    /// Value display uses SI symbols, and a rational exponent is parenthesised:
+    /// a Brownian increment over `dt` is `s^(1/2)`, and the old `s^1` spelling
+    /// silently claimed the wrong dimension (§8.9.1).
+    #[test]
+    fn si_symbols_keep_rational_exponents() {
+        let half = ratio(1, 2);
+        let minus_half = ratio(-1, 2);
+        let three_halves = ratio(3, 2);
+        let time = Dim::base("Time");
+        assert_eq!(time.pow(&half).to_si_symbol_string(), "s^(1/2)");
+        assert_eq!(
+            time.pow(&minus_half).to_si_symbol_string(),
+            "1/s^(1/2)"
+        );
+        assert_eq!(time.to_si_symbol_string(), "s");
+        let acceleration = Dim::base("Length").div(&time.pow(&ratio(2, 1)));
+        assert_eq!(acceleration.to_si_symbol_string(), "m/s^2");
+        assert_eq!(
+            Dim::base("Length").pow(&three_halves).to_si_symbol_string(),
+            "m^(3/2)"
+        );
+        let energy = Dim::base("Mass")
+            .mul(&Dim::base("Length").pow(&ratio(2, 1)))
+            .div(&time.pow(&ratio(2, 1)));
+        assert_eq!(energy.to_si_symbol_string(), "m^2*kg/s^2");
+        assert_eq!(Dim::one().to_si_symbol_string(), "");
+        // A dimension variable has no SI symbol; the display keeps it opaque.
+        assert_eq!(Dim::var(7).to_si_symbol_string(), "d7");
+        // The parenthesised form round-trips through the plain parser once the
+        // symbols are mapped back to the canonical generators.
+        let plain = time.pow(&half).to_plain_string();
+        assert_eq!(plain, "Time^(1/2)");
+        assert_eq!(Dim::parse_plain(&plain).unwrap(), time.pow(&half));
     }
 }

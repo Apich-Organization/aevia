@@ -1,0 +1,12 @@
+## The `FFT` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module FFT
+
+let fft = fft
+let fft_norm = fft_norm
+let fftfreq = fftfreq
+let ifft = ifft
+let irfft = irfft
+let rfft = rfft

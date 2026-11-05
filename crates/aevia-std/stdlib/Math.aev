@@ -1,0 +1,35 @@
+## The `Math` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Math
+
+let acos = acos
+let acosh = acosh
+let asin = asin
+let asinh = asinh
+let atan = atan
+let atan2 = atan2
+let atanh = atanh
+let cbrt = cbrt
+let cos = cos
+let cosh = cosh
+let curry = curry
+let e = e
+let exp = exp
+let hypot = hypot
+let i = i
+let ln = ln
+let log = log
+let log10 = log10
+let log2 = log2
+let nan = nan
+let oo = oo
+let partial = partial
+let pi = pi
+let sin = sin
+let sinh = sinh
+let sqrt = sqrt
+let tan = tan
+let tanh = tanh
+let uncurry = uncurry

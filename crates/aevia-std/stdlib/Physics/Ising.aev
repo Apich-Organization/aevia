@@ -1,0 +1,26 @@
+## `Physics.Ising` of §8.17/§8.20: the typed wrapper over the dynamic
+## `simulate` entry point.
+##
+## `simulate` is the JSON boundary (§8.17): `to_json` encodes the record, the
+## kernel runs the scenario, `from_json` decodes the answer into the declared
+## result type. No scenario list is written here — `"ising"` is the only
+## coupling, and the kernel owns the scenario registry.
+module Physics.Ising
+
+type Params = {
+    width: Int,
+    height: Int,
+    temperature: Float[1],
+    mc_steps: Int,
+    seed: Option<Int>,
+}
+
+type IsingResult = {
+    spins: Tensor<2, Int>,
+    magnetization: Float[1],
+}
+
+fn run(p: Params): Result<IsingResult, SimError> =
+    match simulate("ising", to_json(p)) with
+    | Ok(json) -> from_json(json)
+    | Err(error) -> Err(error)

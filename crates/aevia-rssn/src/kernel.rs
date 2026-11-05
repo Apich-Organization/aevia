@@ -232,6 +232,40 @@ impl Kernel {
         Val::from_rssn(&value, self.id)
     }
 
+    /// Calls a higher-order operator with **no host callbacks**.
+    ///
+    /// §8.19's `Rssn.call_ho` names a `Tensor<1, Callback>`. This build cannot
+    /// produce such a value: the kernel's
+    /// [`HostCallback`](rssn::kernel::plugin::HostCallback) is `Send + Sync`,
+    /// while Aevia's evaluator is a single-threaded `Rc` graph, so an Aevia
+    /// closure cannot cross as one. `core.callback` is therefore off, and the
+    /// runtime reports `E1001` naming it when a non-empty callback list
+    /// reaches the boundary.
+    ///
+    /// With an empty list the kernel's `call_ho` *is* the ordinary dynamic
+    /// call, so this method is the honest half that can be supported: it
+    /// forwards to `Session::call_ho(name, args, &[], ctx)`. A caller can
+    /// compare it with [`Kernel::call`] and must get the same answer; the test
+    /// `the_callback_free_call_ho_is_the_dynamic_call` does exactly that.
+    ///
+    /// # Errors
+    ///
+    /// `E1001("core.dynamic_call")` when the build has no name-based ABI, plus
+    /// whatever the kernel reports.
+    pub fn call_ho(&self, name: &str, args: &[Val]) -> Result<Val, KernelError> {
+        let registry = crate::registry::registry();
+        registry.capabilities.require("core.dynamic_call")?;
+        if let Some(entry) = registry.op(name) {
+            registry.capabilities.require_op(entry)?;
+        }
+        let converted = self.convert(name, args)?;
+        let value = self
+            .session
+            .call_ho(name, &converted, &[], &CallCtx::new())
+            .map_err(|error| from_op_error(&error).at_operator(name))?;
+        Val::from_rssn(&value, self.id)
+    }
+
     /// The solver's structured answer for `equation = 0`, as §8.6's record.
     ///
     /// `operator` is `solve` or `solve_complex`. `solve` goes through the

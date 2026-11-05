@@ -1,0 +1,23 @@
+## The `Data` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Data
+
+let column = column
+let column_dyn = column_dyn
+let filter = filter
+let join = join
+let read_csv = read_csv
+let read_csv_dyn = read_csv_dyn
+let read_json = read_json
+let read_npy = read_npy
+let row = row
+let schema = schema
+let select = select
+let to_dynamic = to_dynamic
+let to_table = to_table
+let write_csv = write_csv
+let write_json = write_json
+let write_npy = write_npy
+type Table<a> = Table<a>

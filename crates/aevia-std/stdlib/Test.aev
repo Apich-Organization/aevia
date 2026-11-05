@@ -1,0 +1,11 @@
+## The `Test` module of §8.20.
+##
+## Generated from `spec/08-stdlib.md`; do not edit.
+## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+module Test
+
+let approx_eq = approx_eq
+let assert = assert
+let assert_eq = assert_eq
+let compile_fail = compile_fail
+let forall = forall
