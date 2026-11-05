@@ -25,6 +25,24 @@ Rssn.dynamic("myplugin_softplus", args)  # 插件/叶子：没有签名
   （`check_args`，参数不被任何 overload 接受时报 `OpError::Type`），但
   不做 Aevia 的完整类型/量纲检查，那由静态检查器或 `Rssn.typed` 负责；
 - 新算子只要在 RSSN 注册，下一次构建就出现，不需要改 Aevia 编译器；
+- `aevia rssn --emit` 的**源码拼写现在也是精确的**（task-31）：维度参数写成
+  Aevia 的量纲变量（`Real[T]`、`Real[T^(1/2)]`、`Tensor<2, Real[T^(1/2)]>`、
+  `Unit[T]`），变量名在声明内局部（`T`、`T2`…）并**在参数与返回间共享**
+  ——`sde_wiener(a3: Real[T]): Tensor<2, Real[T^(1/2)]>` 里的 `T` 与
+  `T^(1/2)` 是同一个变量。`Dyn<term>` 只保留在**确实无法拼写**的地方：
+  manifest 自己声明为 `Dyn(rep, any)` 的签名（`quantity`/`convert` 的值参数
+  与结果、以及 derived 签名）、**秩变量张量**（`transpose`/`rank`/`dot`/
+  `norm`/`sum`；Aevia 声明需要具体秩，`Tensor<n, τ>` 是 `E0304`）、类型
+  参数、未知行 `Table`、`Device`、变体、host opaque、`Never`。生成的
+  `Units.aev`/`Constants.aev` 无条件通过 check；`Rssn.aev` 也通过——生成器
+  对每条声明只发**字面量** `op` + `key` 的 `Rssn.invoke`，checker 按 pinned
+  overload 校验这两个字面量并把结果类型定为该 overload 的声明结果（每次调用
+  新维度变量；`Rssn.sde_wiener` → `Tensor<2, Real[T^(1/2)]>`）。非字面量
+  key 保持动态 `Value`，运行时答 `E1002`/`E1003`/`E1005`；checker 不重新
+  解析或执行该 key（见 §13.2.2）。这套验收在**干净进程**里由
+  `aevia-rssn` 的 `emit_typecheck`（`the_emitted_modules_type_check_with_no_diagnostics`）
+  断言：emit 后三个生成模块 **0 diagnostics**；`cargo test -p aevia-rssn`
+  为 78 项通过；
 - 静态重载用 `OpKey { rule_set, name, signature_hash }`；typed 调用走
   `Rssn.call_key(key, …)` 钉死重载；dynamic 调用走 `call_value`，多注册时
   按 `Match` 格选、并列报 `E1002`（§13.4.1）。`resolve_overload` 只用于
@@ -52,10 +70,20 @@ let answer = s.compute(diff(sin(x) * cos(x), x), &Config::new())?;
   `diagnostics`、`report`。
 - `Term::eval(bindings)` 不做重写，直接数值求值。
 - `Term::compile(inputs)` 把闭式编译成可调用函数；`jit` feature 用
-  Cranelift。
+  Cranelift（0.137）。
 - `Term::as_tensor()` 把嵌套 `list` 项转成 `(shape, Vec<f64>)`。
 - `Term::to_latex()`/`to_typst()`/`to_pretty()` 输出排版。
-- `sim::scenario::run(name, json)` 运行物理仿真。
+- `sim::scenario::run(name, json)` 运行物理仿真；
+  `sim::scenario::SCENARIOS` 是场景名的唯一来源（2026-11-04 测量 29 个）。
+- `Session::register_unit(UnitDef)` 把单位注册进该 session 的 registry；
+  `Session::manifest()` 用 `KernelManifest::build_with_units` 生成，所以
+  session 私有单位会出现在 manifest 里。
+- **SDE manifest 面**：`rules::sde` 把三个无回调算子暴露成 manifest 算子
+  （两个噪声原语 `sde_wiener`/`sde_levy_areas`，加方案元数据
+  `sde_scheme_info(name) -> Tensor<1, Real>`）；`features.sde` 为
+  true 时宿主可用 capability `core.sde`。SDE **求解循环**需要 host 回调
+  （`&Fn + Sync`），不在 manifest 里（kernel CO-03）；Aevia 的
+  `sdeint_diag`/`sdeint_general` 在宿主侧调用 `kernels::sde`。
 
 Aevia 直接复用的部分：
 
@@ -65,6 +93,7 @@ Aevia 直接复用的部分：
 | 项构造与 hash-consing | `graph::Graph`、`Session::call_value`/`Session::parse` |
 | 重写引擎与规则集 | `graph::Engine`、`rules::*` |
 | 微积分/代数/方程/ODE/PDE | `rules::calculus`、`solve`、`ode`、`pde` 等 |
+| SDE 噪声原语 | `rules::sde`（manifest 算子）、`kernels::sde`（积分器） |
 | 量纲推断 | `graph::dim` |
 | 单位解析 | `rules::units` |
 | 数值内核 | `kernels::*` |
@@ -118,8 +147,11 @@ let term = session.sym(&name);
   hash-consing。
 - 符号的假设（`positive`、`real`、`integer`）通过 `Config::assume` 传入；
   Aevia 的 `assuming` 把简单 `Prop`（`x > 0`、`x >= 0`、`x != 0`、
-  `x ∈ ℤ`）转成 `Facts`。一般等式/不等式通过 `Rssn.assume` 动态接口传给
-  RSSN；后端不支持时返回 `E1001`（`core.assume.general`），而不是静默丢弃。
+  `x ∈ ℤ`）转成 `Facts`。**一般等式/不等式目前没有语言入口**：`Rssn`
+  的固定成员里没有 `assume`（§8.19），运行时也没有对应 arm；后端也没有
+  `core.assume.general` 能力行。所以 `assuming` 之外的假设不可用，不是
+  “传给 RSSN 后返回 E1001”。（把一般假设暴露成 `Rssn.assume` 是待定的
+  扩展，需要同时定义 capability 行。）
 
 ## 10.3 算子映射：生成的 façade，不是手写绑定
 
@@ -144,10 +176,11 @@ manifest 生成；新算子不需要改这些表。表格用来解释 Aevia 的�
 | `ln(a)` | `ln(a)` |
 | `atan2(y,x)` | `atan2(y, x)` |
 
-`Session::call_value(name, args)` 构造项并只做该算子自身的局部重写（`add`
-就是一次 n 元展平），不跑全局重写循环；整段表达式用 `Session::parse`。
-0.2.13 **没有** `Session::call`（`Kernel` trait 的 `call` 收 `&OpKey`，只按
-name 分发）。Aevia 的 `+` 在 `Real`/`Float` 符号路径上就是一次
+`Session::call_value(name, args)` 解析重载、校验参数，再构造项并只做该算子
+自身的局部重写（`add` 就是一次 n 元展平），不跑全局重写循环；整段表达式
+用 `Session::parse`。`Kernel::call(&OpKey, …)` 转发 `call_key`，**钉死**
+`OpKey` 指向的重载，不再只按 name 分发；`Kernel::call_ho` 同样按 key 找
+注册。Aevia 的 `+` 在 `Real`/`Float` 符号路径上就是一次
 `call_value("add", ...)`。
 
 ### 10.3.2 重型请求
@@ -176,6 +209,7 @@ name 分发）。Aevia 的 `+` 在 `Real`/`Float` 符号路径上就是一次
 |---|---|
 | `defint`（数值） | `kernels::quadrature` |
 | `odeint` | `kernels::ode` / `sim::integrators` |
+| `sdeint_diag`/`sdeint_general` | `kernels::sde`（Aevia 侧包装；噪声原语 `sde_wiener`/`sde_levy_areas` 与方案元数据 `sde_scheme_info` 是 manifest 算子） |
 | `fft` | `kernels::fft`（rustfft） |
 | `eig`/`svd`/`qr`/`lu` | `kernels`/`faer` |
 | `interp1`/`spline` | `kernels` |
@@ -237,11 +271,14 @@ Aevia 的静态路径不依赖它。单位只在两个边界出现：
 let json = rssn::sim::scenario::run("ising", params)?;
 ```
 
-Aevia 的 `simulate(name, json)` 直接调用；`Physics.*` 包装器由 RSSN 的
-场景 manifest 生成（名称、参数 schema、返回 schema），新增场景不需要手写
-Aevia 包装。`ising` 返回扁平的 `Vec<i8>`，包装器按 `width`/`height` 行主序
-reshape 成 `Tensor<2, Int>`；`sim` 的错误是字符串，包装器按前缀映射成
-`SimError` 枚举。
+Aevia 的 `simulate(name, json)` 直接调用；场景名的唯一来源是 kernel 的
+`sim::scenario::SCENARIOS`（本次测量 29 个，含 `ising_wolff`），宿主不手写
+第二份清单。`Physics.*` 的类型化包装器是**Aevia 源模块**（§8.17），内部调用
+`simulate` 并把记录与 JSON 互相转换；kernel 目前的场景参数仍是 JSON，
+`ScenarioSchema`（DESIGN.md §9 的设计）尚未实现，所以包装器不是从“场景
+manifest”自动生成的——新增场景需要新增一个包装模块。`ising` 返回扁平的
+`Vec<i8>`，包装器按 `width`/`height` 行主序 reshape 成 `Tensor<2, Int>`；
+`sim` 的错误是字符串，包装器按前缀映射成 `SimError` 枚举。
 
 ## 10.4 量纲桥
 
@@ -258,8 +295,8 @@ reshape 成 `Tensor<2, Int>`；`sim` 的错误是字符串，包装器按前缀�
 只有以下场景需要把量纲交给 rssn：
 
 - `Dyn<ρ>` 的运行时检查：宿主保存 `rssn::dim::DimTerm`，不依赖字符串；
-- FFI/导出：优先用 `Config::dimension_term(symbol, DimExpr)`（0.2.13 起
-  存在，不解析文本，未知基名会被 intern）。只有纯文本入口
+- FFI/导出：优先用 `Config::dimension_term(symbol, DimExpr)`（不解析文本，
+  未知基名会被 intern）。只有纯文本入口
   `Config::dimension(symbol, text)` 才必须传**全名**（`Length`、`Mass`、
   `Time`、`Current`、`Temperature`、`Amount`、`Luminosity`），**绝不使用
   单字母**（`L` 是升，`T` 是特斯拉，`N` 是牛顿，`J` 是焦耳）。静态路径
@@ -295,24 +332,24 @@ Aevia 不暴露 `bypass` 给普通用户；`Dyn<ρ>` 是显式逃逸。
 
 ### 10.5.1 Session 不是 `Sync`
 
-`Session` 内部是 `RefCell`，`Term<'s>` 借用 `Session`。Aevia 的桥：
+`Session` 内部是 `RefCell`，`Term<'s>` 借用 `Session`。Aevia 的桥把内核会话
+放在**线程本地**（`aevia-rssn` 的 `kernel()`）：
 
 ```rust
 thread_local! {
-    static BRIDGE: RefCell<RssnBridge> = RefCell::new(RssnBridge::new());
+    static KERNEL: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
 }
 
-struct RssnBridge {
-    session: Session,
-    symbols: HashMap<SymbolKey, u32>,   // TermId
-    configs: HashMap<ConfigKey, Config>,
-}
+pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创建
 ```
 
-- 每个线程一个 bridge；`par_map` 的工作线程各自初始化。
-- 符号值跨线程传递时，`TermId` 不能直接复用；需要重新构造（用项文本或
-  结构化复制）。当前 RSSN `Session` 单线程；Aevia 用 `fork/merge` 支持符号并行，数值张量直接并行。
-- `compute_all` 在单会话内并行；Aevia 用它批量处理独立的重型请求。
+- 每个线程一个内核会话；`par_map` 的“工作线程”因此会各自创建会话（当前
+  `par_map` 顺序执行，见 §9.7.2，所以实际只用一个会话）。
+- 符号值跨线程传递时，kernel `TermRef` 带 `SessionId`，别的会话的 handle 会被
+  拒绝（`OpError::ForeignTerm`）；当前桥不跨线程共享符号值，也不使用
+  `Session::fork`/`merge`——`fork/merge` 只是 kernel 提供的原语。
+- `compute_all` 在单会话内并行，但**当前 Aevia 桥没有用它**：批量请求按顺序
+  逐个调用；需要并行时应在宿主侧按线程分配会话，而不是假设桥已经这样做。
 
 ### 10.5.2 项的生命周期
 
@@ -342,7 +379,9 @@ struct RssnBridge {
 
 ### 10.6.3 批处理
 
-- 多个独立重型请求用 `compute_all`；它在一个会话内并行准备/运行/导入。
+- `compute_all` 可以在一个会话内并行准备/运行/导入多个独立请求；**当前
+  Aevia 桥没有使用它**，批量请求按顺序逐个调 `compute`。这是已记录的
+  性能缺口，不是语义差异。
 - 张量逐元素符号运算不要用 `compute_all`（每个元素一个请求，开销大）；
   用 `map` 构造项，最后一次性 `simplify`。
 - 数值张量用 `F64` 路径，不进项图。
@@ -370,14 +409,18 @@ struct RssnBridge {
 
 ## 10.8 已知缺口与风险（适配后）
 
-RSSN 0.2.13（commit `95099fa0`）已经实现 Manifest、动态
+**下面的数字是测量（2026-11-04，`rssn 3.0.0-rc.1`），live manifest 是唯一
+事实来源。** RSSN 已实现 Manifest、动态
 `Value`/`call_value`/`call_key`、重载解析、**100% 签名覆盖**（Declared/
 Overlay/Derived）、物理常数表、cdylib 插件 ABI、`rssn::dim`、自定义基量纲、
 `Config::dimension_term`、`Term` 遍历/替换、`fork/merge`、结构化结果和
-JIT lowering。下面只列**仍然存在**的集成缺口；已关闭的旧缺口不再重复
-（构建阻塞、`UnitValue` 元数据、重载只按 arity、`dimension_term` 缺失、
-`TypeExpr::Symbol` 缺失、`Solutions.complete` 硬编码、ODE `dimensions`
-丢字段、CODATA 常数缺失、自定义基量纲单位注册、cdylib 未实现，均已关闭）。
+JIT lowering。本轮实测：1382 算子 / 32 rule set / 32 精确（7 declared +
+25 overlay）/ 1350 derived / 82 单位 / 30 常数（18 精确）/
+`manifest_hash = 8d2c3764…`。下面只列**仍然存在**的集成缺口；已关闭的旧
+缺口不再重复（构建阻塞、`UnitValue` 元数据、重载只按 arity、
+`dimension_term` 缺失、`TypeExpr::Symbol` 缺失、`Solutions.complete`
+硬编码、ODE `dimensions` 丢字段、CODATA 常数缺失、自定义基量纲单位注册、
+cdylib 未实现、单位表缺 §5.3.3 的七项，均已关闭）。
 
 1. **`Session` 单线程。** `Session` 仍是 `RefCell`；跨线程要用
    `fork/merge`，不是共享会话。`par_map` 对符号值必须 fork/merge。
@@ -388,13 +431,16 @@ JIT lowering。下面只列**仍然存在**的集成缺口；已关闭的旧缺�
    第一次写才 detach，所以 `prepare` 里的 `define_base_dimension` 是隔离
    的；但如果直接改 `Session` 的模板图，就会影响后续所有请求。Aevia 只用
    `Config::base_dimension`，不碰模板。
-4. **JIT 默认关闭。** `Select`/`Extern1`/`Gather` 已 lowering，但默认
-   构建 `features.jit=false`；`@jit` 必须读 `Features`，否则报
-   `E1001("core.jit")`。
+4. **JIT 默认关闭。** `Select`/`Extern1`/`Extern2`/`Gather` 已 lowering
+   （Cranelift 0.137，由 `jit` feature 门控），但默认构建
+   `features.jit=false`；`@jit` 必须读 `Features`，否则报
+   `E1001("core.jit")`（checker 侧门控）。
 5. **`Solutions` 的两个“未报告”语义。** `multiplicities` 为空表示未报告，
-   不能填 1。`complete` 在 `solve_structured` 里按“是否 `list(...)`”区分；
-   `Solutions::new` 现在默认 `false`，要声明穷尽得显式 `.complete()`。
-   Aevia 自己构造时不要无条件声明穷尽。
+   不能填 1。但 kernel 现在**在能证明时填它**：一元有理多项式 + 全部根是
+   精确数时，用精确 square-free 分解给重数；`conditions` 只填构造上可声明
+   的条件（如 `-b/a` 的 `a != 0`）。`complete` 在 `solve_structured` 里按
+   “是否 `list(...)`”区分；`Solutions::new` 默认 `false`，要声明穷尽得显式
+   `.complete()`。Aevia 自己构造时不要无条件声明穷尽。
 6. **ODE 事件的方法差异已缩小。** `Dopri5`、`Radau5`、`BDF`、
    `Rosenbrock23` 与定步长（`solve_fixed_events`，覆盖 Euler/Heun/RK4）
    都能定位事件；差别只剩“定步长需要 `steps`”和事件定位的精度。
@@ -402,49 +448,98 @@ JIT lowering。下面只列**仍然存在**的集成缺口；已关闭的旧缺�
    `Units.Constants` 可从它生成；但它们不在 `UnitRegistry` 里，不能当单位
    参与 `quantity` 解析。`e` 是基本电荷，与 `Math.e` 同名，`open` 两个模块
    时 `e` 必须限定。
-8. **100% typed，但只有 20 个精确。** 7 declared + 13 overlay 是精确的；
-   1349 个 `Derived` 只区分“数值 `(Real,…)` / 符号 `(Term,…)`”，不区分
-   `Tensor`/`Quantity`/`Int`。Aevia 可以给全部 1369 个生成 typed 声明，
+8. **100% typed，但只有 32 个精确。** 7 declared + 25 overlay 是精确的；
+   1350 个 `Derived` 只区分“数值 `(Real,…)` / 符号 `(Term,…)`”，不区分
+   `Tensor`/`Quantity`/`Int`。Aevia 可以给全部 1382 个生成 typed 声明，
    但必须把 `Derived` 标成“保守推断”，否则 `det` 只会是
    `(Term) -> Term`（它是 HEAVY 请求，没有数值重载）。
-9. **`assuming` 仍以单元谓词为主。** 一般等式/不等式走
-    `Rssn.assume` 动态入口；后端缺失报 `E1001`。
+9. **`assuming` 仍以单元谓词为主。** 一般等式/不等式**没有语言入口**
+   （`Rssn` 没有 `assume` 成员，见 §10.2.2）；后端也没有
+   `core.assume.general` 能力行。不是“走动态入口后返回 E1001”。
 10. **复数表示。** `Value::Complex` 有 `Exact`/`Float`，但 `Number` 仍
     没有复数；符号复数靠 `i` 项，数值复数靠 `Complex64`。两条路径需在
     Aevia 侧统一。
-11. **符号指数：写得进、读不回，语言仍不支持。** `DimExpr::to_term` 现在
-    把 `Length^n` intern 成原子，所以能写入项图；但 `DimTerm::factors()`/
-    `from_term` 只遍历常量指数，符号原子会被**静默丢弃**，不是往返。
+11. **符号指数：桥接可往返，语言仍不支持。** `DimExpr::to_term` 把
+    `Length^n` intern 成原子；`DimExpr::try_from_term` 是 term 可表示量纲的
+    精确逆，`from_term` 是全函数版（读不回给 `Any`，不静默丢因子）。
     Aevia 的静态类型位置仍只接受有理指数（§4.12.3）。不要把“后端能表示”
-    误读成“语言该支持”，也不要用 `from_term` 回读含符号指数的量纲。
+    误读成“语言该支持”。
 12. **仿真 JSON schema。** `SimResult` 有结构化结果，但场景参数仍是
-    JSON；Aevia 的 `Physics.*` 由 manifest/schema 生成，不能手写。
+    JSON；kernel 的 `ScenarioSchema`（DESIGN.md §9 的设计）尚未实现，所以
+    Aevia 的 `Physics.*` 是源模块包装器，不能从 manifest 自动生成；新增
+    场景需要新增包装模块。
 13. **预算/中断。** rssn 的预算在 `compute` 内；Aevia 外层超时/取消是
     协作式的，不能强杀。
-14. **版本漂移。** `api_version=1`、`rssn 0.2.13`；Aevia 必须 pin
-    `api_version` + `manifest_hash`，并跑 conformance。
+14. **版本漂移。** `api_version=1`、`rssn 3.0.0-rc.1`；Aevia 必须 pin
+    `api_version` + `manifest_hash`，并跑 conformance。rc 周期内 manifest
+    仍可能变化，所以文档数字是测量而不是常量。
 15. **`manifest_hash` 是 bincode BLAKE3，有两种取法。**
-    `hash_hex()` 是 64 个 hex 字符（`98fd35fa…`），宿主应该 pin 它；
-    `hash_u64()` 是前 8 字节按**小端**读出的 u64（`f03babb1fa35fd98`），
-    只用于 ABI/显示。两者不可互换。JSON 只供人读，不能对 JSON 文本做
-    哈希/比较。
+    `hash_hex()` 是 64 个 hex 字符（本轮测量 `8d2c37640f409249…`），宿主
+    应该 pin 它；`hash_u64()` 是前 8 字节按**小端**读出的 u64
+    （`4992400f64372c8d`），只用于 ABI/显示。两者不可互换。JSON 只供人读，
+    不能对 JSON 文本做哈希/比较。
 16. **自定义基量纲要经 `Config` 声明。** `expr_to_dim` 已接受任意基名，
     但 `DimTerm` 只能为 `DimArena` 里已有的基名生成；Aevia 对每个
     `dimension` 发 `Config::base_dimension(name)`，`prepare` 会在克隆图上
     定义它。不要直接改模板图的 arena。
 17. **`Value` 的可入项图性按 `manifest.value_kinds` 走。**
-    `term_of_value` 对 Sparse/Record/Variant/Function/Opaque 返回
-    `Unsupported`，`Complex` 仅虚部为 0 时可入图；稀疏运算必须走
-    `eval_dyn` 或 Aevia 本地布局内核。生成器不要硬编码这张表。
+    `term_of_value` 对 `Sparse`/`Record`/`Variant`/`Function`/`Opaque` 返回
+    `Unsupported`；`Complex` 仅虚部为 0 时可入图；`Unit` 是定义不是数
+    （17 个变体中 10 个可入图、7 个不可），要过边界用
+    `quantity(value, unit)`。稀疏运算必须走 `eval_dyn` 或 Aevia 本地布局
+    内核。生成器不要硬编码这张表。
+18. **两个 Aevia 侧 bridge capability 缺口。** `core.callback`：Aevia 闭包
+    不满足 kernel `HostCallback` 的 `Send + Sync`，`Rssn.call_ho` 的非空
+    回调列表报 `E1001`；`core.plugin.source`：Aevia 源码 `@op` 打包未实现，
+    `Rssn.register`/`register_plugin` 报 `E1001`（Rust host 插件仍经嵌入 API
+    注册）。两者是 capability 表里的行，`enabled = false`；缺的是 Aevia 侧
+    的值构造，不是 kernel 接口。
+19. **单位属于 session。** `Session::register_unit` 注册的单位只出现在该
+    session 的 manifest（`KernelManifest::build_with_units`）；进程级
+    `KernelManifest::build` 给出不同的单位表与 hash。插件注册的单位只属于
+    安装该插件的 session，Aevia 必须用 `Session::manifest()`。
+20. **SDE：manifest 只暴露噪声原语 + 方案元数据，求解循环保持 Rust-only。**
+    本轮 `Features`
+    新增 `sde: bool`（true），宿主 capability 名 `core.sde`；
+    `sde_wiener`/`sde_levy_areas` 是 overlay 精确签名（`RootOf{2,3}` /
+    `Same(1)`），**`sde_scheme_info(name) -> Tensor<1, Real>`** 是本轮新增的
+    第三个 SDE manifest 算子（方案元数据：强阶 + Itô/交换/自适应/Lévy 面积
+    四个 flag，dim rule `NonMetric`；无回调，所以能进 manifest），typed 声明
+    随 manifest 自动出现；它是 **manifest-only 的元数据查询**，不是求解
+    路径（求解循环仍 Rust-only），且**只给强阶、没有弱阶**——弱阶在宿主侧
+    `sde_order`（返回 `{strong, weak}`）里，两者互补。它覆盖 kernel 的
+    8 个方案（6 个定步长/Stratonovich + 2 个自适应行，snake_case 名字）。
+    生成源对维度变量的签名现在也是精确的：`sde_wiener` 的声明是
+    `(Int, Int, Int, Real[T]) -> Tensor<2, Real[T^(1/2)]>`、
+    `sde_levy_areas` 是 `(Int, Real[T], Tensor<1, Real>, Int) ->
+    Tensor<1, Real[T]>`（声明内共享同一维度变量映射）；`Dyn<term>` 只为
+    manifest 自己开放的类型（`Dyn(rep, any)`、秩变量张量、类型参数、未知行
+    Table、Device、变体、opaque、Never）保留，见 §10.0。manifest 仍是唯一
+    精确来源。
+    求解器需要 `&Fn + Sync` host 闭包，manifest 的 `Value` ABI 传不了，
+    所以 kernel 的 CO-03 把求解循环、ensemble 统计、host-callback drift 和
+    `FnMut` adapter 留在宿主侧；Aevia 的 `sdeint_*` 不是 `Rssn` 算子。
+    **宿主侧已落地**：`aevia-std::sde` 实现六种方法与 fixed/adaptive 求解，
+    `aevia-core` 负责 dispatch/记录展平（`sde_runtime` 10/10 通过，
+    源码级 `sde_language` 5/5 通过），`core.sde` 在本构建 enabled；
+    **源码级策略记录也已验证可用**（`Sde.Fixed`/`Sde.Adaptive` +
+    `Sde.Diagonal`/`Sde.General(m)` 通过检查并跑出路径，见 §13.2.2 状态）；
+    记录状态 + 一般噪声在语言层是 checker 的 `E0302`，运行时的
+    `E1001("sde.general.record")` 只保留给宿主层直接调 builtin 的路径。
+    记录顺序/一致性见 §10.3.7。
+    `manifest_hash` 变化一方面因为 `Features` 多了这个字段，另一方面本轮
+    加了 `sde_scheme_info`（hash 从 `8ed92a22…` 变为 `8d2c3764…`）。
 
 ### 10.8.1 缓解措施
 
 - **一致性测试**：对每个标准算子，比较 Aevia 静态量纲与 rssn
   `Answer.dimension`；不一致即失败。
-- **单位表校验**：启动时逐项比较基单位/派生单位/仿射单位。
+- **单位表校验**：启动时逐项比较基单位/派生单位/仿射单位，并且只以
+  `manifest.units`（本次测量 82 项）为准。
 - **回退路径**：JIT 失败回退解释器；符号求解失败返回 `Err`，不 panic。
 - **预算默认值**：2 s / 1e6 重写；用户可调。
-- **版本 pin**：`Cargo.toml` 固定 rssn 次版本；升级时跑全量 conformance。
+- **版本 pin**：pin `api_version` + `hash_hex()`；升级时跑全量 conformance；
+  不把文档里的算子/单位计数写进缓存键。
 - **桥接层隔离**：所有 rssn 调用集中在 `aevia-rssn`，上层不直接依赖
   `rssn` 类型。
 
@@ -462,11 +557,18 @@ fn fall_time(h: Float[L]): Float[T] =
 3. 函数体：`2 * h` 构造 `mul(2, h)` 项；`/ g` 构造 `mul(..., pow(g,-1))`；
    `sqrt` 构造 `sqrt(...)` 项。这些都是 `Session::call_value`（只做局部
    重写），不 `compute`。
-4. 返回 `Float` 值（`g` 是 `Float` 常量，`2*h/g` 折叠为浮点数；
-   `sqrt` 对 `Float` 永远走 f64，负数得 NaN，不会保持符号）。
-5. `println` 调用 `show`：直接得到 `2.019`，按显示单位 `s` 打印。
+4. 返回 `Float` 值：`g` 是 `Float` 常量，`2*h/g` 折叠为浮点数；`sqrt` 对
+   `Float` 永远走 f64，负数得 NaN，不会保持符号。
+5. `println` 调用 `show`：直接得到 `2.01962…`，按显示单位 `s` 打印。
 6. 如果用户写 `approx(fall_time(20.0 m))`：`compute` 以 `Numeric` 目标运行，
    rssn 返回数值球，Aevia 取中点。
+
+> **规范 vs 当前实现的偏差（记录在附录 C）**：上面的 4–5 是**设计语义**
+> ——静态 `Float` 的值在运行时就是 f64。当前实现把十进制**量纲字面量**在
+> 编译期折叠为精确有理数（`20.0 m` 的值是精确的 20），即使静态类型是
+> `Float[L]`；于是 `sqrt` 看到精确参数、保持符号，`fall_time(20.0 m)` 打印
+> 为 `sqrt(800000/196133) s`，`approx(...)` 才给出数值。这是实现偏差，不是
+> 本章语义。
 
 这个链条展示了 Aevia 的核心性能策略：**类型/量纲在编译期，算术在项构造，
 重型求解才进 e-graph，数值热点走 f64/JIT**。

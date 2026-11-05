@@ -45,7 +45,7 @@ help: did you mean `2 * h / g`?
 | `E0105` | invalid character | 删除/替换 |
 | `E0106` | invalid numeric literal | 检查下划线/指数 |
 | `E0107` | invalid superscript sequence | 用 `^n` |
-| `E0108` | expected a unit after numeric literal | 写 `3 * x` 或补单位 |
+| `E0108` | expected a unit after numeric literal | 写 `3 * x` 或补单位；`3 (2)` 的括号内必须是单位表达式 |
 
 ## B.4 语法错误（E02xx）
 
@@ -57,7 +57,7 @@ help: did you mean `2 * h / g`?
 | `E0204` | invalid pattern | 检查构造器/字段 |
 | `E0205` | invalid operator section | 用 `(+)` 或 lambda |
 | `E0206` | reserved word used as identifier | 改名 |
-| `E0207` | ambiguous type application | 在 `<` 前加空格或加括号 |
+| `E0207` | ambiguous type application | 在 `<` 前加空格或给 callee 加括号 |
 | `E0208` | duplicate field | 删除重复字段 |
 | `E0209` | invalid unit literal | 检查单位表达式 |
 | `E0210` | unknown attribute | 检查属性名/参数 |
@@ -67,9 +67,9 @@ help: did you mean `2 * h / g`?
 | 代码 | 消息 | 典型修复 |
 |---|---|---|
 | `E0301` | unbound name | 导入/拼写 |
-| `E0302` | type mismatch | 检查标注/参数 |
+| `E0302` | type mismatch | 检查标注/参数；类型级 `Nat` 方程无解也报此码 |
 | `E0303` | infinite type (occurs check) | 加标注/改递归 |
-| `E0304` | ambiguous type | 加类型标注 |
+| `E0304` | ambiguous type | 加类型标注；未能解出的 `Nat` 变量、非线性 `Nat` 方程、无 binder 的 shape 变量也报此码 |
 | `E0305` | not a function | 检查调用 |
 | `E0306` | missing record field | 补字段/改类型 |
 | `E0307` | constructor arity mismatch | 补/删参数 |
@@ -95,8 +95,8 @@ help: did you mean `2 * h / g`?
 | `E0405` | invalid affine point operation | 用温差/`lerp` |
 | `E0406` | bare `0` used where a dimensioned value is expected | 写 `0 m` |
 | `E0407` | unknown dimension/alias | 声明/导入 |
-| `E0408` | unsatisfiable dimension constraint | 检查公式 |
-| `E0409` | dimension occurs check | 简化量纲 |
+| `E0408` | unsatisfiable dimension constraint | 检查公式（保留码：当前量纲代数是自由阿贝尔群上的指数线性统一，非零变量残差总可解，故实现中不可达——见 `diagnostics_coverage` 的证明） |
+| `E0409` | dimension occurs check | 简化量纲（保留码：当前统一不会产生 occurs 状态，实现中不可达——同上） |
 | `E0410` | dimensionful `det`/`product` requires `Dyn<ρ>` | 除以单位/`det_unit` |
 | `E0411` | inconsistent tensor element dimensions | 统一元素量纲 |
 | `E0412` | `Dyn` dimension check failed (runtime) | 检查运行时量纲 |
@@ -113,12 +113,12 @@ help: did you mean `2 * h / g`?
 | 代码 | 消息 | 典型修复 |
 |---|---|---|
 | `E0501` | unknown unit | 导入/拼写 |
-| `E0502` | unit not imported | `open Units.SI` |
+| `E0502` | unit not imported | `open Units.SI`（保留码：当前实现单位表全局、没有模块级单位命名空间） |
 | `E0503` | prefix cannot be applied | 用显式单位 |
 | `E0504` | affine offset dimension mismatch | 检查 offset |
 | `E0505` | duplicate base unit | 删除重复 |
 | `E0506` | unit definition cycle/scale not dimensionless | 检查定义 |
-| `E0507` | prefix unit conflicts with explicit unit | 改名/删除 |
+| `E0507` | prefix unit conflicts with explicit unit | 改名/删除（保留码：同 E0502 的模块级命名空间缺口） |
 | `E0508` | affine unit in product/power | 单独使用 |
 | `E0509` | `to` unit dimension mismatch | 换单位 |
 | `E0510` | affine display on a temperature difference | 用 `delta_to` |
@@ -184,6 +184,7 @@ help: did you mean `2 * h / g`?
 | `W0303` | unused symbol |
 | `W0501` | display unit dropped |
 | `W0601` | unused private declaration |
+| `W0602` | deprecated name used: `@deprecated("...")` on the declaration (§2.2.7/§13.8.1) |
 
 ## B.13 消息写作规范
 

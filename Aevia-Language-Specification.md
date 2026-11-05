@@ -1,6 +1,6 @@
 # Aevia Language Specification
 
-**Single-file edition — Revision 8**
+**Single-file edition — Revision 10**
 
 > 本文件由 `spec/` 下的章节按顺序合并生成；章节内的相对链接在单文件版中不再可用。
 
@@ -48,11 +48,9 @@
 ---
 
 
-
 <!-- ===== README.md ===== -->
 
-
-## Index
+# Aevia Language Specification
 
 **Aevia — Design Standard**
 
@@ -114,12 +112,21 @@ diagnostic category (the exact wording is not normative).
 
 This is a **design standard**, not a frozen implementation. Chapters marked
 normative are intended to be implemented as written; the changelog records every
-audit round. The current text is **Revision 8**, after six rounds of
-independent audits plus the extensibility/backend-integration redesign and the
-alignment with `rssn 0.2.13` (commit `95099fa0`). There is
-**no v1/v2 language split**: every capability is designed in; a backend that
-does not yet implement one reports a capability diagnostic (`E1001`) instead of
-removing the language feature.
+audit round. The current text is **Revision 10**, after six rounds of independent
+audits plus the extensibility/backend-integration redesign, the live-kernel
+alignment with **`rssn 3.0.0-rc.1`** (now **1381 operators, 32 rule sets, 24
+overlays, 82 units**, with `features.sde`; see appendix C), and the second
+implementation round: symbolic instance keys and module-exported classes/
+instances/aliases, the §8.20 standard-library module tree (37 modules with the
+loader fallback), typed SDE surface (§8.9.1) over the kernel's §SDE operators,
+type-level `Nat` linear unification, and the tooling completion (doctests, bench
+baselines, multi-module editor analysis). Revision 9 states the dispatch/extension
+boundary explicitly (no runtime multimethods, no multi-parameter classes, no
+per-type monomorphization; instances selected statically or by canonical
+witnesses) and Revision 10 expands that into the implemented instance-key model.
+There is **no v1/v2 language split**: every capability is designed in; a backend
+that does not yet implement one reports a capability diagnostic (`E1001`) instead
+of removing the language feature.
 
 ## A one-sentence summary
 
@@ -153,9 +160,7 @@ The next chapter explains why this program type-checks, and what the language
 does when it does not.
 
 
-
 <!-- ===== 00-overview.md ===== -->
-
 
 # 00 — 总览：Aevia 是什么，为什么这样设计
 
@@ -455,9 +460,7 @@ Aevia 不重复实现这些。语言层的量纲检查器是**编译期**的，r
 下一章从最底层开始：一个 Aevia 源文件由哪些字符、记号与布局规则组成。
 
 
-
 <!-- ===== 01-lexical.md ===== -->
-
 
 # 01 — 词法结构
 
@@ -725,11 +728,17 @@ exponent     ::= ["-"] integer | "(" rational ")"
 - 上标序列是 `^n` 的等价写法：`m²`、`s⁻¹`、`m³·s⁻²`。
 - 单位表达式内**不**允许空白并置：`kg m^2` 不是 `kg*m^2`，必须写
   `kg*m^2` 或 `kg·m^2`。这条限制让 `3 m x` 不会被误读为 `3*(m*x)`。
+- 单位表达式内的 `*`/`·`/`/` 一直属于单位表达式，直到遇到数字或表达式边界。
+  因此**要把一个量乘以变量或函数调用，必须先用括号结束单位字面量**：
+  `(3 m) * x`、`(3.0 m/s) * exp(-t)`；写成 `3 m * x` 时 `m * x` 整体是单位
+  表达式，`x` 不是单位就报 `E0501`。
 - 单位表达式内不允许数字，因此 `3 m/2 s` 中单位部分只取 `m`，整个表达式
   解析为 `(3 m) / (2 s)`。
 - `1/2 m` 解析为 `1 / (2 m)`，类型是 `Real[1/L]`；要写“半米”，写
   `(1/2) m`。格式化器 SHOULD 在这种模式上加括号。
-- 括号只用于单位表达式：`3 (m/s)` 合法；`3 (2)` 不合法（括号里不是单位）。
+- 括号只用于单位表达式：`3 (m/s)` 合法；`3 (2)` 不合法，报 `E0108`
+  （数字后跟括号时括号内必须是单位表达式）；括号内单位写坏（`3 ()`）报
+  `E0209`。
 
 ### 1.8.2 单位名与限定
 
@@ -829,9 +838,7 @@ m³·s⁻²  = m^3 * s^-2
 下一章把这些记号组织成声明、表达式和模式。
 
 
-
 <!-- ===== 02-syntax.md ===== -->
-
 
 # 02 — 语法
 
@@ -1174,6 +1181,8 @@ let w = xs |> map(f) |> sum
 - `a |> f` 等价于 `f(a)`；`f <| a` 等价于 `f(a)`。
 - `|>` 与 `<|` 同级，混用时按出现顺序左结合；建议只用一种方向。
 - 管道让“数据流”从左到右阅读，适合多步变换。
+- 只有裸运算符 `(+)` 或 lambda 是函数；部分应用 section（如 `(== 1)`、
+  `(* 2)`）报 `E0205`，请写 `fn y => y == 1`。
 
 ### 2.3.8 记录
 
@@ -1242,14 +1251,23 @@ let last = v[-1]                     # 负索引：最后一个
 ```
 index ::= "[" slice { "," slice } "]"
 slice ::= [ expr ] [ ".." [ expr ] | "..=" expr ]
+        | [ expr ] ":" [ expr [ ":" [ expr ] ] ]
 ```
 
 - 索引从 0 开始；负索引从末尾计。
 - `..` 是半开区间，`..=` 是闭区间；省略端点表示到边界。
+- `:` 是带步长切片的写法：`a[i:j:s]`。`i`、`j`、`s` 都可省略，省略的 `s`
+  表示 1；`a[i:j]` 与 `a[i..j]` 是同一个节点。
+- `::` 是 cons 运算符（§2.5），所以在表达式之后 `xs[1::2]` 仍解析为
+  `xs[1 :: 2]`。带起始位置和步长的切片要写出终点（`xs[1:5:2]`）；起点之后
+  立即省略终点只在没有起始位置时写作 `xs[::2]`。
+- 在 `[...]` 内 `:` 是切片分隔符，所以带类型标注的下标要加括号：
+  `xs[(i : Int)]`。
 - `a[i]` 在 rank 1 上取元素，在 rank > 1 上取第 i 个切片（rank 减一）。
 - `a[i, j]` 要求 rank 2；更多下标依此类推。
 - 越界是运行时错误 `E0802`；编译器在索引为字面量时可以静态检查。
-- 切片产生新张量（语义上是复制；运行时在可能时共享底层缓冲区）。
+- 切片产生新张量（语义上是复制；运行时在可能时共享底层缓冲区）。负步长
+  切片总是视图（§6.6.4.1）。
 
 ### 2.3.12 `do` 与 IO
 
@@ -1452,6 +1470,10 @@ exponent ::= ["-"] integer | "(" rational ")"
 前有空格，按比较解析。解析器 SHOULD 在 `ident<` 后尝试类型实参；若失败，
 回退为比较。这条规则要求格式化器在 `<` 比较前保留空格。
 
+相邻的 `<...>` 只在 callee 是函数名（或其限定名）时是类型应用；
+`3<Int>`、`f()<Int>` 这类歧义报 `E0207`，提示在 `<` 前加空格或给 callee
+加括号。
+
 ### 2.7.3 `{` 记录与块
 
 块只用缩进，不用花括号。`{}` 永远是记录。因此 `if x then { y = 1 } else { y = 2 }`
@@ -1496,6 +1518,7 @@ exponent ::= ["-"] integer | "(" rational ")"
 | `[a, b, c]` | `tensor([a, b, c])` |
 | `a[i, j]` | `index(a, [i, j])` |
 | `a[i..j]` | `slice(a, i, j)` |
+| `a[i:j:s]` | `slice_step(a, i, j, s)` |
 
 去糖后的形式不是用户语法；它用于类型检查和解释器的核心 IR。
 
@@ -1550,9 +1573,7 @@ fn main(): IO Unit = do
 下一章进入类型系统：这些表达式的类型从哪里来，量纲如何参与推断。
 
 
-
 <!-- ===== 03-types.md ===== -->
-
 
 # 03 — 类型系统
 
@@ -1638,8 +1659,26 @@ IO            : Type -> Type
 SymFun        : Dim -> Dim -> Type           符号函数（用于 dsolve）
 Dyn           : Rep -> Type                  动态量纲标量（§4.9）
 RateOf        : Type -> Type                  ODE 状态的时间导数类型（§8.9）
+DiffusionOf   : Type -> Type                  SDE 状态的扩散系数类型（§8.9.1）
 Solutions     : Rep -> Dim -> Type            符号解集合（§8.6）
 ```
+
+`DiffusionOf<s>` 与 `RateOf<s>` 同构，但每个叶子的量纲除以 `T^(1/2)`：
+布朗增量 `dW` 的量纲是 `T^(1/2)`，所以 `dX = a dt + G dW` 中 `G` 的每个
+分量比 `X` 多一个 `T^(-1/2)`。
+
+```
+DiffusionOf<Scalar<ρ,d>>             = Scalar<ρ, d/T^(1/2)>
+DiffusionOf<Tensor<n, τ>>            = Tensor<n, DiffusionOf<τ>>
+DiffusionOf<{ l1: τ1, ..., ln: τn }> = { l1: DiffusionOf<τ1>, ..., ln: DiffusionOf<τn> }
+```
+
+若 `s = { x: Float[L] }`，则 `DiffusionOf<s> = { x: Float[L/T^(1/2)] }`；
+标量状态 `Float[1]` 的 `DiffusionOf` 是 `Float[1/T^(1/2)]`。含
+`Int`/`Bool`/函数字段的状态不合法，报 `E0302`（与 `RateOf` 相同）。这是
+**对角**扩散（每个状态分量一个噪声通道）的类型；一般 `n × m` 噪声用
+§8.9.1 的 `sdeint_general`，其扩散参数类型是
+`Tensor<2, Scalar<ρ, d/T^(1/2)>>`。
 
 常用辅助类型（在 Prelude 或对应库中定义）：
 
@@ -1925,7 +1964,15 @@ Matrix<n, m, τ>              # = Tensor<[n, m], τ>
   这是 `Tensor` 的**特殊类型形式**（`Tensor<shape, τ>`），不是把 shape
   列表当作普通类型参数；字面量自动获得细化形状，`zeros_of<[3,4]>()` 等构造器
   可显式指定。
-- 类型级 `Nat` 支持字面量、`+`、`*` 和线性等式；不做一般递归/证明。
+- 类型级 `Nat` 支持字面量、`+` 和「乘以字面量」（`2 * n`）；不做一般
+  递归/证明。形状 extent 中的 `Nat` 变量由 `<n: Nat>`（或未标 kind 的类型
+  参数）绑定，是真正的类型级变量。统一时把等式化为线性形式
+  `Σcᵢ·vᵢ + c = 0`：只有一个变量时解出非负整数（`n + 1 ~ 3` ⇒ `n = 2`，
+  `2·n ~ 6` ⇒ `n = 3`，`n ~ 2·n` ⇒ `n = 0`）；多变量等式保留为待解约束，
+  在后续绑定后重试；常数残差非零报 `E0302`（`type-level equation has no
+  solution`）；两个变量相乘不是线性的，报 `E0304`。秩 `Tensor<n, τ>` 的
+  `n` 仍须是具体整数（否则 `E0304`），refined shape 的 extent 可以是变量。
+  没有 binder 的 shape 变量、以及实例头中的 Nat 变量都报 `E0304`。
   这足以表达矩阵乘法、reshape、拼接，不需要完整依赖类型。
 - 细化 → 秩-only 是安全隐式转换；秩-only → 细化用
   `refine_shape(a) : Option<Tensor<[...],τ>>`（运行时检查）。
@@ -1977,6 +2024,12 @@ Unit[e] * Tensor<shape, Scalar<ρ,d>>   : Tensor<shape, Scalar<ρ,e*d>>
 **张量与张量的逐元素运算要求相同秩**。同秩内形状可以相等或某一维为 1
 （广播）。细化类型在编译期检查；秩-only 在运行时检查。不做 NumPy 式跨秩
 广播；这条限制让结果秩始终静态已知，也避免 `(3,1) + (1,4)` 这类静默错误。
+
+同秩的 refined shape 与 rank-only shape 在**运算**中互相统一
+（`Tensor<[2], V>` 与 `Tensor<1>, A>` 可以同时出现在 `*`/`+`/`@` 中，
+refined → rank-only 是安全隐式转换）。但把 rank-only 值当作 refined
+**注解**（`let x: Tensor<[3]> = zeros(4)`）仍需 `refine_shape` 的运行时
+检查；直接标注是 `E0302`。
 
 `Point` 元素张量 `Tensor<shape, Point[d]>` 的元素级规则：
 
@@ -2202,10 +2255,17 @@ instance Show for Real[d] where
     show(x) = format_quantity(x)
 ```
 
-- 类可以有多参数：`class Convert a b where ...`。
-- 方法只有签名；默认实现由 `derive` 或插件提供。
-- 实例头 `Class τ`；`τ` 中的变量隐式全称量化。
-- 实例方法必须覆盖所有方法。
+- 类**只有一个**类型参数；多参数类不在语言中（实例头语法无法表达多参数实例，
+  求解器也只支持单参数）。`class Convert a b where ...` 报 `E0317`。
+- 方法只有签名；默认实现由 `derive`、内置结构实现（Prelude 类）或插件提供。
+- 实例头 `Class τ`，`τ` 是类型构造器应用；`Class a` 这样的裸类型变量头非法
+  （`E0317`）。`τ` 中的变量隐式全称量化。
+- 用户类：实例必须覆盖所有方法，缺失的方法在 `E0317` 中列出。
+- Prelude 类（§3.8.4）是**钩子**而非封闭实现：实例可以只覆盖一部分方法，
+  其余由内置结构实现提供（例如记录/元组的打印由内置打印器完成）。
+- 类与实例的身份是**符号化**的：类键 `(定义模块路径, 类名)`，实例键再加规范
+  头类型；`AdtId` 只是进程内见证，不进入模块接口或缓存。`private class` 只在
+  定义模块可见；`private instance` 不允许（实例随模块导出，§7.4）。
 
 ### 3.8.2 解析
 
@@ -2265,14 +2325,28 @@ Show (Solutions<ρ,d>)      Show (Record)        # 动态表行
 `Show`/`Eq`/`Ord`/`Hash` 的实例头必须用量纲多态形式（`Float[d]`），
 不能只写无量纲的 `Float`，否则 `20.0 m` 无法打印。
 
+`Show` 对上表的头是**结构性保证**，不是可选优化：没有用户实例时，内置
+打印器直接渲染记录、元组、`Tensor`、`Point`、`Solutions`、`Dyn` 与单位值；
+用户为**自己声明**的名义类型写的实例（或 `derive Show`）优先于内置实现。
+函数没有 `Show` 实例，也没有结构性回退（`E0310`）。
+
+内置类的实例集参与全局一致性（§7.4）。两个实例必须能由**运行时见证**区分
+（§9.2.3）：见证相同即使用户写了两个静态上不同的头，也报 `E0311`。例如
+`Tensor<1, Int>` 与 `Tensor<1, Real>` 都是精确存储，不能同时拥有同一类的实例。
+
 ### 3.8.5 派生
 
 ```
 derive Eq, Show, Hash for Vec2
 ```
 
+`derive` 只对**结构类**开放：`Eq`、`Ord`、`TotalOrd`、`Show`、`Hash`。派生
+其他类（用户类、`Num` 等）报 `E0317`，消息指出失败的类。派生实例在**类型
+所属模块**生成（孤儿规则同样适用，§7.4）。
+
 编译器为记录/变体生成结构化实例。派生 `Ord` 按字段声明顺序做字典序。
-派生不适用于函数字段（没有 `Eq`/`Show` 实例）。
+派生不适用于函数字段（没有 `Eq`/`Show`/`Hash` 实例）；失败的字段类型与类名
+出现在 `E0317` 中，而不是笼统的“不能派生”。
 
 ### 3.8.6 命题 `Prop`
 
@@ -2395,7 +2469,8 @@ bind   : IO a -> (a -> IO b) -> IO b
 3. 单位字面量的 `Rep` 变量 → `Real`（整数系数）或 `Float`（小数系数）。
 4. 其他 `Rep` 变量 → `Real`。
 5. `Dim` 变量 → `1`，并警告 `W0301`。
-6. `Nat` 变量 → 错误 `E0304`（秩无法推断）。
+6. `Nat` 变量**不**默认成任何值；无法由约束解出时在检查期报 `E0304`
+   （秩或 refined extent 无法推断）。
 7. 行变量 → 空行（封闭记录）。
 
 默认化只影响没有约束的变量；有约束的变量必须先统一。`Literal` 约束在
@@ -2496,9 +2571,7 @@ dim_of    : Dyn<ρ> -> DimValue
 下一章把 `d` 从占位符变成真正的代数对象。
 
 
-
 <!-- ===== 04-dimensions.md ===== -->
-
 
 # 04 — 量纲
 
@@ -3183,9 +3256,7 @@ Aevia 的 `Dim` 使用相同的基名和规范形。两者不一致会导致：
 下一章把 `Unit[d]` 从类型变成可用的单位表：前缀、换算、仿射点和常数。
 
 
-
 <!-- ===== 05-units.md ===== -->
-
 
 # 05 — 单位
 
@@ -3428,6 +3499,8 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `min` | `T` | `60 s` |
 | `h` | `T` | `3600 s` |
 | `d` | `T` | `86400 s` |
+| `week` | `T` | `604800 s` |
+| `yr` | `T` | `31557600 s` |
 | `°` / `deg` | `1` | `pi/180` |
 | `′` / `arcmin` | `1` | `pi/10800` |
 | `″` / `arcsec` | `1` | `pi/648000` |
@@ -3443,7 +3516,7 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `atm` | `Pressure` | `101325 Pa` |
 | `mmHg` | `Pressure` | `133.322387415 Pa` |
 | `cal` | `Energy` | `4.184 J` |
-| `kWh` | `Energy` | `3.6e6 J` |
+| `Wh` | `Energy` | `3600 J`（`kWh` 是 `k` 前缀形式） |
 | `hp` | `Power` | `745.6998715822702 W` |
 | `kn` | `L/T` | `1852/3600 m/s` |
 | `mph` | `L/T` | `1609.344/3600 m/s` |
@@ -3456,6 +3529,7 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `gal` | `L^3` | `0.003785411784 m^3` |
 | `oz` | `M` | `0.028349523125 kg` |
 | `lb` | `M` | `0.45359237 kg` |
+| `lbf` | `Force` | `4.4482216152605 N` |
 | `psi` | `Pressure` | `6894.757293168 Pa` |
 | `°C` | `Θ` | 仿射：`1 K offset 273.15 K` |
 | `°F` | `Θ` | 仿射：`5/9 K offset 255.3722222222222 K` |
@@ -3467,10 +3541,10 @@ type  = Scalar<rep(number), dim(unit_expr)>
 用户可以 `dimension Information`。标准库不强制，因为大量公式把 bit 当
 无量纲概率/熵使用。
 
-> **0.2.13（`111b71d0` 起）**：`dimension Information` 与
+> **rssn 3.0.0-rc.1**：`dimension Information` 与
 > `unit bit2 : Information` 都可用，前提是在 `Config` 上声明
-> `base_dimension("Information")`（`prepare` 在克隆图上定义它）。`Dim` 的内部表示是“7 个 SI 基 +
-> 有序旁表”，`expr_to_dim` 接受任意基名。
+> `base_dimension("Information")`（`prepare` 在克隆图上定义它）。`Dim`
+> 的内部表示是“7 个 SI 基 + 有序旁表”，`expr_to_dim` 接受任意基名。
 
 ### 5.3.4 单位模块
 
@@ -3483,25 +3557,36 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `Units.Natural` | `c = 1`、`hbar = 1`、`eV` 系 |
 | `Units.Constants` | 物理常数（§5.8） |
 
-> **0.2.13 实现状态（commit `95099fa0`）**：`manifest.units` 有 75 项，覆盖
-> SI 基/派生、常见英制、`degC`/`degF`、角度，以及：
+> **实现状态（按 rssn 3.0.0-rc.1 测量，2026-11-04）**：`manifest.units` 有
+> **82** 项，覆盖 SI 基/派生、常见英制、`degC`/`degF`、角度、时间
+> （`min`/`h`/`d`/`week`/`yr`）、能量/功率（`Wh`/`cal`/`eV`/`hp`）、信息
+> 单位（`bit`/`B`/`KiB`），以及：
 >
 > - **天文**：`au`（精确）、`ly`、`pc`、`Rsun`、`Msun`、`Mearth`、`jup`；
 > - **CGS**：`dyn`、`erg`、`Gal`、`P`、`St`、`G`（高斯，`1/10000 T`）、
->   `Mx`、`Ba`、`Oe`（scale 带 `pi^-1`）。
+>   `Mx`、`Ba`、`Oe`（scale 带 `pi^-1`）；
+> - **§5.3.3 本轮补齐**：`Da`（别名 `u`）、`kn`、`mph`、`acre`、`bit`、
+>   `B`、`KiB`——本轮之前 kernel 的注册表缺这七项。
 >
 > 因此 `Units.Astronomy` 与 `Units.CGS` 可以从 manifest 生成。`Mpc` 由
-> `pc` 加前缀得到（`pc` 是 `prefixable`）。
+> `pc` 加前缀得到（`pc` 是 `prefixable`）；`kWh` 由 `k`+`Wh` 得到。
 >
 > `Units.Constants` 也从 `manifest.constants` 生成（30 条、18 条精确），
-> 不再需要 Aevia 本地 overlay——这是“单一事实来源”最后一个例外被消除。
+> 不再需要 Aevia 本地 overlay——单一事实来源没有例外。
 >
 > 每个 `UnitValue` 都带 `aliases`/`prefixable`/`category`/`since`，所以生成
-> 单位表不需要再读 `UnitRegistry`。
+> 单位表不需要再读 `UnitRegistry`。单位是 **session 私有**的：
+> `Session::register_unit` 注册的单位只出现在该 session 的 manifest 里
+> （`KernelManifest::build_with_units`），进程级表由 `build` 读取。
 
-`Units.Natural` 通过“单位制”而不是“改常数”实现：它导出一组新的单位，
-其中 `c`、`hbar` 的数值是 1。用户 `open Units.Natural` 后，`1 GeV` 等写法
-成立；切回 SI 用 `open Units.SI`（名字冲突时限定）。
+`Units.Natural` 的设计是“单位制”而不是“改常数”：它本应导出一组新的单位，
+其中 `c`、`hbar` 的数值是 1，用户 `open Units.Natural` 后 `1 GeV` 等写法成立。
+**当前实现状态**：kernel 没有 natural-unit registry，Aevia 也不允许在 manifest
+之外维护第二张单位表（§5.10 第 1 条），所以这一构建里的 `Units.Natural`
+是一个**文档性空模块**（`import Units.Natural` 能解析，但不导出单位）；`c`、
+`hbar` 作为**物理常数的值**来自 `Units.Constants`，`GeV` 由 `G`+`eV` 前缀
+得到。真正的 natural-unit 系统需要 kernel 增加 registry（记录为缺口），
+在那之前不要声称 `open Units.Natural` 会改变 `c`/`hbar` 的数值。
 
 ## 5.4 换算与显示
 
@@ -3554,6 +3639,15 @@ let g = base(d)             # Float[L]，值 3200.0，去掉显示单位
   否则基单位乘积；指数为 1 的用 `m`、`s`，复杂量纲用 `kg*m/s^2`。
 - `show` 保证可读；`repr` 保证可解析回同一个值（带单位文本）。
 - 打印精度由 `Float` 的最短往返表示决定；`Real` 精确值打印为分数或根式。
+
+> **实现状态（2026-11-05，分数指数打印已修复）**：没有显示单位时的 SI
+> 单位拼写现在由 `Dim::to_si_symbol_string()` 渲染，分数指数打印正确：
+> `T^(1/2)` → `s^(1/2)`、`T^(3/2)` → `s^(3/2)`、`1/T^(1/2)` →
+> `1/s^(1/2)`、`L/T^2` → `m/s^2`。`wiener(seed, m, steps, dt)` 的输出元素
+> 量纲是 `Float[T^(1/2)]`，现在打印为 `... s^(1/2)`；符号表达式的幂仍由
+> `format_rational` 打印（`x^(1/2)`）。回归测试在 `aevia-core` 的
+> `si_unit_text`/显示测试里（含真实 `wiener` 值）。早先“分数指数打印成
+> `s^1`”的缺口已关闭。
 
 ## 5.5 角度与无量纲单位
 
@@ -3758,6 +3852,14 @@ type ConstantInfo = {
 | `E0509` | `to` 的单位量纲与值不匹配 |
 | `E0510` | 对温差使用仿射单位显示 |
 
+> **实现状态（2026-11-04）**：`E0501`/`E0504`/`E0505`/`E0506`/`E0508`/
+> `E0509`/`E0510` 有实现且被诊断覆盖测试触发。`E0502`/`E0503`/`E0507`
+> **当前不可达**：单位没有模块级命名空间（checker 的 units 是完整的
+> kernel 表加本地声明，所以“未导入的单位”与内建单位无法区分），因此
+> “未导入”“禁止前缀”“前缀/显式冲突”这三种状态都不存在；要触发它们需要
+> 先有模块级单位可见性（loader + 每模块 units 表），不是检查器能单独补的。
+> 在真正不可达时，编译器不会用别的错误去“假装”它们。
+
 ## 5.10 与 rssn 单位层的衔接
 
 rssn 的 `rssn::dim` 提供 `DimTerm`/`DimArena`/`UnitRegistry`；`units` 规则集
@@ -3784,9 +3886,7 @@ rssn 的 `rssn::dim` 提供 `DimTerm`/`DimArena`/`UnitRegistry`；`units` 规则
 什么时候变成 `Float`，以及张量和 IO 如何运行。
 
 
-
 <!-- ===== 06-semantics.md ===== -->
-
 
 # 06 — 求值语义
 
@@ -3931,6 +4031,15 @@ F64(_) 与 Exact(_) 或 Sym(_)：
   化简为复数的规则，或在返回前检查值域；破坏 `Real` 的值域是内部错误
   `E0809`。
 - `approx` 对形式表达式尝试数值化；定义域外的结果报 `E0806`。
+- **精确（`Real`）相位的扩展实数运算是部分的。** 除本节明确给出的边界值
+  （`ln(0) = -oo`、`ln(oo) = oo`、`exp(oo) = oo`、`exp(-oo) = 0`）外，含
+  `oo` 的 `+`、`-`、`*`、`/`、`^` 一律保留为符号项（按原式打印，例如
+  `oo - oo`、`oo*0`、`oo/oo`），既不静默折叠成有限数，也不报错；未定义
+  形式（`oo - oo`、`oo + (-oo)`、`oo * 0`、`oo / oo`、`oo ^ 0` 等）同样
+  保留，`-oo` 的符号不会丢失。需要有限答案时请在浮点相位计算：`Float`
+  按 IEEE 给出 `inf`/`nan`（`nan != nan`，`-0.0 == 0.0`）。指数为无穷的
+  形式（`0 ^ oo`、`oo ^ oo`）要求有限有理指数，报 `E0402`。这是刻意的
+  保守选择：精确相位不发明 NaN/未定义值，也不把未定义形式当作已化简。
 
 ### 6.3.5 `eval`、`simplify`、`approx`
 
@@ -4038,6 +4147,12 @@ let sol = dsolve(eq, y, t)           # Result<(Real[T] -> Real[L]), MathError>
 - 守卫在模式绑定后求值，必须是具体 `Bool`；`Prop` 报 `E0308`。
 - 非穷尽匹配在编译期报 `E0309`；运行时不会“掉出去”。
 
+> **实现状态（2026-11-05）**：穷尽性/冗余臂（`E0309`/`W0201`）分析是有界
+> 递归，**模式嵌套深度上限 24**（`Checker::PATTERN_DEPTH_BOUND`）；超过
+> 上限时按“已覆盖”处理——它只能**抑制**一条穷尽性/冗余臂诊断，绝不会凭空
+> 产生诊断（不会误报）。`or-pattern` 与空枚举（`type Never = |` 形式）在
+> 当前语法中不可表达；若出现零构造器类型，零个分支即穷尽（语义保留）。
+
 ## 6.6 张量运行时
 
 ### 6.6.1 表示
@@ -4096,6 +4211,38 @@ shape1 ~ shape2:
 - `at(a, i)` 是秩多态索引：`Tensor<n,τ> -> Tensor<n-1,τ>`，要求 `n>=1`。
 - `a @ b` 按秩分派：2×2 → `matmul`，2×1 → `matvec`，1×2 → `vecmat`，
   1×1 → `dot`（§3.5.3.1）。
+
+#### 6.6.4.1 步长
+
+`a[i:j:s]` 是带步长的切片。`s` 是**整数**表达式：不是 `Float`，也不是带量
+纲的量（步长是位置的个数，没有量纲，也没有小数部分）。非整数步长是类型错误
+`E0302`。
+
+- 省略 `i` 或 `j` 沿用默认端点；省略 `s` 表示 1。`a[i:j]` 与 `a[i..j]` 是
+  同一个节点，行为完全相同。
+- 端点省略时按步长的方向解释：`s > 0` 时 `i` 默认 0、`j` 默认该维长度；
+  `s < 0` 时 `i` 默认最后一个下标、`j` 默认第一个下标**之前**。所以
+  `xs[::-1]` 是 `reverse(xs)`，`xs[::-2]` 是 `xs[4], xs[2], xs[0]`。
+- 显式端点中的负数仍从末尾计（与索引一致），并截断到合法范围。终点是半开
+  的：`xs[4:0:-1]` 是 `xs[4], xs[3], xs[2], xs[1]`，不含下标 0。
+
+长度是下标个数的**精确值**：
+
+```
+s > 0:  len = ceil((b - a) / s)      满足 a ≤ i < b
+s < 0:  len = ceil((a - b) / |s|)    满足 a ≥ i > b
+```
+
+**空情形**：第一步就越过 `b` 的切片是空切片，不是一元切片。`xs[0:0:1]`、
+`xs[5:2:1]`、`xs[2:0:1]`、`xs[0:3:-1]` 都为空，且不 panic。
+
+`s == 0` 永不推进：字面量已知时是静态错误 `E0802`，否则是运行时错误
+`E0802`。实现不做除零，也不进入无限循环。
+
+负步长产生**视图**，不是拷贝：同一底层缓冲区、不同的 offset、该轴反向
+（`View { strides, reversed }`）；正步长只是把该轴的 stride 乘以 `s`。因此
+`xs[::-1]` 与 `reverse(xs)` 共享同一缓冲区（`Rc::ptr_eq`），`m[:, ::-1]` 只
+翻转第二轴。视图的元素类型仍是 `Float`：缓冲区是 `f64`。
 
 ### 6.6.5 线性代数
 
@@ -4174,22 +4321,19 @@ random   : () -> IO Float[1]
 
 ### 6.9.1 符号预算
 
-rssn 的 `compute` 接受 `Budget`（时间、重写次数、节点数）。Aevia 默认：
+rssn 的 `compute` 接受 `Budget`（外层迭代、重写匹配上限、节点数、时间上限、
+窗口/beam 参数等）。**实际默认值**（`rssn::graph::schedule::Budget::default`，
+2026-11-04 实测）：`max_iterations = 24`、`max_nodes = 20_000`、
+`match_limit = 1_000`、`reduce_rounds = 32`、`patience = 3`、
+`time_limit = None`（不设墙钟上限）；其余字段见内核源码。预算耗尽报
+`E0808`；`eval`/`simplify` 终止并返回错误（或 `panic`，取决于 API）。重型
+请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err`。
 
-```
-时间     2 s
-重写     1_000_000
-节点     5_000_000
-```
-
-可用 `with_budget(seconds, rewrites, thunk)` 覆盖：
-
-```aevia
-let r = with_budget(10.0, 5_000_000) => simplify(integral(...))
-```
-
-预算耗尽报 `E0808`；`eval`/`simplify` 终止并返回错误（或 `panic`，取决于
-API）。重型请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err`。
+**实现状态**：本实现尚未提供语言级的 `with_budget(seconds, rewrites, thunk)`
+函数（该调用形式不在当前语法/内建中）；Aevia 的 `--budget` 是**尾调用预算**
+（§9.3.4），不是符号预算。符号预算目前取内核默认值，需要调整时通过内核
+`Config`/`Budget` API（embedding 层）完成。`Rssn.budget(n)` 诊断提示中的
+入口也属于后续补齐项。这是已记录的实现缺口，不是规范删除。
 
 ### 6.9.2 错误分类
 
@@ -4210,7 +4354,14 @@ API）。重型请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err
 ### 6.9.3 栈与尾调用
 
 - 自递归尾调用用 trampoline，常量栈。
-- 非尾递归受 `--max-stack` 限制（默认 8 MB 等价深度）；超过报 `E0805`。
+- 非尾递归受调用深度限制：默认 2048 次调用（`Interp::max_depth`），
+  超过报 `E0805` 并带调用栈；解释器运行在 `--max-stack <MiB>` 指定的
+  OS 线程栈上（默认 256 MiB），合法的深递归因此比默认 8 MB 的线程能跑
+  更深。
+- 尾调用不再增长深度，因此一个**不终止**的尾循环由“连续尾调用预算”
+  限制：默认 100,000,000 次（`Interp::max_tail_calls`，`--budget` 修改），
+  超过报 `E0805` 并带调用栈。这是 runaway 保护，不是语义上限（§9.3.4）。
+- 表达式嵌套深度另有上限（默认 16,384 个节点），超过同样是 `E0805`。
 - `panic` 打印调用栈（源码位置 + 函数名）。
 
 ## 6.10 确定性与并行
@@ -4218,6 +4369,8 @@ API）。重型请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err
 - 纯求值完全确定；相同输入得到相同输出（浮点 NaN 规范化）。
 - `par_map(f, xs)` 并行映射，结果顺序与输入一致；线程数不影响结果。
   要求 `Parallel a`（仅 `Int`/`Float` 及其张量）；符号 `Real` 不并行。
+  **实现状态**：本实现的求值器是单线程的，`par_map` 顺序执行但保持上述
+  顺序语义（见 §9.7.2）。
 - `compute_all` 的并行只影响速度，不影响答案。
 - `Set`/`Map` 迭代顺序由 `TotalOrd` 决定，不依赖哈希种子。
 - `random()` 是 IO，不参与纯求值的确定性；`rng(seed)` 是纯的、确定的。
@@ -4287,9 +4440,7 @@ let b = approx(a)      # Ok(9.0)，Float
 下一章定义模块、包和可见性；然后进入标准库与运行时。
 
 
-
 <!-- ===== 07-modules.md ===== -->
-
 
 # 07 — 模块、包与可见性
 
@@ -4311,9 +4462,17 @@ src/
 
 - 模块名由相对 `src/` 的路径决定，`UpperCamelCase` 分段。
 - 文件可以写 `module Thermo.IdealGas`，但 MUST 与路径一致；不一致报
-  `E0601`。
+  `E0601`。独立程序（无包、入口文件无路径上下文）与嵌入的标准库模块不受
+  此检查约束。
 - 一个文件只能有一个模块；不支持一个文件多个模块。
 - 模块名区分大小写。
+
+> **实现状态（2026-11-05）**：检查已实现——导入一个模块时，把该文件声明的
+> `module` 名与其导入路径比对，不一致报 `E0601`（消息含两侧名字与“声明名
+> 必须与导入路径一致”的 note）。豁免与上面一致：**入口文件**（manifest 的
+> `entry` 指向的文件，或 `aevia run file.aev` 里直接运行的文件——它们没有
+> 相对 `src/` 的导入路径）、**独立文件**（无包）和**嵌入的标准库模块**不
+> 检查；实测声明 `module OtherName` 的包入口与独立文件都能正常运行。
 
 ### 7.1.2 顶层声明顺序
 
@@ -4381,6 +4540,14 @@ open Math { sqrt, pi }
 - 单位命名空间与值命名空间分开：`open Units.SI` 同时把单位名加入单位
   命名空间和值命名空间（供 `to(m, x)` 使用）。
 
+> **实现状态（2026-11-05，类型名导入已闭合）**：`import`/`open` 可以引入
+> 该模块导出的**值名**（函数、常量、单位）、**名义变体构造器**与**透明
+> 类型别名**（`import A { Pair }`、`open Physics.Ising` 后直接写 `Params`
+> 都通过检查；`type Pair = { … }` 的定义随接口导出并在导入者展开）。
+> 限定名（`A.Pair`/`Physics.Ising.Params`）也可用，但不再是结构别名类型
+> 注解的唯一写法。`import`/`open` 两种形式都验证过，含 `open` 引入别名
+> 后直接使用。
+
 ### 7.2.3 限定名
 
 ```
@@ -4409,18 +4576,29 @@ Thermo.IdealGas.pressure
 
 - 模块依赖图 MUST 是无环的。循环导入报 `E0602`。
 - 类型/类/实例的依赖也参与排序；实例解析需要所有相关模块已检查。
-- 单独编译：每个模块导出接口（类型、签名、实例、单位、构造器）。接口
-  可以缓存为 `.aevi` 文件；缓存失效按源码哈希和依赖接口哈希。
+- 单独编译：每个模块导出**接口**：类型与构造器、值签名、单位、**类声明、
+  实例、别名定义**。别名导出 MUST 携带定义（展开体），否则导入者无法展开
+  `type Vec2 = { x: Float, y: Float }`（只导出名字会得到 `E0301`）。
+- 类与实例以符号键导出：类键 `(定义模块路径, 类名)`，实例键再加规范头类型；
+  别名先展开再取键。`AdtId` 只是进程内见证，不进入接口。
+  接口可以缓存为 `.aevi` 文件；缓存失效按源码哈希、依赖接口哈希和能力集。
 - 没有隐式全局实例：实例只从导入的模块可见。为避免“实例丢失”，
   标准库的常用实例在 Prelude 中导入。
 
 ## 7.4 类型类实例与模块
 
-- 实例在定义模块中唯一；导入类型/类所在模块即可见。
-- 孤儿规则：实例必须定义在类型或类所属模块。跨模块的孤儿实例报
-  `E0604`。
-- 实例不因 `private` 隐藏；它们随模块导出。
-- 派生实例（`derive`）在类型所在模块生成。
+- 身份是**符号化**的：类键 `(定义模块路径, 类名)`；实例键 `(定义模块路径,
+  类键, 规范头类型)`。规范头类型由类型构造器与结构参数构成，别名先展开。
+  `AdtId` 只是进程内见证，不用于接口、缓存或跨进程身份。
+- 导入一个模块即导入它的类、实例与别名定义。导入的实例参与**全局一致性**
+  检查（重叠 `E0311`，消息指出两个模块），但不再重复孤儿规则检查——它在
+  定义处已经通过。
+- 孤儿规则：实例必须定义在类型所属模块或类所属模块；否则 `E0604`。派生
+  实例（`derive`）同样适用，在类型所在模块生成。
+- 实例不因 `private` 隐藏；它们随模块导出，`private instance` 不允许。
+  `private class` 只在定义模块可见，其实例也不进入接口。
+- 运行时只在**量化的调用点**按见证分派（§9.2.3）；检查器必须能证明候选实例
+  的见证两两不相交，否则在检查期报 `E0311`/`E0310`，绝不按运行时形状猜测。
 
 ## 7.5 包
 
@@ -4456,6 +4634,12 @@ entry = "src/main.aev"      # 可执行包的入口；默认 src/main.aev
 [profile.release]
 opt = 3
 ```
+
+> **实现状态（2026-11-04）**：清单解析、`target`/`entry`、`--locked`、内容哈希与
+> path 依赖已实现；**`version`/`git` 依赖与 registry 未实现**（分别报 `E0605`/
+> 无 registry 客户端，`aevia add/update` 只管理本地清单/锁文件）。上面的
+> `git`/`version` 示例是设计目标，不是当前可用的依赖形式；`[capabilities]` 目前
+> 只被解析/保留，没有运行时权限检查（§9.14）。
 
 - `name` 是包名，`snake_case`；导入时用包名作为根模块。
 - `version` 是 SemVer。
@@ -4496,6 +4680,13 @@ kinematics/
 - `examples/` 下的文件是示例；`aevia run --example name`。
 - `docs/` 放 Markdown 文档；`aevia doc` 生成 API 文档。
 
+> **实现状态（2026-11-05）**：`aevia run file.aev` 与 `aevia run --example
+> name` 都可用。`--example` 在包的 `examples/<name>.aev` 按名解析，拒绝
+> 路径分隔符（名字不是路径），找不到时会**列出可用的示例**，并且与直接给
+> 文件互斥（`--example` 和 file 只能给一个）；测试
+> `cli.rs::run_example_finds_the_packages_examples_directory` 覆盖。`aevia
+> test` 支持 `.aev` 文件/目录，以及 `--doc` 的 doctest 模式。
+
 ### 7.5.4 测试
 
 ```aevia
@@ -4512,15 +4703,22 @@ test "dimension rejection" =
 
 - `test` 声明是 `Bool` 表达式；`aevia test` 运行所有测试。
 - `approx_eq(a, b, tol)` 要求 `a`、`b` 同量纲，`tol` 同量纲。
-- 编译期错误测试用 `@compile_fail` 属性（或 `compile_fail` 块，
-  见 §8.13）。
+- 编译期错误测试用 `compile_fail("<source>")`（§8.13）：它把源码片段交给
+  编译器并要求**编译失败**；片段里的导入由调用模块的导入表提供（实现当前
+  只支持不带导入的片段，文档化的限制）。`@compile_fail` 属性不是本语言的
+  属性（未知属性报 `E0210`）。
 - 属性测试用 `forall`（§8.13）。
 
 ### 7.5.5 文档
 
 - `##` 文档注释附着到下一个声明，内容是 Markdown。
-- `aevia doc` 生成 HTML；类型签名、单位、例子自动提取。
-- 文档注释中的代码块标 `aevia` 会被编译检查（doctest）。
+- `aevia doc` 生成 HTML；类型签名、单位、例子自动提取；未被文档化的声明
+  在索引中报告。
+- 文档注释中的代码块标 `aevia` 会被编译检查（doctest）：`aevia test --doc
+  [FILE…]` 抽取围栏块并逐个编译；块首行可写 `compile_fail` 或
+  `compile_fail EXXXX`。片段在自己的合成模块中编译，声明模块的
+  `import`/`open` 行会被复制，但模块自身的声明不在作用域内（单文件编译器
+  的已知限制）。
 
 ## 7.6 版本与兼容性
 
@@ -4547,9 +4745,7 @@ test "dimension rejection" =
 统计、微积分、数据、绘图和仿真都在这里。
 
 
-
 <!-- ===== 08-stdlib.md ===== -->
-
 
 # 08 — 标准库
 
@@ -4633,10 +4829,15 @@ to_float : Scalar<ρ,d> -> Result<Float[d], EvalError>   # 符号/自由符号�
 to_real  : Scalar<ρ,d> -> Real[d]
 to_int   : Scalar<ρ,1> -> Int
 zero     : Scalar<ρ,d>                 # 该表示/量纲的零，用于 fold/sum
+rng      : Int -> (() -> Float[1])     # 纯、确定；返回“下一个数”函数
 ```
 
 `min`/`max` 是二元函数；张量归约用 `min_all`/`max_all`。`zero` 是
 `fold((+), zero, xs)` 的起点；`sum([])` 内部使用对应表示/量纲的零。
+
+`rng(seed)` 是**纯**的伪随机数生成器：同一个 seed 在同一程序里给出同一
+序列，与执行顺序/线程数无关。它返回一个无参函数，每次调用给出下一个
+`Float[1]`；`random()`（§6.8.2）是 `IO` 版本，不保证可复现。
 
 ### 8.1.4 字符串
 
@@ -4664,6 +4865,7 @@ format      : (String, Tensor<1, String>) -> String
 ```
 map      : ((a -> b), Tensor<n, a>) -> Tensor<n, b>
 map2     : ((a, b) -> c, Tensor<n, a>, Tensor<n, b>) -> Tensor<n, c>
+par_map  : Parallel a => ((a -> b), Tensor<1, a>) -> Tensor<1, b>
 filter   : ((a -> Bool), Tensor<1, a>) -> Tensor<1, a>
 fold     : ((b, a) -> b, b, Tensor<1, a>) -> b
 fold_left: 同上
@@ -4692,6 +4894,11 @@ rank     : Tensor<n, a> -> Int
 ```
 
 `length` 对 `String` 和 `Tensor` 重载，由类型类 `Sized` 解析。
+
+`par_map(f, xs)` 并行映射，结果顺序与输入一致（线程数不改变结果）。它
+要求 `Parallel a`：`Int`、`Float[d]` 及其张量可以并行，符号 `Real` 不并行
+（§3.8.4/§6.10）。元素类型由调用点决定，所以约束在调用点检查，而不是一个
+全局实例。
 
 ### 8.1.6 Option / Result
 
@@ -4722,6 +4929,31 @@ println  : Show a => a -> IO Unit
 eprintln : Show a => a -> IO Unit
 ```
 
+> **实现状态（2026-11-04）**：`par_map`/`rng` 已进入 §3.8.4 的内置类表、
+> Prelude 签名与运行时 dispatch；checker 在调用点检查 `Parallel a`
+> （`Int`/`Float` 及其张量可以并行，符号 `Real` 被静态拒绝，§3.8.4）。
+> `rng` 是纯函数，返回“下一个数”闭包。`par_map` 的结果顺序与输入一致；
+> 当前解释器是 `!Send`，这一构建里 map 实际按顺序执行——这是
+> §9.7.2 rayon 措辞的实现偏差，不是结果语义的偏差（顺序/确定性不变）。
+
+### 8.1.8 程序参数
+
+```
+args : () -> Tensor<1, String>
+```
+
+`args()` 返回宿主传给程序的参数向量，**只包含 `aevia run file -- a b` 中
+`--` 之后的参数**（`--` 本身不是参数）；没有参数时是空张量
+（`length(args()) == 0`，打印 `[]`）。它按位序保留参数的原始字符串，不做
+shell 解析（引号、空格、通配符已由 shell/宿主处理）；值在进程内不变，多次
+调用返回同一组。类型是 `Tensor<1, String>`，因此可以 `map`/索引/`length`。
+
+> **实现状态（2026-11-05）**：已实现——`Interp::set_args` 设置参数向量，
+> builtin 返回 rank-1 `Tensor<1, String>`；`aevia-core` 的
+> `io_taxonomy` 测试 `args_are_the_host_set_vector` 断言空向量（`[]`）与
+> 两个参数（`["one", "two"]`）的情形；CLI 的 `run -- args…` 转发已接线
+> （实测 `aevia run p.aev -- a b` → `args() = [a, b]`，无 `--` 时 `[]`）。
+
 ## 8.2 Math
 
 ```
@@ -4733,7 +4965,10 @@ nan      : Float[1]
 ```
 
 `oo` 是 `Real[1]`，不是量纲多态；`oo m` 是 `Real[L]`。`-oo` 由一元负号
-得到。`nan` 是 `Float[1]`。
+得到。`nan` 是 `Float[1]`。**无穷的运算语义见 §6.3.4**：那里给出哪些边界
+值会折叠（`ln(0)=-oo`、`ln(oo)=oo`、`exp(oo)=oo`、`exp(-oo)=0`）、哪些含
+`oo` 的 `+ - * / ^` 保留为符号项（精确相位不发明 NaN），以及 `Float` 相位
+按 IEEE 给出 `inf`/`nan`；本章只声明 `oo`/`nan` 的类型与量纲。
 
 ### 8.2.1 初等函数
 
@@ -4867,13 +5102,21 @@ matmul     : Sparse<F, [m,k], Scalar<ρ,d>> × Sparse<G, [k,n], Scalar<ρ,e>>
            -> Sparse<Csr, [m,n], Scalar<ρ,d*e>>
 ```
 
-`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。`Sparse` 是核心类型构造器，`F` 是 `Format` kind；`Layout` 类提供
-`from_dense`/`to_dense`/`nnz`/`matmul`/`transpose`。`@` 在 dense/sparse
-混合时按布局分派；不隐式互转。0.2.13 的格式是封闭集合；用户自定义格式要等 RSSN 开放 `Format`（§13.9.5）。RSSN
-的 `TypeExpr::Sparse` 只有 rank，所以 `shape` 细化在 Aevia 侧检查，边界
-降为 rank + 运行时 shape。0.2.13 的 `term_of_value` 不接受 `Value::Sparse`
-进入项图，所以稀疏运算必须走 `eval_dyn` 内核或 Aevia 自己的布局内核；
-不能把稀疏值直接喂给通用重写算子。
+`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。`Sparse` 是核心类型构造器，`F` 是 `Format` kind；`from_dense`/`to_dense`/`nnz` 是内建函数（实现为一个 CSR 记录往返，`stdlib` 测试覆盖），不是可实例化的 `Layout` 类型类。**v1 的稀疏值就是 `from_dense` 返回的 CSR 记录**（`rows`/`cols`/`values`/`col_indices`/`row_ptr`），不是运行时存储类：checker 的 `Sparse`/`TyKind::Sparse` 是类型层镜像，并**擦除为对应的 dense `Tensor`**（所以 `transpose` 只有 dense `Tensor<2>` 的 typing，没有 `Sparse` 重载）；`aevia-core` 的 `Storage` 没有 sparse 变体，kernel 的稀疏值过桥时被 densify。存储类级别的通用稀疏算法（含 `transpose`/`matmul`/`@` 布局分派）以命名 capability gap `storage.sparse` 记录（§13.9.5），是**运行时缺口**而不是类型层承诺。`@` 在 dense/sparse
+混合时按布局分派；不隐式互转。格式当前是封闭集合；用户自定义格式要等
+RSSN 开放 `Format`（§13.9.5）。RSSN 的 `TypeExpr::Sparse` 只有 rank，所以
+`shape` 细化在 Aevia 侧检查，边界降为 rank + 运行时 shape。RSSN 的
+`term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds`
+里 `in_term_graph = false`），所以稀疏运算必须走 `eval_dyn` 内核或 Aevia
+自己的布局内核；不能把稀疏值直接喂给通用重写算子。稀疏存储由 kernel 的
+`faer`（`sparse-linalg`）后端承担；宿主不接触具体格式的存储布局。
+
+> **实现状态（2026-11-05）**：`from_dense`/`to_dense`/`nnz` 已实现并通过
+> CSR 记录往返测试；**没有运行时 `Sparse` 值类型**（记录约定，不是存储类）。
+> `transpose`/`matmul` 的稀疏版本和 `@` 的 dense/sparse 布局分派**尚未
+> 实现**——属 `storage.sparse` 命名 capability gap（§13.9.5），不是静默
+> 遗漏；当前只对 dense 张量分派，稠密矩阵仍可走 `faer`。用户自定义
+> `Format` 也不可用。
 
 ## 8.5 Calculus
 
@@ -4927,7 +5170,8 @@ minimize     : (Tensor<1, Real[d]> -> Real[e], Tensor<1, Real[d]>)
              -> Result<Tensor<1, Real[d]>, MathError>
 minimize_f   : (Tensor<1, Float[d]> -> Float[e], Tensor<1, Float[d]>)
              -> Result<Tensor<1, Float[d]>, MathError>
-maximize     : 同上
+maximize     : (Tensor<1, Real[d]> -> Real[e], Tensor<1, Real[d]>)
+             -> Result<Tensor<1, Real[d]>, MathError>    # 与 minimize 同型（Real 形式），不是 minimize_f
 least_squares: ((Tensor<1, Real[d]> -> Tensor<1, Real[e]>), Tensor<1, Real[d]>)
              -> Result<Tensor<1, Real[d]>, MathError>
 linsolve     : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
@@ -4939,18 +5183,32 @@ linsolve     : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
    multiplicities: Tensor<1, Int>, conditions: Tensor<1, Condition>,
    complete: Bool }`，保留重数与参数条件；它不是 `Set`。
 
-- `multiplicities` 为空表示**未报告**。RSSN 的 `multiplicity()` 访问器对
-  空表返回 1，但那是“没有信息时的默认回答”，不是声明；Aevia 保留空语义，
-  不把它当“全 1”。
-- `complete = true` 表示求解器返回了穷尽形式（RSSN 的 `list(...)`）；
-  返回单个值时 RSSN 给 `false`，`Solutions::new` 也默认 `false`，要声明
-  穷尽必须显式 `.complete()`。**`complete` 不是数学证明**，只是“求解器
-  没有声明不完整”。
+这个记录就是 RSSN `Solutions` 的记录（`Solutions::to_value`）：字段名、顺序和
+含义一一对应，桥不做重新解释，因此内核说“没报告重数”就是空表，说“不完整”
+就是 `false`。唯一的改形是 `variable`——RSSN 侧是符号（无未知量时是空串），
+Aevia 侧是 `Option<String>`。
 
-`Condition` 是 `{ kind: ConditionKind, text: String,
-expression: Option<Value> }`；`ConditionKind` 是 RSSN `ConditionKind` 的
-镜像（`NonZero`、`Positive`、`Real` 等），`text` 是给人读的谓词，
-`expression` 是可选的结构化条件值（RSSN 侧是 `Value`）。
+- `multiplicities` 是求解器给出的重数表，空表示**未报告**。RSSN 的
+  `multiplicity()` 访问器对空表返回 1，但那是“没有信息时的默认回答”，
+  不是声明；Aevia 保留空语义，不把它当“全 1”，也不从重复的根里反推重数。
+  当前 kernel 在**能证明**时填它：方程是一元有理多项式、且每个根都是精确
+  数时，用精确 square-free 分解给出重数（`(x-1)^2*(x+2)` → `[1, 2]`）；
+  根是无理/符号表达式时保持空表（把符号根数值匹配到因式是猜测）。
+- `conditions` 只填求解器**由构造就能声明**的条件，例如
+  `solve(a*x + b = 0, x)` 的根 `-b/a` 带 `a != 0`；实性/分支条件不填。
+  `complete = false` 时 `multiplicities`/`conditions` 都保持空表：沿途找到的
+  单个根不足以声明重数或合法性。
+- `complete` 是求解器的声明：`true` 表示它返回了穷尽形式（RSSN 的
+  `list(...)`），返回单个值时 RSSN 给 `false`。桥原样传递这个值，不写成常量。
+  `list(...)` 里的符号根由桥逐个展开为 `roots` 的元素（不再把整张表当作
+  一个不透明根），所以“求解器给了穷尽列表”与“桥只拿到一个根”是可区分的。
+  **`complete` 不是数学证明**，只是“求解器没有声明不完整”。
+
+`Condition` 是 `{ kind: String, text: String, expression: Option<Value> }`：
+`kind` 是 RSSN `ConditionKind` 的小写名（`nonzero`、`positive`、`real` 等），
+`text` 是给人读的谓词，`expression` 是求解器保留的结构化条件值（RSSN 侧是
+`Value`），求解器没有保留时该字段缺省。语言里没有与 `ConditionKind` 同名的
+类型，所以元素类型是不透明的 `Condition`，字段按值读取。
 
 `solve` 返回实解；`solve_complex` 返回复解。数值求解失败返回 `Err`。
 `linsolve` 是线性方程组求解，避免与符号 `solve` 同名。
@@ -4975,25 +5233,47 @@ mode      : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>
 
 ### 8.7.1 分布
 
-```
-class Distribution dist d where
-    pdf    : (dist, Real[d]) -> Real[1/d]
-    cdf    : (dist, Real[d]) -> Real[1]
-    sample : dist -> IO Real[d]
-    sample_n : (dist, Int, Option<Int>) -> Tensor<1, Real[d]>
+分布是**名义类型**，不是多参数类型类（多参数类不在语言中，§3.8.1）：
 
-type Normal<d>     = { mu: Real[d], sigma: Real[d] }
-type Uniform<d>    = { lo: Real[d], hi: Real[d] }
+```
+type Distribution<d> =
+    | Normal(Normal<d>)
+    | Uniform(Uniform<d>)
+    | Exponential(Exponential<d>)
+    | Gamma(Gamma<d>)
+    | Beta(Beta)
+    | ChiSquared(ChiSquared)
+    | StudentT(StudentT)
+    | Poisson(Poisson)
+    | Binomial(Binomial)
+
+type Normal<d>      = { mu: Real[d], sigma: Real[d] }
+type Uniform<d>     = { lo: Real[d], hi: Real[d] }
 type Exponential<d> = { rate: Real[1/d] }
-type Gamma<d>      = { shape: Real[1], rate: Real[1/d] }
-type Beta          = { alpha: Real[1], beta: Real[1] }
-type ChiSquared    = { df: Real[1] }
-type StudentT      = { df: Real[1] }
-type Poisson       = { lambda: Real[1] }
-type Binomial      = { n: Int, p: Real[1] }
+type Gamma<d>       = { shape: Real[1], rate: Real[1/d] }
+type Beta           = { alpha: Real[1], beta: Real[1] }
+type ChiSquared     = { df: Real[1] }
+type StudentT       = { df: Real[1] }
+type Poisson        = { lambda: Real[1] }
+type Binomial       = { n: Int, p: Real[1] }
+```
+
+`pdf`、`cdf`、`sample`、`sample_n` 是对这个封闭 ADT 的**内建重载**：
+
+```
+pdf      : (Distribution<d>, Real[d]) -> Real[1/d]
+cdf      : (Distribution<d>, Real[d]) -> Real[1]
+sample   : Distribution<d> -> IO Real[d]
+sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ```
 
 `Normal<L>` 的 `pdf` 量纲是 `1/L`；`cdf` 无量纲；`sample` 返回 `Real[L]`。
+
+**v1 不支持用户自定义分布。** 多参数类被移除（§3.8.1），而“分布参数 →
+量纲”的映射需要类型函数（类似 `RateOf`），这是另一个设计；在没有它之前，
+把 `class Distribution dist d` 留在规范里只会让用户写出无法实例化的代码。
+用户自定义分布列在 §12.8.13 的扩展边界之外；标准库可以为新的分布形态增加
+内建构造器，但那是库的封闭集合，不是语言扩展点。
 
 ## 8.8 FFT / Interpolate
 
@@ -5075,6 +5355,179 @@ Float[d]>` 按行主序展平。当前只支持 `Float` 标量/张量字段；�
 `Bool`/函数字段的状态报 `E0302`，把常量参数捕获在 `rhs` 闭包里。`Tensor<1,
 s>` 用 `Boxed` 存储；数值内核只看到扁平 `f64`，Aevia 负责装箱/拆箱。
 
+导入的 `odeint`/`odeint_with`/`solve_ivp`（以及 §8.9.1 的 `sdeint_*`，例如
+`import Ode { odeint }`）**保持类型函数语义**：`RateOf<s>`/`DiffusionOf<s>`
+的检查由入口点本身决定，标准库模块只是再导出，不改变签名；只有本地重新
+定义同名函数才会遮蔽它。
+
+## 8.9.1 SDE
+
+SDE 与 ODE 共用 `RateOf`/展平契约（§8.9），但多了噪声结构与随机积分约定。
+方法名本身编码积分约定：名字里带 `stratonovich` 的收敛到 Stratonovich 解，
+其余是 Itô；没有与方法正交的 `calculus` 选项（名称不说明积分约定的方案
+几乎都会被误用）。
+
+```
+type SdeMethod =
+    | EulerMaruyama | Milstein | MilsteinStratonovich
+    | HeunStratonovich | SrkPlaten | MilsteinNoncommutative
+
+type SdeStructure =
+    | Diagonal                     # 每个状态分量一个噪声通道，m = n
+    | General(Int)                 # (m)；调用者声明噪声可交换
+    | GeneralNoncommutative(Int)   # (m)；只有 MilsteinNoncommutative 合法
+
+type SdeFixedOpts<T> = {
+    structure: SdeStructure,
+    method: SdeMethod,
+    seed: Int,
+    t0: Float[T], dt: Float[T], steps: Int,
+    terms: Int,                    # Lévy 面积的 Fourier 模数；非交换方法之外传 0（显式，无默认值）
+}
+
+type SdeAdaptiveOpts<T> = {
+    structure: SdeStructure,
+    method: SdeMethod,
+    seed: Int,
+    t0: Float[T], t1: Float[T],
+    rtol: Float[1], atol: Float[1],
+    max_steps: Int,
+    cells: Int,                    # 非交换自适应的 Brownian 网格 cell 数；其余传 0
+    terms: Int,
+}
+
+type SdeOpts<T> = | Fixed(SdeFixedOpts<T>) | Adaptive(SdeAdaptiveOpts<T>)
+
+type SdePath<s> = {
+    t: Tensor<1, Float[T]>, y: Tensor<1, s>,
+    steps: Int, rejected: Int, nfev: Int,
+    seed: Int, noise: Int, method: SdeMethod,
+}
+
+sdeint_diag : (((Float[T], s) -> RateOf<s>),
+               ((Float[T], s) -> DiffusionOf<s>),
+               s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>
+
+sdeint_general : (((Float[T], s) -> RateOf<s>),
+                  ((Float[T], s) -> Tensor<2, Scalar<ρ, d/T^(1/2)>>),   # s = Float[d]
+                  s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>
+
+wiener           : (Int, Int, Int, Float[T]) -> Tensor<2, Float[T^(1/2)]>
+                   # (seed, m, steps, dt)；与 manifest 的 sde_wiener(seed, m, steps, h) 同序
+sde_order        : SdeMethod -> { strong: Float[1], weak: Float[1] }
+sde_ensemble_seed: (Int, Int) -> Int     # (seed, index)，纯函数
+```
+
+方法/噪声结构矩阵（内核文档明确没有强于一阶的方案，Milstein 系也只是弱
+一阶，因此不声称弱二阶）：
+
+| method | calculus | 允许的 structure | strong/weak |
+|---|---|---|---|
+| `EulerMaruyama` | Itô | `Diagonal`, `General`, `GeneralNoncommutative` | 1/2, 1 |
+| `Milstein` | Itô | `Diagonal`, `General` | 1, 1 |
+| `MilsteinStratonovich` | Stratonovich | `Diagonal`, `General` | 1, 1 |
+| `HeunStratonovich` | Stratonovich | `Diagonal`, `General` | 1, 1 |
+| `SrkPlaten` | Itô | `Diagonal`, `General` | 1, 1 |
+| `MilsteinNoncommutative` | Itô | `GeneralNoncommutative` | 1, 1 |
+
+`General`/`GeneralNoncommutative` 的 `m` 是噪声通道数；`sdeint_general` 在
+运行时检查扩散矩阵形状是 `n × m`（`E0802`），`SdePath.noise` 报告实际
+`m`（对角时是 `n`）。`sdeint_diag` 的记录状态用对角噪声；记录状态 + 一般
+噪声是 `E1001("sde.general.record")`。
+
+**步长策略**：`Fixed` 是定步长 `dt`、共 `steps` 步（时间网格
+`t0 + k·dt`）；`Adaptive` 在 `[t0, t1]` 上用局部误差 `rtol`/`atol` 控制，
+Brownian bridge 拒绝/重采（内核）。自适应只有 Itô 可交换
+（`EulerMaruyama`/`Milstein`）与非交换 Milstein；Stratonovich 自适应是
+`E1001("sde.interpretation")`，不是悄悄退化成定步长。内核的自适应控制器
+返回 Milstein 解（其误差估计是 EM-vs-Milstein），所以 `Adaptive` +
+`EulerMaruyama` 与 + `Milstein` 给出同一条受控路径，方法名保留请求值。
+
+**确定性**：`seed` 必填，没有默认值。定步长可交换路径的增量来自语言 RNG
+流（与 `rng(seed)` 相同的 LCG，正态用 Box–Muller），因此
+`wiener(seed, m, steps, dt)` 与同 seed 的定步长路径消费**同一组数**；同
+构建内可复现，不承诺跨平台逐位相同。非交换定步长与所有自适应路径需要内核
+自己的 xoshiro 流（bridge 拒绝与 Lévy 面积在求解过程中采样），由 `seed`
+播种，同样只承诺同构建可复现。`sde_ensemble_seed` 只依赖 `(seed, index)`，
+所以集合成员与执行顺序/线程数无关；解释器闭包是 `!Send`，v1 的集合按顺序
+运行。
+
+**错误表**（不新增 Appendix-B 码）：`E0802` 形状/参数（含 `General` 的
+`m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；
+`E0807` 自适应步长塌缩或步数预算耗尽；`E1001` 未实现组合，note 名为
+`core.sde`、`sde.noncommutative`、`sde.interpretation`、
+`sde.general.record`。`SdeError` 是不透明错误类型（像 `SimError`），语言层
+不暴露构造器。
+
+**v1 明确不做**：events/根查找、dense output、用户自定义噪声结构、记录状态
++ 一般噪声、显式非均匀网格（定步长内核假设均匀步长，报 `E0802`；需要变
+步长时用 `Adaptive`）、求解器 manifest 算子（求解器需要回调，无法越过
+manifest ABI）。
+
+> **实现状态（2026-11-04，SDE 集成轮，源码级端到端已验证）**：运行时与
+> `aevia-std` 的 SDE 求解器已落地，`aevia-core` 的 `sde_runtime` 测试
+> 10/10 通过；下面的组合也已用源码程序实际跑通（见 §8.20 的模块导入注）。
+> 可用的组合：
+>
+> - **方法**：`EulerMaruyama`、`Milstein`、`MilsteinStratonovich`、
+>   `HeunStratonovich`、`SrkPlaten`、`MilsteinNoncommutative` 都能积分；
+> - **结构**：`Diagonal`（标量与记录状态）、`General(m)`（标量/rank-1 状态，
+>   扩散矩阵 `n×m` 在运行时校验，例如标量状态 + `General(2)` 给 `1×2`
+>   系数）可用；`GeneralNoncommutative(m)` 只与 `MilsteinNoncommutative`
+>   组合。**记录状态 + 一般噪声在语言层是 `E0302`**：checker 拒绝
+>   `sdeint_general` 的记录状态（help 指向 `sdeint_diag` 或 rank-1 状态），
+>   所以源码程序不会走到运行时的 `E1001("sde.general.record")`；那个
+>   `E1001` 仍是宿主/Rust 层直接调 builtin 时的守卫（`sde_runtime` 的
+>   `general_noise_with_a_record_state_is_named_gap` 覆盖）；
+> - **步长**：`Fixed`（`t0`/`dt`/`steps`，均匀网格）与 `Adaptive`
+>   （`[t0,t1]`、`rtol`/`atol`、`max_steps`）；Stratonovich 自适应是
+>   `E1001("sde.interpretation")`，不会静默退化成定步长；非交换定步长需要
+>   `terms`。源码验证：`Fixed` 20 步对角路径给出 `steps=20, nfev=40`；
+>   `Adaptive` 给出 `steps=11, rejected=1, nfev=60`；两条路径两次运行输出
+>   逐位相同（同 seed/同构建）。源码级回归测试在
+>   `aevia-core/tests/sde_language.rs`（5 个：构造策略并积分、可复现、
+>   diffusion 量纲检查、缺失字段是静态错误、不支持组合是可恢复错误）；
+> - **两条 RNG 流**：可交换定步长路径消费与 `wiener(seed,m,steps,dt)`/
+>   `rng(seed)` 相同的语言 LCG 流；非交换定步长与自适应路径用内核 xoshiro
+>   流，由 `seed` 播种；只承诺同构建可复现，不承诺跨平台逐位一致；
+> - **确定性**：`seed` 必填；`sde_ensemble_seed(seed,index)` 是纯函数，成员
+>   与执行顺序/线程数无关。**语言层没有 ensemble runner**：只有 seed 助手是
+>   入口；`aevia-std` 内部的顺序 ensemble 尚未接线，所以不要从“集合按顺序
+>   运行”推断存在可调用的集合 API；
+> - **入口与类型**：`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/
+>   `sde_ensemble_seed` 是 Prelude 内建，并由 `Sde` 模块 re-export；
+>   `Sde` 模块还声明本节的 `SdeMethod`/`SdeStructure`/`SdeFixedOpts`/
+>   `SdeAdaptiveOpts`/`SdeOpts`/`SdePath`。checker 侧 `RateOf<s>` 与
+>   `DiffusionOf<s>`（`SdeMethod`/`SdeError` 为不透明类型）已实现，drift /
+>   diffusion 的签名按本节检查。**源码级策略构造可用**：`import Sde` 后写
+>   `Sde.Fixed({ structure = Sde.Diagonal, method = Sde.EulerMaruyama, … })`
+>   （或 `import Sde { Fixed, Diagonal, EulerMaruyama }` 后用短名）能通过
+>   检查并运行——本节签名里的构造函数名来自 `Sde` 模块。选项记录由运行时
+>   逐字段读取（`method`/`structure`/`seed`/`t0`/`dt`/`steps`/`terms` 等），
+>   缺失或类型不对得到 `E0802`/`E1001` 的 `SdeError` 值，不会自动填默认值；
+>   透明类型别名（如 `Physics.Ising.Params`）现在也可以经
+>   `import { Params }`/`open Physics.Ising` 引入类型名（task-22 已闭合，
+>   见 §7.2.2 与 §8.20），不再需要退回限定名。
+> - **manifest**：SDE 面有三个 manifest 算子——两个噪声原语
+>   `sde_wiener`/`sde_levy_areas`（overlay 精确签名 + `features.sde`）与
+>   方案元数据 `sde_scheme_info(name: String) -> Tensor<1, Real>`（返回
+>   `[strong_order, ito, commutative_only, adaptive, levy_areas]`，后四项是
+>   1/0 flag；dim rule 是 `NonMetric`；方案名是 snake_case，覆盖 8 个方案：
+>   `euler_maruyama` → `[0.5, 1, 0, 0, 0]`、`milstein` → `[1, 1, 1, 0, 0]`、
+>   `milstein_stratonovich`、`milstein_noncommutative`、`srk_platen`、
+>   `heun_stratonovich`，以及自适应的 `sde_adaptive`/
+>   `sde_adaptive_noncommutative`（`adaptive = 1`）；未知名字保持未化简
+>   请求）。它是**manifest-only 的元数据算子**，不是求解路径；求解循环仍是
+>   Rust-only（host 回调，kernel CO-03）。它只给**强阶**（没有弱阶列），
+>   与 §8.9.1 的 `sde_order`（返回 `{strong, weak}` 表）互补：需要弱阶时用
+>   `sde_order`，需要 flag/自适应标记时用 `sde_scheme_info`。生成源是精确的
+>   （`(String) -> Tensor<1, Real>`，无 `Dyn` 回退）。
+>
+> 数值格式方面：**分数维度指数的打印已修复**（2026-11-05）——`wiener` 的
+> `Float[T^(1/2)]` 元素现在打印成 `s^(1/2)`（`Dim::to_si_symbol_string()`
+> 现在渲染有理指数；同批测试覆盖 `s^(3/2)`、`1/s^(1/2)`、`m/s^2` 和真实
+> `wiener` 值），见 §5.4.3。
+
 ## 8.10 PDE
 
 PDE 求解器的参数是记录，包含网格、系数、边界条件。签名较长，这里给出
@@ -5138,6 +5591,33 @@ CSV 表头可以带单位：`time [s]`、`velocity [m/s]`。`read_csv<ρ>` 解�
 一次防御性校验。没有表头单位时，列被当作无量纲；显式 `ρ` 可以覆盖，
 但运行时校验失败报 `DataError.DimensionMismatch`。
 
+> **实现状态（2026-11-05，第 8 章 323/323 已闭合）**：
+> `read_csv`/`write_csv`/`read_json`/`write_json` 与
+> Table/column/select/filter/join 已实现；**NPY 也在本地实现**（不再依赖
+> kernel 的 `io.binary`）：`read_npy`/`write_npy` 有本地 NPY 编解码与执行
+> runner，实测写读往返为 `write=Ok(())`、`read=Ok([[1, 2], [3, 4]])`。
+> NPY 细节：写 version 1.0；读 1.0/2.0/3.0 头，dtype `'<f8'`（写）与
+> `'<f8'`/`'<f4'`/`'|f8'`/`'|f4'`/`'=f8'`/`'=f4'`（读；f4 提升为 Float），
+> rank 0/1/2（含空数组），只支持 C order。错误按附录 B：`E0901` 文件不存在、
+> `E0902` 非法参数（非 dense/rank 不对的写入）、`E0903` 数据损坏/截断或头
+> 10 KiB、`E0904` 不支持的格式（Fortran order、大端/非浮点 dtype、错误
+> 扩展名、不支持的版本）、`E0905` 绘图。**类型层面 v1 的精确边界**：
+> `read_npy` 固定返回 `Tensor<2, Float>`（rank-variable shape 未实现；
+> `read_npy<1>` 不改变结果秩，省略 `<n>` 也不报 `E0314`）；`write_npy`
+> 接受任何 tensor（checker 只要求是 tensor；rank 0/1/2 由运行时处理，
+> 不支持的存储/格式是 `E0904`）。因此第 8 章的声明名**没有**
+> capability gap（coverage 的 `chapter_eight_has_no_capability_gaps` 通过；
+> 共 **323/323** 个名字——`args` 计入后由 322 变 323）。
+> **IO 错误分类 E0901–E0905 已落地**（本节的读者/写者与 §8.12 的绘图动作
+> 都遵守）：`E0901` 文件不存在、`E0902` 权限拒绝或非法参数、`E0903` 数据
+> 文件解析失败（CSV/JSON 格式错误、NPY 损坏/截断）、`E0904` 不支持的
+> 格式/扩展名（例如 `read_csv("data.npy")`、`read_json("data.csv")`、或
+> `read_npy`/`write_npy` 给错扩展名，在真正读文件之前就返回）、`E0905`
+> 绘图渲染/保存失败。这些分类作为 `Result` 的 `Err` 文本（`E090x: …`）或
+> 致命 IO 动作诊断出现，由 `aevia-core/tests/io_taxonomy.rs` 断言
+> （`E0901`/`E0903`/`E0904`/`E0905` 有直接用例；`E0902` 由
+> `NotFound`/`PermissionDenied` 映射）。
+
 ## 8.12 Plot
 
 ```
@@ -5168,8 +5648,16 @@ xunit: Option<String>, yunit: Option<String>, xscale: AxisScale, yscale: AxisSca
 xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`。
 `line(x, y)` 使用默认值，自动从 `x`、`y` 的量纲生成轴标签
 （`t / s`、`v / (m/s)`）；`line_with` 接受完整 `PlotOpts`；`label(series,
-"v(t)")` 是设置标签的快捷方式。`plot` 默认写
-`plot.html`；`save` 指定文件名（`.html` 或 `.svg`）。
+"v(t)")` 是设置标签的快捷方式。`plot` 默认写 `plot.html`；`save` 指定文件名。
+
+> **实现状态（2026-11-05）**：当前只有 HTML/SVG-inline 一种渲染器——`plot`
+> 和 `save` 生成同一段 HTML（内含 `<svg>` 元素）；`save` **不按扩展名**
+> 切换格式，写 `.svg` 文件时内容仍是 HTML 文档。**写失败是 `E0905`**
+> （"plot rendering failed"/保存失败），由 `aevia-core/tests/io_taxonomy.rs`
+> 的 `a_failed_plot_write_is_e0905` 断言；`plot`/`save` 仍是 fatal 的 IO
+> 动作（失败以诊断退出，不是 `Result`）。独立 `.svg` 输出与 PNG/JPEG
+> 尚未实现（PNG/JPEG 需要额外依赖，见 kernel 的 IO 缺口），不要把它当作
+> 已支持的格式。
 
 ## 8.13 Test
 
@@ -5184,7 +5672,10 @@ compile_fail: String -> Bool
 `approx_eq(a, b, tol)` 要求三者同量纲；`tol` 是绝对容差。`forall` 对
 `Arbitrary` 类型生成随机样本，对每个样本 `decide` 命题；任一为
 `Some(false)` 则失败，全部为 `Some(true)` 才通过，出现 `None` 报
-`E0804`。`compile_fail` 接受一段源码字符串，期望编译失败。
+`E0804`。`compile_fail` 接受一段源码字符串，在**隔离**环境中编译（无导入、
+无调用模块声明，仅 Prelude），产生至少一个错误时返回 `true`；它不检查
+错误码——需要断言错误码时用 doctest 的 `compile_fail EXXXX` 标记
+（§7.5.5/§9.12）。
 
 ## 8.14 Measurement
 
@@ -5199,8 +5690,25 @@ uncertainty : Measurement<d> -> Real[d]
 (/)       : (Measurement<d>, Measurement<e>) -> Measurement<d/e>
 ```
 
-不确定度按独立误差传播（平方和开根）；相关误差需要协方差矩阵，核心库不提供。
-`Measurement` 是库类型，不是语言核心。
+不确定度按独立误差传播（平方和开根）。对 `a = (v₁, u₁)`、`b = (v₂, u₂)`：
+
+- `a + b` / `a - b`：值 `v₁ ± v₂`，不确定度 `√(u₁² + u₂²)`；两边量纲必须
+  相同，否则 `E0401`。
+- `a * b`：值 `v₁·v₂`，不确定度 `√((u₁·v₂)² + (u₂·v₁)²)`（量纲 `d*e`）。
+- `a / b`：值 `v₁/v₂`，不确定度 `√((u₁/v₂)² + (u₂·v₁/v₂²)²)`（量纲 `d/e`）。
+
+相关误差需要协方差矩阵，核心库不提供。`Measurement` 是库类型，不是语言核心；
+checker 把它当普通记录 `{ value, uncertainty }` **结构化识别**（不是新的
+nominal 类型），字段名/顺序因此是边界的一部分：`+`/`-` 要求同量纲
+（否则 `E0401`），`*`/`/` 组合量纲，标量缩放只在 `*`/`/` 一侧。
+**注意**：上面的是**算子**（重载），不是名字；它们不在 §8.20 的 323 条名字
+覆盖表里（名字审计看不到重载）。checker 与运行时**都已实现**这些运算
+（checker 的 `binary_type` 按本节规则检查，运行时的 `apply_binary` 做独立
+误差传播；`aevia-core/tests/measurement.rs` 覆盖）。实现还支持一元 `-` 与
+“测量 ×/÷ 标量”（不确定度乘 `|scalar|`），这些是实现额外项；规范最小集是
+上表四条二元运算。`Measurement + number`（或 `-`）不是运算符，仍是
+`E0302`；只有 `*`/`/` 支持“测量与标量”的混合（`number / measurement` 也被
+拒绝，提示用测量的值相除）。
 
 ## 8.15 Complex
 
@@ -5217,7 +5725,9 @@ complex_sin cos : Complex[1] -> Complex[1]
 ```
 
 `abs` 只用于实数；复数的模用 `magnitude`，避免 `abs : Complex[d] ->
-Real[d]` 与 `abs : Scalar<ρ,d> -> Scalar<ρ,d>` 冲突。
+Real[d]` 与 `abs : Scalar<ρ,d> -> Scalar<ρ,d>` 冲突。`complex_sqrt` 的结果
+量纲是 `d^(1/2)`；类型显示/诊断里的维度变量指数保留下标（`:type
+complex_sqrt` → `Complex[d0] -> Complex[d0^(1/2)]`，不会塌成 `d0^1`）。
 
 ## 8.16 NumberTheory / Combinatorics / Geometry
 
@@ -5238,7 +5748,15 @@ distance    : (Tensor<1, Real[L]>, Tensor<1, Real[L]>) -> Real[L]
 
 ```
 simulate : (String, Json) -> Result<Json, SimError>
+
+to_json   : a -> Json                              # 动态边界：把可表示值编码为 JSON 值
+from_json : Json -> Result<a, SimError>            # 动态边界：解码；a 在运行时擦除
 ```
+
+`Json` 是不透明的动态值类型；`to_json`/`from_json` 是它唯一的语言内构造/
+窄化通道，语义与 `Rssn.typed` + `from_value` 相同：`to_json` 不检查 `a`，
+`from_json` 在运行期解码并把失败报成 `SimError`。类型化包装器用它们把记录
+参数送进 `simulate` 再把结果取回（不是把 `simulate` 本身改成多态签名）。
 
 类型化包装器（每个都是独立模块，顶层声明，无缩进）：
 
@@ -5269,13 +5787,22 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 ```
 
 `simulate` 是动态入口，接受 rssn 的场景名和 JSON；类型化包装器在
-`Physics.*` 中，逐字段标注量纲。覆盖 rssn 的 `SCENARIOS` 列表
-（`ising`、`geodesic`、`gpe`、`schrodinger`、`fdtd`、`elasticity`、
-`lid_driven_cavity`、`channel_flow`、`sod_shock_tube`、`kepler_symplectic`、
-`poisson_multigrid`、`heat_nd`、`wave_nd`、`euler_fv`、`dg_conservation`、
-`acoustics_pml`、`yee_fdtd`、`navier_stokes_mac`、`split_step`、`fem_simplex`、
+`Physics.*` 中，逐字段标注量纲。场景名以下面 rssn 的 live `SCENARIOS`
+列表为准（2026-11-04 测量为 29 个）：`ising`、`ising_wolff`、`geodesic`、
+`gpe`、`schrodinger`、`fdtd`、`elasticity`、`lid_driven_cavity`、
+`channel_flow`、`sod_shock_tube`、`kepler_symplectic`、`poisson_multigrid`、
+`heat_nd`、`wave_nd`、`euler_fv`、`dg_conservation`、`acoustics_pml`、
+`yee_fdtd`、`navier_stokes_mac`、`split_step`、`fem_simplex`、
 `elasticity_fem`、`bem_laplace`、`sph`、`dpd`、`md_lj`、`spin_model`、
-`nbody_gravity`、`kerr_geodesic`）。
+`nbody_gravity`、`kerr_geodesic`。宿主不应手写第二份场景清单：运行时
+从 `rssn::sim::scenario::SCENARIOS` 读。
+
+> **实现状态（2026-11-04）**：动态入口 `simulate` 已实现（`aevia-std`），
+> `to_json`/`from_json` 已实现并类型化（§8.19 的动态边界）；§8.17 上表的
+> 类型化包装器 `Physics.Ising`/`Physics.Geodesic` 已作为 Aevia 源模块实现
+> （`crates/aevia-std/stdlib/Physics/`），`import Physics.Ising` 经嵌入模块
+> 加载器可直接使用，`Physics.Ising.run` 有 4×4 端到端测试（`magnetization`
+> 在 [-1, 1] 内）。
 
 ## 8.18 Device
 
@@ -5296,17 +5823,17 @@ device_of : Tensor<n,τ> -> Device
 ```
 Rssn.Version       : String
 Rssn.ManifestHash  : String
-Rssn.Capabilities  : Tensor<1, String>
+Rssn.Capabilities  : Tensor<1, String>          # 本构建 enabled 的 capability 名
+Rssn.Units         : Tensor<1, String>          # 单位名；单位值由生成的 Units 模块导出
+Rssn.Constants     : Tensor<1, String>          # 常数符号；数值由生成的 Constants 模块导出
+Rssn.ValueKinds    : Tensor<1, String>          # Value 的 17 个变体名
 
 Rssn.call          : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.dynamic       : (String, Tensor<1, Value>) -> Result<Value, OpError>
-Rssn.typed         : (String, Tensor<1, Value>, TypeRep) -> Result<a, OpError>
-Rssn.call_key      : (OpKey, Tensor<1, Value>) -> Result<Value, OpError>
-Rssn.resolve_overload : (String, Tensor<1, Value>) -> Result<OpKey, OpError>
-Rssn.overloads     : String -> Tensor<1, (OpKey, Signature)>
-Rssn.ValueKinds    : Tensor<1, ValueKindInfo>
-Rssn.Constants     : Tensor<1, ConstantInfo>
-Rssn.Units         : Tensor<1, UnitInfo>
+Rssn.typed         : (String, Tensor<1, Value>, TypeRep) -> Result<Value, OpError>
+Rssn.call_key      : (String, String, Tensor<1, Value>) -> Result<Value, OpError>
+Rssn.resolve_overload : (String, Tensor<1, Value>) -> Result<String, OpError>
+Rssn.overloads     : String -> Tensor<1, String>
 to_value           : a -> Value
 from_value         : Value -> Result<a, OpError>
 type_rep<a>()      : TypeRep
@@ -5316,29 +5843,68 @@ Rssn.register        : Plugin -> Result<PluginId, PluginError>
 Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 ```
 
-`OpKey` 是 `{ rule_set: String, name: String, signature_hash: [UInt8; 16] }`；
+`OpKey` 在 Aevia 侧表示成 `(rule_set, name, signature_hash)`：`call_key`
+收 name + `signature_hash`（32 个 hex 字符），`resolve_overload` 成功时返回
+`"rule_set.name@signature_hash"`，`overloads` 返回渲染后的签名文本。
 `signature_hash` 全零表示该算子没有声明重载。`Rssn.call` 是
 `Rssn.dynamic` 的别名（两者都收短名 + `Value` 数组），保留它是为了让
 “调用一个算子”和“走动态边界”在源码里读起来不同。
 
+生成的 typed 声明**不**调用 `Rssn.call_key`：它生成内部形式
+`Rssn.invoke(name, signature_hash, args)`，语义同样是钉死 overload，但错误
+通道不同——生成的 `fn` 必须返回声明类型，所以 kernel 失败会 raise 而不是
+返回 `Err`。`Rssn.invoke` 不是 §8.19 的固定入口，是生成器与运行时之间的
+形式。
+
 `Rssn` 的成员由 Kernel Manifest 生成；上面的 `call`/`dynamic`/`call_key`
 是固定入口。`signature_source = Declared | Overlay | Derived` 的算子都生成
-`Rssn.<name>` 类型化声明（每条 overload 一个），并绑定生成时的 `OpKey`，
-调用走 `Rssn.call_key(key, …)`；只有 `None`（叶子/无调用）与插件算子生成
-`dynamic`。别名生成 `Rssn.<alias>`；冲突时用
-`Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。
+`Rssn.<name>` 类型化声明（每条 overload 一个），并绑定生成时的
+`signature_hash`，调用钉死该 overload；只有 `None`（叶子/无调用）与插件
+算子生成 `dynamic`。别名生成 `Rssn.<alias>`；冲突时用
+`Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。SDE 的三个 manifest
+算子——两个噪声原语 `sde_wiener`/`sde_levy_areas` 与方案元数据
+`sde_scheme_info`——都是 overlay 精确签名，因此 `Rssn.sde_wiener`/
+`Rssn.sde_levy_areas`/`Rssn.sde_scheme_info` 自动是 typed 声明
+（`sde_scheme_info` 是 `(String) -> Tensor<1, Real>`，没有 `Dyn` 回退；
+它是 **manifest-only 的元数据查询**，只给强阶与 flag，不返回弱阶——弱阶
+用宿主侧 `sde_order`，见 §8.9.1）；SDE **求解循环**
+（`sdeint_diag`/`sdeint_general`，§8.9.1）需要 host 回调，
+不是 manifest 算子，也不会出现在 `Rssn` 里——它们由宿主侧实现。
+
+本轮 manifest（`rssn 3.0.0-rc.1`，2026-11-05 实测）：**1382 个算子
+（7 declared + 25 overlay + 1350 derived）、32 个 rule set、82 单位、
+30 常数、overload 1568 条（1201×1 + 178×2 + 2×3 + 1×5）、
+`manifest_hash = 8d2c3764…`**；数字会随 kernel 走，以 live manifest 为准。
 
 `Derived` 是“由注册信息推出”的保守签名：`eval` → `(Real,…) -> Real`
 （谓词 `-> Bool`），非叶子另加 `(Term,…) -> Term`。它不区分
-`Tensor`/`Quantity`/`Int`，所以 IDE 要把它标成“保守推断”。当前
-1369 个算子里 7 个 declared、13 个 overlay、1349 个 derived。
+`Tensor`/`Quantity`/`Int`，所以 IDE 要把它标成“保守推断”。本次测量（rssn
+3.0.0-rc.1，2026-11-05）：1382 个算子里 7 个 declared、25 个 overlay、
+1350 个 derived，32 个 rule set（overload 1201×1 + 178×2 + 2×3 + 1×5 =
+1568 条签名）。这些数字是**测量**，不是常量；以 live manifest 为准。
+
+固定入口的可达性与限制：
+
+- `Rssn.typed` 可用：它执行动态调用并接受一个 `TypeRep`。当前 `type_rep()`
+  产出的 `TypeRep` 只有名字（`kind = "opaque"`），所以运行时只能校验第三个
+  参数确实是 `TypeRep`，不能按它逐字段校验返回值；静态保证来自类型检查器。
+- `Rssn.call_ho` 的类型正确，但**非空**回调列表不可构造：Aevia 闭包不满足
+  kernel `HostCallback` 的 `Send + Sync`，因此运行时报
+  `E1001("core.callback")`。空列表等价于一次动态调用，会正常执行。
+- `Rssn.register`/`Rssn.register_plugin` 的类型正确，但 Aevia 源码无法构造
+  `Plugin` 值：源码级 `@op` 打包（§13.5.2）未实现，因此运行时报
+  `E1001("core.plugin.source")`。Rust host 插件仍可经嵌入 API
+  （`Session::register`）注册。
+- 上述两个名字是 capability 表里的行、`enabled = false`；缺的是 Aevia 侧
+  的值构造，不是 kernel 接口。
 
 `Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、
 实验性入口都走它。多注册时 RSSN 在运行时按
 `Exact > Widened > Shaped > Generic > No` 选择，并列时报 `E1002`；参数不被
 任何 overload 接受时报 `OpError::Type`（`check_args`）。标准集每个名字只有
 1 个注册，所以这条路径不做注册级评分，但**会**做签名级校验。
-`Rssn.call_key` 则不解析，直接执行给定 `OpKey`。
+`Rssn.call_key` 则不解析，直接执行 name + `signature_hash` 指定的
+overload。
 
 ## 8.20 库的组织
 
@@ -5367,6 +5933,7 @@ Stats
 FFT
 Interpolate
 Ode
+Sde
 Pde
 Data
   Csv
@@ -5388,19 +5955,66 @@ Physics
 ```
 
 标准库的模块在 `aevia-std` 包中；Prelude 自动导入，其他按需 `import`。
+模块名就是路径：`import A.B` 解析 `A/B.aev`（§7），`import Math { sqrt }`
+只引入 `sqrt`，`open Units.SI` 把 `Units.SI` 的导出名放进当前作用域。
+
+> **实现状态（2026-11-04）**：标准库**模块树已落地**。
+> （`crates/aevia-std/stdlib/**.aev`，**37** 个模块，含 §8.9.1 的 `Sde`；
+> 经 `include_str!` 嵌入；`aevia_std::stdlib` 暴露
+> `source`/`is_module_name`/`module_paths`。）
+> 加载器在普通根目录解析不到模块时回退到嵌入模块，因此 `import Math {
+> sqrt }`、`open Units.SI`、`import Data.Csv { read_csv, column, Table }`、
+> `import Physics.Ising` 都能从用户源码直接使用；本地文件仍然优先于嵌入
+> 模块。`Units.Constants` 由 live Kernel Manifest 生成；标准库的名字也仍然
+> 直接作为 Prelude 内建可用。`Units/*` 是文档性模块：单位名本来就是
+> ambient 的 `Unit[d]` 值，导出数量绑定会遮蔽它们并改变 `Tensor / Unit`
+> 的语义，因此不导出（§5.3.4）。`Sde` 模块 re-export §8.9.1 的五个入口
+> （`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed`）
+> 并声明选项 ADT（`SdeMethod`/`SdeStructure`/`SdeFixedOpts`/
+> `SdeAdaptiveOpts`/`SdeOpts`/`SdePath`）；`Physics.Ising`/`Physics.Geodesic`
+> 提供 §8.17 的类型化包装器。`spec/11` 的九个完整程序**全部**通过
+> （11.1/11.2/11.3/11.4/11.5/11.6/11.7/11.8/11.10；11.2 的
+> `RateOf<State>` 记录统一与 11.4 的 refined/rank-only shape 统一已在本轮
+> 修复，测试 `spec_programs` 断言这张表）。**第 8 章的声明名已全部闭合**：
+> **323/323** 有实现（`args` 计入后由 322 变 323），`stdlib_coverage` 的
+> `chapter_eight_has_no_capability_gaps` 通过；NPY 也在本轮实现（§8.11）。
+> **注意：323/323 只证明“名字”覆盖**——名字清单看不到参数类型、返回类型
+> 与算子重载。本章声明与 checker scheme 的逐条对照由 `aevia-std` 的
+> `spec_signatures` 审计（309 条声明；机械部分比较 presence/arity/return
+> class，2 条已记录的 loose `sdeint_*` 方案留档，其余 type/order findings
+> 见 `.workbuddy-ai/design/chapter8-signature-audit.md`，会随 task-28/29
+> 的修复更新）；名字通过不代表签名逐字一致。
+> **当前导入状态（task-22 已闭合）**：函数名、`Sde` 的**名义变体构造器**
+> （`import Sde { Milstein, sde_order }`）与**透明类型别名**（`type X =
+> { … }`，例如 `Physics.Ising` 的 `Params`）都可以经 `import { X }`/`open`
+> 引入；源码里可以直接给这类别名类型写注解（`fn make(): Params = …`），
+> 也可以继续用限定名 `Physics.Ising.Params`。SDE 的策略记录本来就是名义
+> 变体，因此不受影响（§8.9.1 验证可写可运行）；§8.17 的包装器结果类型
+> 现在也可以按名字写出来，而不必只靠推断。
+>
+> **生成模块与 manifest 同步**：`Rssn`/`Units`/`Constants` 是 Kernel
+> Manifest 的生成视图。本轮 manifest（2026-11-05 实测）是 **1382 个算子
+> （7 declared + 25 overlay + 1350 derived，其中 `sde_scheme_info` 是本轮
+> 新增的 manifest-only 元数据算子）、32 个 rule set、82 单位、30 常数、
+> overload 1568 条、`manifest_hash = 8d2c3764…`**。嵌入的
+> `crates/aevia-std/stdlib/Units/Constants.aev` 头注释记录了生成时的
+> manifest hash；manifest 变化后必须用
+> `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`
+> 重新生成，否则 `units_constants_is_the_live_manifest` 会失败（这是
+> 生成视图与 live manifest 的诚实校验）。
 
 `Rssn` 是**生成的模块**，不是手写库：构建时从 Kernel Manifest 生成
 `Rssn.<op>` 类型化声明和 `Rssn.dynamic` 动态入口（§13.2）。`Rssn` 的
 内容随 RSSN 版本变化，Aevia 源码不硬编码算子清单。`Sparse` 提供
-`Csr`/`Csc`/`Coo`/`Block` 格式与 `Layout` 类（§13.9.5）；`Device` 提供
-`Cpu`/`Gpu`/`Distributed` 与 `on`/`to_device`（§13.9.4）。
+`Csr`/`Csc`/`Coo`/`Block` 格式标签与内建 `nnz`/`to_dense`/`from_dense`
+（`Layout` 类型类尚未实现，`matmul`/`transpose` 的稀疏版与 `@` 布局分派
+未实现，见 §13.9.5）；`Device` 提供 `Cpu`/`Gpu`/`Distributed` 与
+`on`/`to_device`（§13.9.4，无 `core.gpu` 时 `E1001`）。
 
 下一章定义运行时：从源码到值，从值到 rssn 项，从 REPL 到 JIT。
 
 
-
 <!-- ===== 09-runtime.md ===== -->
-
 
 # 09 — 运行时
 
@@ -5495,6 +6109,29 @@ Core IR 是 ANF：每个中间结果绑定到名字，便于闭包转换、JIT �
 
 类型擦除让 `mean<L>` 和 `mean<T>` 共享代码；运行时见证只用于显示、`Dyn`
 和 FFI 检查。
+
+**见证表。** 类型类分派只读取下列见证。没有见证的类型不能用于量化的运行时
+分派（检查期拒绝，§3.8.4/§7.4）：
+
+| 类型形状 | 运行时见证 |
+|---|---|
+| `Int` / `Real` / `Float` / `Complex` 标量 | `NumKind`（整数/精确/浮点/复数） |
+| `Tensor<n, τ>` | rank + 存储类（`Exact`/`Float`/`Complex`） |
+| 名义类型 `T<...>` | `(定义模块, 名字)` + 参数见证递归 |
+| 记录 | 规范标签集合（排序后；开放行见下） |
+| `Bool` / `String` / `()` / `Prop` | 各自的标签 |
+| `Point` / `Unit` 值 / 函数 / `Dyn` | **无见证**（不能按见证分派） |
+
+- **具体头类型**：检查器记录精确实例键（类 + 规范头），Core IR 携带该键，
+  解释器直接执行对应实例体；不重新解析、不按形状猜测。
+- **量化头类型**：只有当候选实例的见证两两不相交时才允许运行时按见证选择；
+  否则检查期报 `E0311`/`E0310` 并给出帮助。见证不是全的：`Tensor<1, Int>`
+  与 `Tensor<1, Real>` 的存储类相同，两个实例不能共存。
+- 记录见证是**结构**的：不同模块中同标签集合的记录类型不可区分，因此不能
+  各写一个实例；名义类型以模块+名字区分（两个模块同名的 `Shape` 是不同类型）。
+- 没有运行时多方法分派，也没有按类型/量纲的单态化：`mean<L>` 与 `mean<T>`
+  MUST 是同一份代码（§4.4.4、§12.8.13）。表示专用化是按操作、带标签守卫的
+  快速路径，不复制泛型函数。
 
 ## 9.3 解释器
 
@@ -5677,7 +6314,10 @@ rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策�
 
 ### 9.7.2 并发
 
-- 纯函数可以并行；`par_map(f, xs)` 用 rayon，结果顺序确定。
+- 纯函数可以并行；`par_map(f, xs)` 的结果顺序确定（与输入顺序一致）。
+- **实现状态**：当前解释器的求值器是单线程的，`par_map` 在本实现中**顺序执行**
+  且保持顺序语义；线程数不影响结果这一保证仍然成立。真正的并行实现需要
+  `Rssn` 会话级并行或把求值器移出单线程（记录为性能缺口，见 STATUS）。
 - 每个工作线程一个 `Session`；`compute_all` 在单会话内并行，但 Aevia 的
   并行 map 需要跨会话时，按线程分配会话。
 - `IO` 不并行；`do` 顺序执行。
@@ -5724,16 +6364,21 @@ m, km, cm, mm, µm, nm, ft, in, mi, ...
 REPL 支持多行输入（缩进块）、Ctrl-C 取消当前求值、Ctrl-D 退出。声明
 按输入顺序累积；重复定义遮蔽旧定义。
 
+> **实现状态（2026-11-04）**：多行输入、`:ast`/`:core`/`:time`/`:latex` 与
+> Ctrl-D 已实现；**Ctrl-C 取消当前求值尚未实现**（默认控制台处理会终止
+> 进程；协作式取消需要在求值器里加中断标志，属后续工作）。
+
 ## 9.9 CLI
 
 ```
-aevia run [file] [-- args...]      # 运行可执行包/文件
+aevia run [--example NAME] [file] [-- args...]  # 运行可执行包/文件/示例
 aevia repl                         # 交互式
 aevia check [--all]                # 类型/量纲检查
 aevia fmt [--check]                # 格式化
-aevia test [--filter pat]          # 运行测试
+aevia test [--filter pat] [--doc]  # 运行测试 / 编译文档中的 aevia 代码块
 aevia doc [--open]                 # 生成文档
-aevia bench [--filter pat]         # 基准
+aevia bench [--filter pat] [--iterations N] [--warmup N]
+            [--save-baseline FILE] [--compare-baseline FILE] [--threshold RATIO]
 aevia init name                    # 新建包
 aevia add dep                      # 添加依赖
 aevia update                       # 更新锁文件
@@ -5743,25 +6388,109 @@ aevia clean                        # 清理构建产物
 常用 flag：
 
 ```
---release          优化模式
---jobs N           并行度
---max-stack BYTES  栈上限
---budget SECONDS   符号预算
---out PATH         输出路径
+--release          优化模式（当前解释器实现无 JIT/构建缓存，接受并提示“无效果”）
+--jobs N           并行度（同上：当前实现单进程解释执行，接受并提示“无效果”）
+--max-stack MiB    解释器线程的栈上限（默认 256）
+--budget CALLS     连续尾调用预算（默认 100,000,000；不是秒，见 §9.3.4）
+--out PATH         输出路径（`rssn --emit`、`doc` 使用）
 --color auto|always|never
+--locked           拒绝修改 `aevia.lock`（`update`/`add`）
 ```
+
+> **实现状态（截至本轮）**：`clean` 删除 `.aevia/`（当前实现不写构建缓存，
+> 因此通常只报告“没有可清理的内容”）；§9.11 的 `.aevi` 接口缓存尚未实现，
+> 每次编译都重新检查全部模块。这是已记录的性能/增量编译缺口，不是语义
+> 差异。
+>
+> **程序参数（2026-11-05 已实现）**：`aevia run [file] -- args…` 只把 `--`
+> **之后**的字符串交给程序；程序用 `args()` 读取（§8.1.8），返回值是
+> rank-1 `Tensor<1, String>`，无参数时为空张量（`[]`）。`--` 之前的文件路径
+> 和 flag 不是程序参数；没有 `--` 时 `args()` 为 `[]`。`check`/`test`/
+> `bench` 不转发参数。测试见 `cli.rs` 的 `run` 用例（`-- a b` 与空 `--`）。
+>
+> **`run --example`（已实现）**：`aevia run --example NAME` 在包的
+> `examples/NAME.aev` 解析（名字不是路径：拒绝路径分隔符），找不到时列出
+> 可用示例，且 `--example` 与直接给文件互斥；测试
+> `cli.rs::run_example_finds_the_packages_examples_directory`。
 
 ## 9.10 LSP
 
 - 诊断：类型错误、量纲错误、单位错误、未使用绑定、非穷尽匹配。
 - 悬停：类型、量纲、单位、文档。
-- 补全：模块名、函数、单位、字段、构造器。
+- 补全：模块名、函数、单位、字段、构造器。**字段补全**：在 `.` 之后只列
+  接收者记录类型的字段（不混入通用名字）；**关键字补全**：只在表达式位置
+  提供 `do`/`let`/`match`/`with`，不污染类型标注或 `import` 行。
 - 跳转：定义、类型定义、单位声明。
+- 引用：`textDocument/references`——同一名字在已加载程序里的全部使用，
+  `context.includeDeclaration` 遵守；局部绑定/参数只在本文件，顶层声明、
+  导入/限定名、类型与构造器、本文档声明的记录字段可跨文件/跨模块。
+- 重命名：`textDocument/prepareRename` + `textDocument/rename`——返回
+  `WorkspaceEdit`（`documentChanges`），可改局部绑定、顶层声明、被导入且
+  在本程序内使用的名字、本文档声明的记录字段；拒绝关键字/预置名/单位名/
+  不归本文档编辑的导入名，以及非法或与同作用域名字冲突的新名（返回明确
+  错误而不是部分编辑）；编辑后的文本应仍可重新检查通过。
+- 签名帮助：`textDocument/signatureHelp`——光标在调用括号内时给出函数名、
+  活动参数位置与可用重载（来自已加载程序，含导入声明）；触发字符 `(`/`,`，
+  retrigger `,`。**诚实的限制**：活动重载按 arity 选择（`Rssn.<op>` 的
+  pinned key、类方法按检查期 dictionary 是例外）；参数标签显示的是**类型**
+  而不是参数名；文档只来自声明上方的 `##`（内建函数没有声明文档）。
 - 格式化：`aevia fmt` 的同一引擎。
 - 代码动作：添加类型标注、把 `degC` 转成 `K`、提取 `let`、修正量纲。
 - 语义高亮：类型、量纲、单位、算子来源；没有宏，语法高亮是固定的。
 
 LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时；`check` 模式即可。
+文件已保存时，分析通过 `aevia_core::driver` 加载其导入图（包根沿用
+`aevia.toml`），诊断/悬停/补全/跳转按当前文件的 `LoadedModule` 回答，跨
+模块跳转返回定义模块的文件 URI；未保存缓冲区也保留导入图（
+`driver::load_with_roots_and_source` 覆盖入口源码），无法解析/虚拟文档才
+回退为单文件分析。分析结果按入口内容哈希 + 依赖文件 `(len, mtime)` 做有界
+LRU 缓存（默认 4 个程序），任何被导入文件的变化都会失效对应条目。
+`initialize` 返回的**精确能力列表**（`aevia-lsp` 的 `capabilities()`）：
+
+```json
+{
+  "positionEncoding": "utf-16",
+  "textDocumentSync": { "openClose": true, "change": 2, "save": false },
+  "hoverProvider": true,
+  "completionProvider": { "resolveProvider": false },
+  "definitionProvider": true,
+  "typeDefinitionProvider": true,
+  "documentSymbolProvider": true,
+  "documentFormattingProvider": true,
+  "codeActionProvider": true,
+  "workspaceSymbolProvider": true,
+  "referencesProvider": true,
+  "renameProvider": { "prepareProvider": true },
+  "signatureHelpProvider": {
+    "triggerCharacters": ["(", ","],
+    "retriggerCharacters": [","]
+  },
+  "semanticTokensProvider": {
+    "legend": {
+      "tokenTypes": ["type", "dimension", "unit", "operator", "function", "variable", "enumMember"],
+      "tokenModifiers": []
+    },
+    "full": true,
+    "range": false
+  },
+  "experimental": {
+    "multiModuleAnalysis": {
+      "savedFiles": true,
+      "unsavedBuffers": "entry-overlay, imports resolved from disk"
+    },
+    "analysisCache": {
+      "strategy": "entry content hash + file mtime/length",
+      "capacity": 4
+    }
+  }
+}
+```
+
+`aevia-lsp/tests/protocol.rs` 断言这份 capability 表（只声明已实现的行为；
+`workspace/symbol` 在已加载程序的全模块上工作、无文档时空列表）。
+`references`/`rename` 的请求级测试在 `aevia-lsp/tests/protocol.rs`，数据级
+测试在 `aevia-analysis/tests/rename.rs`；`signatureHelp` 的数据级测试在
+`aevia-analysis/tests/signature.rs`。
 
 ## 9.11 构建与包管理
 
@@ -5773,14 +6502,36 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时；`check` 模式即
 - 中心 registry 是默认源；协议见 §13.7。registry 索引是内容寻址 + 签名 +
   capability 声明；`aevia add`/`publish`/`yank` 都走同一协议。
 
+> **实现状态（2026-11-04）**：本实现**不做**`.aevi` 接口缓存、不并行编译、
+> 不实现 registry 客户端：依赖只有 path 依赖（`version`/`git`/registry 依赖
+> 报 `E0605`），`aevia add/update` 只改本地清单/锁文件。`check --all` 已改为
+> 单遍加载（共享依赖只检查一次），`load_with_roots_and_source` 支持脏缓冲区
+> 保留多模块分析；`.aevia/target/` 仍不写。接口缓存与 registry 是已记录
+> 的实现缺口（见 PLAN 夜间计划），不是语义删除。
+
 ## 9.12 测试与基准
 
-- 单元测试：`test` 声明。
+- 单元测试：`test` 声明；`aevia test [--filter PAT]`。
 - 属性测试：`forall` + `Arbitrary`。
-- Doctest：文档中的 `aevia` 代码块。
-- 编译失败测试：`compile_fail`。
+- Doctest：`aevia test --doc [FILE…/DIRS…]` 抽取 `##` 注释中所有标 `aevia`
+  的围栏代码块并逐个编译。块首行可写 `compile_fail`（要求编译失败）或
+  `compile_fail EXXXX`（要求失败且包含该代码）；不写标记要求编译通过。
+  每个片段作为独立合成模块编译：声明模块的 `import`/`open` 行会被复制，
+  但模块自身的声明不在作用域内（单文件编译器限制）。任何失败退出码为 1；
+  没有可检查的块或过滤后为空也退出 1。抽取器在 `aevia-doc::doctest`。
+- 编译失败测试：`compile_fail("<source>") : String -> Bool` 在隔离环境中
+  编译片段（无导入、无调用模块声明，仅 Prelude），产生至少一个错误时返回
+  `true`；它**不**检查错误码——错误码由 doctest 的 `compile_fail EXXXX`
+  标记断言。
 - 黄金测试：REPL 输出/错误信息快照。
-- 基准：`bench` 声明；比较中位数和置信区间；回归阈值 5%。
+- 基准：`bench` 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间
+  （默认 N=100，`--iterations`/`--warmup` 可调）。`--save-baseline FILE`
+  写 JSON（`format=1`、`tool`/`version`、`profile=debug|release`、
+  `iterations`、`warmup`、每项 `median_ns`/`mean_ns`/`ci_ns`）；
+  `--compare-baseline FILE --threshold RATIO`（默认 0.05，可写 `5%`）按
+  中位数比较，超出阈值报 `REGRESSION` 并以 1 退出；profile 不一致以 2
+  退出；只在一侧出现的 workload 会被报告但不计为回归。协议：只比较
+  release 构建、同机、median of N。
 
 ## 9.13 性能目标
 
@@ -5804,6 +6555,12 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时；`check` 模式即
 - 符号预算防止无限化简；栈上限防止无限递归；内存上限可配置。
 - 包构建不执行任意脚本；`build.aev` 不存在。需要生成代码时用插件/算子，
   不用构建脚本或宏。
+
+> **实现状态（2026-11-04）**：`fs`/`net`/`env`/`rand`/`gpu` capability 的
+> **运行时权限检查尚未实现**（`with_cap` 不在语言/内建中）；文件/网络访问
+> 目前受进程权限约束。`gpu`/`distributed` 等后端能力缺失时按 §13.8 报
+> `E1001`。符号预算、栈上限、尾调用预算真实存在（§6.9.1/§9.3.4）；
+> “内存上限可配置”目前只有解释器线程栈上限。沙箱化是已记录的实现缺口。
 
 ## 9.15 错误报告
 
@@ -5831,9 +6588,7 @@ help: did you mean `2 * h / g`?
 哪些是已知缺口。
 
 
-
 <!-- ===== 10-backend.md ===== -->
-
 
 # 10 — rssn 后端映射
 
@@ -5862,6 +6617,24 @@ Rssn.dynamic("myplugin_softplus", args)  # 插件/叶子：没有签名
   （`check_args`，参数不被任何 overload 接受时报 `OpError::Type`），但
   不做 Aevia 的完整类型/量纲检查，那由静态检查器或 `Rssn.typed` 负责；
 - 新算子只要在 RSSN 注册，下一次构建就出现，不需要改 Aevia 编译器；
+- `aevia rssn --emit` 的**源码拼写现在也是精确的**（task-31）：维度参数写成
+  Aevia 的量纲变量（`Real[T]`、`Real[T^(1/2)]`、`Tensor<2, Real[T^(1/2)]>`、
+  `Unit[T]`），变量名在声明内局部（`T`、`T2`…）并**在参数与返回间共享**
+  ——`sde_wiener(a3: Real[T]): Tensor<2, Real[T^(1/2)]>` 里的 `T` 与
+  `T^(1/2)` 是同一个变量。`Dyn<term>` 只保留在**确实无法拼写**的地方：
+  manifest 自己声明为 `Dyn(rep, any)` 的签名（`quantity`/`convert` 的值参数
+  与结果、以及 derived 签名）、**秩变量张量**（`transpose`/`rank`/`dot`/
+  `norm`/`sum`；Aevia 声明需要具体秩，`Tensor<n, τ>` 是 `E0304`）、类型
+  参数、未知行 `Table`、`Device`、变体、host opaque、`Never`。生成的
+  `Units.aev`/`Constants.aev` 无条件通过 check；`Rssn.aev` 也通过——生成器
+  对每条声明只发**字面量** `op` + `key` 的 `Rssn.invoke`，checker 按 pinned
+  overload 校验这两个字面量并把结果类型定为该 overload 的声明结果（每次调用
+  新维度变量；`Rssn.sde_wiener` → `Tensor<2, Real[T^(1/2)]>`）。非字面量
+  key 保持动态 `Value`，运行时答 `E1002`/`E1003`/`E1005`；checker 不重新
+  解析或执行该 key（见 §13.2.2）。这套验收在**干净进程**里由
+  `aevia-rssn` 的 `emit_typecheck`（`the_emitted_modules_type_check_with_no_diagnostics`）
+  断言：emit 后三个生成模块 **0 diagnostics**；`cargo test -p aevia-rssn`
+  为 78 项通过；
 - 静态重载用 `OpKey { rule_set, name, signature_hash }`；typed 调用走
   `Rssn.call_key(key, …)` 钉死重载；dynamic 调用走 `call_value`，多注册时
   按 `Match` 格选、并列报 `E1002`（§13.4.1）。`resolve_overload` 只用于
@@ -5889,10 +6662,20 @@ let answer = s.compute(diff(sin(x) * cos(x), x), &Config::new())?;
   `diagnostics`、`report`。
 - `Term::eval(bindings)` 不做重写，直接数值求值。
 - `Term::compile(inputs)` 把闭式编译成可调用函数；`jit` feature 用
-  Cranelift。
+  Cranelift（0.137）。
 - `Term::as_tensor()` 把嵌套 `list` 项转成 `(shape, Vec<f64>)`。
 - `Term::to_latex()`/`to_typst()`/`to_pretty()` 输出排版。
-- `sim::scenario::run(name, json)` 运行物理仿真。
+- `sim::scenario::run(name, json)` 运行物理仿真；
+  `sim::scenario::SCENARIOS` 是场景名的唯一来源（2026-11-04 测量 29 个）。
+- `Session::register_unit(UnitDef)` 把单位注册进该 session 的 registry；
+  `Session::manifest()` 用 `KernelManifest::build_with_units` 生成，所以
+  session 私有单位会出现在 manifest 里。
+- **SDE manifest 面**：`rules::sde` 把三个无回调算子暴露成 manifest 算子
+  （两个噪声原语 `sde_wiener`/`sde_levy_areas`，加方案元数据
+  `sde_scheme_info(name) -> Tensor<1, Real>`）；`features.sde` 为
+  true 时宿主可用 capability `core.sde`。SDE **求解循环**需要 host 回调
+  （`&Fn + Sync`），不在 manifest 里（kernel CO-03）；Aevia 的
+  `sdeint_diag`/`sdeint_general` 在宿主侧调用 `kernels::sde`。
 
 Aevia 直接复用的部分：
 
@@ -5902,6 +6685,7 @@ Aevia 直接复用的部分：
 | 项构造与 hash-consing | `graph::Graph`、`Session::call_value`/`Session::parse` |
 | 重写引擎与规则集 | `graph::Engine`、`rules::*` |
 | 微积分/代数/方程/ODE/PDE | `rules::calculus`、`solve`、`ode`、`pde` 等 |
+| SDE 噪声原语 | `rules::sde`（manifest 算子）、`kernels::sde`（积分器） |
 | 量纲推断 | `graph::dim` |
 | 单位解析 | `rules::units` |
 | 数值内核 | `kernels::*` |
@@ -5955,8 +6739,11 @@ let term = session.sym(&name);
   hash-consing。
 - 符号的假设（`positive`、`real`、`integer`）通过 `Config::assume` 传入；
   Aevia 的 `assuming` 把简单 `Prop`（`x > 0`、`x >= 0`、`x != 0`、
-  `x ∈ ℤ`）转成 `Facts`。一般等式/不等式通过 `Rssn.assume` 动态接口传给
-  RSSN；后端不支持时返回 `E1001`（`core.assume.general`），而不是静默丢弃。
+  `x ∈ ℤ`）转成 `Facts`。**一般等式/不等式目前没有语言入口**：`Rssn`
+  的固定成员里没有 `assume`（§8.19），运行时也没有对应 arm；后端也没有
+  `core.assume.general` 能力行。所以 `assuming` 之外的假设不可用，不是
+  “传给 RSSN 后返回 E1001”。（把一般假设暴露成 `Rssn.assume` 是待定的
+  扩展，需要同时定义 capability 行。）
 
 ## 10.3 算子映射：生成的 façade，不是手写绑定
 
@@ -5981,10 +6768,11 @@ manifest 生成；新算子不需要改这些表。表格用来解释 Aevia 的�
 | `ln(a)` | `ln(a)` |
 | `atan2(y,x)` | `atan2(y, x)` |
 
-`Session::call_value(name, args)` 构造项并只做该算子自身的局部重写（`add`
-就是一次 n 元展平），不跑全局重写循环；整段表达式用 `Session::parse`。
-0.2.13 **没有** `Session::call`（`Kernel` trait 的 `call` 收 `&OpKey`，只按
-name 分发）。Aevia 的 `+` 在 `Real`/`Float` 符号路径上就是一次
+`Session::call_value(name, args)` 解析重载、校验参数，再构造项并只做该算子
+自身的局部重写（`add` 就是一次 n 元展平），不跑全局重写循环；整段表达式
+用 `Session::parse`。`Kernel::call(&OpKey, …)` 转发 `call_key`，**钉死**
+`OpKey` 指向的重载，不再只按 name 分发；`Kernel::call_ho` 同样按 key 找
+注册。Aevia 的 `+` 在 `Real`/`Float` 符号路径上就是一次
 `call_value("add", ...)`。
 
 ### 10.3.2 重型请求
@@ -6013,6 +6801,7 @@ name 分发）。Aevia 的 `+` 在 `Real`/`Float` 符号路径上就是一次
 |---|---|
 | `defint`（数值） | `kernels::quadrature` |
 | `odeint` | `kernels::ode` / `sim::integrators` |
+| `sdeint_diag`/`sdeint_general` | `kernels::sde`（Aevia 侧包装；噪声原语 `sde_wiener`/`sde_levy_areas` 与方案元数据 `sde_scheme_info` 是 manifest 算子） |
 | `fft` | `kernels::fft`（rustfft） |
 | `eig`/`svd`/`qr`/`lu` | `kernels`/`faer` |
 | `interp1`/`spline` | `kernels` |
@@ -6074,11 +6863,14 @@ Aevia 的静态路径不依赖它。单位只在两个边界出现：
 let json = rssn::sim::scenario::run("ising", params)?;
 ```
 
-Aevia 的 `simulate(name, json)` 直接调用；`Physics.*` 包装器由 RSSN 的
-场景 manifest 生成（名称、参数 schema、返回 schema），新增场景不需要手写
-Aevia 包装。`ising` 返回扁平的 `Vec<i8>`，包装器按 `width`/`height` 行主序
-reshape 成 `Tensor<2, Int>`；`sim` 的错误是字符串，包装器按前缀映射成
-`SimError` 枚举。
+Aevia 的 `simulate(name, json)` 直接调用；场景名的唯一来源是 kernel 的
+`sim::scenario::SCENARIOS`（本次测量 29 个，含 `ising_wolff`），宿主不手写
+第二份清单。`Physics.*` 的类型化包装器是**Aevia 源模块**（§8.17），内部调用
+`simulate` 并把记录与 JSON 互相转换；kernel 目前的场景参数仍是 JSON，
+`ScenarioSchema`（DESIGN.md §9 的设计）尚未实现，所以包装器不是从“场景
+manifest”自动生成的——新增场景需要新增一个包装模块。`ising` 返回扁平的
+`Vec<i8>`，包装器按 `width`/`height` 行主序 reshape 成 `Tensor<2, Int>`；
+`sim` 的错误是字符串，包装器按前缀映射成 `SimError` 枚举。
 
 ## 10.4 量纲桥
 
@@ -6095,8 +6887,8 @@ reshape 成 `Tensor<2, Int>`；`sim` 的错误是字符串，包装器按前缀�
 只有以下场景需要把量纲交给 rssn：
 
 - `Dyn<ρ>` 的运行时检查：宿主保存 `rssn::dim::DimTerm`，不依赖字符串；
-- FFI/导出：优先用 `Config::dimension_term(symbol, DimExpr)`（0.2.13 起
-  存在，不解析文本，未知基名会被 intern）。只有纯文本入口
+- FFI/导出：优先用 `Config::dimension_term(symbol, DimExpr)`（不解析文本，
+  未知基名会被 intern）。只有纯文本入口
   `Config::dimension(symbol, text)` 才必须传**全名**（`Length`、`Mass`、
   `Time`、`Current`、`Temperature`、`Amount`、`Luminosity`），**绝不使用
   单字母**（`L` 是升，`T` 是特斯拉，`N` 是牛顿，`J` 是焦耳）。静态路径
@@ -6132,24 +6924,24 @@ Aevia 不暴露 `bypass` 给普通用户；`Dyn<ρ>` 是显式逃逸。
 
 ### 10.5.1 Session 不是 `Sync`
 
-`Session` 内部是 `RefCell`，`Term<'s>` 借用 `Session`。Aevia 的桥：
+`Session` 内部是 `RefCell`，`Term<'s>` 借用 `Session`。Aevia 的桥把内核会话
+放在**线程本地**（`aevia-rssn` 的 `kernel()`）：
 
 ```rust
 thread_local! {
-    static BRIDGE: RefCell<RssnBridge> = RefCell::new(RssnBridge::new());
+    static KERNEL: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
 }
 
-struct RssnBridge {
-    session: Session,
-    symbols: HashMap<SymbolKey, u32>,   // TermId
-    configs: HashMap<ConfigKey, Config>,
-}
+pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创建
 ```
 
-- 每个线程一个 bridge；`par_map` 的工作线程各自初始化。
-- 符号值跨线程传递时，`TermId` 不能直接复用；需要重新构造（用项文本或
-  结构化复制）。当前 RSSN `Session` 单线程；Aevia 用 `fork/merge` 支持符号并行，数值张量直接并行。
-- `compute_all` 在单会话内并行；Aevia 用它批量处理独立的重型请求。
+- 每个线程一个内核会话；`par_map` 的“工作线程”因此会各自创建会话（当前
+  `par_map` 顺序执行，见 §9.7.2，所以实际只用一个会话）。
+- 符号值跨线程传递时，kernel `TermRef` 带 `SessionId`，别的会话的 handle 会被
+  拒绝（`OpError::ForeignTerm`）；当前桥不跨线程共享符号值，也不使用
+  `Session::fork`/`merge`——`fork/merge` 只是 kernel 提供的原语。
+- `compute_all` 在单会话内并行，但**当前 Aevia 桥没有用它**：批量请求按顺序
+  逐个调用；需要并行时应在宿主侧按线程分配会话，而不是假设桥已经这样做。
 
 ### 10.5.2 项的生命周期
 
@@ -6179,7 +6971,9 @@ struct RssnBridge {
 
 ### 10.6.3 批处理
 
-- 多个独立重型请求用 `compute_all`；它在一个会话内并行准备/运行/导入。
+- `compute_all` 可以在一个会话内并行准备/运行/导入多个独立请求；**当前
+  Aevia 桥没有使用它**，批量请求按顺序逐个调 `compute`。这是已记录的
+  性能缺口，不是语义差异。
 - 张量逐元素符号运算不要用 `compute_all`（每个元素一个请求，开销大）；
   用 `map` 构造项，最后一次性 `simplify`。
 - 数值张量用 `F64` 路径，不进项图。
@@ -6207,14 +7001,18 @@ struct RssnBridge {
 
 ## 10.8 已知缺口与风险（适配后）
 
-RSSN 0.2.13（commit `95099fa0`）已经实现 Manifest、动态
+**下面的数字是测量（2026-11-04，`rssn 3.0.0-rc.1`），live manifest 是唯一
+事实来源。** RSSN 已实现 Manifest、动态
 `Value`/`call_value`/`call_key`、重载解析、**100% 签名覆盖**（Declared/
 Overlay/Derived）、物理常数表、cdylib 插件 ABI、`rssn::dim`、自定义基量纲、
 `Config::dimension_term`、`Term` 遍历/替换、`fork/merge`、结构化结果和
-JIT lowering。下面只列**仍然存在**的集成缺口；已关闭的旧缺口不再重复
-（构建阻塞、`UnitValue` 元数据、重载只按 arity、`dimension_term` 缺失、
-`TypeExpr::Symbol` 缺失、`Solutions.complete` 硬编码、ODE `dimensions`
-丢字段、CODATA 常数缺失、自定义基量纲单位注册、cdylib 未实现，均已关闭）。
+JIT lowering。本轮实测：1382 算子 / 32 rule set / 32 精确（7 declared +
+25 overlay）/ 1350 derived / 82 单位 / 30 常数（18 精确）/
+`manifest_hash = 8d2c3764…`。下面只列**仍然存在**的集成缺口；已关闭的旧
+缺口不再重复（构建阻塞、`UnitValue` 元数据、重载只按 arity、
+`dimension_term` 缺失、`TypeExpr::Symbol` 缺失、`Solutions.complete`
+硬编码、ODE `dimensions` 丢字段、CODATA 常数缺失、自定义基量纲单位注册、
+cdylib 未实现、单位表缺 §5.3.3 的七项，均已关闭）。
 
 1. **`Session` 单线程。** `Session` 仍是 `RefCell`；跨线程要用
    `fork/merge`，不是共享会话。`par_map` 对符号值必须 fork/merge。
@@ -6225,13 +7023,16 @@ JIT lowering。下面只列**仍然存在**的集成缺口；已关闭的旧缺�
    第一次写才 detach，所以 `prepare` 里的 `define_base_dimension` 是隔离
    的；但如果直接改 `Session` 的模板图，就会影响后续所有请求。Aevia 只用
    `Config::base_dimension`，不碰模板。
-4. **JIT 默认关闭。** `Select`/`Extern1`/`Gather` 已 lowering，但默认
-   构建 `features.jit=false`；`@jit` 必须读 `Features`，否则报
-   `E1001("core.jit")`。
+4. **JIT 默认关闭。** `Select`/`Extern1`/`Extern2`/`Gather` 已 lowering
+   （Cranelift 0.137，由 `jit` feature 门控），但默认构建
+   `features.jit=false`；`@jit` 必须读 `Features`，否则报
+   `E1001("core.jit")`（checker 侧门控）。
 5. **`Solutions` 的两个“未报告”语义。** `multiplicities` 为空表示未报告，
-   不能填 1。`complete` 在 `solve_structured` 里按“是否 `list(...)`”区分；
-   `Solutions::new` 现在默认 `false`，要声明穷尽得显式 `.complete()`。
-   Aevia 自己构造时不要无条件声明穷尽。
+   不能填 1。但 kernel 现在**在能证明时填它**：一元有理多项式 + 全部根是
+   精确数时，用精确 square-free 分解给重数；`conditions` 只填构造上可声明
+   的条件（如 `-b/a` 的 `a != 0`）。`complete` 在 `solve_structured` 里按
+   “是否 `list(...)`”区分；`Solutions::new` 默认 `false`，要声明穷尽得显式
+   `.complete()`。Aevia 自己构造时不要无条件声明穷尽。
 6. **ODE 事件的方法差异已缩小。** `Dopri5`、`Radau5`、`BDF`、
    `Rosenbrock23` 与定步长（`solve_fixed_events`，覆盖 Euler/Heun/RK4）
    都能定位事件；差别只剩“定步长需要 `steps`”和事件定位的精度。
@@ -6239,49 +7040,98 @@ JIT lowering。下面只列**仍然存在**的集成缺口；已关闭的旧缺�
    `Units.Constants` 可从它生成；但它们不在 `UnitRegistry` 里，不能当单位
    参与 `quantity` 解析。`e` 是基本电荷，与 `Math.e` 同名，`open` 两个模块
    时 `e` 必须限定。
-8. **100% typed，但只有 20 个精确。** 7 declared + 13 overlay 是精确的；
-   1349 个 `Derived` 只区分“数值 `(Real,…)` / 符号 `(Term,…)`”，不区分
-   `Tensor`/`Quantity`/`Int`。Aevia 可以给全部 1369 个生成 typed 声明，
+8. **100% typed，但只有 32 个精确。** 7 declared + 25 overlay 是精确的；
+   1350 个 `Derived` 只区分“数值 `(Real,…)` / 符号 `(Term,…)`”，不区分
+   `Tensor`/`Quantity`/`Int`。Aevia 可以给全部 1382 个生成 typed 声明，
    但必须把 `Derived` 标成“保守推断”，否则 `det` 只会是
    `(Term) -> Term`（它是 HEAVY 请求，没有数值重载）。
-9. **`assuming` 仍以单元谓词为主。** 一般等式/不等式走
-    `Rssn.assume` 动态入口；后端缺失报 `E1001`。
+9. **`assuming` 仍以单元谓词为主。** 一般等式/不等式**没有语言入口**
+   （`Rssn` 没有 `assume` 成员，见 §10.2.2）；后端也没有
+   `core.assume.general` 能力行。不是“走动态入口后返回 E1001”。
 10. **复数表示。** `Value::Complex` 有 `Exact`/`Float`，但 `Number` 仍
     没有复数；符号复数靠 `i` 项，数值复数靠 `Complex64`。两条路径需在
     Aevia 侧统一。
-11. **符号指数：写得进、读不回，语言仍不支持。** `DimExpr::to_term` 现在
-    把 `Length^n` intern 成原子，所以能写入项图；但 `DimTerm::factors()`/
-    `from_term` 只遍历常量指数，符号原子会被**静默丢弃**，不是往返。
+11. **符号指数：桥接可往返，语言仍不支持。** `DimExpr::to_term` 把
+    `Length^n` intern 成原子；`DimExpr::try_from_term` 是 term 可表示量纲的
+    精确逆，`from_term` 是全函数版（读不回给 `Any`，不静默丢因子）。
     Aevia 的静态类型位置仍只接受有理指数（§4.12.3）。不要把“后端能表示”
-    误读成“语言该支持”，也不要用 `from_term` 回读含符号指数的量纲。
+    误读成“语言该支持”。
 12. **仿真 JSON schema。** `SimResult` 有结构化结果，但场景参数仍是
-    JSON；Aevia 的 `Physics.*` 由 manifest/schema 生成，不能手写。
+    JSON；kernel 的 `ScenarioSchema`（DESIGN.md §9 的设计）尚未实现，所以
+    Aevia 的 `Physics.*` 是源模块包装器，不能从 manifest 自动生成；新增
+    场景需要新增包装模块。
 13. **预算/中断。** rssn 的预算在 `compute` 内；Aevia 外层超时/取消是
     协作式的，不能强杀。
-14. **版本漂移。** `api_version=1`、`rssn 0.2.13`；Aevia 必须 pin
-    `api_version` + `manifest_hash`，并跑 conformance。
+14. **版本漂移。** `api_version=1`、`rssn 3.0.0-rc.1`；Aevia 必须 pin
+    `api_version` + `manifest_hash`，并跑 conformance。rc 周期内 manifest
+    仍可能变化，所以文档数字是测量而不是常量。
 15. **`manifest_hash` 是 bincode BLAKE3，有两种取法。**
-    `hash_hex()` 是 64 个 hex 字符（`98fd35fa…`），宿主应该 pin 它；
-    `hash_u64()` 是前 8 字节按**小端**读出的 u64（`f03babb1fa35fd98`），
-    只用于 ABI/显示。两者不可互换。JSON 只供人读，不能对 JSON 文本做
-    哈希/比较。
+    `hash_hex()` 是 64 个 hex 字符（本轮测量 `8d2c37640f409249…`），宿主
+    应该 pin 它；`hash_u64()` 是前 8 字节按**小端**读出的 u64
+    （`4992400f64372c8d`），只用于 ABI/显示。两者不可互换。JSON 只供人读，
+    不能对 JSON 文本做哈希/比较。
 16. **自定义基量纲要经 `Config` 声明。** `expr_to_dim` 已接受任意基名，
     但 `DimTerm` 只能为 `DimArena` 里已有的基名生成；Aevia 对每个
     `dimension` 发 `Config::base_dimension(name)`，`prepare` 会在克隆图上
     定义它。不要直接改模板图的 arena。
 17. **`Value` 的可入项图性按 `manifest.value_kinds` 走。**
-    `term_of_value` 对 Sparse/Record/Variant/Function/Opaque 返回
-    `Unsupported`，`Complex` 仅虚部为 0 时可入图；稀疏运算必须走
-    `eval_dyn` 或 Aevia 本地布局内核。生成器不要硬编码这张表。
+    `term_of_value` 对 `Sparse`/`Record`/`Variant`/`Function`/`Opaque` 返回
+    `Unsupported`；`Complex` 仅虚部为 0 时可入图；`Unit` 是定义不是数
+    （17 个变体中 10 个可入图、7 个不可），要过边界用
+    `quantity(value, unit)`。稀疏运算必须走 `eval_dyn` 或 Aevia 本地布局
+    内核。生成器不要硬编码这张表。
+18. **两个 Aevia 侧 bridge capability 缺口。** `core.callback`：Aevia 闭包
+    不满足 kernel `HostCallback` 的 `Send + Sync`，`Rssn.call_ho` 的非空
+    回调列表报 `E1001`；`core.plugin.source`：Aevia 源码 `@op` 打包未实现，
+    `Rssn.register`/`register_plugin` 报 `E1001`（Rust host 插件仍经嵌入 API
+    注册）。两者是 capability 表里的行，`enabled = false`；缺的是 Aevia 侧
+    的值构造，不是 kernel 接口。
+19. **单位属于 session。** `Session::register_unit` 注册的单位只出现在该
+    session 的 manifest（`KernelManifest::build_with_units`）；进程级
+    `KernelManifest::build` 给出不同的单位表与 hash。插件注册的单位只属于
+    安装该插件的 session，Aevia 必须用 `Session::manifest()`。
+20. **SDE：manifest 只暴露噪声原语 + 方案元数据，求解循环保持 Rust-only。**
+    本轮 `Features`
+    新增 `sde: bool`（true），宿主 capability 名 `core.sde`；
+    `sde_wiener`/`sde_levy_areas` 是 overlay 精确签名（`RootOf{2,3}` /
+    `Same(1)`），**`sde_scheme_info(name) -> Tensor<1, Real>`** 是本轮新增的
+    第三个 SDE manifest 算子（方案元数据：强阶 + Itô/交换/自适应/Lévy 面积
+    四个 flag，dim rule `NonMetric`；无回调，所以能进 manifest），typed 声明
+    随 manifest 自动出现；它是 **manifest-only 的元数据查询**，不是求解
+    路径（求解循环仍 Rust-only），且**只给强阶、没有弱阶**——弱阶在宿主侧
+    `sde_order`（返回 `{strong, weak}`）里，两者互补。它覆盖 kernel 的
+    8 个方案（6 个定步长/Stratonovich + 2 个自适应行，snake_case 名字）。
+    生成源对维度变量的签名现在也是精确的：`sde_wiener` 的声明是
+    `(Int, Int, Int, Real[T]) -> Tensor<2, Real[T^(1/2)]>`、
+    `sde_levy_areas` 是 `(Int, Real[T], Tensor<1, Real>, Int) ->
+    Tensor<1, Real[T]>`（声明内共享同一维度变量映射）；`Dyn<term>` 只为
+    manifest 自己开放的类型（`Dyn(rep, any)`、秩变量张量、类型参数、未知行
+    Table、Device、变体、opaque、Never）保留，见 §10.0。manifest 仍是唯一
+    精确来源。
+    求解器需要 `&Fn + Sync` host 闭包，manifest 的 `Value` ABI 传不了，
+    所以 kernel 的 CO-03 把求解循环、ensemble 统计、host-callback drift 和
+    `FnMut` adapter 留在宿主侧；Aevia 的 `sdeint_*` 不是 `Rssn` 算子。
+    **宿主侧已落地**：`aevia-std::sde` 实现六种方法与 fixed/adaptive 求解，
+    `aevia-core` 负责 dispatch/记录展平（`sde_runtime` 10/10 通过，
+    源码级 `sde_language` 5/5 通过），`core.sde` 在本构建 enabled；
+    **源码级策略记录也已验证可用**（`Sde.Fixed`/`Sde.Adaptive` +
+    `Sde.Diagonal`/`Sde.General(m)` 通过检查并跑出路径，见 §13.2.2 状态）；
+    记录状态 + 一般噪声在语言层是 checker 的 `E0302`，运行时的
+    `E1001("sde.general.record")` 只保留给宿主层直接调 builtin 的路径。
+    记录顺序/一致性见 §10.3.7。
+    `manifest_hash` 变化一方面因为 `Features` 多了这个字段，另一方面本轮
+    加了 `sde_scheme_info`（hash 从 `8ed92a22…` 变为 `8d2c3764…`）。
 
 ### 10.8.1 缓解措施
 
 - **一致性测试**：对每个标准算子，比较 Aevia 静态量纲与 rssn
   `Answer.dimension`；不一致即失败。
-- **单位表校验**：启动时逐项比较基单位/派生单位/仿射单位。
+- **单位表校验**：启动时逐项比较基单位/派生单位/仿射单位，并且只以
+  `manifest.units`（本次测量 82 项）为准。
 - **回退路径**：JIT 失败回退解释器；符号求解失败返回 `Err`，不 panic。
 - **预算默认值**：2 s / 1e6 重写；用户可调。
-- **版本 pin**：`Cargo.toml` 固定 rssn 次版本；升级时跑全量 conformance。
+- **版本 pin**：pin `api_version` + `hash_hex()`；升级时跑全量 conformance；
+  不把文档里的算子/单位计数写进缓存键。
 - **桥接层隔离**：所有 rssn 调用集中在 `aevia-rssn`，上层不直接依赖
   `rssn` 类型。
 
@@ -6299,11 +7149,18 @@ fn fall_time(h: Float[L]): Float[T] =
 3. 函数体：`2 * h` 构造 `mul(2, h)` 项；`/ g` 构造 `mul(..., pow(g,-1))`；
    `sqrt` 构造 `sqrt(...)` 项。这些都是 `Session::call_value`（只做局部
    重写），不 `compute`。
-4. 返回 `Float` 值（`g` 是 `Float` 常量，`2*h/g` 折叠为浮点数；
-   `sqrt` 对 `Float` 永远走 f64，负数得 NaN，不会保持符号）。
-5. `println` 调用 `show`：直接得到 `2.019`，按显示单位 `s` 打印。
+4. 返回 `Float` 值：`g` 是 `Float` 常量，`2*h/g` 折叠为浮点数；`sqrt` 对
+   `Float` 永远走 f64，负数得 NaN，不会保持符号。
+5. `println` 调用 `show`：直接得到 `2.01962…`，按显示单位 `s` 打印。
 6. 如果用户写 `approx(fall_time(20.0 m))`：`compute` 以 `Numeric` 目标运行，
    rssn 返回数值球，Aevia 取中点。
+
+> **规范 vs 当前实现的偏差（记录在附录 C）**：上面的 4–5 是**设计语义**
+> ——静态 `Float` 的值在运行时就是 f64。当前实现把十进制**量纲字面量**在
+> 编译期折叠为精确有理数（`20.0 m` 的值是精确的 20），即使静态类型是
+> `Float[L]`；于是 `sqrt` 看到精确参数、保持符号，`fall_time(20.0 m)` 打印
+> 为 `sqrt(800000/196133) s`，`approx(...)` 才给出数值。这是实现偏差，不是
+> 本章语义。
 
 这个链条展示了 Aevia 的核心性能策略：**类型/量纲在编译期，算术在项构造，
 重型求解才进 e-graph，数值热点走 f64/JIT**。
@@ -6311,9 +7168,7 @@ fn fall_time(h: Float[L]): Float[T] =
 下一章用完整程序展示这些规则如何组合。
 
 
-
 <!-- ===== 11-examples.md ===== -->
-
 
 # 11 — 完整示例
 
@@ -6491,22 +7346,22 @@ open Units.SI
 import LinearAlgebra { linsolve, det }
 
 fn main(): IO Unit = do
-    let R = [[1.0, 2.0], [3.0, 4.0]] * ohm
-    let I = [0.1, 0.2] * A
+    let r = [[1.0, 2.0], [3.0, 4.0]] * ohm
+    let i = [0.1, 0.2] * A
 
-    let V = R @ I
-    println("V = {V}")                  # [0.5 V, 1.1 V]
+    let v = r @ i
+    println("V = {v}")                  # [0.5 V, 1.1 V]
 
-    let P = V * I
-    println("P = {sum(P)}")             # 0.27 W
+    let p = v * i
+    println("P = {sum(p)}")             # 0.27 W
 
-    match linsolve(R, V) with
-    | Ok(I2) -> println("I = {I2}")     # 回到 [0.1 A, 0.2 A]
+    match linsolve(r, v) with
+    | Ok(i2) -> println("I = {i2}")     # 回到 [0.1 A, 0.2 A]
     | Err(e) -> println("solve failed: {e}")
 
     # det 只接受无量纲矩阵：
-    # let d = det(R)                    # E0410
-    let d = det(R / ohm)
+    # let d = det(r)                    # E0410
+    let d = det(r / ohm)
     println("det(R/Ω) = {d}")
 ```
 
@@ -6514,11 +7369,11 @@ fn main(): IO Unit = do
 
 - `[[...]]` 是 `Tensor<2, Float>`；乘以 `ohm : Unit[Resistance]` 得到
   `Tensor<2, Float[Resistance]>`。
-- `R @ I`：元素量纲 `Resistance * Current = Voltage`；结果
+- `r @ i`：元素量纲 `Resistance * Current = Voltage`；结果
   `Tensor<1, Float[Voltage]>`。
-- `V * I`：`Voltage * Current = Power`；`sum` 保持量纲。
-- `linsolve(R, V)`：`Voltage / Resistance = Current`。
-- `det(R)` 被拒绝，因为 `det` 的量纲是 `d^n`，`n` 是运行时阶数；`R / ohm`
+- `v * i`：`Voltage * Current = Power`；`sum` 保持量纲。
+- `linsolve(r, v)`：`Voltage / Resistance = Current`。
+- `det(r)` 被拒绝，因为 `det` 的量纲是 `d^n`，`n` 是运行时阶数；`r / ohm`
   是无量纲矩阵，`det` 合法。
 
 这个例子展示了“单位是编译期尺度”的好处：矩阵元素带单位，矩阵乘法自动
@@ -6532,19 +7387,19 @@ module Thermo
 open Units.SI
 
 fn main(): IO Unit = do
-    let T1 = 25.0 °C                 # Point[Θ]
-    let T2 = point(300.0, K)         # Point[Θ]
-    let dT = T2 - T1                 # Float[Θ]
-    let T3 = T1 + 10.0 K             # Point[Θ]
+    let t1 = 25.0 °C                 # Point[Θ]
+    let t2 = point(300.0, K)         # Point[Θ]
+    let dt = t2 - t1                 # Float[Θ]
+    let t3 = t1 + 10.0 K             # Point[Θ]
 
-    println("T1 = {T1}")
-    println("T2 = {to(°C, T2)}")
-    println("T3 = {T3}")
-    println("ΔT = {dT}")
+    println("T1 = {t1}")
+    println("T2 = {to(°C, t2)}")
+    println("T3 = {t3}")
+    println("ΔT = {dt}")
 
     # 下面两行是类型错误：
-    # let bad1 = T1 + T2             # E0405
-    # let bad2 = 2.0 * T1            # E0405
+    # let bad1 = t1 + t2             # E0405
+    # let bad2 = 2.0 * t1            # E0405
 ```
 
 输出：
@@ -6581,7 +7436,7 @@ fn main(): IO Unit = do
     | Err(e) -> println("cannot read: {e}")
     | Ok(tbl) ->
         match (column(tbl, "time"), column(tbl, "velocity")) with
-        | (Ok(t), Ok(v)) ->
+        | (Ok(t), Ok(v)) -> do
             println("mean speed = {mean(v)}")
             println("std  speed = {std(v)}")
             let spec = label(line(t, v), "v(t)")
@@ -6659,6 +7514,7 @@ fn linear_fit<d, e>(xs: Tensor<1, Real[d]>, ys: Tensor<1, Real[e]>): { slope: Re
 ## 11.9 错误示例：编译器如何拒绝
 
 ```aevia
+let n: Int = 3
 let bad1 = 3 m + 2 s
 let bad2 = sin(3 m)
 let bad3 = (3 m)^n              # n : Int
@@ -6735,15 +7591,15 @@ fn main(): IO Unit = do
     println("f' = {diff(fn t => exp(-t^2))(x)}")
 
     # 3. 线性代数
-    let M2 = [[2.0, 1.0], [1.0, 3.0]]
+    let m = [[2.0, 1.0], [1.0, 3.0]]
     let b = [1.0, 2.0]
-    match linsolve(M2, b) with
+    match linsolve(m, b) with
     | Ok(x) -> println("x = {x}")
     | Err(e) -> println("solve failed: {e}")
 
     # 4. 数据与绘图
     let ts = linspace(0.0 s, 1.0 s, 100)
-    let vs = map(fn t => 3.0 m/s * exp(-(t / s) / 0.5), ts)
+    let vs = map(fn t => (3.0 m/s) * exp(-(t / s) / 0.5), ts)
     let spec = label(line(ts, vs), "v(t)")
     plot(combine([spec]))
 ```
@@ -6755,9 +7611,7 @@ fn main(): IO Unit = do
 下一章解释这些设计选择的理由、替代方案和已知限制。
 
 
-
 <!-- ===== 12-rationale.md ===== -->
-
 
 # 12 — 设计取舍、限制与路线图
 
@@ -6953,6 +7807,34 @@ CPU/GPU 张量，设备错误在运行时/能力检查时发现。绕法：`on(d
 或函数字段的状态需要手动拆出参数。影响：混合状态要把常量参数放进闭包。
 绕法：`rhs` 捕获参数，状态只保留 `Float` 字段。
 
+### 12.8.13 分派与扩展边界
+
+Aevia 不做多重分派，也不做按类型或量纲的单态化。前者是语义决定，后者是
+工程决定，理由不同。
+
+- **没有运行时多方法。** 方法调用在检查期解决：具体头类型记录精确实例键
+  （类 + 规范头）；只有量化头类型允许按运行时见证在**已证明两两不相交**的
+  候选实例之间选择。见证不能区分的实例在检查期被拒绝（§3.8.4、§9.2.3）。
+  这样“选哪个实例”仍然是一个静态问题，运行时只是执行检查器已经证明的
+  选择，不做回溯或按值猜测。
+- **不单态化。** 单态化按类型复制泛型代码：它放大编译时间与代码体积，破坏
+  单独编译（每个调用类型组合都要重新生成），并且与类型擦除的目标
+  （§9.2.3、§4.4.4）以及量纲多态直接冲突——`mean<L>` 与 `mean<T>` 必须是
+  同一份代码。单态化的正确性收益也不存在：类型错误在检查期已经排除。
+- **表示专用化不是单态化。** 按操作的、带标签守卫的表示专用化保留泛化路径，
+  不复制泛型函数、不改变语义；它在测量与分配基线之后才进入性能计划
+  （§9.13）。
+- **扩展点是显式的**：ADT、记录行、模块/导入、`derive`（受限结构集，
+  §3.8.5）、`@op`/`@rule`、插件与注册表、`Dyn` 逃逸。模块接口导出类型、
+  构造器、类、实例与**别名定义**（§7.1.3/§7.3；导入者可直接展开
+  `type Vec2 = { x: Float, y: Float }`——task-22 已闭合）。没有隐式全局实例、
+  没有类型类默认方法（Prelude 类的“部分覆盖”来自内置结构实现，不是用户
+  可写的默认方法）、没有宏/引用/拼接（§12.8.5）。
+
+代价是：用户不能给既有类型添加类型类实例（孤儿规则），分布、单位这类
+“有参数的量纲族”要用名义类型 + 内建重载表达（§8.7.1），而不是多参数类。
+这些缺口是设计边界，不是版本限制。
+
 ## 12.9 已关闭的设计决策
 
 这些问题不再留到未来版本；下面是最终决定。实现可以分阶段，但语言设计不再
@@ -7074,9 +7956,7 @@ Aevia 成功的标志不是“功能多”，而是：
 下一章是可扩展性与 RSSN 集成；之后是完整文法、诊断目录和审计变更记录。
 
 
-
 <!-- ===== 13-extensibility.md ===== -->
-
 
 # 13 — 可扩展性与 RSSN 集成
 
@@ -7142,13 +8022,18 @@ KernelManifest
 `jit`。完整 schema 见根目录文档 §3.1。
 
 `manifest_hash` 是确定性 bincode 的 BLAKE3；`to_json()` 只供人读。
-`units` 是 `UnitValue`，0.2.13 起带
+`units` 是 `UnitValue`，带
 `name`/`display`/`dimension`/`scale`/`offset`/`affine`/`aliases`/
 `prefixable`/`category`/`since`，生成 `Units.*` 只读 manifest 即可。
+`KernelManifest::build_with_units(graph, sets, plugins, &registry)` 从调用方
+的 registry 读单位，`build(...)` 从进程级表读；`Session::manifest()` 用前者，
+所以 `Session::register_unit` 注册的单位会进入**该** session 的 manifest，
+不会泄漏到别的 session。
 
 `value_kinds: [ValueKindInfo]` 描述每个 `Value` 变体能否入项图
 （`in_term_graph`）以及不能时的替代做法；生成器按它决定 façade 的参数
-位置能不能接受该类型（§13.3.1）。
+位置能不能接受该类型（§13.3.1）。本次测量 17 个变体中 10 个
+`in_term_graph = true`。
 
 `constants: [ConstantValue]` 是物理常数表（30 条、18 条精确），字段
 `name`/`symbol`/`value: ScaleValue`/`dimension: DimExpr`/`unit`/`exact`/
@@ -7156,6 +8041,11 @@ KernelManifest
 
 `features.plugin_kinds` 说明这个构建能加载哪种插件（默认
 `["in-process"]`；开 `plugin-cdylib` 后多一个 `"cdylib"`）。
+`features.sde`（本轮新增）说明 `sde` rule set 已安装、SDE 噪声原语
+（`sde_wiener`/`sde_levy_areas`）与方案元数据算子 `sde_scheme_info` 可从
+manifest 调用；宿主侧的 capability 名是 `core.sde`。`Features` 是 manifest
+的一部分，新增字段/算子会改变 `manifest_hash`（本轮 hash 从 `1920638b…`
+变为 `8ed92a22…`，随后因新增 `sde_scheme_info` 变为 `8d2c3764…`）。
 
 ### 13.2.2 生成规则
 
@@ -7167,23 +8057,29 @@ Aevia 构建时：
      `Rssn.<name>` 类型化声明（**每条 overload 一个**）；
    - `signature_source = None`：生成 `Rssn.dynamic`；
    - 别名：生成 `Rssn.<alias>`；冲突时用 `Rssn.<rule_set>.<name>`。
-3. typed 声明同时记住 `OpInfo.keys` 里对应的 `OpKey`，调用走
-   `Rssn.call_key(key, …)`，静态选择与运行时执行不会分歧。
+3. typed 声明同时记住 `OpInfo.keys` 里对应的 `OpKey`，调用必须钉死该
+   overload，静态选择与运行时执行不会分歧。公开形式是
+   `Rssn.call_key(key, …)`；当前生成器生成等价的
+   `Rssn.invoke(name, signature_hash, args)`（同一钉死语义，错误通道不同：
+   生成的 `fn` 必须返回声明类型，所以 kernel 失败会 raise 而不是返回
+   `Err`）。
 4. 生成 `Rssn.Version`、`Rssn.ManifestHash`、`Rssn.Capabilities`、
    `Rssn.ValueKinds`、`Rssn.Constants`、`Rssn.Units`。
 5. 生成 LSP 补全、文档、签名存根；存根里记录每条声明的来源。
 
-当前 RSSN 0.2.13（`95099fa0`）的实测覆盖：1369 个算子 **100% 有签名**，
-0 unexplained。来源是 **7 declared + 13 overlay + 1349 derived**；
-overload 分布是 1190 个 1 条、177 个 2 条、2 个 3 条。
+当前实测覆盖（`rssn 3.0.0-rc.1`，2026-11-05；live manifest 是唯一事实
+来源）：1382 个算子 **100% 有签名**（32 个 rule set），0 unexplained。
+来源是 **7 declared + 25 overlay + 1350 derived**；overload 分布是 1201 个
+1 条、178 个 2 条、2 个 3 条、1 个 5 条（共 1568 条签名）。这些数字是
+**测量**，不是要写死进生成器的常量。
 
 **精度分档**（生成器必须区分）：
 
 | 来源 | 数量 | 精度 | 生成什么 |
 |---|---|---|---|
 | `Declared` | 7 | 精确 | typed |
-| `Overlay` | 13 | 精确 | typed |
-| `Derived` | 1349 | 形态级 | typed，但只有 `Real`/`Bool`/`Term` |
+| `Overlay` | 25 | 精确 | typed |
+| `Derived` | 1350 | 形态级 | typed，但只有 `Real`/`Bool`/`Term` |
 | `None` | 0 | 无（叶子/无调用） | `dynamic` |
 
 `Derived` 的规则是“由注册信息推出”，不是猜名字：
@@ -7201,15 +8097,67 @@ overload 分布是 1190 个 1 条、177 个 2 条、2 个 3 条。
 `det` 是 `HEAVY` 请求、没有 `eval`，所以没有 overlay 时**只有一条**
 `(Term) -> Term`——连数值形态都没有，`det(matrix)` 的静态类型会是
 `Dyn<term>`；overlay 把它补成 `(Tensor<[n,n],Real>) -> Real`。这就是为什么
-“100% typed”不等于“100% 精确”：1349 个算子的签名不区分
+“100% typed”不等于“100% 精确”：1350 个算子的签名不区分
 `Tensor`/`Quantity`/`Int`，Aevia 的 IDE 应把它们标成“保守推断”。
 
-Aevia 仓库**不允许**出现按算子名手写的绑定文件。只允许：
+overlay 也是**维度类型参数**的载体：`sde_wiener`/`sde_levy_areas` 用
+`T` 这类维度参数把 `sqrt(h)`（`RootOf{degree:2,index:3}`）和
+`Tensor<1, Real[T]>` 写进签名，derivation 推不出这些信息。manifest 里的
+签名是精确的，bridge 的 conformance 测试断言 `sde_wiener` 的元素量纲恰是
+“一个维度变量上的 `^(1/2)`”；checker 与 `registry().resolve` 都按精确
+签名工作。**生成源的拼写现在也是精确的**（task-31）：`render_dim` 把维度
+参数写成 Aevia 的量纲变量，变量名在**声明内局部**（`T`、`T2`…）并跨参数
+与返回共享——`aevia rssn --emit` 产出的 `Rssn.sde_wiener` 是
+`(Int, Int, Int, Real[T]) -> Tensor<2, Real[T^(1/2)]>`，`sde_levy_areas` 是
+`(Int, Real[T], Tensor<1, Real>, Int) -> Tensor<1, Real[T]>`；不再有
+“open dimension 只能写 `Dyn<term>`”的限制。`Dyn<term>` 只为**确实无法
+拼写**的类型保留：manifest 自己开放的 `Dyn(rep, any)`（`quantity`/`convert`
+的值参数与结果、derived 签名）、**秩变量张量**（`transpose`/`rank`/`dot`/
+`norm`/`sum`；声明需要具体秩）、类型参数、未知行 `Table`、`Device`、变体、
+host opaque、`Never`。生成的 `Units.aev`/`Constants.aev` 无条件通过 check；
+`Rssn.aev` 也通过——**字面量 pinned key 的结果类型化**：生成器只发
+`Rssn.invoke(op, key, …)` 且 `op`/`key` 都是字面量，checker 按 manifest 的
+pinned overload 校验并给出该 overload 的声明结果类型
+（`Rssn.sde_wiener` → `Tensor<2, Real[T^(1/2)]>`、`Rssn.det` → `Real`…），
+每次调用取新的维度变量；**非字面量、未知或歧义的 key** 保持动态 `Value`，
+诊断由运行时给出：`E1005`（未知/不匹配的 `signature_hash`）、`E1002`
+（歧义的注册/重载）、`E1003`（动态参数或非函数值）。checker 只按 live
+manifest 校验两个字符串字面量 key，绝不重新解析或执行它；映射用的是
+manifest 自己的签名，不是渲染文本。这套“emit 后 0 diagnostics”的验收在
+干净进程里由 `aevia-rssn` 的 `emit_typecheck` 断言
+（`the_emitted_modules_type_check_with_no_diagnostics`；
+`cargo test -p aevia-rssn` 78 项通过）。新增的
+`sde_scheme_info(name) -> Tensor<1, Real>` 没有开放维度，生成源同样是精确
+的。**SDE 求解循环则不在 manifest 里**（host 回调，kernel CO-03），宿主侧
+`sdeint_*` 不经过 `Rssn` 算子通道；`sde_scheme_info` 是本轮
+新增的**元数据算子**（强阶 + Itô/交换/自适应/Lévy 面积四个 flag，dim rule
+`NonMetric`，无回调，故能进 manifest）。它覆盖 kernel 的 8 个方案
+（snake_case 名，含 2 个自适应行），是 **manifest-only** 的查询，只给强阶、
+没有弱阶——弱阶仍由宿主侧 `sde_order`（§8.9.1）给出，两者互补。
+
+> **实现状态（2026-11-05）**：SDE 的宿主侧求解器（`sdeint_diag`/
+> `sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed`）已实现并有
+> 10/10 集成测试（`sde_language` 源码级 5/5）；`Sde` 模块 re-export 这五个
+> 入口并声明选项 ADT，checker 已实现 `RateOf`/`DiffusionOf`。能力行
+> `core.sde` 在本构建为 enabled（`Rssn.Capabilities` 可见）。**源码级
+> 策略构造已验证可用**：`Sde.Fixed({ structure = Sde.Diagonal, method =
+> Sde.EulerMaruyama, … })` 通过检查并跑出路径（`Fixed` 与 `Adaptive`、
+> `Diagonal` 与 `General(m)` 都验过）；名义变体构造器可以从 `Sde` 导入。
+> 透明类型别名（`type X = { … }`）的类型名现在也能经 `import { X }`/`open`
+> 引入（task-22 已闭合，例如 `Physics.Ising.Params` 可直接注解；限定名
+> 同样可用，§7.2.2/§8.20），因此 SDE 选项 ADT 与其它结构别名类型没有剩余
+> 导入缺口。`sde_wiener`/`sde_levy_areas` 的 manifest 签名始终是精确的。
+
+Aevia 仓库**不允许**出现按算子名手写的绑定文件，也**不保留**
+`signatures.overlay.json` 的副本。只允许：
 
 ```
 tools/gen_rssn_module.aev        # 生成器
-signatures.overlay.json          # RSSN 侧的签名修正；Aevia 只读镜像
 ```
+
+`signatures.overlay.json` 是 RSSN 的构建输入，overlay 在 RSSN 侧已并入
+`OpInfo.overloads`；宿主从 manifest 读到的就是应用后的精确签名，
+`signature_source` 只用于标注。
 
 CI 检查：生成器输出与提交的生成文件一致；manifest 快照变化必须显式更新。
 
@@ -7259,14 +8207,15 @@ type Value =
 静态的；`Value` 只出现在 `Rssn.dynamic`、插件、FFI、反射 API 中。
 
 **可入项图性**：这张表由 `manifest.value_kinds` 给出，Aevia 不维护第二份。
-0.2.13 的取值是：
+本次测量（17 个变体）是：
 
-- `in_term_graph = true`：`VInt`/`VReal`/`VFloat`/`VBool`/`VString`/
-  `VSymbol`/`VUnit`/`VQuantity`/`VTensor`/`VTerm`/`VDyn`；
-- `in_term_graph = false`：`VComplex`（仅虚部为 0 时降为 `Float` 入图，
-  否则 `Unsupported("complex literals")`）、`VSparse`/`VRecord`/
-  `VVariant`/`VFunction`/`VOpaque`（`term_of_value` 返回
-  `Unsupported`）。
+- `in_term_graph = true`（10 个）：`VInt`/`VReal`/`VFloat`/`VBool`/
+  `VString`/`VSymbol`/`VQuantity`/`VTensor`/`VTerm`/`VDyn`；
+- `in_term_graph = false`（7 个）：`VComplex`（仅虚部为 0 时降为 `Float`
+  入图，否则 `Unsupported("complex literals")`）、`VUnit`（单位是定义不是
+  数：`term_of` 拒绝它，过边界用 `quantity(value, unit)`；只有已声明的单位
+  参数位置才直接收 `Value::Unit`）、`VSparse`/`VRecord`/`VVariant`/
+  `VFunction`/`VOpaque`（`term_of_value` 返回 `Unsupported`）。
 
 `false` 的变体只能喂给有 `eval_dyn` 的算子，或作为返回值；生成器不能假设
 所有 `Value` 都能参与重写。
@@ -7276,28 +8225,43 @@ type Value =
 ```aevia
 Rssn.call    : (String, Tensor<1, Value>) -> Result<Value, OpError>
 Rssn.dynamic : (String, Tensor<1, Value>) -> Result<Value, OpError>
-Rssn.typed   : (String, Tensor<1, Value>, TypeRep) -> Result<a, OpError>
-Rssn.overloads       : String -> Tensor<1, (OpKey, Signature)>
-Rssn.resolve_overload: (String, Tensor<1, Value>) -> Result<OpKey, OpError>
-Rssn.call_key        : (OpKey, Tensor<1, Value>) -> Result<Value, OpError>
-Rssn.Constants       : Tensor<1, ConstantInfo>
-Rssn.Units           : Tensor<1, UnitInfo>
+Rssn.typed   : (String, Tensor<1, Value>, TypeRep) -> Result<Value, OpError>
+Rssn.overloads       : String -> Tensor<1, String>
+Rssn.resolve_overload: (String, Tensor<1, Value>) -> Result<String, OpError>
+Rssn.call_key        : (String, String, Tensor<1, Value>) -> Result<Value, OpError>
+Rssn.Constants       : Tensor<1, String>     # 常数符号；数值在生成的 Constants 模块
+Rssn.Units           : Tensor<1, String>     # 单位名；单位值在生成的 Units 模块
 ```
 
 - `Rssn.call` 是 `Rssn.dynamic` 的别名，只按短名/别名查找；不支持
   `rule_set/name` 限定名。短名歧义报 `E1002`。
-- `Rssn.call_key` 是唯一“不解析、直接执行”的入口；`key` 必须来自
-  `OpInfo.keys`/`Rssn.overloads`。`signature_hash` 全零表示“该算子没有
-  声明重载”。
-- `Rssn.resolve_overload` 暴露运行时选择结果，供缓存/诊断用。
+- `Rssn.call_key` 是“不解析、直接执行”的入口；它收 name +
+  `signature_hash`（32 hex 字符），两者合起来就是 `OpKey` 的可写形式。
+  `signature_hash` 全零表示“该算子没有声明重载”。key 与当前 manifest 不符
+  时报 `E1005`（提示重新生成模块）；kernel 侧参数偏离钉住签名时报
+  `UnknownOp`，在 Aevia 边界变成错误值。
+- `Rssn.resolve_overload` 暴露运行时选择结果，供缓存/诊断用：成功返回
+  `"rule_set.name@signature_hash"`；并列与“没有签名接受”都报
+  `OpError::Ambiguous`（后者 `count` 是签名总数）。
+- `Rssn.overloads` 返回每条 overload 的渲染签名文本。
 - 参数用 `to_value(x)` 注入；返回值用 `from_value(v)` 转回静态类型。
 - 没有签名（`SignatureSource::None`）的算子、插件算子、实验性入口走
   `dynamic`。标准集当前没有 `None`，所以 `dynamic` 在标准集上只是插件
   通道。
-- `Rssn.typed` 在运行时把 `Value` 转成静态类型 `a`，做类型与量纲检查；
-  失败返回 `OpError.Type`/`OpError.Dimension`。
-- 高阶算子用 `Rssn.call_ho(name, args, fns)`；`fns` 是 `Callback`，可以
-  包装 Aevia 闭包。
+- `Rssn.typed` **可达且可用**：它执行动态调用并接受一个 `TypeRep`。当前
+  `type_rep()` 产出的 `TypeRep` 只有名字（`{ name = "TypeRep", kind =
+  "opaque" }`），所以运行时只能校验第三个参数确实是 `TypeRep`，不能按它
+  逐字段校验返回值；类型/量纲保证仍来自 Aevia 类型检查器。它不会把
+  kernel 错误变成诊断，错误仍是 `Err(OpError)`。
+- 高阶算子用 `Rssn.call_ho(name, args, fns)`；类型正确，但**非空** `fns`
+  在当前构建不可构造（Aevia 闭包不满足 kernel `HostCallback` 的
+  `Send + Sync`）：运行时报 `E1001("core.callback")`。空列表就是一次
+  动态调用。
+- `Rssn.register`/`Rssn.register_plugin` 类型正确，但 Aevia 源码无法构造
+  `Plugin` 值（源码级 `@op` 打包未实现）：运行时报
+  `E1001("core.plugin.source")`；Rust host 插件仍经嵌入 API 注册
+  （§13.5.1）。这两个名字是 capability 表里 `enabled = false` 的行，缺的是
+  Aevia 侧的值构造。
 
 ### 13.3.3 错误
 
@@ -7336,8 +8300,11 @@ RSSN 允许同名多签名，判定规则在 `kernel::overload` 里：
 ```aevia
 type Match = | No | Generic | Shaped | Widened | Exact   # 有序
 matches_type : (TypeExpr, TypeExpr) -> Match
+matches      : (TypeExpr, Value) -> Match
 score        : (Signature, Tensor<1, Value>) -> Option<Nat>
+score_types  : (Signature, Tensor<1, TypeExpr>) -> Option<Nat>
 best         : (Tensor<1, Signature>, Tensor<1, Value>) -> Best
+best_types   : (Tensor<1, Signature>, Tensor<1, TypeExpr>) -> Best
 type Best    = | None | Unique(Int) | Ambiguous(Tensor<1, Int>)
 ```
 
@@ -7345,15 +8312,18 @@ type Best    = | None | Unique(Int) | Ambiguous(Tensor<1, Int>)
 - `Int -> Real`、`Int|Real|Float -> Complex` 是 `Widened`，反向不成立；
 - 同构造器但元素/量纲未被签名钉死是 `Shaped`；类型变量和 `Dyn` 是
   `Generic`；
-- `best` 内部并列最高 → `Ambiguous`，不静默取第一个。
+- `best` 内部并列最高 → `Ambiguous`，不静默取第一个；
+- `score_types`/`best_types` 与 `score`/`best` 共用同一个取分折叠：Aevia
+  在编译期解析一次，得到的数与 kernel 运行时会得到的是同一个。
 
-**当前标准集的实际情况**：1369 个算子分布在 1369 个唯一名字上，每个名字
-只有 1 个注册；但**每个注册内部有 1–3 条重载**（1190 个 1 条、177 个 2 条、
-2 个 3 条），因为有 `eval` 的算子同时有数值与符号两条。所以要把两件事分开：
+**当前标准集的实际情况**（本次测量）：1382 个算子分布在 1382 个唯一名字
+上，每个名字只有 1 个注册；但**每个注册内部有 1–5 条重载**（1201 个 1 条、
+178 个 2 条、2 个 3 条、1 个 5 条），因为有 `eval` 的算子同时有数值与符号
+两条，overlay 再补精确签名。所以要把两件事分开：
 
 - **注册选择**（`resolve_op`）在 `fitting.len() == 1` 处直接返回，对标准集
   不做评分；跨注册并列只可能由插件触发。
-- **重载选择**（`resolve_overload` → `overload::best`）对注册内的 2–3 条
+- **重载选择**（`resolve_overload` → `overload::best`）对注册内的 1–5 条
   签名**真的执行**：`sin(0.5)` 选 `(Real) -> Real`，`sin(x)`（`x` 是
   `Symbol`）选 `(Term) -> Term`。但实参本身是 `Term`/`Dyn` 时，数值重载
   的 `Real` 也会以 `(_, Dyn(_)) → Generic` 通过，两条同分 → `Ambiguous`。
@@ -7362,7 +8332,7 @@ type Best    = | None | Unique(Int) | Ambiguous(Tensor<1, Int>)
 
 `call_value` 按 name/arity 选注册，然后调 `check_args`：没有任何 overload
 接受参数时返回 `OpError::Type`。但符号重载的 `Dyn<term>` 对任何值都是
-`Generic`，所以 1349 个 derived 算子几乎总能通过——这条检查只在签名全部
+`Generic`，所以 1350 个 derived 算子几乎总能通过——这条检查只在签名全部
 具体（`eq`/`lit`/`pow`）时才真正拦得住。它不在数值/符号之间做选择（那由
 算子的 `eval` 决定）。
 
@@ -7376,8 +8346,10 @@ Aevia 的静态解析规则（与 RSSN 的格同构，供 Aevia 自己的重载/
 
 运行时三条入口，职责不同：
 
-- `Session::call_key(&OpKey, …)`（固有方法）**不解析、不校验参数**，按
-  `rule_set` + `signature_hash` 找注册；钉死重载，参数由调用方保证。
+- `Session::call_key(&OpKey, …)`（固有方法）**不重新解析**，按
+  `rule_set` + `signature_hash` 找注册；它钉死重载，并要求这些参数能被
+  钉住签名接受（`overload::score(pinned, args).is_some()`），否则报
+  `UnknownOp`。
 - `Session::call_value(name, …)` 按 name/arity 找注册；多个候选时用
   `overload::score` 选最具体，并列报 `OpError::Ambiguous`；参数不被任何
   overload 接受时报 `OpError::Type`（`check_args`）。
@@ -7388,21 +8360,24 @@ Aevia 的静态解析规则（与 RSSN 的格同构，供 Aevia 自己的重载/
 
 - `best` 为 `Unique` → 返回带 `signature_hash` 的 key，可直接给 `call_key`；
 - 算子完全没有签名 → 返回零 hash 的 key，`call_key` 接受它；
-- 并列 → `Err(OpError::Ambiguous)`，**不会**给出不可执行的零 hash key。
+- 并列 → `Err(OpError::Ambiguous)`，**不会**给出不可执行的零 hash key；
+- 没有任何签名接受这些参数 → 也返回 `Err(OpError::Ambiguous)`（`count` 是
+  签名总数）；它不重新推导单个签名的拒绝理由。
 
 所以 `resolve_overload` 的返回值总是可以安全地交给 `call_key`。
 
 `OpKey.signature_hash` 是 `Signature::hash()` 的前 16 字节（确定性 bincode
-的 BLAKE3），伪造/过期的 key 返回 `UnknownOp`。
+的 BLAKE3），伪造/过期/参数偏离的 key 返回 `UnknownOp`。
 
 ### 13.4.2 签名覆盖
 
-0.2.13 起覆盖率是 100%：1369 个算子都有签名（`0 unexplained`）。
-签名有四个来源，优先级从高到低：
+覆盖率是 100%：本次测量 1382 个算子都有签名（`0 unexplained`，32 个
+rule set）。签名有四个来源，优先级从高到低：
 
-1. `Declared`：`OpDescriptor::new(...).signature(...)`，算子自己写；
-2. `Overlay`：`signatures.overlay.json` 里人工写的修正（当前 13 条）；
-3. `Derived`：`kernel::infer::derive` 从注册信息推出（当前 1349 条）；
+1. `Declared`：`OpDescriptor::new(...).signature(...)`，算子自己写（7 个）；
+2. `Overlay`：`signatures.overlay.json` 里人工写的修正（25 个；在 RSSN 侧
+   并入 manifest，Aevia 不持有副本）；
+3. `Derived`：`kernel::infer::derive` 从注册信息推出（1350 个）；
 4. `None`：叶子/无调用形式，`dynamic_reason` 说明原因（标准集没有）。
 
 规则：
@@ -7520,10 +8495,25 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 
 Aevia 的 `Dim` 是 `DimTerm` 的类型级镜像；两者的规范形、基名、指数运算
 必须一致。编译器不复制单位表；`Units.*` 是 `manifest.units` 的生成视图
-（`UnitValue` 已带别名/前缀/类别/since，不必再读 `UnitRegistry`）。
+（`UnitValue` 已带别名/前缀/类别/since，不必再读 `UnitRegistry`）。本次
+测量 `manifest.units` 有 82 项。单位属于 **session**：
+`Session::register_unit(UnitDef)` 写该 session 的 registry，
+`KernelManifest::build_with_units` 才把它写进 manifest；进程级
+`KernelManifest::build` 看到的是进程表。插件注册的单位只属于安装插件的
+session。
 
 结构化入口是 `Config::dimension_term(symbol, DimExpr)`：它不解析文本，未知
 基名会被 intern，结构化假设在文本假设之后应用（同名时结构化胜）。
+`DimExpr::to_term` 写 term；`DimExpr::try_from_term` 是 term 可表示量纲的
+精确逆（`Length^n` 读回 `Length^n`）；`from_term` 是全函数版，读不回时给
+`DimExpr::Any` 而不是错误量纲。
+
+`OpInfo.dim_rule` 的 `DimRuleInfo` 本轮新增 `RootOf { degree, index }`：
+结果量纲是**第 `index` 个参数**量纲的 `degree` 次根。旧 `Root(n)` 固定取
+第 0 个参数的根，表达不了 `sde_wiener(seed, m, steps, h)` 的
+`sqrt(h)`（`h` 是第 4 个参数）；它的 manifest wire form 是
+`{"root_of":{"degree":2,"index":3}}`。宿主读 `dim_rule` 时应按变体匹配，
+不要假设只有 `Root`/`Same`/`Product`。
 
 自定义基量纲由 `Config::base_dimension(name)` 声明（幂等）：它把基名送进
 `DimArena`，`Dim` 的内部表示从固定的 7 个 SI 指数扩成“7 个 SI + 有序
@@ -7550,11 +8540,11 @@ unit myunit : Length = 0.5 m  # 内置基量纲
 - 导出信息进入 manifest；下游包可以直接 `import` 并使用。
 - 用户单位可以是仿射的（`unit °X : Temperature = 1 K offset 273.15`），
   但仿射单位只能单独使用。
-- 自定义基量纲（`111b71d0` 起）：`Config::base_dimension` 声明基名，
-  `expr_to_dim` 接受任意基名，`Dim` 用旁表保存非 SI 指数；所以
-  `dimension Currency` + `unit EUR : Currency` 都可用。
-  `features.user_base_dimensions` 是**硬编码 true**（不是 feature 门控），
-  所以每个构建都支持；唯一按构建变化的是 `jit*` 与 `plugin_kinds`。
+- 自定义基量纲：`Config::base_dimension` 声明基名，`expr_to_dim` 接受任意
+  基名，`Dim` 用旁表保存非 SI 指数；所以 `dimension Currency` +
+  `unit EUR : Currency` 都可用。`features.user_base_dimensions` 是
+  **硬编码 true**（不是 feature 门控），所以每个构建都支持；唯一按构建
+  变化的是 `jit*` 与 `plugin_kinds`。
 - 基名经 `Config::base_dimension(name)` 声明即可：`prepare` 在**克隆的**
   图上 `define_base_dimension`；`DimArena` 是写时复制，第一次写就 detach，
   所以不会污染模板或并发请求（§13.6.6）。
@@ -7618,6 +8608,13 @@ pub struct ConstantValue {
 
 Aevia 现在就有中心 registry 的设计，不把它推到“以后”。registry 是
 **内容寻址 + 签名 + 能力声明**的包索引。
+
+> **实现状态（2026-11-04）**：**设计已完成，实现尚未开始。** 当前包管理只
+> 支持 **path 依赖**（`aevia.toml` 的 `[dependencies]` + `aevia.lock`）；
+> registry 依赖、git 依赖和 `publish`/`yank`/`aevia add <version>` 都会报
+> `E0605`（`crates/aevia-core/src/manifest.rs` 明确“there is no registry”）。
+> 本节描述的是待实现的协议，不是可用功能；`spec/09 §9.11` 的状态说明与
+> 本节一致。
 
 ### 13.7.1 包清单
 
@@ -7689,26 +8686,43 @@ rssn_api、capabilities、operators、units、dimensions、stability、yanked。
 
 ### 13.8.2 Capability
 
-后端能力用 capability 名描述：
+后端能力用 capability 名描述。**名字的唯一来源是一张 capability 表**：
+它由 Kernel Manifest 的 `Features` 派生，`Rssn.Capabilities` 只列出
+`enabled = true` 的行（`aevia-rssn` 的 `Capabilities::table()`）。当前构建
+的完整表（本次测量）：
 
 ```
-core.symbolic
-core.numeric
-core.tensor
-core.linalg
-core.ode
-core.pde
-core.fft
-core.stats
-core.units
-core.jit
-core.jit.branch
-core.jit.index
-core.plugin
+core.dynamic_call
+core.jit                    # false：默认构建无 jit feature
+core.jit_branch             # false（同上）
+core.jit_index              # false（同上）
 core.parallel_symbolic
-core.gpu
-core.distributed
+core.higher_order
+core.structured_results
+core.sde                   # 由 features.sde 派生；SDE 噪声原语可用
+core.callback              # false：Aevia 闭包不是 Send + Sync
+core.plugin.source         # false：源码级 @op 打包未实现
+core.plugin
+core.plugin.in-process
+core.plugin.cdylib         # 仅 plugin-cdylib 构建
+dim.exact_units
+dim.affine_units
+dim.user_base_dimensions
 ```
+
+本构建 `Rssn.Capabilities` 实际列出的 enabled 行（2026-11-04 实测）：
+`core.dynamic_call`、`core.parallel_symbolic`、`core.higher_order`、
+`core.sde`、`core.structured_results`、`dim.exact_units`、
+`dim.affine_units`、`dim.user_base_dimensions`、`core.plugin`、
+`core.plugin.in-process`——jit 三行与两个 host-bridge 行是 `false`，不会出现
+在 `Rssn.Capabilities` 里。
+
+另有**规范声明、但当前 manifest 没有对应 `Features` 字段**的名字；它们可以
+出现在诊断里，`Rssn.Capabilities` 不会列出：`core.symbolic`、`core.numeric`、
+`core.tensor`、`core.linalg`、`core.ode`、`core.pde`、`core.fft`、
+`core.stats`、`core.units`、`core.assume.general`、`core.gpu`、
+`core.distributed`、`io.binary`，以及**存储类稀疏**的命名缺口
+`storage.sparse`（§13.9.5：v1 用 CSR 记录，不是运行时存储类）。
 
 Aevia 编译器在类型检查后检查 capability；缺失时：
 
@@ -7782,18 +8796,35 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 - 分布式张量用 `Sharded<Mesh, Tensor<...>>` 库类型；`Mesh` 是运行时
   拓扑，不是类型参数。这样不会为设备/分片生成类型组合爆炸。
 
+> **实现状态（2026-11-04）**：`Device` 值、`to_device`/`on`/`device_of` 已
+> 类型化；没有 `core.gpu` 时 `to_device`/`on` 报 `E1001("core.gpu")`，与
+> 设计一致。`@jit` 当前**只接受零参数**（`@jit(target = …)` 报
+> `E0210("jit takes no arguments")`），JIT 目标选择尚未实现；`Gpu`/
+> `Distributed` 也没有后端，只是可构造的运行时值。
+
 ### 13.9.5 稀疏与布局
 
 **决定：`Sparse<F, shape, τ>` 是核心类型构造器，`F` 是格式类型。**
 
-- 格式：`Csr`、`Csc`、`Coo`、`Block`、`Bcsr`；0.2.13 是封闭集合，用户
+- 格式：`Csr`、`Csc`、`Coo`、`Block`、`Bcsr`；当前是封闭集合，用户
   自定义格式要等 RSSN 开放 `Format` kind（当前插件只能注册算子/单位）。
-- `Layout` 类：`nnz`、`to_dense`、`from_dense`、`matmul`、`transpose`。
+- `Layout` 类（设计上）：`nnz`、`to_dense`、`from_dense`、`matmul`、
+  `transpose`；当前实现是内建函数，不是可实例化的类型类。
 - `@` 按布局分派：dense×sparse、sparse×dense、sparse×sparse。
 - `Sparse` 与 `Tensor` 之间显式转换；不隐式互转。RSSN 的 `TypeExpr::Sparse`
   只有 `rank`，所以 Aevia 的 `Sparse<F,shape,τ>` 在边界降为 rank + 运行时
   shape；细化形状由 Aevia 自己检查。
 - 稀疏不是库补丁，而是类型系统的一部分；`shape` 细化同样适用。
+
+> **实现状态（2026-11-05）**：`Sparse` 类型构造器与 `from_dense`/`to_dense`/
+> `nnz` 已实现（CSR **记录**往返，stdlib 测试覆盖）；**v1 没有运行时
+> `Storage::Sparse` 值类型**——`from_dense` 返回 CSR 字段的记录，checker 的
+> `TyKind::Sparse` 是类型层镜像；kernel 的 `Value::Sparse` 过桥时被 densify。
+> `matmul`/`transpose` 的稀疏版本与 `@` 的 dense/sparse 布局分派**尚未
+> 实现**，以命名 capability gap **`storage.sparse`** 记录（不是静默遗漏；
+> 本轮的 scoping 见 `.workbuddy-ai/design/storage-sparse-scope.md`）；当前
+> `@` 只分派 dense 张量。格式仍是封闭集合。在真正的存储类/算法落地前，
+> 不要声称运行时存在 `Sparse` 值类型。
 
 ### 13.9.6 效果与能力
 
@@ -7805,6 +8836,11 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 - `with_cap(cap, thunk)` 在沙箱中执行；没有能力时 IO 动作失败。
 - 这样避免 effect row 对全部标准库签名的侵入，也避免“v2 才有自定义
   效果”的断层。需要 DSL/代码生成时用插件/算子，不用宏。
+
+> **实现状态（2026-11-04）**：`with_cap` 与 fs/net/env/rand/gpu 的运行时
+> 权限检查**尚未实现**；当前可用的 capability 判定是 §13.8.2 那张由 kernel
+> `Features` 派生的表（`core.*`/`dim.*`），它只控制后端能力（如 `core.jit`、
+> `core.sde`），不控制文件/网络访问。§9.14 的沙箱承诺是设计目标。
 
 ### 13.9.7 宏与语法扩展
 
@@ -7843,7 +8879,7 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 | `%` 取模？ | 否；`mod`/`rem` |
 | `let` 默认递归？ | 否；`fn` 递归，`let rec` 显式 |
 | 顶层 IO？ | 否；`main`/REPL |
-| 中心 registry？ | 是，现在设计并实现协议 |
+| 中心 registry？ | 是；设计完成，实现待做（当前只有 path 依赖，§13.7） |
 | 用户量纲别名导出？ | 是，默认导出，`private` 可隐藏 |
 
 ---
@@ -7866,7 +8902,7 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 
 | 代码 | 情况 |
 |---|---|
-| `E1001` | 后端 capability 缺失（`core.gpu`、`core.jit.branch` 等） |
+| `E1001` | 后端 capability 缺失（`core.gpu`、`core.jit_branch` 等） |
 | `E1002` | 算子/重载歧义 |
 | `E1003` | 没有匹配的算子/重载 |
 | `E1004` | RSSN `api_version` 不兼容 |
@@ -7877,9 +8913,7 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 capability 名、最小 RSSN 版本和可执行的替代方案。
 
 
-
 <!-- ===== appendix-a-grammar.md ===== -->
-
 
 # 附录 A — 完整文法
 
@@ -8036,6 +9070,8 @@ index          ::= "[" slice { "," slice } "]"
 slice          ::= ".."
                  | expr ".." [ expr ]
                  | expr "..=" expr
+                 | ":" [ expr ] [ ":" [ expr ] ]
+                 | expr ":" [ expr [ ":" expr ] ]
                  | expr
 field          ::= "." name
 
@@ -8196,6 +9232,10 @@ unit_atom      ::= unit_name | "(" unit_expr ")" | "%"
 
 `..`/`..=` 只在索引中使用，不参与表达式优先级。
 
+`:` 切片（§6.6.4.1）的第三个分量是整数步长：`a[i:j:s]`。`::` 是 cons 运算
+符，所以起点之后的 `::` 不是两个切片冒号——`xs[1::2]` 是 `xs[1 :: 2]`；省略
+终点又要给步长时，起点必须省略（`xs[::2]`）或终点必须写出（`xs[1:5:2]`）。
+
 ## A.8 词法记号（摘要）
 
 ```
@@ -8221,9 +9261,7 @@ DEDENT         ::= 由布局算法产生
 它同时是标准库函数名。`return` 是 Prelude 函数，不是关键字。
 
 
-
 <!-- ===== appendix-b-diagnostics.md ===== -->
-
 
 # 附录 B — 诊断目录
 
@@ -8272,7 +9310,7 @@ help: did you mean `2 * h / g`?
 | `E0105` | invalid character | 删除/替换 |
 | `E0106` | invalid numeric literal | 检查下划线/指数 |
 | `E0107` | invalid superscript sequence | 用 `^n` |
-| `E0108` | expected a unit after numeric literal | 写 `3 * x` 或补单位 |
+| `E0108` | expected a unit after numeric literal | 写 `3 * x` 或补单位；`3 (2)` 的括号内必须是单位表达式 |
 
 ## B.4 语法错误（E02xx）
 
@@ -8284,7 +9322,7 @@ help: did you mean `2 * h / g`?
 | `E0204` | invalid pattern | 检查构造器/字段 |
 | `E0205` | invalid operator section | 用 `(+)` 或 lambda |
 | `E0206` | reserved word used as identifier | 改名 |
-| `E0207` | ambiguous type application | 在 `<` 前加空格或加括号 |
+| `E0207` | ambiguous type application | 在 `<` 前加空格或给 callee 加括号 |
 | `E0208` | duplicate field | 删除重复字段 |
 | `E0209` | invalid unit literal | 检查单位表达式 |
 | `E0210` | unknown attribute | 检查属性名/参数 |
@@ -8294,9 +9332,9 @@ help: did you mean `2 * h / g`?
 | 代码 | 消息 | 典型修复 |
 |---|---|---|
 | `E0301` | unbound name | 导入/拼写 |
-| `E0302` | type mismatch | 检查标注/参数 |
+| `E0302` | type mismatch | 检查标注/参数；类型级 `Nat` 方程无解也报此码 |
 | `E0303` | infinite type (occurs check) | 加标注/改递归 |
-| `E0304` | ambiguous type | 加类型标注 |
+| `E0304` | ambiguous type | 加类型标注；未能解出的 `Nat` 变量、非线性 `Nat` 方程、无 binder 的 shape 变量也报此码 |
 | `E0305` | not a function | 检查调用 |
 | `E0306` | missing record field | 补字段/改类型 |
 | `E0307` | constructor arity mismatch | 补/删参数 |
@@ -8322,8 +9360,8 @@ help: did you mean `2 * h / g`?
 | `E0405` | invalid affine point operation | 用温差/`lerp` |
 | `E0406` | bare `0` used where a dimensioned value is expected | 写 `0 m` |
 | `E0407` | unknown dimension/alias | 声明/导入 |
-| `E0408` | unsatisfiable dimension constraint | 检查公式 |
-| `E0409` | dimension occurs check | 简化量纲 |
+| `E0408` | unsatisfiable dimension constraint | 检查公式（保留码：当前量纲代数是自由阿贝尔群上的指数线性统一，非零变量残差总可解，故实现中不可达——见 `diagnostics_coverage` 的证明） |
+| `E0409` | dimension occurs check | 简化量纲（保留码：当前统一不会产生 occurs 状态，实现中不可达——同上） |
 | `E0410` | dimensionful `det`/`product` requires `Dyn<ρ>` | 除以单位/`det_unit` |
 | `E0411` | inconsistent tensor element dimensions | 统一元素量纲 |
 | `E0412` | `Dyn` dimension check failed (runtime) | 检查运行时量纲 |
@@ -8340,12 +9378,12 @@ help: did you mean `2 * h / g`?
 | 代码 | 消息 | 典型修复 |
 |---|---|---|
 | `E0501` | unknown unit | 导入/拼写 |
-| `E0502` | unit not imported | `open Units.SI` |
+| `E0502` | unit not imported | `open Units.SI`（保留码：当前实现单位表全局、没有模块级单位命名空间） |
 | `E0503` | prefix cannot be applied | 用显式单位 |
 | `E0504` | affine offset dimension mismatch | 检查 offset |
 | `E0505` | duplicate base unit | 删除重复 |
 | `E0506` | unit definition cycle/scale not dimensionless | 检查定义 |
-| `E0507` | prefix unit conflicts with explicit unit | 改名/删除 |
+| `E0507` | prefix unit conflicts with explicit unit | 改名/删除（保留码：同 E0502 的模块级命名空间缺口） |
 | `E0508` | affine unit in product/power | 单独使用 |
 | `E0509` | `to` unit dimension mismatch | 换单位 |
 | `E0510` | affine display on a temperature difference | 用 `delta_to` |
@@ -8411,6 +9449,7 @@ help: did you mean `2 * h / g`?
 | `W0303` | unused symbol |
 | `W0501` | display unit dropped |
 | `W0601` | unused private declaration |
+| `W0602` | deprecated name used: `@deprecated("...")` on the declaration (§2.2.7/§13.8.1) |
 
 ## B.13 消息写作规范
 
@@ -8478,9 +9517,7 @@ help: transpose B or reshape A
 下一附录记录规范的修订历史。
 
 
-
 <!-- ===== appendix-c-changelog.md ===== -->
-
 
 # 附录 C — 修订记录
 
@@ -8809,3 +9846,360 @@ RSSN 上游又推进了一轮，这一版把规范里“等 RSSN 支持”的几
    改成“方法差异只剩定步长需要 `steps`”。
 9. **`manifest_hash` 更新**为 `98fd35fab1ab3bf0…`（`hash_u64`
    `f03babb1fa35fd98`）。
+
+## Revision 9 — 对齐 RSSN 3.0.0-rc.1、并发核验与派发/扩展边界（2026-11-04）
+
+这一轮做三件事：把规范从“0.2.13 契约”升级到**实测的 3.0.0-rc.1**；把上一轮
+审计后仍与实现不符的条目改正（含以核验结果为准的规范修正）；把“派发/
+扩展边界”这一长期含糊的设计写成明确的规范决定。原则不变：**不删语言
+特性**，后端/实现缺失用 capability 诊断；不以“v2”推脱。
+
+### 1. 后端对齐：rssn 3.0.0-rc.1（实测）
+
+- `rssn 3.0.0-rc.1`、`api_version = 1`；**1379 个算子 / 31 个 rule set**；
+  签名来源 **7 declared + 22 overlay + 1350 derived**（1565 条 overload：
+  1198×1、178×2、2×3、1×5）；**82 个单位**（本轮新增 7 个，见 §5）；
+  30 条常数（18 条精确）；value kinds 17 个（10 个可进项图）；
+  `SCENARIOS` 29 个（含 `ising_wolff`）；`features.jit = false`。
+- `manifest_hash.hash_hex()` =
+  `1920638b60fbdae5717552cf577fb41690473129868aebce5de02ae7580c04d9`。
+  宿主 pin 64 个 hex 字符；`hash_u64()` 只是显示便利。**不再 pin 任何
+  计数/哈希常量**：Aevia 的 conformance 测试直接读活的 manifest（算子数、
+  来源分布、单位表、常数表、能力标志、哈希），manifest 变化时以测试失败
+  提示重新生成，而不是让文档与代码各自漂移。
+- overlay 从 13 个算子扩到 **22**：原 13 个（`diff`/`solve`/`taylor`/
+  `quantity`/`convert`/`det`/`trace`/`norm`/`transpose`/`rank`/`dot`/
+  `cross`/`identity`）加 `and`/`or`/`xor`/`not`/`implies`/`iff`/`fftconv`/
+  `interpolate`/`sum`。**精确签名 29 条**（7+22），其余 1350 条是形态级
+  `Derived`。
+- 这期间上游收口的接口事实（详见根目录 `RSSN-INTEGRATION-REQUIREMENTS.md`
+  的实测段落）：重载只有**一条解析路径**（`call_value` 校验实参；
+  `resolve_overload` 只返回可执行 key、并列报 `Ambiguous`；`call_key` 不再
+  重解析且会校验钉死的 overload；`Kernel::call` 转发 `call_key`）；
+  `Session::register_unit` 与 `KernelManifest::build_with_units`（单位随
+  session 拥有，插件单位不污染别的 session）；`score`/`score_types` 与
+  `best`/`best_types` 共用同一折叠；`DimExpr::try_from_term` 是 `to_term`
+  的精确逆，`from_term` 是全函数并回答 `Any` 而不是静默错误量纲；
+  `ValueKind::Unit` 不再入项图；稀疏改用 faer（`sprs-rssn` 移除）；
+  Cranelift 0.137（`jit` feature，默认关）；`Solutions` 记录、
+  `CallCtx::substitutions`/trace 都已生效。
+- **Aevia 侧不再维护 `signatures.overlay.json` 镜像**：bridge 直接消费
+  manifest 携带的 overlay；仓库里没有第二份签名表。§4.1/§4.2 与 13.2 已按
+  此改写。
+- **JIT 语义**：默认构建 `features.jit = false`，因此 `@jit` 在检查期报
+  `E1001("core.jit")`（不再是“被接受但不做事”）。JIT 的代码生成仍未实现，
+  属已记录的实现缺口。
+
+### 2. 规范修正（以实测行为为准）
+
+- **§6.9.3 / §9.3 调用与资源界限**：非尾递归受**调用深度 2048**限制
+  （`Interp::max_depth`），解释器线程栈由 `--max-stack <MiB>` 指定
+  （默认 256 MiB，不是规范旧文的 8 MB）；不终止的尾循环由**连续尾调用
+  预算**（默认 100,000,000，`--budget`）限制；表达式嵌套另有 16,384 节点
+  上限。三者超限都是 `E0805` 并带调用栈。这是“合法程序终止、runaway 被
+  报告”的保证在新尾调用实现下的精确形式。
+- **§9.9 CLI**：`--max-stack` 的单位是 **MiB**，`--budget` 的单位是**尾
+  调用次数**（不是秒）；`--release`/`--jobs` 在当前解释器实现中没有效果，
+  CLI 明确提示而不是静默忽略；`--out`、`--locked`、`clean`、`lsp` 已实现。
+  `--locked` 只校验锁文件，不涉及缓存。
+- **§9.11 构建缓存**：当前实现**不写** `.aevi`/`.aevia/target` 接口缓存，
+  每次编译重新检查全部模块；`clean` 诚实地删除可能存在的 `.aevia/` 并
+  通常报告“没有可清理的内容”。增量编译是已记录的性能缺口（见 §9 末尾）。
+- **§6.10 / §9.7.2 `par_map`**：语义保证（结果顺序与输入一致、线程数不影响
+  结果）不变；**当前求值器单线程，`par_map` 顺序执行**，明确记录为实现
+  偏差。真正的并行需要会话级并行或线程化求值器。
+- **§1.8.1 单位字面量邻接**：补写“单位表达式内的 `*`/`·`/`/` 一直属于单位
+  表达式，要把量乘以变量或函数调用必须先用括号结束单位字面量”，例如
+  `(3.0 m/s) * exp(-t)`；`3 m * x` 会把 `m*x` 当单位表达式（`x` 不是单位时
+  `E0501`）。这是既有规则的可执行化说明，不是新规则。
+- **§11 完整示例**：修正了示例自身的错误——变量绑定用大写（按 A.4 那是
+  零参构造器模式）；多语句 `match` 分支体需要 `do`（它是 IO 动作序列）；
+  `(3 m)^n` 需要先绑定 `n : Int`；量的乘法需要括号结束单位字面量。示例的
+  类型/量纲推导与输出同步修正。**注意**：`spec/11` 依赖标准库模块
+  （`import Math { sqrt }`、`open Units.SI`），而 §8.20 的模块层级本轮尚未
+  实现，导入仍是 `E0607`；§8.17 的 `Physics.*` 类型化包装器同样未实现。
+  `spec/11`、`spec/08` 里已如实标注这一实现状态，不假装已可运行。
+- **附录 B**：新增 **`W0602` deprecated name used**（`@deprecated` 使用点
+  警告）。其余“已文档但尚未可触发”的代码继续列在 STATUS 的已知缺口里，
+  不在规范里假装可达。
+
+### 3. 本轮新增的语言与运行时能力
+
+- **类型类之外的 `Dyn` 检查器**（§3.11/§4.9）：`dyn`/`check`/`dyn_with`/
+  `check_with`/`dim_of`/`value_of`/`pow_dyn`、`DimValue`、`DimError` 与
+  `Dyn` 的 `+`/`-`/`*`/`/`/`^`/`sqrt` 规则全部有检查器签名；`dyn`/`check`
+  在调用点把具体量纲物化并记录（`dyn_calls`），运行期据此做 `E0412` 校验；
+  `Dyn` 与 `Scalar` 之间没有隐式转换（显式 `check`）。`Show`/`Eq` 对
+  `Dyn` 可用（§4.9.4）。
+- **属性成为真语义**（§2.2.7/§9.6.1/§13.8.1）：`@jit` 按 `core.jit`
+  门控；`@stable`/`@experimental`/`@deprecated` 被记录，使用 deprecated 名字
+  警告 `W0602`；`@op`/`@rule` 按 `core.plugin.source` 门控（本构建缺失，
+  报命名 capability），不再静默无效。源码级插件包装（§13.5.2）仍未实现。
+- **`Rssn` 动态接口的四个入口可达**（§8.19）：`Rssn.typed` 端到端可用
+  （返回 `Result<Value, OpError>`，`TypeRep` 是不透明运行时类型，`from_value`
+  做窄化——这是本实现的诚实静态形式，而不是虚假的 `Result<a, OpError>`）；
+  `Rssn.call_ho` 的空回调表转发到内核、非空回调报
+  `E1001("core.callback")`（Aevia 闭包不是 `Send+Sync`）；
+  `Rssn.register`/`register_plugin` 报 `E1001("core.plugin.source")`
+  （源码级插件打包未实现；宿主 Rust 插件走嵌入 API）。这两个 capability
+  是本轮新增的“实现能力”名。
+- **张量与单位的算术**（§3.5.3/§4.5.2）：`Tensor * Unit`、`Unit * Tensor`、
+  `Tensor / Unit` 对字面量张量也成立（元素表示不被强制改变）；同秩张量的
+  逐元素 `*`/`/` 与张量 `^` 字面量指数按规范实现。
+- **ODE 的 `RateOf`**（§8.9）：`odeint`/`odeint_with`/`solve_ivp` 的右端
+  按内建类型函数 `RateOf<s>` 检查（标量除以 T、张量/记录递归；`Int`/
+  `Bool`/函数字段报 `E0302`）；右端必须是双参。`OdeOpts<s>` 目前只做记录
+  字面量的字段检查（不完全按声明记录检查），是记录在案的遗留项。
+- **Chapter 8 的名称补齐**：`par_map`（`Parallel` 内建类；Int/Float 及其
+  张量；符号 `Real` 报 `E0310`）与 `rng : Int -> (() -> Float)`（纯、确定性
+  生成器）进入 Prelude；`set`/`sum(a, axis)`/`at` 的秩 overload 补齐；
+  单位名与函数名在调用位置正确分命名空间（`at(t, 0)` 是函数，`3 at` 是
+  单位）；`f()` 支持零参函数值应用。**当前 chapter 8 覆盖：315 个名字，
+  实现 + 命名 capability gap 已闭合**（`read_npy`/`write_npy` 仍报
+  `E1001"io.binary"`；blocked 为 0）。
+- **运行时/IR（§6、§9.3-§9.5）**：`reshape` 在连续视图上保持视图（否则
+  复制）；`sum` 对 dense 与 boxed Float 使用 Kahan/pairwise；空张量归约按
+  元素相位定义（Float 空 `sum=0.0`、`prod=1.0`、`mean=NaN`，Real 空
+  `mean=E0802`）；混合字面量张量按 `join` 选择 f64 存储；`EvalError` 栈
+  保留最内层失败帧与其调用点（§9.3.4）；`approx` 对定义域外形式表达式
+  报 `E0806`（不是 `Ok(NaN)`）；`decide` 接受精确比较擦除后的 Bool 形式；
+  `Dyn` 算术/`check` 的运行期校验见 §3；`par_map`/`rng` 运行期 arm 已实现
+  （`par_map` 顺序执行）。
+- **工具链（§9.8-§9.12）**：REPL 补 `:ast`/`:core`/`:time`/`:latex`；CLI
+  补 `clean`、`lsp [--stdio]`、`rssn --emit --out`、`--locked`、`test
+  --filter`、`check --all`、`doc --open`；LSP 补 code actions（加类型标注、
+  温度单位换算、提取 let、修量纲错误）与 semantic tokens，诊断可带未使用
+  绑定；`bench` 报中位数 + 95% CI 并提示构建 profile；`doc` 报告未文档化
+  声明。编辑器仍按 §9.10 的“标准 LSP 3.17、协议无关语义层”分层。
+- **内核（D:/rssn，本轮）**：§5.3.3 的 7 个单位注册进内核单位表
+  （`Da`/`u`、`kn`、`mph`、`acre`、`bit`、`B`/`byte`、`KiB`；精确尺度；
+  `bit`/`B`/`Da` 可加前缀）；**`Solutions.multiplicities`/`conditions`**
+  不再是恒空：只在解确为“一元有理多项式、根为精确数”时按无平方分解填
+  重数（无理/符号根保持“未报告”），`conditions` 填解本身给出的
+  `NonZero` 条件（参数在分母），`complete` 是求解器的真实回答；18 条
+  kernel-requirements 审计项逐条复核（含 4 条此前无直接测试的项）无回归；
+  内核文档（KERNEL/DESIGN/DIMENSIONS/checklist/archive）同步到实测数字。
+
+### 4. 记录在案的实现偏差（不是“以后再说”，是当前契约）
+
+1. **十进制“量字面量”的精确折叠。** 裸小数默认 `Float`（f64），但带单位
+   的十进制量（如 `3.2 km`、`0.1 m`）在编译期按**精确有理数**折叠；其静态
+   表示仍默认 `Float[L]`，在精确上下文（与 Int/Real 混算）走精确路径，
+   纯 Float 上下文才落成 f64。因此 `0.1 m * 3 == 0.3 m` 为真，而
+   `0.1 + 0.2` 仍是 f64 的 `0.30000000000000004`。§3.10.1 的“精确十进制
+   转换”规则不变，但“`3.0 m` 的值 3.0”要读作“精确 3，在 Float 运算处
+   转 f64”。这是实现为保证精确性做的选择，记录在此以免被当成 bug。
+   **相关已知缺陷**：静态 `Float` 与运行期表示目前可能不一致
+   （`fn f(x: Float): Float = x + 1` 返回精确 3），这是类型健全性问题，
+   不是该偏差的许可；修复方向是拒绝 Real→Float 或在字面量降级处按记录的
+   表示强制转换（见 STATUS 已知缺口）。
+2. **`par_map` 顺序执行**（见 §2）。
+3. **`Rssn.typed` 的静态类型是 `Result<Value, OpError>`**，不是规范理想的
+   `Result<a, OpError>`：本构建的 `TypeRep` 没有类型见证，虚构一个新鲜
+   `a` 会重新引入 `∀a.a`；窄化由 `from_value` 完成。`call_ho`/`register`
+   是“类型正确但 capability 门控”。三者都是诚实的能力边界，不是静默
+   降级。
+4. **类实例派发仍按运行时形状**，跨模块的类/实例/别名导出尚未实现
+   （§7.1.3/§7.4 未兑现）；这是已复现的正确性缺陷（多原语头实例会静默
+   互相覆盖、跨模块实例不可见），已列入下一轮的**最高优先级**工作，
+   并配套“实例键 + 见证派发”的设计（见 §5）。
+5. **没有 `@jit` 代码生成**、没有 `.aevi` 接口缓存、没有真正并行的
+   `par_map`、没有标准库模块层级（§8.20）与 `Physics.*` 包装器；这些是
+   实现缺口，不是规范删除的特性（capability/诊断按 §13.8 报告）。
+6. **单一 RNG 语义未统一**：语言侧 `rng`/`sample_n` 与核侧 SDE 使用的
+   RNG 流不同；当前承诺是**同构建可复现**，不是跨平台逐位一致。
+
+### 5. 派发与扩展边界（新增 §12.8.13 的规范决定）
+
+这一轮把长期含糊的问题写成明确决定（理由见 §12.8.13 与设计评审记录）：
+
+- **不做运行时多方法派发**。实例由类型静态选定；类型被擦除后，运行期只
+  按**规范见证**（ADT 的模块+名字身份、`NumKind`、张量秩+存储类、记录
+  字段集合、Bool/String/Unit/Prop）选择实例；见证冲突是**检查期**的
+  `E0311`/`E0310`，不是运行期错误。函数、`Dyn`、高阶值没有见证，不能用
+  实例头部。
+- **不做多参数类/superclass/关联类型/实例上下文/通用默认方法/用户数值类
+  重载**。§3.8.1 的多参数类句子删除；§8.7.1 的 `class Distribution dist d`
+  改写为名义 `Distribution<d>` 加内建 overload（v1 的用户自定义分布关闭，
+  记录为扩展性损失，若将来需要，用 `RateOf` 式类型函数或专门的泛型类设计，
+  而不是把类系统扩成关系型）。
+- **不做按类型或按量纲的单态化**。类型/量纲擦除后，`mean<L>` 与 `mean<T>`
+  必须是同一份代码（§4.4.4、§9.2.3、§11.8）；性能来自调用路径/表示特化/
+  张量内核，而不是为每个类型生成代码。`expr_types` 可用于**表示**特化，
+  但必须先修好静态 Float/运行期表示的偏差。
+- **扩展点是**：ADT、记录、模块、结构化 `derive`（封闭集合
+  `{Eq, Ord, TotalOrd, Show, Hash}`）、RSSN 算子/插件、`Dyn`、包 registry；
+  不是宏、不是 `quote`/AST 片段、不是构建脚本（§12.8.5、§13.9.7、§9.14）。
+- **`Show` 是保证也是钩子**：§3.8.4 列出的结构值（记录、`Solutions` 等）
+  在没有用户实例时由内建结构打印兜底（保证）；用户可为自己的名义类型写
+  实例覆盖（钩子），实例体在检查期按替换后的方法签名检查。
+- **下一轮工作顺序**（记录在 PLAN）：① 实例/类/别名的模块接口 +
+  `Class@?` 静态全局缺陷修复 + 见证派发（正确性）；② 单遍 `check --all`
+  （~10×，不依赖缓存）；③ 最小 SDE（定步长对角噪声 Euler–Maruyama）；
+  ④ 性能 stage-now（分配计数门、帧复用、字面量预解析、启动延迟）；
+  ⑤ 增量编译接口缓存（先符号身份，后缓存）。
+
+## Revision 10 — 第二轮实施：派发键、标准库模块树、SDE、Nat 与工具链（2026-11-05）
+
+本轮把 Revision 9 列出的工作顺序中的前四项实施到可测试状态，并完成了设计评审
+后的边界决定。原则不变：静态解析与运行期一致，能力缺失用诊断而不是删特性。
+
+### 1. 派发与复用（正确性优先）
+
+- **实例身份改为符号键。** `ClassKey`/`InstanceKey`/`AdtKey` 由「定义模块 + 名字
+  + 规范化头部（标量表示、张量秩/形状、ADT 结构参数、记录标签集）」构成，
+  `AdtId` 只作为进程内见证；运行期和检查器用同一个 `InstanceKey::mangle()`
+  生成实例体全局名，修掉了 `Class@?::method` 让所有原语头实例互相覆盖的
+  静默错误。`DictTarget` 把调用点钉死到 `Instance(key)` / `Witness{candidates}`
+  / `Builtin(ShowStructural)`，IR 的 `CallKind::Dictionary` 携带 target，AST 与
+  IR 解释器同规则派发。
+- **类/实例/别名随模块接口导出**（§7.1.3/§7.4）：`ModuleInterface` 携带
+  `classes`/`instances`/`alias_defs`，driver 按拓扑序传给
+  `check_module_with_interfaces`；导入实例合并进 ClassTable（重叠仍 `E0311`，
+  孤儿规则不重复检查），`private class` 只在本地，`private instance` 非法；
+  别名的定义随接口导出，导入方可以展开它。同一类型名在两个模块里现在是两个
+  不同的名义类型（构造器按定义模块绑定）。
+- **见证派发。** 具体头部静态钉死；量化调用点按规范见证（ADT 模块+名字、
+  `NumKind`、张量秩+存储类、记录标签集、Bool/String/Unit/Prop）选择；见证
+  冲突是检查期 `E0311`/`E0310`，不再运行期猜形状。函数、`Dyn`、高阶值没有
+  见证。`rows_overlap`/张量 `heads_overlap` 修正为按字段数/秩比较。
+- **`Show` 语义**：§3.8.4 列出的结构值（记录、`Dyn`、单位值等）在没有用户实例
+  时由内建结构打印兜底（保证）；用户可为自己的名义类型写实例覆盖（钩子），
+  实例体按替换后的方法签名检查。`derive` 封闭到
+  `{Eq, Ord, TotalOrd, Show, Hash}`，`E0317` 点名缺哪个字段/实例；多参数类声明
+  报 `E0317`（§3.8.1 的多参数句子删除）。
+- **`Distribution` 改为名义 `Distribution<d>` ADT**（§8.7.1），v1 不开放用户
+  自定义分布，这个扩展性损失被记录而不是隐藏。
+
+### 2. 标准库模块树（§8.20）
+
+- 37 个模块源（29 个由 §8 章节生成 + 8 个手写：`Units/*` 六个、
+  `Physics/Ising`、`Physics/Geodesic`；新增 `Sde`）经 `include_str!` 嵌入
+  `aevia-std`，`aevia_std::stdlib` 暴露 `source`/`is_module_name`/`module_paths`；
+  加载器在普通根失配时回退到嵌入源（合成 `stdlib/A/B.aev` 路径参与后序/环检测，
+  `SourceMap` 显示 `stdlib://A/B.aev`），本地文件优先。
+- `import Math { sqrt }`、`open Units.SI`、`import Data.Csv { read_csv, column,
+  Table }`、`import Physics.Ising` 从用户源码可用；`spec/11` 的九个完整程序
+  **全部 9/9** 通过类型检查（11.2 的 `RateOf` 被导入再导出遮蔽、11.4 的
+  refined/rank-only 形状单向统一是两个真实检查器缺陷，已修复）。
+- `Units/*` 是文档性模块：单位名本来就是 ambient `Unit[d]` 值，不导出绑定
+  （§5.3.4）；`Units.Constants` 由 live manifest 生成。`Physics.Ising` 有 4×4
+  端到端运行测试。
+- 第 8 章覆盖率：**322 个名字，320 实现，2 个具名 `io.binary` 缺口
+  （`read_npy`/`write_npy`），0 blocked，100% 有归属**。
+
+### 3. SDE（内核 + 语言）
+
+- **内核**新增 `rules::sde`（第 32 个 rule set）与两个无回调算子：
+  `sde_wiener(seed, m, steps, h) -> Tensor<2, Real[T^(1/2)]]`（`DimRule::RootOf
+  { degree: 2, index: 3 }`，取第 4 个参数的平方根；manifest 线格式
+  `{"root_of":{"degree":2,"index":3}}`）与
+  `sde_levy_areas(seed, h, dw, terms) -> Tensor<1, Real[T]]`；新增
+  `Features.sde = true`；`SdeError` 带数据并实现 `Display`，`SdePath` 增加
+  provenance 字段；求解器循环（EM/Milstein 族/SRK/Heun/自适应/非交换/集合）
+  保持为 Rust API，因为回调无法越过 manifest ABI（内核清单 CO-03）。
+- **语言侧**：新 `Sde` 模块与 §8.9.1 规范——`SdeMethod`（名称编码 Itô/
+  Stratonovich）、`SdeStructure`（Diagonal / General(m) /
+  GeneralNoncommutative(m)）、`SdeFixedOpts<T>`/`SdeAdaptiveOpts<T>`/
+  `SdeOpts<T>`、`SdePath<s>`，入口 `sdeint_diag`/`sdeint_general`/`wiener`/
+  `sde_order`/`sde_ensemble_seed`。`DiffusionOf<τ>` 内建类型函数（叶子量纲
+  除以 `T^(1/2)`，与 `RateOf` 同构）。定步长可交换路径使用语言 RNG 流
+  （与 `rng(seed)` 一致，`wiener` 与路径消费同一组增量），非交换/自适应
+  使用内核 xoshiro 流；只承诺同构建可复现。错误沿用
+  `E0802/E0806/E0807/E1001`（`core.sde`、`sde.noncommutative`、
+  `sde.interpretation`、`sde.general.record`），不新增附录 B 码。
+- `aevia-rssn` 自动吸收 manifest：`Rssn.sde_wiener`/`Rssn.sde_levy_areas` 类型化
+  声明、`core.sde` 能力行、`T^(1/2)` 元素维度 conformance 测试；kernel 实测
+  **1381 算子 / 32 rule set / 1567 overload（7 declared + 24 overlay + 1350
+  derived）/ hash `8ed92a22…`**。
+- 明确推迟：events/根查找、dense output、记录状态 + 一般噪声、非均匀定步长
+  网格、用户自定义噪声结构、manifest 求解器算子；`aevia rssn --emit` 对开放
+  维度参数仍保守地拼成 `Dyn<term>`（manifest/检查器精确，生成源码拼写是已知
+  限制）。
+
+### 4. 类型级 Nat 线性统一
+
+- 形状 extent 支持真正的类型级 `Nat` 变量（`ty::Nat = Lit | Var | Add | Mul`，
+  `Shape::Refined(Vec<Option<Nat>>)`），`Scheme.nats` 参与量化/实例化/默认化；
+  统一把方程化为线性形式，单变量解出非负整数（`n+1~3` ⇒ 2、`2n~6` ⇒ 3）、
+  多变量等式保留重试、常数残差 `E0302`、非线性 `E0304`。`reshape`/`zeros_of`/
+  matmul/索引界限按解出的 extent 检查；实例头不允许 Nat 变量（`E0304`）。
+- 前端诊断补齐：`E0108`（数字后括号非单位）、`E0205`（部分运算符 section）、
+  `E0207`（callee 非名字的相邻类型应用）、`E0203` ragged 字面量、`W0101`/
+  `W0103`/`W0601`/`W0602`；其余码在 `diagnostics_coverage.rs` 中有明确处置
+  （运行期/加载器拥有，或带证明的 unreachable 理由）。
+
+### 5. 工具链、测试与性能
+
+- `aevia test --doc`：从 `##` 注释抽取 `aevia` 围栏块，逐块在合成模块中编译；
+  块首行 `compile_fail` / `compile_fail EXXXX` 断言失败与错误码；`@compile_fail`
+  属性删除（`E0210`）；`compile_fail("<source>")` 保持隔离片段契约。
+- `aevia bench` 增加 `--iterations/--warmup`、`--save-baseline`/
+  `--compare-baseline`/`--threshold`（默认 5%），JSON baseline 带
+  profile/version/median/mean/CI，跨 profile 拒绝比较，回归退出码 1。
+- LSP/analysis：文件已保存时通过 `driver` 加载导入图，诊断/悬停/补全/跳转按
+  当前 `LoadedModule` 回答，跨模块跳转到定义文件；未保存缓冲区回退单文件并
+  在能力中声明；新增 code actions、semantic tokens、typeDefinition、单位跳转、
+  `W0101`/`E0309` 透传。缓存与 workspace/symbol 属后续优化。
+- `aevia check --all` 改为单遍加载（`driver::load_all_with_roots` +
+  `LoadStats`），共享依赖只检查一次；`load_with_roots_and_source` 让脏缓冲区
+  保留多模块分析。
+- 性能：字面量按检查器记录的表示物化（修掉「静态 `Float`、运行期精确值」的
+  相位错位）；`eval_ir` 不再在每次返回时克隆整个调用栈，浮点字面量在 lowering
+  时解析一次；Kahan/Neumaier 求和与单元素显示单位修正；分配计数门、符号项
+  结构键、启动阶段剖析、Rep 特化 IR、JIT 均按计划后置（不做整体单态化）。
+- 文档：`STATUS`/`PLAN`/本附录按实测数字更新；单文件规范版重新生成；
+  `RSSN-INTEGRATION-REQUIREMENTS` 与 spec/10/13 对齐新的 manifest 事实与
+  `Features.sde`；内核 `KERNEL/DESIGN/DIMENSIONS/checklist/archive` 同步。
+
+### 6. 仍然开放（记录，不隐藏）
+
+- SDE 源码级选项 ADT 依赖「别名/ADT 声明的 kind 推断」（`type Normal<d>` 的
+  同类问题）；在它落地前 `sdeint_*` 只能从运行期测试构造选项。
+- 增量编译 `.aevi` 接口缓存（先单遍化，缓存 v0 待做）；`aevia rssn --emit`
+  开放维度拼写；稀疏张量运行期（`Value::Sparse`/`@` 布局分派）未实现，
+  当前只有 `from_dense`/`to_dense`/`nnz` 记录级内建；JIT 代码生成未实现。
+- `Spec/11` 依赖的 §8.7.1 `Normal<d>` 静态声明同样等待 kind 推断修复。
+
+
+
+### Revision 10 实施补记（2026-11-05 夜 → 傍晚）
+
+第二轮计划完成后又做了一轮逐模块硬化，全部带测试：
+
+- **类型层**：§6.6 穷尽性/有用性改为有界矩阵算法（嵌套载荷、字面量、记录、guard、
+  空枚举；W0201 冗余分支；深度上界 24 只会抑制诊断、不会凭空报错）；形状细化在
+  matmul/索引/字面量切片/reshape/transpose 中保留；Nat 求解器用 `i128` 线性式，
+  覆盖 `n+n~4`、任一侧乘字面量、负解 E0302、大整数、晚绑定后才矛盾（E0302）与
+  真正歧义（声明末 E0304）；导入类型/构造器/透明记录别名与泛型别名/ADT 的
+  kind 推断（`<d: Dim>`/`<n: Nat>`/`<r: Row>` 及从 body 推断）；属性实参必须是
+  编译期常量（E0210）；`min_all`/`max_all` 接受任意秩；调用位置内建函数优先于
+  同名单位值（`min` vs minute、`dyn` vs dyne），并保住 `dyn` 的动态量纲特化。
+- **标准库与诊断**：§8 签名审计（309 条声明，2 条记录的松散 scheme，18 条人工
+  类型/顺序发现全部修复或有主）；`div_rep` 结果细化（`inv`/`linsolve`/`lstsq`/
+  `mean`/`var`/`std`/`cov`/`corr`）、`complex_sqrt` 的 `d^(1/2)` 显示、`rank`/
+  `shape` 张量类型、NPY 秩放宽（`write_npy` 任意张量、`read_npy` v1 秩 2）、
+  `decide` 的 Bool 重载、Measurement 算术；本地 NPY 编解码（第 8 章 323/323，
+  0 缺口）；E0601、`args()`、E0901–E0905；精确相位扩展实数采取部分语义
+  （`oo*0`/`oo-oo`/`oo/oo` 保持符号项，Float 按 IEEE）。
+- **后端与工具链**：`aevia rssn --emit` 用声明内共享的维度变量精确拼写
+  `Real[T]`/`Real[T^(1/2)]`/`Unit[T]`，其余 `Dyn<term>` 原因逐条记录；字面量键
+  `Rssn.invoke(op, key, …)` 按 manifest 钉死的 overload 定型（每次调用新鲜的维度
+  变量；非字面量/未知键保持动态，E1002/E1003/E1005 仍是运行期诊断），因此
+  `--emit` 后 `check Rssn/Units/Constants` 各 0 诊断；编辑器侧补
+  `references`/`rename`/`prepareRename`（跨文件 WorkspaceEdit、拒绝规则）、
+  `signatureHelp`、字段/关键字补全、`workspace/symbol` 与内容哈希+ mtime 的
+  分析缓存；`run -- args`、`run --example`。
+- **性能**：`sum(a, axis)` 与整张量 `min_all`/`max_all` 的 dense f64 内核
+  （512×512 axis sum：525,336 → 7 次分配、~449 ms → ~12.9 ms；min_all ~105 ms →
+  ~5.2 ms，debug）；分配计数门、结构性 `Term` 键、`Rc<str>`、惰性内核常量播种
+  （空程序启动 61.6 → 8.6 ms）。
+- **内核**：Rader 素数长度 FFT + 批量线程化变换、`tan`/`atan2` 区间规则、C API
+  维度错误码、三角形自适应求积、HOSVD/Tucker、`sde_scheme_info` 元数据算子
+  （manifest **1382 ops / 32 rule set / 25 overlay / 1568 overloads**，hash
+  `8d2c3764…654a`）。
+- **最终权威套件**：`cargo test --workspace --no-fail-fast -- --test-threads=2`
+  → **1266 passed / 0 failed / 5 ignored**（89 个测试目标，exit 0）；单文件规范
+  版同步重新生成为 Revision 10。仍开放的项目逐条列在 `STATUS.md` 的
+  “Known gaps”（稀疏运行期、`.aevi` 缓存/并行编译、registry、沙箱、JIT、
+  非字面量 invoke、KN-06 等）。

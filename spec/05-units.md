@@ -239,6 +239,8 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `min` | `T` | `60 s` |
 | `h` | `T` | `3600 s` |
 | `d` | `T` | `86400 s` |
+| `week` | `T` | `604800 s` |
+| `yr` | `T` | `31557600 s` |
 | `°` / `deg` | `1` | `pi/180` |
 | `′` / `arcmin` | `1` | `pi/10800` |
 | `″` / `arcsec` | `1` | `pi/648000` |
@@ -254,7 +256,7 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `atm` | `Pressure` | `101325 Pa` |
 | `mmHg` | `Pressure` | `133.322387415 Pa` |
 | `cal` | `Energy` | `4.184 J` |
-| `kWh` | `Energy` | `3.6e6 J` |
+| `Wh` | `Energy` | `3600 J`（`kWh` 是 `k` 前缀形式） |
 | `hp` | `Power` | `745.6998715822702 W` |
 | `kn` | `L/T` | `1852/3600 m/s` |
 | `mph` | `L/T` | `1609.344/3600 m/s` |
@@ -267,6 +269,7 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `gal` | `L^3` | `0.003785411784 m^3` |
 | `oz` | `M` | `0.028349523125 kg` |
 | `lb` | `M` | `0.45359237 kg` |
+| `lbf` | `Force` | `4.4482216152605 N` |
 | `psi` | `Pressure` | `6894.757293168 Pa` |
 | `°C` | `Θ` | 仿射：`1 K offset 273.15 K` |
 | `°F` | `Θ` | 仿射：`5/9 K offset 255.3722222222222 K` |
@@ -278,10 +281,10 @@ type  = Scalar<rep(number), dim(unit_expr)>
 用户可以 `dimension Information`。标准库不强制，因为大量公式把 bit 当
 无量纲概率/熵使用。
 
-> **0.2.13（`111b71d0` 起）**：`dimension Information` 与
+> **rssn 3.0.0-rc.1**：`dimension Information` 与
 > `unit bit2 : Information` 都可用，前提是在 `Config` 上声明
-> `base_dimension("Information")`（`prepare` 在克隆图上定义它）。`Dim` 的内部表示是“7 个 SI 基 +
-> 有序旁表”，`expr_to_dim` 接受任意基名。
+> `base_dimension("Information")`（`prepare` 在克隆图上定义它）。`Dim`
+> 的内部表示是“7 个 SI 基 + 有序旁表”，`expr_to_dim` 接受任意基名。
 
 ### 5.3.4 单位模块
 
@@ -294,25 +297,36 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `Units.Natural` | `c = 1`、`hbar = 1`、`eV` 系 |
 | `Units.Constants` | 物理常数（§5.8） |
 
-> **0.2.13 实现状态（commit `95099fa0`）**：`manifest.units` 有 75 项，覆盖
-> SI 基/派生、常见英制、`degC`/`degF`、角度，以及：
+> **实现状态（按 rssn 3.0.0-rc.1 测量，2026-11-04）**：`manifest.units` 有
+> **82** 项，覆盖 SI 基/派生、常见英制、`degC`/`degF`、角度、时间
+> （`min`/`h`/`d`/`week`/`yr`）、能量/功率（`Wh`/`cal`/`eV`/`hp`）、信息
+> 单位（`bit`/`B`/`KiB`），以及：
 >
 > - **天文**：`au`（精确）、`ly`、`pc`、`Rsun`、`Msun`、`Mearth`、`jup`；
 > - **CGS**：`dyn`、`erg`、`Gal`、`P`、`St`、`G`（高斯，`1/10000 T`）、
->   `Mx`、`Ba`、`Oe`（scale 带 `pi^-1`）。
+>   `Mx`、`Ba`、`Oe`（scale 带 `pi^-1`）；
+> - **§5.3.3 本轮补齐**：`Da`（别名 `u`）、`kn`、`mph`、`acre`、`bit`、
+>   `B`、`KiB`——本轮之前 kernel 的注册表缺这七项。
 >
 > 因此 `Units.Astronomy` 与 `Units.CGS` 可以从 manifest 生成。`Mpc` 由
-> `pc` 加前缀得到（`pc` 是 `prefixable`）。
+> `pc` 加前缀得到（`pc` 是 `prefixable`）；`kWh` 由 `k`+`Wh` 得到。
 >
 > `Units.Constants` 也从 `manifest.constants` 生成（30 条、18 条精确），
-> 不再需要 Aevia 本地 overlay——这是“单一事实来源”最后一个例外被消除。
+> 不再需要 Aevia 本地 overlay——单一事实来源没有例外。
 >
 > 每个 `UnitValue` 都带 `aliases`/`prefixable`/`category`/`since`，所以生成
-> 单位表不需要再读 `UnitRegistry`。
+> 单位表不需要再读 `UnitRegistry`。单位是 **session 私有**的：
+> `Session::register_unit` 注册的单位只出现在该 session 的 manifest 里
+> （`KernelManifest::build_with_units`），进程级表由 `build` 读取。
 
-`Units.Natural` 通过“单位制”而不是“改常数”实现：它导出一组新的单位，
-其中 `c`、`hbar` 的数值是 1。用户 `open Units.Natural` 后，`1 GeV` 等写法
-成立；切回 SI 用 `open Units.SI`（名字冲突时限定）。
+`Units.Natural` 的设计是“单位制”而不是“改常数”：它本应导出一组新的单位，
+其中 `c`、`hbar` 的数值是 1，用户 `open Units.Natural` 后 `1 GeV` 等写法成立。
+**当前实现状态**：kernel 没有 natural-unit registry，Aevia 也不允许在 manifest
+之外维护第二张单位表（§5.10 第 1 条），所以这一构建里的 `Units.Natural`
+是一个**文档性空模块**（`import Units.Natural` 能解析，但不导出单位）；`c`、
+`hbar` 作为**物理常数的值**来自 `Units.Constants`，`GeV` 由 `G`+`eV` 前缀
+得到。真正的 natural-unit 系统需要 kernel 增加 registry（记录为缺口），
+在那之前不要声称 `open Units.Natural` 会改变 `c`/`hbar` 的数值。
 
 ## 5.4 换算与显示
 
@@ -365,6 +379,15 @@ let g = base(d)             # Float[L]，值 3200.0，去掉显示单位
   否则基单位乘积；指数为 1 的用 `m`、`s`，复杂量纲用 `kg*m/s^2`。
 - `show` 保证可读；`repr` 保证可解析回同一个值（带单位文本）。
 - 打印精度由 `Float` 的最短往返表示决定；`Real` 精确值打印为分数或根式。
+
+> **实现状态（2026-11-05，分数指数打印已修复）**：没有显示单位时的 SI
+> 单位拼写现在由 `Dim::to_si_symbol_string()` 渲染，分数指数打印正确：
+> `T^(1/2)` → `s^(1/2)`、`T^(3/2)` → `s^(3/2)`、`1/T^(1/2)` →
+> `1/s^(1/2)`、`L/T^2` → `m/s^2`。`wiener(seed, m, steps, dt)` 的输出元素
+> 量纲是 `Float[T^(1/2)]`，现在打印为 `... s^(1/2)`；符号表达式的幂仍由
+> `format_rational` 打印（`x^(1/2)`）。回归测试在 `aevia-core` 的
+> `si_unit_text`/显示测试里（含真实 `wiener` 值）。早先“分数指数打印成
+> `s^1`”的缺口已关闭。
 
 ## 5.5 角度与无量纲单位
 
@@ -568,6 +591,14 @@ type ConstantInfo = {
 | `E0508` | 仿射单位出现在乘积/幂中 |
 | `E0509` | `to` 的单位量纲与值不匹配 |
 | `E0510` | 对温差使用仿射单位显示 |
+
+> **实现状态（2026-11-04）**：`E0501`/`E0504`/`E0505`/`E0506`/`E0508`/
+> `E0509`/`E0510` 有实现且被诊断覆盖测试触发。`E0502`/`E0503`/`E0507`
+> **当前不可达**：单位没有模块级命名空间（checker 的 units 是完整的
+> kernel 表加本地声明，所以“未导入的单位”与内建单位无法区分），因此
+> “未导入”“禁止前缀”“前缀/显式冲突”这三种状态都不存在；要触发它们需要
+> 先有模块级单位可见性（loader + 每模块 units 表），不是检查器能单独补的。
+> 在真正不可达时，编译器不会用别的错误去“假装”它们。
 
 ## 5.10 与 rssn 单位层的衔接
 

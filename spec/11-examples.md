@@ -174,22 +174,22 @@ open Units.SI
 import LinearAlgebra { linsolve, det }
 
 fn main(): IO Unit = do
-    let R = [[1.0, 2.0], [3.0, 4.0]] * ohm
-    let I = [0.1, 0.2] * A
+    let r = [[1.0, 2.0], [3.0, 4.0]] * ohm
+    let i = [0.1, 0.2] * A
 
-    let V = R @ I
-    println("V = {V}")                  # [0.5 V, 1.1 V]
+    let v = r @ i
+    println("V = {v}")                  # [0.5 V, 1.1 V]
 
-    let P = V * I
-    println("P = {sum(P)}")             # 0.27 W
+    let p = v * i
+    println("P = {sum(p)}")             # 0.27 W
 
-    match linsolve(R, V) with
-    | Ok(I2) -> println("I = {I2}")     # 回到 [0.1 A, 0.2 A]
+    match linsolve(r, v) with
+    | Ok(i2) -> println("I = {i2}")     # 回到 [0.1 A, 0.2 A]
     | Err(e) -> println("solve failed: {e}")
 
     # det 只接受无量纲矩阵：
-    # let d = det(R)                    # E0410
-    let d = det(R / ohm)
+    # let d = det(r)                    # E0410
+    let d = det(r / ohm)
     println("det(R/Ω) = {d}")
 ```
 
@@ -197,11 +197,11 @@ fn main(): IO Unit = do
 
 - `[[...]]` 是 `Tensor<2, Float>`；乘以 `ohm : Unit[Resistance]` 得到
   `Tensor<2, Float[Resistance]>`。
-- `R @ I`：元素量纲 `Resistance * Current = Voltage`；结果
+- `r @ i`：元素量纲 `Resistance * Current = Voltage`；结果
   `Tensor<1, Float[Voltage]>`。
-- `V * I`：`Voltage * Current = Power`；`sum` 保持量纲。
-- `linsolve(R, V)`：`Voltage / Resistance = Current`。
-- `det(R)` 被拒绝，因为 `det` 的量纲是 `d^n`，`n` 是运行时阶数；`R / ohm`
+- `v * i`：`Voltage * Current = Power`；`sum` 保持量纲。
+- `linsolve(r, v)`：`Voltage / Resistance = Current`。
+- `det(r)` 被拒绝，因为 `det` 的量纲是 `d^n`，`n` 是运行时阶数；`r / ohm`
   是无量纲矩阵，`det` 合法。
 
 这个例子展示了“单位是编译期尺度”的好处：矩阵元素带单位，矩阵乘法自动
@@ -215,19 +215,19 @@ module Thermo
 open Units.SI
 
 fn main(): IO Unit = do
-    let T1 = 25.0 °C                 # Point[Θ]
-    let T2 = point(300.0, K)         # Point[Θ]
-    let dT = T2 - T1                 # Float[Θ]
-    let T3 = T1 + 10.0 K             # Point[Θ]
+    let t1 = 25.0 °C                 # Point[Θ]
+    let t2 = point(300.0, K)         # Point[Θ]
+    let dt = t2 - t1                 # Float[Θ]
+    let t3 = t1 + 10.0 K             # Point[Θ]
 
-    println("T1 = {T1}")
-    println("T2 = {to(°C, T2)}")
-    println("T3 = {T3}")
-    println("ΔT = {dT}")
+    println("T1 = {t1}")
+    println("T2 = {to(°C, t2)}")
+    println("T3 = {t3}")
+    println("ΔT = {dt}")
 
     # 下面两行是类型错误：
-    # let bad1 = T1 + T2             # E0405
-    # let bad2 = 2.0 * T1            # E0405
+    # let bad1 = t1 + t2             # E0405
+    # let bad2 = 2.0 * t1            # E0405
 ```
 
 输出：
@@ -264,7 +264,7 @@ fn main(): IO Unit = do
     | Err(e) -> println("cannot read: {e}")
     | Ok(tbl) ->
         match (column(tbl, "time"), column(tbl, "velocity")) with
-        | (Ok(t), Ok(v)) ->
+        | (Ok(t), Ok(v)) -> do
             println("mean speed = {mean(v)}")
             println("std  speed = {std(v)}")
             let spec = label(line(t, v), "v(t)")
@@ -342,6 +342,7 @@ fn linear_fit<d, e>(xs: Tensor<1, Real[d]>, ys: Tensor<1, Real[e]>): { slope: Re
 ## 11.9 错误示例：编译器如何拒绝
 
 ```aevia
+let n: Int = 3
 let bad1 = 3 m + 2 s
 let bad2 = sin(3 m)
 let bad3 = (3 m)^n              # n : Int
@@ -418,15 +419,15 @@ fn main(): IO Unit = do
     println("f' = {diff(fn t => exp(-t^2))(x)}")
 
     # 3. 线性代数
-    let M2 = [[2.0, 1.0], [1.0, 3.0]]
+    let m = [[2.0, 1.0], [1.0, 3.0]]
     let b = [1.0, 2.0]
-    match linsolve(M2, b) with
+    match linsolve(m, b) with
     | Ok(x) -> println("x = {x}")
     | Err(e) -> println("solve failed: {e}")
 
     # 4. 数据与绘图
     let ts = linspace(0.0 s, 1.0 s, 100)
-    let vs = map(fn t => 3.0 m/s * exp(-(t / s) / 0.5), ts)
+    let vs = map(fn t => (3.0 m/s) * exp(-(t / s) / 0.5), ts)
     let spec = label(line(ts, vs), "v(t)")
     plot(combine([spec]))
 ```

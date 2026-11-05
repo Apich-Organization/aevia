@@ -141,6 +141,15 @@ F64(_) 与 Exact(_) 或 Sym(_)：
   化简为复数的规则，或在返回前检查值域；破坏 `Real` 的值域是内部错误
   `E0809`。
 - `approx` 对形式表达式尝试数值化；定义域外的结果报 `E0806`。
+- **精确（`Real`）相位的扩展实数运算是部分的。** 除本节明确给出的边界值
+  （`ln(0) = -oo`、`ln(oo) = oo`、`exp(oo) = oo`、`exp(-oo) = 0`）外，含
+  `oo` 的 `+`、`-`、`*`、`/`、`^` 一律保留为符号项（按原式打印，例如
+  `oo - oo`、`oo*0`、`oo/oo`），既不静默折叠成有限数，也不报错；未定义
+  形式（`oo - oo`、`oo + (-oo)`、`oo * 0`、`oo / oo`、`oo ^ 0` 等）同样
+  保留，`-oo` 的符号不会丢失。需要有限答案时请在浮点相位计算：`Float`
+  按 IEEE 给出 `inf`/`nan`（`nan != nan`，`-0.0 == 0.0`）。指数为无穷的
+  形式（`0 ^ oo`、`oo ^ oo`）要求有限有理指数，报 `E0402`。这是刻意的
+  保守选择：精确相位不发明 NaN/未定义值，也不把未定义形式当作已化简。
 
 ### 6.3.5 `eval`、`simplify`、`approx`
 
@@ -247,6 +256,12 @@ let sol = dsolve(eq, y, t)           # Result<(Real[T] -> Real[L]), MathError>
 - 字面量模式：`Int`、`Bool`、`String`；浮点字面量不是合法模式。
 - 守卫在模式绑定后求值，必须是具体 `Bool`；`Prop` 报 `E0308`。
 - 非穷尽匹配在编译期报 `E0309`；运行时不会“掉出去”。
+
+> **实现状态（2026-11-05）**：穷尽性/冗余臂（`E0309`/`W0201`）分析是有界
+> 递归，**模式嵌套深度上限 24**（`Checker::PATTERN_DEPTH_BOUND`）；超过
+> 上限时按“已覆盖”处理——它只能**抑制**一条穷尽性/冗余臂诊断，绝不会凭空
+> 产生诊断（不会误报）。`or-pattern` 与空枚举（`type Never = |` 形式）在
+> 当前语法中不可表达；若出现零构造器类型，零个分支即穷尽（语义保留）。
 
 ## 6.6 张量运行时
 
@@ -416,22 +431,19 @@ random   : () -> IO Float[1]
 
 ### 6.9.1 符号预算
 
-rssn 的 `compute` 接受 `Budget`（时间、重写次数、节点数）。Aevia 默认：
+rssn 的 `compute` 接受 `Budget`（外层迭代、重写匹配上限、节点数、时间上限、
+窗口/beam 参数等）。**实际默认值**（`rssn::graph::schedule::Budget::default`，
+2026-11-04 实测）：`max_iterations = 24`、`max_nodes = 20_000`、
+`match_limit = 1_000`、`reduce_rounds = 32`、`patience = 3`、
+`time_limit = None`（不设墙钟上限）；其余字段见内核源码。预算耗尽报
+`E0808`；`eval`/`simplify` 终止并返回错误（或 `panic`，取决于 API）。重型
+请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err`。
 
-```
-时间     2 s
-重写     1_000_000
-节点     5_000_000
-```
-
-可用 `with_budget(seconds, rewrites, thunk)` 覆盖：
-
-```aevia
-let r = with_budget(10.0, 5_000_000) => simplify(integral(...))
-```
-
-预算耗尽报 `E0808`；`eval`/`simplify` 终止并返回错误（或 `panic`，取决于
-API）。重型请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err`。
+**实现状态**：本实现尚未提供语言级的 `with_budget(seconds, rewrites, thunk)`
+函数（该调用形式不在当前语法/内建中）；Aevia 的 `--budget` 是**尾调用预算**
+（§9.3.4），不是符号预算。符号预算目前取内核默认值，需要调整时通过内核
+`Config`/`Budget` API（embedding 层）完成。`Rssn.budget(n)` 诊断提示中的
+入口也属于后续补齐项。这是已记录的实现缺口，不是规范删除。
 
 ### 6.9.2 错误分类
 
@@ -452,7 +464,14 @@ API）。重型请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err
 ### 6.9.3 栈与尾调用
 
 - 自递归尾调用用 trampoline，常量栈。
-- 非尾递归受 `--max-stack` 限制（默认 8 MB 等价深度）；超过报 `E0805`。
+- 非尾递归受调用深度限制：默认 2048 次调用（`Interp::max_depth`），
+  超过报 `E0805` 并带调用栈；解释器运行在 `--max-stack <MiB>` 指定的
+  OS 线程栈上（默认 256 MiB），合法的深递归因此比默认 8 MB 的线程能跑
+  更深。
+- 尾调用不再增长深度，因此一个**不终止**的尾循环由“连续尾调用预算”
+  限制：默认 100,000,000 次（`Interp::max_tail_calls`，`--budget` 修改），
+  超过报 `E0805` 并带调用栈。这是 runaway 保护，不是语义上限（§9.3.4）。
+- 表达式嵌套深度另有上限（默认 16,384 个节点），超过同样是 `E0805`。
 - `panic` 打印调用栈（源码位置 + 函数名）。
 
 ## 6.10 确定性与并行
@@ -460,6 +479,8 @@ API）。重型请求 `integrate`/`solve` 返回 `Result`，预算错误是 `Err
 - 纯求值完全确定；相同输入得到相同输出（浮点 NaN 规范化）。
 - `par_map(f, xs)` 并行映射，结果顺序与输入一致；线程数不影响结果。
   要求 `Parallel a`（仅 `Int`/`Float` 及其张量）；符号 `Real` 不并行。
+  **实现状态**：本实现的求值器是单线程的，`par_map` 顺序执行但保持上述
+  顺序语义（见 §9.7.2）。
 - `compute_all` 的并行只影响速度，不影响答案。
 - `Set`/`Map` 迭代顺序由 `TotalOrd` 决定，不依赖哈希种子。
 - `random()` 是 IO，不参与纯求值的确定性；`rng(seed)` 是纯的、确定的。

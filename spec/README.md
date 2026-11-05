@@ -60,12 +60,21 @@ diagnostic category (the exact wording is not normative).
 
 This is a **design standard**, not a frozen implementation. Chapters marked
 normative are intended to be implemented as written; the changelog records every
-audit round. The current text is **Revision 8**, after six rounds of
-independent audits plus the extensibility/backend-integration redesign and the
-alignment with `rssn 0.2.13` (commit `95099fa0`). There is
-**no v1/v2 language split**: every capability is designed in; a backend that
-does not yet implement one reports a capability diagnostic (`E1001`) instead of
-removing the language feature.
+audit round. The current text is **Revision 10**, after six rounds of independent
+audits plus the extensibility/backend-integration redesign, the live-kernel
+alignment with **`rssn 3.0.0-rc.1`** (now **1381 operators, 32 rule sets, 24
+overlays, 82 units**, with `features.sde`; see appendix C), and the second
+implementation round: symbolic instance keys and module-exported classes/
+instances/aliases, the §8.20 standard-library module tree (37 modules with the
+loader fallback), typed SDE surface (§8.9.1) over the kernel's §SDE operators,
+type-level `Nat` linear unification, and the tooling completion (doctests, bench
+baselines, multi-module editor analysis). Revision 9 states the dispatch/extension
+boundary explicitly (no runtime multimethods, no multi-parameter classes, no
+per-type monomorphization; instances selected statically or by canonical
+witnesses) and Revision 10 expands that into the implemented instance-key model.
+There is **no v1/v2 language split**: every capability is designed in; a backend
+that does not yet implement one reports a capability diagnostic (`E1001`) instead
+of removing the language feature.
 
 ## A one-sentence summary
 

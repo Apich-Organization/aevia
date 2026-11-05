@@ -82,8 +82,26 @@ IO            : Type -> Type
 SymFun        : Dim -> Dim -> Type           符号函数（用于 dsolve）
 Dyn           : Rep -> Type                  动态量纲标量（§4.9）
 RateOf        : Type -> Type                  ODE 状态的时间导数类型（§8.9）
+DiffusionOf   : Type -> Type                  SDE 状态的扩散系数类型（§8.9.1）
 Solutions     : Rep -> Dim -> Type            符号解集合（§8.6）
 ```
+
+`DiffusionOf<s>` 与 `RateOf<s>` 同构，但每个叶子的量纲除以 `T^(1/2)`：
+布朗增量 `dW` 的量纲是 `T^(1/2)`，所以 `dX = a dt + G dW` 中 `G` 的每个
+分量比 `X` 多一个 `T^(-1/2)`。
+
+```
+DiffusionOf<Scalar<ρ,d>>             = Scalar<ρ, d/T^(1/2)>
+DiffusionOf<Tensor<n, τ>>            = Tensor<n, DiffusionOf<τ>>
+DiffusionOf<{ l1: τ1, ..., ln: τn }> = { l1: DiffusionOf<τ1>, ..., ln: DiffusionOf<τn> }
+```
+
+若 `s = { x: Float[L] }`，则 `DiffusionOf<s> = { x: Float[L/T^(1/2)] }`；
+标量状态 `Float[1]` 的 `DiffusionOf` 是 `Float[1/T^(1/2)]`。含
+`Int`/`Bool`/函数字段的状态不合法，报 `E0302`（与 `RateOf` 相同）。这是
+**对角**扩散（每个状态分量一个噪声通道）的类型；一般 `n × m` 噪声用
+§8.9.1 的 `sdeint_general`，其扩散参数类型是
+`Tensor<2, Scalar<ρ, d/T^(1/2)>>`。
 
 常用辅助类型（在 Prelude 或对应库中定义）：
 
@@ -369,7 +387,15 @@ Matrix<n, m, τ>              # = Tensor<[n, m], τ>
   这是 `Tensor` 的**特殊类型形式**（`Tensor<shape, τ>`），不是把 shape
   列表当作普通类型参数；字面量自动获得细化形状，`zeros_of<[3,4]>()` 等构造器
   可显式指定。
-- 类型级 `Nat` 支持字面量、`+`、`*` 和线性等式；不做一般递归/证明。
+- 类型级 `Nat` 支持字面量、`+` 和「乘以字面量」（`2 * n`）；不做一般
+  递归/证明。形状 extent 中的 `Nat` 变量由 `<n: Nat>`（或未标 kind 的类型
+  参数）绑定，是真正的类型级变量。统一时把等式化为线性形式
+  `Σcᵢ·vᵢ + c = 0`：只有一个变量时解出非负整数（`n + 1 ~ 3` ⇒ `n = 2`，
+  `2·n ~ 6` ⇒ `n = 3`，`n ~ 2·n` ⇒ `n = 0`）；多变量等式保留为待解约束，
+  在后续绑定后重试；常数残差非零报 `E0302`（`type-level equation has no
+  solution`）；两个变量相乘不是线性的，报 `E0304`。秩 `Tensor<n, τ>` 的
+  `n` 仍须是具体整数（否则 `E0304`），refined shape 的 extent 可以是变量。
+  没有 binder 的 shape 变量、以及实例头中的 Nat 变量都报 `E0304`。
   这足以表达矩阵乘法、reshape、拼接，不需要完整依赖类型。
 - 细化 → 秩-only 是安全隐式转换；秩-only → 细化用
   `refine_shape(a) : Option<Tensor<[...],τ>>`（运行时检查）。
@@ -421,6 +447,12 @@ Unit[e] * Tensor<shape, Scalar<ρ,d>>   : Tensor<shape, Scalar<ρ,e*d>>
 **张量与张量的逐元素运算要求相同秩**。同秩内形状可以相等或某一维为 1
 （广播）。细化类型在编译期检查；秩-only 在运行时检查。不做 NumPy 式跨秩
 广播；这条限制让结果秩始终静态已知，也避免 `(3,1) + (1,4)` 这类静默错误。
+
+同秩的 refined shape 与 rank-only shape 在**运算**中互相统一
+（`Tensor<[2], V>` 与 `Tensor<1>, A>` 可以同时出现在 `*`/`+`/`@` 中，
+refined → rank-only 是安全隐式转换）。但把 rank-only 值当作 refined
+**注解**（`let x: Tensor<[3]> = zeros(4)`）仍需 `refine_shape` 的运行时
+检查；直接标注是 `E0302`。
 
 `Point` 元素张量 `Tensor<shape, Point[d]>` 的元素级规则：
 
@@ -646,10 +678,17 @@ instance Show for Real[d] where
     show(x) = format_quantity(x)
 ```
 
-- 类可以有多参数：`class Convert a b where ...`。
-- 方法只有签名；默认实现由 `derive` 或插件提供。
-- 实例头 `Class τ`；`τ` 中的变量隐式全称量化。
-- 实例方法必须覆盖所有方法。
+- 类**只有一个**类型参数；多参数类不在语言中（实例头语法无法表达多参数实例，
+  求解器也只支持单参数）。`class Convert a b where ...` 报 `E0317`。
+- 方法只有签名；默认实现由 `derive`、内置结构实现（Prelude 类）或插件提供。
+- 实例头 `Class τ`，`τ` 是类型构造器应用；`Class a` 这样的裸类型变量头非法
+  （`E0317`）。`τ` 中的变量隐式全称量化。
+- 用户类：实例必须覆盖所有方法，缺失的方法在 `E0317` 中列出。
+- Prelude 类（§3.8.4）是**钩子**而非封闭实现：实例可以只覆盖一部分方法，
+  其余由内置结构实现提供（例如记录/元组的打印由内置打印器完成）。
+- 类与实例的身份是**符号化**的：类键 `(定义模块路径, 类名)`，实例键再加规范
+  头类型；`AdtId` 只是进程内见证，不进入模块接口或缓存。`private class` 只在
+  定义模块可见；`private instance` 不允许（实例随模块导出，§7.4）。
 
 ### 3.8.2 解析
 
@@ -709,14 +748,28 @@ Show (Solutions<ρ,d>)      Show (Record)        # 动态表行
 `Show`/`Eq`/`Ord`/`Hash` 的实例头必须用量纲多态形式（`Float[d]`），
 不能只写无量纲的 `Float`，否则 `20.0 m` 无法打印。
 
+`Show` 对上表的头是**结构性保证**，不是可选优化：没有用户实例时，内置
+打印器直接渲染记录、元组、`Tensor`、`Point`、`Solutions`、`Dyn` 与单位值；
+用户为**自己声明**的名义类型写的实例（或 `derive Show`）优先于内置实现。
+函数没有 `Show` 实例，也没有结构性回退（`E0310`）。
+
+内置类的实例集参与全局一致性（§7.4）。两个实例必须能由**运行时见证**区分
+（§9.2.3）：见证相同即使用户写了两个静态上不同的头，也报 `E0311`。例如
+`Tensor<1, Int>` 与 `Tensor<1, Real>` 都是精确存储，不能同时拥有同一类的实例。
+
 ### 3.8.5 派生
 
 ```
 derive Eq, Show, Hash for Vec2
 ```
 
+`derive` 只对**结构类**开放：`Eq`、`Ord`、`TotalOrd`、`Show`、`Hash`。派生
+其他类（用户类、`Num` 等）报 `E0317`，消息指出失败的类。派生实例在**类型
+所属模块**生成（孤儿规则同样适用，§7.4）。
+
 编译器为记录/变体生成结构化实例。派生 `Ord` 按字段声明顺序做字典序。
-派生不适用于函数字段（没有 `Eq`/`Show` 实例）。
+派生不适用于函数字段（没有 `Eq`/`Show`/`Hash` 实例）；失败的字段类型与类名
+出现在 `E0317` 中，而不是笼统的“不能派生”。
 
 ### 3.8.6 命题 `Prop`
 
@@ -839,7 +892,8 @@ bind   : IO a -> (a -> IO b) -> IO b
 3. 单位字面量的 `Rep` 变量 → `Real`（整数系数）或 `Float`（小数系数）。
 4. 其他 `Rep` 变量 → `Real`。
 5. `Dim` 变量 → `1`，并警告 `W0301`。
-6. `Nat` 变量 → 错误 `E0304`（秩无法推断）。
+6. `Nat` 变量**不**默认成任何值；无法由约束解出时在检查期报 `E0304`
+   （秩或 refined extent 无法推断）。
 7. 行变量 → 空行（封闭记录）。
 
 默认化只影响没有约束的变量；有约束的变量必须先统一。`Literal` 约束在
