@@ -193,3 +193,29 @@ fn a_typed_let_still_parses() {
     };
     assert!(matches!(ty.as_ref().map(|ty| &ty.kind), Some(TyKind::Tensor { .. })));
 }
+
+#[test]
+fn a_reserved_word_cannot_be_a_binding() {
+    // §B.4 E0206: a keyword where a binder belongs is a reserved-word error, not
+    // a generic syntax error.
+    for source in [
+        "let if = 1\n",
+        "let x = match 1 with\n    | match -> 0\n",
+    ] {
+        let diagnostic = support::expect_code(source, "E0206");
+        assert_eq!(diagnostic.severity, aevia_syntax::Severity::Error);
+    }
+}
+
+#[test]
+fn an_invalid_pattern_is_e0204() {
+    // §B.4 E0204: a float literal cannot be a pattern.
+    assert_eq!(
+        support::expect_error(
+            "let x = match 1 with\n    | 1.5 -> 0\n",
+            "E0204",
+        )
+        .code,
+        "E0204"
+    );
+}

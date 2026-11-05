@@ -9,18 +9,25 @@
 //! structurally, and two instances whose heads overlap are rejected when they
 //! are declared (`E0311`).
 
+use crate::keys::{
+    head_key, witness_of, ClassKey, InstanceKey, ModulePath,
+};
 use crate::ty::{Rep, Row, Scheme, Shape, Type};
 use std::collections::HashMap;
 
 /// A class declaration.
 #[derive(Clone, Debug)]
 pub struct ClassDef {
-    /// Number of parameters.
+    /// Number of parameters. The language has exactly one (§3.8.1, round-2
+    /// decision 1f); the field stays so a reader of an old interface can be
+    /// rejected instead of misread.
     pub params: usize,
     /// Methods, with their types written in terms of [`Type::Param`].
     pub methods: Vec<(String, Type)>,
     /// Whether the class is part of the prelude.
     pub builtin: bool,
+    /// The symbolic identity: `(defining module, name)`.
+    pub key: ClassKey,
 }
 
 /// Where an instance came from.
@@ -28,8 +35,11 @@ pub struct ClassDef {
 pub enum Origin {
     /// A prelude instance.
     Prelude,
-    /// A user `instance` declaration.
+    /// A user `instance` declaration in this module.
     User,
+    /// An instance that arrived with an imported module interface. The orphan
+    /// rule is a declaration rule, so it is not re-applied here.
+    Imported,
     /// A `derive` declaration.
     Derived,
 }
@@ -37,7 +47,7 @@ pub enum Origin {
 /// One instance.
 #[derive(Clone, Debug)]
 pub struct Instance {
-    /// The class name.
+    /// The class name, local to the defining module.
     pub class: String,
     /// The instance head.
     pub head: Type,
@@ -45,6 +55,8 @@ pub struct Instance {
     pub methods: HashMap<String, Type>,
     /// Where it came from.
     pub origin: Origin,
+    /// The symbolic identity.
+    pub key: InstanceKey,
 }
 
 /// Why an instance could not be registered.
@@ -52,10 +64,116 @@ pub struct Instance {
 pub enum InstanceError {
     /// No such class.
     UnknownClass,
-    /// Two instances have overlapping heads (`E0311`).
-    Overlapping,
+    /// Two instances have overlapping heads (`E0311`). Both keys are carried so
+    /// the diagnostic can name the modules that disagree.
+    Overlapping {
+        /// The instance being registered.
+        incoming: InstanceKey,
+        /// The instance already in the table.
+        existing: InstanceKey,
+    },
     /// The instance is for a foreign type and a foreign class (`E0604`).
     Orphan,
+    /// A `class` declared more than one parameter (§3.8.1, round-2 decision 1f).
+    MultiParameter,
+    /// Two instances are statically distinct but a runtime witness cannot tell
+    /// them apart (e.g. `Tensor<1, Int>` and `Tensor<1, Real>` are both exact
+    /// storage), so a quantified call site could not dispatch honestly
+    /// (`E0311`, round-2 decision 1c).
+    WitnessCollision {
+        /// The instance being registered.
+        incoming: InstanceKey,
+        /// The instance already in the table.
+        existing: InstanceKey,
+    },
+}
+
+/// Why a `derive` failed (§3.8.5, round-2 decision 1e).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeriveError {
+    /// No such class in scope.
+    UnknownClass(String),
+    /// The class is not in the closed structural set
+    /// `{Eq, Ord, TotalOrd, Show, Hash}`.
+    UnsupportedClass(String),
+    /// A field has no instance of the class, so a structural derive would be a
+    /// lie. Both the field and the class are carried for the message.
+    Field {
+        /// The class being derived.
+        class: String,
+        /// The field type that cannot support it.
+        field: Type,
+    },
+    /// A function field can never have the structural instances.
+    FunctionField {
+        /// The class being derived.
+        class: String,
+        /// The field type (containing the function).
+        field: Type,
+    },
+    /// An instance for the same class and head is already registered.
+    Overlapping(ClassKey),
+    /// The derived type is foreign and the class is a builtin class, so the
+    /// `derive` is an orphan instance (`E0604`).
+    Orphan,
+}
+
+/// Why a class declaration failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClassError {
+    /// The name is already taken in this module (`E0316`).
+    Duplicate,
+    /// More than one parameter was written (§3.8.1: the language has exactly
+    /// one).
+    MultiParameter,
+}
+
+/// The methods a prelude class declares, with their types in terms of
+/// [`Type::Param`] (the class parameter).
+///
+/// A prelude class allows a *partial* override: a user instance may define some
+/// methods and let the built-in structural implementation cover the rest
+/// (round-2 decision 1e). A user class requires every method.
+fn prelude_methods(class: &str) -> Vec<(String, Type)> {
+    let param = Type::Param(0);
+    let ordering = Type::Adt(crate::adt::ORDERING_ID, Vec::new());
+    let func = |args: Vec<Type>, ret: Type| Type::func(args, ret);
+    match class {
+        "Show" => vec![
+            (
+                "show".to_string(),
+                func(vec![param.clone()], Type::Str),
+            ),
+            (
+                "repr".to_string(),
+                func(vec![param.clone()], Type::Str),
+            ),
+            (
+                "to_latex".to_string(),
+                func(vec![param.clone()], Type::Str),
+            ),
+            (
+                "to_typst".to_string(),
+                func(vec![param], Type::Str),
+            ),
+        ],
+        "Ord" => vec![(
+            "compare".to_string(),
+            func(
+                vec![Type::Param(0), Type::Param(0)],
+                Type::option(ordering),
+            ),
+        )],
+        "TotalOrd" => vec![(
+            "total_compare".to_string(),
+            func(
+                vec![Type::Param(0), Type::Param(0)],
+                Type::Adt(crate::adt::ORDERING_ID, Vec::new()),
+            ),
+        )],
+        "Hash" => vec![("hash".to_string(), func(vec![Type::Param(0)], Type::int()))],
+        _ => Vec::new(),
+    }
 }
 
 /// The result of solving one constraint.
@@ -105,13 +223,18 @@ impl ClassTable {
             ("Floating", 1),
             ("Container", 1),
             ("Sized", 1),
+            // §3.8.4: `par_map`'s capability class. Symbolic `Real` is not
+            // parallel, so it has no instance.
+            ("Parallel", 1),
         ] {
+            let methods = prelude_methods(name);
             table.classes.insert(
                 name.to_string(),
                 ClassDef {
                     params: arity,
-                    methods: Vec::new(),
+                    methods,
                     builtin: true,
+                    key: ClassKey::prelude(name),
                 },
             );
         }
@@ -185,6 +308,13 @@ impl ClassTable {
         for head in [tensor, Type::Str] {
             table.add_prelude("Container", head);
         }
+        // §3.8.4: `Parallel a` — only `Int`, `Float` and tensors of them. The
+        // symbolic `Real` path is session-bound and not parallel.
+        for elem in [int.clone(), float.clone()] {
+            table.add_prelude("Parallel", elem.clone());
+            table.add_prelude("Parallel", Type::tensor(Shape::Rank(1), elem.clone()));
+            table.add_prelude("Parallel", Type::tensor(Shape::Rank(2), elem));
+        }
         for head in [Type::Str, Type::tensor(Shape::Rank(1), Type::Param(0))] {
             table.add_prelude("Sized", head);
         }
@@ -192,12 +322,19 @@ impl ClassTable {
     }
 
     fn add_prelude(&mut self, class: &str, head: Type) {
+        let class_key = ClassKey::prelude(class);
+        let key = InstanceKey::new(
+            ModulePath::prelude(),
+            class_key.clone(),
+            head_key(&head),
+        );
         let instances = self.instances.entry(class.to_string()).or_default();
         instances.push(Instance {
             class: class.to_string(),
             head,
             methods: HashMap::new(),
             origin: Origin::Prelude,
+            key,
         });
     }
 
@@ -205,15 +342,21 @@ impl ClassTable {
     ///
     /// # Errors
     ///
-    /// `E0316` when the name is already taken by another class.
+    /// `E0316` when the name is already taken by another class, or
+    /// `E0317`-worthy `InstanceError::MultiParameter` when more than one
+    /// parameter is written (§3.8.1 — the language has exactly one).
     pub fn declare_class(
         &mut self,
+        module: ModulePath,
         name: &str,
         params: usize,
         methods: Vec<(String, Type)>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), ClassError> {
         if self.classes.contains_key(name) {
-            return Err("E0316");
+            return Err(ClassError::Duplicate);
+        }
+        if params > 1 {
+            return Err(ClassError::MultiParameter);
         }
         self.classes.insert(
             name.to_string(),
@@ -221,6 +364,7 @@ impl ClassTable {
                 params,
                 methods,
                 builtin: false,
+                key: ClassKey::new(module, name),
             },
         );
         Ok(())
@@ -238,6 +382,21 @@ impl ClassTable {
         self.classes.get(name)
     }
 
+    /// The symbolic key of a declared class.
+    #[must_use]
+    pub fn class_key(&self, name: &str) -> Option<ClassKey> {
+        self.classes.get(name).map(|class| class.key.clone())
+    }
+
+    /// Whether a class is declared by the module that owns this table (as
+    /// opposed to being imported or built in).
+    #[must_use]
+    pub fn class_is_local(&self, module: &ModulePath, name: &str) -> bool {
+        self.classes
+            .get(name)
+            .is_some_and(|class| &class.key.module == module)
+    }
+
     /// The class that declares a method, if any.
     #[must_use]
     pub fn class_of_method(&self, method: &str) -> Option<(&str, &Type)> {
@@ -251,44 +410,77 @@ impl ClassTable {
 
     /// Registers an instance.
     ///
+    /// `module` is the module that declares it; `head_is_local` and
+    /// `class_is_local` say whether the *type* and the *class* are declared by
+    /// the module being checked — together they decide the orphan rule
+    /// (§3.8.3). An imported instance is never re-checked for orphanhood: it
+    /// was legal where it was declared.
+    ///
     /// # Errors
     ///
     /// `UnknownClass` for a class that does not exist, `Overlapping` when the
-    /// head overlaps an existing instance (`E0311`), and `Orphan` when neither
-    /// the head nor the class is local (`E0604`).
+    /// head overlaps an existing instance (`E0311`, carrying both keys so the
+    /// diagnostic can name the modules), and `Orphan` when neither the head nor
+    /// the class is local (`E0604`).
     pub fn add_instance(
         &mut self,
+        module: &ModulePath,
         class: &str,
         head: Type,
         methods: HashMap<String, Type>,
         origin: Origin,
         head_is_local: bool,
-    ) -> Result<(), InstanceError> {
+        class_is_local: bool,
+    ) -> Result<InstanceKey, InstanceError> {
         let Some(definition) = self.classes.get(class) else {
             return Err(InstanceError::UnknownClass);
         };
         // §3.8.3: an instance belongs either to the module that declares the
-        // type or to the module that declares the class. A builtin class is
-        // foreign, so a user instance for it needs a local type.
-        if origin == Origin::User && !head_is_local && definition.builtin {
+        // type or to the module that declares the class. The rule is a
+        // *declaration* rule; an instance that came with an interface already
+        // passed it where it was declared.
+        if matches!(origin, Origin::User | Origin::Derived)
+            && !head_is_local
+            && !class_is_local
+        {
             return Err(InstanceError::Orphan);
         }
+        let class_key = definition.key.clone();
+        let key = InstanceKey::new(module.clone(), class_key, head_key(&head));
         let instances = self.instances.entry(class.to_string()).or_default();
-        if instances
+        if let Some(existing) = instances
             .iter()
-            .any(|existing| heads_overlap(&existing.head, &head))
+            .find(|existing| heads_overlap(&existing.head, &head))
         {
-            return Err(InstanceError::Overlapping);
+            return Err(InstanceError::Overlapping {
+                incoming: key,
+                existing: existing.key.clone(),
+            });
         }
-        let index = instances.len();
+        // Statically distinct heads can still be indistinguishable to the
+        // dispatcher: the witness table is what the runtime reads, and a tensor
+        // witness is rank+storage, so `Tensor<1, Int>` and `Tensor<1, Real>`
+        // collide. Reject at check time rather than guess at run time
+        // (round-2 decision 1c).
+        let incoming_witness = witness_of(&head);
+        if let Some(witness) = &incoming_witness {
+            if let Some(existing) = instances.iter().find(|existing| {
+                witness_of(&existing.head).as_ref() == Some(witness)
+            }) {
+                return Err(InstanceError::WitnessCollision {
+                    incoming: key,
+                    existing: existing.key.clone(),
+                });
+            }
+        }
         instances.push(Instance {
             class: class.to_string(),
             head,
             methods,
             origin,
+            key: key.clone(),
         });
-        let _ = index;
-        Ok(())
+        Ok(key)
     }
 
     /// Solves `class τ` against the instance set (§3.8.2).
@@ -325,6 +517,52 @@ impl ClassTable {
         instance.methods.get(method).cloned()
     }
 
+    /// The symbolic key of the instance that matches `ty`, when one does.
+    #[must_use]
+    pub fn resolve_key(&self, class: &str, ty: &Type) -> Option<InstanceKey> {
+        let Resolution::Found { index } = self.resolve(class, ty) else {
+            return None;
+        };
+        self.instance_key(class, index)
+    }
+
+    /// The key of an instance by position.
+    #[must_use]
+    pub fn instance_key(&self, class: &str, index: usize) -> Option<InstanceKey> {
+        self.instances
+            .get(class)?
+            .get(index)
+            .map(|instance| instance.key.clone())
+    }
+
+    /// The instances of a class, with their keys, in registration order.
+    #[must_use]
+    pub fn instances_of(&self, class: &str) -> Vec<&Instance> {
+        self.instances
+            .get(class)
+            .map(|instances| instances.iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Every class declaration, for export and tests.
+    #[must_use]
+    pub fn classes(&self) -> Vec<&ClassDef> {
+        self.classes.values().collect()
+    }
+
+    /// Every instance whose key's module is `module`, for export.
+    ///
+    /// A prelude instance is not exported by a user module; an imported one is
+    /// not re-exported (imports are not transitive, §7.2.1).
+    #[must_use]
+    pub fn instances_declared_in(&self, module: &ModulePath) -> Vec<&Instance> {
+        self.instances
+            .values()
+            .flatten()
+            .filter(|instance| &instance.key.module == module)
+            .collect()
+    }
+
     /// Every instance of a class, for diagnostics.
     #[must_use]
     pub fn instance_heads(&self, class: &str) -> Vec<Type> {
@@ -334,46 +572,147 @@ impl ClassTable {
             .unwrap_or_default()
     }
 
+    /// The symbolic keys of every instance of a class.
+    #[must_use]
+    pub fn instance_keys(&self, class: &str) -> Vec<InstanceKey> {
+        self.instances
+            .get(class)
+            .map(|instances| {
+                instances
+                    .iter()
+                    .map(|instance| instance.key.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The number of registered instances, for tests.
     #[must_use]
     pub fn instance_count(&self) -> usize {
         self.instances.values().map(Vec::len).sum()
     }
 
-    /// Adds a `derive`d instance for a type, given the types of its fields.
+    /// The classes a module declares, with their methods, for the interface.
+    #[must_use]
+    pub fn classes_declared_in(&self, module: &ModulePath) -> Vec<&ClassDef> {
+        self.classes
+            .values()
+            .filter(|class| &class.key.module == module)
+            .collect()
+    }
+
+    /// Merges the classes and instances of an imported module interface.
     ///
-    /// Returns `E0317` when a field cannot be derived over (§3.8.5).
+    /// An imported instance is registered with [`Origin::Imported`], which
+    /// skips the orphan rule (it was checked where it was declared) but keeps
+    /// overlap (`E0311`): coherence is global. The returned error is the first
+    /// rejection, with both keys so the caller can name the modules.
     ///
     /// # Errors
     ///
-    /// `UnknownClass` for an unknown class, `Overlapping` for a second
-    /// instance, and `E0317` when a field has no instance.
+    /// `Overlapping` when an imported instance collides with an existing one.
+    pub fn merge_imported(
+        &mut self,
+        module: &ModulePath,
+        classes: &[(ClassKey, ClassDef)],
+        instances: &[Instance],
+    ) -> Result<(), InstanceError> {
+        for (key, definition) in classes {
+            self.classes
+                .entry(key.name.clone())
+                .or_insert_with(|| definition.clone());
+        }
+        for instance in instances {
+            let class_locally_known = self.classes.contains_key(&instance.class);
+            if !class_locally_known {
+                // The class arrived with the instance's interface; keep the
+                // instance name resolvable even when the class declaration was
+                // not exported (a private class with a visible instance is not
+                // possible, but an interface consumer must not drop data).
+                continue;
+            }
+            let class_key = instance.key.class.clone();
+            let key = InstanceKey::new(module.clone(), class_key, instance.key.head.clone());
+            let entries = self.instances.entry(instance.class.clone()).or_default();
+            if let Some(existing) = entries
+                .iter()
+                .find(|existing| heads_overlap(&existing.head, &instance.head))
+            {
+                return Err(InstanceError::Overlapping {
+                    incoming: key,
+                    existing: existing.key.clone(),
+                });
+            }
+            let mut imported = instance.clone();
+            imported.key = key;
+            imported.origin = Origin::Imported;
+            entries.push(imported);
+        }
+        Ok(())
+    }
+
+    /// Adds a `derive`d instance for a type, given the types of its fields.
+    ///
+    /// §3.8.5 and round-2 decision 1e: `derive` is closed to the structural set
+    /// `{Eq, Ord, TotalOrd, Show, Hash}`. Any other class is `E0317`, and the
+    /// error names the class or the field that cannot support the instance.
+    ///
+    /// `module` is the module the `derive` is written in and `head_is_local`
+    /// whether the derived type is declared there: a `derive` on a foreign type
+    /// is an orphan like any other instance (`E0604`), which the old hardcoded
+    /// `true` bypassed.
+    ///
+    /// # Errors
+    ///
+    /// A [`DeriveError`] the caller maps to `E0317`/`E0310`/`E0311`/`E0604`.
     pub fn add_derived(
         &mut self,
+        module: &ModulePath,
         class: &str,
         head: Type,
         fields: &[Type],
-    ) -> Result<(), &'static str> {
+        head_is_local: bool,
+        class_is_local: bool,
+    ) -> Result<InstanceKey, DeriveError> {
         let Some(definition) = self.classes.get(class) else {
-            return Err("E0310");
+            return Err(DeriveError::UnknownClass(class.to_string()));
         };
-        if definition.params != 1 {
-            return Err("E0317");
+        if !DERIVABLE.contains(&class) {
+            return Err(DeriveError::UnsupportedClass(class.to_string()));
         }
+        if definition.params != 1 {
+            return Err(DeriveError::UnsupportedClass(class.to_string()));
+        }
+        let class_key = definition.key.clone();
         // §3.8.5: a function field has no `Eq`/`Show`/`Hash` instance.
         for field in fields {
             if field_has_function(field) {
-                return Err("E0317");
+                return Err(DeriveError::FunctionField {
+                    class: class.to_string(),
+                    field: field.clone(),
+                });
             }
-            if requires_instance(class) && !self.instance_for_field(class, field) {
-                return Err("E0317");
+            if !self.instance_for_field(class, field) {
+                return Err(DeriveError::Field {
+                    class: class.to_string(),
+                    field: field.clone(),
+                });
             }
         }
         let methods = HashMap::new();
-        match self.add_instance(class, head, methods, Origin::Derived, true) {
-            Ok(()) => Ok(()),
-            Err(InstanceError::Overlapping) => Err("E0311"),
-            Err(_) => Err("E0317"),
+        match self.add_instance(
+            module,
+            class,
+            head,
+            methods,
+            Origin::Derived,
+            head_is_local,
+            class_is_local,
+        ) {
+            Ok(key) => Ok(key),
+            Err(InstanceError::Overlapping { .. }) => Err(DeriveError::Overlapping(class_key)),
+            Err(InstanceError::Orphan) => Err(DeriveError::Orphan),
+            Err(_) => Err(DeriveError::UnsupportedClass(class.to_string())),
         }
     }
 
@@ -388,15 +727,12 @@ impl ClassTable {
         matches!(
             self.resolve(class, &resolved),
             Resolution::Found { .. } | Resolution::Deferred
-        )
+        ) || (class == "Show" && is_structural_show_head(&resolved))
     }
 }
 
-/// Whether deriving `class` over this field needs an instance of the field's
-/// own type. A derived instance is structural, so it does.
-fn requires_instance(class: &str) -> bool {
-    matches!(class, "Eq" | "Ord" | "TotalOrd" | "Show" | "Hash")
-}
+/// The closed set of classes `derive` can instantiate (§3.8.5).
+pub const DERIVABLE: &[&str] = &["Eq", "Ord", "TotalOrd", "Show", "Hash"];
 
 fn field_has_function(ty: &Type) -> bool {
     match ty {
@@ -410,6 +746,11 @@ fn field_has_function(ty: &Type) -> bool {
 }
 
 /// Whether two instance heads can match the same type (§3.8.3).
+///
+/// Round-2 decision 1d: a tensor's rank and a record's label set are part of the
+/// head, so heads that differ there are disjoint; treating them as overlapping
+/// rejected legal instance sets, and treating them as matching would let an
+/// instance silently capture a different type.
 #[must_use]
 pub fn heads_overlap(left: &Type, right: &Type) -> bool {
     match (left, right) {
@@ -419,7 +760,16 @@ pub fn heads_overlap(left: &Type, right: &Type) -> bool {
         | (Type::Prop, Type::Prop)
         | (Type::Str, Type::Str)
         | (Type::Unit, Type::Unit) => true,
-        (Type::Tensor { elem: a, .. }, Type::Tensor { elem: b, .. }) => heads_overlap(a, b),
+        (
+            Type::Tensor {
+                shape: sa,
+                elem: a,
+            },
+            Type::Tensor {
+                shape: sb,
+                elem: b,
+            },
+        ) => shape_heads_overlap(sa, sb) && heads_overlap(a, b),
         (Type::Point(_), Type::Point(_)) | (Type::UnitOf(_), Type::UnitOf(_)) => true,
         (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
             pa.len() == pb.len()
@@ -436,14 +786,92 @@ pub fn heads_overlap(left: &Type, right: &Type) -> bool {
     }
 }
 
+/// Whether `show`/`repr` of this type is guaranteed structurally (§3.8.4 and
+/// round-2 decision 1e). The runtime's builtin printer is the fallback when no
+/// user instance matches, so these heads do not need an `instance` declaration.
+#[must_use]
+pub fn is_structural_show_head(ty: &Type) -> bool {
+    match ty {
+        Type::Scalar(..) | Type::Bool | Type::Prop | Type::Str | Type::Unit => true,
+        Type::Tensor { elem, .. } => is_structural_show_head(elem),
+        // §4.9.4: a `Dyn` prints as the scalar it carries.
+        Type::Dyn(_) | Type::UnitOf(_) | Type::Io(_) => true,
+        Type::Record(row) => {
+            row.tail_var().is_none()
+                && row
+                    .fields()
+                    .iter()
+                    .all(|(_, field)| is_structural_show_head(field))
+        }
+        // A nominal user type needs its own `Show` instance (or `derive`): the
+        // printer cannot know a variant's field order or constructor names.
+        Type::Adt(..) | Type::Point(_) | Type::Fn(..) | Type::Var(_) | Type::Param(_) | Type::Error => {
+            false
+        }
+    }
+}
+
+/// Whether two tensor shapes can describe the same type.
+fn shape_heads_overlap(left: &Shape, right: &Shape) -> bool {
+    if left.rank() != right.rank() {
+        return false;
+    }
+    match (left, right) {
+        (Shape::Refined(a), Shape::Refined(b)) => a
+            .iter()
+            .zip(b.iter())
+            .all(|(left, right)| match (left, right) {
+                (Some(left), Some(right)) => left == right,
+                _ => true,
+            }),
+        _ => true,
+    }
+}
+
+/// Whether a concrete tensor type can match a head shape.
+fn shape_head_matches(pattern: &Shape, concrete: &Shape) -> bool {
+    if pattern.rank() != concrete.rank() {
+        return false;
+    }
+    match (pattern, concrete) {
+        (Shape::Refined(pattern), Shape::Refined(concrete)) => pattern
+            .iter()
+            .zip(concrete.iter())
+            .all(|(pattern, concrete)| match (pattern, concrete) {
+                (Some(pattern), Some(concrete)) => pattern == concrete,
+                // Unknown extents on either side cannot be disproved here.
+                _ => true,
+            }),
+        // A rank-only concrete type is the erased form: the extents are not
+        // statically known, so a refined head cannot be ruled out.
+        (Shape::Refined(_), Shape::Rank(_)) => true,
+        _ => true,
+    }
+}
+
 fn rows_overlap(left: &Row, right: &Row) -> bool {
     let left_fields = left.fields();
     let right_fields = right.fields();
+    let left_open = left.tail_var().is_some();
+    let right_open = right.tail_var().is_some();
+    if !left_open && !right_open && left_fields.len() != right_fields.len() {
+        // Both heads are closed records: a value's record type has exactly one
+        // label set, so different sizes can never be the same type.
+        return false;
+    }
     for (label, ty) in &left_fields {
         if let Some((_, other)) = right_fields.iter().find(|(name, _)| name == label) {
             if !heads_overlap(ty, other) {
                 return false;
             }
+        } else if !right_open {
+            // A closed right head lacks this label, so no value matches both.
+            return false;
+        }
+    }
+    for (label, _) in &right_fields {
+        if !left_fields.iter().any(|(name, _)| name == label) && !left_open {
+            return false;
         }
     }
     true
@@ -470,25 +898,37 @@ pub fn matches_head(pattern: &Type, concrete: &Type) -> bool {
         | (Type::Prop, Type::Prop)
         | (Type::Str, Type::Str)
         | (Type::Unit, Type::Unit) => true,
-        (Type::Tensor { elem: a, .. }, Type::Tensor { elem: b, .. }) => matches_head(a, b),
+        (
+            Type::Tensor {
+                shape: pattern,
+                elem: a,
+            },
+            Type::Tensor {
+                shape: concrete,
+                elem: b,
+            },
+        ) => shape_head_matches(pattern, concrete) && matches_head(a, b),
         (Type::Point(_), Type::Point(_)) | (Type::UnitOf(_), Type::UnitOf(_)) => true,
         (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
             pa.len() == pb.len()
                 && pa.iter().zip(pb.iter()).all(|(a, b)| matches_head(a, b))
                 && matches_head(ra, rb)
         }
-        (Type::Record(a), Type::Record(b)) => {
-            let a_fields = a.fields();
-            let b_fields = b.fields();
-            if a_fields.len() != b_fields.len() {
+        (Type::Record(pattern), Type::Record(concrete)) => {
+            let pattern_fields = pattern.fields();
+            let concrete_fields = concrete.fields();
+            let pattern_open = pattern.tail_var().is_some();
+            if !pattern_open && pattern_fields.len() != concrete_fields.len() {
                 return false;
             }
-            a_fields.iter().all(|(label, ty)| {
-                b_fields
+            // Every field the head states must be present in the concrete type
+            // with a matching type; an open head allows extra fields.
+            pattern_fields.iter().all(|(label, ty)| {
+                concrete_fields
                     .iter()
                     .find(|(name, _)| name == label)
                     .is_some_and(|(_, other)| matches_head(ty, other))
-            })
+            }) && (pattern_open || concrete_fields.len() == pattern_fields.len())
         }
         (Type::Adt(a, aa), Type::Adt(b, ab)) => {
             a == b && aa.len() == ab.len() && aa.iter().zip(ab.iter()).all(|(x, y)| matches_head(x, y))
@@ -540,6 +980,7 @@ pub fn method_scheme(class: &str, params: usize, ty: Type) -> Scheme {
         vars: (0..count).collect(),
         dims: Vec::new(),
         rows: Vec::new(),
+        nats: Vec::new(),
         constraints: vec![crate::ty::Constraint::new(
             class,
             (0..count).map(Type::Var).collect(),
@@ -551,6 +992,7 @@ pub fn method_scheme(class: &str, params: usize, ty: Type) -> Scheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adt::Ctor;
 
     #[test]
     fn the_prelude_has_the_specified_instances() {
@@ -593,14 +1035,16 @@ mod tests {
         let length = aevia_dim::Dim::base("Length");
         let error = table
             .add_instance(
+                &ModulePath::new(["Test"]),
                 "Show",
                 Type::real(length),
                 HashMap::new(),
                 Origin::User,
                 true,
+                false,
             )
             .expect_err("Show Real[d] already exists");
-        assert_eq!(error, InstanceError::Overlapping);
+        assert!(matches!(error, InstanceError::Overlapping { .. }));
     }
 
     #[test]
@@ -608,13 +1052,179 @@ mod tests {
         let mut table = ClassTable::prelude();
         let error = table
             .add_instance(
+                &ModulePath::new(["Test"]),
                 "Show",
                 Type::int(),
                 HashMap::new(),
                 Origin::User,
                 false,
+                false,
             )
             .expect_err("the user cannot add Show Int");
         assert_eq!(error, InstanceError::Orphan);
+    }
+
+    #[test]
+    fn an_imported_instance_skips_the_orphan_rule() {
+        let mut table = ClassTable::prelude();
+        table
+            .declare_class(ModulePath::new(["Test"]), "Pretty", 1, Vec::new())
+            .expect("declare Pretty");
+        // Imported from a module where the head was local: not re-checked for
+        // orphanhood here (the head is foreign to this module).
+        table
+            .add_instance(
+                &ModulePath::new(["Library"]),
+                "Pretty",
+                Type::record(vec![("x".to_string(), Type::int())]),
+                HashMap::new(),
+                Origin::Imported,
+                false,
+                false,
+            )
+            .expect("an imported instance is legal where it was declared");
+        // A local class instance for a foreign prelude type is legal: the class
+        // is local.
+        table
+            .add_instance(
+                &ModulePath::new(["Test"]),
+                "Pretty",
+                Type::int(),
+                HashMap::new(),
+                Origin::User,
+                false,
+                true,
+            )
+            .expect("the class is local, so the instance is legal");
+    }
+
+    #[test]
+    fn a_tensor_instance_head_respects_the_rank() {
+        // Round-2 decision 1d: `Tensor<1, a>` and `Tensor<2, a>` are disjoint
+        // heads and must both be registrable.
+        let mut table = ClassTable::prelude();
+        table
+            .declare_class(ModulePath::new(["Test"]), "Pretty", 1, Vec::new())
+            .expect("declare Pretty");
+        for rank in [1, 2] {
+            table
+                .add_instance(
+                    &ModulePath::new(["Test"]),
+                    "Pretty",
+                    Type::tensor(Shape::Rank(rank), Type::int()),
+                    HashMap::new(),
+                    Origin::User,
+                    false,
+                    true,
+                )
+                .expect("a distinct rank is a distinct head");
+        }
+        // Same rank and same storage: the runtime witness cannot tell
+        // `Tensor<1, Int>` from `Tensor<1, Real>`, so it is rejected.
+        let error = table
+            .add_instance(
+                &ModulePath::new(["Test"]),
+                "Pretty",
+                Type::tensor(Shape::Rank(1), Type::real(aevia_dim::Dim::one())),
+                HashMap::new(),
+                Origin::User,
+                false,
+                true,
+            )
+            .expect_err("same witness");
+        assert!(matches!(error, InstanceError::WitnessCollision { .. }));
+    }
+
+    #[test]
+    fn a_closed_record_head_respects_the_label_set() {
+        let mut table = ClassTable::prelude();
+        table
+            .declare_class(ModulePath::new(["Test"]), "Pretty", 1, Vec::new())
+            .expect("declare Pretty");
+        let one = Type::record(vec![("x".to_string(), Type::int())]);
+        let two = Type::record(vec![
+            ("x".to_string(), Type::int()),
+            ("y".to_string(), Type::int()),
+        ]);
+        table
+            .add_instance(
+                &ModulePath::new(["Test"]),
+                "Pretty",
+                one,
+                HashMap::new(),
+                Origin::User,
+                true,
+                true,
+            )
+            .expect("one-label head");
+        table
+            .add_instance(
+                &ModulePath::new(["Test"]),
+                "Pretty",
+                two,
+                HashMap::new(),
+                Origin::User,
+                true,
+                true,
+            )
+            .expect("a different closed label set is a different head");
+    }
+
+    #[test]
+    fn derive_is_closed_to_the_structural_set() {
+        let mut table = ClassTable::prelude();
+        table
+            .declare_class(ModulePath::new(["Test"]), "Pretty", 1, Vec::new())
+            .expect("declare Pretty");
+        let id = crate::adt::allocate_in(ModulePath::new(["Test"]), "V", Vec::new());
+        crate::adt::set_ctors(
+            id,
+            vec![Ctor {
+                name: "V".to_string(),
+                fields: vec![Type::int()],
+            }],
+        );
+        let head = Type::Adt(id, Vec::new());
+        let error = table
+            .add_derived(
+                &ModulePath::new(["Test"]),
+                "Pretty",
+                head.clone(),
+                &[Type::int()],
+                true,
+                true,
+            )
+            .expect_err("Pretty is not derivable");
+        assert_eq!(error, DeriveError::UnsupportedClass("Pretty".to_string()));
+        table
+            .add_derived(
+                &ModulePath::new(["Test"]),
+                "Eq",
+                head.clone(),
+                &[Type::int()],
+                true,
+                false,
+            )
+            .expect("Eq is derivable over an Int field");
+        // ... but a foreign type cannot be derived over.
+        let foreign = crate::adt::allocate_in(ModulePath::new(["Other"]), "W", Vec::new());
+        crate::adt::set_ctors(
+            foreign,
+            vec![Ctor {
+                name: "W".to_string(),
+                fields: vec![Type::int()],
+            }],
+        );
+        let error = table
+            .add_derived(
+                &ModulePath::new(["Test"]),
+                "Show",
+                Type::Adt(foreign, Vec::new()),
+                &[Type::int()],
+                false,
+                false,
+            )
+            .expect_err("derive over a foreign type is an orphan");
+        assert_eq!(error, DeriveError::Orphan);
     }
 }

@@ -8,9 +8,10 @@ use support::{expect_clean, expect_error, span_text};
 
 #[test]
 fn an_unknown_attribute_is_e0210() {
-    let source = "@nope\nfn f() = 1\n";
-    let diagnostic = expect_error(source, "E0210");
-    assert_eq!(span_text(source, &diagnostic), "@nope");
+    for source in ["@nope\nfn f() = 1\n", "@compile_fail\nfn f() = 1\n"] {
+        let diagnostic = expect_error(source, "E0210");
+        assert_eq!(span_text(source, &diagnostic), source.split('\n').next().unwrap());
+    }
 }
 
 #[test]
@@ -22,11 +23,19 @@ fn a_known_attribute_is_accepted() {
         "jit",
         "op(\"mydomain/softplus\")",
         "rule(\"softplus(x) => ln(1 + exp(x))\")",
-        "compile_fail",
     ] {
         let source = format!("@{name}\nfn f() = 1\n");
         expect_clean(&source);
     }
+}
+
+#[test]
+fn compile_fail_is_rejected_rather_than_ignored() {
+    // `@compile_fail` used to parse and then be silently ignored by the
+    // checker. The metaprogramming design replaces it with the
+    // `compile_fail("…")` test feature, so until the standard settles it is an
+    // unknown attribute instead of a no-op (§2.2.7 `E0210`).
+    expect_error("@compile_fail\nfn f() = 1\n", "E0210");
 }
 
 #[test]

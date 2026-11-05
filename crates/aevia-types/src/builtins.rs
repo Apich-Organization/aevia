@@ -12,20 +12,122 @@
 //! the first that type-checks.
 
 use crate::adt::{self, Adt};
-use crate::ty::{Rep, Row, Scheme, Shape, Type};
+use crate::ty::{Constraint, Rep, Row, Scheme, Shape, Type};
 use aevia_dim::Dim;
 use num_rational::BigRational;
 
 /// Builds a scheme quantifying `vars` type/representation variables, `dims`
 /// dimension variables and `rows` row variables.
+///
+/// Every free variable a signature mentions MUST be quantified: an
+/// unquantified one is shared between instantiations of the scheme, so the
+/// second declaration that instantiates it unifies the shared variable and can
+/// report a spurious `E0303` (occurrence). That is what happened to `on` and
+/// `odeint_with`, whose bodies used `var(1)` while only `var(0)` was
+/// quantified. In test builds the helper checks this directly.
 fn scheme(vars: u32, dims: u32, rows: u32, ty: Type) -> Scheme {
-    Scheme {
+    let scheme = Scheme {
         vars: (0..vars).collect(),
         dims: (0..dims).collect(),
         rows: (0..rows).collect(),
+        nats: Vec::new(),
         constraints: Vec::new(),
         ty,
+    };
+    #[cfg(test)]
+    assert_fully_quantified(&scheme);
+    scheme
+}
+
+/// Test-only: every free type/representation, dimension and row variable of a
+/// scheme's body must be in its quantified lists.
+#[cfg(test)]
+fn assert_fully_quantified(scheme: &Scheme) {
+    use std::collections::BTreeSet;
+
+    fn walk(
+        ty: &Type,
+        vars: &mut BTreeSet<u32>,
+        dims: &mut BTreeSet<u32>,
+        rows: &mut BTreeSet<u32>,
+    ) {
+        match ty {
+            Type::Scalar(rep, dim) => {
+                if let Rep::Var(id) = rep {
+                    vars.insert(*id);
+                }
+                dims.extend(dim.vars());
+            }
+            Type::Tensor { elem, .. } => walk(elem, vars, dims, rows),
+            Type::Fn(params, ret) => {
+                for param in params {
+                    walk(param, vars, dims, rows);
+                }
+                walk(ret, vars, dims, rows);
+            }
+            Type::Record(row) => walk_row(row, vars, dims, rows),
+            Type::Adt(_, args) => {
+                for arg in args {
+                    walk(arg, vars, dims, rows);
+                }
+            }
+            Type::Io(inner) => walk(inner, vars, dims, rows),
+            Type::Var(id) => {
+                vars.insert(*id);
+            }
+            Type::Point(dim) | Type::UnitOf(dim) => dims.extend(dim.vars()),
+            Type::Dyn(Rep::Var(id)) => {
+                vars.insert(*id);
+            }
+            Type::Bool
+            | Type::Prop
+            | Type::Str
+            | Type::Unit
+            | Type::Dyn(_)
+            | Type::Param(_)
+            | Type::Error => {}
+        }
     }
+
+    fn walk_row(
+        row: &Row,
+        vars: &mut BTreeSet<u32>,
+        dims: &mut BTreeSet<u32>,
+        rows: &mut BTreeSet<u32>,
+    ) {
+        match row {
+            Row::Empty => {}
+            Row::Var(id) => {
+                rows.insert(*id);
+            }
+            Row::Extend { ty, tail, .. } => {
+                walk(ty, vars, dims, rows);
+                walk_row(tail, vars, dims, rows);
+            }
+        }
+    }
+
+    let (mut vars, mut dims, mut rows) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    walk(&scheme.ty, &mut vars, &mut dims, &mut rows);
+    let extra_vars: Vec<u32> = vars
+        .iter()
+        .copied()
+        .filter(|id| !scheme.vars.contains(id))
+        .collect();
+    let extra_dims: Vec<u32> = dims
+        .iter()
+        .copied()
+        .filter(|id| !scheme.dims.contains(id))
+        .collect();
+    let extra_rows: Vec<u32> = rows
+        .iter()
+        .copied()
+        .filter(|id| !scheme.rows.contains(id))
+        .collect();
+    assert!(
+        extra_vars.is_empty() && extra_dims.is_empty() && extra_rows.is_empty(),
+        "unquantified scheme variables: vars {extra_vars:?}, dims {extra_dims:?}, rows {extra_rows:?} in {scheme}"
+    );
 }
 
 fn var(id: u32) -> Type {
@@ -102,6 +204,33 @@ fn error_type(name: &str) -> Type {
         ctors: Vec::new(),
     });
     Type::Adt(id, Vec::new())
+}
+
+/// The opaque `DimValue` of §4.9.2: a runtime dimension (base dimensions with
+/// rational exponents), not to be confused with the kind `Dim`.
+///
+/// `dim_of` produces one and `dyn_with`/`check_with` consume one; the checker
+/// does not look inside it.
+#[must_use]
+pub fn dim_value_type() -> Type {
+    let id = adt::intern(Adt {
+        name: "DimValue".to_string(),
+        params: Vec::new(),
+        ctors: Vec::new(),
+    });
+    Type::Adt(id, Vec::new())
+}
+
+/// The `ShapeError` a failed `reshape` returns (§8.4).
+#[must_use]
+pub fn shape_error_type() -> Type {
+    error_type("ShapeError")
+}
+
+/// The `DimError` returned by a failed `check`/`check_with` (§4.9.2).
+#[must_use]
+pub fn dim_error_type() -> Type {
+    error_type("DimError")
 }
 
 /// `Solutions<ρ,d>` of §8.6: the roots, their multiplicities, the conditions
@@ -229,14 +358,85 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
         "i" => vec![Scheme::mono(Type::complex(one()))],
 
         // ----- elementary functions --------------------------------------
-        "sqrt" => vec![scheme(
+        "sqrt" => vec![
+            scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![scalar(rep_var(0), dim_var(0))],
+                    scalar(rep_var(0), dim_var(0).pow(&half())),
+                ),
+            ),
+            // §4.9.3: `sqrt : Dyn<ρ> -> Dyn<ρ>` halves the runtime exponent.
+            scheme(
+                1,
+                0,
+                0,
+                func(vec![Type::Dyn(rep_var(0))], Type::Dyn(rep_var(0))),
+            ),
+        ],
+        // ----- §3.11 / §4.9 dynamic dimension -----------------------------
+        // `dyn` and `check` are type-directed primitives: the checker reads
+        // the concrete `d` at the call site and materialises it (§4.9.4), so
+        // their schemes quantify it too. The rest of the escape layer is
+        // ordinary HM.
+        "dyn" => vec![scheme(
             1,
             1,
             0,
             func(
                 vec![scalar(rep_var(0), dim_var(0))],
-                scalar(rep_var(0), dim_var(0).pow(&half())),
+                Type::Dyn(rep_var(0)),
             ),
+        )],
+        "dyn_with" => vec![scheme(
+            1,
+            1,
+            0,
+            func(
+                vec![scalar(rep_var(0), dim_var(0)), dim_value_type()],
+                Type::Dyn(rep_var(0)),
+            ),
+        )],
+        "check" => vec![scheme(
+            1,
+            1,
+            0,
+            func(
+                vec![Type::Dyn(rep_var(0))],
+                Type::result(
+                    scalar(rep_var(0), dim_var(0)),
+                    dim_error_type(),
+                ),
+            ),
+        )],
+        "check_with" => vec![scheme(
+            1,
+            0,
+            0,
+            func(
+                vec![dim_value_type(), Type::Dyn(rep_var(0))],
+                Type::result(scalar(rep_var(0), one()), dim_error_type()),
+            ),
+        )],
+        "dim_of" => vec![scheme(
+            1,
+            0,
+            0,
+            func(vec![Type::Dyn(rep_var(0))], dim_value_type()),
+        )],
+        "value_of" => vec![scheme(
+            1,
+            0,
+            0,
+            func(vec![Type::Dyn(rep_var(0))], scalar(rep_var(0), one())),
+        )],
+        "pow_dyn" => vec![scheme(
+            1,
+            0,
+            0,
+            func(vec![Type::Dyn(rep_var(0)), Type::int()], Type::Dyn(rep_var(0))),
         )],
         "cbrt" => vec![scheme(
             1,
@@ -469,6 +669,18 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                     tensor(1, scalar(rep_var(0), dim_var(0))),
                 ),
             ),
+            // §3.5.5: the axis form is *keepdims*, so a rank-2 reduction keeps
+            // rank 2 (`sum(A, 1)` is a column vector). Rank is not first-class,
+            // so each supported rank gets an overload.
+            scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![tensor(2, scalar(rep_var(0), dim_var(0))), Type::int()],
+                    tensor(2, scalar(rep_var(0), dim_var(0))),
+                ),
+            ),
             // §8.5: `sum(f, a, b)` is the calculus overload, and the index is
             // a dimensionless `Real` so `k` may be symbolic.
             scheme(
@@ -695,7 +907,26 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             scheme(1, 0, 0, func(vec![tensor(2, var(0))], list(var(0)))),
         ],
         "flatten" => vec![scheme(1, 0, 0, func(vec![tensor(2, var(0))], list(var(0))))],
-        "at" => vec![scheme(1, 0, 0, func(vec![list(var(0)), Type::int()], var(0)))],
+        // §3.5.5/§8.4: `at : (Tensor<n, τ>, Int) -> Tensor<n-1, τ>`. Rank is
+        // not first-class here, so the ranks the runtime supports have their
+        // own overload; the checker picks by the argument's rank. The *unit*
+        // `at` (technical atmosphere) is a separate namespace (§1.8.2), so
+        // `at(t, 0)` reaches this function.
+        "at" => vec![
+            scheme(1, 0, 0, func(vec![list(var(0)), Type::int()], var(0))),
+            scheme(
+                1,
+                0,
+                0,
+                func(vec![tensor(2, var(0)), Type::int()], list(var(0))),
+            ),
+            scheme(
+                1,
+                0,
+                0,
+                func(vec![tensor(3, var(0)), Type::int()], tensor(2, var(0))),
+            ),
+        ],
         "map" => vec![
             scheme(
                 2,
@@ -769,6 +1000,32 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             vec![list(Type::float(one())), Type::bool()],
             list(Type::float(one())),
         ))],
+        // §3.8.4/§6.10: explicit parallelism requires `Parallel a` — `Int`,
+        // `Float` and tensors of them; symbolic `Real` is not parallel. The
+        // constraint is enforced at the call site, where the element type is
+        // known (`Checker::par_map_call`).
+        "par_map" => vec![Scheme {
+            vars: vec![0, 1],
+            dims: Vec::new(),
+            rows: Vec::new(),
+            nats: Vec::new(),
+            constraints: vec![Constraint::new("Parallel", vec![var(0)])],
+            ty: func(
+                vec![func(vec![var(0)], var(1)), list(var(0))],
+                list(var(1)),
+            ),
+        }],
+        // §6.10: `rng(seed)` is the pure, reproducible generator; `random()` is
+        // the `IO` one. The value is a next-number function.
+        "rng" => vec![scheme(
+            0,
+            0,
+            0,
+            func(
+                vec![Type::int()],
+                func(vec![Type::Unit], Type::float(one())),
+            ),
+        )],
         "zip" => vec![scheme(
             2,
             0,
@@ -954,6 +1211,13 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             io(Type::result(unit_ty(), error_type("IOError"))),
         ))],
         "read_line" => vec![Scheme::mono(func(vec![unit_ty()], io(Type::string())))],
+        // `args : () -> Tensor<1, String>` — the program's arguments, an empty
+        // tensor when the program was started without any (§8.1; the runtime
+        // supplies the value).
+        "args" => vec![Scheme::mono(func(
+            vec![unit_ty()],
+            list(Type::string()),
+        ))],
         "time_now" => vec![Scheme::mono(func(
             vec![unit_ty()],
             io(Type::float(time())),
@@ -1134,10 +1398,12 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 Type::Adt(adt::RESULT_ID, vec![Type::Var(0), op_error_type()]),
             ),
         )],
-        "decide" => vec![Scheme::mono(func(
-            vec![Type::Prop],
-            Type::option(Type::bool()),
-        ))],
+        "decide" => vec![
+            // A symbolic (exact `Real`) comparison is a `Prop`.
+            Scheme::mono(func(vec![Type::Prop], Type::option(Type::bool()))),
+            // A comparison on machine numbers is already a `Bool`.
+            Scheme::mono(func(vec![Type::Bool], Type::option(Type::bool()))),
+        ],
         "assuming" => vec![scheme(
             1,
             0,
@@ -1493,9 +1759,10 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             0,
             func(vec![tensor(2, var(0))], tensor(2, var(0))),
         )],
-        // `reshape<shape>` names its target rank in a type argument the
-        // checker does not read yet, so the static type stays the argument's
-        // own type and the runtime checks the element count (§8.4).
+        // `reshape<shape>` names its target in a *shape* type argument, which
+        // `Checker::shape_constructor` reads (§3.5.1). This scheme is the
+        // fallback for a call without one: the runtime reports that it needs a
+        // shape, so the static type stays the argument's own type.
         "reshape" => vec![scheme(
             1,
             0,
@@ -1514,15 +1781,36 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 Type::result(tensor(2, var(0)), error_type("ShapeError")),
             ),
         )],
-        "set" => vec![scheme(
-            2,
-            0,
-            0,
-            func(
-                vec![tensor(2, var(0)), list(Type::int()), var(0)],
-                tensor(2, var(0)),
+        // §3.5.5/§8.4: `set : (Tensor<n, τ>, Tensor<1,Int>, τ) -> Tensor<n, τ>`.
+        "set" => vec![
+            scheme(
+                2,
+                0,
+                0,
+                func(
+                    vec![list(var(0)), list(Type::int()), var(0)],
+                    list(var(0)),
+                ),
             ),
-        )],
+            scheme(
+                2,
+                0,
+                0,
+                func(
+                    vec![tensor(2, var(0)), list(Type::int()), var(0)],
+                    tensor(2, var(0)),
+                ),
+            ),
+            scheme(
+                2,
+                0,
+                0,
+                func(
+                    vec![tensor(3, var(0)), list(Type::int()), var(0)],
+                    tensor(3, var(0)),
+                ),
+            ),
+        ],
         "map_indexed" => vec![scheme(
             2,
             0,
@@ -2100,8 +2388,11 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
         )],
 
         // ----- §8.9 ODE ---------------------------------------------------
-        // `RateOf<s>` is a type function, so the right-hand side is typed as
-        // returning the state's own shape (§8.9 says the two agree).
+        // `RateOf<s>` is a built-in type function, so no HM scheme can state
+        // these signatures exactly. The entries below keep the names in the
+        // built-in table (the runtime dispatches on it); the checker types a
+        // call through `ode_call`, which applies §8.9's `RateOf` recursively
+        // and rejects a non-`Float` state field with `E0302`.
         "odeint" => vec![scheme(
             1,
             1,
@@ -2119,7 +2410,7 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             ),
         )],
         "odeint_with" => vec![scheme(
-            1,
+            2,
             1,
             0,
             func(
@@ -2136,7 +2427,7 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             ),
         )],
         "solve_ivp" => vec![scheme(
-            1,
+            2,
             1,
             0,
             func(
@@ -2151,6 +2442,64 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                     ("y".to_string(), list(var(0))),
                 ]),
             ),
+        )],
+
+        // ----- §8.9.1 SDE --------------------------------------------------
+        // The two entry points are typed by `Checker::sde_call` through the
+        // built-in type functions `RateOf`/`DiffusionOf`; this loose scheme
+        // exists so the names resolve and an unimported call still reports
+        // the arity/type errors. `sde_order`'s argument is loose because the
+        // `SdeMethod` constructors are not values (the runtime selects the
+        // method by name, as for `OdeMethod`/`Norm`).
+        "sdeint_diag" | "sdeint_general" => vec![scheme(
+            2,
+            0,
+            0,
+            func(
+                vec![var(0), var(0), var(0), var(0)],
+                var(1),
+            ),
+        )],
+        // `wiener(seed, m, steps, dt) -> Tensor<2, Float[T^(1/2)]]`: the
+        // increments are Brownian (`dW ~ √dt`), matching the kernel manifest
+        // `sde_wiener(seed, m, steps, h)` argument order (§8.9.1).
+        "wiener" => vec![scheme(
+            0,
+            1,
+            0,
+            func(
+                vec![
+                    Type::int(),
+                    Type::int(),
+                    Type::int(),
+                    Type::float(dim_var(0)),
+                ],
+                tensor(
+                    2,
+                    Type::float(
+                        Dim::base("Time")
+                            .pow(&BigRational::new(1.into(), 2.into())),
+                    ),
+                ),
+            ),
+        )],
+        "sde_order" => vec![scheme(
+            1,
+            0,
+            0,
+            func(
+                vec![var(0)],
+                Type::record(vec![
+                    ("strong".to_string(), Type::float(one())),
+                    ("weak".to_string(), Type::float(one())),
+                ]),
+            ),
+        )],
+        "sde_ensemble_seed" => vec![scheme(
+            0,
+            0,
+            0,
+            func(vec![Type::int(), Type::int()], Type::int()),
         )],
 
         // ----- §8.10 PDE --------------------------------------------------
@@ -2211,6 +2560,21 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             func(
                 vec![Type::string(), tensor(2, Type::float(one()))],
                 io(Type::result(unit_ty(), error_type("DataError"))),
+            ),
+        )],
+        // §8.17: the simulation boundary is `Json`. A typed wrapper encodes its
+        // parameters with `to_json`, runs `simulate`, and decodes the answer
+        // with `from_json` — a typed façade over a dynamic boundary rather than
+        // a polymorphic `∀a.a` lie. The `a` in `from_json` is fixed by the
+        // caller's declared result type and erased at run time.
+        "to_json" => vec![scheme(1, 0, 0, func(vec![var(0)], json()))],
+        "from_json" => vec![scheme(
+            1,
+            0,
+            0,
+            func(
+                vec![json()],
+                Type::result(var(0), error_type("SimError")),
             ),
         )],
         "read_json" => vec![Scheme::mono(func(
@@ -2512,8 +2876,11 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 io(tensor(2, var(0))),
             ),
         )],
+        // `on(device, thunk)`: `a` is the device and `b` the thunk result, so
+        // both type variables are quantified (a missing `var(1)` made the
+        // second instantiation in a module an E0303).
         "on" => vec![scheme(
-            1,
+            2,
             0,
             0,
             func(vec![var(0), func(Vec::new(), var(1))], io(var(1))),
@@ -2589,8 +2956,8 @@ mod tests {
     #[test]
     fn overloading_is_visible() {
         assert_eq!(schemes("length").expect("length").len(), 2);
-        // §8.4 and §8.5 give `sum` three forms: a reduction, a reduction with
-        // an axis, and the calculus summation `sum(f, a, b)`.
-        assert_eq!(schemes("sum").expect("sum").len(), 3);
+        // §8.4 and §8.5 give `sum` the reduction, the keepdims axis form for
+        // ranks 1 and 2, and the calculus summation `sum(f, a, b)`.
+        assert_eq!(schemes("sum").expect("sum").len(), 4);
     }
 }

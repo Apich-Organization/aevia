@@ -409,6 +409,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Rejects an attribute the implementation does not know (§2.2.7).
+    ///
+    /// `@compile_fail` is deliberately *not* here: it cannot express "this
+    /// source must fail to compile" without a source snippet, and the
+    /// metaprogramming design replaces it with the `compile_fail("…")` test
+    /// feature. Accepting it and doing nothing was worse than rejecting it, so
+    /// it is an unknown attribute (`E0210`) until the standard says otherwise.
     fn check_attribute(&mut self, attr: &Attribute) {
         const KNOWN: &[&str] = &[
             "stable",
@@ -417,7 +423,6 @@ impl<'a> Parser<'a> {
             "jit",
             "op",
             "rule",
-            "compile_fail",
             // §9.12: a `bench` declaration is a function `aevia bench` times.
             "bench",
         ];
@@ -1817,7 +1822,9 @@ impl<'a> Parser<'a> {
             }
             if self.at_punct(Punct::Lt) && self.span().start == expr.span.end {
                 // `f<T>(...)`: `<` is adjacent to the callee. Roll back when
-                // the contents are not type arguments (§2.7.2).
+                // the contents are not type arguments (§2.7.2). A type
+                // argument may also be a shape or a natural number (§A.5
+                // `type_arg`), which is how `reshape<[3, 2]>(a)` parses.
                 let saved_pos = self.pos;
                 let saved_diagnostics = self.diagnostics.items.len();
                 self.bump();
@@ -1825,7 +1832,7 @@ impl<'a> Parser<'a> {
                 let mut ok = true;
                 if !self.at_punct(Punct::Gt) {
                     loop {
-                        args.push(self.ty());
+                        args.push(self.type_arg());
                         if !self.eat_punct(Punct::Comma) {
                             break;
                         }
@@ -1839,6 +1846,17 @@ impl<'a> Parser<'a> {
                 }
                 if ok && self.eat_punct(Punct::Gt) {
                     let span = expr.span.join(self.previous_span());
+                    // §2.7.2: only a function *name* can take explicit type
+                    // arguments. `f()<Int>` or `(a + b)<Int>` has no reading
+                    // that the checker could honour, and the adjacency rule
+                    // makes the intent genuinely ambiguous: `E0207`.
+                    if !matches!(expr.kind, ExprKind::Var(_) | ExprKind::QName(_)) {
+                        self.error(
+                            "E0207",
+                            "ambiguous type application: only a function name can take type arguments; add a space before `<` or parenthesise the callee",
+                            span,
+                        );
+                    }
                     expr = Expr::new(
                         ExprKind::TypeApp {
                             callee: Box::new(expr),
@@ -2102,11 +2120,22 @@ impl<'a> Parser<'a> {
             } else {
                 self.pos = saved_pos;
                 self.diagnostics.items.truncate(saved_diagnostics);
-                self.error(
-                    "E0209",
-                    "`(` after a numeric literal must contain a unit expression",
-                    self.span(),
-                );
+                // Two different mistakes reach this point. `3 (2)` is a
+                // numeric literal followed by something that is not a unit at
+                // all (`E0108`); `3 (m/)` is a malformed unit literal
+                // (`E0209`, §1.8.1).
+                match self.kind_at(1) {
+                    TokenKind::Int(_) | TokenKind::Float(_) => self.error(
+                        "E0108",
+                        "expected a unit after the numeric literal",
+                        self.span(),
+                    ),
+                    _ => self.error(
+                        "E0209",
+                        "`(` after a numeric literal must contain a unit expression",
+                        self.span(),
+                    ),
+                }
                 None
             }
         } else {
@@ -2142,6 +2171,21 @@ impl<'a> Parser<'a> {
                         start.join(self.previous_span()),
                     );
                 }
+            }
+            // A *partial* section such as `(== 1)` or `(* 2)` is not in the
+            // grammar (§1.8.5): only the bare operator or a lambda is a
+            // function. Report it and keep parsing the operand so one mistake
+            // does not cascade.
+            if !self.punct_at(1, Punct::RParen)
+                && operator_name(punct).is_some()
+                && !matches!(punct, Punct::Plus | Punct::Minus)
+            {
+                self.error(
+                    "E0205",
+                    "invalid operator section: write `(+)` or a lambda",
+                    self.span(),
+                );
+                self.bump();
             }
         }
         let first = self.expr();
@@ -2412,9 +2456,21 @@ impl<'a> Parser<'a> {
                 )
             }
             _ => {
-                self.unexpected("a pattern");
+                // §B.3/B.4: a keyword where a binder belongs is E0206 (reserved
+                // word as identifier), anything else that cannot start a
+                // pattern is E0204 (invalid pattern).
+                let found = self.describe();
+                if matches!(self.kind(), TokenKind::Keyword(_)) {
+                    self.error_here(
+                        "E0206",
+                        format!("{found} is a reserved word and cannot be a binding"),
+                    );
+                } else {
+                    self.error_here("E0204", format!("invalid pattern: {found}"));
+                }
+                let span = self.span();
                 self.bump();
-                Pat::new(PatKind::Error, start)
+                Pat::new(PatKind::Error, span)
             }
         }
     }
@@ -2733,6 +2789,15 @@ impl<'a> Parser<'a> {
                     start.join(self.previous_span()),
                 );
             }
+            "DiffusionOf" => {
+                self.expect_punct(Punct::Lt);
+                let inner = self.ty();
+                self.expect_punct(Punct::Gt);
+                return Ty::new(
+                    TyKind::DiffusionOf(Box::new(inner)),
+                    start.join(self.previous_span()),
+                );
+            }
             "Option" | "Set" => {
                 self.expect_punct(Punct::Lt);
                 let inner = self.ty();
@@ -2864,11 +2929,24 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A type-level natural number (§3.5.1: literal, variable, `+`, `*`).
+    ///
+    /// `*` binds tighter than `+`, so `n + 1 * 2` is `n + 2`; parentheses
+    /// group, so `2 * (n + 1)` is expressible.
     fn nat(&mut self) -> NatAst {
-        let mut left = self.nat_atom();
+        let mut left = self.nat_term();
         while self.eat_punct(Punct::Plus) {
-            let right = self.nat_atom();
+            let right = self.nat_term();
             left = NatAst::Add(Box::new(left), Box::new(right));
+        }
+        left
+    }
+
+    fn nat_term(&mut self) -> NatAst {
+        let mut left = self.nat_atom();
+        while self.eat_punct(Punct::Star) {
+            let right = self.nat_atom();
+            left = NatAst::Mul(Box::new(left), Box::new(right));
         }
         left
     }
@@ -2882,6 +2960,12 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
                 NatAst::Var(name)
+            }
+            TokenKind::Punct(Punct::LParen) => {
+                self.bump();
+                let inner = self.nat();
+                self.expect_punct(Punct::RParen);
+                inner
             }
             _ => {
                 self.unexpected("a natural number");

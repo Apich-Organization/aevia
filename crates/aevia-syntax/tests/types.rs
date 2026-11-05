@@ -3,7 +3,7 @@
 
 mod support;
 
-use aevia_syntax::ast::{DeclKind, NatAst, ShapeAst, Ty, TyKind};
+use aevia_syntax::ast::{DeclKind, ExprKind, NatAst, ShapeAst, Ty, TyKind};
 use support::expect_clean;
 
 /// The annotation of `let x: <ty> = ...`.
@@ -182,6 +182,62 @@ fn the_normative_type_productions_still_parse() {
         "let x: (Int, String) -> Bool = 0\n",
         "let x: forall d. Real[d] -> Real[d] = 0\n",
         "let x: Solutions<Real[L], T> = 0\n",
+    ] {
+        expect_clean(source);
+    }
+}
+
+#[test]
+fn an_expression_type_argument_can_be_a_shape() {
+    // §2.5/§3.5.1: `reshape<[3, 2]>(a)` names its target shape in the
+    // expression's type-argument list, so that list is `type_arg` (§A.5),
+    // not merely `type` — the parser used `ty()` and rejected the `[`.
+    let module = expect_clean("let r = reshape<[3, 2]>(a)\n");
+    let DeclKind::Let { value, .. } = &module.decls[0].kind else {
+        panic!("expected a let");
+    };
+    let ExprKind::Call { callee, args } = &value.kind else {
+        panic!("expected a call, got {:?}", value.kind);
+    };
+    assert_eq!(args.len(), 1);
+    let ExprKind::TypeApp {
+        callee: inner,
+        args: type_args,
+    } = &callee.kind
+    else {
+        panic!("expected a type application, got {:?}", callee.kind);
+    };
+    assert!(matches!(inner.kind, ExprKind::Var(ref name) if name == "reshape"));
+    let TyKind::ShapeArg(ShapeAst::Refined(items)) = &type_args[0].kind else {
+        panic!("expected a shape argument, got {:?}", type_args[0].kind);
+    };
+    assert_eq!(items.len(), 2);
+}
+
+#[test]
+fn an_expression_type_argument_can_be_a_natural_number() {
+    // §A.5 `type_arg ::= type | nat | dim | shape`.
+    let module = expect_clean("let z = zeros_of<3>()\n");
+    let DeclKind::Let { value, .. } = &module.decls[0].kind else {
+        panic!("expected a let");
+    };
+    let ExprKind::Call { callee, .. } = &value.kind else {
+        panic!("expected a call");
+    };
+    let ExprKind::TypeApp { args, .. } = &callee.kind else {
+        panic!("expected a type application");
+    };
+    assert!(matches!(args[0].kind, TyKind::NatArg(NatAst::Lit(3))));
+}
+
+#[test]
+fn a_comparison_after_an_identifier_is_still_a_comparison() {
+    // §2.7.2: `a < b` is a comparison; only `ident<` (adjacent) tries type
+    // arguments, and a failure rolls back to `BinOp::Lt`.
+    for source in [
+        "let x = a < b\n",
+        "let x = f(a) < 3\n",
+        "let y = a < b && b < c\n",
     ] {
         expect_clean(source);
     }

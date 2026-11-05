@@ -6,7 +6,9 @@
 //! built without touching the registry.
 
 pub use crate::ty::AdtId;
+use crate::keys::{AdtKey, ModulePath};
 use crate::ty::Type;
+use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 /// `Option<a>`.
@@ -15,6 +17,74 @@ pub const OPTION_ID: AdtId = 0;
 pub const RESULT_ID: AdtId = 1;
 /// `Ordering`.
 pub const ORDERING_ID: AdtId = 2;
+
+/// The defining module of each user-allocated type.
+///
+/// The module is kept beside the registry rather than inside [`Adt`] because
+/// `Adt` is constructed structurally by consumers (the runtime interns the
+/// opaque value types) and those constructors have no module. An entry exists
+/// only for a type allocated by a compilation unit ([`allocate_in`]); a
+/// built-in/opaque type is in the prelude scope.
+fn modules() -> &'static RwLock<HashMap<AdtId, ModulePath>> {
+    static MODULES: OnceLock<RwLock<HashMap<AdtId, ModulePath>>> = OnceLock::new();
+    MODULES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// The symbolic key of a registered type: `(defining module, name)`.
+///
+/// This is the identity that may leave the process (an interface file, a
+/// diagnostic); the [`AdtId`] never does.
+#[must_use]
+pub fn key_of(id: AdtId) -> AdtKey {
+    let module = modules()
+        .read()
+        .ok()
+        .and_then(|table| table.get(&id).cloned())
+        .unwrap_or_default();
+    AdtKey::new(module, name_of(id))
+}
+
+/// Records the module that declares an allocated type.
+pub fn set_module(id: AdtId, module: ModulePath) {
+    if let Ok(mut table) = modules().write() {
+        table.insert(id, module);
+    }
+}
+
+/// The kind of one declared parameter of a variant type (§2: the kind may be
+/// omitted and inferred from the constructor fields, or written `<d: Dim>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamKind {
+    /// A type parameter (`type Tree<a>`).
+    Type,
+    /// A dimension parameter; the id is the placeholder dimension variable.
+    Dim(u32),
+}
+
+fn param_kinds() -> &'static RwLock<HashMap<AdtId, Vec<ParamKind>>> {
+    static KINDS: OnceLock<RwLock<HashMap<AdtId, Vec<ParamKind>>>> = OnceLock::new();
+    KINDS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Records the parameter kinds of a variant type.
+pub fn set_param_kinds(id: AdtId, kinds: Vec<ParamKind>) {
+    if let Ok(mut table) = param_kinds().write() {
+        table.insert(id, kinds);
+    }
+}
+
+/// The parameter kinds of a variant type; every parameter is a type unless
+/// [`set_param_kinds`] recorded otherwise.
+#[must_use]
+pub fn param_kinds_of(id: AdtId) -> Vec<ParamKind> {
+    if let Ok(table) = param_kinds().read() {
+        if let Some(kinds) = table.get(&id) {
+            return kinds.clone();
+        }
+    }
+    let count = get(id).map_or(0, |adt| adt.params.len());
+    vec![ParamKind::Type; count]
+}
 
 /// One constructor of a variant type.
 #[derive(Clone, Debug)]
@@ -124,6 +194,17 @@ pub fn intern(adt: Adt) -> AdtId {
 /// Panics when the registry lock is poisoned.
 #[must_use]
 pub fn allocate(name: &str, params: Vec<String>) -> AdtId {
+    allocate_in(ModulePath::prelude(), name, params)
+}
+
+/// Allocates a fresh id for a type declared in `module`, recording the defining
+/// module so [`key_of`] can derive the symbolic identity.
+///
+/// # Panics
+///
+/// Panics when the registry lock is poisoned.
+#[must_use]
+pub fn allocate_in(module: ModulePath, name: &str, params: Vec<String>) -> AdtId {
     let mut guard = registry().write().expect("adt registry is not poisoned");
     let id = u32::try_from(guard.len()).unwrap_or(u32::MAX);
     guard.push(Adt {
@@ -131,6 +212,7 @@ pub fn allocate(name: &str, params: Vec<String>) -> AdtId {
         params,
         ctors: Vec::new(),
     });
+    set_module(id, module);
     id
 }
 
@@ -205,6 +287,12 @@ pub fn count() -> usize {
 pub fn reset() {
     if let Ok(mut guard) = registry().write() {
         guard.truncate(3);
+    }
+    if let Ok(mut table) = modules().write() {
+        table.clear();
+    }
+    if let Ok(mut table) = param_kinds().write() {
+        table.clear();
     }
 }
 

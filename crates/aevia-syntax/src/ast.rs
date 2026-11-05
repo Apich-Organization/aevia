@@ -570,6 +570,9 @@ pub enum TyKind {
     Dyn(String),
     /// `RateOf<τ>`
     RateOf(Box<Ty>),
+    /// `DiffusionOf<τ>` (§8.9.1): the diffusion's dimension is the state's
+    /// divided by `T^(1/2)`, so it is a built-in type function like `RateOf`.
+    DiffusionOf(Box<Ty>),
     /// `SymFun<d, e>`
     SymFun(DimAst, DimAst),
     /// `IO τ`
@@ -616,7 +619,8 @@ pub enum ShapeItem {
     Unknown,
 }
 
-/// A type-level natural number.
+/// A type-level natural number (§3.5.1: literals, `+`, `*` and linear
+/// equations — no recursion, no proof terms).
 #[derive(Clone, Debug)]
 pub enum NatAst {
     /// A literal.
@@ -625,6 +629,8 @@ pub enum NatAst {
     Var(String),
     /// `a + b`.
     Add(Box<NatAst>, Box<NatAst>),
+    /// `a * b` (`b` must be a literal for the equation to stay linear).
+    Mul(Box<NatAst>, Box<NatAst>),
 }
 
 /// A dimension expression as written in a type.

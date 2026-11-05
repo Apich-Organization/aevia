@@ -29,10 +29,20 @@ pub mod check;
 pub mod class;
 pub mod diagnostic_bridge;
 pub mod infer;
+pub mod keys;
 pub mod rssn_resolve;
 pub mod ty;
 
-pub use check::{check_module, CheckResult, CheckedModule, Export, RssnCall};
-pub use class::{ClassTable, Resolution};
+pub use check::{
+    check_module, check_module_with_imports, check_module_with_interfaces,
+    check_module_with_options, AliasExport, Capabilities, CheckOptions, CheckResult, CheckedModule,
+    ClassExport, DictTarget, DictionaryUse, DynCall, DynPrimitive, Export, HostRegistration,
+    HostRegistrationKind, InstanceExport, ModuleInterface, RssnCall, Stability,
+};
+pub use class::{ClassTable, Origin, Resolution};
 pub use infer::{Infer, UnifyError};
-pub use ty::{Constraint, LiteralKind, Rep, Row, Scheme, Shape, Type};
+pub use keys::{
+    head_key, witness_collision, witness_of, witnesses_are_disjoint, AdtKey, ClassKey, HeadKey,
+    InstanceKey, ModulePath, RepKind, StorageClass, Witness,
+};
+pub use ty::{Constraint, LiteralKind, Nat, Rep, Row, Scheme, Shape, Type};

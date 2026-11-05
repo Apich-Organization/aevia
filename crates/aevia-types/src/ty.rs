@@ -168,16 +168,159 @@ impl LiteralKind {
     }
 }
 
+/// A type-level natural number (§3.5.1, §13.9.1).
+///
+/// The language offers literals, `+`, `*` by a literal, and linear equations;
+/// there is no general recursion or proof terms. A variable is solved by
+/// [`crate::infer::Infer::unify_nat`] when a linear equation isolates it
+/// (`n + 1 ~ 3` ⇒ `n = 2`, `2 * n ~ 6` ⇒ `n = 3`).
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub enum Nat {
+    /// A concrete extent.
+    Lit(usize),
+    /// A type-level variable.
+    Var(u32),
+    /// `a + b`.
+    Add(Box<Nat>, Box<Nat>),
+    /// `a * b`. Only a constant factor makes the equation linear; a product of
+    /// two variables is rejected (`E0304`).
+    Mul(Box<Nat>, Box<Nat>),
+}
+
+impl Nat {
+    /// A literal.
+    #[must_use]
+    pub fn lit(value: usize) -> Self {
+        Self::Lit(value)
+    }
+
+    /// A variable.
+    #[must_use]
+    pub fn var(id: u32) -> Self {
+        Self::Var(id)
+    }
+
+    /// `self + other`.
+    #[must_use]
+    pub fn add(self, other: Self) -> Self {
+        Self::Add(Box::new(self), Box::new(other))
+    }
+
+    /// `self * other`.
+    #[must_use]
+    pub fn mul(self, other: Self) -> Self {
+        Self::Mul(Box::new(self), Box::new(other))
+    }
+
+    /// The value when the term folds to a literal.
+    #[must_use]
+    pub fn as_const(&self) -> Option<usize> {
+        match self {
+            Self::Lit(value) => Some(*value),
+            Self::Var(_) => None,
+            Self::Add(left, right) => Some(left.as_const()?.checked_add(right.as_const()?)?),
+            Self::Mul(left, right) => Some(left.as_const()?.checked_mul(right.as_const()?)?),
+        }
+    }
+
+    /// Whether the term is linear: every product has at least one literal
+    /// factor, so it expands to `Σ cᵢ·vᵢ + c`.
+    #[must_use]
+    pub fn is_linear(&self) -> bool {
+        match self {
+            Self::Lit(_) | Self::Var(_) => true,
+            Self::Add(left, right) => left.is_linear() && right.is_linear(),
+            Self::Mul(left, right) => {
+                left.as_const().is_some() && right.is_linear()
+                    || right.as_const().is_some() && left.is_linear()
+            }
+        }
+    }
+
+    /// The variables this term mentions.
+    #[must_use]
+    pub fn vars(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        self.collect_vars(&mut out);
+        out
+    }
+
+    fn collect_vars(&self, out: &mut Vec<u32>) {
+        match self {
+            Self::Lit(_) => {}
+            Self::Var(id) => {
+                if !out.contains(id) {
+                    out.push(*id);
+                }
+            }
+            Self::Add(left, right) | Self::Mul(left, right) => {
+                left.collect_vars(out);
+                right.collect_vars(out);
+            }
+        }
+    }
+
+    /// Substitutes variables through `map`, folding any constant arithmetic.
+    #[must_use]
+    pub fn substitute(&self, map: &std::collections::HashMap<u32, Nat>) -> Nat {
+        match self {
+            Self::Lit(value) => Self::Lit(*value),
+            Self::Var(id) => map.get(id).cloned().unwrap_or_else(|| self.clone()),
+            Self::Add(left, right) => {
+                let left = left.substitute(map);
+                let right = right.substitute(map);
+                match (left.as_const(), right.as_const()) {
+                    (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
+                    _ => Nat::Add(Box::new(left), Box::new(right)),
+                }
+            }
+            Self::Mul(left, right) => {
+                let left = left.substitute(map);
+                let right = right.substitute(map);
+                match (left.as_const(), right.as_const()) {
+                    (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
+                    _ => Nat::Mul(Box::new(left), Box::new(right)),
+                }
+            }
+        }
+    }
+}
+
+impl From<usize> for Nat {
+    fn from(value: usize) -> Self {
+        Self::Lit(value)
+    }
+}
+
+impl From<u32> for Nat {
+    fn from(value: u32) -> Self {
+        Self::Lit(usize::try_from(value).unwrap_or(usize::MAX))
+    }
+}
+
+impl fmt::Display for Nat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lit(value) => write!(f, "{value}"),
+            Self::Var(id) => write!(f, "n{id}"),
+            Self::Add(left, right) => write!(f, "({left} + {right})"),
+            Self::Mul(left, right) => write!(f, "({left} * {right})"),
+        }
+    }
+}
+
 /// A tensor shape annotation.
 ///
-/// `Rank(n)` is `Tensor<n, τ>`: the rank is known, the extents are not.
-/// `Refined` is `Tensor<[n1, ..., nk], τ>` with `None` for `?`.
+/// `Rank(n)` is `Tensor<n, τ>`: the rank is known (a concrete `u32` — indexing
+/// requires it, §3.5.4), the extents are not. `Refined` is
+/// `Tensor<[n1, ..., nk], τ>` with `None` for `?`; each extent is a type-level
+/// [`Nat`], so `reshape<[n + 1, 2]>` is expressible.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Shape {
     /// Only the rank is known.
     Rank(u32),
     /// A refined shape; `None` entries are unknown extents.
-    Refined(Vec<Option<usize>>),
+    Refined(Vec<Option<Nat>>),
 }
 
 impl Shape {
@@ -187,6 +330,70 @@ impl Shape {
         match self {
             Self::Rank(rank) => *rank,
             Self::Refined(items) => u32::try_from(items.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// A rank-only shape, for code that constructs one from a `u32`.
+    #[must_use]
+    pub fn rank_only(rank: u32) -> Self {
+        Self::Rank(rank)
+    }
+
+    /// A refined shape from literal extents (`None` stays unknown).
+    #[must_use]
+    pub fn refined(items: impl IntoIterator<Item = Option<usize>>) -> Self {
+        Self::Refined(
+            items
+                .into_iter()
+                .map(|item| item.map(Nat::lit))
+                .collect(),
+        )
+    }
+
+    /// The extents when every one folds to a literal.
+    #[must_use]
+    pub fn extents(&self) -> Option<Vec<usize>> {
+        match self {
+            Self::Rank(_) => None,
+            Self::Refined(items) => items
+                .iter()
+                .map(|item| item.as_ref().and_then(Nat::as_const))
+                .collect(),
+        }
+    }
+
+    /// Whether the shape mentions a type-level variable.
+    #[must_use]
+    pub fn has_variables(&self) -> bool {
+        match self {
+            Self::Rank(_) => false,
+            Self::Refined(items) => items
+                .iter()
+                .flatten()
+                .any(|nat| !nat.vars().is_empty()),
+        }
+    }
+
+    /// The extent at `index`, when it is present and folds to a literal.
+    #[must_use]
+    pub fn extent(&self, index: usize) -> Option<usize> {
+        match self {
+            Self::Rank(_) => None,
+            Self::Refined(items) => items.get(index)?.as_ref().and_then(Nat::as_const),
+        }
+    }
+
+    /// Substitutes type-level variables (parallel to [`Nat::substitute`]).
+    #[must_use]
+    pub fn substitute_nats(&self, map: &std::collections::HashMap<u32, Nat>) -> Shape {
+        match self {
+            Self::Rank(rank) => Self::Rank(*rank),
+            Self::Refined(items) => Self::Refined(
+                items
+                    .iter()
+                    .map(|item| item.as_ref().map(|nat| nat.substitute(map)))
+                    .collect(),
+            ),
         }
     }
 
@@ -528,7 +735,7 @@ impl Type {
         matches!(self, Self::Error)
     }
 
-    /// Substitutes ADT/alias parameters.
+    /// Substitutes ADT/alias parameters (type-kinded positions only).
     #[must_use]
     pub fn substitute_params(&self, args: &[Type]) -> Type {
         match self {
@@ -553,6 +760,58 @@ impl Type {
             other => other.clone(),
         }
     }
+
+    /// Substitutes the parameters of a generic *declaration* (§2: type
+    /// parameters may be type-, dimension-, natural- or row-kinded).
+    ///
+    /// `types` maps `Param(i)` by position (only type-kinded positions are
+    /// used), `dims` maps the dimension variables of dimension-kinded
+    /// parameters, `nats` the shape-extent variables of natural-kinded ones and
+    /// `rows` the row variables of row-kinded ones.
+    #[must_use]
+    pub fn substitute_kinded(
+        &self,
+        types: &[Option<Type>],
+        dims: &std::collections::HashMap<u32, Dim>,
+        nats: &std::collections::HashMap<u32, Nat>,
+        rows: &std::collections::HashMap<u32, Row>,
+    ) -> Type {
+        match self {
+            Self::Param(index) => types
+                .get(usize::try_from(*index).unwrap_or(usize::MAX))
+                .cloned()
+                .flatten()
+                .unwrap_or(Type::Error),
+            Self::Scalar(rep, dim) => {
+                Self::Scalar(*rep, dim.substitute(|id| dims.get(&id).cloned()))
+            }
+            Self::Tensor { shape, elem } => Self::Tensor {
+                shape: shape.substitute_nats(nats),
+                elem: Box::new(elem.substitute_kinded(types, dims, nats, rows)),
+            },
+            Self::Fn(params, ret) => Self::Fn(
+                params
+                    .iter()
+                    .map(|param| param.substitute_kinded(types, dims, nats, rows))
+                    .collect(),
+                Box::new(ret.substitute_kinded(types, dims, nats, rows)),
+            ),
+            Self::Record(row) => Self::Record(row.substitute_kinded(types, dims, nats, rows)),
+            Self::Adt(id, values) => Self::Adt(
+                *id,
+                values
+                    .iter()
+                    .map(|value| value.substitute_kinded(types, dims, nats, rows))
+                    .collect(),
+            ),
+            Self::Io(inner) => {
+                Self::Io(Box::new(inner.substitute_kinded(types, dims, nats, rows)))
+            }
+            Self::Point(dim) => Self::Point(dim.substitute(|id| dims.get(&id).cloned())),
+            Self::UnitOf(dim) => Self::UnitOf(dim.substitute(|id| dims.get(&id).cloned())),
+            other => other.clone(),
+        }
+    }
 }
 
 impl Row {
@@ -566,6 +825,26 @@ impl Row {
                 label: label.clone(),
                 ty: Box::new(ty.substitute_params(args)),
                 tail: Box::new(tail.substitute_params(args)),
+            },
+        }
+    }
+
+    /// Substitutes all four kinds of declaration parameters (§2).
+    #[must_use]
+    pub fn substitute_kinded(
+        &self,
+        types: &[Option<Type>],
+        dims: &std::collections::HashMap<u32, Dim>,
+        nats: &std::collections::HashMap<u32, Nat>,
+        rows: &std::collections::HashMap<u32, Row>,
+    ) -> Row {
+        match self {
+            Self::Empty => Self::Empty,
+            Self::Var(id) => rows.get(id).cloned().unwrap_or_else(|| self.clone()),
+            Self::Extend { label, ty, tail } => Self::Extend {
+                label: label.clone(),
+                ty: Box::new(ty.substitute_kinded(types, dims, nats, rows)),
+                tail: Box::new(tail.substitute_kinded(types, dims, nats, rows)),
             },
         }
     }
@@ -666,8 +945,12 @@ fn render_dim(dim: &Dim) -> String {
                 let magnitude = exponent.abs();
                 let text = if magnitude.is_one() {
                     symbol
-                } else {
+                } else if magnitude.denom().is_one() {
                     format!("{symbol}^{}", magnitude.numer())
+                } else {
+                    // A rational exponent must keep its denominator: a
+                    // polymorphic `Complex[d^(1/2)]` used to render as `d0^1`.
+                    format!("{symbol}^({})", aevia_dim::format_rational(&magnitude))
                 };
                 if exponent.is_negative() {
                     denominator.push(text);
@@ -748,6 +1031,12 @@ pub struct Scheme {
     pub dims: Vec<u32>,
     /// Quantified row variables.
     pub rows: Vec<u32>,
+    /// Quantified type-level natural-number variables (§3.5.1).
+    ///
+    /// A shape extent `[n]` on a declaration takes a fresh Nat variable; a
+    /// function that is polymorphic in it quantifies it here, and instantiation
+    /// maps it to a fresh variable at the call site.
+    pub nats: Vec<u32>,
     /// Class constraints, quantified with the variables they mention.
     pub constraints: Vec<Constraint>,
     /// The body.
@@ -762,6 +1051,7 @@ impl Scheme {
             vars: Vec::new(),
             dims: Vec::new(),
             rows: Vec::new(),
+            nats: Vec::new(),
             constraints: Vec::new(),
             ty,
         }
@@ -774,6 +1064,7 @@ impl Scheme {
             vars,
             dims: Vec::new(),
             rows: Vec::new(),
+            nats: Vec::new(),
             constraints: Vec::new(),
             ty,
         }
@@ -793,6 +1084,7 @@ impl Scheme {
         self.vars.is_empty()
             && self.dims.is_empty()
             && self.rows.is_empty()
+            && self.nats.is_empty()
             && self.constraints.is_empty()
     }
 }
@@ -821,6 +1113,15 @@ mod tests {
             Type::tensor_rank(2, Type::float(Dim::one())).to_string(),
             "Tensor<2, Float>"
         );
+    }
+
+    #[test]
+    fn dimension_variable_exponents_keep_their_denominator() {
+        // §8.15: `complex_sqrt : Complex[d] -> Complex[d^(1/2)]`; the display
+        // used to drop the `/2` and read as `d0^1`.
+        let half = num_rational::BigRational::new(1.into(), 2.into());
+        let ty = Type::complex(Dim::var(0).pow(&half));
+        assert_eq!(ty.to_string(), "Complex[d0^(1/2)]");
     }
 
     #[test]

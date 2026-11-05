@@ -11,9 +11,9 @@
 //! binding sits at a level lower than `l`. This is the standard efficient
 //! formulation and keeps `let` inference linear in practice.
 
-use crate::ty::{Constraint, LiteralKind, Rep, Row, Scheme, Shape, Type};
+use crate::ty::{Constraint, LiteralKind, Nat, Rep, Row, Scheme, Shape, Type};
 use aevia_dim::{Dim, DimMismatch, DimUnifier};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Why two types could not be made equal.
 #[derive(Clone, Debug)]
@@ -55,6 +55,22 @@ pub enum UnifyError {
         /// The requested type.
         requested: Type,
     },
+    /// Two type-level `Nat` terms are inconsistent (§3.5.1): their difference
+    /// has no non-negative integer solution.
+    NatMismatch {
+        /// The left term.
+        left: Nat,
+        /// The right term.
+        right: Nat,
+    },
+    /// A type-level `Nat` equation is not linear — a product of two variables.
+    /// §3.5.1 only offers linear equations, so the checker reports `E0304`.
+    NatNonLinear {
+        /// The left term.
+        left: Nat,
+        /// The right term.
+        right: Nat,
+    },
 }
 
 impl std::fmt::Display for UnifyError {
@@ -84,7 +100,76 @@ impl std::fmt::Display for UnifyError {
                 ),
                 _ => write!(f, "the literal cannot have type {requested}"),
             },
+            Self::NatMismatch { left, right } => {
+                write!(f, "type-level equation has no solution: {left} = {right}")
+            }
+            Self::NatNonLinear { left, right } => write!(
+                f,
+                "type-level equation is not linear: {left} = {right}; only literals, `+` and `*` by a literal are supported"
+            ),
         }
+    }
+}
+
+/// A linear form over type-level `Nat` variables: `Σ cᵢ·vᵢ + c`.
+///
+/// Equations are solved by turning them into `left - right = 0` and isolating
+/// the single remaining variable. Two or more variables leave the equation
+/// pending; a zero-variable form either holds or is inconsistent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NatLinear {
+    coeffs: BTreeMap<u32, i128>,
+    constant: i128,
+}
+
+impl NatLinear {
+    fn constant(value: i128) -> Self {
+        Self {
+            coeffs: BTreeMap::new(),
+            constant: value,
+        }
+    }
+
+    fn variable(id: u32) -> Self {
+        let mut coeffs = BTreeMap::new();
+        coeffs.insert(id, 1);
+        Self {
+            coeffs,
+            constant: 0,
+        }
+    }
+
+    fn add(mut self, other: Self) -> Self {
+        for (id, coefficient) in other.coeffs {
+            *self.coeffs.entry(id).or_insert(0) += coefficient;
+        }
+        self.constant += other.constant;
+        self
+    }
+
+    fn sub(self, other: Self) -> Self {
+        self.add(other.negate())
+    }
+
+    fn negate(mut self) -> Self {
+        self.constant = -self.constant;
+        for coefficient in self.coeffs.values_mut() {
+            *coefficient = -*coefficient;
+        }
+        self
+    }
+
+    fn scale(mut self, factor: i128) -> Self {
+        self.constant *= factor;
+        for coefficient in self.coeffs.values_mut() {
+            *coefficient *= factor;
+        }
+        self
+    }
+
+    fn normalised(mut self) -> Self {
+        self.coeffs.retain(|_, coefficient| *coefficient != 0);
+        self
     }
 }
 
@@ -110,6 +195,14 @@ pub struct Infer {
     rep_lower: HashMap<u32, Vec<Rep>>,
     /// `ρ lacks l` side conditions on row variables (§3.6.1, PLAN D5).
     lacks: HashMap<u32, Vec<String>>,
+    /// Type-level natural-number substitution (§3.5.1).
+    nat_subst: HashMap<u32, Nat>,
+    /// Level of each type-level natural-number variable, for generalisation.
+    nat_levels: HashMap<u32, u32>,
+    /// Linear equations that mention two or more Nat variables. They cannot be
+    /// solved yet; after every new binding they are retried. This is what lets
+    /// `n + 1 ~ 3` and `2 * n ~ 6` work without a full decision procedure.
+    nat_pending: Vec<NatLinear>,
     next: u32,
     level: u32,
 }
@@ -138,6 +231,9 @@ impl Infer {
             weak: HashSet::new(),
             rep_lower: HashMap::new(),
             lacks: HashMap::new(),
+            nat_subst: HashMap::new(),
+            nat_levels: HashMap::new(),
+            nat_pending: Vec::new(),
             next: 0,
             level: 0,
         }
@@ -295,7 +391,7 @@ impl Infer {
                 Type::Scalar(self.resolve_rep_depth(*rep, depth), self.dims.resolve(dim))
             }
             Type::Tensor { shape, elem } => Type::Tensor {
-                shape: shape.clone(),
+                shape: self.resolve_shape_depth(shape, depth + 1),
                 elem: Box::new(self.resolve_depth(elem, depth + 1)),
             },
             Type::Fn(params, ret) => Type::Fn(
@@ -365,6 +461,261 @@ impl Infer {
             },
             Row::Empty => Row::Empty,
         }
+    }
+
+    /// Resolves a shape's type-level extents through the Nat substitution.
+    #[must_use]
+    pub fn resolve_shape(&self, shape: &Shape) -> Shape {
+        self.resolve_shape_depth(shape, 0)
+    }
+
+    fn resolve_shape_depth(&self, shape: &Shape, depth: u32) -> Shape {
+        if depth > 128 {
+            return shape.clone();
+        }
+        match shape {
+            Shape::Rank(rank) => Shape::Rank(*rank),
+            Shape::Refined(items) => Shape::Refined(
+                items
+                    .iter()
+                    .map(|item| {
+                        item.as_ref()
+                            .map(|nat| self.resolve_nat_depth(nat, depth + 1))
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    /// A fresh type-level natural-number variable at the current level.
+    pub fn fresh_nat(&mut self) -> Nat {
+        let id = self.fresh_id();
+        self.nat_levels.insert(id, self.level);
+        Nat::Var(id)
+    }
+
+    /// Resolves a Nat term through the substitution, folding literals.
+    #[must_use]
+    pub fn resolve_nat(&self, nat: &Nat) -> Nat {
+        self.resolve_nat_depth(nat, 0)
+    }
+
+    fn resolve_nat_depth(&self, nat: &Nat, depth: u32) -> Nat {
+        if depth > 128 {
+            return nat.clone();
+        }
+        match nat {
+            Nat::Lit(value) => Nat::Lit(*value),
+            Nat::Var(id) => match self.nat_subst.get(id) {
+                Some(bound) => self.resolve_nat_depth(&bound.clone(), depth + 1),
+                None => nat.clone(),
+            },
+            Nat::Add(left, right) => {
+                let left = self.resolve_nat_depth(left, depth + 1);
+                let right = self.resolve_nat_depth(right, depth + 1);
+                match (left.as_const(), right.as_const()) {
+                    (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
+                    _ => Nat::Add(Box::new(left), Box::new(right)),
+                }
+            }
+            Nat::Mul(left, right) => {
+                let left = self.resolve_nat_depth(left, depth + 1);
+                let right = self.resolve_nat_depth(right, depth + 1);
+                match (left.as_const(), right.as_const()) {
+                    (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
+                    _ => Nat::Mul(Box::new(left), Box::new(right)),
+                }
+            }
+        }
+    }
+
+    /// The linear form of a Nat term, or `None` when it is not linear (a
+    /// product of two variables, §3.5.1).
+    fn nat_linear(&self, nat: &Nat) -> Option<NatLinear> {
+        match self.resolve_nat(nat) {
+            Nat::Lit(value) => Some(NatLinear::constant(i128::try_from(value).ok()?)),
+            Nat::Var(id) => Some(NatLinear::variable(id)),
+            Nat::Add(left, right) => Some(
+                self.nat_linear(&left)?
+                    .add(self.nat_linear(&right)?)
+                    .normalised(),
+            ),
+            Nat::Mul(left, right) => {
+                let left = self.nat_linear(&left)?;
+                let right = self.nat_linear(&right)?;
+                match (left.coeffs.is_empty(), right.coeffs.is_empty()) {
+                    (true, true) => Some(NatLinear::constant(left.constant * right.constant)),
+                    (true, false) => Some(right.scale(left.constant).normalised()),
+                    (false, true) => Some(left.scale(right.constant).normalised()),
+                    (false, false) => None,
+                }
+            }
+        }
+    }
+
+    /// Unifies two type-level natural numbers (§3.5.1).
+    ///
+    /// The difference is put in linear form. One variable isolates (`n + 1 ~ 3`
+    /// ⇒ `n = 2`, `2 * n ~ 6` ⇒ `n = 3`); two or more variables keep the
+    /// equation pending and it is retried after every later binding; a
+    /// variable-free form either holds or is inconsistent.
+    ///
+    /// # Errors
+    ///
+    /// [`UnifyError::NatMismatch`] when the equation has no non-negative
+    /// integer solution, [`UnifyError::NatNonLinear`] when a product of two
+    /// variables appears (the checker maps it to `E0304`).
+    pub fn unify_nat(&mut self, left: &Nat, right: &Nat) -> Result<(), UnifyError> {
+        let left = self.resolve_nat(left);
+        let right = self.resolve_nat(right);
+        if left == right {
+            return Ok(());
+        }
+        let (Some(left_form), Some(right_form)) = (self.nat_linear(&left), self.nat_linear(&right))
+        else {
+            return Err(UnifyError::NatNonLinear { left, right });
+        };
+        let equation = left_form.sub(right_form).normalised();
+        self.apply_nat_equation(equation)
+    }
+
+    /// Solves one linear equation, or keeps it pending when it has several
+    /// variables.
+    fn apply_nat_equation(&mut self, equation: NatLinear) -> Result<(), UnifyError> {
+        if equation.coeffs.is_empty() {
+            return if equation.constant == 0 {
+                Ok(())
+            } else {
+                Err(UnifyError::NatMismatch {
+                    left: Nat::Lit(0),
+                    right: Nat::Lit(usize::try_from(equation.constant.unsigned_abs()).unwrap_or(usize::MAX)),
+                })
+            };
+        }
+        if equation.coeffs.len() == 1 {
+            self.solve_isolated(equation)?;
+            return Ok(());
+        }
+        self.nat_pending.push(equation);
+        Ok(())
+    }
+
+    /// Solves an equation with exactly one variable, if the solution is a
+    /// non-negative integer; binds it and retries the pending equations.
+    fn solve_isolated(&mut self, equation: NatLinear) -> Result<(), UnifyError> {
+        let (&id, &coefficient) = equation
+            .coeffs
+            .iter()
+            .next()
+            .expect("the caller checked there is exactly one variable");
+        let rhs = -equation.constant;
+        if coefficient == 0 || rhs % coefficient != 0 {
+            return Err(UnifyError::NatMismatch {
+                left: Nat::Var(id),
+                right: Nat::Lit(usize::try_from(rhs.unsigned_abs()).unwrap_or(usize::MAX)),
+            });
+        }
+        let value = rhs / coefficient;
+        if value < 0 {
+            return Err(UnifyError::NatMismatch {
+                left: Nat::Var(id),
+                right: Nat::Lit(usize::try_from(value.unsigned_abs()).unwrap_or(usize::MAX)),
+            });
+        }
+        self.nat_subst
+            .insert(id, Nat::Lit(usize::try_from(value).unwrap_or(usize::MAX)));
+        self.solve_pending_nat()
+    }
+
+    /// Retries the multi-variable equations; a later binding may have made one
+    /// solvable (or inconsistent).
+    fn solve_pending_nat(&mut self) -> Result<(), UnifyError> {
+        loop {
+            let pending = std::mem::take(&mut self.nat_pending);
+            let mut progressed = false;
+            let mut kept = Vec::new();
+            for equation in pending {
+                // Substitute the current solution into the stored form.
+                let mut reduced = NatLinear::constant(equation.constant);
+                for (id, coefficient) in &equation.coeffs {
+                    let resolved = self.resolve_nat(&Nat::Var(*id));
+                    let Some(form) = self.nat_linear(&resolved) else {
+                        return Err(UnifyError::NatNonLinear {
+                            left: Nat::Var(*id),
+                            right: Nat::Var(*id),
+                        });
+                    };
+                    reduced = reduced.add(form.scale(*coefficient));
+                }
+                let reduced = reduced.normalised();
+                if reduced.coeffs.is_empty() {
+                    if reduced.constant != 0 {
+                        return Err(UnifyError::NatMismatch {
+                            left: Nat::Lit(0),
+                            right: Nat::Lit(
+                                usize::try_from(reduced.constant.unsigned_abs()).unwrap_or(usize::MAX),
+                            ),
+                        });
+                    }
+                    continue;
+                }
+                if reduced.coeffs.len() == 1 {
+                    self.solve_isolated_without_retry(reduced)?;
+                    progressed = true;
+                    continue;
+                }
+                kept.push(reduced);
+            }
+            self.nat_pending = kept;
+            if !progressed {
+                return Ok(());
+            }
+        }
+    }
+
+    /// [`Self::solve_isolated`] without re-entering [`Self::solve_pending_nat`]
+    /// (the caller is already inside it).
+    fn solve_isolated_without_retry(&mut self, equation: NatLinear) -> Result<(), UnifyError> {
+        let (&id, &coefficient) = equation.coeffs.iter().next().expect("one variable");
+        let rhs = -equation.constant;
+        if coefficient == 0 || rhs % coefficient != 0 {
+            return Err(UnifyError::NatMismatch {
+                left: Nat::Var(id),
+                right: Nat::Lit(usize::try_from(rhs.unsigned_abs()).unwrap_or(usize::MAX)),
+            });
+        }
+        let value = rhs / coefficient;
+        if value < 0 {
+            return Err(UnifyError::NatMismatch {
+                left: Nat::Var(id),
+                right: Nat::Lit(usize::try_from(value.unsigned_abs()).unwrap_or(usize::MAX)),
+            });
+        }
+        self.nat_subst
+            .insert(id, Nat::Lit(usize::try_from(value).unwrap_or(usize::MAX)));
+        Ok(())
+    }
+
+    /// How many multi-variable Nat equations are still unsolved. The checker
+    /// reports `E0304` for them at the end of the module (§3.10.2 rule 6).
+    #[must_use]
+    pub fn unsolved_nat_equations(&self) -> usize {
+        self.nat_pending.len()
+    }
+
+    /// Removes and returns the number of multi-variable equations still
+    /// pending; the checker reports `E0304` for them at the end of a
+    /// declaration (§3.10.2 rule 6).
+    pub fn take_unsolved_nat_equations(&mut self) -> usize {
+        let count = self.nat_pending.len();
+        self.nat_pending.clear();
+        count
+    }
+
+    /// The level at which a Nat variable was created, for generalisation.
+    #[must_use]
+    pub fn nat_level(&self, id: u32) -> u32 {
+        self.nat_levels.get(&id).copied().unwrap_or(0)
     }
 
     /// Unifies two types.
@@ -544,6 +895,20 @@ impl Infer {
             return Ok(());
         }
         match (left, right) {
+            // Keep the *literal* variable alive when one side is literal-marked:
+            // it carries the defaulting rule (`1.0` defaults to `Float`), and a
+            // binding the other way round loses it — the merged variable then
+            // generalises instead of defaulting, so `let g = sqrt(dyn(4.0 m^2))`
+            // became `∀ρ. Dyn<ρ>` instead of `Dyn<Float>`.
+            (Rep::Var(a), Rep::Var(b)) => {
+                let a_literal = self.rep_literals.contains_key(&a);
+                let b_literal = self.rep_literals.contains_key(&b);
+                if a_literal && !b_literal {
+                    self.bind_rep(b, Rep::Var(a))
+                } else {
+                    self.bind_rep(a, Rep::Var(b))
+                }
+            }
             (Rep::Var(id), other) | (other, Rep::Var(id)) => self.bind_rep(id, other),
             _ => Err(UnifyError::Mismatch {
                 left: Type::Scalar(left, Dim::one()),
@@ -752,20 +1117,22 @@ impl Infer {
 
     /// Unifies two shapes.
     ///
-    /// Refined → rank-only is the safe implicit conversion (§3.5.1): a tensor
-    /// whose extents are known is usable where only the rank is known. The
-    /// other direction needs `refine_shape` and a runtime check, so a
-    /// rank-only shape never satisfies a refined annotation.
+    /// A refined shape and a same-rank rank-only shape describe the same
+    /// tensor (§3.5.1/§3.5.3): a value with a known extent is usable where
+    /// only the rank is known, and unifying a `Tensor<[2], τ>` with a
+    /// `Tensor<1, τ>` (or the reverse order — elementwise ops check
+    /// left/right arbitrarily) must succeed. Rank mismatch and two different
+    /// extents stay errors.
     ///
     /// # Errors
     ///
-    /// Fails when the ranks differ, when a rank-only shape would have to
-    /// become refined, or when two known extents differ.
+    /// Fails when the ranks differ or when two known extents differ.
     pub fn unify_shape(&mut self, left: &Shape, right: &Shape) -> Result<(), UnifyError> {
         match (left, right) {
             (Shape::Rank(a), Shape::Rank(b)) if a == b => Ok(()),
-            // Safe: the left side knows more than the right side needs.
-            (Shape::Refined(items), Shape::Rank(rank)) => {
+            // Same rank, one side knows the extents — safe in either direction.
+            (Shape::Refined(items), Shape::Rank(rank))
+            | (Shape::Rank(rank), Shape::Refined(items)) => {
                 if usize::try_from(*rank).unwrap_or(usize::MAX) == items.len() {
                     Ok(())
                 } else {
@@ -775,10 +1142,6 @@ impl Infer {
                     })
                 }
             }
-            (Shape::Rank(_), Shape::Refined(_)) => Err(UnifyError::ShapeMismatch {
-                left: left.clone(),
-                right: right.clone(),
-            }),
             (Shape::Refined(a), Shape::Refined(b)) => {
                 if a.len() != b.len() {
                     return Err(UnifyError::ShapeMismatch {
@@ -787,13 +1150,10 @@ impl Infer {
                     });
                 }
                 for (x, y) in a.iter().zip(b.iter()) {
-                    if let (Some(x), Some(y)) = (x, y) {
-                        if x != y {
-                            return Err(UnifyError::ShapeMismatch {
-                                left: left.clone(),
-                                right: right.clone(),
-                            });
-                        }
+                    match (x, y) {
+                        (Some(x), Some(y)) => self.unify_nat(x, y)?,
+                        // `?` stays compatible with any extent (§3.5.1).
+                        _ => {}
                     }
                 }
                 Ok(())
@@ -995,7 +1355,13 @@ impl Infer {
             self.row_levels.insert(fresh, self.level);
             row_map.insert(*id, fresh);
         }
-        let ty = substitute(&scheme.ty, &type_map, &dim_map, &row_map);
+        let mut nat_map = HashMap::new();
+        for id in &scheme.nats {
+            let fresh = self.fresh_id();
+            self.nat_levels.insert(fresh, self.level);
+            nat_map.insert(*id, Nat::Var(fresh));
+        }
+        let ty = substitute(&scheme.ty, &type_map, &dim_map, &row_map, &nat_map);
         let constraints = scheme
             .constraints
             .iter()
@@ -1004,7 +1370,7 @@ impl Infer {
                 args: constraint
                     .args
                     .iter()
-                    .map(|arg| substitute(arg, &type_map, &dim_map, &row_map))
+                    .map(|arg| substitute(arg, &type_map, &dim_map, &row_map, &nat_map))
                     .collect(),
             })
             .collect();
@@ -1039,7 +1405,15 @@ impl Infer {
         let mut vars = Vec::new();
         let mut dims = Vec::new();
         let mut rows = Vec::new();
-        self.collect_generalizable(&self.resolve(ty), level, &mut vars, &mut dims, &mut rows);
+        let mut nats = Vec::new();
+        self.collect_generalizable(
+            &self.resolve(ty),
+            level,
+            &mut vars,
+            &mut dims,
+            &mut rows,
+            &mut nats,
+        );
         // Representation variables are quantified through the type-variable
         // list as well: they are created from the same counter, so a scheme
         // that quantifies `ρ` must quantify its id.
@@ -1047,6 +1421,7 @@ impl Infer {
             vars,
             dims,
             rows,
+            nats,
             constraints,
             ty: self.resolve(ty),
         }
@@ -1060,6 +1435,7 @@ impl Infer {
         vars: &mut Vec<u32>,
         dims: &mut Vec<u32>,
         rows: &mut Vec<u32>,
+        nats: &mut Vec<u32>,
     ) {
         let type_var = |id: u32| {
             !self.weak.contains(&id)
@@ -1074,6 +1450,7 @@ impl Infer {
         let dim_var = |id: u32| {
             !self.is_weak_dim(id) && self.dim_levels.get(&id).copied().unwrap_or(0) > level
         };
+        let nat_var = |id: u32| self.nat_levels.get(&id).copied().unwrap_or(0) > level;
         match ty {
             Type::Var(id) => {
                 if type_var(*id) && !vars.contains(id) {
@@ -1092,25 +1469,41 @@ impl Infer {
                     }
                 }
             }
-            Type::Tensor { elem, .. } => {
-                self.collect_generalizable(elem, level, vars, dims, rows);
+            Type::Tensor { shape, elem } => {
+                // A shape extent variable that is still free generalises with
+                // the binding, exactly like a dimension variable (§3.5.1).
+                if let Shape::Refined(items) = shape {
+                    for nat in items.iter().flatten() {
+                        for id in nat.vars() {
+                            let resolved = self.resolve_nat(&Nat::Var(id));
+                            let free = match resolved {
+                                Nat::Var(free) => free,
+                                _ => continue,
+                            };
+                            if nat_var(free) && !nats.contains(&free) {
+                                nats.push(free);
+                            }
+                        }
+                    }
+                }
+                self.collect_generalizable(elem, level, vars, dims, rows, nats);
             }
             Type::Fn(params, ret) => {
                 for param in params {
-                    self.collect_generalizable(param, level, vars, dims, rows);
+                    self.collect_generalizable(param, level, vars, dims, rows, nats);
                 }
-                self.collect_generalizable(ret, level, vars, dims, rows);
+                self.collect_generalizable(ret, level, vars, dims, rows, nats);
             }
             Type::Record(row) => {
-                self.collect_row(row, level, vars, dims, rows);
+                self.collect_row(row, level, vars, dims, rows, nats);
             }
             Type::Adt(_, args) => {
                 for arg in args {
-                    self.collect_generalizable(arg, level, vars, dims, rows);
+                    self.collect_generalizable(arg, level, vars, dims, rows, nats);
                 }
             }
             Type::Io(inner) => {
-                self.collect_generalizable(inner, level, vars, dims, rows);
+                self.collect_generalizable(inner, level, vars, dims, rows, nats);
             }
             Type::Point(dim) | Type::UnitOf(dim) => {
                 for id in dim.vars() {
@@ -1136,6 +1529,7 @@ impl Infer {
         vars: &mut Vec<u32>,
         dims: &mut Vec<u32>,
         rows: &mut Vec<u32>,
+        nats: &mut Vec<u32>,
     ) {
         match row {
             Row::Empty => {}
@@ -1148,8 +1542,8 @@ impl Infer {
                 }
             }
             Row::Extend { ty, tail, .. } => {
-                self.collect_generalizable(ty, level, vars, dims, rows);
-                self.collect_row(tail, level, vars, dims, rows);
+                self.collect_generalizable(ty, level, vars, dims, rows, nats);
+                self.collect_row(tail, level, vars, dims, rows, nats);
             }
         }
     }
@@ -1189,6 +1583,7 @@ impl Infer {
                 vars: scheme.vars.clone(),
                 dims: scheme.dims.clone(),
                 rows: scheme.rows.clone(),
+                nats: scheme.nats.clone(),
                 constraints,
                 ty,
             },
@@ -1239,7 +1634,10 @@ impl Infer {
                 Type::Scalar(rep, dim)
             }
             Type::Tensor { shape, elem } => Type::Tensor {
-                shape,
+                // §3.10.2 rule 6: an unquantified Nat variable is *not*
+                // defaulted — the checker reports `E0304` for it. Resolving the
+                // shape here only applies the substitutions already known.
+                shape: self.resolve_shape(&shape),
                 elem: Box::new(self.default_inner(&elem, scheme, warnings, depth + 1)),
             },
             Type::Fn(params, ret) => Type::Fn(
@@ -1272,6 +1670,36 @@ impl Infer {
                 other => Type::Dyn(other),
             },
             other => other,
+        }
+    }
+
+    /// The representation a numeric literal's variable takes: its default, or
+    /// the least reading above its recorded lower bounds.
+    ///
+    /// This is the static answer §3.10.1 gives a literal, exposed so the
+    /// checker can publish it (`CheckedModule::literal_reps`). Unlike
+    /// [`Self::default_rep`], it is defined for a variable that sits only in a
+    /// body and so was never visited by scheme defaulting.
+    #[must_use]
+    pub fn literal_representation(&mut self, rep: Rep) -> Option<Rep> {
+        match self.resolve_rep(rep) {
+            Rep::Var(id) => {
+                let kind = self.rep_literals.get(&id).copied()?;
+                let mut lower: Vec<Rep> = Vec::new();
+                for bound in self.rep_lower.get(&id).cloned().unwrap_or_default() {
+                    self.collect_rep_bounds(bound, &mut lower, 0);
+                }
+                let floor = lower.iter().copied().fold(Rep::Int, |acc, bound| {
+                    acc.join_concrete(bound).unwrap_or(Rep::Complex)
+                });
+                let chosen = Rep::upper_candidates(floor)
+                    .iter()
+                    .copied()
+                    .find(|candidate| kind.accepts_rep(*candidate))?;
+                let _ = self.rep_subst.insert(id, chosen);
+                Some(chosen)
+            }
+            concrete => Some(concrete),
         }
     }
 
@@ -1426,7 +1854,17 @@ fn substitute(
     types: &HashMap<u32, u32>,
     dims: &HashMap<u32, u32>,
     rows: &HashMap<u32, u32>,
+    nats: &HashMap<u32, Nat>,
 ) -> Type {
+    let substitute_shape = |shape: &Shape| match shape {
+        Shape::Rank(rank) => Shape::Rank(*rank),
+        Shape::Refined(items) => Shape::Refined(
+            items
+                .iter()
+                .map(|item| item.as_ref().map(|nat| nat.substitute(nats)))
+                .collect(),
+        ),
+    };
     match ty {
         Type::Var(id) => match types.get(id) {
             Some(fresh) => Type::Var(*fresh),
@@ -1444,24 +1882,24 @@ fn substitute(
             Type::Scalar(rep, dim)
         }
         Type::Tensor { shape, elem } => Type::Tensor {
-            shape: shape.clone(),
-            elem: Box::new(substitute(elem, types, dims, rows)),
+            shape: substitute_shape(shape),
+            elem: Box::new(substitute(elem, types, dims, rows, nats)),
         },
         Type::Fn(params, ret) => Type::Fn(
             params
                 .iter()
-                .map(|param| substitute(param, types, dims, rows))
+                .map(|param| substitute(param, types, dims, rows, nats))
                 .collect(),
-            Box::new(substitute(ret, types, dims, rows)),
+            Box::new(substitute(ret, types, dims, rows, nats)),
         ),
-        Type::Record(row) => Type::Record(substitute_row(row, types, dims, rows)),
+        Type::Record(row) => Type::Record(substitute_row(row, types, dims, rows, nats)),
         Type::Adt(id, args) => Type::Adt(
             *id,
             args.iter()
-                .map(|arg| substitute(arg, types, dims, rows))
+                .map(|arg| substitute(arg, types, dims, rows, nats))
                 .collect(),
         ),
-        Type::Io(inner) => Type::Io(Box::new(substitute(inner, types, dims, rows))),
+        Type::Io(inner) => Type::Io(Box::new(substitute(inner, types, dims, rows, nats))),
         Type::Dyn(Rep::Var(id)) => match types.get(id) {
             Some(fresh) => Type::Dyn(Rep::Var(*fresh)),
             None => ty.clone(),
@@ -1481,6 +1919,7 @@ fn substitute_row(
     types: &HashMap<u32, u32>,
     dims: &HashMap<u32, u32>,
     rows: &HashMap<u32, u32>,
+    nats: &HashMap<u32, Nat>,
 ) -> Row {
     match row {
         Row::Empty => Row::Empty,
@@ -1490,8 +1929,8 @@ fn substitute_row(
         },
         Row::Extend { label, ty, tail } => Row::Extend {
             label: label.clone(),
-            ty: Box::new(substitute(ty, types, dims, rows)),
-            tail: Box::new(substitute_row(tail, types, dims, rows)),
+            ty: Box::new(substitute(ty, types, dims, rows, nats)),
+            tail: Box::new(substitute_row(tail, types, dims, rows, nats)),
         },
     }
 }

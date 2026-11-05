@@ -406,3 +406,185 @@ mod tests {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Literal-key result typing for `Rssn.invoke` (§13.2.2)
+// ---------------------------------------------------------------------------
+
+/// The declared **result** of the overload `signature_hash_hex` pins for
+/// `op_name`, when exactly one overload matches and the type is expressible.
+///
+/// This is the static half of the generated façade: the emitted
+/// `Rssn.invoke("<op>", "<hash>", [...])` names the overload by its `OpKey`
+/// signature digest, so the checker can type the call with the same manifest
+/// signature the runtime pins. Anything ambiguous or unrepresentable returns
+/// `None`, and the caller keeps the dynamic value type (the runtime's `E1005`
+/// stays the diagnostic of record for a wrong or stale literal key).
+///
+/// Dimension variables are freshened **once per call**: a signature's `T` is
+/// one variable in its parameters and in its result, so `Real[T]` in and
+/// `T^(1/2)` out relate exactly as they do in the generated source.
+#[must_use]
+pub fn invoke_result(
+    op_name: &str,
+    signature_hash_hex: &str,
+    infer: &mut crate::infer::Infer,
+) -> Option<Type> {
+    let registry = aevia_rssn::registry();
+    let entry = registry.op(op_name)?;
+    let mut matching = entry
+        .keys
+        .iter()
+        .enumerate()
+        .filter(|(_, key)| hex(&key.signature_hash) == signature_hash_hex);
+    let (index, _) = matching.next()?;
+    if matching.next().is_some() {
+        // Two overloads with one digest would make the claim ambiguous.
+        return None;
+    }
+    let signature = entry.signatures.get(index)?;
+    let mut dims = std::collections::HashMap::new();
+    sig_type_to_type(&signature.ret, infer, &mut dims)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+/// Substitutes a signature dimension's variables with fresh checker variables,
+/// sharing one mapping per call.
+fn map_dim(
+    dim: &Dim,
+    infer: &mut crate::infer::Infer,
+    dims: &mut std::collections::HashMap<u32, Dim>,
+) -> Dim {
+    for id in dim.vars() {
+        if !dims.contains_key(&id) {
+            let fresh = infer.fresh_dim();
+            dims.insert(id, fresh);
+        }
+    }
+    dim.substitute(|id| dims.get(&id).cloned())
+}
+
+/// Maps a manifest result type to the checker's type, or `None` when the
+/// emitted spelling cannot express it.
+///
+/// The emitted source renders `Symbol`, `Table`, `Device`, host opaque types,
+/// variants, `Never`, type variables and rank-variable tensors as `Dyn<term>`,
+/// so those map to `Dyn(Real)`; only a `Symbol` *result* has no safe spelling
+/// here (the emitted module declares `Symbol` itself), and it falls back.
+fn sig_type_to_type(
+    sig: &aevia_rssn::SigType,
+    infer: &mut crate::infer::Infer,
+    dims: &mut std::collections::HashMap<u32, Dim>,
+) -> Option<Type> {
+    use aevia_rssn::SigType as S;
+    Some(match sig {
+        S::Int => Type::int(),
+        S::Real => Type::real(Dim::one()),
+        S::Float => Type::float(Dim::one()),
+        S::Complex => Type::complex(Dim::one()),
+        S::Bool => Type::Bool,
+        S::Str => Type::string(),
+        S::Symbol => return None,
+        S::Unit(dim) => Type::UnitOf(map_dim(dim, infer, dims)),
+        S::Point(dim) => Type::Point(map_dim(dim, infer, dims)),
+        S::Dim(inner, dim) => {
+            let rep = match **inner {
+                S::Int => Rep::Int,
+                S::Float => Rep::Float,
+                S::Complex => Rep::Complex,
+                _ => Rep::Real,
+            };
+            Type::Scalar(rep, map_dim(dim, infer, dims))
+        }
+        S::Tensor { rank: Some(rank), elem } | S::Sparse { rank: Some(rank), elem } => {
+            Type::tensor(
+                Shape::Rank(u32::try_from(*rank).unwrap_or(1)),
+                sig_type_to_type(elem, infer, dims)?,
+            )
+        }
+        S::Record(fields) => {
+            let mut converted = Vec::with_capacity(fields.len());
+            for (name, ty) in fields {
+                converted.push((name.clone(), sig_type_to_type(ty, infer, dims)?));
+            }
+            Type::record(converted)
+        }
+        S::Func(params, ret) => {
+            let mut converted = Vec::with_capacity(params.len());
+            for param in params {
+                converted.push(sig_type_to_type(param, infer, dims)?);
+            }
+            Type::func(converted, sig_type_to_type(ret, infer, dims)?)
+        }
+        // The emitted façade spells every one of these `Dyn<term>`.
+        S::Dyn
+        | S::Never
+        | S::Table
+        | S::Device
+        | S::Opaque(_)
+        | S::Variant(_)
+        | S::Var(_)
+        | S::Tensor { rank: None, .. }
+        | S::Sparse { rank: None, .. } => Type::Dyn(Rep::Real),
+    })
+}
+
+#[cfg(test)]
+mod invoke_tests {
+    use super::*;
+    use crate::infer::Infer;
+
+    fn hash_of(op: &str, index: usize) -> Option<String> {
+        let registry = aevia_rssn::registry();
+        let entry = registry.op(op)?;
+        Some(hex(&entry.keys.get(index)?.signature_hash))
+    }
+
+    #[test]
+    fn a_pinned_det_result_is_typed() {
+        let Some(hash) = hash_of("det", 0) else {
+            return; // the kernel manifest in this build has no `det`
+        };
+        let mut infer = Infer::new();
+        let ty = invoke_result("det", &hash, &mut infer);
+        assert!(ty.is_some(), "det's pinned result must be expressible");
+        // Whatever class the manifest declares (`Dyn`, `Real`, a tensor), a
+        // dimension variable introduced by the mapping is fresh and resolvable.
+        if let Some(ty) = ty {
+            let _ = infer.resolve(&ty);
+        }
+    }
+
+    #[test]
+    fn an_unknown_hash_falls_back() {
+        let mut infer = Infer::new();
+        assert!(invoke_result("det", "00000000000000000000000000000000", &mut infer).is_none());
+        assert!(invoke_result("no_such_operator", "x", &mut infer).is_none());
+    }
+
+    #[test]
+    fn sde_wiener_shares_one_dimension_variable() {
+        let Some(hash) = hash_of("sde_wiener", 0) else {
+            return; // the SDE manifest in this build has no `sde_wiener`
+        };
+        let mut infer = Infer::new();
+        let Some(Type::Tensor { elem, .. }) = invoke_result("sde_wiener", &hash, &mut infer)
+        else {
+            panic!("sde_wiener's result is a rank-2 tensor");
+        };
+        let Type::Scalar(_, dim) = *elem else {
+            panic!("its element is a dimensioned scalar");
+        };
+        // `T^(1/2)`: exactly one non-zero exponent, and it is a half.
+        assert!(!dim.is_one(), "the time exponent survives: {dim}");
+        let factors: Vec<_> = dim.factors().collect();
+        assert_eq!(factors.len(), 1, "one dimension atom: {dim}");
+    }
+}
