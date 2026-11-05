@@ -12,6 +12,33 @@
 //! has to reimplement a byte-offset-to-position mapping or a diagnostic
 //! conversion.
 //!
+//! Beyond the six first queries the crate answers the two §9.10 features that
+//! need a compiler: [`Analysis::code_actions`] (add a type annotation, convert
+//! a Celsius literal to kelvin, extract a `let`, fix a dimension mismatch —
+//! each validated by compiling the rewritten text) and
+//! [`Analysis::semantic_tokens`] (types, dimensions, units and resolved
+//! operators, read from the checker's own records).
+//!
+//! **One document or a whole program.** [`Analysis::new`] compiles a document's
+//! text alone: the right answer for a scratch buffer. [`Analysis::from_path`]
+//! loads a file **and its import graph** through `aevia_core::driver`, so an
+//! imported qualified name (`Math.sqrt`), an `open`ed name, or a field of an
+//! imported record resolves instead of being reported as unbound. An unsaved
+//! edit is loaded as an entry **overlay**: the buffer's text is the entry
+//! module, the imports still come from disk. [`Analysis::from_program`] answers
+//! from a program a caller already has, and [`AnalysisCache`] is the small
+//! content-hash/mtime-keyed cache that makes repeated editor requests cheap
+//! without ever serving a stale dependency.
+//!
+//! [`Analysis::workspace_symbols`] returns declarations from every module of the
+//! loaded program, each with its own file and range — the analysis half of a
+//! workspace-wide symbol search. [`Analysis::references`], [`Analysis::rename`]
+//! and [`Analysis::prepare_rename`] share one canonical declaration identity
+//! across modules; [`Analysis::signature_help`] resolves the call under the
+//! cursor to its overloads and active argument, and [`Analysis::completion`]
+//! narrows to a record's fields after `.` and to keywords where an expression
+//! can start.
+//!
 //! # The two things that are easy to get wrong
 //!
 //! **Positions.** Compiler spans are byte ranges; editor positions are lines
@@ -46,17 +73,24 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod analysis;
+mod actions;
+pub mod cache;
 pub mod diagnostic;
 pub mod document;
 mod occurrence;
 pub mod position;
 pub mod prelude;
+mod tokens;
 pub mod types;
+mod walk;
 
 pub use analysis::Analysis;
+pub use cache::AnalysisCache;
 pub use diagnostic::{Diagnostic, Related, Severity};
 pub use document::{Change, Document, DocumentStore, EditError};
 pub use position::{LineIndex, Position, Range};
 pub use types::{
-    Completion, CompletionKind, Hover, Location, Origin, Symbol, SymbolKind, TextEdit,
+    CodeAction, CodeActionKind, Completion, CompletionKind, FileEdit, Hover, Location, Origin,
+    RenameError, RenamePlaceholder, SemanticToken, SignatureHelp, SignatureInfo, Symbol, SymbolKind,
+    TextEdit, TokenKind, WorkspaceSymbol,
 };

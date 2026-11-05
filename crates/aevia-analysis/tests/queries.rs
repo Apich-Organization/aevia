@@ -291,6 +291,45 @@ fn a_module_name_shadows_the_prelude() {
 }
 
 #[test]
+fn field_completion_offers_the_receivers_record_fields() {
+    // `Point` is the language's affine-point type, so a record alias needs a
+    // different name.
+    let source =
+        "type Sample = { x: Real[L], y: Real[L] }\nfn shift(p: Sample): Real[L] = p.x\n";
+    with(source, |analysis| {
+        // The position just after the dot in `p.x`.
+        let after_dot = offset_of(source, "p.x", 1) + 2;
+        let items = analysis.completion(after_dot);
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["x", "y"], "{labels:?}");
+        assert!(
+            items.iter().all(|item| item.kind == CompletionKind::Field),
+            "{items:#?}"
+        );
+        assert_eq!(items[0].detail.as_deref(), Some("Real[L]"));
+    });
+}
+
+#[test]
+fn keyword_completion_appears_where_an_expression_starts() {
+    let source = "fn f(): Int = \n    \n";
+    with(source, |analysis| {
+        let at_body = u32::try_from(source.find("    \n").expect("indent") + 4).expect("offset");
+        let labels: Vec<String> = analysis
+            .completion(at_body)
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        for keyword in ["do", "let", "match", "with"] {
+            assert!(
+                labels.iter().any(|label| label == keyword),
+                "`{keyword}` missing: {labels:?}"
+            );
+        }
+    });
+}
+
+#[test]
 fn definition_points_at_the_declaration() {
     let source = "fn double(x: Int): Int = x + x\nlet y = double(2)\n";
     with(source, |analysis| {

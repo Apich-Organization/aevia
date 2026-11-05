@@ -28,6 +28,33 @@
 //! assert_eq!(exit, aevia_lsp::Exit::Ungraceful);
 //! ```
 //!
+//! # Multi-module documents
+//!
+//! A `file:` URI is analysed through the real loader —
+//! `aevia_analysis::Analysis::from_path` — so its imports resolve. An unsaved
+//! buffer is loaded as an **entry overlay** (`driver::load_with_roots_and_source`
+//! through the analysis crate): the entry text is the editor's, the imports
+//! still come from disk. Only a document with no path to load from
+//! (`untitled:`, a scratch buffer) uses single-file analysis; the `initialize`
+//! result states this under `experimental.multiModuleAnalysis`.
+//!
+//! Loaded programs are kept in a per-server [`AnalysisCache`]: a request for the
+//! same file reuses the program while the entry's content hash and the
+//! mtime/length of every file under the package roots are unchanged, and a
+//! changed dependency reloads. `didOpen`/`didChange` are enough to see a
+//! package's current files — no polling. `workspace/symbol` answers from all
+//! open documents' loaded modules, with each declaration's own file and range.
+//!
+//! # Navigation beyond a single name
+//!
+//! `references`, `prepareRename` and `rename` work over the loaded program (a
+//! declaration and its qualified or `open`ed uses in importers are one symbol),
+//! and `rename` returns a `WorkspaceEdit` with `documentChanges`. `signatureHelp`
+//! resolves the call under the cursor — user functions, constructors, prelude
+//! overloads, `Rssn` operator overloads, class methods — and completion offers
+//! a record's fields after `.` and expression-starting keywords. Each of these
+//! is claimed in `initialize` only because a handler and a test exist.
+//!
 //! # Concurrency
 //!
 //! Reading and writing are separate threads, joined by channels, and the

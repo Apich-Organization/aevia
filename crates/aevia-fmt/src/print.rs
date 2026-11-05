@@ -981,6 +981,9 @@ impl Printer {
             // apart, and `Unit` is how the specification writes it in a
             // signature (`fn main(): IO Unit`).
             TyKind::Unit => self.push("Unit"),
+            // A lowercase type variable (`fn f(x: a): a`): the parser records
+            // it as a name, and the printer writes that name back.
+            TyKind::Var(name) => self.push(name),
             TyKind::Real(dim) => self.numeric("Real", dim),
             TyKind::Float(dim) => self.numeric("Float", dim),
             TyKind::Complex(dim) => self.numeric("Complex", dim),
@@ -1068,6 +1071,12 @@ impl Printer {
             }
             TyKind::RateOf(inner) => {
                 self.push("RateOf<");
+                self.ty(inner, false);
+                self.push(">");
+            }
+            // §8.9.1: the diffusion's dimension is the state's.
+            TyKind::DiffusionOf(inner) => {
+                self.push("DiffusionOf<");
                 self.ty(inner, false);
                 self.push(">");
             }
@@ -1175,7 +1184,6 @@ impl Printer {
                     }
                 }
             }
-            TyKind::Var(name) => self.push(name),
             TyKind::Forall(params, body) => {
                 let names = params
                     .iter()
@@ -1232,6 +1240,33 @@ impl Printer {
                 self.push(" + ");
                 self.nat(right);
             }
+            // `*` binds tighter than `+`, so a sum operand needs brackets.
+            // `NatAst` keeps no bracket nodes, but `(a + b) * c` and `a * (b
+            // + c)` both re-parse to the same tree the printer writes back.
+            NatAst::Mul(left, right) => {
+                self.nat_operand(left);
+                self.push(" * ");
+                // A right-nested product would re-parse left-associated, so
+                // it keeps its brackets for the tree to survive the round trip.
+                if matches!(**right, NatAst::Add(..) | NatAst::Mul(..)) {
+                    self.push("(");
+                    self.nat(right);
+                    self.push(")");
+                } else {
+                    self.nat(right);
+                }
+            }
+        }
+    }
+
+    /// One operand of `*`, bracketed when it is a sum.
+    fn nat_operand(&mut self, nat: &NatAst) {
+        if matches!(nat, NatAst::Add(..)) {
+            self.push("(");
+            self.nat(nat);
+            self.push(")");
+        } else {
+            self.nat(nat);
         }
     }
 }

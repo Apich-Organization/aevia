@@ -1,0 +1,17 @@
+## Contract tests for `compile_fail : String -> Bool` (§8.13 / §7.5.4).
+##
+## The argument is a source snippet compiled **in isolation**: no imports and
+## no ambient declarations beyond the prelude. The call returns `true` iff the
+## compiler reports at least one error. It does not assert *which* error — the
+## `compile_fail E0401` doctest marker is the form that names a code.
+test "a snippet with a type error fails to compile" =
+    compile_fail("let x: Int = \"s\"")
+
+test "a compiling snippet is reported as compiling" =
+    compile_fail("let x = 1") == false
+
+test "a dimension error is a compile error" =
+    compile_fail("let broken = 1 m + 1")
+
+test "an unbound name is a compile error, because no ambient declarations exist" =
+    compile_fail("let y = not_declared_anywhere(1)")

@@ -654,6 +654,7 @@ fn ty_into(out: &mut String, ty: &Ty) {
         TyKind::Prop => out.push_str("Prop"),
         TyKind::Str => out.push_str("String"),
         TyKind::Unit => out.push_str("()"),
+        TyKind::Var(name) => out.push_str(name),
         TyKind::Tensor { shape, elem } => {
             out.push_str("Tensor<");
             shape_into(out, shape);
@@ -744,6 +745,11 @@ fn ty_into(out: &mut String, ty: &Ty) {
             ty_into(out, inner);
             out.push('>');
         }
+        TyKind::DiffusionOf(inner) => {
+            out.push_str("DiffusionOf<");
+            ty_into(out, inner);
+            out.push('>');
+        }
         TyKind::SymFun(domain, codomain) => {
             out.push_str("SymFun<");
             dim_into(out, domain);
@@ -793,9 +799,6 @@ fn ty_into(out: &mut String, ty: &Ty) {
                 out.push('>');
             }
         }
-        TyKind::Var(name) => {
-            let _ = write!(out, "tvar:{name}");
-        }
         TyKind::Forall(params, body) => {
             out.push_str("forall ");
             type_params_into(out, params);
@@ -836,6 +839,13 @@ fn nat_into(out: &mut String, nat: &NatAst) {
             out.push('(');
             nat_into(out, left);
             out.push('+');
+            nat_into(out, right);
+            out.push(')');
+        }
+        NatAst::Mul(left, right) => {
+            out.push('(');
+            nat_into(out, left);
+            out.push('*');
             nat_into(out, right);
             out.push(')');
         }

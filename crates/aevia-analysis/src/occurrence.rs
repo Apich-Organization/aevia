@@ -17,6 +17,7 @@
 //! tracks names and spans, nothing else.
 
 use aevia_syntax::ast::*;
+use aevia_syntax::token::TokenKind;
 use aevia_syntax::Span;
 use unicode_ident::is_xid_continue;
 
@@ -33,6 +34,12 @@ pub(crate) enum Role {
     Method { name: String, class: String },
     /// A name used as a type.
     TypeName(String),
+    /// A unit name inside a unit literal: the `m` of `3 m`.
+    ///
+    /// The parser turns a unit literal into one `Quantity` node, so the units
+    /// are not in the AST; they are recovered by lexing the literal's own
+    /// source, which is the same text the compiler resolved.
+    Unit(String),
 }
 
 /// One name written in the module.
@@ -210,6 +217,31 @@ impl Collector<'_> {
         }
     }
 
+    /// Records the units of a unit literal by lexing the literal's own source.
+    ///
+    /// The AST stores the resolved unit expression, not its tokens; the tokens
+    /// are still in the document, so lexing the literal recovers their spans.
+    /// Every identifier after the numeric coefficient is part of the unit
+    /// expression, including the `°C` of `25 °C`.
+    fn quantity_units(&mut self, span: Span) {
+        let start = usize::try_from(span.start).unwrap_or(usize::MAX);
+        let end = usize::try_from(span.end).unwrap_or(usize::MAX);
+        let Some(text) = self.text.get(start..end) else {
+            return;
+        };
+        let lexed = aevia_syntax::lex_inline(span.file, text, start);
+        let mut after_number = false;
+        for token in lexed.tokens {
+            match &token.kind {
+                TokenKind::Int(_) | TokenKind::Float(_) => after_number = true,
+                TokenKind::Ident(name) | TokenKind::UpperIdent(name) if after_number => {
+                    self.push(token.span, Role::Unit(name.clone()), None);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn lookup(&self, name: &str) -> Option<Span> {
         self.scopes
             .iter()
@@ -339,7 +371,7 @@ impl Collector<'_> {
         match &expr.kind {
             ExprKind::UnitLit | ExprKind::Error | ExprKind::Bool(_) => {}
             ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Placeholder => {}
-            ExprKind::Quantity { .. } => {}
+            ExprKind::Quantity { .. } => self.quantity_units(expr.span),
             ExprKind::Var(name) => self.use_name(expr.span, name, call),
             ExprKind::QName(path) => self.push(expr.span, Role::Qualified(path.clone()), call),
             ExprKind::Str(pieces) => {
@@ -582,6 +614,7 @@ impl Collector<'_> {
             | TyKind::Set(elem)
             | TyKind::Table(elem)
             | TyKind::RateOf(elem)
+            | TyKind::DiffusionOf(elem)
             | TyKind::Io(elem) => self.ty(elem),
             TyKind::Matrix { rows, cols, elem } => {
                 let _ = (rows, cols);

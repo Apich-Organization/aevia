@@ -15,10 +15,17 @@ path = "src/main.rs"
 aevia-dim.workspace = true
 aevia-syntax.workspace = true
 aevia-types.workspace = true
+aevia-ir.workspace = true
 aevia-core.workspace = true
 aevia-rssn.workspace = true
 aevia-fmt.workspace = true
 aevia-doc.workspace = true
+# `aevia lsp` starts the server from this binary. The server is a library as
+# well as a binary precisely so that the CLI can host it.
+aevia-lsp.workspace = true
+# Baseline files for `aevia bench --save-baseline/--compare-baseline`; the
+# workspace already owns the dependency through the LSP.
+serde_json.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

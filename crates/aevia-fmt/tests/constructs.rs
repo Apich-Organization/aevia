@@ -87,6 +87,12 @@ fn types_and_classes() {
         "type Shape = | Circle(Real[L]) | Rect(Real[L], Real[L])\n",
         "type Table2<r>\n",
         "type Tree<a> = | Leaf | Node(Tree<a>, a, Tree<a>)\n",
+        // §8.9.1: `DiffusionOf<τ>` is a type constructor with one argument.
+        "fn d(x: DiffusionOf<Real[L]>): DiffusionOf<Real[L]> = x\n",
+        "fn d(x: DiffusionOf<Tensor<[2], Float>>): Int = 1\n",
+        // A lowercase type variable in a signature.
+        "fn f(x: a): a = x\n",
+        "fn g(x: Vec<a>): a = x\n",
         "class Pretty a where\n    pretty: a -> String\n",
         "instance Pretty for Vec2 where\n    pretty(v: Vec2): String = \"v\"\n",
         "derive Eq, Show for Vec2\n",
@@ -220,6 +226,21 @@ fn a_slice_step_round_trips() {
 ",
         "let a = b[:3:2]
 ",
+    ] {
+        assert_eq!(round_trip(source), source);
+    }
+}
+
+#[test]
+fn a_type_level_nat_product_round_trips() {
+    // §3.5.1 gained `*`; `*` binds tighter than `+`, and a sum operand keeps
+    // its brackets because the AST drops bracket nodes but not their shape.
+    for source in [
+        "fn f(x: Tensor<[n * 2], Float>): Tensor<[n * 2], Float> = x\n",
+        "let a: Tensor<[n + 1 * 2], Float> = b\n",
+        "let a: Tensor<[(n + 1) * 2], Float> = b\n",
+        "let a: Tensor<[n * (m + 1)], Float> = b\n",
+        "let a: Tensor<[2 * (3 * n)], Float> = b\n",
     ] {
         assert_eq!(round_trip(source), source);
     }

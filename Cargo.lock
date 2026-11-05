@@ -22,9 +22,12 @@ dependencies = [
  "aevia-dim",
  "aevia-doc",
  "aevia-fmt",
+ "aevia-ir",
+ "aevia-lsp",
  "aevia-rssn",
  "aevia-syntax",
  "aevia-types",
+ "serde_json",
 ]
 
 [[package]]
@@ -81,6 +84,7 @@ dependencies = [
  "aevia-types",
  "num-bigint",
  "num-rational",
+ "num-traits",
 ]
 
 [[package]]
@@ -109,6 +113,8 @@ name = "aevia-std"
 version = "0.1.0"
 dependencies = [
  "aevia-core",
+ "aevia-rssn",
+ "aevia-types",
  "faer",
  "nalgebra",
  "num-bigint",
@@ -1736,7 +1742,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rssn"
-version = "0.2.13"
+version = "3.0.0-rc.1"
 dependencies = [
  "argmin",
  "argmin-math",

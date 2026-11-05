@@ -90,8 +90,8 @@ pub fn init(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `aevia add <path>`
-pub fn add(args: &[String]) -> ExitCode {
+/// `aevia add <path>` (with `--locked`, adding a dependency is refused).
+pub fn add(args: &[String], locked: bool) -> ExitCode {
     let Some(path) = args.first() else {
         eprintln!(
             "aevia add: expected the path of a package, as in `aevia add ../units-extra`\n\
@@ -105,6 +105,14 @@ pub fn add(args: &[String]) -> ExitCode {
              is no registry to add a version range from"
         );
         return ExitCode::from(2);
+    }
+    if locked {
+        // `--locked` promises the manifest and lock are inputs. `add` would
+        // change both.
+        eprintln!(
+            "aevia add: `--locked` forbids changing the manifest; re-run without it to add `{path}`"
+        );
+        return ExitCode::from(1);
     }
     let mut package = match current() {
         Ok(package) => package,
@@ -148,11 +156,11 @@ pub fn add(args: &[String]) -> ExitCode {
             dependency_manifest.name, dependency_manifest.version
         );
     }
-    write_lock(&package, false)
+    write_lock(&package, false, false)
 }
 
-/// `aevia update`
-pub fn update(args: &[String]) -> ExitCode {
+/// `aevia update` — with `--locked`, a change is an error rather than a write.
+pub fn update(args: &[String], locked: bool) -> ExitCode {
     if let Some(extra) = args.first() {
         eprintln!("aevia update: expected no arguments, found `{extra}`");
         return ExitCode::from(2);
@@ -164,11 +172,73 @@ pub fn update(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    write_lock(&package, true)
+    write_lock(&package, true, locked)
+}
+
+/// `aevia clean` — remove the `.aevia/` build directory of §9.11.
+///
+/// §9.11 designates `.aevia/target/` for build products and `.aevi` files for
+/// the interface cache. This toolchain writes neither yet, so the command is
+/// honest about what it finds: it removes `.aevia/` if one exists (an older or
+/// future build, or one a user created) and otherwise says there is nothing to
+/// clean. It never claims to have removed a cache that does not exist.
+pub fn clean(args: &[String]) -> ExitCode {
+    if let Some(extra) = args.first() {
+        eprintln!("aevia clean: expected no arguments, found `{extra}`");
+        return ExitCode::from(2);
+    }
+    let package = match current() {
+        Ok(package) => package,
+        Err(message) => {
+            eprintln!("aevia clean: {message}");
+            return ExitCode::from(1);
+        }
+    };
+    let cache = package.dir.join(".aevia");
+    if !cache.exists() {
+        println!(
+            "nothing to clean: `{}` does not exist (this toolchain writes no build cache yet)",
+            cache.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+    let files = count_files(&cache);
+    match std::fs::remove_dir_all(&cache) {
+        Ok(()) => {
+            println!(
+                "removed {} ({files} file{})",
+                cache.display(),
+                if files == 1 { "" } else { "s" }
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("aevia clean: cannot remove `{}`: {error}", cache.display());
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// How many files a directory holds, for the `clean` report.
+fn count_files(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                count_files(&path)
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 /// Resolves the lock and writes it when it changed.
-fn write_lock(package: &Package, report_unchanged: bool) -> ExitCode {
+fn write_lock(package: &Package, report_unchanged: bool, locked: bool) -> ExitCode {
     let lock = match package.resolve() {
         Ok(lock) => lock,
         Err(error) => {
@@ -184,6 +254,13 @@ fn write_lock(package: &Package, report_unchanged: bool) -> ExitCode {
             println!("{} is up to date ({} packages)", path.display(), lock.packages.len());
         }
         return ExitCode::SUCCESS;
+    }
+    if locked {
+        eprintln!(
+            "aevia update: `--locked` refuses to rewrite `{}`; re-run without `--locked`",
+            path.display()
+        );
+        return ExitCode::from(1);
     }
     if let Err(error) = lock.save(&path) {
         eprintln!("aevia update: {}", error.render());
@@ -204,6 +281,62 @@ pub fn sources_under(dir: &Path) -> Vec<PathBuf> {
     collect(dir, &mut files);
     files.sort();
     files
+}
+
+/// Expands a `*`/`?` pattern in the last component of a file argument.
+///
+/// A POSIX shell expands `examples/*.aev` before the program starts; Windows
+/// PowerShell passes the pattern to a native executable verbatim, so the tool
+/// expands it itself. Only the last component is a pattern: the directory part
+/// is a directory, which keeps the rule simple and the errors honest. A
+/// pattern that matches nothing is left as it was, so the file-not-found
+/// diagnostic names exactly what the user wrote.
+#[must_use]
+pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for name in names {
+        if !name.contains('*') && !name.contains('?') {
+            paths.push(PathBuf::from(name));
+            continue;
+        }
+        let (parent, pattern) = match name.rfind(['/', '\\']) {
+            Some(index) => (&name[..index], &name[index + 1..]),
+            None => (".", name.as_str()),
+        };
+        let Ok(entries) = std::fs::read_dir(if parent.is_empty() { "." } else { parent }) else {
+            paths.push(PathBuf::from(name));
+            continue;
+        };
+        let mut matches: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|entry| {
+                wildcard_matches(
+                    &pattern.chars().collect::<Vec<_>>(),
+                    &entry.file_name().to_string_lossy().chars().collect::<Vec<_>>(),
+                )
+            })
+            .map(|entry| PathBuf::from(parent).join(entry.file_name()))
+            .collect();
+        if matches.is_empty() {
+            paths.push(PathBuf::from(name));
+        } else {
+            matches.sort();
+            paths.extend(matches);
+        }
+    }
+    paths
+}
+
+/// Shell-style matching of one file name against `*`/`?`.
+fn wildcard_matches(pattern: &[char], name: &[char]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|start| wildcard_matches(rest, &name[start..])),
+        Some(('?', rest)) => !name.is_empty() && wildcard_matches(rest, &name[1..]),
+        Some((character, rest)) => {
+            name.first() == Some(character) && wildcard_matches(rest, &name[1..])
+        }
+    }
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -44,6 +44,10 @@ pub enum CompletionKind {
     Dimension,
     /// A nominal type or a type alias.
     Type,
+    /// A record field, offered after `.`.
+    Field,
+    /// A language keyword offered in expression position.
+    Keyword,
 }
 
 /// One candidate name.
@@ -64,8 +68,12 @@ pub struct Completion {
 pub enum Origin {
     /// Declared by the document being edited.
     Module,
+    /// Reached through an `import` or `open` of another module.
+    Imported,
     /// A prelude builtin.
     Prelude,
+    /// A language keyword, which no module declares.
+    Language,
 }
 
 /// The sort of thing a symbol names.
@@ -116,6 +124,18 @@ pub struct Symbol {
     pub children: Vec<Symbol>,
 }
 
+/// One declaration in a workspace-wide symbol search.
+///
+/// A [`Symbol`] is relative to one file; a workspace answer must say *which*
+/// file, because the declaration may live in a module the editor never opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceSymbol {
+    /// The file the declaration is written in.
+    pub document: String,
+    /// The declaration, with its range in that file.
+    pub symbol: Symbol,
+}
+
 /// A replacement of one range with new text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextEdit {
@@ -123,4 +143,136 @@ pub struct TextEdit {
     pub range: Range,
     /// What to put there.
     pub new_text: String,
+}
+
+/// One file and the edits a rename makes in it.
+///
+/// A rename can touch several files — a declaration and its qualified uses in
+/// importers — so the result is per file; the transport turns each into one
+/// edit group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileEdit {
+    /// The file the edits belong to.
+    pub document: String,
+    /// The edits, in document order.
+    pub edit: TextEdit,
+}
+
+/// What `prepare_rename` reports for a renamable name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenamePlaceholder {
+    /// The name under the cursor, to highlight.
+    pub range: Range,
+    /// The current name, to preselect in the editor's input box.
+    pub placeholder: String,
+}
+
+/// Why a rename was refused.
+///
+/// A refusal is data, not a stringly-typed error: the transport renders the
+/// message and the analysis tests check the variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RenameError {
+    /// The name has no declaration this program may edit (a prelude builtin, a
+    /// unit, a module segment, an instance method, …).
+    NotRenamable(String),
+    /// The requested new name is not a valid identifier for this declaration.
+    InvalidName(String),
+    /// The new name is already declared in the scope the rename targets.
+    Collision(String),
+}
+
+impl RenameError {
+    /// The sentence to show the user.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        match self {
+            Self::NotRenamable(message)
+            | Self::InvalidName(message)
+            | Self::Collision(message) => message,
+        }
+    }
+}
+
+/// One callable signature offered while typing a call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureInfo {
+    /// The whole signature, for the editor to show, e.g.
+    /// `sqrt: (Real[L]) -> Real[L]`.
+    pub label: String,
+    /// One label per parameter, in order.
+    pub parameters: Vec<String>,
+    /// The declaration's `##` documentation, when it has any.
+    pub documentation: Option<String>,
+}
+
+/// What `signature_help` reports at a cursor inside a call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureHelp {
+    /// Every overload the callee has.
+    pub signatures: Vec<SignatureInfo>,
+    /// Which overload the call's arity (or the checker's pinned overload)
+    /// selects.
+    pub active_signature: usize,
+    /// Which argument the cursor is in; a trailing comma means the next one.
+    pub active_parameter: u32,
+}
+
+/// What sort of change a code action makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeActionKind {
+    /// A fix for a diagnostic the checker reported.
+    QuickFix,
+    /// A change that reorganises the code without changing what it does.
+    RefactorRewrite,
+    /// Pulling an expression out into a named binding.
+    RefactorExtract,
+}
+
+/// One change the user can ask for at a position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodeAction {
+    /// What the editor shows in the menu.
+    pub title: String,
+    /// What sort of change it is.
+    pub kind: CodeActionKind,
+    /// The edits that carry it out, in document order.
+    pub edits: Vec<TextEdit>,
+}
+
+/// What a highlighted token is.
+///
+/// The set is deliberately the one §9.10 names — types, dimensions, units and
+/// operator provenance — plus the ordinary "this is a function/variable"
+/// distinction any editor expects. A token kind a renderer does not know can
+/// be ignored; no token is emitted without a reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenKind {
+    /// A nominal type or a type alias.
+    Type,
+    /// A dimension such as `L`.
+    Dimension,
+    /// A unit such as `m` or `°C`, including the unit part of a literal.
+    Unit,
+    /// An operator whose implementation the checker resolved (`Rssn.sin`, a
+    /// class-method call).
+    Operator,
+    /// A function.
+    Function,
+    /// A local or module-level binding.
+    Variable,
+    /// A variant constructor.
+    Constructor,
+}
+
+/// One highlighted span.
+///
+/// Tokens never overlap and are ordered by position, so a client can encode
+/// them as a delta stream without sorting or merging.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SemanticToken {
+    /// The name's range.
+    pub range: Range,
+    /// What it is.
+    pub kind: TokenKind,
 }

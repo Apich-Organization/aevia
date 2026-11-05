@@ -1,0 +1,50 @@
+## A module whose documentation is also a test suite.
+##
+## `aevia test --doc` compiles every `aevia` fenced block in these comments.
+## Each snippet becomes its own module: this module's imports are copied in,
+## but its declarations are not in scope, so every snippet below is
+## self-contained.
+open Units.SI
+
+## The area of a square, demonstrated by the block above.
+##
+## ```aevia
+## let side = 2.0 m
+## let area = side * side
+## ```
+fn area(side: Real[L]): Real[L^2] = side * side
+
+## A dimension error is what this helper documents, so the doctest says the
+## block is expected to fail with `E0401`.
+##
+## ```aevia
+## compile_fail E0401
+## let broken = 1 m + 1
+## ```
+fn dimension_note(): Int = 1
+
+## `compile_fail` without a code only requires that compilation fails.
+##
+## ```aevia
+## compile_fail
+## let broken: Int = "not an int"
+## ```
+fn any_failure_note(): Int = 1
+
+## Units come from the prelude, and the declaring module's `open` line is
+## copied into the synthetic module.
+##
+## ```aevia
+## let distance = 3.0 km
+## let twelve_hundred_metres = value_in(m, distance)
+## ```
+fn imported_units(): Int = 1
+
+## A multi-line snippet keeps the indentation of its block.
+##
+## ```aevia
+## fn double(x: Int): Int =
+##     x + x
+## let four = double(2)
+## ```
+fn indented_note(): Int = 1
