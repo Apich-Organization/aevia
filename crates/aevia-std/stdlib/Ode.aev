@@ -1,8 +1,17 @@
 ## The `Ode` module of §8.20.
 ##
-## Generated from `spec/08-stdlib.md`; do not edit.
-## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+## The method constructors and option record are source-level declarations.
 module Ode
+
+type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23
+
+type OdeOpts<s> = {
+    rtol: Float[1],
+    atol: Float[1],
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+}
 
 let odeint = odeint
 let odeint_with = odeint_with

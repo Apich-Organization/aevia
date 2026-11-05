@@ -30,6 +30,8 @@ pub mod driver;
 pub mod eval;
 pub mod eval_ir;
 pub mod kernel;
+#[cfg(feature = "jit")]
+mod jit;
 pub mod manifest;
 pub mod rssn_module;
 pub mod sym;
@@ -374,12 +376,7 @@ impl Interp {
         env: &Rc<Scope>,
     ) {
         let spelled = crate::eval::instance_head_name(head);
-        let (key, witness) = export.map_or((None, None), |export| {
-            (
-                Some(export.key.clone()),
-                aevia_types::keys::witness_of(&export.head),
-            )
-        });
+        let key = export.map(|export| export.key.clone());
         let name = match &key {
             | Some(key) => Interp::instance_global(key, method),
             | None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
@@ -393,8 +390,7 @@ impl Interp {
             .or_default()
             .push(crate::eval::InstanceEntry {
                 key,
-                witness,
-                head: spelled,
+                checked_head: export.map(|export| export.head.clone()),
                 shape: crate::eval::head_shape(head, &self.aliases),
                 global: name,
             });

@@ -32,6 +32,8 @@ use aevia_types::check::check_module_with_imports;
 enum Cover {
     /// A program the lexer/parser/checker rejects with this code.
     Front(&'static str),
+    /// A program checked against an explicitly absent JIT capability.
+    NoJit(&'static str),
     /// A program that needs imports in scope to reach the code.
     Imports(&'static str),
     /// Another crate owns it; the checker never emits it.
@@ -160,6 +162,7 @@ fn documented_codes() -> Vec<&'static str> {
 fn table() -> Vec<(&'static str, Cover)> {
     use Cover::Front;
     use Cover::Imports;
+    use Cover::NoJit;
     use Cover::OtherCrate;
     use Cover::Unreachable;
     vec![
@@ -484,7 +487,7 @@ fn table() -> Vec<(&'static str, Cover)> {
             Front("private fn helper(): Int = 1\nfn main(): Int = 2\n"),
         ),
         // ----- B.17 extension/backend --------------------------------------
-        ("E1001", Front("@jit\nfn hot(x: Float): Float = x * 2.0\n")),
+        ("E1001", NoJit("@jit\nfn hot(x: Float): Float = x * 2.0\n")),
         ("E1002", Front("fn f(x) = Rssn.sin(x)\n")),
         ("E1003", Front("let a = Rssn.sin(1, 2)\n")),
         (
@@ -552,6 +555,19 @@ fn every_frontend_code_is_actually_produced() {
     for (code, cover) in table() {
         let produced = match cover {
             | Cover::Front(source) => codes_of(source),
+            | Cover::NoJit(source) => {
+                let lexed = lex(0, source).expect("lexes");
+                let (module, parsed) = parse_module(0, source, &lexed);
+                assert!(!parsed.has_errors());
+                let options = aevia_types::check::CheckOptions {
+                    capabilities: aevia_types::check::Capabilities::from_names(
+                        std::iter::empty::<&str>(),
+                    ),
+                };
+                let checked =
+                    aevia_types::check::check_module_with_options(0, &module, &[], &options);
+                codes_of_diagnostics(&checked.diagnostics)
+            },
             | Cover::Imports(source) => codes_of_ambiguous_imports(source),
             | Cover::OtherCrate(_) | Cover::Unreachable(_) => continue,
         };
@@ -570,7 +586,7 @@ fn every_frontend_code_is_actually_produced() {
 fn non_frontend_entries_state_a_reason() {
     for (code, cover) in table() {
         let reason = match cover {
-            | Cover::Front(_) | Cover::Imports(_) => continue,
+            | Cover::Front(_) | Cover::NoJit(_) | Cover::Imports(_) => continue,
             | Cover::OtherCrate(reason) | Cover::Unreachable(reason) => reason,
         };
         assert!(

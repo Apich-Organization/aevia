@@ -1481,8 +1481,12 @@ fn check_with_capabilities(
 
 #[test]
 fn jit_needs_the_core_jit_capability() {
-    // §9.6.1: with `features.jit = false`, `@jit` is `E1001("core.jit")`.
-    expect_error("@jit\nfn hot(x: Float): Float = x * 2.0\n", "E1001");
+    // Check the missing-capability case independent of Cargo feature unification.
+    let (errors, _, _) = check_with_capabilities(
+        "@jit\nfn hot(x: Float): Float = x * 2.0\n",
+        Capabilities::from_names(std::iter::empty::<&str>()),
+    );
+    assert!(errors.iter().any(|code| code == "E1001"), "{errors:?}");
     // With the capability present it is accepted (the lowering hook is the
     // IR's job, §9.6.2).
     let (errors, _, module) = check_with_capabilities(
@@ -1494,7 +1498,14 @@ fn jit_needs_the_core_jit_capability() {
     // The gate is a capability, not a keyword: `E1001` names it.
     let lexed = lex(0, "@jit\nfn hot(x: Float): Float = x * 2.0\n").expect("lexes");
     let (module, _) = parse_module(0, "@jit\nfn hot(x: Float): Float = x * 2.0\n", &lexed);
-    let result = check_module(0, &module);
+    let result = aevia_types::check::check_module_with_options(
+        0,
+        &module,
+        &[],
+        &CheckOptions {
+            capabilities: Capabilities::from_names(std::iter::empty::<&str>()),
+        },
+    );
     let detail = result
         .diagnostics
         .items

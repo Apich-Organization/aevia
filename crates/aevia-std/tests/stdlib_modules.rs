@@ -49,11 +49,10 @@ fn constants_module_source() -> String {
          ## Generated from the rssn Kernel Manifest: one quantity per physical\n\
          ## constant of `manifest.constants` (§13.6.5). Do not edit; regenerate with\n\
          ## `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.\n\
-         ## rssn {version}, api {api}, manifest {hash}\n\
+         ## rssn {version}, api {api}\n\
          module Units.Constants\n{body}",
         version = registry.version,
         api = registry.api_version,
-        hash = registry.manifest_hash,
     )
 }
 

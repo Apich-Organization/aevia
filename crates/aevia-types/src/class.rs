@@ -82,10 +82,8 @@ pub enum InstanceError {
     Orphan,
     /// A `class` declared more than one parameter (§3.8.1, round-2 decision 1f).
     MultiParameter,
-    /// Two instances are statically distinct but a runtime witness cannot tell
-    /// them apart (e.g. `Tensor<1, Int>` and `Tensor<1, Real>` are both exact
-    /// storage), so a quantified call site could not dispatch honestly
-    /// (`E0311`, round-2 decision 1c).
+    /// Two statically distinct instances cannot be told apart by the
+    /// information preserved by the runtime (`E0311`).
     WitnessCollision {
         /// The instance being registered.
         incoming: InstanceKey,
@@ -473,22 +471,16 @@ impl ClassTable {
                 existing: existing.key.clone(),
             });
         }
-        // Statically distinct heads can still be indistinguishable to the
-        // dispatcher: the witness table is what the runtime reads, and a tensor
-        // witness is rank+storage, so `Tensor<1, Int>` and `Tensor<1, Real>`
-        // collide. Reject at check time rather than guess at run time
-        // (round-2 decision 1c).
-        let incoming_witness = witness_of(&head);
-        if let Some(witness) = &incoming_witness {
-            if let Some(existing) = instances
-                .iter()
-                .find(|existing| witness_of(&existing.head).as_ref() == Some(witness))
-            {
-                return Err(InstanceError::WitnessCollision {
-                    incoming: key,
-                    existing: existing.key.clone(),
-                });
-            }
+        // Statically distinct heads can still be indistinguishable at runtime.
+        // Reject such pairs instead of choosing an arbitrary instance.
+        if let Some(existing) = instances
+            .iter()
+            .find(|existing| runtime_heads_overlap(&existing.head, &head))
+        {
+            return Err(InstanceError::WitnessCollision {
+                incoming: key,
+                existing: existing.key.clone(),
+            });
         }
         instances.push(Instance {
             class: class.to_string(),
@@ -697,6 +689,15 @@ impl ClassTable {
                     existing: existing.key.clone(),
                 });
             }
+            if let Some(existing) = entries
+                .iter()
+                .find(|existing| runtime_heads_overlap(&existing.head, &instance.head))
+            {
+                return Err(InstanceError::WitnessCollision {
+                    incoming: key,
+                    existing: existing.key.clone(),
+                });
+            }
             let mut imported = instance.clone();
             imported.key = key;
             imported.origin = Origin::Imported;
@@ -842,6 +843,53 @@ pub fn heads_overlap(
     }
 }
 
+/// Whether runtime-observable values could satisfy both disjoint heads.
+/// This is deliberately conservative for erased or unsupported types.
+fn runtime_heads_overlap(left: &Type, right: &Type) -> bool {
+    match (left, right) {
+        | (Type::Tensor { shape: a, elem: ea }, Type::Tensor { shape: b, elem: eb }) => {
+            if !shape_heads_overlap(a, b) {
+                return false;
+            }
+            match (&**ea, &**eb) {
+                | (Type::Scalar(ra, _), Type::Scalar(rb, _)) => {
+                    // Typed exact storage preserves Int versus Real. Untagged
+                    // buffers cannot dispatch either head and are never guessed.
+                    *ra == *rb || is_rep_var(*ra) || is_rep_var(*rb)
+                },
+                | _ => true,
+            }
+        },
+        | (Type::Record(a), Type::Record(b)) => {
+            let af = a.fields();
+            let bf = b.fields();
+            if a.tail_var().is_none() && b.tail_var().is_none() && af.len() != bf.len() {
+                return false;
+            }
+            for (name, ty) in &af {
+                match bf.iter().find(|(other, _)| other == name) {
+                    | Some((_, other)) if !runtime_heads_overlap(ty, other) => return false,
+                    | None if b.tail_var().is_none() => return false,
+                    | _ => {},
+                }
+            }
+            if a.tail_var().is_none() && bf.iter().any(|(name, _)| !af.iter().any(|(n, _)| n == name)) {
+                return false;
+            }
+            true
+        },
+        | (Type::Adt(a, aa), Type::Adt(b, ab)) => {
+            crate::adt::key_of(*a) == crate::adt::key_of(*b)
+                && aa.len() == ab.len()
+                && aa.iter().zip(ab).all(|(a, b)| runtime_heads_overlap(a, b))
+        },
+        | _ => match (witness_of(left), witness_of(right)) {
+            | (Some(a), Some(b)) => a == b,
+            | _ => heads_overlap(left, right),
+        },
+    }
+}
+
 /// Whether `show`/`repr` of this type is guaranteed structurally (§3.8.4 and
 /// round-2 decision 1e). The runtime's builtin printer is the fallback when no
 /// user instance matches, so these heads do not need an `instance` declaration.
@@ -882,7 +930,10 @@ fn shape_heads_overlap(
         | (Shape::Refined(a), Shape::Refined(b)) => {
             a.iter().zip(b.iter()).all(|(left, right)| {
                 match (left, right) {
-                    | (Some(left), Some(right)) => left == right,
+                    | (Some(left), Some(right)) => match (left.as_const(), right.as_const()) {
+                        | (Some(left), Some(right)) => left == right,
+                        | _ => true,
+                    },
                     | _ => true,
                 }
             })
@@ -906,15 +957,17 @@ fn shape_head_matches(
                 .zip(concrete.iter())
                 .all(|(pattern, concrete)| {
                     match (pattern, concrete) {
-                        | (Some(pattern), Some(concrete)) => pattern == concrete,
-                        // Unknown extents on either side cannot be disproved here.
-                        | _ => true,
+                        | (Some(pattern), Some(concrete)) => match (pattern.as_const(), concrete.as_const()) {
+                            | (Some(pattern), Some(concrete)) => pattern == concrete,
+                            | _ => pattern == concrete,
+                        },
+                        | (Some(_), None) => false,
+                        | (None, _) => true,
                     }
                 })
         },
-        // A rank-only concrete type is the erased form: the extents are not
-        // statically known, so a refined head cannot be ruled out.
-        | (Shape::Refined(_), Shape::Rank(_)) => true,
+        // Unknown extents cannot prove a fixed extent instance.
+        | (Shape::Refined(items), Shape::Rank(_)) => items.iter().all(Option::is_none),
         | _ => true,
     }
 }
@@ -961,8 +1014,25 @@ pub fn matches_head(
     pattern: &Type,
     concrete: &Type,
 ) -> bool {
+    matches_head_with_bindings(pattern, concrete, &mut HashMap::new())
+}
+
+fn matches_head_with_bindings(
+    pattern: &Type,
+    concrete: &Type,
+    bindings: &mut HashMap<(bool, u32), Type>,
+) -> bool {
     match (pattern, concrete) {
-        | (Type::Param(_) | Type::Var(_), _) => true,
+        | (Type::Param(id), _) | (Type::Var(id), _) => {
+            let key = (matches!(pattern, Type::Param(_)), *id);
+            match bindings.get(&key) {
+                | Some(previous) => previous == concrete,
+                | None => {
+                    bindings.insert(key, concrete.clone());
+                    true
+                },
+            }
+        },
         | (Type::Scalar(a, _), Type::Scalar(b, _)) => {
             if is_rep_var(*a) {
                 true
@@ -983,18 +1053,21 @@ pub fn matches_head(
                 shape: concrete,
                 elem: b,
             },
-        ) => shape_head_matches(pattern, concrete) && matches_head(a, b),
+        ) => shape_head_matches(pattern, concrete) && matches_head_with_bindings(a, b, bindings),
         | (Type::Point(_), Type::Point(_)) | (Type::UnitOf(_), Type::UnitOf(_)) => true,
         | (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
             pa.len() == pb.len()
-                && pa.iter().zip(pb.iter()).all(|(a, b)| matches_head(a, b))
-                && matches_head(ra, rb)
+                && pa
+                    .iter()
+                    .zip(pb.iter())
+                    .all(|(a, b)| matches_head_with_bindings(a, b, bindings))
+                && matches_head_with_bindings(ra, rb, bindings)
         },
         | (Type::Record(pattern), Type::Record(concrete)) => {
             let pattern_fields = pattern.fields();
             let concrete_fields = concrete.fields();
             let pattern_open = pattern.tail_var().is_some();
-            if !pattern_open && pattern_fields.len() != concrete_fields.len() {
+            if !pattern_open && (pattern_fields.len() != concrete_fields.len() || concrete.tail_var().is_some()) {
                 return false;
             }
             // Every field the head states must be present in the concrete type
@@ -1003,15 +1076,18 @@ pub fn matches_head(
                 concrete_fields
                     .iter()
                     .find(|(name, _)| name == label)
-                    .is_some_and(|(_, other)| matches_head(ty, other))
+                    .is_some_and(|(_, other)| matches_head_with_bindings(ty, other, bindings))
             }) && (pattern_open || concrete_fields.len() == pattern_fields.len())
         },
         | (Type::Adt(a, aa), Type::Adt(b, ab)) => {
             a == b
                 && aa.len() == ab.len()
-                && aa.iter().zip(ab.iter()).all(|(x, y)| matches_head(x, y))
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(x, y)| matches_head_with_bindings(x, y, bindings))
         },
-        | (Type::Io(a), Type::Io(b)) => matches_head(a, b),
+        | (Type::Io(a), Type::Io(b)) => matches_head_with_bindings(a, b, bindings),
         | (Type::Dyn(_), Type::Dyn(_)) => true,
         | _ => false,
     }
@@ -1023,7 +1099,7 @@ pub fn has_variables(ty: &Type) -> bool {
     match ty {
         | Type::Var(_) | Type::Param(_) => true,
         | Type::Scalar(rep, dim) => matches!(rep, Rep::Var(_)) || !dim.vars().is_empty(),
-        | Type::Tensor { elem, .. } => has_variables(elem),
+        | Type::Tensor { shape, elem } => shape.has_variables() || has_variables(elem),
         | Type::Fn(params, ret) => params.iter().any(has_variables) || has_variables(ret),
         | Type::Record(row) => row_has_variables(row),
         | Type::Adt(_, args) => args.iter().any(has_variables),
@@ -1181,6 +1257,47 @@ mod tests {
     }
 
     #[test]
+    fn repeated_instance_variables_must_match_the_same_type() {
+        let pair =
+            |left, right| Type::record(vec![("first".into(), left), ("second".into(), right)]);
+        let repeated = pair(Type::Var(42), Type::Var(42));
+        assert!(matches_head(&repeated, &pair(Type::int(), Type::int())));
+        assert!(!matches_head(&repeated, &pair(Type::int(), Type::Str)));
+        assert!(matches_head(
+            &pair(Type::Var(42), Type::Var(43)),
+            &pair(Type::int(), Type::Str),
+        ));
+
+        let mut table = ClassTable::new();
+        table
+            .declare_class(ModulePath::new(["Test"]), "Same", 1, Vec::new())
+            .unwrap();
+        table
+            .add_instance(
+                &ModulePath::new(["Test"]),
+                "Same",
+                repeated,
+                HashMap::new(),
+                Origin::User,
+                true,
+                true,
+            )
+            .unwrap();
+        assert!(matches!(
+            table.resolve("Same", &pair(Type::int(), Type::int())),
+            Resolution::Found { .. }
+        ));
+        assert_eq!(
+            table.resolve("Same", &pair(Type::int(), Type::Str)),
+            Resolution::Missing
+        );
+        assert_eq!(
+            table.resolve("Same", &pair(Type::int(), Type::Var(99))),
+            Resolution::Deferred
+        );
+    }
+
+    #[test]
     fn a_tensor_instance_head_respects_the_rank() {
         // Round-2 decision 1d: `Tensor<1, a>` and `Tensor<2, a>` are disjoint
         // heads and must both be registrable.
@@ -1201,9 +1318,9 @@ mod tests {
                 )
                 .expect("a distinct rank is a distinct head");
         }
-        // Same rank and same storage: the runtime witness cannot tell
-        // `Tensor<1, Int>` from `Tensor<1, Real>`, so it is rejected.
-        let error = table
+        // Exact tensor buffers carry their element representation, so these
+        // two heads are distinguishable even though both store rationals.
+        table
             .add_instance(
                 &ModulePath::new(["Test"]),
                 "Pretty",
@@ -1213,8 +1330,7 @@ mod tests {
                 false,
                 true,
             )
-            .expect_err("same witness");
-        assert!(matches!(error, InstanceError::WitnessCollision { .. }));
+            .expect("typed exact tensors have distinct representations");
     }
 
     #[test]

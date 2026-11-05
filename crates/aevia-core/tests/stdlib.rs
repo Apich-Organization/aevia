@@ -249,7 +249,7 @@ fn a_histogram_reports_counts_and_edges() {
     };
     let counts = tensor_of(&record.fields["counts"]);
     assert_eq!(counts.shape, vec![2]);
-    assert!(matches!(counts.storage, Storage::Exact(_)));
+    assert!(matches!(counts.storage, Storage::Exact(_) | Storage::TypedExact(..)));
     let edges = tensor_of(&record.fields["edges"]);
     assert_eq!(edges.shape, vec![3]);
     // Edges are [0, 2, 4]: 0 and 1 fall low, 2, 3 and 4 fall high.
@@ -652,6 +652,25 @@ let y = odeint(rhs, [1.0], [0.0 s, 0.5 s, 1.0 s])
 }
 
 #[test]
+fn stiff_ode_and_terminal_event_are_available_in_source() {
+    let solution = run_value(
+        r#"
+type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23
+fn rhs(t: Float[T], s: Float[1]): Float[1/T] = 1.0 / (1.0 s)
+fn stop(t: Float[T], s: Float[1]): Float[1] = s - 0.6
+let path = odeint_with(rhs, 0.0, [0.0 s, 0.5 s, 1.0 s], { rtol = 1e-8, atol = 1e-10, method = Radau, steps = Some(10), events = Some(stop) })
+"#,
+        "path",
+    );
+    let Value::Record(trajectory) = solution else { panic!("expected trajectory") };
+    let times = tensor_of(&trajectory.fields["t"]).elements();
+    let states = tensor_of(&trajectory.fields["y"]).elements();
+    assert_eq!(times.len(), 3);
+    assert!((as_f64(&times[2]) - 0.6).abs() < 1e-7);
+    assert!((as_f64(&states[2]) - 0.6).abs() < 1e-7);
+}
+
+#[test]
 fn poisson_recovers_a_manufactured_solution() {
     let solution = run_value(
         r#"
@@ -815,9 +834,9 @@ fn an_exact_factorisation_stays_exact() {
         panic!("lu returns a triple")
     };
     let u = tensor_of(&lu.fields["2"]);
-    assert!(matches!(u.storage, Storage::Exact(_)));
+    assert!(matches!(u.storage, Storage::Exact(_) | Storage::TypedExact(..)));
     let entries: Vec<BigRational> = match &u.storage {
-        | Storage::Exact(values) => values.clone(),
+        | Storage::Exact(values) | Storage::TypedExact(values, _) => values.clone(),
         | _ => unreachable!(),
     };
     // U = [[1, 2], [0, -2]].

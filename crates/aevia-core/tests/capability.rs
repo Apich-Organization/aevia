@@ -2,10 +2,8 @@
 //!
 //! The checker owns the gate (a capability is static), and `CheckOptions`'
 //! default reads the capability set of the `aevia-rssn` registry this build is
-//! linked against. This build's manifest has `features.jit = false`, so a
-//! program that asks for `@jit` must be refused with `E1001` naming
-//! `core.jit` — not silently interpreted — while the same function without the
-//! attribute runs.
+//! linked against. The default build rejects `@jit` with `E1001`; the optional
+//! JIT build accepts it and advertises the capability.
 
 #![allow(clippy::result_large_err)]
 
@@ -21,6 +19,7 @@ fn diagnostics(source: &str) -> Vec<(String, String)> {
 }
 
 #[test]
+#[cfg(not(feature = "jit"))]
 fn jit_is_a_named_capability_gap_in_this_build() {
     // The registry is the single capability table (§13.8.2); the gate reads it.
     let capabilities = aevia_rssn::registry().capabilities.clone();
@@ -64,6 +63,13 @@ fn main(): IO Unit = do
 }
 
 #[test]
+#[cfg(feature = "jit")]
+fn jit_capability_is_available_when_enabled() {
+    assert!(aevia_rssn::registry().capabilities.jit);
+    assert!(diagnostics("@jit\nfn hot(x: Float): Float = x * 2.0\n").is_empty());
+}
+
+#[test]
 fn jit_is_only_allowed_on_a_function() {
     let errors = diagnostics(
         r#"@jit
@@ -85,7 +91,7 @@ fn a_caller_owned_capability_set_can_grant_jit() {
     // §13.8.1: a consumer that owns the manifest registry can check against the
     // exact backend it will run on. This is the entry point the CLI/driver uses
     // when it has a capability set of its own; with `core.jit` granted the
-    // attribute is accepted (codegen remains a documented, separate gap).
+    // attribute is accepted independently of the linked backend.
     let mut sources = aevia_syntax::SourceMap::new();
     let file = sources.add("capability.aev", "@jit\nfn hot(x: Float): Float = x\n");
     let source = "@jit\nfn hot(x: Float): Float = x\n";

@@ -5,10 +5,8 @@
 //! integrator only ever sees numbers.
 //!
 //! `Rk4` is the fixed-step method and needs a step count; `Dopri5` is the
-//! adaptive Dormand–Prince pair. The three stiff methods of §8.9 (`Radau`,
-//! `Bdf`, `Rosenbrock23`) are declared but not implemented here: they are
-//! reported as a named capability gap rather than silently integrated with the
-//! explicit method, which would answer a stiff problem with a wrong number.
+//! adaptive Dormand–Prince pair. Stiff methods use RSSN’s Radau IIA(5),
+//! variable-order BDF and Rosenbrock 2(3) solvers with dense output.
 
 use crate::NumericError;
 
@@ -19,11 +17,11 @@ pub enum Method {
     Rk4,
     /// Adaptive Dormand–Prince 5(4).
     Dopri5,
-    /// Implicit Radau IIA — not implemented in this build.
+    /// Adaptive Radau IIA (order 5, L-stable).
     Radau,
-    /// Implicit BDF — not implemented in this build.
+    /// Adaptive variable-order BDF (orders 1–5).
     Bdf,
-    /// Rosenbrock 2/3 — not implemented in this build.
+    /// Adaptive Rosenbrock 2(3).
     Rosenbrock23,
 }
 
@@ -32,10 +30,7 @@ impl Method {
     #[must_use]
     pub fn capability(&self) -> Option<&'static str> {
         match self {
-            | Self::Rk4 | Self::Dopri5 => None,
-            | Self::Radau => Some("ode.radau"),
-            | Self::Bdf => Some("ode.bdf"),
-            | Self::Rosenbrock23 => Some("ode.rosenbrock"),
+            | Self::Rk4 | Self::Dopri5 | Self::Radau | Self::Bdf | Self::Rosenbrock23 => None,
         }
     }
 }
@@ -67,6 +62,186 @@ impl Default for Options {
 /// A right-hand side: `(t, y) -> dy/dt`.
 pub type Rate<'a> = dyn FnMut(f64, &[f64]) -> Vec<f64> + 'a;
 
+/// A terminal event function. A sign change stops integration at its root.
+pub type EventRate<'a> = dyn FnMut(f64, &[f64]) -> f64 + 'a;
+
+/// Integrate until a terminal event, returning the actual times and states.
+/// Adaptive methods locate roots on their continuous extension; RK4 locates
+/// roots within each fixed step by reintegration and bisection.
+pub fn integrate_until_event(
+    rhs: &mut Rate<'_>,
+    y0: &[f64],
+    ts: &[f64],
+    options: Options,
+    event: &mut EventRate<'_>,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), NumericError> {
+    use rssn::kernels::ode_adaptive::{self, Event, OdeOptions};
+    use rssn::kernels::{ode, ode_stiff};
+    use std::cell::{Cell, RefCell};
+
+    if ts.is_empty() {
+        return Err(NumericError::Empty);
+    }
+    if !ts.iter().chain(y0).all(|x| x.is_finite())
+        || ts
+            .windows(2)
+            .any(|p| p[1] < p[0] || !(p[1] - p[0]).is_finite())
+        || !options.rtol.is_finite()
+        || options.rtol < 0.0
+        || !options.atol.is_finite()
+        || options.atol <= 0.0
+    {
+        return Err(NumericError::Domain(
+            "invalid ODE times, state or tolerances".into(),
+        ));
+    }
+    let initial_event = event(ts[0], y0);
+    if !initial_event.is_finite() {
+        return Err(NumericError::Domain(
+            "event returned a non-finite value".into(),
+        ));
+    }
+    if initial_event == 0.0 {
+        return Ok((vec![ts[0]], vec![y0.to_vec()]));
+    }
+    let start = ts[0];
+    let end = ts[ts.len() - 1];
+    if start == end {
+        return Ok((ts.to_vec(), vec![y0.to_vec(); ts.len()]));
+    }
+    if y0.is_empty() {
+        return Err(NumericError::Domain(
+            "event integration requires a non-empty state".into(),
+        ));
+    }
+    if !(end - start).is_finite() {
+        return Err(NumericError::Domain(
+            "the time interval is too large".into(),
+        ));
+    }
+    let rhs = RefCell::new(rhs);
+    let failure = RefCell::new(None);
+    let f = |t: f64, y: &[f64], out: &mut [f64]| match evaluate(
+        &mut **rhs.borrow_mut(),
+        t,
+        y,
+        out.len(),
+    ) {
+        | Ok(rate) => out.copy_from_slice(&rate),
+        | Err(error) => {
+            if failure.borrow().is_none() {
+                *failure.borrow_mut() = Some(error);
+            }
+            out.fill(f64::NAN);
+        },
+    };
+    let event = RefCell::new(event);
+    let invalid_event = Cell::new(false);
+    let g = |t: f64, y: &[f64]| {
+        let value = event.borrow_mut()(t, y);
+        if !value.is_finite() {
+            invalid_event.set(true);
+        }
+        value
+    };
+    let events = [Event {
+        g: &g,
+        terminal: true,
+        direction: 0,
+    }];
+    let opts = OdeOptions {
+        rtol: options.rtol,
+        atol: options.atol,
+        ..OdeOptions::default()
+    };
+    let result = (|| {
+        if options.method == Method::Rk4 {
+            let mut times = vec![start];
+            let mut states = vec![y0.to_vec()];
+            for pair in ts.windows(2) {
+                if pair[0] == pair[1] {
+                    times.push(pair[1]);
+                    states.push(states.last().unwrap().clone());
+                    continue;
+                }
+                let (trajectory, hits) = ode::solve_fixed_events(
+                    &f,
+                    states.last().unwrap(),
+                    (pair[0], pair[1]),
+                    options.steps.max(1),
+                    ode::OdeSolverMethod::RungeKutta4,
+                    &events,
+                )
+                .map_err(|_| NumericError::NotConverged)?;
+                if let Some(hit) = hits.first() {
+                    times.push(hit.t);
+                    states.push(hit.y.clone());
+                    break;
+                }
+                times.push(pair[1]);
+                states.push(
+                    trajectory
+                        .y
+                        .last()
+                        .cloned()
+                        .ok_or(NumericError::NotConverged)?,
+                );
+            }
+            Ok((times, states))
+        } else {
+            let solution = match options.method {
+                | Method::Dopri5 => ode_adaptive::dopri5(&f, start, end, y0, &opts, &events),
+                | Method::Radau => ode_stiff::radau5_events(&f, start, end, y0, &opts, &events),
+                | Method::Bdf => ode_stiff::bdf_events(&f, start, end, y0, &opts, 5, &events),
+                | Method::Rosenbrock23 => {
+                    ode_adaptive::rosenbrock23_events(&f, start, end, y0, &opts, &events)
+                },
+                | Method::Rk4 => unreachable!(),
+            }
+            .map_err(|_| NumericError::NotConverged);
+            solution.and_then(|solution| {
+                let terminal = *solution.t.last().ok_or(NumericError::NotConverged)?;
+                let mut times = Vec::new();
+                let mut states = Vec::new();
+                for &t in ts.iter().take_while(|&&t| t <= terminal) {
+                    times.push(t);
+                    states.push(if t == start {
+                        y0.to_vec()
+                    } else if t == terminal {
+                        solution
+                            .y
+                            .last()
+                            .cloned()
+                            .ok_or(NumericError::NotConverged)?
+                    } else {
+                        solution.eval(t).ok_or(NumericError::NotConverged)?
+                    });
+                }
+                if times.last().copied() != Some(terminal) {
+                    times.push(terminal);
+                    states.push(
+                        solution
+                            .y
+                            .last()
+                            .cloned()
+                            .ok_or(NumericError::NotConverged)?,
+                    );
+                }
+                Ok((times, states))
+            })
+        }
+    })();
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    if invalid_event.get() {
+        return Err(NumericError::Domain(
+            "event returned a non-finite value".into(),
+        ));
+    }
+    result
+}
+
 /// Integrates `rhs` from `ts[0]` over the given times.
 ///
 /// The result has one state per entry of `ts`, starting with `y0` at `ts[0]`.
@@ -85,6 +260,37 @@ pub fn integrate(
     if ts.is_empty() {
         return Err(NumericError::Empty);
     }
+    if !ts.iter().all(|x| x.is_finite()) || !y0.iter().all(|x| x.is_finite()) {
+        return Err(NumericError::Domain(
+            "times and initial state must be finite".into(),
+        ));
+    }
+    if matches!(
+        options.method,
+        Method::Dopri5 | Method::Radau | Method::Bdf | Method::Rosenbrock23
+    ) && (!options.rtol.is_finite()
+        || !options.atol.is_finite()
+        || options.rtol < 0.0
+        || options.atol <= 0.0)
+    {
+        return Err(NumericError::Domain(
+            "adaptive tolerances must be finite, with rtol >= 0 and atol > 0".into(),
+        ));
+    }
+    if ts
+        .windows(2)
+        .any(|pair| pair[1] < pair[0] || !(pair[1] - pair[0]).is_finite())
+    {
+        return Err(NumericError::Domain(
+            "the time grid must be increasing with finite intervals".into(),
+        ));
+    }
+    if matches!(
+        options.method,
+        Method::Radau | Method::Bdf | Method::Rosenbrock23
+    ) {
+        return stiff_integrate(rhs, y0, ts, options);
+    }
     let mut out = Vec::with_capacity(ts.len());
     let mut y = y0.to_vec();
     let mut t = ts[0];
@@ -93,6 +299,11 @@ pub fn integrate(
         if *target < t {
             return Err(NumericError::Domain(
                 "the time grid must be increasing".to_string(),
+            ));
+        }
+        if !(*target - t).is_finite() {
+            return Err(NumericError::Domain(
+                "the time interval is too large".into(),
             ));
         }
         match options.method {
@@ -112,11 +323,7 @@ pub fn integrate(
                 y = state;
                 t = time;
             },
-            | other => {
-                return Err(NumericError::Domain(format!(
-                    "the `{other:?}` method is not available in this build"
-                )));
-            },
+            | Method::Radau | Method::Bdf | Method::Rosenbrock23 => unreachable!("handled above"),
         }
         out.push(y.clone());
     }
@@ -137,6 +344,9 @@ fn rk4_step(
     for index in 0..y.len() {
         out[index] += h / 6.0 * (k1[index] + 2.0 * k2[index] + 2.0 * k3[index] + k4[index]);
     }
+    if !out.iter().all(|value| value.is_finite()) {
+        return Err(NumericError::NotConverged);
+    }
     Ok(out)
 }
 
@@ -153,6 +363,9 @@ fn evaluate(
             rate.len()
         )));
     }
+    if !rate.iter().all(|value| value.is_finite()) {
+        return Err(NumericError::Domain("the ODE right-hand side returned a non-finite value".into()));
+    }
     Ok(rate)
 }
 
@@ -164,6 +377,72 @@ fn add(
     y.iter()
         .zip(rate)
         .map(|(value, slope)| value + scale * slope)
+        .collect()
+}
+
+/// Run one RSSN solve over the whole grid, preserving BDF history and using
+/// the method's continuous extension for the requested output times.
+fn stiff_integrate(
+    rhs: &mut Rate<'_>,
+    y0: &[f64],
+    ts: &[f64],
+    options: Options,
+) -> Result<Vec<Vec<f64>>, NumericError> {
+    use rssn::kernels::ode_adaptive::{self, OdeOptions};
+    use rssn::kernels::ode_stiff;
+    use std::cell::RefCell;
+
+    let start = ts[0];
+    let end = ts[ts.len() - 1];
+    if start == end || y0.is_empty() {
+        return Ok(vec![y0.to_vec(); ts.len()]);
+    }
+    if !(end - start).is_finite() {
+        return Err(NumericError::Domain(
+            "the time interval is too large".into(),
+        ));
+    }
+    let failure = RefCell::new(None);
+    let rhs = RefCell::new(rhs);
+    let f = |t: f64, y: &[f64], out: &mut [f64]| match evaluate(
+        &mut **rhs.borrow_mut(),
+        t,
+        y,
+        out.len(),
+    ) {
+        | Ok(rate) => out.copy_from_slice(&rate),
+        | Err(error) => {
+            if failure.borrow().is_none() {
+                *failure.borrow_mut() = Some(error);
+            }
+            out.fill(f64::NAN);
+        },
+    };
+    let opts = OdeOptions {
+        rtol: options.rtol,
+        atol: options.atol,
+        ..OdeOptions::default()
+    };
+    let solution = match options.method {
+        | Method::Radau => ode_stiff::radau5(f, start, end, y0, &opts),
+        | Method::Bdf => ode_stiff::bdf(f, start, end, y0, &opts, 5),
+        | Method::Rosenbrock23 => ode_adaptive::rosenbrock23(f, start, end, y0, &opts),
+        | _ => unreachable!("only stiff methods are routed here"),
+    };
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    let solution = solution.map_err(|_| NumericError::NotConverged)?;
+    ts.iter()
+        .map(|&t| {
+            if t == start {
+                Ok(y0.to_vec())
+            } else if t == end {
+                solution.y.last().cloned().ok_or(NumericError::NotConverged)
+            } else {
+                solution.eval(t).ok_or(NumericError::NotConverged)
+            }
+        })
         .collect()
 }
 
@@ -215,7 +494,7 @@ fn dopri5(
         return Ok((y, t));
     }
     let mut guard = 0;
-    while (t1 - t).abs() > 1e-14 * t1.abs().max(1.0) {
+    while t < t1 {
         guard += 1;
         if guard > 1_000_000 {
             return Err(NumericError::NotConverged);
@@ -226,6 +505,9 @@ fn dopri5(
         } else {
             h
         };
+        if !step.is_finite() || step <= 0.0 || t + step == t {
+            return Err(NumericError::NotConverged);
+        }
         let k1 = evaluate(rhs, t, &y, n)?;
         let k2 = evaluate(rhs, t + step / 5.0, &add(&y, &k1, step * A21), n)?;
         let mut stage: Vec<f64> = (0..n)
@@ -259,6 +541,9 @@ fn dopri5(
                     + B5 * k5[index]
                     + B6 * k6[index]);
         }
+        if !candidate.iter().all(|value| value.is_finite()) {
+            return Err(NumericError::NotConverged);
+        }
         let k7 = evaluate(rhs, t + step, &candidate, n)?;
         // Error estimate, scaled to the tolerances.
         let mut error = 0.0f64;
@@ -273,8 +558,11 @@ fn dopri5(
             let scale = options.atol + options.rtol * y[index].abs().max(candidate[index].abs());
             error = error.max((estimate / scale).abs());
         }
-        if error <= 1.0 || step.abs() <= 1e-14 * t.abs().max(1.0) {
-            t += step;
+        if !error.is_finite() {
+            return Err(NumericError::NotConverged);
+        }
+        if error <= 1.0 {
+            t = if step == remaining { t1 } else { t + step };
             y = candidate;
         }
         // 0.9 * error^(-1/5) keeps the step inside the stability region.
@@ -284,12 +572,6 @@ fn dopri5(
             (0.9 * error.powf(-0.2)).clamp(0.2, 5.0)
         };
         h = step * factor;
-        if h.abs() < 1e-14 * t.abs().max(1.0) {
-            if error > 1.0 {
-                return Err(NumericError::NotConverged);
-            }
-            break;
-        }
     }
     Ok((y, t))
 }
@@ -341,8 +623,9 @@ mod tests {
     }
 
     #[test]
-    fn a_stiff_method_is_a_named_gap() {
-        let mut rhs = |_t: f64, y: &[f64]| vec![-1000.0 * y[0]];
+    fn radau_solves_a_stiff_non_autonomous_problem() {
+        // The exact solution is cos(t); the fast transient has rate -1000.
+        let mut rhs = |t: f64, y: &[f64]| vec![-1000.0 * (y[0] - t.cos()) - t.sin()];
         let outcome = integrate(
             &mut rhs,
             &[1.0],
@@ -351,10 +634,147 @@ mod tests {
                 method: Method::Radau,
                 ..Options::default()
             },
-        );
-        assert!(matches!(outcome, Err(NumericError::Domain(_))));
-        assert_eq!(Method::Radau.capability(), Some("ode.radau"));
+        )
+        .unwrap();
+        assert!(close(outcome[1][0], 1.0_f64.cos(), 1e-6), "{outcome:?}");
+        assert_eq!(Method::Radau.capability(), None);
         assert_eq!(Method::Dopri5.capability(), None);
+    }
+
+    #[test]
+    fn radau_handles_coupled_stiff_and_nonlinear_states() {
+        // x' = -1000(x - y²) + 2y y', y' = -y, with x=y².
+        let mut rhs =
+            |_t: f64, y: &[f64]| vec![-1000.0 * (y[0] - y[1] * y[1]) - 2.0 * y[1] * y[1], -y[1]];
+        let solution = integrate(
+            &mut rhs,
+            &[1.0, 1.0],
+            &[0.0, 0.5, 1.0],
+            Options {
+                method: Method::Radau,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            close(solution[2][0], (-2.0_f64).exp(), 2e-6),
+            "{solution:?}"
+        );
+        assert!(
+            close(solution[2][1], (-1.0_f64).exp(), 2e-6),
+            "{solution:?}"
+        );
+    }
+
+    #[test]
+    fn radau_damps_a_very_fast_transient_without_explicit_stability_steps() {
+        let mut calls = 0;
+        let mut rhs = |_t: f64, y: &[f64]| {
+            calls += 1;
+            vec![-1e6 * y[0]]
+        };
+        let solution = integrate(
+            &mut rhs,
+            &[1.0],
+            &[0.0, 1.0],
+            Options {
+                method: Method::Radau,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert!(solution[1][0].abs() < 1e-9, "{solution:?}");
+        assert!(calls < 30_000, "{calls} evaluations");
+    }
+
+    #[test]
+    fn radau_rejects_invalid_input_and_rhs_shape() {
+        let opts = Options {
+            method: Method::Radau,
+            ..Options::default()
+        };
+        let mut rhs = |_t: f64, _y: &[f64]| vec![1.0, 2.0];
+        assert!(matches!(
+            integrate(&mut rhs, &[1.0], &[0.0, 1.0], opts),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            integrate(&mut rhs, &[1.0], &[0.0, f64::NAN], opts),
+            Err(NumericError::Domain(_))
+        ));
+        assert!(matches!(
+            integrate(&mut rhs, &[1.0], &[0.0, 1.0], Options { atol: 0.0, ..opts }),
+            Err(NumericError::Domain(_))
+        ));
+    }
+
+    #[test]
+    fn each_stiff_solver_handles_a_nonuniform_output_grid() {
+        for method in [Method::Radau, Method::Bdf, Method::Rosenbrock23] {
+            let mut rhs = |t: f64, y: &[f64]| vec![-1000.0 * (y[0] - t.cos()) - t.sin()];
+            let times = [0.0, 0.001, 0.1, 0.1, 0.73, 1.0];
+            let trajectory = integrate(
+                &mut rhs,
+                &[1.0],
+                &times,
+                Options {
+                    method,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            for (t, state) in times.iter().zip(&trajectory) {
+                assert!(
+                    (state[0] - t.cos()).abs() < 1e-5,
+                    "{method:?} at {t}: {state:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_methods_locate_a_terminal_event_inside_a_step() {
+        for method in [
+            Method::Rk4,
+            Method::Dopri5,
+            Method::Radau,
+            Method::Bdf,
+            Method::Rosenbrock23,
+        ] {
+            let mut rhs = |_t: f64, _y: &[f64]| vec![1.0];
+            let mut event = |_t: f64, y: &[f64]| y[0] - 0.6;
+            let (times, values) = integrate_until_event(
+                &mut rhs,
+                &[0.0],
+                &[0.0, 0.5, 1.0],
+                Options {
+                    method,
+                    steps: 4,
+                    ..Options::default()
+                },
+                &mut event,
+            )
+            .unwrap();
+            assert_eq!(times.len(), 3, "{method:?}: {times:?}");
+            assert!((times[2] - 0.6).abs() < 1e-7, "{method:?}: {times:?}");
+            assert!((values[2][0] - 0.6).abs() < 1e-7, "{method:?}: {values:?}");
+        }
+    }
+
+    #[test]
+    fn event_at_initial_time_stops_immediately() {
+        let mut rhs = |_t: f64, _y: &[f64]| vec![1.0];
+        let mut event = |_t: f64, y: &[f64]| y[0];
+        let (times, states) = integrate_until_event(
+            &mut rhs,
+            &[0.0],
+            &[0.0, 1.0],
+            Options::default(),
+            &mut event,
+        )
+        .unwrap();
+        assert_eq!(times, vec![0.0]);
+        assert_eq!(states, vec![vec![0.0]]);
     }
 
     #[test]
@@ -362,5 +782,16 @@ mod tests {
         let mut rhs = |_t: f64, _y: &[f64]| vec![1.0, 2.0];
         let outcome = integrate(&mut rhs, &[1.0], &[0.0, 1.0], Options::default());
         assert!(matches!(outcome, Err(NumericError::ShapeMismatch(_))));
+    }
+
+    #[test]
+    fn dopri_integrates_small_time_intervals_and_rejects_nonfinite_rates() {
+        let mut fast = |_t: f64, _y: &[f64]| vec![1e15];
+        let trajectory = integrate(&mut fast, &[0.0], &[0.0, 1e-15], Options::default()).unwrap();
+        assert!((trajectory[1][0] - 1.0).abs() < 1e-8);
+        for method in [Method::Rk4, Method::Dopri5, Method::Radau, Method::Bdf, Method::Rosenbrock23] {
+            let mut invalid = |_t: f64, _y: &[f64]| vec![f64::NAN];
+            assert!(integrate(&mut invalid, &[1.0], &[0.0, 1.0], Options { method, ..Options::default() }).is_err(), "{method:?}");
+        }
     }
 }

@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+jit = ["aevia-rssn/jit"]
+
 [dependencies]
 aevia-dim.workspace = true
 aevia-syntax.workspace = true

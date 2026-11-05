@@ -425,6 +425,7 @@ fn an_ode_with_a_record_state_flattens_and_rebuilds_in_field_order() {
     v: Float[L/T],
 }
 
+
 type Rate = {
     x: Float[L/T],
     v: Float[L/T^2],
@@ -475,6 +476,51 @@ let last = path[-1]
         vec!["x", "v"],
         "the record is rebuilt with its declared field order"
     );
+}
+
+#[test]
+fn an_ode_record_rate_is_matched_by_field_name() {
+    let source = r#"type State = { x: Float[L], v: Float[L/T] }
+type Rate = { x: Float[L/T], v: Float[L/T^2] }
+fn rhs(_t: Float[T], s: State): Rate = { v = 1.0 m/s^2, x = s.v }
+let path = odeint(rhs, { x = 0.0 m, v = 1.0 m/s }, [0.0 s, 1.0 s])
+let last = path[-1]
+"#;
+    let Value::Record(last) = value(source, "last") else {
+        panic!("expected a state")
+    };
+    assert!((float_of(&last.fields["x"]) - 1.5).abs() < 1e-6);
+    assert!((float_of(&last.fields["v"]) - 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn native_ode_rhs_must_match_shape_and_rate_dimension() {
+    use aevia_core::value::NativeFn;
+    let run = |rhs_value: Value, initial: Value| {
+        let rhs = Value::Native(Rc::new(NativeFn(Box::new(
+            move |_interp: &mut Interp, _args: Vec<Value>, _span: Span| Ok(rhs_value.clone()),
+        ))));
+        let times = aevia_core::eval::build_tensor(
+            vec![scalar(0.0, time()), scalar(1.0, time())],
+            vec![2],
+            time(),
+        );
+        let mut interpreter = Interp::new(&aevia_types::CheckedModule::default());
+        interpreter.call_named("odeint", vec![rhs, initial, times], Span::default())
+    };
+    // A dimensionless derivative of a length state is not length/time.
+    let error = run(Value::float(1.0), scalar(0.0, length())).expect_err("wrong rate dimension");
+    assert_eq!(error.code, "E0401");
+    // Same number of elements, but a different tensor shape.
+    let initial =
+        aevia_core::eval::build_tensor(vec![Value::float(0.0); 4], vec![2, 2], Dim::one());
+    let derivative = aevia_core::eval::build_tensor(
+        vec![scalar(1.0, Dim::one().div(&time())); 4],
+        vec![4],
+        Dim::one().div(&time()),
+    );
+    let error = run(derivative, initial).expect_err("wrong rate shape");
+    assert_eq!(error.code, "E0302");
 }
 
 /// A right-hand side that answers a different number of components than the

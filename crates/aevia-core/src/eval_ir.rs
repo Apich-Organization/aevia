@@ -128,6 +128,8 @@ pub(crate) fn run_closure(
     };
     let mut function = first.clone();
     let mut env = first_env.clone();
+    #[cfg(feature = "jit")]
+    let mut current_closure = closure.clone();
     let mut args = args;
     if function.params.len() != args.len() {
         return Err(EvalError::new(
@@ -151,32 +153,57 @@ pub(crate) fn run_closure(
     // a million allocations.
     let mut frame: Vec<Value> = Vec::new();
     let outcome = 'run: loop {
-        let slots = usize::try_from(function.nslots).unwrap_or(0);
-        frame.clear();
-        frame.resize(slots, Value::Unit);
-        for (pattern, argument) in function.params.iter().zip(args.iter_mut()) {
-            // The argument vector is ours, so a plain binder can *move* the
-            // value into its slot instead of cloning it. A 96-byte `Value`
-            // carrying a `BigInt` was one allocation per parameter per
-            // iteration — the cheapest thing a tail loop does.
-            if !bind_parameter(pattern, argument, &mut frame) {
-                break 'run Err(EvalError::new(
-                    "E0308",
-                    format!("pattern does not match value {}", value::show(argument)),
+        #[cfg(feature = "jit")]
+        let compiled_flow = {
+            let remaining = interp.max_tail_calls.saturating_sub(tail_calls);
+            let outcome = crate::jit::run(&function, &args, remaining, || {
+                // Native code may loop only while this name still points to the
+                // same closure. Pure compiled steps cannot mutate that binding.
+                matches!(
+                    eval_atom(interp, &Atom::Global(function.name.to_string()), &mut frame, &env, function.span),
+                    Ok(Value::Closure(target)) if Rc::ptr_eq(&target, &current_closure)
                 )
-                .at(function.span));
+            });
+            match outcome {
+                | Some(crate::jit::Outcome::Value(value)) => Some(Flow::Value(value)),
+                | Some(crate::jit::Outcome::Tail { args, span, consumed }) => {
+                    tail_calls += consumed;
+                    if consumed > 0 {
+                        if let Some(current) = interp.frames.last_mut() { current.span = span; }
+                    }
+                    Some(Flow::Tail { closure: current_closure.clone(), args, span })
+                },
+                | None => None,
             }
-        }
-        let flow = match eval_block(interp, &function.body, &mut frame, &env) {
-            | Ok(flow) => flow,
-            | Err(error) => break 'run Err(error),
+        };
+        #[cfg(not(feature = "jit"))]
+        let compiled_flow: Option<Flow> = None;
+        let flow = match compiled_flow {
+            | Some(flow) => flow,
+            | None => {
+                let slots = usize::try_from(function.nslots).unwrap_or(0);
+                frame.clear();
+                frame.resize(slots, Value::Unit);
+                for (pattern, argument) in function.params.iter().zip(args.iter_mut()) {
+                    // Move plain arguments into the reused trampoline frame.
+                    if !bind_parameter(pattern, argument, &mut frame) {
+                        break 'run Err(EvalError::new(
+                            "E0308",
+                            format!("pattern does not match value {}", value::show(argument)),
+                        ).at(function.span));
+                    }
+                }
+                match eval_block(interp, &function.body, &mut frame, &env) {
+                    | Ok(flow) => flow,
+                    | Err(error) => break 'run Err(error),
+                }
+            },
         };
         let (next, next_args, next_span) = match flow {
             | Flow::Value(value) => break 'run Ok(value),
             | Flow::Tail { closure, args, span } => (closure, args, span),
         };
-        tail_calls += 1;
-        if tail_calls > interp.max_tail_calls {
+        if tail_calls >= interp.max_tail_calls {
             // Not a stack overflow: a tail call reuses the frame, so the stack
             // is one frame deep however long the loop runs. Only a program that
             // never terminates reaches this budget, and calling it "stack
@@ -195,6 +222,7 @@ pub(crate) fn run_closure(
             )
             .with_stack(interp.frames.clone()));
         }
+        tail_calls += 1;
         let (ClosureBody::Ir(next_function), ClosureEnv::Ir(next_env)) = (&next.body, &next.env)
         else {
             break 'run interp.apply(Value::Closure(next), next_args, next_span);
@@ -212,6 +240,8 @@ pub(crate) fn run_closure(
         }
         function = next_function.clone();
         env = next_env.clone();
+        #[cfg(feature = "jit")]
+        { current_closure = next.clone(); }
         args = next_args;
         if let Some(current) = interp.frames.last_mut() {
             // A self tail call keeps the name, and cloning it per iteration was
@@ -267,6 +297,7 @@ fn eval_block(
         match stmt {
             | Stmt::Let(item) => {
                 let value = eval_rhs(interp, &item.rhs, frame, env, item.span)?;
+                let value = interp.attach_checked_type(value, item.span);
                 set(frame, item.slot, value);
             },
             | Stmt::Bind { pattern, atom, span } => {
@@ -292,7 +323,8 @@ fn eval_tail(
 ) -> Result<Flow, EvalError> {
     match tail {
         | Tail::Return { atom, span } => {
-            Ok(Flow::Value(eval_atom(interp, atom, frame, env, *span)?))
+            let value = eval_atom(interp, atom, frame, env, *span)?;
+            Ok(Flow::Value(interp.attach_checked_type(value, *span)))
         },
         | Tail::Call(call) => eval_call(interp, call, frame, env, true),
         | Tail::If {
@@ -358,17 +390,17 @@ fn eval_call(
 ) -> Result<Flow, EvalError> {
     match &call.kind {
         | CallKind::Typed { name, types } => {
-            let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
+            let values = eval_call_args(interp, call, frame, env)?;
             Ok(Flow::Value(crate::builtins::call_typed(
                 interp, name, types, values, call.span,
             )?))
         },
         | CallKind::Rssn { name } => {
-            let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
+            let values = eval_call_args(interp, call, frame, env)?;
             Ok(Flow::Value(interp.call_rssn(name, call.span, values)?))
         },
         | CallKind::Dictionary { method, target: _ } => {
-            let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
+            let values = eval_call_args(interp, call, frame, env)?;
             match interp.dictionary_use(call.span, method) {
                 | Some(use_site) => {
                     // A dictionary call in tail position is a tail call like any
@@ -405,7 +437,7 @@ fn eval_call(
         },
         | CallKind::Normal => {
             let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
-            let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
+            let values = eval_call_args(interp, call, frame, env)?;
             if tail {
                 if let Value::Closure(closure) = &function {
                     if matches!(closure.body, ClosureBody::Ir(_)) {
@@ -420,6 +452,21 @@ fn eval_call(
             Ok(Flow::Value(interp.apply(function, values, call.span)?))
         },
     }
+}
+
+fn eval_call_args(
+    interp: &mut Interp,
+    call: &Call,
+    frame: &mut Vec<Value>,
+    env: &Rc<IrEnv>,
+) -> Result<Vec<Value>, EvalError> {
+    let mut values = Vec::with_capacity(call.args.len());
+    for (index, atom) in call.args.iter().enumerate() {
+        let span = call.arg_spans.get(index).copied().unwrap_or(call.span);
+        let value = eval_atom(interp, atom, frame, env, span)?;
+        values.push(interp.attach_checked_type(value, span));
+    }
+    Ok(values)
 }
 
 fn eval_atoms(

@@ -421,12 +421,9 @@ fn an_exact_call_site_pins_the_instance_key() {
 }
 
 #[test]
-fn instances_with_the_same_runtime_witness_are_rejected() {
-    // Round-2 decision 1c: `Tensor<1, Int>` and `Tensor<1, Real>` are distinct
-    // heads but one witness (exact storage), so a quantified call site could
-    // not dispatch between them. That is check-time `E0311`, not a run-time
-    // guess.
-    expect_error(
+fn exact_tensor_instances_can_differ_by_element_representation() {
+    // Exact tensors with known Int/Real provenance are distinguishable.
+    parsed(
         r#"class Pretty a where
     pretty(x: a): String
 instance Pretty for Tensor<1, Int> where
@@ -434,7 +431,6 @@ instance Pretty for Tensor<1, Int> where
 instance Pretty for Tensor<1, Real> where
     pretty(t) = "real"
 "#,
-        "E0311",
     );
     // Different ranks are distinguishable, so both are legal.
     parsed(
@@ -633,4 +629,71 @@ let sdeint_diag = sdeint_diag
             .map(|item| (&item.code, &item.message))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn repeated_instance_head_parameters_refer_to_one_type() {
+    let module = parsed(
+        r#"class Same a where
+    same(x: a): String
+instance Same for { first: t, second: t } where
+    same(x) = "same"
+"#,
+    );
+    let head = &module.instances[0].head;
+    let pair = |first, second| {
+        Type::record(vec![("first".into(), first), ("second".into(), second)])
+    };
+    assert!(aevia_types::class::matches_head(head, &pair(Type::int(), Type::int())));
+    assert!(!aevia_types::class::matches_head(head, &pair(Type::int(), Type::Str)));
+}
+
+#[test]
+fn repeated_instance_head_parameters_reject_different_field_types() {
+    expect_error(
+        r#"class Same a where
+    same(x: a): String
+instance Same for { first: t, second: t } where
+    same(x) = "same"
+let value = same({ first = 1, second = "text" })
+"#,
+        "E0310",
+    );
+}
+
+#[test]
+fn disjoint_record_fields_and_tensor_extents_have_distinct_instance_keys() {
+    let module = parsed(
+        r#"class Classify a where
+    classify(x: a): String
+instance Classify for { x: Int } where
+    classify(x) = "int"
+instance Classify for { x: String } where
+    classify(x) = "string"
+instance Classify for Tensor<[2], Float> where
+    classify(x) = "two"
+instance Classify for Tensor<[3], Float> where
+    classify(x) = "three"
+"#,
+    );
+    let keys: std::collections::HashSet<_> = module.instances.iter().map(|i| &i.key).collect();
+    assert_eq!(keys.len(), 4);
+    let fixed = &module.instances[2].head;
+    let erased = Type::tensor(aevia_types::ty::Shape::Rank(1), Type::float(aevia_dim::Dim::one()));
+    assert!(!aevia_types::class::matches_head(fixed, &erased));
+}
+
+#[test]
+fn generic_adt_arguments_make_distinct_instance_keys() {
+    let module = parsed(
+        r#"class Describe a where
+    describe(x: a): String
+instance Describe for Option<Int> where
+    describe(x) = "int"
+instance Describe for Option<String> where
+    describe(x) = "string"
+"#,
+    );
+    assert_eq!(module.instances.len(), 2);
+    assert_ne!(module.instances[0].key, module.instances[1].key);
 }

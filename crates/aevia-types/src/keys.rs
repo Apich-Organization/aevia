@@ -267,10 +267,8 @@ pub enum HeadKey {
     },
     /// A nominal type, with its structural arguments.
     Adt(AdtKey, Vec<HeadKey>),
-    /// A record: the canonical (sorted) label set. Field types do not enter the
-    /// key because two instances with the same labels but different field types
-    /// overlap and are rejected at registration.
-    Record(Vec<String>),
+    /// A record's canonical field names and types.
+    Record(Vec<(String, HeadKey)>),
     /// A function type: no instance head may dispatch it.
     Fn,
     /// `Dyn<ρ>`.
@@ -326,11 +324,11 @@ impl fmt::Display for HeadKey {
             },
             | Self::Record(labels) => {
                 f.write_str("{")?;
-                for (index, label) in labels.iter().enumerate() {
+                for (index, (label, ty)) in labels.iter().enumerate() {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{label}")?;
+                    write!(f, "{label}: {ty}")?;
                 }
                 f.write_str("}")
             },
@@ -353,6 +351,7 @@ impl HeadKey {
                 shape.iter().all(Option::is_some) && elem.is_concrete()
             },
             | Self::Adt(_, args) => args.iter().all(Self::is_concrete),
+            | Self::Record(fields) => fields.iter().all(|(_, ty)| ty.is_concrete()),
             | Self::Io(inner) => inner.is_concrete(),
             | Self::Scalar(_)
             | Self::Bool
@@ -361,7 +360,6 @@ impl HeadKey {
             | Self::Prop
             | Self::Point
             | Self::UnitOf
-            | Self::Record(_)
             | Self::Fn
             | Self::Dyn => true,
         }
@@ -389,7 +387,15 @@ pub fn head_key(ty: &Type) -> HeadKey {
                 elem: Box::new(head_key(elem)),
             }
         },
-        | Type::Record(row) => HeadKey::Record(row_labels(row)),
+        | Type::Record(row) => {
+            let mut fields: Vec<_> = row.fields().into_iter()
+                .map(|(label, ty)| (label, head_key(&ty))).collect();
+            fields.sort_by(|a, b| a.0.cmp(&b.0));
+            if row.tail_var().is_some() {
+                fields.push(("...".to_string(), HeadKey::Wildcard));
+            }
+            HeadKey::Record(fields)
+        },
         | Type::Adt(id, args) => {
             HeadKey::Adt(adt::key_of(*id), args.iter().map(head_key).collect())
         },
@@ -687,7 +693,10 @@ mod tests {
         // key is what the instance carries.
         assert_eq!(
             head_key(&record(&["x", "y"])),
-            HeadKey::Record(vec!["x".to_string(), "y".to_string()])
+            HeadKey::Record(vec![
+                ("x".to_string(), HeadKey::Scalar(RepKind::Int)),
+                ("y".to_string(), HeadKey::Scalar(RepKind::Int)),
+            ])
         );
         assert_eq!(
             head_key(&Type::tensor(

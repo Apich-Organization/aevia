@@ -97,6 +97,8 @@ pub struct Function {
     /// `Rc<str>`: a stack frame pushes the name once per *call*, so a `String`
     /// here was one allocation per call (and per tail step's frame update).
     pub name: Rc<str>,
+    /// Whether the source requested JIT compilation.
+    pub jit: bool,
     /// The parameter patterns, in order.
     pub params: Vec<Pattern>,
     /// The body.
@@ -345,6 +347,8 @@ pub struct Call {
     pub callee: Atom,
     /// The arguments, already evaluated to atoms.
     pub args: Vec<Atom>,
+    /// Source spans of arguments, for preserving their checked runtime types.
+    pub arg_spans: Vec<Span>,
     /// How the call is resolved.
     pub kind: CallKind,
     /// Where the call is written. `Rssn` and dictionary lookups are by span.

@@ -177,12 +177,17 @@ impl NumVal {
     }
 }
 
-/// A tensor's backing storage.
-///
-/// The variant is a *representation* choice, not a semantic one: two tensors
-/// with the same shape and the same element values are equal and print
-/// identically whichever variant holds them (§9.13, §6.12.3). Nothing outside
-/// this module may branch on it except to pick a faster path.
+/// The element representation retained by an exact numeric tensor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExactRep {
+    /// Integer elements.
+    Int,
+    /// Exact real elements.
+    Real,
+}
+
+/// A tensor's backing storage. Typed exact buffers retain the element
+/// representation needed to dispatch and reconstruct scalar values.
 #[derive(Clone, Debug)]
 pub enum Storage {
     /// Contiguous, row-major `f64` elements.
@@ -218,8 +223,11 @@ pub enum Storage {
     /// rather than a copy: [`TensorData::buffer`] exposes it, and `Rc::ptr_eq`
     /// on two of them is what "shares storage" means.
     Dense(Rc<Vec<f64>>),
-    /// `Int`/`Real` elements.
+    /// Exact elements whose original representation is unknown.
     Exact(Vec<BigRational>),
+    /// Exact elements with a proven representation. Integer buffers contain
+    /// only rational numbers with denominator one.
+    TypedExact(Vec<BigRational>, ExactRep),
     /// Mixed or structured elements.
     Boxed(Vec<Value>),
     /// `Bool` elements.
@@ -373,7 +381,7 @@ impl Storage {
     pub fn len(&self) -> usize {
         match self {
             | Self::Dense(items) => items.len(),
-            | Self::Exact(items) => items.len(),
+            | Self::Exact(items) | Self::TypedExact(items, _) => items.len(),
             | Self::Boxed(items) => items.len(),
             | Self::Bool(items) => items.len(),
             | Self::View(view) => view.len,
@@ -489,12 +497,21 @@ impl TensorData {
                     .get(position)
                     .map(|value| self.float_value(*value))
             },
-            | Storage::Exact(items) => {
+            | Storage::Exact(items) | Storage::TypedExact(items, ExactRep::Real) => {
                 items.get(index).map(|value| {
                     let mut num = NumVal::exact(value.clone(), self.dim.clone());
                     num.display = self.display.clone();
                     Value::Num(num)
                 })
+            },
+            | Storage::TypedExact(items, ExactRep::Int) => {
+                let value = items.get(index)?;
+                if !value.is_integer() { return None; }
+                Some(Value::Num(NumVal {
+                    kind: NumKind::Int(value.to_integer()),
+                    dim: self.dim.clone(),
+                    display: self.display.clone(),
+                }))
             },
             | Storage::Boxed(items) => items.get(index).cloned(),
             | Storage::Bool(items) => items.get(index).map(|value| Value::Bool(*value)),
@@ -1365,6 +1382,8 @@ pub struct VariantValue {
     pub name: String,
     /// The payload.
     pub fields: Vec<Value>,
+    /// Concrete type arguments supplied by a checked expression, if known.
+    pub type_args: Option<Vec<aevia_types::Type>>,
 }
 
 impl Drop for VariantValue {
@@ -2485,6 +2504,7 @@ pub fn make_variant(
         index,
         name: name.to_string(),
         fields,
+        type_args: None,
     }))
 }
 

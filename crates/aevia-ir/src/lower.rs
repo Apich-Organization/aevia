@@ -84,7 +84,9 @@ pub fn lower_module_with_literals(
             | DeclKind::Fn { name, args, body, .. } => {
                 out.fns.push(FnDecl {
                     name: name.clone(),
-                    function: lowerer.top_function(name, args, body, decl.span),
+                    function: lowerer.top_function(
+                        name, args, body, decl.span, decl.has_attribute("jit"),
+                    ),
                     span: decl.span,
                 })
             },
@@ -107,6 +109,7 @@ pub fn lower_module_with_literals(
                             &method.params,
                             &method.body,
                             method.span,
+                            false,
                         ),
                         span: method.span,
                     });
@@ -171,7 +174,9 @@ pub fn lower_decl_with_literals(
         | DeclKind::Fn { name, args, body, .. } => {
             Some(LoweredDecl::Fn(FnDecl {
                 name: name.clone(),
-                function: lowerer.top_function(name, args, body, decl.span),
+                function: lowerer.top_function(
+                    name, args, body, decl.span, decl.has_attribute("jit"),
+                ),
                 span: decl.span,
             }))
         },
@@ -194,6 +199,7 @@ pub fn lower_decl_with_literals(
                         &method.params,
                         &method.body,
                         method.span,
+                        false,
                     ),
                     span: method.span,
                 });
@@ -388,8 +394,13 @@ impl Lowerer {
         params: &[Param],
         body: &Expr,
         span: Span,
+        jit: bool,
     ) -> Rc<Function> {
-        self.lambda(name.to_string(), params, body, span)
+        let mut function = self.lambda(name.to_string(), params, body, span);
+        Rc::get_mut(&mut function)
+            .expect("new function is uniquely owned")
+            .jit = jit;
+        function
     }
 
     fn top_value(
@@ -422,6 +433,7 @@ impl Lowerer {
         let state = self.fns.pop().expect("the function state");
         Rc::new(Function {
             name: Rc::from(state.name),
+            jit: false,
             params: patterns,
             body: Rc::new(body_block),
             captures: state.captures,
@@ -979,7 +991,7 @@ impl Lowerer {
             let mut call_args = Vec::new();
             for (index, arg) in args.iter().enumerate() {
                 if matches!(arg.kind, ExprKind::Placeholder) {
-                    let name = format!("__arg{index}");
+                    let name = aevia_syntax::ast::placeholder_param_name(index);
                     params.push(Param {
                         pattern: Pat::new(PatKind::Var(name.clone()), arg.span),
                         ty: None,
@@ -1012,6 +1024,7 @@ impl Lowerer {
                     return Rhs::Call(Call {
                         callee: Atom::Unit,
                         args: values,
+                        arg_spans: args.iter().map(|arg| arg.span).collect(),
                         kind: CallKind::Typed {
                             name: name.clone(),
                             types: types.clone(),
@@ -1028,6 +1041,7 @@ impl Lowerer {
                 return Rhs::Call(Call {
                     callee: Atom::Unit,
                     args: values,
+                    arg_spans: args.iter().map(|arg| arg.span).collect(),
                     kind: CallKind::Rssn { name },
                     span: expr.span,
                 });
@@ -1047,6 +1061,7 @@ impl Lowerer {
                 return Rhs::Call(Call {
                     callee: Atom::Global(name.clone()),
                     args: values,
+                    arg_spans: args.iter().map(|arg| arg.span).collect(),
                     kind: CallKind::Dictionary {
                         method: name.clone(),
                         target: Some(use_site.target),
@@ -1060,6 +1075,7 @@ impl Lowerer {
         Rhs::Call(Call {
             callee: function,
             args: values,
+            arg_spans: args.iter().map(|arg| arg.span).collect(),
             kind: CallKind::Normal,
             span: expr.span,
         })
@@ -1152,6 +1168,7 @@ impl Lowerer {
         let state = self.fns.pop().expect("the thunk state");
         Rc::new(Function {
             name: Rc::from(state.name),
+            jit: false,
             params,
             body: Rc::new(block),
             captures: state.captures,

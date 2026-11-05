@@ -11,6 +11,10 @@ repository.workspace = true
 name = "aevia"
 path = "src/main.rs"
 
+[features]
+default = []
+jit = ["aevia-core/jit"]
+
 [dependencies]
 aevia-dim.workspace = true
 aevia-syntax.workspace = true

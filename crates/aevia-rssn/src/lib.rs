@@ -31,6 +31,8 @@
 pub mod codegen;
 pub mod error;
 pub mod kernel;
+#[cfg(feature = "jit")]
+pub mod jit;
 pub mod registry;
 pub mod value;
 

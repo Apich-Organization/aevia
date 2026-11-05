@@ -81,6 +81,23 @@ fn run(entry: &Path) -> String {
     interp.captured()
 }
 
+#[test]
+fn ode_module_exports_stiff_methods_and_terminal_events() {
+    let scratch = Scratch::new("ode-events");
+    let entry = scratch.write(r#"module OdeSource
+import Ode { OdeMethod, OdeOpts, Radau, odeint_with }
+fn rhs(t: Float[T], x: Float[1]): Float[1/T] = 1.0 / (1.0 s)
+fn event(t: Float[T], x: Float[1]): Float[1] = x - 0.6
+fn main(): IO Unit = do
+    let opts: OdeOpts<Float[1]> = { rtol = 1e-8, atol = 1e-10, method = Radau, steps = Some(4), events = Some(event) }
+    let path = odeint_with(rhs, 0.0, [0.0 s, 0.5 s, 1.0 s], opts)
+    println(path.y[2])
+"#);
+    let output = run(&entry);
+    let value: f64 = output.trim().parse().expect("numeric final state");
+    assert!((value - 0.6).abs() < 1e-7, "{output}");
+}
+
 /// `dX = X dt + X dW` from `X(0) = 1` over four steps of 1 s, with the option
 /// records constructed from the `Sde` module and the closures typed through
 /// `RateOf`/`DiffusionOf`.

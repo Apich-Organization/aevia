@@ -149,8 +149,15 @@ fn an_unseeded_sample_advances_the_session_rng() {
 
 fn constant_rhs() -> Value {
     Value::Native(Rc::new(NativeFn(Box::new(
-        |_interp: &mut Interp, _args: Vec<Value>, _span: Span| Ok(float(0.0)),
+        |_interp: &mut Interp, _args: Vec<Value>, _span: Span| Ok(rate(0.0)),
     ))))
+}
+
+fn rate(value: f64) -> Value {
+    Value::Num(aevia_core::value::NumVal::float(
+        value,
+        aevia_dim::Dim::one().div(&aevia_dim::Dim::base("Time")),
+    ))
 }
 
 fn times() -> Value {
@@ -169,35 +176,29 @@ fn ode_options(events: Option<Value>) -> Value {
     record(fields)
 }
 
-/// §8.9: `events` terminates and interpolates at a sign change. This build's
-/// kernel has no event support, so asking for it is `E1001` naming the
-/// capability — never a silently ignored option.
 #[test]
-fn an_ode_event_option_is_a_named_capability_gap() {
+fn an_ode_event_stops_the_trajectory_at_its_root() {
     let mut interpreter = Interp::new(&aevia_types::CheckedModule::default());
-    let error = interpreter
+    let rhs = Value::Native(Rc::new(NativeFn(Box::new(
+        |_interp: &mut Interp, _args: Vec<Value>, _span: Span| Ok(rate(1.0)),
+    ))));
+    let event = Value::Native(Rc::new(NativeFn(Box::new(
+        |_interp: &mut Interp, args: Vec<Value>, _span: Span| Ok(float(args[1].as_f64().unwrap() - 0.6)),
+    ))));
+    let event = make_variant(adt::OPTION_ID, 1, "Some", vec![event]);
+    let result = interpreter
         .call_named(
             "odeint_with",
-            vec![
-                constant_rhs(),
-                float(0.0),
-                times(),
-                ode_options(Some(some(1))),
-            ],
+            vec![rhs, float(0.0), times(), ode_options(Some(event))],
             Span::default(),
         )
-        .expect_err("events are not supported in this build");
-    assert_eq!(error.code, "E1001", "a capability gap names the capability");
-    assert!(
-        error.message.contains("core.ode.events"),
-        "the message names `core.ode.events`: {}",
-        error.message
-    );
-    assert!(
-        error.message.contains("events"),
-        "the message names the option: {}",
-        error.message
-    );
+        .expect("event integration");
+    let Value::Record(trajectory) = result else { panic!("expected trajectory") };
+    let times = tensor_values(trajectory.fields["t"].clone());
+    let states = tensor_values(trajectory.fields["y"].clone());
+    assert_eq!(times.len(), 4);
+    assert!((times[3] - 0.6).abs() < 1e-9, "{times:?}");
+    assert!((states[3] - 0.6).abs() < 1e-9, "{states:?}");
 }
 
 /// `events = None` asks for no events, so it is not a gap: the integration runs
@@ -222,6 +223,28 @@ fn an_absent_event_option_is_not_a_gap() {
     };
     assert!(trajectory.fields.contains_key("t"));
     assert!(trajectory.fields.contains_key("y"));
+}
+
+#[test]
+fn radau_integrates_a_stiff_problem_through_the_runtime() {
+    let rhs = Value::Native(Rc::new(NativeFn(Box::new(
+        |_interp: &mut Interp, args: Vec<Value>, _span: Span| {
+            let t = args[0].as_f64().unwrap();
+            let y = args[1].as_f64().unwrap();
+            Ok(rate(-1000.0 * (y - t.cos()) - t.sin()))
+        },
+    ))));
+    let options = record(vec![
+        ("rtol", float(1e-8)),
+        ("atol", float(1e-10)),
+        ("method", make_variant(adt::OPTION_ID, 0, "Radau", vec![])),
+    ]);
+    let mut interpreter = Interp::new(&aevia_types::CheckedModule::default());
+    let Value::Record(trajectory) = interpreter
+        .call_named("odeint_with", vec![rhs, float(1.0), times(), options], Span::default())
+        .expect("Radau is available") else { panic!("expected trajectory") };
+    let states = tensor_values(trajectory.fields["y"].clone());
+    assert!((states[3] - 1.0_f64.cos()).abs() < 1e-6, "{states:?}");
 }
 
 // ---------------------------------------------------------------------------

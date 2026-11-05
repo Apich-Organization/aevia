@@ -11,6 +11,15 @@ use aevia_dim::UnitExpr;
 use num_bigint::BigInt;
 use num_traits::One;
 
+/// Name of an internal parameter introduced for a call placeholder.
+///
+/// A NUL cannot occur in a source identifier, so this name cannot shadow or
+/// capture a name written by the user when a partial call becomes a lambda.
+#[must_use]
+pub fn placeholder_param_name(index: usize) -> String {
+    format!("\0placeholder{index}")
+}
+
 /// A literal number in a unit literal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NumberLit {

@@ -25,6 +25,8 @@ pub enum TransportError {
     Io(io::Error),
     /// The header block had no `Content-Length`.
     MissingLength,
+    /// The length was invalid or appeared more than once.
+    InvalidLength,
     /// The body was not JSON.
     Json(serde_json::Error),
 }
@@ -37,6 +39,7 @@ impl std::fmt::Display for TransportError {
         match self {
             | Self::Io(error) => write!(f, "transport: {error}"),
             | Self::MissingLength => f.write_str("transport: a message had no Content-Length"),
+            | Self::InvalidLength => f.write_str("transport: invalid or duplicate Content-Length"),
             | Self::Json(error) => write!(f, "transport: the body was not JSON: {error}"),
         }
     }
@@ -65,28 +68,55 @@ impl<R: BufRead> Reader<R> {
     ///
     /// # Errors
     ///
-    /// [`TransportError`] when the stream fails, the frame has no length, or
-    /// the body is not JSON. In the last case the frame has been consumed and
-    /// the next call is still in sync.
+    /// [`TransportError`] when the stream fails, the frame has a missing or
+    /// invalid length, or the body is not JSON. In the last case the frame has
+    /// been consumed and the next call is still in sync.
     pub fn next_message(&mut self) -> Result<Option<serde_json::Value>, TransportError> {
         let mut length = None;
+        let mut started = false;
         loop {
             let Some(line) = read_line(&mut self.inner)? else {
-                return Ok(None);
+                return if started {
+                    Err(
+                        io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete header block")
+                            .into(),
+                    )
+                } else {
+                    Ok(None)
+                };
             };
+            started = true;
             if line.is_empty() {
                 break;
             }
             if let Some((name, value)) = line.split_once(':') {
                 if name.trim().eq_ignore_ascii_case("content-length") {
-                    length = value.trim().parse::<usize>().ok();
+                    let value = value.trim();
+                    if length.is_some()
+                        || value.is_empty()
+                        || !value.bytes().all(|b| b.is_ascii_digit())
+                    {
+                        return Err(TransportError::InvalidLength);
+                    }
+                    length = Some(
+                        value
+                            .parse::<usize>()
+                            .map_err(|_| TransportError::InvalidLength)?,
+                    );
                 }
             }
         }
         let Some(length) = length else {
             return Err(TransportError::MissingLength);
         };
-        let mut body = vec![0_u8; length];
+        let mut body = Vec::new();
+        body.try_reserve_exact(length).map_err(|_| {
+            TransportError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "message body is too large",
+            ))
+        })?;
+        body.resize(length, 0);
         self.inner.read_exact(&mut body)?;
         let value = serde_json::from_slice(&body).map_err(TransportError::Json)?;
         Ok(Some(value))
@@ -99,6 +129,9 @@ fn read_line(reader: &mut impl BufRead) -> Result<Option<String>, TransportError
     let read = reader.read_until(b'\n', &mut bytes)?;
     if read == 0 {
         return Ok(None);
+    }
+    if bytes.last() != Some(&b'\n') {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete header line").into());
     }
     while bytes
         .last()
@@ -227,5 +260,41 @@ mod tests {
             reader.next_message(),
             Err(TransportError::MissingLength)
         ));
+    }
+
+    #[test]
+    fn truncated_headers_are_not_clean_eof() {
+        for bytes in [
+            b"Content-Length: 2".as_slice(),
+            b"Content-Length: 2\r\n".as_slice(),
+        ] {
+            let mut reader = Reader::new(Cursor::new(bytes));
+            assert!(
+                matches!(reader.next_message(), Err(TransportError::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_and_duplicate_lengths_are_refused() {
+        for header in [
+            "Content-Length: +2\r\n",
+            "Content-Length: -1\r\n",
+            "Content-Length: 2\r\ncontent-length: 3\r\n",
+        ] {
+            let frame = format!("{header}\r\n{{}}");
+            let mut reader = Reader::new(Cursor::new(frame));
+            assert!(
+                matches!(reader.next_message(), Err(TransportError::InvalidLength)),
+                "{header:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn impossible_body_allocation_is_reported() {
+        let frame = format!("Content-Length: {}\r\n\r\n", usize::MAX);
+        let mut reader = Reader::new(Cursor::new(frame));
+        assert!(matches!(reader.next_message(), Err(TransportError::Io(e)) if e.kind() == io::ErrorKind::InvalidData));
     }
 }

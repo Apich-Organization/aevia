@@ -353,6 +353,34 @@ let three = 2 |> inc
     assert_eq!(repr(source, "three"), "3");
 }
 
+#[test]
+fn placeholder_parameters_do_not_capture_user_names() {
+    let source = r#"fn subtract(a: Int, b: Int): Int = a - b
+fn with_value(__arg0: Int): Int =
+    let partial = subtract(_, __arg0)
+    partial(10)
+fn with_function(__arg0: (Int, Int) -> Int): Int =
+    let partial = __arg0(_, 3)
+    partial(10)
+let value = with_value(3)
+let function = with_function(subtract)
+"#;
+    let (module, checked) = build(source);
+    for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
+        let mut interp = Interp::new(&checked).with_mode(mode);
+        let diagnostics = interp.load(&module);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        for name in ["value", "function"] {
+            let value = interp.eval_toplevel(name).expect("value exists");
+            assert_eq!(aevia_core::value::repr(&value), "7", "{mode:?} {name}");
+        }
+    }
+}
+
 // --- regressions found by review -------------------------------------------
 
 #[test]
@@ -633,11 +661,11 @@ fn gamma_is_the_gamma_function() {
 fn zeros_and_ones_honour_their_type_argument() {
     assert!(matches!(
         storage("let a = zeros<Int>(3)\n", "a"),
-        Storage::Exact(_)
+        Storage::Exact(_) | Storage::TypedExact(..)
     ));
     assert!(matches!(
         storage("let a = ones<Int>(3)\n", "a"),
-        Storage::Exact(_)
+        Storage::Exact(_) | Storage::TypedExact(..)
     ));
     assert!(matches!(
         storage("let a = zeros<Float>(3)\n", "a"),

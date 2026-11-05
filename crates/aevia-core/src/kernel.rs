@@ -346,6 +346,7 @@ pub fn from_val(
                         index,
                         name: tag.clone(),
                         fields: items,
+                        type_args: None,
                     }))
                 },
                 | None => {

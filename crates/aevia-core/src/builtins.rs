@@ -13,6 +13,7 @@ use crate::kernel as bridge;
 use crate::sym::Fun;
 use crate::sym::Term;
 use crate::value::DynValue;
+use crate::value::ExactRep;
 use crate::value::NativeFn;
 use crate::value::NumKind;
 use crate::value::NumVal;
@@ -84,14 +85,14 @@ pub fn call_typed(
             let one = name == "ones";
             let storage = match element.as_str() {
                 | "Int" | "Real" => {
-                    Storage::Exact(vec![
+                    Storage::TypedExact(vec![
                         if one {
                             BigRational::one()
                         } else {
                             BigRational::zero()
                         };
                         count
-                    ])
+                    ], if element == "Int" { ExactRep::Int } else { ExactRep::Real })
                 },
                 | "Float" => Storage::Dense(Rc::new(vec![if one { 1.0 } else { 0.0 }; count])),
                 | other => {
@@ -566,7 +567,7 @@ pub fn call(
             let len = values.len();
             Ok(Value::Tensor(Rc::new(TensorData {
                 shape: vec![len],
-                storage: Storage::Exact(values),
+                storage: Storage::TypedExact(values, ExactRep::Int),
                 dim: Dim::one(),
                 display: None,
             })))
@@ -594,7 +595,7 @@ pub fn call(
             let len = shape.len();
             Ok(Value::Tensor(Rc::new(TensorData {
                 shape: vec![len],
-                storage: Storage::Exact(shape),
+                storage: Storage::TypedExact(shape, ExactRep::Int),
                 dim: Dim::one(),
                 display: None,
             })))
@@ -2360,11 +2361,12 @@ pub fn call(
             let len = values.len();
             Ok(Value::Tensor(Rc::new(TensorData {
                 shape: vec![len],
-                storage: Storage::Exact(
+                storage: Storage::TypedExact(
                     values
                         .into_iter()
                         .map(|value| BigRational::from_integer(BigInt::from(value)))
                         .collect(),
+                    ExactRep::Int,
                 ),
                 dim: Dim::one(),
                 display: None,
@@ -3487,28 +3489,9 @@ pub fn call(
             } else {
                 aevia_std::ode::Options::default()
             };
-            let (shape, flat) = flatten_state(&initial)?;
-            let mut failure = None;
-            let mut rhs = |t: f64, state: &[f64]| -> Vec<f64> {
-                let argument = vec![
-                    Value::Num(NumVal::float(t, times.dim.clone())),
-                    rebuild_state(&shape, state),
-                ];
-                match interp.apply(function.clone(), argument, span) {
-                    | Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
-                    | Err(error) => {
-                        if failure.is_none() {
-                            failure = Some(error);
-                        }
-                        vec![0.0; state.len()]
-                    },
-                }
-            };
-            let solution = aevia_std::ode::integrate(&mut rhs, &flat, &grid, options);
-            if let Some(error) = failure {
-                return Err(error);
-            }
-            let states = solution.map_err(|error| numeric_error(name, error, span))?;
+            let event = if name == "odeint_with" { ode_event(&args, 3, span)? } else { None };
+            let (grid, states) = run_ode(interp, function, &initial, &grid, &times.dim, options, event, name, span)?;
+            let (shape, _) = flatten_state(&initial)?;
             let elements: Vec<Value> = states
                 .iter()
                 .map(|state| rebuild_state(&shape, state))
@@ -3558,28 +3541,9 @@ pub fn call(
             let grid: Vec<f64> = (0..samples)
                 .map(|index| start + (end - start) * index as f64 / (samples - 1) as f64)
                 .collect();
-            let (shape, flat) = flatten_state(&initial)?;
-            let mut failure = None;
-            let mut rhs = |t: f64, state: &[f64]| -> Vec<f64> {
-                let argument = vec![
-                    Value::Num(NumVal::float(t, time_dim.clone())),
-                    rebuild_state(&shape, state),
-                ];
-                match interp.apply(function.clone(), argument, span) {
-                    | Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
-                    | Err(error) => {
-                        if failure.is_none() {
-                            failure = Some(error);
-                        }
-                        vec![0.0; state.len()]
-                    },
-                }
-            };
-            let solution = aevia_std::ode::integrate(&mut rhs, &flat, &grid, options);
-            if let Some(error) = failure {
-                return Err(error);
-            }
-            let states = solution.map_err(|error| numeric_error(name, error, span))?;
+            let event = ode_event(&args, 3, span)?;
+            let (grid, states) = run_ode(interp, function, &initial, &grid, &time_dim, options, event, name, span)?;
+            let (shape, _) = flatten_state(&initial)?;
             let elements: Vec<Value> = states
                 .iter()
                 .map(|state| rebuild_state(&shape, state))
@@ -6113,42 +6077,118 @@ enum StateShape {
 /// The flat rate vector an ODE right-hand side returned (§8.9).
 ///
 /// The right-hand side must answer one rate per state component, flattened by
-/// the same contract as the state itself: record field order, depth first,
-/// tensor rows in row-major order. A different count is an error rather than a
-/// silently misaligned integration — the vectors are zipped, so a short answer
-/// would otherwise leave the tail at zero and still report success.
+/// the same contract as the state itself: fields are matched by name in state
+/// order, and tensors are flattened in row-major order. Each leaf must have the
+/// state's shape and dimension divided by the time dimension.
 fn ode_rates(
     value: &Value,
+    shape: &StateShape,
+    time_dim: &Dim,
     expected: usize,
     span: Span,
     failure: &mut Option<EvalError>,
 ) -> Vec<f64> {
-    match flatten_state(value) {
-        | Ok((_, flat)) if flat.len() == expected => flat,
-        | Ok((_, flat)) => {
-            if failure.is_none() {
-                *failure = Some(
-                    EvalError::new(
-                        "E0302",
-                        format!(
-                            "the ODE right-hand side returned {} rate(s) for a state of {} \
-                             component(s) (§8.9)",
-                            flat.len(),
-                            expected
-                        ),
-                    )
-                    .at(span),
-                );
+    fn collect_rate(
+        value: &Value,
+        shape: &StateShape,
+        time_dim: &Dim,
+        span: Span,
+        out: &mut Vec<f64>,
+    ) -> Result<(), EvalError> {
+        let shape_error = || EvalError::new("E0302", "the ODE right-hand side must match the state structure and tensor shapes (§8.9)").at(span);
+        let check_dim = |actual: &Dim, state: &Dim| {
+            if *actual == state.div(time_dim) {
+                Ok(())
+            } else {
+                Err(EvalError::new("E0401", "an ODE rate must have its state component's dimension divided by the time dimension (§8.9)").at(span))
             }
-            vec![0.0; expected]
-        },
+        };
+        match (shape, value) {
+            | (StateShape::Scalar(dim), Value::Num(num)) => {
+                check_dim(&num.dim, dim)?;
+                out.push(num.to_f64().ok_or_else(shape_error)?);
+            },
+            | (StateShape::Tensor(expected, dim), Value::Tensor(tensor)) if tensor.shape == *expected => {
+                check_dim(&tensor.dim, dim)?;
+                out.extend(tensor_values(tensor)?);
+            },
+            | (StateShape::Record(fields), Value::Record(record)) if fields.len() == record.fields.len() => {
+                for (name, field_shape) in fields {
+                    let field = record.fields.get(name).ok_or_else(shape_error)?;
+                    collect_rate(field, field_shape, time_dim, span, out)?;
+                }
+            },
+            | _ => return Err(shape_error()),
+        }
+        Ok(())
+    }
+
+    let mut flat = Vec::with_capacity(expected);
+    let result = collect_rate(value, shape, time_dim, span, &mut flat);
+    match result {
+        | Ok(()) => flat,
         | Err(error) => {
             if failure.is_none() {
+                let error = match flatten_state(value) {
+                    | Ok((_, values)) if values.len() != expected => EvalError::new("E0302", format!("the ODE right-hand side returned {} rate(s) for a state of {} component(s) (§8.9)", values.len(), expected)).at(span),
+                    | _ => error,
+                };
                 *failure = Some(error);
             }
             vec![0.0; expected]
         },
     }
+}
+
+fn run_ode(
+    interp: &mut Interp,
+    function: Value,
+    initial: &Value,
+    grid: &[f64],
+    time_dim: &Dim,
+    options: aevia_std::ode::Options,
+    event: Option<Value>,
+    name: &str,
+    span: Span,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), EvalError> {
+    let (shape, flat) = flatten_state(initial)?;
+    let failure = std::cell::RefCell::new(None);
+    let interp = std::cell::RefCell::new(interp);
+    let mut rhs = |t: f64, state: &[f64]| {
+        let args = vec![Value::Num(NumVal::float(t, time_dim.clone())), rebuild_state(&shape, state)];
+        match interp.borrow_mut().apply(function.clone(), args, span) {
+            | Ok(value) => ode_rates(&value, &shape, time_dim, state.len(), span, &mut failure.borrow_mut()),
+            | Err(error) => {
+                if failure.borrow().is_none() { *failure.borrow_mut() = Some(error); }
+                vec![0.0; state.len()]
+            },
+        }
+    };
+    let solution = if let Some(event) = event {
+        let mut event_fn = |t: f64, state: &[f64]| {
+            let args = vec![Value::Num(NumVal::float(t, time_dim.clone())), rebuild_state(&shape, state)];
+            match interp.borrow_mut().apply(event.clone(), args, span) {
+                | Ok(value) => match value.as_f64() {
+                    | Some(number) if crate::value::value_dim(&value) == Dim::one() => number,
+                    | _ => {
+                        if failure.borrow().is_none() {
+                            *failure.borrow_mut() = Some(EvalError::new("E0302", "the ODE event must return a dimensionless number").at(span));
+                        }
+                        f64::NAN
+                    },
+                },
+                | Err(error) => {
+                    if failure.borrow().is_none() { *failure.borrow_mut() = Some(error); }
+                    f64::NAN
+                },
+            }
+        };
+        aevia_std::ode::integrate_until_event(&mut rhs, &flat, grid, options, &mut event_fn)
+    } else {
+        aevia_std::ode::integrate(&mut rhs, &flat, grid, options).map(|states| (grid.to_vec(), states))
+    };
+    if let Some(error) = failure.into_inner() { return Err(error); }
+    solution.map_err(|error| numeric_error(name, error, span))
 }
 
 // ----- §8.9.1 stochastic differential equations ---------------------------
@@ -6805,12 +6845,7 @@ fn rebuild_state_at(
 ///
 /// # Errors
 ///
-/// `E1001` naming `core.ode` when the record asks for a stiff method: this
-/// build has `Rk4` and `Dopri5` only, and answering a stiff problem with an
-/// explicit method would be a wrong number rather than a slow one. `E1001`
-/// naming `core.ode.events` for a non-`None` `events` field: the linked kernel
-/// does not expose `solve_fixed_events`, and silently integrating past an event
-/// would answer a different problem than the one asked.
+/// `E0302` for an invalid method or event option.
 fn ode_options(
     args: &[Value],
     index: usize,
@@ -6826,35 +6861,21 @@ fn ode_options(
     if let Some(atol) = record.fields.get("atol").and_then(Value::as_f64) {
         options.atol = atol;
     }
-    if let Some(steps) = record.fields.get("steps").and_then(Value::as_f64) {
-        options.steps = steps.max(1.0) as usize;
-    }
-    // §8.9: `events` terminates and interpolates at a sign change. This build's
-    // kernel has no event support, so a request for it is a *named* capability
-    // gap — never an option that the runtime quietly drops.
-    match record.fields.get("events") {
-        | None => {},
-        | Some(Value::Variant(option)) if option.adt == adt::OPTION_ID => {
-            if option.name != "None" {
-                return Err(EvalError::new(
-                    "E1001",
-                    "the `events` option needs the `core.ode.events` capability, which this \
-                     build does not have; integrate without `events` or split the interval at \
-                     the event time",
-                )
-                .at(span));
+    if let Some(value) = record.fields.get("steps") {
+        let steps = match value {
+            | Value::Variant(option) if option.adt == adt::OPTION_ID && option.name == "None" => None,
+            | Value::Variant(option) if option.adt == adt::OPTION_ID && option.name == "Some" && option.fields.len() == 1 => Some(option.fields[0].as_f64().ok_or_else(|| EvalError::new("E0302", "`steps` must be a positive integer").at(span))?),
+            | Value::Unit => None,
+            | other => Some(other.as_f64().ok_or_else(|| EvalError::new("E0302", "`steps` must be an optional positive integer").at(span))?),
+        };
+        if let Some(steps) = steps {
+            if !steps.is_finite() || steps < 1.0 || steps.fract() != 0.0 || steps >= usize::MAX as f64 {
+                return Err(EvalError::new("E0302", "`steps` must be a positive integer").at(span));
             }
-        },
-        // A direct dispatch may pass `()` where the source would write `None`.
-        | Some(Value::Unit) => {},
-        | Some(_) => {
-            return Err(EvalError::new(
-                "E0302",
-                "`events` must be `Option<(Float[T], s) -> Float[1]>`",
-            )
-            .at(span));
-        },
+            options.steps = steps as usize;
+        }
     }
+    let _ = ode_event(args, index, span)?;
     if let Some(Value::Variant(method)) = record.fields.get("method") {
         options.method = match method.name.as_str() {
             | "Rk4" => aevia_std::ode::Method::Rk4,
@@ -6873,7 +6894,7 @@ fn ode_options(
                 "E1001",
                 format!(
                     "the `{}` integrator needs the `{capability}` capability, which this \
-                     build does not have; `Rk4` and `Dopri5` are available",
+                     build does not have; `Rk4`, `Dopri5` and `Radau` are available",
                     method.name
                 ),
             )
@@ -6881,6 +6902,16 @@ fn ode_options(
         }
     }
     Ok(options)
+}
+
+fn ode_event(args: &[Value], index: usize, span: Span) -> Result<Option<Value>, EvalError> {
+    let Some(Value::Record(record)) = args.get(index) else { return Ok(None) };
+    match record.fields.get("events") {
+        | None | Some(Value::Unit) => Ok(None),
+        | Some(Value::Variant(option)) if option.adt == adt::OPTION_ID && option.name == "None" => Ok(None),
+        | Some(Value::Variant(option)) if option.adt == adt::OPTION_ID && option.name == "Some" && option.fields.len() == 1 => Ok(Some(option.fields[0].clone())),
+        | _ => Err(EvalError::new("E0302", "`events` must be `Option<(Float[T], s) -> Float[1]>").at(span)),
+    }
 }
 
 /// The grid of a PDE spec.
@@ -7639,7 +7670,8 @@ fn zero_like(tensor: &TensorData) -> Value {
         | Storage::Dense(_) | Storage::View(_) => {
             Value::Num(NumVal::float(0.0, tensor.dim.clone()))
         },
-        | Storage::Exact(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
+        | Storage::Exact(_) | Storage::TypedExact(_, ExactRep::Real) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
+        | Storage::TypedExact(_, ExactRep::Int) => Value::Num(NumVal { kind: NumKind::Int(BigInt::zero()), dim: tensor.dim.clone(), display: None }),
         | Storage::Bool(_) => Value::Bool(false),
         | Storage::Boxed(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
     }

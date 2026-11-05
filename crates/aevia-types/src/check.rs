@@ -37,7 +37,6 @@ use crate::infer::UnifyError;
 use crate::keys::ClassKey;
 use crate::keys::InstanceKey;
 use crate::keys::ModulePath;
-use crate::keys::witness_of;
 use crate::ty::Constraint;
 use crate::ty::LiteralKind;
 use crate::ty::Nat;
@@ -5576,7 +5575,7 @@ impl Checker {
         let mut param_types = Vec::new();
         for (index, arg) in args.iter().enumerate() {
             if matches!(arg.kind, ExprKind::Placeholder) {
-                let name = format!("__arg{index}");
+                let name = aevia_syntax::ast::placeholder_param_name(index);
                 let ty = self.infer.fresh_type();
                 scope.insert(name.clone(), Scheme::mono(ty.clone()));
                 param_types.push(ty);
@@ -7552,6 +7551,11 @@ impl Checker {
                     return ty.clone();
                 }
                 if self.implicit_params {
+                    // The parameter snapshot predates this traversal. Reuse a
+                    // variable first seen in an earlier part of the same head.
+                    if let Some((_, ty)) = self.type_params.iter().find(|(param, _)| param == name) {
+                        return ty.clone();
+                    }
                     // §3.8.1: a variable in an instance head is implicitly
                     // universally quantified.
                     let fresh = self.infer.fresh_type();
@@ -8881,7 +8885,6 @@ impl Checker {
             .classes
             .instances_of(class)
             .into_iter()
-            .filter(|instance| witness_of(&instance.head).is_some())
             .map(|instance| instance.key.clone())
             .collect();
         DictTarget::Witness { candidates }

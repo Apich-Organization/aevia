@@ -604,7 +604,7 @@ fn a_mixed_numeric_literal_promotes_to_f64_storage() {
     // A homogeneous literal keeps the class its elements imply.
     assert!(matches!(
         tensor_value("let t = [1, 2]\n", "t").storage,
-        Storage::Exact(_)
+        Storage::Exact(_) | Storage::TypedExact(..)
     ));
 }
 

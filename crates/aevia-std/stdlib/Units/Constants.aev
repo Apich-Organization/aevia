@@ -3,7 +3,7 @@
 ## Generated from the rssn Kernel Manifest: one quantity per physical
 ## constant of `manifest.constants` (§13.6.5). Do not edit; regenerate with
 ## `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
-## rssn 3.0.0-rc.1, api 1, manifest 8d2c37640f4092496b5b234f0dff4c5fcdb9c61338b6fd8e00bcf316d94c654a
+## rssn 3.0.0-rc.1, api 1
 module Units.Constants
 
 ## π, for the constants the kernel states as a multiple of it. The

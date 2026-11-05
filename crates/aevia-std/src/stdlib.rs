@@ -243,7 +243,8 @@ pub const TREE: &[ModuleDef] = &[
         sections: &["8.9"],
         names: &[],
         types: &[],
-        hand_written: false,
+        // The method constructors and option type are source-level ADTs.
+        hand_written: true,
     },
     ModuleDef {
         path: "Sde",

@@ -386,3 +386,35 @@ let q = area(Square(3.0))
     };
     assert!((square - 9.0).abs() < 1e-12, "got {square}");
 }
+
+#[test]
+fn runtime_dispatch_uses_record_field_types_and_tensor_extents() {
+    let source = r#"class Pretty a where
+    pretty(x: a): String
+instance Pretty for { x: Int } where
+    pretty(v) = "int"
+instance Pretty for { x: String } where
+    pretty(v) = "string"
+instance Pretty for Tensor<[2], Float> where
+    pretty(v) = "two"
+instance Pretty for Tensor<[3], Float> where
+    pretty(v) = "three"
+let describe = fn x => pretty(x)
+let a = describe({ x = 1 })
+let b = describe({ x = "hello" })
+let c = describe([1.0, 2.0])
+let d = describe([1.0, 2.0, 3.0])
+"#;
+    let (module, checked) = build(source);
+    for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
+        let mut interp = Interp::new(&checked).with_buffer().with_mode(mode);
+        let diagnostics = interp.load(&module);
+        assert!(!diagnostics.has_errors(), "{mode:?}: {:?}", diagnostics.items);
+        for (name, expected) in [("a", "int"), ("b", "string"), ("c", "two"), ("d", "three")] {
+            match interp.eval_toplevel(name).expect("value") {
+                | Value::Str(value) => assert_eq!(value.as_ref(), expected, "{mode:?}: {name}"),
+                | other => panic!("{mode:?}: unexpected value {other:?}"),
+            }
+        }
+    }
+}
