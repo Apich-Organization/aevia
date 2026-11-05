@@ -32,10 +32,10 @@ impl Method {
     #[must_use]
     pub fn capability(&self) -> Option<&'static str> {
         match self {
-            Self::Rk4 | Self::Dopri5 => None,
-            Self::Radau => Some("ode.radau"),
-            Self::Bdf => Some("ode.bdf"),
-            Self::Rosenbrock23 => Some("ode.rosenbrock"),
+            | Self::Rk4 | Self::Dopri5 => None,
+            | Self::Radau => Some("ode.radau"),
+            | Self::Bdf => Some("ode.bdf"),
+            | Self::Rosenbrock23 => Some("ode.rosenbrock"),
         }
     }
 }
@@ -96,7 +96,7 @@ pub fn integrate(
             ));
         }
         match options.method {
-            Method::Rk4 => {
+            | Method::Rk4 => {
                 let span = target - t;
                 let steps = options.steps.max(1);
                 let h = span / steps as f64;
@@ -106,17 +106,17 @@ pub fn integrate(
                     time += h;
                 }
                 t = *target;
-            }
-            Method::Dopri5 => {
+            },
+            | Method::Dopri5 => {
                 let (state, time) = dopri5(rhs, &y, t, *target, options)?;
                 y = state;
                 t = time;
-            }
-            other => {
+            },
+            | other => {
                 return Err(NumericError::Domain(format!(
                     "the `{other:?}` method is not available in this build"
-                )))
-            }
+                )));
+            },
         }
         out.push(y.clone());
     }
@@ -156,7 +156,11 @@ fn evaluate(
     Ok(rate)
 }
 
-fn add(y: &[f64], rate: &[f64], scale: f64) -> Vec<f64> {
+fn add(
+    y: &[f64],
+    rate: &[f64],
+    scale: f64,
+) -> Vec<f64> {
     y.iter()
         .zip(rate)
         .map(|(value, slope)| value + scale * slope)
@@ -224,15 +228,17 @@ fn dopri5(
         };
         let k1 = evaluate(rhs, t, &y, n)?;
         let k2 = evaluate(rhs, t + step / 5.0, &add(&y, &k1, step * A21), n)?;
-        let mut stage: Vec<f64> = (0..n).map(|index| step * (A31 * k1[index] + A32 * k2[index])).collect();
+        let mut stage: Vec<f64> = (0..n)
+            .map(|index| step * (A31 * k1[index] + A32 * k2[index]))
+            .collect();
         let k3 = evaluate(rhs, t + 3.0 * step / 10.0, &add(&y, &stage, 1.0), n)?;
         for index in 0..n {
             stage[index] = step * (A41 * k1[index] + A42 * k2[index] + A43 * k3[index]);
         }
         let k4 = evaluate(rhs, t + 4.0 * step / 5.0, &add(&y, &stage, 1.0), n)?;
         for index in 0..n {
-            stage[index] = step
-                * (A51 * k1[index] + A52 * k2[index] + A53 * k3[index] + A54 * k4[index]);
+            stage[index] =
+                step * (A51 * k1[index] + A52 * k2[index] + A53 * k3[index] + A54 * k4[index]);
         }
         let k5 = evaluate(rhs, t + 8.0 * step / 9.0, &add(&y, &stage, 1.0), n)?;
         for index in 0..n {
@@ -292,7 +298,11 @@ fn dopri5(
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64, tolerance: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+        tolerance: f64,
+    ) -> bool {
         (a - b).abs() <= tolerance
     }
 

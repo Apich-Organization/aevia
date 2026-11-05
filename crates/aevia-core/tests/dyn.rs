@@ -8,10 +8,16 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::builtins::call_simple;
-use aevia_core::value::{NumKind, NumVal, Storage, TensorData, Value};
 use aevia_core::EvalError;
-use aevia_dim::{Dim, Scale, UnitDef};
+use aevia_core::builtins::call_simple;
+use aevia_core::value::NumKind;
+use aevia_core::value::NumVal;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
+use aevia_dim::Dim;
+use aevia_dim::Scale;
+use aevia_dim::UnitDef;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::rc::Rc;
@@ -38,18 +44,25 @@ fn scalar(value: f64) -> Value {
     Value::Num(NumVal::float(value, length()))
 }
 
-fn call(name: &str, args: Vec<Value>) -> Value {
-    call_simple(name, args).unwrap_or_else(|error| panic!("{name}: {} {}", error.code, error.message))
+fn call(
+    name: &str,
+    args: Vec<Value>,
+) -> Value {
+    call_simple(name, args)
+        .unwrap_or_else(|error| panic!("{name}: {} {}", error.code, error.message))
 }
 
-fn failure(name: &str, args: Vec<Value>) -> EvalError {
+fn failure(
+    name: &str,
+    args: Vec<Value>,
+) -> EvalError {
     call_simple(name, args).expect_err("expected a failure")
 }
 
 fn dynamic(value: Value) -> Rc<aevia_core::value::DynValue> {
     match value {
-        Value::Dyn(dynamic) => dynamic,
-        other => panic!("expected a Dyn, found {}", other.type_name()),
+        | Value::Dyn(dynamic) => dynamic,
+        | other => panic!("expected a Dyn, found {}", other.type_name()),
     }
 }
 
@@ -62,8 +75,8 @@ fn dimension_text(value: Value) -> String {
         panic!("a DimValue is a record");
     };
     match record.fields.get("dimension") {
-        Some(Value::Str(text)) => text.to_string(),
-        other => panic!("expected a dimension, found {other:?}"),
+        | Some(Value::Str(text)) => text.to_string(),
+        | other => panic!("expected a dimension, found {other:?}"),
     }
 }
 
@@ -91,7 +104,10 @@ fn dim_of_and_value_of_are_total_on_a_dyn() {
         }),
     ] {
         let dynamic = call("dyn", vec![value]);
-        assert_eq!(dimension_text(call("dim_of", vec![dynamic.clone()])), "Length");
+        assert_eq!(
+            dimension_text(call("dim_of", vec![dynamic.clone()])),
+            "Length"
+        );
         assert!(matches!(call("value_of", vec![dynamic]), Value::Num(_)));
     }
     // A dimensionless value carries `1`, not a missing dimension.
@@ -130,7 +146,10 @@ fn check_with_matches_and_rejects() {
 
     let other = dimension_text(call(
         "dim_of",
-        vec![call("dyn", vec![Value::Num(NumVal::float(1.0, Dim::base("Time")))])],
+        vec![call(
+            "dyn",
+            vec![Value::Num(NumVal::float(1.0, Dim::base("Time")))],
+        )],
     ));
     let mismatched = call("check_with", vec![record_dim(&other), dynamic]);
     let Value::Variant(result) = mismatched else {
@@ -153,7 +172,10 @@ fn record_dim(text: &str) -> Value {
 fn dyn_with_takes_the_dimension_it_is_given() {
     let dynamic = dynamic(call(
         "dyn_with",
-        vec![Value::Num(NumVal::float(2.0, Dim::one())), record_dim("Length/Time")],
+        vec![
+            Value::Num(NumVal::float(2.0, Dim::one())),
+            record_dim("Length/Time"),
+        ],
     ));
     assert_eq!(dynamic.dim.to_plain_string(), "Length/Time");
     assert_eq!(payload(&dynamic), 2.0);
@@ -161,8 +183,14 @@ fn dyn_with_takes_the_dimension_it_is_given() {
 
 #[test]
 fn pow_dyn_multiplies_the_exponent() {
-    let powered = dynamic(call("pow_dyn", vec![call("dyn", vec![scalar(2.0)]), Value::int(2)]));
-    assert_eq!(powered.dim, length().pow(&BigRational::from_integer(BigInt::from(2))));
+    let powered = dynamic(call(
+        "pow_dyn",
+        vec![call("dyn", vec![scalar(2.0)]), Value::int(2)],
+    ));
+    assert_eq!(
+        powered.dim,
+        length().pow(&BigRational::from_integer(BigInt::from(2)))
+    );
     assert_eq!(payload(&powered), 4.0);
 }
 
@@ -187,19 +215,28 @@ fn det_unit_answers_with_a_dyn() {
 #[test]
 fn show_names_the_quantity() {
     let rendered = call("show", vec![call("dyn", vec![scalar(3.0)])]);
-    assert_eq!(match rendered {
-        Value::Str(text) => text.to_string(),
-        other => panic!("show answers with a String, found {}", other.type_name()),
-    }, "3 m");
+    assert_eq!(
+        match rendered {
+            | Value::Str(text) => text.to_string(),
+            | other => panic!("show answers with a String, found {}", other.type_name()),
+        },
+        "3 m"
+    );
 }
 
 #[test]
 fn a_non_dyn_argument_is_a_type_error() {
     assert_eq!(failure("dim_of", vec![Value::int(1)]).code, "E0302");
     assert_eq!(failure("value_of", vec![Value::int(1)]).code, "E0302");
-    assert_eq!(failure("pow_dyn", vec![Value::int(1), Value::int(2)]).code, "E0302");
+    assert_eq!(
+        failure("pow_dyn", vec![Value::int(1), Value::int(2)]).code,
+        "E0302"
+    );
     assert_eq!(failure("dyn", vec![Value::string("x")]).code, "E0302");
-    assert_eq!(failure("dyn_with", vec![scalar(1.0), Value::int(1)]).code, "E0302");
+    assert_eq!(
+        failure("dyn_with", vec![scalar(1.0), Value::int(1)]).code,
+        "E0302"
+    );
 }
 
 #[test]

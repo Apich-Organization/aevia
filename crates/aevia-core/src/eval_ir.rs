@@ -13,17 +13,42 @@
 //! * a variable read is a vector index, not a `HashMap` chain;
 //! * every call site and every node carries a span, so a frame names its source.
 
-use crate::eval::{build_tensor, EvalError, Frame, Interp, SliceValue};
+use crate::eval::EvalError;
+use crate::eval::Frame;
+use crate::eval::Interp;
+use crate::eval::SliceValue;
+use crate::eval::build_tensor;
+use crate::value::Closure;
+use crate::value::ClosureBody;
+use crate::value::ClosureEnv;
+use crate::value::IoAction;
+use crate::value::IrEnv;
+use crate::value::NumKind;
+use crate::value::NumVal;
+use crate::value::RecordValue;
+use crate::value::Scope;
+use crate::value::Value;
 use crate::value::{
-    self, Closure, ClosureBody, ClosureEnv, IoAction, IrEnv, NumKind, NumVal, RecordValue, Scope,
-    Value,
+    self,
 };
-use aevia_ir::{
-    Action, Atom, Block, Call, CallKind, Capture, DoPlan, DoTerminal, Function, Pattern, Rhs,
-    Slice, Stmt, StrPart, Tail,
-};
-use aevia_syntax::ast::{BinOp, PatLit};
+use aevia_ir::Action;
+use aevia_ir::Atom;
+use aevia_ir::Block;
+use aevia_ir::Call;
+use aevia_ir::CallKind;
+use aevia_ir::Capture;
+use aevia_ir::DoPlan;
+use aevia_ir::DoTerminal;
+use aevia_ir::Function;
+use aevia_ir::Pattern;
+use aevia_ir::Rhs;
+use aevia_ir::Slice;
+use aevia_ir::Stmt;
+use aevia_ir::StrPart;
+use aevia_ir::Tail;
 use aevia_syntax::Span;
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::PatLit;
 use aevia_types::adt;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
@@ -51,7 +76,10 @@ enum Flow {
 /// scope — but it still carries that scope, so a body that reads a top-level
 /// `let` finds it exactly as the AST path's lexical chain would.
 #[must_use]
-pub fn module_closure(function: &Rc<Function>, scope: &Rc<Scope>) -> Value {
+pub fn module_closure(
+    function: &Rc<Function>,
+    scope: &Rc<Scope>,
+) -> Value {
     let env = Rc::new(IrEnv {
         slots: RefCell::new(Vec::new()),
         scope: Some(scope.clone()),
@@ -140,16 +168,12 @@ pub(crate) fn run_closure(
             }
         }
         let flow = match eval_block(interp, &function.body, &mut frame, &env) {
-            Ok(flow) => flow,
-            Err(error) => break 'run Err(error),
+            | Ok(flow) => flow,
+            | Err(error) => break 'run Err(error),
         };
         let (next, next_args, next_span) = match flow {
-            Flow::Value(value) => break 'run Ok(value),
-            Flow::Tail {
-                closure,
-                args,
-                span,
-            } => (closure, args, span),
+            | Flow::Value(value) => break 'run Ok(value),
+            | Flow::Tail { closure, args, span } => (closure, args, span),
         };
         tail_calls += 1;
         if tail_calls > interp.max_tail_calls {
@@ -212,23 +236,24 @@ pub(crate) fn run_closure(
     match outcome {
         // `?` returns from the enclosing function by unwinding to its call,
         // which is where the `Err`/`None` payload belongs.
-        Err(error) if error.payload.is_some() => Ok(error.payload.expect("checked above")),
-        Err(error) => Err(match stack {
-            Some(stack) => error.with_stack(stack),
-            None => error,
-        }),
-        other => other,
+        | Err(error) if error.payload.is_some() => Ok(error.payload.expect("checked above")),
+        | Err(error) => {
+            Err(match stack {
+                | Some(stack) => error.with_stack(stack),
+                | None => error,
+            })
+        },
+        | other => other,
     }
 }
 
-fn force(interp: &mut Interp, flow: Flow) -> Result<Value, EvalError> {
+fn force(
+    interp: &mut Interp,
+    flow: Flow,
+) -> Result<Value, EvalError> {
     match flow {
-        Flow::Value(value) => Ok(value),
-        Flow::Tail {
-            closure,
-            args,
-            span,
-        } => interp.apply(Value::Closure(closure), args, span),
+        | Flow::Value(value) => Ok(value),
+        | Flow::Tail { closure, args, span } => interp.apply(Value::Closure(closure), args, span),
     }
 }
 
@@ -240,15 +265,11 @@ fn eval_block(
 ) -> Result<Flow, EvalError> {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let(item) => {
+            | Stmt::Let(item) => {
                 let value = eval_rhs(interp, &item.rhs, frame, env, item.span)?;
                 set(frame, item.slot, value);
-            }
-            Stmt::Bind {
-                pattern,
-                atom,
-                span,
-            } => {
+            },
+            | Stmt::Bind { pattern, atom, span } => {
                 let value = eval_atom(interp, atom, frame, env, *span)?;
                 if !match_pattern(pattern, &value, frame) {
                     return Err(EvalError::new(
@@ -257,7 +278,7 @@ fn eval_block(
                     )
                     .at(*span));
                 }
-            }
+            },
         }
     }
     eval_tail(interp, &block.tail, frame, env)
@@ -270,24 +291,30 @@ fn eval_tail(
     env: &Rc<IrEnv>,
 ) -> Result<Flow, EvalError> {
     match tail {
-        Tail::Return { atom, span } => Ok(Flow::Value(eval_atom(interp, atom, frame, env, *span)?)),
-        Tail::Call(call) => eval_call(interp, call, frame, env, true),
-        Tail::If {
+        | Tail::Return { atom, span } => {
+            Ok(Flow::Value(eval_atom(interp, atom, frame, env, *span)?))
+        },
+        | Tail::Call(call) => eval_call(interp, call, frame, env, true),
+        | Tail::If {
             cond,
             cond_span,
             then_block,
             else_block,
             ..
-        } => match eval_atom(interp, cond, frame, env, *cond_span)? {
-            Value::Bool(true) => eval_block(interp, then_block, frame, env),
-            Value::Bool(false) => eval_block(interp, else_block, frame, env),
-            other => Err(EvalError::new(
-                "E0302",
-                format!("`if` expects a Bool condition, found {}", other.type_name()),
-            )
-            .at(*cond_span)),
+        } => {
+            match eval_atom(interp, cond, frame, env, *cond_span)? {
+                | Value::Bool(true) => eval_block(interp, then_block, frame, env),
+                | Value::Bool(false) => eval_block(interp, else_block, frame, env),
+                | other => {
+                    Err(EvalError::new(
+                        "E0302",
+                        format!("`if` expects a Bool condition, found {}", other.type_name()),
+                    )
+                    .at(*cond_span))
+                },
+            }
         },
-        Tail::Match {
+        | Tail::Match {
             scrutinee,
             arms,
             span,
@@ -300,18 +327,15 @@ fn eval_tail(
                 if let Some(guard) = &arm.guard {
                     let produced = eval_block(interp, guard, frame, env)?;
                     match force(interp, produced)? {
-                        Value::Bool(true) => {}
-                        Value::Bool(false) => continue,
-                        other => {
+                        | Value::Bool(true) => {},
+                        | Value::Bool(false) => continue,
+                        | other => {
                             return Err(EvalError::new(
                                 "E0308",
-                                format!(
-                                    "a match guard must be Bool, found {}",
-                                    other.type_name()
-                                ),
+                                format!("a match guard must be Bool, found {}", other.type_name()),
                             )
                             .at(*span));
-                        }
+                        },
                     }
                 }
                 return eval_block(interp, &arm.body, frame, env);
@@ -321,7 +345,7 @@ fn eval_tail(
                 format!("no match arm accepted {}", value::show(&subject)),
             )
             .at(*span))
-        }
+        },
     }
 }
 
@@ -333,20 +357,20 @@ fn eval_call(
     tail: bool,
 ) -> Result<Flow, EvalError> {
     match &call.kind {
-        CallKind::Typed { name, types } => {
+        | CallKind::Typed { name, types } => {
             let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
             Ok(Flow::Value(crate::builtins::call_typed(
                 interp, name, types, values, call.span,
             )?))
-        }
-        CallKind::Rssn { name } => {
+        },
+        | CallKind::Rssn { name } => {
             let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
             Ok(Flow::Value(interp.call_rssn(name, call.span, values)?))
-        }
-        CallKind::Dictionary { method, target: _ } => {
+        },
+        | CallKind::Dictionary { method, target: _ } => {
             let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
             match interp.dictionary_use(call.span, method) {
-                Some(use_site) => {
+                | Some(use_site) => {
                     // A dictionary call in tail position is a tail call like any
                     // other. Applying the instance body here would spend Rust
                     // stack on every step of a recursive instance method, which
@@ -354,7 +378,7 @@ fn eval_call(
                     let dispatch =
                         interp.resolve_dictionary(&use_site, method, &values, call.span)?;
                     match dispatch {
-                        crate::eval::Dispatch::Instance(body) => {
+                        | crate::eval::Dispatch::Instance(body) => {
                             if tail {
                                 if let Value::Closure(closure) = &body {
                                     if matches!(closure.body, ClosureBody::Ir(_)) {
@@ -367,19 +391,19 @@ fn eval_call(
                                 }
                             }
                             Ok(Flow::Value(interp.apply(body, values, call.span)?))
-                        }
-                        crate::eval::Dispatch::Builtin => {
+                        },
+                        | crate::eval::Dispatch::Builtin => {
                             Ok(Flow::Value(interp.call_named(method, values, call.span)?))
-                        }
+                        },
                     }
-                }
-                None => {
+                },
+                | None => {
                     let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
                     Ok(Flow::Value(interp.apply(function, values, call.span)?))
-                }
+                },
             }
-        }
-        CallKind::Normal => {
+        },
+        | CallKind::Normal => {
             let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
             let values = eval_atoms(interp, &call.args, frame, env, call.span)?;
             if tail {
@@ -394,7 +418,7 @@ fn eval_call(
                 }
             }
             Ok(Flow::Value(interp.apply(function, values, call.span)?))
-        }
+        },
     }
 }
 
@@ -423,44 +447,56 @@ fn eval_atom(
         // A slot outside the frame is a lowering bug, not a program. Reading it
         // as `Unit` would turn that bug into a silent wrong value, which is the
         // hardest kind to attribute, so it is an error.
-        Atom::Local(slot) => frame.get(*slot as usize).cloned().ok_or_else(|| {
-            EvalError::new(
-                "E0899",
-                format!("internal: local slot {slot} is outside a frame of {}", frame.len()),
-            )
-            .at(span)
-        })?,
-        Atom::Capture(index) => env
-            .slots
-            .borrow()
-            .get(*index as usize)
-            .cloned()
-            .ok_or_else(|| {
+        | Atom::Local(slot) => {
+            frame.get(*slot as usize).cloned().ok_or_else(|| {
                 EvalError::new(
                     "E0899",
                     format!(
-                        "internal: capture {index} is outside an environment of {}",
-                        env.slots.borrow().len()
+                        "internal: local slot {slot} is outside a frame of {}",
+                        frame.len()
                     ),
                 )
                 .at(span)
-            })?,
-        Atom::Global(name) => interp.lookup_global(name, env.scope.as_ref(), span)?,
-        Atom::Int(value) => Value::Num(NumVal::int(value.clone())),
-        Atom::Exact(value) => Value::Num(NumVal::exact(value.clone(), aevia_dim::Dim::one())),
-        Atom::Float(value) => Value::Num(NumVal::float(*value, aevia_dim::Dim::one())),
-        Atom::Complex { re, im } => Value::Num(NumVal {
-            kind: NumKind::Complex(*re, *im),
-            dim: aevia_dim::Dim::one(),
-            display: None,
-        }),
-        Atom::Bool(value) => Value::Bool(*value),
-        Atom::Str(text) => Value::string(text.clone()),
-        Atom::Unit => Value::Unit,
+            })?
+        },
+        | Atom::Capture(index) => {
+            env.slots
+                .borrow()
+                .get(*index as usize)
+                .cloned()
+                .ok_or_else(|| {
+                    EvalError::new(
+                        "E0899",
+                        format!(
+                            "internal: capture {index} is outside an environment of {}",
+                            env.slots.borrow().len()
+                        ),
+                    )
+                    .at(span)
+                })?
+        },
+        | Atom::Global(name) => interp.lookup_global(name, env.scope.as_ref(), span)?,
+        | Atom::Int(value) => Value::Num(NumVal::int(value.clone())),
+        | Atom::Exact(value) => Value::Num(NumVal::exact(value.clone(), aevia_dim::Dim::one())),
+        | Atom::Float(value) => Value::Num(NumVal::float(*value, aevia_dim::Dim::one())),
+        | Atom::Complex { re, im } => {
+            Value::Num(NumVal {
+                kind: NumKind::Complex(*re, *im),
+                dim: aevia_dim::Dim::one(),
+                display: None,
+            })
+        },
+        | Atom::Bool(value) => Value::Bool(*value),
+        | Atom::Str(text) => Value::string(text.clone()),
+        | Atom::Unit => Value::Unit,
     })
 }
 
-fn set(frame: &mut Vec<Value>, slot: u32, value: Value) {
+fn set(
+    frame: &mut Vec<Value>,
+    slot: u32,
+    value: Value,
+) {
     let index = slot as usize;
     if index >= frame.len() {
         frame.resize(index + 1, Value::Unit);
@@ -468,17 +504,22 @@ fn set(frame: &mut Vec<Value>, slot: u32, value: Value) {
     frame[index] = value;
 }
 
-fn build_closure(function: &Rc<Function>, frame: &[Value], env: &Rc<IrEnv>) -> Value {
+fn build_closure(
+    function: &Rc<Function>,
+    frame: &[Value],
+    env: &Rc<IrEnv>,
+) -> Value {
     let mut slots = Vec::with_capacity(function.captures.len());
     for capture in &function.captures {
         slots.push(match capture {
-            Capture::Local(slot) => frame.get(*slot as usize).cloned().unwrap_or(Value::Unit),
-            Capture::Capture(index) => env
-                .slots
-                .borrow()
-                .get(*index as usize)
-                .cloned()
-                .unwrap_or(Value::Unit),
+            | Capture::Local(slot) => frame.get(*slot as usize).cloned().unwrap_or(Value::Unit),
+            | Capture::Capture(index) => {
+                env.slots
+                    .borrow()
+                    .get(*index as usize)
+                    .cloned()
+                    .unwrap_or(Value::Unit)
+            },
         });
     }
     Value::Closure(Rc::new(Closure {
@@ -500,23 +541,23 @@ fn eval_rhs(
     span: Span,
 ) -> Result<Value, EvalError> {
     match rhs {
-        Rhs::Atom(atom) => eval_atom(interp, atom, frame, env, span),
-        Rhs::Error { code, message } => Err(EvalError::new(code, message.clone()).at(span)),
-        Rhs::Unary { op, operand } => {
+        | Rhs::Atom(atom) => eval_atom(interp, atom, frame, env, span),
+        | Rhs::Error { code, message } => Err(EvalError::new(code, message.clone()).at(span)),
+        | Rhs::Unary { op, operand } => {
             let value = eval_atom(interp, operand, frame, env, span)?;
             interp.unary(*op, value, span)
-        }
-        Rhs::Binary { op, left, right } => {
+        },
+        | Rhs::Binary { op, left, right } => {
             let left = eval_atom(interp, left, frame, env, span)?;
             let right = eval_atom(interp, right, frame, env, span)?;
             interp.binary(*op, left, right, span)
-        }
-        Rhs::AndOr { op, left, right } => {
+        },
+        | Rhs::AndOr { op, left, right } => {
             let left = eval_atom(interp, left, frame, env, span)?;
             let short_circuit = match (op, &left) {
-                (BinOp::And, Value::Bool(false)) => Some(false),
-                (BinOp::Or, Value::Bool(true)) => Some(true),
-                _ => None,
+                | (BinOp::And, Value::Bool(false)) => Some(false),
+                | (BinOp::Or, Value::Bool(true)) => Some(true),
+                | _ => None,
             };
             if let Some(value) = short_circuit {
                 return Ok(Value::Bool(value));
@@ -524,13 +565,15 @@ fn eval_rhs(
             let produced = eval_block(interp, right, frame, env)?;
             let right = force(interp, produced)?;
             interp.binary(*op, left, right, span)
-        }
-        Rhs::Call(call) => match eval_call(interp, call, frame, env, false)? {
-            Flow::Value(value) => Ok(value),
-            Flow::Tail { .. } => unreachable!("a value-position call is not trampolined"),
         },
-        Rhs::Closure(function) => Ok(build_closure(function, frame, env)),
-        Rhs::RecClosure {
+        | Rhs::Call(call) => {
+            match eval_call(interp, call, frame, env, false)? {
+                | Flow::Value(value) => Ok(value),
+                | Flow::Tail { .. } => unreachable!("a value-position call is not trampolined"),
+            }
+        },
+        | Rhs::Closure(function) => Ok(build_closure(function, frame, env)),
+        | Rhs::RecClosure {
             function,
             self_capture,
         } => {
@@ -546,12 +589,12 @@ fn eval_rhs(
                 }
             }
             Ok(closure)
-        }
-        Rhs::Block(block) => {
+        },
+        | Rhs::Block(block) => {
             let produced = eval_block(interp, block, frame, env)?;
             force(interp, produced)
-        }
-        Rhs::Field {
+        },
+        | Rhs::Field {
             base,
             qualified,
             name,
@@ -563,33 +606,40 @@ fn eval_rhs(
             }
             let base = eval_atom(interp, base, frame, env, span)?;
             match base {
-                Value::Record(record) => record.fields.get(name).cloned().ok_or_else(|| {
-                    EvalError::new("E0306", format!("no field `{name}`")).at(span)
-                }),
-                other => Err(EvalError::new(
-                    "E0302",
-                    format!("field access expects a record, found {}", other.type_name()),
-                )
-                .at(span)),
+                | Value::Record(record) => {
+                    record.fields.get(name).cloned().ok_or_else(|| {
+                        EvalError::new("E0306", format!("no field `{name}`")).at(span)
+                    })
+                },
+                | other => {
+                    Err(EvalError::new(
+                        "E0302",
+                        format!("field access expects a record, found {}", other.type_name()),
+                    )
+                    .at(span))
+                },
             }
-        }
-        Rhs::RssnMember { name } => Ok(crate::rssn_module::member(name)),
-        Rhs::Record { base, fields } => {
+        },
+        | Rhs::RssnMember { name } => Ok(crate::rssn_module::member(name)),
+        | Rhs::Record { base, fields } => {
             let mut collected: IndexMap<String, Value> = IndexMap::new();
             if let Some(base) = base {
                 match eval_atom(interp, base, frame, env, span)? {
-                    Value::Record(record) => {
+                    | Value::Record(record) => {
                         for (name, value) in &record.fields {
                             collected.insert(name.clone(), value.clone());
                         }
-                    }
-                    other => {
+                    },
+                    | other => {
                         return Err(EvalError::new(
                             "E0302",
-                            format!("record update expects a record, found {}", other.type_name()),
+                            format!(
+                                "record update expects a record, found {}",
+                                other.type_name()
+                            ),
                         )
                         .at(span));
-                    }
+                    },
                 }
             }
             for (name, atom) in fields {
@@ -597,20 +647,20 @@ fn eval_rhs(
                 collected.insert(name.clone(), value);
             }
             Ok(Value::Record(Rc::new(RecordValue { fields: collected })))
-        }
-        Rhs::Tuple(items) => {
+        },
+        | Rhs::Tuple(items) => {
             let mut fields = IndexMap::new();
             for (index, atom) in items.iter().enumerate() {
                 let value = eval_atom(interp, atom, frame, env, span)?;
                 fields.insert(index.to_string(), value);
             }
             Ok(Value::Record(Rc::new(RecordValue { fields })))
-        }
-        Rhs::Tensor(items) => {
+        },
+        | Rhs::Tensor(items) => {
             let values = eval_atoms(interp, items, frame, env, span)?;
             interp.tensor_from_values(values, span)
-        }
-        Rhs::Index { base, indices } => {
+        },
+        | Rhs::Index { base, indices } => {
             let base = eval_atom(interp, base, frame, env, span)?;
             if !matches!(base, Value::Tensor(_)) {
                 return Err(EvalError::new("E0302", "indexing expects a tensor").at(span));
@@ -618,42 +668,50 @@ fn eval_rhs(
             let mut resolved = Vec::with_capacity(indices.len());
             for index in indices {
                 match index {
-                    Slice::Index(atom) => {
-                        resolved.push(SliceValue::Index(eval_atom(interp, atom, frame, env, span)?.as_f64()));
-                    }
-                    Slice::Range {
+                    | Slice::Index(atom) => {
+                        resolved.push(SliceValue::Index(
+                            eval_atom(interp, atom, frame, env, span)?.as_f64(),
+                        ));
+                    },
+                    | Slice::Range {
                         start,
                         end,
                         inclusive,
                         step,
                     } => {
                         let start = match start {
-                            Some(atom) => Some(
-                                eval_atom(interp, atom, frame, env, span)?
-                                    .as_f64()
-                                    .unwrap_or(0.0),
-                            ),
-                            None => None,
+                            | Some(atom) => {
+                                Some(
+                                    eval_atom(interp, atom, frame, env, span)?
+                                        .as_f64()
+                                        .unwrap_or(0.0),
+                                )
+                            },
+                            | None => None,
                         };
                         let end = match end {
-                            Some(atom) => Some(
-                                eval_atom(interp, atom, frame, env, span)?
-                                    .as_f64()
-                                    .unwrap_or(0.0),
-                            ),
-                            None => None,
+                            | Some(atom) => {
+                                Some(
+                                    eval_atom(interp, atom, frame, env, span)?
+                                        .as_f64()
+                                        .unwrap_or(0.0),
+                                )
+                            },
+                            | None => None,
                         };
                         // A step that is not a number is `NaN` here, which the
                         // slicer refuses: `0` would be a plausible-looking
                         // step and `1` a plausible-looking default, and neither
                         // is what the program said.
                         let step = match step {
-                            Some(atom) => Some(
-                                eval_atom(interp, atom, frame, env, span)?
-                                    .as_f64()
-                                    .unwrap_or(f64::NAN),
-                            ),
-                            None => None,
+                            | Some(atom) => {
+                                Some(
+                                    eval_atom(interp, atom, frame, env, span)?
+                                        .as_f64()
+                                        .unwrap_or(f64::NAN),
+                                )
+                            },
+                            | None => None,
                         };
                         resolved.push(SliceValue::Range {
                             start,
@@ -661,33 +719,33 @@ fn eval_rhs(
                             inclusive: *inclusive,
                             step,
                         });
-                    }
+                    },
                 }
             }
             interp.index_resolved(base, &resolved, span)
-        }
-        Rhs::Quantity {
+        },
+        | Rhs::Quantity {
             value,
             unit,
             as_float,
         } => interp.quantity(value, unit, span, *as_float),
-        Rhs::Str(parts) => {
+        | Rhs::Str(parts) => {
             let mut out = String::new();
             for part in parts {
                 match part {
-                    StrPart::Text(text) => out.push_str(text),
-                    StrPart::Atom(atom) => {
+                    | StrPart::Text(text) => out.push_str(text),
+                    | StrPart::Atom(atom) => {
                         let value = eval_atom(interp, atom, frame, env, span)?;
                         out.push_str(&value::show(&value));
-                    }
+                    },
                 }
             }
             Ok(Value::string(out))
-        }
-        Rhs::Try(atom) => {
+        },
+        | Rhs::Try(atom) => {
             let value = eval_atom(interp, atom, frame, env, span)?;
             match &value {
-                Value::Variant(variant) if variant.adt == adt::RESULT_ID => {
+                | Value::Variant(variant) if variant.adt == adt::RESULT_ID => {
                     if variant.index == 0 {
                         variant
                             .fields
@@ -699,8 +757,8 @@ fn eval_rhs(
                         error.payload = Some(value.clone());
                         Err(error)
                     }
-                }
-                Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
+                },
+                | Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
                     if variant.index == 1 {
                         variant
                             .fields
@@ -712,34 +770,40 @@ fn eval_rhs(
                         error.payload = Some(value.clone());
                         Err(error)
                     }
-                }
-                other => Err(EvalError::new(
-                    "E0702",
-                    format!("`?` expects Result or Option, found {}", other.type_name()),
-                )
-                .at(span)),
+                },
+                | other => {
+                    Err(EvalError::new(
+                        "E0702",
+                        format!("`?` expects Result or Option, found {}", other.type_name()),
+                    )
+                    .at(span))
+                },
             }
-        }
-        Rhs::Factorial { value, double } => {
+        },
+        | Rhs::Factorial { value, double } => {
             let value = eval_atom(interp, value, frame, env, span)?;
             let n = match &value {
-                Value::Num(num) => match &num.kind {
-                    NumKind::Int(value) => value
-                        .to_i64()
-                        .ok_or_else(|| EvalError::new("E0801", "factorial is too large"))?,
-                    _ => {
-                        return Err(
-                            EvalError::new("E0302", "factorial expects an Int").at(span)
-                        );
+                | Value::Num(num) => {
+                    match &num.kind {
+                        | NumKind::Int(value) => {
+                            value
+                                .to_i64()
+                                .ok_or_else(|| EvalError::new("E0801", "factorial is too large"))?
+                        },
+                        | _ => {
+                            return Err(
+                                EvalError::new("E0302", "factorial expects an Int").at(span)
+                            );
+                        },
                     }
                 },
-                _ => {
+                | _ => {
                     return Err(EvalError::new("E0302", "factorial expects an Int").at(span));
-                }
+                },
             };
             Ok(Value::Num(NumVal::int(factorial(n, *double))))
-        }
-        Rhs::Do(plan) => build_do(interp, plan, frame, env),
+        },
+        | Rhs::Do(plan) => build_do(interp, plan, frame, env),
     }
 }
 
@@ -752,8 +816,8 @@ fn build_do(
     let mut actions: Vec<Rc<IoAction>> = Vec::with_capacity(plan.prefix.len() + 1);
     for Action { atom, span } in &plan.prefix {
         match eval_atom(interp, atom, frame, env, *span)? {
-            Value::Io(action) => actions.push(action),
-            other => {
+            | Value::Io(action) => actions.push(action),
+            | other => {
                 return Err(EvalError::new(
                     "E0701",
                     format!(
@@ -762,39 +826,45 @@ fn build_do(
                     ),
                 )
                 .at(*span));
-            }
+            },
         }
     }
     match &plan.terminal {
-        DoTerminal::End => {}
-        DoTerminal::Let { thunk } => match build_closure(thunk, frame, env) {
-            Value::Closure(closure) => actions.push(Rc::new(IoAction::Defer(closure))),
-            _ => unreachable!("a thunk is a closure"),
+        | DoTerminal::End => {},
+        | DoTerminal::Let { thunk } => {
+            match build_closure(thunk, frame, env) {
+                | Value::Closure(closure) => actions.push(Rc::new(IoAction::Defer(closure))),
+                | _ => unreachable!("a thunk is a closure"),
+            }
         },
-        DoTerminal::Bind {
+        | DoTerminal::Bind {
             action,
             span: action_span,
             continuation,
         } => {
             let action = match eval_atom(interp, action, frame, env, *action_span)? {
-                Value::Io(action) => action,
-                _ => {
-                    return Err(EvalError::new("E0701", "`<-` expects an IO action")
-                        .at(*action_span));
-                }
+                | Value::Io(action) => action,
+                | _ => {
+                    return Err(
+                        EvalError::new("E0701", "`<-` expects an IO action").at(*action_span)
+                    );
+                },
             };
             let func = build_closure(continuation, frame, env);
             actions.push(Rc::new(IoAction::Bind { action, func }));
-        }
+        },
     }
     match actions.len() {
-        0 => Ok(Value::Io(Rc::new(IoAction::Pure(Value::Unit)))),
-        1 => Ok(Value::Io(actions.remove(0))),
-        _ => Ok(Value::Io(Rc::new(IoAction::Seq(actions)))),
+        | 0 => Ok(Value::Io(Rc::new(IoAction::Pure(Value::Unit)))),
+        | 1 => Ok(Value::Io(actions.remove(0))),
+        | _ => Ok(Value::Io(Rc::new(IoAction::Seq(actions)))),
     }
 }
 
-fn factorial(n: i64, double: bool) -> BigInt {
+fn factorial(
+    n: i64,
+    double: bool,
+) -> BigInt {
     use num_traits::One;
     let mut result = BigInt::one();
     if n <= 0 {
@@ -819,7 +889,11 @@ fn factorial(n: i64, double: bool) -> BigInt {
 /// `match_pattern` takes `&Value` and clones, which is right for a match arm
 /// (the scrutinee is still needed) and wasteful for a parameter, whose vector
 /// the caller has already given up.
-fn bind_parameter(pattern: &Pattern, value: &mut Value, frame: &mut Vec<Value>) -> bool {
+fn bind_parameter(
+    pattern: &Pattern,
+    value: &mut Value,
+    frame: &mut Vec<Value>,
+) -> bool {
     match pattern {
         | Pattern::Bind { slot, inner: None } => {
             set(frame, *slot, std::mem::replace(value, Value::Unit));
@@ -829,11 +903,15 @@ fn bind_parameter(pattern: &Pattern, value: &mut Value, frame: &mut Vec<Value>) 
     }
 }
 
-fn match_pattern(pattern: &Pattern, value: &Value, frame: &mut Vec<Value>) -> bool {
+fn match_pattern(
+    pattern: &Pattern,
+    value: &Value,
+    frame: &mut Vec<Value>,
+) -> bool {
     match pattern {
-        Pattern::Error => false,
-        Pattern::Wildcard => true,
-        Pattern::Bind { slot, inner } => {
+        | Pattern::Error => false,
+        | Pattern::Wildcard => true,
+        | Pattern::Bind { slot, inner } => {
             if let Some(inner) = inner {
                 if !match_pattern(inner, value, frame) {
                     return false;
@@ -841,8 +919,8 @@ fn match_pattern(pattern: &Pattern, value: &Value, frame: &mut Vec<Value>) -> bo
             }
             set(frame, *slot, value.clone());
             true
-        }
-        Pattern::Ctor { name, args } => {
+        },
+        | Pattern::Ctor { name, args } => {
             let Value::Variant(variant) = value else {
                 return false;
             };
@@ -855,8 +933,8 @@ fn match_pattern(pattern: &Pattern, value: &Value, frame: &mut Vec<Value>) -> bo
                 }
             }
             true
-        }
-        Pattern::Record(fields) => {
+        },
+        | Pattern::Record(fields) => {
             let Value::Record(record) = value else {
                 return false;
             };
@@ -869,8 +947,8 @@ fn match_pattern(pattern: &Pattern, value: &Value, frame: &mut Vec<Value>) -> bo
                 }
             }
             true
-        }
-        Pattern::Tuple(items) => {
+        },
+        | Pattern::Tuple(items) => {
             let Value::Record(record) = value else {
                 return false;
             };
@@ -883,8 +961,8 @@ fn match_pattern(pattern: &Pattern, value: &Value, frame: &mut Vec<Value>) -> bo
                 }
             }
             true
-        }
-        Pattern::Tensor { items, rest } => {
+        },
+        | Pattern::Tensor { items, rest } => {
             let Value::Tensor(tensor) = value else {
                 return false;
             };
@@ -910,21 +988,27 @@ fn match_pattern(pattern: &Pattern, value: &Value, frame: &mut Vec<Value>) -> bo
                 );
             }
             true
-        }
-        Pattern::Lit(literal) => match (literal, value) {
-            (PatLit::Int(expected), Value::Num(num)) => match &num.kind {
-                NumKind::Int(actual) => actual == expected,
-                NumKind::Exact(actual) => actual == &BigRational::from_integer(expected.clone()),
-                NumKind::Float(actual) => {
-                    BigRational::from_float(*actual)
-                        == Some(BigRational::from_integer(expected.clone()))
-                }
-                _ => false,
-            },
-            (PatLit::Str(expected), Value::Str(actual)) => actual.as_ref() == expected,
-            (PatLit::Bool(expected), Value::Bool(actual)) => expected == actual,
-            (PatLit::Unit, Value::Unit) => true,
-            _ => false,
+        },
+        | Pattern::Lit(literal) => {
+            match (literal, value) {
+                | (PatLit::Int(expected), Value::Num(num)) => {
+                    match &num.kind {
+                        | NumKind::Int(actual) => actual == expected,
+                        | NumKind::Exact(actual) => {
+                            actual == &BigRational::from_integer(expected.clone())
+                        },
+                        | NumKind::Float(actual) => {
+                            BigRational::from_float(*actual)
+                                == Some(BigRational::from_integer(expected.clone()))
+                        },
+                        | _ => false,
+                    }
+                },
+                | (PatLit::Str(expected), Value::Str(actual)) => actual.as_ref() == expected,
+                | (PatLit::Bool(expected), Value::Bool(actual)) => expected == actual,
+                | (PatLit::Unit, Value::Unit) => true,
+                | _ => false,
+            }
         },
     }
 }

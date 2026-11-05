@@ -4,8 +4,10 @@
 //! being tested is the command — its exit code, the files it writes and the
 //! files it refuses to write.
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Output;
 
 /// A scratch directory that removes itself.
 struct Scratch(PathBuf);
@@ -19,7 +21,11 @@ impl Scratch {
         Self(path)
     }
 
-    fn write(&self, name: &str, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.0.join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create parent");
@@ -39,7 +45,10 @@ impl Drop for Scratch {
     }
 }
 
-fn aevia(dir: &Path, args: &[&str]) -> Output {
+fn aevia(
+    dir: &Path,
+    args: &[&str],
+) -> Output {
     Command::new(env!("CARGO_BIN_EXE_aevia"))
         .args(args)
         .current_dir(dir)
@@ -75,7 +84,11 @@ fn init_writes_a_package_that_runs() {
     // The generated program runs, and `run` with no file uses the entry.
     let output = aevia(&package, &["run"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("hello from demo"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("hello from demo"),
+        "{}",
+        stdout(&output)
+    );
     let output = aevia(&package, &["check"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
@@ -88,7 +101,11 @@ fn init_refuses_to_overwrite_a_directory() {
     std::fs::write(existing.join("keep.txt"), "do not lose this").expect("write");
     let output = aevia(scratch.path(), &["init", "demo"]);
     assert_ne!(code(&output), 0);
-    assert!(stderr(&output).contains("already exists"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("already exists"),
+        "{}",
+        stderr(&output)
+    );
     assert_eq!(
         std::fs::read_to_string(existing.join("keep.txt")).expect("reads"),
         "do not lose this"
@@ -102,13 +119,14 @@ fn add_and_update_resolve_path_dependencies() {
     assert_eq!(code(&aevia(scratch.path(), &["init", "dep"])), 0);
     assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
     let demo = scratch.path().join("demo");
-    scratch.write(
-        "dep/src/Convert.aev",
-        "fn mm(x: Int): Int = x * 1000\n",
-    );
+    scratch.write("dep/src/Convert.aev", "fn mm(x: Int): Int = x * 1000\n");
     let output = aevia(&demo, &["add", "../dep"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("added `Dep`"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("added `Dep`"),
+        "{}",
+        stdout(&output)
+    );
 
     let manifest = std::fs::read_to_string(demo.join("aevia.toml")).expect("reads");
     assert!(
@@ -124,8 +142,15 @@ fn add_and_update_resolve_path_dependencies() {
     let first = std::fs::read_to_string(demo.join("aevia.lock")).expect("reads");
     let output = aevia(&demo, &["update"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("up to date"), "{}", stdout(&output));
-    assert_eq!(std::fs::read_to_string(demo.join("aevia.lock")).expect("reads"), first);
+    assert!(
+        stdout(&output).contains("up to date"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(demo.join("aevia.lock")).expect("reads"),
+        first
+    );
 
     // And the dependency is importable under its name.
     scratch.write(
@@ -170,7 +195,11 @@ fn fmt_formats_and_check_reports_without_writing() {
     let file = scratch.write("a.aev", "let  x=1+2*3\n");
     let output = aevia(scratch.path(), &["fmt", "--check", "a.aev"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stdout(&output).contains("would reformat a.aev"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("would reformat a.aev"),
+        "{}",
+        stdout(&output)
+    );
     assert_eq!(
         std::fs::read_to_string(&file).expect("reads"),
         "let  x=1+2*3\n",
@@ -250,7 +279,11 @@ fn doc_writes_one_page_per_module_and_an_index() {
     let index = std::fs::read_to_string(demo.join("docs/index.md")).expect("reads");
     assert!(index.contains("Undocumented"), "{index}");
     assert!(index.contains("without a `##` doc comment"), "{index}");
-    assert!(stdout(&output).contains("without a `##` doc comment"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("without a `##` doc comment"),
+        "{}",
+        stdout(&output)
+    );
 
     // `--open` shows the docs; with no terminal to show them to it prints the
     // path rather than launching a viewer nobody asked for.
@@ -308,7 +341,11 @@ fn bench_times_bench_functions_and_reports_failures() {
     assert!(table.contains("median of N iterations"), "{table}");
     // Debug timings are not comparable with release ones, and the command says
     // which build it is. (`cfg!(debug_assertions)` is true for this test.)
-    assert!(stderr(&output).contains("debug build"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("debug build"),
+        "{}",
+        stderr(&output)
+    );
 
     // `--filter` narrows the run, and a run with no failures exits 0.
     let output = aevia(scratch.path(), &["bench", "--filter", "loop", "bench.aev"]);
@@ -319,7 +356,14 @@ fn bench_times_bench_functions_and_reports_failures() {
     // cannot be timed a hundred times.
     let output = aevia(
         scratch.path(),
-        &["bench", "--filter", "loop", "--iterations", "7", "bench.aev"],
+        &[
+            "bench",
+            "--filter",
+            "loop",
+            "--iterations",
+            "7",
+            "bench.aev",
+        ],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let filtered = stdout(&output);
@@ -334,12 +378,13 @@ fn bench_times_bench_functions_and_reports_failures() {
     );
 
     // A count of zero is a mistake, not a request for the default.
-    let output = aevia(
-        scratch.path(),
-        &["bench", "--iterations", "0", "bench.aev"],
-    );
+    let output = aevia(scratch.path(), &["bench", "--iterations", "0", "bench.aev"]);
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("at least 1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("at least 1"),
+        "{}",
+        stderr(&output)
+    );
     let _ = file;
 }
 
@@ -368,7 +413,11 @@ fn clean_removes_the_build_directory_and_says_when_there_is_none() {
     let demo = scratch.path().join("demo");
     let output = aevia(&demo, &["clean"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("nothing to clean"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("nothing to clean"),
+        "{}",
+        stdout(&output)
+    );
 
     scratch.write("demo/.aevia/target/obj.aev", "let x = 1\n");
     scratch.write("demo/.aevia/interfaces/Geometry.aevi", "interface\n");
@@ -381,7 +430,11 @@ fn clean_removes_the_build_directory_and_says_when_there_is_none() {
     // Outside a package there is no directory it could mean.
     let output = aevia(scratch.path(), &["clean"]);
     assert_ne!(code(&output), 0);
-    assert!(stderr(&output).contains("aevia.toml"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("aevia.toml"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -407,7 +460,11 @@ fn lsp_serves_the_protocol_over_stdio() {
     }
     drop(stdin);
     let output = child.wait_with_output().expect("waits");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"capabilities\""), "{stdout}");
     assert!(stdout.contains("aevia-lsp"), "{stdout}");
@@ -443,7 +500,11 @@ fn rssn_emit_writes_the_generated_module_into_out() {
     // `--emit` with no destination is refused rather than guessed.
     let output = aevia(scratch.path(), &["rssn", "--emit"]);
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("destination"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("destination"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -460,7 +521,11 @@ fn locked_refuses_an_out_of_date_lock_instead_of_rewriting_it() {
     std::fs::write(demo.join("aevia.lock"), "# stale\nversion = 1\n").expect("writes");
     let output = aevia(&demo, &["check", "--locked"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stderr(&output).contains("out of date"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("out of date"),
+        "{}",
+        stderr(&output)
+    );
     assert_eq!(
         std::fs::read_to_string(demo.join("aevia.lock")).expect("reads"),
         "# stale\nversion = 1\n",
@@ -470,7 +535,11 @@ fn locked_refuses_an_out_of_date_lock_instead_of_rewriting_it() {
     // `update --locked` refuses to write and says how to proceed.
     let output = aevia(&demo, &["update", "--locked"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stderr(&output).contains("refuses to rewrite"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("refuses to rewrite"),
+        "{}",
+        stderr(&output)
+    );
     // Without `--locked` the lock is rewritten, and then `--locked` passes.
     assert_eq!(code(&aevia(&demo, &["update"])), 0);
     assert_eq!(code(&aevia(&demo, &["check", "--locked"])), 0);
@@ -478,7 +547,11 @@ fn locked_refuses_an_out_of_date_lock_instead_of_rewriting_it() {
     // Outside a package, `--locked` has no lock to check and says so.
     let output = aevia(scratch.path(), &["check", "--locked"]);
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("aevia.toml"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("aevia.toml"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -499,7 +572,11 @@ fn the_flags_with_no_effect_are_reported_rather_than_dropped() {
 
     let output = aevia(scratch.path(), &["check", "--jobs", "0", "a.aev"]);
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("at least 1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("at least 1"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -519,12 +596,20 @@ fn test_filter_selects_by_name_and_refuses_an_empty_selection() {
     let output = aevia(scratch.path(), &["test", "--filter", "alpha", "suite.aev"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("alpha works ... ok"));
-    assert!(!stdout(&output).contains("beta fails"), "{}", stdout(&output));
+    assert!(
+        !stdout(&output).contains("beta fails"),
+        "{}",
+        stdout(&output)
+    );
 
     // A filter that matches nothing must not report success.
     let output = aevia(scratch.path(), &["test", "--filter", "nope", "suite.aev"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stderr(&output).contains("matched no test"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("matched no test"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -540,7 +625,11 @@ fn check_all_checks_modules_the_entry_does_not_import() {
     let output = aevia(&demo, &["check", "--all"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(stderr(&output).contains("E0401"), "{}", stderr(&output));
-    assert!(stderr(&output).contains("orphan.aev"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("orphan.aev"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -584,7 +673,10 @@ fn check_all_loads_the_package_in_one_pass() {
         "one ok line per entry: {text}"
     );
     // The chain still reports a real error with --all.
-    scratch.write("demo/src/H5.aev", "module H5\n\nfn value(): Int = 1 m + 1\n");
+    scratch.write(
+        "demo/src/H5.aev",
+        "module H5\n\nfn value(): Int = 1 m + 1\n",
+    );
     let output = aevia(&demo, &["check", "--all"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(stderr(&output).contains("E0401"), "{}", stderr(&output));
@@ -599,14 +691,26 @@ fn check_accepts_several_files() {
     scratch.write("two.aev", "let b = 2 m\n");
     let output = aevia(scratch.path(), &["check", "one.aev", "two.aev"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("one.aev: ok"), "{}", stdout(&output));
-    assert!(stdout(&output).contains("two.aev: ok"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("one.aev: ok"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("two.aev: ok"),
+        "{}",
+        stdout(&output)
+    );
 
     // One bad file fails the run and is named; the good one is still checked.
     scratch.write("bad.aev", "let c = 1 m + 1\n");
     let output = aevia(scratch.path(), &["check", "one.aev", "bad.aev"]);
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stdout(&output).contains("one.aev: ok"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("one.aev: ok"),
+        "{}",
+        stdout(&output)
+    );
     assert!(stderr(&output).contains("bad.aev"), "{}", stderr(&output));
 }
 
@@ -623,7 +727,11 @@ fn check_expands_a_pattern_the_shell_did_not() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(stdout(&output).contains("a.aev: ok"), "{}", stdout(&output));
     assert!(stdout(&output).contains("b.aev: ok"), "{}", stdout(&output));
-    assert!(!stdout(&output).contains("notes.txt"), "{}", stdout(&output));
+    assert!(
+        !stdout(&output).contains("notes.txt"),
+        "{}",
+        stdout(&output)
+    );
 
     // A pattern that matches nothing is kept and reported, not silently empty.
     let output = aevia(scratch.path(), &["check", "*.missing"]);
@@ -641,7 +749,10 @@ fn the_help_lists_the_commands_that_exist() {
         "run", "check", "test", "repl", "fmt", "doc", "bench", "init", "add", "update", "clean",
         "lsp", "rssn",
     ] {
-        assert!(text.contains(command), "`{command}` is missing from the help");
+        assert!(
+            text.contains(command),
+            "`{command}` is missing from the help"
+        );
     }
     for option in [
         "--locked",
@@ -705,7 +816,11 @@ fn run_passes_arguments_only_after_a_separator() {
         "{}",
         stderr(&output)
     );
-    assert!(stderr(&output).contains("after `--`"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("after `--`"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -731,19 +846,30 @@ fn run_example_finds_the_packages_examples_directory() {
     // A path-qualified name is refused rather than treated as a subdirectory.
     let output = aevia(&demo, &["run", "--example", "sub/greet"]);
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("no path separators"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no path separators"),
+        "{}",
+        stderr(&output)
+    );
 
     // A missing example lists what does exist.
     let output = aevia(&demo, &["run", "--example", "nope"]);
     assert_eq!(code(&output), 2);
     let error = stderr(&output);
     assert!(error.contains("there is no example `nope`"), "{error}");
-    assert!(error.contains("greet") && error.contains("other"), "{error}");
+    assert!(
+        error.contains("greet") && error.contains("other"),
+        "{error}"
+    );
 
     // `--example` and a file are different programs.
     let output = aevia(&demo, &["run", "--example", "greet", "src/main.aev"]);
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("different programs"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("different programs"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -779,10 +905,7 @@ fn doctests_compile_the_documented_examples() {
     assert!(text.contains("doctest "), "{text}");
     assert!(text.contains("5 passed, 0 failed"), "{text}");
     // The isolation limit is stated, not silent.
-    assert!(
-        text.contains("compiles as its own module"),
-        "{text}"
-    );
+    assert!(text.contains("compiles as its own module"), "{text}");
 }
 
 #[test]
@@ -811,7 +934,11 @@ fn doctests_run_over_a_directory_and_a_filter() {
         .to_string();
     let output = aevia(scratch.path(), &["test", "--doc", &directory]);
     assert_eq!(code(&output), 1, "a failing fixture fails the run");
-    assert!(stdout(&output).contains("6 passed, 3 failed"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("6 passed, 3 failed"),
+        "{}",
+        stdout(&output)
+    );
 
     // `--filter` selects by file path: only the good fixture runs.
     let output = aevia(
@@ -819,7 +946,11 @@ fn doctests_run_over_a_directory_and_a_filter() {
         &["test", "--doc", "--filter", "good", &directory],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("5 passed, 0 failed"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("5 passed, 0 failed"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 #[test]
@@ -844,13 +975,21 @@ fn compile_fail_builtin_compiles_the_snippet_in_isolation() {
     let scratch = Scratch::new("compile-fail");
     let output = aevia(scratch.path(), &["test", &fixture("contract.aev")]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("4 passed, 0 failed"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("4 passed, 0 failed"),
+        "{}",
+        stdout(&output)
+    );
 }
 
 // --- §9.12 benchmark baselines --------------------------------------------
 
 /// A baseline document with one workload called `loop`.
-fn synthetic_baseline(median_ns: u64, profile: &str, workload: &str) -> String {
+fn synthetic_baseline(
+    median_ns: u64,
+    profile: &str,
+    workload: &str,
+) -> String {
     format!(
         "{{\n  \"format\": 1,\n  \"tool\": \"aevia bench\",\n  \"version\": \"test\",\n  \
          \"profile\": \"{profile}\",\n  \"iterations\": 2,\n  \"warmup\": 1,\n  \
@@ -892,7 +1031,11 @@ fn bench_baselines_gate_regressions() {
         ],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).contains("wrote baseline"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("wrote baseline"),
+        "{}",
+        stdout(&output)
+    );
     let saved = std::fs::read_to_string(&baseline).expect("baseline file");
     for needle in [
         "\"format\": 1",
@@ -930,11 +1073,7 @@ fn bench_baselines_gate_regressions() {
     assert!(text.contains("0 regression(s)"), "{text}");
 
     // A synthetic baseline of 1 ns makes the current run a regression.
-    std::fs::write(
-        &baseline,
-        synthetic_baseline(1, bench_profile(), "loop"),
-    )
-    .expect("writes");
+    std::fs::write(&baseline, synthetic_baseline(1, bench_profile(), "loop")).expect("writes");
     let output = aevia(
         scratch.path(),
         &[
@@ -951,7 +1090,11 @@ fn bench_baselines_gate_regressions() {
         ],
     );
     assert_eq!(code(&output), 1, "{}", stderr(&output));
-    assert!(stdout(&output).contains("REGRESSION"), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("REGRESSION"),
+        "{}",
+        stdout(&output)
+    );
 
     // A baseline ten seconds slow cannot have been regressed past.
     std::fs::write(
@@ -1040,11 +1183,19 @@ fn bench_baselines_gate_regressions() {
         ],
     );
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("different runs"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("different runs"),
+        "{}",
+        stderr(&output)
+    );
     let output = aevia(
         scratch.path(),
         &["bench", "--threshold", "nope", "bench.aev"],
     );
     assert_eq!(code(&output), 2);
-    assert!(stderr(&output).contains("not a ratio"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("not a ratio"),
+        "{}",
+        stderr(&output)
+    );
 }

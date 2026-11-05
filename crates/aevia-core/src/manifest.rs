@@ -12,9 +12,11 @@
 //! blank lines. Anything outside that subset is `E0605` with the line number —
 //! a manifest the tool only half-understands is worse than one it rejects.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// A manifest or resolution failure, with the diagnostic code it reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,7 +29,10 @@ pub struct ManifestError {
 }
 
 impl ManifestError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    fn new(
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
             message: message.into(),
@@ -80,7 +85,9 @@ impl Manifest {
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
-        out.push_str("# aevia.toml — package manifest. `aevia update` rewrites aevia.lock, not this file.\n");
+        out.push_str(
+            "# aevia.toml — package manifest. `aevia update` rewrites aevia.lock, not this file.\n",
+        );
         out.push_str("[package]\n");
         let _ = writeln!(out, "name = \"{}\"", self.name);
         let _ = writeln!(out, "version = \"{}\"", self.version);
@@ -89,9 +96,9 @@ impl Manifest {
         out.push_str("[dependencies]\n");
         for (key, dependency) in &self.dependencies {
             match dependency {
-                Dependency::Path { path } => {
+                | Dependency::Path { path } => {
                     let _ = writeln!(out, "{key} = {{ path = \"{path}\" }}");
-                }
+                },
             }
         }
         out
@@ -103,7 +110,10 @@ impl Manifest {
     ///
     /// `E0605` for anything outside the supported subset, a missing required
     /// key, an invalid name/version, or a registry dependency.
-    pub fn parse(text: &str, origin: &str) -> Result<Self, ManifestError> {
+    pub fn parse(
+        text: &str,
+        origin: &str,
+    ) -> Result<Self, ManifestError> {
         let mut table = String::new();
         let mut name: Option<String> = None;
         let mut version: Option<String> = None;
@@ -143,7 +153,7 @@ impl Manifest {
             let key = key.trim();
             let value = value.trim();
             match table.as_str() {
-                "package" => {
+                | "package" => {
                     let text = parse_string(value).ok_or_else(|| {
                         ManifestError::new(
                             "E0605",
@@ -151,10 +161,10 @@ impl Manifest {
                         )
                     })?;
                     match key {
-                        "name" => name = Some(text),
-                        "version" => version = Some(text),
-                        "entry" => entry = Some(text),
-                        other => {
+                        | "name" => name = Some(text),
+                        | "version" => version = Some(text),
+                        | "entry" => entry = Some(text),
+                        | other => {
                             return Err(ManifestError::new(
                                 "E0605",
                                 format!(
@@ -162,10 +172,10 @@ impl Manifest {
                                      this tool reads `name`, `version` and `entry`"
                                 ),
                             ));
-                        }
+                        },
                     }
-                }
-                "dependencies" => {
+                },
+                | "dependencies" => {
                     let dependency = parse_dependency(value, origin, number)?;
                     if !is_module_segment(key) {
                         return Err(ManifestError::new(
@@ -178,13 +188,13 @@ impl Manifest {
                         ));
                     }
                     dependencies.insert(key.to_string(), dependency);
-                }
-                _ => {
+                },
+                | _ => {
                     return Err(ManifestError::new(
                         "E0605",
                         format!("{origin}:{number}: `{line}` appears before any table header"),
                     ));
-                }
+                },
             }
         }
         let name = name.ok_or_else(|| {
@@ -236,7 +246,10 @@ impl Manifest {
     /// # Errors
     ///
     /// The I/O error, with the path, when the file cannot be written.
-    pub fn save(&self, path: &Path) -> Result<(), ManifestError> {
+    pub fn save(
+        &self,
+        path: &Path,
+    ) -> Result<(), ManifestError> {
         std::fs::write(path, self.render()).map_err(|error| {
             ManifestError::new(
                 "E0605",
@@ -312,10 +325,14 @@ impl Package {
             return Ok(None);
         };
         let file = normalise(file);
-        let owns = ["src", "tests", "examples"].iter().any(|tree| {
-            file.starts_with(normalise(&package.dir.join(tree)))
-        });
-        if owns { Ok(Some(package)) } else { Ok(None) }
+        let owns = ["src", "tests", "examples"]
+            .iter()
+            .any(|tree| file.starts_with(normalise(&package.dir.join(tree))));
+        if owns {
+            Ok(Some(package))
+        } else {
+            Ok(None)
+        }
     }
 
     /// The `src/` directory, where module paths start.
@@ -381,7 +398,8 @@ impl Package {
                         ),
                     ));
                 }
-                roots.entries
+                roots
+                    .entries
                     .insert(key.clone(), dependency_dir.join(&manifest.entry));
                 roots.packages.insert(key.clone(), source);
                 if seen.insert(dependency_dir.clone()) {
@@ -482,7 +500,10 @@ impl Roots {
 
     /// Also tries `dir` after the package's `src/`.
     #[must_use]
-    pub fn with_local(mut self, dir: &Path) -> Self {
+    pub fn with_local(
+        mut self,
+        dir: &Path,
+    ) -> Self {
         if normalise(dir) != normalise(&self.source) {
             self.local = Some(dir.to_path_buf());
         }
@@ -492,7 +513,10 @@ impl Roots {
     /// The file an import path names: the package's `src/`, the entry's own
     /// directory, then the dependencies.
     #[must_use]
-    pub fn resolve(&self, path: &[String]) -> Option<PathBuf> {
+    pub fn resolve(
+        &self,
+        path: &[String],
+    ) -> Option<PathBuf> {
         if path.is_empty() {
             return None;
         }
@@ -506,7 +530,10 @@ impl Roots {
 
     /// Every file an import path could have meant, for a `E0607` message.
     #[must_use]
-    pub fn candidates(&self, path: &[String]) -> Vec<PathBuf> {
+    pub fn candidates(
+        &self,
+        path: &[String],
+    ) -> Vec<PathBuf> {
         let mut out = Vec::new();
         for base in std::iter::once(&self.source).chain(self.local.iter()) {
             let mut candidate = base.clone();
@@ -576,7 +603,9 @@ impl Lock {
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
-        out.push_str("# aevia.lock — generated by `aevia update`. Do not edit; run `aevia update`.\n");
+        out.push_str(
+            "# aevia.lock — generated by `aevia update`. Do not edit; run `aevia update`.\n",
+        );
         let _ = writeln!(out, "version = {LOCK_VERSION}");
         for package in &self.packages {
             out.push('\n');
@@ -597,7 +626,10 @@ impl Lock {
     /// # Errors
     ///
     /// `E0605` for a malformed or unrecognised lock file.
-    pub fn parse(text: &str, origin: &str) -> Result<Self, ManifestError> {
+    pub fn parse(
+        text: &str,
+        origin: &str,
+    ) -> Result<Self, ManifestError> {
         let mut packages: Vec<LockedPackage> = Vec::new();
         let mut current: Option<LockedPackage> = None;
         let mut version = None;
@@ -636,17 +668,17 @@ impl Lock {
                     )
                 })?;
                 match key {
-                    "name" => package.name = text,
-                    "version" => package.version = text,
-                    "import" => package.import = text,
-                    "source" => package.source = text,
-                    "hash" => package.hash = Some(text),
-                    other => {
+                    | "name" => package.name = text,
+                    | "version" => package.version = text,
+                    | "import" => package.import = text,
+                    | "source" => package.source = text,
+                    | "hash" => package.hash = Some(text),
+                    | other => {
                         return Err(ManifestError::new(
                             "E0605",
                             format!("{origin}:{number}: unknown lock key `{other}`"),
                         ));
-                    }
+                    },
                 }
             } else if key == "version" {
                 version = Some(value.to_string());
@@ -661,27 +693,25 @@ impl Lock {
             packages.push(package);
         }
         match version.as_deref() {
-            Some("1") => {}
-            Some(other) => {
+            | Some("1") => {},
+            | Some(other) => {
                 return Err(ManifestError::new(
                     "E0605",
                     format!("{origin}: lock version `{other}` is not supported; expected `1`"),
                 ));
-            }
-            None => {
+            },
+            | None => {
                 return Err(ManifestError::new(
                     "E0605",
                     format!("{origin}: lock file has no `version`"),
                 ));
-            }
+            },
         }
         for package in &packages {
             if package.name.is_empty() || package.source.is_empty() || package.import.is_empty() {
                 return Err(ManifestError::new(
                     "E0605",
-                    format!(
-                        "{origin}: a `[[package]]` entry needs `name`, `import` and `source`"
-                    ),
+                    format!("{origin}: a `[[package]]` entry needs `name`, `import` and `source`"),
                 ));
             }
         }
@@ -708,7 +738,10 @@ impl Lock {
     /// # Errors
     ///
     /// The I/O error, with the path, when it cannot be written.
-    pub fn save(&self, path: &Path) -> Result<(), ManifestError> {
+    pub fn save(
+        &self,
+        path: &Path,
+    ) -> Result<(), ManifestError> {
         std::fs::write(path, self.render()).map_err(|error| {
             ManifestError::new(
                 "E0605",
@@ -744,8 +777,8 @@ pub fn import_root(name: &str) -> String {
 fn is_module_segment(key: &str) -> bool {
     let mut chars = key.chars();
     match chars.next() {
-        Some(first) if first.is_uppercase() => {}
-        _ => return false,
+        | Some(first) if first.is_uppercase() => {},
+        | _ => return false,
     }
     chars.all(|c| c.is_alphanumeric() || c == '_')
 }
@@ -759,8 +792,8 @@ pub fn valid_package_name(name: &str) -> bool {
 fn is_package_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
-        Some(first) if first.is_ascii_alphabetic() => {}
-        _ => return false,
+        | Some(first) if first.is_ascii_alphabetic() => {},
+        | _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
@@ -801,7 +834,10 @@ fn parse_dependency(
             ),
         ));
     }
-    let Some(inner) = value.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')) else {
+    let Some(inner) = value
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
         return Err(ManifestError::new(
             "E0605",
             format!("{origin}:{number}: expected an inline table `{{ path = \"...\" }}`"),
@@ -820,15 +856,15 @@ fn parse_dependency(
             ));
         };
         match key.trim() {
-            "path" => {
+            | "path" => {
                 path = parse_string(field_value).map(Some).ok_or_else(|| {
                     ManifestError::new(
                         "E0605",
                         format!("{origin}:{number}: `path` expects a quoted string"),
                     )
                 })?;
-            }
-            other => {
+            },
+            | other => {
                 return Err(ManifestError::new(
                     "E0605",
                     format!(
@@ -836,15 +872,17 @@ fn parse_dependency(
                          `{{ path = \"...\" }}` (no registry, no git, no version ranges)"
                     ),
                 ));
-            }
+            },
         }
     }
     match path {
-        Some(path) => Ok(Dependency::Path { path }),
-        None => Err(ManifestError::new(
-            "E0605",
-            format!("{origin}:{number}: a dependency needs a `path`"),
-        )),
+        | Some(path) => Ok(Dependency::Path { path }),
+        | None => {
+            Err(ManifestError::new(
+                "E0605",
+                format!("{origin}:{number}: a dependency needs a `path`"),
+            ))
+        },
     }
 }
 
@@ -856,25 +894,32 @@ fn normalise(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
+            | std::path::Component::CurDir => {},
+            | std::path::Component::ParentDir => {
                 if !out.pop() {
                     out.push("..");
                 }
-            }
-            other => out.push(other.as_os_str()),
+            },
+            | other => out.push(other.as_os_str()),
         }
     }
     out
 }
 
 /// `target` as a path relative to `root`, with `/` separators.
-fn relative_to(root: &Path, target: &Path) -> String {
+fn relative_to(
+    root: &Path,
+    target: &Path,
+) -> String {
     let root = normalise(&absolute(root));
     let target = normalise(&absolute(target));
     if let Ok(rest) = target.strip_prefix(&root) {
         let text = rest.to_string_lossy().replace('\\', "/");
-        return if text.is_empty() { ".".to_string() } else { text };
+        return if text.is_empty() {
+            ".".to_string()
+        } else {
+            text
+        };
     }
     let root_parts: Vec<_> = root.components().collect();
     let target_parts: Vec<_> = target.components().collect();
@@ -937,25 +982,25 @@ pub fn hash_sources(source: &Path) -> Result<String, ManifestError> {
     Ok(format!("fnv1a64:{hash:016x}"))
 }
 
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ManifestError> {
+fn collect(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), ManifestError> {
     let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
+        | Ok(entries) => entries,
         // A dependency with no `src/` is empty, not broken: the lock still
         // records it, so removing a directory shows up as a hash change.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
+        | Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        | Err(error) => {
             return Err(ManifestError::new(
                 "E0607",
                 format!("cannot read `{}`: {error}", dir.display()),
             ));
-        }
+        },
     };
     for entry in entries {
         let entry = entry.map_err(|error| {
-            ManifestError::new(
-                "E0607",
-                format!("cannot read `{}`: {error}", dir.display()),
-            )
+            ManifestError::new("E0607", format!("cannot read `{}`: {error}", dir.display()))
         })?;
         let path = entry.path();
         if path.is_dir() {
@@ -1085,8 +1130,11 @@ UnitsExtra = { path = "../units-extra" }
 
     #[test]
     fn a_lock_file_without_a_version_is_rejected() {
-        let error = Lock::parse("[[package]]\nname = \"a\"\nimport = \"A\"\nsource = \"root\"\n", "aevia.lock")
-            .expect_err("no version");
+        let error = Lock::parse(
+            "[[package]]\nname = \"a\"\nimport = \"A\"\nsource = \"root\"\n",
+            "aevia.lock",
+        )
+        .expect_err("no version");
         assert_eq!(error.code, "E0605");
     }
 

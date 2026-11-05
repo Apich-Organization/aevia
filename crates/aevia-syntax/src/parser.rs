@@ -11,20 +11,34 @@
 //! parsing continues at the next line, so one mistake does not hide the rest.
 
 use crate::ast::*;
-use crate::diagnostic::{Diagnostic, Diagnostics};
-use crate::lexer::{lex_inline, LexOutput};
-use crate::span::{FileId, Span};
-use crate::token::{DocComment, Keyword, Punct, StringPart, Token, TokenKind};
-use aevia_dim::{Scale, UnitExpr};
+use crate::diagnostic::Diagnostic;
+use crate::diagnostic::Diagnostics;
+use crate::lexer::LexOutput;
+use crate::lexer::lex_inline;
+use crate::span::FileId;
+use crate::span::Span;
+use crate::token::DocComment;
+use crate::token::Keyword;
+use crate::token::Punct;
+use crate::token::StringPart;
+use crate::token::Token;
+use crate::token::TokenKind;
+use aevia_dim::Scale;
+use aevia_dim::UnitExpr;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{ToPrimitive, Zero};
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 
 /// Parses a lexed file into a module.
 ///
 /// Always returns a tree; parse errors are reported in the second component.
 #[must_use]
-pub fn parse_module(file: FileId, source: &str, lexed: &LexOutput) -> (Module, Diagnostics) {
+pub fn parse_module(
+    file: FileId,
+    source: &str,
+    lexed: &LexOutput,
+) -> (Module, Diagnostics) {
     let mut parser = Parser::new(&lexed.tokens, &lexed.docs, file, source);
     let module = parser.module();
     (module, parser.diagnostics)
@@ -99,7 +113,10 @@ impl<'a> Parser<'a> {
         &self.token().kind
     }
 
-    fn kind_at(&self, offset: usize) -> &TokenKind {
+    fn kind_at(
+        &self,
+        offset: usize,
+    ) -> &TokenKind {
         self.tokens
             .get(self.pos + offset)
             .map_or(&TokenKind::Eof, |token| &token.kind)
@@ -109,7 +126,10 @@ impl<'a> Parser<'a> {
         self.token().span
     }
 
-    fn text_of(&self, span: Span) -> &str {
+    fn text_of(
+        &self,
+        span: Span,
+    ) -> &str {
         let start = usize::try_from(span.start).unwrap_or(0);
         let end = usize::try_from(span.end).unwrap_or(0);
         self.source.get(start..end).unwrap_or("")
@@ -131,25 +151,36 @@ impl<'a> Parser<'a> {
         matches!(self.kind(), TokenKind::Dedent)
     }
 
-    fn at_punct(&self, punct: Punct) -> bool {
+    fn at_punct(
+        &self,
+        punct: Punct,
+    ) -> bool {
         matches!(self.kind(), TokenKind::Punct(p) if *p == punct)
     }
 
-    fn punct_at(&self, offset: usize, punct: Punct) -> bool {
+    fn punct_at(
+        &self,
+        offset: usize,
+        punct: Punct,
+    ) -> bool {
         matches!(self.kind_at(offset), TokenKind::Punct(p) if *p == punct)
     }
 
-    fn at_kw(&self, keyword: Keyword) -> bool {
+    fn at_kw(
+        &self,
+        keyword: Keyword,
+    ) -> bool {
         matches!(self.kind(), TokenKind::Keyword(k) if *k == keyword)
     }
-
 
     fn at_ident(&self) -> bool {
         matches!(self.kind(), TokenKind::Ident(_))
     }
 
-
-    fn ident_is(&self, name: &str) -> bool {
+    fn ident_is(
+        &self,
+        name: &str,
+    ) -> bool {
         matches!(self.kind(), TokenKind::Ident(text) if text == name)
     }
 
@@ -161,7 +192,10 @@ impl<'a> Parser<'a> {
         token
     }
 
-    fn eat_punct(&mut self, punct: Punct) -> bool {
+    fn eat_punct(
+        &mut self,
+        punct: Punct,
+    ) -> bool {
         if self.at_punct(punct) {
             self.bump();
             true
@@ -170,7 +204,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn eat_kw(&mut self, keyword: Keyword) -> bool {
+    fn eat_kw(
+        &mut self,
+        keyword: Keyword,
+    ) -> bool {
         if self.at_kw(keyword) {
             self.bump();
             true
@@ -194,7 +231,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_punct(&mut self, punct: Punct) -> bool {
+    fn expect_punct(
+        &mut self,
+        punct: Punct,
+    ) -> bool {
         if self.eat_punct(punct) {
             return true;
         }
@@ -205,7 +245,10 @@ impl<'a> Parser<'a> {
         false
     }
 
-    fn expect_kw(&mut self, keyword: Keyword) -> bool {
+    fn expect_kw(
+        &mut self,
+        keyword: Keyword,
+    ) -> bool {
         if self.eat_kw(keyword) {
             return true;
         }
@@ -252,31 +295,43 @@ impl<'a> Parser<'a> {
         self.kind().describe()
     }
 
-    fn error(&mut self, code: &str, message: impl Into<String>, span: Span) {
+    fn error(
+        &mut self,
+        code: &str,
+        message: impl Into<String>,
+        span: Span,
+    ) {
         self.diagnostics
             .push(Diagnostic::error(code, message, span));
     }
 
-    fn error_here(&mut self, code: &str, message: impl Into<String>) {
+    fn error_here(
+        &mut self,
+        code: &str,
+        message: impl Into<String>,
+    ) {
         let span = self.span();
         self.error(code, message, span);
     }
 
-    fn unexpected(&mut self, expected: &str) {
+    fn unexpected(
+        &mut self,
+        expected: &str,
+    ) {
         let found = self.describe();
-        self.error_here(
-            "E0202",
-            format!("expected {expected}, found {found}"),
-        );
+        self.error_here("E0202", format!("expected {expected}, found {found}"));
     }
 
-    fn take_doc(&mut self, before: u32) -> Option<String> {
+    fn take_doc(
+        &mut self,
+        before: u32,
+    ) -> Option<String> {
         let mut text: Option<String> = None;
         while let Some(doc) = self.docs.get(self.doc_cursor) {
             if doc.span.end <= before {
                 text = Some(match text {
-                    Some(previous) => format!("{previous}\n{}", doc.text),
-                    None => doc.text.clone(),
+                    | Some(previous) => format!("{previous}\n{}", doc.text),
+                    | None => doc.text.clone(),
                 });
                 self.doc_cursor += 1;
             } else {
@@ -306,10 +361,10 @@ impl<'a> Parser<'a> {
             }
             let before = self.pos;
             match self.top_decl() {
-                Some(decl) => decls.push(decl),
-                None => {
+                | Some(decl) => decls.push(decl),
+                | None => {
                     self.recover();
-                }
+                },
             }
             if self.pos == before {
                 // Guarantee progress even when a sub-parser bails out early.
@@ -322,14 +377,14 @@ impl<'a> Parser<'a> {
     fn module_path(&mut self) -> Vec<String> {
         let mut path = Vec::new();
         match self.kind().clone() {
-            TokenKind::UpperIdent(name) => {
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 path.push(name);
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a module name");
                 return path;
-            }
+            },
         }
         while self.at_punct(Punct::Dot) && matches!(self.kind_at(1), TokenKind::UpperIdent(_)) {
             self.bump();
@@ -363,21 +418,21 @@ impl<'a> Parser<'a> {
         let private_span = self.span();
         let private = self.eat_kw(Keyword::Private);
         let kind = match self.kind().clone() {
-            TokenKind::Keyword(Keyword::Import) => self.import_decl(false)?,
-            TokenKind::Keyword(Keyword::Open) => self.import_decl(true)?,
-            TokenKind::Keyword(Keyword::Dimension) => self.dimension_decl()?,
-            TokenKind::Keyword(Keyword::Unit) => self.unit_decl()?,
-            TokenKind::Keyword(Keyword::Type) => self.type_decl()?,
-            TokenKind::Keyword(Keyword::Class) => self.class_decl()?,
-            TokenKind::Keyword(Keyword::Instance) => self.instance_decl()?,
-            TokenKind::Keyword(Keyword::Derive) => self.derive_decl()?,
-            TokenKind::Keyword(Keyword::Fn) => self.fn_decl()?,
-            TokenKind::Keyword(Keyword::Let) => self.let_decl()?,
-            TokenKind::Keyword(Keyword::Test) => self.test_decl()?,
-            _ => {
+            | TokenKind::Keyword(Keyword::Import) => self.import_decl(false)?,
+            | TokenKind::Keyword(Keyword::Open) => self.import_decl(true)?,
+            | TokenKind::Keyword(Keyword::Dimension) => self.dimension_decl()?,
+            | TokenKind::Keyword(Keyword::Unit) => self.unit_decl()?,
+            | TokenKind::Keyword(Keyword::Type) => self.type_decl()?,
+            | TokenKind::Keyword(Keyword::Class) => self.class_decl()?,
+            | TokenKind::Keyword(Keyword::Instance) => self.instance_decl()?,
+            | TokenKind::Keyword(Keyword::Derive) => self.derive_decl()?,
+            | TokenKind::Keyword(Keyword::Fn) => self.fn_decl()?,
+            | TokenKind::Keyword(Keyword::Let) => self.let_decl()?,
+            | TokenKind::Keyword(Keyword::Test) => self.test_decl()?,
+            | _ => {
                 self.unexpected("a declaration");
                 return None;
-            }
+            },
         };
         if private
             && !matches!(
@@ -415,7 +470,10 @@ impl<'a> Parser<'a> {
     /// metaprogramming design replaces it with the `compile_fail("…")` test
     /// feature. Accepting it and doing nothing was worse than rejecting it, so
     /// it is an unknown attribute (`E0210`) until the standard says otherwise.
-    fn check_attribute(&mut self, attr: &Attribute) {
+    fn check_attribute(
+        &mut self,
+        attr: &Attribute,
+    ) {
         const KNOWN: &[&str] = &[
             "stable",
             "experimental",
@@ -446,14 +504,14 @@ impl<'a> Parser<'a> {
         let start = self.span();
         self.bump(); // '@'
         let name = match self.kind().clone() {
-            TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
+            | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("an attribute name");
                 String::new()
-            }
+            },
         };
         let mut args = Vec::new();
         if self.eat_punct(Punct::LParen) {
@@ -490,7 +548,10 @@ impl<'a> Parser<'a> {
         Attribute { name, args, span }
     }
 
-    fn import_decl(&mut self, open: bool) -> Option<DeclKind> {
+    fn import_decl(
+        &mut self,
+        open: bool,
+    ) -> Option<DeclKind> {
         self.bump(); // import / open
         let path = self.module_path();
         let mut alias = None;
@@ -507,14 +568,14 @@ impl<'a> Parser<'a> {
             let mut list = Vec::new();
             while !self.at_punct(Punct::RBrace) && !self.at_eof() {
                 match self.kind().clone() {
-                    TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
+                    | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                         self.bump();
                         list.push(name);
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         self.unexpected("a name");
                         break;
-                    }
+                    },
                 }
                 if !self.eat_punct(Punct::Comma) {
                     break;
@@ -535,14 +596,14 @@ impl<'a> Parser<'a> {
     fn dimension_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let name = match self.kind().clone() {
-            TokenKind::UpperIdent(name) => {
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a dimension name");
                 return None;
-            }
+            },
         };
         let value = if self.eat_punct(Punct::Equals) {
             Some(self.dim())
@@ -598,29 +659,29 @@ impl<'a> Parser<'a> {
 
     fn unit_name(&mut self) -> Option<String> {
         match self.kind().clone() {
-            TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
+            | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
                 let mut path = name;
                 while self.at_punct(Punct::Dot) {
                     self.bump();
                     match self.kind().clone() {
-                        TokenKind::Ident(part) | TokenKind::UpperIdent(part) => {
+                        | TokenKind::Ident(part) | TokenKind::UpperIdent(part) => {
                             self.bump();
                             path.push('.');
                             path.push_str(&part);
-                        }
-                        _ => {
+                        },
+                        | _ => {
                             self.unexpected("a unit name");
                             break;
-                        }
+                        },
                     }
                 }
                 Some(path)
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a unit name");
                 None
-            }
+            },
         }
     }
 
@@ -661,33 +722,33 @@ impl<'a> Parser<'a> {
 
     fn number_text(&mut self) -> Option<String> {
         match self.kind().clone() {
-            TokenKind::Int(value) => {
+            | TokenKind::Int(value) => {
                 self.bump();
                 Some(value.to_string())
-            }
-            TokenKind::Float(_) => {
+            },
+            | TokenKind::Float(_) => {
                 let span = self.span();
                 self.bump();
                 Some(self.text_of(span).replace('_', ""))
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a number");
                 None
-            }
+            },
         }
     }
 
     fn type_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let name = match self.kind().clone() {
-            TokenKind::UpperIdent(name) => {
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a type name");
                 return None;
-            }
+            },
         };
         let params = if self.at_punct(Punct::Lt) {
             self.type_params()
@@ -791,14 +852,14 @@ impl<'a> Parser<'a> {
     fn constructor(&mut self) -> Constructor {
         let start = self.span();
         let name = match self.kind().clone() {
-            TokenKind::UpperIdent(name) => {
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a constructor name");
                 String::new()
-            }
+            },
         };
         let mut args = Vec::new();
         if self.eat_punct(Punct::LParen) {
@@ -825,25 +886,25 @@ impl<'a> Parser<'a> {
         while !self.at_punct(Punct::Gt) && !self.at_eof() {
             let start = self.span();
             let name = match self.kind().clone() {
-                TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
+                | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                     self.bump();
                     name
-                }
-                _ => {
+                },
+                | _ => {
                     self.unexpected("a type parameter");
                     break;
-                }
+                },
             };
             let kind = if self.eat_punct(Punct::Colon) {
                 match self.kind().clone() {
-                    TokenKind::UpperIdent(kind) => {
+                    | TokenKind::UpperIdent(kind) => {
                         self.bump();
                         Kind::from_name(&kind)
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         self.unexpected("a kind");
                         None
-                    }
+                    },
                 }
             } else {
                 None
@@ -864,14 +925,14 @@ impl<'a> Parser<'a> {
     fn class_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let name = match self.kind().clone() {
-            TokenKind::UpperIdent(name) => {
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a class name");
                 return None;
-            }
+            },
         };
         let mut params = Vec::new();
         while let TokenKind::Ident(param) = self.kind().clone() {
@@ -894,11 +955,11 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 let method_name = match self.kind().clone() {
-                    TokenKind::Ident(name) => {
+                    | TokenKind::Ident(name) => {
                         self.bump();
                         name
-                    }
-                    _ => break,
+                    },
+                    | _ => break,
                 };
                 let ty = if self.at_punct(Punct::LParen) {
                     let args = self.param_list();
@@ -910,9 +971,7 @@ impl<'a> Parser<'a> {
                     Ty::new(
                         TyKind::Fn(
                             args.into_iter().filter_map(|param| param.ty).collect(),
-                            Box::new(ret.unwrap_or_else(|| {
-                                Ty::new(TyKind::Unit, self.span())
-                            })),
+                            Box::new(ret.unwrap_or_else(|| Ty::new(TyKind::Unit, self.span()))),
                         ),
                         self.previous_span(),
                     )
@@ -939,14 +998,14 @@ impl<'a> Parser<'a> {
     fn instance_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let class = match self.kind().clone() {
-            TokenKind::UpperIdent(name) => {
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a class name");
                 return None;
-            }
+            },
         };
         self.expect_kw(Keyword::For);
         let ty = self.ty();
@@ -958,11 +1017,7 @@ impl<'a> Parser<'a> {
                 // that belongs to the enclosing declaration.
                 self.error_here("E0103", "expected an indented block after `where`");
                 self.expect_newline();
-                return Some(DeclKind::Instance {
-                    class,
-                    ty,
-                    methods,
-                });
+                return Some(DeclKind::Instance { class, ty, methods });
             }
             self.bump();
             self.bump();
@@ -973,11 +1028,11 @@ impl<'a> Parser<'a> {
                 }
                 let start = self.span();
                 let name = match self.kind().clone() {
-                    TokenKind::Ident(name) => {
+                    | TokenKind::Ident(name) => {
                         self.bump();
                         name
-                    }
-                    _ => break,
+                    },
+                    | _ => break,
                 };
                 let params = self.param_list();
                 let ret = if self.eat_punct(Punct::Colon) {
@@ -999,11 +1054,7 @@ impl<'a> Parser<'a> {
             self.expect_dedent();
         }
         self.expect_newline();
-        Some(DeclKind::Instance {
-            class,
-            ty,
-            methods,
-        })
+        Some(DeclKind::Instance { class, ty, methods })
     }
 
     fn derive_decl(&mut self) -> Option<DeclKind> {
@@ -1013,14 +1064,14 @@ impl<'a> Parser<'a> {
             // §A.2: `derive name_list for type`, and `name_list` is
             // `IDENT | UIDENT`.
             match self.kind().clone() {
-                TokenKind::UpperIdent(name) | TokenKind::Ident(name) => {
+                | TokenKind::UpperIdent(name) | TokenKind::Ident(name) => {
                     self.bump();
                     classes.push(name);
-                }
-                _ => {
+                },
+                | _ => {
                     self.unexpected("a class name");
                     break;
-                }
+                },
             }
             if !self.eat_punct(Punct::Comma) {
                 break;
@@ -1037,14 +1088,14 @@ impl<'a> Parser<'a> {
         let name = match self.kind().clone() {
             // §A.2: `fn_decl ::= "fn" IDENT ...`. A capitalised name is a
             // constructor, never a function.
-            TokenKind::Ident(name) => {
+            | TokenKind::Ident(name) => {
                 self.bump();
                 name
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a function name");
                 return None;
-            }
+            },
         };
         let params = if self.at_punct(Punct::Lt) {
             self.type_params()
@@ -1118,21 +1169,23 @@ impl<'a> Parser<'a> {
     fn test_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let name = match self.kind().clone() {
-            TokenKind::Str(parts) => {
+            | TokenKind::Str(parts) => {
                 self.bump();
                 parts
                     .into_iter()
-                    .filter_map(|part| match part {
-                        StringPart::Text(text) => Some(text),
-                        StringPart::Interpolation { .. } => None,
+                    .filter_map(|part| {
+                        match part {
+                            | StringPart::Text(text) => Some(text),
+                            | StringPart::Interpolation { .. } => None,
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join("")
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a test name");
                 String::new()
-            }
+            },
         };
         self.expect_punct(Punct::Equals);
         let body = self.expr();
@@ -1159,12 +1212,12 @@ impl<'a> Parser<'a> {
             return self.layout_block();
         }
         match self.kind().clone() {
-            TokenKind::Keyword(Keyword::Let) => self.let_expr(),
-            TokenKind::Keyword(Keyword::If) => self.if_expr(),
-            TokenKind::Keyword(Keyword::Match) => self.match_expr(),
-            TokenKind::Keyword(Keyword::Fn) => self.lambda_expr(),
-            TokenKind::Keyword(Keyword::Do) => self.do_expr(),
-            _ => self.annot_expr(),
+            | TokenKind::Keyword(Keyword::Let) => self.let_expr(),
+            | TokenKind::Keyword(Keyword::If) => self.if_expr(),
+            | TokenKind::Keyword(Keyword::Match) => self.match_expr(),
+            | TokenKind::Keyword(Keyword::Fn) => self.lambda_expr(),
+            | TokenKind::Keyword(Keyword::Do) => self.do_expr(),
+            | _ => self.annot_expr(),
         }
     }
 
@@ -1236,15 +1289,15 @@ impl<'a> Parser<'a> {
         let mut offset = 1; // past `let`
         loop {
             match self.kind_at(offset) {
-                TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof => return false,
-                TokenKind::Keyword(Keyword::Let) => pending += 1,
-                TokenKind::Keyword(Keyword::In) => {
+                | TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof => return false,
+                | TokenKind::Keyword(Keyword::Let) => pending += 1,
+                | TokenKind::Keyword(Keyword::In) => {
                     if pending == 0 {
                         return true;
                     }
                     pending -= 1;
-                }
-                _ => {}
+                },
+                | _ => {},
             }
             offset += 1;
         }
@@ -1459,10 +1512,7 @@ impl<'a> Parser<'a> {
             stmts.push(DoStmt::Expr(value));
         }
         self.expect_dedent();
-        Expr::new(
-            ExprKind::Do { stmts },
-            start.join(self.previous_span()),
-        )
+        Expr::new(ExprKind::Do { stmts }, start.join(self.previous_span()))
     }
 
     fn try_bind_statement(&mut self) -> Option<DoStmt> {
@@ -1571,13 +1621,13 @@ impl<'a> Parser<'a> {
     fn cmp_expr(&mut self) -> Expr {
         let left = self.cons_expr();
         let op = match self.kind() {
-            TokenKind::Punct(Punct::EqEq) => Some(BinOp::Eq),
-            TokenKind::Punct(Punct::NotEq) => Some(BinOp::Ne),
-            TokenKind::Punct(Punct::Lt) => Some(BinOp::Lt),
-            TokenKind::Punct(Punct::Le) => Some(BinOp::Le),
-            TokenKind::Punct(Punct::Gt) => Some(BinOp::Gt),
-            TokenKind::Punct(Punct::Ge) => Some(BinOp::Ge),
-            _ => None,
+            | TokenKind::Punct(Punct::EqEq) => Some(BinOp::Eq),
+            | TokenKind::Punct(Punct::NotEq) => Some(BinOp::Ne),
+            | TokenKind::Punct(Punct::Lt) => Some(BinOp::Lt),
+            | TokenKind::Punct(Punct::Le) => Some(BinOp::Le),
+            | TokenKind::Punct(Punct::Gt) => Some(BinOp::Gt),
+            | TokenKind::Punct(Punct::Ge) => Some(BinOp::Ge),
+            | _ => None,
         };
         let Some(op) = op else {
             return left;
@@ -1628,9 +1678,9 @@ impl<'a> Parser<'a> {
         let mut left = self.mul_expr();
         loop {
             let op = match self.kind() {
-                TokenKind::Punct(Punct::Plus) => BinOp::Add,
-                TokenKind::Punct(Punct::Minus) => BinOp::Sub,
-                _ => return left,
+                | TokenKind::Punct(Punct::Plus) => BinOp::Add,
+                | TokenKind::Punct(Punct::Minus) => BinOp::Sub,
+                | _ => return left,
             };
             self.bump();
             let right = self.mul_expr();
@@ -1650,10 +1700,10 @@ impl<'a> Parser<'a> {
         let mut left = self.unary_expr();
         loop {
             let op = match self.kind() {
-                TokenKind::Punct(Punct::Star) => BinOp::Mul,
-                TokenKind::Punct(Punct::Slash) => BinOp::Div,
-                TokenKind::Punct(Punct::At) => BinOp::MatMul,
-                _ => return left,
+                | TokenKind::Punct(Punct::Star) => BinOp::Mul,
+                | TokenKind::Punct(Punct::Slash) => BinOp::Div,
+                | TokenKind::Punct(Punct::At) => BinOp::MatMul,
+                | _ => return left,
             };
             self.bump();
             let right = self.unary_expr();
@@ -1691,11 +1741,11 @@ impl<'a> Parser<'a> {
     fn unary_expr_inner(&mut self) -> Expr {
         let start = self.span();
         let op = match self.kind() {
-            TokenKind::Punct(Punct::Minus) => Some(UnOp::Neg),
-            TokenKind::Punct(Punct::Plus) => Some(UnOp::Pos),
-            TokenKind::Punct(Punct::Bang) => Some(UnOp::Not),
-            TokenKind::Punct(Punct::Sqrt) => Some(UnOp::Sqrt),
-            _ => None,
+            | TokenKind::Punct(Punct::Minus) => Some(UnOp::Neg),
+            | TokenKind::Punct(Punct::Plus) => Some(UnOp::Pos),
+            | TokenKind::Punct(Punct::Bang) => Some(UnOp::Not),
+            | TokenKind::Punct(Punct::Sqrt) => Some(UnOp::Sqrt),
+            | _ => None,
         };
         if let Some(op) = op {
             self.bump();
@@ -1957,7 +2007,10 @@ impl<'a> Parser<'a> {
     /// `xs[::2]` — because after an expression `::` is the cons operator
     /// (§A.4), and `xs[1::2]` must keep meaning `xs[1 :: 2]`. A slice with a
     /// start and a step therefore names its end: `xs[1:5:2]`.
-    fn slice_tail(&mut self, start: Option<Expr>) -> SliceAst {
+    fn slice_tail(
+        &mut self,
+        start: Option<Expr>,
+    ) -> SliceAst {
         if self.at_punct(Punct::RBracket) || self.at_punct(Punct::Comma) {
             return SliceAst::Range {
                 start,
@@ -1983,7 +2036,11 @@ impl<'a> Parser<'a> {
 
     /// The step of a `:` slice; a trailing `:` with nothing after it means no
     /// step, so `xs[1:3:]` is `xs[1:3]`.
-    fn slice_step(&mut self, start: Option<Expr>, end: Option<Expr>) -> SliceAst {
+    fn slice_step(
+        &mut self,
+        start: Option<Expr>,
+        end: Option<Expr>,
+    ) -> SliceAst {
         let step = if self.at_punct(Punct::RBracket) || self.at_punct(Punct::Comma) {
             None
         } else {
@@ -2000,51 +2057,53 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> Expr {
         let start = self.span();
         match self.kind().clone() {
-            TokenKind::Int(value) => {
+            | TokenKind::Int(value) => {
                 self.bump();
                 self.quantity_or_number(NumberLit::Int(value), start)
-            }
-            TokenKind::Float(_) => {
+            },
+            | TokenKind::Float(_) => {
                 let span = self.span();
                 self.bump();
                 let text = self.text_of(span).replace('_', "");
                 self.quantity_or_number(NumberLit::Decimal(text), start)
-            }
-            TokenKind::Str(parts) => {
+            },
+            | TokenKind::Str(parts) => {
                 self.bump();
                 let pieces = parts
                     .into_iter()
-                    .map(|part| match part {
-                        StringPart::Text(text) => StrPiece::Text(text),
-                        StringPart::Interpolation { source, span } => {
-                            StrPiece::Expr(Box::new(self.parse_interpolation(&source, span)))
+                    .map(|part| {
+                        match part {
+                            | StringPart::Text(text) => StrPiece::Text(text),
+                            | StringPart::Interpolation { source, span } => {
+                                StrPiece::Expr(Box::new(self.parse_interpolation(&source, span)))
+                            },
                         }
                     })
                     .collect();
                 Expr::new(ExprKind::Str(pieces), start.join(self.previous_span()))
-            }
-            TokenKind::Keyword(Keyword::True) => {
+            },
+            | TokenKind::Keyword(Keyword::True) => {
                 self.bump();
                 Expr::new(ExprKind::Bool(true), start)
-            }
-            TokenKind::Keyword(Keyword::False) => {
+            },
+            | TokenKind::Keyword(Keyword::False) => {
                 self.bump();
                 Expr::new(ExprKind::Bool(false), start)
-            }
-            TokenKind::Keyword(Keyword::If) => self.if_expr(),
-            TokenKind::Keyword(Keyword::Match) => self.match_expr(),
-            TokenKind::Keyword(Keyword::Let) => self.let_expr(),
-            TokenKind::Keyword(Keyword::Fn) => self.lambda_expr(),
-            TokenKind::Keyword(Keyword::Do) => self.do_expr(),
-            TokenKind::Ident(name) => {
+            },
+            | TokenKind::Keyword(Keyword::If) => self.if_expr(),
+            | TokenKind::Keyword(Keyword::Match) => self.match_expr(),
+            | TokenKind::Keyword(Keyword::Let) => self.let_expr(),
+            | TokenKind::Keyword(Keyword::Fn) => self.lambda_expr(),
+            | TokenKind::Keyword(Keyword::Do) => self.do_expr(),
+            | TokenKind::Ident(name) => {
                 self.bump();
                 if name == "_" {
                     Expr::new(ExprKind::Placeholder, start)
                 } else {
                     Expr::new(ExprKind::Var(name), start)
                 }
-            }
-            TokenKind::UpperIdent(name) => {
+            },
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 let mut path = vec![name];
                 while self.at_punct(Punct::Dot)
@@ -2057,14 +2116,17 @@ impl<'a> Parser<'a> {
                     }
                 }
                 if path.len() == 1 {
-                    Expr::new(ExprKind::Var(path.remove(0)), start.join(self.previous_span()))
+                    Expr::new(
+                        ExprKind::Var(path.remove(0)),
+                        start.join(self.previous_span()),
+                    )
                 } else {
                     Expr::new(ExprKind::QName(path), start.join(self.previous_span()))
                 }
-            }
-            TokenKind::Punct(Punct::LParen) => self.paren_expr(),
-            TokenKind::Punct(Punct::LBrace) => self.record_expr(),
-            TokenKind::Punct(Punct::LBracket) => {
+            },
+            | TokenKind::Punct(Punct::LParen) => self.paren_expr(),
+            | TokenKind::Punct(Punct::LBrace) => self.record_expr(),
+            | TokenKind::Punct(Punct::LBracket) => {
                 self.bump();
                 let mut items = Vec::new();
                 while !self.at_punct(Punct::RBracket) && !self.at_eof() {
@@ -2074,22 +2136,23 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_punct(Punct::RBracket);
-                Expr::new(
-                    ExprKind::Tensor(items),
-                    start.join(self.previous_span()),
-                )
-            }
-            _ => {
+                Expr::new(ExprKind::Tensor(items), start.join(self.previous_span()))
+            },
+            | _ => {
                 // A recovery node, so the checker does not invent a second
                 // error for an expression the parser already rejected.
                 self.unexpected("an expression");
                 self.bump();
                 Expr::new(ExprKind::Error, start)
-            }
+            },
         }
     }
 
-    fn parse_interpolation(&mut self, source: &str, span: Span) -> Expr {
+    fn parse_interpolation(
+        &mut self,
+        source: &str,
+        span: Span,
+    ) -> Expr {
         let file_source: &'a str = self.source;
         let lexed = lex_inline(self.file, source, usize::try_from(span.start).unwrap_or(0));
         let mut parser = Parser::new(&lexed.tokens, &lexed.docs, self.file, file_source);
@@ -2106,7 +2169,11 @@ impl<'a> Parser<'a> {
         expr
     }
 
-    fn quantity_or_number(&mut self, value: NumberLit, start: Span) -> Expr {
+    fn quantity_or_number(
+        &mut self,
+        value: NumberLit,
+        start: Span,
+    ) -> Expr {
         let unit = if self.starts_unit_atom() {
             self.unit_expr()
         } else if self.at_punct(Punct::LParen) {
@@ -2125,16 +2192,20 @@ impl<'a> Parser<'a> {
                 // all (`E0108`); `3 (m/)` is a malformed unit literal
                 // (`E0209`, §1.8.1).
                 match self.kind_at(1) {
-                    TokenKind::Int(_) | TokenKind::Float(_) => self.error(
-                        "E0108",
-                        "expected a unit after the numeric literal",
-                        self.span(),
-                    ),
-                    _ => self.error(
-                        "E0209",
-                        "`(` after a numeric literal must contain a unit expression",
-                        self.span(),
-                    ),
+                    | TokenKind::Int(_) | TokenKind::Float(_) => {
+                        self.error(
+                            "E0108",
+                            "expected a unit after the numeric literal",
+                            self.span(),
+                        )
+                    },
+                    | _ => {
+                        self.error(
+                            "E0209",
+                            "`(` after a numeric literal must contain a unit expression",
+                            self.span(),
+                        )
+                    },
                 }
                 None
             }
@@ -2142,13 +2213,17 @@ impl<'a> Parser<'a> {
             None
         };
         match unit {
-            Some(unit) => Expr::new(
-                ExprKind::Quantity { value, unit },
-                start.join(self.previous_span()),
-            ),
-            None => match value {
-                NumberLit::Int(value) => Expr::new(ExprKind::Int(value), start),
-                NumberLit::Decimal(text) => Expr::new(ExprKind::Float(text), start),
+            | Some(unit) => {
+                Expr::new(
+                    ExprKind::Quantity { value, unit },
+                    start.join(self.previous_span()),
+                )
+            },
+            | None => {
+                match value {
+                    | NumberLit::Int(value) => Expr::new(ExprKind::Int(value), start),
+                    | NumberLit::Decimal(text) => Expr::new(ExprKind::Float(text), start),
+                }
             },
         }
     }
@@ -2255,14 +2330,14 @@ impl<'a> Parser<'a> {
         while !self.at_punct(Punct::RBrace) && !self.at_eof() {
             let name_span = self.span();
             let name = match self.kind().clone() {
-                TokenKind::Ident(name) => {
+                | TokenKind::Ident(name) => {
                     self.bump();
                     name
-                }
-                _ => {
+                },
+                | _ => {
                     self.unexpected("a field name");
                     break;
-                }
+                },
             };
             let value = if self.eat_punct(Punct::Equals) {
                 self.expr()
@@ -2294,17 +2369,20 @@ impl<'a> Parser<'a> {
         self.pattern_as(pat)
     }
 
-    fn pattern_as(&mut self, pat: Pat) -> Pat {
+    fn pattern_as(
+        &mut self,
+        pat: Pat,
+    ) -> Pat {
         if self.eat_kw(Keyword::As) {
             let name = match self.kind().clone() {
-                TokenKind::Ident(name) => {
+                | TokenKind::Ident(name) => {
                     self.bump();
                     name
-                }
-                _ => {
+                },
+                | _ => {
                     self.unexpected("a binding name");
                     String::new()
-                }
+                },
             };
             let span = pat.span.join(self.previous_span());
             return Pat::new(
@@ -2321,15 +2399,15 @@ impl<'a> Parser<'a> {
     fn pattern_atom(&mut self) -> Pat {
         let start = self.span();
         match self.kind().clone() {
-            TokenKind::Ident(name) => {
+            | TokenKind::Ident(name) => {
                 self.bump();
                 if name == "_" {
                     Pat::new(PatKind::Wildcard, start)
                 } else {
                     Pat::new(PatKind::Var(name), start)
                 }
-            }
-            TokenKind::UpperIdent(name) => {
+            },
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 let mut args = Vec::new();
                 if self.eat_punct(Punct::LParen) {
@@ -2345,39 +2423,38 @@ impl<'a> Parser<'a> {
                     PatKind::Ctor { name, args },
                     start.join(self.previous_span()),
                 )
-            }
-            TokenKind::Int(value) => {
+            },
+            | TokenKind::Int(value) => {
                 self.bump();
                 Pat::new(PatKind::Lit(PatLit::Int(value)), start)
-            }
-            TokenKind::Str(parts) => {
+            },
+            | TokenKind::Str(parts) => {
                 self.bump();
                 let text = parts
                     .into_iter()
-                    .filter_map(|part| match part {
-                        StringPart::Text(text) => Some(text),
-                        StringPart::Interpolation { .. } => None,
+                    .filter_map(|part| {
+                        match part {
+                            | StringPart::Text(text) => Some(text),
+                            | StringPart::Interpolation { .. } => None,
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join("");
                 Pat::new(PatKind::Lit(PatLit::Str(text)), start)
-            }
-            TokenKind::Keyword(Keyword::True) => {
+            },
+            | TokenKind::Keyword(Keyword::True) => {
                 self.bump();
                 Pat::new(PatKind::Lit(PatLit::Bool(true)), start)
-            }
-            TokenKind::Keyword(Keyword::False) => {
+            },
+            | TokenKind::Keyword(Keyword::False) => {
                 self.bump();
                 Pat::new(PatKind::Lit(PatLit::Bool(false)), start)
-            }
-            TokenKind::Punct(Punct::LParen) => {
+            },
+            | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
                 if self.at_punct(Punct::RParen) {
                     self.bump();
-                    return Pat::new(
-                        PatKind::Lit(PatLit::Unit),
-                        start.join(self.previous_span()),
-                    );
+                    return Pat::new(PatKind::Lit(PatLit::Unit), start.join(self.previous_span()));
                 }
                 let first = self.pattern();
                 if self.eat_punct(Punct::Colon) {
@@ -2404,20 +2481,20 @@ impl<'a> Parser<'a> {
                 }
                 self.expect_punct(Punct::RParen);
                 first
-            }
-            TokenKind::Punct(Punct::LBrace) => {
+            },
+            | TokenKind::Punct(Punct::LBrace) => {
                 self.bump();
                 let mut fields = Vec::new();
                 while !self.at_punct(Punct::RBrace) && !self.at_eof() {
                     let name = match self.kind().clone() {
-                        TokenKind::Ident(name) => {
+                        | TokenKind::Ident(name) => {
                             self.bump();
                             name
-                        }
-                        _ => {
+                        },
+                        | _ => {
                             self.unexpected("a field name");
                             break;
-                        }
+                        },
                     };
                     let sub = if self.eat_punct(Punct::Equals) {
                         Some(self.pattern())
@@ -2431,8 +2508,8 @@ impl<'a> Parser<'a> {
                 }
                 self.expect_punct(Punct::RBrace);
                 Pat::new(PatKind::Record(fields), start.join(self.previous_span()))
-            }
-            TokenKind::Punct(Punct::LBracket) => {
+            },
+            | TokenKind::Punct(Punct::LBracket) => {
                 self.bump();
                 let mut items = Vec::new();
                 let mut rest = None;
@@ -2454,8 +2531,8 @@ impl<'a> Parser<'a> {
                     PatKind::Tensor { items, rest },
                     start.join(self.previous_span()),
                 )
-            }
-            _ => {
+            },
+            | _ => {
                 // §B.3/B.4: a keyword where a binder belongs is E0206 (reserved
                 // word as identifier), anything else that cannot start a
                 // pattern is E0204 (invalid pattern).
@@ -2471,7 +2548,7 @@ impl<'a> Parser<'a> {
                 let span = self.span();
                 self.bump();
                 Pat::new(PatKind::Error, span)
-            }
+            },
         }
     }
 
@@ -2497,22 +2574,22 @@ impl<'a> Parser<'a> {
             loop {
                 let span = self.span();
                 let name = match self.kind().clone() {
-                    TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
+                    | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                         self.bump();
                         name
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         self.unexpected("a type parameter");
                         break;
-                    }
+                    },
                 };
                 let kind = if self.eat_punct(Punct::Colon) {
                     match self.kind().clone() {
-                        TokenKind::UpperIdent(kind) => {
+                        | TokenKind::UpperIdent(kind) => {
                             self.bump();
                             Kind::from_name(&kind)
-                        }
-                        _ => None,
+                        },
+                        | _ => None,
                     }
                 } else {
                     None
@@ -2537,16 +2614,16 @@ impl<'a> Parser<'a> {
             self.expect_punct(Punct::RBracket);
             let span = first.span.join(self.previous_span());
             match &mut first.kind {
-                TyKind::Named { args, .. } => {
+                | TyKind::Named { args, .. } => {
                     args.push(Ty::new(TyKind::DimArg(dim), span));
-                }
-                _ => {
+                },
+                | _ => {
                     self.error(
                         "E0202",
                         "only a named type takes `[dimension]` arguments",
                         span,
                     );
-                }
+                },
             }
             first.span = span;
         }
@@ -2555,8 +2632,8 @@ impl<'a> Parser<'a> {
             let ret = self.ty_inner();
             let span = first.span.join(ret.span);
             let args = match first.kind {
-                TyKind::Tuple(items) => items,
-                _ => vec![first],
+                | TyKind::Tuple(items) => items,
+                | _ => vec![first],
             };
             return Ty::new(TyKind::Fn(args, Box::new(ret)), span);
         }
@@ -2565,22 +2642,24 @@ impl<'a> Parser<'a> {
 
     fn looks_like_forall(&self) -> bool {
         // `forall d. ...` versus the standard-library function `forall(...)`.
-        matches!(self.kind_at(1), TokenKind::Ident(_) | TokenKind::UpperIdent(_))
-            && (self.punct_at(2, Punct::Dot) || self.punct_at(2, Punct::Comma))
+        matches!(
+            self.kind_at(1),
+            TokenKind::Ident(_) | TokenKind::UpperIdent(_)
+        ) && (self.punct_at(2, Punct::Dot) || self.punct_at(2, Punct::Comma))
     }
 
     fn ty_atom(&mut self) -> Ty {
         let start = self.span();
         match self.kind().clone() {
-            TokenKind::UpperIdent(name) => {
+            | TokenKind::UpperIdent(name) => {
                 self.bump();
                 self.named_type(name, start)
-            }
-            TokenKind::Ident(name) => {
+            },
+            | TokenKind::Ident(name) => {
                 self.bump();
                 Ty::new(TyKind::Var(name), start)
-            }
-            TokenKind::Punct(Punct::LParen) => {
+            },
+            | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
                 if self.at_punct(Punct::RParen) {
                     self.bump();
@@ -2600,8 +2679,8 @@ impl<'a> Parser<'a> {
                 }
                 self.expect_punct(Punct::RParen);
                 first
-            }
-            TokenKind::Punct(Punct::LBrace) => {
+            },
+            | TokenKind::Punct(Punct::LBrace) => {
                 self.bump();
                 let mut fields: Vec<(String, Ty)> = Vec::new();
                 let mut rest = None;
@@ -2615,14 +2694,14 @@ impl<'a> Parser<'a> {
                     }
                     let name_span = self.span();
                     let name = match self.kind().clone() {
-                        TokenKind::Ident(name) => {
+                        | TokenKind::Ident(name) => {
                             self.bump();
                             name
-                        }
-                        _ => {
+                        },
+                        | _ => {
                             self.unexpected("a field name");
                             break;
-                        }
+                        },
                     };
                     self.expect_punct(Punct::Colon);
                     let ty = self.ty();
@@ -2644,22 +2723,26 @@ impl<'a> Parser<'a> {
                     TyKind::Record { fields, rest },
                     start.join(self.previous_span()),
                 )
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a type");
                 self.bump();
                 Ty::new(TyKind::Unit, start)
-            }
+            },
         }
     }
 
-    fn named_type(&mut self, name: String, start: Span) -> Ty {
+    fn named_type(
+        &mut self,
+        name: String,
+        start: Span,
+    ) -> Ty {
         match name.as_str() {
-            "Int" => return Ty::new(TyKind::Int, start),
-            "Bool" => return Ty::new(TyKind::Bool, start),
-            "Prop" => return Ty::new(TyKind::Prop, start),
-            "String" => return Ty::new(TyKind::Str, start),
-            "Real" | "Float" | "Complex" => {
+            | "Int" => return Ty::new(TyKind::Int, start),
+            | "Bool" => return Ty::new(TyKind::Bool, start),
+            | "Prop" => return Ty::new(TyKind::Prop, start),
+            | "String" => return Ty::new(TyKind::Str, start),
+            | "Real" | "Float" | "Complex" => {
                 let dim = if self.at_punct(Punct::LBracket) {
                     self.bump();
                     let dim = self.dim();
@@ -2669,13 +2752,13 @@ impl<'a> Parser<'a> {
                     DimAst::One
                 };
                 let kind = match name.as_str() {
-                    "Real" => TyKind::Real(dim),
-                    "Float" => TyKind::Float(dim),
-                    _ => TyKind::Complex(dim),
+                    | "Real" => TyKind::Real(dim),
+                    | "Float" => TyKind::Float(dim),
+                    | _ => TyKind::Complex(dim),
                 };
                 return Ty::new(kind, start.join(self.previous_span()));
-            }
-            "Tensor" => {
+            },
+            | "Tensor" => {
                 self.expect_punct(Punct::Lt);
                 let shape = self.shape();
                 self.expect_punct(Punct::Comma);
@@ -2688,8 +2771,8 @@ impl<'a> Parser<'a> {
                     },
                     start.join(self.previous_span()),
                 );
-            }
-            "Matrix" => {
+            },
+            | "Matrix" => {
                 // §A.5: `Matrix<nat, nat, type>`.
                 self.expect_punct(Punct::Lt);
                 let rows = self.nat();
@@ -2706,19 +2789,19 @@ impl<'a> Parser<'a> {
                     },
                     start.join(self.previous_span()),
                 );
-            }
-            "Sparse" => {
+            },
+            | "Sparse" => {
                 // §A.5: `Sparse<format_name, shape, type>`.
                 self.expect_punct(Punct::Lt);
                 let format = match self.kind().clone() {
-                    TokenKind::UpperIdent(format) | TokenKind::Ident(format) => {
+                    | TokenKind::UpperIdent(format) | TokenKind::Ident(format) => {
                         self.bump();
                         format
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         self.unexpected("a storage format");
                         "CSR".to_string()
-                    }
+                    },
                 };
                 self.expect_punct(Punct::Comma);
                 let shape = self.shape();
@@ -2733,14 +2816,14 @@ impl<'a> Parser<'a> {
                     },
                     start.join(self.previous_span()),
                 );
-            }
-            "Point" => {
+            },
+            | "Point" => {
                 self.expect_punct(Punct::LBracket);
                 let dim = self.dim();
                 self.expect_punct(Punct::RBracket);
                 return Ty::new(TyKind::Point(dim), start.join(self.previous_span()));
-            }
-            "Unit" => {
+            },
+            | "Unit" => {
                 if self.at_punct(Punct::LBracket) {
                     self.bump();
                     let dim = self.dim();
@@ -2748,13 +2831,13 @@ impl<'a> Parser<'a> {
                     return Ty::new(TyKind::UnitOf(dim), start.join(self.previous_span()));
                 }
                 return Ty::new(TyKind::Unit, start);
-            }
-            "IO" => {
+            },
+            | "IO" => {
                 let inner = self.ty_atom();
                 let span = start.join(inner.span);
                 return Ty::new(TyKind::Io(Box::new(inner)), span);
-            }
-            "SymFun" => {
+            },
+            | "SymFun" => {
                 self.expect_punct(Punct::Lt);
                 let domain = self.dim();
                 self.expect_punct(Punct::Comma);
@@ -2764,23 +2847,23 @@ impl<'a> Parser<'a> {
                     TyKind::SymFun(domain, codomain),
                     start.join(self.previous_span()),
                 );
-            }
-            "Dyn" => {
+            },
+            | "Dyn" => {
                 self.expect_punct(Punct::Lt);
                 let rep = match self.kind().clone() {
-                    TokenKind::UpperIdent(rep) | TokenKind::Ident(rep) => {
+                    | TokenKind::UpperIdent(rep) | TokenKind::Ident(rep) => {
                         self.bump();
                         rep
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         self.unexpected("a representation");
                         "Real".to_string()
-                    }
+                    },
                 };
                 self.expect_punct(Punct::Gt);
                 return Ty::new(TyKind::Dyn(rep), start.join(self.previous_span()));
-            }
-            "RateOf" => {
+            },
+            | "RateOf" => {
                 self.expect_punct(Punct::Lt);
                 let inner = self.ty();
                 self.expect_punct(Punct::Gt);
@@ -2788,8 +2871,8 @@ impl<'a> Parser<'a> {
                     TyKind::RateOf(Box::new(inner)),
                     start.join(self.previous_span()),
                 );
-            }
-            "DiffusionOf" => {
+            },
+            | "DiffusionOf" => {
                 self.expect_punct(Punct::Lt);
                 let inner = self.ty();
                 self.expect_punct(Punct::Gt);
@@ -2797,25 +2880,28 @@ impl<'a> Parser<'a> {
                     TyKind::DiffusionOf(Box::new(inner)),
                     start.join(self.previous_span()),
                 );
-            }
-            "Option" | "Set" => {
+            },
+            | "Option" | "Set" => {
                 self.expect_punct(Punct::Lt);
                 let inner = self.ty();
                 self.expect_punct(Punct::Gt);
                 let kind = match name.as_str() {
-                    "Option" => TyKind::Option(Box::new(inner)),
-                    _ => TyKind::Set(Box::new(inner)),
+                    | "Option" => TyKind::Option(Box::new(inner)),
+                    | _ => TyKind::Set(Box::new(inner)),
                 };
                 return Ty::new(kind, start.join(self.previous_span()));
-            }
-            "Table" => {
+            },
+            | "Table" => {
                 // §A.5: `Table<row_type>`, and a row type may be a sum.
                 self.expect_punct(Punct::Lt);
                 let row = self.row_type();
                 self.expect_punct(Punct::Gt);
-                return Ty::new(TyKind::Table(Box::new(row)), start.join(self.previous_span()));
-            }
-            "Result" => {
+                return Ty::new(
+                    TyKind::Table(Box::new(row)),
+                    start.join(self.previous_span()),
+                );
+            },
+            | "Result" => {
                 self.expect_punct(Punct::Lt);
                 let ok = self.ty();
                 self.expect_punct(Punct::Comma);
@@ -2825,8 +2911,8 @@ impl<'a> Parser<'a> {
                     TyKind::Result(Box::new(ok), Box::new(err)),
                     start.join(self.previous_span()),
                 );
-            }
-            "Solutions" => {
+            },
+            | "Solutions" => {
                 self.expect_punct(Punct::Lt);
                 let inner = self.ty();
                 self.expect_punct(Punct::Comma);
@@ -2839,8 +2925,8 @@ impl<'a> Parser<'a> {
                     },
                     start.join(self.previous_span()),
                 );
-            }
-            _ => {}
+            },
+            | _ => {},
         }
         let mut path = vec![name];
         while self.at_punct(Punct::Dot) && matches!(self.kind_at(1), TokenKind::UpperIdent(_)) {
@@ -2878,10 +2964,7 @@ impl<'a> Parser<'a> {
         let start = self.span();
         if self.at_punct(Punct::LBracket) {
             let shape = self.shape();
-            return Ty::new(
-                TyKind::ShapeArg(shape),
-                start.join(self.previous_span()),
-            );
+            return Ty::new(TyKind::ShapeArg(shape), start.join(self.previous_span()));
         }
         if matches!(self.kind(), TokenKind::Int(_)) {
             let nat = self.nat();
@@ -2953,24 +3036,24 @@ impl<'a> Parser<'a> {
 
     fn nat_atom(&mut self) -> NatAst {
         match self.kind().clone() {
-            TokenKind::Int(value) => {
+            | TokenKind::Int(value) => {
                 self.bump();
                 NatAst::Lit(value.to_usize().unwrap_or(0))
-            }
-            TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
+            },
+            | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
                 NatAst::Var(name)
-            }
-            TokenKind::Punct(Punct::LParen) => {
+            },
+            | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
                 let inner = self.nat();
                 self.expect_punct(Punct::RParen);
                 inner
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a natural number");
                 NatAst::Lit(0)
-            }
+            },
         }
     }
 
@@ -3005,38 +3088,38 @@ impl<'a> Parser<'a> {
     fn dim_atom(&mut self) -> DimAst {
         let start = self.span();
         match self.kind().clone() {
-            TokenKind::Int(value) if value == BigInt::from(1) => {
+            | TokenKind::Int(value) if value == BigInt::from(1) => {
                 self.bump();
                 DimAst::One
-            }
-            TokenKind::UpperIdent(name) | TokenKind::Ident(name) => {
+            },
+            | TokenKind::UpperIdent(name) | TokenKind::Ident(name) => {
                 self.bump();
                 let mut path = name;
                 while self.at_punct(Punct::Dot) {
                     self.bump();
                     match self.kind().clone() {
-                        TokenKind::UpperIdent(part) | TokenKind::Ident(part) => {
+                        | TokenKind::UpperIdent(part) | TokenKind::Ident(part) => {
                             self.bump();
                             path.push('.');
                             path.push_str(&part);
-                        }
-                        _ => break,
+                        },
+                        | _ => break,
                     }
                 }
                 let _ = start;
                 DimAst::Name(path)
-            }
-            TokenKind::Punct(Punct::LParen) => {
+            },
+            | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
                 let inner = self.dim();
                 self.expect_punct(Punct::RParen);
                 DimAst::Paren(Box::new(inner))
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a dimension");
                 self.bump();
                 DimAst::One
-            }
+            },
         }
     }
 
@@ -3063,14 +3146,14 @@ impl<'a> Parser<'a> {
     fn signed_int(&mut self) -> BigInt {
         let negative = self.eat_punct(Punct::Minus);
         match self.kind().clone() {
-            TokenKind::Int(value) => {
+            | TokenKind::Int(value) => {
                 self.bump();
                 if negative { -value } else { value }
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("an integer");
                 BigInt::from(1)
-            }
+            },
         }
     }
 
@@ -3098,7 +3181,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn starts_unit_atom_at(&self, offset: usize) -> bool {
+    fn starts_unit_atom_at(
+        &self,
+        offset: usize,
+    ) -> bool {
         matches!(
             self.kind_at(offset),
             TokenKind::Ident(_) | TokenKind::UpperIdent(_) | TokenKind::Punct(Punct::Percent)
@@ -3113,13 +3199,13 @@ impl<'a> Parser<'a> {
         } else if let TokenKind::Superscript(text) = self.kind().clone() {
             self.bump();
             match parse_superscript(&text) {
-                Some(exponent) => {
+                | Some(exponent) => {
                     atom = UnitExpr::Pow(
                         Box::new(atom),
                         BigRational::from_integer(BigInt::from(exponent)),
                     );
-                }
-                None => self.error_here("E0107", "invalid superscript sequence"),
+                },
+                | None => self.error_here("E0107", "invalid superscript sequence"),
             }
         }
         Some(atom)
@@ -3127,36 +3213,36 @@ impl<'a> Parser<'a> {
 
     fn unit_atom(&mut self) -> Option<UnitExpr> {
         match self.kind().clone() {
-            TokenKind::Punct(Punct::Percent) => {
+            | TokenKind::Punct(Punct::Percent) => {
                 self.bump();
                 Some(UnitExpr::Percent)
-            }
-            TokenKind::Punct(Punct::LParen) => {
+            },
+            | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
                 let inner = self.unit_expr()?;
                 self.expect_punct(Punct::RParen);
                 Some(UnitExpr::Paren(Box::new(inner)))
-            }
-            TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
+            },
+            | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
                 let mut path = name;
                 while self.at_punct(Punct::Dot) {
                     match self.kind_at(1).clone() {
-                        TokenKind::Ident(part) | TokenKind::UpperIdent(part) => {
+                        | TokenKind::Ident(part) | TokenKind::UpperIdent(part) => {
                             self.bump();
                             self.bump();
                             path.push('.');
                             path.push_str(&part);
-                        }
-                        _ => break,
+                        },
+                        | _ => break,
                     }
                 }
                 Some(UnitExpr::Name(path))
-            }
-            _ => {
+            },
+            | _ => {
                 self.unexpected("a unit");
                 None
-            }
+            },
         }
     }
 }
@@ -3165,30 +3251,30 @@ fn decl_span(kind: &DeclKind) -> Span {
     // Used only for nested function declarations, where the exact span is not
     // observable; the body's span is the best available approximation.
     match kind {
-        DeclKind::Fn { body, .. } => body.span,
-        DeclKind::Let { value, .. } => value.span,
-        _ => Span::default(),
+        | DeclKind::Fn { body, .. } => body.span,
+        | DeclKind::Let { value, .. } => value.span,
+        | _ => Span::default(),
     }
 }
 
 fn operator_name(punct: Punct) -> Option<&'static str> {
     Some(match punct {
-        Punct::Plus => "+",
-        Punct::Minus => "-",
-        Punct::Star => "*",
-        Punct::Slash => "/",
-        Punct::At => "@",
-        Punct::Caret => "^",
-        Punct::EqEq => "==",
-        Punct::NotEq => "!=",
-        Punct::Lt => "<",
-        Punct::Le => "<=",
-        Punct::Gt => ">",
-        Punct::Ge => ">=",
-        Punct::AndAnd => "&&",
-        Punct::OrOr => "||",
-        Punct::ColonColon => "::",
-        _ => return None,
+        | Punct::Plus => "+",
+        | Punct::Minus => "-",
+        | Punct::Star => "*",
+        | Punct::Slash => "/",
+        | Punct::At => "@",
+        | Punct::Caret => "^",
+        | Punct::EqEq => "==",
+        | Punct::NotEq => "!=",
+        | Punct::Lt => "<",
+        | Punct::Le => "<=",
+        | Punct::Gt => ">",
+        | Punct::Ge => ">=",
+        | Punct::AndAnd => "&&",
+        | Punct::OrOr => "||",
+        | Punct::ColonColon => "::",
+        | _ => return None,
     })
 }
 
@@ -3199,27 +3285,29 @@ fn parse_superscript(text: &str) -> Option<i32> {
     let mut saw_digit = false;
     for c in text.chars() {
         match c {
-            '\u{2070}'..='\u{2079}' => {
+            | '\u{2070}'..='\u{2079}' => {
                 let digit = (c as u32) - 0x2070;
-                value = value.checked_mul(10)?.checked_add(i32::try_from(digit).ok()?)?;
+                value = value
+                    .checked_mul(10)?
+                    .checked_add(i32::try_from(digit).ok()?)?;
                 saw_digit = true;
-            }
+            },
             // U+00B9/B2/B3: the superscripts on most keyboards.
-            '\u{00B9}' => {
+            | '\u{00B9}' => {
                 value = value.checked_mul(10)?.checked_add(1)?;
                 saw_digit = true;
-            }
-            '\u{00B2}' => {
+            },
+            | '\u{00B2}' => {
                 value = value.checked_mul(10)?.checked_add(2)?;
                 saw_digit = true;
-            }
-            '\u{00B3}' => {
+            },
+            | '\u{00B3}' => {
                 value = value.checked_mul(10)?.checked_add(3)?;
                 saw_digit = true;
-            }
-            '\u{207B}' => negative = true,
-            '\u{207A}' => {}
-            _ => return None,
+            },
+            | '\u{207B}' => negative = true,
+            | '\u{207A}' => {},
+            | _ => return None,
         }
     }
     if !saw_digit {
@@ -3268,7 +3356,8 @@ mod tests {
 
     #[test]
     fn parses_a_function_with_a_block_body() {
-        let module = parse("fn fall_time(h: Float[L]): Float[T] =\n    let n = 2\n    sqrt(n * h)\n");
+        let module =
+            parse("fn fall_time(h: Float[L]): Float[T] =\n    let n = 2\n    sqrt(n * h)\n");
         assert_eq!(module.decls.len(), 1);
         let DeclKind::Fn { name, args, body, .. } = &module.decls[0].kind else {
             panic!("expected fn");
@@ -3321,7 +3410,10 @@ mod tests {
             panic!("expected mul");
         };
         assert_eq!(*op, BinOp::Mul);
-        assert!(matches!(right.kind, ExprKind::Binary { op: BinOp::Pow, .. }));
+        assert!(matches!(
+            right.kind,
+            ExprKind::Binary { op: BinOp::Pow, .. }
+        ));
     }
 
     #[test]
@@ -3444,16 +3536,15 @@ mod tests {
         assert_eq!(indices.len(), 4);
         let steps: Vec<bool> = indices
             .iter()
-            .map(|index| match index {
-                SliceAst::Range { step, .. } => step.is_some(),
-                SliceAst::Index(_) => false,
+            .map(|index| {
+                match index {
+                    | SliceAst::Range { step, .. } => step.is_some(),
+                    | SliceAst::Index(_) => false,
+                }
             })
             .collect();
         assert_eq!(steps, vec![true, true, false, false]);
-        let SliceAst::Range {
-            start, end, step, ..
-        } = &indices[0]
-        else {
+        let SliceAst::Range { start, end, step, .. } = &indices[0] else {
             panic!("expected a range");
         };
         assert!(start.is_some() && end.is_some() && step.is_some());

@@ -16,10 +16,15 @@
 //! slices with an explicit shape, so there is no stride to get wrong.
 
 use crate::NumericError;
-use nalgebra::{DMatrix, DVector};
+use nalgebra::DMatrix;
+use nalgebra::DVector;
 
 /// A row-major slice as a `nalgebra` matrix, checking the shape.
-pub(crate) fn matrix(rows: usize, cols: usize, a: &[f64]) -> Result<DMatrix<f64>, NumericError> {
+pub(crate) fn matrix(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<DMatrix<f64>, NumericError> {
     if rows * cols != a.len() {
         return Err(NumericError::ShapeMismatch(format!(
             "{rows}x{cols} needs {} elements, found {}",
@@ -31,7 +36,10 @@ pub(crate) fn matrix(rows: usize, cols: usize, a: &[f64]) -> Result<DMatrix<f64>
 }
 
 /// A slice as a `nalgebra` column vector, checking the length.
-pub(crate) fn vector(len: usize, b: &[f64]) -> Result<DVector<f64>, NumericError> {
+pub(crate) fn vector(
+    len: usize,
+    b: &[f64],
+) -> Result<DVector<f64>, NumericError> {
     if len != b.len() {
         return Err(NumericError::ShapeMismatch(format!(
             "expected {len} entries, found {}",
@@ -53,7 +61,11 @@ pub(crate) fn to_row_major(m: &DMatrix<f64>) -> Vec<f64> {
 }
 
 /// The determinant, by `nalgebra`'s LU.
-pub fn det(rows: usize, cols: usize, a: &[f64]) -> Result<f64, NumericError> {
+pub fn det(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<f64, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -61,7 +73,11 @@ pub fn det(rows: usize, cols: usize, a: &[f64]) -> Result<f64, NumericError> {
 }
 
 /// The inverse, by `nalgebra`'s LU.
-pub fn inv(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<f64>, NumericError> {
+pub fn inv(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<Vec<f64>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -72,7 +88,12 @@ pub fn inv(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<f64>, NumericError
 }
 
 /// `A x = b`, by `nalgebra`'s LU.
-pub fn solve(rows: usize, cols: usize, a: &[f64], b: &[f64]) -> Result<Vec<f64>, NumericError> {
+pub fn solve(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+    b: &[f64],
+) -> Result<Vec<f64>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -122,7 +143,11 @@ pub fn lu(
 }
 
 /// `A = Q R`, by `nalgebra`'s Householder QR.
-pub fn qr(rows: usize, cols: usize, a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
+pub fn qr(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
     let matrix = matrix(rows, cols, a)?;
     let qr = matrix.qr();
     let q = qr.q();
@@ -149,7 +174,13 @@ pub fn qr(rows: usize, cols: usize, a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), N
 /// `TensorData::dense_matmul` agree bit for bit. That is also why it cannot be
 /// replaced by a blocked kernel: a blocked sum reassociates.
 #[must_use]
-pub fn matmul(rows: usize, inner: usize, cols: usize, a: &[f64], b: &[f64]) -> Vec<f64> {
+pub fn matmul(
+    rows: usize,
+    inner: usize,
+    cols: usize,
+    a: &[f64],
+    b: &[f64],
+) -> Vec<f64> {
     let mut data = vec![0.0; rows * cols];
     for row in 0..rows {
         for column in 0..cols {

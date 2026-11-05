@@ -4,12 +4,18 @@
 //! fractional-exponent case is the one that used to be wrong (`s^1` for a
 //! Brownian increment, whose unit is `s^(1/2)`).
 
-use aevia_core::value::{show, si_unit_text, NumVal, Value};
+use aevia_core::value::NumVal;
+use aevia_core::value::Value;
+use aevia_core::value::show;
+use aevia_core::value::si_unit_text;
 use aevia_dim::Dim;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 
-fn rational(numerator: i64, denominator: i64) -> BigRational {
+fn rational(
+    numerator: i64,
+    denominator: i64,
+) -> BigRational {
     BigRational::new(BigInt::from(numerator), BigInt::from(denominator))
 }
 
@@ -22,7 +28,10 @@ fn si_symbols_keep_rational_exponents() {
     assert_eq!(si_unit_text(&time.pow(&rational(1, 2))), "s^(1/2)");
     assert_eq!(si_unit_text(&time.pow(&rational(3, 2))), "s^(3/2)");
     assert_eq!(si_unit_text(&time.pow(&rational(-1, 2))), "1/s^(1/2)");
-    assert_eq!(si_unit_text(&length.div(&time.pow(&rational(2, 1)))), "m/s^2");
+    assert_eq!(
+        si_unit_text(&length.div(&time.pow(&rational(2, 1)))),
+        "m/s^2"
+    );
 }
 
 /// A `wiener` increment carries `T^(1/2)`; its rendered value must say so.
@@ -31,12 +40,7 @@ fn a_wiener_increment_displays_its_sqrt_time_unit() {
     let dt = Value::Num(NumVal::float(0.5, Dim::base("Time")));
     let increments = aevia_core::builtins::call_simple(
         "wiener",
-        vec![
-            Value::int(3),
-            Value::int(1),
-            Value::int(2),
-            dt,
-        ],
+        vec![Value::int(3), Value::int(1), Value::int(2), dt],
     )
     .expect("wiener");
     let rendered = show(&increments);

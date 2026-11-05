@@ -10,12 +10,19 @@
 //! cycle. Cargo allows it for dev-dependencies, and the library build never
 //! sees it.
 
-use aevia_rssn::{codegen, kernel, registry};
-use aevia_syntax::{SourceMap, lex, parse_module};
+use aevia_rssn::codegen;
+use aevia_rssn::kernel;
+use aevia_rssn::registry;
+use aevia_syntax::SourceMap;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 
 /// Parses a generated module, returning it or panicking with the first
 /// diagnostic.
-fn parse(name: &str, text: &str) -> aevia_syntax::Module {
+fn parse(
+    name: &str,
+    text: &str,
+) -> aevia_syntax::Module {
     let lexed = lex(0, text).unwrap_or_else(|errors| {
         panic!("{name} does not lex: {:?}", errors.items[0]);
     });
@@ -59,9 +66,8 @@ fn a_literal_key_types_the_invoke_result() {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    let source = format!(
-        "module InvokeTyping\n\nlet e: Real = Rssn.invoke(\"E\", \"{hash}\", [])\n"
-    );
+    let source =
+        format!("module InvokeTyping\n\nlet e: Real = Rssn.invoke(\"E\", \"{hash}\", [])\n");
     let module = parse("InvokeTyping.aev", &source);
     let checked = aevia_types::check_module(0, &module);
     assert!(
@@ -194,7 +200,10 @@ fn the_generated_module_records_the_live_manifest() {
     let manifest = kernel::kernel().manifest();
     let registry = registry();
     assert_eq!(registry.version, manifest.rssn_version, "the rssn version");
-    assert_eq!(registry.api_version, manifest.api_version, "the ABI version");
+    assert_eq!(
+        registry.api_version, manifest.api_version,
+        "the ABI version"
+    );
     let hash: String = manifest
         .manifest_hash
         .iter()
@@ -227,18 +236,30 @@ fn the_source_distribution_is_the_manifests() {
     let mut expected = [0usize; 4];
     for op in &manifest.ops {
         let slot = match op.signature_source {
-            SignatureSource::Declared => 0,
-            SignatureSource::Overlay => 1,
-            SignatureSource::Derived => 2,
-            SignatureSource::None => 3,
+            | SignatureSource::Declared => 0,
+            | SignatureSource::Overlay => 1,
+            | SignatureSource::Derived => 2,
+            | SignatureSource::None => 3,
         };
         expected[slot] += 1;
     }
     let observed = [
-        registry().ops().filter(|op| op.source == aevia_rssn::Source::Declared).count(),
-        registry().ops().filter(|op| op.source == aevia_rssn::Source::Overlay).count(),
-        registry().ops().filter(|op| op.source == aevia_rssn::Source::Derived).count(),
-        registry().ops().filter(|op| op.source == aevia_rssn::Source::None).count(),
+        registry()
+            .ops()
+            .filter(|op| op.source == aevia_rssn::Source::Declared)
+            .count(),
+        registry()
+            .ops()
+            .filter(|op| op.source == aevia_rssn::Source::Overlay)
+            .count(),
+        registry()
+            .ops()
+            .filter(|op| op.source == aevia_rssn::Source::Derived)
+            .count(),
+        registry()
+            .ops()
+            .filter(|op| op.source == aevia_rssn::Source::None)
+            .count(),
     ];
     assert_eq!(
         observed, expected,
@@ -246,7 +267,10 @@ fn the_source_distribution_is_the_manifests() {
     );
 
     let text = codegen::operators(registry());
-    for op in registry().ops().filter(|op| op.source == aevia_rssn::Source::None) {
+    for op in registry()
+        .ops()
+        .filter(|op| op.source == aevia_rssn::Source::None)
+    {
         assert!(
             text.contains(&format!(
                 "## No signature: reach it with Rssn.dynamic(\"{}\", [...])",
@@ -265,20 +289,20 @@ fn the_source_distribution_is_the_manifests() {
 fn spellable(ty: &aevia_rssn::SigType) -> bool {
     use aevia_rssn::SigType;
     match ty {
-        SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
+        | SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
             rank.is_some() && spellable(elem)
-        }
-        SigType::Unit(dim) | SigType::Point(dim) => dim.is_concrete(),
-        SigType::Dim(inner, dim) => dim.is_concrete() && spellable(inner),
-        SigType::Record(fields) => fields.iter().all(|(_, ty)| spellable(ty)),
-        SigType::Func(params, ret) => params.iter().all(spellable) && spellable(ret),
-        SigType::Variant(_)
+        },
+        | SigType::Unit(dim) | SigType::Point(dim) => dim.is_concrete(),
+        | SigType::Dim(inner, dim) => dim.is_concrete() && spellable(inner),
+        | SigType::Record(fields) => fields.iter().all(|(_, ty)| spellable(ty)),
+        | SigType::Func(params, ret) => params.iter().all(spellable) && spellable(ret),
+        | SigType::Variant(_)
         | SigType::Table
         | SigType::Device
         | SigType::Opaque(_)
         | SigType::Var(_)
         | SigType::Never => false,
-        _ => true,
+        | _ => true,
     }
 }
 
@@ -514,7 +538,9 @@ fn hbar_is_written_exactly() {
         })
         .unwrap_or_else(|| panic!("`{coefficient}` is not an exact rational"));
 
-    let hbar = registry().constant("hbar").expect("hbar is in the manifest");
+    let hbar = registry()
+        .constant("hbar")
+        .expect("hbar is in the manifest");
     assert_eq!(
         exact, hbar.value.rat,
         "the coefficient in the file is not the manifest's exact value"
@@ -594,7 +620,8 @@ fn dimension_parameters_are_spelled_not_dyn() {
 /// host type, type parameter, or a kernel signature whose own type is `Dyn`).
 #[test]
 fn genuinely_open_types_still_say_dyn() {
-    use aevia_dim::{Dim, ratio};
+    use aevia_dim::Dim;
+    use aevia_dim::ratio;
     use aevia_rssn::SigType;
 
     let var = Dim::var(1);

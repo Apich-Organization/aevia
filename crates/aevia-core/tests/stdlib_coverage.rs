@@ -112,8 +112,7 @@ fn declared() -> Vec<&'static str> {
 }
 
 fn spec_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../spec/08-stdlib.md")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/08-stdlib.md")
 }
 
 /// One argument of the right shape to reach a dispatch arm.
@@ -228,13 +227,16 @@ fn every_declared_name_is_implemented_or_a_named_capability_gap() {
             continue;
         }
         match builtins::call_simple(name, probe()) {
-            Ok(_) => {}
-            Err(error) if error.code == "E1001" => {
+            | Ok(_) => {},
+            | Err(error) if error.code == "E1001" => {
                 if !names_a_capability(&error.message) {
-                    missing.push(format!("{name} (E1001 without a capability: {})", error.message));
+                    missing.push(format!(
+                        "{name} (E1001 without a capability: {})",
+                        error.message
+                    ));
                 }
-            }
-            Err(_) => {}
+            },
+            | Err(_) => {},
         }
     }
     assert!(
@@ -250,13 +252,13 @@ fn every_other_builtin_is_implemented() {
     let mut missing = Vec::new();
     for name in EXTRA_NAMES {
         match builtins::call_simple(name, probe()) {
-            Ok(_) => {}
-            Err(error) if error.code == "E1001" => {
+            | Ok(_) => {},
+            | Err(error) if error.code == "E1001" => {
                 if !names_a_capability(&error.message) {
                     missing.push(format!("{name} (E1001 without a capability)"));
                 }
-            }
-            Err(_) => {}
+            },
+            | Err(_) => {},
         }
     }
     assert!(
@@ -306,9 +308,9 @@ fn the_coverage_is_reported() {
             continue;
         }
         match builtins::call_simple(name, probe()) {
-            Ok(_) => implemented += 1,
-            Err(error) if error.code == "E1001" => gaps.push((name, error.message)),
-            Err(_) => implemented += 1,
+            | Ok(_) => implemented += 1,
+            | Err(error) if error.code == "E1001" => gaps.push((name, error.message)),
+            | Err(_) => implemented += 1,
         }
     }
     let accounted = implemented + gaps.len();

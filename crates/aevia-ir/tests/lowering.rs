@@ -7,8 +7,14 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_ir::Atom;
+use aevia_ir::CallKind;
+use aevia_ir::Function;
+use aevia_ir::Pattern;
+use aevia_ir::Rhs;
+use aevia_ir::Stmt;
+use aevia_ir::Tail;
 use aevia_ir::lower::lower_module;
-use aevia_ir::{Atom, CallKind, Function, Pattern, Rhs, Stmt, Tail};
 use aevia_syntax::ast::BinOp;
 
 fn lower(source: &str) -> aevia_ir::Module {
@@ -43,7 +49,10 @@ fn lower(source: &str) -> aevia_ir::Module {
     )
 }
 
-fn top_function<'a>(module: &'a aevia_ir::Module, name: &str) -> &'a std::rc::Rc<Function> {
+fn top_function<'a>(
+    module: &'a aevia_ir::Module,
+    name: &str,
+) -> &'a std::rc::Rc<Function> {
     &module
         .fns
         .iter()
@@ -70,7 +79,10 @@ fn every_intermediate_is_named() {
     else {
         panic!("expected `2 * 3`, found {:?}", first.rhs);
     };
-    assert_eq!((left.to_string(), right.to_string()), ("2".into(), "3".into()));
+    assert_eq!(
+        (left.to_string(), right.to_string()),
+        ("2".into(), "3".into())
+    );
     let Stmt::Let(second) = &decl.block.stmts[1] else {
         panic!("expected a let");
     };
@@ -86,8 +98,8 @@ fn every_intermediate_is_named() {
     // second copy of the product.
     assert_eq!(*slot, first.slot);
     match &decl.block.tail {
-        Tail::Return { atom, .. } => assert_eq!(*atom, Atom::Local(second.slot)),
-        other => panic!("expected a return, found {other:?}"),
+        | Tail::Return { atom, .. } => assert_eq!(*atom, Atom::Local(second.slot)),
+        | other => panic!("expected a return, found {other:?}"),
     }
 }
 
@@ -113,9 +125,8 @@ fn a_call_takes_atoms_and_keeps_its_site() {
 fn captures_are_ordered_by_first_use() {
     // `b + x + a` mentions `b` first and `a` last, so the environment is
     // [b, a] — deterministic, and independent of how many times each is used.
-    let module = lower(
-        "fn outer(a: Int, b: Int): Int =\n    let f = fn (x: Int) => b + x + a\n    f(1)\n",
-    );
+    let module =
+        lower("fn outer(a: Int, b: Int): Int =\n    let f = fn (x: Int) => b + x + a\n    f(1)\n");
     let outer = top_function(&module, "outer");
     assert_eq!(outer.params.len(), 2);
     // The body binds `f` first; find the closure in the body's statements.
@@ -130,10 +141,7 @@ fn captures_are_ordered_by_first_use() {
     let inner = found.expect("the body builds a closure");
     assert_eq!(
         inner.captures,
-        vec![
-            aevia_ir::Capture::Local(1),
-            aevia_ir::Capture::Local(0),
-        ],
+        vec![aevia_ir::Capture::Local(1), aevia_ir::Capture::Local(0),],
         "capture order must be first use, found {:?}",
         inner.captures
     );
@@ -146,7 +154,9 @@ fn captures_are_ordered_by_first_use() {
 fn a_nested_capture_is_threaded_through_every_function() {
     // `a` is bound two functions up: the middle function must capture it so
     // the innermost one can.
-    let module = lower("fn outer(a: Int): Int =\n    let g = fn () =>\n        let h = fn () => a\n        h()\n    g()\n");
+    let module = lower(
+        "fn outer(a: Int): Int =\n    let g = fn () =>\n        let h = fn () => a\n        h()\n    g()\n",
+    );
     let outer = top_function(&module, "outer");
     let middle = closure_in(&outer.body.stmts).expect("g");
     assert_eq!(middle.captures, vec![aevia_ir::Capture::Local(0)]);
@@ -158,10 +168,10 @@ fn closure_in(stmts: &[Stmt]) -> Option<std::rc::Rc<Function>> {
     for stmt in stmts {
         if let Stmt::Let(item) = stmt {
             match &item.rhs {
-                Rhs::Closure(function) | Rhs::RecClosure { function, .. } => {
-                    return Some(function.clone())
-                }
-                _ => {}
+                | Rhs::Closure(function) | Rhs::RecClosure { function, .. } => {
+                    return Some(function.clone());
+                },
+                | _ => {},
             }
         }
     }
@@ -185,17 +195,20 @@ fn every_node_keeps_its_span() {
     }
 }
 
-fn collect_spans(block: &aevia_ir::Block, out: &mut Vec<aevia_syntax::Span>) {
+fn collect_spans(
+    block: &aevia_ir::Block,
+    out: &mut Vec<aevia_syntax::Span>,
+) {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let(item) => out.push(item.span),
-            Stmt::Bind { span, .. } => out.push(*span),
+            | Stmt::Let(item) => out.push(item.span),
+            | Stmt::Bind { span, .. } => out.push(*span),
         }
     }
     match &block.tail {
-        Tail::Return { span, .. } => out.push(*span),
-        Tail::Call(call) => out.push(call.span),
-        Tail::If {
+        | Tail::Return { span, .. } => out.push(*span),
+        | Tail::Call(call) => out.push(call.span),
+        | Tail::If {
             then_block,
             else_block,
             span,
@@ -204,14 +217,14 @@ fn collect_spans(block: &aevia_ir::Block, out: &mut Vec<aevia_syntax::Span>) {
             out.push(*span);
             collect_spans(then_block, out);
             collect_spans(else_block, out);
-        }
-        Tail::Match { arms, span, .. } => {
+        },
+        | Tail::Match { arms, span, .. } => {
             out.push(*span);
             for arm in arms {
                 out.push(arm.span);
                 collect_spans(&arm.body, out);
             }
-        }
+        },
     }
 }
 
@@ -220,14 +233,17 @@ fn a_self_call_in_tail_position_is_marked_as_one() {
     let module = lower("fn count(n: Int): Int = if n == 0 then 0 else count(n - 1)\n");
     let function = top_function(&module, "count");
     let Tail::If { else_block, .. } = &function.body.tail else {
-        panic!("expected the body to be an `if`, found {:?}", function.body.tail);
+        panic!(
+            "expected the body to be an `if`, found {:?}",
+            function.body.tail
+        );
     };
     match &else_block.tail {
-        Tail::Call(call) => {
+        | Tail::Call(call) => {
             assert!(matches!(call.kind, CallKind::Normal));
             assert!(matches!(call.callee, Atom::Global(ref name) if name == "count"));
-        }
-        other => panic!("a tail call must be a `Tail::Call`, found {other:?}"),
+        },
+        | other => panic!("a tail call must be a `Tail::Call`, found {other:?}"),
     }
 }
 
@@ -240,10 +256,12 @@ fn a_non_tail_call_is_not_marked_as_one() {
         panic!("expected an `if`");
     };
     assert!(matches!(else_block.tail, Tail::Return { .. }));
-    assert!(else_block
-        .stmts
-        .iter()
-        .any(|stmt| matches!(stmt, Stmt::Let(item) if matches!(item.rhs, Rhs::Call(_)))));
+    assert!(
+        else_block
+            .stmts
+            .iter()
+            .any(|stmt| matches!(stmt, Stmt::Let(item) if matches!(item.rhs, Rhs::Call(_))))
+    );
 }
 
 #[test]
@@ -298,19 +316,19 @@ fn main(): IO Unit = do
     kinds.sort_unstable();
     kinds.dedup();
     for required in [
-        "let",       // let x = core in core
-        "lambda",    // fn (n) => ...
-        "app",       // call / constructor application
-        "if",        // branch
-        "prim",      // arithmetic, comparison, boolean operator
-        "project",   // record field read
-        "update",    // record update
-        "tensor_lit",// tensor literal
-        "index",     // indexing / slicing
-        "do",        // IO action plan
-        "return",    // a block's tail value
-        "literal",   // Int/Float/String/Bool atom
-        "var",       // a slot / capture / global read
+        "let",        // let x = core in core
+        "lambda",     // fn (n) => ...
+        "app",        // call / constructor application
+        "if",         // branch
+        "prim",       // arithmetic, comparison, boolean operator
+        "project",    // record field read
+        "update",     // record update
+        "tensor_lit", // tensor literal
+        "index",      // indexing / slicing
+        "do",         // IO action plan
+        "return",     // a block's tail value
+        "literal",    // Int/Float/String/Bool atom
+        "var",        // a slot / capture / global read
     ] {
         assert!(
             kinds.contains(&required),
@@ -342,26 +360,29 @@ fn main(): IO Unit = do
 }
 
 /// Names the chapter-9 core form each IR node realises, recursively.
-fn collect_forms(block: &aevia_ir::Block, out: &mut Vec<&'static str>) {
+fn collect_forms(
+    block: &aevia_ir::Block,
+    out: &mut Vec<&'static str>,
+) {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let(item) => collect_rhs_forms(&item.rhs, out),
-            Stmt::Bind { atom, .. } => {
+            | Stmt::Let(item) => collect_rhs_forms(&item.rhs, out),
+            | Stmt::Bind { atom, .. } => {
                 out.push("let");
                 collect_atom_form(atom, out);
-            }
+            },
         }
     }
     match &block.tail {
-        Tail::Return { atom, .. } => {
+        | Tail::Return { atom, .. } => {
             out.push("return");
             collect_atom_form(atom, out);
-        }
-        Tail::Call(call) => {
+        },
+        | Tail::Call(call) => {
             out.push("app");
             collect_call_forms(call, out);
-        }
-        Tail::If {
+        },
+        | Tail::If {
             cond,
             then_block,
             else_block,
@@ -371,10 +392,8 @@ fn collect_forms(block: &aevia_ir::Block, out: &mut Vec<&'static str>) {
             collect_atom_form(cond, out);
             collect_forms(then_block, out);
             collect_forms(else_block, out);
-        }
-        Tail::Match {
-            scrutinee, arms, ..
-        } => {
+        },
+        | Tail::Match { scrutinee, arms, .. } => {
             out.push("match");
             collect_atom_form(scrutinee, out);
             for arm in arms {
@@ -383,12 +402,15 @@ fn collect_forms(block: &aevia_ir::Block, out: &mut Vec<&'static str>) {
                     collect_forms(guard, out);
                 }
             }
-        }
+        },
     }
 }
 
 /// The atom a call names, its arguments, and the constructor case of `app`.
-fn collect_call_forms(call: &aevia_ir::Call, out: &mut Vec<&'static str>) {
+fn collect_call_forms(
+    call: &aevia_ir::Call,
+    out: &mut Vec<&'static str>,
+) {
     if matches!(&call.callee, Atom::Global(name) if name.chars().next().is_some_and(char::is_uppercase))
     {
         out.push("construct");
@@ -399,50 +421,57 @@ fn collect_call_forms(call: &aevia_ir::Call, out: &mut Vec<&'static str>) {
     }
 }
 
-fn collect_rhs_forms(rhs: &Rhs, out: &mut Vec<&'static str>) {
+fn collect_rhs_forms(
+    rhs: &Rhs,
+    out: &mut Vec<&'static str>,
+) {
     match rhs {
-        Rhs::Atom(atom) => collect_atom_form(atom, out),
-        Rhs::Error { .. } => {}
-        Rhs::Unary { operand, .. } => {
+        | Rhs::Atom(atom) => collect_atom_form(atom, out),
+        | Rhs::Error { .. } => {},
+        | Rhs::Unary { operand, .. } => {
             out.push("prim");
             collect_atom_form(operand, out);
-        }
-        Rhs::Binary { left, right, .. } => {
+        },
+        | Rhs::Binary { left, right, .. } => {
             out.push("prim");
             collect_atom_form(left, out);
             collect_atom_form(right, out);
-        }
-        Rhs::AndOr { left, right, .. } => {
+        },
+        | Rhs::AndOr { left, right, .. } => {
             out.push("prim");
             collect_atom_form(left, out);
             collect_forms(right, out);
-        }
-        Rhs::Call(call) => {
+        },
+        | Rhs::Call(call) => {
             out.push("app");
             collect_call_forms(call, out);
-        }
-        Rhs::Closure(function) | Rhs::RecClosure { function, .. } => {
+        },
+        | Rhs::Closure(function) | Rhs::RecClosure { function, .. } => {
             out.push("lambda");
             collect_forms(&function.body, out);
-        }
-        Rhs::Block(block) => {
+        },
+        | Rhs::Block(block) => {
             out.push("let");
             collect_forms(block, out);
-        }
-        Rhs::Field { base, .. } => {
+        },
+        | Rhs::Field { base, .. } => {
             out.push("project");
             collect_atom_form(base, out);
-        }
-        Rhs::Record { base, fields } => {
-            out.push(if base.is_some() { "update" } else { "let" });
+        },
+        | Rhs::Record { base, fields } => {
+            out.push(if base.is_some() {
+                "update"
+            } else {
+                "let"
+            });
             if let Some(base) = base {
                 collect_atom_form(base, out);
             }
             for (_, atom) in fields {
                 collect_atom_form(atom, out);
             }
-        }
-        Rhs::Tuple(items) | Rhs::Tensor(items) => {
+        },
+        | Rhs::Tuple(items) | Rhs::Tensor(items) => {
             if matches!(rhs, Rhs::Tuple(_)) {
                 out.push("construct");
             } else {
@@ -451,19 +480,14 @@ fn collect_rhs_forms(rhs: &Rhs, out: &mut Vec<&'static str>) {
             for atom in items {
                 collect_atom_form(atom, out);
             }
-        }
-        Rhs::Index { base, indices } => {
+        },
+        | Rhs::Index { base, indices } => {
             out.push("index");
             collect_atom_form(base, out);
             for index in indices {
                 match index {
-                    aevia_ir::Slice::Index(atom) => collect_atom_form(atom, out),
-                    aevia_ir::Slice::Range {
-                        start,
-                        end,
-                        step,
-                        ..
-                    } => {
+                    | aevia_ir::Slice::Index(atom) => collect_atom_form(atom, out),
+                    | aevia_ir::Slice::Range { start, end, step, .. } => {
                         out.push("slice");
                         if step.is_some() {
                             out.push("slice_step");
@@ -471,56 +495,57 @@ fn collect_rhs_forms(rhs: &Rhs, out: &mut Vec<&'static str>) {
                         for atom in start.iter().chain(end.iter()).chain(step.iter()) {
                             collect_atom_form(atom, out);
                         }
-                    }
+                    },
                 }
             }
-        }
-        Rhs::Quantity { .. } => out.push("literal"),
-        Rhs::Str(parts) => {
+        },
+        | Rhs::Quantity { .. } => out.push("literal"),
+        | Rhs::Str(parts) => {
             for part in parts {
                 match part {
-                    aevia_ir::StrPart::Text(_) => out.push("literal"),
-                    aevia_ir::StrPart::Atom(atom) => {
+                    | aevia_ir::StrPart::Text(_) => out.push("literal"),
+                    | aevia_ir::StrPart::Atom(atom) => {
                         out.push("literal");
                         collect_atom_form(atom, out);
-                    }
+                    },
                 }
             }
-        }
-        Rhs::Try(atom) => {
+        },
+        | Rhs::Try(atom) => {
             out.push("app");
             collect_atom_form(atom, out);
-        }
-        Rhs::Factorial { value, .. } => {
+        },
+        | Rhs::Factorial { value, .. } => {
             out.push("prim");
             collect_atom_form(value, out);
-        }
-        Rhs::Do(plan) => {
+        },
+        | Rhs::Do(plan) => {
             out.push("do");
             for action in &plan.prefix {
                 collect_atom_form(&action.atom, out);
             }
             match &plan.terminal {
-                aevia_ir::DoTerminal::End => {}
-                aevia_ir::DoTerminal::Let { thunk } => collect_forms(&thunk.body, out),
-                aevia_ir::DoTerminal::Bind {
-                    action,
-                    continuation,
-                    ..
+                | aevia_ir::DoTerminal::End => {},
+                | aevia_ir::DoTerminal::Let { thunk } => collect_forms(&thunk.body, out),
+                | aevia_ir::DoTerminal::Bind {
+                    action, continuation, ..
                 } => {
                     collect_atom_form(action, out);
                     collect_forms(&continuation.body, out);
-                }
+                },
             }
-        }
-        Rhs::RssnMember { .. } => out.push("var"),
+        },
+        | Rhs::RssnMember { .. } => out.push("var"),
     }
 }
 
-fn collect_atom_form(atom: &Atom, out: &mut Vec<&'static str>) {
+fn collect_atom_form(
+    atom: &Atom,
+    out: &mut Vec<&'static str>,
+) {
     match atom {
-        Atom::Local(_) | Atom::Capture(_) | Atom::Global(_) => out.push("var"),
-        Atom::Int(_)
+        | Atom::Local(_) | Atom::Capture(_) | Atom::Global(_) => out.push("var"),
+        | Atom::Int(_)
         | Atom::Exact(_)
         | Atom::Float(_)
         | Atom::Complex { .. }
@@ -534,9 +559,7 @@ fn collect_atom_form(atom: &Atom, out: &mut Vec<&'static str>) {
 fn a_do_block_binds_its_pattern_inside_the_thunk() {
     // The `let` is deferred: its value is lowered in the thunk, and the rest of
     // the block reads the binding as a slot of that frame.
-    let module = lower(
-        "fn main(): IO Unit = do\n    let x = 1 + 2\n    println(\"{x}\")\n",
-    );
+    let module = lower("fn main(): IO Unit = do\n    let x = 1 + 2\n    println(\"{x}\")\n");
     let main = top_function(&module, "main");
     let Stmt::Let(item) = &main.body.stmts[0] else {
         panic!("expected the `do` plan");
@@ -557,9 +580,11 @@ fn a_do_block_binds_its_pattern_inside_the_thunk() {
     let Atom::Local(slot) = atom else {
         panic!("expected a slot, found {atom:?}");
     };
-    assert!(thunk
-        .body
-        .stmts
-        .iter()
-        .any(|stmt| matches!(stmt, Stmt::Let(item) if item.slot == *slot)));
+    assert!(
+        thunk
+            .body
+            .stmts
+            .iter()
+            .any(|stmt| matches!(stmt, Stmt::Let(item) if item.slot == *slot))
+    );
 }

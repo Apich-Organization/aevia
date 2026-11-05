@@ -7,7 +7,8 @@
 //! (spec §1.8.1).
 //!
 //! ```
-//! use aevia_syntax::{lex, parse_module};
+//! use aevia_syntax::lex;
+//! use aevia_syntax::parse_module;
 //!
 //! let source = "let g = 9.80665 m/s^2\n";
 //! let lexed = lex(0, source).expect("lexes");
@@ -26,9 +27,30 @@ pub mod parser;
 pub mod span;
 pub mod token;
 
-pub use ast::{Decl, DeclKind, Expr, ExprKind, Module, Pat, PatKind, Ty, TyKind};
-pub use diagnostic::{Diagnostic, Diagnostics, Severity, Style};
-pub use lexer::{lex, lex_inline, LexOutput};
-pub use parser::{parse_expression, parse_module};
-pub use span::{FileId, SourceFile, SourceMap, Span};
-pub use token::{Keyword, Punct, StringPart, Token, TokenKind};
+pub use ast::Decl;
+pub use ast::DeclKind;
+pub use ast::Expr;
+pub use ast::ExprKind;
+pub use ast::Module;
+pub use ast::Pat;
+pub use ast::PatKind;
+pub use ast::Ty;
+pub use ast::TyKind;
+pub use diagnostic::Diagnostic;
+pub use diagnostic::Diagnostics;
+pub use diagnostic::Severity;
+pub use diagnostic::Style;
+pub use lexer::LexOutput;
+pub use lexer::lex;
+pub use lexer::lex_inline;
+pub use parser::parse_expression;
+pub use parser::parse_module;
+pub use span::FileId;
+pub use span::SourceFile;
+pub use span::SourceMap;
+pub use span::Span;
+pub use token::Keyword;
+pub use token::Punct;
+pub use token::StringPart;
+pub use token::Token;
+pub use token::TokenKind;

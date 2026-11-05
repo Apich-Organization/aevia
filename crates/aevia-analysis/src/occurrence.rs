@@ -16,9 +16,9 @@
 //! asking the checker, and it is deliberately not a second type checker — it
 //! tracks names and spans, nothing else.
 
+use aevia_syntax::Span;
 use aevia_syntax::ast::*;
 use aevia_syntax::token::TokenKind;
-use aevia_syntax::Span;
 use unicode_ident::is_xid_continue;
 
 /// The role a name plays at its span.
@@ -70,7 +70,10 @@ pub(crate) struct Occurrence {
 /// enclosing scope and `let x = x` must resolve the right-hand `x` to the
 /// outer binding.
 #[must_use]
-pub(crate) fn collect(module: &Module, text: &str) -> Vec<Occurrence> {
+pub(crate) fn collect(
+    module: &Module,
+    text: &str,
+) -> Vec<Occurrence> {
     let mut collector = Collector {
         out: Vec::new(),
         text,
@@ -84,12 +87,13 @@ pub(crate) fn collect(module: &Module, text: &str) -> Vec<Occurrence> {
 
 /// The innermost occurrence containing `offset`.
 #[must_use]
-pub(crate) fn at(occurrences: &[Occurrence], offset: u32) -> Option<&Occurrence> {
+pub(crate) fn at(
+    occurrences: &[Occurrence],
+    offset: u32,
+) -> Option<&Occurrence> {
     occurrences
         .iter()
-        .filter(|occurrence| {
-            occurrence.span.start <= offset && offset <= occurrence.span.end
-        })
+        .filter(|occurrence| occurrence.span.start <= offset && offset <= occurrence.span.end)
         .min_by_key(|occurrence| occurrence.span.end.saturating_sub(occurrence.span.start))
 }
 
@@ -101,9 +105,15 @@ pub(crate) fn at(occurrences: &[Occurrence], offset: u32) -> Option<&Occurrence>
 /// for a whole identifier (not a substring) is enough: `fn fall_time` cannot
 /// contain an earlier standalone `fall_time`.
 #[must_use]
-pub(crate) fn name_span(text: &str, within: Span, name: &str) -> Span {
+pub(crate) fn name_span(
+    text: &str,
+    within: Span,
+    name: &str,
+) -> Span {
     let start = usize::try_from(within.start).unwrap_or(usize::MAX);
-    let end = usize::try_from(within.end).unwrap_or(usize::MAX).min(text.len());
+    let end = usize::try_from(within.end)
+        .unwrap_or(usize::MAX)
+        .min(text.len());
     let Some(slice) = text.get(start..end) else {
         return within;
     };
@@ -142,16 +152,16 @@ fn is_identifier_continue(character: char) -> bool {
 /// `Rssn.eig` is a lower-case field of an upper-case root.
 fn qualified_root(expr: &Expr) -> Option<Vec<String>> {
     match &expr.kind {
-        ExprKind::QName(path) => Some(path.clone()),
-        ExprKind::Var(name)
+        | ExprKind::QName(path) => Some(path.clone()),
+        | ExprKind::Var(name)
             if name
                 .chars()
                 .next()
                 .is_some_and(|first| first.is_uppercase()) =>
         {
             Some(vec![name.clone()])
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }
 
@@ -163,7 +173,12 @@ struct Collector<'a> {
 }
 
 impl Collector<'_> {
-    fn push(&mut self, span: Span, role: Role, call: Option<Span>) {
+    fn push(
+        &mut self,
+        span: Span,
+        role: Role,
+        call: Option<Span>,
+    ) {
         self.out.push(Occurrence {
             span,
             role,
@@ -173,7 +188,12 @@ impl Collector<'_> {
     }
 
     /// Records a declaration's name and makes it visible to what follows.
-    fn declare(&mut self, within: Span, name: &str, role: Role) {
+    fn declare(
+        &mut self,
+        within: Span,
+        name: &str,
+        role: Role,
+    ) {
         let span = name_span(self.text, within, name);
         self.bind(name, span);
         self.record(span, role);
@@ -185,13 +205,22 @@ impl Collector<'_> {
     /// to it is dispatched by the checker against the instance table, and two
     /// instances may declare the same method. Binding it here would make the
     /// first instance win every later lookup.
-    fn declare_only(&mut self, within: Span, name: &str, role: Role) {
+    fn declare_only(
+        &mut self,
+        within: Span,
+        name: &str,
+        role: Role,
+    ) {
         let span = name_span(self.text, within, name);
         self.record(span, role);
     }
 
     /// Records a name whose definition is itself.
-    fn record(&mut self, span: Span, role: Role) {
+    fn record(
+        &mut self,
+        span: Span,
+        role: Role,
+    ) {
         self.out.push(Occurrence {
             span,
             role,
@@ -201,7 +230,12 @@ impl Collector<'_> {
     }
 
     /// Records a use of `name`, resolving it against the scopes in view.
-    fn use_name(&mut self, span: Span, name: &str, call: Option<Span>) {
+    fn use_name(
+        &mut self,
+        span: Span,
+        name: &str,
+        call: Option<Span>,
+    ) {
         let binding = self.lookup(name);
         self.out.push(Occurrence {
             span,
@@ -211,7 +245,11 @@ impl Collector<'_> {
         });
     }
 
-    fn bind(&mut self, name: &str, span: Span) {
+    fn bind(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.push((name.to_string(), span));
         }
@@ -223,7 +261,10 @@ impl Collector<'_> {
     /// are still in the document, so lexing the literal recovers their spans.
     /// Every identifier after the numeric coefficient is part of the unit
     /// expression, including the `°C` of `25 °C`.
-    fn quantity_units(&mut self, span: Span) {
+    fn quantity_units(
+        &mut self,
+        span: Span,
+    ) {
         let start = usize::try_from(span.start).unwrap_or(usize::MAX);
         let end = usize::try_from(span.end).unwrap_or(usize::MAX);
         let Some(text) = self.text.get(start..end) else {
@@ -233,16 +274,19 @@ impl Collector<'_> {
         let mut after_number = false;
         for token in lexed.tokens {
             match &token.kind {
-                TokenKind::Int(_) | TokenKind::Float(_) => after_number = true,
-                TokenKind::Ident(name) | TokenKind::UpperIdent(name) if after_number => {
+                | TokenKind::Int(_) | TokenKind::Float(_) => after_number = true,
+                | TokenKind::Ident(name) | TokenKind::UpperIdent(name) if after_number => {
                     self.push(token.span, Role::Unit(name.clone()), None);
-                }
-                _ => {}
+                },
+                | _ => {},
             }
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<Span> {
+    fn lookup(
+        &self,
+        name: &str,
+    ) -> Option<Span> {
         self.scopes
             .iter()
             .rev()
@@ -259,41 +303,41 @@ impl Collector<'_> {
         self.scopes.pop();
     }
 
-    fn decl(&mut self, decl: &Decl, index: usize) {
+    fn decl(
+        &mut self,
+        decl: &Decl,
+        index: usize,
+    ) {
         let _ = index;
         match &decl.kind {
-            DeclKind::Import { .. } => {}
-            DeclKind::Dimension { name, value } => {
+            | DeclKind::Import { .. } => {},
+            | DeclKind::Dimension { name, value } => {
                 self.declare(decl.span, name, Role::Name(name.clone()));
                 let _ = value;
-            }
-            DeclKind::Unit { name, dim, .. } => {
+            },
+            | DeclKind::Unit { name, dim, .. } => {
                 self.declare(decl.span, name, Role::Name(name.clone()));
                 let _ = dim;
-            }
-            DeclKind::Type { name, params, body } => {
+            },
+            | DeclKind::Type { name, params, body } => {
                 self.declare(decl.span, name, Role::TypeName(name.clone()));
                 for param in params {
                     let _ = param;
                 }
                 match body {
-                    TypeBody::Alias(ty) => self.ty(ty),
-                    TypeBody::Variants(ctors) => {
+                    | TypeBody::Alias(ty) => self.ty(ty),
+                    | TypeBody::Variants(ctors) => {
                         for ctor in ctors {
-                            self.push(
-                                ctor.span,
-                                Role::Constructor(ctor.name.clone()),
-                                None,
-                            );
+                            self.push(ctor.span, Role::Constructor(ctor.name.clone()), None);
                             for arg in &ctor.args {
                                 self.ty(arg);
                             }
                         }
-                    }
-                    TypeBody::Abstract => {}
+                    },
+                    | TypeBody::Abstract => {},
                 }
-            }
-            DeclKind::Class {
+            },
+            | DeclKind::Class {
                 name,
                 params,
                 methods,
@@ -303,12 +347,8 @@ impl Collector<'_> {
                 for (_, ty) in methods {
                     self.ty(ty);
                 }
-            }
-            DeclKind::Instance {
-                class,
-                ty,
-                methods,
-            } => {
+            },
+            | DeclKind::Instance { class, ty, methods } => {
                 self.ty(ty);
                 for method in methods {
                     self.declare_only(
@@ -332,9 +372,9 @@ impl Collector<'_> {
                     self.expr(&method.body, None);
                     self.leave();
                 }
-            }
-            DeclKind::Derive { ty, .. } => self.ty(ty),
-            DeclKind::Fn {
+            },
+            | DeclKind::Derive { ty, .. } => self.ty(ty),
+            | DeclKind::Fn {
                 name,
                 params,
                 args,
@@ -355,50 +395,56 @@ impl Collector<'_> {
                 }
                 self.expr(body, None);
                 self.leave();
-            }
-            DeclKind::Let { pattern, ty, value, .. } => {
+            },
+            | DeclKind::Let {
+                pattern, ty, value, ..
+            } => {
                 if let Some(ty) = ty {
                     self.ty(ty);
                 }
                 self.expr(value, None);
                 self.pat(pattern);
-            }
-            DeclKind::Test { body, .. } => self.expr(body, None),
+            },
+            | DeclKind::Test { body, .. } => self.expr(body, None),
         }
     }
 
-    fn expr(&mut self, expr: &Expr, call: Option<Span>) {
+    fn expr(
+        &mut self,
+        expr: &Expr,
+        call: Option<Span>,
+    ) {
         match &expr.kind {
-            ExprKind::UnitLit | ExprKind::Error | ExprKind::Bool(_) => {}
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Placeholder => {}
-            ExprKind::Quantity { .. } => self.quantity_units(expr.span),
-            ExprKind::Var(name) => self.use_name(expr.span, name, call),
-            ExprKind::QName(path) => self.push(expr.span, Role::Qualified(path.clone()), call),
-            ExprKind::Str(pieces) => {
+            | ExprKind::UnitLit | ExprKind::Error | ExprKind::Bool(_) => {},
+            | ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Placeholder => {},
+            | ExprKind::Quantity { .. } => self.quantity_units(expr.span),
+            | ExprKind::Var(name) => self.use_name(expr.span, name, call),
+            | ExprKind::QName(path) => self.push(expr.span, Role::Qualified(path.clone()), call),
+            | ExprKind::Str(pieces) => {
                 for piece in pieces {
                     if let StrPiece::Expr(inner) = piece {
                         self.expr(inner, None);
                     }
                 }
-            }
-            ExprKind::Unary { operand, .. } => self.expr(operand, None),
-            ExprKind::Binary { left, right, .. } => {
+            },
+            | ExprKind::Unary { operand, .. } => self.expr(operand, None),
+            | ExprKind::Binary { left, right, .. } => {
                 self.expr(left, None);
                 self.expr(right, None);
-            }
-            ExprKind::Call { callee, args } => {
+            },
+            | ExprKind::Call { callee, args } => {
                 self.expr(callee, Some(expr.span));
                 for arg in args {
                     self.expr(arg, None);
                 }
-            }
-            ExprKind::TypeApp { callee, args } => {
+            },
+            | ExprKind::TypeApp { callee, args } => {
                 self.expr(callee, Some(expr.span));
                 for arg in args {
                     self.ty(arg);
                 }
-            }
-            ExprKind::Lambda { params, ret, body } => {
+            },
+            | ExprKind::Lambda { params, ret, body } => {
                 self.enter();
                 for param in params {
                     self.pat(&param.pattern);
@@ -411,8 +457,8 @@ impl Collector<'_> {
                 }
                 self.expr(body, None);
                 self.leave();
-            }
-            ExprKind::If {
+            },
+            | ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
@@ -420,8 +466,8 @@ impl Collector<'_> {
                 self.expr(cond, None);
                 self.expr(then_branch, None);
                 self.expr(else_branch, None);
-            }
-            ExprKind::Match { scrutinee, arms } => {
+            },
+            | ExprKind::Match { scrutinee, arms } => {
                 self.expr(scrutinee, None);
                 for arm in arms {
                     self.enter();
@@ -432,8 +478,8 @@ impl Collector<'_> {
                     self.expr(&arm.body, None);
                     self.leave();
                 }
-            }
-            ExprKind::LetIn {
+            },
+            | ExprKind::LetIn {
                 pattern,
                 ty,
                 value,
@@ -447,65 +493,59 @@ impl Collector<'_> {
                 self.pat(pattern);
                 self.expr(body, None);
                 self.leave();
-            }
-            ExprKind::Block { stmts, tail } => {
+            },
+            | ExprKind::Block { stmts, tail } => {
                 self.enter();
                 for stmt in stmts {
                     match stmt {
-                        BlockStmt::Let {
-                            pattern,
-                            ty,
-                            value,
-                            ..
+                        | BlockStmt::Let {
+                            pattern, ty, value, ..
                         } => {
                             if let Some(ty) = ty {
                                 self.ty(ty);
                             }
                             self.expr(value, None);
                             self.pat(pattern);
-                        }
-                        BlockStmt::Fn(decl) => self.decl(decl, 0),
+                        },
+                        | BlockStmt::Fn(decl) => self.decl(decl, 0),
                     }
                 }
                 if let Some(tail) = tail {
                     self.expr(tail, None);
                 }
                 self.leave();
-            }
-            ExprKind::Do { stmts } => {
+            },
+            | ExprKind::Do { stmts } => {
                 self.enter();
                 for stmt in stmts {
                     match stmt {
-                        DoStmt::Let {
-                            pattern,
-                            ty,
-                            value,
-                            ..
+                        | DoStmt::Let {
+                            pattern, ty, value, ..
                         } => {
                             if let Some(ty) = ty {
                                 self.ty(ty);
                             }
                             self.expr(value, None);
                             self.pat(pattern);
-                        }
-                        DoStmt::Bind { pattern, value, .. } => {
+                        },
+                        | DoStmt::Bind { pattern, value, .. } => {
                             self.expr(value, None);
                             self.pat(pattern);
-                        }
-                        DoStmt::Expr(expr) => self.expr(expr, None),
+                        },
+                        | DoStmt::Expr(expr) => self.expr(expr, None),
                     }
                 }
                 self.leave();
-            }
-            ExprKind::Record { base, fields } => {
+            },
+            | ExprKind::Record { base, fields } => {
                 if let Some(base) = base {
                     self.expr(base, None);
                 }
                 for (_, value) in fields {
                     self.expr(value, None);
                 }
-            }
-            ExprKind::Field { base, name } => {
+            },
+            | ExprKind::Field { base, name } => {
                 // `Rssn.eig` and `Units.SI.km` are dotted *names*, not field
                 // accesses: the parser leaves `Rssn.eig` as a field of an
                 // upper-case root, and the checker reads it back the same way.
@@ -515,90 +555,96 @@ impl Collector<'_> {
                 } else {
                     self.expr(base, None);
                 }
-            }
-            ExprKind::Tuple(items) | ExprKind::Tensor(items) => {
+            },
+            | ExprKind::Tuple(items) | ExprKind::Tensor(items) => {
                 for item in items {
                     self.expr(item, None);
                 }
-            }
-            ExprKind::Index { base, indices } => {
+            },
+            | ExprKind::Index { base, indices } => {
                 self.expr(base, None);
                 for index in indices {
                     match index {
-                        SliceAst::Index(expr) => self.expr(expr, None),
-                        SliceAst::Range { start, end, .. } => {
+                        | SliceAst::Index(expr) => self.expr(expr, None),
+                        | SliceAst::Range { start, end, .. } => {
                             if let Some(start) = start {
                                 self.expr(start, None);
                             }
                             if let Some(end) = end {
                                 self.expr(end, None);
                             }
-                        }
+                        },
                     }
                 }
-            }
-            ExprKind::Annot { expr, ty } => {
+            },
+            | ExprKind::Annot { expr, ty } => {
                 self.expr(expr, None);
                 self.ty(ty);
-            }
-            ExprKind::Try(inner) | ExprKind::Factorial { expr: inner, .. } => {
+            },
+            | ExprKind::Try(inner) | ExprKind::Factorial { expr: inner, .. } => {
                 self.expr(inner, None)
-            }
+            },
         }
     }
 
-    fn pat(&mut self, pat: &Pat) {
+    fn pat(
+        &mut self,
+        pat: &Pat,
+    ) {
         match &pat.kind {
-            PatKind::Wildcard | PatKind::Error => {}
-            PatKind::Var(name) => {
+            | PatKind::Wildcard | PatKind::Error => {},
+            | PatKind::Var(name) => {
                 self.bind(name, pat.span);
                 self.record(pat.span, Role::Name(name.clone()));
-            }
-            PatKind::Ctor { name, args } => {
+            },
+            | PatKind::Ctor { name, args } => {
                 self.push(pat.span, Role::Constructor(name.clone()), None);
                 for arg in args {
                     self.pat(arg);
                 }
-            }
-            PatKind::Record(fields) => {
+            },
+            | PatKind::Record(fields) => {
                 for (_, pattern) in fields {
                     if let Some(pattern) = pattern {
                         self.pat(pattern);
                     }
                 }
-            }
-            PatKind::Tuple(items) => {
+            },
+            | PatKind::Tuple(items) => {
                 for item in items {
                     self.pat(item);
                 }
-            }
-            PatKind::Tensor { items, .. } => {
+            },
+            | PatKind::Tensor { items, .. } => {
                 for item in items {
                     self.pat(item);
                 }
-            }
-            PatKind::Lit(_) => {}
-            PatKind::As { pattern, name } => {
+            },
+            | PatKind::Lit(_) => {},
+            | PatKind::As { pattern, name } => {
                 self.pat(pattern);
                 self.bind(name, pat.span);
                 self.record(pat.span, Role::Name(name.clone()));
-            }
-            PatKind::Annot { pattern, ty } => {
+            },
+            | PatKind::Annot { pattern, ty } => {
                 self.pat(pattern);
                 self.ty(ty);
-            }
+            },
         }
     }
 
-    fn ty(&mut self, ty: &Ty) {
+    fn ty(
+        &mut self,
+        ty: &Ty,
+    ) {
         match &ty.kind {
-            TyKind::Int
+            | TyKind::Int
             | TyKind::Bool
             | TyKind::Prop
             | TyKind::Str
             | TyKind::Unit
-            | TyKind::Var(_) => {}
-            TyKind::Real(_)
+            | TyKind::Var(_) => {},
+            | TyKind::Real(_)
             | TyKind::Float(_)
             | TyKind::Complex(_)
             | TyKind::Point(_)
@@ -607,8 +653,8 @@ impl Collector<'_> {
             | TyKind::DimArg(_)
             | TyKind::NatArg(_)
             | TyKind::ShapeArg(_)
-            | TyKind::Dyn(_) => {}
-            TyKind::Tensor { elem, .. }
+            | TyKind::Dyn(_) => {},
+            | TyKind::Tensor { elem, .. }
             | TyKind::Sparse { elem, .. }
             | TyKind::Option(elem)
             | TyKind::Set(elem)
@@ -616,48 +662,48 @@ impl Collector<'_> {
             | TyKind::RateOf(elem)
             | TyKind::DiffusionOf(elem)
             | TyKind::Io(elem) => self.ty(elem),
-            TyKind::Matrix { rows, cols, elem } => {
+            | TyKind::Matrix { rows, cols, elem } => {
                 let _ = (rows, cols);
                 self.ty(elem);
-            }
-            TyKind::Result(ok, err) => {
+            },
+            | TyKind::Result(ok, err) => {
                 self.ty(ok);
                 self.ty(err);
-            }
-            TyKind::Row(parts) => {
+            },
+            | TyKind::Row(parts) => {
                 for part in parts {
                     self.ty(part);
                 }
-            }
-            TyKind::Fn(args, ret) => {
+            },
+            | TyKind::Fn(args, ret) => {
                 for arg in args {
                     self.ty(arg);
                 }
                 self.ty(ret);
-            }
-            TyKind::Record { fields, .. } => {
+            },
+            | TyKind::Record { fields, .. } => {
                 for (_, field) in fields {
                     self.ty(field);
                 }
-            }
-            TyKind::Tuple(items) => {
+            },
+            | TyKind::Tuple(items) => {
                 for item in items {
                     self.ty(item);
                 }
-            }
-            TyKind::Named { path, args } => {
+            },
+            | TyKind::Named { path, args } => {
                 match path.as_slice() {
-                    [name] => self.push(ty.span, Role::TypeName(name.clone()), None),
-                    _ => self.push(ty.span, Role::Qualified(path.clone()), None),
+                    | [name] => self.push(ty.span, Role::TypeName(name.clone()), None),
+                    | _ => self.push(ty.span, Role::Qualified(path.clone()), None),
                 }
                 for arg in args {
                     self.ty(arg);
                 }
-            }
-            TyKind::Forall(params, body) => {
+            },
+            | TyKind::Forall(params, body) => {
                 let _ = params;
                 self.ty(body);
-            }
+            },
         }
     }
 }
@@ -665,7 +711,8 @@ impl Collector<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aevia_syntax::{lex, parse_module};
+    use aevia_syntax::lex;
+    use aevia_syntax::parse_module;
 
     fn occurrences(source: &str) -> Vec<Occurrence> {
         let lexed = lex(0, source).expect("lexes");
@@ -680,9 +727,11 @@ mod tests {
         let found = occurrences(source);
         let names: Vec<&str> = found
             .iter()
-            .filter_map(|occurrence| match &occurrence.role {
-                Role::Name(name) => Some(name.as_str()),
-                _ => None,
+            .filter_map(|occurrence| {
+                match &occurrence.role {
+                    | Role::Name(name) => Some(name.as_str()),
+                    | _ => None,
+                }
             })
             .collect();
         // `double(2)` is walked before the `y` it is bound to.
@@ -727,9 +776,11 @@ mod tests {
         let found = occurrences(source);
         let ctors: Vec<&str> = found
             .iter()
-            .filter_map(|occurrence| match &occurrence.role {
-                Role::Constructor(name) => Some(name.as_str()),
-                _ => None,
+            .filter_map(|occurrence| {
+                match &occurrence.role {
+                    | Role::Constructor(name) => Some(name.as_str()),
+                    | _ => None,
+                }
             })
             .collect();
         assert_eq!(ctors, ["Circle", "Dot", "Dot", "Circle"]);

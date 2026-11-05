@@ -28,8 +28,12 @@
 pub mod lower;
 
 use aevia_dim::UnitExpr;
-use aevia_syntax::ast::{BinOp, NumberLit, PatLit, Ty, UnOp};
 use aevia_syntax::Span;
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::NumberLit;
+use aevia_syntax::ast::PatLit;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::UnOp;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::rc::Rc;

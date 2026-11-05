@@ -11,9 +11,20 @@
 //! binding sits at a level lower than `l`. This is the standard efficient
 //! formulation and keeps `let` inference linear in practice.
 
-use crate::ty::{Constraint, LiteralKind, Nat, Rep, Row, Scheme, Shape, Type};
-use aevia_dim::{Dim, DimMismatch, DimUnifier};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use crate::ty::Constraint;
+use crate::ty::LiteralKind;
+use crate::ty::Nat;
+use crate::ty::Rep;
+use crate::ty::Row;
+use crate::ty::Scheme;
+use crate::ty::Shape;
+use crate::ty::Type;
+use aevia_dim::Dim;
+use aevia_dim::DimMismatch;
+use aevia_dim::DimUnifier;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// Why two types could not be made equal.
 #[derive(Clone, Debug)]
@@ -74,39 +85,50 @@ pub enum UnifyError {
 }
 
 impl std::fmt::Display for UnifyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
-            Self::Mismatch { left, right } => write!(f, "expected {left}, found {right}"),
-            Self::Dim(mismatch) => write!(
-                f,
-                "dimension mismatch: expected {}, found {}",
-                mismatch.right.to_plain_string(),
-                mismatch.left.to_plain_string()
-            ),
-            Self::Occurs(id) => write!(f, "infinite type: t{id} occurs in its own definition"),
-            Self::MissingField { field, row } => {
-                write!(f, "the record {{ {row} }} has no field `{field}`")
-            }
-            Self::DuplicateField { field } => {
-                write!(f, "the record would have two fields named `{field}`")
-            }
-            Self::ShapeMismatch { left, right } => {
-                write!(f, "shape mismatch: expected {left}, found {right}")
-            }
-            Self::LiteralMismatch { kind, requested } => match kind {
-                LiteralKind::Int | LiteralKind::Decimal => write!(
+            | Self::Mismatch { left, right } => write!(f, "expected {left}, found {right}"),
+            | Self::Dim(mismatch) => {
+                write!(
                     f,
-                    "a bare numeric literal cannot have type {requested}; write a unit (for example `1 m`)"
-                ),
-                _ => write!(f, "the literal cannot have type {requested}"),
+                    "dimension mismatch: expected {}, found {}",
+                    mismatch.right.to_plain_string(),
+                    mismatch.left.to_plain_string()
+                )
             },
-            Self::NatMismatch { left, right } => {
+            | Self::Occurs(id) => write!(f, "infinite type: t{id} occurs in its own definition"),
+            | Self::MissingField { field, row } => {
+                write!(f, "the record {{ {row} }} has no field `{field}`")
+            },
+            | Self::DuplicateField { field } => {
+                write!(f, "the record would have two fields named `{field}`")
+            },
+            | Self::ShapeMismatch { left, right } => {
+                write!(f, "shape mismatch: expected {left}, found {right}")
+            },
+            | Self::LiteralMismatch { kind, requested } => {
+                match kind {
+                    | LiteralKind::Int | LiteralKind::Decimal => {
+                        write!(
+                            f,
+                            "a bare numeric literal cannot have type {requested}; write a unit (for example `1 m`)"
+                        )
+                    },
+                    | _ => write!(f, "the literal cannot have type {requested}"),
+                }
+            },
+            | Self::NatMismatch { left, right } => {
                 write!(f, "type-level equation has no solution: {left} = {right}")
-            }
-            Self::NatNonLinear { left, right } => write!(
-                f,
-                "type-level equation is not linear: {left} = {right}; only literals, `+` and `*` by a literal are supported"
-            ),
+            },
+            | Self::NatNonLinear { left, right } => {
+                write!(
+                    f,
+                    "type-level equation is not linear: {left} = {right}; only literals, `+` and `*` by a literal are supported"
+                )
+            },
         }
     }
 }
@@ -133,13 +155,13 @@ impl NatLinear {
     fn variable(id: u32) -> Self {
         let mut coeffs = BTreeMap::new();
         coeffs.insert(id, 1);
-        Self {
-            coeffs,
-            constant: 0,
-        }
+        Self { coeffs, constant: 0 }
     }
 
-    fn add(mut self, other: Self) -> Self {
+    fn add(
+        mut self,
+        other: Self,
+    ) -> Self {
         for (id, coefficient) in other.coeffs {
             *self.coeffs.entry(id).or_insert(0) += coefficient;
         }
@@ -147,7 +169,10 @@ impl NatLinear {
         self
     }
 
-    fn sub(self, other: Self) -> Self {
+    fn sub(
+        self,
+        other: Self,
+    ) -> Self {
         self.add(other.negate())
     }
 
@@ -159,7 +184,10 @@ impl NatLinear {
         self
     }
 
-    fn scale(mut self, factor: i128) -> Self {
+    fn scale(
+        mut self,
+        factor: i128,
+    ) -> Self {
         self.constant *= factor;
         for coefficient in self.coeffs.values_mut() {
             *coefficient *= factor;
@@ -322,168 +350,229 @@ impl Infer {
 
     /// Whether a variable is weak.
     #[must_use]
-    pub fn is_weak(&self, id: u32) -> bool {
+    pub fn is_weak(
+        &self,
+        id: u32,
+    ) -> bool {
         self.weak.contains(&id)
     }
 
     /// Whether a dimension variable is weak, directly or through a
     /// substitution: `let f = fn t => x * t` makes `t`'s dimension weak too.
     #[must_use]
-    pub fn is_weak_dim(&self, id: u32) -> bool {
+    pub fn is_weak_dim(
+        &self,
+        id: u32,
+    ) -> bool {
         if self.weak.contains(&id) {
             return true;
         }
-        self.weak.iter().any(|weak| {
-            self.dims
-                .resolve(&Dim::var(*weak))
-                .contains_var(id)
-        })
+        self.weak
+            .iter()
+            .any(|weak| self.dims.resolve(&Dim::var(*weak)).contains_var(id))
     }
 
     /// Records that a type variable came from a literal.
-    pub fn mark_literal(&mut self, ty: &Type, kind: LiteralKind) {
+    pub fn mark_literal(
+        &mut self,
+        ty: &Type,
+        kind: LiteralKind,
+    ) {
         match ty {
-            Type::Var(id) => {
+            | Type::Var(id) => {
                 self.literals.insert(*id, kind);
-            }
-            Type::Scalar(Rep::Var(id), _) => {
+            },
+            | Type::Scalar(Rep::Var(id), _) => {
                 self.rep_literals.insert(*id, kind);
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
 
     /// The literal kind attached to a representation variable, if any.
     #[must_use]
-    pub fn rep_literal_kind(&self, rep: Rep) -> Option<LiteralKind> {
+    pub fn rep_literal_kind(
+        &self,
+        rep: Rep,
+    ) -> Option<LiteralKind> {
         match rep {
-            Rep::Var(id) => self.rep_literals.get(&id).copied(),
-            _ => None,
+            | Rep::Var(id) => self.rep_literals.get(&id).copied(),
+            | _ => None,
         }
     }
 
     /// The literal kind attached to a variable, if any.
     #[must_use]
-    pub fn literal_kind(&self, ty: &Type) -> Option<LiteralKind> {
+    pub fn literal_kind(
+        &self,
+        ty: &Type,
+    ) -> Option<LiteralKind> {
         match ty {
-            Type::Var(id) => self.literals.get(id).copied(),
-            Type::Scalar(Rep::Var(id), _) => self.rep_literals.get(id).copied(),
-            _ => None,
+            | Type::Var(id) => self.literals.get(id).copied(),
+            | Type::Scalar(Rep::Var(id), _) => self.rep_literals.get(id).copied(),
+            | _ => None,
         }
     }
 
     /// Resolves a type through all substitutions.
     #[must_use]
-    pub fn resolve(&self, ty: &Type) -> Type {
+    pub fn resolve(
+        &self,
+        ty: &Type,
+    ) -> Type {
         self.resolve_depth(ty, 0)
     }
 
-    fn resolve_depth(&self, ty: &Type, depth: u32) -> Type {
+    fn resolve_depth(
+        &self,
+        ty: &Type,
+        depth: u32,
+    ) -> Type {
         if depth > 128 {
             return ty.clone();
         }
         match ty {
-            Type::Var(id) => match self.subst.get(id) {
-                Some(bound) => self.resolve_depth(bound, depth + 1),
-                None => ty.clone(),
+            | Type::Var(id) => {
+                match self.subst.get(id) {
+                    | Some(bound) => self.resolve_depth(bound, depth + 1),
+                    | None => ty.clone(),
+                }
             },
-            Type::Scalar(rep, dim) => {
+            | Type::Scalar(rep, dim) => {
                 Type::Scalar(self.resolve_rep_depth(*rep, depth), self.dims.resolve(dim))
-            }
-            Type::Tensor { shape, elem } => Type::Tensor {
-                shape: self.resolve_shape_depth(shape, depth + 1),
-                elem: Box::new(self.resolve_depth(elem, depth + 1)),
             },
-            Type::Fn(params, ret) => Type::Fn(
-                params
-                    .iter()
-                    .map(|param| self.resolve_depth(param, depth + 1))
-                    .collect(),
-                Box::new(self.resolve_depth(ret, depth + 1)),
-            ),
-            Type::Record(row) => Type::Record(self.resolve_row_depth(row, depth)),
-            Type::Adt(id, args) => Type::Adt(
-                *id,
-                args.iter()
-                    .map(|arg| self.resolve_depth(arg, depth + 1))
-                    .collect(),
-            ),
-            Type::Io(inner) => Type::Io(Box::new(self.resolve_depth(inner, depth + 1))),
-            Type::Dyn(rep) => Type::Dyn(self.resolve_rep_depth(*rep, depth)),
-            _ => ty.clone(),
+            | Type::Tensor { shape, elem } => {
+                Type::Tensor {
+                    shape: self.resolve_shape_depth(shape, depth + 1),
+                    elem: Box::new(self.resolve_depth(elem, depth + 1)),
+                }
+            },
+            | Type::Fn(params, ret) => {
+                Type::Fn(
+                    params
+                        .iter()
+                        .map(|param| self.resolve_depth(param, depth + 1))
+                        .collect(),
+                    Box::new(self.resolve_depth(ret, depth + 1)),
+                )
+            },
+            | Type::Record(row) => Type::Record(self.resolve_row_depth(row, depth)),
+            | Type::Adt(id, args) => {
+                Type::Adt(
+                    *id,
+                    args.iter()
+                        .map(|arg| self.resolve_depth(arg, depth + 1))
+                        .collect(),
+                )
+            },
+            | Type::Io(inner) => Type::Io(Box::new(self.resolve_depth(inner, depth + 1))),
+            | Type::Dyn(rep) => Type::Dyn(self.resolve_rep_depth(*rep, depth)),
+            | _ => ty.clone(),
         }
     }
 
     /// Resolves a dimension through the dimension substitution.
     #[must_use]
-    pub fn resolve_dim(&self, dim: &Dim) -> Dim {
+    pub fn resolve_dim(
+        &self,
+        dim: &Dim,
+    ) -> Dim {
         self.dims.resolve(dim)
     }
 
     /// Resolves a representation through substitutions.
     #[must_use]
-    pub fn resolve_rep(&self, rep: Rep) -> Rep {
+    pub fn resolve_rep(
+        &self,
+        rep: Rep,
+    ) -> Rep {
         self.resolve_rep_depth(rep, 0)
     }
 
-    fn resolve_rep_depth(&self, rep: Rep, depth: u32) -> Rep {
+    fn resolve_rep_depth(
+        &self,
+        rep: Rep,
+        depth: u32,
+    ) -> Rep {
         if depth > 128 {
             return rep;
         }
         match rep {
-            Rep::Var(id) => match self.rep_subst.get(&id) {
-                Some(bound) => self.resolve_rep_depth(*bound, depth + 1),
-                None => rep,
+            | Rep::Var(id) => {
+                match self.rep_subst.get(&id) {
+                    | Some(bound) => self.resolve_rep_depth(*bound, depth + 1),
+                    | None => rep,
+                }
             },
-            other => other,
+            | other => other,
         }
     }
 
     /// Resolves a row through substitutions.
     #[must_use]
-    pub fn resolve_row(&self, row: &Row) -> Row {
+    pub fn resolve_row(
+        &self,
+        row: &Row,
+    ) -> Row {
         self.resolve_row_depth(row, 0)
     }
 
-    fn resolve_row_depth(&self, row: &Row, depth: u32) -> Row {
+    fn resolve_row_depth(
+        &self,
+        row: &Row,
+        depth: u32,
+    ) -> Row {
         if depth > 128 {
             return row.clone();
         }
         match row {
-            Row::Var(id) => match self.row_subst.get(id) {
-                Some(bound) => self.resolve_row_depth(bound, depth + 1),
-                None => row.clone(),
+            | Row::Var(id) => {
+                match self.row_subst.get(id) {
+                    | Some(bound) => self.resolve_row_depth(bound, depth + 1),
+                    | None => row.clone(),
+                }
             },
-            Row::Extend { label, ty, tail } => Row::Extend {
-                label: label.clone(),
-                ty: Box::new(self.resolve_depth(ty, 0)),
-                tail: Box::new(self.resolve_row_depth(tail, depth + 1)),
+            | Row::Extend { label, ty, tail } => {
+                Row::Extend {
+                    label: label.clone(),
+                    ty: Box::new(self.resolve_depth(ty, 0)),
+                    tail: Box::new(self.resolve_row_depth(tail, depth + 1)),
+                }
             },
-            Row::Empty => Row::Empty,
+            | Row::Empty => Row::Empty,
         }
     }
 
     /// Resolves a shape's type-level extents through the Nat substitution.
     #[must_use]
-    pub fn resolve_shape(&self, shape: &Shape) -> Shape {
+    pub fn resolve_shape(
+        &self,
+        shape: &Shape,
+    ) -> Shape {
         self.resolve_shape_depth(shape, 0)
     }
 
-    fn resolve_shape_depth(&self, shape: &Shape, depth: u32) -> Shape {
+    fn resolve_shape_depth(
+        &self,
+        shape: &Shape,
+        depth: u32,
+    ) -> Shape {
         if depth > 128 {
             return shape.clone();
         }
         match shape {
-            Shape::Rank(rank) => Shape::Rank(*rank),
-            Shape::Refined(items) => Shape::Refined(
-                items
-                    .iter()
-                    .map(|item| {
-                        item.as_ref()
-                            .map(|nat| self.resolve_nat_depth(nat, depth + 1))
-                    })
-                    .collect(),
-            ),
+            | Shape::Rank(rank) => Shape::Rank(*rank),
+            | Shape::Refined(items) => {
+                Shape::Refined(
+                    items
+                        .iter()
+                        .map(|item| {
+                            item.as_ref()
+                                .map(|nat| self.resolve_nat_depth(nat, depth + 1))
+                        })
+                        .collect(),
+                )
+            },
         }
     }
 
@@ -496,60 +585,74 @@ impl Infer {
 
     /// Resolves a Nat term through the substitution, folding literals.
     #[must_use]
-    pub fn resolve_nat(&self, nat: &Nat) -> Nat {
+    pub fn resolve_nat(
+        &self,
+        nat: &Nat,
+    ) -> Nat {
         self.resolve_nat_depth(nat, 0)
     }
 
-    fn resolve_nat_depth(&self, nat: &Nat, depth: u32) -> Nat {
+    fn resolve_nat_depth(
+        &self,
+        nat: &Nat,
+        depth: u32,
+    ) -> Nat {
         if depth > 128 {
             return nat.clone();
         }
         match nat {
-            Nat::Lit(value) => Nat::Lit(*value),
-            Nat::Var(id) => match self.nat_subst.get(id) {
-                Some(bound) => self.resolve_nat_depth(&bound.clone(), depth + 1),
-                None => nat.clone(),
+            | Nat::Lit(value) => Nat::Lit(*value),
+            | Nat::Var(id) => {
+                match self.nat_subst.get(id) {
+                    | Some(bound) => self.resolve_nat_depth(&bound.clone(), depth + 1),
+                    | None => nat.clone(),
+                }
             },
-            Nat::Add(left, right) => {
+            | Nat::Add(left, right) => {
                 let left = self.resolve_nat_depth(left, depth + 1);
                 let right = self.resolve_nat_depth(right, depth + 1);
                 match (left.as_const(), right.as_const()) {
-                    (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
-                    _ => Nat::Add(Box::new(left), Box::new(right)),
+                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
+                    | _ => Nat::Add(Box::new(left), Box::new(right)),
                 }
-            }
-            Nat::Mul(left, right) => {
+            },
+            | Nat::Mul(left, right) => {
                 let left = self.resolve_nat_depth(left, depth + 1);
                 let right = self.resolve_nat_depth(right, depth + 1);
                 match (left.as_const(), right.as_const()) {
-                    (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
-                    _ => Nat::Mul(Box::new(left), Box::new(right)),
+                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
+                    | _ => Nat::Mul(Box::new(left), Box::new(right)),
                 }
-            }
+            },
         }
     }
 
     /// The linear form of a Nat term, or `None` when it is not linear (a
     /// product of two variables, §3.5.1).
-    fn nat_linear(&self, nat: &Nat) -> Option<NatLinear> {
+    fn nat_linear(
+        &self,
+        nat: &Nat,
+    ) -> Option<NatLinear> {
         match self.resolve_nat(nat) {
-            Nat::Lit(value) => Some(NatLinear::constant(i128::try_from(value).ok()?)),
-            Nat::Var(id) => Some(NatLinear::variable(id)),
-            Nat::Add(left, right) => Some(
-                self.nat_linear(&left)?
-                    .add(self.nat_linear(&right)?)
-                    .normalised(),
-            ),
-            Nat::Mul(left, right) => {
+            | Nat::Lit(value) => Some(NatLinear::constant(i128::try_from(value).ok()?)),
+            | Nat::Var(id) => Some(NatLinear::variable(id)),
+            | Nat::Add(left, right) => {
+                Some(
+                    self.nat_linear(&left)?
+                        .add(self.nat_linear(&right)?)
+                        .normalised(),
+                )
+            },
+            | Nat::Mul(left, right) => {
                 let left = self.nat_linear(&left)?;
                 let right = self.nat_linear(&right)?;
                 match (left.coeffs.is_empty(), right.coeffs.is_empty()) {
-                    (true, true) => Some(NatLinear::constant(left.constant * right.constant)),
-                    (true, false) => Some(right.scale(left.constant).normalised()),
-                    (false, true) => Some(left.scale(right.constant).normalised()),
-                    (false, false) => None,
+                    | (true, true) => Some(NatLinear::constant(left.constant * right.constant)),
+                    | (true, false) => Some(right.scale(left.constant).normalised()),
+                    | (false, true) => Some(left.scale(right.constant).normalised()),
+                    | (false, false) => None,
                 }
-            }
+            },
         }
     }
 
@@ -565,7 +668,11 @@ impl Infer {
     /// [`UnifyError::NatMismatch`] when the equation has no non-negative
     /// integer solution, [`UnifyError::NatNonLinear`] when a product of two
     /// variables appears (the checker maps it to `E0304`).
-    pub fn unify_nat(&mut self, left: &Nat, right: &Nat) -> Result<(), UnifyError> {
+    pub fn unify_nat(
+        &mut self,
+        left: &Nat,
+        right: &Nat,
+    ) -> Result<(), UnifyError> {
         let left = self.resolve_nat(left);
         let right = self.resolve_nat(right);
         if left == right {
@@ -581,14 +688,19 @@ impl Infer {
 
     /// Solves one linear equation, or keeps it pending when it has several
     /// variables.
-    fn apply_nat_equation(&mut self, equation: NatLinear) -> Result<(), UnifyError> {
+    fn apply_nat_equation(
+        &mut self,
+        equation: NatLinear,
+    ) -> Result<(), UnifyError> {
         if equation.coeffs.is_empty() {
             return if equation.constant == 0 {
                 Ok(())
             } else {
                 Err(UnifyError::NatMismatch {
                     left: Nat::Lit(0),
-                    right: Nat::Lit(usize::try_from(equation.constant.unsigned_abs()).unwrap_or(usize::MAX)),
+                    right: Nat::Lit(
+                        usize::try_from(equation.constant.unsigned_abs()).unwrap_or(usize::MAX),
+                    ),
                 })
             };
         }
@@ -602,7 +714,10 @@ impl Infer {
 
     /// Solves an equation with exactly one variable, if the solution is a
     /// non-negative integer; binds it and retries the pending equations.
-    fn solve_isolated(&mut self, equation: NatLinear) -> Result<(), UnifyError> {
+    fn solve_isolated(
+        &mut self,
+        equation: NatLinear,
+    ) -> Result<(), UnifyError> {
         let (&id, &coefficient) = equation
             .coeffs
             .iter()
@@ -653,7 +768,8 @@ impl Infer {
                         return Err(UnifyError::NatMismatch {
                             left: Nat::Lit(0),
                             right: Nat::Lit(
-                                usize::try_from(reduced.constant.unsigned_abs()).unwrap_or(usize::MAX),
+                                usize::try_from(reduced.constant.unsigned_abs())
+                                    .unwrap_or(usize::MAX),
                             ),
                         });
                     }
@@ -675,7 +791,10 @@ impl Infer {
 
     /// [`Self::solve_isolated`] without re-entering [`Self::solve_pending_nat`]
     /// (the caller is already inside it).
-    fn solve_isolated_without_retry(&mut self, equation: NatLinear) -> Result<(), UnifyError> {
+    fn solve_isolated_without_retry(
+        &mut self,
+        equation: NatLinear,
+    ) -> Result<(), UnifyError> {
         let (&id, &coefficient) = equation.coeffs.iter().next().expect("one variable");
         let rhs = -equation.constant;
         if coefficient == 0 || rhs % coefficient != 0 {
@@ -714,7 +833,10 @@ impl Infer {
 
     /// The level at which a Nat variable was created, for generalisation.
     #[must_use]
-    pub fn nat_level(&self, id: u32) -> u32 {
+    pub fn nat_level(
+        &self,
+        id: u32,
+    ) -> u32 {
         self.nat_levels.get(&id).copied().unwrap_or(0)
     }
 
@@ -723,7 +845,11 @@ impl Infer {
     /// # Errors
     ///
     /// Returns a [`UnifyError`] describing the first difference found.
-    pub fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnifyError> {
+    pub fn unify(
+        &mut self,
+        left: &Type,
+        right: &Type,
+    ) -> Result<(), UnifyError> {
         let left = self.resolve(left);
         let right = self.resolve(right);
         if left == right {
@@ -733,16 +859,16 @@ impl Infer {
             return Ok(());
         }
         match (&left, &right) {
-            (Type::Var(id), other) | (other, Type::Var(id)) => self.bind_var(*id, other),
-            (Type::Scalar(rep_a, dim_a), Type::Scalar(rep_b, dim_b)) => {
+            | (Type::Var(id), other) | (other, Type::Var(id)) => self.bind_var(*id, other),
+            | (Type::Scalar(rep_a, dim_a), Type::Scalar(rep_b, dim_b)) => {
                 self.unify_rep(*rep_a, *rep_b)?;
                 self.unify_dim(dim_a, dim_b)
-            }
-            (Type::Tensor { shape: sa, elem: ea }, Type::Tensor { shape: sb, elem: eb }) => {
+            },
+            | (Type::Tensor { shape: sa, elem: ea }, Type::Tensor { shape: sb, elem: eb }) => {
                 self.unify_shape(sa, sb)?;
                 self.unify(ea, eb)
-            }
-            (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
+            },
+            | (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
                 if pa.len() != pb.len() {
                     return Err(UnifyError::Mismatch {
                         left: left.clone(),
@@ -753,9 +879,9 @@ impl Infer {
                     self.unify(a, b)?;
                 }
                 self.unify(ra, rb)
-            }
-            (Type::Record(ra), Type::Record(rb)) => self.unify_row(ra, rb),
-            (Type::Adt(ia, aa), Type::Adt(ib, ab)) => {
+            },
+            | (Type::Record(ra), Type::Record(rb)) => self.unify_row(ra, rb),
+            | (Type::Adt(ia, aa), Type::Adt(ib, ab)) => {
                 if ia != ib || aa.len() != ab.len() {
                     return Err(UnifyError::Mismatch {
                         left: left.clone(),
@@ -766,16 +892,18 @@ impl Infer {
                     self.unify(a, b)?;
                 }
                 Ok(())
-            }
-            (Type::Io(a), Type::Io(b)) => self.unify(a, b),
-            (Type::Point(a), Type::Point(b)) => self.unify_dim(a, b),
-            (Type::UnitOf(a), Type::UnitOf(b)) => self.unify_dim(a, b),
-            (Type::Dyn(a), Type::Dyn(b)) => self.unify_rep(*a, *b),
-            (Type::Param(a), Type::Param(b)) if a == b => Ok(()),
-            _ => Err(UnifyError::Mismatch {
-                left: left.clone(),
-                right: right.clone(),
-            }),
+            },
+            | (Type::Io(a), Type::Io(b)) => self.unify(a, b),
+            | (Type::Point(a), Type::Point(b)) => self.unify_dim(a, b),
+            | (Type::UnitOf(a), Type::UnitOf(b)) => self.unify_dim(a, b),
+            | (Type::Dyn(a), Type::Dyn(b)) => self.unify_rep(*a, *b),
+            | (Type::Param(a), Type::Param(b)) if a == b => Ok(()),
+            | _ => {
+                Err(UnifyError::Mismatch {
+                    left: left.clone(),
+                    right: right.clone(),
+                })
+            },
         }
     }
 
@@ -784,7 +912,11 @@ impl Infer {
     /// # Errors
     ///
     /// Returns the residual mismatch from [`DimUnifier::unify`].
-    pub fn unify_dim(&mut self, left: &Dim, right: &Dim) -> Result<(), UnifyError> {
+    pub fn unify_dim(
+        &mut self,
+        left: &Dim,
+        right: &Dim,
+    ) -> Result<(), UnifyError> {
         let left = self.dims.resolve(left);
         let right = self.dims.resolve(right);
         if left == right {
@@ -796,9 +928,7 @@ impl Infer {
             let level = self.level;
             self.dim_levels.entry(id).or_insert(level);
         }
-        self.dims
-            .unify(&left, &right)
-            .map_err(UnifyError::Dim)?;
+        self.dims.unify(&left, &right).map_err(UnifyError::Dim)?;
         self.propagate_weak_dims();
         Ok(())
     }
@@ -841,14 +971,18 @@ impl Infer {
     ///
     /// Fails when both sides are concrete and `variable` is below `other`, or
     /// when a literal variable has no reading above `other`.
-    pub fn constrain_rep(&mut self, variable: Rep, other: Rep) -> Result<(), UnifyError> {
+    pub fn constrain_rep(
+        &mut self,
+        variable: Rep,
+        other: Rep,
+    ) -> Result<(), UnifyError> {
         let variable = self.resolve_rep(variable);
         let other = self.resolve_rep(other);
         if variable == other {
             return Ok(());
         }
         match (variable, other) {
-            (Rep::Var(id), lower) => {
+            | (Rep::Var(id), lower) => {
                 if let Some(kind) = self.rep_literals.get(&id).copied() {
                     if let Rep::Var(_) = lower {
                         // Deferred: the other variable carries a literal
@@ -865,8 +999,8 @@ impl Infer {
                     bounds.push(lower);
                 }
                 Ok(())
-            }
-            (concrete, lower) => {
+            },
+            | (concrete, lower) => {
                 if concrete.at_least(lower) {
                     Ok(())
                 } else {
@@ -875,20 +1009,27 @@ impl Infer {
                         right: Type::Scalar(lower, Dim::one()),
                     })
                 }
-            }
+            },
         }
     }
 
     /// The lower bounds recorded for a representation variable.
     #[must_use]
-    pub fn rep_bounds(&self, rep: Rep) -> Vec<Rep> {
+    pub fn rep_bounds(
+        &self,
+        rep: Rep,
+    ) -> Vec<Rep> {
         match self.resolve_rep(rep) {
-            Rep::Var(id) => self.rep_lower.get(&id).cloned().unwrap_or_default(),
-            _ => Vec::new(),
+            | Rep::Var(id) => self.rep_lower.get(&id).cloned().unwrap_or_default(),
+            | _ => Vec::new(),
         }
     }
 
-    pub fn unify_rep(&mut self, left: Rep, right: Rep) -> Result<(), UnifyError> {
+    pub fn unify_rep(
+        &mut self,
+        left: Rep,
+        right: Rep,
+    ) -> Result<(), UnifyError> {
         let left = self.resolve_rep(left);
         let right = self.resolve_rep(right);
         if left == right {
@@ -900,7 +1041,7 @@ impl Infer {
             // binding the other way round loses it — the merged variable then
             // generalises instead of defaulting, so `let g = sqrt(dyn(4.0 m^2))`
             // became `∀ρ. Dyn<ρ>` instead of `Dyn<Float>`.
-            (Rep::Var(a), Rep::Var(b)) => {
+            | (Rep::Var(a), Rep::Var(b)) => {
                 let a_literal = self.rep_literals.contains_key(&a);
                 let b_literal = self.rep_literals.contains_key(&b);
                 if a_literal && !b_literal {
@@ -908,16 +1049,22 @@ impl Infer {
                 } else {
                     self.bind_rep(a, Rep::Var(b))
                 }
-            }
-            (Rep::Var(id), other) | (other, Rep::Var(id)) => self.bind_rep(id, other),
-            _ => Err(UnifyError::Mismatch {
-                left: Type::Scalar(left, Dim::one()),
-                right: Type::Scalar(right, Dim::one()),
-            }),
+            },
+            | (Rep::Var(id), other) | (other, Rep::Var(id)) => self.bind_rep(id, other),
+            | _ => {
+                Err(UnifyError::Mismatch {
+                    left: Type::Scalar(left, Dim::one()),
+                    right: Type::Scalar(right, Dim::one()),
+                })
+            },
         }
     }
 
-    fn bind_rep(&mut self, id: u32, value: Rep) -> Result<(), UnifyError> {
+    fn bind_rep(
+        &mut self,
+        id: u32,
+        value: Rep,
+    ) -> Result<(), UnifyError> {
         if let Rep::Var(other) = value {
             if other == id {
                 return Ok(());
@@ -938,9 +1085,10 @@ impl Infer {
             }
             let level = self.rep_levels.get(&id).copied().unwrap_or(0);
             self.rep_subst.insert(id, Rep::Var(other));
-            self.rep_levels.insert(other, level.min(
-                self.rep_levels.get(&other).copied().unwrap_or(u32::MAX),
-            ));
+            self.rep_levels.insert(
+                other,
+                level.min(self.rep_levels.get(&other).copied().unwrap_or(u32::MAX)),
+            );
             return Ok(());
         }
         // A concrete value must be above every concrete bound.
@@ -971,7 +1119,11 @@ impl Infer {
         Ok(())
     }
 
-    fn bind_var(&mut self, id: u32, ty: &Type) -> Result<(), UnifyError> {
+    fn bind_var(
+        &mut self,
+        id: u32,
+        ty: &Type,
+    ) -> Result<(), UnifyError> {
         let ty = self.resolve(ty);
         if let Type::Var(other) = ty {
             if other == id {
@@ -991,13 +1143,11 @@ impl Infer {
         }
         if let Some(kind) = self.literals.get(&id).copied() {
             match &ty {
-                Type::Scalar(rep, dim) => {
+                | Type::Scalar(rep, dim) => {
                     if !kind.is_quantity() && !dim.is_one() {
                         // A bare literal is dimensionless: an unknown dimension
                         // is forced to 1, a concrete one is an error.
-                        if dim.is_concrete()
-                            || self.dims.unify(dim, &Dim::one()).is_err()
-                        {
+                        if dim.is_concrete() || self.dims.unify(dim, &Dim::one()).is_err() {
                             return Err(UnifyError::LiteralMismatch {
                                 kind,
                                 requested: ty.clone(),
@@ -1013,13 +1163,13 @@ impl Infer {
                             requested: ty.clone(),
                         });
                     }
-                }
-                _ => {
+                },
+                | _ => {
                     return Err(UnifyError::LiteralMismatch {
                         kind,
                         requested: ty.clone(),
                     });
-                }
+                },
             }
         }
         let level = self.levels.get(&id).copied().unwrap_or(0);
@@ -1028,87 +1178,105 @@ impl Infer {
         Ok(())
     }
 
-    fn occurs(&self, id: u32, ty: &Type) -> bool {
+    fn occurs(
+        &self,
+        id: u32,
+        ty: &Type,
+    ) -> bool {
         match self.resolve(ty) {
-            Type::Var(other) => other == id,
-            Type::Scalar(_, dim) => dim.contains_var(id),
-            Type::Tensor { elem, .. } => self.occurs(id, &elem),
-            Type::Fn(params, ret) => {
+            | Type::Var(other) => other == id,
+            | Type::Scalar(_, dim) => dim.contains_var(id),
+            | Type::Tensor { elem, .. } => self.occurs(id, &elem),
+            | Type::Fn(params, ret) => {
                 params.iter().any(|param| self.occurs(id, param)) || self.occurs(id, &ret)
-            }
-            Type::Record(row) => self.occurs_row(id, &row),
-            Type::Adt(_, args) => args.iter().any(|arg| self.occurs(id, arg)),
-            Type::Io(inner) => self.occurs(id, &inner),
-            Type::Point(dim) | Type::UnitOf(dim) => dim.contains_var(id),
-            _ => false,
+            },
+            | Type::Record(row) => self.occurs_row(id, &row),
+            | Type::Adt(_, args) => args.iter().any(|arg| self.occurs(id, arg)),
+            | Type::Io(inner) => self.occurs(id, &inner),
+            | Type::Point(dim) | Type::UnitOf(dim) => dim.contains_var(id),
+            | _ => false,
         }
     }
 
-    fn occurs_row(&self, id: u32, row: &Row) -> bool {
+    fn occurs_row(
+        &self,
+        id: u32,
+        row: &Row,
+    ) -> bool {
         match self.resolve_row(row) {
-            Row::Empty => false,
-            Row::Var(other) => other == id,
-            Row::Extend { ty, tail, .. } => {
-                self.occurs(id, &ty) || self.occurs_row(id, &tail)
-            }
+            | Row::Empty => false,
+            | Row::Var(other) => other == id,
+            | Row::Extend { ty, tail, .. } => self.occurs(id, &ty) || self.occurs_row(id, &tail),
         }
     }
 
-    fn lower_levels(&mut self, ty: &Type, level: u32) {
+    fn lower_levels(
+        &mut self,
+        ty: &Type,
+        level: u32,
+    ) {
         match ty {
-            Type::Var(id) => {
+            | Type::Var(id) => {
                 if let Some(existing) = self.levels.get_mut(id) {
                     *existing = (*existing).min(level);
                 } else {
                     self.levels.insert(*id, level);
                 }
-            }
-            Type::Scalar(rep, dim) => {
+            },
+            | Type::Scalar(rep, dim) => {
                 self.lower_rep_levels(*rep, level);
                 for id in dim.vars() {
                     let entry = self.dim_levels.entry(id).or_insert(level);
                     *entry = (*entry).min(level);
                 }
-            }
-            Type::Tensor { elem, .. } => self.lower_levels(elem, level),
-            Type::Fn(params, ret) => {
+            },
+            | Type::Tensor { elem, .. } => self.lower_levels(elem, level),
+            | Type::Fn(params, ret) => {
                 for param in params {
                     self.lower_levels(param, level);
                 }
                 self.lower_levels(ret, level);
-            }
-            Type::Record(row) => self.lower_row_levels(row, level),
-            Type::Adt(_, args) => {
+            },
+            | Type::Record(row) => self.lower_row_levels(row, level),
+            | Type::Adt(_, args) => {
                 for arg in args {
                     self.lower_levels(arg, level);
                 }
-            }
-            Type::Io(inner) => self.lower_levels(inner, level),
-            Type::Point(dim) | Type::UnitOf(dim) => {
+            },
+            | Type::Io(inner) => self.lower_levels(inner, level),
+            | Type::Point(dim) | Type::UnitOf(dim) => {
                 for id in dim.vars() {
                     let entry = self.dim_levels.entry(id).or_insert(level);
                     *entry = (*entry).min(level);
                 }
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
 
-    fn lower_row_levels(&mut self, row: &Row, level: u32) {
+    fn lower_row_levels(
+        &mut self,
+        row: &Row,
+        level: u32,
+    ) {
         match row {
-            Row::Empty => {}
-            Row::Var(id) => {
+            | Row::Empty => {},
+            | Row::Var(id) => {
                 let entry = self.row_levels.entry(*id).or_insert(level);
                 *entry = (*entry).min(level);
-            }
-            Row::Extend { ty, tail, .. } => {
+            },
+            | Row::Extend { ty, tail, .. } => {
                 self.lower_levels(ty, level);
                 self.lower_row_levels(tail, level);
-            }
+            },
         }
     }
 
-    fn lower_rep_levels(&mut self, rep: Rep, level: u32) {
+    fn lower_rep_levels(
+        &mut self,
+        rep: Rep,
+        level: u32,
+    ) {
         if let Rep::Var(id) = rep {
             let entry = self.rep_levels.entry(id).or_insert(level);
             *entry = (*entry).min(level);
@@ -1127,11 +1295,15 @@ impl Infer {
     /// # Errors
     ///
     /// Fails when the ranks differ or when two known extents differ.
-    pub fn unify_shape(&mut self, left: &Shape, right: &Shape) -> Result<(), UnifyError> {
+    pub fn unify_shape(
+        &mut self,
+        left: &Shape,
+        right: &Shape,
+    ) -> Result<(), UnifyError> {
         match (left, right) {
-            (Shape::Rank(a), Shape::Rank(b)) if a == b => Ok(()),
+            | (Shape::Rank(a), Shape::Rank(b)) if a == b => Ok(()),
             // Same rank, one side knows the extents — safe in either direction.
-            (Shape::Refined(items), Shape::Rank(rank))
+            | (Shape::Refined(items), Shape::Rank(rank))
             | (Shape::Rank(rank), Shape::Refined(items)) => {
                 if usize::try_from(*rank).unwrap_or(usize::MAX) == items.len() {
                     Ok(())
@@ -1141,8 +1313,8 @@ impl Infer {
                         right: right.clone(),
                     })
                 }
-            }
-            (Shape::Refined(a), Shape::Refined(b)) => {
+            },
+            | (Shape::Refined(a), Shape::Refined(b)) => {
                 if a.len() != b.len() {
                     return Err(UnifyError::ShapeMismatch {
                         left: left.clone(),
@@ -1151,21 +1323,27 @@ impl Infer {
                 }
                 for (x, y) in a.iter().zip(b.iter()) {
                     match (x, y) {
-                        (Some(x), Some(y)) => self.unify_nat(x, y)?,
+                        | (Some(x), Some(y)) => self.unify_nat(x, y)?,
                         // `?` stays compatible with any extent (§3.5.1).
-                        _ => {}
+                        | _ => {},
                     }
                 }
                 Ok(())
-            }
-            _ => Err(UnifyError::ShapeMismatch {
-                left: left.clone(),
-                right: right.clone(),
-            }),
+            },
+            | _ => {
+                Err(UnifyError::ShapeMismatch {
+                    left: left.clone(),
+                    right: right.clone(),
+                })
+            },
         }
     }
 
-    fn unify_row(&mut self, left: &Row, right: &Row) -> Result<(), UnifyError> {
+    fn unify_row(
+        &mut self,
+        left: &Row,
+        right: &Row,
+    ) -> Result<(), UnifyError> {
         let left = self.resolve_row(left);
         let right = self.resolve_row(right);
         if left == right {
@@ -1178,8 +1356,8 @@ impl Infer {
 
         for (label, ty) in &left_fields {
             match right_fields.iter().find(|(name, _)| name == label) {
-                Some((_, other)) => self.unify(ty, other)?,
-                None => {
+                | Some((_, other)) => self.unify(ty, other)?,
+                | None => {
                     let Some(tail) = right_tail else {
                         return Err(UnifyError::MissingField {
                             field: label.clone(),
@@ -1200,7 +1378,7 @@ impl Infer {
                     };
                     self.bind_row(tail, extension)?;
                     return self.unify_row(&left, &self.resolve_row(&right));
-                }
+                },
             }
         }
         for (label, ty) in &right_fields {
@@ -1226,14 +1404,14 @@ impl Infer {
             return self.unify_row(&self.resolve_row(&left), &right);
         }
         match (left_tail, right_tail) {
-            (Some(a), Some(b)) if a != b => {
+            | (Some(a), Some(b)) if a != b => {
                 // The merged tail keeps both sides' lacks conditions.
                 for label in self.lacks.get(&b).cloned().unwrap_or_default() {
                     self.require_lacks(a, &label)?;
                 }
                 self.bind_row(a, Row::Var(b))
-            }
-            _ => Ok(()),
+            },
+            | _ => Ok(()),
         }
     }
 
@@ -1243,8 +1421,17 @@ impl Infer {
     ///
     /// Fails when the condition is already violated — the row would end up
     /// with two fields of the same name, which is `E0208`.
-    pub fn require_lacks(&mut self, id: u32, label: &str) -> Result<(), UnifyError> {
-        if self.resolve_row(&Row::Var(id)).fields().iter().any(|(name, _)| name == label) {
+    pub fn require_lacks(
+        &mut self,
+        id: u32,
+        label: &str,
+    ) -> Result<(), UnifyError> {
+        if self
+            .resolve_row(&Row::Var(id))
+            .fields()
+            .iter()
+            .any(|(name, _)| name == label)
+        {
             return Err(UnifyError::DuplicateField {
                 field: label.to_string(),
             });
@@ -1258,7 +1445,10 @@ impl Infer {
 
     /// The labels a row variable must not contain.
     #[must_use]
-    pub fn lacks_of(&self, id: u32) -> Vec<String> {
+    pub fn lacks_of(
+        &self,
+        id: u32,
+    ) -> Vec<String> {
         self.lacks.get(&id).cloned().unwrap_or_default()
     }
 
@@ -1267,7 +1457,12 @@ impl Infer {
     /// # Errors
     ///
     /// Fails when the row cannot absorb the field (a duplicate label).
-    pub fn extend_row(&mut self, tail: u32, label: &str, ty: Type) -> Result<(), UnifyError> {
+    pub fn extend_row(
+        &mut self,
+        tail: u32,
+        label: &str,
+        ty: Type,
+    ) -> Result<(), UnifyError> {
         let fresh = self.fresh_row();
         if let Some(fresh_id) = row_id(&fresh) {
             self.require_lacks(fresh_id, label)?;
@@ -1282,7 +1477,11 @@ impl Infer {
         )
     }
 
-    fn bind_row(&mut self, id: u32, row: Row) -> Result<(), UnifyError> {
+    fn bind_row(
+        &mut self,
+        id: u32,
+        row: Row,
+    ) -> Result<(), UnifyError> {
         let row = self.resolve_row(&row);
         if let Row::Var(other) = row {
             if other == id {
@@ -1314,18 +1513,23 @@ impl Infer {
         Ok(())
     }
 
-    fn row_occurs(&self, id: u32, row: &Row) -> bool {
+    fn row_occurs(
+        &self,
+        id: u32,
+        row: &Row,
+    ) -> bool {
         match self.resolve_row(row) {
-            Row::Empty => false,
-            Row::Var(other) => other == id,
-            Row::Extend { ty, tail, .. } => {
-                self.occurs(id, &ty) || self.row_occurs(id, &tail)
-            }
+            | Row::Empty => false,
+            | Row::Var(other) => other == id,
+            | Row::Extend { ty, tail, .. } => self.occurs(id, &ty) || self.row_occurs(id, &tail),
         }
     }
 
     /// Instantiates a scheme with fresh variables at the current level.
-    pub fn instantiate(&mut self, scheme: &Scheme) -> Type {
+    pub fn instantiate(
+        &mut self,
+        scheme: &Scheme,
+    ) -> Type {
         self.instantiate_scheme(scheme).0
     }
 
@@ -1333,7 +1537,10 @@ impl Infer {
     ///
     /// The constraints come back with the same fresh variables, so the caller
     /// can solve them against the instance table (§3.8.2).
-    pub fn instantiate_scheme(&mut self, scheme: &Scheme) -> (Type, Vec<Constraint>) {
+    pub fn instantiate_scheme(
+        &mut self,
+        scheme: &Scheme,
+    ) -> (Type, Vec<Constraint>) {
         if scheme.is_closed() {
             return (scheme.ty.clone(), Vec::new());
         }
@@ -1365,13 +1572,15 @@ impl Infer {
         let constraints = scheme
             .constraints
             .iter()
-            .map(|constraint| Constraint {
-                class: constraint.class.clone(),
-                args: constraint
-                    .args
-                    .iter()
-                    .map(|arg| substitute(arg, &type_map, &dim_map, &row_map, &nat_map))
-                    .collect(),
+            .map(|constraint| {
+                Constraint {
+                    class: constraint.class.clone(),
+                    args: constraint
+                        .args
+                        .iter()
+                        .map(|arg| substitute(arg, &type_map, &dim_map, &row_map, &nat_map))
+                        .collect(),
+                }
             })
             .collect();
         (ty, constraints)
@@ -1384,14 +1593,21 @@ impl Infer {
     /// are weak by definition (§3.3.3) and the second must default at the end
     /// of the declaration (§3.10.2).
     #[must_use]
-    pub fn generalize(&self, ty: &Type) -> Scheme {
+    pub fn generalize(
+        &self,
+        ty: &Type,
+    ) -> Scheme {
         self.generalize_with(ty, Vec::new())
     }
 
     /// Generalises a type together with the class constraints that belong to
     /// it.
     #[must_use]
-    pub fn generalize_with(&self, ty: &Type, constraints: Vec<Constraint>) -> Scheme {
+    pub fn generalize_with(
+        &self,
+        ty: &Type,
+        constraints: Vec<Constraint>,
+    ) -> Scheme {
         self.generalize_at(self.level, ty, constraints)
     }
 
@@ -1401,7 +1617,12 @@ impl Infer {
     /// remaining declarations are still being checked at level 1, because a
     /// later declaration must see its polymorphic type.
     #[must_use]
-    pub fn generalize_at(&self, level: u32, ty: &Type, constraints: Vec<Constraint>) -> Scheme {
+    pub fn generalize_at(
+        &self,
+        level: u32,
+        ty: &Type,
+        constraints: Vec<Constraint>,
+    ) -> Scheme {
         let mut vars = Vec::new();
         let mut dims = Vec::new();
         let mut rows = Vec::new();
@@ -1452,12 +1673,12 @@ impl Infer {
         };
         let nat_var = |id: u32| self.nat_levels.get(&id).copied().unwrap_or(0) > level;
         match ty {
-            Type::Var(id) => {
+            | Type::Var(id) => {
                 if type_var(*id) && !vars.contains(id) {
                     vars.push(*id);
                 }
-            }
-            Type::Scalar(rep, dim) => {
+            },
+            | Type::Scalar(rep, dim) => {
                 if let Rep::Var(id) = rep {
                     if rep_var(*id) && !vars.contains(id) {
                         vars.push(*id);
@@ -1468,8 +1689,8 @@ impl Infer {
                         dims.push(id);
                     }
                 }
-            }
-            Type::Tensor { shape, elem } => {
+            },
+            | Type::Tensor { shape, elem } => {
                 // A shape extent variable that is still free generalises with
                 // the binding, exactly like a dimension variable (§3.5.1).
                 if let Shape::Refined(items) = shape {
@@ -1477,8 +1698,8 @@ impl Infer {
                         for id in nat.vars() {
                             let resolved = self.resolve_nat(&Nat::Var(id));
                             let free = match resolved {
-                                Nat::Var(free) => free,
-                                _ => continue,
+                                | Nat::Var(free) => free,
+                                | _ => continue,
                             };
                             if nat_var(free) && !nats.contains(&free) {
                                 nats.push(free);
@@ -1487,37 +1708,37 @@ impl Infer {
                     }
                 }
                 self.collect_generalizable(elem, level, vars, dims, rows, nats);
-            }
-            Type::Fn(params, ret) => {
+            },
+            | Type::Fn(params, ret) => {
                 for param in params {
                     self.collect_generalizable(param, level, vars, dims, rows, nats);
                 }
                 self.collect_generalizable(ret, level, vars, dims, rows, nats);
-            }
-            Type::Record(row) => {
+            },
+            | Type::Record(row) => {
                 self.collect_row(row, level, vars, dims, rows, nats);
-            }
-            Type::Adt(_, args) => {
+            },
+            | Type::Adt(_, args) => {
                 for arg in args {
                     self.collect_generalizable(arg, level, vars, dims, rows, nats);
                 }
-            }
-            Type::Io(inner) => {
+            },
+            | Type::Io(inner) => {
                 self.collect_generalizable(inner, level, vars, dims, rows, nats);
-            }
-            Type::Point(dim) | Type::UnitOf(dim) => {
+            },
+            | Type::Point(dim) | Type::UnitOf(dim) => {
                 for id in dim.vars() {
                     if dim_var(id) && !dims.contains(&id) {
                         dims.push(id);
                     }
                 }
-            }
-            Type::Dyn(Rep::Var(id)) => {
+            },
+            | Type::Dyn(Rep::Var(id)) => {
                 if rep_var(*id) && !vars.contains(id) {
                     vars.push(*id);
                 }
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
 
@@ -1532,19 +1753,19 @@ impl Infer {
         nats: &mut Vec<u32>,
     ) {
         match row {
-            Row::Empty => {}
-            Row::Var(id) => {
+            | Row::Empty => {},
+            | Row::Var(id) => {
                 if !self.weak.contains(id)
                     && self.row_levels.get(id).copied().unwrap_or(0) > level
                     && !rows.contains(id)
                 {
                     rows.push(*id);
                 }
-            }
-            Row::Extend { ty, tail, .. } => {
+            },
+            | Row::Extend { ty, tail, .. } => {
                 self.collect_generalizable(ty, level, vars, dims, rows, nats);
                 self.collect_row(tail, level, vars, dims, rows, nats);
-            }
+            },
         }
     }
 
@@ -1552,7 +1773,10 @@ impl Infer {
     ///
     /// Returns the defaulted type and the ids of dimension variables that were
     /// defaulted to `1`, which the caller reports as `W0301`.
-    pub fn default_type(&mut self, ty: &Type) -> (Type, Vec<u32>) {
+    pub fn default_type(
+        &mut self,
+        ty: &Type,
+    ) -> (Type, Vec<u32>) {
         let mut warnings = Vec::new();
         let defaulted = self.default_inner(ty, &Scheme::mono(ty.clone()), &mut warnings, 0);
         (defaulted, warnings)
@@ -1563,19 +1787,24 @@ impl Infer {
     /// This is the module-end step of PLAN D4: generalisation runs first, so
     /// `<d>`-polymorphic functions keep their dimension variables and only
     /// weak and literal variables are defaulted.
-    pub fn default_scheme(&mut self, scheme: &Scheme) -> (Scheme, Vec<u32>) {
+    pub fn default_scheme(
+        &mut self,
+        scheme: &Scheme,
+    ) -> (Scheme, Vec<u32>) {
         let mut warnings = Vec::new();
         let ty = self.default_inner(&scheme.ty, scheme, &mut warnings, 0);
         let constraints = scheme
             .constraints
             .iter()
-            .map(|constraint| Constraint {
-                class: constraint.class.clone(),
-                args: constraint
-                    .args
-                    .iter()
-                    .map(|arg| self.default_inner(arg, scheme, &mut warnings, 0))
-                    .collect(),
+            .map(|constraint| {
+                Constraint {
+                    class: constraint.class.clone(),
+                    args: constraint
+                        .args
+                        .iter()
+                        .map(|arg| self.default_inner(arg, scheme, &mut warnings, 0))
+                        .collect(),
+                }
             })
             .collect();
         (
@@ -1603,12 +1832,12 @@ impl Infer {
         }
         let quantified_type = |id: u32| scheme.vars.contains(&id);
         match self.resolve(ty) {
-            Type::Var(id) => {
+            | Type::Var(id) => {
                 if quantified_type(id) || !self.above_floor(id) {
                     return Type::Var(id);
                 }
                 match self.literals.get(&id).copied() {
-                    Some(kind) => {
+                    | Some(kind) => {
                         let rep = Rep::default_for_literal(kind);
                         let defaulted = Type::Scalar(rep, Dim::one());
                         // Record the default as a substitution: a deferred
@@ -1616,60 +1845,68 @@ impl Infer {
                         // the defaulted type too.
                         self.subst.insert(id, defaulted.clone());
                         defaulted
-                    }
+                    },
                     // A type variable with no literal constraint cannot be
                     // defaulted to `Real`: §3.10.2 only defaults representation,
                     // dimension, natural and row variables. It stays free so the
                     // caller can report `E0304`.
-                    None => Type::Var(id),
+                    | None => Type::Var(id),
                 }
-            }
-            Type::Scalar(rep, dim) => {
+            },
+            | Type::Scalar(rep, dim) => {
                 let rep = match self.resolve_rep(rep) {
-                    Rep::Var(id) if quantified_type(id) || !self.above_floor(id) => Rep::Var(id),
-                    Rep::Var(id) => self.default_rep(id),
-                    other => other,
+                    | Rep::Var(id) if quantified_type(id) || !self.above_floor(id) => Rep::Var(id),
+                    | Rep::Var(id) => self.default_rep(id),
+                    | other => other,
                 };
                 let dim = self.default_dim(&dim, scheme, warnings);
                 Type::Scalar(rep, dim)
-            }
-            Type::Tensor { shape, elem } => Type::Tensor {
-                // §3.10.2 rule 6: an unquantified Nat variable is *not*
-                // defaulted — the checker reports `E0304` for it. Resolving the
-                // shape here only applies the substitutions already known.
-                shape: self.resolve_shape(&shape),
-                elem: Box::new(self.default_inner(&elem, scheme, warnings, depth + 1)),
             },
-            Type::Fn(params, ret) => Type::Fn(
-                params
-                    .iter()
-                    .map(|param| self.default_inner(param, scheme, warnings, depth + 1))
-                    .collect(),
-                Box::new(self.default_inner(&ret, scheme, warnings, depth + 1)),
-            ),
-            Type::Record(row) => {
-                Type::Record(self.default_row(&row, scheme, warnings, depth))
-            }
-            Type::Adt(id, args) => Type::Adt(
-                id,
-                args.iter()
-                    .map(|arg| self.default_inner(arg, scheme, warnings, depth + 1))
-                    .collect(),
-            ),
-            Type::Io(inner) => Type::Io(Box::new(self.default_inner(
-                &inner,
-                scheme,
-                warnings,
-                depth + 1,
-            ))),
-            Type::Point(dim) => Type::Point(self.default_dim(&dim, scheme, warnings)),
-            Type::UnitOf(dim) => Type::UnitOf(self.default_dim(&dim, scheme, warnings)),
-            Type::Dyn(rep) => match self.resolve_rep(rep) {
-                Rep::Var(id) if quantified_type(id) => Type::Dyn(Rep::Var(id)),
-                Rep::Var(id) => Type::Dyn(self.default_rep(id)),
-                other => Type::Dyn(other),
+            | Type::Tensor { shape, elem } => {
+                Type::Tensor {
+                    // §3.10.2 rule 6: an unquantified Nat variable is *not*
+                    // defaulted — the checker reports `E0304` for it. Resolving the
+                    // shape here only applies the substitutions already known.
+                    shape: self.resolve_shape(&shape),
+                    elem: Box::new(self.default_inner(&elem, scheme, warnings, depth + 1)),
+                }
             },
-            other => other,
+            | Type::Fn(params, ret) => {
+                Type::Fn(
+                    params
+                        .iter()
+                        .map(|param| self.default_inner(param, scheme, warnings, depth + 1))
+                        .collect(),
+                    Box::new(self.default_inner(&ret, scheme, warnings, depth + 1)),
+                )
+            },
+            | Type::Record(row) => Type::Record(self.default_row(&row, scheme, warnings, depth)),
+            | Type::Adt(id, args) => {
+                Type::Adt(
+                    id,
+                    args.iter()
+                        .map(|arg| self.default_inner(arg, scheme, warnings, depth + 1))
+                        .collect(),
+                )
+            },
+            | Type::Io(inner) => {
+                Type::Io(Box::new(self.default_inner(
+                    &inner,
+                    scheme,
+                    warnings,
+                    depth + 1,
+                )))
+            },
+            | Type::Point(dim) => Type::Point(self.default_dim(&dim, scheme, warnings)),
+            | Type::UnitOf(dim) => Type::UnitOf(self.default_dim(&dim, scheme, warnings)),
+            | Type::Dyn(rep) => {
+                match self.resolve_rep(rep) {
+                    | Rep::Var(id) if quantified_type(id) => Type::Dyn(Rep::Var(id)),
+                    | Rep::Var(id) => Type::Dyn(self.default_rep(id)),
+                    | other => Type::Dyn(other),
+                }
+            },
+            | other => other,
         }
     }
 
@@ -1681,9 +1918,12 @@ impl Infer {
     /// [`Self::default_rep`], it is defined for a variable that sits only in a
     /// body and so was never visited by scheme defaulting.
     #[must_use]
-    pub fn literal_representation(&mut self, rep: Rep) -> Option<Rep> {
+    pub fn literal_representation(
+        &mut self,
+        rep: Rep,
+    ) -> Option<Rep> {
         match self.resolve_rep(rep) {
-            Rep::Var(id) => {
+            | Rep::Var(id) => {
                 let kind = self.rep_literals.get(&id).copied()?;
                 let mut lower: Vec<Rep> = Vec::new();
                 for bound in self.rep_lower.get(&id).cloned().unwrap_or_default() {
@@ -1698,13 +1938,16 @@ impl Infer {
                     .find(|candidate| kind.accepts_rep(*candidate))?;
                 let _ = self.rep_subst.insert(id, chosen);
                 Some(chosen)
-            }
-            concrete => Some(concrete),
+            },
+            | concrete => Some(concrete),
         }
     }
 
     /// The representation a variable defaults to, honouring its lower bounds.
-    fn default_rep(&mut self, id: u32) -> Rep {
+    fn default_rep(
+        &mut self,
+        id: u32,
+    ) -> Rep {
         let mut lower: Vec<Rep> = Vec::new();
         for bound in self.rep_lower.get(&id).cloned().unwrap_or_default() {
             self.collect_rep_bounds(bound, &mut lower, 0);
@@ -1731,25 +1974,35 @@ impl Infer {
         chosen
     }
 
-    fn collect_rep_bounds(&self, rep: Rep, out: &mut Vec<Rep>, depth: u32) {
+    fn collect_rep_bounds(
+        &self,
+        rep: Rep,
+        out: &mut Vec<Rep>,
+        depth: u32,
+    ) {
         if depth > 16 {
             return;
         }
         match self.resolve_rep(rep) {
-            Rep::Var(id) => {
+            | Rep::Var(id) => {
                 for bound in self.rep_lower.get(&id).cloned().unwrap_or_default() {
                     self.collect_rep_bounds(bound, out, depth + 1);
                 }
-            }
-            concrete => {
+            },
+            | concrete => {
                 if !out.contains(&concrete) {
                     out.push(concrete);
                 }
-            }
+            },
         }
     }
 
-    fn default_dim(&mut self, dim: &Dim, scheme: &Scheme, warnings: &mut Vec<u32>) -> Dim {
+    fn default_dim(
+        &mut self,
+        dim: &Dim,
+        scheme: &Scheme,
+        warnings: &mut Vec<u32>,
+    ) -> Dim {
         for id in dim.vars() {
             if scheme.dims.contains(&id) || self.dim_is_bound(id) || !self.above_floor(id) {
                 continue;
@@ -1764,20 +2017,28 @@ impl Infer {
         self.dims.resolve(dim)
     }
 
-    fn default_row(&mut self, row: &Row, scheme: &Scheme, warnings: &mut Vec<u32>, depth: u32) -> Row {
+    fn default_row(
+        &mut self,
+        row: &Row,
+        scheme: &Scheme,
+        warnings: &mut Vec<u32>,
+        depth: u32,
+    ) -> Row {
         match self.resolve_row(row) {
-            Row::Empty => Row::Empty,
-            Row::Var(id) => {
+            | Row::Empty => Row::Empty,
+            | Row::Var(id) => {
                 if scheme.rows.contains(&id) || !self.above_floor(id) {
                     Row::Var(id)
                 } else {
                     Row::Empty
                 }
-            }
-            Row::Extend { label, ty, tail } => Row::Extend {
-                label,
-                ty: Box::new(self.default_inner(&ty, scheme, warnings, depth + 1)),
-                tail: Box::new(self.default_row(&tail, scheme, warnings, depth)),
+            },
+            | Row::Extend { label, ty, tail } => {
+                Row::Extend {
+                    label,
+                    ty: Box::new(self.default_inner(&ty, scheme, warnings, depth + 1)),
+                    tail: Box::new(self.default_row(&tail, scheme, warnings, depth)),
+                }
             },
         }
     }
@@ -1787,7 +2048,10 @@ impl Infer {
     /// Defaulting an inner `let` must not touch a variable that belongs to the
     /// enclosing function: that one is generalised, or defaulted, at the
     /// enclosing declaration's end.
-    fn above_floor(&self, id: u32) -> bool {
+    fn above_floor(
+        &self,
+        id: u32,
+    ) -> bool {
         let level = self
             .levels
             .get(&id)
@@ -1799,7 +2063,10 @@ impl Infer {
         level > self.level
     }
 
-    fn dim_is_bound(&self, id: u32) -> bool {
+    fn dim_is_bound(
+        &self,
+        id: u32,
+    ) -> bool {
         !self.dims.resolve(&Dim::var(id)).contains_var(id)
     }
 
@@ -1835,7 +2102,10 @@ impl Infer {
     /// attempt already bound would make a "fresh" variable arrive pre-bound,
     /// which is exactly the bug that made two `value_in` calls share a
     /// dimension.
-    pub fn restore(&mut self, snapshot: &Self) {
+    pub fn restore(
+        &mut self,
+        snapshot: &Self,
+    ) {
         let next = self.next.max(snapshot.next);
         *self = snapshot.clone();
         self.next = next;
@@ -1848,7 +2118,6 @@ impl Infer {
     }
 }
 
-
 fn substitute(
     ty: &Type,
     types: &HashMap<u32, u32>,
@@ -1856,61 +2125,77 @@ fn substitute(
     rows: &HashMap<u32, u32>,
     nats: &HashMap<u32, Nat>,
 ) -> Type {
-    let substitute_shape = |shape: &Shape| match shape {
-        Shape::Rank(rank) => Shape::Rank(*rank),
-        Shape::Refined(items) => Shape::Refined(
-            items
-                .iter()
-                .map(|item| item.as_ref().map(|nat| nat.substitute(nats)))
-                .collect(),
-        ),
+    let substitute_shape = |shape: &Shape| {
+        match shape {
+            | Shape::Rank(rank) => Shape::Rank(*rank),
+            | Shape::Refined(items) => {
+                Shape::Refined(
+                    items
+                        .iter()
+                        .map(|item| item.as_ref().map(|nat| nat.substitute(nats)))
+                        .collect(),
+                )
+            },
+        }
     };
     match ty {
-        Type::Var(id) => match types.get(id) {
-            Some(fresh) => Type::Var(*fresh),
-            None => ty.clone(),
+        | Type::Var(id) => {
+            match types.get(id) {
+                | Some(fresh) => Type::Var(*fresh),
+                | None => ty.clone(),
+            }
         },
-        Type::Scalar(rep, dim) => {
+        | Type::Scalar(rep, dim) => {
             let rep = match rep {
-                Rep::Var(id) => match types.get(id) {
-                    Some(fresh) => Rep::Var(*fresh),
-                    None => *rep,
+                | Rep::Var(id) => {
+                    match types.get(id) {
+                        | Some(fresh) => Rep::Var(*fresh),
+                        | None => *rep,
+                    }
                 },
-                other => *other,
+                | other => *other,
             };
             let dim = dim.substitute(|id| dims.get(&id).map(|fresh| Dim::var(*fresh)));
             Type::Scalar(rep, dim)
-        }
-        Type::Tensor { shape, elem } => Type::Tensor {
-            shape: substitute_shape(shape),
-            elem: Box::new(substitute(elem, types, dims, rows, nats)),
         },
-        Type::Fn(params, ret) => Type::Fn(
-            params
-                .iter()
-                .map(|param| substitute(param, types, dims, rows, nats))
-                .collect(),
-            Box::new(substitute(ret, types, dims, rows, nats)),
-        ),
-        Type::Record(row) => Type::Record(substitute_row(row, types, dims, rows, nats)),
-        Type::Adt(id, args) => Type::Adt(
-            *id,
-            args.iter()
-                .map(|arg| substitute(arg, types, dims, rows, nats))
-                .collect(),
-        ),
-        Type::Io(inner) => Type::Io(Box::new(substitute(inner, types, dims, rows, nats))),
-        Type::Dyn(Rep::Var(id)) => match types.get(id) {
-            Some(fresh) => Type::Dyn(Rep::Var(*fresh)),
-            None => ty.clone(),
+        | Type::Tensor { shape, elem } => {
+            Type::Tensor {
+                shape: substitute_shape(shape),
+                elem: Box::new(substitute(elem, types, dims, rows, nats)),
+            }
         },
-        Type::Point(dim) => {
+        | Type::Fn(params, ret) => {
+            Type::Fn(
+                params
+                    .iter()
+                    .map(|param| substitute(param, types, dims, rows, nats))
+                    .collect(),
+                Box::new(substitute(ret, types, dims, rows, nats)),
+            )
+        },
+        | Type::Record(row) => Type::Record(substitute_row(row, types, dims, rows, nats)),
+        | Type::Adt(id, args) => {
+            Type::Adt(
+                *id,
+                args.iter()
+                    .map(|arg| substitute(arg, types, dims, rows, nats))
+                    .collect(),
+            )
+        },
+        | Type::Io(inner) => Type::Io(Box::new(substitute(inner, types, dims, rows, nats))),
+        | Type::Dyn(Rep::Var(id)) => {
+            match types.get(id) {
+                | Some(fresh) => Type::Dyn(Rep::Var(*fresh)),
+                | None => ty.clone(),
+            }
+        },
+        | Type::Point(dim) => {
             Type::Point(dim.substitute(|id| dims.get(&id).map(|fresh| Dim::var(*fresh))))
-        }
-        Type::UnitOf(dim) => {
+        },
+        | Type::UnitOf(dim) => {
             Type::UnitOf(dim.substitute(|id| dims.get(&id).map(|fresh| Dim::var(*fresh))))
-        }
-        other => other.clone(),
+        },
+        | other => other.clone(),
     }
 }
 
@@ -1922,23 +2207,27 @@ fn substitute_row(
     nats: &HashMap<u32, Nat>,
 ) -> Row {
     match row {
-        Row::Empty => Row::Empty,
-        Row::Var(id) => match rows.get(id) {
-            Some(fresh) => Row::Var(*fresh),
-            None => Row::Var(*id),
+        | Row::Empty => Row::Empty,
+        | Row::Var(id) => {
+            match rows.get(id) {
+                | Some(fresh) => Row::Var(*fresh),
+                | None => Row::Var(*id),
+            }
         },
-        Row::Extend { label, ty, tail } => Row::Extend {
-            label: label.clone(),
-            ty: Box::new(substitute(ty, types, dims, rows, nats)),
-            tail: Box::new(substitute_row(tail, types, dims, rows, nats)),
+        | Row::Extend { label, ty, tail } => {
+            Row::Extend {
+                label: label.clone(),
+                ty: Box::new(substitute(ty, types, dims, rows, nats)),
+                tail: Box::new(substitute_row(tail, types, dims, rows, nats)),
+            }
         },
     }
 }
 
 fn row_id(row: &Row) -> Option<u32> {
     match row {
-        Row::Var(id) => Some(*id),
-        _ => None,
+        | Row::Var(id) => Some(*id),
+        | _ => None,
     }
 }
 
@@ -1953,7 +2242,10 @@ mod tests {
         infer
             .unify(&Type::real(dim.clone()), &Type::real(Dim::base("Length")))
             .expect("solvable");
-        assert_eq!(infer.resolve(&Type::real(dim)), Type::real(Dim::base("Length")));
+        assert_eq!(
+            infer.resolve(&Type::real(dim)),
+            Type::real(Dim::base("Length"))
+        );
     }
 
     #[test]

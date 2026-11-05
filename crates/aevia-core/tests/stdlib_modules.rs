@@ -12,7 +12,8 @@
 #![allow(clippy::result_large_err)]
 
 use aevia_core::driver;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// A temporary package root.
 struct Scratch {
@@ -32,7 +33,11 @@ impl Scratch {
     }
 
     /// Writes `relative` (creating its parent directories) and returns its path.
-    fn write(&self, relative: &str, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        relative: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.root.join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create module directory");

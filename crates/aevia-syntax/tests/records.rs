@@ -2,8 +2,12 @@
 
 mod support;
 
-use aevia_syntax::ast::{DeclKind, ExprKind, TyKind};
-use support::{expect_clean, expect_error, span_text};
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::TyKind;
+use support::expect_clean;
+use support::expect_error;
+use support::span_text;
 
 #[test]
 fn a_duplicate_field_in_a_literal_is_e0208() {
@@ -50,7 +54,9 @@ fn distinct_fields_are_still_accepted() {
     let DeclKind::Let { ty, .. } = &module.decls[0].kind else {
         panic!("expected a let");
     };
-    let Some(ty) = ty else { panic!("expected an annotation") };
+    let Some(ty) = ty else {
+        panic!("expected an annotation")
+    };
     let TyKind::Record { fields, .. } = &ty.kind else {
         panic!("expected a record type");
     };

@@ -14,7 +14,8 @@ pub mod doctest;
 
 use aevia_fmt::print::Printer;
 use aevia_syntax::ast::*;
-use aevia_syntax::{lex, parse_module};
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 use std::fmt::Write as _;
 
 /// One documented declaration.
@@ -57,7 +58,10 @@ impl ModuleDoc {
     /// rather than a hope.
     #[must_use]
     pub fn undocumented(&self) -> Vec<&DeclDoc> {
-        self.decls.iter().filter(|decl| decl.doc.is_none()).collect()
+        self.decls
+            .iter()
+            .filter(|decl| decl.doc.is_none())
+            .collect()
     }
 
     /// How many declarations have no `##` comment.
@@ -73,7 +77,11 @@ impl ModuleDoc {
 ///
 /// A message with the line number when the file does not parse: documentation
 /// generated from a tree the parser guessed at would be wrong.
-pub fn module_doc(source: &str, file: &str, fallback_name: &str) -> Result<ModuleDoc, String> {
+pub fn module_doc(
+    source: &str,
+    file: &str,
+    fallback_name: &str,
+) -> Result<ModuleDoc, String> {
     let lexed = lex(0, source).map_err(|diagnostics| first_error(source, &diagnostics))?;
     let (module, diagnostics) = parse_module(0, source, &lexed);
     if diagnostics.has_errors() {
@@ -107,11 +115,16 @@ pub fn module_doc(source: &str, file: &str, fallback_name: &str) -> Result<Modul
     })
 }
 
-fn first_error(source: &str, diagnostics: &aevia_syntax::Diagnostics) -> String {
+fn first_error(
+    source: &str,
+    diagnostics: &aevia_syntax::Diagnostics,
+) -> String {
     let Some(first) = diagnostics.items.first() else {
         return "the file does not parse".to_string();
     };
-    let line = 1 + source[..usize::try_from(first.span.start).unwrap_or(0).min(source.len())]
+    let line = 1 + source[..usize::try_from(first.span.start)
+        .unwrap_or(0)
+        .min(source.len())]
         .matches('\n')
         .count();
     format!("line {line}: {}: {}", first.code, first.message)
@@ -120,36 +133,34 @@ fn first_error(source: &str, diagnostics: &aevia_syntax::Diagnostics) -> String 
 /// The kind, name and signature of a declaration.
 fn signature(decl: &Decl) -> (String, String, String) {
     let kind = match &decl.kind {
-        DeclKind::Import { .. } => "import",
-        DeclKind::Dimension { .. } => "dimension",
-        DeclKind::Unit { .. } => "unit",
-        DeclKind::Type { .. } => "type",
-        DeclKind::Class { .. } => "class",
-        DeclKind::Instance { .. } => "instance",
-        DeclKind::Derive { .. } => "derive",
-        DeclKind::Fn { .. } => "fn",
-        DeclKind::Let { .. } => "let",
-        DeclKind::Test { .. } => "test",
+        | DeclKind::Import { .. } => "import",
+        | DeclKind::Dimension { .. } => "dimension",
+        | DeclKind::Unit { .. } => "unit",
+        | DeclKind::Type { .. } => "type",
+        | DeclKind::Class { .. } => "class",
+        | DeclKind::Instance { .. } => "instance",
+        | DeclKind::Derive { .. } => "derive",
+        | DeclKind::Fn { .. } => "fn",
+        | DeclKind::Let { .. } => "let",
+        | DeclKind::Test { .. } => "test",
     }
     .to_string();
     let (name, signature) = match &decl.kind {
-        DeclKind::Import { path, .. } => (path.join("."), String::new()),
-        DeclKind::Dimension { name, value } => {
+        | DeclKind::Import { path, .. } => (path.join("."), String::new()),
+        | DeclKind::Dimension { name, value } => {
             let mut text = format!("dimension {name}");
             if let Some(value) = value {
                 let _ = write!(text, " = {}", value.to_source());
             }
             (name.clone(), text)
-        }
-        DeclKind::Unit { name, dim, .. } => (
-            name.clone(),
-            format!("unit {name} : {}", dim.to_source()),
-        ),
-        DeclKind::Type { name, params, .. } => (
-            name.clone(),
-            format!("type {name}{}", type_params(params)),
-        ),
-        DeclKind::Class {
+        },
+        | DeclKind::Unit { name, dim, .. } => {
+            (name.clone(), format!("unit {name} : {}", dim.to_source()))
+        },
+        | DeclKind::Type { name, params, .. } => {
+            (name.clone(), format!("type {name}{}", type_params(params)))
+        },
+        | DeclKind::Class {
             name,
             params,
             methods,
@@ -168,16 +179,20 @@ fn signature(decl: &Decl) -> (String, String, String) {
                 let _ = write!(text, "\n    {method}: {}", type_text(ty));
             }
             (name.clone(), text)
-        }
-        DeclKind::Instance { class, ty, .. } => (
-            class.clone(),
-            format!("instance {class} for {}", type_text(ty)),
-        ),
-        DeclKind::Derive { classes, ty } => (
-            classes.join(", "),
-            format!("derive {} for {}", classes.join(", "), type_text(ty)),
-        ),
-        DeclKind::Fn {
+        },
+        | DeclKind::Instance { class, ty, .. } => {
+            (
+                class.clone(),
+                format!("instance {class} for {}", type_text(ty)),
+            )
+        },
+        | DeclKind::Derive { classes, ty } => {
+            (
+                classes.join(", "),
+                format!("derive {} for {}", classes.join(", "), type_text(ty)),
+            )
+        },
+        | DeclKind::Fn {
             name,
             params,
             args,
@@ -201,8 +216,8 @@ fn signature(decl: &Decl) -> (String, String, String) {
                 let _ = write!(text, ": {}", type_text(ret));
             }
             (name.clone(), text)
-        }
-        DeclKind::Let {
+        },
+        | DeclKind::Let {
             pattern,
             ty,
             value,
@@ -223,8 +238,8 @@ fn signature(decl: &Decl) -> (String, String, String) {
                 let _ = write!(text, " = {rendered}");
             }
             (name, text)
-        }
-        DeclKind::Test { name, .. } => (name.clone(), format!("test {name:?}")),
+        },
+        | DeclKind::Test { name, .. } => (name.clone(), format!("test {name:?}")),
     };
     (kind, name, signature)
 }
@@ -237,13 +252,19 @@ fn type_text(ty: &Ty) -> String {
 
 fn pattern_text(pat: &Pat) -> String {
     match &pat.kind {
-        PatKind::Var(name) => name.clone(),
-        PatKind::Wildcard => "_".to_string(),
-        PatKind::Tuple(items) => format!(
-            "({})",
-            items.iter().map(pattern_text).collect::<Vec<_>>().join(", ")
-        ),
-        _ => "_".to_string(),
+        | PatKind::Var(name) => name.clone(),
+        | PatKind::Wildcard => "_".to_string(),
+        | PatKind::Tuple(items) => {
+            format!(
+                "({})",
+                items
+                    .iter()
+                    .map(pattern_text)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
+        | _ => "_".to_string(),
     }
 }
 
@@ -255,16 +276,21 @@ fn type_params(params: &[TypeParam]) -> String {
         "<{}>",
         params
             .iter()
-            .map(|param| match param.kind {
-                Some(kind) => format!("{}: {}", param.name, kind.as_str()),
-                None => param.name.clone(),
+            .map(|param| {
+                match param.kind {
+                    | Some(kind) => format!("{}: {}", param.name, kind.as_str()),
+                    | None => param.name.clone(),
+                }
             })
             .collect::<Vec<_>>()
             .join(", ")
     )
 }
 
-fn plural(count: usize, word: &str) -> String {
+fn plural(
+    count: usize,
+    word: &str,
+) -> String {
     if count == 1 {
         word.to_string()
     } else {
@@ -283,7 +309,11 @@ pub fn render_module(doc: &ModuleDoc) -> String {
         return out;
     }
     for decl in &doc.decls {
-        let private = if decl.private { " (private)" } else { "" };
+        let private = if decl.private {
+            " (private)"
+        } else {
+            ""
+        };
         let _ = writeln!(out, "## `{} {}`{}\n", decl.kind, decl.name, private);
         out.push_str("```aevia\n");
         let _ = writeln!(out, "{}", decl.signature);
@@ -298,7 +328,10 @@ pub fn render_module(doc: &ModuleDoc) -> String {
 
 /// Renders the index page.
 #[must_use]
-pub fn render_index(name: &str, docs: &[ModuleDoc]) -> String {
+pub fn render_index(
+    name: &str,
+    docs: &[ModuleDoc],
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {name} — API\n");
     let count: usize = docs.iter().map(|doc| doc.decls.len()).sum();
@@ -345,10 +378,7 @@ private fn hidden(): Int = 1
         assert_eq!(doc.decls.len(), 3);
         assert_eq!(doc.decls[0].kind, "fn");
         assert_eq!(doc.decls[0].name, "circle");
-        assert_eq!(
-            doc.decls[0].signature,
-            "fn circle(r: Real[L]): Real[L^2]"
-        );
+        assert_eq!(doc.decls[0].signature, "fn circle(r: Real[L]): Real[L^2]");
         assert_eq!(
             doc.decls[0].doc.as_deref(),
             Some("A circle's area.\n\nUses `tau`.")

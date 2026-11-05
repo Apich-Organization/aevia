@@ -12,8 +12,10 @@
 //! `Exact`. A `Float` anywhere in a result is the bug this file exists to
 //! catch.
 
-use aevia_core::value::{NumKind, Value};
-use aevia_core::{Interp, compile};
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Value;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 
@@ -65,11 +67,11 @@ fn phase(value: &Value) -> &'static str {
         .unwrap_or_else(|| panic!("expected a number, found {}", value.type_name()))
         .kind
     {
-        NumKind::Int(_) => "Int",
-        NumKind::Exact(_) => "Exact",
-        NumKind::Float(_) => "Float",
-        NumKind::Sym(_) => "Sym",
-        NumKind::Complex(..) => "Complex",
+        | NumKind::Int(_) => "Int",
+        | NumKind::Exact(_) => "Exact",
+        | NumKind::Float(_) => "Float",
+        | NumKind::Sym(_) => "Sym",
+        | NumKind::Complex(..) => "Complex",
     }
 }
 
@@ -88,7 +90,10 @@ fn integer(value: i64) -> BigRational {
     BigRational::from_integer(BigInt::from(value))
 }
 
-fn rational(numerator: i64, denominator: i64) -> BigRational {
+fn rational(
+    numerator: i64,
+    denominator: i64,
+) -> BigRational {
     BigRational::new(BigInt::from(numerator), BigInt::from(denominator))
 }
 
@@ -98,12 +103,14 @@ fn rational(numerator: i64, denominator: i64) -> BigRational {
 /// constructor deep; taking it out here keeps the assertions about the matrix.
 fn ok_payload(value: &Value) -> Value {
     match value {
-        Value::Variant(variant) if variant.name == "Ok" => variant
-            .fields
-            .first()
-            .cloned()
-            .unwrap_or_else(|| panic!("`Ok` without a payload")),
-        other => panic!("expected `Ok(…)`, found {}", other.type_name()),
+        | Value::Variant(variant) if variant.name == "Ok" => {
+            variant
+                .fields
+                .first()
+                .cloned()
+                .unwrap_or_else(|| panic!("`Ok` without a payload"))
+        },
+        | other => panic!("expected `Ok(…)`, found {}", other.type_name()),
     }
 }
 
@@ -137,12 +144,7 @@ fn an_exact_matmul_is_still_exact() {
     let exact: Vec<BigRational> = elements(&q).iter().map(as_rational).collect();
     assert_eq!(
         exact,
-        [
-            rational(1, 2),
-            integer(1),
-            rational(3, 2),
-            integer(2),
-        ]
+        [rational(1, 2), integer(1), rational(3, 2), integer(2),]
     );
 }
 
@@ -169,11 +171,6 @@ fn an_exact_determinant_and_inverse_are_still_exact() {
     let exact: Vec<BigRational> = elements(&inverse).iter().map(as_rational).collect();
     assert_eq!(
         exact,
-        [
-            integer(-2),
-            integer(1),
-            rational(3, 2),
-            rational(-1, 2),
-        ]
+        [integer(-2), integer(1), rational(3, 2), rational(-1, 2),]
     );
 }

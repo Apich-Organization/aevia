@@ -5,7 +5,9 @@
 //! edit goes through [`Document::apply`], which is the only way the index can
 //! fall out of date.
 
-use crate::position::{LineIndex, Position, Range};
+use crate::position::LineIndex;
+use crate::position::Position;
+use crate::position::Range;
 
 /// One edit to a document.
 ///
@@ -34,7 +36,10 @@ impl Change {
 
     /// A replacement of one range.
     #[must_use]
-    pub fn ranged(range: Range, text: impl Into<String>) -> Self {
+    pub fn ranged(
+        range: Range,
+        text: impl Into<String>,
+    ) -> Self {
         Self {
             range: Some(range),
             text: text.into(),
@@ -52,10 +57,15 @@ pub enum EditError {
 }
 
 impl std::fmt::Display for EditError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
-            Self::UnknownLine(line) => write!(f, "the edit names line {}, which does not exist", line + 1),
-            Self::Reversed => f.write_str("the edit ends before it starts"),
+            | Self::UnknownLine(line) => {
+                write!(f, "the edit names line {}, which does not exist", line + 1)
+            },
+            | Self::Reversed => f.write_str("the edit ends before it starts"),
         }
     }
 }
@@ -74,7 +84,11 @@ pub struct Document {
 impl Document {
     /// Creates a document at revision `version`.
     #[must_use]
-    pub fn new(name: impl Into<String>, version: i64, text: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        version: i64,
+        text: impl Into<String>,
+    ) -> Self {
         let text = text.into();
         let index = LineIndex::new(&text);
         Self {
@@ -123,25 +137,38 @@ impl Document {
 
     /// The position of a byte offset.
     #[must_use]
-    pub fn position(&self, offset: u32) -> Position {
+    pub fn position(
+        &self,
+        offset: u32,
+    ) -> Position {
         self.index.position(&self.text, offset)
     }
 
     /// The byte offset of a position.
     #[must_use]
-    pub fn offset(&self, position: Position) -> Option<u32> {
+    pub fn offset(
+        &self,
+        position: Position,
+    ) -> Option<u32> {
         self.index.offset(&self.text, position)
     }
 
     /// The range covering a byte range.
     #[must_use]
-    pub fn range_of(&self, start: u32, end: u32) -> Range {
+    pub fn range_of(
+        &self,
+        start: u32,
+        end: u32,
+    ) -> Range {
         Range::new(self.position(start), self.position(end))
     }
 
     /// The text of one line, without its terminator.
     #[must_use]
-    pub fn line_text(&self, line: u32) -> Option<&str> {
+    pub fn line_text(
+        &self,
+        line: u32,
+    ) -> Option<&str> {
         self.index.line_text(&self.text, line)
     }
 
@@ -152,7 +179,11 @@ impl Document {
     }
 
     /// Replaces the document's text and bumps the revision to `version`.
-    pub fn replace(&mut self, text: impl Into<String>, version: i64) {
+    pub fn replace(
+        &mut self,
+        text: impl Into<String>,
+        version: i64,
+    ) {
         self.text = text.into();
         self.index = LineIndex::new(&self.text);
         self.version = version;
@@ -166,13 +197,17 @@ impl Document {
     /// refused edit leaves the document untouched — half-applying an edit
     /// would leave the client and the server disagreeing about every later
     /// offset.
-    pub fn apply(&mut self, change: &Change, version: i64) -> Result<(), EditError> {
+    pub fn apply(
+        &mut self,
+        change: &Change,
+        version: i64,
+    ) -> Result<(), EditError> {
         match change.range {
-            None => {
+            | None => {
                 self.replace(change.text.clone(), version);
                 Ok(())
-            }
-            Some(range) => {
+            },
+            | Some(range) => {
                 if range.end < range.start {
                     return Err(EditError::Reversed);
                 }
@@ -192,7 +227,7 @@ impl Document {
                 text.push_str(&self.text[end..]);
                 self.replace(text, version);
                 Ok(())
-            }
+            },
         }
     }
 }
@@ -214,31 +249,43 @@ impl DocumentStore {
     }
 
     /// Adds a document, replacing any document with the same name.
-    pub fn open(&mut self, document: Document) {
+    pub fn open(
+        &mut self,
+        document: Document,
+    ) {
         match self
             .documents
             .iter_mut()
             .find(|open| open.name == document.name)
         {
-            Some(existing) => *existing = document,
-            None => self.documents.push(document),
+            | Some(existing) => *existing = document,
+            | None => self.documents.push(document),
         }
     }
 
     /// Removes a document and returns it.
-    pub fn close(&mut self, name: &str) -> Option<Document> {
+    pub fn close(
+        &mut self,
+        name: &str,
+    ) -> Option<Document> {
         let index = self.documents.iter().position(|doc| doc.name == name)?;
         Some(self.documents.remove(index))
     }
 
     /// The document opened under `name`.
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&Document> {
+    pub fn get(
+        &self,
+        name: &str,
+    ) -> Option<&Document> {
         self.documents.iter().find(|doc| doc.name == name)
     }
 
     /// The document opened under `name`, mutably.
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut Document> {
+    pub fn get_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<&mut Document> {
         self.documents.iter_mut().find(|doc| doc.name == name)
     }
 

@@ -15,8 +15,15 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::value::{equal, repr, show, NumKind, Storage, TensorData, Value};
-use aevia_core::{compile, Interp};
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
+use aevia_core::value::equal;
+use aevia_core::value::repr;
+use aevia_core::value::show;
 use aevia_syntax::Span;
 use std::rc::Rc;
 use std::time::Instant;
@@ -52,8 +59,8 @@ fn session(source: &str) -> Interp {
 
 fn tensor_of(value: &Value) -> &TensorData {
     match value {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -78,16 +85,16 @@ fn boxed(value: &Value) -> Value {
 /// `Value::equal` compares floats with `==`, which cannot tell `-0.0` from
 /// `0.0`; a fast path that turned one into the other would still print
 /// differently, so the bits are checked here.
-fn assert_same(left: &Value, right: &Value, context: &str) {
+fn assert_same(
+    left: &Value,
+    right: &Value,
+    context: &str,
+) {
     match (left, right) {
-        (Value::Tensor(a), Value::Tensor(b)) => {
+        | (Value::Tensor(a), Value::Tensor(b)) => {
             assert_eq!(a.shape, b.shape, "{context}: shape");
             assert_eq!(a.dim, b.dim, "{context}: element dimension");
-            assert_eq!(
-                a.storage.len(),
-                b.storage.len(),
-                "{context}: element count"
-            );
+            assert_eq!(a.storage.len(), b.storage.len(), "{context}: element count");
             for index in 0..a.storage.len() {
                 let x = a.get_flat(index).expect("left element");
                 let y = b.get_flat(index).expect("right element");
@@ -95,38 +102,40 @@ fn assert_same(left: &Value, right: &Value, context: &str) {
             }
             assert_eq!(show(left), show(right), "{context}: show");
             assert_eq!(repr(left), repr(right), "{context}: repr");
-        }
-        (Value::Num(a), Value::Num(b)) => {
+        },
+        | (Value::Num(a), Value::Num(b)) => {
             assert_eq!(
                 a.kind.type_name(),
                 b.kind.type_name(),
                 "{context}: numeric phase"
             );
             match (&a.kind, &b.kind) {
-                (NumKind::Float(x), NumKind::Float(y)) => {
+                | (NumKind::Float(x), NumKind::Float(y)) => {
                     assert_eq!(x.to_bits(), y.to_bits(), "{context}: float bits");
-                }
-                (NumKind::Int(x), NumKind::Int(y)) => assert_eq!(x, y, "{context}: int"),
-                (NumKind::Exact(x), NumKind::Exact(y)) => {
+                },
+                | (NumKind::Int(x), NumKind::Int(y)) => assert_eq!(x, y, "{context}: int"),
+                | (NumKind::Exact(x), NumKind::Exact(y)) => {
                     assert_eq!(x, y, "{context}: rational")
-                }
-                _ => assert_eq!(
-                    a.kind.type_name(),
-                    b.kind.type_name(),
-                    "{context}: representation"
-                ),
+                },
+                | _ => {
+                    assert_eq!(
+                        a.kind.type_name(),
+                        b.kind.type_name(),
+                        "{context}: representation"
+                    )
+                },
             }
             assert_eq!(a.dim, b.dim, "{context}: dimension");
             assert_eq!(repr(left), repr(right), "{context}: repr");
-        }
-        _ => {
+        },
+        | _ => {
             assert_eq!(
                 equal(left, right),
                 Ok(true),
                 "{context}: values differ ({left:?} vs {right:?})"
             );
             assert_eq!(repr(left), repr(right), "{context}: repr");
-        }
+        },
     }
 }
 
@@ -382,11 +391,7 @@ fn reductions_agree_with_the_boxed_path() {
 
     for order in [1_i64, 2, i64::MAX] {
         let dense = interp
-            .call_named(
-                "norm",
-                vec![a.clone(), Value::int(order)],
-                Span::default(),
-            )
+            .call_named("norm", vec![a.clone(), Value::int(order)], Span::default())
             .expect("dense norm");
         let reference = interp
             .call_named("norm", vec![boxed(&a), Value::int(order)], Span::default())
@@ -460,7 +465,11 @@ fn matmul_agrees_with_the_boxed_path() {
 
 /// A deterministic pseudo-random matrix, so the tolerance below covers a shape
 /// and a value distribution rather than one hand-picked case.
-fn pseudo_random(rows: usize, cols: usize, seed: u64) -> Vec<f64> {
+fn pseudo_random(
+    rows: usize,
+    cols: usize,
+    seed: u64,
+) -> Vec<f64> {
     let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     (0..rows * cols)
         .map(|_| {
@@ -473,7 +482,11 @@ fn pseudo_random(rows: usize, cols: usize, seed: u64) -> Vec<f64> {
         .collect()
 }
 
-fn dense_tensor(rows: usize, cols: usize, values: Vec<f64>) -> Value {
+fn dense_tensor(
+    rows: usize,
+    cols: usize,
+    values: Vec<f64>,
+) -> Value {
     Value::Tensor(Rc::new(TensorData {
         shape: vec![rows, cols],
         storage: Storage::Dense(Rc::new(values)),
@@ -512,10 +525,7 @@ fn matmul_reassociates_but_agrees() {
             panic!("at {index}: expected two floats");
         };
         let scale = x.abs().max(y.abs()).max(1.0);
-        assert!(
-            (x - y).abs() <= 1e-12 * scale,
-            "at {index}: {x} vs {y}"
-        );
+        assert!((x - y).abs() <= 1e-12 * scale, "at {index}: {x} vs {y}");
     }
 }
 
@@ -574,12 +584,15 @@ fn the_example_tensor_program_agrees_with_the_boxed_path() {
         .expect("M @ v boxed");
     assert_same(&dense, &reference, "M @ v");
     assert_eq!(
-        equal(&dense, &Value::Tensor(Rc::new(TensorData {
-            shape: vec![2],
-            storage: Storage::Dense(Rc::new(vec![17.0, 39.0])),
-            dim: aevia_dim::Dim::one(),
-            display: None,
-        }))),
+        equal(
+            &dense,
+            &Value::Tensor(Rc::new(TensorData {
+                shape: vec![2],
+                storage: Storage::Dense(Rc::new(vec![17.0, 39.0])),
+                dim: aevia_dim::Dim::one(),
+                display: None,
+            }))
+        ),
         Ok(true),
         "M @ v is [17, 39]"
     );
@@ -724,12 +737,21 @@ fn bench_dense_vs_boxed_100k() {
         "sum speedup: {:.1}x (dense {dense_sum:.3} ms, boxed {boxed_sum:.3} ms)",
         boxed_sum / dense_sum
     );
-    assert!(dense_sum < boxed_sum, "the reduction path must not be slower");
+    assert!(
+        dense_sum < boxed_sum,
+        "the reduction path must not be slower"
+    );
 }
 
 /// The loop `@` ran before the dispatcher, verbatim, so one binary can measure
 /// both sides of the change.
-fn sequential_matmul(rows: usize, inner: usize, cols: usize, a: &[f64], b: &[f64]) -> Vec<f64> {
+fn sequential_matmul(
+    rows: usize,
+    inner: usize,
+    cols: usize,
+    a: &[f64],
+    b: &[f64],
+) -> Vec<f64> {
     let mut data = vec![0.0; rows * cols];
     for row in 0..rows {
         for column in 0..cols {
@@ -760,7 +782,11 @@ fn bench_matmul_256() {
     let right = dense_tensor(SIZE, SIZE, b.clone());
     let mut interp = session("");
 
-    fn timed(label: &str, rounds: usize, mut run: impl FnMut()) -> f64 {
+    fn timed(
+        label: &str,
+        rounds: usize,
+        mut run: impl FnMut(),
+    ) -> f64 {
         for _ in 0..2 {
             run();
         }

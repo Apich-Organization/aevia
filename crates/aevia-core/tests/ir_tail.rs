@@ -14,7 +14,9 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::{compile, Interp, Mode};
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
 
 /// Runs `main` on a thread with `stack` bytes and returns its output or the
 /// runtime error's code.
@@ -22,7 +24,11 @@ use aevia_core::{compile, Interp, Mode};
 /// The whole pipeline runs inside the thread: a checked module is not `Send`
 /// (its values are `Rc`-backed), and the stack the interpreter is judged by is
 /// the point of the test.
-fn run_with_stack(source: &str, mode: Mode, stack: usize) -> Result<String, String> {
+fn run_with_stack(
+    source: &str,
+    mode: Mode,
+    stack: usize,
+) -> Result<String, String> {
     let source = source.to_string();
     std::thread::Builder::new()
         .stack_size(stack)
@@ -53,8 +59,8 @@ fn run_with_stack(source: &str, mode: Mode, stack: usize) -> Result<String, Stri
                     .collect::<Vec<_>>()
             );
             match interp.run_main() {
-                Ok(_) => Ok(interp.captured()),
-                Err(error) => Err(error.code.to_string()),
+                | Ok(_) => Ok(interp.captured()),
+                | Err(error) => Err(error.code.to_string()),
             }
         })
         .expect("spawn")

@@ -23,18 +23,25 @@
 //! exactly. A full square `u` would need `rows - k` extra columns that carry no
 //! information about `a`.
 
-use crate::{Complex, NumericError};
+use crate::Complex;
+use crate::NumericError;
 use num_rational::BigRational;
-use num_traits::{One, Signed, Zero};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::Zero;
 
 mod faer_backend;
 pub mod legacy;
 
-use legacy::{matrix, vector};
+use legacy::matrix;
+use legacy::vector;
 
 /// `true` when a dimension is empty, in which case `faer` asserts instead of
 /// answering and [`legacy`] answers.
-fn empty(rows: usize, cols: usize) -> bool {
+fn empty(
+    rows: usize,
+    cols: usize,
+) -> bool {
     rows == 0 || cols == 0
 }
 
@@ -43,7 +50,11 @@ fn empty(rows: usize, cols: usize) -> bool {
 /// # Errors
 ///
 /// [`NumericError::NotSquare`] when the matrix is not square.
-pub fn det(rows: usize, cols: usize, a: &[f64]) -> Result<f64, NumericError> {
+pub fn det(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<f64, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -58,7 +69,11 @@ pub fn det(rows: usize, cols: usize, a: &[f64]) -> Result<f64, NumericError> {
 /// # Errors
 ///
 /// [`NumericError::Singular`] when it has none.
-pub fn inv(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<f64>, NumericError> {
+pub fn inv(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<Vec<f64>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -73,7 +88,12 @@ pub fn inv(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<f64>, NumericError
 /// # Errors
 ///
 /// [`NumericError::Singular`] when the system has no unique solution.
-pub fn solve(rows: usize, cols: usize, a: &[f64], b: &[f64]) -> Result<Vec<f64>, NumericError> {
+pub fn solve(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+    b: &[f64],
+) -> Result<Vec<f64>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -186,7 +206,11 @@ pub fn eig(
 /// # Errors
 ///
 /// [`NumericError::NotSquare`] when the matrix is not square.
-pub fn eigvals(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<Complex>, NumericError> {
+pub fn eigvals(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<Vec<Complex>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -204,7 +228,11 @@ pub fn eigvals(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<Complex>, Nume
 /// set to one and the rest is back-substituted. When rounding leaves the matrix
 /// non-singular the answer falls back to the last basis vector, which is a
 /// legitimate (if uninteresting) representative and keeps the shape promise.
-fn eigenvector(n: usize, a: &[f64], lambda: Complex) -> Result<Vec<Complex>, NumericError> {
+fn eigenvector(
+    n: usize,
+    a: &[f64],
+    lambda: Complex,
+) -> Result<Vec<Complex>, NumericError> {
     let mut m: Vec<Vec<Complex>> = (0..n)
         .map(|row| {
             (0..n)
@@ -247,10 +275,8 @@ fn eigenvector(n: usize, a: &[f64], lambda: Complex) -> Result<Vec<Complex>, Num
             }
             for inner in column..n {
                 let term = factor.mul(m[row][inner]);
-                m[other][inner] = Complex::new(
-                    m[other][inner].re - term.re,
-                    m[other][inner].im - term.im,
-                );
+                m[other][inner] =
+                    Complex::new(m[other][inner].re - term.re, m[other][inner].im - term.im);
             }
         }
         pivot_of_row[row] = column;
@@ -259,7 +285,11 @@ fn eigenvector(n: usize, a: &[f64], lambda: Complex) -> Result<Vec<Complex>, Num
             break;
         }
     }
-    let taken: Vec<usize> = pivot_of_row.iter().copied().filter(|&c| c != usize::MAX).collect();
+    let taken: Vec<usize> = pivot_of_row
+        .iter()
+        .copied()
+        .filter(|&c| c != usize::MAX)
+        .collect();
     let free = (0..n).find(|column| !taken.contains(column));
     let Some(free) = free else {
         // No free column: numerical noise. Any vector is as good as another.
@@ -332,7 +362,11 @@ pub fn svd(
 /// # Errors
 ///
 /// [`NumericError::NotConverged`] when the decomposition fails.
-pub fn qr(rows: usize, cols: usize, a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
+pub fn qr(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
     if empty(rows, cols) {
         return legacy::qr(rows, cols, a);
     }
@@ -363,7 +397,11 @@ pub fn lu(
 /// # Errors
 ///
 /// [`NumericError::NotPositiveDefinite`] when `A` is not positive definite.
-pub fn cholesky(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<f64>, NumericError> {
+pub fn cholesky(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<Vec<f64>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -381,7 +419,11 @@ pub fn cholesky(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<f64>, Numeric
 
 /// The lower triangle of a matrix, the rest zeroed.
 #[must_use]
-pub fn tril(rows: usize, cols: usize, a: &[f64]) -> Vec<f64> {
+pub fn tril(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Vec<f64> {
     let mut out = vec![0.0; a.len()];
     for row in 0..rows {
         for column in 0..cols.min(row + 1) {
@@ -393,7 +435,11 @@ pub fn tril(rows: usize, cols: usize, a: &[f64]) -> Vec<f64> {
 
 /// The upper triangle of a matrix, the rest zeroed.
 #[must_use]
-pub fn triu(rows: usize, cols: usize, a: &[f64]) -> Vec<f64> {
+pub fn triu(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Vec<f64> {
     let mut out = vec![0.0; a.len()];
     for row in 0..rows {
         for column in row..cols {
@@ -483,7 +529,9 @@ pub fn qr_exact(
     let mut q = vec![BigRational::zero(); rows * rows];
     let mut r = vec![BigRational::zero(); rows * cols];
     for column in 0..cols {
-        let mut v: Vec<BigRational> = (0..rows).map(|row| a[row * cols + column].clone()).collect();
+        let mut v: Vec<BigRational> = (0..rows)
+            .map(|row| a[row * cols + column].clone())
+            .collect();
         for inner in 0..column.min(rows) {
             let mut dot = BigRational::zero();
             for row in 0..rows {
@@ -495,9 +543,9 @@ pub fn qr_exact(
                 v[row] -= term;
             }
         }
-        let norm = v
-            .iter()
-            .fold(BigRational::zero(), |acc, value| acc + value.clone() * value.clone());
+        let norm = v.iter().fold(BigRational::zero(), |acc, value| {
+            acc + value.clone() * value.clone()
+        });
         if norm.is_zero() {
             continue;
         }
@@ -562,13 +610,20 @@ fn integer_sqrt(value: &num_bigint::BigInt) -> Option<num_bigint::BigInt> {
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+    ) -> bool {
         (a - b).abs() < 1e-9
     }
 
     /// A deterministic pseudo-random matrix, so a parity test covers a shape
     /// and a value distribution rather than one hand-picked case.
-    fn pseudo_random(rows: usize, cols: usize, seed: u64) -> Vec<f64> {
+    fn pseudo_random(
+        rows: usize,
+        cols: usize,
+        seed: u64,
+    ) -> Vec<f64> {
         let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
         (0..rows * cols)
             .map(|_| {
@@ -601,7 +656,10 @@ mod tests {
 
     #[test]
     fn a_singular_matrix_has_no_inverse() {
-        assert_eq!(inv(2, 2, &[1.0, 2.0, 2.0, 4.0]), Err(NumericError::Singular));
+        assert_eq!(
+            inv(2, 2, &[1.0, 2.0, 2.0, 4.0]),
+            Err(NumericError::Singular)
+        );
     }
 
     #[test]
@@ -611,7 +669,10 @@ mod tests {
         let product = matrix(3, 3, &q).unwrap() * matrix(3, 3, &r).unwrap();
         for row in 0..3 {
             for column in 0..3 {
-                assert!(close(product[(row, column)], a[row * 3 + column]), "at ({row}, {column})");
+                assert!(
+                    close(product[(row, column)], a[row * 3 + column]),
+                    "at ({row}, {column})"
+                );
             }
         }
     }
@@ -839,7 +900,10 @@ mod tests {
         // dispatch sends it there.
         assert_eq!(det(0, 0, &[]), Ok(1.0));
         assert_eq!(inv(0, 0, &[]), Ok(Vec::new()));
-        assert_eq!(lu(0, 0, &[]).map(|(p, l, u)| (p.len(), l.len(), u.len())), Ok((0, 0, 0)));
+        assert_eq!(
+            lu(0, 0, &[]).map(|(p, l, u)| (p.len(), l.len(), u.len())),
+            Ok((0, 0, 0))
+        );
         assert_eq!(qr(0, 0, &[]).map(|(q, r)| (q.len(), r.len())), Ok((0, 0)));
         assert_eq!(matmul(2, 0, 3, &[], &[]), Ok(vec![0.0; 6]));
     }

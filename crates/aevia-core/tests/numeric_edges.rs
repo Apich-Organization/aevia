@@ -7,7 +7,8 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::{compile, Interp};
+use aevia_core::Interp;
+use aevia_core::compile;
 
 fn eval_source(source: &str) -> Result<Interp, String> {
     let compilation = compile("edges.aev", source);
@@ -37,11 +38,14 @@ fn eval_source(source: &str) -> Result<Interp, String> {
 }
 
 /// `Ok(rendered)` or `Err("code: message")` for a top-level binding.
-fn observe(source: &str, name: &str) -> Result<String, String> {
+fn observe(
+    source: &str,
+    name: &str,
+) -> Result<String, String> {
     let mut interp = eval_source(source)?;
     match interp.eval_toplevel(name) {
-        Ok(value) => Ok(aevia_core::value::show(&value)),
-        Err(error) => Err(format!("{}: {}", error.code, error.message)),
+        | Ok(value) => Ok(aevia_core::value::show(&value)),
+        | Err(error) => Err(format!("{}: {}", error.code, error.message)),
     }
 }
 
@@ -139,9 +143,11 @@ fn exact_infinity_arithmetic_is_partial() {
     assert_eq!(observe("let v = oo / oo\n", "v").unwrap(), "oo/oo");
     assert_eq!(observe("let v = oo * 0\n", "v").unwrap(), "oo*0");
     // The sign of a negative infinity survives the partial rule.
-    assert!(observe("let v = -oo * 0\n", "v")
-        .unwrap()
-        .starts_with("-oo"));
+    assert!(
+        observe("let v = -oo * 0\n", "v")
+            .unwrap()
+            .starts_with("-oo")
+    );
     // `0 ^ oo` has no finite rational exponent, so it is `E0402` rather than an
     // invented value.
     let error = observe("let v = 0 ^ oo\n", "v").expect_err("a finite exponent is required");

@@ -6,11 +6,22 @@
 //! rendered value. A test that looks for `"2"` in `show(x)` passes for `19`; a
 //! test that asks whether the value is `Value::Bool` cannot.
 
-use aevia_rssn::{Failure, Num, OpEntry, Sig, SigType, UnitVal, Val, kernel, registry};
+use aevia_rssn::Failure;
+use aevia_rssn::Num;
+use aevia_rssn::OpEntry;
+use aevia_rssn::Sig;
+use aevia_rssn::SigType;
+use aevia_rssn::UnitVal;
+use aevia_rssn::Val;
+use aevia_rssn::kernel;
+use aevia_rssn::registry;
 use num_bigint::BigInt;
-use rssn::kernel::result::{Condition, ConditionKind, Solutions};
+use rssn::kernel::result::Condition;
+use rssn::kernel::result::ConditionKind;
+use rssn::kernel::result::Solutions;
 use rssn::kernel::signature::DimExpr;
-use rssn::kernel::value::{SparseValue, Value};
+use rssn::kernel::value::SparseValue;
+use rssn::kernel::value::Value;
 
 // ---------------------------------------------------------------------------
 // 1. One decision: name plus argument types to a pinned key
@@ -67,20 +78,24 @@ fn an_unknown_name_is_e1003() {
 /// re-derive dimension rules.
 #[test]
 fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
-    use aevia_rssn::{SigType, registry};
+    use aevia_rssn::SigType;
+    use aevia_rssn::registry;
     let registry = registry();
     let text = aevia_rssn::codegen::operators(&registry);
 
     let wiener = registry.op("sde_wiener").expect("sde_wiener is registered");
     assert_eq!(wiener.source, aevia_rssn::Source::Overlay);
     assert_eq!(wiener.signatures.len(), 1, "one overload");
-    assert_eq!(wiener.keys.len(), wiener.signatures.len(), "one key per overload");
-    let SigType::Tensor {
-        rank: Some(2),
-        elem,
-    } = &wiener.signatures[0].ret
-    else {
-        panic!("`sde_wiener` must return a rank-2 tensor: {:?}", wiener.signatures[0]);
+    assert_eq!(
+        wiener.keys.len(),
+        wiener.signatures.len(),
+        "one key per overload"
+    );
+    let SigType::Tensor { rank: Some(2), elem } = &wiener.signatures[0].ret else {
+        panic!(
+            "`sde_wiener` must return a rank-2 tensor: {:?}",
+            wiener.signatures[0]
+        );
     };
     let SigType::Dim(inner, dim) = &**elem else {
         panic!("`sde_wiener` elements must be dimensioned reals: {elem:?}");
@@ -107,12 +122,11 @@ fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
     assert_eq!(areas.source, aevia_rssn::Source::Overlay);
     assert_eq!(areas.signatures.len(), 1);
     assert_eq!(areas.keys.len(), areas.signatures.len());
-    let SigType::Tensor {
-        rank: Some(1),
-        elem,
-    } = &areas.signatures[0].ret
-    else {
-        panic!("`sde_levy_areas` must return a rank-1 tensor: {:?}", areas.signatures[0]);
+    let SigType::Tensor { rank: Some(1), elem } = &areas.signatures[0].ret else {
+        panic!(
+            "`sde_levy_areas` must return a rank-1 tensor: {:?}",
+            areas.signatures[0]
+        );
     };
     let SigType::Dim(_, dim) = &**elem else {
         panic!("`sde_levy_areas` elements must be dimensioned reals: {elem:?}");
@@ -137,7 +151,8 @@ fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
 /// order table, and neither wraps the other.
 #[test]
 fn sde_scheme_info_is_a_typed_overlay_operator() {
-    use aevia_rssn::{SigType, registry};
+    use aevia_rssn::SigType;
+    use aevia_rssn::registry;
     let registry = registry();
     let op = registry
         .op("sde_scheme_info")
@@ -146,7 +161,11 @@ fn sde_scheme_info_is_a_typed_overlay_operator() {
     assert_eq!(op.signatures.len(), 1, "one overload");
     assert_eq!(op.keys.len(), op.signatures.len(), "one key per overload");
     let signature = &op.signatures[0];
-    assert_eq!(signature.params, vec![SigType::Str], "the scheme name is a String");
+    assert_eq!(
+        signature.params,
+        vec![SigType::Str],
+        "the scheme name is a String"
+    );
     assert_eq!(
         signature.ret,
         SigType::Tensor {
@@ -162,14 +181,18 @@ fn sde_scheme_info_is_a_typed_overlay_operator() {
     );
     // The live manifest is the one the registry mirrors; the generated module
     // states its hash (the test above pins that connection).
-    assert!(registry.op_count() > 1300, "the manifest's operators are live");
+    assert!(
+        registry.op_count() > 1300,
+        "the manifest's operators are live"
+    );
 }
 
 /// The same ambiguity, through the runtime entry point: a rank-2 tensor whose
 /// elements are kernel terms. The compatibility path resolves once and reports
 /// the tie; it never falls back to a second resolver.
 #[test]
-fn the_runtime_reports_the_ambiguity_instead_of_choosing() {    let kernel = kernel::kernel();
+fn the_runtime_reports_the_ambiguity_instead_of_choosing() {
+    let kernel = kernel::kernel();
     let cell = || {
         let handle = kernel
             .term_of(&Val::Symbol("x".to_string()))
@@ -267,10 +290,7 @@ fn an_integral_exact_value_crosses_in_normal_form() {
         Value::Int(BigInt::from(2)),
         "a whole rational is `Value::Int`, not `Value::Real(Rat(2/1))`"
     );
-    let third = Val::Num(Num::Rat(BigRational::new(
-        BigInt::from(1),
-        BigInt::from(3),
-    )));
+    let third = Val::Num(Num::Rat(BigRational::new(BigInt::from(1), BigInt::from(3))));
     assert_eq!(
         third.to_rssn(kernel.id()).expect("an exact number"),
         Value::Real(Number::Rat(BigRational::new(
@@ -413,10 +433,7 @@ fn a_unit_result_stays_a_unit() {
 #[test]
 fn a_quantity_is_a_quantity_in_both_directions() {
     let value = kernel::kernel()
-        .call(
-            "quantity",
-            &[Val::Num(Num::Float(3.0)), Val::Unit(metre())],
-        )
+        .call("quantity", &[Val::Num(Num::Float(3.0)), Val::Unit(metre())])
         .expect("a quantity is a value the kernel takes");
     let Val::Quantity { value: amount, unit } = &value else {
         panic!("`quantity(3.0, m)` is {value:?}, not a quantity");
@@ -531,9 +548,8 @@ fn a_kernel_failure_is_e0899_and_is_not_retried() {
 #[test]
 fn an_unreduced_request_is_e0807() {
     use rssn::kernel::call::OpError;
-    let error =
-        aevia_rssn::error::from_op_error(&OpError::NotReduced("integral".to_string()))
-            .at_operator("integral");
+    let error = aevia_rssn::error::from_op_error(&OpError::NotReduced("integral".to_string()))
+        .at_operator("integral");
     assert_eq!(error.code, "E0807");
     assert_eq!(error.kind, Failure::Other);
     assert_eq!(error.variant(), Some("NotReduced"));
@@ -712,10 +728,7 @@ fn a_structured_result_needs_its_capability() {
         structured_results: false,
         ..aevia_rssn::Capabilities::default()
     };
-    assert_eq!(
-        without.missing_for(&entry),
-        Some("core.structured_results")
-    );
+    assert_eq!(without.missing_for(&entry), Some("core.structured_results"));
     assert!(without.require_op(&entry).is_err());
     assert!(registry().capabilities.require_op(&entry).is_ok());
 }
@@ -774,7 +787,9 @@ fn the_host_bridge_capabilities_are_disabled_rows() {
             .unwrap_or_else(|| panic!("`{name}` has no row in the capability table"));
         assert!(!row.enabled, "`{name}` must be disabled in this build");
         assert!(!capabilities.has(name), "`has` must agree with the row");
-        let error = capabilities.require(name).expect_err("the capability is off");
+        let error = capabilities
+            .require(name)
+            .expect_err("the capability is off");
         assert_eq!(error.code, "E1001");
         assert_eq!(error.kind, Failure::Capability);
         assert!(
@@ -845,8 +860,7 @@ fn a_solution_set_round_trips_through_the_bridge() {
         complete: true,
     };
     let kernel = kernel::kernel();
-    let value =
-        Val::from_solutions(&solutions, kernel.id()).expect("a solution set is a record");
+    let value = Val::from_solutions(&solutions, kernel.id()).expect("a solution set is a record");
     let Val::Record(fields) = &value else {
         panic!("a `Solutions` must cross as a record, found {value:?}");
     };
@@ -855,7 +869,13 @@ fn a_solution_set_round_trips_through_the_bridge() {
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        ["variable", "roots", "multiplicities", "conditions", "complete"],
+        [
+            "variable",
+            "roots",
+            "multiplicities",
+            "conditions",
+            "complete"
+        ],
         "the field names are §8.6's, in declaration order"
     );
     let back = value
@@ -883,7 +903,11 @@ fn an_unreported_multiplicity_stays_empty() {
     let back = value.to_solutions(kernel.id()).expect("a `Solutions`");
     assert!(back.multiplicities.is_empty(), "empty must not become `1`");
     assert!(!back.complete);
-    assert_eq!(back.multiplicity(0), 1, "the accessor's default is not a claim");
+    assert_eq!(
+        back.multiplicity(0),
+        1,
+        "the accessor's default is not a claim"
+    );
 }
 
 /// A value that is not a `Solutions` record is refused, not read as one.
@@ -912,7 +936,10 @@ fn a_complex_solution_set_is_the_same_record() {
             vec![
                 Expr::App(
                     String::from("pow"),
-                    vec![Expr::Sym(String::from("x")), Expr::Num(Num::Int(BigInt::from(2)))],
+                    vec![
+                        Expr::Sym(String::from("x")),
+                        Expr::Num(Num::Int(BigInt::from(2))),
+                    ],
                 ),
                 Expr::Num(Num::Int(BigInt::from(1))),
             ],
@@ -942,13 +969,18 @@ fn a_complex_solution_set_is_the_same_record() {
 /// chosen overload.
 #[test]
 fn the_match_lattice_compares_rank_and_dimension() {
-    use rssn::kernel::overload::{Match, matches_type};
-    use rssn::kernel::signature::{DimExpr, NatExpr, TypeExpr};
+    use rssn::kernel::overload::Match;
+    use rssn::kernel::overload::matches_type;
+    use rssn::kernel::signature::DimExpr;
+    use rssn::kernel::signature::NatExpr;
+    use rssn::kernel::signature::TypeExpr;
 
-    let tensor = |rank: u64| TypeExpr::Tensor {
-        rank: NatExpr::Lit(rank),
-        shape: None,
-        elem: Box::new(TypeExpr::Real),
+    let tensor = |rank: u64| {
+        TypeExpr::Tensor {
+            rank: NatExpr::Lit(rank),
+            shape: None,
+            elem: Box::new(TypeExpr::Real),
+        }
     };
     assert_eq!(matches_type(&tensor(2), &tensor(2)), Match::Exact);
     assert_eq!(
@@ -960,7 +992,10 @@ fn the_match_lattice_compares_rank_and_dimension() {
     let length = DimExpr::base("Length");
     let time = DimExpr::base("Time");
     assert_eq!(
-        matches_type(&TypeExpr::Unit(length.clone()), &TypeExpr::Unit(length.clone())),
+        matches_type(
+            &TypeExpr::Unit(length.clone()),
+            &TypeExpr::Unit(length.clone())
+        ),
         Match::Exact
     );
     assert_eq!(
@@ -984,7 +1019,8 @@ fn the_match_lattice_compares_rank_and_dimension() {
 /// matrix overload.
 #[test]
 fn a_rank_mismatch_resolves_to_the_dynamic_overload() {
-    use aevia_rssn::{SigType, resolve_key};
+    use aevia_rssn::SigType;
+    use aevia_rssn::resolve_key;
 
     let det = registry().op("det").expect("det");
     let key = resolve_key(
@@ -1011,15 +1047,12 @@ fn a_pinned_key_is_validated_against_its_own_overload() {
     // free symbol, not a unit.
     let key = quantity.keys[1].clone();
     let error = kernel::kernel()
-        .call_key(
-            &key,
-            &[Val::Num(Num::Float(3.0)), Val::Unit(metre())],
-        )
+        .call_key(&key, &[Val::Num(Num::Float(3.0)), Val::Unit(metre())])
         .expect_err("a unit does not satisfy the `Symbol` parameter");
     assert_eq!(error.variant(), Some("UnknownOp"));
     match error.cause.as_deref() {
-        Some(OpError::UnknownOp(reported)) => assert_eq!(reported, &key),
-        other => panic!("expected `UnknownOp`, found {other:?}"),
+        | Some(OpError::UnknownOp(reported)) => assert_eq!(reported, &key),
+        | other => panic!("expected `UnknownOp`, found {other:?}"),
     }
 }
 
@@ -1068,10 +1101,7 @@ fn every_key_is_the_hash_of_distinct_signatures() {
 #[test]
 fn an_ambiguity_reports_the_tied_count() {
     let error = kernel::kernel()
-        .resolve(
-            "quantity",
-            &[Val::Num(Num::Float(3.0)), Val::Unit(metre())],
-        )
+        .resolve("quantity", &[Val::Num(Num::Float(3.0)), Val::Unit(metre())])
         .expect_err("two overloads tie");
     assert_eq!(error.kind, Failure::Ambiguous);
     assert!(
@@ -1094,7 +1124,9 @@ fn an_ambiguity_reports_the_tied_count() {
 fn a_session_unit_reaches_its_own_manifest() {
     use num_rational::BigRational;
     use rssn::api::Session;
-    use rssn::dim::{DimExpr, Scale, UnitDef};
+    use rssn::dim::DimExpr;
+    use rssn::dim::Scale;
+    use rssn::dim::UnitDef;
 
     let furlong = UnitDef::linear(
         "furlong",
@@ -1110,7 +1142,11 @@ fn a_session_unit_reaches_its_own_manifest() {
         .register_unit(furlong)
         .expect("a session may register a unit");
     assert!(
-        first.manifest().units.iter().any(|unit| unit.name == "furlong"),
+        first
+            .manifest()
+            .units
+            .iter()
+            .any(|unit| unit.name == "furlong"),
         "the registered unit must reach the session's manifest"
     );
     assert!(
@@ -1130,8 +1166,10 @@ fn a_session_unit_reaches_its_own_manifest() {
 /// it back must not drop or change a factor.
 #[test]
 fn the_dimension_term_round_trip_is_exact() {
-    use rssn::dim::{DimArena, DimExpr};
-    use rssn::kernel::signature::{Exp, Rational};
+    use rssn::dim::DimArena;
+    use rssn::dim::DimExpr;
+    use rssn::kernel::signature::Exp;
+    use rssn::kernel::signature::Rational;
 
     let mut arena = DimArena::new();
     let expressions = [
@@ -1148,11 +1186,12 @@ fn the_dimension_term_round_trip_is_exact() {
     for expression in expressions {
         let term = expression.to_term(&mut arena).expect("to_term");
         let back = DimExpr::try_from_term(&term, &arena).expect("try_from_term");
-        let again = back.to_term(&mut arena).expect("to_term of the recovered form");
+        let again = back
+            .to_term(&mut arena)
+            .expect("to_term of the recovered form");
         assert_eq!(
             again, term,
             "`to_term(try_from_term(term))` must be `term` for {expression:?}"
         );
     }
 }
-

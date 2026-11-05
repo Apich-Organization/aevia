@@ -7,16 +7,24 @@
 //! keeps the dependency direction one-way: `aevia-core` knows this module,
 //! this module knows `rssn`, and `rssn` knows nothing about either.
 
-use crate::error::{Failure, KernelError};
+use crate::error::Failure;
+use crate::error::KernelError;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, ToPrimitive};
+use num_traits::One;
+use num_traits::ToPrimitive;
 use rssn::graph::Number;
 use rssn::kernel::result::Solutions;
-use rssn::kernel::value::{
-    ComplexValue, OpaqueValue, QuantityValue, RecordValue, SessionId, TensorValue, TermRef,
-    UnitValue, Value, VariantValue,
-};
+use rssn::kernel::value::ComplexValue;
+use rssn::kernel::value::OpaqueValue;
+use rssn::kernel::value::QuantityValue;
+use rssn::kernel::value::RecordValue;
+use rssn::kernel::value::SessionId;
+use rssn::kernel::value::TensorValue;
+use rssn::kernel::value::TermRef;
+use rssn::kernel::value::UnitValue;
+use rssn::kernel::value::Value;
+use rssn::kernel::value::VariantValue;
 use std::fmt;
 
 /// A scalar the kernel understands.
@@ -39,9 +47,9 @@ impl Num {
     #[must_use]
     pub fn to_f64(&self) -> f64 {
         match self.try_to_f64() {
-            Some(value) => value,
-            None if self.is_negative() => f64::NEG_INFINITY,
-            None => f64::INFINITY,
+            | Some(value) => value,
+            | None if self.is_negative() => f64::NEG_INFINITY,
+            | None => f64::INFINITY,
         }
     }
 
@@ -53,9 +61,9 @@ impl Num {
     #[must_use]
     pub fn try_to_f64(&self) -> Option<f64> {
         match self {
-            Self::Int(value) => value.to_f64().filter(|value| value.is_finite()),
-            Self::Rat(value) => value.to_f64().filter(|value| value.is_finite()),
-            Self::Float(value) => Some(*value),
+            | Self::Int(value) => value.to_f64().filter(|value| value.is_finite()),
+            | Self::Rat(value) => value.to_f64().filter(|value| value.is_finite()),
+            | Self::Float(value) => Some(*value),
         }
     }
 
@@ -63,9 +71,9 @@ impl Num {
     #[must_use]
     fn is_negative(&self) -> bool {
         match self {
-            Self::Int(value) => num_traits::Signed::is_negative(value),
-            Self::Rat(value) => num_traits::Signed::is_negative(value),
-            Self::Float(value) => value.is_sign_negative(),
+            | Self::Int(value) => num_traits::Signed::is_negative(value),
+            | Self::Rat(value) => num_traits::Signed::is_negative(value),
+            | Self::Float(value) => value.is_sign_negative(),
         }
     }
 
@@ -73,9 +81,9 @@ impl Num {
     #[must_use]
     pub fn to_rational(&self) -> Option<BigRational> {
         match self {
-            Self::Int(value) => Some(BigRational::from_integer(value.clone())),
-            Self::Rat(value) => Some(value.clone()),
-            Self::Float(_) => None,
+            | Self::Int(value) => Some(BigRational::from_integer(value.clone())),
+            | Self::Rat(value) => Some(value.clone()),
+            | Self::Float(_) => None,
         }
     }
 
@@ -83,9 +91,9 @@ impl Num {
     #[must_use]
     pub fn from_number(number: &Number) -> Self {
         match number {
-            Number::Int(value) => Self::Int(value.clone()),
-            Number::Rat(value) => Self::Rat(value.clone()),
-            Number::Float(value) => Self::Float(*value),
+            | Number::Int(value) => Self::Int(value.clone()),
+            | Number::Rat(value) => Self::Rat(value.clone()),
+            | Number::Float(value) => Self::Float(*value),
         }
     }
 
@@ -100,10 +108,10 @@ impl Num {
     #[must_use]
     pub fn to_number(&self) -> Number {
         match self {
-            Self::Int(value) => Number::Int(value.clone()),
-            Self::Rat(value) if value.is_integer() => Number::Int(value.to_integer()),
-            Self::Rat(value) => Number::Rat(value.clone()),
-            Self::Float(value) => Number::Float(*value),
+            | Self::Int(value) => Number::Int(value.clone()),
+            | Self::Rat(value) if value.is_integer() => Number::Int(value.to_integer()),
+            | Self::Rat(value) => Number::Rat(value.clone()),
+            | Self::Float(value) => Number::Float(*value),
         }
     }
 }
@@ -124,7 +132,10 @@ pub struct Sym {
 impl Sym {
     /// The handle for `term`.
     #[must_use]
-    pub const fn new(session: u64, node: u32) -> Self {
+    pub const fn new(
+        session: u64,
+        node: u32,
+    ) -> Self {
         Self { session, node }
     }
 }
@@ -158,7 +169,11 @@ pub struct UnitVal {
 impl UnitVal {
     /// A linear unit.
     #[must_use]
-    pub fn linear(name: &str, dim: aevia_dim::Dim, scale: aevia_dim::Scale) -> Self {
+    pub fn linear(
+        name: &str,
+        dim: aevia_dim::Dim,
+        scale: aevia_dim::Scale,
+    ) -> Self {
         Self {
             name: name.to_string(),
             display: name.to_string(),
@@ -307,8 +322,8 @@ impl Val {
     #[must_use]
     pub fn as_list(&self) -> Option<&[Self]> {
         match self {
-            Self::Tensor { shape, data } if shape.len() == 1 => Some(data),
-            _ => None,
+            | Self::Tensor { shape, data } if shape.len() == 1 => Some(data),
+            | _ => None,
         }
     }
 
@@ -318,21 +333,26 @@ impl Val {
     ///
     /// Rejects a term handle from another session, and host-only payloads the
     /// kernel has no representation for.
-    pub fn to_rssn(&self, session: SessionId) -> Result<Value, KernelError> {
+    pub fn to_rssn(
+        &self,
+        session: SessionId,
+    ) -> Result<Value, KernelError> {
         Ok(match self {
-            Self::Num(Num::Int(value)) => Value::Int(value.clone()),
+            | Self::Num(Num::Int(value)) => Value::Int(value.clone()),
             // `Num::to_number` collapses an integral rational to `Int`; an
             // exact integer is `Value::Int` in the kernel's model, and a
             // non-normal `Rat` would miss the structural rewrites.
-            Self::Num(number @ Num::Rat(_)) => match number.to_number() {
-                Number::Int(value) => Value::Int(value),
-                other => Value::Real(other),
+            | Self::Num(number @ Num::Rat(_)) => {
+                match number.to_number() {
+                    | Number::Int(value) => Value::Int(value),
+                    | other => Value::Real(other),
+                }
             },
-            Self::Num(Num::Float(value)) => Value::Float(*value),
-            Self::Bool(value) => Value::Bool(*value),
-            Self::Str(value) => Value::String(value.clone()),
-            Self::Symbol(name) => Value::Symbol(name.clone()),
-            Self::Term(sym) => {
+            | Self::Num(Num::Float(value)) => Value::Float(*value),
+            | Self::Bool(value) => Value::Bool(*value),
+            | Self::Str(value) => Value::String(value.clone()),
+            | Self::Symbol(name) => Value::Symbol(name.clone()),
+            | Self::Term(sym) => {
                 if sym.session != session.0 {
                     return Err(KernelError::stale_term(*sym, session.0));
                 }
@@ -345,12 +365,9 @@ impl Val {
                     session,
                     node: sym.node,
                 })
-            }
-            Self::Complex { re, im } => Value::Complex(ComplexValue::Float {
-                re: *re,
-                im: *im,
-            }),
-            Self::Tensor { shape, data } => {
+            },
+            | Self::Complex { re, im } => Value::Complex(ComplexValue::Float { re: *re, im: *im }),
+            | Self::Tensor { shape, data } => {
                 let mut converted = Vec::with_capacity(data.len());
                 for item in data {
                     converted.push(item.to_rssn(session)?);
@@ -368,15 +385,15 @@ impl Val {
                     elem,
                     data: converted,
                 })
-            }
-            Self::Record(fields) => {
+            },
+            | Self::Record(fields) => {
                 let mut converted = Vec::with_capacity(fields.len());
                 for (name, value) in fields {
                     converted.push((name.clone(), value.to_rssn(session)?));
                 }
                 Value::Record(RecordValue { fields: converted })
-            }
-            Self::Variant { tag, payload } => {
+            },
+            | Self::Variant { tag, payload } => {
                 let mut converted = Vec::with_capacity(payload.len());
                 for item in payload {
                     converted.push(item.to_rssn(session)?);
@@ -385,16 +402,20 @@ impl Val {
                     tag: tag.clone(),
                     payload: converted,
                 })
-            }
-            Self::Unit(unit) => Value::Unit(unit.to_rssn()),
-            Self::Quantity { value, unit } => Value::Quantity(QuantityValue {
-                value: Box::new(value.to_rssn(session)?),
-                unit: unit.to_rssn(),
-            }),
-            Self::Opaque { kind, bytes } => Value::Opaque(OpaqueValue {
-                kind: kind.clone(),
-                bytes: bytes.clone(),
-            }),
+            },
+            | Self::Unit(unit) => Value::Unit(unit.to_rssn()),
+            | Self::Quantity { value, unit } => {
+                Value::Quantity(QuantityValue {
+                    value: Box::new(value.to_rssn(session)?),
+                    unit: unit.to_rssn(),
+                })
+            },
+            | Self::Opaque { kind, bytes } => {
+                Value::Opaque(OpaqueValue {
+                    kind: kind.clone(),
+                    bytes: bytes.clone(),
+                })
+            },
         })
     }
 
@@ -404,15 +425,18 @@ impl Val {
     ///
     /// Rejects the values that only exist on the kernel's side of the
     /// boundary (callbacks) and values the bridge cannot represent.
-    pub fn from_rssn(value: &Value, session: SessionId) -> Result<Self, KernelError> {
+    pub fn from_rssn(
+        value: &Value,
+        session: SessionId,
+    ) -> Result<Self, KernelError> {
         Ok(match value {
-            Value::Int(value) => Self::Num(Num::Int(value.clone())),
-            Value::Real(number) => Self::Num(Num::from_number(number)),
-            Value::Float(value) => Self::Num(Num::Float(*value)),
-            Value::Bool(value) => Self::Bool(*value),
-            Value::String(value) => Self::Str(value.clone()),
-            Value::Symbol(name) => Self::Symbol(name.clone()),
-            Value::Term(term) => {
+            | Value::Int(value) => Self::Num(Num::Int(value.clone())),
+            | Value::Real(number) => Self::Num(Num::from_number(number)),
+            | Value::Float(value) => Self::Num(Num::Float(*value)),
+            | Value::Bool(value) => Self::Bool(*value),
+            | Value::String(value) => Self::Str(value.clone()),
+            | Value::Symbol(name) => Self::Symbol(name.clone()),
+            | Value::Term(term) => {
                 if term.session != session {
                     return Err(KernelError::stale_term(
                         Sym::new(term.session.0, term.node),
@@ -420,8 +444,8 @@ impl Val {
                     ));
                 }
                 Self::Term(Sym::new(term.session.0, term.node))
-            }
-            Value::Complex(complex) => {
+            },
+            | Value::Complex(complex) => {
                 // Lossy in both directions: `Val::Complex` holds two `f64`s,
                 // so an exact complex (`ComplexValue::Exact`) loses its
                 // rationals here, and a non-real complex cannot re-enter the
@@ -430,8 +454,8 @@ impl Val {
                 // `NumKind::Complex` has to widen with it.
                 let (re, im) = complex.to_f64();
                 Self::Complex { re, im }
-            }
-            Value::Tensor(tensor) => {
+            },
+            | Value::Tensor(tensor) => {
                 let mut data = Vec::with_capacity(tensor.data.len());
                 for item in &tensor.data {
                     data.push(Self::from_rssn(item, session)?);
@@ -440,8 +464,8 @@ impl Val {
                     shape: tensor.shape.clone(),
                     data,
                 }
-            }
-            Value::Sparse(sparse) => {
+            },
+            | Value::Sparse(sparse) => {
                 // A sparse value becomes a dense one: the host tensor type is
                 // dense, and dropping the zeros would change the shape the
                 // caller sees.
@@ -453,16 +477,19 @@ impl Val {
                         KernelError::of(
                             "E0809",
                             crate::error::Failure::Kernel,
-                            format!("a sparse tensor of shape {:?} is too large to densify", sparse.shape),
+                            format!(
+                                "a sparse tensor of shape {:?} is too large to densify",
+                                sparse.shape
+                            ),
                         )
                     })?;
                 // The zeros carry the element type, not `Int`: a sparse
                 // `Real` matrix densified into `Int` zeros changes the type of
                 // every element the kernel did not store.
                 let zero = match sparse.data.first() {
-                    Some(Value::Float(_)) => Self::Num(Num::Float(0.0)),
-                    Some(Value::Real(_)) => Self::Num(Num::Rat(BigRational::default())),
-                    _ => Self::Num(Num::Int(BigInt::from(0))),
+                    | Some(Value::Float(_)) => Self::Num(Num::Float(0.0)),
+                    | Some(Value::Real(_)) => Self::Num(Num::Rat(BigRational::default())),
+                    | _ => Self::Num(Num::Int(BigInt::from(0))),
                 };
                 let mut data = vec![zero; extent];
                 for (index, item) in sparse.indices.iter().zip(&sparse.data) {
@@ -486,15 +513,15 @@ impl Val {
                     shape: sparse.shape.clone(),
                     data,
                 }
-            }
-            Value::Record(record) => {
+            },
+            | Value::Record(record) => {
                 let mut fields = Vec::with_capacity(record.fields.len());
                 for (name, item) in &record.fields {
                     fields.push((name.clone(), Self::from_rssn(item, session)?));
                 }
                 Self::Record(fields)
-            }
-            Value::Variant(variant) => {
+            },
+            | Value::Variant(variant) => {
                 let mut payload = Vec::with_capacity(variant.payload.len());
                 for item in &variant.payload {
                     payload.push(Self::from_rssn(item, session)?);
@@ -503,27 +530,31 @@ impl Val {
                     tag: variant.tag.clone(),
                     payload,
                 }
-            }
-            Value::Unit(unit) => Self::Unit(UnitVal::from_rssn(unit)),
-            Value::Quantity(quantity) => Self::Quantity {
-                value: Box::new(Self::from_rssn(&quantity.value, session)?),
-                unit: UnitVal::from_rssn(&quantity.unit),
+            },
+            | Value::Unit(unit) => Self::Unit(UnitVal::from_rssn(unit)),
+            | Value::Quantity(quantity) => {
+                Self::Quantity {
+                    value: Box::new(Self::from_rssn(&quantity.value, session)?),
+                    unit: UnitVal::from_rssn(&quantity.unit),
+                }
             },
             // The payload is what Aevia can hold; `Dyn`'s representation
             // (`repr`) and its dimension (`dim`) have no mirror in `Val`, and
             // the dimension is re-attached by the caller from the static type.
             // Recorded as a requirement in `.workbuddy-ai/audit/bridge-fixed.md`.
-            Value::Dyn(dynamic) => Self::from_rssn(&dynamic.value, session)?,
-            Value::Opaque(opaque) => Self::Opaque {
-                kind: opaque.kind.clone(),
-                bytes: opaque.bytes.clone(),
+            | Value::Dyn(dynamic) => Self::from_rssn(&dynamic.value, session)?,
+            | Value::Opaque(opaque) => {
+                Self::Opaque {
+                    kind: opaque.kind.clone(),
+                    bytes: opaque.bytes.clone(),
+                }
             },
-            Value::Function(_) => {
+            | Value::Function(_) => {
                 return Err(KernelError::new(
                     "E0899",
                     "a host callback cannot cross back into Aevia",
                 ));
-            }
+            },
         })
     }
 
@@ -538,7 +569,10 @@ impl Val {
     /// # Errors
     ///
     /// Rejects a root or condition expression that belongs to another session.
-    pub fn from_solutions(solutions: &Solutions, session: SessionId) -> Result<Self, KernelError> {
+    pub fn from_solutions(
+        solutions: &Solutions,
+        session: SessionId,
+    ) -> Result<Self, KernelError> {
         Self::from_rssn(&solutions.to_value(), session)
     }
 
@@ -552,7 +586,10 @@ impl Val {
     ///
     /// `E0809` when the value is not a record, a field is missing or
     /// mistyped, or the multiplicities do not line up with the roots.
-    pub fn to_solutions(&self, session: SessionId) -> Result<Solutions, KernelError> {
+    pub fn to_solutions(
+        &self,
+        session: SessionId,
+    ) -> Result<Solutions, KernelError> {
         let value = self.to_rssn(session)?;
         Solutions::from_value(&value).map_err(|error| {
             KernelError::of(
@@ -567,49 +604,52 @@ impl Val {
     #[must_use]
     pub fn text(&self) -> String {
         match self {
-            Self::Num(Num::Int(value)) => value.to_string(),
-            Self::Num(Num::Rat(value)) => {
+            | Self::Num(Num::Int(value)) => value.to_string(),
+            | Self::Num(Num::Rat(value)) => {
                 if value.denom().is_one() {
                     value.numer().to_string()
                 } else {
                     value.to_string()
                 }
-            }
-            Self::Num(Num::Float(value)) => crate::format_float(*value),
-            Self::Bool(value) => value.to_string(),
-            Self::Str(value) => value.clone(),
-            Self::Symbol(name) => name.clone(),
-            Self::Term(sym) => format!("<term {}:{}>", sym.session, sym.node),
-            Self::Complex { re, im } => format!("{re}{im:+}i"),
-            Self::Tensor { shape, data } => {
+            },
+            | Self::Num(Num::Float(value)) => crate::format_float(*value),
+            | Self::Bool(value) => value.to_string(),
+            | Self::Str(value) => value.clone(),
+            | Self::Symbol(name) => name.clone(),
+            | Self::Term(sym) => format!("<term {}:{}>", sym.session, sym.node),
+            | Self::Complex { re, im } => format!("{re}{im:+}i"),
+            | Self::Tensor { shape, data } => {
                 let _ = shape;
                 let items: Vec<String> = data.iter().map(Self::text).collect();
                 format!("[{}]", items.join(", "))
-            }
-            Self::Record(fields) => {
+            },
+            | Self::Record(fields) => {
                 let items: Vec<String> = fields
                     .iter()
                     .map(|(name, value)| format!("{name} = {}", value.text()))
                     .collect();
                 format!("{{ {} }}", items.join(", "))
-            }
-            Self::Variant { tag, payload } => {
+            },
+            | Self::Variant { tag, payload } => {
                 if payload.is_empty() {
                     tag.clone()
                 } else {
                     let items: Vec<String> = payload.iter().map(Self::text).collect();
                     format!("{tag}({})", items.join(", "))
                 }
-            }
-            Self::Unit(unit) => unit.display.clone(),
-            Self::Quantity { value, unit } => format!("{} {}", value.text(), unit.display),
-            Self::Opaque { kind, .. } => format!("<{kind}>"),
+            },
+            | Self::Unit(unit) => unit.display.clone(),
+            | Self::Quantity { value, unit } => format!("{} {}", value.text(), unit.display),
+            | Self::Opaque { kind, .. } => format!("<{kind}>"),
         }
     }
 }
 
 impl fmt::Display for Val {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(&self.text())
     }
 }

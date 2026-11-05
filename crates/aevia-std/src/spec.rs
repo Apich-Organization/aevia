@@ -100,8 +100,8 @@ pub fn sections(source: &str) -> Vec<Section> {
         }
         // A `#` starts a comment in the specification's signatures.
         let line = match raw.find('#') {
-            Some(at) => &raw[..at],
-            None => raw,
+            | Some(at) => &raw[..at],
+            | None => raw,
         };
         let opens = i32::try_from(line.matches('{').count()).unwrap_or(0);
         let closes = i32::try_from(line.matches('}').count()).unwrap_or(0);
@@ -154,11 +154,11 @@ pub fn sections(source: &str) -> Vec<Section> {
 
 /// The number and title of a `## 8.x …` or `### 8.x.y …` heading.
 fn chapter8_heading(line: &str) -> Option<(String, String)> {
-    let rest = line.strip_prefix("### ").or_else(|| line.strip_prefix("## "))?;
+    let rest = line
+        .strip_prefix("### ")
+        .or_else(|| line.strip_prefix("## "))?;
     let rest = rest.trim_start();
-    let number_end = rest
-        .find(char::is_whitespace)
-        .unwrap_or(rest.len());
+    let number_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let number = &rest[..number_end];
     let mut parts = number.split('.');
     if parts.next() != Some("8") {
@@ -228,7 +228,11 @@ fn declared_names(line: &str) -> Option<Vec<String>> {
         }
         names.push(word.to_string());
     }
-    if names.is_empty() { None } else { Some(names) }
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
 }
 
 /// Removes every `<…>` group, keeping the identifier in front of it.
@@ -237,10 +241,10 @@ fn strip_type_arguments(text: &str) -> String {
     let mut depth = 0usize;
     for character in text.chars() {
         match character {
-            '<' => depth += 1,
-            '>' => depth = depth.saturating_sub(1),
-            other if depth == 0 => out.push(other),
-            _ => {}
+            | '<' => depth += 1,
+            | '>' => depth = depth.saturating_sub(1),
+            | other if depth == 0 => out.push(other),
+            | _ => {},
         }
     }
     out

@@ -21,16 +21,44 @@
 //! records `Capture::Capture(index)`. A capture is added the first time the
 //! name is mentioned, so the environment order is deterministic and testable.
 
-use crate::{
-    Action, Arm, Atom, Block, Call, CallKind, Capture, DoPlan, DoTerminal, FnDecl, Function,
-    InstanceDecl, Let, LetDecl, MethodDecl, Module, Pattern, Rhs, Slice, Stmt, StrPart, Tail,
-};
-use aevia_syntax::ast::{
-    BinOp, BlockStmt, Decl, DeclKind, DoStmt, Expr, ExprKind, MatchArm, Param, Pat, PatKind,
-    SliceAst, StrPiece,
-};
+use crate::Action;
+use crate::Arm;
+use crate::Atom;
+use crate::Block;
+use crate::Call;
+use crate::CallKind;
+use crate::Capture;
+use crate::DoPlan;
+use crate::DoTerminal;
+use crate::FnDecl;
+use crate::Function;
+use crate::InstanceDecl;
+use crate::Let;
+use crate::LetDecl;
+use crate::MethodDecl;
+use crate::Module;
+use crate::Pattern;
+use crate::Rhs;
+use crate::Slice;
+use crate::Stmt;
+use crate::StrPart;
+use crate::Tail;
 use aevia_syntax::Span;
-use aevia_types::check::{DictionaryUse, RssnCall};
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::BlockStmt;
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::DoStmt;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::MatchArm;
+use aevia_syntax::ast::Param;
+use aevia_syntax::ast::Pat;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::SliceAst;
+use aevia_syntax::ast::StrPiece;
+use aevia_types::check::DictionaryUse;
+use aevia_types::check::RssnCall;
 use aevia_types::ty::Rep;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -53,14 +81,14 @@ pub fn lower_module_with_literals(
     let mut out = Module::default();
     for decl in &module.decls {
         match &decl.kind {
-            DeclKind::Fn {
-                name, args, body, ..
-            } => out.fns.push(FnDecl {
-                name: name.clone(),
-                function: lowerer.top_function(name, args, body, decl.span),
-                span: decl.span,
-            }),
-            DeclKind::Let { pattern, value, .. } => {
+            | DeclKind::Fn { name, args, body, .. } => {
+                out.fns.push(FnDecl {
+                    name: name.clone(),
+                    function: lowerer.top_function(name, args, body, decl.span),
+                    span: decl.span,
+                })
+            },
+            | DeclKind::Let { pattern, value, .. } => {
                 let (block, nslots) = lowerer.top_value(value);
                 out.lets.push(LetDecl {
                     pattern: pattern.clone(),
@@ -68,8 +96,8 @@ pub fn lower_module_with_literals(
                     nslots,
                     span: decl.span,
                 });
-            }
-            DeclKind::Instance { class, ty, methods } => {
+            },
+            | DeclKind::Instance { class, ty, methods } => {
                 let mut lowered = Vec::with_capacity(methods.len());
                 for method in methods {
                     lowered.push(MethodDecl {
@@ -88,8 +116,8 @@ pub fn lower_module_with_literals(
                     head: ty.clone(),
                     methods: lowered,
                 });
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
     out
@@ -140,14 +168,14 @@ pub fn lower_decl_with_literals(
 ) -> Option<LoweredDecl> {
     let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
     match &decl.kind {
-        DeclKind::Fn {
-            name, args, body, ..
-        } => Some(LoweredDecl::Fn(FnDecl {
-            name: name.clone(),
-            function: lowerer.top_function(name, args, body, decl.span),
-            span: decl.span,
-        })),
-        DeclKind::Let { pattern, value, .. } => {
+        | DeclKind::Fn { name, args, body, .. } => {
+            Some(LoweredDecl::Fn(FnDecl {
+                name: name.clone(),
+                function: lowerer.top_function(name, args, body, decl.span),
+                span: decl.span,
+            }))
+        },
+        | DeclKind::Let { pattern, value, .. } => {
             let (block, nslots) = lowerer.top_value(value);
             Some(LoweredDecl::Let(LetDecl {
                 pattern: pattern.clone(),
@@ -155,8 +183,8 @@ pub fn lower_decl_with_literals(
                 nslots,
                 span: decl.span,
             }))
-        }
-        DeclKind::Instance { class, ty, methods } => {
+        },
+        | DeclKind::Instance { class, ty, methods } => {
             let mut lowered = Vec::with_capacity(methods.len());
             for method in methods {
                 lowered.push(MethodDecl {
@@ -175,8 +203,8 @@ pub fn lower_decl_with_literals(
                 head: ty.clone(),
                 methods: lowered,
             }))
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }
 
@@ -190,7 +218,10 @@ struct FnState {
 }
 
 impl FnState {
-    fn new(name: String, _span: Span) -> Self {
+    fn new(
+        name: String,
+        _span: Span,
+    ) -> Self {
         Self {
             name,
             nslots: 0,
@@ -244,7 +275,10 @@ impl Lowerer {
     }
 
     /// The representation the checker instantiated for the literal at `span`.
-    fn literal_rep(&self, span: Span) -> Option<Rep> {
+    fn literal_rep(
+        &self,
+        span: Span,
+    ) -> Option<Rep> {
         self.literal_reps.get(&span).copied()
     }
 
@@ -269,7 +303,11 @@ impl Lowerer {
         self.state().scopes.pop();
     }
 
-    fn declare(&mut self, name: &str, place: Capture) {
+    fn declare(
+        &mut self,
+        name: &str,
+        place: Capture,
+    ) {
         let state = self.state();
         state
             .scopes
@@ -278,7 +316,11 @@ impl Lowerer {
             .insert(name.to_string(), place);
     }
 
-    fn add_capture(&mut self, level: usize, key: Capture) -> u32 {
+    fn add_capture(
+        &mut self,
+        level: usize,
+        key: Capture,
+    ) -> u32 {
         let state = &mut self.fns[level];
         if let Some(index) = state.capture_index.get(&key) {
             return *index;
@@ -291,7 +333,10 @@ impl Lowerer {
 
     /// Resolves a name to an atom, threading a capture through every function
     /// between the one that binds it and the one that uses it.
-    fn resolve(&mut self, name: &str) -> Atom {
+    fn resolve(
+        &mut self,
+        name: &str,
+    ) -> Atom {
         let last = self.fns.len() - 1;
         let mut found: Option<(usize, Capture)> = None;
         for level in (0..=last).rev() {
@@ -311,8 +356,8 @@ impl Lowerer {
         };
         if level == last {
             return match place {
-                Capture::Local(slot) => Atom::Local(slot),
-                Capture::Capture(index) => Atom::Capture(index),
+                | Capture::Local(slot) => Atom::Local(slot),
+                | Capture::Capture(index) => Atom::Capture(index),
             };
         }
         let mut key = place;
@@ -324,7 +369,12 @@ impl Lowerer {
         Atom::Capture(index)
     }
 
-    fn emit(&mut self, builder: &mut Builder, rhs: Rhs, span: Span) -> Atom {
+    fn emit(
+        &mut self,
+        builder: &mut Builder,
+        rhs: Rhs,
+        span: Span,
+    ) -> Atom {
         let slot = self.fresh_slot();
         builder.stmts.push(Stmt::Let(Let { slot, rhs, span }));
         Atom::Local(slot)
@@ -332,19 +382,37 @@ impl Lowerer {
 
     // ----- functions ------------------------------------------------------
 
-    fn top_function(&mut self, name: &str, params: &[Param], body: &Expr, span: Span) -> Rc<Function> {
+    fn top_function(
+        &mut self,
+        name: &str,
+        params: &[Param],
+        body: &Expr,
+        span: Span,
+    ) -> Rc<Function> {
         self.lambda(name.to_string(), params, body, span)
     }
 
-    fn top_value(&mut self, value: &Expr) -> (Block, u32) {
+    fn top_value(
+        &mut self,
+        value: &Expr,
+    ) -> (Block, u32) {
         self.fns.push(FnState::new("<top>".to_string(), value.span));
         let block = self.block(value);
         let state = self.fns.pop().expect("the top-level state");
-        debug_assert!(state.captures.is_empty(), "a top-level value captures nothing");
+        debug_assert!(
+            state.captures.is_empty(),
+            "a top-level value captures nothing"
+        );
         (block, state.nslots)
     }
 
-    fn lambda(&mut self, name: String, params: &[Param], body: &Expr, span: Span) -> Rc<Function> {
+    fn lambda(
+        &mut self,
+        name: String,
+        params: &[Param],
+        body: &Expr,
+        span: Span,
+    ) -> Rc<Function> {
         self.fns.push(FnState::new(name, span));
         let patterns: Vec<Pattern> = params
             .iter()
@@ -364,14 +432,20 @@ impl Lowerer {
 
     // ----- blocks ---------------------------------------------------------
 
-    fn block(&mut self, expr: &Expr) -> Block {
+    fn block(
+        &mut self,
+        expr: &Expr,
+    ) -> Block {
         self.push_scope();
         let block = self.block_inner(expr);
         self.pop_scope();
         block
     }
 
-    fn block_inner(&mut self, expr: &Expr) -> Block {
+    fn block_inner(
+        &mut self,
+        expr: &Expr,
+    ) -> Block {
         let mut builder = Builder::default();
         let tail = self.tail(expr, &mut builder);
         Block {
@@ -380,9 +454,13 @@ impl Lowerer {
         }
     }
 
-    fn tail(&mut self, expr: &Expr, builder: &mut Builder) -> Tail {
+    fn tail(
+        &mut self,
+        expr: &Expr,
+        builder: &mut Builder,
+    ) -> Tail {
         match &expr.kind {
-            ExprKind::If {
+            | ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
@@ -395,20 +473,17 @@ impl Lowerer {
                     else_block: Rc::new(self.block(else_branch)),
                     span: expr.span,
                 }
-            }
-            ExprKind::Match { scrutinee, arms } => {
+            },
+            | ExprKind::Match { scrutinee, arms } => {
                 let subject = self.value(scrutinee, builder);
                 Tail::Match {
                     scrutinee: subject,
                     arms: self.arms(arms),
                     span: expr.span,
                 }
-            }
-            ExprKind::LetIn {
-                pattern,
-                value,
-                body,
-                ..
+            },
+            | ExprKind::LetIn {
+                pattern, value, body, ..
             } => {
                 let atom = self.value(value, builder);
                 self.push_scope();
@@ -416,49 +491,54 @@ impl Lowerer {
                 let tail = self.tail(body, builder);
                 self.pop_scope();
                 tail
-            }
-            ExprKind::Block { stmts, tail } => {
+            },
+            | ExprKind::Block { stmts, tail } => {
                 self.push_scope();
                 for stmt in stmts {
                     self.statement(stmt, builder);
                 }
                 let result = match tail {
-                    Some(tail) => self.tail(tail, builder),
-                    None => Tail::Return {
-                        atom: Atom::Unit,
-                        span: expr.span,
+                    | Some(tail) => self.tail(tail, builder),
+                    | None => {
+                        Tail::Return {
+                            atom: Atom::Unit,
+                            span: expr.span,
+                        }
                     },
                 };
                 self.pop_scope();
                 result
-            }
-            ExprKind::Call { callee, args } => match self.call_rhs(expr, callee, args, builder) {
-                Rhs::Call(call) => Tail::Call(call),
-                other => {
-                    let atom = self.emit(builder, other, expr.span);
-                    Tail::Return {
-                        atom,
-                        span: expr.span,
-                    }
+            },
+            | ExprKind::Call { callee, args } => {
+                match self.call_rhs(expr, callee, args, builder) {
+                    | Rhs::Call(call) => Tail::Call(call),
+                    | other => {
+                        let atom = self.emit(builder, other, expr.span);
+                        Tail::Return {
+                            atom,
+                            span: expr.span,
+                        }
+                    },
                 }
             },
-            _ => {
+            | _ => {
                 let atom = self.value(expr, builder);
                 Tail::Return {
                     atom,
                     span: expr.span,
                 }
-            }
+            },
         }
     }
 
-    fn statement(&mut self, stmt: &BlockStmt, builder: &mut Builder) {
+    fn statement(
+        &mut self,
+        stmt: &BlockStmt,
+        builder: &mut Builder,
+    ) {
         match stmt {
-            BlockStmt::Let {
-                pattern,
-                value,
-                span,
-                ..
+            | BlockStmt::Let {
+                pattern, value, span, ..
             } => {
                 if let (PatKind::Var(name), ExprKind::Lambda { params, body, .. }) =
                     (&pattern.kind, &value.kind)
@@ -471,15 +551,12 @@ impl Lowerer {
                 }
                 let atom = self.value(value, builder);
                 self.bind_value(pattern, atom, builder);
-            }
-            BlockStmt::Fn(decl) => {
-                if let DeclKind::Fn {
-                    name, args, body, ..
-                } = &decl.kind
-                {
+            },
+            | BlockStmt::Fn(decl) => {
+                if let DeclKind::Fn { name, args, body, .. } = &decl.kind {
                     self.recursive(name, args, body, decl.span, decl.span, builder);
                 }
-            }
+            },
         }
     }
 
@@ -503,11 +580,13 @@ impl Lowerer {
         // A binding whose closure never mentions itself needs no patch step:
         // emit the plain closure, which is both cheaper and easier to read.
         let rhs = match self_capture {
-            Some(index) => Rhs::RecClosure {
-                function,
-                self_capture: Some(index),
+            | Some(index) => {
+                Rhs::RecClosure {
+                    function,
+                    self_capture: Some(index),
+                }
             },
-            None => Rhs::Closure(function),
+            | None => Rhs::Closure(function),
         };
         builder.stmts.push(Stmt::Let(Let { slot, rhs, span }));
     }
@@ -517,9 +596,14 @@ impl Lowerer {
     /// A plain `let x = e` becomes a slot; anything with structure becomes a
     /// `Bind` statement, which the runtime matches exactly as `bind_pattern`
     /// does and reports `E0308` at the same span when it does not match.
-    fn bind_value(&mut self, pattern: &Pat, atom: Atom, builder: &mut Builder) {
+    fn bind_value(
+        &mut self,
+        pattern: &Pat,
+        atom: Atom,
+        builder: &mut Builder,
+    ) {
         match &pattern.kind {
-            PatKind::Var(name) => {
+            | PatKind::Var(name) => {
                 if let Atom::Local(slot) = atom {
                     self.declare(name, Capture::Local(slot));
                     return;
@@ -531,20 +615,23 @@ impl Lowerer {
                     rhs: Rhs::Atom(atom),
                     span: pattern.span,
                 }));
-            }
-            PatKind::Wildcard => {}
-            _ => {
+            },
+            | PatKind::Wildcard => {},
+            | _ => {
                 let lowered = self.pattern(pattern);
                 builder.stmts.push(Stmt::Bind {
                     pattern: lowered,
                     atom,
                     span: pattern.span,
                 });
-            }
+            },
         }
     }
 
-    fn arms(&mut self, arms: &[MatchArm]) -> Vec<Arm> {
+    fn arms(
+        &mut self,
+        arms: &[MatchArm],
+    ) -> Vec<Arm> {
         arms.iter()
             .map(|arm| {
                 self.push_scope();
@@ -562,48 +649,57 @@ impl Lowerer {
             .collect()
     }
 
-    fn pattern(&mut self, pattern: &Pat) -> Pattern {
+    fn pattern(
+        &mut self,
+        pattern: &Pat,
+    ) -> Pattern {
         match &pattern.kind {
-            PatKind::Error => Pattern::Error,
-            PatKind::Wildcard => Pattern::Wildcard,
-            PatKind::Var(name) => {
+            | PatKind::Error => Pattern::Error,
+            | PatKind::Wildcard => Pattern::Wildcard,
+            | PatKind::Var(name) => {
                 let slot = self.fresh_slot();
                 self.declare(name, Capture::Local(slot));
                 Pattern::Bind { slot, inner: None }
-            }
-            PatKind::Ctor { name, args } => Pattern::Ctor {
-                name: name.clone(),
-                args: args.iter().map(|arg| self.pattern(arg)).collect(),
             },
-            PatKind::Record(fields) => Pattern::Record(
-                fields
-                    .iter()
-                    .map(|(name, sub)| {
-                        let lowered = match sub {
-                            Some(sub) => self.pattern(sub),
-                            None => {
-                                let slot = self.fresh_slot();
-                                self.declare(name, Capture::Local(slot));
-                                Pattern::Bind { slot, inner: None }
-                            }
-                        };
-                        (name.clone(), lowered)
-                    })
-                    .collect(),
-            ),
-            PatKind::Tuple(items) => {
+            | PatKind::Ctor { name, args } => {
+                Pattern::Ctor {
+                    name: name.clone(),
+                    args: args.iter().map(|arg| self.pattern(arg)).collect(),
+                }
+            },
+            | PatKind::Record(fields) => {
+                Pattern::Record(
+                    fields
+                        .iter()
+                        .map(|(name, sub)| {
+                            let lowered = match sub {
+                                | Some(sub) => self.pattern(sub),
+                                | None => {
+                                    let slot = self.fresh_slot();
+                                    self.declare(name, Capture::Local(slot));
+                                    Pattern::Bind { slot, inner: None }
+                                },
+                            };
+                            (name.clone(), lowered)
+                        })
+                        .collect(),
+                )
+            },
+            | PatKind::Tuple(items) => {
                 Pattern::Tuple(items.iter().map(|item| self.pattern(item)).collect())
-            }
-            PatKind::Tensor { items, rest } => Pattern::Tensor {
-                items: items.iter().map(|item| self.pattern(item)).collect(),
-                rest: rest.as_ref().map(|name| {
-                    let slot = self.fresh_slot();
-                    self.declare(name, Capture::Local(slot));
-                    slot
-                }),
             },
-            PatKind::Lit(literal) => Pattern::Lit(literal.clone()),
-            PatKind::As { pattern: inner, name } => {
+            | PatKind::Tensor { items, rest } => {
+                Pattern::Tensor {
+                    items: items.iter().map(|item| self.pattern(item)).collect(),
+                    rest: rest.as_ref().map(|name| {
+                        let slot = self.fresh_slot();
+                        self.declare(name, Capture::Local(slot));
+                        slot
+                    }),
+                }
+            },
+            | PatKind::Lit(literal) => Pattern::Lit(literal.clone()),
+            | PatKind::As { pattern: inner, name } => {
                 let lowered = self.pattern(inner);
                 let slot = self.fresh_slot();
                 self.declare(name, Capture::Local(slot));
@@ -611,44 +707,58 @@ impl Lowerer {
                     slot,
                     inner: Some(Box::new(lowered)),
                 }
-            }
-            PatKind::Annot { pattern: inner, .. } => self.pattern(inner),
+            },
+            | PatKind::Annot { pattern: inner, .. } => self.pattern(inner),
         }
     }
 
     // ----- expressions ----------------------------------------------------
 
-    fn value(&mut self, expr: &Expr, builder: &mut Builder) -> Atom {
+    fn value(
+        &mut self,
+        expr: &Expr,
+        builder: &mut Builder,
+    ) -> Atom {
         match &expr.kind {
-            ExprKind::Error | ExprKind::UnitLit => Atom::Unit,
-            ExprKind::Bool(value) => Atom::Bool(*value),
+            | ExprKind::Error | ExprKind::UnitLit => Atom::Unit,
+            | ExprKind::Bool(value) => Atom::Bool(*value),
             // §3.10.1 / §6.3.2: the checker's per-literal representation is the
             // runtime's. A literal in a `Float` context is an f64 atom; one in a
             // `Real` context is exact; `Int` stays exact and integral.
-            ExprKind::Int(value) => match self.literal_rep(expr.span) {
-                Some(Rep::Float) => Atom::Float(
-                    num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
-                ),
-                Some(Rep::Real) => Atom::Exact(num_rational::BigRational::from_integer(value.clone())),
-                Some(Rep::Complex) => Atom::Complex {
-                    re: num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
-                    im: 0.0,
-                },
-                _ => Atom::Int(value.clone()),
+            | ExprKind::Int(value) => {
+                match self.literal_rep(expr.span) {
+                    | Some(Rep::Float) => {
+                        Atom::Float(num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN))
+                    },
+                    | Some(Rep::Real) => {
+                        Atom::Exact(num_rational::BigRational::from_integer(value.clone()))
+                    },
+                    | Some(Rep::Complex) => {
+                        Atom::Complex {
+                            re: num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+                            im: 0.0,
+                        }
+                    },
+                    | _ => Atom::Int(value.clone()),
+                }
             },
-            ExprKind::Float(text) => match self.literal_rep(expr.span) {
-                Some(Rep::Real) => Atom::Exact(
-                    exact_decimal(text).unwrap_or_else(|| {
-                        num_rational::BigRational::from_integer(num_bigint::BigInt::from(0))
-                    }),
-                ),
-                Some(Rep::Complex) => Atom::Complex {
-                    re: parse_float_literal(text),
-                    im: 0.0,
-                },
-                _ => Atom::Float(parse_float_literal(text)),
+            | ExprKind::Float(text) => {
+                match self.literal_rep(expr.span) {
+                    | Some(Rep::Real) => {
+                        Atom::Exact(exact_decimal(text).unwrap_or_else(|| {
+                            num_rational::BigRational::from_integer(num_bigint::BigInt::from(0))
+                        }))
+                    },
+                    | Some(Rep::Complex) => {
+                        Atom::Complex {
+                            re: parse_float_literal(text),
+                            im: 0.0,
+                        }
+                    },
+                    | _ => Atom::Float(parse_float_literal(text)),
+                }
             },
-            ExprKind::Str(pieces) => {
+            | ExprKind::Str(pieces) => {
                 if pieces
                     .iter()
                     .all(|piece| matches!(piece, StrPiece::Text(_)))
@@ -664,18 +774,18 @@ impl Lowerer {
                     let mut parts = Vec::with_capacity(pieces.len());
                     for piece in pieces {
                         match piece {
-                            StrPiece::Text(text) => parts.push(StrPart::Text(text.clone())),
-                            StrPiece::Expr(inner) => {
+                            | StrPiece::Text(text) => parts.push(StrPart::Text(text.clone())),
+                            | StrPiece::Expr(inner) => {
                                 let atom = self.value(inner, builder);
                                 parts.push(StrPart::Atom(atom));
-                            }
+                            },
                         }
                     }
                     self.emit(builder, Rhs::Str(parts), expr.span)
                 }
-            }
-            ExprKind::Var(name) => self.resolve(name),
-            ExprKind::QName(path) => {
+            },
+            | ExprKind::Var(name) => self.resolve(name),
+            | ExprKind::QName(path) => {
                 if path.len() == 2 && path[0] == "Rssn" {
                     self.emit(
                         builder,
@@ -687,60 +797,44 @@ impl Lowerer {
                 } else {
                     Atom::Global(path.join("."))
                 }
-            }
-            ExprKind::Unary { op, operand } => {
+            },
+            | ExprKind::Unary { op, operand } => {
                 let operand = self.value(operand, builder);
                 self.emit(builder, Rhs::Unary { op: *op, operand }, expr.span)
-            }
-            ExprKind::Binary { op, left, right } => {
+            },
+            | ExprKind::Binary { op, left, right } => {
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let left = self.value(left, builder);
                     let right = Rc::new(self.block(right));
-                    self.emit(
-                        builder,
-                        Rhs::AndOr {
-                            op: *op,
-                            left,
-                            right,
-                        },
-                        expr.span,
-                    )
+                    self.emit(builder, Rhs::AndOr { op: *op, left, right }, expr.span)
                 } else {
                     let left = self.value(left, builder);
                     let right = self.value(right, builder);
-                    self.emit(
-                        builder,
-                        Rhs::Binary {
-                            op: *op,
-                            left,
-                            right,
-                        },
-                        expr.span,
-                    )
+                    self.emit(builder, Rhs::Binary { op: *op, left, right }, expr.span)
                 }
-            }
-            ExprKind::Call { callee, args } => {
+            },
+            | ExprKind::Call { callee, args } => {
                 let rhs = self.call_rhs(expr, callee, args, builder);
                 self.emit(builder, rhs, expr.span)
-            }
-            ExprKind::TypeApp { callee, .. } => self.value(callee, builder),
-            ExprKind::Lambda { params, body, .. } => {
+            },
+            | ExprKind::TypeApp { callee, .. } => self.value(callee, builder),
+            | ExprKind::Lambda { params, body, .. } => {
                 let function = self.lambda("<lambda>".to_string(), params, body, expr.span);
                 self.emit(builder, Rhs::Closure(function), expr.span)
-            }
-            ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::LetIn { .. } => {
+            },
+            | ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::LetIn { .. } => {
                 let block = self.block(expr);
                 self.emit(builder, Rhs::Block(Rc::new(block)), expr.span)
-            }
-            ExprKind::Block { .. } => {
+            },
+            | ExprKind::Block { .. } => {
                 let block = self.block(expr);
                 self.emit(builder, Rhs::Block(Rc::new(block)), expr.span)
-            }
-            ExprKind::Do { stmts } => {
+            },
+            | ExprKind::Do { stmts } => {
                 let plan = self.do_plan(stmts, builder);
                 self.emit(builder, Rhs::Do(plan), expr.span)
-            }
-            ExprKind::Record { base, fields } => {
+            },
+            | ExprKind::Record { base, fields } => {
                 let base = base.as_ref().map(|base| self.value(base, builder));
                 let mut lowered = Vec::with_capacity(fields.len());
                 for (name, value) in fields {
@@ -755,14 +849,10 @@ impl Lowerer {
                     },
                     expr.span,
                 )
-            }
-            ExprKind::Field { base, name } => {
+            },
+            | ExprKind::Field { base, name } => {
                 if is_rssn_root(base) {
-                    return self.emit(
-                        builder,
-                        Rhs::RssnMember { name: name.clone() },
-                        expr.span,
-                    );
+                    return self.emit(builder, Rhs::RssnMember { name: name.clone() }, expr.span);
                 }
                 let qualified = qualified_name(base, name);
                 let base = self.value(base, builder);
@@ -775,33 +865,33 @@ impl Lowerer {
                     },
                     expr.span,
                 )
-            }
-            ExprKind::Tuple(items) => {
+            },
+            | ExprKind::Tuple(items) => {
                 let mut lowered = Vec::with_capacity(items.len());
                 for item in items {
                     let atom = self.value(item, builder);
                     lowered.push(atom);
                 }
                 self.emit(builder, Rhs::Tuple(lowered), expr.span)
-            }
-            ExprKind::Tensor(items) => {
+            },
+            | ExprKind::Tensor(items) => {
                 let mut lowered = Vec::with_capacity(items.len());
                 for item in items {
                     let atom = self.value(item, builder);
                     lowered.push(atom);
                 }
                 self.emit(builder, Rhs::Tensor(lowered), expr.span)
-            }
-            ExprKind::Index { base, indices } => {
+            },
+            | ExprKind::Index { base, indices } => {
                 let base = self.value(base, builder);
                 let mut lowered = Vec::with_capacity(indices.len());
                 for index in indices {
                     match index {
-                        SliceAst::Index(expr) => {
+                        | SliceAst::Index(expr) => {
                             let atom = self.value(expr, builder);
                             lowered.push(Slice::Index(atom));
-                        }
-                        SliceAst::Range {
+                        },
+                        | SliceAst::Range {
                             start,
                             end,
                             inclusive,
@@ -816,7 +906,7 @@ impl Lowerer {
                                 inclusive: *inclusive,
                                 step,
                             });
-                        }
+                        },
                     }
                 }
                 self.emit(
@@ -827,21 +917,23 @@ impl Lowerer {
                     },
                     expr.span,
                 )
-            }
-            ExprKind::Annot { expr: inner, .. } => self.value(inner, builder),
-            ExprKind::Placeholder => self.emit(
-                builder,
-                Rhs::Error {
-                    code: "E0202",
-                    message: "`_` cannot be evaluated outside a call".to_string(),
-                },
-                expr.span,
-            ),
-            ExprKind::Try(inner) => {
+            },
+            | ExprKind::Annot { expr: inner, .. } => self.value(inner, builder),
+            | ExprKind::Placeholder => {
+                self.emit(
+                    builder,
+                    Rhs::Error {
+                        code: "E0202",
+                        message: "`_` cannot be evaluated outside a call".to_string(),
+                    },
+                    expr.span,
+                )
+            },
+            | ExprKind::Try(inner) => {
                 let atom = self.value(inner, builder);
                 self.emit(builder, Rhs::Try(atom), expr.span)
-            }
-            ExprKind::Factorial { expr: inner, double } => {
+            },
+            | ExprKind::Factorial { expr: inner, double } => {
                 let value = self.value(inner, builder);
                 self.emit(
                     builder,
@@ -851,8 +943,8 @@ impl Lowerer {
                     },
                     expr.span,
                 )
-            }
-            ExprKind::Quantity { value, unit } => {
+            },
+            | ExprKind::Quantity { value, unit } => {
                 // §3.10.1: the checker instantiated this literal as `Float` (or
                 // as `Real`); the flag carries that decision into evaluation so
                 // a `Float`-context quantity is a float and a `Real`-context one
@@ -867,7 +959,7 @@ impl Lowerer {
                     },
                     expr.span,
                 )
-            }
+            },
         }
     }
 
@@ -973,41 +1065,42 @@ impl Lowerer {
         })
     }
 
-    fn values(&mut self, args: &[Expr], builder: &mut Builder) -> Vec<Atom> {
+    fn values(
+        &mut self,
+        args: &[Expr],
+        builder: &mut Builder,
+    ) -> Vec<Atom> {
         args.iter().map(|arg| self.value(arg, builder)).collect()
     }
 
     // ----- `do` -----------------------------------------------------------
 
-    fn do_plan(&mut self, stmts: &[DoStmt], builder: &mut Builder) -> DoPlan {
+    fn do_plan(
+        &mut self,
+        stmts: &[DoStmt],
+        builder: &mut Builder,
+    ) -> DoPlan {
         let mut prefix = Vec::new();
         for (index, stmt) in stmts.iter().enumerate() {
             let rest = &stmts[index + 1..];
             match stmt {
-                DoStmt::Expr(expr) => {
+                | DoStmt::Expr(expr) => {
                     let atom = self.value(expr, builder);
                     prefix.push(Action {
                         atom,
                         span: expr.span,
                     });
-                }
-                DoStmt::Let {
-                    pattern,
-                    value,
-                    span,
-                    ..
+                },
+                | DoStmt::Let {
+                    pattern, value, span, ..
                 } => {
                     let thunk = self.do_thunk(Some((pattern, value)), None, rest, *span);
                     return DoPlan {
                         prefix,
                         terminal: DoTerminal::Let { thunk },
                     };
-                }
-                DoStmt::Bind {
-                    pattern,
-                    value,
-                    span,
-                } => {
+                },
+                | DoStmt::Bind { pattern, value, span } => {
                     let action = self.value(value, builder);
                     let continuation = self.do_thunk(None, Some(pattern), rest, *span);
                     return DoPlan {
@@ -1018,7 +1111,7 @@ impl Lowerer {
                             continuation,
                         },
                     };
-                }
+                },
             }
         }
         DoPlan {
@@ -1090,9 +1183,9 @@ fn parse_float_literal(text: &str) -> f64 {
 /// Whether an expression names the `Rssn` module itself.
 fn is_rssn_root(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Var(name) => name == "Rssn",
-        ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
-        _ => false,
+        | ExprKind::Var(name) => name == "Rssn",
+        | ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
+        | _ => false,
     }
 }
 
@@ -1103,20 +1196,23 @@ fn is_rssn_root(expr: &Expr) -> bool {
 /// have no pinned key.
 fn rssn_operator_name(expr: &Expr) -> Option<String> {
     match &expr.kind {
-        ExprKind::Field { base, name } if is_rssn_root(base) => Some(name.clone()),
-        ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => Some(path[1].clone()),
-        _ => None,
+        | ExprKind::Field { base, name } if is_rssn_root(base) => Some(name.clone()),
+        | ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => Some(path[1].clone()),
+        | _ => None,
     }
 }
 
 /// The flat key a qualified field access names, when the base is a path or an
 /// import alias.
-fn qualified_name(base: &Expr, field: &str) -> Option<String> {
+fn qualified_name(
+    base: &Expr,
+    field: &str,
+) -> Option<String> {
     match &base.kind {
-        ExprKind::QName(path) => Some(format!("{}.{field}", path.join("."))),
-        ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
+        | ExprKind::QName(path) => Some(format!("{}.{field}", path.join("."))),
+        | ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
             Some(format!("{name}.{field}"))
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }

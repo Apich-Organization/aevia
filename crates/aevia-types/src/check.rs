@@ -11,24 +11,60 @@
 //! it records which names are values, constructors, types or units, and their
 //! types after defaulting.
 
-use crate::adt::{self, Adt, Ctor};
-use crate::builtins::{self, dynamic_value_type, op_error_type};
-use crate::class::{
-    is_structural_show_head, method_scheme, ClassDef, ClassError, ClassTable, DeriveError,
-    Instance, InstanceError, Origin, Resolution,
+use crate::adt::Adt;
+use crate::adt::Ctor;
+use crate::adt::{
+    self,
 };
+use crate::builtins::dynamic_value_type;
+use crate::builtins::op_error_type;
+use crate::builtins::{
+    self,
+};
+use crate::class::ClassDef;
+use crate::class::ClassError;
+use crate::class::ClassTable;
+use crate::class::DeriveError;
+use crate::class::Instance;
+use crate::class::InstanceError;
+use crate::class::Origin;
+use crate::class::Resolution;
+use crate::class::is_structural_show_head;
+use crate::class::method_scheme;
 use crate::diagnostic_bridge::code;
-use crate::infer::{Infer, UnifyError};
-use crate::keys::{witness_of, ClassKey, InstanceKey, ModulePath};
-use crate::ty::{Constraint, LiteralKind, Nat, Rep, Row, Scheme, Shape, Type};
-use aevia_dim::{Dim, DimEnv, UnitDef, UnitError, UnitExpr, UnitTable};
+use crate::infer::Infer;
+use crate::infer::UnifyError;
+use crate::keys::ClassKey;
+use crate::keys::InstanceKey;
+use crate::keys::ModulePath;
+use crate::keys::witness_of;
+use crate::ty::Constraint;
+use crate::ty::LiteralKind;
+use crate::ty::Nat;
+use crate::ty::Rep;
+use crate::ty::Row;
+use crate::ty::Scheme;
+use crate::ty::Shape;
+use crate::ty::Type;
+use aevia_dim::Dim;
+use aevia_dim::DimEnv;
+use aevia_dim::UnitDef;
+use aevia_dim::UnitError;
+use aevia_dim::UnitExpr;
+use aevia_dim::UnitTable;
+use aevia_syntax::Diagnostic;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::FileId;
+use aevia_syntax::Span;
 use aevia_syntax::ast::*;
-use aevia_syntax::{Diagnostic, Diagnostics, FileId, Span};
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{Signed, ToPrimitive, Zero};
-use std::collections::{HashMap, HashSet};
+use num_traits::Signed;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// What a name exported by a module denotes.
 #[derive(Clone, Debug)]
@@ -376,8 +412,8 @@ impl CheckedModule {
     #[must_use]
     pub fn module_path(&self) -> ModulePath {
         match &self.name {
-            Some(path) => ModulePath::new(path.iter().cloned()),
-            None => ModulePath::new([format!("<file{}>", self.anonymous_file)]),
+            | Some(path) => ModulePath::new(path.iter().cloned()),
+            | None => ModulePath::new([format!("<file{}>", self.anonymous_file)]),
         }
     }
 }
@@ -433,7 +469,10 @@ impl Capabilities {
     }
 
     /// Adds one capability name.
-    pub fn insert(&mut self, name: impl Into<String>) {
+    pub fn insert(
+        &mut self,
+        name: impl Into<String>,
+    ) {
         self.names.insert(name.into());
     }
 
@@ -442,7 +481,10 @@ impl Capabilities {
     /// An unknown name is *not* provided: a diagnostic that asks about a
     /// capability must say "missing" rather than assume it exists.
     #[must_use]
-    pub fn has(&self, name: &str) -> bool {
+    pub fn has(
+        &self,
+        name: &str,
+    ) -> bool {
         self.names.contains(name)
     }
 
@@ -484,7 +526,10 @@ pub struct CheckResult {
 
 /// Checks one parsed module.
 #[must_use]
-pub fn check_module(file: FileId, module: &Module) -> CheckResult {
+pub fn check_module(
+    file: FileId,
+    module: &Module,
+) -> CheckResult {
     check_module_with_imports(file, module, &[])
 }
 
@@ -581,40 +626,43 @@ struct ParamUsage {
 }
 
 impl ParamUsage {
-    fn scan(&mut self, ty: &Ty) {
+    fn scan(
+        &mut self,
+        ty: &Ty,
+    ) {
         match &ty.kind {
-            TyKind::Real(dim) | TyKind::Float(dim) | TyKind::Complex(dim) => self.scan_dim(dim),
-            TyKind::Point(dim) | TyKind::UnitOf(dim) => self.scan_dim(dim),
-            TyKind::Tensor { shape, elem } | TyKind::Sparse { shape, elem, .. } => {
+            | TyKind::Real(dim) | TyKind::Float(dim) | TyKind::Complex(dim) => self.scan_dim(dim),
+            | TyKind::Point(dim) | TyKind::UnitOf(dim) => self.scan_dim(dim),
+            | TyKind::Tensor { shape, elem } | TyKind::Sparse { shape, elem, .. } => {
                 self.scan_shape(shape);
                 self.scan(elem);
-            }
-            TyKind::Matrix { rows, cols, elem } => {
+            },
+            | TyKind::Matrix { rows, cols, elem } => {
                 self.scan_nat(rows);
                 self.scan_nat(cols);
                 self.scan(elem);
-            }
-            TyKind::ShapeArg(shape) => self.scan_shape(shape),
-            TyKind::NatArg(nat) => self.scan_nat(nat),
-            TyKind::DimArg(dim) => self.scan_dim(dim),
-            TyKind::SymFun(domain, codomain) => {
+            },
+            | TyKind::ShapeArg(shape) => self.scan_shape(shape),
+            | TyKind::NatArg(nat) => self.scan_nat(nat),
+            | TyKind::DimArg(dim) => self.scan_dim(dim),
+            | TyKind::SymFun(domain, codomain) => {
                 self.scan_dim(domain);
                 self.scan_dim(codomain);
-            }
-            TyKind::Record { fields, rest } => {
+            },
+            | TyKind::Record { fields, rest } => {
                 for (_, field) in fields {
                     self.scan(field);
                 }
                 if let Some(rest) = rest {
                     self.rows.insert(rest.clone());
                 }
-            }
-            TyKind::Tuple(items) | TyKind::Row(items) => {
+            },
+            | TyKind::Tuple(items) | TyKind::Row(items) => {
                 for item in items {
                     self.scan(item);
                 }
-            }
-            TyKind::Named { path, args } => {
+            },
+            | TyKind::Named { path, args } => {
                 if args.is_empty() {
                     if let Some(name) = path.last() {
                         self.types.insert(name.clone());
@@ -623,83 +671,92 @@ impl ParamUsage {
                 for arg in args {
                     self.scan(arg);
                 }
-            }
-            TyKind::Option(inner)
+            },
+            | TyKind::Option(inner)
             | TyKind::Set(inner)
             | TyKind::Table(inner)
             | TyKind::RateOf(inner)
             | TyKind::DiffusionOf(inner)
             | TyKind::Io(inner) => self.scan(inner),
-            TyKind::Result(ok, error) => {
+            | TyKind::Result(ok, error) => {
                 self.scan(ok);
                 self.scan(error);
-            }
-            TyKind::Fn(params, ret) => {
+            },
+            | TyKind::Fn(params, ret) => {
                 for param in params {
                     self.scan(param);
                 }
                 self.scan(ret);
-            }
-            TyKind::Forall(_, body) => self.scan(body),
-            TyKind::Var(name) => {
+            },
+            | TyKind::Forall(_, body) => self.scan(body),
+            | TyKind::Var(name) => {
                 // A bare type-variable spelling (`a`) names the parameter.
                 self.types.insert(name.clone());
-            }
-            TyKind::Int
+            },
+            | TyKind::Int
             | TyKind::Bool
             | TyKind::Prop
             | TyKind::Str
             | TyKind::Unit
-            | TyKind::Dyn(_) => {}
+            | TyKind::Dyn(_) => {},
         }
     }
 
-    fn scan_dim(&mut self, dim: &DimAst) {
+    fn scan_dim(
+        &mut self,
+        dim: &DimAst,
+    ) {
         match dim {
-            DimAst::One => {}
-            DimAst::Name(name) => {
+            | DimAst::One => {},
+            | DimAst::Name(name) => {
                 self.dims.insert(name.clone());
-            }
-            DimAst::Mul(left, right) | DimAst::Div(left, right) => {
+            },
+            | DimAst::Mul(left, right) | DimAst::Div(left, right) => {
                 self.scan_dim(left);
                 self.scan_dim(right);
-            }
-            DimAst::Pow(base, _) => self.scan_dim(base),
-            DimAst::Paren(inner) => self.scan_dim(inner),
+            },
+            | DimAst::Pow(base, _) => self.scan_dim(base),
+            | DimAst::Paren(inner) => self.scan_dim(inner),
         }
     }
 
-    fn scan_nat(&mut self, nat: &NatAst) {
+    fn scan_nat(
+        &mut self,
+        nat: &NatAst,
+    ) {
         match nat {
-            NatAst::Lit(_) => {}
-            NatAst::Var(name) => {
+            | NatAst::Lit(_) => {},
+            | NatAst::Var(name) => {
                 self.nats.insert(name.clone());
-            }
-            NatAst::Add(left, right) | NatAst::Mul(left, right) => {
+            },
+            | NatAst::Add(left, right) | NatAst::Mul(left, right) => {
                 self.scan_nat(left);
                 self.scan_nat(right);
-            }
+            },
         }
     }
 
-    fn scan_shape(&mut self, shape: &ShapeAst) {
+    fn scan_shape(
+        &mut self,
+        shape: &ShapeAst,
+    ) {
         match shape {
-            ShapeAst::Rank(nat) => self.scan_nat(nat),
-            ShapeAst::Refined(items) => {
+            | ShapeAst::Rank(nat) => self.scan_nat(nat),
+            | ShapeAst::Refined(items) => {
                 for item in items {
                     if let ShapeItem::Known(nat) = item {
                         self.scan_nat(nat);
                     }
                 }
-            }
+            },
         }
     }
 }
 
 fn tail_row_id(row: &Row) -> Option<u32> {
     match row {
-        Row::Var(id) => Some(*id),
-        _ => None,
+        | Row::Var(id) => Some(*id),
+        | _ => None,
     }
 }
 
@@ -709,9 +766,9 @@ fn tail_row_id(row: &Row) -> Option<u32> {
 /// uppercase one as a named type; both are just names to kind inference.
 fn bare_type_name(ty: &Ty) -> Option<&String> {
     match &ty.kind {
-        TyKind::Named { path, args } if args.is_empty() => path.last(),
-        TyKind::Var(name) => Some(name),
-        _ => None,
+        | TyKind::Named { path, args } if args.is_empty() => path.last(),
+        | TyKind::Var(name) => Some(name),
+        | _ => None,
     }
 }
 
@@ -821,7 +878,10 @@ struct AliasDef {
 }
 
 impl Checker {
-    fn new(file: FileId, options: CheckOptions) -> Self {
+    fn new(
+        file: FileId,
+        options: CheckOptions,
+    ) -> Self {
         let mut checker = Self {
             file,
             module_path: ModulePath::new([format!("<file{file}>")]),
@@ -899,7 +959,10 @@ impl Checker {
     ///
     /// An imported value is a global with a dotted name, which is exactly how
     /// `A.B.f` resolves: the qualified form is one key, not a nested lookup.
-    fn add_imports(&mut self, imports: &[Import]) {
+    fn add_imports(
+        &mut self,
+        imports: &[Import],
+    ) {
         // Names an earlier import in this call already brought in, with the
         // type it gave them: a second, different one is ambiguous (§7.2.2).
         let mut opened: Vec<(String, Type)> = Vec::new();
@@ -907,8 +970,7 @@ impl Checker {
             if prefix.is_empty() {
                 self.unqualified_import_names
                     .push(exports.keys().cloned().collect());
-                self.requested_unqualified
-                    .extend(exports.keys().cloned());
+                self.requested_unqualified.extend(exports.keys().cloned());
             }
             for (name, export) in exports {
                 let key = if prefix.is_empty() {
@@ -917,16 +979,16 @@ impl Checker {
                     format!("{prefix}.{name}")
                 };
                 match export {
-                    Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
+                    | Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
                         self.note_opened(&mut opened, prefix, &key, scheme);
                         self.globals.insert(key.clone(), scheme.clone());
-                    }
-                    Export::TypeCtor { adt, scheme, .. } => {
+                    },
+                    | Export::TypeCtor { adt, scheme, .. } => {
                         self.note_opened(&mut opened, prefix, &key, scheme);
                         self.globals.insert(key.clone(), scheme.clone());
                         self.adts.insert(key.clone(), *adt);
-                    }
-                    Export::Unit { def } => {
+                    },
+                    | Export::Unit { def } => {
                         // The unit is usable both qualified and, after
                         // `import { km }`, unqualified. A qualified spelling
                         // (`V.Imp2.smoot`) is a unit *name*, so it has to be
@@ -943,17 +1005,17 @@ impl Checker {
                         }
                         self.globals
                             .insert(key.clone(), Scheme::mono(Type::UnitOf(def.dim.clone())));
-                    }
-                    Export::Type { adt } => {
+                    },
+                    | Export::Type { adt } => {
                         self.adts.insert(key.clone(), *adt);
-                    }
-                    Export::Alias { .. } => {}
-                    Export::Dimension { dim: Some(dim) } => {
+                    },
+                    | Export::Alias { .. } => {},
+                    | Export::Dimension { dim: Some(dim) } => {
                         self.dims.define_alias(&key, dim.clone());
-                    }
-                    Export::Dimension { dim: None } => {
+                    },
+                    | Export::Dimension { dim: None } => {
                         let _ = self.dims.define_base(&key);
-                    }
+                    },
                 }
             }
         }
@@ -966,7 +1028,10 @@ impl Checker {
     /// declared) but participate in the global coherence check, so an overlap
     /// is `E0311` naming both modules. Classes are registered with their
     /// symbolic key; their methods become callable globals.
-    fn merge_interface(&mut self, interface: &ModuleInterface) {
+    fn merge_interface(
+        &mut self,
+        interface: &ModuleInterface,
+    ) {
         let module = interface.name.clone();
         // Qualified alias definitions: a source reference `A.Vec2` expands.
         for (name, alias) in &interface.aliases {
@@ -997,23 +1062,27 @@ impl Checker {
         let instances: Vec<Instance> = interface
             .instances
             .iter()
-            .map(|instance| Instance {
-                class: instance.key.class.name.clone(),
-                head: instance.head.clone(),
-                methods: instance.methods.clone(),
-                origin: Origin::Imported,
-                key: instance.key.clone(),
+            .map(|instance| {
+                Instance {
+                    class: instance.key.class.name.clone(),
+                    head: instance.head.clone(),
+                    methods: instance.methods.clone(),
+                    origin: Origin::Imported,
+                    key: instance.key.clone(),
+                }
             })
             .collect();
         if let Err(error) = self.classes.merge_imported(&module, &classes, &instances) {
             let message = match error {
-                InstanceError::Overlapping { incoming, existing } => format!(
-                    "imported instance `{incoming}` overlaps `{existing}`"
-                ),
-                InstanceError::WitnessCollision { incoming, existing } => format!(
-                    "imported instances `{incoming}` and `{existing}` cannot be told apart at run time"
-                ),
-                _ => format!("cannot merge the interface of `{module}`"),
+                | InstanceError::Overlapping { incoming, existing } => {
+                    format!("imported instance `{incoming}` overlaps `{existing}`")
+                },
+                | InstanceError::WitnessCollision { incoming, existing } => {
+                    format!(
+                        "imported instances `{incoming}` and `{existing}` cannot be told apart at run time"
+                    )
+                },
+                | _ => format!("cannot merge the interface of `{module}`"),
             };
             self.error_help(
                 "E0311",
@@ -1042,17 +1111,21 @@ impl Checker {
                 format!("{}.{}", module.dotted(), name)
             };
             match export {
-                Export::Type { adt } => {
+                | Export::Type { adt } => {
                     self.adts.entry(qualified).or_insert(*adt);
-                }
-                Export::TypeCtor { adt, scheme, .. } => {
+                },
+                | Export::TypeCtor { adt, scheme, .. } => {
                     self.adts.entry(qualified.clone()).or_insert(*adt);
-                    self.globals.entry(qualified).or_insert_with(|| scheme.clone());
-                }
-                Export::Ctor { scheme, .. } | Export::Value { scheme, .. } => {
-                    self.globals.entry(qualified).or_insert_with(|| scheme.clone());
-                }
-                _ => {}
+                    self.globals
+                        .entry(qualified)
+                        .or_insert_with(|| scheme.clone());
+                },
+                | Export::Ctor { scheme, .. } | Export::Value { scheme, .. } => {
+                    self.globals
+                        .entry(qualified)
+                        .or_insert_with(|| scheme.clone());
+                },
+                | _ => {},
             }
         }
         // Which interface is the source of the prefix-less import? The flat
@@ -1064,7 +1137,10 @@ impl Checker {
             .unqualified_import_names
             .iter()
             .filter(|names| {
-                !names.is_empty() && names.iter().all(|name| interface.exports.contains_key(name))
+                !names.is_empty()
+                    && names
+                        .iter()
+                        .all(|name| interface.exports.contains_key(name))
             })
             .count();
         if matching == 1 {
@@ -1073,45 +1149,45 @@ impl Checker {
                     continue;
                 }
                 match export {
-                    Export::Alias { .. } => {
+                    | Export::Alias { .. } => {
                         if let Some(alias) = interface.aliases.get(name) {
                             let def = self.imported_alias_def(alias);
                             self.aliases.entry(name.clone()).or_insert(def);
                         }
-                    }
-                    Export::Type { adt } => {
+                    },
+                    | Export::Type { adt } => {
                         self.adts.entry(name.clone()).or_insert(*adt);
                         // §7.1: the constructors travel with the type, so
                         // `import M { T }` also names every constructor of `T`.
                         for (ctor_name, ctor) in &interface.exports {
                             match ctor {
-                                Export::Ctor { adt: id, scheme, .. } if id == adt => {
+                                | Export::Ctor { adt: id, scheme, .. } if id == adt => {
                                     self.globals
                                         .entry(ctor_name.clone())
                                         .or_insert_with(|| scheme.clone());
-                                }
-                                Export::TypeCtor { adt: id, scheme, .. } if id == adt => {
+                                },
+                                | Export::TypeCtor { adt: id, scheme, .. } if id == adt => {
                                     self.adts.entry(ctor_name.clone()).or_insert(*id);
                                     self.globals
                                         .entry(ctor_name.clone())
                                         .or_insert_with(|| scheme.clone());
-                                }
-                                _ => {}
+                                },
+                                | _ => {},
                             }
                         }
-                    }
-                    Export::TypeCtor { adt, scheme, .. } => {
+                    },
+                    | Export::TypeCtor { adt, scheme, .. } => {
                         self.adts.entry(name.clone()).or_insert(*adt);
                         self.globals
                             .entry(name.clone())
                             .or_insert_with(|| scheme.clone());
-                    }
-                    Export::Ctor { scheme, .. } | Export::Value { scheme, .. } => {
+                    },
+                    | Export::Ctor { scheme, .. } | Export::Value { scheme, .. } => {
                         self.globals
                             .entry(name.clone())
                             .or_insert_with(|| scheme.clone());
-                    }
-                    _ => {}
+                    },
+                    | _ => {},
                 }
             }
         }
@@ -1151,7 +1227,10 @@ impl Checker {
     /// runtime (§13.5.2), and a malformed argument is `E0210` (appendix B).
     /// `@stable`/`@experimental`/`@deprecated` are recorded so a consumer (the
     /// language server) can report them, and a use of a deprecated name warns.
-    fn check_attributes(&mut self, module: &Module) {
+    fn check_attributes(
+        &mut self,
+        module: &Module,
+    ) {
         for decl in &module.decls {
             let owner = declaration_name(decl);
             for attr in &decl.attrs {
@@ -1174,7 +1253,7 @@ impl Checker {
                     }
                 }
                 match attr.name.as_str() {
-                    "jit" => {
+                    | "jit" => {
                         if !matches!(decl.kind, DeclKind::Fn { .. }) {
                             self.error(
                                 "E0210",
@@ -1184,11 +1263,7 @@ impl Checker {
                             continue;
                         }
                         if let Some(arg) = attr.args.first() {
-                            self.error(
-                                "E0210",
-                                "`@jit` takes no arguments",
-                                arg.value.span,
-                            );
+                            self.error("E0210", "`@jit` takes no arguments", arg.value.span);
                             continue;
                         }
                         if !self.options.capabilities.has("core.jit") {
@@ -1202,8 +1277,8 @@ impl Checker {
                                 "this build always interprets the function; remove `@jit` (§9.6.1)",
                             );
                         }
-                    }
-                    "stable" | "experimental" => {
+                    },
+                    | "stable" | "experimental" => {
                         if let Some(arg) = attr.args.first() {
                             self.error(
                                 "E0210",
@@ -1220,40 +1295,45 @@ impl Checker {
                             };
                             self.stability.insert(name, marker);
                         }
-                    }
-                    "deprecated" => {
+                    },
+                    | "deprecated" => {
                         let message = match attr.args.as_slice() {
-                            [] => "this name is deprecated".to_string(),
-                            [arg] => match string_constant(&arg.value) {
-                                Some(text) => text,
-                                None => {
-                                    self.error(
-                                        "E0210",
-                                        "`@deprecated` takes a string message",
-                                        arg.value.span,
-                                    );
-                                    continue;
+                            | [] => "this name is deprecated".to_string(),
+                            | [arg] => {
+                                match string_constant(&arg.value) {
+                                    | Some(text) => text,
+                                    | None => {
+                                        self.error(
+                                            "E0210",
+                                            "`@deprecated` takes a string message",
+                                            arg.value.span,
+                                        );
+                                        continue;
+                                    },
                                 }
                             },
-                            [_, extra, ..] => {
+                            | [_, extra, ..] => {
                                 self.error(
                                     "E0210",
                                     "`@deprecated` takes at most one message",
                                     extra.value.span,
                                 );
                                 continue;
-                            }
+                            },
                         };
                         if let Some(name) = owner.clone() {
                             self.deprecated.insert(name.clone(), message.clone());
                             self.stability.insert(name, Stability::Deprecated(message));
                         }
-                    }
-                    "op" | "rule" => {
+                    },
+                    | "op" | "rule" => {
                         if !matches!(decl.kind, DeclKind::Fn { .. }) {
                             self.error(
                                 "E0210",
-                                format!("`@{}` may only be applied to a `fn` declaration", attr.name),
+                                format!(
+                                    "`@{}` may only be applied to a `fn` declaration",
+                                    attr.name
+                                ),
                                 attr.span,
                             );
                             continue;
@@ -1262,25 +1342,27 @@ impl Checker {
                             continue;
                         };
                         let name_arg = match attr.args.as_slice() {
-                            [arg] => match string_constant(&arg.value) {
-                                Some(text) => text,
-                                None => {
-                                    self.error(
-                                        "E0210",
-                                        format!("`@{}` takes a string name", attr.name),
-                                        arg.value.span,
-                                    );
-                                    continue;
+                            | [arg] => {
+                                match string_constant(&arg.value) {
+                                    | Some(text) => text,
+                                    | None => {
+                                        self.error(
+                                            "E0210",
+                                            format!("`@{}` takes a string name", attr.name),
+                                            arg.value.span,
+                                        );
+                                        continue;
+                                    },
                                 }
                             },
-                            _ => {
+                            | _ => {
                                 self.error(
                                     "E0210",
                                     format!("`@{}` takes exactly one string name", attr.name),
                                     attr.span,
                                 );
                                 continue;
-                            }
+                            },
                         };
                         // §13.5.2: `@op` wraps an Aevia function as a kernel
                         // host callback and `@rule` publishes a rewrite rule —
@@ -1307,16 +1389,19 @@ impl Checker {
                             name: name_arg,
                             function,
                         });
-                    }
+                    },
                     // `@bench` (§9.12) and `@compile_fail` (§9.12) are read by
                     // the tooling, not by the checker.
-                    _ => {}
+                    | _ => {},
                 }
             }
         }
     }
 
-    fn run(&mut self, module: &Module) {
+    fn run(
+        &mut self,
+        module: &Module,
+    ) {
         self.checked.name = module.name.clone();
         self.checked.anonymous_file = self.file;
         if let Some(path) = &module.name {
@@ -1330,19 +1415,19 @@ impl Checker {
         // a declaration may be written after its first use (§7.1.2).
         for decl in &module.decls {
             match &decl.kind {
-                DeclKind::Dimension { name, value } => {
+                | DeclKind::Dimension { name, value } => {
                     self.declare_dimension(name, value.as_ref(), decl.span);
-                }
-                DeclKind::Unit { .. } => self.declare_unit(decl),
-                DeclKind::Type { name, params, body } => {
+                },
+                | DeclKind::Unit { .. } => self.declare_unit(decl),
+                | DeclKind::Type { name, params, body } => {
                     self.declare_type(name, params, body, decl.private);
-                }
-                DeclKind::Class {
+                },
+                | DeclKind::Class {
                     name,
                     params,
                     methods,
                 } => self.declare_class(name, params, methods, decl.span, decl.private),
-                _ => {}
+                | _ => {},
             }
         }
 
@@ -1352,8 +1437,12 @@ impl Checker {
         let mut seen_fns: HashSet<String> = HashSet::new();
         for (index, decl) in module.decls.iter().enumerate() {
             match &decl.kind {
-                DeclKind::Fn {
-                    name, params, args, ret, ..
+                | DeclKind::Fn {
+                    name,
+                    params,
+                    args,
+                    ret,
+                    ..
                 } => {
                     if !seen_fns.insert(name.clone()) {
                         self.error_help(
@@ -1380,16 +1469,16 @@ impl Checker {
                         );
                     }
                     pending.push((name.clone(), decl.span));
-                }
-                DeclKind::Let { pattern, ty, .. } => {
+                },
+                | DeclKind::Let { pattern, ty, .. } => {
                     let PatKind::Var(name) = &pattern.kind else {
                         continue;
                     };
                     // One variable for both passes: a forward reference and the
                     // definition must see the same type (§7.1.2).
                     let value_ty = match ty {
-                        Some(ty) => self.convert_type(ty),
-                        None => self.infer.fresh_type(),
+                        | Some(ty) => self.convert_type(ty),
+                        | None => self.infer.fresh_type(),
                     };
                     self.top_lets.insert(name.clone(), value_ty.clone());
                     let scheme = Scheme::mono(value_ty);
@@ -1405,31 +1494,29 @@ impl Checker {
                         );
                     }
                     pending.push((name.clone(), decl.span));
-                }
-                _ => {}
+                },
+                | _ => {},
             }
         }
 
         // Pass C: bodies.
         for decl in &module.decls {
             match &decl.kind {
-                DeclKind::Fn {
-                    name, args, body, ..
-                } => self.check_fn_body(name, args, body),
-                DeclKind::Let {
+                | DeclKind::Fn { name, args, body, .. } => self.check_fn_body(name, args, body),
+                | DeclKind::Let {
                     pattern,
                     ty,
                     value,
                     rec,
                 } => self.check_top_let_body(pattern, ty.as_ref(), value, *rec, decl.span),
-                DeclKind::Test { name, body } => {
+                | DeclKind::Test { name, body } => {
                     let ty = self.synth(body);
                     self.expect_bool(&ty, body.span);
                     self.checked.tests.push(name.clone());
-                }
-                DeclKind::Instance { .. } => self.check_instance(decl),
-                DeclKind::Derive { .. } => self.check_derive(decl),
-                _ => {}
+                },
+                | DeclKind::Instance { .. } => self.check_instance(decl),
+                | DeclKind::Derive { .. } => self.check_derive(decl),
+                | _ => {},
             }
             // §3.10.2 rule 6 / §3.5.1: a type-level equation that still has
             // several unknowns after the declaration cannot be expressed in its
@@ -1520,10 +1607,7 @@ impl Checker {
 
         // §B.12: a symbol nobody reads is dead weight.
         for decl in &module.decls {
-            if let DeclKind::Let {
-                pattern, value, ..
-            } = &decl.kind
-            {
+            if let DeclKind::Let { pattern, value, .. } = &decl.kind {
                 let PatKind::Var(name) = &pattern.kind else {
                     continue;
                 };
@@ -1579,17 +1663,13 @@ impl Checker {
         // annotation, not the literal, is what is wrong.
         for (got, bound) in self.infer.rep_conflicts() {
             self.diagnostics.push(
-                Diagnostic::error(
-                    "E0302",
-                    "type mismatch",
-                    Span::new(self.file, 0, 0),
-                )
-                .with_primary_label(format!(
-                    "this value is {}, but the context needs at least {}",
-                    got.name(),
-                    bound.name()
-                ))
-                .with_help("annotate the binding with the wider representation"),
+                Diagnostic::error("E0302", "type mismatch", Span::new(self.file, 0, 0))
+                    .with_primary_label(format!(
+                        "this value is {}, but the context needs at least {}",
+                        got.name(),
+                        bound.name()
+                    ))
+                    .with_help("annotate the binding with the wider representation"),
             );
         }
 
@@ -1722,7 +1802,11 @@ impl Checker {
     /// unified, so either is the answer). Replacing the previous entry instead
     /// of pushing a second one keeps the table one entry per span and saves a
     /// clone on every checked expression.
-    fn note_type(&mut self, span: Span, ty: &Type) {
+    fn note_type(
+        &mut self,
+        span: Span,
+        ty: &Type,
+    ) {
         if span.start >= span.end || matches!(ty, Type::Error) {
             return;
         }
@@ -1737,23 +1821,31 @@ impl Checker {
 
     /// Generalises a scheme, keeping the class constraints of the declaration
     /// it came from.
-    fn generalize_scheme(&mut self, scheme: &Scheme) -> Scheme {
+    fn generalize_scheme(
+        &mut self,
+        scheme: &Scheme,
+    ) -> Scheme {
         self.infer
             .generalize_with(&scheme.ty, scheme.constraints.clone())
     }
 
     // ----- declarations --------------------------------------------------
 
-    fn declare_dimension(&mut self, name: &str, value: Option<&DimAst>, span: Span) {
+    fn declare_dimension(
+        &mut self,
+        name: &str,
+        value: Option<&DimAst>,
+        span: Span,
+    ) {
         match value {
-            Some(ast) => {
+            | Some(ast) => {
                 let dim = self.convert_dim(ast, span);
                 self.dims.define_alias(name, dim.clone());
                 self.checked
                     .exports
                     .insert(name.to_string(), Export::Dimension { dim: Some(dim) });
-            }
-            None => {
+            },
+            | None => {
                 if !self.dims.define_base(name) {
                     self.error(
                         "E0316",
@@ -1765,11 +1857,14 @@ impl Checker {
                 self.checked
                     .exports
                     .insert(name.to_string(), Export::Dimension { dim: None });
-            }
+            },
         }
     }
 
-    fn declare_unit(&mut self, decl: &Decl) {
+    fn declare_unit(
+        &mut self,
+        decl: &Decl,
+    ) {
         let DeclKind::Unit {
             name,
             dim,
@@ -1785,19 +1880,19 @@ impl Checker {
         let mut scale_value = scale.clone();
         if let Some(base) = base {
             match self.units.resolve(base) {
-                Ok(resolved) => scale_value = scale_value.mul(&resolved.scale),
-                Err(error) => {
+                | Ok(resolved) => scale_value = scale_value.mul(&resolved.scale),
+                | Err(error) => {
                     self.unit_error(error, decl.span);
                     return;
-                }
+                },
             }
         }
         let offset_value = match offset {
-            Some((offset_scale, offset_unit)) => {
+            | Some((offset_scale, offset_unit)) => {
                 let mut value = offset_scale.clone();
                 if let Some(unit) = offset_unit {
                     match self.units.resolve(unit) {
-                        Ok(resolved) => {
+                        | Ok(resolved) => {
                             // §5.1.1: the offset must measure the same
                             // dimension as the unit it is attached to.
                             if resolved.dim.is_concrete()
@@ -1817,16 +1912,16 @@ impl Checker {
                                 return;
                             }
                             value = value.mul(&resolved.scale);
-                        }
-                        Err(error) => {
+                        },
+                        | Err(error) => {
                             self.unit_error(error, decl.span);
                             return;
-                        }
+                        },
                     }
                 }
                 Some(value)
-            }
-            None => None,
+            },
+            | None => None,
         };
         let def = UnitDef {
             name: name.clone(),
@@ -1857,16 +1952,21 @@ impl Checker {
     /// The declared parameter kinds of a generic alias or variant type, when it
     /// is already in scope. Used to propagate a kind through a nested
     /// application (`type Opts<d> = | Fixed(FixedOpts<d>) | …`).
-    fn declared_param_kinds(&self, name: &str) -> Option<Vec<AliasParamKind>> {
+    fn declared_param_kinds(
+        &self,
+        name: &str,
+    ) -> Option<Vec<AliasParamKind>> {
         if let Some(alias) = self.aliases.get(name) {
             return Some(alias.kinds.clone());
         }
         self.adts.get(name).map(|id| {
             adt::param_kinds_of(*id)
                 .into_iter()
-                .map(|kind| match kind {
-                    adt::ParamKind::Type => AliasParamKind::Type,
-                    adt::ParamKind::Dim(_) => AliasParamKind::Dim,
+                .map(|kind| {
+                    match kind {
+                        | adt::ParamKind::Type => AliasParamKind::Type,
+                        | adt::ParamKind::Dim(_) => AliasParamKind::Dim,
+                    }
                 })
                 .collect()
         })
@@ -1875,36 +1975,46 @@ impl Checker {
     /// Propagates a written argument's kind from the callee's declaration into
     /// the usage sets, so an unannotated parameter used only as a *dimension
     /// argument* (`FixedOpts<d>`) is inferred as a dimension.
-    fn scan_kind_args(&self, ty: &Ty, usage: &mut ParamUsage) {
+    fn scan_kind_args(
+        &self,
+        ty: &Ty,
+        usage: &mut ParamUsage,
+    ) {
         match &ty.kind {
-            TyKind::Named { path, args } => {
+            | TyKind::Named { path, args } => {
                 let kinds = self.declared_param_kinds(&path.join("."));
                 for (index, arg) in args.iter().enumerate() {
                     let declared = kinds.as_ref().and_then(|kinds| kinds.get(index)).copied();
                     match declared {
-                        Some(AliasParamKind::Dim) => match bare_type_name(arg) {
-                            Some(name) => {
-                                usage.dims.insert(name.clone());
+                        | Some(AliasParamKind::Dim) => {
+                            match bare_type_name(arg) {
+                                | Some(name) => {
+                                    usage.dims.insert(name.clone());
+                                },
+                                | None => self.scan_kind_args(arg, usage),
                             }
-                            None => self.scan_kind_args(arg, usage),
                         },
-                        Some(AliasParamKind::Nat) => match bare_type_name(arg) {
-                            Some(name) => {
-                                usage.nats.insert(name.clone());
+                        | Some(AliasParamKind::Nat) => {
+                            match bare_type_name(arg) {
+                                | Some(name) => {
+                                    usage.nats.insert(name.clone());
+                                },
+                                | None => self.scan_kind_args(arg, usage),
                             }
-                            None => self.scan_kind_args(arg, usage),
                         },
-                        Some(AliasParamKind::Row) => match bare_type_name(arg) {
-                            Some(name) => {
-                                usage.rows.insert(name.clone());
+                        | Some(AliasParamKind::Row) => {
+                            match bare_type_name(arg) {
+                                | Some(name) => {
+                                    usage.rows.insert(name.clone());
+                                },
+                                | None => self.scan_kind_args(arg, usage),
                             }
-                            None => self.scan_kind_args(arg, usage),
                         },
-                        Some(AliasParamKind::Type) | None => self.scan_kind_args(arg, usage),
+                        | Some(AliasParamKind::Type) | None => self.scan_kind_args(arg, usage),
                     }
                 }
-            }
-            TyKind::Tensor { elem, .. }
+            },
+            | TyKind::Tensor { elem, .. }
             | TyKind::Sparse { elem, .. }
             | TyKind::Matrix { elem, .. }
             | TyKind::Option(elem)
@@ -1913,28 +2023,28 @@ impl Checker {
             | TyKind::RateOf(elem)
             | TyKind::DiffusionOf(elem)
             | TyKind::Io(elem) => self.scan_kind_args(elem, usage),
-            TyKind::Result(ok, error) => {
+            | TyKind::Result(ok, error) => {
                 self.scan_kind_args(ok, usage);
                 self.scan_kind_args(error, usage);
-            }
-            TyKind::Fn(params, ret) => {
+            },
+            | TyKind::Fn(params, ret) => {
                 for param in params {
                     self.scan_kind_args(param, usage);
                 }
                 self.scan_kind_args(ret, usage);
-            }
-            TyKind::Record { fields, .. } => {
+            },
+            | TyKind::Record { fields, .. } => {
                 for (_, field) in fields {
                     self.scan_kind_args(field, usage);
                 }
-            }
-            TyKind::Tuple(items) | TyKind::Row(items) => {
+            },
+            | TyKind::Tuple(items) | TyKind::Row(items) => {
                 for item in items {
                     self.scan_kind_args(item, usage);
                 }
-            }
-            TyKind::Forall(_, body) => self.scan_kind_args(body, usage),
-            _ => {}
+            },
+            | TyKind::Forall(_, body) => self.scan_kind_args(body, usage),
+            | _ => {},
         }
     }
 
@@ -1945,40 +2055,40 @@ impl Checker {
     ) -> (Vec<AliasParamKind>, Vec<(usize, AliasParamKind)>) {
         let mut usage = ParamUsage::default();
         match body {
-            TypeBody::Alias(ty) => usage.scan(ty),
-            TypeBody::Variants(ctors) => {
+            | TypeBody::Alias(ty) => usage.scan(ty),
+            | TypeBody::Variants(ctors) => {
                 for ctor in ctors {
                     for field in &ctor.args {
                         usage.scan(field);
                     }
                 }
-            }
-            TypeBody::Abstract => {}
+            },
+            | TypeBody::Abstract => {},
         }
         // A name used only as a *dimension argument* of an already-declared
         // generic type (`FixedOpts<d>`) is a dimension too, even though the
         // written argument looks like a type.
         match body {
-            TypeBody::Alias(ty) => self.scan_kind_args(ty, &mut usage),
-            TypeBody::Variants(ctors) => {
+            | TypeBody::Alias(ty) => self.scan_kind_args(ty, &mut usage),
+            | TypeBody::Variants(ctors) => {
                 for ctor in ctors {
                     for field in &ctor.args {
                         self.scan_kind_args(field, &mut usage);
                     }
                 }
-            }
-            TypeBody::Abstract => {}
+            },
+            | TypeBody::Abstract => {},
         }
         let mut kinds = Vec::with_capacity(params.len());
         let mut extra: Vec<(usize, AliasParamKind)> = Vec::new();
         for (index, param) in params.iter().enumerate() {
             let name = &param.name;
             let explicit = match param.kind {
-                Some(Kind::Type) => Some(AliasParamKind::Type),
-                Some(Kind::Dim) => Some(AliasParamKind::Dim),
-                Some(Kind::Nat) => Some(AliasParamKind::Nat),
-                Some(Kind::Row) => Some(AliasParamKind::Row),
-                Some(other) => {
+                | Some(Kind::Type) => Some(AliasParamKind::Type),
+                | Some(Kind::Dim) => Some(AliasParamKind::Dim),
+                | Some(Kind::Nat) => Some(AliasParamKind::Nat),
+                | Some(Kind::Row) => Some(AliasParamKind::Row),
+                | Some(other) => {
                     self.error_help(
                         "E0317",
                         format!(
@@ -1988,8 +2098,8 @@ impl Checker {
                         "use `Type`, `Dim`, `Nat` or `Row`, or omit the kind so it is inferred from the body",
                     );
                     Some(AliasParamKind::Type)
-                }
-                None => None,
+                },
+                | None => None,
             };
             let dim_use = usage.dims.contains(name);
             let nat_use = usage.nats.contains(name);
@@ -2040,27 +2150,27 @@ impl Checker {
         let mut row_vars = vec![0; params.len()];
         for (index, (param, kind)) in params.iter().zip(kinds.iter()).enumerate() {
             match kind {
-                AliasParamKind::Type => {
+                | AliasParamKind::Type => {
                     self.type_params.push((
                         param.name.clone(),
                         Type::Param(u32::try_from(index).unwrap_or(0)),
                     ));
-                }
-                AliasParamKind::Dim => {
+                },
+                | AliasParamKind::Dim => {
                     let dim = self.infer.fresh_dim();
                     dim_vars[index] = dim.vars().first().copied().unwrap_or(0);
                     self.dim_params.push((param.name.clone(), dim));
-                }
-                AliasParamKind::Nat => {
+                },
+                | AliasParamKind::Nat => {
                     let nat = self.infer.fresh_nat();
                     nat_vars[index] = nat.vars().first().copied().unwrap_or(0);
                     self.nat_params.push((param.name.clone(), nat));
-                }
-                AliasParamKind::Row => {
+                },
+                | AliasParamKind::Row => {
                     let row = self.infer.fresh_row();
                     row_vars[index] = tail_row_id(&row).unwrap_or(0);
                     self.row_params.push((param.name.clone(), row));
-                }
+                },
             }
         }
         // A parameter whose kind could not be inferred (E0317 was reported)
@@ -2071,27 +2181,27 @@ impl Checker {
                 continue;
             };
             match kind {
-                AliasParamKind::Type => {
+                | AliasParamKind::Type => {
                     self.type_params.push((
                         param.name.clone(),
                         Type::Param(u32::try_from(*index).unwrap_or(0)),
                     ));
-                }
-                AliasParamKind::Dim => {
+                },
+                | AliasParamKind::Dim => {
                     let dim = self.infer.fresh_dim();
                     dim_vars[*index] = dim.vars().first().copied().unwrap_or(0);
                     self.dim_params.push((param.name.clone(), dim));
-                }
-                AliasParamKind::Nat => {
+                },
+                | AliasParamKind::Nat => {
                     let nat = self.infer.fresh_nat();
                     nat_vars[*index] = nat.vars().first().copied().unwrap_or(0);
                     self.nat_params.push((param.name.clone(), nat));
-                }
-                AliasParamKind::Row => {
+                },
+                | AliasParamKind::Row => {
                     let row = self.infer.fresh_row();
                     row_vars[*index] = tail_row_id(&row).unwrap_or(0);
                     self.row_params.push((param.name.clone(), row));
-                }
+                },
             }
         }
         (dim_vars, nat_vars, row_vars)
@@ -2100,23 +2210,26 @@ impl Checker {
     /// The interface form of an alias body: placeholders become canonical ids
     /// derived from the parameter position, so an interface never carries
     /// another process's inference ids.
-    fn canonical_alias_export(&self, def: &AliasDef) -> AliasExport {
+    fn canonical_alias_export(
+        &self,
+        def: &AliasDef,
+    ) -> AliasExport {
         let mut dims = std::collections::HashMap::new();
         let mut nats = std::collections::HashMap::new();
         let mut rows = std::collections::HashMap::new();
         for (index, kind) in def.kinds.iter().enumerate() {
             let canonical = u32::try_from(index).unwrap_or(0);
             match kind {
-                AliasParamKind::Dim => {
+                | AliasParamKind::Dim => {
                     dims.insert(def.dim_vars[index], Dim::var(canonical));
-                }
-                AliasParamKind::Nat => {
+                },
+                | AliasParamKind::Nat => {
                     nats.insert(def.nat_vars[index], Nat::Var(canonical));
-                }
-                AliasParamKind::Row => {
+                },
+                | AliasParamKind::Row => {
                     rows.insert(def.row_vars[index], Row::Var(canonical));
-                }
-                AliasParamKind::Type => {}
+                },
+                | AliasParamKind::Type => {},
             }
         }
         let types = vec![None; def.params];
@@ -2128,7 +2241,10 @@ impl Checker {
     }
 
     /// Rebuilds an imported alias with this checker's own fresh placeholders.
-    fn imported_alias_def(&mut self, alias: &AliasExport) -> AliasDef {
+    fn imported_alias_def(
+        &mut self,
+        alias: &AliasExport,
+    ) -> AliasDef {
         let mut dims = std::collections::HashMap::new();
         let mut nats = std::collections::HashMap::new();
         let mut rows = std::collections::HashMap::new();
@@ -2138,22 +2254,22 @@ impl Checker {
         for (index, kind) in alias.kinds.iter().enumerate() {
             let canonical = u32::try_from(index).unwrap_or(0);
             match kind {
-                AliasParamKind::Dim => {
+                | AliasParamKind::Dim => {
                     let dim = self.infer.fresh_dim();
                     dim_vars[index] = dim.vars().first().copied().unwrap_or(0);
                     dims.insert(canonical, dim);
-                }
-                AliasParamKind::Nat => {
+                },
+                | AliasParamKind::Nat => {
                     let nat = self.infer.fresh_nat();
                     nat_vars[index] = nat.vars().first().copied().unwrap_or(0);
                     nats.insert(canonical, nat);
-                }
-                AliasParamKind::Row => {
+                },
+                | AliasParamKind::Row => {
                     let row = self.infer.fresh_row();
                     row_vars[index] = tail_row_id(&row).unwrap_or(0);
                     rows.insert(canonical, row);
-                }
-                AliasParamKind::Type => {}
+                },
+                | AliasParamKind::Type => {},
             }
         }
         let types = vec![None; alias.params];
@@ -2173,7 +2289,12 @@ impl Checker {
     /// a dimension, a nat-kinded one as a type-level `Nat` and a row-kinded one
     /// as a record row. The alias body stores placeholders, so the expansion is
     /// a substitution rather than a re-conversion.
-    fn instantiate_alias(&mut self, alias: &AliasDef, args: &[Ty], span: Span) -> Type {
+    fn instantiate_alias(
+        &mut self,
+        alias: &AliasDef,
+        args: &[Ty],
+        span: Span,
+    ) -> Type {
         if args.len() > alias.params {
             self.error(
                 "E0315",
@@ -2194,47 +2315,50 @@ impl Checker {
                 // A missing argument stays a fresh variable of its kind, the
                 // way an unapplied generic alias behaves.
                 match kind {
-                    AliasParamKind::Type => {}
-                    AliasParamKind::Dim => {
+                    | AliasParamKind::Type => {},
+                    | AliasParamKind::Dim => {
                         let dim = self.infer.fresh_dim();
                         dims.insert(alias.dim_vars[index], dim);
-                    }
-                    AliasParamKind::Nat => {
+                    },
+                    | AliasParamKind::Nat => {
                         let nat = self.infer.fresh_nat();
                         nats.insert(alias.nat_vars[index], nat);
-                    }
-                    AliasParamKind::Row => {
+                    },
+                    | AliasParamKind::Row => {
                         let row = self.infer.fresh_row();
                         rows.insert(alias.row_vars[index], row);
-                    }
+                    },
                 }
                 continue;
             };
             match kind {
-                AliasParamKind::Type => types[index] = Some(self.convert_type(arg)),
-                AliasParamKind::Dim => {
+                | AliasParamKind::Type => types[index] = Some(self.convert_type(arg)),
+                | AliasParamKind::Dim => {
                     let dim = self.convert_type_as_dim(arg);
                     dims.insert(alias.dim_vars[index], dim);
-                }
-                AliasParamKind::Nat => {
+                },
+                | AliasParamKind::Nat => {
                     let nat = self.convert_type_as_nat(arg);
                     nats.insert(alias.nat_vars[index], nat);
-                }
-                AliasParamKind::Row => {
+                },
+                | AliasParamKind::Row => {
                     let row = self.convert_type_as_row(arg);
                     rows.insert(alias.row_vars[index], row);
-                }
+                },
             }
         }
         alias.ty.substitute_kinded(&types, &dims, &nats, &rows)
     }
 
     /// Converts a type argument written for a dimension-kinded parameter.
-    fn convert_type_as_dim(&mut self, ty: &Ty) -> Dim {
+    fn convert_type_as_dim(
+        &mut self,
+        ty: &Ty,
+    ) -> Dim {
         let name = match &ty.kind {
-            TyKind::Named { path, args } if args.is_empty() => Some(path.join(".")),
-            TyKind::Var(name) => Some(name.clone()),
-            _ => None,
+            | TyKind::Named { path, args } if args.is_empty() => Some(path.join(".")),
+            | TyKind::Var(name) => Some(name.clone()),
+            | _ => None,
         };
         if let Some(name) = name {
             if let Some((_, dim)) = self.dim_params.iter().find(|(param, _)| *param == name) {
@@ -2255,8 +2379,8 @@ impl Checker {
             return Dim::one();
         }
         match &ty.kind {
-            TyKind::DimArg(dim) => self.convert_dim(dim, ty.span),
-            _ => {
+            | TyKind::DimArg(dim) => self.convert_dim(dim, ty.span),
+            | _ => {
                 self.error_help(
                     "E0407",
                     "this type argument must be a dimension",
@@ -2264,14 +2388,17 @@ impl Checker {
                     "declare the parameter as `<d: Dim>` or pass a dimension such as `L`",
                 );
                 Dim::one()
-            }
+            },
         }
     }
 
     /// Converts a type argument written for a natural-number-kinded parameter.
-    fn convert_type_as_nat(&mut self, ty: &Ty) -> Nat {
+    fn convert_type_as_nat(
+        &mut self,
+        ty: &Ty,
+    ) -> Nat {
         match bare_type_name(ty) {
-            Some(name) => {
+            | Some(name) => {
                 if let Some((_, nat)) = self.nat_params.iter().find(|(param, _)| param == name) {
                     return nat.clone();
                 }
@@ -2282,28 +2409,33 @@ impl Checker {
                     "the parameter is a type-level natural; pass a number such as `3`",
                 );
                 Nat::Lit(0)
-            }
-            None => match &ty.kind {
-                TyKind::NatArg(nat) => self.convert_nat(nat, ty.span),
-                _ => {
-                    self.error_help(
-                        "E0304",
-                        "this type argument must be a type-level natural number",
-                        ty.span,
-                        "declare the parameter as `<n: Nat>` or pass a number such as `3`",
-                    );
-                    Nat::Lit(0)
+            },
+            | None => {
+                match &ty.kind {
+                    | TyKind::NatArg(nat) => self.convert_nat(nat, ty.span),
+                    | _ => {
+                        self.error_help(
+                            "E0304",
+                            "this type argument must be a type-level natural number",
+                            ty.span,
+                            "declare the parameter as `<n: Nat>` or pass a number such as `3`",
+                        );
+                        Nat::Lit(0)
+                    },
                 }
             },
         }
     }
 
     /// Converts a type argument written for a row-kinded parameter.
-    fn convert_type_as_row(&mut self, ty: &Ty) -> Row {
+    fn convert_type_as_row(
+        &mut self,
+        ty: &Ty,
+    ) -> Row {
         let converted = self.convert_type(ty);
         match self.infer.resolve(&converted) {
-            Type::Record(row) => row,
-            other => {
+            | Type::Record(row) => row,
+            | other => {
                 self.error_help(
                     "E0302",
                     format!("a row argument must be a record type, found {other}"),
@@ -2311,7 +2443,7 @@ impl Checker {
                     "declare the parameter as `<r: Row>` and pass a record such as `{ x: Int }`",
                 );
                 Row::Empty
-            }
+            },
         }
     }
 
@@ -2337,7 +2469,7 @@ impl Checker {
             );
         }
         match body {
-            TypeBody::Alias(ty) => {
+            | TypeBody::Alias(ty) => {
                 // An alias is transparent, so referring to itself is an
                 // infinite type, not a recursive one (§3.6.4).
                 let saved = self.declaring_alias.replace(name.to_string());
@@ -2357,8 +2489,8 @@ impl Checker {
                 self.checked
                     .exports
                     .insert(name.to_string(), Export::Alias { params: params.len() });
-            }
-            TypeBody::Variants(ctors) => {
+            },
+            | TypeBody::Variants(ctors) => {
                 // Allocate the id *before* converting the fields, so a field
                 // that mentions the type being declared resolves (§3.6.4).
                 // The defining module is recorded with it, so the symbolic key
@@ -2376,11 +2508,11 @@ impl Checker {
                 let mut adt_kinds = Vec::with_capacity(params.len());
                 for (index, kind) in kinds.iter().enumerate() {
                     match kind {
-                        AliasParamKind::Type => adt_kinds.push(adt::ParamKind::Type),
-                        AliasParamKind::Dim => {
+                        | AliasParamKind::Type => adt_kinds.push(adt::ParamKind::Type),
+                        | AliasParamKind::Dim => {
                             adt_kinds.push(adt::ParamKind::Dim(dim_vars[index]));
-                        }
-                        AliasParamKind::Nat | AliasParamKind::Row => {
+                        },
+                        | AliasParamKind::Nat | AliasParamKind::Row => {
                             self.error_help(
                                 "E0317",
                                 format!(
@@ -2395,7 +2527,7 @@ impl Checker {
                                 "a variant type may be parameterised by types and dimensions; use a record alias for a row/nat parameter",
                             );
                             adt_kinds.push(adt::ParamKind::Type);
-                        }
+                        },
                     }
                 }
                 adt::set_param_kinds(id, adt_kinds);
@@ -2445,8 +2577,8 @@ impl Checker {
                         self.checked.exports.insert(ctor.name.clone(), export);
                     }
                 }
-            }
-            TypeBody::Abstract => {
+            },
+            | TypeBody::Abstract => {
                 for kind in &kinds {
                     if !matches!(kind, AliasParamKind::Type) {
                         self.error_help(
@@ -2471,7 +2603,7 @@ impl Checker {
                         .exports
                         .insert(name.to_string(), Export::Type { adt: id });
                 }
-            }
+            },
         }
         self.type_params = saved_types;
         self.dim_params = saved_dims;
@@ -2484,9 +2616,15 @@ impl Checker {
     /// `type Bad = Bad -> Int` has no well-founded value: checking it is
     /// `E0312`. `type Tree<a> = | Node(Tree<a>, a, Tree<a>)` is positive and
     /// therefore legal.
-    fn check_positivity(&mut self, id: adt::AdtId, ty: &Type, positive: bool, span: Span) {
+    fn check_positivity(
+        &mut self,
+        id: adt::AdtId,
+        ty: &Type,
+        positive: bool,
+        span: Span,
+    ) {
         match ty {
-            Type::Adt(other, args) => {
+            | Type::Adt(other, args) => {
                 if *other == id && !positive {
                     self.error_help(
                         "E0312",
@@ -2498,21 +2636,21 @@ impl Checker {
                 for arg in args {
                     self.check_positivity(id, arg, positive, span);
                 }
-            }
-            Type::Tensor { elem, .. } => self.check_positivity(id, elem, positive, span),
-            Type::Fn(params, ret) => {
+            },
+            | Type::Tensor { elem, .. } => self.check_positivity(id, elem, positive, span),
+            | Type::Fn(params, ret) => {
                 for param in params {
                     self.check_positivity(id, param, false, span);
                 }
                 self.check_positivity(id, ret, positive, span);
-            }
-            Type::Record(row) => {
+            },
+            | Type::Record(row) => {
                 for (_, field) in row.fields() {
                     self.check_positivity(id, &field, positive, span);
                 }
-            }
-            Type::Io(inner) => self.check_positivity(id, inner, positive, span),
-            _ => {}
+            },
+            | Type::Io(inner) => self.check_positivity(id, inner, positive, span),
+            | _ => {},
         }
     }
 
@@ -2569,28 +2707,24 @@ impl Checker {
             params.len().max(1),
             converted,
         ) {
-            Ok(()) => {
+            | Ok(()) => {
                 if private {
                     // §7.1.3: a `private class` is usable inside the module and
                     // is not part of its exported interface.
                     self.private_classes.insert(name.to_string());
                 }
-            }
-            Err(ClassError::Duplicate) => {
-                self.error(
-                    "E0316",
-                    format!("class `{name}` is already declared"),
-                    span,
-                );
-            }
-            Err(ClassError::MultiParameter) => {
+            },
+            | Err(ClassError::Duplicate) => {
+                self.error("E0316", format!("class `{name}` is already declared"), span);
+            },
+            | Err(ClassError::MultiParameter) => {
                 // Unreachable: the arity is checked above. Kept total.
                 self.error(
                     "E0317",
                     format!("class `{name}` declares more than one parameter"),
                     span,
                 );
-            }
+            },
         }
     }
 
@@ -2600,7 +2734,10 @@ impl Checker {
     /// how the old checker let one instance shadow `show` for the whole module.
     /// Each method gets a mangled global, and the call site records which
     /// instance the checker proved.
-    fn check_instance(&mut self, decl: &Decl) {
+    fn check_instance(
+        &mut self,
+        decl: &Decl,
+    ) {
         let DeclKind::Instance {
             class,
             ty: head_ast,
@@ -2682,7 +2819,7 @@ impl Checker {
             };
             for (index, param) in instance_method.params.iter().enumerate() {
                 let ty = match (&param.ty, expected_params.get(index)) {
-                    (Some(annotation), _) => {
+                    | (Some(annotation), _) => {
                         let annotated = self.convert_type(annotation);
                         if let Some(want) = expected_params.get(index) {
                             if let Err(error) = self.infer.unify(&annotated, want) {
@@ -2690,9 +2827,9 @@ impl Checker {
                             }
                         }
                         annotated
-                    }
-                    (None, Some(want)) => want.clone(),
-                    (None, None) => self.infer.fresh_type(),
+                    },
+                    | (None, Some(want)) => want.clone(),
+                    | (None, None) => self.infer.fresh_type(),
                 };
                 self.bind_pattern(&param.pattern, &ty);
                 params.push(ty);
@@ -2780,9 +2917,12 @@ impl Checker {
     /// The first free type-level Nat variable in a type, rendered for a
     /// diagnostic (used to reject an instance head such as
     /// `Tensor<[n], Float]`, §3.5.1/§3.8.1).
-    fn nat_variable_in(&self, ty: &Type) -> Option<String> {
+    fn nat_variable_in(
+        &self,
+        ty: &Type,
+    ) -> Option<String> {
         match ty {
-            Type::Tensor { shape, elem } => {
+            | Type::Tensor { shape, elem } => {
                 if let Shape::Refined(items) = shape {
                     for item in items.iter().flatten() {
                         let resolved = self.infer.resolve_nat(item);
@@ -2792,38 +2932,47 @@ impl Checker {
                     }
                 }
                 self.nat_variable_in(elem)
-            }
-            Type::Fn(params, ret) => params
-                .iter()
-                .find_map(|param| self.nat_variable_in(param))
-                .or_else(|| self.nat_variable_in(ret)),
-            Type::Record(row) => row
-                .fields()
-                .into_iter()
-                .find_map(|(_, field)| self.nat_variable_in(&field)),
-            Type::Adt(_, args) => args.iter().find_map(|arg| self.nat_variable_in(arg)),
-            Type::Io(inner) => self.nat_variable_in(inner),
-            _ => None,
+            },
+            | Type::Fn(params, ret) => {
+                params
+                    .iter()
+                    .find_map(|param| self.nat_variable_in(param))
+                    .or_else(|| self.nat_variable_in(ret))
+            },
+            | Type::Record(row) => {
+                row.fields()
+                    .into_iter()
+                    .find_map(|(_, field)| self.nat_variable_in(&field))
+            },
+            | Type::Adt(_, args) => args.iter().find_map(|arg| self.nat_variable_in(arg)),
+            | Type::Io(inner) => self.nat_variable_in(inner),
+            | _ => None,
         }
     }
 
-    fn head_is_local_ast(&self, ty: &Ty) -> bool {
+    fn head_is_local_ast(
+        &self,
+        ty: &Ty,
+    ) -> bool {
         match &ty.kind {
-            TyKind::Named { path, .. } => {
+            | TyKind::Named { path, .. } => {
                 let name = path.join(".");
                 self.adts
                     .get(&name)
                     .is_some_and(|id| self.local_adts.contains(id))
                     || self.aliases.contains_key(&name)
-            }
-            TyKind::Record { .. } => true,
-            _ => false,
+            },
+            | TyKind::Record { .. } => true,
+            | _ => false,
         }
     }
 
     /// Converts an instance head, treating unknown type and dimension names as
     /// implicitly quantified variables (§3.8.1).
-    fn convert_instance_head(&mut self, ty: &Ty) -> Type {
+    fn convert_instance_head(
+        &mut self,
+        ty: &Ty,
+    ) -> Type {
         let saved_types = std::mem::take(&mut self.type_params);
         let saved_dims = std::mem::take(&mut self.dim_params);
         let saved_nats = std::mem::take(&mut self.nat_params);
@@ -2840,7 +2989,10 @@ impl Checker {
     }
 
     /// Checks a `derive` declaration (§3.8.5).
-    fn check_derive(&mut self, decl: &Decl) {
+    fn check_derive(
+        &mut self,
+        decl: &Decl,
+    ) {
         let DeclKind::Derive { classes, ty } = &decl.kind else {
             return;
         };
@@ -2848,16 +3000,20 @@ impl Checker {
         // A `derive` works on a nominal type or on a record alias: both are
         // structurally known here.
         let fields: Vec<Type> = match &head {
-            Type::Adt(id, _) => match adt::get(*id) {
-                Some(registered) => registered
-                    .ctors
-                    .iter()
-                    .flat_map(|ctor| ctor.fields.clone())
-                    .collect(),
-                None => Vec::new(),
+            | Type::Adt(id, _) => {
+                match adt::get(*id) {
+                    | Some(registered) => {
+                        registered
+                            .ctors
+                            .iter()
+                            .flat_map(|ctor| ctor.fields.clone())
+                            .collect()
+                    },
+                    | None => Vec::new(),
+                }
             },
-            Type::Record(row) => row.fields().into_iter().map(|(_, ty)| ty).collect(),
-            _ => {
+            | Type::Record(row) => row.fields().into_iter().map(|(_, ty)| ty).collect(),
+            | _ => {
                 self.error_help(
                     "E0317",
                     "`derive` needs a nominal type or a record type",
@@ -2865,7 +3021,7 @@ impl Checker {
                     "deriving works on `type` declarations",
                 );
                 return;
-            }
+            },
         };
         let head_is_local = self.head_is_local_ast(ty);
         for class in classes {
@@ -2882,65 +3038,82 @@ impl Checker {
                 class_is_local,
             );
             match result {
-                Ok(_) => {}
-                Err(DeriveError::UnknownClass(_)) => self.error_help(
-                    "E0310",
-                    format!("no class `{class}` is in scope"),
-                    decl.span,
-                    "declare it with `class ... where`, or import the module that does",
-                ),
-                Err(DeriveError::UnsupportedClass(unsupported)) => self.error_help(
+                | Ok(_) => {},
+                | Err(DeriveError::UnknownClass(_)) => {
+                    self.error_help(
+                        "E0310",
+                        format!("no class `{class}` is in scope"),
+                        decl.span,
+                        "declare it with `class ... where`, or import the module that does",
+                    )
+                },
+                | Err(DeriveError::UnsupportedClass(unsupported)) => {
+                    self.error_help(
+                        "E0317",
+                        format!("`derive` cannot instantiate `{unsupported}`"),
+                        decl.span,
+                        "`derive` is closed to Eq, Ord, TotalOrd, Show and Hash (§3.8.5)",
+                    )
+                },
+                | Err(DeriveError::Field { class: failed, field }) => self.error_help(
                     "E0317",
-                    format!("`derive` cannot instantiate `{unsupported}`"),
-                    decl.span,
-                    "`derive` is closed to Eq, Ord, TotalOrd, Show and Hash (§3.8.5)",
-                ),
-                Err(DeriveError::Field { class: failed, field }) => self.error_help(
-                    "E0317",
-                    format!("cannot derive `{failed}`: the field `{field}` has no `{failed}` instance"),
+                    format!(
+                        "cannot derive `{failed}`: the field `{field}` has no `{failed}` instance"
+                    ),
                     decl.span,
                     "write the instance by hand, or derive over a field type that supports it",
                 ),
-                Err(DeriveError::FunctionField { class: failed, field }) => self.error_help(
-                    "E0317",
-                    format!(
-                        "cannot derive `{failed}`: the field `{field}` contains a function"
-                    ),
-                    decl.span,
-                    "functions have no Eq/Ord/Show/Hash instance",
-                ),
-                Err(DeriveError::Overlapping(key)) => self.error_help(
-                    "E0311",
-                    format!("an instance `{key}` already exists"),
-                    decl.span,
-                    "remove the derive or the hand-written instance",
-                ),
-                Err(DeriveError::Orphan) => self.error_help(
-                    "E0604",
-                    "orphan instance: `derive` can only instantiate a class for a local type",
-                    decl.span,
-                    "derive in the module that declares the type",
-                ),
+                | Err(DeriveError::FunctionField { class: failed, field }) => {
+                    self.error_help(
+                        "E0317",
+                        format!(
+                            "cannot derive `{failed}`: the field `{field}` contains a function"
+                        ),
+                        decl.span,
+                        "functions have no Eq/Ord/Show/Hash instance",
+                    )
+                },
+                | Err(DeriveError::Overlapping(key)) => {
+                    self.error_help(
+                        "E0311",
+                        format!("an instance `{key}` already exists"),
+                        decl.span,
+                        "remove the derive or the hand-written instance",
+                    )
+                },
+                | Err(DeriveError::Orphan) => {
+                    self.error_help(
+                        "E0604",
+                        "orphan instance: `derive` can only instantiate a class for a local type",
+                        decl.span,
+                        "derive in the module that declares the type",
+                    )
+                },
             }
         }
     }
 
     /// Solves a class constraint, or defers it until the type is known.
-    fn solve_constraint(&mut self, constraint: &Constraint, span: Span) {
+    fn solve_constraint(
+        &mut self,
+        constraint: &Constraint,
+        span: Span,
+    ) {
         let Some(arg) = constraint.args.first() else {
             return;
         };
         let resolved = self.infer.resolve(arg);
         match self.classes.resolve(&constraint.class, &resolved) {
-            Resolution::Found { .. } => {}
-            Resolution::Deferred => self
-                .deferred_constraints
-                .push((constraint.class.clone(), resolved, span)),
-            Resolution::Missing if is_structural_show(&constraint.class, &resolved) => {
+            | Resolution::Found { .. } => {},
+            | Resolution::Deferred => {
+                self.deferred_constraints
+                    .push((constraint.class.clone(), resolved, span))
+            },
+            | Resolution::Missing if is_structural_show(&constraint.class, &resolved) => {
                 // §3.8.4/round-2 decision 1e: `Show` is a *guarantee* for the
                 // structural heads; the builtin printer is the instance.
-            }
-            Resolution::Missing => {
+            },
+            | Resolution::Missing => {
                 let heads = self.classes.instance_heads(&constraint.class);
                 let known = heads
                     .iter()
@@ -2950,10 +3123,7 @@ impl Checker {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "E0310",
-                        format!(
-                            "no instance of `{}` for `{resolved}`",
-                            constraint.class
-                        ),
+                        format!("no instance of `{}` for `{resolved}`", constraint.class),
                         span,
                     )
                     .with_primary_label("this type has no instance")
@@ -2964,7 +3134,7 @@ impl Checker {
                     })
                     .with_help("add an `instance` declaration, or use a type that has one"),
                 );
-            }
+            },
         }
     }
 
@@ -2972,7 +3142,12 @@ impl Checker {
     ///
     /// Returns `None` when the call does not have the shape this rule covers,
     /// so the builtin signature still applies.
-    fn unit_display_call(&mut self, name: &str, args: &[Expr], span: Span) -> Option<Type> {
+    fn unit_display_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Option<Type> {
         let [unit_expr, value] = args else {
             return None;
         };
@@ -2981,7 +3156,7 @@ impl Checker {
         let synth_value = self.synth(value);
         let value_ty = self.infer.resolve(&synth_value);
         match value_ty {
-            Type::Point(dim) => {
+            | Type::Point(dim) => {
                 if dim.is_concrete() && unit.dim.is_concrete() && dim != unit.dim {
                     self.error_help(
                         "E0509",
@@ -2996,8 +3171,8 @@ impl Checker {
                 } else {
                     Type::float(Dim::one())
                 })
-            }
-            Type::Scalar(rep, dim) => {
+            },
+            | Type::Scalar(rep, dim) => {
                 if unit.affine {
                     self.error_help(
                         "E0510",
@@ -3021,8 +3196,8 @@ impl Checker {
                 } else {
                     Type::Scalar(rep, Dim::one())
                 })
-            }
-            _ => None,
+            },
+            | _ => None,
         }
     }
 
@@ -3031,22 +3206,28 @@ impl Checker {
     /// A type that is still unknown is re-checked at the end of the module,
     /// once defaulting has made it concrete: `sort([1.0, 2.0])` is
     /// `sort : Tensor<1, Float>` and `Float` has no `TotalOrd`.
-    fn require_instance(&mut self, class: &str, ty: &Type, span: Span) {
+    fn require_instance(
+        &mut self,
+        class: &str,
+        ty: &Type,
+        span: Span,
+    ) {
         let resolved = self.infer.resolve(ty);
         match self.classes.resolve(class, &resolved) {
-            Resolution::Missing if is_structural_show(class, &resolved) => {}
-            Resolution::Missing => {
+            | Resolution::Missing if is_structural_show(class, &resolved) => {},
+            | Resolution::Missing => {
                 self.error_help(
                     "E0310",
                     format!("no instance of `{class}` for `{resolved}`"),
                     span,
                     "this type has no total order; use a type that has one",
                 );
-            }
-            Resolution::Deferred => self
-                .deferred_constraints
-                .push((class.to_string(), resolved, span)),
-            Resolution::Found { .. } => {}
+            },
+            | Resolution::Deferred => {
+                self.deferred_constraints
+                    .push((class.to_string(), resolved, span))
+            },
+            | Resolution::Found { .. } => {},
         }
     }
 
@@ -3057,16 +3238,16 @@ impl Checker {
         for (class, ty, span) in deferred {
             let resolved = self.infer.resolve(&ty);
             match self.classes.resolve(&class, &resolved) {
-                Resolution::Found { .. } => {}
-                Resolution::Missing if is_structural_show(&class, &resolved) => {}
-                Resolution::Deferred | Resolution::Missing => {
+                | Resolution::Found { .. } => {},
+                | Resolution::Missing if is_structural_show(&class, &resolved) => {},
+                | Resolution::Deferred | Resolution::Missing => {
                     self.error_help(
                         "E0310",
                         format!("no instance of `{class}` for `{resolved}`"),
                         span,
                         "add a type annotation that fixes the type, or an `instance` declaration",
                     );
-                }
+                },
             }
         }
     }
@@ -3083,22 +3264,22 @@ impl Checker {
         let saved_rows = self.row_params.clone();
         for param in params {
             match param.kind {
-                Some(Kind::Dim) => {
+                | Some(Kind::Dim) => {
                     let dim = self.infer.fresh_dim();
                     self.dim_params.push((param.name.clone(), dim));
-                }
+                },
                 // §3.5.1: a type-level `Nat` parameter is a real variable; the
                 // solver may bind it from a shape equation.
-                Some(Kind::Nat) => {
+                | Some(Kind::Nat) => {
                     let nat = self.infer.fresh_nat();
                     self.nat_params.push((param.name.clone(), nat));
-                }
+                },
                 // §2/§3.6: a row parameter is usable as a record tail.
-                Some(Kind::Row) => {
+                | Some(Kind::Row) => {
                     let row = self.infer.fresh_row();
                     self.row_params.push((param.name.clone(), row));
-                }
-                Some(Kind::Type) | None => {
+                },
+                | Some(Kind::Type) | None => {
                     let ty = self.infer.fresh_type();
                     self.type_params.push((param.name.clone(), ty));
                     // An unkinded parameter may also be used as a dimension
@@ -3113,8 +3294,8 @@ impl Checker {
                         let row = self.infer.fresh_row();
                         self.row_params.push((param.name.clone(), row));
                     }
-                }
-                _ => {}
+                },
+                | _ => {},
             }
         }
         let generics = FnGenerics {
@@ -3126,14 +3307,14 @@ impl Checker {
         let mut arg_types = Vec::new();
         for arg in args {
             let ty = match &arg.ty {
-                Some(ty) => self.convert_type(ty),
-                None => self.infer.fresh_type(),
+                | Some(ty) => self.convert_type(ty),
+                | None => self.infer.fresh_type(),
             };
             arg_types.push(ty);
         }
         let ret_ty = match ret {
-            Some(ty) => self.convert_type(ty),
-            None => self.infer.fresh_type(),
+            | Some(ty) => self.convert_type(ty),
+            | None => self.infer.fresh_type(),
         };
         self.type_params = saved_types;
         self.dim_params = saved_dims;
@@ -3142,7 +3323,12 @@ impl Checker {
         (Type::func(arg_types, ret_ty), generics)
     }
 
-    fn check_fn_body(&mut self, name: &str, args: &[Param], body: &Expr) {
+    fn check_fn_body(
+        &mut self,
+        name: &str,
+        args: &[Param],
+        body: &Expr,
+    ) {
         let Some(signature) = self.fn_signatures.get(name).cloned() else {
             return;
         };
@@ -3179,7 +3365,9 @@ impl Checker {
         // Waiting for the end of the module is too late — a call site in
         // between has already unified the shared variable, so `fn ident(x) = x`
         // came out monomorphic and `ident("s")` after `ident(1)` was an error.
-        let generalised = self.infer.generalize_at(0, &Type::func(params, (*ret).clone()), Vec::new());
+        let generalised =
+            self.infer
+                .generalize_at(0, &Type::func(params, (*ret).clone()), Vec::new());
         self.globals.insert(name.to_string(), generalised.clone());
         if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
             *scheme = generalised;
@@ -3205,18 +3393,18 @@ impl Checker {
             return;
         };
         let target = match self.top_lets.get(name).cloned() {
-            Some(target) => target,
-            None => self.infer.fresh_type(),
+            | Some(target) => target,
+            | None => self.infer.fresh_type(),
         };
         let target = match annotation {
-            Some(ty) => {
+            | Some(ty) => {
                 let annotated = self.convert_type(ty);
                 if let Err(error) = self.infer.unify(&target, &annotated) {
                     self.report_unify(error, ty.span);
                 }
                 annotated
-            }
-            None => target,
+            },
+            | None => target,
         };
         self.note_type(pattern.span, &target);
         if rec {
@@ -3254,17 +3442,18 @@ impl Checker {
         self.infer.enter_level();
         let target = self.infer.fresh_type();
         if let (PatKind::Var(name), true) = (&pattern.kind, rec) {
-            self.globals.insert(name.clone(), Scheme::mono(target.clone()));
+            self.globals
+                .insert(name.clone(), Scheme::mono(target.clone()));
         }
         let target = match annotation {
-            Some(ty) => {
+            | Some(ty) => {
                 let annotated = self.convert_type(ty);
                 if let Err(error) = self.infer.unify(&target, &annotated) {
                     self.report_unify(error, ty.span);
                 }
                 annotated
-            }
-            None => target,
+            },
+            | None => target,
         };
         self.check(value, &target);
         self.infer.leave_level();
@@ -3289,7 +3478,12 @@ impl Checker {
     }
 
     /// Generalises and defaults a local `let` and binds its pattern.
-    fn bind_local(&mut self, pattern: &Pat, value_ty: &Type, span: Span) {
+    fn bind_local(
+        &mut self,
+        pattern: &Pat,
+        value_ty: &Type,
+        span: Span,
+    ) {
         self.note_type(pattern.span, value_ty);
         let scheme = self.infer.generalize(value_ty);
         let (scheme, warnings) = self.infer.default_scheme(&scheme);
@@ -3308,80 +3502,86 @@ impl Checker {
 
     // ----- expressions ---------------------------------------------------
 
-    fn synth(&mut self, expr: &Expr) -> Type {
+    fn synth(
+        &mut self,
+        expr: &Expr,
+    ) -> Type {
         let ty = self.synth_inner(expr);
         self.note_type(expr.span, &ty);
         ty
     }
 
-    fn synth_inner(&mut self, expr: &Expr) -> Type {
+    fn synth_inner(
+        &mut self,
+        expr: &Expr,
+    ) -> Type {
         match &expr.kind {
             // A parser recovery node: the syntax error was already reported, so
             // synthesise an unconstrained type instead of a second diagnostic.
-            ExprKind::Error => self.infer.fresh_type(),
-            ExprKind::UnitLit => Type::Unit,
-            ExprKind::Bool(_) => Type::Bool,
-            ExprKind::Int(_) => {
+            | ExprKind::Error => self.infer.fresh_type(),
+            | ExprKind::UnitLit => Type::Unit,
+            | ExprKind::Bool(_) => Type::Bool,
+            | ExprKind::Int(_) => {
                 self.literal_spans.push(expr.span);
                 let ty = self.infer.fresh_type();
                 self.infer.mark_literal(&ty, LiteralKind::Int);
                 ty
-            }
-            ExprKind::Float(_) => {
+            },
+            | ExprKind::Float(_) => {
                 self.literal_spans.push(expr.span);
                 let ty = self.infer.fresh_type();
                 self.infer.mark_literal(&ty, LiteralKind::Decimal);
                 ty
-            }
-            ExprKind::Str(pieces) => {
+            },
+            | ExprKind::Str(pieces) => {
                 for piece in pieces {
                     if let StrPiece::Expr(inner) = piece {
                         self.synth(inner);
                     }
                 }
                 Type::string()
-            }
-            ExprKind::Quantity { value, unit } => {
+            },
+            | ExprKind::Quantity { value, unit } => {
                 self.literal_spans.push(expr.span);
                 self.quantity_type(value, unit, expr.span)
-            }
-            ExprKind::Var(name) => self.lookup_value(name, expr.span),
-            ExprKind::QName(path) => {
+            },
+            | ExprKind::Var(name) => self.lookup_value(name, expr.span),
+            | ExprKind::QName(path) => {
                 // `Rssn.Version` and friends are kernel members, not names in
                 // scope; the manifest decides what exists.
                 if path.len() == 2 && path[0] == "Rssn" {
                     return self.rssn_member(&path[1], expr.span);
                 }
                 self.lookup_value(&path.join("."), expr.span)
-            }
-            ExprKind::Unary { op, operand } => self.synth_unary(*op, operand, expr.span),
-            ExprKind::Binary { op, left, right } => {
+            },
+            | ExprKind::Unary { op, operand } => self.synth_unary(*op, operand, expr.span),
+            | ExprKind::Binary { op, left, right } => {
                 self.synth_binary(*op, left, right, expr.span)
-            }
-            ExprKind::Call { callee, args } => self.synth_call(callee, args, expr.span),
-            ExprKind::TypeApp { callee, args } => self.synth_type_app(callee, args, expr.span),
-            ExprKind::Lambda { params, ret, body } => {
+            },
+            | ExprKind::Call { callee, args } => self.synth_call(callee, args, expr.span),
+            | ExprKind::TypeApp { callee, args } => self.synth_type_app(callee, args, expr.span),
+            | ExprKind::Lambda { params, ret, body } => {
                 self.infer.enter_level();
                 self.scopes.push(HashMap::new());
                 let mut arg_types = Vec::new();
                 for param in params {
                     let ty = match &param.ty {
-                        Some(ty) => self.convert_type(ty),
-                        None => self.infer.fresh_type(),
+                        | Some(ty) => self.convert_type(ty),
+                        | None => self.infer.fresh_type(),
                     };
                     self.bind_pattern(&param.pattern, &ty);
                     arg_types.push(ty);
                 }
                 let ret_ty = match ret {
-                    Some(ty) => self.convert_type(ty),
-                    None => self.infer.fresh_type(),
+                    | Some(ty) => self.convert_type(ty),
+                    | None => self.infer.fresh_type(),
                 };
                 self.check(body, &ret_ty);
                 self.scopes.pop();
                 self.infer.leave_level();
                 Type::func(arg_types, ret_ty)
-            }
-            ExprKind::If {
+            },
+            | ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
@@ -3392,8 +3592,8 @@ impl Checker {
                 self.check(then_branch, &branch);
                 self.check(else_branch, &branch);
                 branch
-            }
-            ExprKind::Match { scrutinee, arms } => {
+            },
+            | ExprKind::Match { scrutinee, arms } => {
                 let subject = self.synth(scrutinee);
                 let result = self.infer.fresh_type();
                 // §6.6 usefulness: a *guarded* arm never contributes coverage,
@@ -3425,8 +3625,8 @@ impl Checker {
                 let subject_resolved = self.infer.resolve(&subject);
                 self.check_exhaustive(&subject_resolved, &unguarded, expr.span);
                 result
-            }
-            ExprKind::LetIn {
+            },
+            | ExprKind::LetIn {
                 pattern,
                 ty,
                 value,
@@ -3434,12 +3634,12 @@ impl Checker {
             } => {
                 self.infer.enter_level();
                 let value_ty = match ty {
-                    Some(ty) => {
+                    | Some(ty) => {
                         let ty = self.convert_type(ty);
                         self.check(value, &ty);
                         ty
-                    }
-                    None => self.synth(value),
+                    },
+                    | None => self.synth(value),
                 };
                 self.infer.leave_level();
                 self.scopes.push(HashMap::new());
@@ -3447,12 +3647,12 @@ impl Checker {
                 let body_ty = self.synth(body);
                 self.scopes.pop();
                 body_ty
-            }
-            ExprKind::Block { stmts, tail } => {
+            },
+            | ExprKind::Block { stmts, tail } => {
                 self.scopes.push(HashMap::new());
                 for stmt in stmts {
                     match stmt {
-                        BlockStmt::Let {
+                        | BlockStmt::Let {
                             pattern,
                             ty,
                             value,
@@ -3468,29 +3668,33 @@ impl Checker {
                                     .insert(name.clone(), Scheme::mono(target.clone()));
                             }
                             let value_ty = match ty {
-                                Some(annotation) => {
+                                | Some(annotation) => {
                                     let annotated = self.convert_type(annotation);
                                     if let Err(error) = self.infer.unify(&target, &annotated) {
                                         self.report_unify(error, annotation.span);
                                     }
                                     self.check(value, &annotated);
                                     annotated
-                                }
-                                None => {
+                                },
+                                | None => {
                                     self.check(value, &target);
                                     target
-                                }
+                                },
                             };
                             self.infer.leave_level();
                             self.bind_local(pattern, &value_ty, *span);
-                        }
-                        BlockStmt::Fn(decl) => {
+                        },
+                        | BlockStmt::Fn(decl) => {
                             if let DeclKind::Fn {
-                                name, params, args, ret, body, ..
+                                name,
+                                params,
+                                args,
+                                ret,
+                                body,
+                                ..
                             } = &decl.kind
                             {
-                                let (ty, generics) =
-                                    self.fn_signature(params, args, ret.as_ref());
+                                let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
                                 self.fn_generics.insert(name.clone(), generics);
                                 self.fn_signatures.insert(name.clone(), ty.clone());
                                 self.scopes
@@ -3499,12 +3703,12 @@ impl Checker {
                                     .insert(name.clone(), Scheme::mono(ty));
                                 self.check_fn_body(name, args, body);
                             }
-                        }
+                        },
                     }
                 }
                 let tail_ty = match tail {
-                    Some(tail) => self.synth(tail),
-                    None => {
+                    | Some(tail) => self.synth(tail),
+                    | None => {
                         self.error_help(
                             "E0201",
                             "block has no final expression",
@@ -3512,14 +3716,14 @@ impl Checker {
                             "add a value after the `let` statements",
                         );
                         Type::Unit
-                    }
+                    },
                 };
                 self.scopes.pop();
                 tail_ty
-            }
-            ExprKind::Do { stmts } => self.synth_do(stmts),
-            ExprKind::Record { base, fields } => self.synth_record(base.as_deref(), fields),
-            ExprKind::Field { base, name } => {
+            },
+            | ExprKind::Do { stmts } => self.synth_do(stmts),
+            | ExprKind::Record { base, fields } => self.synth_record(base.as_deref(), fields),
+            | ExprKind::Field { base, name } => {
                 if is_rssn_root(base) {
                     return self.rssn_member(name, expr.span);
                 }
@@ -3546,8 +3750,8 @@ impl Checker {
                 }
                 let base_ty = self.synth(base);
                 self.field_type(&base_ty, name, expr.span)
-            }
-            ExprKind::Tuple(items) => {
+            },
+            | ExprKind::Tuple(items) => {
                 let types: Vec<Type> = items.iter().map(|item| self.synth(item)).collect();
                 Type::record(
                     types
@@ -3555,28 +3759,32 @@ impl Checker {
                         .enumerate()
                         .map(|(index, ty)| (index.to_string(), ty)),
                 )
-            }
-            ExprKind::Tensor(items) => self.synth_tensor(items, expr.span),
-            ExprKind::Index { base, indices } => self.synth_index(base, indices, expr.span),
-            ExprKind::Annot { expr: inner, ty } => {
+            },
+            | ExprKind::Tensor(items) => self.synth_tensor(items, expr.span),
+            | ExprKind::Index { base, indices } => self.synth_index(base, indices, expr.span),
+            | ExprKind::Annot { expr: inner, ty } => {
                 let ty = self.convert_type(ty);
                 self.check(inner, &ty);
                 ty
-            }
-            ExprKind::Placeholder => {
+            },
+            | ExprKind::Placeholder => {
                 self.error("E0202", "`_` is only allowed as a call argument", expr.span);
                 Type::Error
-            }
-            ExprKind::Try(inner) => self.synth_try(inner, expr.span),
-            ExprKind::Factorial { expr: inner, .. } => {
+            },
+            | ExprKind::Try(inner) => self.synth_try(inner, expr.span),
+            | ExprKind::Factorial { expr: inner, .. } => {
                 let ty = self.synth(inner);
                 let _ = self.infer.unify(&ty, &Type::int());
                 Type::int()
-            }
+            },
         }
     }
 
-    fn check(&mut self, expr: &Expr, expected: &Type) {
+    fn check(
+        &mut self,
+        expr: &Expr,
+        expected: &Type,
+    ) {
         self.check_inner(expr, expected);
         // Whatever path `check_inner` took — a direct comparison, or a
         // bidirectional rule that never synthesised the node — the type of the
@@ -3585,7 +3793,11 @@ impl Checker {
         self.note_type(expr.span, expected);
     }
 
-    fn check_inner(&mut self, expr: &Expr, expected: &Type) {
+    fn check_inner(
+        &mut self,
+        expr: &Expr,
+        expected: &Type,
+    ) {
         let resolved_expected = self.infer.resolve(expected);
         // An empty list has no element to learn its type from; the context
         // supplies it, which is what `let e: Tensor<1, Float> = []` means.
@@ -3595,7 +3807,7 @@ impl Checker {
             return;
         }
         match (&expr.kind, &resolved_expected) {
-            (ExprKind::Lambda { params, ret, body }, Type::Fn(expected_params, expected_ret))
+            | (ExprKind::Lambda { params, ret, body }, Type::Fn(expected_params, expected_ret))
                 if params.len() == expected_params.len() =>
             {
                 self.infer.enter_level();
@@ -3619,8 +3831,8 @@ impl Checker {
                 self.scopes.pop();
                 self.infer.leave_level();
                 return;
-            }
-            (
+            },
+            | (
                 ExprKind::If {
                     cond,
                     then_branch,
@@ -3633,24 +3845,27 @@ impl Checker {
                 self.check(then_branch, expected);
                 self.check(else_branch, expected);
                 return;
-            }
-            (ExprKind::Block { stmts, tail: Some(tail) }, _) => {
+            },
+            | (
+                ExprKind::Block {
+                    stmts,
+                    tail: Some(tail),
+                },
+                _,
+            ) => {
                 self.scopes.push(HashMap::new());
                 for stmt in stmts {
                     if let BlockStmt::Let {
-                        pattern,
-                        ty,
-                        value,
-                        ..
+                        pattern, ty, value, ..
                     } = stmt
                     {
                         let value_ty = match ty {
-                            Some(ty) => {
+                            | Some(ty) => {
                                 let ty = self.convert_type(ty);
                                 self.check(value, &ty);
                                 ty
-                            }
-                            None => self.synth(value),
+                            },
+                            | None => self.synth(value),
                         };
                         self.bind_pattern(pattern, &value_ty);
                     }
@@ -3658,18 +3873,15 @@ impl Checker {
                 self.check(tail, expected);
                 self.scopes.pop();
                 return;
-            }
-            _ => {}
+            },
+            | _ => {},
         }
         let actual = self.synth(expr);
         let expected_resolved = self.infer.resolve(expected);
         // §3.9.4: a pure context cannot run an action. Saying `E0313` instead
         // of a plain mismatch is what tells the user to return `IO`.
         if matches!(actual, Type::Io(_))
-            && !matches!(
-                expected_resolved,
-                Type::Io(_) | Type::Var(_) | Type::Error
-            )
+            && !matches!(expected_resolved, Type::Io(_) | Type::Var(_) | Type::Error)
         {
             self.error_help(
                 "E0313",
@@ -3704,7 +3916,11 @@ impl Checker {
     /// `let a: Tensor<[3], Float> = zeros(4)` would claim a guarantee the
     /// checker cannot make. The reverse (refined value, rank-only annotation)
     /// is the safe implicit conversion and is allowed.
-    fn rank_only_to_refined(&self, actual: &Type, expected: &Type) -> Option<String> {
+    fn rank_only_to_refined(
+        &self,
+        actual: &Type,
+        expected: &Type,
+    ) -> Option<String> {
         let actual = self.infer.resolve(actual);
         let expected = self.infer.resolve(expected);
         let (
@@ -3730,40 +3946,58 @@ impl Checker {
         }
     }
 
-    fn synth_unary(&mut self, op: UnOp, operand: &Expr, span: Span) -> Type {
+    fn synth_unary(
+        &mut self,
+        op: UnOp,
+        operand: &Expr,
+        span: Span,
+    ) -> Type {
         let ty = self.synth(operand);
         let resolved = match op {
-            UnOp::Neg | UnOp::Pos => self.force_scalar(&ty),
-            _ => self.infer.resolve(&ty),
+            | UnOp::Neg | UnOp::Pos => self.force_scalar(&ty),
+            | _ => self.infer.resolve(&ty),
         };
         match op {
-            UnOp::Neg | UnOp::Pos => match resolved {
-                // §4.9.3: unary `-` and `+` preserve `Dyn<ρ>`.
-                Type::Scalar(..) | Type::Tensor { .. } | Type::Dyn(_) => resolved,
-                other => {
-                    self.error("E0302", format!("`-` is not defined for {other}"), span);
-                    Type::Error
+            | UnOp::Neg | UnOp::Pos => {
+                match resolved {
+                    // §4.9.3: unary `-` and `+` preserve `Dyn<ρ>`.
+                    | Type::Scalar(..) | Type::Tensor { .. } | Type::Dyn(_) => resolved,
+                    | other => {
+                        self.error("E0302", format!("`-` is not defined for {other}"), span);
+                        Type::Error
+                    },
                 }
             },
-            UnOp::Not => match resolved {
-                Type::Bool => Type::Bool,
-                Type::Prop => Type::Prop,
-                other => {
-                    self.error("E0302", format!("`!` expects Bool, found {other}"), span);
-                    Type::Error
+            | UnOp::Not => {
+                match resolved {
+                    | Type::Bool => Type::Bool,
+                    | Type::Prop => Type::Prop,
+                    | other => {
+                        self.error("E0302", format!("`!` expects Bool, found {other}"), span);
+                        Type::Error
+                    },
                 }
             },
-            UnOp::Sqrt => match resolved {
-                Type::Scalar(rep, dim) => {
-                    // §3.4.2: a root divides, so an integer becomes `Real`.
-                    Type::Scalar(self.div_rep(rep), dim.pow(&BigRational::new(1.into(), 2.into())))
-                }
-                // §4.9.3: `sqrt : Dyn<ρ> -> Dyn<ρ>`, halving the runtime
-                // exponent.
-                Type::Dyn(rep) => Type::Dyn(self.infer.resolve_rep(rep)),
-                other => {
-                    self.error("E0302", format!("`√` expects a scalar, found {other}"), span);
-                    Type::Error
+            | UnOp::Sqrt => {
+                match resolved {
+                    | Type::Scalar(rep, dim) => {
+                        // §3.4.2: a root divides, so an integer becomes `Real`.
+                        Type::Scalar(
+                            self.div_rep(rep),
+                            dim.pow(&BigRational::new(1.into(), 2.into())),
+                        )
+                    },
+                    // §4.9.3: `sqrt : Dyn<ρ> -> Dyn<ρ>`, halving the runtime
+                    // exponent.
+                    | Type::Dyn(rep) => Type::Dyn(self.infer.resolve_rep(rep)),
+                    | other => {
+                        self.error(
+                            "E0302",
+                            format!("`√` expects a scalar, found {other}"),
+                            span,
+                        );
+                        Type::Error
+                    },
                 }
             },
         }
@@ -3771,7 +4005,10 @@ impl Checker {
 
     /// The `(rep, dim)` of a §8.14 measurement record, when `ty` is one:
     /// `{ value: Real[d], uncertainty: Real[d] }`.
-    fn measurement_parts(&self, ty: &Type) -> Option<(Rep, Dim)> {
+    fn measurement_parts(
+        &self,
+        ty: &Type,
+    ) -> Option<(Rep, Dim)> {
         let Type::Record(row) = ty else {
             return None;
         };
@@ -3784,14 +4021,10 @@ impl Checker {
         }
         let value = fields.iter().find(|(name, _)| name == "value")?;
         let uncertainty = fields.iter().find(|(name, _)| name == "uncertainty")?;
-        let (
-            Type::Scalar(value_rep, value_dim),
-            Type::Scalar(_uncertainty_rep, uncertainty_dim),
-        ) = (
+        let (Type::Scalar(value_rep, value_dim), Type::Scalar(_uncertainty_rep, uncertainty_dim)) = (
             self.infer.resolve(&value.1),
             self.infer.resolve(&uncertainty.1),
-        )
-        else {
+        ) else {
             return None;
         };
         if value_dim != uncertainty_dim {
@@ -3801,12 +4034,12 @@ impl Checker {
     }
 
     /// The `Measurement<d>` record type itself.
-    fn measurement_type(rep: Rep, dim: Dim) -> Type {
+    fn measurement_type(
+        rep: Rep,
+        dim: Dim,
+    ) -> Type {
         Type::record(vec![
-            (
-                "value".to_string(),
-                Type::Scalar(rep, dim.clone()),
-            ),
+            ("value".to_string(), Type::Scalar(rep, dim.clone())),
             ("uncertainty".to_string(), Type::Scalar(rep, dim)),
         ])
     }
@@ -3823,7 +4056,7 @@ impl Checker {
     ) -> Type {
         let plain_scalar = |ty: &Type| matches!(ty, Type::Scalar(_, _));
         match (op, left, right) {
-            (BinOp::Add | BinOp::Sub, Some((rep, left_dim)), Some((_, right_dim))) => {
+            | (BinOp::Add | BinOp::Sub, Some((rep, left_dim)), Some((_, right_dim))) => {
                 if left_dim != right_dim {
                     self.error_help(
                         "E0401",
@@ -3837,8 +4070,8 @@ impl Checker {
                     return Type::Error;
                 }
                 Self::measurement_type(rep, left_dim)
-            }
-            (BinOp::Add | BinOp::Sub, _, _) => {
+            },
+            | (BinOp::Add | BinOp::Sub, _, _) => {
                 self.error_help(
                     "E0302",
                     format!(
@@ -3849,23 +4082,23 @@ impl Checker {
                     "wrap a plain number with `measure(x, u)` to give it an uncertainty",
                 );
                 Type::Error
-            }
-            (BinOp::Mul, Some((rep, left_dim)), Some((_, right_dim))) => {
+            },
+            | (BinOp::Mul, Some((rep, left_dim)), Some((_, right_dim))) => {
                 Self::measurement_type(rep, left_dim.mul(&right_dim))
-            }
-            (BinOp::Mul, Some((rep, left_dim)), None) if plain_scalar(right_ty) => {
+            },
+            | (BinOp::Mul, Some((rep, left_dim)), None) if plain_scalar(right_ty) => {
                 Self::measurement_type(rep, left_dim)
-            }
-            (BinOp::Mul, None, Some((rep, right_dim))) if plain_scalar(left_ty) => {
+            },
+            | (BinOp::Mul, None, Some((rep, right_dim))) if plain_scalar(left_ty) => {
                 Self::measurement_type(rep, right_dim)
-            }
-            (BinOp::Div, Some((rep, left_dim)), Some((_, right_dim))) => {
+            },
+            | (BinOp::Div, Some((rep, left_dim)), Some((_, right_dim))) => {
                 Self::measurement_type(self.div_rep(rep), left_dim.div(&right_dim))
-            }
-            (BinOp::Div, Some((rep, left_dim)), None) if plain_scalar(right_ty) => {
+            },
+            | (BinOp::Div, Some((rep, left_dim)), None) if plain_scalar(right_ty) => {
                 Self::measurement_type(rep, left_dim)
-            }
-            (BinOp::Div, None, Some(_)) => {
+            },
+            | (BinOp::Div, None, Some(_)) => {
                 self.error_help(
                     "E0302",
                     "dividing a plain number by a measurement is not supported",
@@ -3873,8 +4106,8 @@ impl Checker {
                     "divide by the measurement's value if that is what you mean",
                 );
                 Type::Error
-            }
-            _ => {
+            },
+            | _ => {
                 self.error_help(
                     "E0302",
                     format!(
@@ -3887,11 +4120,17 @@ impl Checker {
                     "measurement operators take measurement records or a measurement and a number",
                 );
                 Type::Error
-            }
+            },
         }
     }
 
-    fn synth_binary(&mut self, op: BinOp, left: &Expr, right: &Expr, span: Span) -> Type {
+    fn synth_binary(
+        &mut self,
+        op: BinOp,
+        left: &Expr,
+        right: &Expr,
+        span: Span,
+    ) -> Type {
         let left_ty = self.synth(left);
         let right_ty = self.synth(right);
         self.binary_type(op, &left_ty, &right_ty, left, right, span)
@@ -3903,14 +4142,17 @@ impl Checker {
     /// reading, and leaving it unconstrained would make `2 * h / g` fail before
     /// `g`'s declaration is checked. Literals keep their dimension rule: a
     /// bare `2` may only become a dimensionless scalar.
-    fn force_scalar(&mut self, ty: &Type) -> Type {
+    fn force_scalar(
+        &mut self,
+        ty: &Type,
+    ) -> Type {
         let resolved = self.infer.resolve(ty);
         if !matches!(resolved, Type::Var(_)) {
             return resolved;
         }
         let dim = match self.infer.literal_kind(&resolved) {
-            Some(kind) if !kind.is_quantity() => Dim::one(),
-            _ => self.infer.fresh_dim(),
+            | Some(kind) if !kind.is_quantity() => Dim::one(),
+            | _ => self.infer.fresh_dim(),
         };
         let scalar = Type::Scalar(self.infer.fresh_rep(), dim);
         let _ = self.infer.unify(&resolved, &scalar);
@@ -3965,14 +4207,14 @@ impl Checker {
             }
         }
         match op {
-            BinOp::Add | BinOp::Sub => {
+            | BinOp::Add | BinOp::Sub => {
                 self.add_type(op, &left_resolved, &right_resolved, left, right, span)
-            }
-            BinOp::Mul => self.mul_type(&left_resolved, &right_resolved, span),
-            BinOp::Div => self.div_type(&left_resolved, &right_resolved, span),
-            BinOp::MatMul => self.matmul_type(&left_resolved, &right_resolved, span),
-            BinOp::Pow => self.pow_type(&left_resolved, right, span),
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+            },
+            | BinOp::Mul => self.mul_type(&left_resolved, &right_resolved, span),
+            | BinOp::Div => self.div_type(&left_resolved, &right_resolved, span),
+            | BinOp::MatMul => self.matmul_type(&left_resolved, &right_resolved, span),
+            | BinOp::Pow => self.pow_type(&left_resolved, right, span),
+            | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 if let Err(error) = self.infer.unify(&left_resolved, &right_resolved) {
                     self.report_unify(error, span);
                     return Type::Error;
@@ -3990,19 +4232,20 @@ impl Checker {
                     return Type::Error;
                 }
                 match compared {
-                    Type::Scalar(rep, _) if matches!(self.infer.resolve_rep(rep), Rep::Real) => {
+                    | Type::Scalar(rep, _) if matches!(self.infer.resolve_rep(rep), Rep::Real) => {
                         // §3.8.6: comparing exact reals yields a proposition.
                         Type::Prop
-                    }
-                    Type::Prop => Type::Prop,
-                    _ => Type::Bool,
+                    },
+                    | Type::Prop => Type::Prop,
+                    | _ => Type::Bool,
                 }
-            }
-            BinOp::And | BinOp::Or => match (&left_resolved, &right_resolved) {
-                (Type::Bool, Type::Bool) => Type::Bool,
-                (Type::Prop, Type::Prop) => Type::Prop,
-                _ => {
-                    self.error(
+            },
+            | BinOp::And | BinOp::Or => {
+                match (&left_resolved, &right_resolved) {
+                    | (Type::Bool, Type::Bool) => Type::Bool,
+                    | (Type::Prop, Type::Prop) => Type::Prop,
+                    | _ => {
+                        self.error(
                         "E0302",
                         format!(
                             "`{}` expects Bool or Prop operands, found {left_resolved} and {right_resolved}",
@@ -4010,24 +4253,27 @@ impl Checker {
                         ),
                         span,
                     );
-                    Type::Error
+                        Type::Error
+                    },
                 }
             },
-            BinOp::Cons => match &right_resolved {
-                Type::Tensor { elem, .. } => {
-                    let elem = (**elem).clone();
-                    let _ = self.infer.unify(&left_resolved, &elem);
-                    Type::tensor(Shape::Rank(1), elem)
-                }
-                _ => {
-                    self.error("E0302", "`::` expects a tensor on the right", span);
-                    Type::Error
+            | BinOp::Cons => {
+                match &right_resolved {
+                    | Type::Tensor { elem, .. } => {
+                        let elem = (**elem).clone();
+                        let _ = self.infer.unify(&left_resolved, &elem);
+                        Type::tensor(Shape::Rank(1), elem)
+                    },
+                    | _ => {
+                        self.error("E0302", "`::` expects a tensor on the right", span);
+                        Type::Error
+                    },
                 }
             },
-            BinOp::Pipe | BinOp::PipeBack => {
+            | BinOp::Pipe | BinOp::PipeBack => {
                 self.error("E0202", "pipes are desugared by the parser", span);
                 Type::Error
-            }
+            },
         }
     }
 
@@ -4041,7 +4287,7 @@ impl Checker {
         span: Span,
     ) -> Type {
         match (left, right) {
-            (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
+            | (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
                 if let Err(error) = self.infer.unify_dim(a_dim, b_dim) {
                     // §4.7: a bare `0` is not dimension-polymorphic, and the
                     // spec gives it its own code so the fix (`0 m`) is obvious.
@@ -4053,7 +4299,11 @@ impl Checker {
                         self.error_help(
                             "E0406",
                             "a bare `0` is `Int`, not a dimensioned zero",
-                            if left_zero { left_expr.span } else { right_expr.span },
+                            if left_zero {
+                                left_expr.span
+                            } else {
+                                right_expr.span
+                            },
                             "write `0 m` (or `0.0 m`) if you meant a zero quantity",
                         );
                         return Type::Error;
@@ -4063,17 +4313,23 @@ impl Checker {
                 }
                 let rep = self.join_rep(*a_rep, *b_rep);
                 Type::Scalar(rep, self.infer.resolve_dim(a_dim))
-            }
+            },
             // §4.9.3: `Dyn + Dyn` and `Dyn - Dyn` keep `Dyn<ρ>`; the
             // dimensions must be equal, which the runtime checks (`E0412`).
-            (Type::Dyn(a), Type::Dyn(b)) => {
+            | (Type::Dyn(a), Type::Dyn(b)) => {
                 if let Err(error) = self.infer.unify_rep(*a, *b) {
                     self.report_unify(error, span);
                     return Type::Error;
                 }
                 Type::Dyn(self.infer.resolve_rep(*a))
-            }
-            (Type::Tensor { shape, elem: a }, Type::Tensor { shape: b_shape, elem: b }) => {
+            },
+            | (
+                Type::Tensor { shape, elem: a },
+                Type::Tensor {
+                    shape: b_shape,
+                    elem: b,
+                },
+            ) => {
                 if let Err(error) = self.infer.unify_shape(shape, b_shape) {
                     self.report_unify(error, span);
                 }
@@ -4084,8 +4340,8 @@ impl Checker {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
-            (Type::Tensor { shape, elem }, Type::Scalar(rep, dim))
+            },
+            | (Type::Tensor { shape, elem }, Type::Scalar(rep, dim))
             | (Type::Scalar(rep, dim), Type::Tensor { shape, elem }) => {
                 let elem = self.force_scalar(&self.infer.resolve(elem));
                 if let Type::Scalar(elem_rep, elem_dim) = elem {
@@ -4106,8 +4362,8 @@ impl Checker {
                         elem: Box::new(elem),
                     }
                 }
-            }
-            (Type::Point(a), Type::Point(b)) => {
+            },
+            | (Type::Point(a), Type::Point(b)) => {
                 if op == BinOp::Sub {
                     if let Err(error) = self.infer.unify_dim(a, b) {
                         self.report_unify(error, span);
@@ -4123,8 +4379,8 @@ impl Checker {
                     );
                     Type::Error
                 }
-            }
-            (Type::Point(a), Type::Scalar(rep, b)) if op == BinOp::Add => {
+            },
+            | (Type::Point(a), Type::Scalar(rep, b)) if op == BinOp::Add => {
                 if let Err(error) = self.infer.unify_dim(a, b) {
                     self.report_dim_error(error, span, left_expr.span, right_expr.span);
                     return Type::Error;
@@ -4134,8 +4390,8 @@ impl Checker {
                     return Type::Error;
                 }
                 Type::Point(self.infer.resolve_dim(a))
-            }
-            (Type::Scalar(rep, b), Type::Point(a)) if op == BinOp::Add => {
+            },
+            | (Type::Scalar(rep, b), Type::Point(a)) if op == BinOp::Add => {
                 if let Err(error) = self.infer.unify_dim(a, b) {
                     self.report_dim_error(error, span, left_expr.span, right_expr.span);
                     return Type::Error;
@@ -4145,51 +4401,56 @@ impl Checker {
                     return Type::Error;
                 }
                 Type::Point(self.infer.resolve_dim(a))
-            }
-            _ => {
+            },
+            | _ => {
                 if matches!(left, Type::Dyn(_)) || matches!(right, Type::Dyn(_)) {
                     // §4.9.4: `Dyn<ρ>` is not a `Scalar<ρ,d>` and does not
                     // convert implicitly — the escape layer is explicit.
                     self.error_help(
                         "E0302",
-                        format!(
-                            "`{}` cannot mix `Dyn` with {left} and {right}",
-                            op.as_str()
-                        ),
+                        format!("`{}` cannot mix `Dyn` with {left} and {right}", op.as_str()),
                         span,
                         "`Dyn` does not convert implicitly; `check` it first",
                     );
                 } else {
                     self.error(
                         "E0302",
-                        format!(
-                            "`{}` is not defined for {left} and {right}",
-                            op.as_str()
-                        ),
+                        format!("`{}` is not defined for {left} and {right}", op.as_str()),
                         span,
                     );
                 }
                 Type::Error
-            }
+            },
         }
     }
 
-    fn mul_type(&mut self, left: &Type, right: &Type, span: Span) -> Type {
+    fn mul_type(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        span: Span,
+    ) -> Type {
         match (left, right) {
-            (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
+            | (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
                 Type::Scalar(self.join_rep(*a_rep, *b_rep), a_dim.mul(b_dim))
-            }
-            (Type::Tensor { shape, elem }, Type::Scalar(rep, dim))
+            },
+            | (Type::Tensor { shape, elem }, Type::Scalar(rep, dim))
             | (Type::Scalar(rep, dim), Type::Tensor { shape, elem }) => {
                 let elem = self.scale_elem(elem, Some(*rep), dim, false, span);
                 Type::Tensor {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
+            },
             // §3.5.3: elementwise multiplication of two tensors of the same
             // rank; shapes must be equal or broadcast (a 1-extent axis).
-            (Type::Tensor { shape, elem: a }, Type::Tensor { shape: b_shape, elem: b }) => {
+            | (
+                Type::Tensor { shape, elem: a },
+                Type::Tensor {
+                    shape: b_shape,
+                    elem: b,
+                },
+            ) => {
                 if let Err(error) = self.infer.unify_shape(shape, b_shape) {
                     self.report_unify(error, span);
                 }
@@ -4200,21 +4461,19 @@ impl Checker {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
+            },
             // §4.9.3: `Dyn * Dyn` adds the runtime dimensions.
-            (Type::Dyn(a), Type::Dyn(b)) => {
+            | (Type::Dyn(a), Type::Dyn(b)) => {
                 if let Err(error) = self.infer.unify_rep(*a, *b) {
                     self.report_unify(error, span);
                     return Type::Error;
                 }
                 Type::Dyn(self.infer.resolve_rep(*a))
-            }
-            (Type::UnitOf(a), Type::UnitOf(b)) => Type::UnitOf(a.mul(b)),
-            (Type::UnitOf(dim), Type::Scalar(rep, other))
-            | (Type::Scalar(rep, other), Type::UnitOf(dim)) => {
-                Type::Scalar(*rep, other.mul(dim))
-            }
-            (Type::UnitOf(dim), Type::Tensor { shape, elem })
+            },
+            | (Type::UnitOf(a), Type::UnitOf(b)) => Type::UnitOf(a.mul(b)),
+            | (Type::UnitOf(dim), Type::Scalar(rep, other))
+            | (Type::Scalar(rep, other), Type::UnitOf(dim)) => Type::Scalar(*rep, other.mul(dim)),
+            | (Type::UnitOf(dim), Type::Tensor { shape, elem })
             | (Type::Tensor { shape, elem }, Type::UnitOf(dim)) => {
                 // §3.5.3: `Unit[e] * Tensor<shape, Scalar<ρ,d>>` keeps ρ.
                 let elem = self.scale_elem(elem, None, dim, false, span);
@@ -4222,12 +4481,12 @@ impl Checker {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
-            (Type::Point(_), _) | (_, Type::Point(_)) => {
+            },
+            | (Type::Point(_), _) | (_, Type::Point(_)) => {
                 self.error("E0405", "affine points cannot be multiplied", span);
                 Type::Error
-            }
-            _ => {
+            },
+            | _ => {
                 if matches!(left, Type::Dyn(_)) || matches!(right, Type::Dyn(_)) {
                     self.error_help(
                         "E0302",
@@ -4243,25 +4502,36 @@ impl Checker {
                     );
                 }
                 Type::Error
-            }
+            },
         }
     }
 
-    fn div_type(&mut self, left: &Type, right: &Type, span: Span) -> Type {
+    fn div_type(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        span: Span,
+    ) -> Type {
         match (left, right) {
-            (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
+            | (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
                 let joined = self.join_rep(*a_rep, *b_rep);
                 Type::Scalar(self.div_rep(joined), a_dim.div(b_dim))
-            }
-            (Type::Tensor { shape, elem }, Type::Scalar(rep, dim)) => {
+            },
+            | (Type::Tensor { shape, elem }, Type::Scalar(rep, dim)) => {
                 let elem = self.scale_elem(elem, Some(*rep), dim, true, span);
                 Type::Tensor {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
+            },
             // §3.5.3: elementwise division of two equal-rank tensors.
-            (Type::Tensor { shape, elem: a }, Type::Tensor { shape: b_shape, elem: b }) => {
+            | (
+                Type::Tensor { shape, elem: a },
+                Type::Tensor {
+                    shape: b_shape,
+                    elem: b,
+                },
+            ) => {
                 if let Err(error) = self.infer.unify_shape(shape, b_shape) {
                     self.report_unify(error, span);
                 }
@@ -4272,20 +4542,18 @@ impl Checker {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
+            },
             // §4.9.3: `Dyn / Dyn` subtracts the runtime dimensions.
-            (Type::Dyn(a), Type::Dyn(b)) => {
+            | (Type::Dyn(a), Type::Dyn(b)) => {
                 if let Err(error) = self.infer.unify_rep(*a, *b) {
                     self.report_unify(error, span);
                     return Type::Error;
                 }
                 Type::Dyn(self.infer.resolve_rep(*a))
-            }
-            (Type::UnitOf(a), Type::UnitOf(b)) => Type::UnitOf(a.div(b)),
-            (Type::Scalar(rep, other), Type::UnitOf(dim)) => {
-                Type::Scalar(*rep, other.div(dim))
-            }
-            (Type::Tensor { shape, elem }, Type::UnitOf(dim)) => {
+            },
+            | (Type::UnitOf(a), Type::UnitOf(b)) => Type::UnitOf(a.div(b)),
+            | (Type::Scalar(rep, other), Type::UnitOf(dim)) => Type::Scalar(*rep, other.div(dim)),
+            | (Type::Tensor { shape, elem }, Type::UnitOf(dim)) => {
                 // §3.5.3: `Tensor<shape, Scalar<ρ,d>> / Unit[e]` keeps ρ and
                 // divides the dimension; it is not a scalar division, so `ρ` is
                 // not `div_rep`'d.
@@ -4294,9 +4562,9 @@ impl Checker {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
+            },
             // §5.6.3: `p / k` and `p / K` are `E0405`, not a generic mismatch.
-            (Type::Point(_), _) | (_, Type::Point(_)) => {
+            | (Type::Point(_), _) | (_, Type::Point(_)) => {
                 self.error_help(
                     "E0405",
                     "an affine point cannot be divided",
@@ -4304,8 +4572,8 @@ impl Checker {
                     "divide a temperature *difference*, or use `lerp`",
                 );
                 Type::Error
-            }
-            _ => {
+            },
+            | _ => {
                 if matches!(left, Type::Dyn(_)) || matches!(right, Type::Dyn(_)) {
                     self.error_help(
                         "E0302",
@@ -4321,7 +4589,7 @@ impl Checker {
                     );
                 }
                 Type::Error
-            }
+            },
         }
     }
 
@@ -4347,25 +4615,25 @@ impl Checker {
     ) -> Type {
         let elem = self.force_scalar(&self.infer.resolve(elem));
         match elem {
-            Type::Scalar(elem_rep, elem_dim) => {
+            | Type::Scalar(elem_rep, elem_dim) => {
                 let joined = match rep {
-                    Some(rep) => self.join_rep(elem_rep, rep),
-                    None => elem_rep,
+                    | Some(rep) => self.join_rep(elem_rep, rep),
+                    | None => elem_rep,
                 };
                 if divide {
                     Type::Scalar(self.div_rep(joined), elem_dim.div(dim))
                 } else {
                     Type::Scalar(joined, elem_dim.mul(dim))
                 }
-            }
-            other => {
+            },
+            | other => {
                 self.error(
                     "E0302",
                     format!("cannot scale a tensor of {other} by a unit"),
                     span,
                 );
                 Type::Error
-            }
+            },
         }
     }
 
@@ -4373,27 +4641,45 @@ impl Checker {
     ///
     /// A literal that could still be an `Int` is committed to `Real` here,
     /// because the operation itself decides the representation.
-    fn div_rep(&mut self, rep: Rep) -> Rep {
+    fn div_rep(
+        &mut self,
+        rep: Rep,
+    ) -> Rep {
         match self.infer.resolve_rep(rep) {
-            Rep::Int => Rep::Real,
-            Rep::Var(id) => match self.infer.rep_literal_kind(Rep::Var(id)) {
-                Some(LiteralKind::Int | LiteralKind::QuantityInt) => {
-                    self.constrain_or_report(Rep::Var(id), Rep::Real);
-                    Rep::Real
+            | Rep::Int => Rep::Real,
+            | Rep::Var(id) => {
+                match self.infer.rep_literal_kind(Rep::Var(id)) {
+                    | Some(LiteralKind::Int | LiteralKind::QuantityInt) => {
+                        self.constrain_or_report(Rep::Var(id), Rep::Real);
+                        Rep::Real
+                    },
+                    | Some(LiteralKind::Decimal | LiteralKind::QuantityDecimal) => {
+                        self.constrain_or_report(Rep::Var(id), Rep::Float);
+                        Rep::Float
+                    },
+                    | None => Rep::Var(id),
                 }
-                Some(LiteralKind::Decimal | LiteralKind::QuantityDecimal) => {
-                    self.constrain_or_report(Rep::Var(id), Rep::Float);
-                    Rep::Float
-                }
-                None => Rep::Var(id),
             },
-            other => other,
+            | other => other,
         }
     }
 
-    fn matmul_type(&mut self, left: &Type, right: &Type, span: Span) -> Type {
-        let (Type::Tensor { shape: left_shape, elem: le }, Type::Tensor { shape: right_shape, elem: re }) =
-            (left, right)
+    fn matmul_type(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        span: Span,
+    ) -> Type {
+        let (
+            Type::Tensor {
+                shape: left_shape,
+                elem: le,
+            },
+            Type::Tensor {
+                shape: right_shape,
+                elem: re,
+            },
+        ) = (left, right)
         else {
             self.error(
                 "E0302",
@@ -4417,7 +4703,7 @@ impl Checker {
                     // A concrete mismatch is a shape error (`E0802`); a
                     // non-linear Nat equation is `E0304`.
                     match error {
-                        crate::infer::UnifyError::NatMismatch { .. } => {
+                        | crate::infer::UnifyError::NatMismatch { .. } => {
                             let left_extent = self.infer.resolve_nat(&k);
                             let right_extent = self.infer.resolve_nat(&k2);
                             self.error(
@@ -4427,38 +4713,42 @@ impl Checker {
                                 ),
                                 span,
                             );
-                        }
-                        other => self.report_unify(other, span),
+                        },
+                        | other => self.report_unify(other, span),
                     }
                     return Type::Error;
                 }
             }
         }
         match (ls.rank(), rs.rank()) {
-            (2, 2) => Type::Tensor {
-                shape: match (&ls, &rs) {
-                    (Shape::Refined(a), Shape::Refined(b)) => Shape::Refined(vec![
-                        a.first().cloned().flatten(),
-                        b.get(1).cloned().flatten(),
-                    ]),
-                    _ => Shape::Rank(2),
-                },
-                elem: Box::new(elem),
+            | (2, 2) => {
+                Type::Tensor {
+                    shape: match (&ls, &rs) {
+                        | (Shape::Refined(a), Shape::Refined(b)) => {
+                            Shape::Refined(vec![
+                                a.first().cloned().flatten(),
+                                b.get(1).cloned().flatten(),
+                            ])
+                        },
+                        | _ => Shape::Rank(2),
+                    },
+                    elem: Box::new(elem),
+                }
             },
-            (2, 1) | (1, 2) => {
+            | (2, 1) | (1, 2) => {
                 // Collapse the shared axis and keep the surviving extent when
                 // it is statically known: `Tensor<[2, 3]> @ Tensor<[3]>` is
                 // `Tensor<[2]>`, and `Tensor<[3]> @ Tensor<[3, 4]>` is
                 // `Tensor<[4]>`. Unknown extents fall back to rank-only.
                 let surviving = if ls.rank() == 2 {
                     match &ls {
-                        Shape::Refined(items) => items.first().cloned().flatten(),
-                        Shape::Rank(_) => None,
+                        | Shape::Refined(items) => items.first().cloned().flatten(),
+                        | Shape::Rank(_) => None,
                     }
                 } else {
                     match &rs {
-                        Shape::Refined(items) => items.get(1).cloned().flatten(),
-                        Shape::Rank(_) => None,
+                        | Shape::Refined(items) => items.get(1).cloned().flatten(),
+                        | Shape::Rank(_) => None,
                     }
                 };
                 let shape = surviving.map_or(Shape::Rank(1), |extent| {
@@ -4468,9 +4758,9 @@ impl Checker {
                     shape,
                     elem: Box::new(elem),
                 }
-            }
-            (1, 1) => elem,
-            _ => {
+            },
+            | (1, 1) => elem,
+            | _ => {
                 self.error(
                     "E0302",
                     format!(
@@ -4481,35 +4771,45 @@ impl Checker {
                     span,
                 );
                 Type::Error
-            }
+            },
         }
     }
 
-    fn multiply_elems(&mut self, left: &Type, right: &Type, span: Span) -> Type {
+    fn multiply_elems(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        span: Span,
+    ) -> Type {
         let left = self.force_scalar(&self.infer.resolve(left));
         let right = self.force_scalar(&self.infer.resolve(right));
         match (&left, &right) {
-            (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
+            | (Type::Scalar(a_rep, a_dim), Type::Scalar(b_rep, b_dim)) => {
                 Type::Scalar(self.join_rep(*a_rep, *b_rep), a_dim.mul(b_dim))
-            }
-            _ => {
+            },
+            | _ => {
                 self.error(
                     "E0411",
                     format!("incompatible tensor element types {left} and {right}"),
                     span,
                 );
                 Type::Error
-            }
+            },
         }
     }
 
-    fn pow_type(&mut self, base: &Type, exponent: &Expr, span: Span) -> Type {
+    fn pow_type(
+        &mut self,
+        base: &Type,
+        exponent: &Expr,
+        span: Span,
+    ) -> Type {
         // §4.11: the exponent is a number, never a quantity — `2^(3 m)` is
         // `E0402`, not a silent mismatch.
         let exponent_synth = self.synth(exponent);
         let exponent_ty = self.infer.resolve(&exponent_synth);
         match &exponent_ty {
-            Type::Scalar(_, dim) => {
+            | Type::Scalar(_, dim) => {
                 let resolved = self.infer.resolve_dim(dim);
                 if !resolved.is_one()
                     && (resolved.is_concrete()
@@ -4524,16 +4824,16 @@ impl Checker {
                     );
                     return Type::Error;
                 }
-            }
-            Type::Var(_) | Type::Error => {}
-            other => {
+            },
+            | Type::Var(_) | Type::Error => {},
+            | other => {
                 self.error(
                     "E0402",
                     format!("the exponent of `^` must be a number, found {other}"),
                     exponent.span,
                 );
                 return Type::Error;
-            }
+            },
         }
         // §4.9.3: `(^) : Dyn<ρ> × Int -> Dyn<ρ>` — the runtime dimension
         // exponent is multiplied. Unlike `Scalar`, the exponent may be a
@@ -4548,8 +4848,8 @@ impl Checker {
         let exponent_value = literal_exponent(exponent);
         let Some(exponent_value) = exponent_value else {
             return match base {
-                Type::Scalar(rep, dim) if dim.is_one() => Type::Scalar(*rep, Dim::one()),
-                Type::Scalar(_, _) => {
+                | Type::Scalar(rep, dim) if dim.is_one() => Type::Scalar(*rep, Dim::one()),
+                | Type::Scalar(_, _) => {
                     self.error_help(
                         "E0404",
                         "a dimensioned value cannot be raised to a runtime exponent",
@@ -4557,12 +4857,12 @@ impl Checker {
                         "use a literal exponent, or `pow_dyn` for a checked dynamic power",
                     );
                     Type::Error
-                }
-                other => other.clone(),
+                },
+                | other => other.clone(),
             };
         };
         match base {
-            Type::Scalar(rep, dim) => {
+            | Type::Scalar(rep, dim) => {
                 // §3.4.2: a negative or fractional exponent divides, so an
                 // integer base becomes an exact rational: `2^-1` is `Real`.
                 let rep = if exponent_value.is_integer() && !exponent_value.is_negative() {
@@ -4571,15 +4871,17 @@ impl Checker {
                     self.div_rep(*rep)
                 };
                 Type::Scalar(rep, dim.pow(&exponent_value))
-            }
-            Type::Tensor { shape, elem } => Type::Tensor {
-                shape: shape.clone(),
-                elem: Box::new(self.pow_type(elem, exponent, span)),
             },
-            other => {
+            | Type::Tensor { shape, elem } => {
+                Type::Tensor {
+                    shape: shape.clone(),
+                    elem: Box::new(self.pow_type(elem, exponent, span)),
+                }
+            },
+            | other => {
                 self.error("E0302", format!("`^` is not defined for {other}"), span);
                 Type::Error
-            }
+            },
         }
     }
 
@@ -4590,14 +4892,18 @@ impl Checker {
     /// instead of silently typing as `Int`. When one side is a variable the
     /// other side becomes a *lower bound* (PLAN D4): the variable stays free,
     /// so `fn f(x) = x + 1` is polymorphic rather than `Int -> Int`.
-    fn join_rep(&mut self, left: Rep, right: Rep) -> Rep {
+    fn join_rep(
+        &mut self,
+        left: Rep,
+        right: Rep,
+    ) -> Rep {
         let left = self.infer.resolve_rep(left);
         let right = self.infer.resolve_rep(right);
         if left == right {
             return left;
         }
         match (left, right) {
-            (Rep::Var(a), Rep::Var(b)) => {
+            | (Rep::Var(a), Rep::Var(b)) => {
                 // The result must be above both. Keep one variable and record
                 // the other as its lower bound, preferring the non-literal
                 // side: a literal only says what its *default* is.
@@ -4610,8 +4916,8 @@ impl Checker {
                 };
                 // `1 m + 1.0 m`: an exact literal and a decimal literal.
                 let mixed = match (a_kind, b_kind) {
-                    (Some(a_kind), Some(b_kind)) => is_decimal(a_kind) != is_decimal(b_kind),
-                    _ => false,
+                    | (Some(a_kind), Some(b_kind)) => is_decimal(a_kind) != is_decimal(b_kind),
+                    | _ => false,
                 };
                 if mixed {
                     self.mixed_rep = true;
@@ -4654,16 +4960,14 @@ impl Checker {
                     // one: `let x = 1.0 + 2` then `x * 3` used to narrow `x`
                     // to `Int`, which cannot hold the sum.
                     let joined_kind = match (a_kind, b_kind) {
-                        (Some(LiteralKind::Int), Some(kind)) => kind,
-                        (Some(kind), Some(LiteralKind::Int)) => kind,
-                        (Some(kind), _) => kind,
-                        (_, Some(kind)) => kind,
-                        (None, None) => LiteralKind::Int,
+                        | (Some(LiteralKind::Int), Some(kind)) => kind,
+                        | (Some(kind), Some(LiteralKind::Int)) => kind,
+                        | (Some(kind), _) => kind,
+                        | (_, Some(kind)) => kind,
+                        | (None, None) => LiteralKind::Int,
                     };
-                    self.infer.mark_literal(
-                        &Type::Scalar(Rep::Var(a), Dim::one()),
-                        joined_kind,
-                    );
+                    self.infer
+                        .mark_literal(&Type::Scalar(Rep::Var(a), Dim::one()), joined_kind);
                     self.constrain_or_report(Rep::Var(a), Rep::Var(b));
                     Rep::Var(a)
                 } else if a_literal {
@@ -4673,8 +4977,8 @@ impl Checker {
                     self.constrain_or_report(Rep::Var(a), Rep::Var(b));
                     Rep::Var(a)
                 }
-            }
-            (Rep::Var(variable), concrete) | (concrete, Rep::Var(variable)) => {
+            },
+            | (Rep::Var(variable), concrete) | (concrete, Rep::Var(variable)) => {
                 if let Some(kind) = self.infer.rep_literal_kind(Rep::Var(variable)) {
                     // A literal has a finite set of readings: pick the least
                     // one that is above `concrete`. This is the *static* answer
@@ -4689,20 +4993,24 @@ impl Checker {
                 }
                 self.constrain_or_report(Rep::Var(variable), concrete);
                 Rep::Var(variable)
-            }
-            (a, b) => {
+            },
+            | (a, b) => {
                 if matches!((a, b), (Rep::Real, Rep::Float) | (Rep::Float, Rep::Real)) {
                     // §3.4.1: the exact path wins; `W0302` is the performance
                     // hint the appendix documents.
                     self.mixed_rep = true;
                 }
                 a.join_concrete(b).unwrap_or(Rep::Real)
-            }
+            },
         }
     }
 
     /// Records a lower bound, reporting the failure instead of dropping it.
-    fn constrain_or_report(&mut self, variable: Rep, lower: Rep) {
+    fn constrain_or_report(
+        &mut self,
+        variable: Rep,
+        lower: Rep,
+    ) {
         if let Err(error) = self.infer.constrain_rep(variable, lower) {
             self.report_unify(error, Span::new(self.file, 0, 0));
         }
@@ -4724,7 +5032,10 @@ impl Checker {
     /// `let odeint = odeint`, whose re-exported HM scheme types the right-hand
     /// side as returning the *state* instead of `RateOf<state>` (§8.9). A local
     /// declaration is a genuine shadow and keeps the ordinary path.
-    fn is_locally_defined(&self, name: &str) -> bool {
+    fn is_locally_defined(
+        &self,
+        name: &str,
+    ) -> bool {
         if self.top_lets.contains_key(name) || self.fn_signatures.contains_key(name) {
             return true;
         }
@@ -4734,7 +5045,12 @@ impl Checker {
             .any(|scope| scope.contains_key(name))
     }
 
-    fn synth_call(&mut self, callee: &Expr, args: &[Expr], span: Span) -> Type {
+    fn synth_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         if args
             .iter()
             .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
@@ -4771,11 +5087,9 @@ impl Checker {
                 if let (Some(op_name), Some(hash)) =
                     (string_constant(&args[0]), string_constant(&args[1]))
                 {
-                    if let Some(ty) = crate::rssn_resolve::invoke_result(
-                        &op_name,
-                        &hash,
-                        &mut self.infer,
-                    ) {
+                    if let Some(ty) =
+                        crate::rssn_resolve::invoke_result(&op_name, &hash, &mut self.infer)
+                    {
                         return ty;
                     }
                 }
@@ -4832,7 +5146,8 @@ impl Checker {
             // builtin scheme.
             let has_special_typing = matches!(
                 name.as_str(),
-                "dyn" | "check"
+                "dyn"
+                    | "check"
                     | "odeint"
                     | "odeint_with"
                     | "solve_ivp"
@@ -4903,8 +5218,8 @@ impl Checker {
                     builtin_type("DataError").unwrap_or(Type::Error),
                 )));
                 return match self.infer.resolve(&value_ty) {
-                    Type::Tensor { .. } => io_result,
-                    other => {
+                    | Type::Tensor { .. } => io_result,
+                    | other => {
                         self.error_help(
                             "E0302",
                             format!("`write_npy` expects a tensor, found {other}"),
@@ -4912,7 +5227,7 @@ impl Checker {
                             "write a `Tensor<n, Float>` value",
                         );
                         Type::Error
-                    }
+                    },
                 };
             }
             // §8.1: `min_all`/`max_all` reduce a whole tensor of any rank to
@@ -4934,13 +5249,13 @@ impl Checker {
                 }
                 let arg_ty = self.synth(&args[0]);
                 return match self.infer.resolve(&arg_ty) {
-                    Type::Tensor { elem, .. } => {
+                    | Type::Tensor { elem, .. } => {
                         // A tensor literal's element can still be a literal
                         // type variable; commit it to a scalar first.
                         let elem = self.force_scalar(&elem);
                         match self.infer.resolve(&elem) {
-                            Type::Scalar(rep, dim) => Type::Scalar(rep, dim),
-                            other => {
+                            | Type::Scalar(rep, dim) => Type::Scalar(rep, dim),
+                            | other => {
                                 self.error_help(
                                     "E0302",
                                     format!(
@@ -4950,10 +5265,10 @@ impl Checker {
                                     "reduce a `Tensor<n, Scalar<ρ, d>>`; it returns its element type",
                                 );
                                 Type::Error
-                            }
+                            },
                         }
-                    }
-                    other => {
+                    },
+                    | other => {
                         self.error_help(
                             "E0302",
                             format!("`{name}` expects a tensor, found {other}"),
@@ -4961,7 +5276,7 @@ impl Checker {
                             "`min_all`/`max_all` reduce a whole tensor of any rank",
                         );
                         Type::Error
-                    }
+                    },
                 };
             }
             // §8.1/§8.4: `rank` and `shape` require a tensor; the scheme used
@@ -4980,7 +5295,7 @@ impl Checker {
                 }
                 let arg_ty = self.synth(&args[0]);
                 return match self.infer.resolve(&arg_ty) {
-                    Type::Tensor { shape, .. } => {
+                    | Type::Tensor { shape, .. } => {
                         if name == "rank" {
                             Type::int()
                         } else {
@@ -4993,8 +5308,8 @@ impl Checker {
                                 Type::int(),
                             )
                         }
-                    }
-                    other => {
+                    },
+                    | other => {
                         self.error_help(
                             "E0302",
                             format!("`{name}` expects a tensor, found {other}"),
@@ -5002,7 +5317,7 @@ impl Checker {
                             "`rank`/`shape` describe a `Tensor<n, τ>` value",
                         );
                         Type::Error
-                    }
+                    },
                 };
             }
             // §8.4: `transpose` swaps the two extents of a rank-2 tensor; the
@@ -5023,19 +5338,16 @@ impl Checker {
                 }
                 let arg_ty = self.synth(&args[0]);
                 return match self.infer.resolve(&arg_ty) {
-                    Type::Tensor { shape, elem } if shape.rank() == 2 => {
+                    | Type::Tensor { shape, elem } if shape.rank() == 2 => {
                         let swapped = match &shape {
-                            Shape::Refined(items) if items.len() == 2 => {
+                            | Shape::Refined(items) if items.len() == 2 => {
                                 Shape::Refined(vec![items[1].clone(), items[0].clone()])
-                            }
-                            _ => Shape::Rank(2),
+                            },
+                            | _ => Shape::Rank(2),
                         };
-                        Type::Tensor {
-                            shape: swapped,
-                            elem,
-                        }
-                    }
-                    other => {
+                        Type::Tensor { shape: swapped, elem }
+                    },
+                    | other => {
                         self.error_help(
                             "E0302",
                             format!("`transpose` expects a rank-2 tensor, found {other}"),
@@ -5043,7 +5355,7 @@ impl Checker {
                             "transpose a matrix (`Tensor<2, τ>` or a refined `Tensor<[m, n], τ>`)",
                         );
                         Type::Error
-                    }
+                    },
                 };
             }
             // §6.10: explicit parallelism needs `Parallel a` (§3.8.4).
@@ -5144,14 +5456,18 @@ impl Checker {
         // (`Int → Real`). A scheme cannot express that conditional, so the
         // refinement is applied at the call site with the argument's rep known.
         match &callee.kind {
-            ExprKind::Var(name) => self.refine_div_rep_result(name, ty),
-            _ => ty,
+            | ExprKind::Var(name) => self.refine_div_rep_result(name, ty),
+            | _ => ty,
         }
     }
 
     /// Applies the `div_rep` result refinement of the division-shaped
     /// builtins (§3.4.2, §8.1/§8.4/§8.7).
-    fn refine_div_rep_result(&mut self, name: &str, ty: Type) -> Type {
+    fn refine_div_rep_result(
+        &mut self,
+        name: &str,
+        ty: Type,
+    ) -> Type {
         const DIVIDED: [&str; 8] = [
             "mean", "var", "std", "cov", "corr", "inv", "linsolve", "lstsq",
         ];
@@ -5163,28 +5479,38 @@ impl Checker {
     }
 
     /// Rewrites every scalar leaf of a result to its `div_rep`.
-    fn div_rep_in_type(&mut self, ty: &Type) -> Type {
+    fn div_rep_in_type(
+        &mut self,
+        ty: &Type,
+    ) -> Type {
         match ty {
-            Type::Scalar(rep, dim) => Type::Scalar(self.div_rep(*rep), dim.clone()),
-            Type::Tensor { shape, elem } => Type::Tensor {
-                shape: shape.clone(),
-                elem: Box::new(self.div_rep_in_type(elem)),
+            | Type::Scalar(rep, dim) => Type::Scalar(self.div_rep(*rep), dim.clone()),
+            | Type::Tensor { shape, elem } => {
+                Type::Tensor {
+                    shape: shape.clone(),
+                    elem: Box::new(self.div_rep_in_type(elem)),
+                }
             },
-            Type::Adt(id, args)
+            | Type::Adt(id, args)
                 if (*id == adt::RESULT_ID || *id == adt::OPTION_ID) && !args.is_empty() =>
             {
                 let mut values = args.clone();
                 values[0] = self.div_rep_in_type(&args[0]);
                 Type::Adt(*id, values)
-            }
-            other => other.clone(),
+            },
+            | other => other.clone(),
         }
     }
 
-    fn call_with_type(&mut self, callee_ty: Type, args: &[Expr], span: Span) -> Type {
+    fn call_with_type(
+        &mut self,
+        callee_ty: Type,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         let callee_ty = self.infer.resolve(&callee_ty);
         match callee_ty {
-            Type::Fn(params, ret) => {
+            | Type::Fn(params, ret) => {
                 // `() -> τ` and `f()`: a function taking unit can be written
                 // with the unit argument or without it, so `random()`,
                 // `time_now()` and `read_line()` type-check (`()` is one
@@ -5214,8 +5540,8 @@ impl Checker {
                     self.check(arg, param);
                 }
                 *ret
-            }
-            Type::Var(_) => {
+            },
+            | Type::Var(_) => {
                 let params: Vec<Type> = args.iter().map(|arg| self.synth(arg)).collect();
                 let ret = self.infer.fresh_type();
                 let function = Type::func(params, ret.clone());
@@ -5227,18 +5553,23 @@ impl Checker {
                     return Type::Error;
                 }
                 ret
-            }
-            other => {
+            },
+            | other => {
                 self.error("E0305", format!("{other} is not a function"), span);
                 for arg in args {
                     self.synth(arg);
                 }
                 Type::Error
-            }
+            },
         }
     }
 
-    fn partial_application(&mut self, callee: &Expr, args: &[Expr], span: Span) -> Type {
+    fn partial_application(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         let mut params = Vec::new();
         let mut call_args = Vec::new();
         let mut scope = HashMap::new();
@@ -5277,7 +5608,10 @@ impl Checker {
             .first()
             .map_or_else(|| Type::float(Dim::one()), |ty| self.convert_type(ty));
         let (rank, value_args): (u32, &[Expr]) = if name == "fill" {
-            (u32::try_from(args.len().saturating_sub(1)).unwrap_or(0), &args[1..])
+            (
+                u32::try_from(args.len().saturating_sub(1)).unwrap_or(0),
+                &args[1..],
+            )
         } else {
             (u32::try_from(args.len()).unwrap_or(0), args)
         };
@@ -5309,7 +5643,9 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
-        let target = type_args.first().and_then(|ty| self.shape_type_argument(ty));
+        let target = type_args
+            .first()
+            .and_then(|ty| self.shape_type_argument(ty));
         if name == "reshape" {
             if args.len() != 1 {
                 self.error(
@@ -5324,8 +5660,8 @@ impl Checker {
             }
             let arg_ty = self.synth(&args[0]);
             let (source_shape, elem) = match self.infer.resolve(&arg_ty) {
-                Type::Tensor { shape, elem } => (shape, (*elem).clone()),
-                other => {
+                | Type::Tensor { shape, elem } => (shape, (*elem).clone()),
+                | other => {
                     self.error_help(
                         "E0302",
                         format!("`reshape` expects a tensor, found {other}"),
@@ -5333,7 +5669,7 @@ impl Checker {
                         "reshape a `Tensor<n, τ>`",
                     );
                     return Type::Error;
-                }
+                },
             };
             let Some(target) = target else {
                 // No shape argument: the runtime reports that it needs one.
@@ -5346,8 +5682,8 @@ impl Checker {
             // mismatch is `E0802`. A product of two variable extents is not
             // linear and is `E0304`.
             let source_items = match &source_shape {
-                Shape::Refined(items) => Some(items.clone()),
-                Shape::Rank(_) => None,
+                | Shape::Refined(items) => Some(items.clone()),
+                | Shape::Rank(_) => None,
             };
             if let Some(source_items) = source_items {
                 if let (Some(source_product), Some(target_product)) = (
@@ -5356,7 +5692,7 @@ impl Checker {
                 ) {
                     if let Err(error) = self.infer.unify_nat(&source_product, &target_product) {
                         match error {
-                            crate::infer::UnifyError::NatMismatch { .. } => {
+                            | crate::infer::UnifyError::NatMismatch { .. } => {
                                 let source_count = self.infer.resolve_nat(&source_product);
                                 let target_count = self.infer.resolve_nat(&target_product);
                                 self.error_help(
@@ -5367,18 +5703,15 @@ impl Checker {
                                     span,
                                     "the element count must be preserved",
                                 );
-                            }
-                            other => self.report_unify(other, span),
+                            },
+                            | other => self.report_unify(other, span),
                         }
                         return Type::Error;
                     }
                 }
             }
             let target = self.infer.resolve_shape(&Shape::Refined(target));
-            return Type::result(
-                Type::tensor(target, elem),
-                builtins::shape_error_type(),
-            );
+            return Type::result(Type::tensor(target, elem), builtins::shape_error_type());
         }
         // `zeros_of<[3, 4]>()` / `ones_of<[3, 4]>()`.
         if !args.is_empty() {
@@ -5402,13 +5735,16 @@ impl Checker {
     /// The product of a shape's known extents, as a Nat term (§3.5.1).
     ///
     /// `None` when an extent is `?`: the count is not statically known.
-    fn shape_product(&self, items: &[Option<Nat>]) -> Option<Nat> {
+    fn shape_product(
+        &self,
+        items: &[Option<Nat>],
+    ) -> Option<Nat> {
         let mut product = Nat::Lit(1);
         for item in items {
             let extent = self.infer.resolve_nat(item.as_ref()?);
             product = match (product.as_const(), extent.as_const()) {
-                (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
-                _ => Nat::Mul(Box::new(product), Box::new(extent)),
+                | (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
+                | _ => Nat::Mul(Box::new(product), Box::new(extent)),
             };
         }
         Some(product)
@@ -5418,13 +5754,18 @@ impl Checker {
     ///
     /// `reshape<[3, 2]>` and the spelled-out `reshape<Tensor<[3, 2], Float>>`
     /// (the spelling the runtime tests use) both reach here; `?` is `None`.
-    fn shape_type_argument(&mut self, ty: &Ty) -> Option<Vec<Option<Nat>>> {
+    fn shape_type_argument(
+        &mut self,
+        ty: &Ty,
+    ) -> Option<Vec<Option<Nat>>> {
         match &ty.kind {
-            TyKind::ShapeArg(shape) | TyKind::Tensor { shape, .. } => match self.convert_shape(shape) {
-                Shape::Refined(items) => Some(items),
-                Shape::Rank(_) => None,
+            | TyKind::ShapeArg(shape) | TyKind::Tensor { shape, .. } => {
+                match self.convert_shape(shape) {
+                    | Shape::Refined(items) => Some(items),
+                    | Shape::Rank(_) => None,
+                }
             },
-            _ => {
+            | _ => {
                 self.error_help(
                     "E0302",
                     "the type argument of `reshape` must be a shape",
@@ -5432,7 +5773,7 @@ impl Checker {
                     "write `reshape<[3, 2]>(a)`",
                 );
                 None
-            }
+            },
         }
     }
 
@@ -5446,7 +5787,12 @@ impl Checker {
     /// `RateOf` recurses through tensors and records and divides a scalar's
     /// dimension by `T`, so the right-hand side is *not* typed as returning the
     /// state type: a state `Float[L]` returns `Float[L/T]`.
-    fn ode_call(&mut self, name: &str, args: &[Expr], span: Span) -> Type {
+    fn ode_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         let expected = if name == "odeint" { 3 } else { 4 };
         if args.len() != expected {
             self.error(
@@ -5463,7 +5809,7 @@ impl Checker {
         // The right-hand side: `(Float[T], s) -> RateOf<s>`.
         let rhs_ty = self.synth(&args[0]);
         let state = match self.infer.resolve(&rhs_ty) {
-            Type::Fn(params, ret) if params.len() == 2 => {
+            | Type::Fn(params, ret) if params.len() == 2 => {
                 if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
                     self.report_unify(error, args[0].span);
                 }
@@ -5475,8 +5821,8 @@ impl Checker {
                     }
                 }
                 state
-            }
-            other => {
+            },
+            | other => {
                 self.error_help(
                     "E0302",
                     format!(
@@ -5489,20 +5835,20 @@ impl Checker {
                     self.synth(arg);
                 }
                 return Type::Error;
-            }
+            },
         };
         self.check(&args[1], &state);
         let time_series = Type::tensor(Shape::Rank(1), Type::float(time.clone()));
         match name {
-            "odeint" | "odeint_with" => self.check(&args[2], &time_series),
+            | "odeint" | "odeint_with" => self.check(&args[2], &time_series),
             // `solve_ivp` takes an interval, `(Float[T], Float[T])`.
-            _ => {
+            | _ => {
                 let interval = Type::record(vec![
                     ("0".to_string(), Type::float(time.clone())),
                     ("1".to_string(), Type::float(time.clone())),
                 ]);
                 self.check(&args[2], &interval);
-            }
+            },
         }
         if name != "odeint" {
             // `OdeOpts<s>`: the options record is checked field-wise by its
@@ -5512,11 +5858,13 @@ impl Checker {
             self.synth(&args[3]);
         }
         match name {
-            "odeint" => Type::tensor(Shape::Rank(1), state),
-            _ => Type::record(vec![
-                ("t".to_string(), time_series),
-                ("y".to_string(), Type::tensor(Shape::Rank(1), state)),
-            ]),
+            | "odeint" => Type::tensor(Shape::Rank(1), state),
+            | _ => {
+                Type::record(vec![
+                    ("t".to_string(), time_series),
+                    ("y".to_string(), Type::tensor(Shape::Rank(1), state)),
+                ])
+            },
         }
     }
 
@@ -5529,7 +5877,12 @@ impl Checker {
     /// states and its diffusion returns a rank-2 tensor whose elements are
     /// `DiffusionOf<element>` — the noise column count is a runtime check
     /// because it depends on the value, not the type.
-    fn sde_call(&mut self, name: &str, args: &[Expr], span: Span) -> Type {
+    fn sde_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         const EXPECTED: usize = 4;
         if args.len() != EXPECTED {
             self.error(
@@ -5546,7 +5899,7 @@ impl Checker {
         // 1. Drift: `(Float[T], s) -> RateOf<s>`; the state `s` comes from it.
         let drift_ty = self.synth(&args[0]);
         let state = match self.infer.resolve(&drift_ty) {
-            Type::Fn(params, ret) if params.len() == 2 => {
+            | Type::Fn(params, ret) if params.len() == 2 => {
                 if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
                     self.report_unify(error, args[0].span);
                 }
@@ -5558,8 +5911,8 @@ impl Checker {
                     }
                 }
                 state
-            }
-            other => {
+            },
+            | other => {
                 self.error_help(
                     "E0302",
                     format!(
@@ -5572,7 +5925,7 @@ impl Checker {
                     self.synth(arg);
                 }
                 return Type::Error;
-            }
+            },
         };
         // 2. Diffusion. Diagonal noise: `(Float[T], s) -> DiffusionOf<s>`.
         //    General noise: a rank-2 tensor of `DiffusionOf<element>`.
@@ -5580,14 +5933,12 @@ impl Checker {
             self.diffusion_of(&state, span)
         } else {
             let elem = match self.infer.resolve(&state) {
-                Type::Scalar(_, _) => state.clone(),
-                Type::Tensor { shape, elem } if shape.rank() == 1 => (*elem).clone(),
-                other => {
+                | Type::Scalar(_, _) => state.clone(),
+                | Type::Tensor { shape, elem } if shape.rank() == 1 => (*elem).clone(),
+                | other => {
                     self.error_help(
                         "E0302",
-                        format!(
-                            "`sdeint_general` needs a scalar or rank-1 state, found {other}"
-                        ),
+                        format!("`sdeint_general` needs a scalar or rank-1 state, found {other}"),
                         span,
                         "use `sdeint_diag` for a record state, or pass a `Tensor<1, Float>` state",
                     );
@@ -5595,7 +5946,7 @@ impl Checker {
                         self.synth(arg);
                     }
                     return Type::Error;
-                }
+                },
             };
             if elem.is_error() {
                 Type::Error
@@ -5605,7 +5956,7 @@ impl Checker {
         };
         let diffusion_ty = self.synth(&args[1]);
         match self.infer.resolve(&diffusion_ty) {
-            Type::Fn(params, ret) if params.len() == 2 => {
+            | Type::Fn(params, ret) if params.len() == 2 => {
                 if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
                     self.report_unify(error, args[1].span);
                 }
@@ -5617,8 +5968,8 @@ impl Checker {
                         self.report_unify(error, args[1].span);
                     }
                 }
-            }
-            other => {
+            },
+            | other => {
                 self.error_help(
                     "E0302",
                     format!(
@@ -5627,7 +5978,7 @@ impl Checker {
                     args[1].span,
                     "write `fn noise(_t: Float[T], s: State): DiffusionOf<State> = …`",
                 );
-            }
+            },
         }
         // 3. Initial state and 4. policy record (the record literal checks its
         // own field types; the policy schema is closed in the standard library).
@@ -5640,10 +5991,7 @@ impl Checker {
                 "t".to_string(),
                 Type::tensor(Shape::Rank(1), Type::float(time)),
             ),
-            (
-                "y".to_string(),
-                Type::tensor(Shape::Rank(1), state),
-            ),
+            ("y".to_string(), Type::tensor(Shape::Rank(1), state)),
             ("steps".to_string(), Type::int()),
             ("rejected".to_string(), Type::int()),
             ("nfev".to_string(), Type::int()),
@@ -5657,7 +6005,11 @@ impl Checker {
     /// §6.10: `par_map(f, xs)` — the result order is the input order, and the
     /// element type must have a `Parallel` instance (§3.8.4: only `Int`,
     /// `Float` and tensors of them; symbolic `Real` is not parallel).
-    fn par_map_call(&mut self, args: &[Expr], span: Span) -> Type {
+    fn par_map_call(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         if args.len() != 2 {
             self.error(
                 "E0315",
@@ -5672,8 +6024,8 @@ impl Checker {
         let f_ty = self.synth(&args[0]);
         let xs_ty = self.synth(&args[1]);
         let element = match self.infer.resolve(&xs_ty) {
-            Type::Tensor { elem, .. } => (*elem).clone(),
-            other => {
+            | Type::Tensor { elem, .. } => (*elem).clone(),
+            | other => {
                 self.error_help(
                     "E0302",
                     format!("`par_map` expects a tensor, found {other}"),
@@ -5681,7 +6033,7 @@ impl Checker {
                     "build a tensor first, or use `map` on other containers",
                 );
                 return Type::Error;
-            }
+            },
         };
         self.require_instance("Parallel", &element, span);
         let result = self.infer.fresh_type();
@@ -5702,7 +6054,11 @@ impl Checker {
     /// dimension is the dimensionless `1` (a literal cannot be dimensioned
     /// unless it carries a unit), so `dyn(3)` is fine; a `<d>`-polymorphic
     /// parameter is not, and the spec's answer is `dyn_with(x, dim)`.
-    fn dyn_call(&mut self, args: &[Expr], span: Span) -> Type {
+    fn dyn_call(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         if args.len() != 1 {
             self.error(
                 "E0315",
@@ -5746,7 +6102,12 @@ impl Checker {
 
     /// §3.11/§4.9.2: `check : Dyn<ρ> -> Result<Scalar<ρ,d>, DimError>`, with
     /// `d` concrete. `check<d>(x)` names it explicitly (§4.9.4).
-    fn check_call(&mut self, args: &[Expr], type_arg: Option<&Ty>, span: Span) -> Type {
+    fn check_call(
+        &mut self,
+        args: &[Expr],
+        type_arg: Option<&Ty>,
+        span: Span,
+    ) -> Type {
         if args.len() != 1 {
             self.error(
                 "E0315",
@@ -5760,8 +6121,8 @@ impl Checker {
         }
         let arg_ty = self.synth(&args[0]);
         let rep = match self.infer.resolve(&arg_ty) {
-            Type::Dyn(rep) => self.infer.resolve_rep(rep),
-            other => {
+            | Type::Dyn(rep) => self.infer.resolve_rep(rep),
+            | other => {
                 self.error_help(
                     "E0302",
                     format!("`check` expects a `Dyn<ρ>`, found {other}"),
@@ -5769,19 +6130,19 @@ impl Checker {
                     "`dyn(x)` wraps a scalar; `check` is the only way back (§4.9.4)",
                 );
                 return Type::Error;
-            }
+            },
         };
         let dim = match type_arg {
-            Some(ty) => {
+            | Some(ty) => {
                 let Some(dim) = self.dimension_type_argument(ty) else {
                     return Type::Error;
                 };
                 self.infer.resolve_dim(&dim)
-            }
+            },
             // The expected type of the enclosing expression fixes `d` — but it
             // may arrive after this call is synthesised, so it is resolved at
             // the end of the module (`pending_checks`).
-            None => self.infer.fresh_dim(),
+            | None => self.infer.fresh_dim(),
         };
         self.pending_checks.push((span, dim.clone()));
         Type::result(Type::Scalar(rep, dim), builtins::dim_error_type())
@@ -5791,9 +6152,12 @@ impl Checker {
     ///
     /// `d` is written in the type language: `L`/`Length` is a named dimension,
     /// `d` is a quantified dimension variable of the enclosing declaration.
-    fn dimension_type_argument(&mut self, ty: &Ty) -> Option<Dim> {
+    fn dimension_type_argument(
+        &mut self,
+        ty: &Ty,
+    ) -> Option<Dim> {
         match &ty.kind {
-            TyKind::Var(name) => {
+            | TyKind::Var(name) => {
                 if let Some((_, dim)) = self.dim_params.iter().find(|(param, _)| param == name) {
                     return Some(dim.clone());
                 }
@@ -5805,8 +6169,8 @@ impl Checker {
                     );
                     None
                 })
-            }
-            TyKind::Named { path, args } if args.is_empty() => {
+            },
+            | TyKind::Named { path, args } if args.is_empty() => {
                 let name = path.join(".");
                 self.dims.lookup(&name).or_else(|| {
                     self.error(
@@ -5816,8 +6180,8 @@ impl Checker {
                     );
                     None
                 })
-            }
-            _ => {
+            },
+            | _ => {
                 self.error_help(
                     "E0407",
                     "the type argument of `check` must be a dimension",
@@ -5825,7 +6189,7 @@ impl Checker {
                     "write `check<L>(x)` or `check<Length>(x)`",
                 );
                 None
-            }
+            },
         }
     }
 
@@ -5883,17 +6247,22 @@ impl Checker {
         Type::Error
     }
 
-    fn special_call(&mut self, name: &str, args: &[Expr], span: Span) -> Type {
+    fn special_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         match name {
-            "zeros" | "ones" => {
+            | "zeros" | "ones" => {
                 let rank = u32::try_from(args.len()).unwrap_or(0);
                 for arg in args {
                     let ty = self.synth(arg);
                     let _ = self.infer.unify(&ty, &Type::int());
                 }
                 Type::tensor(Shape::Rank(rank), Type::float(Dim::one()))
-            }
-            "fill" => {
+            },
+            | "fill" => {
                 if args.is_empty() {
                     self.error("E0315", "`fill` needs a value", span);
                     return Type::Error;
@@ -5905,8 +6274,8 @@ impl Checker {
                     let _ = self.infer.unify(&ty, &Type::int());
                 }
                 Type::tensor(Shape::Rank(rank), elem)
-            }
-            "symbol" => {
+            },
+            | "symbol" => {
                 if let Some(arg) = args.first() {
                     let ty = self.synth(arg);
                     let _ = self.infer.unify(&ty, &Type::string());
@@ -5914,8 +6283,8 @@ impl Checker {
                 // §3.3.3: a symbol keeps one dimension for the whole program,
                 // so its dimension variable is weak and never generalised.
                 Type::real(self.infer.fresh_weak_dim())
-            }
-            "symfun" => {
+            },
+            | "symfun" => {
                 if let Some(arg) = args.first() {
                     let ty = self.synth(arg);
                     let _ = self.infer.unify(&ty, &Type::string());
@@ -5923,17 +6292,26 @@ impl Checker {
                 let domain = self.infer.fresh_weak_dim();
                 let codomain = self.infer.fresh_weak_dim();
                 Type::func(vec![Type::real(domain)], Type::real(codomain))
-            }
-            _ => Type::Error,
+            },
+            | _ => Type::Error,
         }
     }
 
-    fn synth_type_app(&mut self, callee: &Expr, args: &[Ty], span: Span) -> Type {
+    fn synth_type_app(
+        &mut self,
+        callee: &Expr,
+        args: &[Ty],
+        span: Span,
+    ) -> Type {
         let _ = (args, span);
         self.synth(callee)
     }
 
-    fn synth_record(&mut self, base: Option<&Expr>, fields: &[(String, Expr)]) -> Type {
+    fn synth_record(
+        &mut self,
+        base: Option<&Expr>,
+        fields: &[(String, Expr)],
+    ) -> Type {
         // §3.6.1/§2: two fields with the same name in one literal is `E0208`,
         // not a silent last-write-wins.
         let mut seen: HashSet<&str> = HashSet::new();
@@ -5948,23 +6326,23 @@ impl Checker {
             }
         }
         let mut row = match base {
-            Some(base) => {
+            | Some(base) => {
                 let base_ty = self.synth(base);
                 match self.infer.resolve(&base_ty) {
                     // The base row — including its open tail — is the result
                     // row, so `{ p with z = … }` keeps `p`'s unknown fields.
-                    Type::Record(row) => row,
-                    other => {
+                    | Type::Record(row) => row,
+                    | other => {
                         self.error(
                             "E0302",
                             format!("record update expects a record, found {other}"),
                             base.span,
                         );
                         Row::Empty
-                    }
+                    },
                 }
-            }
-            None => Row::Empty,
+            },
+            | None => Row::Empty,
         };
         for (name, value) in fields {
             let ty = self.synth(value);
@@ -5993,7 +6371,12 @@ impl Checker {
         })
     }
 
-    fn field_type(&mut self, base: &Type, name: &str, span: Span) -> Type {
+    fn field_type(
+        &mut self,
+        base: &Type,
+        name: &str,
+        span: Span,
+    ) -> Type {
         let base = self.infer.resolve(base);
         if matches!(base, Type::Var(_)) {
             // An unannotated parameter used as `p.x` is an open record with at
@@ -6009,37 +6392,45 @@ impl Checker {
             return field;
         }
         match self.infer.resolve(&base) {
-            Type::Record(row) => match row.field(name) {
-                Some(ty) => ty.clone(),
-                None => match row.tail_var() {
-                    Some(tail) => {
-                        // The row is still open: absorb the field (§3.6.1).
-                        let field = self.infer.fresh_type();
-                        let _ = self.infer.extend_row(tail, name, field.clone());
-                        field
-                    }
-                    None => {
-                        self.error(
-                            "E0306",
-                            format!("the record {{ {row} }} has no field `{name}`"),
-                            span,
-                        );
-                        Type::Error
-                    }
-                },
+            | Type::Record(row) => {
+                match row.field(name) {
+                    | Some(ty) => ty.clone(),
+                    | None => {
+                        match row.tail_var() {
+                            | Some(tail) => {
+                                // The row is still open: absorb the field (§3.6.1).
+                                let field = self.infer.fresh_type();
+                                let _ = self.infer.extend_row(tail, name, field.clone());
+                                field
+                            },
+                            | None => {
+                                self.error(
+                                    "E0306",
+                                    format!("the record {{ {row} }} has no field `{name}`"),
+                                    span,
+                                );
+                                Type::Error
+                            },
+                        }
+                    },
+                }
             },
-            other => {
+            | other => {
                 self.error(
                     "E0302",
                     format!("field access expects a record, found {other}"),
                     span,
                 );
                 Type::Error
-            }
+            },
         }
     }
 
-    fn synth_tensor(&mut self, items: &[Expr], span: Span) -> Type {
+    fn synth_tensor(
+        &mut self,
+        items: &[Expr],
+        span: Span,
+    ) -> Type {
         if items.is_empty() {
             self.error_help(
                 "E0314",
@@ -6053,8 +6444,8 @@ impl Checker {
         for item in items {
             let ty = self.synth(item);
             match &elem {
-                None => elem = Some(ty),
-                Some(existing) => {
+                | None => elem = Some(ty),
+                | Some(existing) => {
                     let existing_resolved = self.infer.resolve(existing);
                     let this_resolved = self.infer.resolve(&ty);
                     if let Err(error) = self.infer.unify(existing, &ty) {
@@ -6071,13 +6462,13 @@ impl Checker {
                             self.report_unify(error, item.span);
                         }
                     }
-                }
+                },
             }
         }
         let elem = elem.unwrap_or(Type::Error);
         let resolved = self.infer.resolve(&elem);
         match resolved {
-            Type::Tensor {
+            | Type::Tensor {
                 shape: inner,
                 elem: inner_elem,
             } => {
@@ -6087,15 +6478,22 @@ impl Checker {
                     shape: Shape::Refined(shape),
                     elem: inner_elem,
                 }
-            }
-            other => Type::Tensor {
-                shape: Shape::Refined(vec![Some(Nat::lit(items.len()))]),
-                elem: Box::new(other),
+            },
+            | other => {
+                Type::Tensor {
+                    shape: Shape::Refined(vec![Some(Nat::lit(items.len()))]),
+                    elem: Box::new(other),
+                }
             },
         }
     }
 
-    fn synth_index(&mut self, base: &Expr, indices: &[SliceAst], span: Span) -> Type {
+    fn synth_index(
+        &mut self,
+        base: &Expr,
+        indices: &[SliceAst],
+        span: Span,
+    ) -> Type {
         let base_ty = self.synth(base);
         let mut resolved = self.infer.resolve(&base_ty);
         if matches!(resolved, Type::Var(_)) {
@@ -6120,7 +6518,7 @@ impl Checker {
         let mut slice_extents: Vec<(usize, Option<Nat>)> = Vec::new();
         for (position, index) in indices.iter().enumerate() {
             match index {
-                SliceAst::Index(expr) => {
+                | SliceAst::Index(expr) => {
                     // §3.5.4: the index is an `Int`. A `String` index used to
                     // be silently accepted because the error was discarded.
                     let ty = self.synth(expr);
@@ -6153,10 +6551,8 @@ impl Checker {
                         }
                     }
                     consumed.push(position);
-                }
-                SliceAst::Range {
-                    start, end, step, ..
-                } => {
+                },
+                | SliceAst::Range { start, end, step, .. } => {
                     sliced = true;
                     for part in [start, end].into_iter().flatten() {
                         let ty = self.synth(part);
@@ -6189,8 +6585,8 @@ impl Checker {
                     // when the source extent is known; anything else (negative
                     // indices, non-unit steps, dynamic bounds) leaves it `?`.
                     let source_extent = match &shape {
-                        Shape::Refined(items) => items.get(position).cloned().flatten(),
-                        Shape::Rank(_) => None,
+                        | Shape::Refined(items) => items.get(position).cloned().flatten(),
+                        | Shape::Rank(_) => None,
                     };
                     let extent = self.literal_slice_extent(
                         source_extent.as_ref(),
@@ -6199,7 +6595,7 @@ impl Checker {
                         step.as_ref(),
                     );
                     slice_extents.push((position, extent));
-                }
+                },
             }
         }
         let rank = shape.rank();
@@ -6215,7 +6611,7 @@ impl Checker {
         // The refinement survives indexing: `[3]` indexed by `0` is a scalar,
         // and `[3, 4]` indexed by `i` is `[4]`.
         let result_shape = match &shape {
-            Shape::Refined(items) => {
+            | Shape::Refined(items) => {
                 let mut kept = items.clone();
                 for position in consumed.iter().rev() {
                     if *position < kept.len() {
@@ -6230,8 +6626,8 @@ impl Checker {
                     }
                 }
                 Shape::Refined(kept)
-            }
-            Shape::Rank(_) => Shape::Rank(result_rank),
+            },
+            | Shape::Rank(_) => Shape::Rank(result_rank),
         };
         Type::Tensor {
             shape: result_shape,
@@ -6255,19 +6651,19 @@ impl Checker {
             .as_const()
             .and_then(|value| i64::try_from(value).ok())?;
         let step = match step {
-            None => 1,
-            Some(step) => literal_index(step)?,
+            | None => 1,
+            | Some(step) => literal_index(step)?,
         };
         if step != 1 {
             return None;
         }
         let start = match start {
-            None => 0,
-            Some(start) => literal_index(start)?,
+            | None => 0,
+            | Some(start) => literal_index(start)?,
         };
         let end = match end {
-            None => extent,
-            Some(end) => literal_index(end)?,
+            | None => extent,
+            | Some(end) => literal_index(end)?,
         };
         if start < 0 || end < 0 || end > extent || end < start {
             return None;
@@ -6275,27 +6671,28 @@ impl Checker {
         Some(Nat::Lit(usize::try_from(end - start).unwrap_or(0)))
     }
 
-    fn synth_try(&mut self, inner: &Expr, span: Span) -> Type {
+    fn synth_try(
+        &mut self,
+        inner: &Expr,
+        span: Span,
+    ) -> Type {
         let inner_ty = self.synth(inner);
         let inner_ty = self.infer.resolve(&inner_ty);
         let result_arity = match &inner_ty {
-            Type::Adt(id, args) if *id == adt::RESULT_ID && args.len() == 2 => Some(2),
-            Type::Adt(id, args) if *id == adt::OPTION_ID && !args.is_empty() => Some(1),
-            _ => None,
+            | Type::Adt(id, args) if *id == adt::RESULT_ID && args.len() == 2 => Some(2),
+            | Type::Adt(id, args) if *id == adt::OPTION_ID && !args.is_empty() => Some(1),
+            | _ => None,
         };
         let Some(arity) = result_arity else {
-            self.error(
-                "E0702",
-                "`?` requires a `Result` or `Option` value",
-                span,
-            );
+            self.error("E0702", "`?` requires a `Result` or `Option` value", span);
             return Type::Error;
         };
         // §3.9.3: `?` returns from the *enclosing function*, so that function
         // must return the same container.
         let expected = self.return_type.clone();
         match expected.map(|ty| self.infer.resolve(&ty)) {
-            Some(Type::Adt(id, args)) if id == adt::RESULT_ID && args.len() == 2 && arity == 2 => {
+            | Some(Type::Adt(id, args)) if id == adt::RESULT_ID && args.len() == 2 && arity == 2 =>
+            {
                 if let Type::Adt(_, inner_args) = &inner_ty {
                     // The error types only need to agree when one of them is
                     // still open. Two different concrete error types are a
@@ -6307,12 +6704,12 @@ impl Checker {
                         let _ = self.infer.unify(&inner_args[1], &args[1]);
                     }
                 }
-            }
-            Some(Type::Adt(id, args))
-                if id == adt::OPTION_ID && !args.is_empty() && arity == 1 => {}
+            },
+            | Some(Type::Adt(id, args)) if id == adt::OPTION_ID && !args.is_empty() && arity == 1 =>
+                {},
             // An unannotated function's return type is not known yet.
-            Some(Type::Var(_) | Type::Error) => {}
-            Some(other) => {
+            | Some(Type::Var(_) | Type::Error) => {},
+            | Some(other) => {
                 self.error_help(
                     "E0702",
                     format!("`?` needs the enclosing function to return `Result`, but it returns {other}"),
@@ -6320,55 +6717,55 @@ impl Checker {
                     "return `Result<T, E>`, or handle the error with `match`",
                 );
                 return Type::Error;
-            }
-            None => {}
+            },
+            | None => {},
         }
         match inner_ty {
-            Type::Adt(_, args) => args[0].clone(),
-            other => other,
+            | Type::Adt(_, args) => args[0].clone(),
+            | other => other,
         }
     }
 
-    fn synth_do(&mut self, stmts: &[DoStmt]) -> Type {
+    fn synth_do(
+        &mut self,
+        stmts: &[DoStmt],
+    ) -> Type {
         self.scopes.push(HashMap::new());
         let mut last_ty = Type::Unit;
         for stmt in stmts {
             match stmt {
-                DoStmt::Let {
-                    pattern,
-                    ty,
-                    value,
-                    ..
+                | DoStmt::Let {
+                    pattern, ty, value, ..
                 } => {
                     let value_ty = match ty {
-                        Some(ty) => {
+                        | Some(ty) => {
                             let ty = self.convert_type(ty);
                             self.check(value, &ty);
                             ty
-                        }
-                        None => self.synth(value),
+                        },
+                        | None => self.synth(value),
                     };
                     self.bind_pattern(pattern, &value_ty);
-                }
-                DoStmt::Bind { pattern, value, .. } => {
+                },
+                | DoStmt::Bind { pattern, value, .. } => {
                     let value_ty = self.synth(value);
                     let inner = match self.infer.resolve(&value_ty) {
-                        Type::Io(inner) => *inner,
-                        other => {
+                        | Type::Io(inner) => *inner,
+                        | other => {
                             self.error(
                                 "E0701",
                                 format!("`<-` expects an IO action, found {other}"),
                                 value.span,
                             );
                             Type::Error
-                        }
+                        },
                     };
                     self.bind_pattern(pattern, &inner);
-                }
-                DoStmt::Expr(expr) => {
+                },
+                | DoStmt::Expr(expr) => {
                     let ty = self.synth(expr);
                     match self.infer.resolve(&ty) {
-                        Type::Io(inner) => {
+                        | Type::Io(inner) => {
                             if !inner.is_unit() {
                                 self.warn(
                                     "W0202",
@@ -6377,29 +6774,34 @@ impl Checker {
                                 );
                             }
                             last_ty = *inner;
-                        }
-                        other => {
+                        },
+                        | other => {
                             self.error(
                                 "E0701",
                                 format!("a `do` statement must be an IO action, found {other}"),
                                 expr.span,
                             );
-                        }
+                        },
                     }
-                }
+                },
             }
         }
         self.scopes.pop();
         Type::io(last_ty)
     }
 
-    fn quantity_type(&mut self, value: &NumberLit, unit: &UnitExpr, span: Span) -> Type {
+    fn quantity_type(
+        &mut self,
+        value: &NumberLit,
+        unit: &UnitExpr,
+        span: Span,
+    ) -> Type {
         let resolved = match self.units.resolve(unit) {
-            Ok(resolved) => resolved,
-            Err(error) => {
+            | Ok(resolved) => resolved,
+            | Err(error) => {
                 self.unit_error(error, span);
                 return Type::Error;
-            }
+            },
         };
         if resolved.affine {
             return Type::Point(resolved.dim);
@@ -6418,21 +6820,21 @@ impl Checker {
     /// A pattern that matches every value of its type.
     fn pattern_catch_all(pattern: &Pat) -> bool {
         match &pattern.kind {
-            PatKind::Wildcard | PatKind::Var(_) | PatKind::Error => true,
-            PatKind::As { pattern, .. } | PatKind::Annot { pattern, .. } => {
+            | PatKind::Wildcard | PatKind::Var(_) | PatKind::Error => true,
+            | PatKind::As { pattern, .. } | PatKind::Annot { pattern, .. } => {
                 Self::pattern_catch_all(pattern)
-            }
-            _ => false,
+            },
+            | _ => false,
         }
     }
 
     /// Strips `as`/annotation wrappers before analysing a pattern.
     fn pattern_inner(pattern: &Pat) -> &Pat {
         match &pattern.kind {
-            PatKind::As { pattern, .. } | PatKind::Annot { pattern, .. } => {
+            | PatKind::As { pattern, .. } | PatKind::Annot { pattern, .. } => {
                 Self::pattern_inner(pattern)
-            }
-            _ => pattern,
+            },
+            | _ => pattern,
         }
     }
 
@@ -6444,7 +6846,11 @@ impl Checker {
     }
 
     /// The field patterns a constructor pattern leaves for its arguments.
-    fn specialise_ctor(patterns: &[Pat], name: &str, arity: usize) -> Option<Vec<Vec<Pat>>> {
+    fn specialise_ctor(
+        patterns: &[Pat],
+        name: &str,
+        arity: usize,
+    ) -> Option<Vec<Vec<Pat>>> {
         let mut columns: Vec<Vec<Pat>> = vec![Vec::new(); arity];
         let mut any = false;
         for pattern in patterns {
@@ -6455,11 +6861,7 @@ impl Checker {
                 }
                 continue;
             }
-            if let PatKind::Ctor {
-                name: written,
-                args,
-            } = &Self::pattern_inner(pattern).kind
-            {
+            if let PatKind::Ctor { name: written, args } = &Self::pattern_inner(pattern).kind {
                 if written == name {
                     any = true;
                     for (index, column) in columns.iter_mut().enumerate() {
@@ -6476,7 +6878,11 @@ impl Checker {
     }
 
     /// The patterns a record/tuple pattern leaves for one field.
-    fn specialise_field(patterns: &[Pat], label: &str, index: usize) -> Vec<Pat> {
+    fn specialise_field(
+        patterns: &[Pat],
+        label: &str,
+        index: usize,
+    ) -> Vec<Pat> {
         let mut column = Vec::new();
         for pattern in patterns {
             if Self::pattern_catch_all(pattern) {
@@ -6484,20 +6890,24 @@ impl Checker {
                 continue;
             }
             match &Self::pattern_inner(pattern).kind {
-                PatKind::Record(fields) => column.push(
-                    fields
-                        .iter()
-                        .find(|(name, _)| name == label)
-                        .and_then(|(_, value)| value.clone())
-                        .unwrap_or_else(Self::wildcard_pattern),
-                ),
-                PatKind::Tuple(items) => column.push(
-                    items
-                        .get(index)
-                        .cloned()
-                        .unwrap_or_else(Self::wildcard_pattern),
-                ),
-                _ => {}
+                | PatKind::Record(fields) => {
+                    column.push(
+                        fields
+                            .iter()
+                            .find(|(name, _)| name == label)
+                            .and_then(|(_, value)| value.clone())
+                            .unwrap_or_else(Self::wildcard_pattern),
+                    )
+                },
+                | PatKind::Tuple(items) => {
+                    column.push(
+                        items
+                            .get(index)
+                            .cloned()
+                            .unwrap_or_else(Self::wildcard_pattern),
+                    )
+                },
+                | _ => {},
             }
         }
         column
@@ -6508,7 +6918,12 @@ impl Checker {
     /// The recursion is bounded: past [`Self::PATTERN_DEPTH_BOUND`] the answer
     /// is "covered", so a pathological pattern nest can suppress an
     /// exhaustiveness warning but can never produce a false one.
-    fn patterns_cover(&self, patterns: &[Pat], ty: &Type, depth: u32) -> bool {
+    fn patterns_cover(
+        &self,
+        patterns: &[Pat],
+        ty: &Type,
+        depth: u32,
+    ) -> bool {
         if depth > PATTERN_DEPTH_BOUND {
             return true;
         }
@@ -6517,7 +6932,7 @@ impl Checker {
         }
         let resolved = self.infer.resolve(ty);
         match &resolved {
-            Type::Adt(id, args) => {
+            | Type::Adt(id, args) => {
                 let Some(registered) = adt::get(*id) else {
                     return false;
                 };
@@ -6526,7 +6941,8 @@ impl Checker {
                     return true;
                 }
                 for ctor in &registered.ctors {
-                    let Some(columns) = Self::specialise_ctor(patterns, &ctor.name, ctor.fields.len())
+                    let Some(columns) =
+                        Self::specialise_ctor(patterns, &ctor.name, ctor.fields.len())
                     else {
                         return false;
                     };
@@ -6540,8 +6956,8 @@ impl Checker {
                     }
                 }
                 true
-            }
-            Type::Bool => {
+            },
+            | Type::Bool => {
                 let mut yes = false;
                 let mut no = false;
                 for pattern in patterns {
@@ -6554,11 +6970,16 @@ impl Checker {
                     }
                 }
                 yes && no
-            }
-            Type::Unit => patterns.iter().any(|pattern| {
-                matches!(Self::pattern_inner(pattern).kind, PatKind::Lit(PatLit::Unit))
-            }),
-            Type::Record(row) => {
+            },
+            | Type::Unit => {
+                patterns.iter().any(|pattern| {
+                    matches!(
+                        Self::pattern_inner(pattern).kind,
+                        PatKind::Lit(PatLit::Unit)
+                    )
+                })
+            },
+            | Type::Record(row) => {
                 // An open row can always carry more fields; only a catch-all
                 // (handled above) covers it.
                 if row.tail_var().is_some() {
@@ -6566,9 +6987,9 @@ impl Checker {
                 }
                 let fields = row.fields();
                 if fields.is_empty() {
-                    return patterns
-                        .iter()
-                        .any(|pattern| matches!(Self::pattern_inner(pattern).kind, PatKind::Record(_)));
+                    return patterns.iter().any(|pattern| {
+                        matches!(Self::pattern_inner(pattern).kind, PatKind::Record(_))
+                    });
                 }
                 for (index, (label, field_ty)) in fields.iter().enumerate() {
                     let column = Self::specialise_field(patterns, label, index);
@@ -6577,14 +6998,19 @@ impl Checker {
                     }
                 }
                 true
-            }
+            },
             // Infinite or statically opaque domains need a catch-all arm.
-            _ => false,
+            | _ => false,
         }
     }
 
     /// Whether an arm can never be reached because earlier arms cover it.
-    fn pattern_is_unreachable(&self, pattern: &Pat, previous: &[Pat], ty: &Type) -> bool {
+    fn pattern_is_unreachable(
+        &self,
+        pattern: &Pat,
+        previous: &[Pat],
+        ty: &Type,
+    ) -> bool {
         if previous.iter().any(Self::pattern_catch_all) {
             return true;
         }
@@ -6618,18 +7044,24 @@ impl Checker {
     }
 
     /// A short pattern showing one value the arms miss (§6.6 E0309 message).
-    fn missing_pattern(&self, patterns: &[Pat], ty: &Type, depth: u32) -> String {
+    fn missing_pattern(
+        &self,
+        patterns: &[Pat],
+        ty: &Type,
+        depth: u32,
+    ) -> String {
         if depth > 8 {
             return "_".to_string();
         }
         let resolved = self.infer.resolve(ty);
         match &resolved {
-            Type::Adt(id, args) => {
+            | Type::Adt(id, args) => {
                 let Some(registered) = adt::get(*id) else {
                     return "_".to_string();
                 };
                 for ctor in &registered.ctors {
-                    let Some(columns) = Self::specialise_ctor(patterns, &ctor.name, ctor.fields.len())
+                    let Some(columns) =
+                        Self::specialise_ctor(patterns, &ctor.name, ctor.fields.len())
                     else {
                         return ctor.name.clone();
                     };
@@ -6646,8 +7078,8 @@ impl Checker {
                     }
                 }
                 "_".to_string()
-            }
-            Type::Bool => {
+            },
+            | Type::Bool => {
                 let mut yes = false;
                 let mut no = false;
                 for pattern in patterns {
@@ -6660,13 +7092,13 @@ impl Checker {
                     }
                 }
                 match (yes, no) {
-                    (true, false) => "false".to_string(),
-                    (false, true) => "true".to_string(),
-                    _ => "true or false".to_string(),
+                    | (true, false) => "false".to_string(),
+                    | (false, true) => "true".to_string(),
+                    | _ => "true or false".to_string(),
                 }
-            }
-            Type::Unit => "()".to_string(),
-            Type::Record(row) => {
+            },
+            | Type::Unit => "()".to_string(),
+            | Type::Record(row) => {
                 let fields = row.fields();
                 for (index, (label, field_ty)) in fields.iter().enumerate() {
                     let column = Self::specialise_field(patterns, label, index);
@@ -6676,12 +7108,17 @@ impl Checker {
                     }
                 }
                 "_".to_string()
-            }
-            _ => "_".to_string(),
+            },
+            | _ => "_".to_string(),
         }
     }
 
-    fn check_exhaustive(&mut self, subject: &Type, unguarded: &[Pat], span: Span) {
+    fn check_exhaustive(
+        &mut self,
+        subject: &Type,
+        unguarded: &[Pat],
+        span: Span,
+    ) {
         if self.patterns_cover(unguarded, subject, 0) {
             return;
         }
@@ -6696,12 +7133,16 @@ impl Checker {
 
     // ----- patterns ------------------------------------------------------
 
-    fn bind_pattern(&mut self, pattern: &Pat, ty: &Type) {
+    fn bind_pattern(
+        &mut self,
+        pattern: &Pat,
+        ty: &Type,
+    ) {
         match &pattern.kind {
             // A parser recovery node: the syntax error was already reported.
-            PatKind::Error => {}
-            PatKind::Wildcard => {}
-            PatKind::Var(name) => {
+            | PatKind::Error => {},
+            | PatKind::Wildcard => {},
+            | PatKind::Var(name) => {
                 // The binder is a place the editor asks about, and this is the
                 // type its uses get. Recorded at the pattern's own span, so it
                 // never competes with an expression that happens to share it.
@@ -6735,24 +7176,25 @@ impl Checker {
                 if let Some(scope) = self.scopes.last_mut() {
                     scope.insert(name.clone(), Scheme::mono(ty.clone()));
                 }
-            }
-            PatKind::Ctor { name, args } => {
+            },
+            | PatKind::Ctor { name, args } => {
                 let resolved = self.infer.resolve(ty);
                 let (adt_id, adt_args) = match &resolved {
-                    Type::Adt(id, args) => (*id, args.clone()),
-                    _ => {
+                    | Type::Adt(id, args) => (*id, args.clone()),
+                    | _ => {
                         self.error(
                             "E0308",
                             format!("pattern `{name}` does not match {resolved}"),
                             pattern.span,
                         );
                         return;
-                    }
+                    },
                 };
                 let Some(registered) = adt::get(adt_id) else {
                     return;
                 };
-                let Some(index) = registered.ctors.iter().position(|ctor| ctor.name == *name) else {
+                let Some(index) = registered.ctors.iter().position(|ctor| ctor.name == *name)
+                else {
                     self.error(
                         "E0307",
                         format!("`{}` has no constructor `{name}`", registered.name),
@@ -6777,8 +7219,8 @@ impl Checker {
                     let field_ty = field.substitute_params(&adt_args);
                     self.bind_pattern(sub, &field_ty);
                 }
-            }
-            PatKind::Record(fields) => {
+            },
+            | PatKind::Record(fields) => {
                 let resolved = self.infer.resolve(ty);
                 let Type::Record(row) = resolved else {
                     self.error(
@@ -6798,19 +7240,19 @@ impl Checker {
                         continue;
                     };
                     match sub {
-                        Some(sub) => self.bind_pattern(sub, &field_ty),
-                        None => {
+                        | Some(sub) => self.bind_pattern(sub, &field_ty),
+                        | None => {
                             if !name.starts_with('_') {
                                 self.local_binders.push((name.clone(), pattern.span));
                             }
                             if let Some(scope) = self.scopes.last_mut() {
                                 scope.insert(name.clone(), Scheme::mono(field_ty));
                             }
-                        }
+                        },
                     }
                 }
-            }
-            PatKind::Tuple(items) => {
+            },
+            | PatKind::Tuple(items) => {
                 let resolved = self.infer.resolve(ty);
                 let Type::Record(row) = resolved else {
                     self.error(
@@ -6827,8 +7269,8 @@ impl Checker {
                         .unwrap_or(Type::Error);
                     self.bind_pattern(item, &field_ty);
                 }
-            }
-            PatKind::Tensor { items, rest } => {
+            },
+            | PatKind::Tensor { items, rest } => {
                 let resolved = self.infer.resolve(ty);
                 let Type::Tensor { elem, .. } = resolved else {
                     self.error(
@@ -6849,25 +7291,25 @@ impl Checker {
                         );
                     }
                 }
-            }
-            PatKind::Lit(lit) => {
+            },
+            | PatKind::Lit(lit) => {
                 let lit_ty = match lit {
-                    PatLit::Int(_) => Type::int(),
-                    PatLit::Str(_) => Type::string(),
-                    PatLit::Bool(_) => Type::bool(),
-                    PatLit::Unit => Type::Unit,
+                    | PatLit::Int(_) => Type::int(),
+                    | PatLit::Str(_) => Type::string(),
+                    | PatLit::Bool(_) => Type::bool(),
+                    | PatLit::Unit => Type::Unit,
                 };
                 if let Err(error) = self.infer.unify(ty, &lit_ty) {
                     self.report_unify(error, pattern.span);
                 }
-            }
-            PatKind::As { pattern: inner, name } => {
+            },
+            | PatKind::As { pattern: inner, name } => {
                 self.bind_pattern(inner, ty);
                 if let Some(scope) = self.scopes.last_mut() {
                     scope.insert(name.clone(), Scheme::mono(ty.clone()));
                 }
-            }
-            PatKind::Annot {
+            },
+            | PatKind::Annot {
                 pattern: inner,
                 ty: annotation,
             } => {
@@ -6876,71 +7318,86 @@ impl Checker {
                     self.report_unify(error, pattern.span);
                 }
                 self.bind_pattern(inner, &annotated);
-            }
+            },
         }
     }
 
     // ----- types ---------------------------------------------------------
 
-    fn convert_type(&mut self, ty: &Ty) -> Type {
+    fn convert_type(
+        &mut self,
+        ty: &Ty,
+    ) -> Type {
         let params = self.type_params.clone();
         self.convert_type_with_params(ty, &params)
     }
 
-    fn convert_type_with_params(&mut self, ty: &Ty, params: &[(String, Type)]) -> Type {
+    fn convert_type_with_params(
+        &mut self,
+        ty: &Ty,
+        params: &[(String, Type)],
+    ) -> Type {
         match &ty.kind {
-            TyKind::Int => Type::int(),
-            TyKind::Bool => Type::Bool,
-            TyKind::Prop => Type::Prop,
-            TyKind::Str => Type::string(),
-            TyKind::Unit => Type::Unit,
-            TyKind::Real(dim) => Type::real(self.convert_dim(dim, ty.span)),
-            TyKind::Float(dim) => Type::float(self.convert_dim(dim, ty.span)),
-            TyKind::Complex(dim) => Type::complex(self.convert_dim(dim, ty.span)),
-            TyKind::Point(dim) => Type::Point(self.convert_dim(dim, ty.span)),
-            TyKind::UnitOf(dim) => Type::UnitOf(self.convert_dim(dim, ty.span)),
-            TyKind::Tensor { shape, elem } => Type::Tensor {
-                shape: self.convert_shape(shape),
-                elem: Box::new(self.convert_type_with_params(elem, params)),
+            | TyKind::Int => Type::int(),
+            | TyKind::Bool => Type::Bool,
+            | TyKind::Prop => Type::Prop,
+            | TyKind::Str => Type::string(),
+            | TyKind::Unit => Type::Unit,
+            | TyKind::Real(dim) => Type::real(self.convert_dim(dim, ty.span)),
+            | TyKind::Float(dim) => Type::float(self.convert_dim(dim, ty.span)),
+            | TyKind::Complex(dim) => Type::complex(self.convert_dim(dim, ty.span)),
+            | TyKind::Point(dim) => Type::Point(self.convert_dim(dim, ty.span)),
+            | TyKind::UnitOf(dim) => Type::UnitOf(self.convert_dim(dim, ty.span)),
+            | TyKind::Tensor { shape, elem } => {
+                Type::Tensor {
+                    shape: self.convert_shape(shape),
+                    elem: Box::new(self.convert_type_with_params(elem, params)),
+                }
             },
             // `Matrix<n, m, τ>` is a rank-2 tensor with a static shape.
-            TyKind::Matrix { rows, cols, elem } => Type::Tensor {
-                shape: Shape::Refined(vec![
-                    Some(self.convert_nat(rows, ty.span)),
-                    Some(self.convert_nat(cols, ty.span)),
-                ]),
-                elem: Box::new(self.convert_type_with_params(elem, params)),
+            | TyKind::Matrix { rows, cols, elem } => {
+                Type::Tensor {
+                    shape: Shape::Refined(vec![
+                        Some(self.convert_nat(rows, ty.span)),
+                        Some(self.convert_nat(cols, ty.span)),
+                    ]),
+                    elem: Box::new(self.convert_type_with_params(elem, params)),
+                }
             },
             // `Sparse<fmt, shape, τ>` has the shape of its dense counterpart;
             // the storage format is a runtime property.
-            TyKind::Sparse { shape, elem, .. } => Type::Tensor {
-                shape: self.convert_shape(shape),
-                elem: Box::new(self.convert_type_with_params(elem, params)),
+            | TyKind::Sparse { shape, elem, .. } => {
+                Type::Tensor {
+                    shape: self.convert_shape(shape),
+                    elem: Box::new(self.convert_type_with_params(elem, params)),
+                }
             },
             // A row sum is the union of its summands' fields.
-            TyKind::Row(items) => {
+            | TyKind::Row(items) => {
                 let mut merged: Vec<(String, Type)> = Vec::new();
                 for item in items {
                     let converted = self.convert_type_with_params(item, params);
                     match converted {
-                        Type::Record(row) => merged.extend(row.fields()),
-                        other => return other,
+                        | Type::Record(row) => merged.extend(row.fields()),
+                        | other => return other,
                     }
                 }
                 Type::record(merged)
-            }
+            },
             // A dimension argument is carried as `Real[d]`, the encoding this
             // checker already uses for a dimension in argument position.
-            TyKind::DimArg(dim) => Type::real(self.convert_dim(dim, ty.span)),
+            | TyKind::DimArg(dim) => Type::real(self.convert_dim(dim, ty.span)),
             // A natural number or a shape is a value-level argument: it only
             // appears where a shape is expected, so it contributes no type.
-            TyKind::NatArg(_) | TyKind::ShapeArg(_) => Type::int(),
-            TyKind::Option(inner) => Type::option(self.convert_type_with_params(inner, params)),
-            TyKind::Result(ok, err) => Type::result(
-                self.convert_type_with_params(ok, params),
-                self.convert_type_with_params(err, params),
-            ),
-            TyKind::Set(inner) => {
+            | TyKind::NatArg(_) | TyKind::ShapeArg(_) => Type::int(),
+            | TyKind::Option(inner) => Type::option(self.convert_type_with_params(inner, params)),
+            | TyKind::Result(ok, err) => {
+                Type::result(
+                    self.convert_type_with_params(ok, params),
+                    self.convert_type_with_params(err, params),
+                )
+            },
+            | TyKind::Set(inner) => {
                 let inner = self.convert_type_with_params(inner, params);
                 // §3.8.4: `Set<a>` needs `TotalOrd a`; `Set<Float>` is not
                 // legal because `Float` has no total order (NaN).
@@ -6953,47 +7410,51 @@ impl Checker {
                     }),
                     vec![inner],
                 )
-            }
-            TyKind::Table(inner) => Type::Adt(
-                adt::intern(Adt {
-                    name: "Table".to_string(),
-                    params: vec!["r".to_string()],
-                    ctors: Vec::new(),
-                }),
-                vec![self.convert_type_with_params(inner, params)],
-            ),
-            TyKind::Dyn(rep) => Type::Dyn(match rep.as_str() {
-                "Int" => Rep::Int,
-                "Float" => Rep::Float,
-                "Complex" => Rep::Complex,
-                _ => Rep::Real,
-            }),
-            TyKind::RateOf(inner) => {
+            },
+            | TyKind::Table(inner) => {
+                Type::Adt(
+                    adt::intern(Adt {
+                        name: "Table".to_string(),
+                        params: vec!["r".to_string()],
+                        ctors: Vec::new(),
+                    }),
+                    vec![self.convert_type_with_params(inner, params)],
+                )
+            },
+            | TyKind::Dyn(rep) => {
+                Type::Dyn(match rep.as_str() {
+                    | "Int" => Rep::Int,
+                    | "Float" => Rep::Float,
+                    | "Complex" => Rep::Complex,
+                    | _ => Rep::Real,
+                })
+            },
+            | TyKind::RateOf(inner) => {
                 let inner = self.convert_type_with_params(inner, params);
                 self.rate_of(&inner, ty.span)
-            }
-            TyKind::DiffusionOf(inner) => {
+            },
+            | TyKind::DiffusionOf(inner) => {
                 let inner = self.convert_type_with_params(inner, params);
                 self.diffusion_of(&inner, ty.span)
-            }
-            TyKind::SymFun(domain, codomain) => {
+            },
+            | TyKind::SymFun(domain, codomain) => {
                 let domain = self.convert_dim(domain, ty.span);
                 let codomain = self.convert_dim(codomain, ty.span);
                 Type::func(vec![Type::real(domain)], Type::real(codomain))
-            }
-            TyKind::Io(inner) => Type::io(self.convert_type_with_params(inner, params)),
-            TyKind::Fn(args, ret) => Type::func(
-                args.iter()
-                    .map(|arg| self.convert_type_with_params(arg, params))
-                    .collect(),
-                self.convert_type_with_params(ret, params),
-            ),
-            TyKind::Record { fields, rest } => {
+            },
+            | TyKind::Io(inner) => Type::io(self.convert_type_with_params(inner, params)),
+            | TyKind::Fn(args, ret) => {
+                Type::func(
+                    args.iter()
+                        .map(|arg| self.convert_type_with_params(arg, params))
+                        .collect(),
+                    self.convert_type_with_params(ret, params),
+                )
+            },
+            | TyKind::Record { fields, rest } => {
                 let mut collected: Vec<(String, Type)> = fields
                     .iter()
-                    .map(|(name, ty)| {
-                        (name.clone(), self.convert_type_with_params(ty, params))
-                    })
+                    .map(|(name, ty)| (name.clone(), self.convert_type_with_params(ty, params)))
                     .collect();
                 if let Some(rest_name) = rest {
                     // An open row: the fields are known and the tail is either
@@ -7001,13 +7462,10 @@ impl Checker {
                     // or a fresh variable that absorbs whatever the caller
                     // passes.
                     collected.sort_by(|a, b| a.0.cmp(&b.0));
-                    let mut row = match self
-                        .row_params
-                        .iter()
-                        .find(|(param, _)| param == rest_name)
+                    let mut row = match self.row_params.iter().find(|(param, _)| param == rest_name)
                     {
-                        Some((_, row)) => row.clone(),
-                        None => self.infer.fresh_row(),
+                        | Some((_, row)) => row.clone(),
+                        | None => self.infer.fresh_row(),
                     };
                     for (name, ty) in collected.into_iter().rev() {
                         row = Row::Extend {
@@ -7020,20 +7478,19 @@ impl Checker {
                 } else {
                     Type::record(collected)
                 }
-            }
-            TyKind::Tuple(items) => Type::record(
-                items
-                    .iter()
-                    .enumerate()
-                    .map(|(index, ty)| {
-                        (
-                            index.to_string(),
-                            self.convert_type_with_params(ty, params),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            TyKind::Named { path, args } => {
+            },
+            | TyKind::Tuple(items) => {
+                Type::record(
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, ty)| {
+                            (index.to_string(), self.convert_type_with_params(ty, params))
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            },
+            | TyKind::Named { path, args } => {
                 let name = path.join(".");
                 if self.declaring_alias.as_deref() == Some(name.as_str()) {
                     self.error_help(
@@ -7066,20 +7523,20 @@ impl Checker {
                     let mut converted = Vec::with_capacity(kinds.len());
                     for (index, kind) in kinds.iter().enumerate() {
                         match kind {
-                            adt::ParamKind::Type => {
+                            | adt::ParamKind::Type => {
                                 let value = match args.get(index) {
-                                    Some(arg) => self.convert_type_with_params(arg, params),
-                                    None => self.infer.fresh_type(),
+                                    | Some(arg) => self.convert_type_with_params(arg, params),
+                                    | None => self.infer.fresh_type(),
                                 };
                                 converted.push(value);
-                            }
-                            adt::ParamKind::Dim(_) => {
+                            },
+                            | adt::ParamKind::Dim(_) => {
                                 let dim = match args.get(index) {
-                                    Some(arg) => self.convert_type_as_dim(arg),
-                                    None => self.infer.fresh_dim(),
+                                    | Some(arg) => self.convert_type_as_dim(arg),
+                                    | None => self.infer.fresh_dim(),
                                 };
                                 converted.push(Type::UnitOf(dim));
-                            }
+                            },
                         }
                     }
                     return Type::Adt(id, converted);
@@ -7089,8 +7546,8 @@ impl Checker {
                 }
                 self.error("E0301", format!("unknown type `{name}`"), ty.span);
                 Type::Error
-            }
-            TyKind::Var(name) => {
+            },
+            | TyKind::Var(name) => {
                 if let Some((_, ty)) = params.iter().find(|(param, _)| param == name) {
                     return ty.clone();
                 }
@@ -7101,14 +7558,10 @@ impl Checker {
                     self.type_params.push((name.clone(), fresh.clone()));
                     return fresh;
                 }
-                self.error(
-                    "E0301",
-                    format!("unknown type variable `{name}`"),
-                    ty.span,
-                );
+                self.error("E0301", format!("unknown type variable `{name}`"), ty.span);
                 Type::Error
-            }
-            TyKind::Forall(_, body) => self.convert_type_with_params(body, params),
+            },
+            | TyKind::Forall(_, body) => self.convert_type_with_params(body, params),
         }
     }
 
@@ -7121,16 +7574,17 @@ impl Checker {
     /// flattens `Float` scalars and tensors into `Vec<f64>`, so anything else
     /// has no representation on that path. An open record row cannot be
     /// flattened either.
-    fn rate_of(&mut self, ty: &Type, span: Span) -> Type {
+    fn rate_of(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> Type {
         let resolved = self.infer.resolve(ty);
         match resolved {
-            Type::Scalar(rep, dim) => {
+            | Type::Scalar(rep, dim) => {
                 let rep = self.infer.resolve_rep(rep);
                 let is_int = rep == Rep::Int
-                    || matches!(
-                        self.infer.rep_literal_kind(rep),
-                        Some(LiteralKind::Int)
-                    );
+                    || matches!(self.infer.rep_literal_kind(rep), Some(LiteralKind::Int));
                 if is_int {
                     self.error_help(
                         "E0302",
@@ -7141,15 +7595,15 @@ impl Checker {
                     return Type::Error;
                 }
                 Type::Scalar(rep, dim.div(&Dim::base("Time")))
-            }
-            Type::Tensor { shape, elem } => {
+            },
+            | Type::Tensor { shape, elem } => {
                 let elem = self.rate_of(&elem, span);
                 Type::Tensor {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
-            Type::Record(row) => {
+            },
+            | Type::Record(row) => {
                 if row.tail_var().is_some() {
                     self.error_help(
                         "E0302",
@@ -7165,8 +7619,8 @@ impl Checker {
                     .map(|(name, ty)| (name, self.rate_of(&ty, span)))
                     .collect::<Vec<_>>();
                 Type::Record(Row::closed(fields))
-            }
-            Type::Var(_) => {
+            },
+            | Type::Var(_) => {
                 // An unannotated parameter of the right-hand side: commit it to
                 // a scalar and use its literal kind.
                 let scalar = self.force_scalar(&resolved);
@@ -7175,8 +7629,8 @@ impl Checker {
                 } else {
                     self.rate_of(&scalar, span)
                 }
-            }
-            other => {
+            },
+            | other => {
                 self.error_help(
                     "E0302",
                     format!("an ODE state cannot contain a value of type {other}"),
@@ -7184,7 +7638,7 @@ impl Checker {
                     "an `odeint` state is `Float` scalars, tensors and closed records of them",
                 );
                 Type::Error
-            }
+            },
         }
     }
 
@@ -7200,16 +7654,17 @@ impl Checker {
     ///
     /// `Int`/`Bool`/function fields and open rows are `E0302`, exactly as for
     /// `RateOf`: the SDE path flattens the state into `Vec<f64>`.
-    fn diffusion_of(&mut self, ty: &Type, span: Span) -> Type {
+    fn diffusion_of(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> Type {
         let resolved = self.infer.resolve(ty);
         match resolved {
-            Type::Scalar(rep, dim) => {
+            | Type::Scalar(rep, dim) => {
                 let rep = self.infer.resolve_rep(rep);
                 let is_int = rep == Rep::Int
-                    || matches!(
-                        self.infer.rep_literal_kind(rep),
-                        Some(LiteralKind::Int)
-                    );
+                    || matches!(self.infer.rep_literal_kind(rep), Some(LiteralKind::Int));
                 if is_int {
                     self.error_help(
                         "E0302",
@@ -7224,15 +7679,15 @@ impl Checker {
                 // `dW ~ √dt`, so the diffusion's dimension is the state's
                 // *divided* by `T^(1/2)` (Brownian scaling).
                 Type::Scalar(rep, dim.div(&sqrt_time))
-            }
-            Type::Tensor { shape, elem } => {
+            },
+            | Type::Tensor { shape, elem } => {
                 let elem = self.diffusion_of(&elem, span);
                 Type::Tensor {
                     shape: shape.clone(),
                     elem: Box::new(elem),
                 }
-            }
-            Type::Record(row) => {
+            },
+            | Type::Record(row) => {
                 if row.tail_var().is_some() {
                     self.error_help(
                         "E0302",
@@ -7248,16 +7703,16 @@ impl Checker {
                     .map(|(name, ty)| (name, self.diffusion_of(&ty, span)))
                     .collect::<Vec<_>>();
                 Type::Record(Row::closed(fields))
-            }
-            Type::Var(_) => {
+            },
+            | Type::Var(_) => {
                 let scalar = self.force_scalar(&resolved);
                 if matches!(self.infer.resolve(&scalar), Type::Error) {
                     Type::Error
                 } else {
                     self.diffusion_of(&scalar, span)
                 }
-            }
-            other => {
+            },
+            | other => {
                 self.error_help(
                     "E0302",
                     format!("an SDE state cannot contain a value of type {other}"),
@@ -7265,17 +7720,20 @@ impl Checker {
                     "an SDE state is `Float` scalars, tensors and closed records of them",
                 );
                 Type::Error
-            }
+            },
         }
     }
 
-    fn convert_shape(&mut self, shape: &ShapeAst) -> Shape {
+    fn convert_shape(
+        &mut self,
+        shape: &ShapeAst,
+    ) -> Shape {
         match shape {
-            ShapeAst::Rank(nat) => {
+            | ShapeAst::Rank(nat) => {
                 let converted = self.convert_nat(nat, Span::new(self.file, 0, 0));
                 match converted.as_const() {
-                    Some(rank) => Shape::Rank(u32::try_from(rank).unwrap_or(0)),
-                    None => {
+                    | Some(rank) => Shape::Rank(u32::try_from(rank).unwrap_or(0)),
+                    | None => {
                         // §3.5.4: indexing needs a known rank, so a rank that
                         // is still a variable is `E0304` (write a concrete
                         // rank). Refined extents may stay variables.
@@ -7286,20 +7744,24 @@ impl Checker {
                             "write a concrete rank, for example `Tensor<1, Float>`, or use a refined shape `Tensor<[n], Float>`",
                         );
                         Shape::Rank(0)
-                    }
+                    },
                 }
-            }
-            ShapeAst::Refined(items) => Shape::Refined(
-                items
-                    .iter()
-                    .map(|item| match item {
-                        ShapeItem::Known(nat) => {
-                            Some(self.convert_nat(nat, Span::new(self.file, 0, 0)))
-                        }
-                        ShapeItem::Unknown => None,
-                    })
-                    .collect(),
-            ),
+            },
+            | ShapeAst::Refined(items) => {
+                Shape::Refined(
+                    items
+                        .iter()
+                        .map(|item| {
+                            match item {
+                                | ShapeItem::Known(nat) => {
+                                    Some(self.convert_nat(nat, Span::new(self.file, 0, 0)))
+                                },
+                                | ShapeItem::Unknown => None,
+                            }
+                        })
+                        .collect(),
+                )
+            },
         }
     }
 
@@ -7310,10 +7772,14 @@ impl Checker {
     /// `E0304`: unlike an unkinded type parameter, an undeclared Nat variable
     /// has no binder to quantify over. Inside an instance head the name is an
     /// implicit parameter, like a dimension there.
-    fn convert_nat(&mut self, nat: &NatAst, span: Span) -> Nat {
+    fn convert_nat(
+        &mut self,
+        nat: &NatAst,
+        span: Span,
+    ) -> Nat {
         match nat {
-            NatAst::Lit(value) => Nat::Lit(*value),
-            NatAst::Var(name) => {
+            | NatAst::Lit(value) => Nat::Lit(*value),
+            | NatAst::Var(name) => {
                 if let Some((_, nat)) = self.nat_params.iter().find(|(param, _)| param == name) {
                     return nat.clone();
                 }
@@ -7327,36 +7793,40 @@ impl Checker {
                     "declare it, for example `fn f<n>(xs: Tensor<[n], Float>)`; only literals, `+` and `*` by a literal are supported in a shape",
                 );
                 Nat::Lit(0)
-            }
-            NatAst::Add(left, right) => {
+            },
+            | NatAst::Add(left, right) => {
                 let left = self.convert_nat(left, span);
                 let right = self.convert_nat(right, span);
                 match (left.as_const(), right.as_const()) {
-                    (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
-                    _ => Nat::Add(Box::new(left), Box::new(right)),
+                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
+                    | _ => Nat::Add(Box::new(left), Box::new(right)),
                 }
-            }
-            NatAst::Mul(left, right) => {
+            },
+            | NatAst::Mul(left, right) => {
                 let left = self.convert_nat(left, span);
                 let right = self.convert_nat(right, span);
                 match (left.as_const(), right.as_const()) {
-                    (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
-                    _ => Nat::Mul(Box::new(left), Box::new(right)),
+                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
+                    | _ => Nat::Mul(Box::new(left), Box::new(right)),
                 }
-            }
+            },
         }
     }
 
-    fn convert_dim(&mut self, dim: &DimAst, span: Span) -> Dim {
+    fn convert_dim(
+        &mut self,
+        dim: &DimAst,
+        span: Span,
+    ) -> Dim {
         match dim {
-            DimAst::One => Dim::one(),
-            DimAst::Name(name) => {
+            | DimAst::One => Dim::one(),
+            | DimAst::Name(name) => {
                 if let Some((_, dim)) = self.dim_params.iter().find(|(param, _)| param == name) {
                     return dim.clone();
                 }
                 match self.dims.lookup(name) {
-                    Some(dim) => dim,
-                    None => {
+                    | Some(dim) => dim,
+                    | None => {
                         if self.implicit_params {
                             // §3.8.1: `instance Show for Real[d]` quantifies
                             // `d` implicitly.
@@ -7366,32 +7836,34 @@ impl Checker {
                         }
                         self.error("E0407", format!("unknown dimension `{name}`"), span);
                         Dim::one()
-                    }
+                    },
                 }
-            }
-            DimAst::Mul(left, right) => self
-                .convert_dim(left, span)
-                .mul(&self.convert_dim(right, span)),
-            DimAst::Div(left, right) => self
-                .convert_dim(left, span)
-                .div(&self.convert_dim(right, span)),
-            DimAst::Pow(base, exponent) => self.convert_dim(base, span).pow(exponent),
-            DimAst::Paren(inner) => self.convert_dim(inner, span),
+            },
+            | DimAst::Mul(left, right) => {
+                self.convert_dim(left, span)
+                    .mul(&self.convert_dim(right, span))
+            },
+            | DimAst::Div(left, right) => {
+                self.convert_dim(left, span)
+                    .div(&self.convert_dim(right, span))
+            },
+            | DimAst::Pow(base, exponent) => self.convert_dim(base, span).pow(exponent),
+            | DimAst::Paren(inner) => self.convert_dim(inner, span),
         }
     }
 
     // ----- helpers -------------------------------------------------------
 
-    fn lookup_value(&mut self, name: &str, span: Span) -> Type {
+    fn lookup_value(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Type {
         self.referenced.insert(name.to_string());
         // §13.8.1: a deprecated name still works, but using it warns — that is
         // the "warning period" the stability model promises.
         if let Some(message) = self.deprecated.get(name).cloned() {
-            self.warn(
-                "W0602",
-                format!("`{name}` is deprecated: {message}"),
-                span,
-            );
+            self.warn("W0602", format!("`{name}` is deprecated: {message}"), span);
         }
         for scope in self.scopes.iter().rev() {
             if let Some(scheme) = scope.get(name) {
@@ -7419,7 +7891,11 @@ impl Checker {
     }
 
     /// Instantiates a scheme, solving whatever class constraints come with it.
-    fn instantiate_value(&mut self, scheme: &Scheme, span: Span) -> Type {
+    fn instantiate_value(
+        &mut self,
+        scheme: &Scheme,
+        span: Span,
+    ) -> Type {
         let (ty, constraints) = self.infer.instantiate_scheme(scheme);
         for constraint in &constraints {
             self.solve_constraint(constraint, span);
@@ -7427,28 +7903,36 @@ impl Checker {
         ty
     }
 
-    fn expect_bool(&mut self, ty: &Type, span: Span) {
+    fn expect_bool(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) {
         if matches!(self.infer.resolve(ty), Type::Var(_)) {
             let _ = self.infer.unify(ty, &Type::Bool);
             return;
         }
         match self.infer.resolve(ty) {
-            Type::Bool | Type::Error => {}
-            Type::Prop => {
+            | Type::Bool | Type::Error => {},
+            | Type::Prop => {
                 self.error_help(
                     "E0302",
                     "a symbolic proposition is not a `Bool`",
                     span,
                     "use `decide(p)` or `assuming(p, ...)`",
                 );
-            }
-            other => self.error("E0302", format!("expected Bool, found {other}"), span),
+            },
+            | other => self.error("E0302", format!("expected Bool, found {other}"), span),
         }
     }
 
-    fn report_unify(&mut self, error: UnifyError, span: Span) {
+    fn report_unify(
+        &mut self,
+        error: UnifyError,
+        span: Span,
+    ) {
         match error {
-            UnifyError::Dim(mismatch) => {
+            | UnifyError::Dim(mismatch) => {
                 let left = self.dims.format(&mismatch.left);
                 let right = self.dims.format(&mismatch.right);
                 let difference = self.dims.format(&mismatch.difference);
@@ -7459,30 +7943,30 @@ impl Checker {
                         .with_note(format!("right: {right}"))
                         .with_note(format!("difference: {difference}")),
                 );
-            }
-            UnifyError::Mismatch { left, right } => {
+            },
+            | UnifyError::Mismatch { left, right } => {
                 self.diagnostics.push(
                     Diagnostic::error("E0302", "type mismatch", span)
                         .with_primary_label(format!("expected {right}, found {left}")),
                 );
-            }
-            UnifyError::LiteralMismatch { kind, requested } => {
+            },
+            | UnifyError::LiteralMismatch { kind, requested } => {
                 let label = match kind {
-                    LiteralKind::Int | LiteralKind::Decimal => {
+                    | LiteralKind::Int | LiteralKind::Decimal => {
                         format!("a bare numeric literal cannot have type {requested}")
-                    }
-                    _ => format!("this literal cannot have type {requested}"),
+                    },
+                    | _ => format!("this literal cannot have type {requested}"),
                 };
                 self.diagnostics.push(
                     Diagnostic::error("E0302", "type mismatch", span)
                         .with_primary_label(label)
                         .with_help("write a unit, for example `1 m`"),
                 );
-            }
-            other => {
+            },
+            | other => {
                 self.diagnostics
                     .push(Diagnostic::error(code(&other), other.to_string(), span));
-            }
+            },
         }
     }
 
@@ -7517,23 +8001,42 @@ impl Checker {
         }
     }
 
-    fn unit_error(&mut self, error: UnitError, span: Span) {
+    fn unit_error(
+        &mut self,
+        error: UnitError,
+        span: Span,
+    ) {
         self.diagnostics
             .push(Diagnostic::error(error.code(), error.to_string(), span));
     }
 
-    fn error(&mut self, code: &str, message: impl Into<String>, span: Span) {
+    fn error(
+        &mut self,
+        code: &str,
+        message: impl Into<String>,
+        span: Span,
+    ) {
         self.diagnostics
             .push(Diagnostic::error(code, message, span));
     }
 
-    fn error_help(&mut self, code: &str, message: impl Into<String>, span: Span, help: &str) {
-        self.diagnostics.push(
-            Diagnostic::error(code, message, span).with_help(help),
-        );
+    fn error_help(
+        &mut self,
+        code: &str,
+        message: impl Into<String>,
+        span: Span,
+        help: &str,
+    ) {
+        self.diagnostics
+            .push(Diagnostic::error(code, message, span).with_help(help));
     }
 
-    fn warn(&mut self, code: &str, message: impl Into<String>, span: Span) {
+    fn warn(
+        &mut self,
+        code: &str,
+        message: impl Into<String>,
+        span: Span,
+    ) {
         self.diagnostics
             .push(Diagnostic::warning(code, message, span));
     }
@@ -7542,42 +8045,50 @@ impl Checker {
 /// The name of a unit when an expression is a bare unit value.
 fn unit_name_of(expr: &Expr) -> Option<String> {
     match &expr.kind {
-        ExprKind::Var(name) => Some(name.clone()),
-        ExprKind::QName(path) => Some(path.join(".")),
-        _ => None,
+        | ExprKind::Var(name) => Some(name.clone()),
+        | ExprKind::QName(path) => Some(path.join(".")),
+        | _ => None,
     }
 }
 
 /// Whether a type mentions any of `ids`.
-fn mentions_any(ty: &Type, ids: &[u32]) -> bool {
+fn mentions_any(
+    ty: &Type,
+    ids: &[u32],
+) -> bool {
     match ty {
-        Type::Var(id) => ids.contains(id),
-        Type::Scalar(rep, _) => match rep {
-            Rep::Var(id) => ids.contains(id),
-            _ => false,
+        | Type::Var(id) => ids.contains(id),
+        | Type::Scalar(rep, _) => {
+            match rep {
+                | Rep::Var(id) => ids.contains(id),
+                | _ => false,
+            }
         },
-        Type::Tensor { elem, .. } => mentions_any(elem, ids),
-        Type::Fn(params, ret) => {
+        | Type::Tensor { elem, .. } => mentions_any(elem, ids),
+        | Type::Fn(params, ret) => {
             params.iter().any(|param| mentions_any(param, ids)) || mentions_any(ret, ids)
-        }
-        Type::Record(row) => row
-            .fields()
-            .iter()
-            .any(|(_, field)| mentions_any(field, ids)),
-        Type::Adt(_, args) => args.iter().any(|arg| mentions_any(arg, ids)),
-        Type::Io(inner) => mentions_any(inner, ids),
-        _ => false,
+        },
+        | Type::Record(row) => {
+            row.fields()
+                .iter()
+                .any(|(_, field)| mentions_any(field, ids))
+        },
+        | Type::Adt(_, args) => args.iter().any(|arg| mentions_any(arg, ids)),
+        | Type::Io(inner) => mentions_any(inner, ids),
+        | _ => false,
     }
 }
 
 /// Whether an expression calls `symbol` or `symfun`.
 fn is_symbol_factory(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Call { callee, .. } => match &callee.kind {
-            ExprKind::Var(name) => matches!(name.as_str(), "symbol" | "symfun"),
-            _ => false,
+        | ExprKind::Call { callee, .. } => {
+            match &callee.kind {
+                | ExprKind::Var(name) => matches!(name.as_str(), "symbol" | "symfun"),
+                | _ => false,
+            }
         },
-        _ => false,
+        | _ => false,
     }
 }
 
@@ -7587,7 +8098,10 @@ fn is_symbol_factory(expr: &Expr) -> bool {
 /// representations and `Dyn`; the printer already implements them, so an
 /// explicit instance is not required (round-2 decision 1e). Only `Show` has
 /// this guarantee.
-fn is_structural_show(class: &str, ty: &Type) -> bool {
+fn is_structural_show(
+    class: &str,
+    ty: &Type,
+) -> bool {
     class == "Show" && is_structural_show_head(ty)
 }
 
@@ -7599,27 +8113,28 @@ fn is_bare_zero(expr: &Expr) -> bool {
 /// The value of a literal index, when it is one (§3.5.4).
 fn literal_index(expr: &Expr) -> Option<i64> {
     match &expr.kind {
-        ExprKind::Int(value) => value.to_i64(),
-        ExprKind::Unary {
+        | ExprKind::Int(value) => value.to_i64(),
+        | ExprKind::Unary {
             op: UnOp::Neg,
             operand,
         } => literal_index(operand).map(|value| -value),
-        _ => None,
+        | _ => None,
     }
 }
 
 /// Whether a type mentions a function anywhere.
 fn contains_function(ty: &Type) -> bool {
     match ty {
-        Type::Fn(..) => true,
-        Type::Tensor { elem, .. } => contains_function(elem),
-        Type::Record(row) => row
-            .fields()
-            .iter()
-            .any(|(_, field)| contains_function(field)),
-        Type::Adt(_, args) => args.iter().any(contains_function),
-        Type::Io(inner) => contains_function(inner),
-        _ => false,
+        | Type::Fn(..) => true,
+        | Type::Tensor { elem, .. } => contains_function(elem),
+        | Type::Record(row) => {
+            row.fields()
+                .iter()
+                .any(|(_, field)| contains_function(field))
+        },
+        | Type::Adt(_, args) => args.iter().any(contains_function),
+        | Type::Io(inner) => contains_function(inner),
+        | _ => false,
     }
 }
 
@@ -7628,7 +8143,10 @@ fn contains_function(ty: &Type) -> bool {
 /// A literal has a finite set of representations; the default is preferred
 /// when it is high enough, otherwise the first accepted reading above the
 /// bound.
-fn literal_reading_above(kind: LiteralKind, concrete: Rep) -> Option<Rep> {
+fn literal_reading_above(
+    kind: LiteralKind,
+    concrete: Rep,
+) -> Option<Rep> {
     let default = Rep::default_for_literal(kind);
     if kind.accepts_rep(default) && default.at_least(concrete) {
         return Some(default);
@@ -7645,30 +8163,37 @@ fn annotation_span(ty: &Ty) -> Span {
 
 fn literal_exponent(expr: &Expr) -> Option<BigRational> {
     match &expr.kind {
-        ExprKind::Int(value) => value
-            .to_i64()
-            .map(|value| BigRational::from_integer(BigInt::from(value))),
-        ExprKind::Unary {
+        | ExprKind::Int(value) => {
+            value
+                .to_i64()
+                .map(|value| BigRational::from_integer(BigInt::from(value)))
+        },
+        | ExprKind::Unary {
             op: UnOp::Neg,
             operand,
         } => literal_exponent(operand).map(|value| -value),
-        ExprKind::Binary {
+        | ExprKind::Binary {
             op: BinOp::Div,
             left,
             right,
-        } => match (&left.kind, &right.kind) {
-            (ExprKind::Int(a), ExprKind::Int(b)) if !b.is_zero() => {
-                let a = BigRational::from_integer(a.clone());
-                let b = BigRational::from_integer(b.clone());
-                Some(a / b)
+        } => {
+            match (&left.kind, &right.kind) {
+                | (ExprKind::Int(a), ExprKind::Int(b)) if !b.is_zero() => {
+                    let a = BigRational::from_integer(a.clone());
+                    let b = BigRational::from_integer(b.clone());
+                    Some(a / b)
+                },
+                | _ => None,
             }
-            _ => None,
         },
-        _ => None,
+        | _ => None,
     }
 }
 
-fn ctor_scheme(adt: adt::AdtId, index: usize) -> Scheme {
+fn ctor_scheme(
+    adt: adt::AdtId,
+    index: usize,
+) -> Scheme {
     let Some(registered) = adt::get(adt) else {
         return Scheme::mono(Type::Error);
     };
@@ -7686,15 +8211,15 @@ fn ctor_scheme(adt: adt::AdtId, index: usize) -> Scheme {
     let mut params: Vec<Type> = Vec::with_capacity(kinds.len());
     for (position, kind) in kinds.iter().enumerate() {
         match kind {
-            adt::ParamKind::Type => {
+            | adt::ParamKind::Type => {
                 let id = u32::try_from(position).unwrap_or(0);
                 vars.push(id);
                 params.push(Type::Var(id));
-            }
-            adt::ParamKind::Dim(id) => {
+            },
+            | adt::ParamKind::Dim(id) => {
                 dims.push(*id);
                 params.push(Type::UnitOf(Dim::var(*id)));
-            }
+            },
         }
     }
     let result = Type::Adt(adt, params.clone());
@@ -7758,7 +8283,10 @@ fn builtin_type(name: &str) -> Option<Type> {
 
 /// Whether two element types are both tensors of the same rank but with a
 /// different known extent — the `E0203` ragged-literal case (§3.5.2).
-fn shapes_are_ragged(left: &Type, right: &Type) -> bool {
+fn shapes_are_ragged(
+    left: &Type,
+    right: &Type,
+) -> bool {
     let (
         Type::Tensor {
             shape: Shape::Refined(a),
@@ -7775,26 +8303,30 @@ fn shapes_are_ragged(left: &Type, right: &Type) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).any(|(left, right)| match (left, right) {
-        (Some(left), Some(right)) => left != right,
-        _ => false,
+    a.iter().zip(b.iter()).any(|(left, right)| {
+        match (left, right) {
+            | (Some(left), Some(right)) => left != right,
+            | _ => false,
+        }
     })
 }
 
 /// The name a declaration introduces, when it introduces one.
 fn declaration_name(decl: &Decl) -> Option<String> {
     match &decl.kind {
-        DeclKind::Fn { name, .. }
+        | DeclKind::Fn { name, .. }
         | DeclKind::Type { name, .. }
         | DeclKind::Class { name, .. }
         | DeclKind::Unit { name, .. }
         | DeclKind::Dimension { name, .. }
         | DeclKind::Test { name, .. } => Some(name.clone()),
-        DeclKind::Let { pattern, .. } => match &pattern.kind {
-            PatKind::Var(name) => Some(name.clone()),
-            _ => None,
+        | DeclKind::Let { pattern, .. } => {
+            match &pattern.kind {
+                | PatKind::Var(name) => Some(name.clone()),
+                | _ => None,
+            }
         },
-        DeclKind::Import { .. } | DeclKind::Instance { .. } | DeclKind::Derive { .. } => None,
+        | DeclKind::Import { .. } | DeclKind::Instance { .. } | DeclKind::Derive { .. } => None,
     }
 }
 
@@ -7805,28 +8337,30 @@ fn declaration_name(decl: &Decl) -> Option<String> {
 /// expression is not a compile-time constant.
 fn is_attribute_constant(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Int(_)
+        | ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::UnitLit
         | ExprKind::Quantity { .. } => true,
         // A string is constant only without interpolation.
-        ExprKind::Str(pieces) => pieces
-            .iter()
-            .all(|piece| matches!(piece, StrPiece::Text(_))),
-        ExprKind::Var(_) | ExprKind::QName(_) => true,
-        ExprKind::Unary { op, operand } => {
+        | ExprKind::Str(pieces) => {
+            pieces
+                .iter()
+                .all(|piece| matches!(piece, StrPiece::Text(_)))
+        },
+        | ExprKind::Var(_) | ExprKind::QName(_) => true,
+        | ExprKind::Unary { op, operand } => {
             matches!(op, UnOp::Neg | UnOp::Pos | UnOp::Not) && is_attribute_constant(operand)
-        }
-        ExprKind::Binary { left, right, .. } => {
+        },
+        | ExprKind::Binary { left, right, .. } => {
             is_attribute_constant(left) && is_attribute_constant(right)
-        }
-        ExprKind::Tuple(items) => items.iter().all(is_attribute_constant),
-        ExprKind::Tensor(items) => items.iter().all(is_attribute_constant),
-        ExprKind::Record { base: None, fields } => {
+        },
+        | ExprKind::Tuple(items) => items.iter().all(is_attribute_constant),
+        | ExprKind::Tensor(items) => items.iter().all(is_attribute_constant),
+        | ExprKind::Record { base: None, fields } => {
             fields.iter().all(|(_, value)| is_attribute_constant(value))
-        }
-        _ => false,
+        },
+        | _ => false,
     }
 }
 
@@ -7839,8 +8373,8 @@ fn string_constant(expr: &Expr) -> Option<String> {
     let mut text = String::new();
     for piece in pieces {
         match piece {
-            StrPiece::Text(part) => text.push_str(part),
-            StrPiece::Expr(_) => return None,
+            | StrPiece::Text(part) => text.push_str(part),
+            | StrPiece::Expr(_) => return None,
         }
     }
     Some(text)
@@ -7861,7 +8395,10 @@ fn prelude_class_methods() -> Vec<(&'static str, &'static str, Type)> {
         (
             "Ord",
             "compare",
-            Type::func(vec![var.clone(), var.clone()], Type::option(ordering.clone())),
+            Type::func(
+                vec![var.clone(), var.clone()],
+                Type::option(ordering.clone()),
+            ),
         ),
         (
             "TotalOrd",
@@ -7901,25 +8438,30 @@ fn is_transcendental(name: &str) -> bool {
     )
 }
 
-
 /// The flat key a qualified field access names, when the base is a path or an
 /// import alias.
-fn qualified_name(base: &Expr, field: &str) -> Option<String> {
+fn qualified_name(
+    base: &Expr,
+    field: &str,
+) -> Option<String> {
     match &base.kind {
-        ExprKind::QName(path) => Some(format!("{}.{field}", path.join("."))),
-        ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
+        | ExprKind::QName(path) => Some(format!("{}.{field}", path.join("."))),
+        | ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
             Some(format!("{name}.{field}"))
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }
 
 /// Whether an expression is `Rssn.<member>`.
-fn is_rssn_member(expr: &Expr, member: &str) -> bool {
+fn is_rssn_member(
+    expr: &Expr,
+    member: &str,
+) -> bool {
     match &expr.kind {
-        ExprKind::Field { base, name } => name == member && is_rssn_root(base),
-        ExprKind::QName(path) => path.len() == 2 && path[0] == "Rssn" && path[1] == member,
-        _ => false,
+        | ExprKind::Field { base, name } => name == member && is_rssn_root(base),
+        | ExprKind::QName(path) => path.len() == 2 && path[0] == "Rssn" && path[1] == member,
+        | _ => false,
     }
 }
 
@@ -7946,9 +8488,9 @@ fn rssn_op_name(expr: &Expr) -> Option<String> {
         "register_plugin",
     ];
     let name = match &expr.kind {
-        ExprKind::Field { base, name } if is_rssn_root(base) => name.clone(),
-        ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => path[1].clone(),
-        _ => return None,
+        | ExprKind::Field { base, name } if is_rssn_root(base) => name.clone(),
+        | ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => path[1].clone(),
+        | _ => return None,
     };
     if MEMBERS.contains(&name.as_str()) || name == "overloads" {
         return None;
@@ -7959,9 +8501,9 @@ fn rssn_op_name(expr: &Expr) -> Option<String> {
 /// Whether an expression names the `Rssn` module itself.
 fn is_rssn_root(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Var(name) => name == "Rssn",
-        ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
-        _ => false,
+        | ExprKind::Var(name) => name == "Rssn",
+        | ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
+        | _ => false,
     }
 }
 
@@ -7988,40 +8530,46 @@ fn opaque_type(name: &str) -> Type {
 fn rssn_type(sig: &aevia_rssn::SigType) -> Type {
     use aevia_rssn::SigType as S;
     match sig {
-        S::Int => Type::int(),
-        S::Real => Type::real(Dim::one()),
-        S::Float => Type::float(Dim::one()),
-        S::Complex => Type::complex(Dim::one()),
-        S::Bool => Type::Bool,
-        S::Str => Type::Str,
-        S::Symbol => Type::Dyn(Rep::Real),
-        S::Unit(dim) => Type::UnitOf(dim.clone()),
-        S::Point(dim) => Type::Point(dim.clone()),
-        S::Dim(inner, dim) => match **inner {
-            S::Int => Type::Scalar(Rep::Int, dim.clone()),
-            S::Float => Type::Scalar(Rep::Float, dim.clone()),
-            S::Complex => Type::Scalar(Rep::Complex, dim.clone()),
-            _ => Type::Scalar(Rep::Real, dim.clone()),
+        | S::Int => Type::int(),
+        | S::Real => Type::real(Dim::one()),
+        | S::Float => Type::float(Dim::one()),
+        | S::Complex => Type::complex(Dim::one()),
+        | S::Bool => Type::Bool,
+        | S::Str => Type::Str,
+        | S::Symbol => Type::Dyn(Rep::Real),
+        | S::Unit(dim) => Type::UnitOf(dim.clone()),
+        | S::Point(dim) => Type::Point(dim.clone()),
+        | S::Dim(inner, dim) => {
+            match **inner {
+                | S::Int => Type::Scalar(Rep::Int, dim.clone()),
+                | S::Float => Type::Scalar(Rep::Float, dim.clone()),
+                | S::Complex => Type::Scalar(Rep::Complex, dim.clone()),
+                | _ => Type::Scalar(Rep::Real, dim.clone()),
+            }
         },
-        S::Tensor { rank, elem } => {
+        | S::Tensor { rank, elem } => {
             let shape = Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1)));
             Type::tensor(shape, rssn_type(elem))
-        }
-        S::Sparse { rank, elem } => {
+        },
+        | S::Sparse { rank, elem } => {
             let shape = Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1)));
             Type::tensor(shape, rssn_type(elem))
-        }
-        S::Record(fields) => Type::record(
-            fields
-                .iter()
-                .map(|(name, ty)| (name.clone(), rssn_type(ty))),
-        ),
-        S::Func(params, ret) => Type::Fn(
-            params.iter().map(rssn_type).collect(),
-            Box::new(rssn_type(ret)),
-        ),
-        S::Table | S::Device | S::Opaque(_) | S::Var(_) | S::Variant(_) => dynamic_value_type(),
-        S::Dyn | S::Never => Type::Dyn(Rep::Real),
+        },
+        | S::Record(fields) => {
+            Type::record(
+                fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), rssn_type(ty))),
+            )
+        },
+        | S::Func(params, ret) => {
+            Type::Fn(
+                params.iter().map(rssn_type).collect(),
+                Box::new(rssn_type(ret)),
+            )
+        },
+        | S::Table | S::Device | S::Opaque(_) | S::Var(_) | S::Variant(_) => dynamic_value_type(),
+        | S::Dyn | S::Never => Type::Dyn(Rep::Real),
     }
 }
 
@@ -8030,13 +8578,17 @@ impl Checker {
     ///
     /// An overloaded name is not a first-class value (PLAN D1): unless every
     /// overload has the same type, using it without a call is `E0303`.
-    fn rssn_member(&mut self, name: &str, span: Span) -> Type {
+    fn rssn_member(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Type {
         match name {
-            "Version" | "ManifestHash" => return Type::Str,
-            "Capabilities" | "Units" | "Constants" | "ValueKinds" => {
+            | "Version" | "ManifestHash" => return Type::Str,
+            | "Capabilities" | "Units" | "Constants" | "ValueKinds" => {
                 return Type::tensor(Shape::Rank(1), Type::Str);
-            }
-            "call" | "dynamic" => {
+            },
+            | "call" | "dynamic" => {
                 return Type::Fn(
                     vec![Type::Str, value_list_type()],
                     Box::new(Type::Adt(
@@ -8044,8 +8596,8 @@ impl Checker {
                         vec![dynamic_value_type(), op_error_type()],
                     )),
                 );
-            }
-            "call_key" => {
+            },
+            | "call_key" => {
                 return Type::Fn(
                     vec![Type::Str, Type::Str, value_list_type()],
                     Box::new(Type::Adt(
@@ -8053,36 +8605,33 @@ impl Checker {
                         vec![dynamic_value_type(), op_error_type()],
                     )),
                 );
-            }
-            "invoke" => {
+            },
+            | "invoke" => {
                 // As a value `invoke` is a dynamic call: its result type is
                 // only known per call site, never once for the module.
                 return Type::Fn(
                     vec![Type::Str, Type::Str, value_list_type()],
                     Box::new(dynamic_value_type()),
                 );
-            }
-            "resolve_overload" => {
+            },
+            | "resolve_overload" => {
                 return Type::Fn(
                     vec![Type::Str, value_list_type()],
-                    Box::new(Type::Adt(
-                        adt::RESULT_ID,
-                        vec![Type::Str, op_error_type()],
-                    )),
+                    Box::new(Type::Adt(adt::RESULT_ID, vec![Type::Str, op_error_type()])),
                 );
-            }
-            "overloads" => {
+            },
+            | "overloads" => {
                 return Type::Fn(
                     vec![Type::Str],
                     Box::new(Type::tensor(Shape::Rank(1), Type::Str)),
                 );
-            }
+            },
             // §8.19: the host-extension entry points. Their arguments and
             // results are opaque host values (`TypeRep`, `Callback`, `Plugin`),
             // so the honest static type names those types and leaves the rest
             // to the runtime, which returns `Err(OpError)` when the capability
             // is missing.
-            "typed" => {
+            | "typed" => {
                 return Type::Fn(
                     vec![Type::Str, value_list_type(), opaque_type("TypeRep")],
                     Box::new(Type::Adt(
@@ -8090,8 +8639,8 @@ impl Checker {
                         vec![dynamic_value_type(), op_error_type()],
                     )),
                 );
-            }
-            "call_ho" => {
+            },
+            | "call_ho" => {
                 return Type::Fn(
                     vec![
                         Type::Str,
@@ -8103,8 +8652,8 @@ impl Checker {
                         vec![dynamic_value_type(), op_error_type()],
                     )),
                 );
-            }
-            "register" | "register_plugin" => {
+            },
+            | "register" | "register_plugin" => {
                 return Type::Fn(
                     vec![opaque_type("Plugin")],
                     Box::new(Type::Adt(
@@ -8112,8 +8661,8 @@ impl Checker {
                         vec![opaque_type("PluginId"), opaque_type("PluginError")],
                     )),
                 );
-            }
-            _ => {}
+            },
+            | _ => {},
         }
         let Some(entry) = aevia_rssn::registry().op(name) else {
             self.error_help(
@@ -8146,7 +8695,12 @@ impl Checker {
     }
 
     /// Types a call to `Rssn.<op>` by resolving the overload at the call site.
-    fn rssn_call(&mut self, name: &str, args: &[Expr], span: Span) -> Type {
+    fn rssn_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         let Some(entry) = aevia_rssn::registry().op(name) else {
             for arg in args {
                 self.synth(arg);
@@ -8168,7 +8722,7 @@ impl Checker {
             arg_types.push(resolved);
         }
         match crate::rssn_resolve::resolve(entry, &classified) {
-            crate::rssn_resolve::Resolution::Unique { index, .. } => {
+            | crate::rssn_resolve::Resolution::Unique { index, .. } => {
                 let Some(signature) = entry.signatures.get(index) else {
                     return Type::Error;
                 };
@@ -8182,8 +8736,8 @@ impl Checker {
                     });
                 }
                 ret
-            }
-            crate::rssn_resolve::Resolution::Ambiguous { candidates } => {
+            },
+            | crate::rssn_resolve::Resolution::Ambiguous { candidates } => {
                 let rendered: Vec<String> = candidates
                     .iter()
                     .filter_map(|index| entry.signatures.get(*index))
@@ -8200,8 +8754,8 @@ impl Checker {
                     .with_help("annotate an argument so one overload wins"),
                 );
                 Type::Error
-            }
-            crate::rssn_resolve::Resolution::None => {
+            },
+            | crate::rssn_resolve::Resolution::None => {
                 let rendered: Vec<String> = entry
                     .signatures
                     .iter()
@@ -8218,11 +8772,11 @@ impl Checker {
                     .with_help("use `Rssn.dynamic` for a signature-free call"),
                 );
                 Type::Error
-            }
-            crate::rssn_resolve::Resolution::Unknown => {
+            },
+            | crate::rssn_resolve::Resolution::Unknown => {
                 self.error("E0301", format!("rssn has no operator `{name}`"), span);
                 Type::Error
-            }
+            },
         }
     }
 
@@ -8231,30 +8785,42 @@ impl Checker {
     /// A literal that has not been committed yet is classified by the
     /// representation it defaults to: `sin(0.5)` must pick the numeric
     /// overload, not tie with the symbolic one.
-    fn classify_arg(&self, ty: &Type) -> aevia_rssn::SigType {
+    fn classify_arg(
+        &self,
+        ty: &Type,
+    ) -> aevia_rssn::SigType {
         match ty {
-            Type::Var(_) => match self.infer.literal_kind(ty) {
-                Some(kind) => crate::rssn_resolve::classify(&Type::Scalar(
-                    Rep::default_for_literal(kind),
-                    Dim::one(),
-                )),
-                None => aevia_rssn::SigType::Dyn,
-            },
-            Type::Scalar(Rep::Var(id), dim) => {
-                match self.infer.rep_literal_kind(Rep::Var(*id)) {
-                    Some(kind) => crate::rssn_resolve::classify(&Type::Scalar(
-                        Rep::default_for_literal(kind),
-                        dim.clone(),
-                    )),
-                    None => aevia_rssn::SigType::Dyn,
+            | Type::Var(_) => {
+                match self.infer.literal_kind(ty) {
+                    | Some(kind) => {
+                        crate::rssn_resolve::classify(&Type::Scalar(
+                            Rep::default_for_literal(kind),
+                            Dim::one(),
+                        ))
+                    },
+                    | None => aevia_rssn::SigType::Dyn,
                 }
-            }
-            other => crate::rssn_resolve::classify(other),
+            },
+            | Type::Scalar(Rep::Var(id), dim) => {
+                match self.infer.rep_literal_kind(Rep::Var(*id)) {
+                    | Some(kind) => {
+                        crate::rssn_resolve::classify(&Type::Scalar(
+                            Rep::default_for_literal(kind),
+                            dim.clone(),
+                        ))
+                    },
+                    | None => aevia_rssn::SigType::Dyn,
+                }
+            },
+            | other => crate::rssn_resolve::classify(other),
         }
     }
 
     /// The Aevia type of one manifest signature.
-    fn rssn_signature_type(&mut self, signature: &aevia_rssn::Sig) -> Type {
+    fn rssn_signature_type(
+        &mut self,
+        signature: &aevia_rssn::Sig,
+    ) -> Type {
         let mut params: Vec<Type> = signature.params.iter().map(rssn_type).collect();
         if signature.variadic.is_some() {
             params.push(Type::tensor(Shape::Rank(1), dynamic_value_type()));
@@ -8298,7 +8864,12 @@ impl Checker {
     ///   dispatched this way and are left to the runtime's existing shape
     ///   dispatch until Phase B pins them; the checker has already rejected
     ///   colliding witnesses at registration (`E0311`).
-    fn dict_target(&self, class: &str, method: &str, head: &Type) -> DictTarget {
+    fn dict_target(
+        &self,
+        class: &str,
+        method: &str,
+        head: &Type,
+    ) -> DictTarget {
         let _ = method;
         if let Some(key) = self.classes.resolve_key(class, head) {
             return DictTarget::Instance(key);
@@ -8319,7 +8890,7 @@ impl Checker {
 
 fn shape_items(shape: &Shape) -> Vec<Option<Nat>> {
     match shape {
-        Shape::Rank(rank) => vec![None; usize::try_from(*rank).unwrap_or(0)],
-        Shape::Refined(items) => items.clone(),
+        | Shape::Rank(rank) => vec![None; usize::try_from(*rank).unwrap_or(0)],
+        | Shape::Refined(items) => items.clone(),
     }
 }

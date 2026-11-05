@@ -69,33 +69,33 @@ impl Keyword {
     #[must_use]
     pub fn from_word(word: &str) -> Option<Self> {
         Some(match word {
-            "as" => Self::As,
-            "class" => Self::Class,
-            "derive" => Self::Derive,
-            "dimension" => Self::Dimension,
-            "do" => Self::Do,
-            "else" => Self::Else,
-            "false" => Self::False,
-            "fn" => Self::Fn,
-            "for" => Self::For,
-            "if" => Self::If,
-            "import" => Self::Import,
-            "in" => Self::In,
-            "instance" => Self::Instance,
-            "let" => Self::Let,
-            "match" => Self::Match,
-            "module" => Self::Module,
-            "open" => Self::Open,
-            "private" => Self::Private,
-            "rec" => Self::Rec,
-            "test" => Self::Test,
-            "then" => Self::Then,
-            "true" => Self::True,
-            "type" => Self::Type,
-            "unit" => Self::Unit,
-            "where" => Self::Where,
-            "with" => Self::With,
-            _ => return None,
+            | "as" => Self::As,
+            | "class" => Self::Class,
+            | "derive" => Self::Derive,
+            | "dimension" => Self::Dimension,
+            | "do" => Self::Do,
+            | "else" => Self::Else,
+            | "false" => Self::False,
+            | "fn" => Self::Fn,
+            | "for" => Self::For,
+            | "if" => Self::If,
+            | "import" => Self::Import,
+            | "in" => Self::In,
+            | "instance" => Self::Instance,
+            | "let" => Self::Let,
+            | "match" => Self::Match,
+            | "module" => Self::Module,
+            | "open" => Self::Open,
+            | "private" => Self::Private,
+            | "rec" => Self::Rec,
+            | "test" => Self::Test,
+            | "then" => Self::Then,
+            | "true" => Self::True,
+            | "type" => Self::Type,
+            | "unit" => Self::Unit,
+            | "where" => Self::Where,
+            | "with" => Self::With,
+            | _ => return None,
         })
     }
 
@@ -103,38 +103,41 @@ impl Keyword {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::As => "as",
-            Self::Class => "class",
-            Self::Derive => "derive",
-            Self::Dimension => "dimension",
-            Self::Do => "do",
-            Self::Else => "else",
-            Self::False => "false",
-            Self::Fn => "fn",
-            Self::For => "for",
-            Self::If => "if",
-            Self::Import => "import",
-            Self::In => "in",
-            Self::Instance => "instance",
-            Self::Let => "let",
-            Self::Match => "match",
-            Self::Module => "module",
-            Self::Open => "open",
-            Self::Private => "private",
-            Self::Rec => "rec",
-            Self::Test => "test",
-            Self::Then => "then",
-            Self::True => "true",
-            Self::Type => "type",
-            Self::Unit => "unit",
-            Self::Where => "where",
-            Self::With => "with",
+            | Self::As => "as",
+            | Self::Class => "class",
+            | Self::Derive => "derive",
+            | Self::Dimension => "dimension",
+            | Self::Do => "do",
+            | Self::Else => "else",
+            | Self::False => "false",
+            | Self::Fn => "fn",
+            | Self::For => "for",
+            | Self::If => "if",
+            | Self::Import => "import",
+            | Self::In => "in",
+            | Self::Instance => "instance",
+            | Self::Let => "let",
+            | Self::Match => "match",
+            | Self::Module => "module",
+            | Self::Open => "open",
+            | Self::Private => "private",
+            | Self::Rec => "rec",
+            | Self::Test => "test",
+            | Self::Then => "then",
+            | Self::True => "true",
+            | Self::Type => "type",
+            | Self::Unit => "unit",
+            | Self::Where => "where",
+            | Self::With => "with",
         }
     }
 }
 
 impl fmt::Display for Keyword {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -227,51 +230,54 @@ impl Punct {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::LParen => "(",
-            Self::RParen => ")",
-            Self::LBracket => "[",
-            Self::RBracket => "]",
-            Self::LBrace => "{",
-            Self::RBrace => "}",
-            Self::Comma => ",",
-            Self::Semicolon => ";",
-            Self::Colon => ":",
-            Self::Dot => ".",
-            Self::DotDot => "..",
-            Self::DotDotEq => "..=",
-            Self::Ellipsis => "...",
-            Self::Arrow => "->",
-            Self::FatArrow => "=>",
-            Self::LArrow => "<-",
-            Self::Pipe => "|",
-            Self::Equals => "=",
-            Self::Plus => "+",
-            Self::Minus => "-",
-            Self::Star => "*",
-            Self::Slash => "/",
-            Self::Caret => "^",
-            Self::At => "@",
-            Self::Percent => "%",
-            Self::EqEq => "==",
-            Self::NotEq => "!=",
-            Self::Lt => "<",
-            Self::Le => "<=",
-            Self::Gt => ">",
-            Self::Ge => ">=",
-            Self::AndAnd => "&&",
-            Self::OrOr => "||",
-            Self::Bang => "!",
-            Self::PipeGt => "|>",
-            Self::LtPipe => "<|",
-            Self::ColonColon => "::",
-            Self::Question => "?",
-            Self::Sqrt => "√",
+            | Self::LParen => "(",
+            | Self::RParen => ")",
+            | Self::LBracket => "[",
+            | Self::RBracket => "]",
+            | Self::LBrace => "{",
+            | Self::RBrace => "}",
+            | Self::Comma => ",",
+            | Self::Semicolon => ";",
+            | Self::Colon => ":",
+            | Self::Dot => ".",
+            | Self::DotDot => "..",
+            | Self::DotDotEq => "..=",
+            | Self::Ellipsis => "...",
+            | Self::Arrow => "->",
+            | Self::FatArrow => "=>",
+            | Self::LArrow => "<-",
+            | Self::Pipe => "|",
+            | Self::Equals => "=",
+            | Self::Plus => "+",
+            | Self::Minus => "-",
+            | Self::Star => "*",
+            | Self::Slash => "/",
+            | Self::Caret => "^",
+            | Self::At => "@",
+            | Self::Percent => "%",
+            | Self::EqEq => "==",
+            | Self::NotEq => "!=",
+            | Self::Lt => "<",
+            | Self::Le => "<=",
+            | Self::Gt => ">",
+            | Self::Ge => ">=",
+            | Self::AndAnd => "&&",
+            | Self::OrOr => "||",
+            | Self::Bang => "!",
+            | Self::PipeGt => "|>",
+            | Self::LtPipe => "<|",
+            | Self::ColonColon => "::",
+            | Self::Question => "?",
+            | Self::Sqrt => "√",
         }
     }
 }
 
 impl fmt::Display for Punct {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -324,18 +330,18 @@ impl TokenKind {
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            Self::Ident(name) => format!("identifier `{name}`"),
-            Self::UpperIdent(name) => format!("`{name}`"),
-            Self::Keyword(keyword) => format!("`{keyword}`"),
-            Self::Int(value) => format!("`{value}`"),
-            Self::Float(value) => format!("`{value}`"),
-            Self::Str(_) => "string literal".to_string(),
-            Self::Superscript(text) => format!("`{text}`"),
-            Self::Punct(punct) => format!("`{punct}`"),
-            Self::Newline => "end of line".to_string(),
-            Self::Indent => "indentation".to_string(),
-            Self::Dedent => "end of block".to_string(),
-            Self::Eof => "end of file".to_string(),
+            | Self::Ident(name) => format!("identifier `{name}`"),
+            | Self::UpperIdent(name) => format!("`{name}`"),
+            | Self::Keyword(keyword) => format!("`{keyword}`"),
+            | Self::Int(value) => format!("`{value}`"),
+            | Self::Float(value) => format!("`{value}`"),
+            | Self::Str(_) => "string literal".to_string(),
+            | Self::Superscript(text) => format!("`{text}`"),
+            | Self::Punct(punct) => format!("`{punct}`"),
+            | Self::Newline => "end of line".to_string(),
+            | Self::Indent => "indentation".to_string(),
+            | Self::Dedent => "end of block".to_string(),
+            | Self::Eof => "end of file".to_string(),
         }
     }
 }
@@ -352,7 +358,10 @@ pub struct Token {
 impl Token {
     /// Creates a token.
     #[must_use]
-    pub fn new(kind: TokenKind, span: Span) -> Self {
+    pub fn new(
+        kind: TokenKind,
+        span: Span,
+    ) -> Self {
         Self { kind, span }
     }
 }

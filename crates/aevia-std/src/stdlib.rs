@@ -517,7 +517,10 @@ pub const CALL_FORM_ONLY: &[&str] = &["zeros", "ones", "fill"];
 
 /// Renders one generated module: a header, the `module` declaration, one
 /// self-alias per name and one alias per re-exported type.
-fn render_module(module: &ModuleDef, names: &[&str]) -> String {
+fn render_module(
+    module: &ModuleDef,
+    names: &[&str],
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "## The `{}` module of §8.20.\n\
@@ -535,7 +538,10 @@ fn render_module(module: &ModuleDef, names: &[&str]) -> String {
     let mut skipped: Vec<(&str, &'static str)> = Vec::new();
     for name in names {
         if name.starts_with(|ch: char| ch.is_ascii_uppercase()) || name.contains('.') {
-            skipped.push((name, "constructor or qualified name: ambient from the Prelude"));
+            skipped.push((
+                name,
+                "constructor or qualified name: ambient from the Prelude",
+            ));
             continue;
         }
         if CALL_FORM_ONLY.contains(name) {
@@ -559,7 +565,9 @@ fn render_module(module: &ModuleDef, names: &[&str]) -> String {
         }
     }
     if !skipped.is_empty() {
-        out.push_str("\n## Not re-exported (see the module header of `tests/stdlib_modules.rs`):\n");
+        out.push_str(
+            "\n## Not re-exported (see the module header of `tests/stdlib_modules.rs`):\n",
+        );
         for (name, reason) in &skipped {
             out.push_str(&format!("##   {name} — {reason}\n"));
         }
@@ -602,7 +610,11 @@ mod tests {
                 def.path
             );
         }
-        assert_eq!(TREE.len(), modules().len(), "the tree and the table disagree");
+        assert_eq!(
+            TREE.len(),
+            modules().len(),
+            "the tree and the table disagree"
+        );
     }
 
     #[test]
@@ -616,19 +628,13 @@ mod tests {
                     let (name, value) = rest
                         .split_once(" = ")
                         .unwrap_or_else(|| panic!("malformed alias in `{path}`: {line}"));
-                    assert_eq!(
-                        name, value,
-                        "`{path}` has a non-self alias: {line}"
-                    );
+                    assert_eq!(name, value, "`{path}` has a non-self alias: {line}");
                 }
                 if let Some(rest) = line.strip_prefix("type ") {
                     let (head, alias) = rest
                         .split_once(" = ")
                         .unwrap_or_else(|| panic!("malformed type alias in `{path}`: {line}"));
-                    assert_eq!(
-                        head, alias,
-                        "`{path}` has a non-self type alias: {line}"
-                    );
+                    assert_eq!(head, alias, "`{path}` has a non-self type alias: {line}");
                 }
             }
         }

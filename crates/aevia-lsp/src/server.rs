@@ -13,8 +13,13 @@
 //!   client may send `$/cancelRequest` and a server that dies on it is broken;
 //! * `exit` terminates, with code 0 only if `shutdown` came first.
 
-use aevia_analysis::{Analysis, AnalysisCache, Change, Document, DocumentStore};
-use serde_json::{Value, json};
+use aevia_analysis::Analysis;
+use aevia_analysis::AnalysisCache;
+use aevia_analysis::Change;
+use aevia_analysis::Document;
+use aevia_analysis::DocumentStore;
+use serde_json::Value;
+use serde_json::json;
 use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 
@@ -46,7 +51,10 @@ struct RpcError {
 }
 
 impl RpcError {
-    fn new(code: i64, message: impl Into<String>) -> Self {
+    fn new(
+        code: i64,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
             message: message.into(),
@@ -87,7 +95,10 @@ impl Server {
     }
 
     /// Handles one parsed message.
-    pub fn handle(&mut self, message: Value) -> Control {
+    pub fn handle(
+        &mut self,
+        message: Value,
+    ) -> Control {
         let id = message.get("id").cloned();
         let method = message
             .get("method")
@@ -95,17 +106,17 @@ impl Server {
             .map(str::to_string);
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         match (method, id) {
-            (Some(method), Some(id)) => {
+            | (Some(method), Some(id)) => {
                 match self.request(&method, &params) {
-                    Ok(result) => self.respond(id, result),
-                    Err(error) => self.fail(id, &error),
+                    | Ok(result) => self.respond(id, result),
+                    | Err(error) => self.fail(id, &error),
                 }
                 Control::Continue
-            }
-            (Some(method), None) => self.notification(&method, &params),
+            },
+            | (Some(method), None) => self.notification(&method, &params),
             // A response to a request this server never sent: it asks the
             // client nothing, so there is nothing to match it against.
-            (None, _) => Control::Continue,
+            | (None, _) => Control::Continue,
         }
     }
 
@@ -113,7 +124,10 @@ impl Server {
     ///
     /// The protocol asks for a `-32700` with a null id, and the connection
     /// survives: the frame was consumed, so the next message still parses.
-    pub fn parse_error(&self, detail: &str) {
+    pub fn parse_error(
+        &self,
+        detail: &str,
+    ) {
         self.fail(
             Value::Null,
             &RpcError::new(PARSE_ERROR, format!("the message was not JSON: {detail}")),
@@ -121,9 +135,13 @@ impl Server {
     }
 
     /// Handles a request.
-    fn request(&mut self, method: &str, params: &Value) -> Result<Value, RpcError> {
+    fn request(
+        &mut self,
+        method: &str,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
         match method {
-            "initialize" => {
+            | "initialize" => {
                 if self.state != State::Uninitialized {
                     return Err(RpcError::new(
                         INVALID_REQUEST,
@@ -138,8 +156,8 @@ impl Server {
                         "version": env!("CARGO_PKG_VERSION"),
                     },
                 }))
-            }
-            "shutdown" => {
+            },
+            | "shutdown" => {
                 if self.state != State::Running {
                     return Err(RpcError::new(
                         INVALID_REQUEST,
@@ -148,37 +166,45 @@ impl Server {
                 }
                 self.state = State::ShutDown;
                 Ok(Value::Null)
-            }
+            },
             // A workspace request has no `textDocument`: it is answered from
             // the open documents' loaded programs.
-            "workspace/symbol" => {
+            | "workspace/symbol" => {
                 self.require_running()?;
                 Ok(self.workspace_symbols(params))
-            }
-            _ => {
+            },
+            | _ => {
                 self.require_running()?;
                 self.document_request(method, params)
-            }
+            },
         }
     }
 
     /// Refuses a request outside the running state.
     fn require_running(&self) -> Result<(), RpcError> {
         match self.state {
-            State::Uninitialized => Err(RpcError::new(
-                SERVER_NOT_INITIALIZED,
-                "the client must send `initialize` first",
-            )),
-            State::ShutDown => Err(RpcError::new(
-                INVALID_REQUEST,
-                "the server has been shut down",
-            )),
-            State::Running => Ok(()),
+            | State::Uninitialized => {
+                Err(RpcError::new(
+                    SERVER_NOT_INITIALIZED,
+                    "the client must send `initialize` first",
+                ))
+            },
+            | State::ShutDown => {
+                Err(RpcError::new(
+                    INVALID_REQUEST,
+                    "the server has been shut down",
+                ))
+            },
+            | State::Running => Ok(()),
         }
     }
 
     /// Handles one of the document requests.
-    fn document_request(&self, method: &str, params: &Value) -> Result<Value, RpcError> {
+    fn document_request(
+        &self,
+        method: &str,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
         // The method is checked before the parameters: an unknown request must
         // be `-32601` whatever its params look like.
         if !matches!(
@@ -219,35 +245,47 @@ impl Server {
             })
         };
         Ok(match method {
-            "textDocument/hover" => analysis
-                .hover(offset()?)
-                .map_or(Value::Null, |hover| crate::protocol::hover_json(&hover)),
-            "textDocument/completion" => {
+            | "textDocument/hover" => {
+                analysis
+                    .hover(offset()?)
+                    .map_or(Value::Null, |hover| crate::protocol::hover_json(&hover))
+            },
+            | "textDocument/completion" => {
                 crate::protocol::completion_json(&analysis.completion(offset()?))
-            }
-            "textDocument/definition" => analysis
-                .definition(offset()?)
-                .map_or(Value::Null, |location| crate::protocol::location_json(&location)),
-            "textDocument/typeDefinition" => analysis
-                .type_definition(offset()?)
-                .map_or(Value::Null, |location| crate::protocol::location_json(&location)),
-            "textDocument/documentSymbol" => crate::protocol::symbols_json(&analysis.symbols()),
-            "textDocument/codeAction" => {
+            },
+            | "textDocument/definition" => {
+                analysis
+                    .definition(offset()?)
+                    .map_or(Value::Null, |location| {
+                        crate::protocol::location_json(&location)
+                    })
+            },
+            | "textDocument/typeDefinition" => {
+                analysis
+                    .type_definition(offset()?)
+                    .map_or(Value::Null, |location| {
+                        crate::protocol::location_json(&location)
+                    })
+            },
+            | "textDocument/documentSymbol" => crate::protocol::symbols_json(&analysis.symbols()),
+            | "textDocument/codeAction" => {
                 let range = params
                     .get("range")
                     .and_then(crate::protocol::range)
                     .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no valid `range`"))?;
                 crate::protocol::code_actions_json(uri, &analysis.code_actions(range))
-            }
-            "textDocument/semanticTokens/full" => {
+            },
+            | "textDocument/semanticTokens/full" => {
                 crate::protocol::semantic_tokens_json(&analysis.semantic_tokens())
-            }
-            "textDocument/signatureHelp" => analysis
-                .signature_help(offset()?)
-                .map_or(Value::Null, |help| {
-                    crate::protocol::signature_help_json(&help)
-                }),
-            "textDocument/references" => {
+            },
+            | "textDocument/signatureHelp" => {
+                analysis
+                    .signature_help(offset()?)
+                    .map_or(Value::Null, |help| {
+                        crate::protocol::signature_help_json(&help)
+                    })
+            },
+            | "textDocument/references" => {
                 let include_declaration = params
                     .get("context")
                     .and_then(|context| context.get("includeDeclaration"))
@@ -256,58 +294,69 @@ impl Server {
                 crate::protocol::references_json(
                     &analysis.references(offset()?, include_declaration),
                 )
-            }
-            "textDocument/prepareRename" => {
+            },
+            | "textDocument/prepareRename" => {
                 match analysis.prepare_rename(offset()?) {
-                    Ok(placeholder) => crate::protocol::prepare_rename_json(&placeholder),
+                    | Ok(placeholder) => crate::protocol::prepare_rename_json(&placeholder),
                     // A refusal is a request failure with the reason, not a
                     // silent null: the user asked a question and gets an answer.
-                    Err(error) => return Err(RpcError::new(REQUEST_FAILED, error.message())),
+                    | Err(error) => return Err(RpcError::new(REQUEST_FAILED, error.message())),
                 }
-            }
-            "textDocument/rename" => {
+            },
+            | "textDocument/rename" => {
                 let new_name = params
                     .get("newName")
                     .and_then(Value::as_str)
                     .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no `newName`"))?;
                 match analysis.rename(offset()?, new_name) {
-                    Ok(edits) => crate::protocol::rename_json(&edits),
-                    Err(error) => return Err(RpcError::new(REQUEST_FAILED, error.message())),
+                    | Ok(edits) => crate::protocol::rename_json(&edits),
+                    | Err(error) => return Err(RpcError::new(REQUEST_FAILED, error.message())),
                 }
-            }
-            _ => analysis.formatting().map_or(Value::Null, |edit| {
-                Value::Array(vec![crate::protocol::text_edit_json(&edit)])
-            }),
+            },
+            | _ => {
+                analysis.formatting().map_or(Value::Null, |edit| {
+                    Value::Array(vec![crate::protocol::text_edit_json(&edit)])
+                })
+            },
         })
     }
 
     /// Handles a notification.
-    fn notification(&mut self, method: &str, params: &Value) -> Control {
+    fn notification(
+        &mut self,
+        method: &str,
+        params: &Value,
+    ) -> Control {
         match method {
-            "initialized" => Control::Continue,
-            "exit" => Control::Exit {
-                graceful: self.state == State::ShutDown,
+            | "initialized" => Control::Continue,
+            | "exit" => {
+                Control::Exit {
+                    graceful: self.state == State::ShutDown,
+                }
             },
-            "textDocument/didOpen" => {
+            | "textDocument/didOpen" => {
                 self.did_open(params);
                 Control::Continue
-            }
-            "textDocument/didChange" => {
+            },
+            | "textDocument/didChange" => {
                 self.did_change(params);
                 Control::Continue
-            }
-            "textDocument/didClose" => {
+            },
+            | "textDocument/didClose" => {
                 self.did_close(params);
                 Control::Continue
-            }
+            },
             // `$/cancelRequest`, `$/setTrace`, `textDocument/didSave` and
             // anything a future client invents: ignored, never fatal.
-            _ => Control::Continue,
+            | _ => Control::Continue,
         }
     }
 
     /// `textDocument/didOpen`.
-    fn did_open(&mut self, params: &Value) {
+    fn did_open(
+        &mut self,
+        params: &Value,
+    ) {
         let Some(item) = params.get("textDocument") else {
             return;
         };
@@ -315,17 +364,16 @@ impl Server {
             return;
         };
         let version = item.get("version").and_then(Value::as_i64).unwrap_or(0);
-        let text = item
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        self.documents
-            .open(Document::new(uri, version, text));
+        let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+        self.documents.open(Document::new(uri, version, text));
         self.publish(uri);
     }
 
     /// `textDocument/didChange`, incremental or full.
-    fn did_change(&mut self, params: &Value) {
+    fn did_change(
+        &mut self,
+        params: &Value,
+    ) {
         let Some(uri) = text_document_uri(params).map(str::to_string) else {
             return;
         };
@@ -345,8 +393,8 @@ impl Server {
                 continue;
             };
             let edit = match change.get("range").and_then(crate::protocol::range) {
-                Some(range) => Change::ranged(range, text),
-                None => Change::full(text),
+                | Some(range) => Change::ranged(range, text),
+                | None => Change::full(text),
             };
             // A refused edit leaves the document as it was; the client and the
             // server then still agree on the text, which matters more than
@@ -357,7 +405,10 @@ impl Server {
     }
 
     /// `textDocument/didClose`.
-    fn did_close(&mut self, params: &Value) {
+    fn did_close(
+        &mut self,
+        params: &Value,
+    ) {
         let Some(uri) = text_document_uri(params) else {
             return;
         };
@@ -371,7 +422,10 @@ impl Server {
     }
 
     /// Compiles a document and sends its diagnostics.
-    fn publish(&self, uri: &str) {
+    fn publish(
+        &self,
+        uri: &str,
+    ) {
         let Some(document) = self.documents.get(uri) else {
             return;
         };
@@ -391,17 +445,28 @@ impl Server {
         );
     }
 
-    fn send(&self, message: Value) {
+    fn send(
+        &self,
+        message: Value,
+    ) {
         // A closed channel means the writer is gone, which means the process is
         // ending; there is nothing left to report to.
         let _ = self.out.send(message);
     }
 
-    fn respond(&self, id: Value, result: Value) {
+    fn respond(
+        &self,
+        id: Value,
+        result: Value,
+    ) {
         self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
     }
 
-    fn fail(&self, id: Value, error: &RpcError) {
+    fn fail(
+        &self,
+        id: Value,
+        error: &RpcError,
+    ) {
         self.send(json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -409,23 +474,27 @@ impl Server {
         }));
     }
 
-    fn notify(&self, method: &str, params: Value) {
+    fn notify(
+        &self,
+        method: &str,
+        params: Value,
+    ) {
         self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
     }
 }
 
 /// The `textDocument.uri` of a request or notification.
 fn text_document_uri(params: &Value) -> Option<&str> {
-    params
-        .get("textDocument")?
-        .get("uri")?
-        .as_str()
+    params.get("textDocument")?.get("uri")?.as_str()
 }
 
 impl Server {
     /// Answers from the opened documents' programs: every declaration of every
     /// module they load, filtered by `query`.
-    fn workspace_symbols(&self, params: &Value) -> Value {
+    fn workspace_symbols(
+        &self,
+        params: &Value,
+    ) -> Value {
         let query = params.get("query").and_then(Value::as_str).unwrap_or("");
         let mut seen = std::collections::HashSet::new();
         let mut symbols = Vec::new();
@@ -451,7 +520,10 @@ impl Server {
     ///
     /// The buffer text is the entry overlay in both cases, so an unsaved file
     /// keeps its imports while its diagnostics point at the unsaved text.
-    fn analysis_for<'a>(&self, document: &'a Document) -> Analysis<'a> {
+    fn analysis_for<'a>(
+        &self,
+        document: &'a Document,
+    ) -> Analysis<'a> {
         let Some(path) = crate::protocol::path_from_uri(document.name()) else {
             return Analysis::new(document);
         };
@@ -460,8 +532,8 @@ impl Server {
             .borrow_mut()
             .program_for_document(&path, document.text());
         match program {
-            Some(program) => Analysis::from_program(document, program),
-            None => Analysis::new(document),
+            | Some(program) => Analysis::from_program(document, program),
+            | None => Analysis::new(document),
         }
     }
 }

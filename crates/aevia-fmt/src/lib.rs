@@ -27,7 +27,10 @@ pub mod comments;
 pub mod fingerprint;
 pub mod print;
 
-use aevia_syntax::{lex, parse_module, Diagnostic, Module};
+use aevia_syntax::Diagnostic;
+use aevia_syntax::Module;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 
 /// Why a file was not formatted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +61,10 @@ pub struct FormatError {
 }
 
 impl FormatError {
-    fn new(failure: Failure, message: impl Into<String>) -> Self {
+    fn new(
+        failure: Failure,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             failure,
             message: message.into(),
@@ -67,7 +73,10 @@ impl FormatError {
 }
 
 impl std::fmt::Display for FormatError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
@@ -146,20 +155,29 @@ fn parse(source: &str) -> Result<Module, FormatError> {
     let lexed = lex(0, source).map_err(|diagnostics| {
         FormatError::new(
             Failure::Lex,
-            format!("{} (the file was not changed)", describe(source, &diagnostics)),
+            format!(
+                "{} (the file was not changed)",
+                describe(source, &diagnostics)
+            ),
         )
     })?;
     let (module, diagnostics) = parse_module(0, source, &lexed);
     if diagnostics.has_errors() {
         return Err(FormatError::new(
             Failure::Syntax,
-            format!("{} (the file was not changed)", describe(source, &diagnostics)),
+            format!(
+                "{} (the file was not changed)",
+                describe(source, &diagnostics)
+            ),
         ));
     }
     Ok(module)
 }
 
-fn describe(source: &str, diagnostics: &aevia_syntax::Diagnostics) -> String {
+fn describe(
+    source: &str,
+    diagnostics: &aevia_syntax::Diagnostics,
+) -> String {
     let Some(first) = diagnostics
         .items
         .iter()
@@ -175,13 +193,21 @@ fn describe(source: &str, diagnostics: &aevia_syntax::Diagnostics) -> String {
     )
 }
 
-fn line_of(source: &str, offset: u32) -> usize {
-    let offset = usize::try_from(offset).unwrap_or(usize::MAX).min(source.len());
+fn line_of(
+    source: &str,
+    offset: u32,
+) -> usize {
+    let offset = usize::try_from(offset)
+        .unwrap_or(usize::MAX)
+        .min(source.len());
     1 + source[..offset].matches('\n').count()
 }
 
 /// The declaration whose printed form differs, for the failure message.
-fn blame(original: &Module, printed: &Module) -> String {
+fn blame(
+    original: &Module,
+    printed: &Module,
+) -> String {
     if original.decls.len() != printed.decls.len() {
         return format!(
             "the file has {} declarations and prints as {}",
@@ -213,7 +239,10 @@ fn normalise(comments: &[comments::Comment]) -> Vec<String> {
 }
 
 /// The first place two fingerprints differ, as a short excerpt.
-fn first_difference(left: &str, right: &str) -> String {
+fn first_difference(
+    left: &str,
+    right: &str,
+) -> String {
     let left: Vec<char> = left.chars().collect();
     let right: Vec<char> = right.chars().collect();
     let at = left
@@ -230,7 +259,11 @@ fn first_difference(left: &str, right: &str) -> String {
 /// A diagnostic for a caller that wants to print one.
 #[must_use]
 pub fn diagnostic(error: &FormatError) -> Diagnostic {
-    Diagnostic::error("E0202", error.message.clone(), aevia_syntax::Span::default())
+    Diagnostic::error(
+        "E0202",
+        error.message.clone(),
+        aevia_syntax::Span::default(),
+    )
 }
 
 #[cfg(test)]
@@ -241,7 +274,10 @@ mod tests {
     fn formatting_normalises_spacing_without_changing_the_program() {
         let source = "let  x=1+2*3\nfn f(a:Int):Int=a  +1\n";
         let formatted = format_source(source).expect("formats");
-        assert_eq!(formatted, "let x = 1 + 2 * 3\n\nfn f(a: Int): Int = a + 1\n");
+        assert_eq!(
+            formatted,
+            "let x = 1 + 2 * 3\n\nfn f(a: Int): Int = a + 1\n"
+        );
         assert_eq!(format_source(&formatted).expect("again"), formatted);
     }
 
@@ -260,16 +296,9 @@ mod tests {
         // refuse and name the declaration, not print something else.
         let source = "class Pretty a where\n    show_it()\n";
         let error = format_source(source).expect_err("refuses");
+        assert!(error.message.contains("class Pretty"), "{}", error.message);
         assert!(
-            error.message.contains("class Pretty"),
-            "{}",
-            error.message
-        );
-        assert!(
-            matches!(
-                error.failure,
-                Failure::Unprintable | Failure::TreeChanged
-            ),
+            matches!(error.failure, Failure::Unprintable | Failure::TreeChanged),
             "{:?}",
             error.failure
         );

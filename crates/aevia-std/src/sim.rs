@@ -25,7 +25,10 @@ pub fn is_scenario(name: &str) -> bool {
 ///
 /// The backend's message: an unknown scenario, parameters that do not parse, or
 /// a failed simulation.
-pub fn simulate(name: &str, params: &str) -> Result<String, String> {
+pub fn simulate(
+    name: &str,
+    params: &str,
+) -> Result<String, String> {
     rssn::sim::scenario::run(name, params)
 }
 

@@ -5,8 +5,12 @@
 
 #![allow(dead_code)]
 
+use aevia_syntax::Diagnostic;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::LexOutput;
 use aevia_syntax::ast::Module;
-use aevia_syntax::{lex, parse_module, Diagnostic, Diagnostics, LexOutput};
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 
 /// A parsed file: the tree and everything the lexer and parser reported.
 pub struct Parsed {
@@ -21,10 +25,7 @@ pub struct Parsed {
 pub fn parse(source: &str) -> Parsed {
     let lexed = lex(0, source).expect("the file lexes");
     let (module, diagnostics) = parse_module(0, source, &lexed);
-    Parsed {
-        module,
-        diagnostics,
-    }
+    Parsed { module, diagnostics }
 }
 
 /// Lexes `source` and returns the token stream, for layout assertions.
@@ -45,7 +46,10 @@ pub fn codes(diagnostics: &Diagnostics) -> Vec<String> {
 
 /// The source text a diagnostic underlines.
 #[must_use]
-pub fn span_text<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
+pub fn span_text<'a>(
+    source: &'a str,
+    diagnostic: &Diagnostic,
+) -> &'a str {
     let start = usize::try_from(diagnostic.span.start).unwrap_or(0);
     let end = usize::try_from(diagnostic.span.end).unwrap_or(0);
     source.get(start..end).unwrap_or("<out of range>")
@@ -69,7 +73,10 @@ pub fn expect_clean(source: &str) -> Module {
 
 /// Asserts that `source` produces exactly one diagnostic, with `code`, and
 /// returns it.
-pub fn expect_error(source: &str, code: &str) -> Diagnostic {
+pub fn expect_error(
+    source: &str,
+    code: &str,
+) -> Diagnostic {
     let mut parsed = parse(source);
     let found = codes(&parsed.diagnostics);
     assert_eq!(
@@ -88,7 +95,10 @@ pub fn expect_error(source: &str, code: &str) -> Diagnostic {
 
 /// Asserts that `source` produces `code` at least once, and returns the first
 /// such diagnostic.
-pub fn expect_code(source: &str, code: &str) -> Diagnostic {
+pub fn expect_code(
+    source: &str,
+    code: &str,
+) -> Diagnostic {
     let parsed = parse(source);
     let found = codes(&parsed.diagnostics);
     parsed

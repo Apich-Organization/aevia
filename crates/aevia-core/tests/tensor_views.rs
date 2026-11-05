@@ -19,11 +19,22 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
 use aevia_core::builtins::call_typed;
-use aevia_core::value::{equal, repr, show, NumKind, Storage, TensorData, Value};
-use aevia_core::{compile, Interp};
-use aevia_syntax::ast::{NatAst, ShapeAst, ShapeItem, Ty, TyKind};
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
+use aevia_core::value::equal;
+use aevia_core::value::repr;
+use aevia_core::value::show;
 use aevia_syntax::Span;
+use aevia_syntax::ast::NatAst;
+use aevia_syntax::ast::ShapeAst;
+use aevia_syntax::ast::ShapeItem;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
 use std::rc::Rc;
 
 // --- harness ---------------------------------------------------------------
@@ -57,8 +68,8 @@ fn session(source: &str) -> Interp {
 
 fn tensor_of(value: &Value) -> &TensorData {
     match value {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -94,16 +105,16 @@ fn values(value: &Value) -> Vec<f64> {
 /// `Value::equal` compares floats with `==`, which cannot tell `-0.0` from
 /// `0.0`. A view that read the wrong slot would usually differ in value, but
 /// "usually" is not the standard a representation has to meet.
-fn assert_same(left: &Value, right: &Value, context: &str) {
+fn assert_same(
+    left: &Value,
+    right: &Value,
+    context: &str,
+) {
     match (left, right) {
-        (Value::Tensor(a), Value::Tensor(b)) => {
+        | (Value::Tensor(a), Value::Tensor(b)) => {
             assert_eq!(a.shape, b.shape, "{context}: shape");
             assert_eq!(a.dim, b.dim, "{context}: element dimension");
-            assert_eq!(
-                a.storage.len(),
-                b.storage.len(),
-                "{context}: element count"
-            );
+            assert_eq!(a.storage.len(), b.storage.len(), "{context}: element count");
             for index in 0..a.storage.len() {
                 let x = a.get_flat(index).expect("left element");
                 let y = b.get_flat(index).expect("right element");
@@ -111,38 +122,40 @@ fn assert_same(left: &Value, right: &Value, context: &str) {
             }
             assert_eq!(show(left), show(right), "{context}: show");
             assert_eq!(repr(left), repr(right), "{context}: repr");
-        }
-        (Value::Num(a), Value::Num(b)) => {
+        },
+        | (Value::Num(a), Value::Num(b)) => {
             assert_eq!(
                 a.kind.type_name(),
                 b.kind.type_name(),
                 "{context}: numeric phase"
             );
             match (&a.kind, &b.kind) {
-                (NumKind::Float(x), NumKind::Float(y)) => {
+                | (NumKind::Float(x), NumKind::Float(y)) => {
                     assert_eq!(x.to_bits(), y.to_bits(), "{context}: float bits");
-                }
-                (NumKind::Int(x), NumKind::Int(y)) => assert_eq!(x, y, "{context}: int"),
-                (NumKind::Exact(x), NumKind::Exact(y)) => {
+                },
+                | (NumKind::Int(x), NumKind::Int(y)) => assert_eq!(x, y, "{context}: int"),
+                | (NumKind::Exact(x), NumKind::Exact(y)) => {
                     assert_eq!(x, y, "{context}: rational")
-                }
-                _ => assert_eq!(
-                    a.kind.type_name(),
-                    b.kind.type_name(),
-                    "{context}: representation"
-                ),
+                },
+                | _ => {
+                    assert_eq!(
+                        a.kind.type_name(),
+                        b.kind.type_name(),
+                        "{context}: representation"
+                    )
+                },
             }
             assert_eq!(a.dim, b.dim, "{context}: dimension");
             assert_eq!(repr(left), repr(right), "{context}: repr");
-        }
-        _ => {
+        },
+        | _ => {
             assert_eq!(
                 equal(left, right),
                 Ok(true),
                 "{context}: values differ ({left:?} vs {right:?})"
             );
             assert_eq!(repr(left), repr(right), "{context}: repr");
-        }
+        },
     }
 }
 
@@ -336,12 +349,8 @@ fn a_view_and_its_copy_are_the_same_value() {
                 coordinates[axis] = (rest % extent) as isize;
                 rest /= extent;
             }
-            let through_view = tensor_of(&view)
-                .get(&coordinates)
-                .expect("a view element");
-            let through_copy = tensor_of(&copy)
-                .get(&coordinates)
-                .expect("a copy element");
+            let through_view = tensor_of(&view).get(&coordinates).expect("a view element");
+            let through_copy = tensor_of(&copy).get(&coordinates).expect("a copy element");
             assert_same(
                 &through_view,
                 &through_copy,
@@ -394,7 +403,12 @@ fn arithmetic_and_reductions_agree_between_a_view_and_its_copy() {
         .apply_binary("@", square.clone(), square.clone(), Span::default())
         .expect("view matmul");
     let from_copy = interp
-        .apply_binary("@", square_copy.clone(), square_copy.clone(), Span::default())
+        .apply_binary(
+            "@",
+            square_copy.clone(),
+            square_copy.clone(),
+            Span::default(),
+        )
         .expect("copy matmul");
     assert_same(&from_view, &from_copy, "view @ view");
 
@@ -422,7 +436,9 @@ fn arithmetic_and_reductions_agree_between_a_view_and_its_copy() {
 
 #[test]
 fn a_contiguous_view_takes_the_f64_path_and_a_strided_one_materialises() {
-    let mut interp = session(&format!("{MATRIX}let rows = m[1..3, 0..3]\nlet column = m[0..3, 1..2]\n"));
+    let mut interp = session(&format!(
+        "{MATRIX}let rows = m[1..3, 0..3]\nlet column = m[0..3, 1..2]\n"
+    ));
     let rows = interp.eval_toplevel("rows").expect("rows");
     let column = interp.eval_toplevel("column").expect("column");
 
@@ -587,7 +603,11 @@ fn a_view_keeps_the_element_dimension_and_display_unit() {
     // same display unit.
     let mut interp = Interp::new(&aevia_types::CheckedModule::default());
     let from_view = interp
-        .call_named("sum", vec![Value::Tensor(Rc::new(view.clone()))], Span::default())
+        .call_named(
+            "sum",
+            vec![Value::Tensor(Rc::new(view.clone()))],
+            Span::default(),
+        )
         .expect("sum of the view");
     let from_copy = interp
         .call_named(
@@ -867,7 +887,11 @@ fn a_reversed_matrix_axis_flips_that_axis_only() {
         "the flipped matrix shares the source buffer"
     );
     assert_eq!(flipped.shape, vec![3, 3], "the shape is unchanged");
-    assert_eq!(flipped.offset(), 2, "the first element is column 2 of row 0");
+    assert_eq!(
+        flipped.offset(),
+        2,
+        "the first element is column 2 of row 0"
+    );
     assert_eq!(flipped.strides(), Some(&[3usize, 1][..]), "strides");
     assert_eq!(
         flipped.reversed(),
@@ -909,9 +933,7 @@ fn a_reversed_matrix_axis_flips_that_axis_only() {
     let first = flipped.slice_view(&[(0, 3), (0, 1)]).expect("a column");
     assert_eq!(first.offset(), 2, "logical column 0 is buffer slot 2");
     assert_eq!(values(&Value::Tensor(Rc::new(first))), vec![3.0, 6.0, 9.0]);
-    let last = flipped
-        .slice_view(&[(0, 3), (2, 3)])
-        .expect("a column");
+    let last = flipped.slice_view(&[(0, 3), (2, 3)]).expect("a column");
     assert_eq!(last.offset(), 0, "logical column 2 is buffer slot 0");
     assert_eq!(values(&Value::Tensor(Rc::new(last))), vec![1.0, 4.0, 7.0]);
     assert!(

@@ -5,7 +5,9 @@
 //! approximation of them.
 
 use num_bigint::BigInt;
-use num_traits::{One, Signed, Zero};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::Zero;
 
 /// The prime factorisation of `n`, as `(prime, exponent)` pairs in increasing
 /// order.
@@ -55,14 +57,17 @@ pub fn factor(n: i64) -> Vec<(i64, u32)> {
     let mut merged: Vec<(i64, u32)> = Vec::with_capacity(out.len());
     for (prime, exponent) in out {
         match merged.last_mut() {
-            Some((last, count)) if *last == prime => *count += exponent,
-            _ => merged.push((prime, exponent)),
+            | Some((last, count)) if *last == prime => *count += exponent,
+            | _ => merged.push((prime, exponent)),
         }
     }
     merged
 }
 
-fn push_factor(out: &mut Vec<(i64, u32)>, prime: u64) {
+fn push_factor(
+    out: &mut Vec<(i64, u32)>,
+    prime: u64,
+) {
     for entry in out.iter_mut() {
         if entry.0 as u64 == prime {
             entry.1 += 1;
@@ -114,7 +119,11 @@ pub fn is_prime(n: u64) -> bool {
 }
 
 /// `base^exponent mod modulus`.
-fn modular_power(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
+fn modular_power(
+    mut base: u64,
+    mut exponent: u64,
+    modulus: u64,
+) -> u64 {
     if modulus == 1 {
         return 0;
     }
@@ -130,7 +139,11 @@ fn modular_power(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     result
 }
 
-fn mul_mod(a: u64, b: u64, modulus: u64) -> u64 {
+fn mul_mod(
+    a: u64,
+    b: u64,
+    modulus: u64,
+) -> u64 {
     u64::try_from((u128::from(a) * u128::from(b)) % u128::from(modulus)).unwrap_or(0)
 }
 
@@ -157,7 +170,10 @@ fn pollard_rho(n: u64) -> u64 {
     }
 }
 
-fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
+fn gcd_u64(
+    mut a: u64,
+    mut b: u64,
+) -> u64 {
     while b != 0 {
         let remainder = a % b;
         a = b;
@@ -190,7 +206,13 @@ pub fn primes(limit: i64) -> Vec<i64> {
     sieve
         .iter()
         .enumerate()
-        .filter_map(|(index, prime)| if *prime { Some(index as i64) } else { None })
+        .filter_map(|(index, prime)| {
+            if *prime {
+                Some(index as i64)
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -199,7 +221,10 @@ pub fn primes(limit: i64) -> Vec<i64> {
 /// Returns zero when `k > n` and when either argument is negative, which is the
 /// convention combinatorics uses for an impossible selection.
 #[must_use]
-pub fn binomial(n: i64, k: i64) -> BigInt {
+pub fn binomial(
+    n: i64,
+    k: i64,
+) -> BigInt {
     if k < 0 || n < 0 || k > n {
         return BigInt::zero();
     }
@@ -226,7 +251,10 @@ pub fn permutations(n: i64) -> BigInt {
 
 /// The greatest common divisor, non-negative.
 #[must_use]
-pub fn gcd(a: i64, b: i64) -> i64 {
+pub fn gcd(
+    a: i64,
+    b: i64,
+) -> i64 {
     let mut a = a.unsigned_abs();
     let mut b = b.unsigned_abs();
     while b != 0 {
@@ -239,7 +267,10 @@ pub fn gcd(a: i64, b: i64) -> i64 {
 
 /// The least common multiple, zero when either argument is zero.
 #[must_use]
-pub fn lcm(a: i64, b: i64) -> i64 {
+pub fn lcm(
+    a: i64,
+    b: i64,
+) -> i64 {
     if a == 0 || b == 0 {
         return 0;
     }
@@ -302,10 +333,7 @@ mod tests {
         assert_eq!(binomial(5, 2), BigInt::from(10));
         assert_eq!(binomial(10, 0), BigInt::one());
         assert_eq!(binomial(2, 5), BigInt::zero());
-        assert_eq!(
-            binomial(60, 30).to_string(),
-            "118264581564861424"
-        );
+        assert_eq!(binomial(60, 30).to_string(), "118264581564861424");
     }
 
     #[test]

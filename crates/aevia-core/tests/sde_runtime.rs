@@ -11,7 +11,10 @@
 #![allow(clippy::result_large_err)]
 
 use aevia_core::builtins::call_simple;
-use aevia_core::value::{make_variant, NativeFn, RecordValue, Value};
+use aevia_core::value::NativeFn;
+use aevia_core::value::RecordValue;
+use aevia_core::value::Value;
+use aevia_core::value::make_variant;
 use aevia_syntax::Span;
 use aevia_types::adt;
 use indexmap::IndexMap;
@@ -29,7 +32,12 @@ fn record(fields: Vec<(&str, Value)>) -> Value {
     Value::Record(Rc::new(RecordValue { fields: map }))
 }
 
-fn variant(type_name: &str, index: usize, name: &str, fields: Vec<Value>) -> Value {
+fn variant(
+    type_name: &str,
+    index: usize,
+    name: &str,
+    fields: Vec<Value>,
+) -> Value {
     let id = adt::intern(adt::Adt {
         name: type_name.to_string(),
         params: Vec::new(),
@@ -38,14 +46,20 @@ fn variant(type_name: &str, index: usize, name: &str, fields: Vec<Value>) -> Val
     make_variant(id, index, name, fields)
 }
 
-fn method(index: usize, name: &str) -> Value {
+fn method(
+    index: usize,
+    name: &str,
+) -> Value {
     variant("SdeMethod", index, name, Vec::new())
 }
 
-fn structure(name: &str, noise: Option<i64>) -> Value {
+fn structure(
+    name: &str,
+    noise: Option<i64>,
+) -> Value {
     match noise {
-        Some(noise) => variant("SdeStructure", 1, name, vec![Value::int(noise)]),
-        None => variant("SdeStructure", 0, name, Vec::new()),
+        | Some(noise) => variant("SdeStructure", 1, name, vec![Value::int(noise)]),
+        | None => variant("SdeStructure", 0, name, Vec::new()),
     }
 }
 
@@ -102,12 +116,19 @@ fn adaptive_options(
     variant("SdeOpts", 1, "Adaptive", vec![options])
 }
 
-fn call(name: &str, args: Vec<Value>) -> Value {
-    call_simple(name, args).unwrap_or_else(|error| panic!("`{name}` failed: {} {}", error.code, error.message))
+fn call(
+    name: &str,
+    args: Vec<Value>,
+) -> Value {
+    call_simple(name, args)
+        .unwrap_or_else(|error| panic!("`{name}` failed: {} {}", error.code, error.message))
 }
 
 /// The `Ok` payload of a `Result`, or a panic carrying the `Err` payload.
-fn ok_payload(value: Value, context: &str) -> Rc<RecordValue> {
+fn ok_payload(
+    value: Value,
+    context: &str,
+) -> Rc<RecordValue> {
     let Value::Variant(result) = value else {
         panic!("{context}: expected a Result");
     };
@@ -115,12 +136,15 @@ fn ok_payload(value: Value, context: &str) -> Rc<RecordValue> {
         panic!("{context}: expected Ok, found Err({:?})", result.fields);
     }
     match result.fields.first() {
-        Some(Value::Record(record)) => record.clone(),
-        other => panic!("{context}: the Ok payload is not a record: {other:?}"),
+        | Some(Value::Record(record)) => record.clone(),
+        | other => panic!("{context}: the Ok payload is not a record: {other:?}"),
     }
 }
 
-fn err_payload(value: Value, context: &str) -> Rc<aevia_core::value::VariantValue> {
+fn err_payload(
+    value: Value,
+    context: &str,
+) -> Rc<aevia_core::value::VariantValue> {
     let Value::Variant(result) = value else {
         panic!("{context}: expected a Result");
     };
@@ -128,15 +152,15 @@ fn err_payload(value: Value, context: &str) -> Rc<aevia_core::value::VariantValu
         panic!("{context}: expected Err, found Ok");
     }
     match result.fields.first() {
-        Some(Value::Variant(error)) => error.clone(),
-        other => panic!("{context}: the Err payload is not an SdeError: {other:?}"),
+        | Some(Value::Variant(error)) => error.clone(),
+        | other => panic!("{context}: the Err payload is not an SdeError: {other:?}"),
     }
 }
 
 fn tensor_of(value: &Value) -> &aevia_core::value::TensorData {
     match value {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -177,8 +201,24 @@ fn unit_diffusion() -> Value {
 /// library's own.
 #[test]
 fn wiener_is_the_language_stream() {
-    let first = call("wiener", vec![Value::int(7), Value::int(2), Value::int(3), Value::float(0.5)]);
-    let again = call("wiener", vec![Value::int(7), Value::int(2), Value::int(3), Value::float(0.5)]);
+    let first = call(
+        "wiener",
+        vec![
+            Value::int(7),
+            Value::int(2),
+            Value::int(3),
+            Value::float(0.5),
+        ],
+    );
+    let again = call(
+        "wiener",
+        vec![
+            Value::int(7),
+            Value::int(2),
+            Value::int(3),
+            Value::float(0.5),
+        ],
+    );
     let tensor = tensor_of(&first);
     assert_eq!(tensor.shape, vec![3, 2], "(seed, m, steps, dt) → steps × m");
     let expected: Vec<f64> = aevia_std::sde::wiener(7, 2, 3, 0.5)
@@ -186,7 +226,10 @@ fn wiener_is_the_language_stream() {
         .flatten()
         .collect();
     let observed: Vec<f64> = tensor.elements().iter().map(float_of).collect();
-    assert_eq!(observed, expected, "wiener must be the std library's stream");
+    assert_eq!(
+        observed, expected,
+        "wiener must be the std library's stream"
+    );
     let repeated: Vec<f64> = tensor_of(&again).elements().iter().map(float_of).collect();
     assert_eq!(observed, repeated, "same seed, same increments");
 }
@@ -203,7 +246,10 @@ fn sde_order_and_ensemble_seed_are_pure() {
     let seed = call("sde_ensemble_seed", vec![Value::int(11), Value::int(4)]);
     assert_eq!(float_of(&seed), aevia_std::sde::ensemble_seed(11, 4) as f64);
     assert_eq!(
-        float_of(&call("sde_ensemble_seed", vec![Value::int(11), Value::int(4)])),
+        float_of(&call(
+            "sde_ensemble_seed",
+            vec![Value::int(11), Value::int(4)]
+        )),
         float_of(&seed),
         "a function of (seed, index) only"
     );
@@ -347,13 +393,7 @@ fn every_fixed_step_method_integrates() {
         (4, "SrkPlaten"),
     ];
     for (index, name) in diagonal_methods {
-        let options = fixed_options(
-            method(index, name),
-            structure("Diagonal", None),
-            5,
-            0.05,
-            3,
-        );
+        let options = fixed_options(method(index, name), structure("Diagonal", None), 5, 0.05, 3);
         let path = ok_payload(
             call(
                 "sdeint_diag",
@@ -405,9 +445,7 @@ fn every_fixed_step_method_integrates() {
 #[test]
 fn adaptive_integration_runs() {
     let zero_drift: Value = Value::Native(Rc::new(NativeFn(Box::new(
-        |_interp: &mut aevia_core::Interp, _args: Vec<Value>, _span: Span| {
-            Ok(Value::float(0.0))
-        },
+        |_interp: &mut aevia_core::Interp, _args: Vec<Value>, _span: Span| Ok(Value::float(0.0)),
     ))));
     let options = variant(
         "SdeOpts",
@@ -429,19 +467,17 @@ fn adaptive_integration_runs() {
     let path = ok_payload(
         call(
             "sdeint_diag",
-            vec![
-                zero_drift,
-                unit_diffusion(),
-                Value::float(1.0),
-                options,
-            ],
+            vec![zero_drift, unit_diffusion(), Value::float(1.0), options],
         ),
         "adaptive",
     );
     assert!(float_of(&path.fields["steps"]) >= 1.0);
     let times = tensor_of(&path.fields["t"]);
     assert!(
-        times.elements().iter().all(|value| float_of(value) <= 0.05 + 1e-9),
+        times
+            .elements()
+            .iter()
+            .all(|value| float_of(value) <= 0.05 + 1e-9),
         "the path stays inside [t0, t1]"
     );
 }
@@ -522,8 +558,8 @@ fn unsupported_combinations_name_their_capability() {
         let error = err_payload(value, context);
         assert_eq!(error.name, "Unsupported", "{context}: {error:?}");
         match error.fields.first() {
-            Some(Value::Str(text)) => text.to_string(),
-            other => panic!("{context}: the capability is a string, found {other:?}"),
+            | Some(Value::Str(text)) => text.to_string(),
+            | other => panic!("{context}: the capability is a string, found {other:?}"),
         }
     };
 
@@ -599,10 +635,7 @@ fn general_noise_with_a_record_state_is_named_gap() {
         1,
     );
     let error = err_payload(
-        call(
-            "sdeint_general",
-            vec![drift, diffusion, initial, options],
-        ),
+        call("sdeint_general", vec![drift, diffusion, initial, options]),
         "sdeint_general with a record state",
     );
     assert_eq!(error.name, "Unsupported");
@@ -610,9 +643,11 @@ fn general_noise_with_a_record_state_is_named_gap() {
         error
             .fields
             .first()
-            .and_then(|value| match value {
-                Value::Str(text) => Some(text.to_string()),
-                _ => None,
+            .and_then(|value| {
+                match value {
+                    | Value::Str(text) => Some(text.to_string()),
+                    | _ => None,
+                }
             })
             .is_some_and(|capability| capability == "sde.general.record"),
         "the Err payload names the capability: {:?}",

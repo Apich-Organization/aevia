@@ -8,8 +8,10 @@
 #![allow(dead_code)]
 
 use aevia_std::stdlib;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 /// A throwaway package directory.
 pub struct Package {
@@ -37,7 +39,11 @@ impl Package {
         package
     }
 
-    pub fn write(&self, relative: &str, source: &str) -> PathBuf {
+    pub fn write(
+        &self,
+        relative: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.dir.join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("a module directory");
@@ -47,14 +53,21 @@ impl Package {
     }
 
     /// Loads `entry` (a package-relative path) and its imports.
-    pub fn load(&self, entry: &str) -> aevia_core::driver::Program {
+    pub fn load(
+        &self,
+        entry: &str,
+    ) -> aevia_core::driver::Program {
         let path = self.dir.join(entry);
         assert!(path.exists(), "the entry `{entry}` was not written");
         aevia_core::driver::load(&path)
     }
 
     /// Writes a one-module program and loads it.
-    pub fn compile_program(&self, name: &str, source: &str) -> aevia_core::driver::Program {
+    pub fn compile_program(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> aevia_core::driver::Program {
         self.write(&format!("{name}.aev"), source);
         self.load(&format!("{name}.aev"))
     }

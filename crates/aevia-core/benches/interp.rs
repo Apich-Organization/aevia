@@ -15,9 +15,12 @@
 //! closure, `fold` over the same tensor with a native function, dense `sum`, and
 //! symbolic-term construction (100/200/400 operands).
 
-use aevia_core::{compile, Interp, Mode};
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
 use aevia_syntax::Span;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 const ROUNDS: usize = 7;
 
@@ -56,7 +59,11 @@ fn median(mut samples: Vec<Duration>) -> (Duration, Duration, Duration) {
     (median, samples[0], samples[samples.len() - 1])
 }
 
-fn report(label: &str, samples: Vec<Duration>, units: f64) {
+fn report(
+    label: &str,
+    samples: Vec<Duration>,
+    units: f64,
+) {
     let (median, min, max) = median(samples);
     let unit = median.as_secs_f64() / units;
     println!(
@@ -108,11 +115,13 @@ fn main(): IO Unit = do
     }
     report("map (2 000 elements)", samples, 2_000.0);
 
-    let identity = aevia_core::value::Value::Native(std::rc::Rc::new(
-        aevia_core::value::NativeFn(Box::new(
+    let identity =
+        aevia_core::value::Value::Native(std::rc::Rc::new(aevia_core::value::NativeFn(Box::new(
             |_interp: &mut Interp, args: Vec<aevia_core::value::Value>, _span: Span| {
-                let (Some(aevia_core::value::Value::Num(a)), Some(aevia_core::value::Value::Num(b))) =
-                    (args.first(), args.get(1))
+                let (
+                    Some(aevia_core::value::Value::Num(a)),
+                    Some(aevia_core::value::Value::Num(b)),
+                ) = (args.first(), args.get(1))
                 else {
                     return Ok(aevia_core::value::Value::float(0.0));
                 };
@@ -122,8 +131,7 @@ fn main(): IO Unit = do
                     aevia_core::value::NumVal::float(a + b, aevia_dim::Dim::one()),
                 ))
             },
-        )),
-    ));
+        ))));
     let zero = aevia_core::value::Value::float(0.0);
     hot.call_named(
         "fold",
@@ -204,6 +212,10 @@ fn main(): IO Unit = do
             let _ = sum;
             samples.push(start.elapsed());
         }
-        report(&format!("symbolic build ({terms} terms)"), samples, terms as f64);
+        report(
+            &format!("symbolic build ({terms} terms)"),
+            samples,
+            terms as f64,
+        );
     }
 }

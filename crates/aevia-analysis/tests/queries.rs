@@ -1,19 +1,32 @@
 //! The semantic queries, exercised the way a client calls them: through a
 //! document, a byte offset, and the public result types.
 
-use aevia_analysis::{
-    Analysis, CompletionKind, Document, DocumentStore, Origin, Position, Range, Severity, SymbolKind,
-};
+use aevia_analysis::Analysis;
+use aevia_analysis::CompletionKind;
+use aevia_analysis::Document;
+use aevia_analysis::DocumentStore;
+use aevia_analysis::Origin;
+use aevia_analysis::Position;
+use aevia_analysis::Range;
+use aevia_analysis::Severity;
+use aevia_analysis::SymbolKind;
 
 /// Runs `body` against an analysis of `source`.
-fn with<R>(source: &str, body: impl FnOnce(&Analysis<'_>) -> R) -> R {
+fn with<R>(
+    source: &str,
+    body: impl FnOnce(&Analysis<'_>) -> R,
+) -> R {
     let document = Document::new("test.aev", 1, source);
     let analysis = Analysis::new(&document);
     body(&analysis)
 }
 
 /// The byte offset of the `nth` occurrence of `needle`, counting from one.
-fn offset_of(source: &str, needle: &str, nth: usize) -> u32 {
+fn offset_of(
+    source: &str,
+    needle: &str,
+    nth: usize,
+) -> u32 {
     let mut from = 0;
     let mut found = None;
     for _ in 0..nth.max(1) {
@@ -29,7 +42,11 @@ fn offset_of(source: &str, needle: &str, nth: usize) -> u32 {
 }
 
 /// The source text a range covers, which is what a client shows.
-fn text_of<'a>(document: &Document, source: &'a str, range: Range) -> &'a str {
+fn text_of<'a>(
+    document: &Document,
+    source: &'a str,
+    range: Range,
+) -> &'a str {
     let start = document.offset(range.start).expect("start");
     let end = document.offset(range.end).expect("end");
     &source[start as usize..end as usize]
@@ -58,7 +75,11 @@ fn a_type_error_becomes_a_placed_diagnostic() {
 #[test]
 fn a_clean_file_has_no_diagnostics() {
     with("let g = 9.80665 m/s^2\n", |analysis| {
-        assert!(analysis.diagnostics().is_empty(), "{:?}", analysis.diagnostics());
+        assert!(
+            analysis.diagnostics().is_empty(),
+            "{:?}",
+            analysis.diagnostics()
+        );
     });
 }
 
@@ -81,7 +102,11 @@ fn hover_reports_the_scheme_of_a_function() {
         let hover = analysis
             .hover(offset_of(source, "double", 2))
             .expect("hover on the call");
-        assert!(hover.contents.contains("double: Int -> Int"), "{}", hover.contents);
+        assert!(
+            hover.contents.contains("double: Int -> Int"),
+            "{}",
+            hover.contents
+        );
     });
 }
 
@@ -103,7 +128,11 @@ fn hover_reports_the_pinned_overload_of_a_kernel_call() {
             .hover(offset_of(source, "Rssn.sin", 1))
             .expect("hover on the kernel call");
         assert!(hover.contents.contains("Rssn.sin"), "{}", hover.contents);
-        assert!(hover.contents.contains("pinned overload"), "{}", hover.contents);
+        assert!(
+            hover.contents.contains("pinned overload"),
+            "{}",
+            hover.contents
+        );
     });
 }
 
@@ -112,7 +141,11 @@ fn hover_reports_the_class_of_a_resolved_method_call() {
     let source = "let s = show(1.0)\n";
     with(source, |analysis| {
         let hover = analysis.hover(offset_of(source, "show", 1)).expect("hover");
-        assert!(hover.contents.contains("class method"), "{}", hover.contents);
+        assert!(
+            hover.contents.contains("class method"),
+            "{}",
+            hover.contents
+        );
         assert!(hover.contents.contains("Show"), "{}", hover.contents);
     });
 }
@@ -123,7 +156,9 @@ fn hover_on_a_local_binding_reports_its_type() {
     // exports — is no longer a hole in the answer.
     let source = "fn f(x: Int): Int = x + 1\n";
     with(source, |analysis| {
-        let hover = analysis.hover(offset_of(source, "x + 1", 1)).expect("hover");
+        let hover = analysis
+            .hover(offset_of(source, "x + 1", 1))
+            .expect("hover");
         assert_eq!(hover.contents, "```aevia\nx: Int\n```");
         assert_eq!(hover.range, Some(analysis.document().range_of(20, 21)));
     });
@@ -174,8 +209,14 @@ fn hover_on_a_call_reports_the_result_not_the_function() {
             Some(analysis.document().range_of(call, call + 8))
         );
         // On the name, the function's own scheme is still the answer.
-        let callee = analysis.hover(offset_of(source, "shout", 2)).expect("hover");
-        assert!(callee.contents.contains("shout: Int -> String"), "{}", callee.contents);
+        let callee = analysis
+            .hover(offset_of(source, "shout", 2))
+            .expect("hover");
+        assert!(
+            callee.contents.contains("shout: Int -> String"),
+            "{}",
+            callee.contents
+        );
     });
 }
 
@@ -225,7 +266,11 @@ fn hover_on_a_constructor_names_its_type() {
         let hover = analysis
             .hover(offset_of(source, "Dot", 2))
             .expect("hover on the constructor");
-        assert!(hover.contents.contains("constructor of `Shape`"), "{}", hover.contents);
+        assert!(
+            hover.contents.contains("constructor of `Shape`"),
+            "{}",
+            hover.contents
+        );
     });
 }
 
@@ -256,13 +301,16 @@ fn completion_offers_the_module_and_the_prelude_without_duplicates() {
         sorted.dedup();
         assert_eq!(before, sorted.len(), "a name is offered twice");
         // Module names sort before prelude ones.
-        assert!(labels.iter().position(|l| *l == "mine") < labels.iter().position(|l| *l == "sqrt"));
+        assert!(
+            labels.iter().position(|l| *l == "mine") < labels.iter().position(|l| *l == "sqrt")
+        );
     });
 }
 
 #[test]
 fn completion_knows_units_dimensions_and_constructors() {
-    let source = "dimension Currency\nunit usd : Currency = 1\ntype Shape = | Circle(Real[L]) | Dot\n";
+    let source =
+        "dimension Currency\nunit usd : Currency = 1\ntype Shape = | Circle(Real[L]) | Dot\n";
     with(source, |analysis| {
         let items = analysis.completion(0);
         let kind = |label: &str| {
@@ -294,8 +342,7 @@ fn a_module_name_shadows_the_prelude() {
 fn field_completion_offers_the_receivers_record_fields() {
     // `Point` is the language's affine-point type, so a record alias needs a
     // different name.
-    let source =
-        "type Sample = { x: Real[L], y: Real[L] }\nfn shift(p: Sample): Real[L] = p.x\n";
+    let source = "type Sample = { x: Real[L], y: Real[L] }\nfn shift(p: Sample): Real[L] = p.x\n";
     with(source, |analysis| {
         // The position just after the dot in `p.x`.
         let after_dot = offset_of(source, "p.x", 1) + 2;
@@ -368,7 +415,10 @@ fn a_class_method_resolves_when_one_instance_declares_it() {
         let location = analysis
             .definition(offset_of(source, "pretty", 3))
             .expect("definition");
-        assert_eq!(text_of(analysis.document(), source, location.range), "pretty");
+        assert_eq!(
+            text_of(analysis.document(), source, location.range),
+            "pretty"
+        );
         // The instance method, on line 5, not the class declaration on line 2.
         assert_eq!(location.range.start.line, 4);
     });
@@ -390,7 +440,10 @@ fn the_outline_nests_constructors_and_methods() {
     with(source, |analysis| {
         let symbols = analysis.symbols();
         let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
-        assert_eq!(names, ["Shape", "Show2", "instance Show2 for Float", "area"]);
+        assert_eq!(
+            names,
+            ["Shape", "Show2", "instance Show2 for Float", "area"]
+        );
 
         let shape = &symbols[0];
         assert_eq!(shape.kind, SymbolKind::Enum);
@@ -404,10 +457,7 @@ fn the_outline_nests_constructors_and_methods() {
 
         let area = &symbols[3];
         assert_eq!(area.kind, SymbolKind::Function);
-        assert_eq!(
-            text_of(analysis.document(), source, area.selection),
-            "area"
-        );
+        assert_eq!(text_of(analysis.document(), source, area.selection), "area");
     });
 }
 
@@ -445,11 +495,17 @@ fn positions_survive_an_astral_character_on_an_earlier_line() {
     // line must still be found at column 4.
     let source = "let s = \"😀\"\nlet g = 1 m\n";
     with(source, |analysis| {
-        let line = analysis.document().offset(Position::new(1, 4)).expect("offset");
+        let line = analysis
+            .document()
+            .offset(Position::new(1, 4))
+            .expect("offset");
         assert_eq!(&source[line as usize..line as usize + 1], "g");
         let hover = analysis.hover(line).expect("hover");
         assert!(hover.contents.contains("g:"), "{}", hover.contents);
-        assert_eq!(hover.range, Some(Range::new(Position::new(1, 4), Position::new(1, 5))));
+        assert_eq!(
+            hover.range,
+            Some(Range::new(Position::new(1, 4), Position::new(1, 5)))
+        );
     });
 }
 

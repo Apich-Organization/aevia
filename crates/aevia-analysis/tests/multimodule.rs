@@ -5,7 +5,10 @@
 //! resolve instead of being reported as unbound. These tests build a small
 //! package in a temporary directory and ask the same questions an editor does.
 
-use aevia_analysis::{Analysis, AnalysisCache, Document, Range};
+use aevia_analysis::Analysis;
+use aevia_analysis::AnalysisCache;
+use aevia_analysis::Document;
+use aevia_analysis::Range;
 
 /// A temporary package that removes itself.
 struct Package {
@@ -24,12 +27,21 @@ impl Package {
         .expect("write manifest");
         Self { root }
     }
-    fn write(&self, name: &str, source: &str) -> std::path::PathBuf {
+
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
         let path = self.root.join(name);
         std::fs::write(&path, source).expect("write source");
         path
     }
-    fn path(&self, name: &str) -> std::path::PathBuf {
+
+    fn path(
+        &self,
+        name: &str,
+    ) -> std::path::PathBuf {
         self.root.join(name)
     }
 }
@@ -40,12 +52,23 @@ impl Drop for Package {
 }
 
 /// The byte offset of `needle` in `source`.
-fn offset_of(source: &str, needle: &str) -> u32 {
-    u32::try_from(source.find(needle).unwrap_or_else(|| panic!("no {needle:?}"))).expect("offset")
+fn offset_of(
+    source: &str,
+    needle: &str,
+) -> u32 {
+    u32::try_from(
+        source
+            .find(needle)
+            .unwrap_or_else(|| panic!("no {needle:?}")),
+    )
+    .expect("offset")
 }
 
 /// The source text a range covers in `source`.
-fn text_of(source: &str, range: Range) -> &str {
+fn text_of(
+    source: &str,
+    range: Range,
+) -> &str {
     let index = aevia_analysis::LineIndex::new(source);
     let start = index.offset(source, range.start).expect("start") as usize;
     let end = index.offset(source, range.end).expect("end") as usize;
@@ -64,7 +87,10 @@ fn package(name: &str) -> (Package, String) {
     (package, source)
 }
 
-fn analysis<'a>(package: &Package, source: &'a str) -> (Document, std::path::PathBuf) {
+fn analysis<'a>(
+    package: &Package,
+    source: &'a str,
+) -> (Document, std::path::PathBuf) {
     let path = package.path("src/B.aev");
     (Document::new(path.display().to_string(), 1, source), path)
 }
@@ -159,11 +185,19 @@ fn an_opened_import_resolves_a_bare_name() {
     let path = package.path("src/C.aev");
     let document = Document::new(path.display().to_string(), 1, source);
     let analysis = Analysis::from_path(&document, &path);
-    assert!(analysis.diagnostics().is_empty(), "{:#?}", analysis.diagnostics());
+    assert!(
+        analysis.diagnostics().is_empty(),
+        "{:#?}",
+        analysis.diagnostics()
+    );
     let hover = analysis.hover(offset_of(source, "sqrt")).expect("hover");
     assert!(hover.contents.contains("sqrt"), "{}", hover.contents);
     let location = analysis.definition(offset_of(source, "sqrt")).expect("def");
-    assert!(location.document.ends_with("A.aev"), "{}", location.document);
+    assert!(
+        location.document.ends_with("A.aev"),
+        "{}",
+        location.document
+    );
 }
 
 #[test]
@@ -178,7 +212,11 @@ fn a_record_field_of_an_imported_type_is_named() {
     let path = package.path("src/D.aev");
     let document = Document::new(path.display().to_string(), 1, source);
     let analysis = Analysis::from_path(&document, &path);
-    assert!(analysis.diagnostics().is_empty(), "{:#?}", analysis.diagnostics());
+    assert!(
+        analysis.diagnostics().is_empty(),
+        "{:#?}",
+        analysis.diagnostics()
+    );
     let hover = analysis
         .hover(offset_of(source, "p.x") + 2)
         .expect("a field hover");
@@ -196,7 +234,11 @@ fn an_unsaved_buffer_keeps_its_imports_and_its_edits() {
     let document = Document::new(path.display().to_string(), 2, &edited);
     let analysis = Analysis::from_path(&document, &path);
     assert!(analysis.is_multi_module());
-    assert!(analysis.diagnostics().is_empty(), "{:#?}", analysis.diagnostics());
+    assert!(
+        analysis.diagnostics().is_empty(),
+        "{:#?}",
+        analysis.diagnostics()
+    );
     // The unsaved line is visible to the queries: no false unbound name.
     let hover = analysis
         .hover(offset_of(&edited, "A.sqrt"))
@@ -266,7 +308,11 @@ fn definition_through_the_server_style_cache_path() {
     let location = analysis
         .definition(offset_of(source, "sqrt"))
         .expect("definition");
-    assert!(location.document.ends_with("A.aev"), "{}", location.document);
+    assert!(
+        location.document.ends_with("A.aev"),
+        "{}",
+        location.document
+    );
     let a_source = std::fs::read_to_string(package.path("src/A.aev")).expect("reads");
     assert_eq!(text_of(&a_source, location.range), "sqrt");
 }

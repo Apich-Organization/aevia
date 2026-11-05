@@ -4,12 +4,26 @@
 //! lives here. The analysis crate has none of it; this module has nothing else.
 //! Two tables are the whole coupling: one for each enum the protocol numbers.
 
-use aevia_analysis::{
-    CodeAction, CodeActionKind, Completion, CompletionKind, Diagnostic, FileEdit, Hover, Location,
-    Position, Range, RenamePlaceholder, SemanticToken, Severity, SignatureHelp, Symbol, SymbolKind,
-    TextEdit, TokenKind,
-};
-use serde_json::{Value, json};
+use aevia_analysis::CodeAction;
+use aevia_analysis::CodeActionKind;
+use aevia_analysis::Completion;
+use aevia_analysis::CompletionKind;
+use aevia_analysis::Diagnostic;
+use aevia_analysis::FileEdit;
+use aevia_analysis::Hover;
+use aevia_analysis::Location;
+use aevia_analysis::Position;
+use aevia_analysis::Range;
+use aevia_analysis::RenamePlaceholder;
+use aevia_analysis::SemanticToken;
+use aevia_analysis::Severity;
+use aevia_analysis::SignatureHelp;
+use aevia_analysis::Symbol;
+use aevia_analysis::SymbolKind;
+use aevia_analysis::TextEdit;
+use aevia_analysis::TokenKind;
+use serde_json::Value;
+use serde_json::json;
 
 /// Reads a protocol position (`{ line, character }`, UTF-16 code units).
 ///
@@ -53,10 +67,10 @@ pub fn range_json(range: Range) -> Value {
 /// playground that prints `error`/`warning` has no use for a number.
 fn severity_number(severity: Severity) -> u8 {
     match severity {
-        Severity::Error => 1,
-        Severity::Warning => 2,
-        Severity::Info => 3,
-        Severity::Hint => 4,
+        | Severity::Error => 1,
+        | Severity::Warning => 2,
+        | Severity::Info => 3,
+        | Severity::Hint => 4,
     }
 }
 
@@ -67,38 +81,41 @@ fn severity_number(severity: Severity) -> u8 {
 /// type-level name.
 fn completion_kind(kind: CompletionKind) -> u8 {
     match kind {
-        CompletionKind::Function => 3,
-        CompletionKind::Value => 12,
-        CompletionKind::Constructor => 4,
-        CompletionKind::Unit => 11,
-        CompletionKind::Dimension => 25,
-        CompletionKind::Type => 22,
+        | CompletionKind::Function => 3,
+        | CompletionKind::Value => 12,
+        | CompletionKind::Constructor => 4,
+        | CompletionKind::Unit => 11,
+        | CompletionKind::Dimension => 25,
+        | CompletionKind::Type => 22,
         // The protocol's `Field` and `Keyword`.
-        CompletionKind::Field => 5,
-        CompletionKind::Keyword => 14,
+        | CompletionKind::Field => 5,
+        | CompletionKind::Keyword => 14,
     }
 }
 
 /// The protocol's symbol kind.
 fn symbol_kind(kind: SymbolKind) -> u8 {
     match kind {
-        SymbolKind::Function => 12,
-        SymbolKind::Method => 6,
-        SymbolKind::Variable => 13,
-        SymbolKind::Constant => 14,
-        SymbolKind::Struct => 23,
-        SymbolKind::Enum => 10,
-        SymbolKind::EnumMember => 22,
-        SymbolKind::Interface => 11,
-        SymbolKind::Object => 19,
-        SymbolKind::TypeParameter => 26,
-        SymbolKind::Namespace => 3,
+        | SymbolKind::Function => 12,
+        | SymbolKind::Method => 6,
+        | SymbolKind::Variable => 13,
+        | SymbolKind::Constant => 14,
+        | SymbolKind::Struct => 23,
+        | SymbolKind::Enum => 10,
+        | SymbolKind::EnumMember => 22,
+        | SymbolKind::Interface => 11,
+        | SymbolKind::Object => 19,
+        | SymbolKind::TypeParameter => 26,
+        | SymbolKind::Namespace => 3,
     }
 }
 
 /// Writes one diagnostic, with the document it belongs to.
 #[must_use]
-pub fn diagnostic_json(uri: &str, diagnostic: &Diagnostic) -> Value {
+pub fn diagnostic_json(
+    uri: &str,
+    diagnostic: &Diagnostic,
+) -> Value {
     let mut value = json!({
         "range": range_json(diagnostic.range),
         "severity": severity_number(diagnostic.severity),
@@ -295,14 +312,14 @@ pub fn path_from_uri(uri: &str) -> Option<std::path::PathBuf> {
     let path = percent_decode(rest);
     // `file:///C:/x` leaves `/C:/x`; a drive letter is not a directory.
     let path = match path.strip_prefix('/') {
-        Some(rest)
+        | Some(rest)
             if rest.len() >= 2
                 && rest.as_bytes()[0].is_ascii_alphabetic()
                 && rest.as_bytes()[1] == b':' =>
         {
             rest.to_string()
-        }
-        _ => path,
+        },
+        | _ => path,
     };
     Some(std::path::PathBuf::from(path))
 }
@@ -376,9 +393,9 @@ pub fn text_edit_json(edit: &TextEdit) -> Value {
 /// The protocol's code-action kind.
 fn code_action_kind(kind: CodeActionKind) -> &'static str {
     match kind {
-        CodeActionKind::QuickFix => "quickfix",
-        CodeActionKind::RefactorRewrite => "refactor.rewrite",
-        CodeActionKind::RefactorExtract => "refactor.extract",
+        | CodeActionKind::QuickFix => "quickfix",
+        | CodeActionKind::RefactorRewrite => "refactor.rewrite",
+        | CodeActionKind::RefactorExtract => "refactor.extract",
     }
 }
 
@@ -388,7 +405,10 @@ fn code_action_kind(kind: CodeActionKind) -> &'static str {
 /// open: the protocol allows edits across files, and this server deliberately
 /// knows only the document it was asked about.
 #[must_use]
-pub fn code_actions_json(uri: &str, actions: &[CodeAction]) -> Value {
+pub fn code_actions_json(
+    uri: &str,
+    actions: &[CodeAction],
+) -> Value {
     Value::Array(
         actions
             .iter()
@@ -425,13 +445,13 @@ pub const TOKEN_TYPES: [&str; 7] = [
 /// The index of a token kind in [`TOKEN_TYPES`].
 fn token_type(kind: TokenKind) -> u32 {
     match kind {
-        TokenKind::Type => 0,
-        TokenKind::Dimension => 1,
-        TokenKind::Unit => 2,
-        TokenKind::Operator => 3,
-        TokenKind::Function => 4,
-        TokenKind::Variable => 5,
-        TokenKind::Constructor => 6,
+        | TokenKind::Type => 0,
+        | TokenKind::Dimension => 1,
+        | TokenKind::Unit => 2,
+        | TokenKind::Operator => 3,
+        | TokenKind::Function => 4,
+        | TokenKind::Variable => 5,
+        | TokenKind::Constructor => 6,
     }
 }
 
@@ -649,7 +669,10 @@ mod tests {
         };
         let value = code_actions_json("file:///a.aev", &[action]);
         assert_eq!(value[0]["kind"], "quickfix");
-        assert_eq!(value[0]["edit"]["changes"]["file:///a.aev"][0]["newText"], ": Float");
+        assert_eq!(
+            value[0]["edit"]["changes"]["file:///a.aev"][0]["newText"],
+            ": Float"
+        );
     }
 
     #[test]
@@ -672,7 +695,10 @@ mod tests {
             },
         ];
         let value = semantic_tokens_json(&tokens);
-        assert_eq!(value["data"], serde_json::json!([0, 4, 1, 5, 0, 0, 6, 2, 2, 0, 1, 2, 4, 0, 0]));
+        assert_eq!(
+            value["data"],
+            serde_json::json!([0, 4, 1, 5, 0, 0, 6, 2, 2, 0, 1, 2, 4, 0, 0])
+        );
     }
 
     #[test]
@@ -692,10 +718,7 @@ mod tests {
         let value = workspace_symbols_json(&[entry]);
         assert_eq!(value[0]["name"], "sqrt");
         assert_eq!(value[0]["kind"], 12);
-        assert_eq!(
-            value[0]["location"]["uri"],
-            "file:///C:/aevia/src/A.aev"
-        );
+        assert_eq!(value[0]["location"]["uri"], "file:///C:/aevia/src/A.aev");
         assert_eq!(
             value[0]["location"]["range"]["start"],
             serde_json::json!({"line": 2, "character": 3})
@@ -704,9 +727,8 @@ mod tests {
 
     #[test]
     fn a_rename_is_one_document_change_per_file_in_order() {
-        let range = |line, start, end| {
-            Range::new(Position::new(line, start), Position::new(line, end))
-        };
+        let range =
+            |line, start, end| Range::new(Position::new(line, start), Position::new(line, end));
         let edits = [
             FileEdit {
                 document: "C:/aevia/src/A.aev".to_string(),
@@ -735,7 +757,10 @@ mod tests {
             .as_array()
             .expect("documentChanges");
         assert_eq!(changes.len(), 2, "{value:#?}");
-        assert_eq!(changes[0]["textDocument"]["uri"], "file:///C:/aevia/src/A.aev");
+        assert_eq!(
+            changes[0]["textDocument"]["uri"],
+            "file:///C:/aevia/src/A.aev"
+        );
         assert_eq!(changes[0]["textDocument"]["version"], Value::Null);
         assert_eq!(changes[0]["edits"].as_array().map(Vec::len), Some(2));
         assert_eq!(changes[0]["edits"][0]["newText"], "amount");
@@ -743,7 +768,10 @@ mod tests {
             changes[0]["edits"][0]["range"]["start"],
             serde_json::json!({"line": 2, "character": 3})
         );
-        assert_eq!(changes[1]["textDocument"]["uri"], "file:///C:/aevia/src/B.aev");
+        assert_eq!(
+            changes[1]["textDocument"]["uri"],
+            "file:///C:/aevia/src/B.aev"
+        );
     }
 
     #[test]
@@ -799,10 +827,7 @@ mod tests {
             value["signatures"][0]["parameters"][0]["label"],
             "Tensor<1, Float>"
         );
-        assert_eq!(
-            value["signatures"][1]["documentation"]["kind"],
-            "markdown"
-        );
+        assert_eq!(value["signatures"][1]["documentation"]["kind"], "markdown");
         assert_eq!(
             value["signatures"][1]["documentation"]["value"],
             "Reduce along an axis."

@@ -7,13 +7,23 @@
 //! actions — is ordinary data.
 
 use crate::sym::Term;
-use aevia_dim::{Dim, DimEnv, UnitDef};
-use aevia_types::adt::{self, AdtId};
-use aevia_syntax::ast::{BinOp, Expr, Pat};
+use aevia_dim::Dim;
+use aevia_dim::DimEnv;
+use aevia_dim::UnitDef;
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::Expr;
+use aevia_syntax::ast::Pat;
+use aevia_types::adt::AdtId;
+use aevia_types::adt::{
+    self,
+};
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, Signed, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -41,10 +51,10 @@ impl NumKind {
     #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self {
-            Self::Int(_) => "Int",
-            Self::Exact(_) | Self::Sym(_) => "Real",
-            Self::Float(_) => "Float",
-            Self::Complex(..) => "Complex",
+            | Self::Int(_) => "Int",
+            | Self::Exact(_) | Self::Sym(_) => "Real",
+            | Self::Float(_) => "Float",
+            | Self::Complex(..) => "Complex",
         }
     }
 }
@@ -73,7 +83,10 @@ impl NumVal {
 
     /// An exact rational.
     #[must_use]
-    pub fn exact(value: BigRational, dim: Dim) -> Self {
+    pub fn exact(
+        value: BigRational,
+        dim: Dim,
+    ) -> Self {
         Self {
             kind: NumKind::Exact(value),
             dim,
@@ -83,7 +96,10 @@ impl NumVal {
 
     /// A float.
     #[must_use]
-    pub fn float(value: f64, dim: Dim) -> Self {
+    pub fn float(
+        value: f64,
+        dim: Dim,
+    ) -> Self {
         Self {
             kind: NumKind::Float(value),
             dim,
@@ -93,7 +109,10 @@ impl NumVal {
 
     /// A symbolic value.
     #[must_use]
-    pub fn symbolic(term: Term, dim: Dim) -> Self {
+    pub fn symbolic(
+        term: Term,
+        dim: Dim,
+    ) -> Self {
         Self {
             kind: NumKind::Sym(Rc::new(term)),
             dim,
@@ -103,7 +122,10 @@ impl NumVal {
 
     /// Attaches a display unit.
     #[must_use]
-    pub fn with_display(mut self, unit: Rc<UnitDef>) -> Self {
+    pub fn with_display(
+        mut self,
+        unit: Rc<UnitDef>,
+    ) -> Self {
         self.display = Some(unit);
         self
     }
@@ -112,17 +134,17 @@ impl NumVal {
     #[must_use]
     pub fn to_f64(&self) -> Option<f64> {
         match &self.kind {
-            NumKind::Int(value) => value.to_f64(),
-            NumKind::Exact(value) => Some(aevia_dim::rat::to_f64(value)),
-            NumKind::Float(value) => Some(*value),
-            NumKind::Complex(re, im) => {
+            | NumKind::Int(value) => value.to_f64(),
+            | NumKind::Exact(value) => Some(aevia_dim::rat::to_f64(value)),
+            | NumKind::Float(value) => Some(*value),
+            | NumKind::Complex(re, im) => {
                 if im.abs() < f64::EPSILON {
                     Some(*re)
                 } else {
                     None
                 }
-            }
-            NumKind::Sym(term) => term.eval(&HashMap::new()).ok(),
+            },
+            | NumKind::Sym(term) => term.eval(&HashMap::new()).ok(),
         }
     }
 
@@ -130,10 +152,10 @@ impl NumVal {
     #[must_use]
     pub fn to_rational(&self) -> Option<BigRational> {
         match &self.kind {
-            NumKind::Int(value) => Some(BigRational::from_integer(value.clone())),
-            NumKind::Exact(value) => Some(value.clone()),
-            NumKind::Float(value) => BigRational::from_float(*value),
-            _ => None,
+            | NumKind::Int(value) => Some(BigRational::from_integer(value.clone())),
+            | NumKind::Exact(value) => Some(value.clone()),
+            | NumKind::Float(value) => BigRational::from_float(*value),
+            | _ => None,
         }
     }
 
@@ -141,10 +163,10 @@ impl NumVal {
     #[must_use]
     pub fn is_zero(&self) -> bool {
         match &self.kind {
-            NumKind::Int(value) => value.is_zero(),
-            NumKind::Exact(value) => value.is_zero(),
-            NumKind::Float(value) => *value == 0.0,
-            _ => false,
+            | NumKind::Int(value) => value.is_zero(),
+            | NumKind::Exact(value) => value.is_zero(),
+            | NumKind::Float(value) => *value == 0.0,
+            | _ => false,
         }
     }
 
@@ -265,7 +287,10 @@ impl View {
     /// `None` when the magnitude does not fit an `isize`, which no buffer the
     /// runtime can allocate reaches: the window is rejected rather than
     /// wrapped.
-    fn step(&self, axis: usize) -> Option<isize> {
+    fn step(
+        &self,
+        axis: usize,
+    ) -> Option<isize> {
         signed_stride(self.strides[axis], self.reversed[axis])
     }
 }
@@ -275,9 +300,16 @@ impl View {
 /// The only place a direction becomes a sign. `usize → isize` is checked, so a
 /// magnitude that cannot be negated rejects the window instead of wrapping to
 /// `isize::MIN`.
-fn signed_stride(stride: usize, reversed: bool) -> Option<isize> {
+fn signed_stride(
+    stride: usize,
+    reversed: bool,
+) -> Option<isize> {
     let magnitude = isize::try_from(stride).ok()?;
-    Some(if reversed { -magnitude } else { magnitude })
+    Some(if reversed {
+        -magnitude
+    } else {
+        magnitude
+    })
 }
 
 /// True when every position a window can reach lies inside a buffer of
@@ -340,11 +372,11 @@ impl Storage {
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
-            Self::Dense(items) => items.len(),
-            Self::Exact(items) => items.len(),
-            Self::Boxed(items) => items.len(),
-            Self::Bool(items) => items.len(),
-            Self::View(view) => view.len,
+            | Self::Dense(items) => items.len(),
+            | Self::Exact(items) => items.len(),
+            | Self::Boxed(items) => items.len(),
+            | Self::Bool(items) => items.len(),
+            | Self::View(view) => view.len,
         }
     }
 
@@ -445,25 +477,35 @@ impl TensorData {
     /// element in *this tensor's* row-major order — which is what `show`,
     /// `elements` and `==` all mean by "the k-th element".
     #[must_use]
-    pub fn get_flat(&self, index: usize) -> Option<Value> {
+    pub fn get_flat(
+        &self,
+        index: usize,
+    ) -> Option<Value> {
         match &self.storage {
-            Storage::Dense(items) => items.get(index).map(|value| self.float_value(*value)),
-            Storage::View(view) => {
+            | Storage::Dense(items) => items.get(index).map(|value| self.float_value(*value)),
+            | Storage::View(view) => {
                 let position = self.view_position(view, index)?;
-                view.data.get(position).map(|value| self.float_value(*value))
-            }
-            Storage::Exact(items) => items.get(index).map(|value| {
-                let mut num = NumVal::exact(value.clone(), self.dim.clone());
-                num.display = self.display.clone();
-                Value::Num(num)
-            }),
-            Storage::Boxed(items) => items.get(index).cloned(),
-            Storage::Bool(items) => items.get(index).map(|value| Value::Bool(*value)),
+                view.data
+                    .get(position)
+                    .map(|value| self.float_value(*value))
+            },
+            | Storage::Exact(items) => {
+                items.get(index).map(|value| {
+                    let mut num = NumVal::exact(value.clone(), self.dim.clone());
+                    num.display = self.display.clone();
+                    Value::Num(num)
+                })
+            },
+            | Storage::Boxed(items) => items.get(index).cloned(),
+            | Storage::Bool(items) => items.get(index).map(|value| Value::Bool(*value)),
         }
     }
 
     /// A `Float` element carrying this tensor's dimension and display unit.
-    fn float_value(&self, value: f64) -> Value {
+    fn float_value(
+        &self,
+        value: f64,
+    ) -> Value {
         let mut num = NumVal::float(value, self.dim.clone());
         num.display = self.display.clone();
         Value::Num(num)
@@ -475,7 +517,11 @@ impl TensorData {
     /// `checked_add_signed` rejects a position that would fall below the start
     /// of the buffer instead of wrapping it to a huge `usize` that happens to
     /// land inside the buffer.
-    fn view_position(&self, view: &View, index: usize) -> Option<usize> {
+    fn view_position(
+        &self,
+        view: &View,
+        index: usize,
+    ) -> Option<usize> {
         if index >= view.len
             || view.strides.len() != self.shape.len()
             || view.reversed.len() != self.shape.len()
@@ -506,9 +552,9 @@ impl TensorData {
     #[must_use]
     pub fn dense(&self) -> Option<&[f64]> {
         match &self.storage {
-            Storage::Dense(items) => Some(items.as_slice()),
-            Storage::View(view) => self.contiguous_window(view),
-            _ => None,
+            | Storage::Dense(items) => Some(items.as_slice()),
+            | Storage::View(view) => self.contiguous_window(view),
+            | _ => None,
         }
     }
 
@@ -526,18 +572,20 @@ impl TensorData {
     #[must_use]
     pub fn dense_flat(&self) -> Option<Cow<'_, [f64]>> {
         match &self.storage {
-            Storage::Dense(items) => Some(Cow::Borrowed(items.as_slice())),
-            Storage::View(view) => match self.contiguous_window(view) {
-                Some(window) => Some(Cow::Borrowed(window)),
-                None => {
-                    let mut out = Vec::with_capacity(view.len);
-                    for index in 0..view.len {
-                        out.push(*view.data.get(self.view_position(view, index)?)?);
-                    }
-                    Some(Cow::Owned(out))
+            | Storage::Dense(items) => Some(Cow::Borrowed(items.as_slice())),
+            | Storage::View(view) => {
+                match self.contiguous_window(view) {
+                    | Some(window) => Some(Cow::Borrowed(window)),
+                    | None => {
+                        let mut out = Vec::with_capacity(view.len);
+                        for index in 0..view.len {
+                            out.push(*view.data.get(self.view_position(view, index)?)?);
+                        }
+                        Some(Cow::Owned(out))
+                    },
                 }
             },
-            _ => None,
+            | _ => None,
         }
     }
 
@@ -546,14 +594,18 @@ impl TensorData {
     /// A reversed axis is never contiguous, even when its magnitude is 1: the
     /// window's elements run backwards through the buffer, so no single slice
     /// of it holds them in logical order.
-    fn contiguous_window<'a>(&self, view: &'a View) -> Option<&'a [f64]> {
+    fn contiguous_window<'a>(
+        &self,
+        view: &'a View,
+    ) -> Option<&'a [f64]> {
         if view.reversed.iter().any(|reversed| *reversed) {
             return None;
         }
         if view.strides != row_major_strides(&self.shape) {
             return None;
         }
-        view.data.get(view.offset..view.offset.checked_add(view.len)?)
+        view.data
+            .get(view.offset..view.offset.checked_add(view.len)?)
     }
 
     /// The buffer this tensor's elements live in, when it has one.
@@ -563,9 +615,9 @@ impl TensorData {
     #[must_use]
     pub fn buffer(&self) -> Option<&Rc<Vec<f64>>> {
         match &self.storage {
-            Storage::Dense(data) => Some(data),
-            Storage::View(view) => Some(&view.data),
-            _ => None,
+            | Storage::Dense(data) => Some(data),
+            | Storage::View(view) => Some(&view.data),
+            | _ => None,
         }
     }
 
@@ -592,8 +644,8 @@ impl TensorData {
     #[must_use]
     pub fn offset(&self) -> usize {
         match &self.storage {
-            Storage::View(view) => view.offset,
-            _ => 0,
+            | Storage::View(view) => view.offset,
+            | _ => 0,
         }
     }
 
@@ -604,8 +656,8 @@ impl TensorData {
     #[must_use]
     pub fn strides(&self) -> Option<&[usize]> {
         match &self.storage {
-            Storage::View(view) => Some(&view.strides),
-            _ => None,
+            | Storage::View(view) => Some(&view.strides),
+            | _ => None,
         }
     }
 
@@ -616,13 +668,18 @@ impl TensorData {
     #[must_use]
     pub fn reversed(&self) -> Option<&[bool]> {
         match &self.storage {
-            Storage::View(view) => Some(&view.reversed),
-            _ => None,
+            | Storage::View(view) => Some(&view.reversed),
+            | _ => None,
         }
     }
 
     /// A dense tensor with the same shape, dimension and display.
-    fn dense_with(&self, data: Vec<f64>, dim: Dim, display: Option<Rc<UnitDef>>) -> Value {
+    fn dense_with(
+        &self,
+        data: Vec<f64>,
+        dim: Dim,
+        display: Option<Rc<UnitDef>>,
+    ) -> Value {
         Value::Tensor(Rc::new(Self {
             shape: self.shape.clone(),
             storage: Storage::Dense(Rc::new(data)),
@@ -634,19 +691,29 @@ impl TensorData {
     /// The element at a multi-dimensional index, with negative indices counted
     /// from the end (§6.6.4).
     #[must_use]
-    pub fn get(&self, indices: &[isize]) -> Option<Value> {
+    pub fn get(
+        &self,
+        indices: &[isize],
+    ) -> Option<Value> {
         let flat = self.flat_index(indices)?;
         self.get_flat(flat)
     }
 
-    fn flat_index(&self, indices: &[isize]) -> Option<usize> {
+    fn flat_index(
+        &self,
+        indices: &[isize],
+    ) -> Option<usize> {
         if indices.len() != self.shape.len() {
             return None;
         }
         let mut flat = 0usize;
         for (index, extent) in indices.iter().zip(self.shape.iter()) {
             let extent = isize::try_from(*extent).ok()?;
-            let normalized = if *index < 0 { extent + index } else { *index };
+            let normalized = if *index < 0 {
+                extent + index
+            } else {
+                *index
+            };
             if normalized < 0 || normalized >= extent {
                 return None;
             }
@@ -677,32 +744,36 @@ impl TensorData {
     /// elementwise result is a fresh `NumVal::float`, and a `NumVal` built by
     /// arithmetic carries no display unit.
     #[must_use]
-    pub fn dense_binary(&self, op: BinOp, right: &Self) -> Option<Value> {
+    pub fn dense_binary(
+        &self,
+        op: BinOp,
+        right: &Self,
+    ) -> Option<Value> {
         let (left_data, right_data) = (self.dense_flat()?, right.dense_flat()?);
         if self.shape != right.shape || left_data.is_empty() {
             return None;
         }
         let dim = match op {
-            BinOp::Add | BinOp::Sub => self.dim.clone(),
-            BinOp::Mul => self.dim.mul(&right.dim),
-            BinOp::Div => self.dim.div(&right.dim),
-            BinOp::Pow => {
+            | BinOp::Add | BinOp::Sub => self.dim.clone(),
+            | BinOp::Mul => self.dim.mul(&right.dim),
+            | BinOp::Div => self.dim.div(&right.dim),
+            | BinOp::Pow => {
                 // The boxed path takes the tensor's dimension from the first
                 // element it builds, so the first exponent decides it here too.
                 let exponent = BigRational::from_float(right_data[0])?;
                 self.dim.pow(&exponent)
-            }
-            _ => return None,
+            },
+            | _ => return None,
         };
         let mut data = Vec::with_capacity(left_data.len());
         for (a, b) in left_data.iter().zip(right_data.iter()) {
             data.push(match op {
-                BinOp::Add => a + b,
-                BinOp::Sub => a - b,
-                BinOp::Mul => a * b,
-                BinOp::Div => a / b,
-                BinOp::Pow => a.powf(*b),
-                _ => return None,
+                | BinOp::Add => a + b,
+                | BinOp::Sub => a - b,
+                | BinOp::Mul => a * b,
+                | BinOp::Div => a / b,
+                | BinOp::Pow => a.powf(*b),
+                | _ => return None,
             });
         }
         Some(self.dense_with(data, dim, None))
@@ -717,7 +788,12 @@ impl TensorData {
     /// `scalar ^ tensor` is excluded: its dimension depends on every
     /// exponent, so no single result dimension exists.
     #[must_use]
-    pub fn dense_scalar(&self, op: BinOp, scalar: &NumVal, flipped: bool) -> Option<Value> {
+    pub fn dense_scalar(
+        &self,
+        op: BinOp,
+        scalar: &NumVal,
+        flipped: bool,
+    ) -> Option<Value> {
         let data = self.dense_flat()?;
         let NumKind::Float(number) = &scalar.kind else {
             return None;
@@ -727,23 +803,23 @@ impl TensorData {
             return None;
         }
         let dim = match op {
-            BinOp::Add | BinOp::Sub => {
+            | BinOp::Add | BinOp::Sub => {
                 if flipped {
                     scalar.dim.clone()
                 } else {
                     self.dim.clone()
                 }
-            }
-            BinOp::Mul => self.dim.mul(&scalar.dim),
-            BinOp::Div => {
+            },
+            | BinOp::Mul => self.dim.mul(&scalar.dim),
+            | BinOp::Div => {
                 if flipped {
                     scalar.dim.div(&self.dim)
                 } else {
                     self.dim.div(&scalar.dim)
                 }
-            }
-            BinOp::Pow => self.dim.pow(&BigRational::from_float(number)?),
-            _ => return None,
+            },
+            | BinOp::Pow => self.dim.pow(&BigRational::from_float(number)?),
+            | _ => return None,
         };
         let mut out = Vec::with_capacity(data.len());
         for element in data.iter() {
@@ -753,12 +829,12 @@ impl TensorData {
                 (*element, number)
             };
             out.push(match op {
-                BinOp::Add => a + b,
-                BinOp::Sub => a - b,
-                BinOp::Mul => a * b,
-                BinOp::Div => a / b,
-                BinOp::Pow => a.powf(b),
-                _ => return None,
+                | BinOp::Add => a + b,
+                | BinOp::Sub => a - b,
+                | BinOp::Mul => a * b,
+                | BinOp::Div => a / b,
+                | BinOp::Pow => a.powf(b),
+                | _ => return None,
             });
         }
         Some(self.dense_with(out, dim, None))
@@ -812,10 +888,13 @@ impl TensorData {
     /// inner extent is left to the boxed path, which answers a dimensionless
     /// zero.
     #[must_use]
-    pub fn dense_matmul(&self, right: &Self) -> Option<Value> {
+    pub fn dense_matmul(
+        &self,
+        right: &Self,
+    ) -> Option<Value> {
         let (a, b) = (self.dense_flat()?, right.dense_flat()?);
         match (self.rank(), right.rank()) {
-            (2, 2) => {
+            | (2, 2) => {
                 let (m, k) = (self.shape[0], self.shape[1]);
                 let (k2, n) = (right.shape[0], right.shape[1]);
                 if k != k2 || k == 0 || m == 0 || n == 0 {
@@ -831,8 +910,8 @@ impl TensorData {
                     dim: self.dim.mul(&right.dim),
                     display: None,
                 })))
-            }
-            (2, 1) => {
+            },
+            | (2, 1) => {
                 let (m, k) = (self.shape[0], self.shape[1]);
                 if k != right.shape[0] || k == 0 || m == 0 {
                     return None;
@@ -851,8 +930,8 @@ impl TensorData {
                     dim: self.dim.mul(&right.dim),
                     display: None,
                 })))
-            }
-            (1, 2) => {
+            },
+            | (1, 2) => {
                 let k = self.shape[0];
                 let (k2, n) = (right.shape[0], right.shape[1]);
                 if k != k2 || k == 0 || n == 0 {
@@ -872,8 +951,8 @@ impl TensorData {
                     dim: self.dim.mul(&right.dim),
                     display: None,
                 })))
-            }
-            (1, 1) => {
+            },
+            | (1, 1) => {
                 let k = self.shape[0];
                 if k != right.shape[0] || k == 0 {
                     return None;
@@ -883,8 +962,8 @@ impl TensorData {
                     total += a[index] * b[index];
                 }
                 Some(Value::Num(NumVal::float(total, self.dim.mul(&right.dim))))
-            }
-            _ => None,
+            },
+            | _ => None,
         }
     }
 
@@ -897,19 +976,23 @@ impl TensorData {
     /// view a view of the *same* buffer — including a slice of a reversed one.
     fn f64_window(&self) -> Option<(Rc<Vec<f64>>, usize, Vec<usize>, Vec<bool>)> {
         match &self.storage {
-            Storage::Dense(data) => Some((
-                data.clone(),
-                0,
-                row_major_strides(&self.shape),
-                vec![false; self.rank()],
-            )),
-            Storage::View(view) => Some((
-                view.data.clone(),
-                view.offset,
-                view.strides.clone(),
-                view.reversed.clone(),
-            )),
-            _ => None,
+            | Storage::Dense(data) => {
+                Some((
+                    data.clone(),
+                    0,
+                    row_major_strides(&self.shape),
+                    vec![false; self.rank()],
+                ))
+            },
+            | Storage::View(view) => {
+                Some((
+                    view.data.clone(),
+                    view.offset,
+                    view.strides.clone(),
+                    view.reversed.clone(),
+                ))
+            },
+            | _ => None,
         }
     }
 
@@ -930,7 +1013,10 @@ impl TensorData {
     /// the result is empty (an empty tensor stays [`Storage::Boxed`], as
     /// everywhere else).
     #[must_use]
-    pub fn slice_view(&self, ranges: &[(usize, usize)]) -> Option<Self> {
+    pub fn slice_view(
+        &self,
+        ranges: &[(usize, usize)],
+    ) -> Option<Self> {
         let (data, offset, strides, reversed) = self.f64_window()?;
         if ranges.len() != self.rank() {
             return None;
@@ -984,7 +1070,10 @@ impl TensorData {
     /// that leaves the buffer, and for an empty result (an empty tensor stays
     /// [`Storage::Boxed`], as everywhere else).
     #[must_use]
-    pub fn slice_step_view(&self, walks: &[(usize, usize, isize)]) -> Option<Self> {
+    pub fn slice_step_view(
+        &self,
+        walks: &[(usize, usize, isize)],
+    ) -> Option<Self> {
         let (data, offset, strides, reversed) = self.f64_window()?;
         if walks.len() != self.rank() {
             return None;
@@ -1040,7 +1129,10 @@ impl TensorData {
     /// `fixed` names more axes than the tensor has, when a coordinate is out
     /// of range, or when the result is empty.
     #[must_use]
-    pub fn index_view(&self, fixed: &[usize]) -> Option<Self> {
+    pub fn index_view(
+        &self,
+        fixed: &[usize],
+    ) -> Option<Self> {
         let (data, offset, strides, reversed) = self.f64_window()?;
         if fixed.len() > self.rank() {
             return None;
@@ -1134,7 +1226,10 @@ impl TensorData {
     /// Returns `None` when the elements are not in an `f64` buffer, when
     /// `axis` is not a dimension, or when the tensor is empty.
     #[must_use]
-    pub fn reversed_view(&self, axis: usize) -> Option<Self> {
+    pub fn reversed_view(
+        &self,
+        axis: usize,
+    ) -> Option<Self> {
         let (data, offset, strides, mut reversed) = self.f64_window()?;
         let extent = *self.shape.get(axis)?;
         let len: usize = self.shape.iter().product();
@@ -1198,10 +1293,13 @@ impl TensorData {
     /// Returns `None` for a view over a buffer that is not `f64`, which cannot
     /// be constructed today.
     #[must_use]
-    pub fn reshape_storage(&self, shape: &[usize]) -> Option<Storage> {
+    pub fn reshape_storage(
+        &self,
+        shape: &[usize],
+    ) -> Option<Storage> {
         let len = Self::element_count(shape);
         match &self.storage {
-            Storage::View(view) => {
+            | Storage::View(view) => {
                 // `len == 0` cannot be a view (empty tensors stay boxed), but
                 // guarding it keeps the offset arithmetic honest.
                 if len == 0 {
@@ -1217,8 +1315,8 @@ impl TensorData {
                     }));
                 }
                 Some(Storage::Dense(Rc::new(self.dense_flat()?.into_owned())))
-            }
-            other => Some(other.clone()),
+            },
+            | other => Some(other.clone()),
         }
     }
 }
@@ -1366,7 +1464,10 @@ impl Scope {
 
     /// Looks a name up through the chain.
     #[must_use]
-    pub fn lookup(self: &Rc<Self>, name: &str) -> Option<Value> {
+    pub fn lookup(
+        self: &Rc<Self>,
+        name: &str,
+    ) -> Option<Value> {
         let mut current = Some(self.clone());
         while let Some(scope) = current {
             if let Some(value) = scope.vars.borrow().get(name) {
@@ -1435,7 +1536,12 @@ pub struct Closure {
 impl Closure {
     /// An AST-path closure.
     #[must_use]
-    pub fn ast(params: Vec<Pat>, body: Expr, env: Rc<Scope>, name: Option<String>) -> Self {
+    pub fn ast(
+        params: Vec<Pat>,
+        body: Expr,
+        env: Rc<Scope>,
+        name: Option<String>,
+    ) -> Self {
         Self {
             params,
             body: ClosureBody::Ast(body),
@@ -1448,8 +1554,8 @@ impl Closure {
     #[must_use]
     pub fn arity(&self) -> usize {
         match &self.body {
-            ClosureBody::Ast(_) => self.params.len(),
-            ClosureBody::Ir(function) => function.params.len(),
+            | ClosureBody::Ast(_) => self.params.len(),
+            | ClosureBody::Ir(function) => function.params.len(),
         }
     }
 }
@@ -1457,11 +1563,20 @@ impl Closure {
 /// A function implemented in Rust, used by higher-order builtins such as
 /// `diff`, which returns a closure that is not written in Aevia source.
 pub struct NativeFn(
-    pub Box<dyn Fn(&mut crate::eval::Interp, Vec<Value>, aevia_syntax::Span) -> Result<Value, crate::eval::EvalError>>,
+    pub  Box<
+        dyn Fn(
+            &mut crate::eval::Interp,
+            Vec<Value>,
+            aevia_syntax::Span,
+        ) -> Result<Value, crate::eval::EvalError>,
+    >,
 );
 
 impl fmt::Debug for NativeFn {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str("<native fn>")
     }
 }
@@ -1635,8 +1750,8 @@ impl Value {
     #[must_use]
     pub fn as_num(&self) -> Option<&NumVal> {
         match self {
-            Self::Num(num) => Some(num),
-            _ => None,
+            | Self::Num(num) => Some(num),
+            | _ => None,
         }
     }
 
@@ -1656,20 +1771,20 @@ impl Value {
     #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self {
-            Self::Unit => "()",
-            Self::Bool(_) => "Bool",
-            Self::Num(num) => num.kind.type_name(),
-            Self::Str(_) => "String",
-            Self::Tensor(_) => "Tensor",
-            Self::Record(_) => "record",
-            Self::Variant(_) => "variant",
-            Self::Closure(_) | Self::Native(_) => "function",
-            Self::Ctor { .. } => "constructor",
-            Self::UnitOf(_) => "Unit",
-            Self::Io(_) => "IO",
-            Self::Prop(_) => "Prop",
-            Self::Dyn(_) => "Dyn",
-            Self::Error => "<error>",
+            | Self::Unit => "()",
+            | Self::Bool(_) => "Bool",
+            | Self::Num(num) => num.kind.type_name(),
+            | Self::Str(_) => "String",
+            | Self::Tensor(_) => "Tensor",
+            | Self::Record(_) => "record",
+            | Self::Variant(_) => "variant",
+            | Self::Closure(_) | Self::Native(_) => "function",
+            | Self::Ctor { .. } => "constructor",
+            | Self::UnitOf(_) => "Unit",
+            | Self::Io(_) => "IO",
+            | Self::Prop(_) => "Prop",
+            | Self::Dyn(_) => "Dyn",
+            | Self::Error => "<error>",
         }
     }
 }
@@ -1754,7 +1869,10 @@ pub fn format_scalar_repr(num: &NumVal) -> String {
     format_scalar_in(num, true)
 }
 
-fn format_scalar_in(num: &NumVal, repr: bool) -> String {
+fn format_scalar_in(
+    num: &NumVal,
+    repr: bool,
+) -> String {
     // A symbolic term prints itself; the display unit only adds a suffix.
     if let NumKind::Sym(term) = &num.kind {
         let text = if repr {
@@ -1774,15 +1892,13 @@ fn format_scalar_in(num: &NumVal, repr: bool) -> String {
         };
     }
     let (text, unit) = match (&num.kind, &num.display) {
-        (kind, Some(unit)) => {
+        | (kind, Some(unit)) => {
             let text = match kind {
-                NumKind::Int(value) => display_exact(
-                    &BigRational::from_integer(value.clone()),
-                    unit,
-                    repr,
-                ),
-                NumKind::Exact(value) => display_exact(value, unit, repr),
-                NumKind::Float(value) => {
+                | NumKind::Int(value) => {
+                    display_exact(&BigRational::from_integer(value.clone()), unit, repr)
+                },
+                | NumKind::Exact(value) => display_exact(value, unit, repr),
+                | NumKind::Float(value) => {
                     let offset = unit.offset.as_ref().map_or(0.0, aevia_dim::Scale::to_f64);
                     let scale = unit.scale.to_f64();
                     let shown = if scale == 0.0 {
@@ -1795,55 +1911,51 @@ fn format_scalar_in(num: &NumVal, repr: bool) -> String {
                     } else {
                         format_float(shown)
                     }
-                }
-                NumKind::Complex(re, im) => {
+                },
+                | NumKind::Complex(re, im) => {
                     let sign = if *im < 0.0 { "-" } else { "+" };
-                    format!(
-                        "{} {sign} {}*i",
-                        format_float(*re),
-                        format_float(im.abs())
-                    )
-                }
-                NumKind::Sym(_) => unreachable!("handled above"),
+                    format!("{} {sign} {}*i", format_float(*re), format_float(im.abs()))
+                },
+                | NumKind::Sym(_) => unreachable!("handled above"),
             };
             (text, Some(unit.display.clone()))
-        }
-        (NumKind::Int(value), None) => (value.to_string(), None),
-        (NumKind::Exact(value), None) => (
-            if repr {
-                // `repr` of an exact value is a rational: an integral one is
-                // its integer (`Int ⊂ Real`, so the text is the same), and the
-                // rest keep their denominator.
-                aevia_dim::rat::format_rational(value)
-            } else {
-                aevia_dim::format_rational_decimal(value)
-            },
-            None,
-        ),
-        (NumKind::Float(value), None) => (
-            if repr {
-                format_float_repr(*value)
-            } else {
-                format_float(*value)
-            },
-            None,
-        ),
-        (NumKind::Complex(re, im), None) => {
-            let sign = if *im < 0.0 { "-" } else { "+" };
+        },
+        | (NumKind::Int(value), None) => (value.to_string(), None),
+        | (NumKind::Exact(value), None) => {
             (
-                format!(
-                    "{} {sign} {}*i",
-                    format_float(*re),
-                    format_float(im.abs())
-                ),
+                if repr {
+                    // `repr` of an exact value is a rational: an integral one is
+                    // its integer (`Int ⊂ Real`, so the text is the same), and the
+                    // rest keep their denominator.
+                    aevia_dim::rat::format_rational(value)
+                } else {
+                    aevia_dim::format_rational_decimal(value)
+                },
                 None,
             )
-        }
-        (NumKind::Sym(_), None) => unreachable!("handled above"),
+        },
+        | (NumKind::Float(value), None) => {
+            (
+                if repr {
+                    format_float_repr(*value)
+                } else {
+                    format_float(*value)
+                },
+                None,
+            )
+        },
+        | (NumKind::Complex(re, im), None) => {
+            let sign = if *im < 0.0 { "-" } else { "+" };
+            (
+                format!("{} {sign} {}*i", format_float(*re), format_float(im.abs())),
+                None,
+            )
+        },
+        | (NumKind::Sym(_), None) => unreachable!("handled above"),
     };
     let suffix = match unit {
-        Some(unit) => unit,
-        None => si_unit_text(&num.dim),
+        | Some(unit) => unit,
+        | None => si_unit_text(&num.dim),
     };
     if suffix.is_empty() {
         text
@@ -1854,7 +1966,11 @@ fn format_scalar_in(num: &NumVal, repr: bool) -> String {
 
 /// Converts a coherent exact value into a display unit without leaving the
 /// rationals, so `3.2 km` stays `3.2 km` instead of `3.2000000000000006 km`.
-fn display_exact(value: &BigRational, unit: &UnitDef, repr: bool) -> String {
+fn display_exact(
+    value: &BigRational,
+    unit: &UnitDef,
+    repr: bool,
+) -> String {
     let offset = unit
         .offset
         .as_ref()
@@ -1911,34 +2027,41 @@ pub fn repr(value: &Value) -> String {
 /// answer for a value no program prints by hand.
 const MAX_RENDER_DEPTH: usize = 1_024;
 
-fn render(value: &Value, repr: bool) -> String {
+fn render(
+    value: &Value,
+    repr: bool,
+) -> String {
     render_at(value, repr, 0)
 }
 
-fn render_at(value: &Value, repr: bool, depth: usize) -> String {
+fn render_at(
+    value: &Value,
+    repr: bool,
+    depth: usize,
+) -> String {
     if depth > MAX_RENDER_DEPTH {
         return "...".to_string();
     }
     match value {
-        Value::Unit => "()".to_string(),
-        Value::Bool(true) => "true".to_string(),
-        Value::Bool(false) => "false".to_string(),
-        Value::Num(num) => {
+        | Value::Unit => "()".to_string(),
+        | Value::Bool(true) => "true".to_string(),
+        | Value::Bool(false) => "false".to_string(),
+        | Value::Num(num) => {
             if repr {
                 format_scalar_repr(num)
             } else {
                 format_scalar(num)
             }
-        }
-        Value::Str(text) => {
+        },
+        | Value::Str(text) => {
             if repr {
                 quote(text)
             } else {
                 text.to_string()
             }
-        }
-        Value::Tensor(tensor) => show_tensor_in(tensor, repr),
-        Value::Record(record) => {
+        },
+        | Value::Tensor(tensor) => show_tensor_in(tensor, repr),
+        | Value::Record(record) => {
             let mut out = String::from("{ ");
             for (index, (name, value)) in record.fields.iter().enumerate() {
                 if index > 0 {
@@ -1948,8 +2071,8 @@ fn render_at(value: &Value, repr: bool, depth: usize) -> String {
             }
             out.push_str(" }");
             out
-        }
-        Value::Variant(variant) => {
+        },
+        | Value::Variant(variant) => {
             if variant.fields.is_empty() {
                 variant.name.clone()
             } else {
@@ -1963,9 +2086,9 @@ fn render_at(value: &Value, repr: bool, depth: usize) -> String {
                 out.push(')');
                 out
             }
-        }
-        Value::Closure(_) | Value::Native(_) => "<fn>".to_string(),
-        Value::Ctor { name, args, .. } => {
+        },
+        | Value::Closure(_) | Value::Native(_) => "<fn>".to_string(),
+        | Value::Ctor { name, args, .. } => {
             if args.is_empty() {
                 name.clone()
             } else {
@@ -1975,21 +2098,21 @@ fn render_at(value: &Value, repr: bool, depth: usize) -> String {
                     .collect();
                 format!("{name}({})", rendered.join(", "))
             }
-        }
-        Value::UnitOf(unit) => unit.display.clone(),
-        Value::Io(_) => "<io>".to_string(),
-        Value::Prop(prop) => prop.text.clone(),
+        },
+        | Value::UnitOf(unit) => unit.display.clone(),
+        | Value::Io(_) => "<io>".to_string(),
+        | Value::Prop(prop) => prop.text.clone(),
         // §4.9.4: a `Dyn` prints as the scalar it carries, in the unit it was
         // written with, so `show(dyn(3 m))` names the same quantity.
-        Value::Dyn(dynamic) => {
+        | Value::Dyn(dynamic) => {
             let scalar = dynamic.as_scalar();
             if repr {
                 format_scalar_repr(&scalar)
             } else {
                 format_scalar(&scalar)
             }
-        }
-        Value::Error => "<error>".to_string(),
+        },
+        | Value::Error => "<error>".to_string(),
     }
 }
 
@@ -1999,20 +2122,28 @@ fn quote(text: &str) -> String {
     out.push('"');
     for character in text.chars() {
         match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other => out.push(other),
+            | '"' => out.push_str("\\\""),
+            | '\\' => out.push_str("\\\\"),
+            | '\n' => out.push_str("\\n"),
+            | '\r' => out.push_str("\\r"),
+            | '\t' => out.push_str("\\t"),
+            | other => out.push(other),
         }
     }
     out.push('"');
     out
 }
 
-fn show_tensor_in(tensor: &TensorData, repr: bool) -> String {
-    fn render_at(tensor: &TensorData, offset: &mut usize, depth: usize, repr: bool) -> String {
+fn show_tensor_in(
+    tensor: &TensorData,
+    repr: bool,
+) -> String {
+    fn render_at(
+        tensor: &TensorData,
+        offset: &mut usize,
+        depth: usize,
+        repr: bool,
+    ) -> String {
         let extent = tensor.shape.get(depth).copied().unwrap_or(0);
         if depth + 1 == tensor.shape.len() {
             let mut parts = Vec::with_capacity(extent);
@@ -2062,21 +2193,26 @@ pub enum MathSyntax {
 /// # Errors
 ///
 /// `E1001` naming the capability when the value has no typeset form.
-pub fn to_math(value: &Value, syntax: MathSyntax) -> Result<String, String> {
+pub fn to_math(
+    value: &Value,
+    syntax: MathSyntax,
+) -> Result<String, String> {
     let latex = syntax == MathSyntax::Latex;
     match value {
-        Value::Num(num) => Ok(math_scalar(num, syntax)),
-        Value::Str(text) if latex => Ok(format!("\\text{{{text}}}")),
-        Value::Str(text) => Ok(format!("\"{text}\"")),
-        Value::Bool(flag) => Ok(match (latex, *flag) {
-            (true, true) => "\\mathrm{true}".to_string(),
-            (true, false) => "\\mathrm{false}".to_string(),
-            (false, true) => "true".to_string(),
-            (false, false) => "false".to_string(),
-        }),
-        Value::Unit => Ok("()".to_string()),
-        Value::Tensor(tensor) => math_tensor(tensor, syntax),
-        Value::Record(record) => {
+        | Value::Num(num) => Ok(math_scalar(num, syntax)),
+        | Value::Str(text) if latex => Ok(format!("\\text{{{text}}}")),
+        | Value::Str(text) => Ok(format!("\"{text}\"")),
+        | Value::Bool(flag) => {
+            Ok(match (latex, *flag) {
+                | (true, true) => "\\mathrm{true}".to_string(),
+                | (true, false) => "\\mathrm{false}".to_string(),
+                | (false, true) => "true".to_string(),
+                | (false, false) => "false".to_string(),
+            })
+        },
+        | Value::Unit => Ok("()".to_string()),
+        | Value::Tensor(tensor) => math_tensor(tensor, syntax),
+        | Value::Record(record) => {
             let mut out = if latex {
                 String::from("\\begin{cases}")
             } else {
@@ -2094,34 +2230,41 @@ pub fn to_math(value: &Value, syntax: MathSyntax) -> Result<String, String> {
             }
             out.push_str(if latex { "\\end{cases}" } else { ")" });
             Ok(out)
-        }
-        Value::Variant(variant) if variant.fields.is_empty() => Ok(if latex {
-            format!("\\mathrm{{{}}}", variant.name)
-        } else {
-            variant.name.clone()
-        }),
-        Value::Variant(_) => Err("variant payloads have no mathematical form".to_string()),
-        Value::Closure(_) | Value::Native(_) => {
+        },
+        | Value::Variant(variant) if variant.fields.is_empty() => {
+            Ok(if latex {
+                format!("\\mathrm{{{}}}", variant.name)
+            } else {
+                variant.name.clone()
+            })
+        },
+        | Value::Variant(_) => Err("variant payloads have no mathematical form".to_string()),
+        | Value::Closure(_) | Value::Native(_) => {
             Err("a function has no mathematical form".to_string())
-        }
-        Value::Ctor { .. } => Err("a constructor has no mathematical form".to_string()),
-        Value::UnitOf(unit) => Ok(if latex {
-            format!("\\mathrm{{{}}}", unit.display)
-        } else {
-            unit.display.clone()
-        }),
-        Value::Io(_) => Err("an IO action has no mathematical form".to_string()),
-        Value::Prop(prop) => Ok(prop.text.clone()),
-        Value::Dyn(dynamic) => Ok(math_scalar(&dynamic.as_scalar(), syntax)),
-        Value::Error => Err("an error value has no mathematical form".to_string()),
+        },
+        | Value::Ctor { .. } => Err("a constructor has no mathematical form".to_string()),
+        | Value::UnitOf(unit) => {
+            Ok(if latex {
+                format!("\\mathrm{{{}}}", unit.display)
+            } else {
+                unit.display.clone()
+            })
+        },
+        | Value::Io(_) => Err("an IO action has no mathematical form".to_string()),
+        | Value::Prop(prop) => Ok(prop.text.clone()),
+        | Value::Dyn(dynamic) => Ok(math_scalar(&dynamic.as_scalar(), syntax)),
+        | Value::Error => Err("an error value has no mathematical form".to_string()),
     }
 }
 
-fn math_scalar(num: &NumVal, syntax: MathSyntax) -> String {
+fn math_scalar(
+    num: &NumVal,
+    syntax: MathSyntax,
+) -> String {
     let body = match &num.kind {
-        NumKind::Sym(term) => crate::sym::term_to_math(term, syntax == MathSyntax::Latex),
-        NumKind::Int(value) => value.to_string(),
-        NumKind::Exact(value) => {
+        | NumKind::Sym(term) => crate::sym::term_to_math(term, syntax == MathSyntax::Latex),
+        | NumKind::Int(value) => value.to_string(),
+        | NumKind::Exact(value) => {
             if value.denom().is_one() {
                 value.numer().to_string()
             } else if syntax == MathSyntax::Latex {
@@ -2129,17 +2272,12 @@ fn math_scalar(num: &NumVal, syntax: MathSyntax) -> String {
             } else {
                 format!("frac({}, {})", value.numer(), value.denom())
             }
-        }
-        NumKind::Float(value) => format_float(*value),
-        NumKind::Complex(re, im) => {
+        },
+        | NumKind::Float(value) => format_float(*value),
+        | NumKind::Complex(re, im) => {
             let sign = if *im < 0.0 { "-" } else { "+" };
-            format!(
-                "{}{} {} i",
-                format_float(*re),
-                sign,
-                format_float(im.abs())
-            )
-        }
+            format!("{}{} {} i", format_float(*re), sign, format_float(im.abs()))
+        },
     };
     let suffix = si_unit_text(&num.dim);
     if suffix.is_empty() {
@@ -2149,7 +2287,10 @@ fn math_scalar(num: &NumVal, syntax: MathSyntax) -> String {
     }
 }
 
-fn math_tensor(tensor: &TensorData, syntax: MathSyntax) -> Result<String, String> {
+fn math_tensor(
+    tensor: &TensorData,
+    syntax: MathSyntax,
+) -> Result<String, String> {
     if tensor.rank() > 2 {
         return Err("only rank 1 and 2 tensors have a matrix form".to_string());
     }
@@ -2216,11 +2357,14 @@ pub enum NotEqual {
 }
 
 impl fmt::Display for NotEqual {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::TypeMismatch(left, right) => write!(f, "cannot compare {left} with {right}"),
-            Self::NoEq(name) => write!(f, "{name} has no `Eq` instance"),
-            Self::Poisoned => f.write_str("a poisoned value reached an equality test"),
+            | Self::TypeMismatch(left, right) => write!(f, "cannot compare {left} with {right}"),
+            | Self::NoEq(name) => write!(f, "{name} has no `Eq` instance"),
+            | Self::Poisoned => f.write_str("a poisoned value reached an equality test"),
         }
     }
 }
@@ -2236,14 +2380,17 @@ impl fmt::Display for NotEqual {
 /// # Errors
 ///
 /// [`NotEqual`] when the values are not comparable.
-pub fn equal(left: &Value, right: &Value) -> Result<bool, NotEqual> {
+pub fn equal(
+    left: &Value,
+    right: &Value,
+) -> Result<bool, NotEqual> {
     match (left, right) {
-        (Value::Unit, Value::Unit) => Ok(true),
-        (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
-        (Value::Str(a), Value::Str(b)) => Ok(a == b),
-        (Value::Num(a), Value::Num(b)) => Ok(numbers_equal(a, b)),
-        (Value::Tensor(a), Value::Tensor(b)) => tensors_equal(a, b),
-        (Value::Record(a), Value::Record(b)) => {
+        | (Value::Unit, Value::Unit) => Ok(true),
+        | (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
+        | (Value::Str(a), Value::Str(b)) => Ok(a == b),
+        | (Value::Num(a), Value::Num(b)) => Ok(numbers_equal(a, b)),
+        | (Value::Tensor(a), Value::Tensor(b)) => tensors_equal(a, b),
+        | (Value::Record(a), Value::Record(b)) => {
             if a.fields.len() != b.fields.len() {
                 return Ok(false);
             }
@@ -2256,8 +2403,8 @@ pub fn equal(left: &Value, right: &Value) -> Result<bool, NotEqual> {
                 }
             }
             Ok(true)
-        }
-        (Value::Variant(a), Value::Variant(b)) => {
+        },
+        | (Value::Variant(a), Value::Variant(b)) => {
             if a.adt != b.adt || a.index != b.index || a.fields.len() != b.fields.len() {
                 return Ok(false);
             }
@@ -2267,21 +2414,21 @@ pub fn equal(left: &Value, right: &Value) -> Result<bool, NotEqual> {
                 }
             }
             Ok(true)
-        }
-        (Value::UnitOf(a), Value::UnitOf(b)) => Ok(a.name == b.name),
-        (Value::Prop(a), Value::Prop(b)) => Ok(a.text == b.text),
+        },
+        | (Value::UnitOf(a), Value::UnitOf(b)) => Ok(a.name == b.name),
+        | (Value::Prop(a), Value::Prop(b)) => Ok(a.text == b.text),
         // §4.9.4: two `Dyn`s are equal when they carry the same dimension and
         // the same payload.
-        (Value::Dyn(a), Value::Dyn(b)) => {
+        | (Value::Dyn(a), Value::Dyn(b)) => {
             Ok(a.dim == b.dim && equal(&Value::Num(a.payload()), &Value::Num(b.payload()))?)
-        }
-        (Value::Error, _) | (_, Value::Error) => Err(NotEqual::Poisoned),
-        (Value::Closure(_) | Value::Native(_), _) | (_, Value::Closure(_) | Value::Native(_)) => {
+        },
+        | (Value::Error, _) | (_, Value::Error) => Err(NotEqual::Poisoned),
+        | (Value::Closure(_) | Value::Native(_), _) | (_, Value::Closure(_) | Value::Native(_)) => {
             Err(NotEqual::NoEq("a function"))
-        }
-        (Value::Ctor { .. }, _) | (_, Value::Ctor { .. }) => Err(NotEqual::NoEq("a constructor")),
-        (Value::Io(_), _) | (_, Value::Io(_)) => Err(NotEqual::NoEq("an IO action")),
-        (a, b) => Err(NotEqual::TypeMismatch(a.type_name(), b.type_name())),
+        },
+        | (Value::Ctor { .. }, _) | (_, Value::Ctor { .. }) => Err(NotEqual::NoEq("a constructor")),
+        | (Value::Io(_), _) | (_, Value::Io(_)) => Err(NotEqual::NoEq("an IO action")),
+        | (a, b) => Err(NotEqual::TypeMismatch(a.type_name(), b.type_name())),
     }
 }
 
@@ -2289,20 +2436,28 @@ pub fn equal(left: &Value, right: &Value) -> Result<bool, NotEqual> {
 ///
 /// A symbolic operand is not decidable here; [`crate::eval::Interp::compare`]
 /// turns that case into a `Prop` before reaching this function.
-fn numbers_equal(left: &NumVal, right: &NumVal) -> bool {
+fn numbers_equal(
+    left: &NumVal,
+    right: &NumVal,
+) -> bool {
     match (&left.kind, &right.kind) {
-        (NumKind::Sym(_), _) | (_, NumKind::Sym(_)) => false,
-        (NumKind::Complex(ar, ai), NumKind::Complex(br, bi)) => ar == br && ai == bi,
-        (NumKind::Complex(..), _) | (_, NumKind::Complex(..)) => false,
-        (NumKind::Float(a), NumKind::Float(b)) => a == b,
-        _ => match (left.to_rational(), right.to_rational()) {
-            (Some(a), Some(b)) => a == b,
-            _ => false,
+        | (NumKind::Sym(_), _) | (_, NumKind::Sym(_)) => false,
+        | (NumKind::Complex(ar, ai), NumKind::Complex(br, bi)) => ar == br && ai == bi,
+        | (NumKind::Complex(..), _) | (_, NumKind::Complex(..)) => false,
+        | (NumKind::Float(a), NumKind::Float(b)) => a == b,
+        | _ => {
+            match (left.to_rational(), right.to_rational()) {
+                | (Some(a), Some(b)) => a == b,
+                | _ => false,
+            }
         },
     }
 }
 
-fn tensors_equal(left: &TensorData, right: &TensorData) -> Result<bool, NotEqual> {
+fn tensors_equal(
+    left: &TensorData,
+    right: &TensorData,
+) -> Result<bool, NotEqual> {
     if left.shape != right.shape {
         return Ok(false);
     }
@@ -2319,7 +2474,12 @@ fn tensors_equal(left: &TensorData, right: &TensorData) -> Result<bool, NotEqual
 
 /// Builds a variant value.
 #[must_use]
-pub fn make_variant(adt: AdtId, index: usize, name: &str, fields: Vec<Value>) -> Value {
+pub fn make_variant(
+    adt: AdtId,
+    index: usize,
+    name: &str,
+    fields: Vec<Value>,
+) -> Value {
     Value::Variant(Rc::new(VariantValue {
         adt,
         index,
@@ -2330,26 +2490,31 @@ pub fn make_variant(adt: AdtId, index: usize, name: &str, fields: Vec<Value>) ->
 
 /// The constructor name for an id/index pair.
 #[must_use]
-pub fn ctor_name(adt: AdtId, index: usize) -> Option<String> {
-    adt::get(adt)
-        .and_then(|registered| registered.ctors.get(index).map(|ctor| ctor.name.clone()))
+pub fn ctor_name(
+    adt: AdtId,
+    index: usize,
+) -> Option<String> {
+    adt::get(adt).and_then(|registered| registered.ctors.get(index).map(|ctor| ctor.name.clone()))
 }
 
 /// The dimension of a value, when it has one.
 #[must_use]
 pub fn value_dim(value: &Value) -> Dim {
     match value {
-        Value::Num(num) => num.dim.clone(),
-        Value::Tensor(tensor) => tensor.dim.clone(),
-        Value::Dyn(dynamic) => dynamic.dim.clone(),
-        _ => Dim::one(),
+        | Value::Num(num) => num.dim.clone(),
+        | Value::Tensor(tensor) => tensor.dim.clone(),
+        | Value::Dyn(dynamic) => dynamic.dim.clone(),
+        | _ => Dim::one(),
     }
 }
 
 /// A helper used by tests and the REPL to print a value with a dimension
 /// environment.
 #[must_use]
-pub fn show_with(value: &Value, _dims: &DimEnv) -> String {
+pub fn show_with(
+    value: &Value,
+    _dims: &DimEnv,
+) -> String {
     show(value)
 }
 
@@ -2367,9 +2532,11 @@ mod tests {
 
     #[test]
     fn dimensioned_numbers_print_their_si_unit() {
-        let num = NumVal::float(9.80665, Dim::base("Length").div(&Dim::base("Time").pow(
-            &BigRational::from_integer(BigInt::from(2)),
-        )));
+        let num = NumVal::float(
+            9.80665,
+            Dim::base("Length")
+                .div(&Dim::base("Time").pow(&BigRational::from_integer(BigInt::from(2)))),
+        );
         assert_eq!(format_scalar(&num), "9.80665 m/s^2");
     }
 
@@ -2384,7 +2551,10 @@ mod tests {
         assert_eq!(show_tensor_in(&tensor, false), "[[1, 2], [3, 4]]");
     }
 
-    fn tensor(shape: Vec<usize>, values: Vec<f64>) -> Value {
+    fn tensor(
+        shape: Vec<usize>,
+        values: Vec<f64>,
+    ) -> Value {
         Value::Tensor(Rc::new(TensorData {
             shape,
             storage: Storage::Dense(Rc::new(values)),
@@ -2396,11 +2566,17 @@ mod tests {
     #[test]
     fn tensor_equality_compares_shape_and_elements() {
         assert_eq!(
-            equal(&tensor(vec![2], vec![1.0, 2.0]), &tensor(vec![2], vec![1.0, 2.0])),
+            equal(
+                &tensor(vec![2], vec![1.0, 2.0]),
+                &tensor(vec![2], vec![1.0, 2.0])
+            ),
             Ok(true)
         );
         assert_eq!(
-            equal(&tensor(vec![2], vec![1.0, 2.0]), &tensor(vec![2], vec![1.0, 3.0])),
+            equal(
+                &tensor(vec![2], vec![1.0, 2.0]),
+                &tensor(vec![2], vec![1.0, 3.0])
+            ),
             Ok(false)
         );
         // The same elements in a different shape are different values.
@@ -2429,7 +2605,10 @@ mod tests {
         let function = Value::Native(Rc::new(NativeFn(Box::new(|_interp, _args, _span| {
             Ok(Value::Unit)
         }))));
-        assert_eq!(equal(&function, &function), Err(NotEqual::NoEq("a function")));
+        assert_eq!(
+            equal(&function, &function),
+            Err(NotEqual::NoEq("a function"))
+        );
     }
 
     #[test]

@@ -48,7 +48,10 @@ pub fn gamma(x: f64) -> f64 {
 
 /// The Beta function `B(a, b)`.
 #[must_use]
-pub fn beta(a: f64, b: f64) -> f64 {
+pub fn beta(
+    a: f64,
+    b: f64,
+) -> f64 {
     (ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)).exp()
 }
 
@@ -77,7 +80,10 @@ pub fn erfc(x: f64) -> f64 {
 /// Series below `x = a + 1` and a continued fraction above it, which is where
 /// each expansion converges.
 #[must_use]
-pub fn regularized_gamma_p(a: f64, x: f64) -> f64 {
+pub fn regularized_gamma_p(
+    a: f64,
+    x: f64,
+) -> f64 {
     if x <= 0.0 || a <= 0.0 {
         return 0.0;
     }
@@ -125,20 +131,28 @@ pub fn regularized_gamma_p(a: f64, x: f64) -> f64 {
 
 /// `Q(a, x)`: the regularized upper incomplete Gamma function.
 #[must_use]
-pub fn regularized_gamma_q(a: f64, x: f64) -> f64 {
+pub fn regularized_gamma_q(
+    a: f64,
+    x: f64,
+) -> f64 {
     1.0 - regularized_gamma_p(a, x)
 }
 
 /// `I_x(a, b)`: the regularized incomplete Beta function.
 #[must_use]
-pub fn regularized_beta(x: f64, a: f64, b: f64) -> f64 {
+pub fn regularized_beta(
+    x: f64,
+    a: f64,
+    b: f64,
+) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
     if x >= 1.0 {
         return 1.0;
     }
-    let front = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
+    let front =
+        (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
     if x < (a + 1.0) / (a + b + 2.0) {
         front * beta_continued_fraction(x, a, b) / a
     } else {
@@ -147,7 +161,11 @@ pub fn regularized_beta(x: f64, a: f64, b: f64) -> f64 {
 }
 
 /// Lentz's continued fraction for the incomplete Beta function.
-fn beta_continued_fraction(x: f64, a: f64, b: f64) -> f64 {
+fn beta_continued_fraction(
+    x: f64,
+    a: f64,
+    b: f64,
+) -> f64 {
     const TINY: f64 = 1e-300;
     let mut c = 1.0;
     let mut d = 1.0 - (a + b) * x / (a + 1.0);
@@ -248,7 +266,8 @@ pub fn bessel_j0(x: f64) -> f64 {
         let y = x * x;
         let numerator = 57_568_490_574.0
             + y * (-13_362_590_354.0
-                + y * (651_619_640.7 + y * (-11_214_424.18 + y * (77_392.330_17 + y * (-184.905_245_6)))));
+                + y * (651_619_640.7
+                    + y * (-11_214_424.18 + y * (77_392.330_17 + y * (-184.905_245_6)))));
         let denominator = 57_568_490_411.0
             + y * (1_029_532_985.0
                 + y * (9_494_680.718 + y * (59_272.648_53 + y * (267.853_271_2 + y))));
@@ -368,12 +387,15 @@ pub fn bessel_y1(x: f64) -> f64 {
 /// Upward recurrence where it is stable (`n <= x`) and Miller's downward
 /// recurrence where it is not, normalised against `J0`.
 #[must_use]
-pub fn bessel_jn(n: i32, x: f64) -> f64 {
+pub fn bessel_jn(
+    n: i32,
+    x: f64,
+) -> f64 {
     let n = n.unsigned_abs();
     match n {
-        0 => bessel_j0(x),
-        1 => bessel_j1(x),
-        _ => {
+        | 0 => bessel_j0(x),
+        | 1 => bessel_j1(x),
+        | _ => {
             let ax = x.abs();
             if ax == 0.0 {
                 return 0.0;
@@ -382,8 +404,7 @@ pub fn bessel_jn(n: i32, x: f64) -> f64 {
                 let mut previous = bessel_j0(x);
                 let mut current = bessel_j1(x);
                 for order in 1..n {
-                    let next =
-                        2.0 * f64::from(order) / x * current - previous;
+                    let next = 2.0 * f64::from(order) / x * current - previous;
                     previous = current;
                     current = next;
                 }
@@ -410,20 +431,29 @@ pub fn bessel_jn(n: i32, x: f64) -> f64 {
                     }
                 }
                 let scale = bessel_j0(ax) / current;
-                answer * scale * if x < 0.0 && n % 2 == 1 { -1.0 } else { 1.0 }
+                answer
+                    * scale
+                    * if x < 0.0 && n % 2 == 1 {
+                        -1.0
+                    } else {
+                        1.0
+                    }
             }
-        }
+        },
     }
 }
 
 /// The Bessel function of the second kind, order `n`.
 #[must_use]
-pub fn bessel_yn(n: i32, x: f64) -> f64 {
+pub fn bessel_yn(
+    n: i32,
+    x: f64,
+) -> f64 {
     let n = n.unsigned_abs();
     match n {
-        0 => bessel_y0(x),
-        1 => bessel_y1(x),
-        _ => {
+        | 0 => bessel_y0(x),
+        | 1 => bessel_y1(x),
+        | _ => {
             let mut previous = bessel_y0(x);
             let mut current = bessel_y1(x);
             for order in 1..n {
@@ -432,13 +462,16 @@ pub fn bessel_yn(n: i32, x: f64) -> f64 {
                 current = next;
             }
             current
-        }
+        },
     }
 }
 
 /// The Legendre polynomial `P_n(x)`, by the three-term recurrence.
 #[must_use]
-pub fn legendre_p(n: i32, x: f64) -> f64 {
+pub fn legendre_p(
+    n: i32,
+    x: f64,
+) -> f64 {
     if n < 0 {
         return f64::NAN;
     }
@@ -448,8 +481,7 @@ pub fn legendre_p(n: i32, x: f64) -> f64 {
     }
     let mut current = x;
     for order in 1..n {
-        let next = ((2.0 * f64::from(order) + 1.0) * x * current
-            - f64::from(order) * previous)
+        let next = ((2.0 * f64::from(order) + 1.0) * x * current - f64::from(order) * previous)
             / (f64::from(order) + 1.0);
         previous = current;
         current = next;
@@ -459,7 +491,10 @@ pub fn legendre_p(n: i32, x: f64) -> f64 {
 
 /// The physicists' Hermite polynomial `H_n(x)`.
 #[must_use]
-pub fn hermite_h(n: i32, x: f64) -> f64 {
+pub fn hermite_h(
+    n: i32,
+    x: f64,
+) -> f64 {
     if n < 0 {
         return f64::NAN;
     }
@@ -478,7 +513,10 @@ pub fn hermite_h(n: i32, x: f64) -> f64 {
 
 /// The Laguerre polynomial `L_n(x)`.
 #[must_use]
-pub fn laguerre_l(n: i32, x: f64) -> f64 {
+pub fn laguerre_l(
+    n: i32,
+    x: f64,
+) -> f64 {
     if n < 0 {
         return f64::NAN;
     }
@@ -488,8 +526,7 @@ pub fn laguerre_l(n: i32, x: f64) -> f64 {
     }
     let mut current = 1.0 - x;
     for order in 1..n {
-        let next = ((2.0 * f64::from(order) + 1.0 - x) * current
-            - f64::from(order) * previous)
+        let next = ((2.0 * f64::from(order) + 1.0 - x) * current - f64::from(order) * previous)
             / (f64::from(order) + 1.0);
         previous = current;
         current = next;
@@ -499,7 +536,10 @@ pub fn laguerre_l(n: i32, x: f64) -> f64 {
 
 /// The Chebyshev polynomial of the first kind `T_n(x)`.
 #[must_use]
-pub fn chebyshev_t(n: i32, x: f64) -> f64 {
+pub fn chebyshev_t(
+    n: i32,
+    x: f64,
+) -> f64 {
     if n < 0 {
         return f64::NAN;
     }
@@ -518,7 +558,10 @@ pub fn chebyshev_t(n: i32, x: f64) -> f64 {
 
 /// The Chebyshev polynomial of the second kind `U_n(x)`.
 #[must_use]
-pub fn chebyshev_u(n: i32, x: f64) -> f64 {
+pub fn chebyshev_u(
+    n: i32,
+    x: f64,
+) -> f64 {
     if n < 0 {
         return f64::NAN;
     }
@@ -539,7 +582,11 @@ pub fn chebyshev_u(n: i32, x: f64) -> f64 {
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64, tolerance: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+        tolerance: f64,
+    ) -> bool {
         (a - b).abs() <= tolerance * b.abs().max(1.0)
     }
 
@@ -625,7 +672,10 @@ fn rational(value: i64) -> BigRational {
 
 /// `P_n(x)` over the rationals.
 #[must_use]
-pub fn legendre_p_exact(n: u32, x: &BigRational) -> BigRational {
+pub fn legendre_p_exact(
+    n: u32,
+    x: &BigRational,
+) -> BigRational {
     if n == 0 {
         return BigRational::one();
     }
@@ -644,7 +694,10 @@ pub fn legendre_p_exact(n: u32, x: &BigRational) -> BigRational {
 
 /// `H_n(x)` over the rationals.
 #[must_use]
-pub fn hermite_h_exact(n: u32, x: &BigRational) -> BigRational {
+pub fn hermite_h_exact(
+    n: u32,
+    x: &BigRational,
+) -> BigRational {
     if n == 0 {
         return BigRational::one();
     }
@@ -661,7 +714,10 @@ pub fn hermite_h_exact(n: u32, x: &BigRational) -> BigRational {
 
 /// `L_n(x)` over the rationals.
 #[must_use]
-pub fn laguerre_l_exact(n: u32, x: &BigRational) -> BigRational {
+pub fn laguerre_l_exact(
+    n: u32,
+    x: &BigRational,
+) -> BigRational {
     if n == 0 {
         return BigRational::one();
     }
@@ -680,7 +736,10 @@ pub fn laguerre_l_exact(n: u32, x: &BigRational) -> BigRational {
 
 /// `T_n(x)` over the rationals.
 #[must_use]
-pub fn chebyshev_t_exact(n: u32, x: &BigRational) -> BigRational {
+pub fn chebyshev_t_exact(
+    n: u32,
+    x: &BigRational,
+) -> BigRational {
     if n == 0 {
         return BigRational::one();
     }
@@ -696,7 +755,10 @@ pub fn chebyshev_t_exact(n: u32, x: &BigRational) -> BigRational {
 
 /// `U_n(x)` over the rationals.
 #[must_use]
-pub fn chebyshev_u_exact(n: u32, x: &BigRational) -> BigRational {
+pub fn chebyshev_u_exact(
+    n: u32,
+    x: &BigRational,
+) -> BigRational {
     if n == 0 {
         return BigRational::one();
     }

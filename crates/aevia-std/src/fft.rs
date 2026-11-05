@@ -9,8 +9,8 @@
 //! graph.
 
 use crate::Complex;
-use rustfft::num_complex::Complex64;
 use rustfft::FftPlanner;
+use rustfft::num_complex::Complex64;
 
 /// The normalisation convention of [`fft_norm`] (§8.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,11 +61,14 @@ pub fn ifft(input: &[Complex]) -> Vec<Complex> {
 
 /// The forward transform under a chosen normalisation.
 #[must_use]
-pub fn fft_norm(input: &[Complex], norm: Norm) -> Vec<Complex> {
+pub fn fft_norm(
+    input: &[Complex],
+    norm: Norm,
+) -> Vec<Complex> {
     let len = input.len().max(1) as f64;
     let scale = match norm {
-        Norm::Backward => 1.0,
-        Norm::Forward | Norm::Unitary => 1.0 / len.sqrt(),
+        | Norm::Backward => 1.0,
+        | Norm::Forward | Norm::Unitary => 1.0 / len.sqrt(),
     };
     fft(input)
         .into_iter()
@@ -77,18 +80,19 @@ pub fn fft_norm(input: &[Complex], norm: Norm) -> Vec<Complex> {
 /// `n/2 + 1` bins.
 #[must_use]
 pub fn rfft(input: &[f64]) -> Vec<Complex> {
-    let spectrum = fft(
-        &input
-            .iter()
-            .map(|value| Complex::new(*value, 0.0))
-            .collect::<Vec<_>>(),
-    );
+    let spectrum = fft(&input
+        .iter()
+        .map(|value| Complex::new(*value, 0.0))
+        .collect::<Vec<_>>());
     spectrum.into_iter().take(input.len() / 2 + 1).collect()
 }
 
 /// Rebuilds a real signal of length `n` from the half spectrum.
 #[must_use]
-pub fn irfft(input: &[Complex], n: usize) -> Vec<f64> {
+pub fn irfft(
+    input: &[Complex],
+    n: usize,
+) -> Vec<f64> {
     let mut spectrum = vec![Complex::new(0.0, 0.0); n];
     for (index, value) in input.iter().enumerate() {
         if index < n {
@@ -103,7 +107,10 @@ pub fn irfft(input: &[Complex], n: usize) -> Vec<f64> {
 
 /// The sample frequencies of a length-`n` transform with spacing `d`.
 #[must_use]
-pub fn fftfreq(n: usize, d: f64) -> Vec<f64> {
+pub fn fftfreq(
+    n: usize,
+    d: f64,
+) -> Vec<f64> {
     let mut out = Vec::with_capacity(n);
     if n == 0 || d == 0.0 {
         return out;
@@ -123,7 +130,10 @@ pub fn fftfreq(n: usize, d: f64) -> Vec<f64> {
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+    ) -> bool {
         (a - b).abs() < 1e-10
     }
 

@@ -22,9 +22,13 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
+use aevia_core::driver;
 use aevia_core::value;
-use aevia_core::{compile, driver, Interp, Mode};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// What one run of one program produced.
 #[derive(Clone, Debug, PartialEq)]
@@ -66,7 +70,10 @@ enum Comparison {
     Differ { ast: String, ir: String },
 }
 
-fn run_source(source: &str, mode: Mode) -> Result<Outcome, String> {
+fn run_source(
+    source: &str,
+    mode: Mode,
+) -> Result<Outcome, String> {
     let compilation = compile("parity.aev", source);
     if compilation.diagnostics.has_errors() {
         return Err(compilation
@@ -95,8 +102,8 @@ fn run_source(source: &str, mode: Mode) -> Result<Outcome, String> {
         loaded.items.first().map(|item| item.code.to_string())
     } else {
         match interp.run_main() {
-            Ok(_) => None,
-            Err(failure) => Some(failure.code.to_string()),
+            | Ok(_) => None,
+            | Err(failure) => Some(failure.code.to_string()),
         }
     };
     let mut values = Vec::new();
@@ -112,7 +119,10 @@ fn run_source(source: &str, mode: Mode) -> Result<Outcome, String> {
     })
 }
 
-fn run_file(path: &Path, mode: Mode) -> Result<Outcome, String> {
+fn run_file(
+    path: &Path,
+    mode: Mode,
+) -> Result<Outcome, String> {
     let program = driver::load(path);
     if program.diagnostics.has_errors() {
         return Err(program
@@ -134,8 +144,8 @@ fn run_file(path: &Path, mode: Mode) -> Result<Outcome, String> {
         loaded.items.first().map(|item| item.code.to_string())
     } else {
         match interp.run_main() {
-            Ok(_) => None,
-            Err(failure) => Some(failure.code.to_string()),
+            | Ok(_) => None,
+            | Err(failure) => Some(failure.code.to_string()),
         }
     };
     let mut values = Vec::new();
@@ -151,30 +161,28 @@ fn run_file(path: &Path, mode: Mode) -> Result<Outcome, String> {
     })
 }
 
-fn compare(
-    run: impl Fn(Mode) -> Result<Outcome, String>,
-) -> Comparison {
+fn compare(run: impl Fn(Mode) -> Result<Outcome, String>) -> Comparison {
     let first = match run(Mode::Ast) {
-        Ok(outcome) => outcome,
-        Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
+        | Ok(outcome) => outcome,
+        | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
     };
     let second = match run(Mode::Ast) {
-        Ok(outcome) => outcome,
-        Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
+        | Ok(outcome) => outcome,
+        | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
     };
     if first != second {
         return Comparison::Skip(Skipped::Nondeterministic);
     }
     let ir = match run(Mode::Ir) {
-        Ok(outcome) => outcome,
-        Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
+        | Ok(outcome) => outcome,
+        | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
     };
     // The IR is run twice as well: a nondeterministic IR (an iteration order
     // leaking into `repr`, say) would otherwise be invisible, because only the
     // AST side was ever checked for stability.
     let ir_again = match run(Mode::Ir) {
-        Ok(outcome) => outcome,
-        Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
+        | Ok(outcome) => outcome,
+        | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
     };
     if ir != ir_again {
         return Comparison::Skip(Skipped::Nondeterministic);
@@ -498,13 +506,13 @@ fn compare_corpus() {
     for path in &files {
         programs += 1;
         match compare(|mode| run_file(path, mode)) {
-            Comparison::Agree => agreed += 1,
-            Comparison::Skip(reason) => {
+            | Comparison::Agree => agreed += 1,
+            | Comparison::Skip(reason) => {
                 skipped.push((path.display().to_string(), reason));
-            }
-            Comparison::Differ { ast, ir } => {
+            },
+            | Comparison::Differ { ast, ir } => {
                 differed.push((path.display().to_string(), ast, ir));
-            }
+            },
         }
     }
 
@@ -529,13 +537,16 @@ fn compare_corpus() {
     for source in &sources {
         programs += 1;
         match compare(|mode| run_source(source, mode)) {
-            Comparison::Agree => agreed += 1,
-            Comparison::Skip(reason) => {
-                skipped.push((format!("<test source {}>", &source[..source.len().min(40)]), reason));
-            }
-            Comparison::Differ { ast, ir } => {
+            | Comparison::Agree => agreed += 1,
+            | Comparison::Skip(reason) => {
+                skipped.push((
+                    format!("<test source {}>", &source[..source.len().min(40)]),
+                    reason,
+                ));
+            },
+            | Comparison::Differ { ast, ir } => {
                 differed.push((source.clone(), ast, ir));
-            }
+            },
         }
     }
 
@@ -543,9 +554,9 @@ fn compare_corpus() {
     for source in CURATED {
         programs += 1;
         match compare(|mode| run_source(source, mode)) {
-            Comparison::Agree => agreed += 1,
-            Comparison::Skip(reason) => skipped.push(((*source).to_string(), reason)),
-            Comparison::Differ { ast, ir } => differed.push(((*source).to_string(), ast, ir)),
+            | Comparison::Agree => agreed += 1,
+            | Comparison::Skip(reason) => skipped.push(((*source).to_string(), reason)),
+            | Comparison::Differ { ast, ir } => differed.push(((*source).to_string(), ast, ir)),
         }
     }
 
@@ -579,7 +590,10 @@ fn compare_corpus() {
     );
 }
 
-fn collect(directory: &Path, out: &mut Vec<PathBuf>) {
+fn collect(
+    directory: &Path,
+    out: &mut Vec<PathBuf>,
+) {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
@@ -637,6 +651,9 @@ fn an_incremental_session_agrees_on_both_paths() {
         let d = interp.eval_toplevel("d").expect("d is bound");
         seen.push((value::repr(&c), value::repr(&d)));
     }
-    assert_eq!(seen[0], seen[1], "the two paths disagree on an incremental session");
+    assert_eq!(
+        seen[0], seen[1],
+        "the two paths disagree on an incremental session"
+    );
     assert_eq!(seen[0], ("4".to_string(), "5".to_string()));
 }

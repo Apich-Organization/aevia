@@ -62,18 +62,19 @@ pub struct Field {
 }
 
 /// The Laplacian of a field with zero boundary data, five-point stencil.
-fn laplacian(grid: Grid, values: &[f64]) -> Vec<f64> {
+fn laplacian(
+    grid: Grid,
+    values: &[f64],
+) -> Vec<f64> {
     let (nx, ny, h) = (grid.nx, grid.ny, grid.h);
     let mut out = vec![0.0; values.len()];
     for y in 1..ny - 1 {
         for x in 1..nx - 1 {
             let index = y * nx + x;
-            out[index] = (values[index + 1]
-                + values[index - 1]
-                + values[index + nx]
-                + values[index - nx]
-                - 4.0 * values[index])
-                / (h * h);
+            out[index] =
+                (values[index + 1] + values[index - 1] + values[index + nx] + values[index - nx]
+                    - 4.0 * values[index])
+                    / (h * h);
         }
     }
     out
@@ -234,8 +235,7 @@ pub fn solve_wave(spec: &WaveSpec) -> Result<Vec<Field>, NumericError> {
     // The first step needs the velocity: u^1 = u^0 + dt v^0 + dt²/2 c² ∇²u^0.
     let lap = laplacian(spec.grid, &current);
     for index in 0..current.len() {
-        current[index] += spec.dt * spec.velocity[index]
-            + 0.5 * squared * lap[index];
+        current[index] += spec.dt * spec.velocity[index] + 0.5 * squared * lap[index];
     }
     let mut out = vec![
         Field {
@@ -338,7 +338,11 @@ pub fn solve_advection(spec: &AdvectionSpec) -> Result<Vec<Field>, NumericError>
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64, tolerance: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+        tolerance: f64,
+    ) -> bool {
         (a - b).abs() <= tolerance
     }
 

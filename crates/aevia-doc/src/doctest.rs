@@ -21,8 +21,10 @@
 //! snippet that needs a module function has to define what it uses; this
 //! limitation is documented in the command's help and in its output.
 
-use aevia_syntax::ast::{Decl, DeclKind};
-use aevia_syntax::{lex, parse_module};
+use aevia_syntax::ast::Decl;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 
 /// What a doctest promises about its snippet.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,7 +61,10 @@ pub struct Doctest {
 /// A message with the line number when the file does not lex or parse, when a
 /// fence is never closed, or when a `compile_fail` marker is malformed:
 /// documentation the compiler cannot read must not silently run nothing.
-pub fn extract(source: &str, file: &str) -> Result<Vec<Doctest>, String> {
+pub fn extract(
+    source: &str,
+    file: &str,
+) -> Result<Vec<Doctest>, String> {
     let lexed = lex(0, source).map_err(|diagnostics| first_error(source, &diagnostics))?;
     let (module, diagnostics) = parse_module(0, source, &lexed);
     if diagnostics.has_errors() {
@@ -100,7 +105,10 @@ type DocRun = Vec<DocLine>;
 ///
 /// The lexer trims each `##` line, so the spans are the only way back to the
 /// original indentation — which a fenced code block needs.
-fn doc_runs(source: &str, docs: &[aevia_syntax::token::DocComment]) -> Vec<DocRun> {
+fn doc_runs(
+    source: &str,
+    docs: &[aevia_syntax::token::DocComment],
+) -> Vec<DocRun> {
     let mut runs: Vec<DocRun> = Vec::new();
     let mut previous_end: Option<usize> = None;
     for comment in docs {
@@ -248,18 +256,26 @@ fn file_stem(file: &str) -> String {
 }
 
 /// The first diagnostic as `line N: code: message`.
-fn first_error(source: &str, diagnostics: &aevia_syntax::Diagnostics) -> String {
+fn first_error(
+    source: &str,
+    diagnostics: &aevia_syntax::Diagnostics,
+) -> String {
     let Some(first) = diagnostics.items.first() else {
         return "the file does not parse".to_string();
     };
-    let line = 1 + source[..usize::try_from(first.span.start).unwrap_or(0).min(source.len())]
+    let line = 1 + source[..usize::try_from(first.span.start)
+        .unwrap_or(0)
+        .min(source.len())]
         .matches('\n')
         .count();
     format!("line {line}: {}: {}", first.code, first.message)
 }
 
 /// The source text of one declaration, trimmed.
-fn slice<'a>(source: &'a str, declaration: &Decl) -> Option<&'a str> {
+fn slice<'a>(
+    source: &'a str,
+    declaration: &Decl,
+) -> Option<&'a str> {
     let start = usize::try_from(declaration.span.start).ok()?;
     let end = usize::try_from(declaration.span.end).ok()?;
     source.get(start..end).map(str::trim)
@@ -341,11 +357,8 @@ mod tests {
 
     #[test]
     fn an_unclosed_fence_is_refused() {
-        let error = extract(
-            "## ```aevia\n## let x = 1\nfn f(): Int = 1\n",
-            "a.aev",
-        )
-        .expect_err("refuses");
+        let error =
+            extract("## ```aevia\n## let x = 1\nfn f(): Int = 1\n", "a.aev").expect_err("refuses");
         assert!(error.contains("unclosed"), "{error}");
     }
 
@@ -354,8 +367,7 @@ mod tests {
         let source = "## ```aevia\n## fn double(x: Int): Int =\n##     x + x\n## ```\nfn double(x: Int): Int = x + x\n";
         let found = extract_ok(source);
         assert_eq!(
-            found[0].snippet,
-            "fn double(x: Int): Int =\n    x + x",
+            found[0].snippet, "fn double(x: Int): Int =\n    x + x",
             "{}",
             found[0].snippet
         );
@@ -398,4 +410,3 @@ mod tests {
         assert_eq!(found[0].snippet, "let compile_failure = 1");
     }
 }
-

@@ -6,13 +6,19 @@
 //! added to the kernel appears on the next run without a line changing in
 //! this repository.
 
-use aevia_dim::{Dim, Scale};
 use crate::error::KernelError;
+use aevia_dim::Dim;
+use aevia_dim::Scale;
 use num_traits::ToPrimitive;
 use rssn::kernel::manifest::KernelManifest;
-use rssn::kernel::signature::{
-    DimExpr, Exp, NatExpr, Rational, Signature, Stability, TypeExpr, Variadic,
-};
+use rssn::kernel::signature::DimExpr;
+use rssn::kernel::signature::Exp;
+use rssn::kernel::signature::NatExpr;
+use rssn::kernel::signature::Rational;
+use rssn::kernel::signature::Signature;
+use rssn::kernel::signature::Stability;
+use rssn::kernel::signature::TypeExpr;
+use rssn::kernel::signature::Variadic;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -45,10 +51,10 @@ impl Source {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Declared => "declared",
-            Self::Overlay => "overlay",
-            Self::Derived => "derived",
-            Self::None => "none",
+            | Self::Declared => "declared",
+            | Self::Overlay => "overlay",
+            | Self::Derived => "derived",
+            | Self::None => "none",
         }
     }
 }
@@ -132,10 +138,7 @@ impl Sig {
         let mut text = format!("({}) -> {}", params.join(", "), render_type(&self.ret));
         if let Some((min, max, elem)) = &self.variadic {
             let bound = max.map_or_else(|| "...".to_string(), |max| format!("..{max}"));
-            text.push_str(&format!(
-                " with {min}{bound} x {}",
-                render_type(elem)
-            ));
+            text.push_str(&format!(" with {min}{bound} x {}", render_type(elem)));
         }
         text
     }
@@ -181,13 +184,19 @@ impl OpEntry {
 
     /// The key of the overload `index`.
     #[must_use]
-    pub fn key(&self, index: usize) -> Option<&rssn::kernel::signature::OpKey> {
+    pub fn key(
+        &self,
+        index: usize,
+    ) -> Option<&rssn::kernel::signature::OpKey> {
         self.keys.get(index)
     }
 
     /// Whether the operator accepts `count` arguments.
     #[must_use]
-    pub fn accepts(&self, count: usize) -> bool {
+    pub fn accepts(
+        &self,
+        count: usize,
+    ) -> bool {
         count >= self.arity.0 && self.arity.1.is_none_or(|max| count <= max)
     }
 
@@ -203,7 +212,10 @@ impl OpEntry {
 
     /// The index of the overload `key` names, when this entry has it.
     #[must_use]
-    pub fn key_index(&self, key: &rssn::kernel::signature::OpKey) -> Option<usize> {
+    pub fn key_index(
+        &self,
+        key: &rssn::kernel::signature::OpKey,
+    ) -> Option<usize> {
         self.keys
             .iter()
             .position(|candidate| candidate.signature_hash == key.signature_hash)
@@ -225,31 +237,31 @@ impl OpEntry {
         arg_types: &[rssn::kernel::signature::TypeExpr],
     ) -> Result<rssn::kernel::signature::OpKey, KernelError> {
         use rssn::kernel::overload::Match;
-        let scored: Vec<(usize, Match)> = self
-            .raw
-            .iter()
-            .enumerate()
-            .filter_map(|(index, signature)| {
-                if !signature.accepts_arity(arg_types.len()) {
-                    return None;
-                }
-                let mut worst = Match::Exact;
-                for (position, got) in arg_types.iter().enumerate() {
-                    let param = signature.params.get(position).or_else(|| {
-                        signature.variadic.as_ref().map(|variadic| &variadic.elem)
-                    })?;
-                    let matched = rssn::kernel::overload::matches_type(param, got);
-                    if !matched.accepted() {
+        let scored: Vec<(usize, Match)> =
+            self.raw
+                .iter()
+                .enumerate()
+                .filter_map(|(index, signature)| {
+                    if !signature.accepts_arity(arg_types.len()) {
                         return None;
                     }
-                    // `Match` is ordered `No < Generic < Shaped < Widened <
-                    // Exact`, so the minimum is the weakest parameter — the
-                    // same rule `overload::score` applies.
-                    worst = worst.min(matched);
-                }
-                Some((index, worst))
-            })
-            .collect();
+                    let mut worst = Match::Exact;
+                    for (position, got) in arg_types.iter().enumerate() {
+                        let param = signature.params.get(position).or_else(|| {
+                            signature.variadic.as_ref().map(|variadic| &variadic.elem)
+                        })?;
+                        let matched = rssn::kernel::overload::matches_type(param, got);
+                        if !matched.accepted() {
+                            return None;
+                        }
+                        // `Match` is ordered `No < Generic < Shaped < Widened <
+                        // Exact`, so the minimum is the weakest parameter — the
+                        // same rule `overload::score` applies.
+                        worst = worst.min(matched);
+                    }
+                    Some((index, worst))
+                })
+                .collect();
         let Some(top) = scored.iter().map(|(_, matched)| *matched).max() else {
             return Err(KernelError::of(
                 "E1003",
@@ -268,22 +280,24 @@ impl OpEntry {
             .collect();
         if let [only] = tied.as_slice() {
             return match self.keys.get(*only) {
-                Some(key) => Ok(key.clone()),
+                | Some(key) => Ok(key.clone()),
                 // `keys` and `overloads` are index-aligned by contract
                 // (`OpInfo.keys` has one entry per overload). If they are not,
                 // inventing a zero-hash key would silently execute the wrong
                 // registration, so the inconsistency is the error.
-                None => Err(KernelError::of(
-                    "E0899",
-                    crate::error::Failure::Kernel,
-                    format!(
-                        "`{}` has {} overloads but {} keys: the manifest is inconsistent",
-                        self.name,
-                        self.raw.len(),
-                        self.keys.len()
-                    ),
-                )
-                .at_operator(&self.name)),
+                | None => {
+                    Err(KernelError::of(
+                        "E0899",
+                        crate::error::Failure::Kernel,
+                        format!(
+                            "`{}` has {} overloads but {} keys: the manifest is inconsistent",
+                            self.name,
+                            self.raw.len(),
+                            self.keys.len()
+                        ),
+                    )
+                    .at_operator(&self.name))
+                },
             };
         }
         Err(KernelError::of(
@@ -356,10 +370,12 @@ impl Capabilities {
     /// The table, in the order diagnostics and the generated module use.
     #[must_use]
     pub fn table(&self) -> Vec<Capability> {
-        let row = |name: &str, binding: &str, enabled: bool| Capability {
-            name: name.to_string(),
-            binding: binding.to_string(),
-            enabled,
+        let row = |name: &str, binding: &str, enabled: bool| {
+            Capability {
+                name: name.to_string(),
+                binding: binding.to_string(),
+                enabled,
+            }
         };
         let mut rows = vec![
             row("core.dynamic_call", "dynamic_call", self.dynamic_call),
@@ -423,7 +439,10 @@ impl Capabilities {
     /// An unknown name is not a capability this build has: a diagnostic that
     /// asks about one must say "missing", never "present by default".
     #[must_use]
-    pub fn has(&self, name: &str) -> bool {
+    pub fn has(
+        &self,
+        name: &str,
+    ) -> bool {
         self.table()
             .iter()
             .any(|row| row.name == name && row.enabled)
@@ -448,7 +467,10 @@ impl Capabilities {
     /// # Errors
     ///
     /// `E1001("core.<capability>")`.
-    pub fn require(&self, name: &str) -> Result<(), KernelError> {
+    pub fn require(
+        &self,
+        name: &str,
+    ) -> Result<(), KernelError> {
         if self.has(name) {
             Ok(())
         } else {
@@ -467,7 +489,10 @@ impl Capabilities {
     ///
     /// `None` means the operator needs nothing this build is missing.
     #[must_use]
-    pub fn missing_for(&self, entry: &OpEntry) -> Option<&'static str> {
+    pub fn missing_for(
+        &self,
+        entry: &OpEntry,
+    ) -> Option<&'static str> {
         if entry.higher_order && !self.higher_order {
             return Some("core.higher_order");
         }
@@ -490,10 +515,13 @@ impl Capabilities {
     /// # Errors
     ///
     /// `E1001` naming the missing capability, with the operator attached.
-    pub fn require_op(&self, entry: &OpEntry) -> Result<(), KernelError> {
+    pub fn require_op(
+        &self,
+        entry: &OpEntry,
+    ) -> Result<(), KernelError> {
         match self.missing_for(entry) {
-            Some(name) => Err(KernelError::capability(name).at_operator(&entry.name)),
-            None => Ok(()),
+            | Some(name) => Err(KernelError::capability(name).at_operator(&entry.name)),
+            | None => Ok(()),
         }
     }
 }
@@ -594,10 +622,10 @@ impl Registry {
                 signatures: op.overloads.iter().map(convert_signature).collect(),
                 raw: op.overloads.clone(),
                 source: match op.signature_source {
-                    rssn::kernel::manifest::SignatureSource::Declared => Source::Declared,
-                    rssn::kernel::manifest::SignatureSource::Overlay => Source::Overlay,
-                    rssn::kernel::manifest::SignatureSource::Derived => Source::Derived,
-                    rssn::kernel::manifest::SignatureSource::None => Source::None,
+                    | rssn::kernel::manifest::SignatureSource::Declared => Source::Declared,
+                    | rssn::kernel::manifest::SignatureSource::Overlay => Source::Overlay,
+                    | rssn::kernel::manifest::SignatureSource::Derived => Source::Derived,
+                    | rssn::kernel::manifest::SignatureSource::None => Source::None,
                 },
                 stability: op.stability,
                 doc: op.doc.clone(),
@@ -664,7 +692,10 @@ impl Registry {
 
     /// The operator called `name` (or one of its aliases).
     #[must_use]
-    pub fn op(&self, name: &str) -> Option<&OpEntry> {
+    pub fn op(
+        &self,
+        name: &str,
+    ) -> Option<&OpEntry> {
         self.ops.get(name)
     }
 
@@ -684,7 +715,10 @@ impl Registry {
 
     /// The unit called `name`.
     #[must_use]
-    pub fn unit(&self, name: &str) -> Option<&UnitInfo> {
+    pub fn unit(
+        &self,
+        name: &str,
+    ) -> Option<&UnitInfo> {
         self.units
             .iter()
             .find(|unit| unit.name == name || unit.aliases.iter().any(|alias| alias == name))
@@ -692,7 +726,10 @@ impl Registry {
 
     /// The constant with that symbol.
     #[must_use]
-    pub fn constant(&self, symbol: &str) -> Option<&ConstantInfo> {
+    pub fn constant(
+        &self,
+        symbol: &str,
+    ) -> Option<&ConstantInfo> {
         self.constants
             .iter()
             .find(|constant| constant.symbol == symbol)
@@ -784,11 +821,11 @@ struct SignatureDims {
 
 impl SignatureDims {
     /// The variable for a signature dimension parameter named `name`.
-    fn var(&mut self, name: &str) -> Dim {
-        let id = *self
-            .named
-            .entry(name.to_string())
-            .or_insert_with(fresh_dim);
+    fn var(
+        &mut self,
+        name: &str,
+    ) -> Dim {
+        let id = *self.named.entry(name.to_string()).or_insert_with(fresh_dim);
         Dim::var(id)
     }
 }
@@ -820,69 +857,84 @@ fn variadic_bounds_with(
     )
 }
 
-fn convert_type_with(ty: &TypeExpr, dims: &mut SignatureDims) -> SigType {
+fn convert_type_with(
+    ty: &TypeExpr,
+    dims: &mut SignatureDims,
+) -> SigType {
     match ty {
-        TypeExpr::Int => SigType::Int,
-        TypeExpr::Real => SigType::Real,
-        TypeExpr::Float => SigType::Float,
-        TypeExpr::Complex => SigType::Complex,
-        TypeExpr::Bool => SigType::Bool,
-        TypeExpr::String => SigType::Str,
-        TypeExpr::Symbol => SigType::Symbol,
-        TypeExpr::Unit(dim) => SigType::Unit(convert_dim_with(dim, dims)),
-        TypeExpr::Point(dim) => SigType::Point(convert_dim_with(dim, dims)),
-        TypeExpr::Dim(inner, dim) => SigType::Dim(
-            Box::new(convert_type_with(inner, dims)),
-            convert_dim_with(dim, dims),
-        ),
-        TypeExpr::Tensor { rank, elem, .. } => SigType::Tensor {
-            rank: convert_rank(rank),
-            elem: Box::new(convert_type_with(elem, dims)),
+        | TypeExpr::Int => SigType::Int,
+        | TypeExpr::Real => SigType::Real,
+        | TypeExpr::Float => SigType::Float,
+        | TypeExpr::Complex => SigType::Complex,
+        | TypeExpr::Bool => SigType::Bool,
+        | TypeExpr::String => SigType::Str,
+        | TypeExpr::Symbol => SigType::Symbol,
+        | TypeExpr::Unit(dim) => SigType::Unit(convert_dim_with(dim, dims)),
+        | TypeExpr::Point(dim) => SigType::Point(convert_dim_with(dim, dims)),
+        | TypeExpr::Dim(inner, dim) => {
+            SigType::Dim(
+                Box::new(convert_type_with(inner, dims)),
+                convert_dim_with(dim, dims),
+            )
         },
-        TypeExpr::Sparse { rank, elem, .. } => SigType::Sparse {
-            rank: convert_rank(rank),
-            elem: Box::new(convert_type_with(elem, dims)),
+        | TypeExpr::Tensor { rank, elem, .. } => {
+            SigType::Tensor {
+                rank: convert_rank(rank),
+                elem: Box::new(convert_type_with(elem, dims)),
+            }
         },
-        TypeExpr::Record(fields) => SigType::Record(
-            fields
-                .iter()
-                .map(|(name, ty)| (name.clone(), convert_type_with(ty, dims)))
-                .collect(),
-        ),
-        TypeExpr::Variant(variants) => SigType::Variant(
-            variants
-                .iter()
-                .map(|(name, payload)| {
-                    (
-                        name.clone(),
-                        payload
-                            .iter()
-                            .map(|ty| convert_type_with(ty, dims))
-                            .collect(),
-                    )
-                })
-                .collect(),
-        ),
-        TypeExpr::Function(params, ret) => SigType::Func(
-            params
-                .iter()
-                .map(|ty| convert_type_with(ty, dims))
-                .collect(),
-            Box::new(convert_type_with(ret, dims)),
-        ),
-        TypeExpr::Table(_) => SigType::Table,
-        TypeExpr::Dyn(_) => SigType::Dyn,
-        TypeExpr::Device => SigType::Device,
-        TypeExpr::Opaque(name) => SigType::Opaque(name.clone()),
-        TypeExpr::Var(name) => SigType::Var(name.clone()),
-        TypeExpr::Never => SigType::Never,
+        | TypeExpr::Sparse { rank, elem, .. } => {
+            SigType::Sparse {
+                rank: convert_rank(rank),
+                elem: Box::new(convert_type_with(elem, dims)),
+            }
+        },
+        | TypeExpr::Record(fields) => {
+            SigType::Record(
+                fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), convert_type_with(ty, dims)))
+                    .collect(),
+            )
+        },
+        | TypeExpr::Variant(variants) => {
+            SigType::Variant(
+                variants
+                    .iter()
+                    .map(|(name, payload)| {
+                        (
+                            name.clone(),
+                            payload
+                                .iter()
+                                .map(|ty| convert_type_with(ty, dims))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+        },
+        | TypeExpr::Function(params, ret) => {
+            SigType::Func(
+                params
+                    .iter()
+                    .map(|ty| convert_type_with(ty, dims))
+                    .collect(),
+                Box::new(convert_type_with(ret, dims)),
+            )
+        },
+        | TypeExpr::Table(_) => SigType::Table,
+        | TypeExpr::Dyn(_) => SigType::Dyn,
+        | TypeExpr::Device => SigType::Device,
+        | TypeExpr::Opaque(name) => SigType::Opaque(name.clone()),
+        | TypeExpr::Var(name) => SigType::Var(name.clone()),
+        | TypeExpr::Never => SigType::Never,
     }
 }
 
 fn convert_rank(rank: &NatExpr) -> Option<usize> {
     match rank {
-        NatExpr::Lit(value) => usize::try_from(*value).ok(),
-        _ => None,
+        | NatExpr::Lit(value) => usize::try_from(*value).ok(),
+        | _ => None,
     }
 }
 
@@ -895,56 +947,72 @@ fn convert_rank(rank: &NatExpr) -> Option<usize> {
 #[must_use]
 pub fn to_type_expr(ty: &SigType) -> TypeExpr {
     match ty {
-        SigType::Int => TypeExpr::Int,
-        SigType::Real => TypeExpr::Real,
-        SigType::Float => TypeExpr::Float,
-        SigType::Complex => TypeExpr::Complex,
-        SigType::Bool => TypeExpr::Bool,
-        SigType::Str => TypeExpr::String,
-        SigType::Symbol => TypeExpr::Symbol,
-        SigType::Unit(dim) => TypeExpr::Unit(to_dim_expr(dim)),
-        SigType::Point(dim) => TypeExpr::Point(to_dim_expr(dim)),
-        SigType::Dim(inner, dim) => TypeExpr::Dim(Box::new(to_type_expr(inner)), to_dim_expr(dim)),
-        SigType::Tensor { rank, elem } => TypeExpr::Tensor {
-            rank: NatExpr::Lit(u64::try_from(rank.unwrap_or(1)).unwrap_or(1)),
-            shape: None,
-            elem: Box::new(to_type_expr(elem)),
+        | SigType::Int => TypeExpr::Int,
+        | SigType::Real => TypeExpr::Real,
+        | SigType::Float => TypeExpr::Float,
+        | SigType::Complex => TypeExpr::Complex,
+        | SigType::Bool => TypeExpr::Bool,
+        | SigType::Str => TypeExpr::String,
+        | SigType::Symbol => TypeExpr::Symbol,
+        | SigType::Unit(dim) => TypeExpr::Unit(to_dim_expr(dim)),
+        | SigType::Point(dim) => TypeExpr::Point(to_dim_expr(dim)),
+        | SigType::Dim(inner, dim) => {
+            TypeExpr::Dim(Box::new(to_type_expr(inner)), to_dim_expr(dim))
         },
-        SigType::Sparse { rank, elem } => TypeExpr::Sparse {
-            format: String::new(),
-            rank: NatExpr::Lit(u64::try_from(rank.unwrap_or(1)).unwrap_or(1)),
-            elem: Box::new(to_type_expr(elem)),
+        | SigType::Tensor { rank, elem } => {
+            TypeExpr::Tensor {
+                rank: NatExpr::Lit(u64::try_from(rank.unwrap_or(1)).unwrap_or(1)),
+                shape: None,
+                elem: Box::new(to_type_expr(elem)),
+            }
         },
-        SigType::Record(fields) => TypeExpr::Record(
-            fields
-                .iter()
-                .map(|(name, ty)| (name.clone(), to_type_expr(ty)))
-                .collect(),
-        ),
-        SigType::Variant(variants) => TypeExpr::Variant(
-            variants
-                .iter()
-                .map(|(name, payload)| {
-                    (name.clone(), payload.iter().map(to_type_expr).collect())
-                })
-                .collect(),
-        ),
-        SigType::Func(params, ret) => TypeExpr::Function(
-            params.iter().map(to_type_expr).collect(),
-            Box::new(to_type_expr(ret)),
-        ),
-        SigType::Table => TypeExpr::Table(rssn::kernel::signature::RowExpr {
-            columns: Vec::new(),
-            rows: NatExpr::Lit(0),
-        }),
-        SigType::Device => TypeExpr::Device,
-        SigType::Opaque(name) => TypeExpr::Opaque(name.clone()),
-        SigType::Var(name) => TypeExpr::Var(name.clone()),
-        SigType::Dyn => TypeExpr::Dyn(rssn::kernel::signature::RepExpr {
-            repr: "term".to_string(),
-            dim: None,
-        }),
-        SigType::Never => TypeExpr::Never,
+        | SigType::Sparse { rank, elem } => {
+            TypeExpr::Sparse {
+                format: String::new(),
+                rank: NatExpr::Lit(u64::try_from(rank.unwrap_or(1)).unwrap_or(1)),
+                elem: Box::new(to_type_expr(elem)),
+            }
+        },
+        | SigType::Record(fields) => {
+            TypeExpr::Record(
+                fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), to_type_expr(ty)))
+                    .collect(),
+            )
+        },
+        | SigType::Variant(variants) => {
+            TypeExpr::Variant(
+                variants
+                    .iter()
+                    .map(|(name, payload)| {
+                        (name.clone(), payload.iter().map(to_type_expr).collect())
+                    })
+                    .collect(),
+            )
+        },
+        | SigType::Func(params, ret) => {
+            TypeExpr::Function(
+                params.iter().map(to_type_expr).collect(),
+                Box::new(to_type_expr(ret)),
+            )
+        },
+        | SigType::Table => {
+            TypeExpr::Table(rssn::kernel::signature::RowExpr {
+                columns: Vec::new(),
+                rows: NatExpr::Lit(0),
+            })
+        },
+        | SigType::Device => TypeExpr::Device,
+        | SigType::Opaque(name) => TypeExpr::Opaque(name.clone()),
+        | SigType::Var(name) => TypeExpr::Var(name.clone()),
+        | SigType::Dyn => {
+            TypeExpr::Dyn(rssn::kernel::signature::RepExpr {
+                repr: "term".to_string(),
+                dim: None,
+            })
+        },
+        | SigType::Never => TypeExpr::Never,
     }
 }
 
@@ -972,32 +1040,37 @@ pub fn convert_dim(dim: &DimExpr) -> Dim {
 }
 
 /// The shared form of [`convert_dim`]: named signature variables are interned.
-fn convert_dim_with(dim: &DimExpr, dims: &mut SignatureDims) -> Dim {
+fn convert_dim_with(
+    dim: &DimExpr,
+    dims: &mut SignatureDims,
+) -> Dim {
     match dim {
-        DimExpr::Base(name) => Dim::base(name),
-        DimExpr::Mul(factors) => factors
-            .iter()
-            .fold(Dim::one(), |acc, factor| {
+        | DimExpr::Base(name) => Dim::base(name),
+        | DimExpr::Mul(factors) => {
+            factors.iter().fold(Dim::one(), |acc, factor| {
                 acc.mul(&convert_dim_with(factor, dims))
-            }),
-        DimExpr::Pow(base, Exp::Rat(exponent)) => {
+            })
+        },
+        | DimExpr::Pow(base, Exp::Rat(exponent)) => {
             let Some(exponent) = convert_exponent(exponent) else {
                 return Dim::one();
             };
             convert_dim_with(base, dims).pow(&exponent)
-        }
-        DimExpr::Pow(_, Exp::Symbol(_)) => Dim::one(),
-        DimExpr::Inverse(base) => convert_dim_with(base, dims).pow(
-            &num_rational::BigRational::from_integer(num_bigint::BigInt::from(-1)),
-        ),
-        DimExpr::Dimless => Dim::one(),
+        },
+        | DimExpr::Pow(_, Exp::Symbol(_)) => Dim::one(),
+        | DimExpr::Inverse(base) => {
+            convert_dim_with(base, dims).pow(&num_rational::BigRational::from_integer(
+                num_bigint::BigInt::from(-1),
+            ))
+        },
+        | DimExpr::Dimless => Dim::one(),
         // `NonMetric` says "not a scalar at all" and `Container` "a structured
         // container"; neither is a dimension, and neither is `1`. They cannot
         // be stated in the dimension algebra, so they stay dimensionless and
         // the kernel checks them at run time.
-        DimExpr::NonMetric | DimExpr::Container => Dim::one(),
-        DimExpr::Var(name) => dims.var(name),
-        DimExpr::Any => Dim::var(fresh_dim()),
+        | DimExpr::NonMetric | DimExpr::Container => Dim::one(),
+        | DimExpr::Var(name) => dims.var(name),
+        | DimExpr::Any => Dim::var(fresh_dim()),
     }
 }
 
@@ -1046,15 +1119,15 @@ pub fn to_dim_expr(dim: &Dim) -> DimExpr {
             return DimExpr::Any;
         };
         let base = match atom {
-            aevia_dim::Atom::Base(name) => DimExpr::Base(name.to_string()),
-            aevia_dim::Atom::Var(id) => DimExpr::Var(format!("d{id}")),
+            | aevia_dim::Atom::Base(name) => DimExpr::Base(name.to_string()),
+            | aevia_dim::Atom::Var(id) => DimExpr::Var(format!("d{id}")),
         };
         factors.push(base.pow(Exp::Rat(Rational::new(numer, denom))));
     }
     match factors.len() {
-        0 => DimExpr::Dimless,
-        1 => factors.remove(0),
-        _ => DimExpr::Mul(factors),
+        | 0 => DimExpr::Dimless,
+        | 1 => factors.remove(0),
+        | _ => DimExpr::Mul(factors),
     }
 }
 
@@ -1112,32 +1185,36 @@ pub fn to_scale_value(scale: &Scale) -> rssn::kernel::value::ScaleValue {
 #[must_use]
 pub fn render_type(ty: &SigType) -> String {
     match ty {
-        SigType::Int => "Int".to_string(),
-        SigType::Real => "Real".to_string(),
-        SigType::Float => "Float".to_string(),
-        SigType::Complex => "Complex".to_string(),
-        SigType::Bool => "Bool".to_string(),
-        SigType::Str => "String".to_string(),
-        SigType::Symbol => "Symbol".to_string(),
-        SigType::Unit(dim) => format!("Unit[{}]", render_dim(dim)),
-        SigType::Point(dim) => format!("Point[{}]", render_dim(dim)),
-        SigType::Dim(inner, dim) => format!("{}[{}]", render_type(inner), render_dim(dim)),
-        SigType::Tensor { rank, elem } => match rank {
-            Some(rank) => format!("Tensor<{rank}, {}>", render_type(elem)),
-            None => format!("Tensor<_, {}>", render_type(elem)),
+        | SigType::Int => "Int".to_string(),
+        | SigType::Real => "Real".to_string(),
+        | SigType::Float => "Float".to_string(),
+        | SigType::Complex => "Complex".to_string(),
+        | SigType::Bool => "Bool".to_string(),
+        | SigType::Str => "String".to_string(),
+        | SigType::Symbol => "Symbol".to_string(),
+        | SigType::Unit(dim) => format!("Unit[{}]", render_dim(dim)),
+        | SigType::Point(dim) => format!("Point[{}]", render_dim(dim)),
+        | SigType::Dim(inner, dim) => format!("{}[{}]", render_type(inner), render_dim(dim)),
+        | SigType::Tensor { rank, elem } => {
+            match rank {
+                | Some(rank) => format!("Tensor<{rank}, {}>", render_type(elem)),
+                | None => format!("Tensor<_, {}>", render_type(elem)),
+            }
         },
-        SigType::Sparse { rank, elem } => match rank {
-            Some(rank) => format!("Sparse<{rank}, {}>", render_type(elem)),
-            None => format!("Sparse<_, {}>", render_type(elem)),
+        | SigType::Sparse { rank, elem } => {
+            match rank {
+                | Some(rank) => format!("Sparse<{rank}, {}>", render_type(elem)),
+                | None => format!("Sparse<_, {}>", render_type(elem)),
+            }
         },
-        SigType::Record(fields) => {
+        | SigType::Record(fields) => {
             let items: Vec<String> = fields
                 .iter()
                 .map(|(name, ty)| format!("{name}: {}", render_type(ty)))
                 .collect();
             format!("{{ {} }}", items.join(", "))
-        }
-        SigType::Variant(variants) => {
+        },
+        | SigType::Variant(variants) => {
             let items: Vec<String> = variants
                 .iter()
                 .map(|(name, payload)| {
@@ -1150,17 +1227,17 @@ pub fn render_type(ty: &SigType) -> String {
                 })
                 .collect();
             items.join(" | ")
-        }
-        SigType::Func(params, ret) => {
+        },
+        | SigType::Func(params, ret) => {
             let types: Vec<String> = params.iter().map(render_type).collect();
             format!("({}) -> {}", types.join(", "), render_type(ret))
-        }
-        SigType::Table => "Table".to_string(),
-        SigType::Device => "Device".to_string(),
-        SigType::Opaque(name) => name.clone(),
-        SigType::Var(name) => name.clone(),
-        SigType::Dyn => "Dyn<term>".to_string(),
-        SigType::Never => "Never".to_string(),
+        },
+        | SigType::Table => "Table".to_string(),
+        | SigType::Device => "Device".to_string(),
+        | SigType::Opaque(name) => name.clone(),
+        | SigType::Var(name) => name.clone(),
+        | SigType::Dyn => "Dyn<term>".to_string(),
+        | SigType::Never => "Never".to_string(),
     }
 }
 

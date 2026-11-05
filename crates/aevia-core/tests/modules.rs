@@ -1,7 +1,8 @@
 //! Multi-file programs: imports, aliases, name lists and cycles.
 
 use aevia_core::driver;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// A scratch directory that removes itself.
 struct Scratch(PathBuf);
@@ -15,7 +16,11 @@ impl Scratch {
         Self(path)
     }
 
-    fn write(&self, name: &str, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.0.join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create parent");
@@ -145,7 +150,10 @@ fn a_name_list_imports_only_those_names() {
 #[test]
 fn modules_are_checked_before_their_importers() {
     let scratch = Scratch::new("order");
-    scratch.write("A/Base.aev", "module A.Base\n\nfn double(x: Int): Int = 2 * x\n");
+    scratch.write(
+        "A/Base.aev",
+        "module A.Base\n\nfn double(x: Int): Int = 2 * x\n",
+    );
     scratch.write(
         "A/Mid.aev",
         "module A.Mid\nimport A.Base\n\nfn quad(x: Int): Int = A.Base.double(A.Base.double(x))\n",
@@ -229,7 +237,9 @@ fn private_declarations_are_not_exported() {
         .map(|item| item.message.clone())
         .collect();
     assert!(
-        messages.iter().any(|message| message.contains("no exported name")),
+        messages
+            .iter()
+            .any(|message| message.contains("no exported name")),
         "unexpected diagnostics: {messages:?}"
     );
 }
@@ -296,10 +306,13 @@ fn every_module_contributes_its_pinned_keys() {
 let root = Rssn.sqrt(9)
 ",
     );
-    let entry = scratch.write("main.aev", "import A.Num
+    let entry = scratch.write(
+        "main.aev",
+        "import A.Num
 
 fn main(): IO Unit = println(\"x\")
-");
+",
+    );
     let program = driver::load(&entry);
     let entry_module = program.entry().expect("entry module");
     let mut interp = aevia_core::Interp::new(&entry_module.checked);

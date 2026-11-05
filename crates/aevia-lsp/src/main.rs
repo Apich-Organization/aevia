@@ -37,7 +37,7 @@ fn main() -> ExitCode {
     }
 
     match aevia_lsp::serve_stdio() {
-        aevia_lsp::Exit::Graceful => ExitCode::SUCCESS,
-        aevia_lsp::Exit::Ungraceful => ExitCode::from(1),
+        | aevia_lsp::Exit::Graceful => ExitCode::SUCCESS,
+        | aevia_lsp::Exit::Ungraceful => ExitCode::from(1),
     }
 }

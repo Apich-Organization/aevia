@@ -14,7 +14,8 @@
 
 use crate::document::Document;
 use crate::position::Range;
-use aevia_syntax::{FileId, Severity as SyntaxSeverity};
+use aevia_syntax::FileId;
+use aevia_syntax::Severity as SyntaxSeverity;
 
 /// How serious a diagnostic is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -59,7 +60,11 @@ pub struct Diagnostic {
 /// than `file`, or when its secondary labels do — a label in another file
 /// cannot be placed in this document either.
 #[must_use]
-pub fn convert(diagnostic: &aevia_syntax::Diagnostic, file: FileId, doc: &Document) -> Option<Diagnostic> {
+pub fn convert(
+    diagnostic: &aevia_syntax::Diagnostic,
+    file: FileId,
+    doc: &Document,
+) -> Option<Diagnostic> {
     if diagnostic.span.file != file {
         return None;
     }
@@ -80,9 +85,11 @@ pub fn convert(diagnostic: &aevia_syntax::Diagnostic, file: FileId, doc: &Docume
         .labels
         .iter()
         .filter(|label| label.span.file == file)
-        .map(|label| Related {
-            range: doc.range_of(label.span.start, label.span.end),
-            message: label.message.clone(),
+        .map(|label| {
+            Related {
+                range: doc.range_of(label.span.start, label.span.end),
+                message: label.message.clone(),
+            }
         })
         .collect();
     Some(Diagnostic {
@@ -96,16 +103,17 @@ pub fn convert(diagnostic: &aevia_syntax::Diagnostic, file: FileId, doc: &Docume
 
 fn severity(severity: SyntaxSeverity) -> Severity {
     match severity {
-        SyntaxSeverity::Error => Severity::Error,
-        SyntaxSeverity::Warning => Severity::Warning,
-        SyntaxSeverity::Note => Severity::Info,
+        | SyntaxSeverity::Error => Severity::Error,
+        | SyntaxSeverity::Warning => Severity::Warning,
+        | SyntaxSeverity::Note => Severity::Info,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aevia_syntax::{Diagnostic as CompilerDiagnostic, Span};
+    use aevia_syntax::Diagnostic as CompilerDiagnostic;
+    use aevia_syntax::Span;
 
     fn document() -> Document {
         Document::new("a.aev", 1, "let x = 1 m\nlet y = x + 1\n")
@@ -114,10 +122,11 @@ mod tests {
     #[test]
     fn a_span_becomes_a_range() {
         let doc = document();
-        let compiler = CompilerDiagnostic::error("E0401", "dimension mismatch", Span::new(0, 16, 21))
-            .with_primary_label("expected Real[L], found Int")
-            .with_note("left:  L")
-            .with_help("divide by a unit");
+        let compiler =
+            CompilerDiagnostic::error("E0401", "dimension mismatch", Span::new(0, 16, 21))
+                .with_primary_label("expected Real[L], found Int")
+                .with_note("left:  L")
+                .with_help("divide by a unit");
         let converted = convert(&compiler, 0, &doc).expect("same file");
         assert_eq!(converted.range, doc.range_of(16, 21));
         assert_eq!(converted.range.start, crate::Position::new(1, 4));
@@ -132,8 +141,7 @@ mod tests {
     #[test]
     fn a_span_in_another_file_is_dropped() {
         let doc = document();
-        let compiler =
-            CompilerDiagnostic::error("E0401", "from elsewhere", Span::new(7, 0, 3));
+        let compiler = CompilerDiagnostic::error("E0401", "from elsewhere", Span::new(7, 0, 3));
         assert!(convert(&compiler, 0, &doc).is_none());
     }
 
@@ -162,7 +170,10 @@ mod tests {
             notes: Vec::new(),
             helps: Vec::new(),
         };
-        assert_eq!(convert(&warning, 0, &doc).expect("w").severity, Severity::Warning);
+        assert_eq!(
+            convert(&warning, 0, &doc).expect("w").severity,
+            Severity::Warning
+        );
         let converted = convert(&note, 0, &doc).expect("n");
         assert_eq!(converted.severity, Severity::Info);
         assert_eq!(converted.code, None);

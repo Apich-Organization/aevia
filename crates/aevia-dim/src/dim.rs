@@ -9,12 +9,16 @@
 //! The module also carries the base/alias environment used to parse and print
 //! dimension expressions (`L`, `Length`, `Energy`, ...).
 
-use crate::rat::{format_rational, parse_decimal};
+use crate::rat::format_rational;
+use crate::rat::parse_decimal;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, Signed, Zero};
-use std::collections::{BTreeMap, HashMap};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::Zero;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 
 /// One generator of the dimension group.
@@ -37,10 +41,13 @@ impl Atom {
 }
 
 impl fmt::Display for Atom {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Base(name) => f.write_str(name),
-            Self::Var(id) => write!(f, "d{id}"),
+            | Self::Base(name) => f.write_str(name),
+            | Self::Var(id) => write!(f, "d{id}"),
         }
     }
 }
@@ -99,10 +106,15 @@ impl Dim {
 
     /// Multiplies two dimensions (exponents add).
     #[must_use]
-    pub fn mul(&self, other: &Self) -> Self {
+    pub fn mul(
+        &self,
+        other: &Self,
+    ) -> Self {
         let mut factors = self.factors.clone();
         for (atom, exponent) in &other.factors {
-            let entry = factors.entry(atom.clone()).or_insert_with(BigRational::zero);
+            let entry = factors
+                .entry(atom.clone())
+                .or_insert_with(BigRational::zero);
             *entry += exponent;
         }
         factors.retain(|_, exponent| !exponent.is_zero());
@@ -111,10 +123,15 @@ impl Dim {
 
     /// Divides two dimensions (exponents subtract).
     #[must_use]
-    pub fn div(&self, other: &Self) -> Self {
+    pub fn div(
+        &self,
+        other: &Self,
+    ) -> Self {
         let mut factors = self.factors.clone();
         for (atom, exponent) in &other.factors {
-            let entry = factors.entry(atom.clone()).or_insert_with(BigRational::zero);
+            let entry = factors
+                .entry(atom.clone())
+                .or_insert_with(BigRational::zero);
             *entry -= exponent;
         }
         factors.retain(|_, exponent| !exponent.is_zero());
@@ -123,7 +140,10 @@ impl Dim {
 
     /// Raises the dimension to a rational power.
     #[must_use]
-    pub fn pow(&self, exponent: &BigRational) -> Self {
+    pub fn pow(
+        &self,
+        exponent: &BigRational,
+    ) -> Self {
         if exponent.is_zero() {
             return Self::one();
         }
@@ -142,7 +162,10 @@ impl Dim {
 
     /// True when the dimension contains the given variable.
     #[must_use]
-    pub fn contains_var(&self, id: u32) -> bool {
+    pub fn contains_var(
+        &self,
+        id: u32,
+    ) -> bool {
         self.factors.contains_key(&Atom::Var(id))
     }
 
@@ -151,9 +174,11 @@ impl Dim {
     pub fn vars(&self) -> Vec<u32> {
         self.factors
             .keys()
-            .filter_map(|atom| match atom {
-                Atom::Var(id) => Some(*id),
-                Atom::Base(_) => None,
+            .filter_map(|atom| {
+                match atom {
+                    | Atom::Var(id) => Some(*id),
+                    | Atom::Base(_) => None,
+                }
             })
             .collect()
     }
@@ -163,9 +188,11 @@ impl Dim {
     pub fn base_factors(&self) -> Vec<(&str, &BigRational)> {
         self.factors
             .iter()
-            .filter_map(|(atom, exponent)| match atom {
-                Atom::Base(name) => Some((&**name, exponent)),
-                Atom::Var(_) => None,
+            .filter_map(|(atom, exponent)| {
+                match atom {
+                    | Atom::Base(name) => Some((&**name, exponent)),
+                    | Atom::Var(_) => None,
+                }
             })
             .collect()
     }
@@ -180,23 +207,26 @@ impl Dim {
     /// Unmapped variables are left in place; the caller decides whether that
     /// is an error.
     #[must_use]
-    pub fn substitute<F>(&self, mut lookup: F) -> Self
+    pub fn substitute<F>(
+        &self,
+        mut lookup: F,
+    ) -> Self
     where
         F: FnMut(u32) -> Option<Dim>,
     {
         let mut result = Dim::one();
         for (atom, exponent) in &self.factors {
             match atom {
-                Atom::Base(_) => {
+                | Atom::Base(_) => {
                     result = result.mul(&Dim::from_factors([(atom.clone(), exponent.clone())]));
-                }
-                Atom::Var(id) => match lookup(*id) {
-                    Some(replacement) => result = result.mul(&replacement.pow(exponent)),
-                    None => {
-                        result = result.mul(&Dim::from_factors([(
-                            Atom::Var(*id),
-                            exponent.clone(),
-                        )]));
+                },
+                | Atom::Var(id) => {
+                    match lookup(*id) {
+                        | Some(replacement) => result = result.mul(&replacement.pow(exponent)),
+                        | None => {
+                            result = result
+                                .mul(&Dim::from_factors([(Atom::Var(*id), exponent.clone())]));
+                        },
                     }
                 },
             }
@@ -212,19 +242,28 @@ impl Dim {
 
     /// The difference `self / other`, used in diagnostics.
     #[must_use]
-    pub fn difference(&self, other: &Self) -> Self {
+    pub fn difference(
+        &self,
+        other: &Self,
+    ) -> Self {
         self.div(other)
     }
 }
 
 impl fmt::Debug for Dim {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(&self.to_plain_string())
     }
 }
 
 impl fmt::Display for Dim {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(&self.to_plain_string())
     }
 }
@@ -236,9 +275,11 @@ impl Dim {
     /// diagnostics notes, never single letters (§4.1).
     #[must_use]
     pub fn to_plain_string(&self) -> String {
-        render(self, |atom| match atom {
-            Atom::Base(name) => name.to_string(),
-            Atom::Var(id) => format!("d{id}"),
+        render(self, |atom| {
+            match atom {
+                | Atom::Base(name) => name.to_string(),
+                | Atom::Var(id) => format!("d{id}"),
+            }
         })
     }
 
@@ -259,8 +300,8 @@ impl Dim {
         let mut denominator = Vec::new();
         for (atom, exponent) in &self.factors {
             let name = match atom {
-                Atom::Base(name) => si_symbol(name).to_string(),
-                Atom::Var(id) => format!("d{id}"),
+                | Atom::Base(name) => si_symbol(name).to_string(),
+                | Atom::Var(id) => format!("d{id}"),
             };
             let (target, magnitude) = if exponent.is_negative() {
                 (&mut denominator, -exponent.clone())
@@ -281,9 +322,9 @@ impl Dim {
             numerator.join("*")
         };
         match denominator.len() {
-            0 => numerator,
-            1 => format!("{numerator}/{}", denominator[0]),
-            _ => format!("{numerator}/({})", denominator.join("*")),
+            | 0 => numerator,
+            | 1 => format!("{numerator}/{}", denominator[0]),
+            | _ => format!("{numerator}/({})", denominator.join("*")),
         }
     }
 
@@ -304,7 +345,10 @@ impl Dim {
     }
 }
 
-fn render<F>(dim: &Dim, mut name_of: F) -> String
+fn render<F>(
+    dim: &Dim,
+    mut name_of: F,
+) -> String
 where
     F: FnMut(&Atom) -> String,
 {
@@ -332,11 +376,11 @@ where
         numerator.join("*")
     };
     match denominator.len() {
-        0 => numerator,
+        | 0 => numerator,
         // `M/L*T` reads as `(M/L)*T`; a product in the denominator needs
         // parentheses so the text parses back to the same dimension.
-        1 => format!("{numerator}/{}", denominator[0]),
-        _ => format!("{numerator}/({})", denominator.join("*")),
+        | 1 => format!("{numerator}/{}", denominator[0]),
+        | _ => format!("{numerator}/({})", denominator.join("*")),
     }
 }
 
@@ -355,14 +399,14 @@ fn format_exponent(exponent: &BigRational) -> String {
 /// it would make the display ambiguous.
 fn si_symbol(base: &str) -> &str {
     match base {
-        "Length" => "m",
-        "Mass" => "kg",
-        "Time" => "s",
-        "Current" => "A",
-        "Temperature" => "K",
-        "Amount" => "mol",
-        "Luminosity" => "cd",
-        other => other,
+        | "Length" => "m",
+        | "Mass" => "kg",
+        | "Time" => "s",
+        | "Current" => "A",
+        | "Temperature" => "K",
+        | "Amount" => "mol",
+        | "Luminosity" => "cd",
+        | other => other,
     }
 }
 
@@ -437,7 +481,10 @@ impl DimEnv {
     }
 
     /// Adds a user base dimension; returns false when the name already exists.
-    pub fn define_base(&mut self, name: &str) -> bool {
+    pub fn define_base(
+        &mut self,
+        name: &str,
+    ) -> bool {
         if self.lookup(name).is_some() {
             return false;
         }
@@ -446,7 +493,11 @@ impl DimEnv {
     }
 
     /// Adds a transparent alias such as `dimension Velocity = L/T`.
-    pub fn define_alias(&mut self, name: &str, dim: Dim) {
+    pub fn define_alias(
+        &mut self,
+        name: &str,
+        dim: Dim,
+    ) {
         self.aliases.insert(name.to_string(), dim);
     }
 
@@ -464,7 +515,10 @@ impl DimEnv {
 
     /// Resolves a base name or alias.
     #[must_use]
-    pub fn lookup(&self, name: &str) -> Option<Dim> {
+    pub fn lookup(
+        &self,
+        name: &str,
+    ) -> Option<Dim> {
         if let Some(index) = self.bases.iter().position(|base| base == name) {
             return Some(Dim::base(&self.bases[index]));
         }
@@ -481,7 +535,10 @@ impl DimEnv {
     /// # Errors
     ///
     /// Fails on unknown generators or malformed exponents.
-    pub fn parse(&self, text: &str) -> Result<Dim, DimParseError> {
+    pub fn parse(
+        &self,
+        text: &str,
+    ) -> Result<Dim, DimParseError> {
         let mut parser = DimTextParser::new(text);
         let dim = parser.parse_dim_with(self)?;
         parser.skip_space();
@@ -497,7 +554,10 @@ impl DimEnv {
     /// Prefers the shortest known alias (`Energy` over `M*L^2/T^2`), otherwise
     /// prints single-letter bases, which is the surface syntax of §2.5.1.
     #[must_use]
-    pub fn format(&self, dim: &Dim) -> String {
+    pub fn format(
+        &self,
+        dim: &Dim,
+    ) -> String {
         let short = self.format_short(dim);
         let mut best: Option<(&str, usize)> = None;
         for (alias, value) in &self.aliases {
@@ -509,21 +569,27 @@ impl DimEnv {
             }
         }
         match best {
-            Some((alias, len)) if len < short.chars().count() => alias.to_string(),
-            _ => short,
+            | Some((alias, len)) if len < short.chars().count() => alias.to_string(),
+            | _ => short,
         }
     }
 
     /// Renders with single-letter SI bases and canonical user bases.
     #[must_use]
-    pub fn format_short(&self, dim: &Dim) -> String {
-        render(dim, |atom| match atom {
-            Atom::Base(name) => self
-                .short
-                .get(&**name)
-                .cloned()
-                .unwrap_or_else(|| (*name).to_string()),
-            Atom::Var(id) => format!("d{id}"),
+    pub fn format_short(
+        &self,
+        dim: &Dim,
+    ) -> String {
+        render(dim, |atom| {
+            match atom {
+                | Atom::Base(name) => {
+                    self.short
+                        .get(&**name)
+                        .cloned()
+                        .unwrap_or_else(|| (*name).to_string())
+                },
+                | Atom::Var(id) => format!("d{id}"),
+            }
         })
     }
 }
@@ -542,12 +608,15 @@ pub enum DimParseError {
 }
 
 impl fmt::Display for DimParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::UnknownName(name) => write!(f, "unknown dimension `{name}`"),
-            Self::UnexpectedEnd => f.write_str("unexpected end of dimension expression"),
-            Self::Trailing(text) => write!(f, "unexpected `{text}` after dimension expression"),
-            Self::BadExponent(text) => write!(f, "invalid dimension exponent `{text}`"),
+            | Self::UnknownName(name) => write!(f, "unknown dimension `{name}`"),
+            | Self::UnexpectedEnd => f.write_str("unexpected end of dimension expression"),
+            | Self::Trailing(text) => write!(f, "unexpected `{text}` after dimension expression"),
+            | Self::BadExponent(text) => write!(f, "invalid dimension exponent `{text}`"),
         }
     }
 }
@@ -594,24 +663,30 @@ impl<'a> DimTextParser<'a> {
         self.parse_dim_with(&env)
     }
 
-    fn parse_dim_with(&mut self, env: &DimEnv) -> Result<Dim, DimParseError> {
+    fn parse_dim_with(
+        &mut self,
+        env: &DimEnv,
+    ) -> Result<Dim, DimParseError> {
         let mut result = self.parse_factor(env)?;
         loop {
             match self.peek() {
-                Some('*') | Some('·') => {
+                | Some('*') | Some('·') => {
                     self.bump();
                     result = result.mul(&self.parse_factor(env)?);
-                }
-                Some('/') => {
+                },
+                | Some('/') => {
                     self.bump();
                     result = result.div(&self.parse_factor(env)?);
-                }
-                _ => return Ok(result),
+                },
+                | _ => return Ok(result),
             }
         }
     }
 
-    fn parse_factor(&mut self, env: &DimEnv) -> Result<Dim, DimParseError> {
+    fn parse_factor(
+        &mut self,
+        env: &DimEnv,
+    ) -> Result<Dim, DimParseError> {
         let mut atom = self.parse_atom(env)?;
         if self.peek() == Some('^') {
             self.bump();
@@ -621,9 +696,12 @@ impl<'a> DimTextParser<'a> {
         Ok(atom)
     }
 
-    fn parse_atom(&mut self, env: &DimEnv) -> Result<Dim, DimParseError> {
+    fn parse_atom(
+        &mut self,
+        env: &DimEnv,
+    ) -> Result<Dim, DimParseError> {
         match self.peek() {
-            Some('(') => {
+            | Some('(') => {
                 self.bump();
                 let inner = self.parse_dim_with(env)?;
                 if self.peek() != Some(')') {
@@ -631,12 +709,12 @@ impl<'a> DimTextParser<'a> {
                 }
                 self.bump();
                 Ok(inner)
-            }
-            Some('1') => {
+            },
+            | Some('1') => {
                 self.bump();
                 Ok(Dim::one())
-            }
-            Some(c) if c.is_alphabetic() || c == '_' => {
+            },
+            | Some(c) if c.is_alphabetic() || c == '_' => {
                 let start = self.pos;
                 while let Some(c) = self.peek() {
                     if c.is_alphanumeric() || c == '_' {
@@ -648,9 +726,9 @@ impl<'a> DimTextParser<'a> {
                 let name = &self.text[start..self.pos];
                 env.lookup(name)
                     .ok_or_else(|| DimParseError::UnknownName(name.to_string()))
-            }
-            Some(c) => Err(DimParseError::Trailing(c.to_string())),
-            None => Err(DimParseError::UnexpectedEnd),
+            },
+            | Some(c) => Err(DimParseError::Trailing(c.to_string())),
+            | None => Err(DimParseError::UnexpectedEnd),
         }
     }
 
@@ -676,17 +754,17 @@ impl<'a> DimTextParser<'a> {
             }
             self.bump();
             let value = match inner.split_once('/') {
-                Some((numerator, denominator)) => {
-                    let numerator =
-                        parse_decimal(numerator).ok_or_else(|| DimParseError::BadExponent(inner.clone()))?;
+                | Some((numerator, denominator)) => {
+                    let numerator = parse_decimal(numerator)
+                        .ok_or_else(|| DimParseError::BadExponent(inner.clone()))?;
                     let denominator = parse_decimal(denominator)
                         .ok_or_else(|| DimParseError::BadExponent(inner.clone()))?;
                     if denominator.is_zero() {
                         return Err(DimParseError::BadExponent(inner));
                     }
                     numerator / denominator
-                }
-                None => parse_decimal(&inner).ok_or(DimParseError::BadExponent(inner))?,
+                },
+                | None => parse_decimal(&inner).ok_or(DimParseError::BadExponent(inner))?,
             };
             return Ok(if negative { -value } else { value });
         }
@@ -741,17 +819,28 @@ impl DimUnifier {
 
     /// Resolves all bound variables in a dimension.
     #[must_use]
-    pub fn resolve(&self, dim: &Dim) -> Dim {
+    pub fn resolve(
+        &self,
+        dim: &Dim,
+    ) -> Dim {
         self.resolve_depth(dim, 0)
     }
 
-    fn resolve_depth(&self, dim: &Dim, depth: u32) -> Dim {
+    fn resolve_depth(
+        &self,
+        dim: &Dim,
+        depth: u32,
+    ) -> Dim {
         if depth > 64 {
             // A cycle here can only come from a bug in `bind`; returning the
             // unexpanded form keeps the checker from looping forever.
             return dim.clone();
         }
-        dim.substitute(|id| self.subst.get(&id).map(|value| self.resolve_depth(value, depth + 1)))
+        dim.substitute(|id| {
+            self.subst
+                .get(&id)
+                .map(|value| self.resolve_depth(value, depth + 1))
+        })
     }
 
     /// Binds a variable to a dimension, checking for self-reference.
@@ -760,7 +849,11 @@ impl DimUnifier {
     ///
     /// Returns a mismatch carrying the offending dimension when the binding is
     /// circular (`d = d * L`), which no finite substitution can satisfy.
-    pub fn bind(&mut self, id: u32, value: Dim) -> Result<(), DimMismatch> {
+    pub fn bind(
+        &mut self,
+        id: u32,
+        value: Dim,
+    ) -> Result<(), DimMismatch> {
         let resolved = self.resolve(&value);
         if resolved.contains_var(id) {
             return Err(DimMismatch {
@@ -781,15 +874,21 @@ impl DimUnifier {
     /// # Errors
     ///
     /// Returns the residual mismatch when the dimensions cannot be made equal.
-    pub fn unify(&mut self, left: &Dim, right: &Dim) -> Result<(), DimMismatch> {
+    pub fn unify(
+        &mut self,
+        left: &Dim,
+        right: &Dim,
+    ) -> Result<(), DimMismatch> {
         for _ in 0..256 {
             let quotient = self.resolve(left).div(&self.resolve(right));
             if quotient.is_one() {
                 return Ok(());
             }
-            let variable = quotient.factors().find_map(|(atom, exponent)| match atom {
-                Atom::Var(id) => Some((*id, exponent.clone())),
-                Atom::Base(_) => None,
+            let variable = quotient.factors().find_map(|(atom, exponent)| {
+                match atom {
+                    | Atom::Var(id) => Some((*id, exponent.clone())),
+                    | Atom::Base(_) => None,
+                }
             });
             let Some((id, exponent)) = variable else {
                 let resolved_left = self.resolve(left);
@@ -850,7 +949,10 @@ mod tests {
         assert_eq!(env.parse("L^2").unwrap(), env.parse("L^(4/2)").unwrap());
         assert_eq!(env.parse("L/L").unwrap(), Dim::one());
         assert_eq!(env.parse("(L^2)^(1/2)").unwrap(), Dim::base("Length"));
-        assert_eq!(env.parse("Energy").unwrap(), env.parse("M*L^2/T^2").unwrap());
+        assert_eq!(
+            env.parse("Energy").unwrap(),
+            env.parse("M*L^2/T^2").unwrap()
+        );
     }
 
     #[test]
@@ -893,10 +995,7 @@ mod tests {
         let env = env();
         let mut unifier = DimUnifier::new();
         unifier
-            .unify(
-                &Dim::var(0).mul(&Dim::var(1)),
-                &env.parse("L").unwrap(),
-            )
+            .unify(&Dim::var(0).mul(&Dim::var(1)), &env.parse("L").unwrap())
             .expect("one free variable");
         assert_eq!(
             unifier.resolve(&Dim::var(0)),
@@ -930,10 +1029,7 @@ mod tests {
         let three_halves = ratio(3, 2);
         let time = Dim::base("Time");
         assert_eq!(time.pow(&half).to_si_symbol_string(), "s^(1/2)");
-        assert_eq!(
-            time.pow(&minus_half).to_si_symbol_string(),
-            "1/s^(1/2)"
-        );
+        assert_eq!(time.pow(&minus_half).to_si_symbol_string(), "1/s^(1/2)");
         assert_eq!(time.to_si_symbol_string(), "s");
         let acceleration = Dim::base("Length").div(&time.pow(&ratio(2, 1)));
         assert_eq!(acceleration.to_si_symbol_string(), "m/s^2");

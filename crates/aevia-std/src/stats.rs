@@ -17,7 +17,10 @@
 use crate::NumericError;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, Signed, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 
 fn sort_exact(values: &mut [BigRational]) {
     values.sort();
@@ -77,11 +80,7 @@ pub fn quantile_exact(
         ));
     }
     let position = q.clone() * BigRational::from_integer(BigInt::from(sorted.len() - 1));
-    let lower = position
-        .to_f64()
-        .unwrap_or(0.0)
-        .floor()
-        .max(0.0) as usize;
+    let lower = position.to_f64().unwrap_or(0.0).floor().max(0.0) as usize;
     let lower = lower.min(sorted.len() - 1);
     if lower + 1 >= sorted.len() {
         return Ok(sorted[lower].clone());
@@ -98,7 +97,10 @@ pub fn quantile_exact(
 ///
 /// [`NumericError::Empty`] for an empty sample and
 /// [`NumericError::Domain`] when `q` is outside `[0, 1]`.
-pub fn quantile(values: &[f64], q: f64) -> Result<f64, NumericError> {
+pub fn quantile(
+    values: &[f64],
+    q: f64,
+) -> Result<f64, NumericError> {
     if values.is_empty() {
         return Err(NumericError::Empty);
     }
@@ -124,7 +126,11 @@ pub fn quantile(values: &[f64], q: f64) -> Result<f64, NumericError> {
 ///
 /// [`NumericError::ShapeMismatch`] when the lengths differ, and
 /// [`NumericError::Empty`] when there are no elements.
-pub fn cov(left: &[f64], right: &[f64], population: bool) -> Result<f64, NumericError> {
+pub fn cov(
+    left: &[f64],
+    right: &[f64],
+    population: bool,
+) -> Result<f64, NumericError> {
     if left.len() != right.len() {
         return Err(NumericError::ShapeMismatch(format!(
             "cov needs two samples of one length, found {} and {}",
@@ -160,7 +166,11 @@ pub fn cov(left: &[f64], right: &[f64], population: bool) -> Result<f64, Numeric
 ///
 /// [`NumericError::ShapeMismatch`] when the lengths differ, and
 /// [`NumericError::Domain`] when one sample has no spread.
-pub fn corr(left: &[f64], right: &[f64], population: bool) -> Result<f64, NumericError> {
+pub fn corr(
+    left: &[f64],
+    right: &[f64],
+    population: bool,
+) -> Result<f64, NumericError> {
     let covariance = cov(left, right, population)?;
     let variance_left = cov(left, left, population)?;
     let variance_right = cov(right, right, population)?;
@@ -234,12 +244,17 @@ pub fn kurtosis(values: &[f64]) -> Result<f64, NumericError> {
 ///
 /// [`NumericError::Empty`] for an empty sample and [`NumericError::Domain`]
 /// when `bins` is zero.
-pub fn histogram(values: &[f64], bins: usize) -> Result<(Vec<i64>, Vec<f64>), NumericError> {
+pub fn histogram(
+    values: &[f64],
+    bins: usize,
+) -> Result<(Vec<i64>, Vec<f64>), NumericError> {
     if values.is_empty() {
         return Err(NumericError::Empty);
     }
     if bins == 0 {
-        return Err(NumericError::Domain("a histogram needs a bucket".to_string()));
+        return Err(NumericError::Domain(
+            "a histogram needs a bucket".to_string(),
+        ));
     }
     let mut low = f64::INFINITY;
     let mut high = f64::NEG_INFINITY;
@@ -258,7 +273,9 @@ pub fn histogram(values: &[f64], bins: usize) -> Result<(Vec<i64>, Vec<f64>), Nu
         1.0
     };
     let start = if high > low { low } else { low - 0.5 };
-    let edges: Vec<f64> = (0..=bins).map(|index| start + width * index as f64).collect();
+    let edges: Vec<f64> = (0..=bins)
+        .map(|index| start + width * index as f64)
+        .collect();
     let mut counts = vec![0i64; bins];
     for value in values {
         let mut index = ((value - start) / width).floor() as isize;
@@ -386,10 +403,7 @@ mod tests {
             quantile_exact(&sample, &BigRational::one()),
             Ok(rational(4))
         );
-        assert_eq!(
-            quantile(&[0.0, 10.0], 0.25),
-            Ok(2.5)
-        );
+        assert_eq!(quantile(&[0.0, 10.0], 0.25), Ok(2.5));
     }
 
     #[test]
@@ -518,9 +532,12 @@ pub fn cov_exact(
     }
     let mean_left = mean_exact(left)?;
     let mean_right = mean_exact(right)?;
-    let total = left.iter().zip(right).fold(BigRational::zero(), |acc, (a, b)| {
-        acc + (a.clone() - mean_left.clone()) * (b.clone() - mean_right.clone())
-    });
+    let total = left
+        .iter()
+        .zip(right)
+        .fold(BigRational::zero(), |acc, (a, b)| {
+            acc + (a.clone() - mean_left.clone()) * (b.clone() - mean_right.clone())
+        });
     let count = if population || left.len() == 1 {
         left.len()
     } else {

@@ -73,7 +73,8 @@
 use crate::NumericError;
 use rssn::kernels::random::Rng;
 use rssn::kernels::sde as kernel;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+use std::cell::RefCell;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -110,10 +111,10 @@ impl SdeError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Invalid(_) | Self::Shape(_) => "E0802",
-            Self::NonFinite(_) => "E0806",
-            Self::StepLimit(_) => "E0807",
-            Self::Unsupported { .. } => "E1001",
+            | Self::Invalid(_) | Self::Shape(_) => "E0802",
+            | Self::NonFinite(_) => "E0806",
+            | Self::StepLimit(_) => "E0807",
+            | Self::Unsupported { .. } => "E1001",
         }
     }
 
@@ -121,8 +122,8 @@ impl SdeError {
     #[must_use]
     pub fn capability(&self) -> Option<&'static str> {
         match self {
-            Self::Unsupported { capability, .. } => Some(capability),
-            Self::Invalid(_) | Self::Shape(_) | Self::NonFinite(_) | Self::StepLimit(_) => None,
+            | Self::Unsupported { capability, .. } => Some(capability),
+            | Self::Invalid(_) | Self::Shape(_) | Self::NonFinite(_) | Self::StepLimit(_) => None,
         }
     }
 
@@ -134,7 +135,10 @@ impl SdeError {
         Self::Invalid(message.into())
     }
 
-    fn unsupported(capability: &'static str, detail: impl Into<String>) -> Self {
+    fn unsupported(
+        capability: &'static str,
+        detail: impl Into<String>,
+    ) -> Self {
         Self::Unsupported {
             capability,
             detail: detail.into(),
@@ -143,14 +147,17 @@ impl SdeError {
 }
 
 impl std::fmt::Display for SdeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
-            Self::Invalid(message) | Self::Shape(message) => f.write_str(message),
-            Self::NonFinite(reason) => write!(f, "the state became non-finite: {reason}"),
-            Self::StepLimit(reason) => f.write_str(reason),
-            Self::Unsupported { capability, detail } => {
+            | Self::Invalid(message) | Self::Shape(message) => f.write_str(message),
+            | Self::NonFinite(reason) => write!(f, "the state became non-finite: {reason}"),
+            | Self::StepLimit(reason) => f.write_str(reason),
+            | Self::Unsupported { capability, detail } => {
                 write!(f, "this build does not provide `{capability}`: {detail}")
-            }
+            },
         }
     }
 }
@@ -160,22 +167,24 @@ impl std::error::Error for SdeError {}
 impl From<kernel::SdeError> for SdeError {
     fn from(error: kernel::SdeError) -> Self {
         match error {
-            kernel::SdeError::Invalid { what } => {
+            | kernel::SdeError::Invalid { what } => {
                 Self::invalid(format!("the kernel rejected the SDE parameters: {what}"))
-            }
-            kernel::SdeError::NonFinite { step } => {
+            },
+            | kernel::SdeError::NonFinite { step } => {
                 Self::NonFinite(format!("the state left the reals at step {step}"))
-            }
-            kernel::SdeError::StepLimit { limit } => {
+            },
+            | kernel::SdeError::StepLimit { limit } => {
                 Self::StepLimit(format!("the step budget of {limit} was exhausted"))
-            }
-            kernel::SdeError::StepUnderflow { t, h } => Self::StepLimit(format!(
-                "the step size underflowed at t = {t} (h = {h:e})"
-            )),
-            kernel::SdeError::StepBelowCell { cells } => Self::StepLimit(format!(
-                "an adaptive step cannot be shorter than one of the {cells} Brownian cells; \
+            },
+            | kernel::SdeError::StepUnderflow { t, h } => {
+                Self::StepLimit(format!("the step size underflowed at t = {t} (h = {h:e})"))
+            },
+            | kernel::SdeError::StepBelowCell { cells } => {
+                Self::StepLimit(format!(
+                    "an adaptive step cannot be shorter than one of the {cells} Brownian cells; \
                  use more cells"
-            )),
+                ))
+            },
         }
     }
 }
@@ -183,9 +192,11 @@ impl From<kernel::SdeError> for SdeError {
 impl From<NumericError> for SdeError {
     fn from(error: NumericError) -> Self {
         match error {
-            NumericError::NotConverged => Self::StepLimit("the iteration did not converge".into()),
-            NumericError::Domain(message) => Self::invalid(message),
-            other => Self::invalid(other.to_string()),
+            | NumericError::NotConverged => {
+                Self::StepLimit("the iteration did not converge".into())
+            },
+            | NumericError::Domain(message) => Self::invalid(message),
+            | other => Self::invalid(other.to_string()),
         }
     }
 }
@@ -226,12 +237,12 @@ impl Method {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            Self::EulerMaruyama => "euler_maruyama",
-            Self::Milstein => "milstein",
-            Self::MilsteinStratonovich => "milstein_stratonovich",
-            Self::HeunStratonovich => "heun_stratonovich",
-            Self::SrkPlaten => "srk_platen",
-            Self::MilsteinNoncommutative => "milstein_noncommutative",
+            | Self::EulerMaruyama => "euler_maruyama",
+            | Self::Milstein => "milstein",
+            | Self::MilsteinStratonovich => "milstein_stratonovich",
+            | Self::HeunStratonovich => "heun_stratonovich",
+            | Self::SrkPlaten => "srk_platen",
+            | Self::MilsteinNoncommutative => "milstein_noncommutative",
         }
     }
 
@@ -239,13 +250,13 @@ impl Method {
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
-            "euler_maruyama" | "em" => Self::EulerMaruyama,
-            "milstein" => Self::Milstein,
-            "milstein_stratonovich" => Self::MilsteinStratonovich,
-            "heun_stratonovich" | "heun" => Self::HeunStratonovich,
-            "srk_platen" | "srk" => Self::SrkPlaten,
-            "milstein_noncommutative" => Self::MilsteinNoncommutative,
-            _ => return None,
+            | "euler_maruyama" | "em" => Self::EulerMaruyama,
+            | "milstein" => Self::Milstein,
+            | "milstein_stratonovich" => Self::MilsteinStratonovich,
+            | "heun_stratonovich" | "heun" => Self::HeunStratonovich,
+            | "srk_platen" | "srk" => Self::SrkPlaten,
+            | "milstein_noncommutative" => Self::MilsteinNoncommutative,
+            | _ => return None,
         })
     }
 
@@ -253,11 +264,11 @@ impl Method {
     #[must_use]
     pub fn calculus(self) -> Calculus {
         match self {
-            Self::EulerMaruyama
+            | Self::EulerMaruyama
             | Self::Milstein
             | Self::SrkPlaten
             | Self::MilsteinNoncommutative => Calculus::Ito,
-            Self::MilsteinStratonovich | Self::HeunStratonovich => Calculus::Stratonovich,
+            | Self::MilsteinStratonovich | Self::HeunStratonovich => Calculus::Stratonovich,
         }
     }
 }
@@ -280,19 +291,23 @@ pub struct Order {
 pub fn sde_order(method: Method) -> Order {
     match method {
         // Euler–Maruyama is strong 1/2, weak 1.
-        Method::EulerMaruyama => Order {
-            strong: 0.5,
-            weak: 1.0,
+        | Method::EulerMaruyama => {
+            Order {
+                strong: 0.5,
+                weak: 1.0,
+            }
         },
         // Every other implemented scheme is strong order one. The kernel is
         // explicit that they are weak order one too (not two).
-        Method::Milstein
+        | Method::Milstein
         | Method::MilsteinStratonovich
         | Method::HeunStratonovich
         | Method::SrkPlaten
-        | Method::MilsteinNoncommutative => Order {
-            strong: 1.0,
-            weak: 1.0,
+        | Method::MilsteinNoncommutative => {
+            Order {
+                strong: 1.0,
+                weak: 1.0,
+            }
         },
     }
 }
@@ -318,10 +333,13 @@ pub enum Structure {
 impl Structure {
     /// The number of noise channels (`m`) for a state of `n` components.
     #[must_use]
-    pub fn noise(self, state: usize) -> usize {
+    pub fn noise(
+        self,
+        state: usize,
+    ) -> usize {
         match self {
-            Self::Diagonal => state,
-            Self::General { noise, .. } => noise,
+            | Self::Diagonal => state,
+            | Self::General { noise, .. } => noise,
         }
     }
 
@@ -329,17 +347,20 @@ impl Structure {
     #[must_use]
     pub fn is_commutative(self) -> bool {
         match self {
-            Self::Diagonal => true,
-            Self::General { commutative, .. } => commutative,
+            | Self::Diagonal => true,
+            | Self::General { commutative, .. } => commutative,
         }
     }
 
     /// How many values the diffusion callback returns.
     #[must_use]
-    pub fn coefficients(self, state: usize) -> usize {
+    pub fn coefficients(
+        self,
+        state: usize,
+    ) -> usize {
         match self {
-            Self::Diagonal => state,
-            Self::General { noise, .. } => state * noise,
+            | Self::Diagonal => state,
+            | Self::General { noise, .. } => state * noise,
         }
     }
 }
@@ -444,7 +465,12 @@ impl Options {
 
     /// An explicit uniform grid.
     #[must_use]
-    pub fn grid(method: Method, structure: Structure, seed: u64, times: Vec<f64>) -> Self {
+    pub fn grid(
+        method: Method,
+        structure: Structure,
+        seed: u64,
+        times: Vec<f64>,
+    ) -> Self {
         let t0 = times.first().copied().unwrap_or(0.0);
         Self {
             method,
@@ -489,7 +515,10 @@ impl Options {
 
     /// Sets the number of Fourier modes for the simulated Lévy areas.
     #[must_use]
-    pub fn with_terms(mut self, terms: usize) -> Self {
+    pub fn with_terms(
+        mut self,
+        terms: usize,
+    ) -> Self {
         self.terms = terms;
         self
     }
@@ -551,12 +580,22 @@ impl Stream {
 /// consume. A fixed-step integration with the same seed and structure therefore
 /// consumes these numbers.
 #[must_use]
-pub fn wiener(seed: u64, m: usize, steps: usize, dt: f64) -> Vec<Vec<f64>> {
+pub fn wiener(
+    seed: u64,
+    m: usize,
+    steps: usize,
+    dt: f64,
+) -> Vec<Vec<f64>> {
     let mut stream = Stream::new(seed);
     wiener_from(&mut stream, m, dt, steps)
 }
 
-fn wiener_from(stream: &mut Stream, m: usize, dt: f64, steps: usize) -> Vec<Vec<f64>> {
+fn wiener_from(
+    stream: &mut Stream,
+    m: usize,
+    dt: f64,
+    steps: usize,
+) -> Vec<Vec<f64>> {
     let scale = dt.abs().sqrt();
     (0..steps)
         .map(|_| {
@@ -573,7 +612,10 @@ fn wiener_from(stream: &mut Stream, m: usize, dt: f64, steps: usize) -> Vec<Vec<
 /// same whichever order or concurrency runs the ensemble; this build runs the
 /// paths sequentially because an interpreter closure is `!Send`.
 #[must_use]
-pub fn ensemble_seed(seed: u64, index: usize) -> u64 {
+pub fn ensemble_seed(
+    seed: u64,
+    index: usize,
+) -> u64 {
     kernel::ensemble_seed(seed, index)
 }
 
@@ -639,7 +681,12 @@ where
     A: FnMut(f64, &[f64]) -> Result<Vec<f64>, SdeError>,
     G: FnMut(f64, &[f64]) -> Result<Vec<f64>, SdeError>,
 {
-    fn new(drift: A, diffusion: G, state: usize, structure: Structure) -> Self {
+    fn new(
+        drift: A,
+        diffusion: G,
+        state: usize,
+        structure: Structure,
+    ) -> Self {
         Self {
             drift: RefCell::new(drift),
             diffusion: RefCell::new(diffusion),
@@ -653,7 +700,12 @@ where
     }
 
     /// Writes the drift into the kernel's output slice.
-    fn drift_at(&self, t: f64, y: &[f64], out: &mut [f64]) {
+    fn drift_at(
+        &self,
+        t: f64,
+        y: &[f64],
+        out: &mut [f64],
+    ) {
         if self.drift_error.borrow().is_some() {
             out.fill(0.0);
             return;
@@ -664,24 +716,29 @@ where
             (*drift)(t, y)
         };
         match result {
-            Ok(values) if values.len() == self.state => out.copy_from_slice(&values),
-            Ok(values) => {
+            | Ok(values) if values.len() == self.state => out.copy_from_slice(&values),
+            | Ok(values) => {
                 *self.drift_error.borrow_mut() = Some(SdeError::shape(format!(
                     "the drift returned {} value(s) for a state of {}",
                     values.len(),
                     self.state
                 )));
                 out.fill(0.0);
-            }
-            Err(error) => {
+            },
+            | Err(error) => {
                 *self.drift_error.borrow_mut() = Some(error);
                 out.fill(0.0);
-            }
+            },
         }
     }
 
     /// Writes the diffusion into the kernel's `n × m` output slice.
-    fn diffusion_at(&self, t: f64, y: &[f64], out: &mut [f64]) {
+    fn diffusion_at(
+        &self,
+        t: f64,
+        y: &[f64],
+        out: &mut [f64],
+    ) {
         if self.diffusion_error.borrow().is_some() {
             out.fill(0.0);
             return;
@@ -692,7 +749,7 @@ where
             (*diffusion)(t, y)
         };
         match result {
-            Ok(values) if values.len() == self.coefficients => {
+            | Ok(values) if values.len() == self.coefficients => {
                 if self.diagonal {
                     // Expand the diagonal to the kernel's dense n×n layout.
                     out.fill(0.0);
@@ -702,19 +759,19 @@ where
                 } else {
                     out.copy_from_slice(&values);
                 }
-            }
-            Ok(values) => {
+            },
+            | Ok(values) => {
                 *self.diffusion_error.borrow_mut() = Some(SdeError::shape(format!(
                     "the diffusion returned {} coefficient(s); this structure needs {}",
                     values.len(),
                     self.coefficients
                 )));
                 out.fill(0.0);
-            }
-            Err(error) => {
+            },
+            | Err(error) => {
                 *self.diffusion_error.borrow_mut() = Some(error);
                 out.fill(0.0);
-            }
+            },
         }
     }
 
@@ -771,10 +828,8 @@ where
     let noise = options.structure.noise(state);
     let adapters = Adapters::new(drift, diffusion, state, options.structure);
     let run = match &options.schedule {
-        Schedule::Fixed { dt, steps } => {
-            fixed(&adapters, y0, options, *dt, *steps, noise)
-        }
-        Schedule::Grid { times } => {
+        | Schedule::Fixed { dt, steps } => fixed(&adapters, y0, options, *dt, *steps, noise),
+        | Schedule::Grid { times } => {
             let (dt, steps) = uniform_grid(times)?;
             if (times[0] - options.t0).abs() > 1e-12 * options.t0.abs().max(1.0) {
                 return Err(SdeError::invalid(
@@ -782,14 +837,18 @@ where
                 ));
             }
             fixed(&adapters, y0, options, dt, steps, noise)
-        }
-        Schedule::Adaptive {
+        },
+        | Schedule::Adaptive {
             t1,
             rtol,
             atol,
             max_steps,
             cells,
-        } => adaptive(&adapters, y0, options, *t1, *rtol, *atol, *max_steps, *cells),
+        } => {
+            adaptive(
+                &adapters, y0, options, *t1, *rtol, *atol, *max_steps, *cells,
+            )
+        },
     };
     // A callback failure is recorded inside the adapter (the kernel callbacks
     // return `()`); it takes precedence over the kernel's own error code because
@@ -840,7 +899,10 @@ where
 }
 
 /// Checks the options against a state length before any work is done.
-fn validate_options(options: &Options, y0: &[f64]) -> Result<(), SdeError> {
+fn validate_options(
+    options: &Options,
+    y0: &[f64],
+) -> Result<(), SdeError> {
     if y0.is_empty() {
         return Err(SdeError::shape("the initial state is empty"));
     }
@@ -861,18 +923,20 @@ fn validate_options(options: &Options, y0: &[f64]) -> Result<(), SdeError> {
         ));
     }
     match &options.schedule {
-        Schedule::Fixed { dt, steps } => {
+        | Schedule::Fixed { dt, steps } => {
             if !dt.is_finite() || *dt <= 0.0 {
-                return Err(SdeError::invalid("the step size must be finite and positive"));
+                return Err(SdeError::invalid(
+                    "the step size must be finite and positive",
+                ));
             }
             if *steps == 0 {
                 return Err(SdeError::invalid("the step count must be positive"));
             }
-        }
-        Schedule::Grid { times } => {
+        },
+        | Schedule::Grid { times } => {
             uniform_grid(times)?;
-        }
-        Schedule::Adaptive {
+        },
+        | Schedule::Adaptive {
             t1,
             rtol,
             atol,
@@ -880,7 +944,9 @@ fn validate_options(options: &Options, y0: &[f64]) -> Result<(), SdeError> {
             cells,
         } => {
             if !t1.is_finite() || *t1 <= options.t0 {
-                return Err(SdeError::invalid("the end time must be after the initial time"));
+                return Err(SdeError::invalid(
+                    "the end time must be after the initial time",
+                ));
             }
             if !rtol.is_finite() || *rtol <= 0.0 {
                 return Err(SdeError::invalid("`rtol` must be finite and positive"));
@@ -896,7 +962,7 @@ fn validate_options(options: &Options, y0: &[f64]) -> Result<(), SdeError> {
                     "the non-commutative adaptive method needs `cells > 0`",
                 ));
             }
-        }
+        },
     }
     check_combination(options)
 }
@@ -933,9 +999,9 @@ fn check_combination(options: &Options) -> Result<(), SdeError> {
         return Ok(());
     }
     match options.method {
-        Method::EulerMaruyama | Method::Milstein => Ok(()),
-        Method::MilsteinNoncommutative => Ok(()),
-        Method::MilsteinStratonovich | Method::HeunStratonovich | Method::SrkPlaten => {
+        | Method::EulerMaruyama | Method::Milstein => Ok(()),
+        | Method::MilsteinNoncommutative => Ok(()),
+        | Method::MilsteinStratonovich | Method::HeunStratonovich | Method::SrkPlaten => {
             Err(SdeError::unsupported(
                 "sde.interpretation",
                 format!(
@@ -943,7 +1009,7 @@ fn check_combination(options: &Options) -> Result<(), SdeError> {
                     options.method.name()
                 ),
             ))
-        }
+        },
     }
 }
 
@@ -953,11 +1019,15 @@ fn uniform_grid(times: &[f64]) -> Result<(f64, usize), SdeError> {
         return Err(SdeError::invalid("the time grid needs at least two points"));
     }
     if !times.iter().all(|time| time.is_finite()) {
-        return Err(SdeError::invalid("the time grid contains a non-finite time"));
+        return Err(SdeError::invalid(
+            "the time grid contains a non-finite time",
+        ));
     }
     let dt = times[1] - times[0];
     if dt <= 0.0 {
-        return Err(SdeError::invalid("the time grid must be strictly increasing"));
+        return Err(SdeError::invalid(
+            "the time grid must be strictly increasing",
+        ));
     }
     let tolerance = 1e-9 * dt.abs().max(1.0);
     for window in times.windows(2) {
@@ -997,36 +1067,32 @@ where
     } else {
         let increments = wiener(options.seed, noise, steps, dt);
         match options.method {
-            Method::EulerMaruyama => {
+            | Method::EulerMaruyama => {
                 kernel::euler_maruyama(drift, diffusion, noise, t0, dt, y0, &increments)
-            }
-            Method::Milstein => {
+            },
+            | Method::Milstein => {
                 kernel::milstein(drift, diffusion, noise, t0, dt, y0, &increments)
-            }
-            Method::MilsteinStratonovich => kernel::milstein_stratonovich(
-                drift,
-                diffusion,
-                noise,
-                t0,
-                dt,
-                y0,
-                &increments,
-            ),
-            Method::HeunStratonovich => {
+            },
+            | Method::MilsteinStratonovich => {
+                kernel::milstein_stratonovich(drift, diffusion, noise, t0, dt, y0, &increments)
+            },
+            | Method::HeunStratonovich => {
                 kernel::heun_stratonovich(drift, diffusion, noise, t0, dt, y0, &increments)
-            }
-            Method::SrkPlaten => {
+            },
+            | Method::SrkPlaten => {
                 kernel::srk_platen(drift, diffusion, noise, t0, dt, y0, &increments)
-            }
+            },
             // Handled above; kept total for the match.
-            Method::MilsteinNoncommutative => unreachable!("non-commutative path"),
+            | Method::MilsteinNoncommutative => unreachable!("non-commutative path"),
         }
         .map_err(SdeError::from)?
     };
     if let Some(failure) = adapters.failure() {
         return Err(failure);
     }
-    let t: Vec<f64> = (0..states.len()).map(|step| t0 + step as f64 * dt).collect();
+    let t: Vec<f64> = (0..states.len())
+        .map(|step| t0 + step as f64 * dt)
+        .collect();
     Ok(Path {
         t,
         steps: states.len().saturating_sub(1),
@@ -1121,7 +1187,10 @@ mod tests {
     type Coeff = Box<dyn FnMut(f64, &[f64]) -> Result<Vec<f64>, SdeError>>;
 
     /// Geometric Brownian motion: `dX = mu X dt + sigma X dW` (scalar).
-    fn gbm(mu: f64, sigma: f64) -> (Coeff, Coeff) {
+    fn gbm(
+        mu: f64,
+        sigma: f64,
+    ) -> (Coeff, Coeff) {
         (
             Box::new(move |_t: f64, y: &[f64]| Ok(vec![mu * y[0]])),
             Box::new(move |_t: f64, y: &[f64]| Ok(vec![sigma * y[0]])),
@@ -1129,7 +1198,11 @@ mod tests {
     }
 
     /// Ornstein–Uhlenbeck: `dX = theta (mu - X) dt + sigma dW`.
-    fn ou(theta: f64, mu: f64, sigma: f64) -> (Coeff, Coeff) {
+    fn ou(
+        theta: f64,
+        mu: f64,
+        sigma: f64,
+    ) -> (Coeff, Coeff) {
         (
             Box::new(move |_t: f64, y: &[f64]| Ok(vec![theta * (mu - y[0])])),
             Box::new(move |_t: f64, _y: &[f64]| Ok(vec![sigma])),
@@ -1179,7 +1252,14 @@ mod tests {
     #[test]
     fn a_fixed_path_consumes_the_published_increments() {
         let (drift, diffusion) = gbm(0.1, 0.4);
-        let options = Options::fixed(Method::EulerMaruyama, Structure::Diagonal, 11, 0.0, 0.01, 20);
+        let options = Options::fixed(
+            Method::EulerMaruyama,
+            Structure::Diagonal,
+            11,
+            0.0,
+            0.01,
+            20,
+        );
         let path = integrate(drift, diffusion, &[1.0], &options).expect("a path");
         let increments = wiener(11, 1, 20, 0.01);
         let expected = kernel::euler_maruyama(
@@ -1236,14 +1316,8 @@ mod tests {
         assert_eq!(sde_order(Method::EulerMaruyama).strong, 0.5);
         assert_eq!(sde_order(Method::Milstein).strong, 1.0);
         assert_eq!(Method::Milstein.calculus(), Calculus::Ito);
-        assert_eq!(
-            Method::HeunStratonovich.calculus(),
-            Calculus::Stratonovich
-        );
-        assert_eq!(
-            Method::from_name("srk_platen"),
-            Some(Method::SrkPlaten)
-        );
+        assert_eq!(Method::HeunStratonovich.calculus(), Calculus::Stratonovich);
+        assert_eq!(Method::from_name("srk_platen"), Some(Method::SrkPlaten));
         assert_eq!(Method::from_name("nope"), None);
     }
 
@@ -1288,14 +1362,19 @@ mod tests {
             drift,
             diffusion,
             &[1.0, 2.0],
-            &Options::fixed(Method::EulerMaruyama, Structure::Diagonal, 21, 0.0, 0.01, 20),
+            &Options::fixed(
+                Method::EulerMaruyama,
+                Structure::Diagonal,
+                21,
+                0.0,
+                0.01,
+                20,
+            ),
         )
         .expect("diagonal");
         let (drift, diffusion) = (
             |_t: f64, y: &[f64]| Ok(vec![-0.1 * y[0], -0.2 * y[1]]),
-            move |_t: f64, _y: &[f64]| {
-                Ok(vec![sigma[0][0], sigma[0][1], sigma[1][0], sigma[1][1]])
-            },
+            move |_t: f64, _y: &[f64]| Ok(vec![sigma[0][0], sigma[0][1], sigma[1][0], sigma[1][1]]),
         );
         let general = integrate(
             drift,
@@ -1321,14 +1400,8 @@ mod tests {
     fn the_noncommutative_method_runs_and_needs_terms() {
         // Two correlated, non-commutative noise channels: G depends on y.
         let drift = |_t: f64, y: &[f64]| Ok(vec![-y[0], -y[1]]);
-        let diffusion = |_t: f64, y: &[f64]| {
-            Ok(vec![
-                0.3 * y[0],
-                0.1 * y[1],
-                0.1 * y[0],
-                0.3 * y[1],
-            ])
-        };
+        let diffusion =
+            |_t: f64, y: &[f64]| Ok(vec![0.3 * y[0], 0.1 * y[1], 0.1 * y[0], 0.3 * y[1]]);
         let options = Options::fixed(
             Method::MilsteinNoncommutative,
             Structure::General {
@@ -1398,14 +1471,8 @@ mod tests {
     #[test]
     fn the_noncommutative_adaptive_method_runs() {
         let drift = |_t: f64, y: &[f64]| Ok(vec![-y[0], -2.0 * y[1]]);
-        let diffusion = |_t: f64, y: &[f64]| {
-            Ok(vec![
-                0.2 * y[0],
-                0.05 * y[1],
-                0.05 * y[0],
-                0.2 * y[1],
-            ])
-        };
+        let diffusion =
+            |_t: f64, y: &[f64]| Ok(vec![0.2 * y[0], 0.05 * y[1], 0.05 * y[0], 0.2 * y[1]]);
         let options = Options::adaptive(
             Method::MilsteinNoncommutative,
             Structure::General {
@@ -1435,8 +1502,8 @@ mod tests {
         for (index, member) in members.iter().enumerate() {
             options.seed = ensemble_seed(31, index);
             let (drift, diffusion) = gbm(0.03, 0.25);
-            let individual = integrate(drift, diffusion, &[1.0], &options)
-                .expect("the individual run");
+            let individual =
+                integrate(drift, diffusion, &[1.0], &options).expect("the individual run");
             assert_eq!(
                 member.y, individual.y,
                 "ensemble member {index} is not the individual run"
@@ -1444,14 +1511,13 @@ mod tests {
         }
         // Order independence: re-running the ensemble gives the same members.
         let (drift, diffusion) = gbm(0.03, 0.25);
-        let again = ensemble(drift, diffusion, &[1.0], &Options::fixed(
-            Method::Milstein,
-            Structure::Diagonal,
-            31,
-            0.0,
-            0.01,
-            25,
-        ), 3)
+        let again = ensemble(
+            drift,
+            diffusion,
+            &[1.0],
+            &Options::fixed(Method::Milstein, Structure::Diagonal, 31, 0.0, 0.01, 25),
+            3,
+        )
         .expect("ensemble");
         assert_eq!(members, again);
     }
@@ -1602,14 +1668,8 @@ mod tests {
 
     #[test]
     fn fixed_span_reaches_the_end_exactly() {
-        let span = Options::fixed_span(
-            Method::EulerMaruyama,
-            Structure::Diagonal,
-            5,
-            0.0,
-            1.0,
-            0.3,
-        );
+        let span =
+            Options::fixed_span(Method::EulerMaruyama, Structure::Diagonal, 5, 0.0, 1.0, 0.3);
         let (drift, diffusion) = gbm(0.0, 0.1);
         let path = integrate(drift, diffusion, &[1.0], &span).expect("a span path");
         assert_eq!(path.steps, 3, "the span is divided into whole steps");

@@ -3,9 +3,13 @@
 
 mod support;
 
-use aevia_syntax::ast::{DeclKind, ExprKind, StrPiece};
-use aevia_syntax::token::{StringPart, TokenKind};
-use support::{expect_clean, lex_only};
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::StrPiece;
+use aevia_syntax::token::StringPart;
+use aevia_syntax::token::TokenKind;
+use support::expect_clean;
+use support::lex_only;
 
 /// The literal text of the only `Str` token in `source`.
 fn literal_text(source: &str) -> String {
@@ -13,16 +17,20 @@ fn literal_text(source: &str) -> String {
     let parts = lexed
         .tokens
         .iter()
-        .find_map(|token| match &token.kind {
-            TokenKind::Str(parts) => Some(parts.clone()),
-            _ => None,
+        .find_map(|token| {
+            match &token.kind {
+                | TokenKind::Str(parts) => Some(parts.clone()),
+                | _ => None,
+            }
         })
         .expect("a string token");
     parts
         .into_iter()
-        .map(|part| match part {
-            StringPart::Text(text) => text,
-            StringPart::Interpolation { .. } => "<interp>".to_string(),
+        .map(|part| {
+            match part {
+                | StringPart::Text(text) => text,
+                | StringPart::Interpolation { .. } => "<interp>".to_string(),
+            }
         })
         .collect()
 }
@@ -44,7 +52,10 @@ fn a_multiline_string_decodes_the_other_escapes() {
 
 #[test]
 fn a_multiline_string_decodes_a_unicode_escape() {
-    assert_eq!(literal_text("let s = \"\"\"\\u{41}\\u{1F600}\"\"\"\n"), "A\u{1F600}");
+    assert_eq!(
+        literal_text("let s = \"\"\"\\u{41}\\u{1F600}\"\"\"\n"),
+        "A\u{1F600}"
+    );
 }
 
 #[test]

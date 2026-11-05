@@ -6,12 +6,21 @@
 //! rules — the reviewed decisions 1a–1g in
 //! `.workbuddy-ai/design/round2-design-register.md`.
 
-use aevia_syntax::{lex, parse_module};
-use aevia_types::check::{
-    check_module, check_module_with_interfaces, CheckOptions, CheckedModule, DictTarget,
-    InstanceExport, ModuleInterface,
-};
-use aevia_types::{head_key, ClassKey, Export, InstanceKey, ModulePath, Type};
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
+use aevia_types::ClassKey;
+use aevia_types::Export;
+use aevia_types::InstanceKey;
+use aevia_types::ModulePath;
+use aevia_types::Type;
+use aevia_types::check::CheckOptions;
+use aevia_types::check::CheckedModule;
+use aevia_types::check::DictTarget;
+use aevia_types::check::InstanceExport;
+use aevia_types::check::ModuleInterface;
+use aevia_types::check::check_module;
+use aevia_types::check::check_module_with_interfaces;
+use aevia_types::head_key;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
@@ -27,13 +36,7 @@ fn parsed(source: &str) -> CheckedModule {
             .map(|item| (&item.code, &item.message))
             .collect::<Vec<_>>()
     );
-    let result = check_module_with_interfaces(
-        0,
-        &module,
-        &[],
-        &[],
-        &CheckOptions::default(),
-    );
+    let result = check_module_with_interfaces(0, &module, &[], &[], &CheckOptions::default());
     assert!(
         !result.diagnostics.has_errors(),
         "unexpected errors: {:?}",
@@ -47,13 +50,26 @@ fn parsed(source: &str) -> CheckedModule {
     result.module
 }
 
-fn expect_error(source: &str, code: &str) {
+fn expect_error(
+    source: &str,
+    code: &str,
+) {
     let lexed = lex(0, source).expect("lexes");
     let (module, diagnostics) = parse_module(0, source, &lexed);
-    let mut codes: Vec<String> = diagnostics.items.iter().map(|item| item.code.clone()).collect();
+    let mut codes: Vec<String> = diagnostics
+        .items
+        .iter()
+        .map(|item| item.code.clone())
+        .collect();
     if !diagnostics.has_errors() {
         let result = check_module(0, &module);
-        codes.extend(result.diagnostics.items.iter().map(|item| item.code.clone()));
+        codes.extend(
+            result
+                .diagnostics
+                .items
+                .iter()
+                .map(|item| item.code.clone()),
+        );
     }
     assert!(
         codes.iter().any(|found| found == code),
@@ -74,13 +90,7 @@ fn check_importing(
         .map(|(prefix, checked)| (prefix.to_string(), checked.exports.clone()))
         .collect();
     let merged: Vec<ModuleInterface> = interfaces.into_iter().map(|m| m.interface()).collect();
-    check_module_with_interfaces(
-        0,
-        &module,
-        &import_table,
-        &merged,
-        &CheckOptions::default(),
-    )
+    check_module_with_interfaces(0, &module, &import_table, &merged, &CheckOptions::default())
 }
 
 #[test]
@@ -114,7 +124,10 @@ let rendered = pretty({ x = 1.0, y = 2.0 })
     assert_eq!(alias.params, 0);
     assert!(matches!(alias.body, Type::Record(_)));
     // The flat table still has the alias name.
-    assert!(matches!(library.exports.get("Vec2"), Some(Export::Alias { .. })));
+    assert!(matches!(
+        library.exports.get("Vec2"),
+        Some(Export::Alias { .. })
+    ));
 }
 
 #[test]
@@ -161,10 +174,13 @@ fn describe(v: A.Vec2): String = pretty(v)
     };
     assert_eq!(key.module, ModulePath::new(["A"]));
     assert_eq!(key.class.name, "Pretty");
-    assert_eq!(key.head, head_key(&Type::record(vec![
-        ("x".to_string(), Type::float(aevia_dim::Dim::one())),
-        ("y".to_string(), Type::float(aevia_dim::Dim::one())),
-    ])));
+    assert_eq!(
+        key.head,
+        head_key(&Type::record(vec![
+            ("x".to_string(), Type::float(aevia_dim::Dim::one())),
+            ("y".to_string(), Type::float(aevia_dim::Dim::one())),
+        ]))
+    );
 }
 
 #[test]
@@ -185,14 +201,10 @@ instance Show for Shape where
     let a = parsed(source_a);
     let b = parsed(source_b);
     assert_ne!(
-        a.instances[0].key.head,
-        b.instances[0].key.head,
+        a.instances[0].key.head, b.instances[0].key.head,
         "same name, different module must be different heads"
     );
-    assert_ne!(
-        a.instances[0].key.module,
-        b.instances[0].key.module
-    );
+    assert_ne!(a.instances[0].key.module, b.instances[0].key.module);
     let result = check_importing(
         r#"module C
 fn show_a(s: A.Shape): String = show(s)
@@ -216,14 +228,20 @@ fn show_b(s: B.Shape): String = show(s)
         .dictionaries
         .iter()
         .filter(|use_site| use_site.method == "show")
-        .filter_map(|use_site| match &use_site.target {
-            DictTarget::Instance(key) => Some(key.module.clone()),
-            _ => None,
+        .filter_map(|use_site| {
+            match &use_site.target {
+                | DictTarget::Instance(key) => Some(key.module.clone()),
+                | _ => None,
+            }
         })
         .collect();
     modules.sort();
     modules.dedup();
-    assert_eq!(modules.len(), 2, "each call must pin its own module: {modules:?}");
+    assert_eq!(
+        modules.len(),
+        2,
+        "each call must pin its own module: {modules:?}"
+    );
 }
 
 #[test]
@@ -250,13 +268,8 @@ fn an_imported_instance_overlaps_with_e0311_naming_both_modules() {
     let lexed = lex(0, "").expect("lexes");
     let (parsed_module, diagnostics) = parse_module(0, "", &lexed);
     assert!(!diagnostics.has_errors());
-    let result = check_module_with_interfaces(
-        0,
-        &parsed_module,
-        &[],
-        &[evil],
-        &CheckOptions::default(),
-    );
+    let result =
+        check_module_with_interfaces(0, &parsed_module, &[], &[evil], &CheckOptions::default());
     assert!(
         result
             .diagnostics
@@ -322,18 +335,18 @@ derive Eq for A.Foreign
 fn a_multi_parameter_class_is_rejected() {
     // §3.8.1 (round-2 decision 1f): the language has exactly one parameter, so
     // a two-parameter declaration is rejected instead of half-supported.
-    expect_error(
-        "class Convert a b where\n    convert(x: a): b\n",
-        "E0317",
-    );
+    expect_error("class Convert a b where\n    convert(x: a): b\n", "E0317");
     // An instance whose head is a bare variable cannot express its head either.
     expect_error(
         "class Pretty a where\n    pretty(x: a): String\ninstance Pretty for a where\n    pretty(x) = \"x\"\n",
         "E0317",
     );
     // `private instance` is not legal (§7.1.3); the parser reports the misuse.
-    let lexed = lex(0, "private instance Show for Int where\n    show(x) = \"n\"\n")
-        .expect("lexes");
+    let lexed = lex(
+        0,
+        "private instance Show for Int where\n    show(x) = \"n\"\n",
+    )
+    .expect("lexes");
     let (_, diagnostics) = parse_module(
         0,
         "private instance Show for Int where\n    show(x) = \"n\"\n",
@@ -448,7 +461,10 @@ let local = reveal({ x = 1.0 })
 "#,
     );
     // §7.1.3: `private class` keeps the class out of the interface.
-    assert!(library.classes.is_empty(), "a private class must not be exported");
+    assert!(
+        library.classes.is_empty(),
+        "a private class must not be exported"
+    );
     assert!(
         library.instances.is_empty(),
         "an instance of a private class is not exported either"
@@ -485,9 +501,11 @@ let b = pretty("s")
         .dictionaries
         .iter()
         .filter(|use_site| use_site.method == "pretty")
-        .filter_map(|use_site| match &use_site.target {
-            DictTarget::Instance(key) => Some(key.head.clone()),
-            _ => None,
+        .filter_map(|use_site| {
+            match &use_site.target {
+                | DictTarget::Instance(key) => Some(key.head.clone()),
+                | _ => None,
+            }
         })
         .collect();
     heads.sort();
@@ -501,9 +519,7 @@ let b = pretty("s")
 fn a_selective_import_brings_the_type_and_its_constructors() {
     // `import A { Pair, Color, Red }`: `Pair` is an alias (its body comes from
     // the interface), `Color` an ADT and `Red` one of its constructors.
-    let library = parsed(
-        "module A\ntype Pair = { x: Int, y: Int }\ntype Color = | Red | Blue\n",
-    );
+    let library = parsed("module A\ntype Pair = { x: Int, y: Int }\ntype Color = | Red | Blue\n");
     let result = check_importing(
         "module B\nimport A { Pair, Color, Red }\nlet p: Pair = { x = 1, y = 2 }\nlet c: Color = Red\nfn pick(c: Color): Int = match c with\n    | Red -> 1\n    | Blue -> 2\n",
         vec![("", library.clone())],

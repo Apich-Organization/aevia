@@ -22,10 +22,13 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_types::adt::{OPTION_ID, RESULT_ID};
+use aevia_types::Scheme;
+use aevia_types::Type;
+use aevia_types::adt::OPTION_ID;
+use aevia_types::adt::RESULT_ID;
 use aevia_types::builtins;
-use aevia_types::{Scheme, Type};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
 // Extraction
@@ -66,11 +69,7 @@ fn declaration_names(head: &str) -> Option<Vec<String>> {
             .strip_prefix('(')
             .and_then(|rest| rest.strip_suffix(')'))
         {
-            if inner.is_empty()
-                || !inner
-                    .chars()
-                    .all(|ch| "&|<>=+-*/%!~^".contains(ch))
-            {
+            if inner.is_empty() || !inner.chars().all(|ch| "&|<>=+-*/%!~^".contains(ch)) {
                 return None;
             }
             names.push(inner.to_string());
@@ -81,10 +80,7 @@ fn declaration_names(head: &str) -> Option<Vec<String>> {
         // spelling (`+`, `-`) is a declaration too (§8.14's measurement
         // arithmetic).
         let bare = token.split('<').next().unwrap_or(token);
-        let operator = !bare.is_empty()
-            && bare
-                .chars()
-                .all(|ch| "&|<>=+-*/%!~^".contains(ch));
+        let operator = !bare.is_empty() && bare.chars().all(|ch| "&|<>=+-*/%!~^".contains(ch));
         if operator {
             names.push(bare.to_string());
             continue;
@@ -93,7 +89,10 @@ fn declaration_names(head: &str) -> Option<Vec<String>> {
             || !bare
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-            || !bare.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            || !bare
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
         {
             return None;
         }
@@ -106,7 +105,8 @@ fn declaration_names(head: &str) -> Option<Vec<String>> {
     }
 }
 
-fn split_top_commas(text: &str) -> Vec<&str> {    let mut parts = Vec::new();
+fn split_top_commas(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
     let mut depth = 0i32;
     let mut start = 0usize;
     let bytes = text.as_bytes();
@@ -116,15 +116,15 @@ fn split_top_commas(text: &str) -> Vec<&str> {    let mut parts = Vec::new();
         // corrupt the depth (`sdeint_diag`'s nested closures).
         let arrow = index > 0 && (bytes[index - 1] == b'-' || bytes[index - 1] == b'=');
         match byte {
-            b'(' | b'[' | b'{' => depth += 1,
-            b'<' if !arrow => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'>' if !arrow => depth -= 1,
-            b',' if depth == 0 => {
+            | b'(' | b'[' | b'{' => depth += 1,
+            | b'<' if !arrow => depth += 1,
+            | b')' | b']' | b'}' => depth -= 1,
+            | b'>' if !arrow => depth -= 1,
+            | b',' if depth == 0 => {
                 parts.push(text[start..index].trim());
                 start = index + 1;
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
     parts.push(text[start..].trim());
@@ -138,14 +138,14 @@ fn split_arrow(signature: &str) -> Option<(&str, &str)> {
     for index in 0..bytes.len().saturating_sub(1) {
         let arrow = index > 0 && (bytes[index - 1] == b'-' || bytes[index - 1] == b'=');
         match bytes[index] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b'<' if !arrow => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'>' if !arrow => depth -= 1,
-            b'-' if bytes[index + 1] == b'>' && depth == 0 => {
+            | b'(' | b'[' | b'{' => depth += 1,
+            | b'<' if !arrow => depth += 1,
+            | b')' | b']' | b'}' => depth -= 1,
+            | b'>' if !arrow => depth -= 1,
+            | b'-' if bytes[index + 1] == b'>' && depth == 0 => {
                 return Some((signature[..index].trim(), signature[index + 2..].trim()));
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
     None
@@ -179,7 +179,9 @@ fn declared_arity(signature: &str) -> Option<usize> {
 
 /// The return class of a declared signature (`value`, `result`, …).
 fn declared_return_class(signature: &str) -> &'static str {
-    let ret = split_arrow(signature).map_or(signature, |(_, ret)| ret).trim();
+    let ret = split_arrow(signature)
+        .map_or(signature, |(_, ret)| ret)
+        .trim();
     return_class(ret)
 }
 
@@ -201,30 +203,36 @@ fn return_class(ret: &str) -> &'static str {
     }
     let head = ret.split(['<', '[', '(', ' ']).next().unwrap_or("");
     match head {
-        "Result" => "result",
-        "Option" => "option",
-        "Tensor" => "tensor",
-        "Sparse" => "sparse",
-        "IO" => "io",
-        "Int" | "Float" | "Real" | "Complex" | "Bool" | "String" | "Prop" | "Ordering"
+        | "Result" => "result",
+        | "Option" => "option",
+        | "Tensor" => "tensor",
+        | "Sparse" => "sparse",
+        | "IO" => "io",
+        | "Int" | "Float" | "Real" | "Complex" | "Bool" | "String" | "Prop" | "Ordering"
         | "Scalar" | "Unit" => "value",
-        "Table" => "table",
-        _ if ret.contains("->") => "function",
-        _ if !head.is_empty()
-            && head.chars().next().is_some_and(|ch| ch.is_ascii_uppercase()) =>
+        | "Table" => "table",
+        | _ if ret.contains("->") => "function",
+        | _ if !head.is_empty()
+            && head
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase()) =>
         {
             // A nominal type named `Measurement`, `Series`, …; the scheme may
             // lower it to a structural record (Aevia tuples are records).
             "nominal"
-        }
-        _ => "value",
+        },
+        | _ => "value",
     }
 }
 
 /// Resolves an `同上` ("same as above") declaration against the previous
 /// signature: `同上` inherits it, `+ PlotOpts`/`（带 PlotOpts）` appends one
 /// options parameter, `（默认参数）` strips one.
-fn inherit_signature(previous: &str, marker: &str) -> String {
+fn inherit_signature(
+    previous: &str,
+    marker: &str,
+) -> String {
     let mut signature = previous.to_string();
     if marker.contains("默认参数") {
         if let Some((lhs, ret)) = split_arrow(&signature) {
@@ -254,11 +262,13 @@ fn inherit_signature(previous: &str, marker: &str) -> String {
     signature
 }
 
-///
 /// Aevia has no tuple type of its own (`(a, b)` is a record with positional
 /// labels §3.2.4), and a nominal value type may be lowered to a record by the
 /// checker's representation; those are agreement, not drift.
-fn classes_agree(declared: &str, scheme: &str) -> bool {
+fn classes_agree(
+    declared: &str,
+    scheme: &str,
+) -> bool {
     declared == scheme
         || matches!(
             (declared, scheme),
@@ -396,31 +406,33 @@ fn declarations() -> Vec<Decl> {
 
 fn scheme_arity(scheme: &Scheme) -> usize {
     match &scheme.ty {
-        Type::Fn(params, _) => params.len(),
-        _ => 0,
+        | Type::Fn(params, _) => params.len(),
+        | _ => 0,
     }
 }
 
 fn scheme_return_class(scheme: &Scheme) -> &'static str {
     fn class(ty: &Type) -> &'static str {
         match ty {
-            Type::Adt(id, _) if *id == RESULT_ID => "result",
-            Type::Adt(id, _) if *id == OPTION_ID => "option",
-            Type::Tensor { .. } => "tensor",
-            Type::Io(_) => "io",
-            Type::Record(_) => "record",
-            Type::Fn(_, _) => "function",
-            Type::Adt(_, _) => "value",
-            _ => "value",
+            | Type::Adt(id, _) if *id == RESULT_ID => "result",
+            | Type::Adt(id, _) if *id == OPTION_ID => "option",
+            | Type::Tensor { .. } => "tensor",
+            | Type::Io(_) => "io",
+            | Type::Record(_) => "record",
+            | Type::Fn(_, _) => "function",
+            | Type::Adt(_, _) => "value",
+            | _ => "value",
         }
     }
     match &scheme.ty {
-        Type::Fn(_, ret) => class(ret),
-        Type::Io(inner) => match &**inner {
-            Type::Fn(_, ret) => class(ret),
-            other => class(other),
+        | Type::Fn(_, ret) => class(ret),
+        | Type::Io(inner) => {
+            match &**inner {
+                | Type::Fn(_, ret) => class(ret),
+                | other => class(other),
+            }
         },
-        other => class(other),
+        | other => class(other),
     }
 }
 
@@ -615,7 +627,7 @@ fn audit() -> (Vec<Mismatch>, Vec<String>) {
         let spec_class = declared_return_class(&decl.signature);
         let schemes = builtins::schemes(&decl.name);
         match schemes {
-            None => {
+            | None => {
                 if !SPECIAL.contains(&decl.name.as_str()) {
                     mismatches.push(Mismatch {
                         section: decl.section.clone(),
@@ -627,14 +639,13 @@ fn audit() -> (Vec<Mismatch>, Vec<String>) {
                     "| {} | `{}` | `{}` | MISSING | - | - | checker/frontend |",
                     decl.section, decl.name, decl.signature
                 ));
-            }
-            Some(schemes) => {
+            },
+            | Some(schemes) => {
                 let mut arities: Vec<usize> = schemes.iter().map(scheme_arity).collect();
                 arities.sort_unstable();
                 arities.dedup();
                 let classes: Vec<&str> = {
-                    let mut values: Vec<&str> =
-                        schemes.iter().map(scheme_return_class).collect();
+                    let mut values: Vec<&str> = schemes.iter().map(scheme_return_class).collect();
                     values.sort_unstable();
                     values.dedup();
                     values
@@ -648,10 +659,7 @@ fn audit() -> (Vec<Mismatch>, Vec<String>) {
                     mismatches.push(Mismatch {
                         section: decl.section.clone(),
                         name: decl.name.clone(),
-                        reason: format!(
-                            "arity: spec {:?} vs scheme {arities:?}",
-                            spec_arity
-                        ),
+                        reason: format!("arity: spec {:?} vs scheme {arities:?}", spec_arity),
                     });
                 }
                 if !class_ok {
@@ -669,17 +677,25 @@ fn audit() -> (Vec<Mismatch>, Vec<String>) {
                     rendered.join(" ; "),
                     spec_arity.map_or("?".to_string(), |a| a.to_string()),
                     format!("{arities:?}"),
-                    if arity_ok && class_ok { "MATCH" } else { "MISMATCH" },
+                    if arity_ok && class_ok {
+                        "MATCH"
+                    } else {
+                        "MISMATCH"
+                    },
                     if arity_ok && class_ok {
                         "-".to_string()
                     } else {
                         format!(
                             "{}: spec class {spec_class}, scheme {classes:?}",
-                            if !arity_ok { "arity" } else { "return class" }
+                            if !arity_ok {
+                                "arity"
+                            } else {
+                                "return class"
+                            }
                         )
                     }
                 ));
-            }
+            },
         }
     }
     (mismatches, table)
@@ -767,9 +783,9 @@ fn every_declared_signature_has_a_matching_scheme() {
     let mut unexpected: Vec<&Mismatch> = mismatches
         .iter()
         .filter(|mismatch| {
-            !EXPECTED_MISMATCHES.iter().any(|(section, name, _, _)| {
-                *section == mismatch.section && *name == mismatch.name
-            })
+            !EXPECTED_MISMATCHES
+                .iter()
+                .any(|(section, name, _, _)| *section == mismatch.section && *name == mismatch.name)
         })
         .collect();
     unexpected.sort();
@@ -783,10 +799,12 @@ fn every_declared_signature_has_a_matching_scheme() {
         "the declared signature and the checker disagree (fix, or record it with an owner):\n{}",
         unexpected
             .iter()
-            .map(|mismatch| format!(
-                "  {} `{}`: {}",
-                mismatch.section, mismatch.name, mismatch.reason
-            ))
+            .map(|mismatch| {
+                format!(
+                    "  {} `{}`: {}",
+                    mismatch.section, mismatch.name, mismatch.reason
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     );

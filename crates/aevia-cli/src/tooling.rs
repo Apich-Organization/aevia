@@ -1,12 +1,21 @@
 //! `aevia fmt`, `aevia doc`, `aevia bench` — the source-level tools.
 
-use crate::{apply_options, load_program, report, style, Options};
-use aevia_core::driver;
+use crate::Options;
+use crate::apply_options;
+use crate::load_program;
+use crate::report;
+use crate::style;
 use aevia_core::Interp;
-use aevia_syntax::{DeclKind, Expr, ExprKind, Span};
-use std::path::{Path, PathBuf};
+use aevia_core::driver;
+use aevia_syntax::DeclKind;
+use aevia_syntax::Expr;
+use aevia_syntax::ExprKind;
+use aevia_syntax::Span;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 /// How many untimed iterations a benchmark runs first, unless the user says.
 const DEFAULT_WARMUP: usize = 3;
@@ -16,36 +25,39 @@ const DEFAULT_ITERATIONS: usize = 100;
 const DEFAULT_THRESHOLD: f64 = 0.05;
 
 /// `aevia fmt [--check] [files…]`
-pub fn fmt(_options: Options, args: &[String]) -> ExitCode {
+pub fn fmt(
+    _options: Options,
+    args: &[String],
+) -> ExitCode {
     let mut check = false;
     let mut files: Vec<String> = Vec::new();
     for arg in args {
         match arg.as_str() {
-            "--check" => check = true,
-            other if other.starts_with('-') => {
+            | "--check" => check = true,
+            | other if other.starts_with('-') => {
                 eprintln!("aevia fmt: unknown option `{other}` (the options are `--check`)");
                 return ExitCode::from(2);
-            }
-            other => files.push(other.to_string()),
+            },
+            | other => files.push(other.to_string()),
         }
     }
     let paths = match inputs(&files) {
-        Ok(paths) => paths,
-        Err(code) => return code,
+        | Ok(paths) => paths,
+        | Err(code) => return code,
     };
     let mut changed = 0usize;
     let mut failed = 0usize;
     for path in &paths {
         let source = match std::fs::read_to_string(path) {
-            Ok(source) => source,
-            Err(error) => {
+            | Ok(source) => source,
+            | Err(error) => {
                 eprintln!("aevia fmt: cannot read `{}`: {error}", path.display());
                 failed += 1;
                 continue;
-            }
+            },
         };
         match aevia_fmt::format_source(&source) {
-            Ok(formatted) => {
+            | Ok(formatted) => {
                 if formatted == source {
                     continue;
                 }
@@ -54,20 +66,20 @@ pub fn fmt(_options: Options, args: &[String]) -> ExitCode {
                     println!("would reformat {}", path.display());
                 } else {
                     match std::fs::write(path, &formatted) {
-                        Ok(()) => println!("formatted {}", path.display()),
-                        Err(error) => {
+                        | Ok(()) => println!("formatted {}", path.display()),
+                        | Err(error) => {
                             eprintln!("aevia fmt: cannot write `{}`: {error}", path.display());
                             failed += 1;
-                        }
+                        },
                     }
                 }
-            }
-            Err(error) => {
+            },
+            | Err(error) => {
                 // The file is left exactly as it was; the message names the
                 // construct that could not be printed.
                 eprintln!("aevia fmt: {}: {error}", path.display());
                 failed += 1;
-            }
+            },
         }
     }
     if failed > 0 {
@@ -83,58 +95,64 @@ pub fn fmt(_options: Options, args: &[String]) -> ExitCode {
 }
 
 /// `aevia doc [--out DIR] [--open] [files…]`
-pub fn doc(_options: Options, args: &[String]) -> ExitCode {
+pub fn doc(
+    _options: Options,
+    args: &[String],
+) -> ExitCode {
     let mut out: Option<PathBuf> = None;
     let mut files: Vec<String> = Vec::new();
     let mut open = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--out" => {
+            | "--out" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
                     eprintln!("aevia doc: `--out` expects a directory");
                     return ExitCode::from(2);
                 };
                 out = Some(PathBuf::from(value));
-            }
-            "--open" => open = true,
-            other if other.starts_with('-') => {
+            },
+            | "--open" => open = true,
+            | other if other.starts_with('-') => {
                 eprintln!(
                     "aevia doc: unknown option `{other}` (the options are `--out DIR` and `--open`)"
                 );
                 return ExitCode::from(2);
-            }
-            other => files.push(other.to_string()),
+            },
+            | other => files.push(other.to_string()),
         }
         index += 1;
     }
     let paths = match inputs(&files) {
-        Ok(paths) => paths,
-        Err(code) => return code,
+        | Ok(paths) => paths,
+        | Err(code) => return code,
     };
     let package = aevia_core::manifest::Package::find(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     )
     .ok()
     .flatten();
-    let directory = out.unwrap_or_else(|| match &package {
-        Some(package) => package.dir.join("docs"),
-        None => PathBuf::from("docs"),
+    let directory = out.unwrap_or_else(|| {
+        match &package {
+            | Some(package) => package.dir.join("docs"),
+            | None => PathBuf::from("docs"),
+        }
     });
-    let name = package
-        .as_ref()
-        .map_or_else(|| "Aevia".to_string(), |package| package.manifest.name.clone());
+    let name = package.as_ref().map_or_else(
+        || "Aevia".to_string(),
+        |package| package.manifest.name.clone(),
+    );
     let mut docs = Vec::new();
     let mut failed = 0usize;
     for path in &paths {
         let source = match std::fs::read_to_string(path) {
-            Ok(source) => source,
-            Err(error) => {
+            | Ok(source) => source,
+            | Err(error) => {
                 eprintln!("aevia doc: cannot read `{}`: {error}", path.display());
                 failed += 1;
                 continue;
-            }
+            },
         };
         let fallback = path
             .file_stem()
@@ -149,11 +167,11 @@ pub fn doc(_options: Options, args: &[String]) -> ExitCode {
             .display()
             .to_string();
         match aevia_doc::module_doc(&source, &shown, &fallback) {
-            Ok(doc) => docs.push(doc),
-            Err(message) => {
+            | Ok(doc) => docs.push(doc),
+            | Err(message) => {
                 eprintln!("aevia doc: {}: {message}", path.display());
                 failed += 1;
-            }
+            },
         }
     }
     if failed > 0 {
@@ -161,7 +179,10 @@ pub fn doc(_options: Options, args: &[String]) -> ExitCode {
     }
     docs.sort_by(|left, right| left.path.cmp(&right.path));
     if let Err(error) = std::fs::create_dir_all(&directory) {
-        eprintln!("aevia doc: cannot create `{}`: {error}", directory.display());
+        eprintln!(
+            "aevia doc: cannot create `{}`: {error}",
+            directory.display()
+        );
         return ExitCode::from(1);
     }
     for doc in &docs {
@@ -174,12 +195,18 @@ pub fn doc(_options: Options, args: &[String]) -> ExitCode {
     }
     let index_path = directory.join("index.md");
     if let Err(error) = std::fs::write(&index_path, aevia_doc::render_index(&name, &docs)) {
-        eprintln!("aevia doc: cannot write `{}`: {error}", index_path.display());
+        eprintln!(
+            "aevia doc: cannot write `{}`: {error}",
+            index_path.display()
+        );
         return ExitCode::from(1);
     }
     println!("wrote {}", index_path.display());
     let declarations: usize = docs.iter().map(|doc| doc.decls.len()).sum();
-    let undocumented: usize = docs.iter().map(aevia_doc::ModuleDoc::undocumented_count).sum();
+    let undocumented: usize = docs
+        .iter()
+        .map(aevia_doc::ModuleDoc::undocumented_count)
+        .sum();
     println!(
         "{declarations} declaration(s) in {} module(s), {undocumented} without a `##` doc comment",
         docs.len()
@@ -188,8 +215,8 @@ pub fn doc(_options: Options, args: &[String]) -> ExitCode {
     println!("run `aevia test --doc` to compile the `aevia` examples in these pages");
     if open {
         match absolute(&index_path) {
-            Ok(path) => open_documentation(&path),
-            Err(message) => eprintln!("aevia doc: --open: {message}"),
+            | Ok(path) => open_documentation(&path),
+            | Err(message) => eprintln!("aevia doc: --open: {message}"),
         }
     }
     ExitCode::SUCCESS
@@ -226,20 +253,23 @@ fn open_documentation(index: &std::path::Path) {
     #[cfg(all(unix, not(target_os = "macos")))]
     let command = std::process::Command::new("xdg-open").arg(index).spawn();
     match command {
-        Ok(_) => println!("opened {}", index.display()),
-        Err(error) => {
+        | Ok(_) => println!("opened {}", index.display()),
+        | Err(error) => {
             // Not being able to launch a viewer is not a documentation
             // failure: the files are written and the path is the answer.
             eprintln!(
                 "aevia doc: --open: cannot start a viewer ({error}); the documentation is at {}",
                 index.display()
             );
-        }
+        },
     }
 }
 
 /// `aevia bench [--filter PAT] [--iterations N] [--warmup N] [files…]`
-pub fn bench(options: Options, args: &[String]) -> ExitCode {
+pub fn bench(
+    options: Options,
+    args: &[String],
+) -> ExitCode {
     let mut filter: Option<String> = None;
     let mut iterations = DEFAULT_ITERATIONS;
     let mut warmup = DEFAULT_WARMUP;
@@ -250,17 +280,17 @@ pub fn bench(options: Options, args: &[String]) -> ExitCode {
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--filter" => {
+            | "--filter" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
                     eprintln!("aevia bench: `--filter` expects a pattern");
                     return ExitCode::from(2);
                 };
                 filter = Some(value.clone());
-            }
+            },
             // A benchmark whose single call takes a second cannot be timed a
             // hundred times; the count is the user's, not a constant.
-            "--iterations" => {
+            | "--iterations" => {
                 index += 1;
                 let Some(value) = args.get(index).and_then(|value| value.parse().ok()) else {
                     eprintln!("aevia bench: `--iterations` expects a positive count");
@@ -271,55 +301,55 @@ pub fn bench(options: Options, args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
                 iterations = value;
-            }
-            "--warmup" => {
+            },
+            | "--warmup" => {
                 index += 1;
                 let Some(value) = args.get(index).and_then(|value| value.parse().ok()) else {
                     eprintln!("aevia bench: `--warmup` expects a count of untimed calls");
                     return ExitCode::from(2);
                 };
                 warmup = value;
-            }
-            "--save-baseline" => {
+            },
+            | "--save-baseline" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
                     eprintln!("aevia bench: `--save-baseline` expects a file path");
                     return ExitCode::from(2);
                 };
                 save_baseline_path = Some(PathBuf::from(value));
-            }
-            "--compare-baseline" => {
+            },
+            | "--compare-baseline" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
                     eprintln!("aevia bench: `--compare-baseline` expects a file path");
                     return ExitCode::from(2);
                 };
                 compare_baseline_path = Some(PathBuf::from(value));
-            }
+            },
             // §9.12's 5 % gate; `0.05` and `5%` both mean the same thing.
-            "--threshold" => {
+            | "--threshold" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
                     eprintln!("aevia bench: `--threshold` expects a ratio such as `0.05` or `5%`");
                     return ExitCode::from(2);
                 };
                 match parse_threshold(value) {
-                    Ok(parsed) => threshold = parsed,
-                    Err(message) => {
+                    | Ok(parsed) => threshold = parsed,
+                    | Err(message) => {
                         eprintln!("aevia bench: {message}");
                         return ExitCode::from(2);
-                    }
+                    },
                 }
-            }
-            other if other.starts_with('-') => {
+            },
+            | other if other.starts_with('-') => {
                 eprintln!(
                     "aevia bench: unknown option `{other}` (the options are `--filter PAT`, \
                      `--iterations N`, `--warmup N`, `--save-baseline FILE`, \
                      `--compare-baseline FILE` and `--threshold RATIO`)"
                 );
                 return ExitCode::from(2);
-            }
-            other => files.push(other.to_string()),
+            },
+            | other => files.push(other.to_string()),
         }
         index += 1;
     }
@@ -341,15 +371,15 @@ pub fn bench(options: Options, args: &[String]) -> ExitCode {
         );
     }
     let paths = match inputs(&files) {
-        Ok(paths) => paths,
-        Err(code) => return code,
+        | Ok(paths) => paths,
+        | Err(code) => return code,
     };
     let mut rows: Vec<Row> = Vec::new();
     let mut failed = 0usize;
     for path in &paths {
         let program = match load_program(path, style(options)) {
-            Ok(program) => program,
-            Err(code) => return code,
+            | Ok(program) => program,
+            | Err(code) => return code,
         };
         if report(&program.diagnostics, &program.sources, style(options)) {
             return ExitCode::from(1);
@@ -369,9 +399,11 @@ pub fn bench(options: Options, args: &[String]) -> ExitCode {
             .decls
             .iter()
             .filter(|decl| decl.has_attribute("bench"))
-            .filter_map(|decl| match &decl.kind {
-                DeclKind::Fn { name, body, .. } => Some((name.clone(), body)),
-                _ => None,
+            .filter_map(|decl| {
+                match &decl.kind {
+                    | DeclKind::Fn { name, body, .. } => Some((name.clone(), body)),
+                    | _ => None,
+                }
             })
             .collect();
         if benches.is_empty() {
@@ -424,23 +456,23 @@ pub fn bench(options: Options, args: &[String]) -> ExitCode {
     let mut recorded = 0usize;
     if let Some(path) = &save_baseline_path {
         match save_baseline(path, &rows, iterations, warmup) {
-            Ok(saved) => {
+            | Ok(saved) => {
                 println!(
                     "wrote baseline `{}` ({saved} workload(s), profile `{}`)",
                     path.display(),
                     profile()
                 );
                 recorded += saved;
-            }
-            Err(message) => {
+            },
+            | Err(message) => {
                 eprintln!("aevia bench: cannot save the baseline: {message}");
                 return ExitCode::from(2);
-            }
+            },
         }
     }
     if let Some(path) = &compare_baseline_path {
         match compare_baseline(path, &rows, threshold) {
-            Ok(comparison) => {
+            | Ok(comparison) => {
                 let percent = threshold * 100.0;
                 println!(
                     "{} benchmark(s) compared against `{}`, {} regression(s) over {percent:.1}% \
@@ -454,11 +486,11 @@ pub fn bench(options: Options, args: &[String]) -> ExitCode {
                 if comparison.regressions > 0 {
                     return ExitCode::from(1);
                 }
-            }
-            Err((code, message)) => {
+            },
+            | Err((code, message)) => {
                 eprintln!("aevia bench: cannot compare with the baseline: {message}");
                 return code;
-            }
+            },
         }
     }
     let _ = recorded;
@@ -482,8 +514,8 @@ fn profile() -> &'static str {
 fn parse_threshold(text: &str) -> Result<f64, String> {
     let text = text.trim();
     let (number, scale) = match text.strip_suffix('%') {
-        Some(number) => (number.trim(), 100.0),
-        None => (text, 1.0),
+        | Some(number) => (number.trim(), 100.0),
+        | None => (text, 1.0),
     };
     let value: f64 = number
         .parse()
@@ -498,12 +530,12 @@ fn parse_threshold(text: &str) -> Result<f64, String> {
 impl Row {
     fn measured(&self) -> Option<(Duration, Duration, Duration)> {
         match &self.outcome {
-            Outcome::Ok {
+            | Outcome::Ok {
                 median,
                 mean,
                 confidence,
             } => Some((*median, *mean, *confidence)),
-            Outcome::Failed(_) => None,
+            | Outcome::Failed(_) => None,
         }
     }
 }
@@ -581,7 +613,10 @@ fn compare_baseline(
     let document: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
         (
             ExitCode::from(2),
-            format!("`{}` is not a baseline JSON document: {error}", path.display()),
+            format!(
+                "`{}` is not a baseline JSON document: {error}",
+                path.display()
+            ),
         )
     })?;
     let stored_profile = document.get("profile").and_then(serde_json::Value::as_str);
@@ -622,10 +657,7 @@ fn compare_baseline(
             );
             continue;
         };
-        let Some(baseline_ns) = entry
-            .get("median_ns")
-            .and_then(serde_json::Value::as_u64)
-        else {
+        let Some(baseline_ns) = entry.get("median_ns").and_then(serde_json::Value::as_u64) else {
             println!(
                 "{}: baseline entry has no `median_ns`, not compared",
                 row.name
@@ -712,13 +744,13 @@ fn run_bench(
         .module
         .decls
         .iter()
-        .find_map(|decl| match &decl.kind {
-            DeclKind::Fn {
-                name: declared,
-                args,
-                ..
-            } if declared == name => Some(args.len()),
-            _ => None,
+        .find_map(|decl| {
+            match &decl.kind {
+                | DeclKind::Fn {
+                    name: declared, args, ..
+                } if declared == name => Some(args.len()),
+                | _ => None,
+            }
         })
         .unwrap_or(0);
     if arity > 0 {
@@ -744,10 +776,7 @@ fn run_bench(
             return Row {
                 name: name.to_string(),
                 iterations: 0,
-                outcome: Outcome::Failed(format!(
-                    "{} while warming up (in {file})",
-                    error.message
-                )),
+                outcome: Outcome::Failed(format!("{} while warming up (in {file})", error.message)),
             };
         }
     }
@@ -821,26 +850,30 @@ fn print_table(rows: &[Row]) {
     println!("{}", "-".repeat(width + 52));
     for row in rows {
         match &row.outcome {
-            Outcome::Ok {
+            | Outcome::Ok {
                 median,
                 mean,
                 confidence,
-            } => println!(
-                "{:<width$}{:>10}  {:>12}  {:>12}  {:>12}",
-                row.name,
-                row.iterations,
-                duration(*median),
-                duration(*mean),
-                format!("±{}", duration(*confidence)),
-                width = width
-            ),
-            Outcome::Failed(reason) => println!(
-                "{:<width$}{:>10}  FAILED  {}",
-                row.name,
-                "-",
-                reason,
-                width = width
-            ),
+            } => {
+                println!(
+                    "{:<width$}{:>10}  {:>12}  {:>12}  {:>12}",
+                    row.name,
+                    row.iterations,
+                    duration(*median),
+                    duration(*mean),
+                    format!("±{}", duration(*confidence)),
+                    width = width
+                )
+            },
+            | Outcome::Failed(reason) => {
+                println!(
+                    "{:<width$}{:>10}  FAILED  {}",
+                    row.name,
+                    "-",
+                    reason,
+                    width = width
+                )
+            },
         }
     }
 }

@@ -6,7 +6,10 @@
 
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, Signed, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::str::FromStr;
 
 /// Builds a rational from a numerator/denominator pair.
@@ -15,7 +18,10 @@ use std::str::FromStr;
 ///
 /// Panics when `den` is zero; callers in this crate pass literal constants.
 #[must_use]
-pub fn ratio(num: i64, den: i64) -> BigRational {
+pub fn ratio(
+    num: i64,
+    den: i64,
+) -> BigRational {
     BigRational::new(BigInt::from(num), BigInt::from(den))
 }
 
@@ -32,19 +38,19 @@ pub fn parse_decimal(text: &str) -> Option<BigRational> {
         return None;
     }
     let (negative, rest) = match cleaned.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, cleaned.strip_prefix('+').unwrap_or(cleaned)),
+        | Some(rest) => (true, rest),
+        | None => (false, cleaned.strip_prefix('+').unwrap_or(cleaned)),
     };
     let (mantissa, exponent) = match rest.find(['e', 'E']) {
-        Some(at) => {
+        | Some(at) => {
             let exp = i64::from_str(&rest[at + 1..]).ok()?;
             (&rest[..at], exp)
-        }
-        None => (rest, 0),
+        },
+        | None => (rest, 0),
     };
     let (int_part, frac_part) = match mantissa.split_once('.') {
-        Some((int_part, frac_part)) => (int_part, frac_part),
-        None => (mantissa, ""),
+        | Some((int_part, frac_part)) => (int_part, frac_part),
+        | None => (mantissa, ""),
     };
     if int_part.is_empty() && frac_part.is_empty() {
         return None;
@@ -69,7 +75,10 @@ pub fn parse_decimal(text: &str) -> Option<BigRational> {
 
 /// Raises a rational to an integer power.
 #[must_use]
-pub fn pow_int(value: &BigRational, exponent: i32) -> BigRational {
+pub fn pow_int(
+    value: &BigRational,
+    exponent: i32,
+) -> BigRational {
     let magnitude = exponent.unsigned_abs();
     let powered = value.pow(i32::try_from(magnitude).unwrap_or(i32::MAX));
     if exponent < 0 {
@@ -129,7 +138,11 @@ pub fn format_rational_decimal(value: &BigRational) -> String {
         format!("0.{}{}", "0".repeat(places - digits.len()), digits)
     };
     let body = body.trim_end_matches('0').trim_end_matches('.').to_string();
-    if negative { format!("-{body}") } else { body }
+    if negative {
+        format!("-{body}")
+    } else {
+        body
+    }
 }
 
 /// Converts a rational to the nearest `f64` (used only for display and kernels).

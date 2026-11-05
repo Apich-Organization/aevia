@@ -7,8 +7,9 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
+use aevia_core::compile;
 use aevia_core::value::Value;
-use aevia_core::{compile, Interp};
 
 fn build(source: &str) -> (aevia_syntax::Module, aevia_types::CheckedModule) {
     let compilation = compile("classes.aev", source);
@@ -42,15 +43,21 @@ fn interp(source: &str) -> Interp {
     interp
 }
 
-fn value(source: &str, name: &str) -> Value {
+fn value(
+    source: &str,
+    name: &str,
+) -> Value {
     let mut interp = interp(source);
     interp.eval_toplevel(name).expect("the name is bound")
 }
 
-fn text(source: &str, name: &str) -> String {
+fn text(
+    source: &str,
+    name: &str,
+) -> String {
     match value(source, name) {
-        Value::Str(text) => text.to_string(),
-        other => panic!("expected a String, found {}", other.type_name()),
+        | Value::Str(text) => text.to_string(),
+        | other => panic!("expected a String, found {}", other.type_name()),
     }
 }
 
@@ -202,8 +209,8 @@ let different_variant = Dot(1.0) == Dot(2.0)
         ("different_variant", false),
     ] {
         match value(source, name) {
-            Value::Bool(flag) => assert_eq!(flag, expected, "{name}"),
-            other => panic!("{name}: expected a Bool, found {}", other.type_name()),
+            | Value::Bool(flag) => assert_eq!(flag, expected, "{name}"),
+            | other => panic!("{name}: expected a Bool, found {}", other.type_name()),
         }
     }
 }
@@ -222,9 +229,11 @@ let numbers = sort([3, 1, 2])
     let order: Vec<String> = strings
         .elements()
         .iter()
-        .map(|element| match element {
-            Value::Str(text) => text.to_string(),
-            other => panic!("expected a String, found {}", other.type_name()),
+        .map(|element| {
+            match element {
+                | Value::Str(text) => text.to_string(),
+                | other => panic!("expected a String, found {}", other.type_name()),
+            }
         })
         .collect();
     assert_eq!(order, vec!["a", "b", "c"]);
@@ -273,8 +282,8 @@ let greater = total_compare(2, 1)
 ";
     for (name, expected) in [("less", 0usize), ("greater", 2)] {
         match value(source, name) {
-            Value::Variant(variant) => assert_eq!(variant.index, expected, "{name}"),
-            other => panic!("{name}: expected an Ordering, found {}", other.type_name()),
+            | Value::Variant(variant) => assert_eq!(variant.index, expected, "{name}"),
+            | other => panic!("{name}: expected an Ordering, found {}", other.type_name()),
         }
     }
 }
@@ -288,9 +297,11 @@ let a = hash(1)
 let b = hash(1.0)
 let c = hash(2)
 ";
-    let hash_of = |name: &str| match value(source, name) {
-        Value::Num(num) => num.to_rational(),
-        other => panic!("{name}: expected a number, found {}", other.type_name()),
+    let hash_of = |name: &str| {
+        match value(source, name) {
+            | Value::Num(num) => num.to_rational(),
+            | other => panic!("{name}: expected a number, found {}", other.type_name()),
+        }
     };
     assert_eq!(hash_of("a"), hash_of("b"), "1 == 1.0, so the hashes agree");
     assert_ne!(hash_of("a"), hash_of("c"));
@@ -302,14 +313,18 @@ let c = hash(2)
         for (name, value) in fields {
             map.insert((*name).to_string(), Value::int(*value));
         }
-        Value::Record(std::rc::Rc::new(aevia_core::value::RecordValue { fields: map }))
+        Value::Record(std::rc::Rc::new(aevia_core::value::RecordValue {
+            fields: map,
+        }))
     };
     let forward = record(&[("x", 1), ("y", 2)]);
     let reversed = record(&[("y", 2), ("x", 1)]);
     let other = record(&[("x", 1), ("y", 3)]);
-    let hash = |value: Value| match aevia_core::builtins::call_simple("hash", vec![value]) {
-        Ok(Value::Num(num)) => num.to_rational(),
-        other => panic!("hash failed: {other:?}"),
+    let hash = |value: Value| {
+        match aevia_core::builtins::call_simple("hash", vec![value]) {
+            | Ok(Value::Num(num)) => num.to_rational(),
+            | other => panic!("hash failed: {other:?}"),
+        }
     };
     assert_eq!(hash(forward.clone()), hash(reversed));
     assert_ne!(hash(forward), hash(other));
@@ -361,13 +376,13 @@ let c = area(Circle(2.0))
 let q = area(Square(3.0))
 ";
     let circle = match value(source, "c") {
-        Value::Num(number) => number.to_f64().expect("a number"),
-        other => panic!("expected a scalar, found {}", other.type_name()),
+        | Value::Num(number) => number.to_f64().expect("a number"),
+        | other => panic!("expected a scalar, found {}", other.type_name()),
     };
     assert!((circle - 12.0).abs() < 1e-12, "got {circle}");
     let square = match value(source, "q") {
-        Value::Num(number) => number.to_f64().expect("a number"),
-        other => panic!("expected a scalar, found {}", other.type_name()),
+        | Value::Num(number) => number.to_f64().expect("a number"),
+        | other => panic!("expected a scalar, found {}", other.type_name()),
     };
     assert!((square - 9.0).abs() < 1e-12, "got {square}");
 }

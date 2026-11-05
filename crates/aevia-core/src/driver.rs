@@ -8,13 +8,23 @@
 //! modules it imports, and a cycle is reported rather than followed.
 
 use crate::manifest::Roots;
-use aevia_syntax::ast::{DeclKind, Module};
-use aevia_syntax::{lex, parse_module, Diagnostic, Diagnostics, FileId, SourceMap, Span};
-use aevia_types::check::{
-    check_module_with_interfaces, CheckOptions, CheckedModule, Import, ModuleInterface,
-};
+use aevia_syntax::Diagnostic;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::FileId;
+use aevia_syntax::SourceMap;
+use aevia_syntax::Span;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::Module;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
+use aevia_types::check::CheckOptions;
+use aevia_types::check::CheckedModule;
+use aevia_types::check::Import;
+use aevia_types::check::ModuleInterface;
+use aevia_types::check::check_module_with_interfaces;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// A module that was loaded and checked.
 pub struct LoadedModule {
@@ -49,7 +59,10 @@ impl Program {
 
     /// The interface of the module called `path`.
     #[must_use]
-    pub fn exports(&self, path: &[String]) -> Option<&CheckedModule> {
+    pub fn exports(
+        &self,
+        path: &[String],
+    ) -> Option<&CheckedModule> {
         self.modules
             .iter()
             .find(|module| module.path == path)
@@ -156,13 +169,16 @@ pub fn load(entry: &Path) -> Program {
 /// unchanged, so the caller that passes [`Roots::adjacent`] gets exactly the
 /// behaviour of [`load`].
 #[must_use]
-pub fn load_with_roots(entry: &Path, roots: Roots) -> Program {
+pub fn load_with_roots(
+    entry: &Path,
+    roots: Roots,
+) -> Program {
     // The entry's own directory is tried after the package's `src/`, so a file
     // in `tests/` or `examples/` reaches both the package's modules and its own
     // neighbours.
     let roots = match entry.parent() {
-        Some(dir) => roots.with_local(dir),
-        None => roots,
+        | Some(dir) => roots.with_local(dir),
+        | None => roots,
     };
     let mut loader = Loader {
         roots: Some(roots),
@@ -190,15 +206,17 @@ pub fn load_with_roots_and_source(
     options: &CheckOptions,
 ) -> Program {
     let roots = match entry.parent() {
-        Some(dir) => roots.with_local(dir),
-        None => roots,
+        | Some(dir) => roots.with_local(dir),
+        | None => roots,
     };
     let mut loader = Loader {
         roots: Some(roots),
         options: options.clone(),
         ..Loader::default()
     };
-    loader.overlay.insert(entry.to_path_buf(), source.to_string());
+    loader
+        .overlay
+        .insert(entry.to_path_buf(), source.to_string());
     let root = loader.load_file(entry, &[]);
     let (modules, sources, diagnostics) = loader.finish(root);
     Program {
@@ -210,7 +228,10 @@ pub fn load_with_roots_and_source(
 
 /// [`load_with_roots_and_source`] with the adjacent roots and default options.
 #[must_use]
-pub fn load_with_source(entry: &Path, source: &str) -> Program {
+pub fn load_with_source(
+    entry: &Path,
+    source: &str,
+) -> Program {
     load_with_roots_and_source(
         entry,
         Roots::adjacent(entry),
@@ -249,11 +270,21 @@ struct Parsed {
     file: FileId,
     module: Module,
     path: Vec<String>,
-    imports: Vec<(PathBuf, Vec<String>, Option<String>, bool, Option<Vec<String>>)>,
+    imports: Vec<(
+        PathBuf,
+        Vec<String>,
+        Option<String>,
+        bool,
+        Option<Vec<String>>,
+    )>,
 }
 
 impl Loader {
-    fn load_file(&mut self, path: &Path, expected: &[String]) -> Option<PathBuf> {
+    fn load_file(
+        &mut self,
+        path: &Path,
+        expected: &[String],
+    ) -> Option<PathBuf> {
         let canonical = path.to_path_buf();
         if self.roots.is_none() {
             self.roots = Some(Roots::adjacent(&canonical));
@@ -286,29 +317,31 @@ impl Loader {
         // resolve through the loader.
         let overlaid = self.overlay.get(&canonical).cloned();
         let source = match (&overlaid, &embedded) {
-            (Some(source), _) => source.clone(),
-            (None, Some((_, source))) => source.to_string(),
-            (None, None) => match std::fs::read_to_string(&canonical) {
-                Ok(source) => source,
-                Err(error) => {
-                    self.diagnostics.push(Diagnostic::error(
-                        "E0607",
-                        format!("cannot read `{}`: {error}", canonical.display()),
-                        Span::default(),
-                    ));
-                    return None;
+            | (Some(source), _) => source.clone(),
+            | (None, Some((_, source))) => source.to_string(),
+            | (None, None) => {
+                match std::fs::read_to_string(&canonical) {
+                    | Ok(source) => source,
+                    | Err(error) => {
+                        self.diagnostics.push(Diagnostic::error(
+                            "E0607",
+                            format!("cannot read `{}`: {error}", canonical.display()),
+                            Span::default(),
+                        ));
+                        return None;
+                    },
                 }
             },
         };
         let display = match (&overlaid, &embedded) {
-            (Some(_), _) => canonical.display().to_string(),
-            (None, Some((components, _))) => format!("stdlib://{}.aev", components.join("/")),
-            (None, None) => canonical.display().to_string(),
+            | (Some(_), _) => canonical.display().to_string(),
+            | (None, Some((components, _))) => format!("stdlib://{}.aev", components.join("/")),
+            | (None, None) => canonical.display().to_string(),
         };
         let file = self.sources.add(display, &source);
         let lexed = match lex(file, &source) {
-            Ok(lexed) => lexed,
-            Err(errors) => {
+            | Ok(lexed) => lexed,
+            | Err(errors) => {
                 self.diagnostics.extend(errors);
                 // Remember the failure so a second importer does not report it
                 // again.
@@ -327,7 +360,7 @@ impl Loader {
                 );
                 self.order.push(canonical.clone());
                 return None;
-            }
+            },
         };
         let (module, parse_diagnostics) = parse_module(file, &source, &lexed);
         self.diagnostics.extend(parse_diagnostics);
@@ -375,15 +408,14 @@ impl Loader {
                 .as_ref()
                 .and_then(|roots| roots.resolve(import_path));
             let target = match resolved {
-                Some(target) => target,
-                None => {
+                | Some(target) => target,
+                | None => {
                     // §8.20: the standard library ships embedded, not on disk.
                     // A module the package roots do not resolve but the stdlib
                     // names is loaded from the embedded source under a stable
                     // synthetic key, so post-order and cycle detection work the
                     // same way as for a file.
-                    let components: Vec<&str> =
-                        import_path.iter().map(String::as_str).collect();
+                    let components: Vec<&str> = import_path.iter().map(String::as_str).collect();
                     if aevia_std::stdlib::is_module_name(&components) {
                         let mut key = PathBuf::from("stdlib");
                         for component in import_path {
@@ -412,14 +444,11 @@ impl Loader {
                                 ),
                                 decl.span,
                             )
-                            .with_note(format!(
-                                "imported from `{}`",
-                                module_label(&path)
-                            )),
+                            .with_note(format!("imported from `{}`", module_label(&path))),
                         );
                         continue;
                     }
-                }
+                },
             };
             if let Some(resolved) = self.load_file(&target, import_path) {
                 imports.push((
@@ -461,9 +490,7 @@ impl Loader {
                 let prefix = if *open || names.is_some() {
                     String::new()
                 } else {
-                    alias
-                        .clone()
-                        .unwrap_or_else(|| import_path.join("."))
+                    alias.clone().unwrap_or_else(|| import_path.join("."))
                 };
                 let entry = prefixes.entry(target.clone()).or_default();
                 if !entry.contains(&prefix) {
@@ -499,9 +526,7 @@ impl Loader {
                 let prefix = if *open || names.is_some() {
                     String::new()
                 } else {
-                    alias
-                        .clone()
-                        .unwrap_or_else(|| import_path.join("."))
+                    alias.clone().unwrap_or_else(|| import_path.join("."))
                 };
                 let span = parsed
                     .module
@@ -618,7 +643,10 @@ fn module_label(path: &[String]) -> String {
 }
 
 /// The name a module declares, or its file stem.
-fn module_path(module: &Module, file: &Path) -> Vec<String> {
+fn module_path(
+    module: &Module,
+    file: &Path,
+) -> Vec<String> {
     if let Some(name) = &module.name {
         return name.clone();
     }
@@ -632,7 +660,10 @@ fn module_path(module: &Module, file: &Path) -> Vec<String> {
 /// Each module gets its own scope so that two modules may both define a
 /// private helper, and every top-level name is also exported under its
 /// qualified name so that importers can reach it.
-pub fn run_modules(interp: &mut crate::Interp, program: &Program) -> Diagnostics {
+pub fn run_modules(
+    interp: &mut crate::Interp,
+    program: &Program,
+) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
     let last = program.modules.len().saturating_sub(1);
     for (index, module) in program.modules.iter().enumerate() {

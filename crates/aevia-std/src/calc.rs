@@ -10,7 +10,8 @@
 //! Richardson check. Everything iterative reports `NotConverged` rather than a
 //! plausible-looking wrong answer.
 
-use crate::{linalg, NumericError};
+use crate::NumericError;
+use crate::linalg;
 
 /// The relative step a finite difference uses.
 ///
@@ -34,7 +35,10 @@ fn second_step(x: f64) -> f64 {
 
 /// The first derivative of `f` at `x`, by a central difference with one
 /// Richardson extrapolation step.
-pub fn derivative<F>(f: &mut F, x: f64) -> f64
+pub fn derivative<F>(
+    f: &mut F,
+    x: f64,
+) -> f64
 where
     F: FnMut(f64) -> f64,
 {
@@ -46,7 +50,10 @@ where
 }
 
 /// The second derivative of `f` at `x`.
-pub fn second_derivative<F>(f: &mut F, x: f64) -> f64
+pub fn second_derivative<F>(
+    f: &mut F,
+    x: f64,
+) -> f64
 where
     F: FnMut(f64) -> f64,
 {
@@ -62,7 +69,11 @@ where
 ///
 /// [`NumericError::NotConverged`] when the recursion limit is reached before
 /// the tolerance is met, and [`NumericError::Domain`] when `b < a`.
-pub fn quadrature<F>(f: &mut F, a: f64, b: f64) -> Result<f64, NumericError>
+pub fn quadrature<F>(
+    f: &mut F,
+    a: f64,
+    b: f64,
+) -> Result<f64, NumericError>
 where
     F: FnMut(f64) -> f64,
 {
@@ -125,7 +136,10 @@ where
 }
 
 /// The gradient of a scalar field at `x`, by central differences.
-pub fn grad<F>(f: &mut F, x: &[f64]) -> Vec<f64>
+pub fn grad<F>(
+    f: &mut F,
+    x: &[f64],
+) -> Vec<f64>
 where
     F: FnMut(&[f64]) -> f64,
 {
@@ -145,7 +159,10 @@ where
 }
 
 /// The Jacobian of a vector field at `x`: `(rows, cols, row-major entries)`.
-pub fn jacobian<F>(f: &mut F, x: &[f64]) -> (usize, usize, Vec<f64>)
+pub fn jacobian<F>(
+    f: &mut F,
+    x: &[f64],
+) -> (usize, usize, Vec<f64>)
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
@@ -172,7 +189,10 @@ where
 }
 
 /// The Hessian of a scalar field at `x`.
-pub fn hessian<F>(f: &mut F, x: &[f64]) -> Vec<f64>
+pub fn hessian<F>(
+    f: &mut F,
+    x: &[f64],
+) -> Vec<f64>
 where
     F: FnMut(&[f64]) -> f64,
 {
@@ -220,7 +240,10 @@ where
 }
 
 /// The divergence of a vector field at `x`.
-pub fn divergence<F>(f: &mut F, x: &[f64]) -> f64
+pub fn divergence<F>(
+    f: &mut F,
+    x: &[f64],
+) -> f64
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
@@ -237,7 +260,10 @@ where
 /// [`NumericError::Domain`] when the field is not three-dimensional — the curl
 /// of a two-dimensional field is a scalar that §8.5 does not declare, and
 /// answering with one would silently change the type.
-pub fn curl<F>(f: &mut F, x: &[f64]) -> Result<Vec<f64>, NumericError>
+pub fn curl<F>(
+    f: &mut F,
+    x: &[f64],
+) -> Result<Vec<f64>, NumericError>
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
@@ -256,7 +282,10 @@ where
 }
 
 /// The Laplacian of a scalar field at `x`: the trace of the Hessian.
-pub fn laplacian<F>(f: &mut F, x: &[f64]) -> f64
+pub fn laplacian<F>(
+    f: &mut F,
+    x: &[f64],
+) -> f64
 where
     F: FnMut(&[f64]) -> f64,
 {
@@ -271,7 +300,10 @@ where
 ///
 /// [`NumericError::NotConverged`] when neither method finds a sign change or a
 /// stationary point.
-pub fn root<F>(f: &mut F, guess: f64) -> Result<f64, NumericError>
+pub fn root<F>(
+    f: &mut F,
+    guess: f64,
+) -> Result<f64, NumericError>
 where
     F: FnMut(f64) -> f64,
 {
@@ -341,7 +373,11 @@ where
 
 /// The minimum of a unimodal function on `[low, high]`, by golden-section
 /// search.
-fn golden_minimum<F>(f: &mut F, low: f64, high: f64) -> f64
+fn golden_minimum<F>(
+    f: &mut F,
+    low: f64,
+    high: f64,
+) -> f64
 where
     F: FnMut(f64) -> f64,
 {
@@ -379,7 +415,10 @@ where
 ///
 /// [`NumericError::NotConverged`] when the iteration does not settle, and
 /// [`NumericError::Singular`] when the Jacobian vanishes.
-pub fn solve_system<F>(f: &mut F, start: &[f64]) -> Result<Vec<f64>, NumericError>
+pub fn solve_system<F>(
+    f: &mut F,
+    start: &[f64],
+) -> Result<Vec<f64>, NumericError>
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
@@ -424,7 +463,10 @@ where
 ///
 /// [`NumericError::Empty`] when the start point is empty, and
 /// [`NumericError::NotConverged`] when the simplex does not shrink.
-pub fn minimize<F>(f: &mut F, start: &[f64]) -> Result<Vec<f64>, NumericError>
+pub fn minimize<F>(
+    f: &mut F,
+    start: &[f64],
+) -> Result<Vec<f64>, NumericError>
 where
     F: FnMut(&[f64]) -> f64,
 {
@@ -509,7 +551,10 @@ where
 /// # Errors
 ///
 /// As [`minimize`].
-pub fn maximize<F>(f: &mut F, start: &[f64]) -> Result<Vec<f64>, NumericError>
+pub fn maximize<F>(
+    f: &mut F,
+    start: &[f64],
+) -> Result<Vec<f64>, NumericError>
 where
     F: FnMut(&[f64]) -> f64,
 {
@@ -522,7 +567,10 @@ where
 /// # Errors
 ///
 /// [`NumericError::NotConverged`] when the iteration does not settle.
-pub fn least_squares<F>(f: &mut F, start: &[f64]) -> Result<Vec<f64>, NumericError>
+pub fn least_squares<F>(
+    f: &mut F,
+    start: &[f64],
+) -> Result<Vec<f64>, NumericError>
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
@@ -554,7 +602,11 @@ where
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64, tolerance: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+        tolerance: f64,
+    ) -> bool {
         (a - b).abs() <= tolerance
     }
 
@@ -573,7 +625,11 @@ mod tests {
     #[test]
     fn quadrature_integrates_a_sine_over_a_period() {
         let mut f = |x: f64| x.sin();
-        assert!(close(quadrature(&mut f, 0.0, std::f64::consts::PI).unwrap(), 2.0, 1e-10));
+        assert!(close(
+            quadrature(&mut f, 0.0, std::f64::consts::PI).unwrap(),
+            2.0,
+            1e-10
+        ));
     }
 
     #[test]

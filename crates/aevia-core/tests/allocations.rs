@@ -14,11 +14,17 @@
 // `System` unchanged except for the counter.
 #![allow(unsafe_code)]
 
-use aevia_core::value::{NumVal, Value};
-use aevia_core::{compile, Interp, Mode};
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
+use aevia_core::value::NumVal;
+use aevia_core::value::Value;
 use aevia_syntax::Span;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::alloc::GlobalAlloc;
+use std::alloc::Layout;
+use std::alloc::System;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 struct Counting;
 
@@ -27,16 +33,28 @@ static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 // SAFETY: every method forwards to `System`, which is a valid allocator; the
 // only addition is a relaxed atomic increment.
 unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    unsafe fn alloc(
+        &self,
+        layout: Layout,
+    ) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
 
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+    unsafe fn dealloc(
+        &self,
+        pointer: *mut u8,
+        layout: Layout,
+    ) {
         unsafe { System.dealloc(pointer, layout) }
     }
 
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    unsafe fn realloc(
+        &self,
+        pointer: *mut u8,
+        layout: Layout,
+        new_size: usize,
+    ) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         unsafe { System.realloc(pointer, layout, new_size) }
     }
@@ -109,9 +127,7 @@ fn the_hot_paths_allocate_within_their_budget() {
     main_program(&mut tail); // warm up
     let (tail_allocations, _) = allocations(|| main_program(&mut tail));
     let tail_per_step = tail_allocations as f64 / 1_000.0;
-    eprintln!(
-        "allocations: tail loop {tail_allocations} total, {tail_per_step:.3}/step"
-    );
+    eprintln!("allocations: tail loop {tail_allocations} total, {tail_per_step:.3}/step");
     // One `Vec<Value>` per tail call (the evaluated argument list) is the only
     // remaining per-step allocation; the frame buffer itself is reused. The
     // gate pins that: a regression that clones frames or names per step shows up
@@ -132,8 +148,8 @@ fn the_hot_paths_allocate_within_their_budget() {
             .expect("map")
     });
     let elements = match &mapped {
-        Value::Tensor(tensor) => tensor.storage.len(),
-        other => panic!("map answers a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor.storage.len(),
+        | other => panic!("map answers a tensor, found {}", other.type_name()),
     };
     let map_per_element = map_allocations as f64 / elements as f64;
     eprintln!(
@@ -145,16 +161,16 @@ fn the_hot_paths_allocate_within_their_budget() {
     );
 
     // --- fold: the same closure call, with an accumulator -------------------
-    let identity = Value::Native(std::rc::Rc::new(aevia_core::value::NativeFn(
-        Box::new(|_interp: &mut Interp, args: Vec<Value>, _span: Span| {
+    let identity = Value::Native(std::rc::Rc::new(aevia_core::value::NativeFn(Box::new(
+        |_interp: &mut Interp, args: Vec<Value>, _span: Span| {
             let (Some(Value::Num(a)), Some(Value::Num(b))) = (args.first(), args.get(1)) else {
                 return Ok(Value::float(0.0));
             };
             let a = a.to_f64().unwrap_or(0.0);
             let b = b.to_f64().unwrap_or(0.0);
             Ok(Value::Num(NumVal::float(a + b, aevia_dim::Dim::one())))
-        }),
-    )));
+        },
+    ))));
     let zero = Value::Num(NumVal::float(0.0, aevia_dim::Dim::one()));
     hot.call_named(
         "fold",
@@ -200,19 +216,11 @@ fn the_hot_paths_allocate_within_their_budget() {
     let mut grid_interp = interpreter(grid_source);
     let grid = grid_interp.eval_toplevel("grid").expect("grid");
     grid_interp
-        .call_named(
-            "sum",
-            vec![grid.clone(), Value::int(0)],
-            Span::default(),
-        )
+        .call_named("sum", vec![grid.clone(), Value::int(0)], Span::default())
         .expect("warm-up axis sum");
     let (axis_allocations, reduced) = allocations(|| {
         grid_interp
-            .call_named(
-                "sum",
-                vec![grid, Value::int(0)],
-                Span::default(),
-            )
+            .call_named("sum", vec![grid, Value::int(0)], Span::default())
             .expect("axis sum")
     });
     let Value::Tensor(reduced) = &reduced else {

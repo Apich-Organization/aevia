@@ -17,8 +17,8 @@ pub fn polygon_area(points: &[f64]) -> f64 {
     let mut total = 0.0;
     for index in 0..count {
         let next = (index + 1) % count;
-        total += points[index * 2] * points[next * 2 + 1]
-            - points[next * 2] * points[index * 2 + 1];
+        total +=
+            points[index * 2] * points[next * 2 + 1] - points[next * 2] * points[index * 2 + 1];
     }
     (total / 2.0).abs()
 }
@@ -28,7 +28,10 @@ pub fn polygon_area(points: &[f64]) -> f64 {
 /// # Errors
 ///
 /// [`crate::NumericError::ShapeMismatch`] when the dimensions differ.
-pub fn distance(left: &[f64], right: &[f64]) -> Result<f64, crate::NumericError> {
+pub fn distance(
+    left: &[f64],
+    right: &[f64],
+) -> Result<f64, crate::NumericError> {
     if left.len() != right.len() {
         return Err(crate::NumericError::ShapeMismatch(format!(
             "distance needs two points of one dimension, found {} and {}",
@@ -50,9 +53,21 @@ pub fn tetrahedron_volume(points: &[f64]) -> f64 {
     if points.len() < 12 {
         return 0.0;
     }
-    let a = [points[3] - points[0], points[4] - points[1], points[5] - points[2]];
-    let b = [points[6] - points[0], points[7] - points[1], points[8] - points[2]];
-    let c = [points[9] - points[0], points[10] - points[1], points[11] - points[2]];
+    let a = [
+        points[3] - points[0],
+        points[4] - points[1],
+        points[5] - points[2],
+    ];
+    let b = [
+        points[6] - points[0],
+        points[7] - points[1],
+        points[8] - points[2],
+    ];
+    let c = [
+        points[9] - points[0],
+        points[10] - points[1],
+        points[11] - points[2],
+    ];
     let cross = [
         b[1] * c[2] - b[2] * c[1],
         b[2] * c[0] - b[0] * c[2],
@@ -86,9 +101,7 @@ mod tests {
 
     #[test]
     fn the_volume_of_a_unit_tetrahedron() {
-        let points = [
-            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
-        ];
+        let points = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         assert!((tetrahedron_volume(&points) - 1.0 / 6.0).abs() < 1e-12);
     }
 }

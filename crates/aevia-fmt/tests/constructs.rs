@@ -4,8 +4,11 @@
 //! written against; these snippets cover the rest of appendix A, one construct
 //! at a time, so a gap names itself.
 
-use aevia_fmt::{fingerprint, format_source};
-use aevia_syntax::{lex, parse_module, Module};
+use aevia_fmt::fingerprint;
+use aevia_fmt::format_source;
+use aevia_syntax::Module;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 
 fn parse(source: &str) -> Module {
     let lexed = lex(0, source).unwrap_or_else(|diagnostics| {
@@ -250,14 +253,21 @@ fn a_type_level_nat_product_round_trips() {
 fn a_colon_slice_without_a_step_is_the_range_it_means() {
     // `b[1:5]` and `b[1..5]` are the same node, so the formatter writes the
     // older spelling and the tree is unchanged.
-    assert_eq!(round_trip("let a = b[1:5]
-"), "let a = b[1..5]
-");
+    assert_eq!(
+        round_trip(
+            "let a = b[1:5]
+"
+        ),
+        "let a = b[1..5]
+"
+    );
     // The same rule on an axis of a matrix: a full slice with no step is the
     // `..` form, while the stepped axis keeps its `:` spelling.
     assert_eq!(
-        round_trip("let a = m[::, ::-1]
-"),
+        round_trip(
+            "let a = m[::, ::-1]
+"
+        ),
         "let a = m[.., ::-1]
 "
     );

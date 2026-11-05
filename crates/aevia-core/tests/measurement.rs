@@ -7,12 +7,16 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
+use aevia_core::compile;
 use aevia_core::value::Value;
-use aevia_core::{compile, Interp};
 use aevia_syntax::Span;
 
 fn interpreter() -> Interp {
-    let compilation = compile("measure.aev", "fn main(): IO Unit = do\n    println(\"\")\n");
+    let compilation = compile(
+        "measure.aev",
+        "fn main(): IO Unit = do\n    println(\"\")\n",
+    );
     assert!(!compilation.diagnostics.has_errors());
     let mut interp = Interp::new(&compilation.checked).with_buffer();
     let diagnostics = interp.load(&compilation.module.expect("a module"));
@@ -20,7 +24,11 @@ fn interpreter() -> Interp {
     interp
 }
 
-fn measurement(interp: &mut Interp, value: f64, uncertainty: f64) -> Value {
+fn measurement(
+    interp: &mut Interp,
+    value: f64,
+    uncertainty: f64,
+) -> Value {
     interp
         .call_named(
             "measure",
@@ -30,7 +38,12 @@ fn measurement(interp: &mut Interp, value: f64, uncertainty: f64) -> Value {
         .expect("measure builds a record")
 }
 
-fn apply(interp: &mut Interp, op: &str, left: Value, right: Value) -> Value {
+fn apply(
+    interp: &mut Interp,
+    op: &str,
+    left: Value,
+    right: Value,
+) -> Value {
     interp
         .apply_binary(op, left, right, Span::default())
         .expect("the operator is defined for the measurements")
@@ -45,7 +58,10 @@ fn parts(value: &Value) -> (f64, f64) {
     (value, uncertainty)
 }
 
-fn close(actual: f64, expected: f64) -> bool {
+fn close(
+    actual: f64,
+    expected: f64,
+) -> bool {
     (actual - expected).abs() < 1e-12
 }
 
@@ -56,7 +72,10 @@ fn addition_and_subtraction_use_quadrature() {
     let b = measurement(&mut interp, 2.0, 0.2);
     let (value, uncertainty) = parts(&apply(&mut interp, "+", a.clone(), b.clone()));
     assert!(close(value, 3.0), "sum value {value}");
-    assert!(close(uncertainty, 0.05f64.sqrt()), "sum uncertainty {uncertainty}");
+    assert!(
+        close(uncertainty, 0.05f64.sqrt()),
+        "sum uncertainty {uncertainty}"
+    );
 
     let (value, uncertainty) = parts(&apply(&mut interp, "-", b, a));
     assert!(close(value, 1.0));
@@ -71,7 +90,10 @@ fn multiplication_and_division_propagate_independent_errors() {
     // (u1*v2)² + (u2*v1)² = (0.1*2)² + (0.2*1)² = 0.04 + 0.04.
     let (value, uncertainty) = parts(&apply(&mut interp, "*", a.clone(), b.clone()));
     assert!(close(value, 2.0), "product value {value}");
-    assert!(close(uncertainty, 0.08f64.sqrt()), "product uncertainty {uncertainty}");
+    assert!(
+        close(uncertainty, 0.08f64.sqrt()),
+        "product uncertainty {uncertainty}"
+    );
 
     // (u1/v2)² + (u2*v1/v2²)² = (0.1/2)² + (0.2*1/4)² = 0.0025 + 0.0025.
     let (value, uncertainty) = parts(&apply(&mut interp, "/", a, b));

@@ -11,7 +11,9 @@
 //! Resolution is a *type-level* decision, made once, at the call site; the
 //! runtime executes the key it produced (PLAN D1).
 
-use crate::ty::{Rep, Shape, Type};
+use crate::ty::Rep;
+use crate::ty::Shape;
+use crate::ty::Type;
 use aevia_dim::Dim;
 
 /// How well one argument matches one parameter, ordered weakest to strongest.
@@ -105,33 +107,41 @@ pub fn resolve(
         .map(|(index, _)| *index)
         .collect();
     match tied.as_slice() {
-        [only] => Resolution::Unique {
-            index: *only,
-            score: top,
+        | [only] => {
+            Resolution::Unique {
+                index: *only,
+                score: top,
+            }
         },
-        _ => Resolution::Ambiguous { candidates: tied },
+        | _ => Resolution::Ambiguous { candidates: tied },
     }
 }
 
-fn accepts_arity(signature: &aevia_rssn::Sig, count: usize) -> bool {
+fn accepts_arity(
+    signature: &aevia_rssn::Sig,
+    count: usize,
+) -> bool {
     if signature.params.len() == count {
         return true;
     }
     match &signature.variadic {
-        Some((min, max, _)) => count >= *min && max.is_none_or(|max| count <= max),
-        None => false,
+        | Some((min, max, _)) => count >= *min && max.is_none_or(|max| count <= max),
+        | None => false,
     }
 }
 
 /// The score of one argument against one parameter.
 #[must_use]
-pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Score {
+pub fn score_type(
+    param: &aevia_rssn::SigType,
+    got: &aevia_rssn::SigType,
+) -> Score {
     use aevia_rssn::SigType as S;
     match (param, got) {
         // A variable or `Dyn` parameter accepts anything (§13.4.1).
-        (S::Var(_), _) | (S::Dyn, _) | (S::Never, _) => Score::Generic,
-        (_, S::Dyn) | (_, S::Var(_)) => Score::Generic,
-        (S::Int, S::Int)
+        | (S::Var(_), _) | (S::Dyn, _) | (S::Never, _) => Score::Generic,
+        | (_, S::Dyn) | (_, S::Var(_)) => Score::Generic,
+        | (S::Int, S::Int)
         | (S::Real, S::Real)
         | (S::Float, S::Float)
         | (S::Complex, S::Complex)
@@ -140,21 +150,21 @@ pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Sco
         | (S::Symbol, S::Symbol)
         | (S::Table, S::Table)
         | (S::Device, S::Device) => Score::Exact,
-        (S::Unit(a), S::Unit(b)) => {
+        | (S::Unit(a), S::Unit(b)) => {
             if a == b {
                 Score::Exact
             } else {
                 Score::No
             }
-        }
-        (S::Point(a), S::Point(b)) => {
+        },
+        | (S::Point(a), S::Point(b)) => {
             if a == b {
                 Score::Exact
             } else {
                 Score::No
             }
-        }
-        (S::Dim(base, dim), other) => {
+        },
+        | (S::Dim(base, dim), other) => {
             // A dimensioned parameter matches the same base representation;
             // the dimension itself is not part of the score.
             let inner = score_type(base, other);
@@ -165,16 +175,16 @@ pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Sco
             } else {
                 inner
             }
-        }
-        (other, S::Dim(base, dim)) => {
+        },
+        | (other, S::Dim(base, dim)) => {
             let inner = score_type(other, base);
             if inner.accepted() && *dim != Dim::one() {
                 Score::Shaped
             } else {
                 inner
             }
-        }
-        (S::Tensor { rank: a, elem: ea }, S::Tensor { rank: b, elem: eb })
+        },
+        | (S::Tensor { rank: a, elem: ea }, S::Tensor { rank: b, elem: eb })
         | (S::Sparse { rank: a, elem: ea }, S::Sparse { rank: b, elem: eb })
         | (S::Tensor { rank: a, elem: ea }, S::Sparse { rank: b, elem: eb })
         | (S::Sparse { rank: a, elem: ea }, S::Tensor { rank: b, elem: eb }) => {
@@ -190,8 +200,8 @@ pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Sco
             } else {
                 Score::Exact
             }
-        }
-        (S::Record(a), S::Record(b)) => {
+        },
+        | (S::Record(a), S::Record(b)) => {
             if a.len() != b.len() {
                 return Score::No;
             }
@@ -207,8 +217,8 @@ pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Sco
                 worst = worst.min(score);
             }
             worst
-        }
-        (S::Variant(a), S::Variant(b)) => {
+        },
+        | (S::Variant(a), S::Variant(b)) => {
             if a.len() != b.len() {
                 return Score::No;
             }
@@ -229,8 +239,8 @@ pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Sco
                 }
             }
             worst
-        }
-        (S::Func(pa, ra), S::Func(pb, rb)) => {
+        },
+        | (S::Func(pa, ra), S::Func(pb, rb)) => {
             if pa.len() != pb.len() {
                 return Score::No;
             }
@@ -247,22 +257,22 @@ pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Sco
                 return Score::No;
             }
             worst.min(score)
-        }
-        (S::Opaque(a), S::Opaque(b)) => {
+        },
+        | (S::Opaque(a), S::Opaque(b)) => {
             if a == b {
                 Score::Exact
             } else {
                 Score::No
             }
-        }
+        },
         // Numeric widening: `Int -> Real`, `Int|Real|Float -> Complex`.
         //
         // `Float -> Real` is the exact conversion of §3.4.1, so `sin(0.5)`
         // picks the numeric overload rather than tying with the symbolic one.
-        (S::Real, S::Int | S::Float) | (S::Complex, S::Int) => Score::Widened,
-        (S::Float, S::Int) => Score::Widened,
-        (S::Complex, S::Real | S::Float) => Score::Widened,
-        _ => Score::No,
+        | (S::Real, S::Int | S::Float) | (S::Complex, S::Int) => Score::Widened,
+        | (S::Float, S::Int) => Score::Widened,
+        | (S::Complex, S::Real | S::Float) => Score::Widened,
+        | _ => Score::No,
     }
 }
 
@@ -271,52 +281,58 @@ pub fn score_type(param: &aevia_rssn::SigType, got: &aevia_rssn::SigType) -> Sco
 pub fn classify(ty: &Type) -> aevia_rssn::SigType {
     use aevia_rssn::SigType as S;
     match ty {
-        Type::Scalar(Rep::Int, _) => S::Int,
-        Type::Scalar(Rep::Real, dim) => {
+        | Type::Scalar(Rep::Int, _) => S::Int,
+        | Type::Scalar(Rep::Real, dim) => {
             if dim.is_one() {
                 S::Real
             } else {
                 S::Dim(Box::new(S::Real), dim.clone())
             }
-        }
-        Type::Scalar(Rep::Float, dim) => {
+        },
+        | Type::Scalar(Rep::Float, dim) => {
             if dim.is_one() {
                 S::Float
             } else {
                 S::Dim(Box::new(S::Float), dim.clone())
             }
-        }
-        Type::Scalar(Rep::Complex, dim) => {
+        },
+        | Type::Scalar(Rep::Complex, dim) => {
             if dim.is_one() {
                 S::Complex
             } else {
                 S::Dim(Box::new(S::Complex), dim.clone())
             }
-        }
+        },
         // A representation variable is not known at the call site; the dynamic
         // parameter is the only safe reading.
-        Type::Scalar(Rep::Var(_), _) => S::Dyn,
-        Type::Bool => S::Bool,
-        Type::Prop => S::Bool,
-        Type::Str => S::Str,
-        Type::Unit => S::Opaque("Unit".to_string()),
-        Type::UnitOf(dim) => S::Unit(dim.clone()),
-        Type::Point(dim) => S::Point(dim.clone()),
-        Type::Tensor { shape, elem } => S::Tensor {
-            rank: Some(usize::try_from(shape.rank()).unwrap_or(0)),
-            elem: Box::new(classify(elem)),
+        | Type::Scalar(Rep::Var(_), _) => S::Dyn,
+        | Type::Bool => S::Bool,
+        | Type::Prop => S::Bool,
+        | Type::Str => S::Str,
+        | Type::Unit => S::Opaque("Unit".to_string()),
+        | Type::UnitOf(dim) => S::Unit(dim.clone()),
+        | Type::Point(dim) => S::Point(dim.clone()),
+        | Type::Tensor { shape, elem } => {
+            S::Tensor {
+                rank: Some(usize::try_from(shape.rank()).unwrap_or(0)),
+                elem: Box::new(classify(elem)),
+            }
         },
-        Type::Fn(params, ret) => S::Func(
-            params.iter().map(classify).collect(),
-            Box::new(classify(ret)),
-        ),
-        Type::Record(row) => S::Record(
-            row.fields()
-                .into_iter()
-                .map(|(name, ty)| (name, classify(&ty)))
-                .collect(),
-        ),
-        Type::Adt(id, _args) => {
+        | Type::Fn(params, ret) => {
+            S::Func(
+                params.iter().map(classify).collect(),
+                Box::new(classify(ret)),
+            )
+        },
+        | Type::Record(row) => {
+            S::Record(
+                row.fields()
+                    .into_iter()
+                    .map(|(name, ty)| (name, classify(&ty)))
+                    .collect(),
+            )
+        },
+        | Type::Adt(id, _args) => {
             if *id == crate::adt::ORDERING_ID {
                 return S::Variant(vec![
                     ("Less".to_string(), Vec::new()),
@@ -325,10 +341,10 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
                 ]);
             }
             S::Opaque(crate::adt::name_of(*id))
-        }
-        Type::Io(inner) => S::Opaque(format!("IO {}", classify(inner).render_hint())),
-        Type::Dyn(_) => S::Dyn,
-        Type::Var(_) | Type::Param(_) | Type::Error => S::Dyn,
+        },
+        | Type::Io(inner) => S::Opaque(format!("IO {}", classify(inner).render_hint())),
+        | Type::Dyn(_) => S::Dyn,
+        | Type::Var(_) | Type::Param(_) | Type::Error => S::Dyn,
     }
 }
 
@@ -340,14 +356,14 @@ trait RenderHint {
 impl RenderHint for aevia_rssn::SigType {
     fn render_hint(&self) -> String {
         match self {
-            aevia_rssn::SigType::Int => "Int".to_string(),
-            aevia_rssn::SigType::Real => "Real".to_string(),
-            aevia_rssn::SigType::Float => "Float".to_string(),
-            aevia_rssn::SigType::Complex => "Complex".to_string(),
-            aevia_rssn::SigType::Bool => "Bool".to_string(),
-            aevia_rssn::SigType::Str => "String".to_string(),
-            aevia_rssn::SigType::Opaque(name) => name.clone(),
-            other => format!("{other:?}"),
+            | aevia_rssn::SigType::Int => "Int".to_string(),
+            | aevia_rssn::SigType::Real => "Real".to_string(),
+            | aevia_rssn::SigType::Float => "Float".to_string(),
+            | aevia_rssn::SigType::Complex => "Complex".to_string(),
+            | aevia_rssn::SigType::Bool => "Bool".to_string(),
+            | aevia_rssn::SigType::Str => "String".to_string(),
+            | aevia_rssn::SigType::Opaque(name) => name.clone(),
+            | other => format!("{other:?}"),
         }
     }
 }
@@ -356,8 +372,8 @@ impl RenderHint for aevia_rssn::SigType {
 #[must_use]
 pub fn known_rank(shape: &Shape) -> Option<usize> {
     match shape {
-        Shape::Rank(rank) => Some(usize::try_from(*rank).ok()?),
-        Shape::Refined(items) => Some(items.len()),
+        | Shape::Rank(rank) => Some(usize::try_from(*rank).ok()?),
+        | Shape::Refined(items) => Some(items.len()),
     }
 }
 
@@ -386,10 +402,7 @@ mod tests {
     #[test]
     fn a_dimensioned_parameter_is_shaped() {
         use aevia_rssn::SigType as S;
-        let score = score_type(
-            &S::Dim(Box::new(S::Float), Dim::base("Length")),
-            &S::Float,
-        );
+        let score = score_type(&S::Dim(Box::new(S::Float), Dim::base("Length")), &S::Float);
         assert_eq!(score, Score::Shaped);
     }
 
@@ -485,46 +498,53 @@ fn sig_type_to_type(
 ) -> Option<Type> {
     use aevia_rssn::SigType as S;
     Some(match sig {
-        S::Int => Type::int(),
-        S::Real => Type::real(Dim::one()),
-        S::Float => Type::float(Dim::one()),
-        S::Complex => Type::complex(Dim::one()),
-        S::Bool => Type::Bool,
-        S::Str => Type::string(),
-        S::Symbol => return None,
-        S::Unit(dim) => Type::UnitOf(map_dim(dim, infer, dims)),
-        S::Point(dim) => Type::Point(map_dim(dim, infer, dims)),
-        S::Dim(inner, dim) => {
+        | S::Int => Type::int(),
+        | S::Real => Type::real(Dim::one()),
+        | S::Float => Type::float(Dim::one()),
+        | S::Complex => Type::complex(Dim::one()),
+        | S::Bool => Type::Bool,
+        | S::Str => Type::string(),
+        | S::Symbol => return None,
+        | S::Unit(dim) => Type::UnitOf(map_dim(dim, infer, dims)),
+        | S::Point(dim) => Type::Point(map_dim(dim, infer, dims)),
+        | S::Dim(inner, dim) => {
             let rep = match **inner {
-                S::Int => Rep::Int,
-                S::Float => Rep::Float,
-                S::Complex => Rep::Complex,
-                _ => Rep::Real,
+                | S::Int => Rep::Int,
+                | S::Float => Rep::Float,
+                | S::Complex => Rep::Complex,
+                | _ => Rep::Real,
             };
             Type::Scalar(rep, map_dim(dim, infer, dims))
+        },
+        | S::Tensor {
+            rank: Some(rank),
+            elem,
         }
-        S::Tensor { rank: Some(rank), elem } | S::Sparse { rank: Some(rank), elem } => {
+        | S::Sparse {
+            rank: Some(rank),
+            elem,
+        } => {
             Type::tensor(
                 Shape::Rank(u32::try_from(*rank).unwrap_or(1)),
                 sig_type_to_type(elem, infer, dims)?,
             )
-        }
-        S::Record(fields) => {
+        },
+        | S::Record(fields) => {
             let mut converted = Vec::with_capacity(fields.len());
             for (name, ty) in fields {
                 converted.push((name.clone(), sig_type_to_type(ty, infer, dims)?));
             }
             Type::record(converted)
-        }
-        S::Func(params, ret) => {
+        },
+        | S::Func(params, ret) => {
             let mut converted = Vec::with_capacity(params.len());
             for param in params {
                 converted.push(sig_type_to_type(param, infer, dims)?);
             }
             Type::func(converted, sig_type_to_type(ret, infer, dims)?)
-        }
+        },
         // The emitted façade spells every one of these `Dyn<term>`.
-        S::Dyn
+        | S::Dyn
         | S::Never
         | S::Table
         | S::Device
@@ -541,7 +561,10 @@ mod invoke_tests {
     use super::*;
     use crate::infer::Infer;
 
-    fn hash_of(op: &str, index: usize) -> Option<String> {
+    fn hash_of(
+        op: &str,
+        index: usize,
+    ) -> Option<String> {
         let registry = aevia_rssn::registry();
         let entry = registry.op(op)?;
         Some(hex(&entry.keys.get(index)?.signature_hash))
@@ -575,8 +598,7 @@ mod invoke_tests {
             return; // the SDE manifest in this build has no `sde_wiener`
         };
         let mut infer = Infer::new();
-        let Some(Type::Tensor { elem, .. }) = invoke_result("sde_wiener", &hash, &mut infer)
-        else {
+        let Some(Type::Tensor { elem, .. }) = invoke_result("sde_wiener", &hash, &mut infer) else {
             panic!("sde_wiener's result is a rank-2 tensor");
         };
         let Type::Scalar(_, dim) = *elem else {

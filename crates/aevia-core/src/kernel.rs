@@ -15,12 +15,24 @@
 
 use crate::eval::EvalError;
 use crate::sym::Term;
-use crate::value::{NumKind, NumVal, RecordValue, Storage, TensorData, Value, VariantValue};
+use crate::value::NumKind;
+use crate::value::NumVal;
+use crate::value::RecordValue;
+use crate::value::Storage;
+use crate::value::TensorData;
+use crate::value::Value;
+use crate::value::VariantValue;
 use aevia_dim::Dim;
-use aevia_rssn::{Expr, KernelError, Num, Sym, Val};
+use aevia_rssn::Expr;
+use aevia_rssn::KernelError;
+use aevia_rssn::Num;
+use aevia_rssn::Sym;
+use aevia_rssn::Val;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -42,28 +54,34 @@ pub fn error(failure: &KernelError) -> EvalError {
 /// reported as `E1003`.
 pub fn to_val(value: &Value) -> Result<Val, EvalError> {
     Ok(match value {
-        Value::Unit => Val::Variant {
-            tag: "Unit".to_string(),
-            payload: Vec::new(),
+        | Value::Unit => {
+            Val::Variant {
+                tag: "Unit".to_string(),
+                payload: Vec::new(),
+            }
         },
-        Value::Bool(flag) => Val::Bool(*flag),
-        Value::Str(text) => Val::Str(text.to_string()),
-        Value::Num(number) => match &number.kind {
-            NumKind::Int(value) => Val::Num(Num::Int(value.clone())),
-            NumKind::Exact(value) => Val::Num(Num::Rat(value.clone())),
-            NumKind::Float(value) => Val::Num(Num::Float(*value)),
-            NumKind::Complex(re, im) => Val::Complex { re: *re, im: *im },
-            NumKind::Sym(term) => match term.as_foreign() {
-                Some(sym) => Val::Term(sym),
-                None => {
-                    let kernel = aevia_rssn::kernel();
-                    kernel
-                        .build(&to_expr(term))
-                        .map_err(|failure| error(&failure))?
-                }
-            },
+        | Value::Bool(flag) => Val::Bool(*flag),
+        | Value::Str(text) => Val::Str(text.to_string()),
+        | Value::Num(number) => {
+            match &number.kind {
+                | NumKind::Int(value) => Val::Num(Num::Int(value.clone())),
+                | NumKind::Exact(value) => Val::Num(Num::Rat(value.clone())),
+                | NumKind::Float(value) => Val::Num(Num::Float(*value)),
+                | NumKind::Complex(re, im) => Val::Complex { re: *re, im: *im },
+                | NumKind::Sym(term) => {
+                    match term.as_foreign() {
+                        | Some(sym) => Val::Term(sym),
+                        | None => {
+                            let kernel = aevia_rssn::kernel();
+                            kernel
+                                .build(&to_expr(term))
+                                .map_err(|failure| error(&failure))?
+                        },
+                    }
+                },
+            }
         },
-        Value::Tensor(tensor) => {
+        | Value::Tensor(tensor) => {
             let mut data = Vec::with_capacity(tensor.storage.len());
             for index in 0..tensor.storage.len() {
                 if let Some(item) = tensor.get_flat(index) {
@@ -74,15 +92,15 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
                 shape: tensor.shape.clone(),
                 data,
             }
-        }
-        Value::Record(record) => {
+        },
+        | Value::Record(record) => {
             let mut fields = Vec::with_capacity(record.fields.len());
             for (name, item) in &record.fields {
                 fields.push((name.clone(), to_val(item)?));
             }
             Val::Record(fields)
-        }
-        Value::Variant(variant) => {
+        },
+        | Value::Variant(variant) => {
             let mut payload = Vec::with_capacity(variant.fields.len());
             for item in &variant.fields {
                 payload.push(to_val(item)?);
@@ -91,12 +109,12 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
                 tag: variant.name.clone(),
                 payload,
             }
-        }
+        },
         // A bare unit is a definition, not a quantity. It crosses with its
         // dimension and scale, so `Rssn.quantity(3.0, Units.m)` sends the
         // kernel a length and not a string it will refuse.
-        Value::UnitOf(unit) => Val::Unit(aevia_rssn::UnitVal::from_def(unit)),
-        Value::Prop(proposition) => {
+        | Value::UnitOf(unit) => Val::Unit(aevia_rssn::UnitVal::from_def(unit)),
+        | Value::Prop(proposition) => {
             return Err(EvalError::new(
                 "E1004",
                 format!(
@@ -104,23 +122,23 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
                     crate::value::show(&Value::Prop(proposition.clone()))
                 ),
             ));
-        }
+        },
         // A `Dyn` is a quantity with a run-time dimension. The kernel's term
         // graph is dimensionless (§10.3.6), so the payload crosses and the
         // dimension stays host-side, exactly as for a `Scalar`.
-        Value::Dyn(dynamic) => return to_val(&Value::Num(dynamic.as_scalar())),
-        Value::Error => {
+        | Value::Dyn(dynamic) => return to_val(&Value::Num(dynamic.as_scalar())),
+        | Value::Error => {
             return Err(EvalError::new(
                 "E0899",
                 "a poisoned value reached the kernel after an earlier error",
             ));
-        }
-        Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => {
+        },
+        | Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => {
             return Err(EvalError::new(
                 "E1003",
                 "a function cannot be passed to the kernel",
             ));
-        }
+        },
     })
 }
 
@@ -131,10 +149,12 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
 /// Propagates the kernel's failure when a node cannot be built.
 pub fn term_val(term: &Term) -> Result<Val, EvalError> {
     match term {
-        Term::Foreign { sym, .. } => Ok(Val::Term(*sym)),
-        other => aevia_rssn::kernel()
-            .build(&to_expr(other))
-            .map_err(|failure| error(&failure)),
+        | Term::Foreign { sym, .. } => Ok(Val::Term(*sym)),
+        | other => {
+            aevia_rssn::kernel()
+                .build(&to_expr(other))
+                .map_err(|failure| error(&failure))
+        },
     }
 }
 
@@ -144,20 +164,24 @@ pub fn to_expr(term: &Term) -> Expr {
     match term {
         // Integers are sent as integers: several kernels key on the exact
         // representation (`integral` recognises `x^2` but not `x^(2/1)`).
-        Term::Num(value) if value.denom().is_one() => Expr::Num(Num::Int(value.numer().clone())),
-        Term::Num(value) => Expr::Num(Num::Rat(value.clone())),
-        Term::Sym(name) => Expr::Sym(name.clone()),
-        Term::Add(items) => Expr::App("add".to_string(), items.iter().map(to_expr).collect()),
-        Term::Mul(items) => Expr::App("mul".to_string(), items.iter().map(to_expr).collect()),
-        Term::Pow(base, exponent) => Expr::App(
-            "pow".to_string(),
-            vec![to_expr(base), exponent_expr(exponent)],
-        ),
-        Term::Fun(function, args) => Expr::App(
-            function.as_str().to_string(),
-            args.iter().map(to_expr).collect(),
-        ),
-        Term::Foreign { sym, .. } => Expr::Term(*sym),
+        | Term::Num(value) if value.denom().is_one() => Expr::Num(Num::Int(value.numer().clone())),
+        | Term::Num(value) => Expr::Num(Num::Rat(value.clone())),
+        | Term::Sym(name) => Expr::Sym(name.clone()),
+        | Term::Add(items) => Expr::App("add".to_string(), items.iter().map(to_expr).collect()),
+        | Term::Mul(items) => Expr::App("mul".to_string(), items.iter().map(to_expr).collect()),
+        | Term::Pow(base, exponent) => {
+            Expr::App(
+                "pow".to_string(),
+                vec![to_expr(base), exponent_expr(exponent)],
+            )
+        },
+        | Term::Fun(function, args) => {
+            Expr::App(
+                function.as_str().to_string(),
+                args.iter().map(to_expr).collect(),
+            )
+        },
+        | Term::Foreign { sym, .. } => Expr::Term(*sym),
     }
 }
 
@@ -185,7 +209,9 @@ pub fn clean_internal_names(text: &str) -> String {
         // Only the generated `x#diff12` is stripped; `symbol("a#b")` keeps its
         // name, because `a#b` is the name the user asked for.
         let digits = tail.len() - tail.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0 || tail.is_empty() || !tail.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+        if digits > 0
+            || tail.is_empty()
+            || !tail.starts_with(|c: char| c.is_alphanumeric() || c == '_')
         {
             rest = &tail[digits..];
             continue;
@@ -202,7 +228,12 @@ pub fn clean_internal_names(text: &str) -> String {
 /// # Errors
 ///
 /// Propagates the kernel's diagnostic.
-pub fn compute(name: &str, args: &[Value], opts: &aevia_rssn::Opts, dim: Dim) -> Result<Value, EvalError> {
+pub fn compute(
+    name: &str,
+    args: &[Value],
+    opts: &aevia_rssn::Opts,
+    dim: Dim,
+) -> Result<Value, EvalError> {
     let mut converted = Vec::with_capacity(args.len());
     for arg in args {
         converted.push(to_val(arg)?);
@@ -221,7 +252,10 @@ pub fn compute(name: &str, args: &[Value], opts: &aevia_rssn::Opts, dim: Dim) ->
 /// bridge cannot read is not a closed form: [`Term::try_free_symbols`] reports
 /// it instead of answering `Some(0)`.
 #[must_use]
-pub fn fold(term: &Term, dim: Dim) -> Option<Value> {
+pub fn fold(
+    term: &Term,
+    dim: Dim,
+) -> Option<Value> {
     if !term.try_free_symbols().ok()?.is_empty() {
         return None;
     }
@@ -240,14 +274,19 @@ pub fn fold(term: &Term, dim: Dim) -> Option<Value> {
 /// `dim` is the dimension the static type assigned to the result; the kernel
 /// does not track it on the static path (§10.4.1).
 #[must_use]
-pub fn from_val(value: &Val, dim: Dim) -> Value {
+pub fn from_val(
+    value: &Val,
+    dim: Dim,
+) -> Value {
     match value {
-        Val::Num(Num::Int(value)) => Value::Num(NumVal {
-            kind: NumKind::Int(value.clone()),
-            dim,
-            display: None,
-        }),
-        Val::Num(Num::Rat(value)) => {
+        | Val::Num(Num::Int(value)) => {
+            Value::Num(NumVal {
+                kind: NumKind::Int(value.clone()),
+                dim,
+                display: None,
+            })
+        },
+        | Val::Num(Num::Rat(value)) => {
             if value.denom().is_one() {
                 Value::Num(NumVal {
                     kind: NumKind::Int(value.numer().clone()),
@@ -257,38 +296,43 @@ pub fn from_val(value: &Val, dim: Dim) -> Value {
             } else {
                 Value::Num(NumVal::exact(value.clone(), dim))
             }
-        }
-        Val::Num(Num::Float(value)) => Value::Num(NumVal::float(*value, dim)),
-        Val::Bool(flag) => Value::Bool(*flag),
-        Val::Str(text) => Value::string(text.clone()),
-        Val::Symbol(name) => Value::Num(NumVal::symbolic(Term::Sym(name.clone()), dim)),
-        Val::Term(sym) => {
+        },
+        | Val::Num(Num::Float(value)) => Value::Num(NumVal::float(*value, dim)),
+        | Val::Bool(flag) => Value::Bool(*flag),
+        | Val::Str(text) => Value::string(text.clone()),
+        | Val::Symbol(name) => Value::Num(NumVal::symbolic(Term::Sym(name.clone()), dim)),
+        | Val::Term(sym) => {
             let kernel = aevia_rssn::kernel();
             let text = clean_internal_names(&kernel.text(*sym));
             Value::Num(NumVal::symbolic(Term::foreign(*sym, text), dim))
-        }
-        Val::Complex { re, im } => Value::Num(NumVal {
-            kind: NumKind::Complex(*re, *im),
-            dim,
-            display: None,
-        }),
-        Val::Tensor { shape, data } => {
-            let storage: Vec<Value> = data.iter().map(|item| from_val(item, dim.clone())).collect();
+        },
+        | Val::Complex { re, im } => {
+            Value::Num(NumVal {
+                kind: NumKind::Complex(*re, *im),
+                dim,
+                display: None,
+            })
+        },
+        | Val::Tensor { shape, data } => {
+            let storage: Vec<Value> = data
+                .iter()
+                .map(|item| from_val(item, dim.clone()))
+                .collect();
             Value::Tensor(Rc::new(TensorData {
                 shape: shape.clone(),
                 storage: Storage::Boxed(storage),
                 dim,
                 display: None,
             }))
-        }
-        Val::Record(fields) => {
+        },
+        | Val::Record(fields) => {
             let mut map = indexmap::IndexMap::new();
             for (name, item) in fields {
                 map.insert(name.clone(), from_val(item, Dim::one()));
             }
             Value::Record(Rc::new(RecordValue { fields: map }))
-        }
-        Val::Variant { tag, payload } => {
+        },
+        | Val::Variant { tag, payload } => {
             let items: Vec<Value> = payload
                 .iter()
                 .map(|item| from_val(item, Dim::one()))
@@ -296,40 +340,39 @@ pub fn from_val(value: &Val, dim: Dim) -> Value {
             // The tag has to name a constructor this runtime knows; an
             // unknown tag is reported as text rather than invented.
             match aevia_types::adt::find_ctor(tag) {
-                Some((adt, index, _)) => Value::Variant(Rc::new(VariantValue {
-                    adt,
-                    index,
-                    name: tag.clone(),
-                    fields: items,
-                })),
-                None => {
+                | Some((adt, index, _)) => {
+                    Value::Variant(Rc::new(VariantValue {
+                        adt,
+                        index,
+                        name: tag.clone(),
+                        fields: items,
+                    }))
+                },
+                | None => {
                     let rendered: Vec<String> = items.iter().map(crate::value::show).collect();
                     Value::string(format!("{tag}({})", rendered.join(", ")))
-                }
+                },
             }
-        }
+        },
         // A unit is a value of type `Unit[d]`, not text: returning a `Str`
         // here would give the caller a different runtime variant than the
         // checker promised.
-        Val::Unit(unit) => Value::UnitOf(Rc::new(unit.to_def())),
-        Val::Quantity { value, unit } => {
+        | Val::Unit(unit) => Value::UnitOf(Rc::new(unit.to_def())),
+        | Val::Quantity { value, unit } => {
             let inner = from_val(value, unit.dim.clone());
             match inner {
                 // The unit's dimension is the value's dimension, and the
                 // display unit is the unit it was written in — both were
                 // dropped when a quantity travelled as an opaque string.
-                Value::Num(number) => {
+                | Value::Num(number) => {
                     let mut number = number.with_display(Rc::new(unit.to_def()));
                     number.dim = unit.dim.clone();
                     Value::Num(number)
-                }
-                other => other,
+                },
+                | other => other,
             }
-        }
-        Val::Opaque { kind, bytes } => Value::string(format!(
-            "<{kind}:{} bytes>",
-            bytes.len()
-        )),
+        },
+        | Val::Opaque { kind, bytes } => Value::string(format!("<{kind}:{} bytes>", bytes.len())),
     }
 }
 
@@ -337,17 +380,22 @@ pub fn from_val(value: &Val, dim: Dim) -> Value {
 #[must_use]
 pub fn term_of(val: &Val) -> Option<Term> {
     match val {
-        Val::Num(Num::Int(value)) => Some(Term::Num(BigRational::from_integer(value.clone()))),
-        Val::Num(Num::Rat(value)) => Some(Term::Num(value.clone())),
-        Val::Num(Num::Float(value)) => Some(Term::Num(
-            BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
-        )),
-        Val::Symbol(name) => Some(Term::Sym(name.clone())),
-        Val::Term(sym) => {
+        | Val::Num(Num::Int(value)) => Some(Term::Num(BigRational::from_integer(value.clone()))),
+        | Val::Num(Num::Rat(value)) => Some(Term::Num(value.clone())),
+        | Val::Num(Num::Float(value)) => {
+            Some(Term::Num(
+                BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
+            ))
+        },
+        | Val::Symbol(name) => Some(Term::Sym(name.clone())),
+        | Val::Term(sym) => {
             let kernel = aevia_rssn::kernel();
-            Some(Term::foreign(*sym, clean_internal_names(&kernel.text(*sym))))
-        }
-        _ => None,
+            Some(Term::foreign(
+                *sym,
+                clean_internal_names(&kernel.text(*sym)),
+            ))
+        },
+        | _ => None,
     }
 }
 
@@ -359,7 +407,10 @@ pub fn dim_of(value: &Value) -> Dim {
 
 /// Evaluates a symbolic term to a float, with the given bindings.
 #[must_use]
-pub fn eval_term(term: &Term, bindings: &HashMap<String, f64>) -> Option<f64> {
+pub fn eval_term(
+    term: &Term,
+    bindings: &HashMap<String, f64>,
+) -> Option<f64> {
     if let Term::Foreign { sym, .. } = term {
         let pairs: Vec<(String, f64)> = bindings
             .iter()
@@ -392,21 +443,21 @@ pub fn float_num(value: f64) -> Num {
 #[must_use]
 pub fn as_i64(value: &Num) -> Option<i64> {
     match value {
-        Num::Int(value) => value.to_i64(),
-        Num::Rat(value) => {
+        | Num::Int(value) => value.to_i64(),
+        | Num::Rat(value) => {
             if value.denom().is_one() {
                 value.numer().to_i64()
             } else {
                 None
             }
-        }
-        Num::Float(value) => {
+        },
+        | Num::Float(value) => {
             if value.fract() == 0.0 {
                 Some(*value as i64)
             } else {
                 None
             }
-        }
+        },
     }
 }
 
@@ -415,7 +466,11 @@ pub fn as_i64(value: &Num) -> Option<i64> {
 /// # Errors
 ///
 /// Propagates the kernel's diagnostic.
-pub fn call(name: &str, args: &[Value], dim: Dim) -> Result<Value, EvalError> {
+pub fn call(
+    name: &str,
+    args: &[Value],
+    dim: Dim,
+) -> Result<Value, EvalError> {
     let mut converted = Vec::with_capacity(args.len());
     for arg in args {
         converted.push(to_val(arg)?);
@@ -433,7 +488,11 @@ pub fn call(name: &str, args: &[Value], dim: Dim) -> Result<Value, EvalError> {
 ///
 /// Propagates the kernel's diagnostic, and `E1003` when the answer has no term
 /// form at all.
-pub fn call_term(name: &str, args: &[Value], _dim: Dim) -> Result<Term, EvalError> {
+pub fn call_term(
+    name: &str,
+    args: &[Value],
+    _dim: Dim,
+) -> Result<Term, EvalError> {
     let mut converted = Vec::with_capacity(args.len());
     for arg in args {
         converted.push(to_val(arg)?);

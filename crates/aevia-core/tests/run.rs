@@ -8,8 +8,12 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::value::{NumKind, Storage, Value};
-use aevia_core::{compile, EvalError, Interp};
+use aevia_core::EvalError;
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Storage;
+use aevia_core::value::Value;
 
 /// Runs a test body on a thread with the stack the CLI gives the interpreter
 /// (§9.9: 256 MiB). The harness's default test stack is far smaller, and a
@@ -26,8 +30,10 @@ fn with_cli_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) 
 fn build(source: &str) -> (aevia_syntax::Module, aevia_types::CheckedModule) {
     let compilation = compile("test.aev", source);
     if compilation.diagnostics.has_errors() {
-        eprintln!("--- source ---
-{source}--- end ---");
+        eprintln!(
+            "--- source ---
+{source}--- end ---"
+        );
     }
     assert!(
         !compilation.diagnostics.has_errors(),
@@ -70,31 +76,43 @@ fn run(source: &str) -> String {
 fn run_error(source: &str) -> EvalError {
     let mut interp = interp(source);
     match interp.run_main() {
-        Ok(_) => panic!("expected a runtime error"),
-        Err(error) => error,
+        | Ok(_) => panic!("expected a runtime error"),
+        | Err(error) => error,
     }
 }
 
-fn value(source: &str, name: &str) -> Value {
+fn value(
+    source: &str,
+    name: &str,
+) -> Value {
     let mut interp = interp(source);
     interp.eval_toplevel(name).expect("value exists")
 }
 
-fn repr(source: &str, name: &str) -> String {
+fn repr(
+    source: &str,
+    name: &str,
+) -> String {
     aevia_core::value::repr(&value(source, name))
 }
 
-fn num(source: &str, name: &str) -> aevia_core::value::NumVal {
+fn num(
+    source: &str,
+    name: &str,
+) -> aevia_core::value::NumVal {
     match value(source, name) {
-        Value::Num(number) => number,
-        other => panic!("expected a scalar, found {}", other.type_name()),
+        | Value::Num(number) => number,
+        | other => panic!("expected a scalar, found {}", other.type_name()),
     }
 }
 
-fn storage(source: &str, name: &str) -> Storage {
+fn storage(
+    source: &str,
+    name: &str,
+) -> Storage {
     match value(source, name) {
-        Value::Tensor(tensor) => tensor.storage.clone(),
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor.storage.clone(),
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -104,8 +122,7 @@ fn kinematics_program_keeps_both_phases() {
     // it has no exact root and stays symbolic (§6.3.1). `approx` is the
     // explicit step to a number — that is the language's story, and this
     // program now shows it instead of hiding it in a float.
-    let output = run(
-        r#"module Kinematics
+    let output = run(r#"module Kinematics
 
 let g = 9.80665 m/s^2
 
@@ -118,15 +135,17 @@ fn main(): IO Unit = do
     match approx(fall_time(h)) with
     | Ok(t) -> println("numerically = {t}")
     | Err(e) -> println("approx failed: {e}")
-"#,
-    );
+"#);
     let lines: Vec<&str> = output.lines().collect();
     assert_eq!(lines.len(), 2, "unexpected output: {output}");
     assert!(
         lines[0].starts_with("fall time from 20 m = sqrt("),
         "the exact answer must stay a root: {output}"
     );
-    assert!(lines[0].ends_with(" s"), "the dimension must survive: {output}");
+    assert!(
+        lines[0].ends_with(" s"),
+        "the dimension must survive: {output}"
+    );
     let numeric: f64 = lines[1]
         .trim_start_matches("numerically = ")
         .trim_end_matches(" s")
@@ -199,13 +218,7 @@ fn unit_literals_fold_to_coherent_values() {
         "3.2"
     );
     // `3.2 km` and `3200 m` are the same value.
-    assert_eq!(
-        repr(
-            "let a = 3.2 km == 3200 m\n",
-            "a"
-        ),
-        "true"
-    );
+    assert_eq!(repr("let a = 3.2 km == 3200 m\n", "a"), "true");
 }
 
 #[test]
@@ -237,8 +250,7 @@ let a = df(2)
 
 #[test]
 fn recursion_and_pattern_matching_work() {
-    let output = run(
-        r#"type Shape =
+    let output = run(r#"type Shape =
     | Circle(Real[L])
     | Rect(Real[L], Real[L])
 
@@ -250,8 +262,7 @@ fn area(s: Shape): Real[L^2] =
 fn main(): IO Unit = do
     println(area(Circle(2.0 m)))
     println(area(Rect(2.0 m, 3.0 m)))
-"#,
-    );
+"#);
     assert_eq!(output, "12 m^2\n6 m^2\n");
 }
 
@@ -288,20 +299,17 @@ let d = q.x
 
 #[test]
 fn do_blocks_sequence_io() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     let name = "aevia"
     println("hello, {name}")
     println(1 + 1)
-"#,
-    );
+"#);
     assert_eq!(output, "hello, aevia\n2\n");
 }
 
 #[test]
 fn result_and_question_mark() {
-    let output = run(
-        r#"fn safe_div(a: Float, b: Float): Result<Float, String> =
+    let output = run(r#"fn safe_div(a: Float, b: Float): Result<Float, String> =
     if b == 0.0 then Err("zero") else Ok(a / b)
 
 fn show_it(a: Float, b: Float): IO Unit =
@@ -312,32 +320,27 @@ fn show_it(a: Float, b: Float): IO Unit =
 fn main(): IO Unit = do
     show_it(6.0, 3.0)
     show_it(1.0, 0.0)
-"#,
-    );
+"#);
     assert_eq!(output, "ok 2\nerr zero\n");
 }
 
 #[test]
 fn strings_interpolate_values() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     let x = 2.0 m
     println("x = {x}, twice = {2 * x}")
-"#,
-    );
+"#);
     assert_eq!(output, "x = 2 m, twice = 4 m\n");
 }
 
 #[test]
 fn local_recursive_functions_terminate() {
-    let output = run(
-        r#"fn factorial(n: Int): Int =
+    let output = run(r#"fn factorial(n: Int): Int =
     if n <= 1 then 1 else n * factorial(n - 1)
 
 fn main(): IO Unit = do
     println(factorial(5))
-"#,
-    );
+"#);
     assert_eq!(output, "120\n");
 }
 
@@ -389,8 +392,7 @@ let lt = a < b
 
 #[test]
 fn question_mark_returns_the_error_value() {
-    let output = run(
-        r#"fn safe(p: String): Result<Int, String> =
+    let output = run(r#"fn safe(p: String): Result<Int, String> =
     let x = parse_int(p)?
     Ok(x)
 
@@ -398,8 +400,7 @@ fn main(): IO Unit = do
     match safe("abc") with
     | Ok(v) -> println("ok {v}")
     | Err(e) -> println("err")
-"#,
-    );
+"#);
     assert_eq!(output, "err\n");
 }
 
@@ -437,10 +438,7 @@ let d = diff(g)(3)
 
 #[test]
 fn sqrt_of_a_negative_stays_formal() {
-    assert_eq!(
-        repr("let a = sqrt(0.0 - 1.0)\n", "a"),
-        "sqrt(-1)"
-    );
+    assert_eq!(repr("let a = sqrt(0.0 - 1.0)\n", "a"), "sqrt(-1)");
 }
 
 // --- item 3: structural equality -------------------------------------------
@@ -586,19 +584,15 @@ fn random_advances_only_when_the_action_runs() {
     // §6.10: a `let` that is never executed must not consume a value from the
     // sequence, so a program with an extra unused `random` still produces the
     // same first number.
-    let with_extra = run(
-        r#"fn main(): IO Unit = do
+    let with_extra = run(r#"fn main(): IO Unit = do
     let unused = random(())
     a <- random(())
     println("{a}")
-"#,
-    );
-    let without = run(
-        r#"fn main(): IO Unit = do
+"#);
+    let without = run(r#"fn main(): IO Unit = do
     a <- random(())
     println("{a}")
-"#,
-    );
+"#);
     assert_eq!(
         with_extra, without,
         "a `let` perturbed the RNG when the block was built"
@@ -614,12 +608,10 @@ fn random_advances_only_when_the_action_runs() {
 
 #[test]
 fn time_now_reads_the_clock() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     t <- time_now(())
     if t > 0.0 s then println("after 1970") else println("before 1970")
-"#,
-    );
+"#);
     assert_eq!(output, "after 1970\n");
 }
 
@@ -639,10 +631,22 @@ fn gamma_is_the_gamma_function() {
 
 #[test]
 fn zeros_and_ones_honour_their_type_argument() {
-    assert!(matches!(storage("let a = zeros<Int>(3)\n", "a"), Storage::Exact(_)));
-    assert!(matches!(storage("let a = ones<Int>(3)\n", "a"), Storage::Exact(_)));
-    assert!(matches!(storage("let a = zeros<Float>(3)\n", "a"), Storage::Dense(_)));
-    assert!(matches!(storage("let a = ones<Float>(3)\n", "a"), Storage::Dense(_)));
+    assert!(matches!(
+        storage("let a = zeros<Int>(3)\n", "a"),
+        Storage::Exact(_)
+    ));
+    assert!(matches!(
+        storage("let a = ones<Int>(3)\n", "a"),
+        Storage::Exact(_)
+    ));
+    assert!(matches!(
+        storage("let a = zeros<Float>(3)\n", "a"),
+        Storage::Dense(_)
+    ));
+    assert!(matches!(
+        storage("let a = ones<Float>(3)\n", "a"),
+        Storage::Dense(_)
+    ));
 }
 
 #[test]
@@ -703,11 +707,9 @@ fn approx_eq_checks_the_dimension() {
         num_rational::BigRational::new(101.into(), 100.into()),
         Dim::base("Length"),
     ));
-    let verdict = aevia_core::builtins::call_simple(
-        "approx_eq",
-        vec![metre, also_metre, tolerance],
-    )
-    .expect("same dimension");
+    let verdict =
+        aevia_core::builtins::call_simple("approx_eq", vec![metre, also_metre, tolerance])
+            .expect("same dimension");
     assert_eq!(aevia_core::value::repr(&verdict), "true");
 }
 
@@ -725,7 +727,8 @@ let b = a == 1
 fn decide_compares_exact_values_without_rounding() {
     // A proposition built from two exact rationals that agree in `f64` but not
     // exactly: `1/3` and the double nearest to it.
-    use aevia_core::value::{Comparison, PropValue};
+    use aevia_core::value::Comparison;
+    use aevia_core::value::PropValue;
     use aevia_syntax::ast::BinOp;
     use std::rc::Rc;
     let third = Value::Num(aevia_core::value::NumVal::exact(
@@ -779,7 +782,10 @@ let b = linsolve([[2, 1], [1, 3]], [3, 5])
 }
 
 /// The `Solutions` record of §8.6, with the `Ok` wrapper removed.
-fn solutions_of(source: &str, name: &str) -> std::rc::Rc<aevia_core::value::RecordValue> {
+fn solutions_of(
+    source: &str,
+    name: &str,
+) -> std::rc::Rc<aevia_core::value::RecordValue> {
     let solved = value(source, name);
     let Value::Variant(result) = solved else {
         panic!("expected a Result, found {}", solved.type_name());
@@ -797,16 +803,19 @@ fn field_elements(
     field: &str,
 ) -> Vec<Value> {
     match record.fields.get(field) {
-        Some(Value::Tensor(tensor)) => tensor.elements(),
-        other => panic!("`{field}` should be a tensor, found {other:?}"),
+        | Some(Value::Tensor(tensor)) => tensor.elements(),
+        | other => panic!("`{field}` should be a tensor, found {other:?}"),
     }
 }
 
 /// A `Bool` field of a `Solutions` record.
-fn bool_field(record: &aevia_core::value::RecordValue, field: &str) -> bool {
+fn bool_field(
+    record: &aevia_core::value::RecordValue,
+    field: &str,
+) -> bool {
     match record.fields.get(field) {
-        Some(Value::Bool(flag)) => *flag,
-        other => panic!("`{field}` should be a Bool, found {other:?}"),
+        | Some(Value::Bool(flag)) => *flag,
+        | other => panic!("`{field}` should be a Bool, found {other:?}"),
     }
 }
 
@@ -815,12 +824,18 @@ fn bool_field(record: &aevia_core::value::RecordValue, field: &str) -> bool {
 fn integer_roots(record: &aevia_core::value::RecordValue) -> Vec<i64> {
     let mut roots: Vec<i64> = field_elements(record, "roots")
         .iter()
-        .map(|root| match root {
-            Value::Num(number) => match &number.kind {
-                NumKind::Int(value) => value.to_string().parse().expect("an Int fits an i64"),
-                other => panic!("expected an integer root, found {}", other.type_name()),
-            },
-            other => panic!("expected a number, found {}", other.type_name()),
+        .map(|root| {
+            match root {
+                | Value::Num(number) => {
+                    match &number.kind {
+                        | NumKind::Int(value) => {
+                            value.to_string().parse().expect("an Int fits an i64")
+                        },
+                        | other => panic!("expected an integer root, found {}", other.type_name()),
+                    }
+                },
+                | other => panic!("expected a number, found {}", other.type_name()),
+            }
         })
         .collect();
     roots.sort_unstable();
@@ -843,17 +858,19 @@ fn solutions_carry_variable_and_completeness() {
         );
     }
     match solutions.fields.get("variable") {
-        Some(Value::Variant(variable)) => {
+        | Some(Value::Variant(variable)) => {
             assert_eq!(variable.index, 1, "the solved variable must be named");
             match variable.fields.first() {
-                Some(Value::Str(name)) => assert!(
-                    !name.contains("#diff"),
-                    "the internal suffix must not leak: {name}"
-                ),
-                other => panic!("expected a symbol name, found {other:?}"),
+                | Some(Value::Str(name)) => {
+                    assert!(
+                        !name.contains("#diff"),
+                        "the internal suffix must not leak: {name}"
+                    )
+                },
+                | other => panic!("expected a symbol name, found {other:?}"),
             }
-        }
-        other => panic!("expected an Option, found {other:?}"),
+        },
+        | other => panic!("expected an Option, found {other:?}"),
     }
     // The kernel answered with its exhaustive list form, so it claims
     // completeness; the bridge used to hardcode `false` here.
@@ -872,8 +889,8 @@ fn solutions_carry_variable_and_completeness() {
         "c",
     );
     match claimed {
-        Value::Bool(flag) => assert!(flag, "the program sees the solver's claim"),
-        other => panic!("`s.complete` should be a Bool, found {}", other.type_name()),
+        | Value::Bool(flag) => assert!(flag, "the program sees the solver's claim"),
+        | other => panic!("`s.complete` should be a Bool, found {}", other.type_name()),
     }
 }
 
@@ -987,36 +1004,36 @@ fn a_flat_arithmetic_chain_is_not_a_stack_overflow() {
 #[test]
 fn a_runaway_recursion_is_e0805_and_carries_a_trace() {
     with_cli_stack(|| {
-    // A tight budget on purpose. The default is far above any legal program, so
-    // a runaway loop would take minutes to reach it; the guarantee under test
-    // is "the budget stops a loop that never terminates", not "the default is
-    // small".
-    let mut interp = interp(
-        r#"fn down(n: Int): Int = down(n + 1)
+        // A tight budget on purpose. The default is far above any legal program, so
+        // a runaway loop would take minutes to reach it; the guarantee under test
+        // is "the budget stops a loop that never terminates", not "the default is
+        // small".
+        let mut interp = interp(
+            r#"fn down(n: Int): Int = down(n + 1)
 
 fn main(): IO Unit = do
     println(down(0))
 "#,
-    );
-    interp.max_tail_calls = 10_000;
-    let error = match interp.run_main() {
-        Ok(_) => panic!("expected the budget to stop the loop"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code, "E0805");
-    assert!(
-        error
-            .stack
-            .iter()
-            .any(|frame| frame.function.as_ref() == "down"),
-        "the error must carry a call stack: {:?}",
-        error.stack
-    );
-    assert!(
-        error.message.contains("tail calls"),
-        "a budget stop must not be reported as a stack overflow: {}",
-        error.message
-    );
+        );
+        interp.max_tail_calls = 10_000;
+        let error = match interp.run_main() {
+            | Ok(_) => panic!("expected the budget to stop the loop"),
+            | Err(error) => error,
+        };
+        assert_eq!(error.code, "E0805");
+        assert!(
+            error
+                .stack
+                .iter()
+                .any(|frame| frame.function.as_ref() == "down"),
+            "the error must carry a call stack: {:?}",
+            error.stack
+        );
+        assert!(
+            error.message.contains("tail calls"),
+            "a budget stop must not be reported as a stack overflow: {}",
+            error.message
+        );
     });
 }
 
@@ -1041,14 +1058,16 @@ fn main(): IO Unit = do
             generous.max_tail_calls
         );
         generous.max_tail_calls = 5000;
-        generous.run_main().expect("2000 tail calls are within 5000");
+        generous
+            .run_main()
+            .expect("2000 tail calls are within 5000");
         assert_eq!(generous.captured().trim(), "2000");
 
         let mut tight = interp(source);
         tight.max_tail_calls = 1000;
         let error = match tight.run_main() {
-            Ok(_) => panic!("expected the budget to stop the loop"),
-            Err(error) => error,
+            | Ok(_) => panic!("expected the budget to stop the loop"),
+            | Err(error) => error,
         };
         assert_eq!(error.code, "E0805");
         assert!(
@@ -1077,11 +1096,9 @@ fn prelude_constants_are_values_not_names() {
         twice.kind
     );
     // ... and it must still be usable as a number when one is asked for.
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{approx(2 * pi)}")
-"#,
-    );
+"#);
     let value: f64 = output
         .trim()
         .trim_start_matches("Ok(")
@@ -1096,8 +1113,5 @@ fn nan_and_i_have_the_types_the_checker_promises() {
     let nan = num("let n = nan", "n");
     assert!(matches!(nan.kind, NumKind::Float(value) if value.is_nan()));
     let unit_imaginary = num("let j = i", "j");
-    assert!(
-        matches!(unit_imaginary.kind, NumKind::Complex(re, im) if re == 0.0 && im == 1.0)
-    );
+    assert!(matches!(unit_imaginary.kind, NumKind::Complex(re, im) if re == 0.0 && im == 1.0));
 }
-

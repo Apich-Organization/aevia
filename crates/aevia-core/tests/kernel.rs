@@ -6,8 +6,12 @@
 //! a digit, which is true of almost any answer — `contains("-2")` and
 //! `contains('2')` are satisfied by the same character.
 
-use aevia_core::value::{NumKind, Storage, TensorData, Value};
-use aevia_core::{compile, Interp};
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
 use aevia_dim::Dim;
 use std::rc::Rc;
 
@@ -49,15 +53,21 @@ fn run(source: &str) -> String {
     interp.captured()
 }
 
-fn value(source: &str, name: &str) -> Value {
+fn value(
+    source: &str,
+    name: &str,
+) -> Value {
     let mut interp = interp(source);
     interp.eval_toplevel(name).expect("value exists")
 }
 
-fn num(source: &str, name: &str) -> aevia_core::value::NumVal {
+fn num(
+    source: &str,
+    name: &str,
+) -> aevia_core::value::NumVal {
     match value(source, name) {
-        Value::Num(number) => number,
-        other => panic!("expected a scalar, found {}", other.type_name()),
+        | Value::Num(number) => number,
+        | other => panic!("expected a scalar, found {}", other.type_name()),
     }
 }
 
@@ -79,7 +89,10 @@ fn elements(value: &Value) -> Vec<num_rational::BigRational> {
         .collect()
 }
 
-fn rat(numerator: i64, denominator: i64) -> num_rational::BigRational {
+fn rat(
+    numerator: i64,
+    denominator: i64,
+) -> num_rational::BigRational {
     num_rational::BigRational::new(numerator.into(), denominator.into())
 }
 
@@ -104,31 +117,25 @@ let b = a(3.0)
 
 #[test]
 fn a_definite_integral_is_evaluated() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{defint(fn t => t^2, 0.0, 3.0)}")
-"#,
-    );
+"#);
     assert_eq!(output, "Ok(9)\n");
 }
 
 #[test]
 fn a_limit_is_evaluated() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{limit(fn t => sin(t) / t, 0.0)}")
-"#,
-    );
+"#);
     assert_eq!(output, "Ok(1)\n");
 }
 
 #[test]
 fn a_taylor_series_is_returned() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{series(fn t => exp(t), 0.0, 3)}")
-"#,
-    );
+"#);
     // 1 + x + x^2/2 + x^3/6, in whatever order the kernel writes it.
     assert!(output.contains("1/6"), "unexpected series: {output}");
     assert!(output.contains("^3"), "unexpected series: {output}");
@@ -155,11 +162,9 @@ fn solve_returns_every_root() {
 
 #[test]
 fn nsolve_finds_a_numeric_root() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{nsolve(fn t => cos(t) - t, 1.0)}")
-"#,
-    );
+"#);
     assert!(output.starts_with("Ok(0.739"), "unexpected root: {output}");
 }
 
@@ -178,30 +183,23 @@ let s = simplify(x + x)
         "expected a symbolic value, found {}",
         simplified.kind.type_name()
     );
-    assert_eq!(
-        aevia_core::value::repr(&Value::Num(simplified)),
-        "2*x"
-    );
+    assert_eq!(aevia_core::value::repr(&Value::Num(simplified)), "2*x");
 }
 
 #[test]
 fn the_rssn_module_exposes_the_kernel_version() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{Rssn.Version}")
-"#,
-    );
+"#);
     assert_eq!(output.trim(), aevia_rssn::registry().version);
 }
 
 #[test]
 fn the_rssn_module_calls_operators_by_name() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{Rssn.sqrt(16)}")
     println("{Rssn.det([[1.0, 2.0], [3.0, 4.0]])}")
-"#,
-    );
+"#);
     assert_eq!(output, "4\n-2\n");
 }
 
@@ -217,15 +215,15 @@ fn a_dynamic_call_crosses_the_boundary() {
     };
     assert_eq!(result.index, 0, "the dynamic call failed");
     match result.fields.first() {
-        Some(Value::Num(number)) => {
+        | Some(Value::Num(number)) => {
             assert!(
                 matches!(number.kind, NumKind::Float(_)),
                 "sin(0.0) is a Float, found {}",
                 number.kind.type_name()
             );
             assert_eq!(number.to_f64(), Some(0.0), "sin(0) is exactly 0");
-        }
-        other => panic!("expected a number, found {other:?}"),
+        },
+        | other => panic!("expected a number, found {other:?}"),
     }
 }
 
@@ -264,25 +262,21 @@ let l = Rssn.overloads(name)
 
 #[test]
 fn calculus_results_carry_the_argument_dimension() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     println("{antiderivative(fn t: Real[L] => t)(2.0 m)}")
     println("{defint(fn t: Real[L] => t, 0.0 m, 3.0 m)}")
     println("{limit(fn t: Real[L] => 2.0 * t, 2.0 m)}")
-"#,
-    );
+"#);
     assert_eq!(output, "2 m^2\nOk(4.5 m^2)\nOk(4 m)\n");
 }
 
 #[test]
 fn nested_antiderivatives_do_not_capture_each_other() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     let inner = antiderivative(fn u => u)
     let outer = antiderivative(fn t => inner(t))
     println("{outer(2.0)}")
-"#,
-    );
+"#);
     // inner(t) = t^2/2, so the outer integral is t^3/6; at 2 that is 4/3.
     assert_eq!(output, "4/3\n");
 }
@@ -317,25 +311,21 @@ fn solutions_are_a_record() {
 
 #[test]
 fn a_dynamic_call_reports_failure_as_a_value() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     match Rssn.dynamic("no_such_operator", []) with
     | Ok(v) -> println("ok")
     | Err(e) -> println("err")
-"#,
-    );
+"#);
     assert_eq!(output, "err\n");
 }
 
 #[test]
 fn a_stale_signature_pin_is_an_error() {
-    let output = run(
-        r#"fn main(): IO Unit = do
+    let output = run(r#"fn main(): IO Unit = do
     match Rssn.call_key("sin", "deadbeef", [to_value(0.5)]) with
     | Ok(v) -> println("ok")
     | Err(e) -> println("err")
-"#,
-    );
+"#);
     assert_eq!(output, "err\n");
 }
 
@@ -390,15 +380,20 @@ fn a_matrix_returning_operator_returns_a_tensor_of_the_declared_rank() {
     // `Tensor<2, Real>` and the value was a symbolic `list(list(...))`. Every
     // matrix-returning operator was violating its declared type.
     let matrix = match value("let m = Rssn.identity(3)", "m") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("identity must return a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("identity must return a tensor, found {}", other.type_name()),
     };
     assert_eq!(matrix.shape, vec![3, 3], "shape");
     assert_eq!(matrix.storage.len(), 9, "element count");
 
     let transposed = match value("let t = Rssn.transpose([[1, 2], [3, 4]])", "t") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("transpose must return a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => {
+            panic!(
+                "transpose must return a tensor, found {}",
+                other.type_name()
+            )
+        },
     };
     assert_eq!(transposed.shape, vec![2, 2], "shape");
     let elements: Vec<String> = (0..transposed.storage.len())
@@ -447,16 +442,20 @@ fn a_variadic_call_spreads_its_list_into_positional_arguments() {
         .expect("a variadic signature");
     let (_, _, elem) = signature.variadic.as_ref().expect("a variadic tail");
     let (first, second) = match elem {
-        SigType::Bool => (Value::Bool(true), Value::Bool(false)),
-        SigType::Int => (Value::int(1), Value::int(2)),
-        SigType::Real | SigType::Float => (
-            Value::Num(aevia_core::value::NumVal::float(1.0, Dim::one())),
-            Value::Num(aevia_core::value::NumVal::float(2.0, Dim::one())),
-        ),
-        other => panic!(
-            "`{}`'s variadic element is {other:?}; extend the test rather than skip it",
-            entry.name
-        ),
+        | SigType::Bool => (Value::Bool(true), Value::Bool(false)),
+        | SigType::Int => (Value::int(1), Value::int(2)),
+        | SigType::Real | SigType::Float => {
+            (
+                Value::Num(aevia_core::value::NumVal::float(1.0, Dim::one())),
+                Value::Num(aevia_core::value::NumVal::float(2.0, Dim::one())),
+            )
+        },
+        | other => {
+            panic!(
+                "`{}`'s variadic element is {other:?}; extend the test rather than skip it",
+                entry.name
+            )
+        },
     };
     let key = entry.keys[index].clone();
     let answer = aevia_core::rssn_module::call_operator(
@@ -487,7 +486,10 @@ fn an_unknown_pinned_key_is_reported_not_re_resolved() {
     let forged = aevia_rssn::OpKey::new("trig", "sin", None);
     let error = aevia_core::rssn_module::call_operator(
         &forged,
-        vec![Value::Num(aevia_core::value::NumVal::float(0.5, Dim::one()))],
+        vec![Value::Num(aevia_core::value::NumVal::float(
+            0.5,
+            Dim::one(),
+        ))],
         aevia_syntax::Span::default(),
     )
     .expect_err("a key no overload has cannot execute");
@@ -534,4 +536,3 @@ fn a_quantity_crosses_the_dynamic_boundary_as_a_quantity() {
         "the display unit survived"
     );
 }
-

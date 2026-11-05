@@ -8,11 +8,16 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
 use aevia_core::builtins::call_typed;
+use aevia_core::compile;
 use aevia_core::value::Value;
-use aevia_core::{compile, Interp};
-use aevia_syntax::ast::{NatAst, ShapeAst, ShapeItem, Ty, TyKind};
 use aevia_syntax::Span;
+use aevia_syntax::ast::NatAst;
+use aevia_syntax::ast::ShapeAst;
+use aevia_syntax::ast::ShapeItem;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
 
 fn interp(source: &str) -> Interp {
     let compilation = compile("shapes.aev", source);
@@ -41,11 +46,14 @@ fn interp(source: &str) -> Interp {
     interp
 }
 
-fn tensor(source: &str, name: &str) -> std::rc::Rc<aevia_core::value::TensorData> {
+fn tensor(
+    source: &str,
+    name: &str,
+) -> std::rc::Rc<aevia_core::value::TensorData> {
     let mut interp = interp(source);
     match interp.eval_toplevel(name).expect("the name is bound") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -86,9 +94,7 @@ fn reshape_changes_the_shape_and_keeps_the_elements() {
 fn reshape_refuses_a_different_element_count() {
     // §8.4: the element count is checked at run time. The declared type is a
     // `Result`, so the failure is the `Err` the type promises.
-    let mut interp = interp(
-        "let r = reshape<Tensor<[4], Float>>(zeros(2, 3))\n",
-    );
+    let mut interp = interp("let r = reshape<Tensor<[4], Float>>(zeros(2, 3))\n");
     let Value::Variant(result) = interp.eval_toplevel("r").expect("r is bound") else {
         panic!("reshape answers with a Result");
     };
@@ -101,9 +107,7 @@ fn reshape_refuses_a_different_element_count() {
 
 #[test]
 fn reshape_dyn_reports_the_same_failure_as_a_result() {
-    let mut interp = interp(
-        "let r = reshape_dyn(zeros(2, 3), [4])\n",
-    );
+    let mut interp = interp("let r = reshape_dyn(zeros(2, 3), [4])\n");
     let Value::Variant(result) = interp.eval_toplevel("r").expect("r is bound") else {
         panic!("reshape_dyn answers with a Result");
     };
@@ -125,7 +129,9 @@ fn a_shape_written_as_a_shape_argument_works() {
     let mut interp = Interp::new(&aevia_types::CheckedModule::default());
     let matrix = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData {
         shape: vec![2, 3],
-        storage: aevia_core::value::Storage::Dense(std::rc::Rc::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])),
+        storage: aevia_core::value::Storage::Dense(std::rc::Rc::new(vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+        ])),
         dim: aevia_dim::Dim::one(),
         display: None,
     }));

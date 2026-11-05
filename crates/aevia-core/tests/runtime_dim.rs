@@ -7,8 +7,10 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::value::{NumKind, Value};
-use aevia_core::{compile, Interp};
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Value;
 use aevia_dim::Dim;
 use aevia_syntax::Span;
 use std::rc::Rc;
@@ -44,21 +46,32 @@ fn interp(source: &str) -> Interp {
     interpreter
 }
 
-fn value(source: &str, name: &str) -> Value {
-    interp(source).eval_toplevel(name).expect("the name is bound")
+fn value(
+    source: &str,
+    name: &str,
+) -> Value {
+    interp(source)
+        .eval_toplevel(name)
+        .expect("the name is bound")
 }
 
-fn num(source: &str, name: &str) -> aevia_core::value::NumVal {
+fn num(
+    source: &str,
+    name: &str,
+) -> aevia_core::value::NumVal {
     match value(source, name) {
-        Value::Num(number) => number,
-        other => panic!("expected a scalar, found {}", other.type_name()),
+        | Value::Num(number) => number,
+        | other => panic!("expected a scalar, found {}", other.type_name()),
     }
 }
 
-fn tensor(source: &str, name: &str) -> Rc<aevia_core::value::TensorData> {
+fn tensor(
+    source: &str,
+    name: &str,
+) -> Rc<aevia_core::value::TensorData> {
     match value(source, name) {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -74,7 +87,10 @@ fn time() -> Dim {
     Dim::base("Time")
 }
 
-fn scalar(value: f64, dim: Dim) -> Value {
+fn scalar(
+    value: f64,
+    dim: Dim,
+) -> Value {
     Value::Num(aevia_core::value::NumVal::float(value, dim))
 }
 
@@ -96,8 +112,8 @@ let per_second = [1.0, 2.0] / s
 "#;
     let mut interpreter = interp(source);
     let t = match interpreter.eval_toplevel("t").expect("t") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("t is a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("t is a tensor, found {}", other.type_name()),
     };
     assert_eq!(t.shape, vec![2, 2], "scaling a tensor does not reshape it");
     assert!(
@@ -108,8 +124,8 @@ let per_second = [1.0, 2.0] / s
     // The element of the scaled tensor carries the tensor's element dimension,
     // and `value_in` converts from the display unit: `1 Ω` is `1 Ω`.
     let x = match interpreter.eval_toplevel("x").expect("x") {
-        Value::Num(number) => number,
-        other => panic!("x is a number, found {}", other.type_name()),
+        | Value::Num(number) => number,
+        | other => panic!("x is a number, found {}", other.type_name()),
     };
     assert!(matches!(x.kind, NumKind::Float(value) if value == 1.0));
     assert_eq!(
@@ -134,8 +150,8 @@ let per_second = [1.0, 2.0] / s
 
     // `A / u` divides the element dimension.
     let per_second = match interpreter.eval_toplevel("per_second").expect("per_second") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("per_second is a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("per_second is a tensor, found {}", other.type_name()),
     };
     let expected = num("let w = 1 / (1 s)\n", "w").dim;
     assert_eq!(
@@ -155,19 +171,22 @@ let b = ohm * [[1.0, 2.0], [3.0, 4.0]]
 "#;
     let mut interpreter = interp(source);
     let plain = match interpreter.eval_toplevel("plain").expect("plain") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("plain is a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("plain is a tensor, found {}", other.type_name()),
     };
     let a = match interpreter.eval_toplevel("a").expect("a") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("a is a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("a is a tensor, found {}", other.type_name()),
     };
     let b = match interpreter.eval_toplevel("b").expect("b") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("b is a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("b is a tensor, found {}", other.type_name()),
     };
     assert_eq!(a.shape, b.shape);
-    assert_eq!(a.dim, b.dim, "unit * tensor multiplies the element dimension");
+    assert_eq!(
+        a.dim, b.dim,
+        "unit * tensor multiplies the element dimension"
+    );
     assert_eq!(
         a.elements().iter().map(float_of).collect::<Vec<_>>(),
         b.elements().iter().map(float_of).collect::<Vec<_>>()
@@ -191,12 +210,16 @@ fn dyn_of(value: Value) -> Value {
 
 fn dyn_value(value: &Value) -> Rc<aevia_core::value::DynValue> {
     match value {
-        Value::Dyn(dynamic) => dynamic.clone(),
-        other => panic!("expected a Dyn, found {}", other.type_name()),
+        | Value::Dyn(dynamic) => dynamic.clone(),
+        | other => panic!("expected a Dyn, found {}", other.type_name()),
     }
 }
 
-fn binary(name: &str, left: Value, right: Value) -> Result<Value, aevia_core::EvalError> {
+fn binary(
+    name: &str,
+    left: Value,
+    right: Value,
+) -> Result<Value, aevia_core::EvalError> {
     let mut interpreter = Interp::new(&aevia_types::CheckedModule::default());
     interpreter.apply_binary(name, left, right, Span::default())
 }
@@ -216,8 +239,8 @@ fn dyn_addition_keeps_the_dimension_and_rejects_a_mismatch() {
     );
 
     let seconds = dyn_of(scalar(1.0, time()));
-    let error = binary("+", dyn_of(scalar(1.0, metre)), seconds)
-        .expect_err("adding L and T must fail");
+    let error =
+        binary("+", dyn_of(scalar(1.0, metre)), seconds).expect_err("adding L and T must fail");
     assert_eq!(error.code, "E0412", "Dyn dimension check failed");
 
     // `-` is the same rule.
@@ -228,7 +251,10 @@ fn dyn_addition_keeps_the_dimension_and_rejects_a_mismatch() {
     )
     .expect("same dimensions subtract");
     assert_eq!(dyn_value(&difference).dim, length());
-    assert_eq!(dyn_value(&difference).value.to_f64().expect("a number"), 2.0);
+    assert_eq!(
+        dyn_value(&difference).value.to_f64().expect("a number"),
+        2.0
+    );
 }
 
 /// `*` adds the dimensions, `/` subtracts them (§4.9.3).
@@ -258,8 +284,7 @@ fn dyn_multiplication_and_division_combine_dimensions() {
 /// `Dyn ^ Int` multiplies the dimension exponent; `sqrt(Dyn)` halves it.
 #[test]
 fn dyn_powers_and_roots_scale_the_dimension_exponent() {
-    let squared = binary("^", dyn_of(scalar(3.0, length())), Value::int(2))
-        .expect("Dyn ^ Int");
+    let squared = binary("^", dyn_of(scalar(3.0, length())), Value::int(2)).expect("Dyn ^ Int");
     let dynamic = dyn_value(&squared);
     assert_eq!(dynamic.payload().to_f64().expect("a number"), 9.0);
     let factors = dynamic.dim.base_factors();
@@ -420,8 +445,8 @@ let last = path[-1]
 "#;
     let mut interpreter = interp(source);
     let path = match interpreter.eval_toplevel("path").expect("path") {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("the trajectory is a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("the trajectory is a tensor, found {}", other.type_name()),
     };
     assert_eq!(
         path.shape,

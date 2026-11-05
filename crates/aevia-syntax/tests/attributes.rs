@@ -3,14 +3,21 @@
 
 mod support;
 
-use aevia_syntax::ast::{AttrArg, DeclKind, ExprKind};
-use support::{expect_clean, expect_error, span_text};
+use aevia_syntax::ast::AttrArg;
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::ExprKind;
+use support::expect_clean;
+use support::expect_error;
+use support::span_text;
 
 #[test]
 fn an_unknown_attribute_is_e0210() {
     for source in ["@nope\nfn f() = 1\n", "@compile_fail\nfn f() = 1\n"] {
         let diagnostic = expect_error(source, "E0210");
-        assert_eq!(span_text(source, &diagnostic), source.split('\n').next().unwrap());
+        assert_eq!(
+            span_text(source, &diagnostic),
+            source.split('\n').next().unwrap()
+        );
     }
 }
 

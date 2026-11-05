@@ -68,25 +68,28 @@ impl NumericError {
     #[must_use]
     pub fn constructor(&self) -> &'static str {
         match self {
-            Self::NotSquare | Self::ShapeMismatch(_) => "ShapeMismatch",
-            Self::Singular => "Singular",
-            Self::NotPositiveDefinite => "NotPositiveDefinite",
-            Self::NotConverged => "NotConverged",
-            Self::Domain(_) | Self::Empty => "NotConverged",
+            | Self::NotSquare | Self::ShapeMismatch(_) => "ShapeMismatch",
+            | Self::Singular => "Singular",
+            | Self::NotPositiveDefinite => "NotPositiveDefinite",
+            | Self::NotConverged => "NotConverged",
+            | Self::Domain(_) | Self::Empty => "NotConverged",
         }
     }
 }
 
 impl std::fmt::Display for NumericError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
-            Self::NotSquare => f.write_str("the matrix is not square"),
-            Self::ShapeMismatch(detail) => write!(f, "shape mismatch: {detail}"),
-            Self::Singular => f.write_str("the matrix is singular"),
-            Self::NotPositiveDefinite => f.write_str("the matrix is not positive definite"),
-            Self::NotConverged => f.write_str("the iteration did not converge"),
-            Self::Domain(detail) => write!(f, "outside the domain: {detail}"),
-            Self::Empty => f.write_str("the input is empty"),
+            | Self::NotSquare => f.write_str("the matrix is not square"),
+            | Self::ShapeMismatch(detail) => write!(f, "shape mismatch: {detail}"),
+            | Self::Singular => f.write_str("the matrix is singular"),
+            | Self::NotPositiveDefinite => f.write_str("the matrix is not positive definite"),
+            | Self::NotConverged => f.write_str("the iteration did not converge"),
+            | Self::Domain(detail) => write!(f, "outside the domain: {detail}"),
+            | Self::Empty => f.write_str("the input is empty"),
         }
     }
 }
@@ -103,7 +106,10 @@ pub struct Complex {
 impl Complex {
     /// A complex number.
     #[must_use]
-    pub const fn new(re: f64, im: f64) -> Self {
+    pub const fn new(
+        re: f64,
+        im: f64,
+    ) -> Self {
         Self { re, im }
     }
 
@@ -127,7 +133,10 @@ impl Complex {
 
     /// `self * other`.
     #[must_use]
-    pub fn mul(self, other: Self) -> Self {
+    pub fn mul(
+        self,
+        other: Self,
+    ) -> Self {
         Self::new(
             self.re * other.re - self.im * other.im,
             self.re * other.im + self.im * other.re,
@@ -136,7 +145,10 @@ impl Complex {
 
     /// `self / other`.
     #[must_use]
-    pub fn div(self, other: Self) -> Self {
+    pub fn div(
+        self,
+        other: Self,
+    ) -> Self {
         let denominator = other.re * other.re + other.im * other.im;
         Self::new(
             (self.re * other.re + self.im * other.im) / denominator,

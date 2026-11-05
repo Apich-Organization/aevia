@@ -187,7 +187,7 @@ impl RenameError {
     #[must_use]
     pub fn message(&self) -> &str {
         match self {
-            Self::NotRenamable(message)
+            | Self::NotRenamable(message)
             | Self::InvalidName(message)
             | Self::Collision(message) => message,
         }

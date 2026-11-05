@@ -3,8 +3,11 @@
 //! bytes.
 
 use aevia_core::driver;
-use aevia_core::manifest::{Lock, Manifest, Package};
-use std::path::{Path, PathBuf};
+use aevia_core::manifest::Lock;
+use aevia_core::manifest::Manifest;
+use aevia_core::manifest::Package;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// A scratch directory that removes itself.
 struct Scratch(PathBuf);
@@ -18,7 +21,11 @@ impl Scratch {
         Self(path)
     }
 
-    fn write(&self, name: &str, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.0.join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create parent");
@@ -41,11 +48,11 @@ impl Drop for Scratch {
 /// Loads `entry` the way the CLI does: through its package when it has one.
 fn load(entry: &Path) -> driver::Program {
     match Package::owning(entry).expect("manifest parses") {
-        Some(package) => {
+        | Some(package) => {
             let roots = package.roots().expect("roots resolve");
             driver::load_with_roots(entry, roots)
-        }
-        None => driver::load(entry),
+        },
+        | None => driver::load(entry),
     }
 }
 

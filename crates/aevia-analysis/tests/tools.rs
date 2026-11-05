@@ -5,15 +5,23 @@
 //! test asserts the same thing the server promises: the edit it offers
 //! produces a document with no errors.
 
-use aevia_analysis::{
-    Analysis, CodeAction, CodeActionKind, Document, Range, Severity, TokenKind,
-};
+use aevia_analysis::Analysis;
+use aevia_analysis::CodeAction;
+use aevia_analysis::CodeActionKind;
+use aevia_analysis::Document;
+use aevia_analysis::Range;
+use aevia_analysis::Severity;
+use aevia_analysis::TokenKind;
 
 fn document(source: &str) -> Document {
     Document::new("test.aev", 1, source)
 }
 
-fn offset_of(source: &str, needle: &str, nth: usize) -> u32 {
+fn offset_of(
+    source: &str,
+    needle: &str,
+    nth: usize,
+) -> u32 {
     let mut from = 0;
     let mut found = None;
     for _ in 0..nth.max(1) {
@@ -29,19 +37,29 @@ fn offset_of(source: &str, needle: &str, nth: usize) -> u32 {
 }
 
 /// A zero-width request at the byte `offset`.
-fn cursor(document: &Document, offset: u32) -> Range {
+fn cursor(
+    document: &Document,
+    offset: u32,
+) -> Range {
     Range::new(document.position(offset), document.position(offset))
 }
 
 /// The source text a range covers.
-fn text_of<'a>(document: &Document, source: &'a str, range: Range) -> &'a str {
+fn text_of<'a>(
+    document: &Document,
+    source: &'a str,
+    range: Range,
+) -> &'a str {
     let start = document.offset(range.start).expect("start");
     let end = document.offset(range.end).expect("end");
     &source[start as usize..end as usize]
 }
 
 /// Applies a code action's edits, returning the new document text.
-fn apply(document: &Document, action: &CodeAction) -> String {
+fn apply(
+    document: &Document,
+    action: &CodeAction,
+) -> String {
     let mut text = document.text().to_string();
     let mut edits: Vec<_> = action.edits.iter().collect();
     edits.sort_by_key(|edit| std::cmp::Reverse(document.offset(edit.range.start).expect("start")));
@@ -54,7 +72,10 @@ fn apply(document: &Document, action: &CodeAction) -> String {
 }
 
 /// The action whose title contains `needle`.
-fn action<'a>(actions: &'a [CodeAction], needle: &str) -> &'a CodeAction {
+fn action<'a>(
+    actions: &'a [CodeAction],
+    needle: &str,
+) -> &'a CodeAction {
     actions
         .iter()
         .find(|action| action.title.contains(needle))
@@ -189,7 +210,10 @@ fn a_dimension_mismatch_is_fixed_by_adding_the_missing_unit() {
     let source = "let x = 1 m + 1\n";
     let document = document(source);
     let analysis = Analysis::new(&document);
-    assert!(!analysis.diagnostics().is_empty(), "the source must fail first");
+    assert!(
+        !analysis.diagnostics().is_empty(),
+        "the source must fail first"
+    );
     let actions = analysis.code_actions(cursor(&document, offset_of(source, "+", 1)));
     let action = action(&actions, "Add `m`");
     assert_eq!(action.kind, CodeActionKind::QuickFix);
@@ -280,7 +304,10 @@ fn token_list(source: &str) -> Vec<(String, TokenKind)> {
         .collect()
 }
 
-fn kinds_of<'a>(tokens: &'a [(String, TokenKind)], text: &str) -> Vec<TokenKind> {
+fn kinds_of<'a>(
+    tokens: &'a [(String, TokenKind)],
+    text: &str,
+) -> Vec<TokenKind> {
     tokens
         .iter()
         .filter(|(token, _)| token == text)
@@ -308,7 +335,9 @@ fn types_dimensions_and_units_are_highlighted() {
         "{tokens:#?}"
     );
     assert!(
-        kinds_of(&tokens, "Real").iter().all(|kind| *kind == TokenKind::Type),
+        kinds_of(&tokens, "Real")
+            .iter()
+            .all(|kind| *kind == TokenKind::Type),
         "{tokens:#?}"
     );
     assert_eq!(kinds_of(&tokens, "L")[0], TokenKind::Dimension);
@@ -353,5 +382,8 @@ fn a_variant_constructor_is_not_a_type() {
     let source = "type Shape = | Circle(Real[L]) | Dot\nlet s = Dot\n";
     let tokens = token_list(source);
     assert_eq!(kinds_of(&tokens, "Circle")[0], TokenKind::Constructor);
-    assert_eq!(kinds_of(&tokens, "Dot"), [TokenKind::Constructor, TokenKind::Constructor]);
+    assert_eq!(
+        kinds_of(&tokens, "Dot"),
+        [TokenKind::Constructor, TokenKind::Constructor]
+    );
 }

@@ -14,7 +14,8 @@
 //!
 //! `RAYON_NUM_THREADS` is honoured: `faer` reads the global rayon pool.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 use aevia_std::linalg;
 
@@ -39,7 +40,10 @@ fn median(mut samples: Vec<Duration>) -> Duration {
     samples[samples.len() / 2]
 }
 
-fn report(label: &str, elapsed: Duration) {
+fn report(
+    label: &str,
+    elapsed: Duration,
+) {
     let seconds = elapsed.as_secs_f64();
     let flops = 2.0 * (N as f64).powi(3);
     println!(
@@ -78,7 +82,10 @@ fn main() {
     println!("{N}x{N} f64 matmul, {REPEATS} samples, median of each:");
     report("before", before);
     report("after", after);
-    println!("speedup    {:.1}x", before.as_secs_f64() / after.as_secs_f64());
+    println!(
+        "speedup    {:.1}x",
+        before.as_secs_f64() / after.as_secs_f64()
+    );
 
     // The factorisations moved too, so they get the same treatment: a move
     // justified by "it should be faster" is not justified.

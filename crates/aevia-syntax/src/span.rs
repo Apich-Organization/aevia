@@ -23,7 +23,11 @@ pub struct Span {
 impl Span {
     /// Creates a span.
     #[must_use]
-    pub fn new(file: FileId, start: usize, end: usize) -> Self {
+    pub fn new(
+        file: FileId,
+        start: usize,
+        end: usize,
+    ) -> Self {
         Self {
             file,
             start: u32::try_from(start).unwrap_or(u32::MAX),
@@ -33,7 +37,10 @@ impl Span {
 
     /// A span that covers both inputs.
     #[must_use]
-    pub fn join(self, other: Self) -> Self {
+    pub fn join(
+        self,
+        other: Self,
+    ) -> Self {
         if self.file != other.file {
             return self;
         }
@@ -68,7 +75,10 @@ impl Span {
 }
 
 impl fmt::Debug for Span {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         write!(f, "{}..{}@{}", self.start, self.end, self.file)
     }
 }
@@ -87,7 +97,10 @@ pub struct SourceFile {
 impl SourceFile {
     /// Registers a file and precomputes line starts.
     #[must_use]
-    pub fn new(name: impl Into<String>, text: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
         let text = text.into();
         let mut line_starts = vec![0];
         for (index, byte) in text.bytes().enumerate() {
@@ -104,11 +117,14 @@ impl SourceFile {
 
     /// The 1-based line and column (in characters) of a byte offset.
     #[must_use]
-    pub fn line_col(&self, offset: u32) -> (usize, usize) {
+    pub fn line_col(
+        &self,
+        offset: u32,
+    ) -> (usize, usize) {
         let offset = usize::try_from(offset).unwrap_or(0).min(self.text.len());
         let line = match self.line_starts.binary_search(&offset) {
-            Ok(index) => index,
-            Err(index) => index.saturating_sub(1),
+            | Ok(index) => index,
+            | Err(index) => index.saturating_sub(1),
         };
         let start = self.line_starts.get(line).copied().unwrap_or(0);
         let column = self.text[start..offset].chars().count() + 1;
@@ -117,7 +133,10 @@ impl SourceFile {
 
     /// The text of a 1-based line, without its terminator.
     #[must_use]
-    pub fn line_text(&self, line: usize) -> &str {
+    pub fn line_text(
+        &self,
+        line: usize,
+    ) -> &str {
         let Some(&start) = self.line_starts.get(line.saturating_sub(1)) else {
             return "";
         };
@@ -144,7 +163,11 @@ impl SourceMap {
     }
 
     /// Adds a file and returns its id.
-    pub fn add(&mut self, name: impl Into<String>, text: impl Into<String>) -> FileId {
+    pub fn add(
+        &mut self,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> FileId {
         let id = u32::try_from(self.files.len()).unwrap_or(u32::MAX);
         self.files.push(SourceFile::new(name, text));
         id
@@ -152,13 +175,19 @@ impl SourceMap {
 
     /// The file with the given id.
     #[must_use]
-    pub fn file(&self, id: FileId) -> Option<&SourceFile> {
+    pub fn file(
+        &self,
+        id: FileId,
+    ) -> Option<&SourceFile> {
         self.files.get(usize::try_from(id).ok()?)
     }
 
     /// The text of a span, when it is in range.
     #[must_use]
-    pub fn text(&self, span: Span) -> &str {
+    pub fn text(
+        &self,
+        span: Span,
+    ) -> &str {
         let Some(file) = self.file(span.file) else {
             return "";
         };
@@ -169,13 +198,16 @@ impl SourceMap {
 
     /// The `file:line:column` prefix for a span.
     #[must_use]
-    pub fn location(&self, span: Span) -> String {
+    pub fn location(
+        &self,
+        span: Span,
+    ) -> String {
         match self.file(span.file) {
-            Some(file) => {
+            | Some(file) => {
                 let (line, column) = file.line_col(span.start);
                 format!("{}:{line}:{column}", file.name)
-            }
-            None => "<unknown>".to_string(),
+            },
+            | None => "<unknown>".to_string(),
         }
     }
 }

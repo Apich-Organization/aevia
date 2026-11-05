@@ -19,9 +19,13 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
 use aevia_core::builtins::call_simple;
-use aevia_core::value::{Storage, TensorData, Value};
-use aevia_core::{Interp, compile, rssn_module};
+use aevia_core::compile;
+use aevia_core::rssn_module;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
 use aevia_dim::Dim;
 use aevia_syntax::Span;
 use std::rc::Rc;
@@ -42,11 +46,13 @@ fn type_rep() -> Value {
 
 fn result(value: Value) -> (usize, Value) {
     match value {
-        Value::Variant(variant) => (
-            variant.index,
-            variant.fields.first().cloned().unwrap_or(Value::Unit),
-        ),
-        other => panic!("expected a Result, found {}", other.type_name()),
+        | Value::Variant(variant) => {
+            (
+                variant.index,
+                variant.fields.first().cloned().unwrap_or(Value::Unit),
+            )
+        },
+        | other => panic!("expected a Result, found {}", other.type_name()),
     }
 }
 
@@ -65,7 +71,10 @@ fn checked(source: &str) -> (aevia_syntax::Module, aevia_types::CheckedModule) {
     (compilation.module.expect("a module"), compilation.checked)
 }
 
-fn toplevel(source: &str, name: &str) -> Value {
+fn toplevel(
+    source: &str,
+    name: &str,
+) -> Value {
     let (module, checked) = checked(source);
     let mut interp = Interp::new(&checked);
     let load = interp.load(&module);
@@ -256,11 +265,7 @@ fn call_ho_is_reachable_from_source() {
 fn a_non_empty_callback_list_names_the_callback_capability() {
     let error = rssn_module::call(
         "call_ho",
-        vec![
-            Value::string("sin"),
-            list(vec![0.5]),
-            list(vec![1.0]),
-        ],
+        vec![Value::string("sin"), list(vec![0.5]), list(vec![1.0])],
         Span::default(),
     )
     .expect_err("an Aevia closure cannot cross as a kernel callback");
@@ -271,17 +276,12 @@ fn a_non_empty_callback_list_names_the_callback_capability() {
         error.message
     );
     assert!(
-        error
-            .notes
-            .iter()
-            .any(|note| note.contains("Send + Sync")),
+        error.notes.iter().any(|note| note.contains("Send + Sync")),
         "the note must say what the ABI requires: {:?}",
         error.notes
     );
     assert!(
-        !aevia_rssn::registry()
-            .capabilities
-            .has("core.callback"),
+        !aevia_rssn::registry().capabilities.has("core.callback"),
         "the capability row exists but must be disabled"
     );
 }

@@ -11,7 +11,8 @@
 //! `Rect` in different modules distinct.
 
 use aevia_dim::Dim;
-use num_traits::{One, Signed};
+use num_traits::One;
+use num_traits::Signed;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -41,10 +42,10 @@ impl Rep {
     #[must_use]
     pub fn default_for_literal(kind: LiteralKind) -> Self {
         match kind {
-            LiteralKind::Int => Self::Int,
-            LiteralKind::Decimal => Self::Float,
-            LiteralKind::QuantityInt => Self::Real,
-            LiteralKind::QuantityDecimal => Self::Float,
+            | LiteralKind::Int => Self::Int,
+            | LiteralKind::Decimal => Self::Float,
+            | LiteralKind::QuantityInt => Self::Real,
+            | LiteralKind::QuantityDecimal => Self::Float,
         }
     }
 
@@ -52,8 +53,8 @@ impl Rep {
     #[must_use]
     pub fn div_rep(self) -> Self {
         match self {
-            Self::Int => Self::Real,
-            other => other,
+            | Self::Int => Self::Real,
+            | other => other,
         }
     }
 
@@ -62,20 +63,26 @@ impl Rep {
     /// `None` when either side is a variable, or when the two are not
     /// comparable — the caller records a bound instead of guessing.
     #[must_use]
-    pub fn join_concrete(self, other: Self) -> Option<Self> {
-        use Rep::{Complex, Float, Int, Real};
+    pub fn join_concrete(
+        self,
+        other: Self,
+    ) -> Option<Self> {
+        use Rep::Complex;
+        use Rep::Float;
+        use Rep::Int;
+        use Rep::Real;
         if self == other {
             return Some(self);
         }
         match (self, other) {
-            (Int, Real) | (Real, Int) => Some(Real),
-            (Int, Float) | (Float, Int) => Some(Float),
-            (Int, Complex) | (Complex, Int) => Some(Complex),
+            | (Int, Real) | (Real, Int) => Some(Real),
+            | (Int, Float) | (Float, Int) => Some(Float),
+            | (Int, Complex) | (Complex, Int) => Some(Complex),
             // §3.4.1: `Real` wins over `Float` — exactness is preserved.
-            (Real, Float) | (Float, Real) => Some(Real),
-            (Real, Complex) | (Complex, Real) => Some(Complex),
-            (Float, Complex) | (Complex, Float) => Some(Complex),
-            _ => None,
+            | (Real, Float) | (Float, Real) => Some(Real),
+            | (Real, Complex) | (Complex, Real) => Some(Complex),
+            | (Float, Complex) | (Complex, Float) => Some(Complex),
+            | _ => None,
         }
     }
 
@@ -84,15 +91,21 @@ impl Rep {
     /// `Int < Float < Complex` and `Int < Real < Complex`; `Float` and `Real`
     /// are incomparable.
     #[must_use]
-    pub fn at_least(self, lower: Self) -> bool {
-        use Rep::{Complex, Float, Int, Real};
+    pub fn at_least(
+        self,
+        lower: Self,
+    ) -> bool {
+        use Rep::Complex;
+        use Rep::Float;
+        use Rep::Int;
+        use Rep::Real;
         if self == lower {
             return true;
         }
         match (self, lower) {
-            (_, Int) => matches!(self, Real | Float | Complex),
-            (Complex, Real | Float) => true,
-            _ => false,
+            | (_, Int) => matches!(self, Real | Float | Complex),
+            | (Complex, Real | Float) => true,
+            | _ => false,
         }
     }
 
@@ -100,13 +113,16 @@ impl Rep {
     /// lower bounds, in increasing order.
     #[must_use]
     pub fn upper_candidates(lower: Self) -> &'static [Rep] {
-        use Rep::{Complex, Float, Int, Real};
+        use Rep::Complex;
+        use Rep::Float;
+        use Rep::Int;
+        use Rep::Real;
         match lower {
-            Int => &[Int, Float, Real, Complex],
-            Float => &[Float, Complex],
-            Real => &[Real, Complex],
-            Complex => &[Complex],
-            Rep::Var(_) => &[Int, Float, Real, Complex],
+            | Int => &[Int, Float, Real, Complex],
+            | Float => &[Float, Complex],
+            | Real => &[Real, Complex],
+            | Complex => &[Complex],
+            | Rep::Var(_) => &[Int, Float, Real, Complex],
         }
     }
 
@@ -114,20 +130,23 @@ impl Rep {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            Self::Int => "Int",
-            Self::Real => "Real",
-            Self::Float => "Float",
-            Self::Complex => "Complex",
-            Self::Var(_) => "?",
+            | Self::Int => "Int",
+            | Self::Real => "Real",
+            | Self::Float => "Float",
+            | Self::Complex => "Complex",
+            | Self::Var(_) => "?",
         }
     }
 }
 
 impl fmt::Display for Rep {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Var(id) => write!(f, "ρ{id}"),
-            other => f.write_str(other.name()),
+            | Self::Var(id) => write!(f, "ρ{id}"),
+            | other => f.write_str(other.name()),
         }
     }
 }
@@ -158,12 +177,15 @@ impl LiteralKind {
 
     /// Whether the literal may unify with a given representation.
     #[must_use]
-    pub fn accepts_rep(self, rep: Rep) -> bool {
+    pub fn accepts_rep(
+        self,
+        rep: Rep,
+    ) -> bool {
         match self {
-            Self::Int => matches!(rep, Rep::Int | Rep::Real | Rep::Float | Rep::Complex),
-            Self::Decimal => matches!(rep, Rep::Float | Rep::Real),
-            Self::QuantityInt => matches!(rep, Rep::Real | Rep::Float | Rep::Complex),
-            Self::QuantityDecimal => matches!(rep, Rep::Float | Rep::Real),
+            | Self::Int => matches!(rep, Rep::Int | Rep::Real | Rep::Float | Rep::Complex),
+            | Self::Decimal => matches!(rep, Rep::Float | Rep::Real),
+            | Self::QuantityInt => matches!(rep, Rep::Real | Rep::Float | Rep::Complex),
+            | Self::QuantityDecimal => matches!(rep, Rep::Float | Rep::Real),
         }
     }
 }
@@ -202,13 +224,19 @@ impl Nat {
 
     /// `self + other`.
     #[must_use]
-    pub fn add(self, other: Self) -> Self {
+    pub fn add(
+        self,
+        other: Self,
+    ) -> Self {
         Self::Add(Box::new(self), Box::new(other))
     }
 
     /// `self * other`.
     #[must_use]
-    pub fn mul(self, other: Self) -> Self {
+    pub fn mul(
+        self,
+        other: Self,
+    ) -> Self {
         Self::Mul(Box::new(self), Box::new(other))
     }
 
@@ -216,10 +244,10 @@ impl Nat {
     #[must_use]
     pub fn as_const(&self) -> Option<usize> {
         match self {
-            Self::Lit(value) => Some(*value),
-            Self::Var(_) => None,
-            Self::Add(left, right) => Some(left.as_const()?.checked_add(right.as_const()?)?),
-            Self::Mul(left, right) => Some(left.as_const()?.checked_mul(right.as_const()?)?),
+            | Self::Lit(value) => Some(*value),
+            | Self::Var(_) => None,
+            | Self::Add(left, right) => Some(left.as_const()?.checked_add(right.as_const()?)?),
+            | Self::Mul(left, right) => Some(left.as_const()?.checked_mul(right.as_const()?)?),
         }
     }
 
@@ -228,12 +256,12 @@ impl Nat {
     #[must_use]
     pub fn is_linear(&self) -> bool {
         match self {
-            Self::Lit(_) | Self::Var(_) => true,
-            Self::Add(left, right) => left.is_linear() && right.is_linear(),
-            Self::Mul(left, right) => {
+            | Self::Lit(_) | Self::Var(_) => true,
+            | Self::Add(left, right) => left.is_linear() && right.is_linear(),
+            | Self::Mul(left, right) => {
                 left.as_const().is_some() && right.is_linear()
                     || right.as_const().is_some() && left.is_linear()
-            }
+            },
         }
     }
 
@@ -245,43 +273,49 @@ impl Nat {
         out
     }
 
-    fn collect_vars(&self, out: &mut Vec<u32>) {
+    fn collect_vars(
+        &self,
+        out: &mut Vec<u32>,
+    ) {
         match self {
-            Self::Lit(_) => {}
-            Self::Var(id) => {
+            | Self::Lit(_) => {},
+            | Self::Var(id) => {
                 if !out.contains(id) {
                     out.push(*id);
                 }
-            }
-            Self::Add(left, right) | Self::Mul(left, right) => {
+            },
+            | Self::Add(left, right) | Self::Mul(left, right) => {
                 left.collect_vars(out);
                 right.collect_vars(out);
-            }
+            },
         }
     }
 
     /// Substitutes variables through `map`, folding any constant arithmetic.
     #[must_use]
-    pub fn substitute(&self, map: &std::collections::HashMap<u32, Nat>) -> Nat {
+    pub fn substitute(
+        &self,
+        map: &std::collections::HashMap<u32, Nat>,
+    ) -> Nat {
         match self {
-            Self::Lit(value) => Self::Lit(*value),
-            Self::Var(id) => map.get(id).cloned().unwrap_or_else(|| self.clone()),
-            Self::Add(left, right) => {
+            | Self::Lit(value) => Self::Lit(*value),
+            | Self::Var(id) => map.get(id).cloned().unwrap_or_else(|| self.clone()),
+            | Self::Add(left, right) => {
                 let left = left.substitute(map);
                 let right = right.substitute(map);
                 match (left.as_const(), right.as_const()) {
-                    (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
-                    _ => Nat::Add(Box::new(left), Box::new(right)),
+                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_add(right)),
+                    | _ => Nat::Add(Box::new(left), Box::new(right)),
                 }
-            }
-            Self::Mul(left, right) => {
+            },
+            | Self::Mul(left, right) => {
                 let left = left.substitute(map);
                 let right = right.substitute(map);
                 match (left.as_const(), right.as_const()) {
-                    (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
-                    _ => Nat::Mul(Box::new(left), Box::new(right)),
+                    | (Some(left), Some(right)) => Nat::Lit(left.saturating_mul(right)),
+                    | _ => Nat::Mul(Box::new(left), Box::new(right)),
                 }
-            }
+            },
         }
     }
 }
@@ -299,12 +333,15 @@ impl From<u32> for Nat {
 }
 
 impl fmt::Display for Nat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Lit(value) => write!(f, "{value}"),
-            Self::Var(id) => write!(f, "n{id}"),
-            Self::Add(left, right) => write!(f, "({left} + {right})"),
-            Self::Mul(left, right) => write!(f, "({left} * {right})"),
+            | Self::Lit(value) => write!(f, "{value}"),
+            | Self::Var(id) => write!(f, "n{id}"),
+            | Self::Add(left, right) => write!(f, "({left} + {right})"),
+            | Self::Mul(left, right) => write!(f, "({left} * {right})"),
         }
     }
 }
@@ -328,8 +365,8 @@ impl Shape {
     #[must_use]
     pub fn rank(&self) -> u32 {
         match self {
-            Self::Rank(rank) => *rank,
-            Self::Refined(items) => u32::try_from(items.len()).unwrap_or(u32::MAX),
+            | Self::Rank(rank) => *rank,
+            | Self::Refined(items) => u32::try_from(items.len()).unwrap_or(u32::MAX),
         }
     }
 
@@ -342,23 +379,20 @@ impl Shape {
     /// A refined shape from literal extents (`None` stays unknown).
     #[must_use]
     pub fn refined(items: impl IntoIterator<Item = Option<usize>>) -> Self {
-        Self::Refined(
-            items
-                .into_iter()
-                .map(|item| item.map(Nat::lit))
-                .collect(),
-        )
+        Self::Refined(items.into_iter().map(|item| item.map(Nat::lit)).collect())
     }
 
     /// The extents when every one folds to a literal.
     #[must_use]
     pub fn extents(&self) -> Option<Vec<usize>> {
         match self {
-            Self::Rank(_) => None,
-            Self::Refined(items) => items
-                .iter()
-                .map(|item| item.as_ref().and_then(Nat::as_const))
-                .collect(),
+            | Self::Rank(_) => None,
+            | Self::Refined(items) => {
+                items
+                    .iter()
+                    .map(|item| item.as_ref().and_then(Nat::as_const))
+                    .collect()
+            },
         }
     }
 
@@ -366,34 +400,39 @@ impl Shape {
     #[must_use]
     pub fn has_variables(&self) -> bool {
         match self {
-            Self::Rank(_) => false,
-            Self::Refined(items) => items
-                .iter()
-                .flatten()
-                .any(|nat| !nat.vars().is_empty()),
+            | Self::Rank(_) => false,
+            | Self::Refined(items) => items.iter().flatten().any(|nat| !nat.vars().is_empty()),
         }
     }
 
     /// The extent at `index`, when it is present and folds to a literal.
     #[must_use]
-    pub fn extent(&self, index: usize) -> Option<usize> {
+    pub fn extent(
+        &self,
+        index: usize,
+    ) -> Option<usize> {
         match self {
-            Self::Rank(_) => None,
-            Self::Refined(items) => items.get(index)?.as_ref().and_then(Nat::as_const),
+            | Self::Rank(_) => None,
+            | Self::Refined(items) => items.get(index)?.as_ref().and_then(Nat::as_const),
         }
     }
 
     /// Substitutes type-level variables (parallel to [`Nat::substitute`]).
     #[must_use]
-    pub fn substitute_nats(&self, map: &std::collections::HashMap<u32, Nat>) -> Shape {
+    pub fn substitute_nats(
+        &self,
+        map: &std::collections::HashMap<u32, Nat>,
+    ) -> Shape {
         match self {
-            Self::Rank(rank) => Self::Rank(*rank),
-            Self::Refined(items) => Self::Refined(
-                items
-                    .iter()
-                    .map(|item| item.as_ref().map(|nat| nat.substitute(map)))
-                    .collect(),
-            ),
+            | Self::Rank(rank) => Self::Rank(*rank),
+            | Self::Refined(items) => {
+                Self::Refined(
+                    items
+                        .iter()
+                        .map(|item| item.as_ref().map(|nat| nat.substitute(map)))
+                        .collect(),
+                )
+            },
         }
     }
 
@@ -405,22 +444,25 @@ impl Shape {
 }
 
 impl fmt::Display for Shape {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Rank(rank) => write!(f, "{rank}"),
-            Self::Refined(items) => {
+            | Self::Rank(rank) => write!(f, "{rank}"),
+            | Self::Refined(items) => {
                 f.write_str("[")?;
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
                     match item {
-                        Some(extent) => write!(f, "{extent}")?,
-                        None => f.write_str("?")?,
+                        | Some(extent) => write!(f, "{extent}")?,
+                        | None => f.write_str("?")?,
                     }
                 }
                 f.write_str("]")
-            }
+            },
         }
     }
 }
@@ -469,11 +511,11 @@ impl Row {
         let mut current = self;
         loop {
             match current {
-                Row::Empty | Row::Var(_) => return out,
-                Row::Extend { label, ty, tail } => {
+                | Row::Empty | Row::Var(_) => return out,
+                | Row::Extend { label, ty, tail } => {
                     out.push((label.clone(), (**ty).clone()));
                     current = tail;
-                }
+                },
             }
         }
     }
@@ -484,26 +526,29 @@ impl Row {
         let mut current = self;
         loop {
             match current {
-                Row::Empty => return None,
-                Row::Var(id) => return Some(*id),
-                Row::Extend { tail, .. } => current = tail,
+                | Row::Empty => return None,
+                | Row::Var(id) => return Some(*id),
+                | Row::Extend { tail, .. } => current = tail,
             }
         }
     }
 
     /// The type of a field, if present.
     #[must_use]
-    pub fn field(&self, name: &str) -> Option<&Type> {
+    pub fn field(
+        &self,
+        name: &str,
+    ) -> Option<&Type> {
         let mut current = self;
         loop {
             match current {
-                Row::Empty | Row::Var(_) => return None,
-                Row::Extend { label, ty, tail } => {
+                | Row::Empty | Row::Var(_) => return None,
+                | Row::Extend { label, ty, tail } => {
                     if label == name {
                         return Some(ty);
                     }
                     current = tail;
-                }
+                },
             }
         }
     }
@@ -515,14 +560,14 @@ impl Row {
         let mut current = self;
         loop {
             match current {
-                Row::Empty | Row::Var(_) => return None,
-                Row::Extend { label, tail, .. } => {
+                | Row::Empty | Row::Var(_) => return None,
+                | Row::Extend { label, tail, .. } => {
                     if seen.contains(&label.as_str()) {
                         return Some(label.clone());
                     }
                     seen.push(label);
                     current = tail;
-                }
+                },
             }
         }
     }
@@ -532,33 +577,46 @@ impl Row {
     /// A label already present is *replaced* — that is record update, not a
     /// duplicate.
     #[must_use]
-    pub fn update(self, label: &str, ty: Type) -> Self {
+    pub fn update(
+        self,
+        label: &str,
+        ty: Type,
+    ) -> Self {
         match self {
-            Row::Extend {
+            | Row::Extend {
                 label: existing,
                 ty: existing_ty,
                 tail,
             } => {
                 let tail = tail.update(label, ty.clone());
-                let ty = if existing == label { ty } else { *existing_ty };
+                let ty = if existing == label {
+                    ty
+                } else {
+                    *existing_ty
+                };
                 Row::Extend {
                     label: existing,
                     ty: Box::new(ty),
                     tail: Box::new(tail),
                 }
-            }
-            Row::Var(id) => Row::Var(id),
-            Row::Empty => Row::Extend {
-                label: label.to_string(),
-                ty: Box::new(ty),
-                tail: Box::new(Row::Empty),
+            },
+            | Row::Var(id) => Row::Var(id),
+            | Row::Empty => {
+                Row::Extend {
+                    label: label.to_string(),
+                    ty: Box::new(ty),
+                    tail: Box::new(Row::Empty),
+                }
             },
         }
     }
 }
 
 impl fmt::Display for Row {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         let fields = self.fields();
         for (index, (label, ty)) in fields.iter().enumerate() {
             if index > 0 {
@@ -567,13 +625,13 @@ impl fmt::Display for Row {
             write!(f, "{label}: {ty}")?;
         }
         match self.tail_var() {
-            Some(id) => {
+            | Some(id) => {
                 if !fields.is_empty() {
                     f.write_str(", ")?;
                 }
                 write!(f, "...r{id}")
-            }
-            None => Ok(()),
+            },
+            | None => Ok(()),
         }
     }
 }
@@ -647,7 +705,10 @@ impl Type {
 
     /// A scalar with a representation and dimension.
     #[must_use]
-    pub fn scalar(rep: Rep, dim: Dim) -> Self {
+    pub fn scalar(
+        rep: Rep,
+        dim: Dim,
+    ) -> Self {
         Self::Scalar(rep, dim)
     }
 
@@ -671,7 +732,10 @@ impl Type {
 
     /// `Tensor<shape, elem>`.
     #[must_use]
-    pub fn tensor(shape: Shape, elem: Type) -> Self {
+    pub fn tensor(
+        shape: Shape,
+        elem: Type,
+    ) -> Self {
         Self::Tensor {
             shape,
             elem: Box::new(elem),
@@ -680,13 +744,19 @@ impl Type {
 
     /// A rank-only tensor.
     #[must_use]
-    pub fn tensor_rank(rank: u32, elem: Type) -> Self {
+    pub fn tensor_rank(
+        rank: u32,
+        elem: Type,
+    ) -> Self {
         Self::tensor(Shape::Rank(rank), elem)
     }
 
     /// A function type.
     #[must_use]
-    pub fn func(args: Vec<Type>, ret: Type) -> Self {
+    pub fn func(
+        args: Vec<Type>,
+        ret: Type,
+    ) -> Self {
         Self::Fn(args, Box::new(ret))
     }
 
@@ -710,7 +780,10 @@ impl Type {
 
     /// `Result<τ, ε>` as an ADT reference.
     #[must_use]
-    pub fn result(ok: Type, err: Type) -> Self {
+    pub fn result(
+        ok: Type,
+        err: Type,
+    ) -> Self {
         Self::Adt(crate::adt::RESULT_ID, vec![ok, err])
     }
 
@@ -718,8 +791,8 @@ impl Type {
     #[must_use]
     pub fn as_scalar(&self) -> Option<(Rep, &Dim)> {
         match self {
-            Self::Scalar(rep, dim) => Some((*rep, dim)),
-            _ => None,
+            | Self::Scalar(rep, dim) => Some((*rep, dim)),
+            | _ => None,
         }
     }
 
@@ -737,27 +810,38 @@ impl Type {
 
     /// Substitutes ADT/alias parameters (type-kinded positions only).
     #[must_use]
-    pub fn substitute_params(&self, args: &[Type]) -> Type {
+    pub fn substitute_params(
+        &self,
+        args: &[Type],
+    ) -> Type {
         match self {
-            Self::Param(index) => args
-                .get(usize::try_from(*index).unwrap_or(usize::MAX))
-                .cloned()
-                .unwrap_or(Type::Error),
-            Self::Scalar(rep, dim) => Self::Scalar(*rep, dim.clone()),
-            Self::Tensor { shape, elem } => Self::Tensor {
-                shape: shape.clone(),
-                elem: Box::new(elem.substitute_params(args)),
+            | Self::Param(index) => {
+                args.get(usize::try_from(*index).unwrap_or(usize::MAX))
+                    .cloned()
+                    .unwrap_or(Type::Error)
             },
-            Self::Fn(params, ret) => Self::Fn(
-                params.iter().map(|p| p.substitute_params(args)).collect(),
-                Box::new(ret.substitute_params(args)),
-            ),
-            Self::Record(row) => Self::Record(row.substitute_params(args)),
-            Self::Adt(id, values) => {
-                Self::Adt(*id, values.iter().map(|v| v.substitute_params(args)).collect())
-            }
-            Self::Io(inner) => Self::Io(Box::new(inner.substitute_params(args))),
-            other => other.clone(),
+            | Self::Scalar(rep, dim) => Self::Scalar(*rep, dim.clone()),
+            | Self::Tensor { shape, elem } => {
+                Self::Tensor {
+                    shape: shape.clone(),
+                    elem: Box::new(elem.substitute_params(args)),
+                }
+            },
+            | Self::Fn(params, ret) => {
+                Self::Fn(
+                    params.iter().map(|p| p.substitute_params(args)).collect(),
+                    Box::new(ret.substitute_params(args)),
+                )
+            },
+            | Self::Record(row) => Self::Record(row.substitute_params(args)),
+            | Self::Adt(id, values) => {
+                Self::Adt(
+                    *id,
+                    values.iter().map(|v| v.substitute_params(args)).collect(),
+                )
+            },
+            | Self::Io(inner) => Self::Io(Box::new(inner.substitute_params(args))),
+            | other => other.clone(),
         }
     }
 
@@ -777,39 +861,47 @@ impl Type {
         rows: &std::collections::HashMap<u32, Row>,
     ) -> Type {
         match self {
-            Self::Param(index) => types
-                .get(usize::try_from(*index).unwrap_or(usize::MAX))
-                .cloned()
-                .flatten()
-                .unwrap_or(Type::Error),
-            Self::Scalar(rep, dim) => {
-                Self::Scalar(*rep, dim.substitute(|id| dims.get(&id).cloned()))
-            }
-            Self::Tensor { shape, elem } => Self::Tensor {
-                shape: shape.substitute_nats(nats),
-                elem: Box::new(elem.substitute_kinded(types, dims, nats, rows)),
+            | Self::Param(index) => {
+                types
+                    .get(usize::try_from(*index).unwrap_or(usize::MAX))
+                    .cloned()
+                    .flatten()
+                    .unwrap_or(Type::Error)
             },
-            Self::Fn(params, ret) => Self::Fn(
-                params
-                    .iter()
-                    .map(|param| param.substitute_kinded(types, dims, nats, rows))
-                    .collect(),
-                Box::new(ret.substitute_kinded(types, dims, nats, rows)),
-            ),
-            Self::Record(row) => Self::Record(row.substitute_kinded(types, dims, nats, rows)),
-            Self::Adt(id, values) => Self::Adt(
-                *id,
-                values
-                    .iter()
-                    .map(|value| value.substitute_kinded(types, dims, nats, rows))
-                    .collect(),
-            ),
-            Self::Io(inner) => {
+            | Self::Scalar(rep, dim) => {
+                Self::Scalar(*rep, dim.substitute(|id| dims.get(&id).cloned()))
+            },
+            | Self::Tensor { shape, elem } => {
+                Self::Tensor {
+                    shape: shape.substitute_nats(nats),
+                    elem: Box::new(elem.substitute_kinded(types, dims, nats, rows)),
+                }
+            },
+            | Self::Fn(params, ret) => {
+                Self::Fn(
+                    params
+                        .iter()
+                        .map(|param| param.substitute_kinded(types, dims, nats, rows))
+                        .collect(),
+                    Box::new(ret.substitute_kinded(types, dims, nats, rows)),
+                )
+            },
+            | Self::Record(row) => Self::Record(row.substitute_kinded(types, dims, nats, rows)),
+            | Self::Adt(id, values) => {
+                Self::Adt(
+                    *id,
+                    values
+                        .iter()
+                        .map(|value| value.substitute_kinded(types, dims, nats, rows))
+                        .collect(),
+                )
+            },
+            | Self::Io(inner) => {
                 Self::Io(Box::new(inner.substitute_kinded(types, dims, nats, rows)))
-            }
-            Self::Point(dim) => Self::Point(dim.substitute(|id| dims.get(&id).cloned())),
-            Self::UnitOf(dim) => Self::UnitOf(dim.substitute(|id| dims.get(&id).cloned())),
-            other => other.clone(),
+            },
+            | Self::Point(dim) => Self::Point(dim.substitute(|id| dims.get(&id).cloned())),
+            | Self::UnitOf(dim) => Self::UnitOf(dim.substitute(|id| dims.get(&id).cloned())),
+            | other => other.clone(),
         }
     }
 }
@@ -817,14 +909,19 @@ impl Type {
 impl Row {
     /// Substitutes ADT/alias parameters inside the row.
     #[must_use]
-    pub fn substitute_params(&self, args: &[Type]) -> Row {
+    pub fn substitute_params(
+        &self,
+        args: &[Type],
+    ) -> Row {
         match self {
-            Self::Empty => Self::Empty,
-            Self::Var(id) => Self::Var(*id),
-            Self::Extend { label, ty, tail } => Self::Extend {
-                label: label.clone(),
-                ty: Box::new(ty.substitute_params(args)),
-                tail: Box::new(tail.substitute_params(args)),
+            | Self::Empty => Self::Empty,
+            | Self::Var(id) => Self::Var(*id),
+            | Self::Extend { label, ty, tail } => {
+                Self::Extend {
+                    label: label.clone(),
+                    ty: Box::new(ty.substitute_params(args)),
+                    tail: Box::new(tail.substitute_params(args)),
+                }
             },
         }
     }
@@ -839,42 +936,47 @@ impl Row {
         rows: &std::collections::HashMap<u32, Row>,
     ) -> Row {
         match self {
-            Self::Empty => Self::Empty,
-            Self::Var(id) => rows.get(id).cloned().unwrap_or_else(|| self.clone()),
-            Self::Extend { label, ty, tail } => Self::Extend {
-                label: label.clone(),
-                ty: Box::new(ty.substitute_kinded(types, dims, nats, rows)),
-                tail: Box::new(tail.substitute_kinded(types, dims, nats, rows)),
+            | Self::Empty => Self::Empty,
+            | Self::Var(id) => rows.get(id).cloned().unwrap_or_else(|| self.clone()),
+            | Self::Extend { label, ty, tail } => {
+                Self::Extend {
+                    label: label.clone(),
+                    ty: Box::new(ty.substitute_kinded(types, dims, nats, rows)),
+                    tail: Box::new(tail.substitute_kinded(types, dims, nats, rows)),
+                }
             },
         }
     }
 }
 
 impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Scalar(Rep::Int, dim) if dim.is_one() => f.write_str("Int"),
-            Self::Scalar(Rep::Real, dim) => {
+            | Self::Scalar(Rep::Int, dim) if dim.is_one() => f.write_str("Int"),
+            | Self::Scalar(Rep::Real, dim) => {
                 f.write_str("Real")?;
                 write_dim(f, dim)
-            }
-            Self::Scalar(Rep::Float, dim) => {
+            },
+            | Self::Scalar(Rep::Float, dim) => {
                 f.write_str("Float")?;
                 write_dim(f, dim)
-            }
-            Self::Scalar(Rep::Complex, dim) => {
+            },
+            | Self::Scalar(Rep::Complex, dim) => {
                 f.write_str("Complex")?;
                 write_dim(f, dim)
-            }
-            Self::Scalar(rep, dim) => write!(f, "Scalar<{rep}, {dim}>"),
-            Self::Bool => f.write_str("Bool"),
-            Self::Prop => f.write_str("Prop"),
-            Self::Str => f.write_str("String"),
-            Self::Unit => f.write_str("()"),
-            Self::Tensor { shape, elem } => write!(f, "Tensor<{shape}, {elem}>"),
-            Self::Point(dim) => write!(f, "Point[{dim}]"),
-            Self::UnitOf(dim) => write!(f, "Unit[{dim}]"),
-            Self::Fn(params, ret) => {
+            },
+            | Self::Scalar(rep, dim) => write!(f, "Scalar<{rep}, {dim}>"),
+            | Self::Bool => f.write_str("Bool"),
+            | Self::Prop => f.write_str("Prop"),
+            | Self::Str => f.write_str("String"),
+            | Self::Unit => f.write_str("()"),
+            | Self::Tensor { shape, elem } => write!(f, "Tensor<{shape}, {elem}>"),
+            | Self::Point(dim) => write!(f, "Point[{dim}]"),
+            | Self::UnitOf(dim) => write!(f, "Unit[{dim}]"),
+            | Self::Fn(params, ret) => {
                 if params.len() == 1 {
                     write!(f, "{} -> {ret}", params[0])
                 } else {
@@ -887,9 +989,9 @@ impl fmt::Display for Type {
                     }
                     write!(f, ") -> {ret}")
                 }
-            }
-            Self::Record(row) => write!(f, "{{ {row} }}"),
-            Self::Adt(id, args) => {
+            },
+            | Self::Record(row) => write!(f, "{{ {row} }}"),
+            | Self::Adt(id, args) => {
                 let name = crate::adt::name_of(*id);
                 if args.is_empty() {
                     f.write_str(&name)
@@ -903,17 +1005,20 @@ impl fmt::Display for Type {
                     }
                     f.write_str(">")
                 }
-            }
-            Self::Io(inner) => write!(f, "IO {inner}"),
-            Self::Dyn(rep) => write!(f, "Dyn<{rep}>"),
-            Self::Var(id) => write!(f, "t{id}"),
-            Self::Param(id) => write!(f, "p{id}"),
-            Self::Error => f.write_str("<error>"),
+            },
+            | Self::Io(inner) => write!(f, "IO {inner}"),
+            | Self::Dyn(rep) => write!(f, "Dyn<{rep}>"),
+            | Self::Var(id) => write!(f, "t{id}"),
+            | Self::Param(id) => write!(f, "p{id}"),
+            | Self::Error => f.write_str("<error>"),
         }
     }
 }
 
-fn write_dim(f: &mut fmt::Formatter<'_>, dim: &Dim) -> fmt::Result {
+fn write_dim(
+    f: &mut fmt::Formatter<'_>,
+    dim: &Dim,
+) -> fmt::Result {
     if dim.is_one() {
         return Ok(());
     }
@@ -930,17 +1035,19 @@ fn render_dim(dim: &Dim) -> String {
     let mut denominator = Vec::new();
     for (atom, exponent) in dim.factors() {
         let symbol = match atom {
-            aevia_dim::Atom::Base(name) => match &**name {
-                "Length" => "L",
-                "Mass" => "M",
-                "Time" => "T",
-                "Current" => "I",
-                "Temperature" => "Θ",
-                "Amount" => "Amt",
-                "Luminosity" => "Lum",
-                other => other,
+            | aevia_dim::Atom::Base(name) => {
+                match &**name {
+                    | "Length" => "L",
+                    | "Mass" => "M",
+                    | "Time" => "T",
+                    | "Current" => "I",
+                    | "Temperature" => "Θ",
+                    | "Amount" => "Amt",
+                    | "Luminosity" => "Lum",
+                    | other => other,
+                }
             },
-            aevia_dim::Atom::Var(id) => {
+            | aevia_dim::Atom::Var(id) => {
                 let symbol = format!("d{id}");
                 let magnitude = exponent.abs();
                 let text = if magnitude.is_one() {
@@ -958,7 +1065,7 @@ fn render_dim(dim: &Dim) -> String {
                     numerator.push(text);
                 }
                 continue;
-            }
+            },
         };
         let target = if exponent.is_negative() {
             &mut denominator
@@ -1004,7 +1111,10 @@ pub struct Constraint {
 impl Constraint {
     /// A one-parameter constraint such as `Show a`.
     #[must_use]
-    pub fn new(class: impl Into<String>, args: Vec<Type>) -> Self {
+    pub fn new(
+        class: impl Into<String>,
+        args: Vec<Type>,
+    ) -> Self {
         Self {
             class: class.into(),
             args,
@@ -1013,7 +1123,10 @@ impl Constraint {
 }
 
 impl fmt::Display for Constraint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(&self.class)?;
         for arg in &self.args {
             write!(f, " {arg}")?;
@@ -1059,7 +1172,10 @@ impl Scheme {
 
     /// A scheme quantified over type variables.
     #[must_use]
-    pub fn poly(vars: Vec<u32>, ty: Type) -> Self {
+    pub fn poly(
+        vars: Vec<u32>,
+        ty: Type,
+    ) -> Self {
         Self {
             vars,
             dims: Vec::new(),
@@ -1072,7 +1188,10 @@ impl Scheme {
 
     /// Attaches class constraints.
     #[must_use]
-    pub fn constrained(mut self, constraints: Vec<Constraint>) -> Self {
+    pub fn constrained(
+        mut self,
+        constraints: Vec<Constraint>,
+    ) -> Self {
         self.constraints = constraints;
         self
     }
@@ -1090,7 +1209,10 @@ impl Scheme {
 }
 
 impl fmt::Display for Scheme {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         if !self.constraints.is_empty() {
             let rendered: Vec<String> = self.constraints.iter().map(ToString::to_string).collect();
             write!(f, "{} => ", rendered.join(", "))?;

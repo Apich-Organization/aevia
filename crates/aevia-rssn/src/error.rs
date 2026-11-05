@@ -68,7 +68,10 @@ pub struct KernelError {
 impl KernelError {
     /// A failure with a code and a message.
     #[must_use]
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
             message: message.into(),
@@ -81,7 +84,11 @@ impl KernelError {
 
     /// A failure with a code, a message and a kind.
     #[must_use]
-    pub fn of(code: &'static str, kind: Failure, message: impl Into<String>) -> Self {
+    pub fn of(
+        code: &'static str,
+        kind: Failure,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
             message: message.into(),
@@ -94,7 +101,10 @@ impl KernelError {
 
     /// Adds the operator whose call failed.
     #[must_use]
-    pub fn at_operator(mut self, operator: &str) -> Self {
+    pub fn at_operator(
+        mut self,
+        operator: &str,
+    ) -> Self {
         self.operator = Some(operator.to_string());
         self
     }
@@ -105,7 +115,10 @@ impl KernelError {
     /// program's, so it becomes `E0899` with [`Failure::Kernel`] whatever code
     /// the message was given: the runtime has to stop, not retry.
     #[must_use]
-    pub fn caused_by(mut self, error: &OpError) -> Self {
+    pub fn caused_by(
+        mut self,
+        error: &OpError,
+    ) -> Self {
         if matches!(
             error,
             OpError::Internal(_) | OpError::Host(_) | OpError::Codec(_)
@@ -121,35 +134,43 @@ impl KernelError {
     /// rssn type.
     #[must_use]
     pub fn variant(&self) -> Option<&'static str> {
-        self.cause.as_deref().map(|error| match error {
-            OpError::UnknownOp(_) => "UnknownOp",
-            OpError::Arity { .. } => "Arity",
-            OpError::Type { .. } => "Type",
-            OpError::Ambiguous { .. } => "Ambiguous",
-            OpError::Dimension(_) => "Dimension",
-            OpError::NotNumeric(_) => "NotNumeric",
-            OpError::NotReduced(_) => "NotReduced",
-            OpError::Domain(_) => "Domain",
-            OpError::BudgetExceeded => "BudgetExceeded",
-            OpError::Unsupported { .. } => "Unsupported",
-            OpError::Plugin(_) => "Plugin",
-            OpError::ForeignTerm { .. } => "ForeignTerm",
-            OpError::Codec(_) => "Codec",
-            OpError::Host(_) => "Host",
-            OpError::Internal(_) => "Internal",
+        self.cause.as_deref().map(|error| {
+            match error {
+                | OpError::UnknownOp(_) => "UnknownOp",
+                | OpError::Arity { .. } => "Arity",
+                | OpError::Type { .. } => "Type",
+                | OpError::Ambiguous { .. } => "Ambiguous",
+                | OpError::Dimension(_) => "Dimension",
+                | OpError::NotNumeric(_) => "NotNumeric",
+                | OpError::NotReduced(_) => "NotReduced",
+                | OpError::Domain(_) => "Domain",
+                | OpError::BudgetExceeded => "BudgetExceeded",
+                | OpError::Unsupported { .. } => "Unsupported",
+                | OpError::Plugin(_) => "Plugin",
+                | OpError::ForeignTerm { .. } => "ForeignTerm",
+                | OpError::Codec(_) => "Codec",
+                | OpError::Host(_) => "Host",
+                | OpError::Internal(_) => "Internal",
+            }
         })
     }
 
     /// Adds a suggestion.
     #[must_use]
-    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+    pub fn with_help(
+        mut self,
+        help: impl Into<String>,
+    ) -> Self {
         self.help = Some(help.into());
         self
     }
 
     /// A handle that outlived its session.
     #[must_use]
-    pub fn stale_term(sym: Sym, session: u64) -> Self {
+    pub fn stale_term(
+        sym: Sym,
+        session: u64,
+    ) -> Self {
         Self::of(
             "E0899",
             Failure::Stale,
@@ -167,7 +188,10 @@ impl KernelError {
     /// node is gone (a `reset`, a `fork` that was never merged, a handle from a
     /// session that has since been replaced).
     #[must_use]
-    pub fn foreign(sym: Sym, operation: &str) -> Self {
+    pub fn foreign(
+        sym: Sym,
+        operation: &str,
+    ) -> Self {
         Self::of(
             "E0899",
             Failure::Stale,
@@ -198,7 +222,10 @@ impl KernelError {
 }
 
 impl std::fmt::Display for KernelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "{}: {}", self.code, self.message)
     }
 }
@@ -217,91 +244,105 @@ pub fn from_op_error(error: &OpError) -> KernelError {
 
 fn classify(error: &OpError) -> KernelError {
     match error {
-        OpError::UnknownOp(key) => KernelError::of(
-            "E1003",
-            Failure::Unknown,
-            format!("rssn has no operator `{}`", key.qualified()),
-        )
-        .with_help("check the name against `Rssn.operators`, or use `Rssn.dynamic`"),
-        OpError::Arity { expected, got } => KernelError::of(
-            "E1003",
-            Failure::Type,
-            format!("operator takes {expected:?} arguments, got {got}"),
-        ),
-        OpError::Type {
-            expected,
-            got,
-            arg,
-        } => KernelError::of(
-            "E0302",
-            Failure::Type,
-            format!("argument {arg} is {got:?}, expected {expected:?}"),
-        ),
-        OpError::Ambiguous { name, count } => KernelError::of(
-            "E1002",
-            Failure::Ambiguous,
-            format!("{count} overloads of `{name}` match equally well"),
-        )
-        .with_help("annotate the arguments so one overload is strictly more specific"),
-        OpError::Dimension(dimension) => KernelError::of(
-            "E0401",
-            Failure::Type,
-            format!("dimension error: {dimension}"),
-        ),
-        OpError::NotNumeric(what) => KernelError::of(
-            "E0803",
-            Failure::Other,
-            format!("`{what}` has no numeric value"),
-        ),
-        OpError::NotReduced(what) => KernelError::of(
-            "E0807",
-            Failure::Other,
-            format!("`{what}` did not reduce to a closed form"),
-        )
-        .with_help("try `nsolve` for a numeric root, or `approx` for a value"),
-        OpError::Domain(what) => {
+        | OpError::UnknownOp(key) => {
+            KernelError::of(
+                "E1003",
+                Failure::Unknown,
+                format!("rssn has no operator `{}`", key.qualified()),
+            )
+            .with_help("check the name against `Rssn.operators`, or use `Rssn.dynamic`")
+        },
+        | OpError::Arity { expected, got } => {
+            KernelError::of(
+                "E1003",
+                Failure::Type,
+                format!("operator takes {expected:?} arguments, got {got}"),
+            )
+        },
+        | OpError::Type { expected, got, arg } => {
+            KernelError::of(
+                "E0302",
+                Failure::Type,
+                format!("argument {arg} is {got:?}, expected {expected:?}"),
+            )
+        },
+        | OpError::Ambiguous { name, count } => {
+            KernelError::of(
+                "E1002",
+                Failure::Ambiguous,
+                format!("{count} overloads of `{name}` match equally well"),
+            )
+            .with_help("annotate the arguments so one overload is strictly more specific")
+        },
+        | OpError::Dimension(dimension) => {
+            KernelError::of(
+                "E0401",
+                Failure::Type,
+                format!("dimension error: {dimension}"),
+            )
+        },
+        | OpError::NotNumeric(what) => {
+            KernelError::of(
+                "E0803",
+                Failure::Other,
+                format!("`{what}` has no numeric value"),
+            )
+        },
+        | OpError::NotReduced(what) => {
+            KernelError::of(
+                "E0807",
+                Failure::Other,
+                format!("`{what}` did not reduce to a closed form"),
+            )
+            .with_help("try `nsolve` for a numeric root, or `approx` for a value")
+        },
+        | OpError::Domain(what) => {
             KernelError::of("E0806", Failure::Other, format!("out of domain: {what}"))
-        }
-        OpError::BudgetExceeded => KernelError::of(
-            "E0808",
-            Failure::Other,
-            "the rewrite budget ran out before a closed form was found",
-        )
-        .with_help("raise the budget with `Rssn.budget(n)`"),
+        },
+        | OpError::BudgetExceeded => {
+            KernelError::of(
+                "E0808",
+                Failure::Other,
+                "the rewrite budget ran out before a closed form was found",
+            )
+            .with_help("raise the budget with `Rssn.budget(n)`")
+        },
         // A backend that cannot execute an operator is a capability gap, not a
         // wrong program: the code names it so a user can tell the two apart.
-        OpError::Unsupported { backend, feature } => KernelError::of(
-            "E1001",
-            Failure::Capability,
-            format!("the `{backend}` backend does not support `{feature}`"),
-        )
-        .with_help("this is a gap in the build, not in the program"),
-        OpError::Plugin(error) => KernelError::of(
-            "E1006",
-            Failure::Capability,
-            format!("plugin failure: {error:?}"),
-        ),
-        OpError::ForeignTerm { expected, got } => KernelError::of(
-            "E0899",
-            Failure::Stale,
-            format!(
-                "a term handle from session {} reached session {}",
-                expected.0, got.0
-            ),
-        ),
-        OpError::Codec(error) => KernelError::of(
-            "E0899",
-            Failure::Other,
-            format!("codec failure: {error:?}"),
-        ),
-        OpError::Host(message) => KernelError::of(
-            "E0899",
-            Failure::Other,
-            format!("host callback: {message}"),
-        ),
-        OpError::Internal(message) => {
+        | OpError::Unsupported { backend, feature } => {
+            KernelError::of(
+                "E1001",
+                Failure::Capability,
+                format!("the `{backend}` backend does not support `{feature}`"),
+            )
+            .with_help("this is a gap in the build, not in the program")
+        },
+        | OpError::Plugin(error) => {
+            KernelError::of(
+                "E1006",
+                Failure::Capability,
+                format!("plugin failure: {error:?}"),
+            )
+        },
+        | OpError::ForeignTerm { expected, got } => {
+            KernelError::of(
+                "E0899",
+                Failure::Stale,
+                format!(
+                    "a term handle from session {} reached session {}",
+                    expected.0, got.0
+                ),
+            )
+        },
+        | OpError::Codec(error) => {
+            KernelError::of("E0899", Failure::Other, format!("codec failure: {error:?}"))
+        },
+        | OpError::Host(message) => {
+            KernelError::of("E0899", Failure::Other, format!("host callback: {message}"))
+        },
+        | OpError::Internal(message) => {
             KernelError::of("E0899", Failure::Kernel, format!("rssn: {message}"))
-        }
+        },
     }
 }
 
@@ -310,31 +351,37 @@ fn classify(error: &OpError) -> KernelError {
 pub fn from_compute_error(error: &rssn::api::ComputeError) -> KernelError {
     use rssn::api::ComputeError;
     match error {
-        ComputeError::Dimension(dimension) => KernelError::of(
-            "E0401",
-            Failure::Type,
-            format!("dimension error: {dimension}"),
-        ),
-        ComputeError::NotNumeric(what) => KernelError::of(
-            "E0803",
-            Failure::Other,
-            format!("`{what}` has no numeric value"),
-        ),
-        ComputeError::Inconsistent(what) => KernelError::of(
-            "E0809",
-            Failure::Other,
-            format!("the kernel produced an inconsistent result: {what}"),
-        ),
-        ComputeError::Rule(message) => KernelError::of(
-            "E0899",
-            Failure::Other,
-            format!("rule failure: {message}"),
-        ),
-        ComputeError::UnknownOperator(name) => KernelError::of(
-            "E1003",
-            Failure::Unknown,
-            format!("rssn has no operator `{name}`"),
-        ),
-        other => KernelError::of("E0899", Failure::Other, format!("rssn: {other}")),
+        | ComputeError::Dimension(dimension) => {
+            KernelError::of(
+                "E0401",
+                Failure::Type,
+                format!("dimension error: {dimension}"),
+            )
+        },
+        | ComputeError::NotNumeric(what) => {
+            KernelError::of(
+                "E0803",
+                Failure::Other,
+                format!("`{what}` has no numeric value"),
+            )
+        },
+        | ComputeError::Inconsistent(what) => {
+            KernelError::of(
+                "E0809",
+                Failure::Other,
+                format!("the kernel produced an inconsistent result: {what}"),
+            )
+        },
+        | ComputeError::Rule(message) => {
+            KernelError::of("E0899", Failure::Other, format!("rule failure: {message}"))
+        },
+        | ComputeError::UnknownOperator(name) => {
+            KernelError::of(
+                "E1003",
+                Failure::Unknown,
+                format!("rssn has no operator `{name}`"),
+            )
+        },
+        | other => KernelError::of("E0899", Failure::Other, format!("rssn: {other}")),
     }
 }

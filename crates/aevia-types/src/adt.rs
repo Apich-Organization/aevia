@@ -5,11 +5,13 @@
 //! and `Ordering`, whose ids are fixed constants so that `Type::option` can be
 //! built without touching the registry.
 
+use crate::keys::AdtKey;
+use crate::keys::ModulePath;
 pub use crate::ty::AdtId;
-use crate::keys::{AdtKey, ModulePath};
 use crate::ty::Type;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
+use std::sync::RwLock;
 
 /// `Option<a>`.
 pub const OPTION_ID: AdtId = 0;
@@ -45,7 +47,10 @@ pub fn key_of(id: AdtId) -> AdtKey {
 }
 
 /// Records the module that declares an allocated type.
-pub fn set_module(id: AdtId, module: ModulePath) {
+pub fn set_module(
+    id: AdtId,
+    module: ModulePath,
+) {
     if let Ok(mut table) = modules().write() {
         table.insert(id, module);
     }
@@ -67,7 +72,10 @@ fn param_kinds() -> &'static RwLock<HashMap<AdtId, Vec<ParamKind>>> {
 }
 
 /// Records the parameter kinds of a variant type.
-pub fn set_param_kinds(id: AdtId, kinds: Vec<ParamKind>) {
+pub fn set_param_kinds(
+    id: AdtId,
+    kinds: Vec<ParamKind>,
+) {
     if let Ok(mut table) = param_kinds().write() {
         table.insert(id, kinds);
     }
@@ -193,7 +201,10 @@ pub fn intern(adt: Adt) -> AdtId {
 ///
 /// Panics when the registry lock is poisoned.
 #[must_use]
-pub fn allocate(name: &str, params: Vec<String>) -> AdtId {
+pub fn allocate(
+    name: &str,
+    params: Vec<String>,
+) -> AdtId {
     allocate_in(ModulePath::prelude(), name, params)
 }
 
@@ -204,7 +215,11 @@ pub fn allocate(name: &str, params: Vec<String>) -> AdtId {
 ///
 /// Panics when the registry lock is poisoned.
 #[must_use]
-pub fn allocate_in(module: ModulePath, name: &str, params: Vec<String>) -> AdtId {
+pub fn allocate_in(
+    module: ModulePath,
+    name: &str,
+    params: Vec<String>,
+) -> AdtId {
     let mut guard = registry().write().expect("adt registry is not poisoned");
     let id = u32::try_from(guard.len()).unwrap_or(u32::MAX);
     guard.push(Adt {
@@ -220,9 +235,15 @@ pub fn allocate_in(module: ModulePath, name: &str, params: Vec<String>) -> AdtId
 ///
 /// Declaring a recursive type requires the name to exist before its fields are
 /// converted (§3.6.4), which is why allocation and construction are two steps.
-pub fn set_ctors(id: AdtId, ctors: Vec<Ctor>) {
+pub fn set_ctors(
+    id: AdtId,
+    ctors: Vec<Ctor>,
+) {
     if let Ok(mut guard) = registry().write() {
-        if let Some(entry) = usize::try_from(id).ok().and_then(|index| guard.get_mut(index)) {
+        if let Some(entry) = usize::try_from(id)
+            .ok()
+            .and_then(|index| guard.get_mut(index))
+        {
             entry.ctors = ctors;
         }
     }
@@ -243,7 +264,10 @@ pub fn name_of(id: AdtId) -> String {
 
 /// The index of a constructor inside its type.
 #[must_use]
-pub fn ctor_index(id: AdtId, name: &str) -> Option<usize> {
+pub fn ctor_index(
+    id: AdtId,
+    name: &str,
+) -> Option<usize> {
     let adt = get(id)?;
     adt.ctors.iter().position(|ctor| ctor.name == name)
 }

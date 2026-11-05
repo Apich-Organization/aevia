@@ -12,7 +12,11 @@
 //! that is not JSON is reported as an error the caller can answer and then
 //! continue: the frame was consumed, so the next message is still in sync.
 
-use std::io::{self, BufRead, Write};
+use std::io::BufRead;
+use std::io::Write;
+use std::io::{
+    self,
+};
 
 /// Why a message could not be read or written.
 #[derive(Debug)]
@@ -26,11 +30,14 @@ pub enum TransportError {
 }
 
 impl std::fmt::Display for TransportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
-            Self::Io(error) => write!(f, "transport: {error}"),
-            Self::MissingLength => f.write_str("transport: a message had no Content-Length"),
-            Self::Json(error) => write!(f, "transport: the body was not JSON: {error}"),
+            | Self::Io(error) => write!(f, "transport: {error}"),
+            | Self::MissingLength => f.write_str("transport: a message had no Content-Length"),
+            | Self::Json(error) => write!(f, "transport: the body was not JSON: {error}"),
         }
     }
 }
@@ -93,12 +100,18 @@ fn read_line(reader: &mut impl BufRead) -> Result<Option<String>, TransportError
     if read == 0 {
         return Ok(None);
     }
-    while bytes.last().is_some_and(|byte| *byte == b'\n' || *byte == b'\r') {
+    while bytes
+        .last()
+        .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+    {
         bytes.pop();
     }
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|_| TransportError::Io(io::Error::new(io::ErrorKind::InvalidData, "a header line was not UTF-8")))
+    String::from_utf8(bytes).map(Some).map_err(|_| {
+        TransportError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "a header line was not UTF-8",
+        ))
+    })
 }
 
 /// Frames messages for a writer.
@@ -117,7 +130,10 @@ impl<W: Write> Writer<W> {
     /// # Errors
     ///
     /// The stream's own error.
-    pub fn send(&mut self, message: &serde_json::Value) -> io::Result<()> {
+    pub fn send(
+        &mut self,
+        message: &serde_json::Value,
+    ) -> io::Result<()> {
         let body = serde_json::to_vec(message)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         write!(self.inner, "Content-Length: {}\r\n\r\n", body.len())?;
@@ -182,7 +198,10 @@ mod tests {
         let body = r#"{"id":7}"#;
         let bytes = format!("content-length: {}\n\n{}", body.len(), body).into_bytes();
         let mut reader = Reader::new(Cursor::new(bytes));
-        assert_eq!(reader.next_message().expect("reads").expect("some")["id"], 7);
+        assert_eq!(
+            reader.next_message().expect("reads").expect("some")["id"],
+            7
+        );
     }
 
     #[test]
@@ -194,7 +213,10 @@ mod tests {
             reader.next_message(),
             Err(TransportError::Json(_))
         ));
-        assert_eq!(reader.next_message().expect("reads").expect("some")["id"], 9);
+        assert_eq!(
+            reader.next_message().expect("reads").expect("some")["id"],
+            9
+        );
     }
 
     #[test]

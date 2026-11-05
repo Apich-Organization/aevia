@@ -4,7 +4,9 @@
 //! must land on the name in the file it names, and a rename must produce edits
 //! that leave a program which still checks.
 
-use aevia_analysis::{Analysis, Document, FileEdit};
+use aevia_analysis::Analysis;
+use aevia_analysis::Document;
+use aevia_analysis::FileEdit;
 
 /// A temporary package that removes itself.
 struct Package {
@@ -25,13 +27,20 @@ impl Package {
         Self { root }
     }
 
-    fn write(&self, name: &str, source: &str) -> std::path::PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
         let path = self.root.join(name);
         std::fs::write(&path, source).expect("write source");
         path
     }
 
-    fn path(&self, name: &str) -> std::path::PathBuf {
+    fn path(
+        &self,
+        name: &str,
+    ) -> std::path::PathBuf {
         self.root.join(name)
     }
 }
@@ -52,7 +61,8 @@ struct Imported {
 fn imported(name: &str) -> Imported {
     let package = Package::new(name);
     let a_source = "module A\n\nfn value(): Int = 1\n".to_string();
-    let b_source = "module B\n\nimport A\n\nlet got = A.value()\nlet again = A.value()\n".to_string();
+    let b_source =
+        "module B\n\nimport A\n\nlet got = A.value()\nlet again = A.value()\n".to_string();
     package.write("src/A.aev", &a_source);
     package.write("src/B.aev", &b_source);
     Imported {
@@ -69,7 +79,10 @@ impl Imported {
         (document, path)
     }
 
-    fn text_of(&self, document: &str) -> &str {
+    fn text_of(
+        &self,
+        document: &str,
+    ) -> &str {
         if document.ends_with("A.aev") {
             &self.a_source
         } else {
@@ -78,12 +91,18 @@ impl Imported {
     }
 }
 
-fn offset_of(source: &str, needle: &str) -> u32 {
+fn offset_of(
+    source: &str,
+    needle: &str,
+) -> u32 {
     u32::try_from(source.find(needle).expect("the needle is in the source")).expect("offset")
 }
 
 /// The source text a location covers.
-fn text_at(source: &str, range: aevia_analysis::Range) -> String {
+fn text_at(
+    source: &str,
+    range: aevia_analysis::Range,
+) -> String {
     let document = Document::new("x.aev", 1, source);
     let start = document.offset(range.start).expect("start offset");
     let end = document.offset(range.end).expect("end offset");
@@ -91,7 +110,11 @@ fn text_at(source: &str, range: aevia_analysis::Range) -> String {
 }
 
 /// Applies a rename's edits to one file's text.
-fn apply(text: &str, edits: &[FileEdit], document: &str) -> String {
+fn apply(
+    text: &str,
+    edits: &[FileEdit],
+    document: &str,
+) -> String {
     let mut replacements: Vec<(usize, usize, String)> = edits
         .iter()
         .filter(|edit| edit.document == document)
@@ -114,7 +137,10 @@ fn apply(text: &str, edits: &[FileEdit], document: &str) -> String {
     out
 }
 
-fn renames_in<'a>(edits: &'a [FileEdit], suffix: &str) -> Vec<&'a FileEdit> {
+fn renames_in<'a>(
+    edits: &'a [FileEdit],
+    suffix: &str,
+) -> Vec<&'a FileEdit> {
     edits
         .iter()
         .filter(|edit| edit.document.ends_with(suffix))
@@ -157,7 +183,10 @@ fn references_find_uses_across_imported_modules() {
     // `includeDeclaration: false` drops the declaration.
     let uses = analysis.references(offset_of(&package.b_source, "value"), false);
     assert_eq!(uses.len(), 2, "{uses:#?}");
-    assert!(uses.iter().all(|location| location.document.ends_with("B.aev")));
+    assert!(
+        uses.iter()
+            .all(|location| location.document.ends_with("B.aev"))
+    );
 }
 
 #[test]
@@ -169,9 +198,11 @@ fn references_of_a_local_parameter_stay_in_the_file() {
     let parameter = offset_of(source, "n:");
     let references = analysis.references(parameter, true);
     assert_eq!(references.len(), 3, "{references:#?}");
-    assert!(references
-        .iter()
-        .all(|location| location.document == "p.aev"));
+    assert!(
+        references
+            .iter()
+            .all(|location| location.document == "p.aev")
+    );
     assert_eq!(analysis.references(parameter, false).len(), 2);
 }
 
@@ -234,7 +265,8 @@ fn rename_of_an_imported_function_updates_both_files() {
     package.package.write("src/A.aev", &renamed_a);
     package.package.write("src/B.aev", &renamed_b);
     let renamed_document = Document::new(b_document, 2, &renamed_b);
-    let renamed_analysis = Analysis::from_path(&renamed_document, &package.package.path("src/B.aev"));
+    let renamed_analysis =
+        Analysis::from_path(&renamed_document, &package.package.path("src/B.aev"));
     assert!(renamed_analysis.is_multi_module());
     assert!(
         renamed_analysis.diagnostics().is_empty(),
@@ -270,10 +302,7 @@ fn rename_refuses_a_name_already_exported() {
         "src/A.aev",
         "module A\n\nfn value(): Int = 1\nfn amount(): Int = 2\n",
     );
-    package.write(
-        "src/B.aev",
-        "module B\n\nimport A\n\nlet got = A.value()\n",
-    );
+    package.write("src/B.aev", "module B\n\nimport A\n\nlet got = A.value()\n");
     let path = package.path("src/B.aev");
     let source = std::fs::read_to_string(&path).expect("reads");
     let document = Document::new(path.display().to_string(), 1, &source);
@@ -282,10 +311,10 @@ fn rename_refuses_a_name_already_exported() {
         .rename(offset_of(&source, "value"), "amount")
         .expect_err("the name is taken");
     match error {
-        aevia_analysis::RenameError::Collision(message) => {
+        | aevia_analysis::RenameError::Collision(message) => {
             assert!(message.contains("already declared"), "{message}");
-        }
-        other => panic!("expected a collision, got {other:?}"),
+        },
+        | other => panic!("expected a collision, got {other:?}"),
     }
 }
 
@@ -351,10 +380,10 @@ fn prepare_rename_refuses_prelude_names_and_units() {
         .prepare_rename(offset_of(units, "m"))
         .expect_err("a unit name is not renamable");
     match error {
-        aevia_analysis::RenameError::NotRenamable(message) => {
+        | aevia_analysis::RenameError::NotRenamable(message) => {
             assert!(message.contains("unit"), "{message}");
-        }
-        other => panic!("expected a refusal, got {other:?}"),
+        },
+        | other => panic!("expected a refusal, got {other:?}"),
     }
 }
 
@@ -417,10 +446,10 @@ fn record_field_references_and_rename_stay_in_the_document() {
         .prepare_rename(offset_of(&source, "x"))
         .expect_err("the field belongs to an imported type");
     match error {
-        aevia_analysis::RenameError::NotRenamable(message) => {
+        | aevia_analysis::RenameError::NotRenamable(message) => {
             assert!(message.contains("does not declare"), "{message}");
-        }
-        other => panic!("expected a refusal, got {other:?}"),
+        },
+        | other => panic!("expected a refusal, got {other:?}"),
     }
 }
 
@@ -433,9 +462,9 @@ fn a_field_declared_by_two_types_in_the_document_is_ambiguous() {
         .prepare_rename(offset_of(source, "x"))
         .expect_err("two records declare x");
     match error {
-        aevia_analysis::RenameError::NotRenamable(message) => {
+        | aevia_analysis::RenameError::NotRenamable(message) => {
             assert!(message.contains("several record types"), "{message}");
-        }
-        other => panic!("expected a refusal, got {other:?}"),
+        },
+        | other => panic!("expected a refusal, got {other:?}"),
     }
 }

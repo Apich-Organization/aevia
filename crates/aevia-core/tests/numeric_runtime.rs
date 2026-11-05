@@ -8,9 +8,12 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::builtins::call_simple;
-use aevia_core::value::{make_variant, NativeFn, RecordValue, Value};
 use aevia_core::Interp;
+use aevia_core::builtins::call_simple;
+use aevia_core::value::NativeFn;
+use aevia_core::value::RecordValue;
+use aevia_core::value::Value;
+use aevia_core::value::make_variant;
 use aevia_syntax::Span;
 use aevia_types::adt;
 use indexmap::IndexMap;
@@ -44,14 +47,20 @@ fn none() -> Value {
     make_variant(adt::OPTION_ID, 0, "None", Vec::new())
 }
 
-fn samples(name: &str, args: Vec<Value>) -> Vec<f64> {
+fn samples(
+    name: &str,
+    args: Vec<Value>,
+) -> Vec<f64> {
     let value = call_simple(name, args)
         .unwrap_or_else(|error| panic!("`{name}` failed: {} {}", error.code, error.message));
     tensor_values(value)
 }
 
 /// The same, on one session, so an unseeded call advances that session's RNG.
-fn samples_via(interp: &mut Interp, args: Vec<Value>) -> Vec<f64> {
+fn samples_via(
+    interp: &mut Interp,
+    args: Vec<Value>,
+) -> Vec<f64> {
     let value = interp
         .call_named("sample_n", args, Span::default())
         .unwrap_or_else(|error| panic!("`sample_n` failed: {} {}", error.code, error.message));
@@ -87,7 +96,10 @@ fn a_seeded_sample_is_reproducible() {
 
     // The sample is still inside the distribution's support.
     for value in &first {
-        assert!((0.0..=4.0).contains(value), "sample {value} outside support");
+        assert!(
+            (0.0..=4.0).contains(value),
+            "sample {value} outside support"
+        );
     }
 }
 

@@ -4,9 +4,19 @@
 //! Sources are written as raw strings so their indentation is exactly what the
 //! layout algorithm sees.
 
-use aevia_syntax::{lex, parse_module};
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
+use aevia_types::Capabilities;
+use aevia_types::CheckOptions;
+use aevia_types::CheckedModule;
+use aevia_types::DynPrimitive;
+use aevia_types::Export;
+use aevia_types::HostRegistrationKind;
+use aevia_types::Rep;
+use aevia_types::Shape;
+use aevia_types::Stability;
+use aevia_types::Type;
 use aevia_types::check::check_module;
-use aevia_types::{Capabilities, CheckOptions, CheckedModule, DynPrimitive, Export, HostRegistrationKind, Rep, Shape, Stability, Type};
 
 fn check(source: &str) -> (Vec<String>, CheckedModule) {
     let lexed = lex(0, source).expect("the source lexes");
@@ -64,7 +74,10 @@ fn expect_ok(source: &str) -> CheckedModule {
     module
 }
 
-fn expect_error(source: &str, code: &str) {
+fn expect_error(
+    source: &str,
+    code: &str,
+) {
     let (codes, _) = check(source);
     assert!(
         codes.iter().any(|found| found == code),
@@ -72,10 +85,16 @@ fn expect_error(source: &str, code: &str) {
     );
 }
 
-fn expect_warning(source: &str, code: &str) {
+fn expect_warning(
+    source: &str,
+    code: &str,
+) {
     let lexed = lex(0, source).expect("the source lexes");
     let (module, parse_diagnostics) = parse_module(0, source, &lexed);
-    assert!(!parse_diagnostics.has_errors(), "parse errors: {parse_diagnostics:?}");
+    assert!(
+        !parse_diagnostics.has_errors(),
+        "parse errors: {parse_diagnostics:?}"
+    );
     let result = check_module(0, &module);
     let codes: Vec<String> = result
         .diagnostics
@@ -89,7 +108,10 @@ fn expect_warning(source: &str, code: &str) {
     );
 }
 
-fn expect_any_error(source: &str, code: &str) {
+fn expect_any_error(
+    source: &str,
+    code: &str,
+) {
     let codes = check_any(source);
     assert!(
         codes.iter().any(|found| found == code),
@@ -110,10 +132,13 @@ fn warnings(source: &str) -> Vec<String> {
         .collect()
 }
 
-fn scheme_of(module: &CheckedModule, name: &str) -> aevia_types::Scheme {
+fn scheme_of(
+    module: &CheckedModule,
+    name: &str,
+) -> aevia_types::Scheme {
     match module.exports.get(name) {
-        Some(Export::Value { scheme, .. }) => scheme.clone(),
-        other => panic!("`{name}` is not an exported value: {other:?}"),
+        | Some(Export::Value { scheme, .. }) => scheme.clone(),
+        | other => panic!("`{name}` is not an exported value: {other:?}"),
     }
 }
 
@@ -449,7 +474,10 @@ fn a_negative_exponent_is_exact() {
     // §2.4: `2^-1` is `Real`, not `Int`.
     expect_error("let half: Int = 2^-1\n", "E0302");
     let module = expect_ok("let half = 2^-1\n");
-    assert_eq!(scheme_of(&module, "half").ty, Type::real(aevia_dim::Dim::one()));
+    assert_eq!(
+        scheme_of(&module, "half").ty,
+        Type::real(aevia_dim::Dim::one())
+    );
 }
 
 #[test]
@@ -481,14 +509,8 @@ fn try_outside_a_result_function_is_rejected() {
 #[test]
 fn functions_are_neither_eq_nor_showable() {
     // §2.8 / §3.8.4: a function has no `Eq` and no `Show` instance.
-    expect_error(
-        "fn f(x: Int): Int = x\nlet same: Bool = f == f\n",
-        "E0310",
-    );
-    expect_error(
-        "fn f(x: Int): Int = x\nlet s: String = show(f)\n",
-        "E0310",
-    );
+    expect_error("fn f(x: Int): Int = x\nlet same: Bool = f == f\n", "E0310");
+    expect_error("fn f(x: Int): Int = x\nlet s: String = show(f)\n", "E0310");
     // The instances that must exist do exist.
     expect_ok("let s: String = show(1)\nlet t: String = show(1.0 m)\n");
 }
@@ -535,7 +557,10 @@ fn a_tensor_of_floats_stays_float_when_scaled() {
 fn a_non_recursive_let_cannot_see_itself() {
     // §2.13 / §3.3.2 rule 5.
     expect_error("let x = x + 1\n", "E0301");
-    expect_error("let f = fn (n) => if n == 0 then 0 else f(n - 1)\n", "E0301");
+    expect_error(
+        "let f = fn (n) => if n == 0 then 0 else f(n - 1)\n",
+        "E0301",
+    );
     // `let rec` binds first, so it is legal.
     expect_ok("let rec f = fn (n) => if n == 0 then 0 else f(n - 1)\n");
 }
@@ -565,10 +590,7 @@ fn overlapping_instances_are_rejected() {
 #[test]
 fn a_temperature_difference_cannot_use_an_affine_unit() {
     // §2.15 / §5.4.1.
-    expect_error(
-        "let t: Float[Θ] = 10 K\nlet c = value_in(°C, t)\n",
-        "E0510",
-    );
+    expect_error("let t: Float[Θ] = 10 K\nlet c = value_in(°C, t)\n", "E0510");
     expect_ok("let p: Point[Θ] = 25.0 °C\nlet c = value_in(°C, p)\n");
 }
 
@@ -606,9 +628,11 @@ fn a_type_declaration_gets_a_fresh_id_per_compilation_unit() {
     expect_error("type A = | A\ntype A = | A\n", "E0316");
     let first = expect_ok("type Shape = | Circle\n");
     let second = expect_ok("type Shape = | Circle\n");
-    let id = |module: &CheckedModule| match module.exports.get("Shape") {
-        Some(Export::Type { adt }) => *adt,
-        other => panic!("`Shape` is not a type export: {other:?}"),
+    let id = |module: &CheckedModule| {
+        match module.exports.get("Shape") {
+            | Some(Export::Type { adt }) => *adt,
+            | other => panic!("`Shape` is not a type export: {other:?}"),
+        }
     };
     assert_ne!(id(&first), id(&second));
     assert_ne!(id(&first), aevia_types::adt::RESULT_ID);
@@ -632,10 +656,7 @@ fn dividing_an_affine_point_is_e0405() {
 #[test]
 fn a_dimensioned_determinant_needs_dyn() {
     // §4.11 / §3.5.5.
-    expect_error(
-        "fn f(a: Tensor<2, Real[L]>): Real[L] = det(a)\n",
-        "E0410",
-    );
+    expect_error("fn f(a: Tensor<2, Real[L]>): Real[L] = det(a)\n", "E0410");
     // A dimensionless matrix still has a determinant.
     expect_ok("fn f(a: Tensor<2, Float>): Float = det(a)\n");
 }
@@ -654,10 +675,7 @@ fn an_affine_offset_must_match_the_unit_dimension() {
 #[test]
 fn deriving_over_a_function_field_is_rejected() {
     // §3.8.5.
-    expect_error(
-        "type F = | F(Int -> Int)\nderive Eq for F\n",
-        "E0317",
-    );
+    expect_error("type F = | F(Int -> Int)\nderive Eq for F\n", "E0317");
     expect_ok("type V = | V(Float, Float)\nderive Eq, Show for V\n");
 }
 
@@ -703,9 +721,7 @@ fn an_unused_symbol_warns_w0303() {
 
 #[test]
 fn indexing_keeps_the_refinement() {
-    let module = expect_ok(
-        "fn f(m: Tensor<[2, 3], Float>): Tensor<[3], Float> = m[0]\n",
-    );
+    let module = expect_ok("fn f(m: Tensor<[2, 3], Float>): Tensor<[3], Float> = m[0]\n");
     assert_eq!(
         scheme_of(&module, "f").ty,
         Type::func(
@@ -861,7 +877,11 @@ let b = render("s")
 }
 
 /// The byte offset of the `nth` occurrence of `needle`, counting from one.
-fn offset_of(source: &str, needle: &str, nth: usize) -> usize {
+fn offset_of(
+    source: &str,
+    needle: &str,
+    nth: usize,
+) -> usize {
     let mut from = 0;
     let mut found = None;
     for _ in 0..nth.max(1) {
@@ -877,7 +897,12 @@ fn offset_of(source: &str, needle: &str, nth: usize) -> usize {
 }
 
 /// The type the checker recorded for the expression that is exactly `text`.
-fn expr_type(module: &CheckedModule, source: &str, text: &str, nth: usize) -> Type {
+fn expr_type(
+    module: &CheckedModule,
+    source: &str,
+    text: &str,
+    nth: usize,
+) -> Type {
     let start = offset_of(source, text, nth);
     let span = aevia_syntax::Span::new(0, start, start + text.len());
     module
@@ -901,7 +926,10 @@ fn an_expression_has_a_recorded_type() {
         expr_type(&module, source, "1.0", 1),
         Type::real(aevia_dim::Dim::one())
     );
-    assert_eq!(expr_type(&module, source, "x", 1), Type::real(aevia_dim::Dim::one()));
+    assert_eq!(
+        expr_type(&module, source, "x", 1),
+        Type::real(aevia_dim::Dim::one())
+    );
 }
 
 #[test]
@@ -1028,9 +1056,7 @@ fn a_unit_scales_a_tensor_without_changing_its_representation() {
     let module = expect_ok("let r = [[1.0, 2.0], [3.0, 4.0]] * ohm\n");
     assert_eq!(scheme_of(&module, "r").ty, ohms);
     // The annotated form from spec/11 must agree.
-    expect_ok(
-        "let a: Tensor<2, Float[Resistance]> = [[1.0, 2.0], [3.0, 4.0]] * ohm\n",
-    );
+    expect_ok("let a: Tensor<2, Float[Resistance]> = [[1.0, 2.0], [3.0, 4.0]] * ohm\n");
     // `Unit[e] * Tensor` is the same product written the other way (§3.5.3).
     let module = expect_ok("let r = ohm * [[1.0, 2.0], [3.0, 4.0]]\n");
     assert_eq!(scheme_of(&module, "r").ty, ohms);
@@ -1102,15 +1128,15 @@ fn traj(): Tensor<1, State> =
 "#,
     );
     let state = Type::record(vec![
-        ("v".to_string(), Type::float(aevia_dim::Dim::base("Length").div(&aevia_dim::Dim::base("Time")))),
+        (
+            "v".to_string(),
+            Type::float(aevia_dim::Dim::base("Length").div(&aevia_dim::Dim::base("Time"))),
+        ),
         ("x".to_string(), Type::float(aevia_dim::Dim::base("Length"))),
     ]);
     assert_eq!(
         scheme_of(&module, "traj").ty,
-        Type::func(
-            Vec::new(),
-            Type::tensor(Shape::Rank(1), state),
-        )
+        Type::func(Vec::new(), Type::tensor(Shape::Rank(1), state),)
     );
 
     // A scalar state: `RateOf<Float[L]> = Float[L/T]`, so returning `Float[L]`
@@ -1174,9 +1200,11 @@ fn traj(): { t: Tensor<1, Float[T]>, y: Tensor<1, Float[L]> } =
             Type::tensor(Shape::Rank(1), Type::float(length)),
         ),
     ]);
-    assert_eq!(scheme_of(&module, "traj").ty, Type::func(Vec::new(), expected));
+    assert_eq!(
+        scheme_of(&module, "traj").ty,
+        Type::func(Vec::new(), expected)
+    );
 }
-
 
 // --- §3.11 / §4.9 dynamic dimension `Dyn` ----------------------------------
 
@@ -1195,28 +1223,26 @@ let b = dyn(2)
     // the same comparison `check` needs (E0412).
     let length = aevia_dim::Dim::base("Length");
     assert_eq!(module.dyn_calls.len(), 2);
-    assert!(module
-        .dyn_calls
-        .iter()
-        .any(|call| call.primitive == DynPrimitive::Dyn && call.dim == length));
-    assert!(module
-        .dyn_calls
-        .iter()
-        .any(|call| call.primitive == DynPrimitive::Dyn
-            && call.dim == aevia_dim::Dim::one()));
+    assert!(
+        module
+            .dyn_calls
+            .iter()
+            .any(|call| call.primitive == DynPrimitive::Dyn && call.dim == length)
+    );
+    assert!(
+        module
+            .dyn_calls
+            .iter()
+            .any(|call| call.primitive == DynPrimitive::Dyn && call.dim == aevia_dim::Dim::one())
+    );
 }
 
 #[test]
 fn dyn_requires_a_concrete_dimension() {
     // §4.9.4: `dyn` is a type-directed primitive — `d` must not contain a free
     // dimension variable. Generic code uses `dyn_with(x, dim)`.
-    expect_error(
-        "fn f<d>(x: Real[d]): Dyn<Real> = dyn(x)\n",
-        "E0304",
-    );
-    expect_ok(
-        "fn f<d>(x: Real[d], dim: DimValue): Dyn<Real> = dyn_with(x, dim)\n",
-    );
+    expect_error("fn f<d>(x: Real[d]): Dyn<Real> = dyn(x)\n", "E0304");
+    expect_ok("fn f<d>(x: Real[d], dim: DimValue): Dyn<Real> = dyn_with(x, dim)\n");
     // `dyn` of a non-scalar is a type error, not an inference failure.
     expect_error("let t = dyn([1.0, 2.0])\n", "E0302");
 }
@@ -1238,10 +1264,7 @@ let p = pow_dyn(d, 2)
     );
     // `DimValue` is a runtime type, distinct from the kind `Dim` and from
     // `Dyn` itself.
-    assert_eq!(
-        scheme_of(&module, "dim").ty.to_string(),
-        "DimValue"
-    );
+    assert_eq!(scheme_of(&module, "dim").ty.to_string(), "DimValue");
     expect_error("let d = dyn(3.0 m)\nlet x = dim_of(3.0)\n", "E0302");
 }
 
@@ -1330,10 +1353,7 @@ fn check_with_is_the_generic_form() {
         Vec::new(),
     );
     let expected = Type::func(
-        vec![
-            dim_value,
-            Type::real(aevia_dim::Dim::var(scheme.dims[0])),
-        ],
+        vec![dim_value, Type::real(aevia_dim::Dim::var(scheme.dims[0]))],
         Type::result(Type::real(aevia_dim::Dim::one()), dim_error),
     );
     assert_eq!(scheme.ty, expected);
@@ -1379,22 +1399,19 @@ fn total(x: Tensor<1, Float>): Float = sum(x)
     );
     assert_eq!(
         scheme_of(&module, "m").ty,
-        Type::tensor(
-            Shape::Rank(2),
-            Type::float(aevia_dim::Dim::one())
-        )
+        Type::tensor(Shape::Rank(2), Type::float(aevia_dim::Dim::one()))
     );
     assert_eq!(
         scheme_of(&module, "v").ty,
-        Type::tensor(
-            Shape::Rank(1),
-            Type::float(aevia_dim::Dim::one())
-        )
+        Type::tensor(Shape::Rank(1), Type::float(aevia_dim::Dim::one()))
     );
     assert_eq!(
         scheme_of(&module, "rows").ty,
         Type::func(
-            vec![Type::tensor(Shape::Rank(2), Type::float(aevia_dim::Dim::one()))],
+            vec![Type::tensor(
+                Shape::Rank(2),
+                Type::float(aevia_dim::Dim::one())
+            )],
             Type::tensor(Shape::Rank(2), Type::float(aevia_dim::Dim::one()))
         )
     );
@@ -1433,11 +1450,17 @@ fn up(xs: Tensor<1, Int>): Tensor<1, Int> = par_map(fn (x) => x + 1, xs)
 
 // --- §9.6.1 @jit, §13.8.1 stability, §13.5.2 @op/@rule ---------------------
 
-fn check_with_capabilities(source: &str, capabilities: Capabilities) -> (Vec<String>, Vec<String>, CheckedModule) {
+fn check_with_capabilities(
+    source: &str,
+    capabilities: Capabilities,
+) -> (Vec<String>, Vec<String>, CheckedModule) {
     use aevia_syntax::Severity;
     let lexed = lex(0, source).expect("the source lexes");
     let (module, parse_diagnostics) = parse_module(0, source, &lexed);
-    assert!(!parse_diagnostics.has_errors(), "parse errors: {parse_diagnostics:?}");
+    assert!(
+        !parse_diagnostics.has_errors(),
+        "parse errors: {parse_diagnostics:?}"
+    );
     let result = aevia_types::check::check_module_with_options(
         0,
         &module,
@@ -1448,9 +1471,9 @@ fn check_with_capabilities(source: &str, capabilities: Capabilities) -> (Vec<Str
     let mut warnings = Vec::new();
     for item in &result.diagnostics.items {
         match item.severity {
-            Severity::Error => errors.push(item.code.clone()),
-            Severity::Warning => warnings.push(item.code.clone()),
-            Severity::Note => {}
+            | Severity::Error => errors.push(item.code.clone()),
+            | Severity::Warning => warnings.push(item.code.clone()),
+            | Severity::Note => {},
         }
     }
     (errors, warnings, result.module)
@@ -1512,7 +1535,10 @@ fn caller(): Int = old_api(1)
         Some(&Stability::Deprecated("use new_api".to_string()))
     );
     assert_eq!(module.stability.get("new_api"), Some(&Stability::Stable));
-    assert_eq!(module.stability.get("trial"), Some(&Stability::Experimental));
+    assert_eq!(
+        module.stability.get("trial"),
+        Some(&Stability::Experimental)
+    );
     // An invalid argument is `E0210`, per appendix B's "check the name/args".
     expect_any_error("@deprecated(1)\nfn f(x: Int): Int = x\n", "E0210");
     expect_any_error("@stable(\"x\")\nfn f(x: Int): Int = x\n", "E0210");
@@ -1554,10 +1580,12 @@ fn simplify_softplus(x: Float): Float = x
             && registration.name == "mydomain/softplus"
             && registration.function == "softplus"
     }));
-    assert!(module
-        .registrations
-        .iter()
-        .any(|registration| registration.kind == HostRegistrationKind::Rule));
+    assert!(
+        module
+            .registrations
+            .iter()
+            .any(|registration| registration.kind == HostRegistrationKind::Rule)
+    );
     // The argument must be a compile-time string.
     expect_any_error("@op(1)\nfn f(x: Float): Float = x\n", "E0210");
 }
@@ -1625,7 +1653,7 @@ let w = 1
 "#;
     let (codes, module) = check(source);
     assert!(codes.is_empty(), "unexpected errors: {codes:?}");
-let mut reps: Vec<Rep> = module.literal_reps.values().copied().collect();
+    let mut reps: Vec<Rep> = module.literal_reps.values().copied().collect();
     reps.sort_by_key(|rep| rep.name());
     // `x + 1` and `y`: Float. `z`: Real. `w`: Int.
     assert!(reps.contains(&Rep::Float), "found {reps:?}");
@@ -1681,24 +1709,26 @@ fn a_builtin_scheme_is_instantiated_freshly_each_time() {
 fn a_linear_nat_equation_solves_the_extent() {
     // `n + 1 ~ 2` ⇒ `n = 1`: the parameter's extent is `2` afterwards, and the
     // solution is concrete, so the scheme has no Nat variables left.
-    let module = expect_ok(
-        "fn f<n>(a: Tensor<[n + 1], Float>): Tensor<[2], Float> = a\n",
-    );
+    let module = expect_ok("fn f<n>(a: Tensor<[n + 1], Float>): Tensor<[2], Float> = a\n");
     let scheme = scheme_of(&module, "f");
     assert!(scheme.nats.is_empty(), "n is solved: {scheme:?}");
-    let two = Type::tensor(Shape::refined([Some(2)]), Type::float(aevia_dim::Dim::one()));
+    let two = Type::tensor(
+        Shape::refined([Some(2)]),
+        Type::float(aevia_dim::Dim::one()),
+    );
     assert_eq!(scheme.ty, Type::func(vec![two.clone()], two));
 }
 
 #[test]
 fn a_scaled_nat_equation_solves_the_extent() {
     // `2 * n ~ 6` ⇒ `n = 3`; the coefficient divides exactly.
-    let module = expect_ok(
-        "fn f<n>(a: Tensor<[2 * n], Float>): Tensor<[6], Float> = a\n",
-    );
+    let module = expect_ok("fn f<n>(a: Tensor<[2 * n], Float>): Tensor<[6], Float> = a\n");
     let scheme = scheme_of(&module, "f");
     assert!(scheme.nats.is_empty(), "n is solved: {scheme:?}");
-    let six = Type::tensor(Shape::refined([Some(6)]), Type::float(aevia_dim::Dim::one()));
+    let six = Type::tensor(
+        Shape::refined([Some(6)]),
+        Type::float(aevia_dim::Dim::one()),
+    );
     assert_eq!(scheme.ty, Type::func(vec![six.clone()], six));
 }
 
@@ -1741,8 +1771,14 @@ let b = id_t([1.0, 2.0, 3.0])
     assert_eq!(
         scheme.ty,
         Type::func(
-            vec![Type::tensor(Shape::Refined(vec![Some(nat.clone())]), Type::float(aevia_dim::Dim::one()))],
-            Type::tensor(Shape::Refined(vec![Some(nat)]), Type::float(aevia_dim::Dim::one()))
+            vec![Type::tensor(
+                Shape::Refined(vec![Some(nat.clone())]),
+                Type::float(aevia_dim::Dim::one())
+            )],
+            Type::tensor(
+                Shape::Refined(vec![Some(nat)]),
+                Type::float(aevia_dim::Dim::one())
+            )
         )
     );
 }
@@ -1759,7 +1795,10 @@ fn reshape_and_zeros_of_propagate_nat_extents() {
     let module = expect_ok("let z = zeros_of<[2 * 3]>()\n");
     assert_eq!(
         scheme_of(&module, "z").ty,
-        Type::tensor(Shape::refined([Some(6)]), Type::float(aevia_dim::Dim::one()))
+        Type::tensor(
+            Shape::refined([Some(6)]),
+            Type::float(aevia_dim::Dim::one())
+        )
     );
     // A polymorphic target keeps its variable: `zeros<n>` has one Nat parameter.
     let module = expect_ok(
@@ -1775,7 +1814,11 @@ fn matmul_unifies_its_shared_extent() {
         "fn mm<a, b, c>(x: Tensor<[a, b], Float>, y: Tensor<[b, c], Float>): Tensor<[a, c], Float> = x @ y\n",
     );
     let scheme = scheme_of(&module, "mm");
-    assert_eq!(scheme.nats.len(), 3, "a, b and c are quantified: {scheme:?}");
+    assert_eq!(
+        scheme.nats.len(),
+        3,
+        "a, b and c are quantified: {scheme:?}"
+    );
     // A concrete mismatch is `E0802` (shape error), as before.
     expect_error(
         "fn bad(a: Tensor<[2, 3], Float>, b: Tensor<[4, 5], Float>): Tensor<[2, 5], Float> = a @ b\n",
@@ -1809,9 +1852,7 @@ fn an_instance_head_cannot_quantify_a_nat_variable() {
 fn diffusion_of_divides_the_dimension_by_sqrt_time() {
     // `DiffusionOf<Float[L]>` is `Float[L / T^(1/2)]`: `sqrt(s / t)` has
     // exactly that dimension, and the annotation is a built-in type function.
-    expect_ok(
-        "fn noise(t: Float[T], s: Float[L]): DiffusionOf<Float[L]> = sqrt(s * s / t)\n",
-    );
+    expect_ok("fn noise(t: Float[T], s: Float[L]): DiffusionOf<Float[L]> = sqrt(s * s / t)\n");
     // The Brownian scaling is on the *state*, not an arbitrary choice: plain
     // `sqrt(s)` is `L^(1/2)`, not `L / T^(1/2)`.
     expect_error(
@@ -1819,9 +1860,7 @@ fn diffusion_of_divides_the_dimension_by_sqrt_time() {
         "E0401",
     );
     // It recurses through records, exactly like `RateOf`.
-    expect_ok(
-        "fn g(d: DiffusionOf<{ p: Float[L] }>): { p: Float[L / T^(1/2)] } = d\n",
-    );
+    expect_ok("fn g(d: DiffusionOf<{ p: Float[L] }>): { p: Float[L / T^(1/2)] } = d\n");
     // A non-numeric state field is rejected by the type function.
     expect_error(
         "fn bad(t: Float[T], n: Int): DiffusionOf<Int> = 0\n",
@@ -1919,7 +1958,8 @@ fn an_imported_odeint_keeps_the_rate_of_typing() {
     // builtin with its loose HM scheme. The type-function typing must still
     // apply: an imported entry point is not a *local* shadow.
     use aevia_types::builtins;
-    use aevia_types::check::{check_module_with_imports, Export};
+    use aevia_types::check::Export;
+    use aevia_types::check::check_module_with_imports;
     let source = r#"type State = { x: Float[L], v: Float[L/T] }
 type Rate = { x: Float[L/T], v: Float[L/T^2] }
 fn rhs(_t: Float[T], s: State): Rate = { x = s.v, v = -9.80665 m/s^2 }
@@ -2163,7 +2203,10 @@ fn bool_and_literal_patterns_are_analysed() {
     // An integer literal does not exhaust an infinite domain.
     expect_error("fn f(n: Int): Int = match n with\n    | 0 -> 1\n", "E0309");
     expect_ok("fn f(n: Int): Int = match n with\n    | 0 -> 1\n    | _ -> 2\n");
-    expect_error("fn f(b: Bool): Int = match b with\n    | true -> 1\n", "E0309");
+    expect_error(
+        "fn f(b: Bool): Int = match b with\n    | true -> 1\n",
+        "E0309",
+    );
     // A guard does not count as coverage.
     expect_error(
         "fn f(b: Bool): Int = match b with\n    | true if b -> 1\n    | false -> 2\n",
@@ -2243,9 +2286,7 @@ fn a_negative_nat_solution_is_rejected() {
 fn very_large_nat_literals_still_solve() {
     // Larger than `i64::MAX`: the linear form is `i128`, so this is a normal
     // equation rather than a spurious "non-linear" E0304.
-    expect_ok(
-        "fn f<n>(a: Tensor<[n], Float>): Tensor<[15000000000000000000], Float> = a\n",
-    );
+    expect_ok("fn f<n>(a: Tensor<[n], Float>): Tensor<[15000000000000000000], Float> = a\n");
 }
 
 #[test]
@@ -2299,10 +2340,7 @@ fn indexing_and_literal_slices_keep_the_refined_remainder() {
     // A literal unit-step slice computes its extent: `[6][1..4]` is `[3]`.
     expect_ok("fn f(a: Tensor<[6], Float>): Tensor<[3], Float> = a[1..4]\n");
     // An out-of-range literal index is still E0802 (static check).
-    expect_error(
-        "fn f(a: Tensor<[3], Float>): Float = a[7]\n",
-        "E0802",
-    );
+    expect_error("fn f(a: Tensor<[3], Float>): Float = a[7]\n", "E0802");
 }
 
 #[test]
@@ -2327,9 +2365,7 @@ fn division_shaped_builtins_refine_the_result_representation() {
         Type::real(aevia_dim::Dim::one()),
         "mean of Ints is Real"
     );
-    expect_ok(
-        "fn f(a: Tensor<2, Int>): Result<Tensor<2, Real>, LinAlgError> = inv(a)\n",
-    );
+    expect_ok("fn f(a: Tensor<2, Int>): Result<Tensor<2, Real>, LinAlgError> = inv(a)\n");
     expect_ok("fn f(xs: Tensor<1, Int>): Real = std(xs)\n");
     expect_ok("fn f(xs: Tensor<1, Int>, ys: Tensor<1, Int>): Real = corr(xs, ys)\n");
 }
@@ -2383,11 +2419,15 @@ fn npy_io_accepts_every_tensor_rank_it_handles() {
     expect_ok(
         "let r: IO (Result<(), DataError>) = write_npy(\"x.npy\", [[1.0, 2.0], [3.0, 4.0]])\n",
     );
-    expect_error("let r: IO (Result<(), DataError>) = write_npy(\"x.npy\", 1.0)\n", "E0302");
-    expect_ok(
-        "let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy(\"x.npy\")\n",
+    expect_error(
+        "let r: IO (Result<(), DataError>) = write_npy(\"x.npy\", 1.0)\n",
+        "E0302",
     );
-    expect_error("let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy(1)\n", "E0302");
+    expect_ok("let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy(\"x.npy\")\n");
+    expect_error(
+        "let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy(1)\n",
+        "E0302",
+    );
 }
 
 #[test]
@@ -2404,7 +2444,10 @@ fn a_dimension_variable_sqrt_renders_its_half_exponent() {
 
 // --- §13.2.2 literal-key result typing for `Rssn.invoke` -------------------
 
-fn pinned_hash(op: &str, index: usize) -> Option<String> {
+fn pinned_hash(
+    op: &str,
+    index: usize,
+) -> Option<String> {
     let entry = aevia_rssn::registry().op(op)?;
     Some(
         entry
@@ -2506,5 +2549,7 @@ fn min_all_and_max_all_reduce_tensors_of_any_rank() {
     expect_error("let x = min_all(3.0)\n", "E0302");
     expect_error("let x = max_all(\"s\")\n", "E0302");
     // The binary scalar functions are unchanged.
-    expect_ok("fn f(a: Real[L], b: Real[L]): Real[L] = min(a, b)\nfn g(a: Float, b: Float): Float = max(a, b)\n");
+    expect_ok(
+        "fn f(a: Real[L], b: Real[L]): Real[L] = min(a, b)\nfn g(a: Float, b: Float): Float = max(a, b)\n",
+    );
 }

@@ -38,13 +38,19 @@ impl Position {
 
     /// Creates a position.
     #[must_use]
-    pub const fn new(line: u32, column: u32) -> Self {
+    pub const fn new(
+        line: u32,
+        column: u32,
+    ) -> Self {
         Self { line, column }
     }
 }
 
 impl std::fmt::Display for Position {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "{}:{}", self.line + 1, self.column + 1)
     }
 }
@@ -61,7 +67,10 @@ pub struct Range {
 impl Range {
     /// Creates a range.
     #[must_use]
-    pub const fn new(start: Position, end: Position) -> Self {
+    pub const fn new(
+        start: Position,
+        end: Position,
+    ) -> Self {
         Self { start, end }
     }
 
@@ -70,7 +79,10 @@ impl Range {
     /// The end is included so that a cursor resting immediately after an
     /// identifier still hovers it, which is what every editor does.
     #[must_use]
-    pub fn contains(self, position: Position) -> bool {
+    pub fn contains(
+        self,
+        position: Position,
+    ) -> bool {
         self.start <= position && position <= self.end
     }
 }
@@ -106,7 +118,11 @@ impl LineIndex {
 
     /// The byte range of a line's contents, excluding its terminator.
     #[must_use]
-    pub fn line_span(&self, text: &str, line: u32) -> Option<std::ops::Range<usize>> {
+    pub fn line_span(
+        &self,
+        text: &str,
+        line: u32,
+    ) -> Option<std::ops::Range<usize>> {
         let start = *self.starts.get(usize::try_from(line).ok()?)?;
         let mut end = self
             .starts
@@ -115,7 +131,8 @@ impl LineIndex {
             .unwrap_or(text.len());
         // The terminator belongs to no line: a client counting the characters
         // of line 3 of a CRLF file counts neither the `\r` nor the `\n`.
-        while end > start && (text.as_bytes()[end - 1] == b'\n' || text.as_bytes()[end - 1] == b'\r')
+        while end > start
+            && (text.as_bytes()[end - 1] == b'\n' || text.as_bytes()[end - 1] == b'\r')
         {
             end -= 1;
         }
@@ -124,7 +141,11 @@ impl LineIndex {
 
     /// The text of a line, without its terminator.
     #[must_use]
-    pub fn line_text<'a>(&self, text: &'a str, line: u32) -> Option<&'a str> {
+    pub fn line_text<'a>(
+        &self,
+        text: &'a str,
+        line: u32,
+    ) -> Option<&'a str> {
         let span = self.line_span(text, line)?;
         text.get(span)
     }
@@ -136,14 +157,20 @@ impl LineIndex {
     /// neither can be expressed as a position, and returning the nearest one
     /// is what keeps a diagnostic from vanishing.
     #[must_use]
-    pub fn position(&self, text: &str, offset: u32) -> Position {
-        let mut offset = usize::try_from(offset).unwrap_or(usize::MAX).min(text.len());
+    pub fn position(
+        &self,
+        text: &str,
+        offset: u32,
+    ) -> Position {
+        let mut offset = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(text.len());
         while offset > 0 && !text.is_char_boundary(offset) {
             offset -= 1;
         }
         let line = match self.starts.binary_search(&offset) {
-            Ok(index) => index,
-            Err(index) => index.saturating_sub(1),
+            | Ok(index) => index,
+            | Err(index) => index.saturating_sub(1),
         };
         let start = self.starts.get(line).copied().unwrap_or(0);
         let column = text
@@ -160,7 +187,11 @@ impl LineIndex {
     /// A column past the end of its line is clamped to the line's end, and a
     /// column inside a surrogate pair snaps down to the code point's start.
     #[must_use]
-    pub fn offset(&self, text: &str, position: Position) -> Option<u32> {
+    pub fn offset(
+        &self,
+        text: &str,
+        position: Position,
+    ) -> Option<u32> {
         let span = self.line_span(text, position.line)?;
         let line = text.get(span.clone())?;
         let mut units = 0_u32;
@@ -185,7 +216,10 @@ impl LineIndex {
 mod tests {
     use super::*;
 
-    fn round_trip(text: &str, offset: usize) {
+    fn round_trip(
+        text: &str,
+        offset: usize,
+    ) {
         let index = LineIndex::new(text);
         let offset = u32::try_from(offset).expect("offset");
         let position = index.position(text, offset);

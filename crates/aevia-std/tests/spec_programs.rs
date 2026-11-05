@@ -14,7 +14,10 @@
 
 mod common;
 
-use common::{errors, rendered, spec_programs_path, Package};
+use common::Package;
+use common::errors;
+use common::rendered;
+use common::spec_programs_path;
 
 /// One complete program from §11.
 struct Program {
@@ -194,7 +197,11 @@ const EXPECTED: &[(&str, &str, &str)] = &[
          §8.9 type-function typing (`Ode.aev` re-exports the loose HM scheme; \
          imports are not local shadows)",
     ),
-    ("Symbolic", "ok", "§11.3: `import Math/Calculus/Solve`, higher-order diff/solve"),
+    (
+        "Symbolic",
+        "ok",
+        "§11.3: `import Math/Calculus/Solve`, higher-order diff/solve",
+    ),
     (
         "Circuits",
         "ok",
@@ -202,7 +209,11 @@ const EXPECTED: &[(&str, &str, &str)] = &[
          same-rank rank-only shape for elementwise ops (`Tensor<[2], V>` vs \
          `Tensor<1, A>` in `v * i`)",
     ),
-    ("Thermo", "ok", "§11.5: affine points, `point(300.0, K)`, `to(°C, …)`"),
+    (
+        "Thermo",
+        "ok",
+        "§11.5: affine points, `point(300.0, K)`, `to(°C, …)`",
+    ),
     (
         "Analysis",
         "ok",
@@ -213,7 +224,11 @@ const EXPECTED: &[(&str, &str, &str)] = &[
         "ok",
         "§11.7: `import Physics.Ising`, typed Params record (executes separately)",
     ),
-    ("Regression", "ok", "§11.8: dimension-polymorphic statistics"),
+    (
+        "Regression",
+        "ok",
+        "§11.8: dimension-polymorphic statistics",
+    ),
     (
         "Full",
         "ok",
@@ -224,7 +239,10 @@ const EXPECTED: &[(&str, &str, &str)] = &[
 #[test]
 fn the_extraction_is_the_chapters_complete_programs() {
     let programs = extracted();
-    let names: Vec<&str> = programs.iter().map(|program| program.module.as_str()).collect();
+    let names: Vec<&str> = programs
+        .iter()
+        .map(|program| program.module.as_str())
+        .collect();
     assert_eq!(
         names,
         [
@@ -242,7 +260,9 @@ fn the_extraction_is_the_chapters_complete_programs() {
     );
     for program in &programs {
         assert!(
-            program.source.starts_with(&format!("module {}", program.module)),
+            program
+                .source
+                .starts_with(&format!("module {}", program.module)),
             "`{}` does not start with its module declaration",
             program.section
         );

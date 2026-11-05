@@ -14,10 +14,14 @@ use aevia_dim::format_rational_decimal;
 use aevia_rssn::Sym;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, Signed, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::rc::Rc;
 
 /// A structural hash of a term, without allocating a key string.
@@ -36,65 +40,74 @@ fn term_hash(term: &Term) -> u64 {
 }
 
 impl Hash for Term {
-    fn hash<H: Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(
+        &self,
+        state: &mut H,
+    ) {
         match self {
-            Self::Num(value) => {
+            | Self::Num(value) => {
                 0u8.hash(state);
                 value.hash(state);
-            }
-            Self::Sym(name) => {
+            },
+            | Self::Sym(name) => {
                 1u8.hash(state);
                 name.hash(state);
-            }
-            Self::Add(items) => {
+            },
+            | Self::Add(items) => {
                 2u8.hash(state);
                 items.hash(state);
-            }
-            Self::Mul(items) => {
+            },
+            | Self::Mul(items) => {
                 3u8.hash(state);
                 items.hash(state);
-            }
-            Self::Pow(base, exponent) => {
+            },
+            | Self::Pow(base, exponent) => {
                 4u8.hash(state);
                 base.hash(state);
                 exponent.hash(state);
-            }
-            Self::Fun(function, args) => {
+            },
+            | Self::Fun(function, args) => {
                 5u8.hash(state);
                 function.as_str().hash(state);
                 args.hash(state);
-            }
-            Self::Foreign { sym, text } => {
+            },
+            | Self::Foreign { sym, text } => {
                 6u8.hash(state);
                 sym.hash(state);
                 text.hash(state);
-            }
+            },
         }
     }
 }
 
 /// Moves the operands of a sum into `flat`, consuming the term instead of
 /// cloning it (the clone was the other O(n) allocation per add).
-fn flatten_add_owned(term: Term, flat: &mut Vec<Term>) {
+fn flatten_add_owned(
+    term: Term,
+    flat: &mut Vec<Term>,
+) {
     match term {
-        Term::Add(items) => {
+        | Term::Add(items) => {
             for item in items {
                 flatten_add_owned(item, flat);
             }
-        }
-        other => flat.push(other),
+        },
+        | other => flat.push(other),
     }
 }
 
 /// Moves the factors of a product into `flat`, consuming the term.
-fn flatten_mul_owned(term: Term, flat: &mut Vec<Term>) {
+fn flatten_mul_owned(
+    term: Term,
+    flat: &mut Vec<Term>,
+) {
     match term {
-        Term::Mul(items) => {
+        | Term::Mul(items) => {
             for item in items {
                 flatten_mul_owned(item, flat);
             }
-        }
-        other => flat.push(other),
+        },
+        | other => flat.push(other),
     }
 }
 
@@ -163,33 +176,36 @@ impl Fun {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Sqrt => "sqrt",
-            Self::Exp => "exp",
-            Self::Ln => "ln",
-            Self::Sin => "sin",
-            Self::Cos => "cos",
-            Self::Tan => "tan",
-            Self::Abs => "abs",
-            Self::Ite => "ite",
-            Self::Other(name) => name,
+            | Self::Sqrt => "sqrt",
+            | Self::Exp => "exp",
+            | Self::Ln => "ln",
+            | Self::Sin => "sin",
+            | Self::Cos => "cos",
+            | Self::Tan => "tan",
+            | Self::Abs => "abs",
+            | Self::Ite => "ite",
+            | Self::Other(name) => name,
         }
     }
 
     /// The numeric value, when it is defined.
     #[must_use]
-    pub fn eval(self, x: f64) -> f64 {
+    pub fn eval(
+        self,
+        x: f64,
+    ) -> f64 {
         match self {
-            Self::Sqrt => x.sqrt(),
-            Self::Exp => x.exp(),
-            Self::Ln => x.ln(),
-            Self::Sin => x.sin(),
-            Self::Cos => x.cos(),
-            Self::Tan => x.tan(),
-            Self::Abs => x.abs(),
+            | Self::Sqrt => x.sqrt(),
+            | Self::Exp => x.exp(),
+            | Self::Ln => x.ln(),
+            | Self::Sin => x.sin(),
+            | Self::Cos => x.cos(),
+            | Self::Tan => x.tan(),
+            | Self::Abs => x.abs(),
             // `ite` is not a numeric function of one argument; it is only
             // folded by `Term::fun` when the condition is a number.
-            Self::Ite => f64::NAN,
-            Self::Other(_) => f64::NAN,
+            | Self::Ite => f64::NAN,
+            | Self::Other(_) => f64::NAN,
         }
     }
 }
@@ -215,7 +231,10 @@ impl Term {
 
     /// Wraps a kernel term.
     #[must_use]
-    pub fn foreign(sym: Sym, text: impl Into<Rc<str>>) -> Self {
+    pub fn foreign(
+        sym: Sym,
+        text: impl Into<Rc<str>>,
+    ) -> Self {
         Self::Foreign {
             sym,
             text: text.into(),
@@ -226,8 +245,8 @@ impl Term {
     #[must_use]
     pub fn as_foreign(&self) -> Option<Sym> {
         match self {
-            Self::Foreign { sym, .. } => Some(*sym),
-            _ => None,
+            | Self::Foreign { sym, .. } => Some(*sym),
+            | _ => None,
         }
     }
 
@@ -235,12 +254,12 @@ impl Term {
     #[must_use]
     pub fn is_constant(&self) -> bool {
         match self {
-            Self::Num(_) => true,
-            Self::Sym(_) => false,
-            Self::Add(items) | Self::Mul(items) => items.iter().all(Self::is_constant),
-            Self::Pow(base, _) => base.is_constant(),
-            Self::Fun(_, args) => args.iter().all(Self::is_constant),
-            Self::Foreign { .. } => self.free_symbols().is_empty(),
+            | Self::Num(_) => true,
+            | Self::Sym(_) => false,
+            | Self::Add(items) | Self::Mul(items) => items.iter().all(Self::is_constant),
+            | Self::Pow(base, _) => base.is_constant(),
+            | Self::Fun(_, args) => args.iter().all(Self::is_constant),
+            | Self::Foreign { .. } => self.free_symbols().is_empty(),
         }
     }
 
@@ -266,26 +285,29 @@ impl Term {
         self.try_free_symbols().unwrap_or_default()
     }
 
-    fn collect_symbols(&self, out: &mut Vec<String>) -> Result<(), EvalError> {
+    fn collect_symbols(
+        &self,
+        out: &mut Vec<String>,
+    ) -> Result<(), EvalError> {
         match self {
-            Self::Num(_) => {}
-            Self::Sym(name) => {
+            | Self::Num(_) => {},
+            | Self::Sym(name) => {
                 if !out.contains(name) {
                     out.push(name.clone());
                 }
-            }
-            Self::Add(items) | Self::Mul(items) => {
+            },
+            | Self::Add(items) | Self::Mul(items) => {
                 for item in items {
                     item.collect_symbols(out)?;
                 }
-            }
-            Self::Pow(base, _) => base.collect_symbols(out)?,
-            Self::Fun(_, args) => {
+            },
+            | Self::Pow(base, _) => base.collect_symbols(out)?,
+            | Self::Fun(_, args) => {
                 for arg in args {
                     arg.collect_symbols(out)?;
                 }
-            }
-            Self::Foreign { sym, .. } => {
+            },
+            | Self::Foreign { sym, .. } => {
                 let names = aevia_rssn::kernel()
                     .try_free_symbols(*sym)
                     .map_err(|failure| crate::kernel::error(&failure))?;
@@ -294,14 +316,17 @@ impl Term {
                         out.push(name);
                     }
                 }
-            }
+            },
         }
         Ok(())
     }
 
     /// Adds two terms, folding constants and collecting like terms.
     #[must_use]
-    pub fn add(left: Term, right: Term) -> Term {
+    pub fn add(
+        left: Term,
+        right: Term,
+    ) -> Term {
         let mut flat = Vec::new();
         flatten_add_owned(left, &mut flat);
         flatten_add_owned(right, &mut flat);
@@ -320,8 +345,8 @@ impl Term {
                 .iter_mut()
                 .find(|(existing_hash, existing, _)| *existing_hash == hash && *existing == term)
             {
-                Some((_, _, count)) => *count += BigRational::one(),
-                None => groups.push((hash, term, BigRational::one())),
+                | Some((_, _, count)) => *count += BigRational::one(),
+                | None => groups.push((hash, term, BigRational::one())),
             }
         }
         let mut items = Vec::with_capacity(groups.len() + 1);
@@ -338,15 +363,18 @@ impl Term {
             items.push(rational(constant));
         }
         match items.len() {
-            0 => zero(),
-            1 => items.remove(0),
-            _ => Term::Add(items),
+            | 0 => zero(),
+            | 1 => items.remove(0),
+            | _ => Term::Add(items),
         }
     }
 
     /// Multiplies two terms, folding constants and merging equal bases.
     #[must_use]
-    pub fn mul(left: Term, right: Term) -> Term {
+    pub fn mul(
+        left: Term,
+        right: Term,
+    ) -> Term {
         let mut flat = Vec::new();
         flatten_mul_owned(left, &mut flat);
         flatten_mul_owned(right, &mut flat);
@@ -354,31 +382,25 @@ impl Term {
         let mut factors: Vec<(u64, Term, BigRational)> = Vec::new();
         for term in flat {
             match term {
-                Term::Num(value) => constant *= value,
-                Term::Pow(base, exponent) => {
+                | Term::Num(value) => constant *= value,
+                | Term::Pow(base, exponent) => {
                     let hash = term_hash(&base);
-                    match factors
-                        .iter_mut()
-                        .find(|(existing_hash, existing, _)| {
-                            *existing_hash == hash && *existing == *base
-                        })
-                    {
-                        Some((_, _, existing)) => *existing += exponent,
-                        None => factors.push((hash, *base, exponent)),
+                    match factors.iter_mut().find(|(existing_hash, existing, _)| {
+                        *existing_hash == hash && *existing == *base
+                    }) {
+                        | Some((_, _, existing)) => *existing += exponent,
+                        | None => factors.push((hash, *base, exponent)),
                     }
-                }
-                other => {
+                },
+                | other => {
                     let hash = term_hash(&other);
-                    match factors
-                        .iter_mut()
-                        .find(|(existing_hash, existing, _)| {
-                            *existing_hash == hash && *existing == other
-                        })
-                    {
-                        Some((_, _, count)) => *count += BigRational::one(),
-                        None => factors.push((hash, other, BigRational::one())),
+                    match factors.iter_mut().find(|(existing_hash, existing, _)| {
+                        *existing_hash == hash && *existing == other
+                    }) {
+                        | Some((_, _, count)) => *count += BigRational::one(),
+                        | None => factors.push((hash, other, BigRational::one())),
                     }
-                }
+                },
             }
         }
         if constant.is_zero() {
@@ -395,15 +417,18 @@ impl Term {
             items.push(Term::pow(base, exponent));
         }
         match items.len() {
-            0 => one(),
-            1 => items.remove(0),
-            _ => Term::Mul(items),
+            | 0 => one(),
+            | 1 => items.remove(0),
+            | _ => Term::Mul(items),
         }
     }
 
     /// Raises a term to a rational power.
     #[must_use]
-    pub fn pow(base: Term, exponent: BigRational) -> Term {
+    pub fn pow(
+        base: Term,
+        exponent: BigRational,
+    ) -> Term {
         if exponent.is_zero() {
             return one();
         }
@@ -480,7 +505,10 @@ impl Term {
 
     /// Subtracts `right` from `left`.
     #[must_use]
-    pub fn sub(left: Term, right: Term) -> Term {
+    pub fn sub(
+        left: Term,
+        right: Term,
+    ) -> Term {
         Term::add(left, Term::neg(right))
     }
 
@@ -491,7 +519,10 @@ impl Term {
     /// for, and `sqrt(2)^2` would then be `2.0000000000000004`. Only an exact
     /// result is folded here; everything else is a term.
     #[must_use]
-    pub fn fun(function: Fun, args: Vec<Term>) -> Term {
+    pub fn fun(
+        function: Fun,
+        args: Vec<Term>,
+    ) -> Term {
         if let Fun::Ite = function {
             if args.len() == 3 {
                 if let Term::Num(condition) = &args[0] {
@@ -521,35 +552,45 @@ impl Term {
     /// A kernel handle the bridge cannot rewrite is a diagnostic, never a
     /// silently unchanged term: returning the input unchanged would make
     /// `subst` look like it worked.
-    pub fn substitute(&self, symbol: &str, value: &Term) -> Result<Term, EvalError> {
+    pub fn substitute(
+        &self,
+        symbol: &str,
+        value: &Term,
+    ) -> Result<Term, EvalError> {
         Ok(match self {
-            Self::Sym(name) if name == symbol => value.clone(),
-            Self::Num(_) | Self::Sym(_) => self.clone(),
-            Self::Add(items) => items
-                .iter()
-                .map(|item| item.substitute(symbol, value))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .reduce(Term::add)
-                .unwrap_or_else(zero),
-            Self::Mul(items) => items
-                .iter()
-                .map(|item| item.substitute(symbol, value))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .reduce(Term::mul)
-                .unwrap_or_else(one),
-            Self::Pow(base, exponent) => {
+            | Self::Sym(name) if name == symbol => value.clone(),
+            | Self::Num(_) | Self::Sym(_) => self.clone(),
+            | Self::Add(items) => {
+                items
+                    .iter()
+                    .map(|item| item.substitute(symbol, value))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .reduce(Term::add)
+                    .unwrap_or_else(zero)
+            },
+            | Self::Mul(items) => {
+                items
+                    .iter()
+                    .map(|item| item.substitute(symbol, value))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .reduce(Term::mul)
+                    .unwrap_or_else(one)
+            },
+            | Self::Pow(base, exponent) => {
                 Term::pow(base.substitute(symbol, value)?, exponent.clone())
-            }
-            Self::Fun(function, args) => Term::fun(
-                *function,
-                args.iter()
-                    .map(|arg| arg.substitute(symbol, value))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
+            },
+            | Self::Fun(function, args) => {
+                Term::fun(
+                    *function,
+                    args.iter()
+                        .map(|arg| arg.substitute(symbol, value))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            },
             // The kernel owns the structure, so ask it.
-            Self::Foreign { .. } => {
+            | Self::Foreign { .. } => {
                 let kernel = aevia_rssn::kernel();
                 let from = crate::kernel::kernel_symbol(symbol);
                 let target = crate::kernel::term_val(value)?;
@@ -563,7 +604,7 @@ impl Term {
                         "the kernel answered with a value that has no term form",
                     )
                 })?
-            }
+            },
         })
     }
 
@@ -573,24 +614,29 @@ impl Term {
     ///
     /// A kernel handle the bridge cannot differentiate is a diagnostic. It
     /// must never become `0`: a wrong derivative is worse than a failure.
-    pub fn diff(&self, symbol: &str) -> Result<Term, EvalError> {
+    pub fn diff(
+        &self,
+        symbol: &str,
+    ) -> Result<Term, EvalError> {
         Ok(match self {
-            Self::Num(_) => zero(),
-            Self::Sym(name) => {
+            | Self::Num(_) => zero(),
+            | Self::Sym(name) => {
                 if name == symbol {
                     one()
                 } else {
                     zero()
                 }
-            }
-            Self::Add(items) => items
-                .iter()
-                .map(|item| item.diff(symbol))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .reduce(Term::add)
-                .unwrap_or_else(zero),
-            Self::Mul(items) => {
+            },
+            | Self::Add(items) => {
+                items
+                    .iter()
+                    .map(|item| item.diff(symbol))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .reduce(Term::add)
+                    .unwrap_or_else(zero)
+            },
+            | Self::Mul(items) => {
                 // Product rule, term by term.
                 let mut sum = zero();
                 for (index, item) in items.iter().enumerate() {
@@ -607,8 +653,8 @@ impl Term {
                     sum = Term::add(sum, product);
                 }
                 sum
-            }
-            Self::Pow(base, exponent) => {
+            },
+            | Self::Pow(base, exponent) => {
                 let derivative = base.diff(symbol)?;
                 if derivative == zero() {
                     return Ok(zero());
@@ -616,8 +662,8 @@ impl Term {
                 let lowered = Term::pow((**base).clone(), exponent - BigRational::one());
                 let coefficient = rational(exponent.clone());
                 Term::mul(Term::mul(coefficient, lowered), derivative)
-            }
-            Self::Fun(function, args) => {
+            },
+            | Self::Fun(function, args) => {
                 if let Fun::Ite = function {
                     // A conditional has no derivative of its own; the honest
                     // answer names the capability instead of guessing a branch.
@@ -634,11 +680,13 @@ impl Term {
                     return Ok(zero());
                 }
                 let outer = match function {
-                    Fun::Sin => Term::fun(Fun::Cos, vec![arg.clone()]),
-                    Fun::Cos => Term::neg(Term::fun(Fun::Sin, vec![arg.clone()])),
-                    Fun::Exp => Term::fun(Fun::Exp, vec![arg.clone()]),
-                    Fun::Ln => Term::pow(arg.clone(), BigRational::from_integer(BigInt::from(-1))),
-                    Fun::Sqrt => {
+                    | Fun::Sin => Term::fun(Fun::Cos, vec![arg.clone()]),
+                    | Fun::Cos => Term::neg(Term::fun(Fun::Sin, vec![arg.clone()])),
+                    | Fun::Exp => Term::fun(Fun::Exp, vec![arg.clone()]),
+                    | Fun::Ln => {
+                        Term::pow(arg.clone(), BigRational::from_integer(BigInt::from(-1)))
+                    },
+                    | Fun::Sqrt => {
                         // d/du sqrt(u) = 1 / (2 sqrt(u))
                         let two = Term::Num(BigRational::from_integer(BigInt::from(2)));
                         let root = Term::fun(Fun::Sqrt, vec![arg.clone()]);
@@ -646,27 +694,29 @@ impl Term {
                             Term::mul(two, root),
                             BigRational::from_integer(BigInt::from(-1)),
                         )
-                    }
-                    Fun::Tan => {
+                    },
+                    | Fun::Tan => {
                         let cos = Term::fun(Fun::Cos, vec![arg.clone()]);
                         Term::pow(cos, BigRational::from_integer(BigInt::from(-2)))
-                    }
+                    },
                     // |u| is differentiated formally as sign(u) = |u| / u.
-                    Fun::Abs => Term::mul(
-                        Term::fun(Fun::Abs, vec![arg.clone()]),
-                        Term::pow(arg.clone(), BigRational::from_integer(BigInt::from(-1))),
-                    ),
-                    Fun::Ite => unreachable!("handled above"),
-                    Fun::Other(name) => {
+                    | Fun::Abs => {
+                        Term::mul(
+                            Term::fun(Fun::Abs, vec![arg.clone()]),
+                            Term::pow(arg.clone(), BigRational::from_integer(BigInt::from(-1))),
+                        )
+                    },
+                    | Fun::Ite => unreachable!("handled above"),
+                    | Fun::Other(name) => {
                         return Err(EvalError::new(
                             "E1001",
                             format!("differentiating `{name}` needs the kernel"),
-                        ))
-                    }
+                        ));
+                    },
                 };
                 Term::mul(outer, inner)
-            }
-            Self::Foreign { .. } => {
+            },
+            | Self::Foreign { .. } => {
                 let handle = self.as_foreign().expect("matched Foreign");
                 let result = aevia_rssn::kernel()
                     .diff(handle, symbol)
@@ -677,7 +727,7 @@ impl Term {
                         "the kernel answered with a value that has no term form",
                     )
                 })?
-            }
+            },
         })
     }
 
@@ -695,66 +745,77 @@ impl Term {
     /// # Errors
     ///
     /// Returns the name of the first unbound symbol.
-    pub fn eval(&self, bindings: &HashMap<String, f64>) -> Result<f64, String> {
+    pub fn eval(
+        &self,
+        bindings: &HashMap<String, f64>,
+    ) -> Result<f64, String> {
         match self {
-            Self::Num(value) => Ok(aevia_dim::rat::to_f64(value)),
-            Self::Sym(name) => match bindings.get(name).copied() {
-                Some(value) => Ok(value),
-                // The mathematical constants are part of the prelude; a term
-                // that only mentions them is numeric.
-                None if name == "pi" => Ok(std::f64::consts::PI),
-                None if name == "e" => Ok(std::f64::consts::E),
-                None => Err(name.clone()),
+            | Self::Num(value) => Ok(aevia_dim::rat::to_f64(value)),
+            | Self::Sym(name) => {
+                match bindings.get(name).copied() {
+                    | Some(value) => Ok(value),
+                    // The mathematical constants are part of the prelude; a term
+                    // that only mentions them is numeric.
+                    | None if name == "pi" => Ok(std::f64::consts::PI),
+                    | None if name == "e" => Ok(std::f64::consts::E),
+                    | None => Err(name.clone()),
+                }
             },
-            Self::Add(items) => {
+            | Self::Add(items) => {
                 let mut total = 0.0;
                 for item in items {
                     total += item.eval(bindings)?;
                 }
                 Ok(total)
-            }
-            Self::Mul(items) => {
+            },
+            | Self::Mul(items) => {
                 let mut total = 1.0;
                 for item in items {
                     total *= item.eval(bindings)?;
                 }
                 Ok(total)
-            }
-            Self::Pow(base, exponent) => {
+            },
+            | Self::Pow(base, exponent) => {
                 let base = base.eval(bindings)?;
                 let exponent = aevia_dim::rat::to_f64(exponent);
                 Ok(base.powf(exponent))
-            }
-            Self::Fun(function, args) => {
+            },
+            | Self::Fun(function, args) => {
                 let value = args
                     .first()
                     .map_or(Ok(f64::NAN), |arg| arg.eval(bindings))?;
                 Ok(function.eval(value))
-            }
-            Self::Foreign { .. } => {
+            },
+            | Self::Foreign { .. } => {
                 crate::kernel::eval_term(self, bindings).ok_or_else(|| "a kernel term".to_string())
-            }
+            },
         }
     }
 }
 
-fn exact_function(function: Fun, value: &BigRational) -> Option<BigRational> {
+fn exact_function(
+    function: Fun,
+    value: &BigRational,
+) -> Option<BigRational> {
     match function {
-        Fun::Sqrt if value.is_positive() => {
+        | Fun::Sqrt if value.is_positive() => {
             let numerator = value.numer().clone();
             let denominator = value.denom().clone();
             let root_num = perfect_root(&numerator, 2)?;
             let root_den = perfect_root(&denominator, 2)?;
             Some(BigRational::new(root_num, root_den))
-        }
-        Fun::Abs => Some(value.abs()),
-        Fun::Exp if value.is_zero() => Some(BigRational::one()),
-        Fun::Ln if value.is_one() => Some(BigRational::zero()),
-        _ => None,
+        },
+        | Fun::Abs => Some(value.abs()),
+        | Fun::Exp if value.is_zero() => Some(BigRational::one()),
+        | Fun::Ln if value.is_one() => Some(BigRational::zero()),
+        | _ => None,
     }
 }
 
-fn perfect_root(value: &BigInt, degree: u32) -> Option<BigInt> {
+fn perfect_root(
+    value: &BigInt,
+    degree: u32,
+) -> Option<BigInt> {
     // An even root of a negative number is not real; an odd root keeps the
     // sign, so `(-8)^(1/3) = -2` (§6.3.4 leaves only negative *even* roots
     // formal).
@@ -765,7 +826,11 @@ fn perfect_root(value: &BigInt, degree: u32) -> Option<BigInt> {
     let approximate = value.to_f64()?;
     let root = approximate.abs().powf(1.0 / f64::from(degree));
     let candidate = BigInt::from(root.round() as i64);
-    let candidate = if negative { -candidate } else { candidate };
+    let candidate = if negative {
+        -candidate
+    } else {
+        candidate
+    };
     if candidate.pow(degree) == *value {
         Some(candidate)
     } else {
@@ -777,9 +842,9 @@ fn perfect_root(value: &BigInt, degree: u32) -> Option<BigInt> {
 /// kernel handle whose rendered text is `oo`).
 fn is_infinity_term(term: &Term) -> bool {
     match term {
-        Term::Sym(name) => name == "oo",
-        Term::Foreign { text, .. } => text.as_ref() == "oo",
-        _ => false,
+        | Term::Sym(name) => name == "oo",
+        | Term::Foreign { text, .. } => text.as_ref() == "oo",
+        | _ => false,
     }
 }
 
@@ -789,16 +854,18 @@ fn infinity_sign_of(term: &Term) -> Option<i8> {
         return Some(1);
     }
     match term {
-        Term::Mul(items) => match items.as_slice() {
-            [Term::Num(coefficient), rest]
-                if coefficient == &BigRational::from_integer(BigInt::from(-1))
-                    && is_infinity_term(rest) =>
-            {
-                Some(-1)
+        | Term::Mul(items) => {
+            match items.as_slice() {
+                | [Term::Num(coefficient), rest]
+                    if coefficient == &BigRational::from_integer(BigInt::from(-1))
+                        && is_infinity_term(rest) =>
+                {
+                    Some(-1)
+                },
+                | _ => None,
             }
-            _ => None,
         },
-        _ => None,
+        | _ => None,
     }
 }
 
@@ -812,16 +879,19 @@ fn infinity_sign_of(term: &Term) -> Option<i8> {
 #[must_use]
 pub fn contains_infinity(term: &Term) -> bool {
     match term {
-        Term::Num(_) => false,
-        Term::Sym(_) | Term::Foreign { .. } => infinity_sign_of(term).is_some(),
-        Term::Add(items) | Term::Mul(items) => items.iter().any(contains_infinity),
-        Term::Pow(base, _) => contains_infinity(base),
-        Term::Fun(_, args) => args.iter().any(contains_infinity),
+        | Term::Num(_) => false,
+        | Term::Sym(_) | Term::Foreign { .. } => infinity_sign_of(term).is_some(),
+        | Term::Add(items) | Term::Mul(items) => items.iter().any(contains_infinity),
+        | Term::Pow(base, _) => contains_infinity(base),
+        | Term::Fun(_, args) => args.iter().any(contains_infinity),
     }
 }
 
 impl fmt::Display for Term {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         self.render(f, false)
     }
 }
@@ -840,26 +910,30 @@ impl Term {
         out
     }
 
-    fn render(&self, f: &mut dyn fmt::Write, repr: bool) -> fmt::Result {
+    fn render(
+        &self,
+        f: &mut dyn fmt::Write,
+        repr: bool,
+    ) -> fmt::Result {
         match self {
-            Self::Num(value) => {
+            | Self::Num(value) => {
                 if repr {
                     f.write_str(&aevia_dim::rat::format_rational(value))
                 } else {
                     f.write_str(&format_rational_decimal(value))
                 }
-            }
+            },
             // `symbol("x")` allocates `x`, `x#2`, ... so that two calls are
             // different symbols (§6.3.6); only that numeric suffix is hidden.
             // A user's `symbol("a#b")` keeps its name.
-            Self::Sym(name) => {
+            | Self::Sym(name) => {
                 if repr {
                     f.write_str(name)
                 } else {
                     f.write_str(display_name(name))
                 }
-            }
-            Self::Add(items) => {
+            },
+            | Self::Add(items) => {
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
                         // `… - oo` is the negative-infinity term, not `-1*oo`.
@@ -877,8 +951,8 @@ impl Term {
                     item.render(f, repr)?;
                 }
                 Ok(())
-            }
-            Self::Mul(items) => {
+            },
+            | Self::Mul(items) => {
                 // `a * b^-1` reads as `a/b`; this is also how an unevaluated
                 // quotient such as `oo / oo` stays legible.
                 if let [numerator, Self::Pow(denominator, exponent)] = items.as_slice() {
@@ -919,8 +993,8 @@ impl Term {
                     }
                 }
                 Ok(())
-            }
-            Self::Pow(base, exponent) => {
+            },
+            | Self::Pow(base, exponent) => {
                 // A negative base needs parentheses: `-8^(1/3)` would read as
                 // the negation of `8^(1/3)`, not as `(-8)^(1/3)`.
                 let needs_parens = matches!(**base, Self::Add(_) | Self::Mul(_))
@@ -937,8 +1011,8 @@ impl Term {
                 } else {
                     write!(f, "^({})", aevia_dim::format_rational(exponent))
                 }
-            }
-            Self::Fun(function, args) => {
+            },
+            | Self::Fun(function, args) => {
                 write!(f, "{}(", function.as_str())?;
                 for (index, arg) in args.iter().enumerate() {
                     if index > 0 {
@@ -947,8 +1021,8 @@ impl Term {
                     arg.render(f, repr)?;
                 }
                 f.write_str(")")
-            }
-            Self::Foreign { text, .. } => f.write_str(text),
+            },
+            | Self::Foreign { text, .. } => f.write_str(text),
         }
     }
 }
@@ -957,7 +1031,10 @@ impl Term {
 struct ReprFormatter<'a>(&'a mut String);
 
 impl fmt::Write for ReprFormatter<'_> {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
+    fn write_str(
+        &mut self,
+        text: &str,
+    ) -> fmt::Result {
         self.0.push_str(text);
         Ok(())
     }
@@ -965,11 +1042,18 @@ impl fmt::Write for ReprFormatter<'_> {
 
 /// Renders a term in LaTeX (`latex`) or Typst syntax.
 #[must_use]
-pub fn term_to_math(term: &Term, latex: bool) -> String {
-    fn render(term: &Term, latex: bool, parent_prec: u8) -> String {
+pub fn term_to_math(
+    term: &Term,
+    latex: bool,
+) -> String {
+    fn render(
+        term: &Term,
+        latex: bool,
+        parent_prec: u8,
+    ) -> String {
         // 2 = sum, 1 = product, 0 = atom.
         let (text, prec) = match term {
-            Term::Num(value) => {
+            | Term::Num(value) => {
                 if value.denom().is_one() {
                     (value.numer().to_string(), 0)
                 } else if latex {
@@ -980,16 +1064,16 @@ pub fn term_to_math(term: &Term, latex: bool) -> String {
                 } else {
                     (format!("frac({}, {})", value.numer(), value.denom()), 0)
                 }
-            }
-            Term::Sym(name) => {
+            },
+            | Term::Sym(name) => {
                 let name = display_name(name);
                 if latex {
                     (format!("\\mathrm{{{name}}}"), 0)
                 } else {
                     (format!("italic({name})"), 0)
                 }
-            }
-            Term::Add(items) => {
+            },
+            | Term::Add(items) => {
                 let mut out = String::new();
                 for (index, item) in items.iter().enumerate() {
                     if index == 0 {
@@ -1003,8 +1087,8 @@ pub fn term_to_math(term: &Term, latex: bool) -> String {
                     }
                 }
                 (out, 2)
-            }
-            Term::Mul(items) => {
+            },
+            | Term::Mul(items) => {
                 let mut out = String::new();
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
@@ -1013,8 +1097,8 @@ pub fn term_to_math(term: &Term, latex: bool) -> String {
                     out.push_str(&render(item, latex, 1));
                 }
                 (out, 1)
-            }
-            Term::Pow(base, exponent) => {
+            },
+            | Term::Pow(base, exponent) => {
                 let base_text = render(base, latex, 0);
                 let exponent_text = if exponent.denom().is_one() {
                     exponent.numer().to_string()
@@ -1029,41 +1113,44 @@ pub fn term_to_math(term: &Term, latex: bool) -> String {
                     format!("{base_text}^({exponent_text})")
                 };
                 (body, 0)
-            }
-            Term::Fun(function, args) => {
+            },
+            | Term::Fun(function, args) => {
                 let rendered: Vec<String> = args.iter().map(|arg| render(arg, latex, 0)).collect();
                 let name = function.as_str();
                 match function {
-                    Fun::Sqrt if args.len() == 1 => {
+                    | Fun::Sqrt if args.len() == 1 => {
                         let body = if latex {
                             format!("\\sqrt{{{}}}", rendered[0])
                         } else {
                             format!("sqrt({})", rendered[0])
                         };
                         (body, 0)
-                    }
-                    Fun::Ite if args.len() == 3 => {
+                    },
+                    | Fun::Ite if args.len() == 3 => {
                         let body = if latex {
                             format!(
                                 "\\begin{{cases}} {} & {} \\\\ {} & \\text{{otherwise}} \\end{{cases}}",
                                 rendered[1], rendered[0], rendered[2]
                             )
                         } else {
-                            format!("cases({} & {}, {} & otherwise)", rendered[1], rendered[0], rendered[2])
+                            format!(
+                                "cases({} & {}, {} & otherwise)",
+                                rendered[1], rendered[0], rendered[2]
+                            )
                         };
                         (body, 0)
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         let call = format!("{name}({})", rendered.join(", "));
                         if latex {
                             (format!("\\operatorname{{{name}}}{call}"), 0)
                         } else {
                             (format!("{name}{call}"), 0)
                         }
-                    }
+                    },
                 }
-            }
-            Term::Foreign { text, .. } => (text.to_string(), 0),
+            },
+            | Term::Foreign { text, .. } => (text.to_string(), 0),
         };
         if prec > parent_prec {
             if latex {
@@ -1083,27 +1170,31 @@ pub fn term_to_math(term: &Term, latex: bool) -> String {
 /// The name a symbol prints as.
 fn display_name(name: &str) -> &str {
     match name.rsplit_once('#') {
-        Some((base, suffix)) if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) => {
+        | Some((base, suffix))
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) =>
+        {
             base
-        }
-        _ => name,
+        },
+        | _ => name,
     }
 }
 
 fn is_negative(term: &Term) -> bool {
     match term {
-        Term::Num(value) => value.is_negative(),
-        Term::Mul(factors) => factors
-            .first()
-            .is_some_and(|first| matches!(first, Term::Num(value) if value.is_negative())),
-        _ => false,
+        | Term::Num(value) => value.is_negative(),
+        | Term::Mul(factors) => {
+            factors
+                .first()
+                .is_some_and(|first| matches!(first, Term::Num(value) if value.is_negative()))
+        },
+        | _ => false,
     }
 }
 
 fn absolute(term: &Term) -> Term {
     match term {
-        Term::Num(value) => Term::Num(value.abs()),
-        Term::Mul(factors) => {
+        | Term::Num(value) => Term::Num(value.abs()),
+        | Term::Mul(factors) => {
             let mut factors = factors.clone();
             if let Some(Term::Num(value)) = factors.first_mut() {
                 *value = value.abs();
@@ -1113,8 +1204,8 @@ fn absolute(term: &Term) -> Term {
             } else {
                 Term::Mul(factors)
             }
-        }
-        other => other.clone(),
+        },
+        | other => other.clone(),
     }
 }
 
@@ -1150,10 +1241,7 @@ mod tests {
         // x^3 - 3x + 1 -> 3x^2 - 3
         let term = Term::add(
             Term::Pow(Box::new(x()), BigRational::from_integer(BigInt::from(3))),
-            Term::add(
-                Term::mul(Term::int(-3), x()),
-                Term::int(1),
-            ),
+            Term::add(Term::mul(Term::int(-3), x()), Term::int(1)),
         );
         let derivative = term.diff("x").expect("differentiates");
         assert_eq!(derivative.to_string(), "3*x^2 - 3");
@@ -1161,7 +1249,10 @@ mod tests {
 
     #[test]
     fn substitution_is_structural() {
-        let term = Term::add(Term::Pow(Box::new(x()), BigRational::from_integer(BigInt::from(2))), Term::int(1));
+        let term = Term::add(
+            Term::Pow(Box::new(x()), BigRational::from_integer(BigInt::from(2))),
+            Term::int(1),
+        );
         let replaced = term.substitute("x", &Term::int(3)).expect("substitutes");
         assert_eq!(replaced.to_string(), "10");
     }

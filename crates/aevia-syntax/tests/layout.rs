@@ -3,9 +3,14 @@
 
 mod support;
 
-use aevia_syntax::ast::{DeclKind, ExprKind};
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::ExprKind;
 use aevia_syntax::token::TokenKind;
-use support::{codes, expect_clean, expect_code, lex_only, parse};
+use support::codes;
+use support::expect_clean;
+use support::expect_code;
+use support::lex_only;
+use support::parse;
 
 #[test]
 fn let_in_is_a_layout_group_body() {
@@ -57,7 +62,10 @@ fn a_block_without_a_final_expression_is_e0201() {
     // §2.3.1: "块必须至少有一个最终表达式".
     let source = "fn f() =\n    let a = 1\n";
     let diagnostic = expect_code(source, "E0201");
-    assert_eq!(&source[diagnostic.span.start as usize..diagnostic.span.end as usize], "\n");
+    assert_eq!(
+        &source[diagnostic.span.start as usize..diagnostic.span.end as usize],
+        "\n"
+    );
 }
 
 #[test]

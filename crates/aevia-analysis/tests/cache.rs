@@ -4,7 +4,9 @@
 //! Every test builds a real package in a temp directory, so invalidation is
 //! exercised against the filesystem the loader actually reads.
 
-use aevia_analysis::{Analysis, AnalysisCache, Document};
+use aevia_analysis::Analysis;
+use aevia_analysis::AnalysisCache;
+use aevia_analysis::Document;
 
 /// A temporary package that removes itself.
 struct Package {
@@ -23,12 +25,21 @@ impl Package {
         .expect("write manifest");
         Self { root }
     }
-    fn write(&self, name: &str, source: &str) -> std::path::PathBuf {
+
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
         let path = self.root.join(name);
         std::fs::write(&path, source).expect("write source");
         path
     }
-    fn path(&self, name: &str) -> std::path::PathBuf {
+
+    fn path(
+        &self,
+        name: &str,
+    ) -> std::path::PathBuf {
         self.root.join(name)
     }
 }
@@ -41,10 +52,7 @@ impl Drop for Package {
 /// A package whose `B` imports `A`, and B's text.
 fn imported_package(name: &str) -> (Package, String) {
     let package = Package::new(name);
-    package.write(
-        "src/A.aev",
-        "module A\n\nfn value(): Int = 1\n",
-    );
+    package.write("src/A.aev", "module A\n\nfn value(): Int = 1\n");
     let source = "module B\n\nimport A\n\nlet got = A.value()\n".to_string();
     package.write("src/B.aev", &source);
     (package, source)
@@ -55,9 +63,15 @@ fn document(source: &str) -> Document {
 }
 
 /// The hover text for `needle` in the document.
-fn hover(analysis: &Analysis<'_>, source: &str, needle: &str) -> String {
+fn hover(
+    analysis: &Analysis<'_>,
+    source: &str,
+    needle: &str,
+) -> String {
     let offset = u32::try_from(source.find(needle).expect("needle")).expect("offset");
-    analysis.hover(offset).map_or_else(String::new, |hover| hover.contents)
+    analysis
+        .hover(offset)
+        .map_or_else(String::new, |hover| hover.contents)
 }
 
 #[test]
@@ -69,11 +83,18 @@ fn an_unchanged_package_is_loaded_once() {
     let second = cache.program(&path);
     assert_eq!(cache.loads(), 1, "the second request was a cache miss");
     assert_eq!(cache.len(), 1);
-    assert!(std::rc::Rc::ptr_eq(&first, &second), "the program was reloaded");
+    assert!(
+        std::rc::Rc::ptr_eq(&first, &second),
+        "the program was reloaded"
+    );
     let document = document(&source);
     let analysis = Analysis::from_program(&document, second);
     assert!(analysis.is_multi_module());
-    assert!(analysis.diagnostics().is_empty(), "{:#?}", analysis.diagnostics());
+    assert!(
+        analysis.diagnostics().is_empty(),
+        "{:#?}",
+        analysis.diagnostics()
+    );
 }
 
 #[test]
@@ -87,10 +108,7 @@ fn editing_an_import_invalidates_and_the_new_value_is_seen() {
     assert!(before.contains("Int"), "{before}");
 
     // A new return type changes the import's content and length.
-    package.write(
-        "src/A.aev",
-        "module A\n\nfn value(): Float = 1.0\n",
-    );
+    package.write("src/A.aev", "module A\n\nfn value(): Float = 1.0\n");
     let second = cache.program(&path);
     assert_eq!(cache.loads(), 2, "the changed import did not invalidate");
     let after = hover(&Analysis::from_program(&document, second), &source, "value");
@@ -108,7 +126,10 @@ fn adding_a_missing_module_invalidates() {
     let first = cache.program(&path);
     let document = document(&source);
     let missing = Analysis::from_program(&document, first);
-    assert!(!missing.diagnostics().is_empty(), "a missing import was clean");
+    assert!(
+        !missing.diagnostics().is_empty(),
+        "a missing import was clean"
+    );
 
     // Creating the module must invalidate: the walk sees a new `.aev`.
     package.write("src/A.aev", "module A\n\nfn value(): Int = 1\n");
@@ -116,7 +137,11 @@ fn adding_a_missing_module_invalidates() {
     assert_eq!(cache.loads(), 2, "the new module did not invalidate");
     let resolved = Analysis::from_program(&document, second);
     assert!(resolved.is_multi_module());
-    assert!(resolved.diagnostics().is_empty(), "{:#?}", resolved.diagnostics());
+    assert!(
+        resolved.diagnostics().is_empty(),
+        "{:#?}",
+        resolved.diagnostics()
+    );
 }
 
 #[test]
@@ -126,9 +151,11 @@ fn deleting_an_imported_module_invalidates() {
     let mut cache = AnalysisCache::new();
     let first = cache.program(&path);
     let document = document(&source);
-    assert!(Analysis::from_program(&document, first)
-        .diagnostics()
-        .is_empty());
+    assert!(
+        Analysis::from_program(&document, first)
+            .diagnostics()
+            .is_empty()
+    );
     std::fs::remove_file(package.path("src/A.aev")).expect("delete");
     let second = cache.program(&path);
     assert_eq!(cache.loads(), 2, "the deletion did not invalidate");
@@ -166,7 +193,10 @@ fn a_same_length_edit_of_the_entry_is_detected_by_the_content_hash() {
     let mut cache = AnalysisCache::new();
     let _ = cache.program(&path);
     // Same length, different content: only the content hash can see this.
-    package.write("src/B.aev", "module B\n\nimport A\n\nlet got = A.value(9)\n");
+    package.write(
+        "src/B.aev",
+        "module B\n\nimport A\n\nlet got = A.value(9)\n",
+    );
     let _ = cache.program(&path);
     assert_eq!(cache.loads(), 2, "a same-length entry edit was not seen");
 }
@@ -271,7 +301,10 @@ fn a_dirty_buffer_still_sees_an_import_edit() {
 }
 
 /// The hover text of `A.value` in `source`.
-fn analysis_hover(analysis: &Analysis<'_>, source: &str) -> String {
+fn analysis_hover(
+    analysis: &Analysis<'_>,
+    source: &str,
+) -> String {
     let offset = u32::try_from(source.find("value").expect("needle")).expect("offset");
     analysis
         .hover(offset)

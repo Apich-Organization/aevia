@@ -13,12 +13,20 @@
 //!   their ASCII spelling while keeping their original span, so diagnostics and
 //!   the formatter can still show what the user wrote.
 
-use crate::diagnostic::{Diagnostic, Diagnostics};
-use crate::span::{FileId, Span};
-use crate::token::{DocComment, Keyword, Punct, StringPart, Token, TokenKind};
+use crate::diagnostic::Diagnostic;
+use crate::diagnostic::Diagnostics;
+use crate::span::FileId;
+use crate::span::Span;
+use crate::token::DocComment;
+use crate::token::Keyword;
+use crate::token::Punct;
+use crate::token::StringPart;
+use crate::token::Token;
+use crate::token::TokenKind;
 use num_bigint::BigInt;
 use num_traits::Num;
-use unicode_ident::{is_xid_continue, is_xid_start};
+use unicode_ident::is_xid_continue;
+use unicode_ident::is_xid_start;
 use unicode_normalization::UnicodeNormalization;
 
 /// The result of lexing a file.
@@ -36,7 +44,10 @@ pub struct LexOutput {
 ///
 /// Returns every lexical diagnostic that was recovered from; the caller
 /// renders them and stops before parsing.
-pub fn lex(file: FileId, text: &str) -> Result<LexOutput, Diagnostics> {
+pub fn lex(
+    file: FileId,
+    text: &str,
+) -> Result<LexOutput, Diagnostics> {
     Lexer::new(file, text, 0).run()
 }
 
@@ -44,15 +55,21 @@ pub fn lex(file: FileId, text: &str) -> Result<LexOutput, Diagnostics> {
 ///
 /// `base` is the byte offset of `text` inside its file, so spans stay correct.
 #[must_use]
-pub fn lex_inline(file: FileId, text: &str, base: usize) -> LexOutput {
+pub fn lex_inline(
+    file: FileId,
+    text: &str,
+    base: usize,
+) -> LexOutput {
     Lexer::new(file, text, base)
         .run_inline()
-        .unwrap_or_else(|_diagnostics| LexOutput {
-            tokens: vec![Token::new(
-                TokenKind::Eof,
-                Span::new(file, base, base + text.len()),
-            )],
-            docs: Vec::new(),
+        .unwrap_or_else(|_diagnostics| {
+            LexOutput {
+                tokens: vec![Token::new(
+                    TokenKind::Eof,
+                    Span::new(file, base, base + text.len()),
+                )],
+                docs: Vec::new(),
+            }
         })
 }
 
@@ -71,7 +88,11 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn new(file: FileId, src: &'a str, base: usize) -> Self {
+    fn new(
+        file: FileId,
+        src: &'a str,
+        base: usize,
+    ) -> Self {
         Self {
             file,
             src,
@@ -146,22 +167,22 @@ impl<'a> Lexer<'a> {
                 return;
             };
             match c {
-                '\n' | '\r' => self.newline(),
-                '#' => {
+                | '\n' | '\r' => self.newline(),
+                | '#' => {
                     self.comment();
-                }
-                '"' => {
+                },
+                | '"' => {
                     self.string();
-                }
-                'r' if self.peek_at(1) == Some('"') => {
+                },
+                | 'r' if self.peek_at(1) == Some('"') => {
                     self.bump();
                     self.raw_string();
-                }
-                c if c.is_ascii_digit() => self.number(),
-                c if is_xid_start(c) || c == '_' => self.identifier(),
-                '°' => self.degree_unit(),
-                c if is_superscript(c) => self.superscript(),
-                _ => self.punct(),
+                },
+                | c if c.is_ascii_digit() => self.number(),
+                | c if is_xid_start(c) || c == '_' => self.identifier(),
+                | '°' => self.degree_unit(),
+                | c if is_superscript(c) => self.superscript(),
+                | _ => self.punct(),
             }
         }
     }
@@ -192,7 +213,10 @@ impl<'a> Lexer<'a> {
         self.src[self.pos..].chars().next()
     }
 
-    fn peek_at(&self, offset: usize) -> Option<char> {
+    fn peek_at(
+        &self,
+        offset: usize,
+    ) -> Option<char> {
         self.src[self.pos..].chars().nth(offset)
     }
 
@@ -201,7 +225,6 @@ impl<'a> Lexer<'a> {
         self.pos += c.len_utf8();
         Some(c)
     }
-
 
     fn skip_spaces(&mut self) {
         while let Some(c) = self.peek() {
@@ -213,7 +236,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn push(&mut self, kind: TokenKind, start: usize, end: usize) {
+    fn push(
+        &mut self,
+        kind: TokenKind,
+        start: usize,
+        end: usize,
+    ) {
         if !matches!(kind, TokenKind::Newline | TokenKind::Dedent) {
             self.line_has_token = true;
         }
@@ -221,12 +249,22 @@ impl<'a> Lexer<'a> {
             .push(Token::new(kind, Span::new(self.file, start, end)));
     }
 
-    fn emit(&mut self, kind: TokenKind, start: usize) {
+    fn emit(
+        &mut self,
+        kind: TokenKind,
+        start: usize,
+    ) {
         let end = self.mark();
         self.push(kind, start, end);
     }
 
-    fn error(&mut self, code: &str, message: impl Into<String>, start: usize, end: usize) {
+    fn error(
+        &mut self,
+        code: &str,
+        message: impl Into<String>,
+        start: usize,
+        end: usize,
+    ) {
         let span = Span::new(self.file, start, end);
         self.diagnostics
             .push(Diagnostic::error(code, message, span));
@@ -259,49 +297,49 @@ impl<'a> Lexer<'a> {
             let mut indent = 0usize;
             loop {
                 match self.peek() {
-                    Some(' ') => {
+                    | Some(' ') => {
                         self.bump();
                         indent += 1;
-                    }
-                    Some('\t') => {
+                    },
+                    | Some('\t') => {
                         let start = self.mark();
                         self.bump();
                         indent += 1;
-                        self.error(
-                            "E0101",
-                            "tab character in indentation",
-                            start,
-                            self.mark(),
-                        );
+                        self.error("E0101", "tab character in indentation", start, self.mark());
                         // Keep measuring so the rest of the line still parses.
                         while let Some(' ') | Some('\t') = self.peek() {
                             if self.peek() == Some('\t') {
                                 let at = self.mark();
                                 self.bump();
-                                self.error("E0101", "tab character in indentation", at, self.mark());
+                                self.error(
+                                    "E0101",
+                                    "tab character in indentation",
+                                    at,
+                                    self.mark(),
+                                );
                             } else {
                                 self.bump();
                             }
                             indent += 1;
                         }
-                    }
-                    _ => break,
+                    },
+                    | _ => break,
                 }
             }
             match self.peek() {
-                None => {
+                | None => {
                     self.at_line_start = false;
                     return false;
-                }
-                Some('\n') => {
+                },
+                | Some('\n') => {
                     self.bump();
                     continue;
-                }
-                Some('\r') => {
+                },
+                | Some('\r') => {
                     self.bump();
                     continue;
-                }
-                Some('#') => {
+                },
+                | Some('#') => {
                     let spanned_newline = self.comment();
                     if spanned_newline {
                         // The comment swallowed one or more line breaks. Code
@@ -317,22 +355,22 @@ impl<'a> Lexer<'a> {
                     }
                     self.skip_spaces();
                     match self.peek() {
-                        None => {
+                        | None => {
                             self.at_line_start = false;
                             return false;
-                        }
-                        Some('\n') => {
+                        },
+                        | Some('\n') => {
                             self.bump();
                             continue;
-                        }
-                        Some('\r') => {
+                        },
+                        | Some('\r') => {
                             self.bump();
                             continue;
-                        }
-                        _ => {}
+                        },
+                        | _ => {},
                     }
-                }
-                _ => {}
+                },
+                | _ => {},
             }
             self.apply_indent(indent);
             self.at_line_start = false;
@@ -340,7 +378,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn apply_indent(&mut self, indent: usize) {
+    fn apply_indent(
+        &mut self,
+        indent: usize,
+    ) {
         let current = *self.indent_stack.last().unwrap_or(&0);
         let at = self.mark();
         if indent > current {
@@ -434,10 +475,14 @@ impl<'a> Lexer<'a> {
         // §1.5.1: identifiers are compared in NFC, so `é` written as `e` plus a
         // combining accent is the same name as the precomposed one.
         let normalised: String = raw.nfc().collect();
-        let text: &str = if normalised == raw { raw } else { &normalised };
+        let text: &str = if normalised == raw {
+            raw
+        } else {
+            &normalised
+        };
         let kind = match Keyword::from_word(text) {
-            Some(keyword) => TokenKind::Keyword(keyword),
-            None => {
+            | Some(keyword) => TokenKind::Keyword(keyword),
+            | None => {
                 // Only ASCII capitals introduce a `UIDENT`: the spec's own
                 // example `Δt` is a value binding, not a constructor (§1.5.1).
                 let first = text.chars().next().unwrap_or('_');
@@ -446,7 +491,7 @@ impl<'a> Lexer<'a> {
                 } else {
                     TokenKind::Ident(text.to_string())
                 }
-            }
+            },
         };
         self.emit(kind, start);
     }
@@ -481,10 +526,10 @@ impl<'a> Lexer<'a> {
         if self.peek() == Some('0') {
             if let Some(radix_char) = self.peek_at(1) {
                 let radix = match radix_char {
-                    'x' | 'X' => Some(16),
-                    'o' | 'O' => Some(8),
-                    'b' | 'B' => Some(2),
-                    _ => None,
+                    | 'x' | 'X' => Some(16),
+                    | 'o' | 'O' => Some(8),
+                    | 'b' | 'B' => Some(2),
+                    | _ => None,
                 };
                 if let Some(radix) = radix {
                     self.bump();
@@ -520,12 +565,7 @@ impl<'a> Lexer<'a> {
                         self.error("E0106", "numeric literal ends with `_`", at, at);
                     }
                     if cleaned.is_empty() {
-                        self.error(
-                            "E0106",
-                            "numeric literal has no digits",
-                            start,
-                            self.mark(),
-                        );
+                        self.error("E0106", "numeric literal has no digits", start, self.mark());
                         return;
                     }
                     if self.pos == digits_start {
@@ -545,8 +585,10 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     match BigInt::from_str_radix(&cleaned, radix) {
-                        Ok(value) => self.emit(TokenKind::Int(value), start),
-                        Err(_) => self.error("E0106", "invalid numeric literal", start, self.mark()),
+                        | Ok(value) => self.emit(TokenKind::Int(value), start),
+                        | Err(_) => {
+                            self.error("E0106", "invalid numeric literal", start, self.mark())
+                        },
                     }
                     return;
                 }
@@ -631,13 +673,20 @@ impl<'a> Lexer<'a> {
         }
         if is_float {
             match cleaned.parse::<f64>() {
-                Ok(value) => self.emit(TokenKind::Float(value), start),
-                Err(_) => self.error("E0106", "invalid floating-point literal", start, self.mark()),
+                | Ok(value) => self.emit(TokenKind::Float(value), start),
+                | Err(_) => {
+                    self.error(
+                        "E0106",
+                        "invalid floating-point literal",
+                        start,
+                        self.mark(),
+                    )
+                },
             }
         } else {
             match BigInt::from_str_radix(&cleaned, 10) {
-                Ok(value) => self.emit(TokenKind::Int(value), start),
-                Err(_) => self.error("E0106", "invalid integer literal", start, self.mark()),
+                | Ok(value) => self.emit(TokenKind::Int(value), start),
+                | Err(_) => self.error("E0106", "invalid integer literal", start, self.mark()),
             }
         }
     }
@@ -653,54 +702,54 @@ impl<'a> Lexer<'a> {
         let mut text = String::new();
         loop {
             match self.peek() {
-                None => {
+                | None => {
                     self.error("E0104", "unclosed string literal", start, self.mark());
                     break;
-                }
-                Some('"') => {
+                },
+                | Some('"') => {
                     self.bump();
                     break;
-                }
-                Some('\n') => {
+                },
+                | Some('\n') => {
                     self.error("E0104", "unclosed string literal", start, self.mark());
                     break;
-                }
-                Some('\\') => {
+                },
+                | Some('\\') => {
                     self.bump();
                     match self.peek() {
-                        Some('n') => {
+                        | Some('n') => {
                             text.push('\n');
                             self.bump();
-                        }
-                        Some('t') => {
+                        },
+                        | Some('t') => {
                             text.push('\t');
                             self.bump();
-                        }
-                        Some('r') => {
+                        },
+                        | Some('r') => {
                             text.push('\r');
                             self.bump();
-                        }
-                        Some('0') => {
+                        },
+                        | Some('0') => {
                             text.push('\0');
                             self.bump();
-                        }
-                        Some('\\') => {
+                        },
+                        | Some('\\') => {
                             text.push('\\');
                             self.bump();
-                        }
-                        Some('"') => {
+                        },
+                        | Some('"') => {
                             text.push('"');
                             self.bump();
-                        }
-                        Some('{') => {
+                        },
+                        | Some('{') => {
                             text.push('{');
                             self.bump();
-                        }
-                        Some('}') => {
+                        },
+                        | Some('}') => {
                             text.push('}');
                             self.bump();
-                        }
-                        Some('u') => {
+                        },
+                        | Some('u') => {
                             self.bump();
                             if self.peek() != Some('{') {
                                 self.error("E0104", "expected `{` after `\\u`", start, self.mark());
@@ -716,21 +765,28 @@ impl<'a> Lexer<'a> {
                             }
                             let hex = self.src[hex_start..self.pos].to_string();
                             if self.peek() != Some('}') {
-                                self.error("E0104", "unclosed `\\u{...}` escape", start, self.mark());
+                                self.error(
+                                    "E0104",
+                                    "unclosed `\\u{...}` escape",
+                                    start,
+                                    self.mark(),
+                                );
                                 continue;
                             }
                             self.bump();
                             match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                                Some(c) => text.push(c),
-                                None => self.error(
-                                    "E0105",
-                                    format!("`\\u{{{hex}}}` is not a Unicode scalar value"),
-                                    hex_start,
-                                    self.pos,
-                                ),
+                                | Some(c) => text.push(c),
+                                | None => {
+                                    self.error(
+                                        "E0105",
+                                        format!("`\\u{{{hex}}}` is not a Unicode scalar value"),
+                                        hex_start,
+                                        self.pos,
+                                    )
+                                },
                             }
-                        }
-                        Some(other) => {
+                        },
+                        | Some(other) => {
                             let at = self.mark();
                             self.bump();
                             self.error(
@@ -739,23 +795,23 @@ impl<'a> Lexer<'a> {
                                 at,
                                 self.mark(),
                             );
-                        }
-                        None => {}
+                        },
+                        | None => {},
                     }
-                }
-                Some('{') => {
+                },
+                | Some('{') => {
                     if !text.is_empty() {
                         parts.push(StringPart::Text(std::mem::take(&mut text)));
                     }
                     match self.interpolation() {
-                        Some(part) => parts.push(part),
-                        None => break,
+                        | Some(part) => parts.push(part),
+                        | None => break,
                     }
-                }
-                Some(c) => {
+                },
+                | Some(c) => {
                     text.push(c);
                     self.bump();
-                }
+                },
             }
         }
         if !text.is_empty() {
@@ -771,18 +827,18 @@ impl<'a> Lexer<'a> {
         let mut depth = 1usize;
         while let Some(c) = self.peek() {
             match c {
-                '{' => {
+                | '{' => {
                     depth += 1;
                     self.bump();
-                }
-                '}' => {
+                },
+                | '}' => {
                     depth -= 1;
                     if depth == 0 {
                         break;
                     }
                     self.bump();
-                }
-                '\\' => {
+                },
+                | '\\' => {
                     // An escape belongs to a nested string literal: consume the
                     // backslash and its character together, so `\"` does not
                     // look like the start of a string.
@@ -790,8 +846,8 @@ impl<'a> Lexer<'a> {
                     if self.peek().is_some() {
                         self.bump();
                     }
-                }
-                '"' => {
+                },
+                | '"' => {
                     // Skip a nested string so braces inside it do not count.
                     self.bump();
                     while let Some(inner) = self.peek() {
@@ -805,10 +861,10 @@ impl<'a> Lexer<'a> {
                             self.bump();
                         }
                     }
-                }
-                _ => {
+                },
+                | _ => {
                     self.bump();
-                }
+                },
             }
         }
         if self.peek() != Some('}') {
@@ -821,11 +877,7 @@ impl<'a> Lexer<'a> {
             return None;
         }
         let source = unescape_source(&self.src[content_start..self.pos]);
-        let span = Span::new(
-            self.file,
-            self.base + content_start,
-            self.base + self.pos,
-        );
+        let span = Span::new(self.file, self.base + content_start, self.base + self.pos);
         self.bump(); // '}'
         Some(StringPart::Interpolation { source, span })
     }
@@ -836,27 +888,27 @@ impl<'a> Lexer<'a> {
         let content_start = self.pos;
         loop {
             match self.peek() {
-                None | Some('\n') => {
+                | None | Some('\n') => {
                     self.error("E0104", "unclosed raw string literal", start, self.mark());
                     break;
-                }
-                Some('"') => break,
-                Some(_) => {
+                },
+                | Some('"') => break,
+                | Some(_) => {
                     self.bump();
-                }
+                },
             }
         }
         let text = self.src[content_start..self.pos].to_string();
         if self.peek() == Some('"') {
             self.bump();
         }
-        self.emit(
-            TokenKind::Str(vec![StringPart::Text(text)]),
-            start,
-        );
+        self.emit(TokenKind::Str(vec![StringPart::Text(text)]), start);
     }
 
-    fn multiline_string(&mut self, start: usize) {
+    fn multiline_string(
+        &mut self,
+        start: usize,
+    ) {
         self.pos += 3;
         let content_start = self.pos;
         let mut end = None;
@@ -939,13 +991,13 @@ impl<'a> Lexer<'a> {
             if self.src[self.pos..].starts_with(text) {
                 self.pos += text.len();
                 match punct {
-                    Punct::LParen | Punct::LBracket | Punct::LBrace => {
+                    | Punct::LParen | Punct::LBracket | Punct::LBrace => {
                         self.bracket_depth += 1;
-                    }
-                    Punct::RParen | Punct::RBracket | Punct::RBrace => {
+                    },
+                    | Punct::RParen | Punct::RBracket | Punct::RBrace => {
                         self.bracket_depth = self.bracket_depth.saturating_sub(1);
-                    }
-                    _ => {}
+                    },
+                    | _ => {},
                 }
                 self.emit(TokenKind::Punct(*punct), start);
                 return;
@@ -981,12 +1033,12 @@ fn unescape_source(source: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.peek() {
-                Some('"') | Some('{') | Some('}') => {
+                | Some('"') | Some('{') | Some('}') => {
                     if let Some(escaped) = chars.next() {
                         out.push(escaped);
                     }
-                }
-                _ => out.push('\\'),
+                },
+                | _ => out.push('\\'),
             }
             continue;
         }
@@ -1027,12 +1079,12 @@ fn split_interpolations(
     };
     while let Some((_, ch)) = chars.next() {
         match ch {
-            '\\' => {
+            | '\\' => {
                 // Keep the escape verbatim; the run is decoded when it is
                 // flushed, so `\{` never starts an interpolation.
                 literal.push('\\');
                 match chars.next() {
-                    Some((_, 'u')) => {
+                    | Some((_, 'u')) => {
                         literal.push('u');
                         if matches!(chars.peek(), Some((_, '{'))) {
                             for (_, inner) in chars.by_ref() {
@@ -1042,37 +1094,37 @@ fn split_interpolations(
                                 }
                             }
                         }
-                    }
-                    Some((_, escaped)) => literal.push(escaped),
-                    None => {}
+                    },
+                    | Some((_, escaped)) => literal.push(escaped),
+                    | None => {},
                 }
-            }
-            '{' => {
+            },
+            | '{' => {
                 let start = chars.peek().map_or(text.len(), |(index, _)| *index);
                 let mut depth = 1usize;
                 let mut end = text.len();
                 while let Some((index, inner)) = chars.next() {
                     match inner {
-                        '{' => depth += 1,
-                        '}' => {
+                        | '{' => depth += 1,
+                        | '}' => {
                             depth -= 1;
                             if depth == 0 {
                                 end = index;
                                 break;
                             }
-                        }
-                        '\\' => {
+                        },
+                        | '\\' => {
                             chars.next();
-                        }
-                        '"' => {
+                        },
+                        | '"' => {
                             // A nested string may contain braces.
                             for (_, quoted) in chars.by_ref() {
                                 if quoted == '"' {
                                     break;
                                 }
                             }
-                        }
-                        _ => {}
+                        },
+                        | _ => {},
                     }
                 }
                 flush(&mut literal, &mut parts);
@@ -1080,8 +1132,8 @@ fn split_interpolations(
                     source: unescape_source(&text[start..end]),
                     span,
                 });
-            }
-            other => literal.push(other),
+            },
+            | other => literal.push(other),
         }
     }
     flush(&mut literal, &mut parts);
@@ -1091,7 +1143,10 @@ fn split_interpolations(
 /// Decodes the escapes of §1.7 (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\{`,
 /// `\}`, `\u{...}`). An unknown escape is reported through `on_error` and its
 /// character is kept, so no source text is lost.
-fn decode_escapes(text: &str, mut on_error: impl FnMut(&str)) -> String {
+fn decode_escapes(
+    text: &str,
+    mut on_error: impl FnMut(&str),
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -1104,15 +1159,15 @@ fn decode_escapes(text: &str, mut on_error: impl FnMut(&str)) -> String {
             break;
         };
         match next {
-            'n' => out.push('\n'),
-            't' => out.push('\t'),
-            'r' => out.push('\r'),
-            '0' => out.push('\0'),
-            '\\' => out.push('\\'),
-            '"' => out.push('"'),
-            '{' => out.push('{'),
-            '}' => out.push('}'),
-            'u' => {
+            | 'n' => out.push('\n'),
+            | 't' => out.push('\t'),
+            | 'r' => out.push('\r'),
+            | '0' => out.push('\0'),
+            | '\\' => out.push('\\'),
+            | '"' => out.push('"'),
+            | '{' => out.push('{'),
+            | '}' => out.push('}'),
+            | 'u' => {
                 let mut hex = String::new();
                 if chars.peek() == Some(&'{') {
                     chars.next();
@@ -1124,14 +1179,14 @@ fn decode_escapes(text: &str, mut on_error: impl FnMut(&str)) -> String {
                     }
                 }
                 match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                    Some(decoded) => out.push(decoded),
-                    None => on_error(&format!("\\u{{{hex}}}")),
+                    | Some(decoded) => out.push(decoded),
+                    | None => on_error(&format!("\\u{{{hex}}}")),
                 }
-            }
-            other => {
+            },
+            | other => {
                 on_error(&format!("\\{other}"));
                 out.push(other);
-            }
+            },
         }
     }
     out
@@ -1181,11 +1236,13 @@ mod tests {
     fn layout(source: &str) -> Vec<String> {
         kinds(source)
             .into_iter()
-            .map(|kind| match kind {
-                TokenKind::Newline => "NL".to_string(),
-                TokenKind::Indent => "INDENT".to_string(),
-                TokenKind::Dedent => "DEDENT".to_string(),
-                other => other.describe(),
+            .map(|kind| {
+                match kind {
+                    | TokenKind::Newline => "NL".to_string(),
+                    | TokenKind::Indent => "INDENT".to_string(),
+                    | TokenKind::Dedent => "DEDENT".to_string(),
+                    | other => other.describe(),
+                }
             })
             .collect()
     }
@@ -1196,8 +1253,22 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                "`fn`", "identifier `f`", "`(`", "identifier `x`", "`)`", "`=`", "NL", "INDENT",
-                "`let`", "identifier `y`", "`=`", "`1`", "NL", "identifier `y`", "NL", "DEDENT",
+                "`fn`",
+                "identifier `f`",
+                "`(`",
+                "identifier `x`",
+                "`)`",
+                "`=`",
+                "NL",
+                "INDENT",
+                "`let`",
+                "identifier `y`",
+                "`=`",
+                "`1`",
+                "NL",
+                "identifier `y`",
+                "NL",
+                "DEDENT",
             ]
         );
     }
@@ -1241,7 +1312,9 @@ mod tests {
             panic!("expected string");
         };
         assert_eq!(parts[0], StringPart::Text("a".to_string()));
-        assert!(matches!(&parts[1], StringPart::Interpolation { source, .. } if source.trim() == "x + 1"));
+        assert!(
+            matches!(&parts[1], StringPart::Interpolation { source, .. } if source.trim() == "x + 1")
+        );
         assert_eq!(parts[2], StringPart::Text("b{c}".to_string()));
     }
 
@@ -1292,10 +1365,9 @@ mod regression_tests {
     fn typographic_superscripts_are_recognised() {
         // U+00B2 is the `²` most keyboards produce.
         let output = lex(0, "3 m\u{00B2}").expect("lexes");
-        assert!(output
-            .tokens
-            .iter()
-            .any(|token| matches!(&token.kind, TokenKind::Superscript(text) if text == "\u{00B2}")));
+        assert!(output.tokens.iter().any(
+            |token| matches!(&token.kind, TokenKind::Superscript(text) if text == "\u{00B2}")
+        ));
         let output = lex(0, "2 s\u{207B}\u{00B9}").expect("lexes");
         assert!(output.tokens.iter().any(
             |token| matches!(&token.kind, TokenKind::Superscript(text) if text == "\u{207B}\u{00B9}")
@@ -1305,23 +1377,29 @@ mod regression_tests {
     #[test]
     fn carriage_return_is_a_line_terminator() {
         let tokens = lex(0, "fn f() =\r    let x = 1\r    x\r").expect("lexes");
-        assert!(tokens
-            .tokens
-            .iter()
-            .any(|token| matches!(token.kind, TokenKind::Indent)));
-        assert!(tokens
-            .tokens
-            .iter()
-            .any(|token| matches!(token.kind, TokenKind::Dedent)));
+        assert!(
+            tokens
+                .tokens
+                .iter()
+                .any(|token| matches!(token.kind, TokenKind::Indent))
+        );
+        assert!(
+            tokens
+                .tokens
+                .iter()
+                .any(|token| matches!(token.kind, TokenKind::Dedent))
+        );
     }
 
     #[test]
     fn a_multiline_comment_does_not_indent_the_next_line() {
         let tokens = lex(0, "#- c\n-# let b = 2\n").expect("lexes");
-        assert!(!tokens
-            .tokens
-            .iter()
-            .any(|token| matches!(token.kind, TokenKind::Indent)));
+        assert!(
+            !tokens
+                .tokens
+                .iter()
+                .any(|token| matches!(token.kind, TokenKind::Indent))
+        );
     }
 
     #[test]
@@ -1349,6 +1427,9 @@ mod regression_tests {
         lexer.scan();
         lexer.finish();
         let kinds: Vec<&TokenKind> = lexer.tokens.iter().map(|token| &token.kind).collect();
-        assert!(matches!(kinds[kinds.len() - 2], TokenKind::Newline), "{kinds:?}");
+        assert!(
+            matches!(kinds[kinds.len() - 2], TokenKind::Newline),
+            "{kinds:?}"
+        );
     }
 }

@@ -14,7 +14,10 @@
 //! * [`codegen`] — the `Rssn` module, generated from that manifest.
 //!
 //! ```
-//! use aevia_rssn::{kernel, registry, Val, Num};
+//! use aevia_rssn::Num;
+//! use aevia_rssn::Val;
+//! use aevia_rssn::kernel;
+//! use aevia_rssn::registry;
 //!
 //! let k = kernel::kernel();
 //! let value = k.call("sqrt", &[Val::Num(Num::Float(16.0))]).expect("sqrt");
@@ -31,14 +34,30 @@ pub mod kernel;
 pub mod registry;
 pub mod value;
 
-pub use error::{Failure, KernelError};
-pub use kernel::{Computed, Expr, Kernel, Opts, kernel, reset};
-pub use registry::{
-    Capability, Capabilities, ConstantInfo, OpEntry, Registry, Sig, SigType, Source, UnitInfo,
-    registry, resolve_key,
-};
+pub use error::Failure;
+pub use error::KernelError;
+pub use kernel::Computed;
+pub use kernel::Expr;
+pub use kernel::Kernel;
+pub use kernel::Opts;
+pub use kernel::kernel;
+pub use kernel::reset;
+pub use registry::Capabilities;
+pub use registry::Capability;
+pub use registry::ConstantInfo;
+pub use registry::OpEntry;
+pub use registry::Registry;
+pub use registry::Sig;
+pub use registry::SigType;
+pub use registry::Source;
+pub use registry::UnitInfo;
+pub use registry::registry;
+pub use registry::resolve_key;
 pub use rssn::kernel::signature::OpKey;
-pub use value::{Num, Sym, UnitVal, Val};
+pub use value::Num;
+pub use value::Sym;
+pub use value::UnitVal;
+pub use value::Val;
 
 /// The dynamic ABI version this build understands.
 pub const SUPPORTED_API_VERSION: u32 = 1;
@@ -101,15 +120,15 @@ pub fn unit_defs() -> Vec<aevia_dim::UnitDef> {
                 }
             }
             aevia_dim::UnitDef {
-            name: unit.name.clone(),
-            aliases,
-            dim: unit.dim.clone(),
-            scale: unit.scale.clone(),
-            offset: unit.offset.clone(),
-            prefixable: unit.prefixable,
-            affine: unit.affine,
-            display: unit.display.clone(),
-            category: unit.category.clone(),
+                name: unit.name.clone(),
+                aliases,
+                dim: unit.dim.clone(),
+                scale: unit.scale.clone(),
+                offset: unit.offset.clone(),
+                prefixable: unit.prefixable,
+                affine: unit.affine,
+                display: unit.display.clone(),
+                category: unit.category.clone(),
             }
         })
         .collect()

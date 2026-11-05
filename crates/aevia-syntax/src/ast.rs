@@ -6,7 +6,8 @@
 //! precedence — which is what distinguishes the AST from the CST of §9.2.1.
 
 use crate::span::Span;
-use aevia_dim::{Scale, UnitExpr};
+use aevia_dim::Scale;
+use aevia_dim::UnitExpr;
 use num_bigint::BigInt;
 use num_traits::One;
 
@@ -26,11 +27,11 @@ impl NumberLit {
     #[must_use]
     pub fn as_f64(&self) -> f64 {
         match self {
-            Self::Int(value) => {
+            | Self::Int(value) => {
                 use num_traits::ToPrimitive;
                 value.to_f64().unwrap_or(f64::INFINITY)
-            }
-            Self::Decimal(text) => text.replace('_', "").parse().unwrap_or(f64::NAN),
+            },
+            | Self::Decimal(text) => text.replace('_', "").parse().unwrap_or(f64::NAN),
         }
     }
 
@@ -38,8 +39,8 @@ impl NumberLit {
     #[must_use]
     pub fn as_rational(&self) -> Option<num_rational::BigRational> {
         match self {
-            Self::Int(value) => Some(num_rational::BigRational::from_integer(value.clone())),
-            Self::Decimal(text) => aevia_dim::parse_decimal(text),
+            | Self::Int(value) => Some(num_rational::BigRational::from_integer(value.clone())),
+            | Self::Decimal(text) => aevia_dim::parse_decimal(text),
         }
     }
 
@@ -116,23 +117,23 @@ impl BinOp {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Add => "+",
-            Self::Sub => "-",
-            Self::Mul => "*",
-            Self::Div => "/",
-            Self::MatMul => "@",
-            Self::Pow => "^",
-            Self::Eq => "==",
-            Self::Ne => "!=",
-            Self::Lt => "<",
-            Self::Le => "<=",
-            Self::Gt => ">",
-            Self::Ge => ">=",
-            Self::And => "&&",
-            Self::Or => "||",
-            Self::Cons => "::",
-            Self::Pipe => "|>",
-            Self::PipeBack => "<|",
+            | Self::Add => "+",
+            | Self::Sub => "-",
+            | Self::Mul => "*",
+            | Self::Div => "/",
+            | Self::MatMul => "@",
+            | Self::Pow => "^",
+            | Self::Eq => "==",
+            | Self::Ne => "!=",
+            | Self::Lt => "<",
+            | Self::Le => "<=",
+            | Self::Gt => ">",
+            | Self::Ge => ">=",
+            | Self::And => "&&",
+            | Self::Or => "||",
+            | Self::Cons => "::",
+            | Self::Pipe => "|>",
+            | Self::PipeBack => "<|",
         }
     }
 }
@@ -149,7 +150,10 @@ pub struct Expr {
 impl Expr {
     /// Creates an expression node.
     #[must_use]
-    pub fn new(kind: ExprKind, span: Span) -> Self {
+    pub fn new(
+        kind: ExprKind,
+        span: Span,
+    ) -> Self {
         Self { kind, span }
     }
 }
@@ -410,7 +414,10 @@ pub struct Pat {
 impl Pat {
     /// Creates a pattern node.
     #[must_use]
-    pub fn new(kind: PatKind, span: Span) -> Self {
+    pub fn new(
+        kind: PatKind,
+        span: Span,
+    ) -> Self {
         Self { kind, span }
     }
 }
@@ -488,7 +495,10 @@ pub struct Ty {
 impl Ty {
     /// Creates a type node.
     #[must_use]
-    pub fn new(kind: TyKind, span: Span) -> Self {
+    pub fn new(
+        kind: TyKind,
+        span: Span,
+    ) -> Self {
         Self { kind, span }
     }
 }
@@ -655,18 +665,18 @@ impl DimAst {
     #[must_use]
     pub fn to_source(&self) -> String {
         match self {
-            Self::One => "1".to_string(),
-            Self::Name(name) => name.clone(),
-            Self::Mul(left, right) => format!("{}*{}", left.to_source(), right.to_source()),
-            Self::Div(left, right) => format!("{}/{}", left.to_source(), right.to_source()),
-            Self::Pow(base, exponent) => {
+            | Self::One => "1".to_string(),
+            | Self::Name(name) => name.clone(),
+            | Self::Mul(left, right) => format!("{}*{}", left.to_source(), right.to_source()),
+            | Self::Div(left, right) => format!("{}/{}", left.to_source(), right.to_source()),
+            | Self::Pow(base, exponent) => {
                 if exponent.denom().is_one() {
                     format!("{}^{}", base.to_source(), exponent.numer())
                 } else {
                     format!("{}^{}", base.to_source(), crate::ast::format_rat(exponent))
                 }
-            }
-            Self::Paren(inner) => format!("({})", inner.to_source()),
+            },
+            | Self::Paren(inner) => format!("({})", inner.to_source()),
         }
     }
 }
@@ -699,14 +709,14 @@ impl Kind {
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
-            "Type" => Self::Type,
-            "Dim" => Self::Dim,
-            "Nat" => Self::Nat,
-            "Row" => Self::Row,
-            "Rep" => Self::Rep,
-            "Format" => Self::Format,
-            "Shape" => Self::Shape,
-            _ => return None,
+            | "Type" => Self::Type,
+            | "Dim" => Self::Dim,
+            | "Nat" => Self::Nat,
+            | "Row" => Self::Row,
+            | "Rep" => Self::Rep,
+            | "Format" => Self::Format,
+            | "Shape" => Self::Shape,
+            | _ => return None,
         })
     }
 
@@ -714,13 +724,13 @@ impl Kind {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Type => "Type",
-            Self::Dim => "Dim",
-            Self::Nat => "Nat",
-            Self::Row => "Row",
-            Self::Rep => "Rep",
-            Self::Format => "Format",
-            Self::Shape => "Shape",
+            | Self::Type => "Type",
+            | Self::Dim => "Dim",
+            | Self::Nat => "Nat",
+            | Self::Row => "Row",
+            | Self::Rep => "Rep",
+            | Self::Format => "Format",
+            | Self::Shape => "Shape",
         }
     }
 }
@@ -778,13 +788,19 @@ impl Decl {
     /// when the backend has no JIT (§9.6.1), `@op` registers an RSSN operator
     /// (§13.5) and `@deprecated` drives the stability warnings (§13.8.1).
     #[must_use]
-    pub fn attribute(&self, name: &str) -> Option<&Attribute> {
+    pub fn attribute(
+        &self,
+        name: &str,
+    ) -> Option<&Attribute> {
         self.attrs.iter().find(|attr| attr.name == name)
     }
 
     /// True when the attribute called `name` was written.
     #[must_use]
-    pub fn has_attribute(&self, name: &str) -> bool {
+    pub fn has_attribute(
+        &self,
+        name: &str,
+    ) -> bool {
         self.attribute(name).is_some()
     }
 }

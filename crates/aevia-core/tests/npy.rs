@@ -5,15 +5,23 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::builtins::{npy_decode, npy_encode};
-use aevia_core::value::{IoAction, Storage, TensorData, Value};
-use aevia_core::{compile, Interp};
+use aevia_core::Interp;
+use aevia_core::builtins::npy_decode;
+use aevia_core::builtins::npy_encode;
+use aevia_core::compile;
+use aevia_core::value::IoAction;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
 use aevia_syntax::Span;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::rc::Rc;
 
-fn tensor(shape: Vec<usize>, values: Vec<f64>) -> TensorData {
+fn tensor(
+    shape: Vec<usize>,
+    values: Vec<f64>,
+) -> TensorData {
     TensorData {
         shape,
         storage: Storage::Dense(Rc::new(values)),
@@ -24,12 +32,15 @@ fn tensor(shape: Vec<usize>, values: Vec<f64>) -> TensorData {
 
 fn dense(tensor: &TensorData) -> Vec<f64> {
     match &tensor.storage {
-        Storage::Dense(values) => values.as_ref().clone(),
-        other => panic!("expected dense storage, found {other:?}"),
+        | Storage::Dense(values) => values.as_ref().clone(),
+        | other => panic!("expected dense storage, found {other:?}"),
     }
 }
 
-fn exact_tensor(shape: Vec<usize>, values: Vec<i64>) -> TensorData {
+fn exact_tensor(
+    shape: Vec<usize>,
+    values: Vec<i64>,
+) -> TensorData {
     TensorData {
         shape,
         storage: Storage::Exact(
@@ -45,7 +56,10 @@ fn exact_tensor(shape: Vec<usize>, values: Vec<i64>) -> TensorData {
 
 /// A `.npy` file with `header` (no padding) and `data`, padded the way NumPy
 /// writes it.
-fn file_with(header: &str, data: &[u8]) -> Vec<u8> {
+fn file_with(
+    header: &str,
+    data: &[u8],
+) -> Vec<u8> {
     let mut header = header.to_string();
     let padding = (64 - ((10 + header.len() + 1) % 64)) % 64;
     header.push_str(&" ".repeat(padding));
@@ -53,7 +67,11 @@ fn file_with(header: &str, data: &[u8]) -> Vec<u8> {
     let mut bytes = b"\x93NUMPY".to_vec();
     bytes.push(1);
     bytes.push(0);
-    bytes.extend_from_slice(&u16::try_from(header.len()).expect("small header").to_le_bytes());
+    bytes.extend_from_slice(
+        &u16::try_from(header.len())
+            .expect("small header")
+            .to_le_bytes(),
+    );
     bytes.extend_from_slice(header.as_bytes());
     bytes.extend_from_slice(data);
     bytes
@@ -109,20 +127,28 @@ fn float32_is_promoted_to_float_storage() {
 /// version 1.0, the header dict padded to a 64-byte data boundary.
 #[test]
 fn a_known_header_is_byte_exact() {
-    let bytes = npy_encode(&tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]))
-        .expect("encode");
+    let bytes =
+        npy_encode(&tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])).expect("encode");
     assert_eq!(&bytes[..6], b"\x93NUMPY");
     assert_eq!(&bytes[6..8], &[1, 0]);
     let header_len = usize::from(u16::from_le_bytes([bytes[8], bytes[9]]));
     assert_eq!(header_len, 118, "padded header length");
-    assert_eq!((10 + header_len) % 64, 0, "data starts on a 64-byte boundary");
+    assert_eq!(
+        (10 + header_len) % 64,
+        0,
+        "data starts on a 64-byte boundary"
+    );
     let header = std::str::from_utf8(&bytes[10..10 + header_len]).expect("header text");
     let mut expected = "{'descr': '<f8', 'fortran_order': False, 'shape': (3, 2), }".to_string();
     expected.push_str(&" ".repeat(58));
     expected.push('\n');
     assert_eq!(header, expected);
     assert_eq!(bytes.len(), 10 + header_len + 6 * 8);
-    let first = f64::from_le_bytes(bytes[10 + header_len..10 + header_len + 8].try_into().unwrap());
+    let first = f64::from_le_bytes(
+        bytes[10 + header_len..10 + header_len + 8]
+            .try_into()
+            .unwrap(),
+    );
     assert_eq!(first, 1.0);
 }
 
@@ -185,8 +211,7 @@ fn truncated_or_extra_data_is_e0903() {
     bytes.push(0);
     assert!(decode_error(&bytes).starts_with("E0903:"));
 
-    let header =
-        "{'descr': '<f8', 'fortran_order': False, 'shape': (2,), }";
+    let header = "{'descr': '<f8', 'fortran_order': False, 'shape': (2,), }";
     let mut oversized = file_with(header, &[0u8; 8]);
     // Claim a 11 KiB header: the codec bounds the header before reading data.
     let len = 11u16 * 1024;
@@ -211,7 +236,10 @@ fn interpreter() -> Interp {
     interp
 }
 
-fn run_action(interp: &mut Interp, action: Value) -> Value {
+fn run_action(
+    interp: &mut Interp,
+    action: Value,
+) -> Value {
     let Value::Io(action) = action else {
         panic!("expected an IO action, found {}", action.type_name());
     };
@@ -224,8 +252,8 @@ fn ok_tensor(value: Value) -> Rc<TensorData> {
     };
     assert_eq!(result.name, "Ok", "expected Ok, found {result:?}");
     match result.fields.first() {
-        Some(Value::Tensor(tensor)) => tensor.clone(),
-        other => panic!("the Ok payload is not a tensor: {other:?}"),
+        | Some(Value::Tensor(tensor)) => tensor.clone(),
+        | other => panic!("the Ok payload is not a tensor: {other:?}"),
     }
 }
 
@@ -235,8 +263,8 @@ fn err_text(value: &Value) -> String {
     };
     assert_eq!(result.name, "Err");
     match result.fields.first() {
-        Some(Value::Str(text)) => text.to_string(),
-        other => panic!("the Err payload is not a string: {other:?}"),
+        | Some(Value::Str(text)) => text.to_string(),
+        | other => panic!("the Err payload is not a string: {other:?}"),
     }
 }
 
@@ -273,10 +301,7 @@ fn write_then_read_round_trips_through_the_io_actions() {
 #[test]
 fn a_missing_npy_file_is_e0901_and_a_wrong_extension_is_e0904() {
     let mut interp = interpreter();
-    let missing = std::env::temp_dir().join(format!(
-        "aevia-missing-{}.npy",
-        std::process::id()
-    ));
+    let missing = std::env::temp_dir().join(format!("aevia-missing-{}.npy", std::process::id()));
     let read = interp
         .call_named(
             "read_npy",
@@ -309,14 +334,10 @@ fn a_missing_npy_file_is_e0901_and_a_wrong_extension_is_e0904() {
 fn npy_actions_are_reachable() {
     let mut interp = interpreter();
     let action = interp
-        .call_named(
-            "read_npy",
-            vec![Value::string("x.npy")],
-            Span::default(),
-        )
+        .call_named("read_npy", vec![Value::string("x.npy")], Span::default())
         .expect("read_npy");
     match action {
-        Value::Io(action) => assert!(matches!(*action, IoAction::ReadNpy(_))),
-        other => panic!("read_npy answers an IO action, found {}", other.type_name()),
+        | Value::Io(action) => assert!(matches!(*action, IoAction::ReadNpy(_))),
+        | other => panic!("read_npy answers an IO action, found {}", other.type_name()),
     }
 }

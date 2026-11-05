@@ -3,7 +3,12 @@
 
 mod support;
 
-use aevia_syntax::ast::{DeclKind, ExprKind, NatAst, ShapeAst, Ty, TyKind};
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::NatAst;
+use aevia_syntax::ast::ShapeAst;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
 use support::expect_clean;
 
 /// The annotation of `let x: <ty> = ...`.
@@ -29,12 +34,7 @@ fn matrix_type() {
 #[test]
 fn sparse_type() {
     let ty = annotation("let x: Sparse<CSR, 2, Float> = 0.0\n");
-    let TyKind::Sparse {
-        format,
-        shape,
-        elem,
-    } = &ty.kind
-    else {
+    let TyKind::Sparse { format, shape, elem } = &ty.kind else {
         panic!("expected Sparse, got {:?}", ty.kind);
     };
     assert_eq!(format, "CSR");

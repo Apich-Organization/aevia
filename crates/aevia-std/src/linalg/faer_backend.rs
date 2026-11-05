@@ -10,11 +10,19 @@
 //! reaches this module.
 
 use crate::NumericError;
-use faer::linalg::solvers::{PartialPivLu, Qr, Solve};
-use faer::{Accum, Mat, get_global_parallelism};
+use faer::Accum;
+use faer::Mat;
+use faer::get_global_parallelism;
+use faer::linalg::solvers::PartialPivLu;
+use faer::linalg::solvers::Qr;
+use faer::linalg::solvers::Solve;
 
 /// A row-major slice as a `faer` matrix, checking the shape.
-pub(super) fn matrix(rows: usize, cols: usize, a: &[f64]) -> Result<Mat<f64>, NumericError> {
+pub(super) fn matrix(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<Mat<f64>, NumericError> {
     let expected = rows * cols;
     if expected != a.len() {
         return Err(NumericError::ShapeMismatch(format!(
@@ -49,12 +57,19 @@ fn to_row_major(matrix: faer::MatRef<'_, f64>) -> Vec<f64> {
 /// An exactly singular matrix is the case the old path reported
 /// [`NumericError::Singular`] for, and a nearly singular one is not: the
 /// answer is large, not absent, and refusing it would be a semantic change.
-fn is_singular(u: faer::MatRef<'_, f64>, n: usize) -> bool {
+fn is_singular(
+    u: faer::MatRef<'_, f64>,
+    n: usize,
+) -> bool {
     (0..n).any(|index| u[(index, index)] == 0.0)
 }
 
 /// The determinant of a square matrix.
-pub(super) fn det(rows: usize, cols: usize, a: &[f64]) -> Result<f64, NumericError> {
+pub(super) fn det(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<f64, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -62,7 +77,11 @@ pub(super) fn det(rows: usize, cols: usize, a: &[f64]) -> Result<f64, NumericErr
 }
 
 /// The inverse of a square matrix.
-pub(super) fn inv(rows: usize, cols: usize, a: &[f64]) -> Result<Vec<f64>, NumericError> {
+pub(super) fn inv(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<Vec<f64>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
@@ -129,7 +148,11 @@ pub(super) fn lu(
 }
 
 /// `A = Q R` with `Q` orthonormal and `rows × rows`.
-pub(super) fn qr(rows: usize, cols: usize, a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
+pub(super) fn qr(
+    rows: usize,
+    cols: usize,
+    a: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
     let matrix = matrix(rows, cols, a)?;
     let qr = Qr::new(matrix.as_ref());
     let q = qr.compute_Q();

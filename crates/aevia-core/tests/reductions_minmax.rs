@@ -6,8 +6,12 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::value::{Storage, TensorData, Value};
-use aevia_core::{compile, Interp, Mode};
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
 use aevia_syntax::Span;
 
 fn interpreter() -> Interp {
@@ -19,7 +23,11 @@ fn interpreter() -> Interp {
     interp
 }
 
-fn evaluate(mode: Mode, source: &str, names: &[&str]) -> Vec<String> {
+fn evaluate(
+    mode: Mode,
+    source: &str,
+    names: &[&str],
+) -> Vec<String> {
     let compilation = compile("minmax.aev", source);
     assert!(
         !compilation.diagnostics.has_errors(),
@@ -46,20 +54,30 @@ fn evaluate(mode: Mode, source: &str, names: &[&str]) -> Vec<String> {
         .collect()
 }
 
-fn evaluate_both(source: &str, names: &[&str]) -> Vec<String> {
+fn evaluate_both(
+    source: &str,
+    names: &[&str],
+) -> Vec<String> {
     let ir = evaluate(Mode::Ir, source, names);
     let ast = evaluate(Mode::Ast, source, names);
     assert_eq!(ast, ir, "the two evaluators disagree on {names:?}");
     ir
 }
 
-fn call(interp: &mut Interp, name: &str, args: Vec<Value>) -> Value {
+fn call(
+    interp: &mut Interp,
+    name: &str,
+    args: Vec<Value>,
+) -> Value {
     interp
         .call_named(name, args, Span::default())
         .unwrap_or_else(|error| panic!("`{name}` failed: {} {}", error.code, error.message))
 }
 
-fn dense(shape: Vec<usize>, values: Vec<f64>) -> Value {
+fn dense(
+    shape: Vec<usize>,
+    values: Vec<f64>,
+) -> Value {
     Value::Tensor(std::rc::Rc::new(TensorData {
         shape,
         storage: Storage::Dense(std::rc::Rc::new(values)),
@@ -83,7 +101,10 @@ fn dense_min_max_answer_the_whole_tensor_scalar() {
 
     let mut interp = interpreter();
     let tensor = dense(vec![3], vec![3.0, 1.0, 2.0]);
-    assert_eq!(number(&call(&mut interp, "min_all", vec![tensor.clone()])), 1.0);
+    assert_eq!(
+        number(&call(&mut interp, "min_all", vec![tensor.clone()])),
+        1.0
+    );
     assert_eq!(number(&call(&mut interp, "max_all", vec![tensor])), 3.0);
     // The result is a Scalar, not a rank-0 tensor.
     assert!(!matches!(
@@ -205,7 +226,10 @@ fn a_strided_view_answers_like_its_dense_copy() {
         dim: aevia_dim::Dim::one(),
         display: None,
     }));
-    assert_eq!(number(&call(&mut interp, "min_all", vec![view.clone()])), 0.0);
+    assert_eq!(
+        number(&call(&mut interp, "min_all", vec![view.clone()])),
+        0.0
+    );
     assert_eq!(number(&call(&mut interp, "max_all", vec![view])), 8.0);
 
     // The whole-tensor runtime accepts a rank-2 tensor even though the checker

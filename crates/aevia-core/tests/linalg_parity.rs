@@ -8,11 +8,20 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
 use aevia_core::builtins::call_simple;
-use aevia_core::value::{repr, NumKind, NumVal, Storage, TensorData, Value};
-use aevia_core::{compile, Interp};
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::NumVal;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
+use aevia_core::value::repr;
 
-fn call(name: &str, args: Vec<Value>) -> Value {
+fn call(
+    name: &str,
+    args: Vec<Value>,
+) -> Value {
     call_simple(name, args).unwrap_or_else(|error| panic!("`{name}` failed: {error:?}"))
 }
 
@@ -43,19 +52,28 @@ fn session(source: &str) -> Interp {
     interp
 }
 
-fn value(source: &str, name: &str) -> Value {
+fn value(
+    source: &str,
+    name: &str,
+) -> Value {
     let mut interp = session(source);
     interp.eval_toplevel(name).expect("value exists")
 }
 
-fn repr_of(source: &str, name: &str) -> String {
+fn repr_of(
+    source: &str,
+    name: &str,
+) -> String {
     repr(&value(source, name))
 }
 
-fn tensor(source: &str, name: &str) -> TensorData {
+fn tensor(
+    source: &str,
+    name: &str,
+) -> TensorData {
     match value(source, name) {
-        Value::Tensor(tensor) => (*tensor).clone(),
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => (*tensor).clone(),
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -74,11 +92,11 @@ fn ok_tensor(value: Value) -> TensorData {
 /// The storage phase of a scalar: `Int`, `Exact`, `Float` or the others.
 fn phase(num: &NumVal) -> &'static str {
     match num.kind {
-        NumKind::Int(_) => "Int",
-        NumKind::Exact(_) => "Exact",
-        NumKind::Float(_) => "Float",
-        NumKind::Sym(_) => "Sym",
-        NumKind::Complex(..) => "Complex",
+        | NumKind::Int(_) => "Int",
+        | NumKind::Exact(_) => "Exact",
+        | NumKind::Float(_) => "Float",
+        | NumKind::Sym(_) => "Sym",
+        | NumKind::Complex(..) => "Complex",
     }
 }
 
@@ -104,8 +122,8 @@ fn floats(tensor: &TensorData) -> Vec<f64> {
                 panic!("expected a scalar");
             };
             match num.kind {
-                NumKind::Float(value) => value,
-                other => panic!("expected a float, found {}", other.type_name()),
+                | NumKind::Float(value) => value,
+                | other => panic!("expected a float, found {}", other.type_name()),
             }
         })
         .collect()
@@ -114,8 +132,8 @@ fn floats(tensor: &TensorData) -> Vec<f64> {
 /// The `f64` a scalar holds.
 fn floats_of(num: &NumVal) -> f64 {
     match num.kind {
-        NumKind::Float(value) => value,
-        ref other => panic!("expected a float, found {}", other.type_name()),
+        | NumKind::Float(value) => value,
+        | ref other => panic!("expected a float, found {}", other.type_name()),
     }
 }
 
@@ -154,7 +172,10 @@ fn the_float_matmul_answers_are_unchanged() {
 }
 
 /// A diagonal matrix as a dense `Value`, `size × size`.
-fn diagonal(size: usize, values: &[(usize, f64)]) -> Value {
+fn diagonal(
+    size: usize,
+    values: &[(usize, f64)],
+) -> Value {
     let mut data = vec![2.0; size * size];
     for (index, value) in values {
         data[index * size + index] = *value;

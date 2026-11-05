@@ -38,7 +38,10 @@ fn main(): IO Unit = do
 "#,
     );
     assert_eq!(
-        errors.iter().map(|(code, _)| code.as_str()).collect::<Vec<_>>(),
+        errors
+            .iter()
+            .map(|(code, _)| code.as_str())
+            .collect::<Vec<_>>(),
         vec!["E1001"],
         "the only diagnostic is the capability gap: {errors:?}"
     );
@@ -68,7 +71,10 @@ let x = 1
 "#,
     );
     assert_eq!(
-        errors.iter().map(|(code, _)| code.as_str()).collect::<Vec<_>>(),
+        errors
+            .iter()
+            .map(|(code, _)| code.as_str())
+            .collect::<Vec<_>>(),
         vec!["E0210"],
         "@jit on a non-fn is a malformed attribute: {errors:?}"
     );

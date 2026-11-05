@@ -10,15 +10,21 @@
 
 use aevia_lsp::Exit;
 use serde_json::Value;
-use std::io::{BufReader, Cursor, Write};
-use std::sync::{Arc, Mutex};
+use std::io::BufReader;
+use std::io::Cursor;
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 /// A writer a test can read back after the session ends.
 #[derive(Clone)]
 struct Shared(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Shared {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+    fn write(
+        &mut self,
+        bytes: &[u8],
+    ) -> std::io::Result<usize> {
         self.0.lock().expect("lock").extend_from_slice(bytes);
         Ok(bytes.len())
     }
@@ -52,7 +58,10 @@ fn run(messages: &[&str]) -> (Exit, Vec<Value>) {
 }
 
 /// The reply carrying `id`.
-fn reply(replies: &[Value], id: i64) -> &Value {
+fn reply(
+    replies: &[Value],
+    id: i64,
+) -> &Value {
     replies
         .iter()
         .find(|message| message.get("id").and_then(Value::as_i64) == Some(id))
@@ -60,12 +69,14 @@ fn reply(replies: &[Value], id: i64) -> &Value {
 }
 
 /// Every `publishDiagnostics` for `uri`, in order.
-fn published<'a>(replies: &'a [Value], uri: &str) -> Vec<&'a Value> {
+fn published<'a>(
+    replies: &'a [Value],
+    uri: &str,
+) -> Vec<&'a Value> {
     replies
         .iter()
         .filter(|message| {
-            message.get("method").and_then(Value::as_str)
-                == Some("textDocument/publishDiagnostics")
+            message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
                 && message["params"]["uri"] == uri
         })
         .collect()
@@ -151,15 +162,24 @@ fn a_full_session_speaks_the_protocol() {
     assert_eq!(items[0]["code"], "E0401");
     assert_eq!(items[0]["severity"], 1);
     assert_eq!(items[0]["source"], "aevia");
-    assert_eq!(items[0]["range"]["start"], serde_json::json!({"line":1,"character":10}));
-    assert_eq!(items[0]["range"]["end"], serde_json::json!({"line":1,"character":17}));
+    assert_eq!(
+        items[0]["range"]["start"],
+        serde_json::json!({"line":1,"character":10})
+    );
+    assert_eq!(
+        items[0]["range"]["end"],
+        serde_json::json!({"line":1,"character":17})
+    );
     assert!(
         items[0]["message"]
             .as_str()
             .is_some_and(|text| text.contains("dimension mismatch")),
         "{items:#?}"
     );
-    assert_eq!(items[0]["relatedInformation"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        items[0]["relatedInformation"].as_array().map(Vec::len),
+        Some(2)
+    );
 
     // hover: the exported scheme of `g`.
     let hover = reply(&replies, 2);
@@ -168,7 +188,10 @@ fn a_full_session_speaks_the_protocol() {
         .unwrap_or_else(|| panic!("no hover: {hover:#?}"));
     assert!(contents.contains("g:"), "{contents}");
     assert!(contents.contains("Float"), "{contents}");
-    assert_eq!(hover["result"]["range"]["start"], serde_json::json!({"line":0,"character":5}));
+    assert_eq!(
+        hover["result"]["range"]["start"],
+        serde_json::json!({"line":0,"character":5})
+    );
 
     // completion: the module's names and the prelude.
     let completion = reply(&replies, 3);
@@ -197,7 +220,10 @@ fn a_full_session_speaks_the_protocol() {
     );
 
     // documentSymbol: two top-level bindings.
-    let symbols = reply(&replies, 5)["result"].as_array().expect("an array").clone();
+    let symbols = reply(&replies, 5)["result"]
+        .as_array()
+        .expect("an array")
+        .clone();
     let names: Vec<&str> = symbols.iter().filter_map(|s| s["name"].as_str()).collect();
     assert_eq!(names, ["g", "bad"]);
     assert_eq!(symbols[0]["kind"], 13);
@@ -211,8 +237,14 @@ fn a_full_session_speaks_the_protocol() {
         edits[0]["newText"],
         "let g = 9.80665 m/s^2\n\nlet bad = 1 m + 1\n"
     );
-    assert_eq!(edits[0]["range"]["start"], serde_json::json!({"line":0,"character":0}));
-    assert_eq!(edits[0]["range"]["end"], serde_json::json!({"line":2,"character":0}));
+    assert_eq!(
+        edits[0]["range"]["start"],
+        serde_json::json!({"line":0,"character":0})
+    );
+    assert_eq!(
+        edits[0]["range"]["end"],
+        serde_json::json!({"line":2,"character":0})
+    );
 
     // An unknown request is `-32601`; the session survives it.
     let unknown = reply(&replies, 7);
@@ -224,13 +256,20 @@ fn a_full_session_speaks_the_protocol() {
     let actions = code_actions["result"].as_array().expect("an array");
     let fix = actions
         .iter()
-        .find(|action| action["title"].as_str().is_some_and(|title| title.contains("Add `m`")))
+        .find(|action| {
+            action["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("Add `m`"))
+        })
         .unwrap_or_else(|| panic!("no dimension fix: {actions:#?}"));
     assert_eq!(fix["kind"], "quickfix");
     let edits = fix["edit"]["changes"][URI].as_array().expect("edits");
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0]["newText"], " m");
-    assert_eq!(edits[0]["range"]["start"], serde_json::json!({"line":1,"character":17}));
+    assert_eq!(
+        edits[0]["range"]["start"],
+        serde_json::json!({"line":1,"character":17})
+    );
 
     // semanticTokens/full: the unit `m` of `m/s^2` is a unit token. The
     // protocol's delta stream is checked structurally here; the analysis crate
@@ -278,12 +317,16 @@ fn an_incremental_change_republishes_diagnostics() {
     assert_eq!(diagnostics.len(), 2, "{replies:#?}");
     assert_eq!(diagnostics[0]["params"]["version"], 1);
     assert_eq!(
-        diagnostics[0]["params"]["diagnostics"].as_array().map(Vec::len),
+        diagnostics[0]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(1)
     );
     assert_eq!(diagnostics[1]["params"]["version"], 2);
     assert_eq!(
-        diagnostics[1]["params"]["diagnostics"].as_array().map(Vec::len),
+        diagnostics[1]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(0),
         "the edit fixed the error: {replies:#?}"
     );
@@ -307,7 +350,9 @@ fn a_full_text_change_is_accepted_too() {
     let diagnostics = published(&replies, URI);
     assert_eq!(diagnostics.len(), 2);
     assert_eq!(
-        diagnostics[1]["params"]["diagnostics"].as_array().map(Vec::len),
+        diagnostics[1]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(0)
     );
 }
@@ -330,7 +375,9 @@ fn closing_a_document_clears_its_diagnostics() {
     let diagnostics = published(&replies, URI);
     assert_eq!(diagnostics.len(), 2);
     assert_eq!(
-        diagnostics[1]["params"]["diagnostics"].as_array().map(Vec::len),
+        diagnostics[1]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(0)
     );
 }
@@ -442,13 +489,20 @@ impl TempPackage {
         Self { root }
     }
 
-    fn write(&self, name: &str, source: &str) -> std::path::PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
         let path = self.root.join(name);
         std::fs::write(&path, source).expect("write source");
         path
     }
 
-    fn path(&self, name: &str) -> std::path::PathBuf {
+    fn path(
+        &self,
+        name: &str,
+    ) -> std::path::PathBuf {
         self.root.join(name)
     }
 }
@@ -461,7 +515,10 @@ impl Drop for TempPackage {
 
 /// Runs a scripted session whose messages are built as JSON values.
 fn run_json(messages: Vec<Value>) -> (Exit, Vec<Value>) {
-    let owned: Vec<String> = messages.into_iter().map(|message| message.to_string()).collect();
+    let owned: Vec<String> = messages
+        .into_iter()
+        .map(|message| message.to_string())
+        .collect();
     let borrowed: Vec<&str> = owned.iter().map(String::as_str).collect();
     run(&borrowed)
 }
@@ -519,7 +576,9 @@ fn a_saved_file_is_analysed_with_its_imports() {
     let published = published(&replies, &b_uri);
     assert_eq!(published.len(), 1, "{replies:#?}");
     assert_eq!(
-        published[0]["params"]["diagnostics"].as_array().map(Vec::len),
+        published[0]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(0),
         "{replies:#?}"
     );
@@ -618,14 +677,18 @@ fn an_unsaved_buffer_keeps_its_imports_and_reflects_edits() {
     let published = published(&replies, &b_uri);
     assert_eq!(published.len(), 3, "{replies:#?}");
     assert_eq!(
-        published[0]["params"]["diagnostics"].as_array().map(Vec::len),
+        published[0]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(0),
         "the saved file is clean"
     );
     // The unsaved buffer keeps its imports: the edit is valid, so the buffer is
     // still clean — no false unbound-name diagnostics.
     assert_eq!(
-        published[1]["params"]["diagnostics"].as_array().map(Vec::len),
+        published[1]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(0),
         "a dirty buffer with valid imports was not clean: {replies:#?}"
     );
@@ -640,13 +703,19 @@ fn an_unsaved_buffer_keeps_its_imports_and_reflects_edits() {
         .filter_map(|diagnostic| diagnostic["code"].as_str())
         .collect();
     assert!(
-        !codes.iter().any(|code| *code == "E0301" || *code == "E0607"),
+        !codes
+            .iter()
+            .any(|code| *code == "E0301" || *code == "E0607"),
         "a dirty buffer with valid imports reported import errors: {codes:?}"
     );
 }
 
 /// The byte offset of a protocol position in ASCII test text.
-fn offset_at(text: &str, line: u64, character: u64) -> usize {
+fn offset_at(
+    text: &str,
+    line: u64,
+    character: u64,
+) -> usize {
     let line_start: usize = text
         .split_inclusive('\n')
         .take(line as usize)
@@ -656,7 +725,10 @@ fn offset_at(text: &str, line: u64, character: u64) -> usize {
 }
 
 /// Applies JSON text edits to one file's text, last edit first.
-fn apply_changes(text: &str, edits: &[Value]) -> String {
+fn apply_changes(
+    text: &str,
+    edits: &[Value],
+) -> String {
     let mut replacements: Vec<(usize, usize, String)> = edits
         .iter()
         .map(|edit| {
@@ -791,14 +863,8 @@ fn references_rename_and_its_edits_cross_files() {
         .iter()
         .find(|change| change["textDocument"]["uri"] == b_uri)
         .expect("the change in B");
-    let new_a = apply_changes(
-        a_source,
-        a_change["edits"].as_array().expect("A edits"),
-    );
-    let new_b = apply_changes(
-        b_source,
-        b_change["edits"].as_array().expect("B edits"),
-    );
+    let new_a = apply_changes(a_source, a_change["edits"].as_array().expect("A edits"));
+    let new_b = apply_changes(b_source, b_change["edits"].as_array().expect("B edits"));
     assert!(new_a.contains("fn magnitude(x: Real[L])"), "{new_a}");
     assert!(!new_a.contains("sqrt"), "{new_a}");
     assert_eq!(new_b.matches("A.magnitude(").count(), 1, "{new_b}");
@@ -827,7 +893,9 @@ fn references_rename_and_its_edits_cross_files() {
     let published = published(&replies, &b_uri);
     assert_eq!(published.len(), 1, "{replies:#?}");
     assert_eq!(
-        published[0]["params"]["diagnostics"].as_array().map(Vec::len),
+        published[0]["params"]["diagnostics"]
+            .as_array()
+            .map(Vec::len),
         Some(0),
         "the renamed package does not check: {replies:#?}"
     );
@@ -896,7 +964,10 @@ fn rename_refusals_are_errors_with_reasons() {
 
     // The import's module segment is not a declaration to rename.
     let module_segment = reply(&replies, 4);
-    assert_eq!(module_segment["error"]["code"], -32803, "{module_segment:#?}");
+    assert_eq!(
+        module_segment["error"]["code"], -32803,
+        "{module_segment:#?}"
+    );
     assert!(
         module_segment["error"]["message"]
             .as_str()
@@ -907,7 +978,11 @@ fn rename_refusals_are_errors_with_reasons() {
 }
 
 /// The protocol position of the byte `delta` characters after `needle`.
-fn position_of(text: &str, needle: &str, delta: usize) -> serde_json::Value {
+fn position_of(
+    text: &str,
+    needle: &str,
+    delta: usize,
+) -> serde_json::Value {
     let offset = text.find(needle).expect("the needle is in the source") + delta;
     let before = &text[..offset];
     let line = before.matches('\n').count();
@@ -1003,8 +1078,7 @@ fn signature_help_uses_an_imported_declarations_docs() {
     assert_eq!(exit, Exit::Graceful, "{replies:#?}");
     let help = reply(&replies, 2);
     assert_eq!(
-        help["result"]["signatures"][0]["label"],
-        "A.magnitude: (Real[L]) -> Real[L]",
+        help["result"]["signatures"][0]["label"], "A.magnitude: (Real[L]) -> Real[L]",
         "{help:#?}"
     );
     assert_eq!(

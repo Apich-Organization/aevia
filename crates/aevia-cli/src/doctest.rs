@@ -15,9 +15,11 @@
 //! the point of a doctest is that the documentation is checked, not that
 //! something happened.
 
-use crate::tooling;
 use crate::Options;
-use aevia_doc::doctest::{extract, Doctest, Expected};
+use crate::tooling;
+use aevia_doc::doctest::Doctest;
+use aevia_doc::doctest::Expected;
+use aevia_doc::doctest::extract;
 use aevia_syntax::Severity;
 use std::process::ExitCode;
 
@@ -31,10 +33,14 @@ enum Outcome {
 }
 
 /// `aevia test --doc [--filter PAT] [files…]`
-pub fn run(_options: Options, files: &[String], filter: Option<&str>) -> ExitCode {
+pub fn run(
+    _options: Options,
+    files: &[String],
+    filter: Option<&str>,
+) -> ExitCode {
     let paths = match tooling::inputs(files) {
-        Ok(paths) => paths,
-        Err(code) => return code,
+        | Ok(paths) => paths,
+        | Err(code) => return code,
     };
     let mut passed = 0usize;
     let mut failed = 0usize;
@@ -47,32 +53,32 @@ pub fn run(_options: Options, files: &[String], filter: Option<&str>) -> ExitCod
             }
         }
         let source = match std::fs::read_to_string(path) {
-            Ok(source) => source,
-            Err(error) => {
+            | Ok(source) => source,
+            | Err(error) => {
                 eprintln!("aevia test --doc: cannot read `{shown}`: {error}");
                 failed += 1;
                 continue;
-            }
+            },
         };
         let doctests = match extract(&source, &shown) {
-            Ok(doctests) => doctests,
-            Err(message) => {
+            | Ok(doctests) => doctests,
+            | Err(message) => {
                 // A file whose documentation cannot be read is a failure, not
                 // an empty success: nothing was checked.
                 eprintln!("aevia test --doc: `{shown}`: {message}");
                 failed += 1;
                 continue;
-            }
+            },
         };
         for doctest in &doctests {
             checked += 1;
             let (outcome, compilation) = check(doctest);
             match outcome {
-                Outcome::Pass => {
+                | Outcome::Pass => {
                     println!("doctest {}:{} ... ok", doctest.file, doctest.line);
                     passed += 1;
-                }
-                Outcome::Fail(reason) => {
+                },
+                | Outcome::Fail(reason) => {
                     println!(
                         "doctest {}:{} ... FAILED ({reason})",
                         doctest.file, doctest.line
@@ -81,7 +87,7 @@ pub fn run(_options: Options, files: &[String], filter: Option<&str>) -> ExitCod
                         eprint!("{}", compilation.diagnostics.render(&compilation.sources));
                     }
                     failed += 1;
-                }
+                },
             }
         }
     }
@@ -92,9 +98,7 @@ pub fn run(_options: Options, files: &[String], filter: Option<&str>) -> ExitCod
         }
     }
     if checked == 0 {
-        eprintln!(
-            "aevia test --doc: no ```aevia code blocks found; nothing was checked"
-        );
+        eprintln!("aevia test --doc: no ```aevia code blocks found; nothing was checked");
         return ExitCode::from(1);
     }
     println!("\n{passed} passed, {failed} failed");
@@ -129,14 +133,17 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::Compilation>) {
         .map(|diagnostic| diagnostic.code.clone())
         .collect();
     let outcome = match &doctest.expected {
-        Expected::Compiles => {
+        | Expected::Compiles => {
             if errors.is_empty() {
                 Outcome::Pass
             } else {
-                Outcome::Fail(format!("the snippet did not compile ({})", codes_or(&codes)))
+                Outcome::Fail(format!(
+                    "the snippet did not compile ({})",
+                    codes_or(&codes)
+                ))
             }
-        }
-        Expected::Fails => {
+        },
+        | Expected::Fails => {
             if errors.is_empty() {
                 Outcome::Fail(
                     "expected the snippet to fail to compile, but it compiled".to_string(),
@@ -144,8 +151,8 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::Compilation>) {
             } else {
                 Outcome::Pass
             }
-        }
-        Expected::FailsWith(expected) => {
+        },
+        | Expected::FailsWith(expected) => {
             if errors.is_empty() {
                 Outcome::Fail(format!(
                     "expected `{expected}` but the snippet compiled; add the error it documents"
@@ -153,12 +160,9 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::Compilation>) {
             } else if codes.iter().any(|code| code == expected) {
                 Outcome::Pass
             } else {
-                Outcome::Fail(format!(
-                    "expected `{expected}`, got {}",
-                    codes_or(&codes)
-                ))
+                Outcome::Fail(format!("expected `{expected}`, got {}", codes_or(&codes)))
             }
-        }
+        },
     };
     (outcome, Some(compilation))
 }
@@ -191,7 +195,10 @@ fn codes_or(codes: &[String]) -> String {
 mod tests {
     use super::*;
 
-    fn doctest(snippet: &str, expected: Expected) -> Doctest {
+    fn doctest(
+        snippet: &str,
+        expected: Expected,
+    ) -> Doctest {
         Doctest {
             file: "tests/example.aev".to_string(),
             module: "Example".to_string(),
@@ -202,7 +209,10 @@ mod tests {
         }
     }
 
-    fn outcome(snippet: &str, expected: Expected) -> Outcome {
+    fn outcome(
+        snippet: &str,
+        expected: Expected,
+    ) -> Outcome {
         check(&doctest(snippet, expected)).0
     }
 
@@ -223,7 +233,10 @@ mod tests {
     #[test]
     fn a_matching_compile_fail_passes() {
         assert_eq!(
-            outcome("let broken = 1 m + 1", Expected::FailsWith("E0401".to_string())),
+            outcome(
+                "let broken = 1 m + 1",
+                Expected::FailsWith("E0401".to_string())
+            ),
             Outcome::Pass
         );
     }
@@ -254,7 +267,8 @@ mod tests {
 
     #[test]
     fn a_compile_fail_block_that_compiles_is_not_a_pass() {
-        let Outcome::Fail(reason) = outcome("let fine = 1", Expected::FailsWith("E0401".to_string()))
+        let Outcome::Fail(reason) =
+            outcome("let fine = 1", Expected::FailsWith("E0401".to_string()))
         else {
             panic!("expected a failure");
         };

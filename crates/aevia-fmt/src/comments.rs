@@ -29,7 +29,10 @@ impl Comment {
     /// line and indents it, and only the continuation lines of a block comment
     /// need it here.
     #[must_use]
-    pub fn render(&self, indent: &str) -> String {
+    pub fn render(
+        &self,
+        indent: &str,
+    ) -> String {
         self.text
             .lines()
             .enumerate()
@@ -53,13 +56,13 @@ pub fn scan(source: &str) -> Vec<Comment> {
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
-            b'"' => {
+            | b'"' => {
                 index = skip_string(bytes, index);
-            }
-            b'r' if bytes.get(index + 1) == Some(&b'"') => {
+            },
+            | b'r' if bytes.get(index + 1) == Some(&b'"') => {
                 index = skip_raw_string(bytes, index + 1);
-            }
-            b'#' => {
+            },
+            | b'#' => {
                 if bytes[index..].starts_with(b"#-") {
                     let (end, closed) = skip_block(bytes, index);
                     let text = source[index..end].trim_end().to_string();
@@ -82,14 +85,17 @@ pub fn scan(source: &str) -> Vec<Comment> {
                     });
                     index = end;
                 }
-            }
-            _ => index += 1,
+            },
+            | _ => index += 1,
         }
     }
     out
 }
 
-fn skip_line(bytes: &[u8], from: usize) -> usize {
+fn skip_line(
+    bytes: &[u8],
+    from: usize,
+) -> usize {
     let mut index = from;
     while index < bytes.len() && bytes[index] != b'\n' {
         index += 1;
@@ -98,7 +104,10 @@ fn skip_line(bytes: &[u8], from: usize) -> usize {
 }
 
 /// Past a `"…"` or `"""…"""` literal, including `{…}` interpolations.
-fn skip_string(bytes: &[u8], from: usize) -> usize {
+fn skip_string(
+    bytes: &[u8],
+    from: usize,
+) -> usize {
     if bytes[from..].starts_with(b"\"\"\"") {
         let mut index = from + 3;
         while index < bytes.len() {
@@ -112,42 +121,48 @@ fn skip_string(bytes: &[u8], from: usize) -> usize {
     let mut index = from + 1;
     while index < bytes.len() {
         match bytes[index] {
-            b'\\' => index += 2,
-            b'"' => return index + 1,
+            | b'\\' => index += 2,
+            | b'"' => return index + 1,
             // An interpolation may contain a nested string with a quote in it.
-            b'{' => {
+            | b'{' => {
                 index = skip_interpolation(bytes, index);
-            }
-            _ => index += 1,
+            },
+            | _ => index += 1,
         }
     }
     bytes.len()
 }
 
-fn skip_interpolation(bytes: &[u8], from: usize) -> usize {
+fn skip_interpolation(
+    bytes: &[u8],
+    from: usize,
+) -> usize {
     let mut index = from + 1;
     let mut depth = 1usize;
     while index < bytes.len() {
         match bytes[index] {
-            b'"' => {
+            | b'"' => {
                 index = skip_string(bytes, index);
                 continue;
-            }
-            b'{' => depth += 1,
-            b'}' => {
+            },
+            | b'{' => depth += 1,
+            | b'}' => {
                 depth -= 1;
                 if depth == 0 {
                     return index + 1;
                 }
-            }
-            _ => {}
+            },
+            | _ => {},
         }
         index += 1;
     }
     bytes.len()
 }
 
-fn skip_raw_string(bytes: &[u8], quote: usize) -> usize {
+fn skip_raw_string(
+    bytes: &[u8],
+    quote: usize,
+) -> usize {
     let mut index = quote + 1;
     while index < bytes.len() {
         if bytes[index] == b'"' {
@@ -159,7 +174,10 @@ fn skip_raw_string(bytes: &[u8], quote: usize) -> usize {
 }
 
 /// Past a `#- … -#` comment. Returns the end and whether it was closed.
-fn skip_block(bytes: &[u8], from: usize) -> (usize, bool) {
+fn skip_block(
+    bytes: &[u8],
+    from: usize,
+) -> (usize, bool) {
     let mut index = from + 2;
     let mut depth = 1usize;
     while index < bytes.len() {

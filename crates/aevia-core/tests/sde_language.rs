@@ -10,7 +10,8 @@
 #![allow(clippy::result_large_err)]
 
 use aevia_core::driver;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 struct Scratch(PathBuf);
 
@@ -23,7 +24,10 @@ impl Scratch {
         Self(path)
     }
 
-    fn write(&self, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        source: &str,
+    ) -> PathBuf {
         let path = self.0.join("main.aev");
         std::fs::write(&path, source).expect("write program");
         path
@@ -236,4 +240,3 @@ fn main(): IO Unit = do
         "expected a recoverable SdeError naming `sde.noncommutative`, got: {output}"
     );
 }
-

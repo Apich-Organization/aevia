@@ -25,7 +25,11 @@
 mod common;
 
 use aevia_std::stdlib;
-use common::{errors, rendered, spec_stdlib_path, stdlib_root, Package};
+use common::Package;
+use common::errors;
+use common::rendered;
+use common::spec_stdlib_path;
+use common::stdlib_root;
 
 /// The `Units.Constants` module, generated from the live Kernel Manifest.
 ///
@@ -122,11 +126,11 @@ fn the_generated_sources_are_the_specifications() {
     let mut drifted = Vec::new();
     for (path, source) in expected {
         match stdlib::source(&path.split('/').collect::<Vec<_>>()) {
-            Some(embedded) if embedded != source => {
+            | Some(embedded) if embedded != source => {
                 drifted.push(format!("`{path}` differs from the specification"));
-            }
-            Some(_) => {}
-            None => drifted.push(format!("`{path}` is not embedded")),
+            },
+            | Some(_) => {},
+            | None => drifted.push(format!("`{path}` is not embedded")),
         }
     }
     assert!(
@@ -186,7 +190,8 @@ fn every_module_checks_and_exports_its_names() {
             probe.push_str(&format!("import {path} {{ {} }}\n", list.join(", ")));
         }
         probe.push_str("\nfn main(): IO Unit = do\n    print(\"\")\n");
-        let program = package.compile_program(&format!("probe_{}", module.path.replace('/', "_")), &probe);
+        let program =
+            package.compile_program(&format!("probe_{}", module.path.replace('/', "_")), &probe);
         let failures = errors(&program);
         if !failures.is_empty() {
             broken.push(format!(
@@ -286,7 +291,10 @@ fn builtin_exists(name: &str) -> bool {
 
 /// A wrapper's failure is exactly "the JSON bridge is not in the checker yet",
 /// with no other diagnostic mixed in.
-fn assert_pending_json_bridge(program: &aevia_core::driver::Program, wrapper: &str) {
+fn assert_pending_json_bridge(
+    program: &aevia_core::driver::Program,
+    wrapper: &str,
+) {
     let failures = errors(program);
     assert!(
         !failures.is_empty(),
@@ -297,9 +305,7 @@ fn assert_pending_json_bridge(program: &aevia_core::driver::Program, wrapper: &s
             continue;
         }
         assert!(
-            failures
-                .iter()
-                .any(|failure| failure.contains(missing)),
+            failures.iter().any(|failure| failure.contains(missing)),
             "`{wrapper}` must fail only because `{missing}` is missing; found: {}",
             rendered(program)
         );
@@ -341,8 +347,10 @@ fn the_physics_wrappers_run_when_the_json_bridge_exists() {
         ("Physics.Geodesic", "Physics/Geodesic"),
     ] {
         let path = module.replace('/', ".");
-        let probe = format!("module Probe\n\nimport {path}\n\nfn main(): IO Unit = do\n    print(\"\")\n");
-        let program = package.compile_program(&format!("probe_{}", module.replace('/', "_")), &probe);
+        let probe =
+            format!("module Probe\n\nimport {path}\n\nfn main(): IO Unit = do\n    print(\"\")\n");
+        let program =
+            package.compile_program(&format!("probe_{}", module.replace('/', "_")), &probe);
         let failures = errors(&program);
         if failures.is_empty() {
             continue;
@@ -351,7 +359,9 @@ fn the_physics_wrappers_run_when_the_json_bridge_exists() {
     }
 
     if !(builtin_exists("to_json") && builtin_exists("from_json")) {
-        eprintln!("pending: Physics.Ising.run not executed (to_json/from_json missing from the checker)");
+        eprintln!(
+            "pending: Physics.Ising.run not executed (to_json/from_json missing from the checker)"
+        );
         return;
     }
     if !json_bridge_runs() {

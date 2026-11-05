@@ -18,28 +18,56 @@
 //! numeric severity, no JSON: a query takes a byte offset and returns a Rust
 //! value from [`crate::types`].
 
-use crate::diagnostic::{self, Diagnostic};
-use crate::document::Document;
-use crate::occurrence::{self, Occurrence, Role};
-use crate::position::{LineIndex, Range};
-use crate::prelude;
-use crate::types::{
-    CodeAction, Completion, CompletionKind, FileEdit, Hover, Location, Origin, RenameError,
-    RenamePlaceholder, SemanticToken, SignatureHelp, SignatureInfo, Symbol, SymbolKind, TextEdit,
-    WorkspaceSymbol,
+use crate::actions;
+use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{
+    self,
 };
-use crate::{actions, tokens, walk};
+use crate::document::Document;
+use crate::occurrence::Occurrence;
+use crate::occurrence::Role;
+use crate::occurrence::{
+    self,
+};
+use crate::position::LineIndex;
+use crate::position::Range;
+use crate::prelude;
+use crate::tokens;
+use crate::types::CodeAction;
+use crate::types::Completion;
+use crate::types::CompletionKind;
+use crate::types::FileEdit;
+use crate::types::Hover;
+use crate::types::Location;
+use crate::types::Origin;
+use crate::types::RenameError;
+use crate::types::RenamePlaceholder;
+use crate::types::SemanticToken;
+use crate::types::SignatureHelp;
+use crate::types::SignatureInfo;
+use crate::types::Symbol;
+use crate::types::SymbolKind;
+use crate::types::TextEdit;
+use crate::types::WorkspaceSymbol;
+use crate::walk;
 use aevia_core::compile;
-use aevia_core::driver::{LoadedModule, Program};
+use aevia_core::driver::LoadedModule;
+use aevia_core::driver::Program;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::FileId;
+use aevia_syntax::SourceMap;
+use aevia_syntax::Span;
 use aevia_syntax::ast::*;
-use aevia_syntax::{Diagnostics, FileId, SourceMap, Span};
-use aevia_types::check::{CheckedModule, Export};
-use aevia_types::{Scheme, Type};
+use aevia_types::Scheme;
+use aevia_types::Type;
 use aevia_types::builtins;
+use aevia_types::check::CheckedModule;
+use aevia_types::check::Export;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
-use unicode_ident::{is_xid_continue, is_xid_start};
+use unicode_ident::is_xid_continue;
+use unicode_ident::is_xid_start;
 
 /// Where the answers come from.
 enum Source {
@@ -79,16 +107,10 @@ impl<'a> Analysis<'a> {
     #[must_use]
     pub fn new(document: &'a Document) -> Self {
         let compilation = compile(document.name(), document.text());
-        let file = compilation
-            .module
-            .as_ref()
-            .map_or(0, |module| module.file);
-        let occurrences = compilation
-            .module
-            .as_ref()
-            .map_or_else(Vec::new, |module| {
-                occurrence::collect(module, document.text())
-            });
+        let file = compilation.module.as_ref().map_or(0, |module| module.file);
+        let occurrences = compilation.module.as_ref().map_or_else(Vec::new, |module| {
+            occurrence::collect(module, document.text())
+        });
         let definitions = compilation
             .module
             .as_ref()
@@ -121,7 +143,10 @@ impl<'a> Analysis<'a> {
     /// from (a scratch buffer), and [`crate::AnalysisCache`] is the right entry
     /// point for a caller that asks repeatedly.
     #[must_use]
-    pub fn from_path(document: &'a Document, path: &Path) -> Self {
+    pub fn from_path(
+        document: &'a Document,
+        path: &Path,
+    ) -> Self {
         if !crate::cache::analysable(path) {
             return Self::new(document);
         }
@@ -145,7 +170,10 @@ impl<'a> Analysis<'a> {
     /// answer falls back to single-file analysis rather than describing source
     /// that is not there.
     #[must_use]
-    pub fn from_program(document: &'a Document, program: Rc<Program>) -> Self {
+    pub fn from_program(
+        document: &'a Document,
+        program: Rc<Program>,
+    ) -> Self {
         let Some(entry) = program.entry() else {
             return Self::new(document);
         };
@@ -205,57 +233,65 @@ impl<'a> Analysis<'a> {
     /// The document's parsed module, when parsing got far enough.
     fn module(&self) -> Option<&Module> {
         match &self.source {
-            Source::Single(compilation) => compilation.module.as_ref(),
-            Source::Program(program) => program.entry().map(|entry| &entry.module),
+            | Source::Single(compilation) => compilation.module.as_ref(),
+            | Source::Program(program) => program.entry().map(|entry| &entry.module),
         }
     }
 
     /// The document module's checked interface.
     fn checked_module(&self) -> &CheckedModule {
         match &self.source {
-            Source::Single(compilation) => &compilation.checked,
+            | Source::Single(compilation) => &compilation.checked,
             // `from_path` only builds the program variant when it has an
             // entry module, and the loader keeps the entry last.
-            Source::Program(program) => &program
-                .modules
-                .last()
-                .expect("a loaded program has an entry")
-                .checked,
+            | Source::Program(program) => {
+                &program
+                    .modules
+                    .last()
+                    .expect("a loaded program has an entry")
+                    .checked
+            },
         }
     }
 
     /// The source map of the answer set: one file, or the whole program.
     fn sources(&self) -> &SourceMap {
         match &self.source {
-            Source::Single(compilation) => &compilation.sources,
-            Source::Program(program) => &program.sources,
+            | Source::Single(compilation) => &compilation.sources,
+            | Source::Program(program) => &program.sources,
         }
     }
 
     /// Every diagnostic of the answer set, before filtering by file.
     fn compiler_diagnostics(&self) -> &Diagnostics {
         match &self.source {
-            Source::Single(compilation) => &compilation.diagnostics,
-            Source::Program(program) => &program.diagnostics,
+            | Source::Single(compilation) => &compilation.diagnostics,
+            | Source::Program(program) => &program.diagnostics,
         }
     }
 
     /// The loaded program, when the document was saved and loaded from disk.
     fn program(&self) -> Option<&Program> {
         match &self.source {
-            Source::Single(_) => None,
-            Source::Program(program) => Some(program),
+            | Source::Single(_) => None,
+            | Source::Program(program) => Some(program),
         }
     }
 
     /// The declaration table of loaded module `index`.
-    fn definitions_of(&self, index: usize) -> Option<&HashMap<String, Span>> {
+    fn definitions_of(
+        &self,
+        index: usize,
+    ) -> Option<&HashMap<String, Span>> {
         self.module_definitions.get(index)
     }
 
     /// Resolves a dotted name such as `Math.sqrt` to the module that exports
     /// its last segment, trying the longest module prefix first.
-    fn resolve_qualified(&self, path: &[String]) -> Option<(usize, &Export)> {
+    fn resolve_qualified(
+        &self,
+        path: &[String],
+    ) -> Option<(usize, &Export)> {
         let program = self.program()?;
         let (member, prefix) = path.split_last()?;
         for length in (1..=prefix.len()).rev() {
@@ -272,7 +308,10 @@ impl<'a> Analysis<'a> {
     }
 
     /// Resolves an unqualified name to a module whose `open` brings it in.
-    fn resolve_opened(&self, name: &str) -> Option<(usize, &Export)> {
+    fn resolve_opened(
+        &self,
+        name: &str,
+    ) -> Option<(usize, &Export)> {
         let program = self.program()?;
         for (index, module) in program.modules.iter().enumerate() {
             if !module.aliases.iter().any(|alias| alias.is_empty()) {
@@ -286,7 +325,11 @@ impl<'a> Analysis<'a> {
     }
 
     /// The location of a declaration in loaded module `index`.
-    fn declaration_in(&self, index: usize, name: &str) -> Option<Location> {
+    fn declaration_in(
+        &self,
+        index: usize,
+        name: &str,
+    ) -> Option<Location> {
         let program = self.program()?;
         let module: &LoadedModule = program.modules.get(index)?;
         let span = *self.definitions_of(index)?.get(name)?;
@@ -298,7 +341,11 @@ impl<'a> Analysis<'a> {
     }
 
     /// The location of `span` in `file`, using that file's own text.
-    fn location_in_file(&self, file: FileId, span: Span) -> Option<Location> {
+    fn location_in_file(
+        &self,
+        file: FileId,
+        span: Span,
+    ) -> Option<Location> {
         let source = self.sources().file(file)?;
         Some(Location {
             document: source.name.clone(),
@@ -344,7 +391,10 @@ impl<'a> Analysis<'a> {
     /// Returns `None` rather than a guess: no entry, a type that still names a
     /// unification variable, or a cursor on whitespace.
     #[must_use]
-    pub fn hover(&self, offset: u32) -> Option<Hover> {
+    pub fn hover(
+        &self,
+        offset: u32,
+    ) -> Option<Hover> {
         if let Some(occurrence) = occurrence::at(&self.occurrences, offset) {
             if let Some(contents) = self.describe(occurrence) {
                 return Some(Hover {
@@ -383,7 +433,10 @@ impl<'a> Analysis<'a> {
     /// the walk in [`occurrence`] answers that for [`Self::definition`]. See
     /// `.workbuddy-ai/audit/lsp.md`.
     #[must_use]
-    pub fn completion(&self, offset: u32) -> Vec<Completion> {
+    pub fn completion(
+        &self,
+        offset: u32,
+    ) -> Vec<Completion> {
         if usize::try_from(offset).unwrap_or(usize::MAX) > self.document.len() {
             return Vec::new();
         }
@@ -464,10 +517,10 @@ impl<'a> Analysis<'a> {
             items.push(Completion {
                 label: name.to_string(),
                 kind: match &scheme {
-                    Some(scheme) if matches!(scheme.ty, aevia_types::Type::Fn(_, _)) => {
+                    | Some(scheme) if matches!(scheme.ty, aevia_types::Type::Fn(_, _)) => {
                         CompletionKind::Function
-                    }
-                    _ => CompletionKind::Value,
+                    },
+                    | _ => CompletionKind::Value,
                 },
                 detail: scheme.map(|scheme| scheme.to_string()),
                 origin: Origin::Prelude,
@@ -500,17 +553,23 @@ impl<'a> Analysis<'a> {
     /// the returned [`Location`] names *that* file. `Rssn.<op>` has no
     /// definition to go to: the kernel is not source.
     #[must_use]
-    pub fn definition(&self, offset: u32) -> Option<Location> {
+    pub fn definition(
+        &self,
+        offset: u32,
+    ) -> Option<Location> {
         let occurrence = occurrence::at(&self.occurrences, offset)?;
         match &occurrence.role {
-            Role::Qualified(path) => {
+            | Role::Qualified(path) => {
                 if path.first().map(String::as_str) == Some("Rssn") {
                     return None;
                 }
                 let (index, _) = self.resolve_qualified(path)?;
                 self.declaration_in(index, path.last()?)
-            }
-            Role::Name(name) | Role::Constructor(name) | Role::TypeName(name) | Role::Unit(name) => {
+            },
+            | Role::Name(name)
+            | Role::Constructor(name)
+            | Role::TypeName(name)
+            | Role::Unit(name) => {
                 if let Some(binding) = occurrence.binding {
                     return Some(Location {
                         document: self.document.name().to_string(),
@@ -525,8 +584,8 @@ impl<'a> Analysis<'a> {
                 }
                 let (index, _) = self.resolve_opened(name)?;
                 self.declaration_in(index, name)
-            }
-            Role::Method { name, .. } => {
+            },
+            | Role::Method { name, .. } => {
                 let span = occurrence
                     .binding
                     .or_else(|| self.definitions.get(name).copied())?;
@@ -534,7 +593,7 @@ impl<'a> Analysis<'a> {
                     document: self.document.name().to_string(),
                     range: self.range(span),
                 })
-            }
+            },
         }
     }
 
@@ -556,11 +615,14 @@ impl<'a> Analysis<'a> {
     /// document's outline. A query is matched case-insensitively against the
     /// declaration's name; an empty query lists everything.
     #[must_use]
-    pub fn workspace_symbols(&self, query: &str) -> Vec<WorkspaceSymbol> {
+    pub fn workspace_symbols(
+        &self,
+        query: &str,
+    ) -> Vec<WorkspaceSymbol> {
         let needle = query.trim().to_lowercase();
         let mut symbols = Vec::new();
         match &self.source {
-            Source::Single(compilation) => {
+            | Source::Single(compilation) => {
                 let Some(module) = &compilation.module else {
                     return symbols;
                 };
@@ -572,14 +634,13 @@ impl<'a> Analysis<'a> {
                     &needle,
                     &mut symbols,
                 );
-            }
-            Source::Program(program) => {
+            },
+            | Source::Program(program) => {
                 for module in &program.modules {
                     let Some(source) = program.sources.file(module.file) else {
                         continue;
                     };
-                    let context =
-                        SymbolContext::new(&source.text, module.file, &module.checked);
+                    let context = SymbolContext::new(&source.text, module.file, &module.checked);
                     collect_workspace(
                         &context.module_symbols(&module.module),
                         &source.name,
@@ -587,7 +648,7 @@ impl<'a> Analysis<'a> {
                         &mut symbols,
                     );
                 }
-            }
+            },
         }
         symbols
     }
@@ -614,7 +675,10 @@ impl<'a> Analysis<'a> {
     /// offers nothing whose replacement text it has not checked. `request` is
     /// the client's selection; a cursor is a zero-width range.
     #[must_use]
-    pub fn code_actions(&self, request: Range) -> Vec<CodeAction> {
+    pub fn code_actions(
+        &self,
+        request: Range,
+    ) -> Vec<CodeAction> {
         let Some(module) = self.module() else {
             return Vec::new();
         };
@@ -659,7 +723,10 @@ impl<'a> Analysis<'a> {
     /// type may be declared in an imported module, and the location names that
     /// file.
     #[must_use]
-    pub fn type_definition(&self, offset: u32) -> Option<Location> {
+    pub fn type_definition(
+        &self,
+        offset: u32,
+    ) -> Option<Location> {
         let aevia_types::Type::Adt(id, _) = self.cursor_type(offset)? else {
             return None;
         };
@@ -699,7 +766,10 @@ impl<'a> Analysis<'a> {
     /// `None` outside a call, on the callee name itself, and for a callee that
     /// names nothing callable.
     #[must_use]
-    pub fn signature_help(&self, offset: u32) -> Option<SignatureHelp> {
+    pub fn signature_help(
+        &self,
+        offset: u32,
+    ) -> Option<SignatureHelp> {
         let (views, entry) = self.views();
         let view = views.get(entry)?;
         let (callee, call) = innermost_call(view.module, offset)?;
@@ -811,7 +881,11 @@ impl<'a> Analysis<'a> {
     /// may declare it, because the source alone cannot say which type a bare
     /// `{ x = … }` or `p.x` names.
     #[must_use]
-    pub fn references(&self, offset: u32, include_declaration: bool) -> Vec<Location> {
+    pub fn references(
+        &self,
+        offset: u32,
+        include_declaration: bool,
+    ) -> Vec<Location> {
         let (views, entry) = self.views();
         if let Some(target) = resolve_target(&views, entry, offset) {
             return collect_references(&views, &target, include_declaration);
@@ -826,7 +900,10 @@ impl<'a> Analysis<'a> {
     /// program may edit; a unit or dimension name would change the unit or type
     /// system rather than an identifier; a module path segment is not a
     /// declaration. Each of those refuses with a sentence, not a silent `None`.
-    pub fn prepare_rename(&self, offset: u32) -> Result<RenamePlaceholder, RenameError> {
+    pub fn prepare_rename(
+        &self,
+        offset: u32,
+    ) -> Result<RenamePlaceholder, RenameError> {
         let (views, entry) = self.views();
         if let Some(target) = resolve_target(&views, entry, offset) {
             check_renamable(&target)?;
@@ -863,7 +940,11 @@ impl<'a> Analysis<'a> {
     /// `open`ed uses in importers are all updated. The new name must be a valid
     /// identifier of the same shape (upper-case for types and constructors,
     /// lower-case for values) and must not collide in the scope being renamed.
-    pub fn rename(&self, offset: u32, new_name: &str) -> Result<Vec<FileEdit>, RenameError> {
+    pub fn rename(
+        &self,
+        offset: u32,
+        new_name: &str,
+    ) -> Result<Vec<FileEdit>, RenameError> {
         let (views, entry) = self.views();
         if let Some(target) = resolve_target(&views, entry, offset) {
             check_renamable(&target)?;
@@ -886,7 +967,7 @@ impl<'a> Analysis<'a> {
     /// One view per loaded module, and the index of the entry (open) module.
     fn views(&self) -> (Vec<ModuleView<'_>>, usize) {
         match &self.source {
-            Source::Single(compilation) => {
+            | Source::Single(compilation) => {
                 let Some(module) = &compilation.module else {
                     return (Vec::new(), 0);
                 };
@@ -903,8 +984,8 @@ impl<'a> Analysis<'a> {
                     imports: Vec::new(),
                 };
                 (vec![view], 0)
-            }
-            Source::Program(program) => {
+            },
+            | Source::Program(program) => {
                 let paths: Vec<Vec<String>> = program
                     .modules
                     .iter()
@@ -935,7 +1016,7 @@ impl<'a> Analysis<'a> {
                     .position(|view| view.file == self.file)
                     .unwrap_or_else(|| views.len().saturating_sub(1));
                 (views, entry)
-            }
+            },
         }
     }
 
@@ -945,21 +1026,23 @@ impl<'a> Analysis<'a> {
     /// exported or imported name, then the innermost expression's type: the
     /// same order the hover answer uses, because both questions are "what is
     /// this".
-    fn cursor_type(&self, offset: u32) -> Option<&aevia_types::Type> {
+    fn cursor_type(
+        &self,
+        offset: u32,
+    ) -> Option<&aevia_types::Type> {
         if let Some(occurrence) = occurrence::at(&self.occurrences, offset) {
             if let Some(ty) = self.recorded_type(occurrence.span) {
                 return Some(ty);
             }
             let export = match &occurrence.role {
-                Role::Name(name) | Role::Constructor(name) | Role::TypeName(name) => self
-                    .checked_module()
-                    .exports
-                    .get(name)
-                    .or_else(|| self.resolve_opened(name).map(|(_, export)| export)),
-                Role::Qualified(path) => self
-                    .resolve_qualified(path)
-                    .map(|(_, export)| export),
-                _ => None,
+                | Role::Name(name) | Role::Constructor(name) | Role::TypeName(name) => {
+                    self.checked_module()
+                        .exports
+                        .get(name)
+                        .or_else(|| self.resolve_opened(name).map(|(_, export)| export))
+                },
+                | Role::Qualified(path) => self.resolve_qualified(path).map(|(_, export)| export),
+                | _ => None,
             };
             if let Some(scheme) = export.and_then(export_scheme) {
                 return Some(scheme);
@@ -969,15 +1052,21 @@ impl<'a> Analysis<'a> {
     }
 
     /// The range of a compiler span in this document.
-    fn range(&self, span: Span) -> Range {
+    fn range(
+        &self,
+        span: Span,
+    ) -> Range {
         self.document.range_of(span.start, span.end)
     }
 
     /// The hover text for an occurrence, or `None` when nothing is known.
-    fn describe(&self, occurrence: &Occurrence) -> Option<String> {
+    fn describe(
+        &self,
+        occurrence: &Occurrence,
+    ) -> Option<String> {
         let checked = self.checked_module();
         match &occurrence.role {
-            Role::Name(name) => {
+            | Role::Name(name) => {
                 // A class method call the checker resolved: the interesting
                 // fact is *which instance*, not the scheme, because the scheme
                 // is the class's and the instance is the proof.
@@ -1010,35 +1099,37 @@ impl<'a> Analysis<'a> {
                 let polymorphic = !scheme.vars.is_empty() || !scheme.dims.is_empty();
                 let text = format!("```aevia\n{name}: {scheme}\n```\n\nprelude");
                 Some(self.with_use_type(text, occurrence.span, polymorphic))
-            }
-            Role::Constructor(name) => {
+            },
+            | Role::Constructor(name) => {
                 if let Some(export) = checked.exports.get(name) {
                     return describe_export(name, export);
                 }
                 let (_, export) = self.resolve_opened(name)?;
                 describe_export(name, export)
-            }
-            Role::TypeName(name) => {
+            },
+            | Role::TypeName(name) => {
                 let export = checked
                     .exports
                     .get(name)
                     .or_else(|| self.resolve_opened(name).map(|(_, export)| export))?;
                 match export {
-                    Export::Type { .. } => Some(format!("type `{name}`")),
-                    Export::Alias { params } => {
+                    | Export::Type { .. } => Some(format!("type `{name}`")),
+                    | Export::Alias { params } => {
                         Some(format!("type alias `{name}` with {params} parameter(s)"))
-                    }
-                    Export::TypeCtor { adt, .. } => Some(format!(
-                        "type `{name}`\n\nconstructor `{name}` of `{}`",
-                        aevia_types::adt::name_of(*adt)
-                    )),
-                    other => describe_export(name, other),
+                    },
+                    | Export::TypeCtor { adt, .. } => {
+                        Some(format!(
+                            "type `{name}`\n\nconstructor `{name}` of `{}`",
+                            aevia_types::adt::name_of(*adt)
+                        ))
+                    },
+                    | other => describe_export(name, other),
                 }
-            }
-            Role::Method { name, class } => Some(format!(
-                "**method** `{name}`\n\nclass `{class}`"
-            )),
-            Role::Unit(name) => {
+            },
+            | Role::Method { name, class } => {
+                Some(format!("**method** `{name}`\n\nclass `{class}`"))
+            },
+            | Role::Unit(name) => {
                 // A unit literal's unit is not an exported name; the checker's
                 // unit table is the record of what it resolved to.
                 let dim = self
@@ -1047,11 +1138,11 @@ impl<'a> Analysis<'a> {
                     .lookup(name)
                     .map(|unit| unit.dim.to_plain_string());
                 Some(match dim {
-                    Some(dim) => format!("**unit** `{name}`\n\ndimension `{dim}`"),
-                    None => format!("**unit** `{name}`"),
+                    | Some(dim) => format!("**unit** `{name}`\n\ndimension `{dim}`"),
+                    | None => format!("**unit** `{name}`"),
                 })
-            }
-            Role::Qualified(path) => self.describe_qualified(path, occurrence.span),
+            },
+            | Role::Qualified(path) => self.describe_qualified(path, occurrence.span),
         }
     }
 
@@ -1060,7 +1151,10 @@ impl<'a> Analysis<'a> {
     /// A type that still names a unification variable is the checker saying
     /// "not decided here" — `t7` would look like information — and `Error` is
     /// its "inference already failed". Neither is an answer.
-    fn recorded_type(&self, span: Span) -> Option<&aevia_types::Type> {
+    fn recorded_type(
+        &self,
+        span: Span,
+    ) -> Option<&aevia_types::Type> {
         let ty = self.checked_module().expr_types.get(&span)?;
         if ty.is_error() || aevia_types::class::has_variables(ty) {
             return None;
@@ -1072,11 +1166,14 @@ impl<'a> Analysis<'a> {
     ///
     /// A name keeps its name (`x: Int`); anything else is the bare type, which
     /// is what the expression *is*.
-    fn describe_expression_type(&self, occurrence: &Occurrence) -> Option<String> {
+    fn describe_expression_type(
+        &self,
+        occurrence: &Occurrence,
+    ) -> Option<String> {
         let ty = self.recorded_type(occurrence.span)?;
         Some(match &occurrence.role {
-            Role::Name(name) => format!("```aevia\n{name}: {ty}\n```"),
-            _ => format!("```aevia\n{ty}\n```"),
+            | Role::Name(name) => format!("```aevia\n{name}: {ty}\n```"),
+            | _ => format!("```aevia\n{ty}\n```"),
         })
     }
 
@@ -1086,7 +1183,10 @@ impl<'a> Analysis<'a> {
     /// This is how a field of a type imported from another module is named:
     /// the checker resolved the record in this module's own type table, and the
     /// row says which field the access is.
-    fn describe_field(&self, span: Span) -> Option<String> {
+    fn describe_field(
+        &self,
+        span: Span,
+    ) -> Option<String> {
         let module = self.module()?;
         let ExprKind::Field { base, name } = &walk::exactly(module, span)?.kind else {
             return None;
@@ -1104,7 +1204,10 @@ impl<'a> Analysis<'a> {
     /// "Innermost" is the shortest span: in `1.0 + 2` the binary expression
     /// covers the whole text, but a cursor on `1.0` is inside the literal's
     /// own span, and that is the expression the question is about.
-    fn expression_at(&self, offset: u32) -> Option<(Span, &aevia_types::Type)> {
+    fn expression_at(
+        &self,
+        offset: u32,
+    ) -> Option<(Span, &aevia_types::Type)> {
         // Whitespace is not an expression. Without this, a cursor on the
         // indent before a block's tail would hover the whole block.
         let text = self.document.text().as_bytes();
@@ -1140,13 +1243,18 @@ impl<'a> Analysis<'a> {
     /// `id` is `∀a. a -> a` wherever it is written; at `id("s")` the useful
     /// extra fact is that *this* use is `String -> String`. A monomorphic
     /// declaration has nothing to add.
-    fn with_use_type(&self, text: String, span: Span, polymorphic: bool) -> String {
+    fn with_use_type(
+        &self,
+        text: String,
+        span: Span,
+        polymorphic: bool,
+    ) -> String {
         if !polymorphic {
             return text;
         }
         match self.recorded_type(span) {
-            Some(ty) => format!("{text}\n\nas used here: `{ty}`"),
-            None => text,
+            | Some(ty) => format!("{text}\n\nas used here: `{ty}`"),
+            | None => text,
         }
     }
 
@@ -1157,7 +1265,11 @@ impl<'a> Analysis<'a> {
     /// same scheme `aevia check` used. `Rssn.<op>` is the one dotted name the
     /// *checker* records: it pins the overload at the call site, and that pin is
     /// the whole point of PLAN D1, so it is what the hover reports.
-    fn describe_qualified(&self, path: &[String], span: Span) -> Option<String> {
+    fn describe_qualified(
+        &self,
+        path: &[String],
+        span: Span,
+    ) -> Option<String> {
         if let Some((index, export)) = self.resolve_qualified(path) {
             let full = path.join(".");
             let text = describe_export(&full, export)?;
@@ -1176,15 +1288,11 @@ impl<'a> Analysis<'a> {
         if root != "Rssn" {
             return None;
         }
-        let call = self
-            .checked_module()
-            .rssn_calls
-            .iter()
-            .find(|call| {
-                call.name.as_str() == op.as_str()
-                    && call.span.start <= span.start
-                    && span.end <= call.span.end
-            })?;
+        let call = self.checked_module().rssn_calls.iter().find(|call| {
+            call.name.as_str() == op.as_str()
+                && call.span.start <= span.start
+                && span.end <= call.span.end
+        })?;
         let entry = aevia_rssn::registry().op(op);
         let overloads = entry.map_or(0, |entry| entry.signatures.len());
         let mut text = format!(
@@ -1202,7 +1310,6 @@ impl<'a> Analysis<'a> {
         }
         Some(text)
     }
-
 }
 
 /// Builds outline entries for one module, in that module's own coordinates.
@@ -1219,16 +1326,19 @@ struct SymbolContext<'a> {
 }
 
 impl<'a> SymbolContext<'a> {
-    fn new(text: &'a str, file: FileId, checked: &'a CheckedModule) -> Self {
-        Self {
-            text,
-            file,
-            checked,
-        }
+    fn new(
+        text: &'a str,
+        file: FileId,
+        checked: &'a CheckedModule,
+    ) -> Self {
+        Self { text, file, checked }
     }
 
     /// The range of a span in this context's file.
-    fn range(&self, span: Span) -> Range {
+    fn range(
+        &self,
+        span: Span,
+    ) -> Range {
         if span.file != self.file {
             return Range::default();
         }
@@ -1236,7 +1346,10 @@ impl<'a> SymbolContext<'a> {
     }
 
     /// The source text a span covers, when it is in this file.
-    fn text_of(&self, span: Span) -> String {
+    fn text_of(
+        &self,
+        span: Span,
+    ) -> String {
         if span.file != self.file {
             return String::new();
         }
@@ -1246,27 +1359,38 @@ impl<'a> SymbolContext<'a> {
     }
 
     /// The range of a declaration's name.
-    fn name_range(&self, within: Span, name: &str) -> Range {
+    fn name_range(
+        &self,
+        within: Span,
+        name: &str,
+    ) -> Range {
         self.range(occurrence::name_span(self.text, within, name))
     }
 
     /// The checker's rendering of an exported name's scheme, when it has one.
-    fn scheme_of(&self, name: &str) -> Option<String> {
+    fn scheme_of(
+        &self,
+        name: &str,
+    ) -> Option<String> {
         match self.checked.exports.get(name)? {
-            Export::Value { scheme, .. } => scheme_is_known(scheme).then(|| scheme.to_string()),
-            Export::Ctor { scheme, .. } | Export::TypeCtor { scheme, .. } => {
+            | Export::Value { scheme, .. } => scheme_is_known(scheme).then(|| scheme.to_string()),
+            | Export::Ctor { scheme, .. } | Export::TypeCtor { scheme, .. } => {
                 scheme_is_known(scheme).then(|| scheme.to_string())
-            }
-            Export::Type { .. } | Export::Alias { .. } => None,
-            Export::Unit { def } => Some(format!("unit: {}", def.dim.to_plain_string())),
-            Export::Dimension { dim } => dim
-                .as_ref()
-                .map(|dim| format!("dimension: {}", dim.to_plain_string())),
+            },
+            | Export::Type { .. } | Export::Alias { .. } => None,
+            | Export::Unit { def } => Some(format!("unit: {}", def.dim.to_plain_string())),
+            | Export::Dimension { dim } => {
+                dim.as_ref()
+                    .map(|dim| format!("dimension: {}", dim.to_plain_string()))
+            },
         }
     }
 
     /// Every top-level declaration of `module` as an outline entry.
-    fn module_symbols(&self, module: &Module) -> Vec<Symbol> {
+    fn module_symbols(
+        &self,
+        module: &Module,
+    ) -> Vec<Symbol> {
         module
             .decls
             .iter()
@@ -1275,53 +1399,66 @@ impl<'a> SymbolContext<'a> {
     }
 
     /// One declaration as an outline entry.
-    fn declaration_symbol(&self, decl: &Decl) -> Option<Symbol> {
+    fn declaration_symbol(
+        &self,
+        decl: &Decl,
+    ) -> Option<Symbol> {
         let name_range = |name: &str| self.name_range(decl.span, name);
         let whole = self.range(decl.span);
         let detail = |name: &str| self.scheme_of(name);
         let symbol = match &decl.kind {
-            DeclKind::Import { path, .. } => Symbol {
-                name: path.join("."),
-                kind: SymbolKind::Namespace,
-                range: whole,
-                selection: whole,
-                detail: None,
-                children: Vec::new(),
+            | DeclKind::Import { path, .. } => {
+                Symbol {
+                    name: path.join("."),
+                    kind: SymbolKind::Namespace,
+                    range: whole,
+                    selection: whole,
+                    detail: None,
+                    children: Vec::new(),
+                }
             },
-            DeclKind::Dimension { name, .. } => Symbol {
-                name: name.clone(),
-                kind: SymbolKind::TypeParameter,
-                range: whole,
-                selection: name_range(name),
-                detail: None,
-                children: Vec::new(),
+            | DeclKind::Dimension { name, .. } => {
+                Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::TypeParameter,
+                    range: whole,
+                    selection: name_range(name),
+                    detail: None,
+                    children: Vec::new(),
+                }
             },
-            DeclKind::Unit { name, dim, .. } => Symbol {
-                name: name.clone(),
-                kind: SymbolKind::Constant,
-                range: whole,
-                selection: name_range(name),
-                detail: Some(format!("unit: {}", dim.to_source())),
-                children: Vec::new(),
+            | DeclKind::Unit { name, dim, .. } => {
+                Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::Constant,
+                    range: whole,
+                    selection: name_range(name),
+                    detail: Some(format!("unit: {}", dim.to_source())),
+                    children: Vec::new(),
+                }
             },
-            DeclKind::Type { name, body, .. } => {
+            | DeclKind::Type { name, body, .. } => {
                 let (kind, children) = match body {
-                    TypeBody::Alias(_) => (SymbolKind::Struct, Vec::new()),
-                    TypeBody::Abstract => (SymbolKind::Interface, Vec::new()),
-                    TypeBody::Variants(ctors) => (
-                        SymbolKind::Enum,
-                        ctors
-                            .iter()
-                            .map(|ctor| Symbol {
-                                name: ctor.name.clone(),
-                                kind: SymbolKind::EnumMember,
-                                range: self.range(ctor.span),
-                                selection: self.range(ctor.span),
-                                detail: None,
-                                children: Vec::new(),
-                            })
-                            .collect(),
-                    ),
+                    | TypeBody::Alias(_) => (SymbolKind::Struct, Vec::new()),
+                    | TypeBody::Abstract => (SymbolKind::Interface, Vec::new()),
+                    | TypeBody::Variants(ctors) => {
+                        (
+                            SymbolKind::Enum,
+                            ctors
+                                .iter()
+                                .map(|ctor| {
+                                    Symbol {
+                                        name: ctor.name.clone(),
+                                        kind: SymbolKind::EnumMember,
+                                        range: self.range(ctor.span),
+                                        selection: self.range(ctor.span),
+                                        detail: None,
+                                        children: Vec::new(),
+                                    }
+                                })
+                                .collect(),
+                        )
+                    },
                 };
                 Symbol {
                     name: name.clone(),
@@ -1331,61 +1468,63 @@ impl<'a> SymbolContext<'a> {
                     detail: None,
                     children,
                 }
-            }
-            DeclKind::Class {
-                name,
-                methods,
-                ..
-            } => Symbol {
-                name: name.clone(),
-                kind: SymbolKind::Interface,
-                range: whole,
-                selection: name_range(name),
-                detail: None,
-                children: methods
-                    .iter()
-                    .map(|(method, ty)| Symbol {
-                        name: method.clone(),
-                        kind: SymbolKind::Method,
-                        range: whole,
-                        selection: self.name_range(decl.span, method),
-                        detail: Some(self.text_of(ty.span)),
-                        children: Vec::new(),
-                    })
-                    .collect(),
             },
-            DeclKind::Instance {
-                class,
-                ty,
-                methods,
-            } => Symbol {
-                name: format!("instance {class} for {}", self.text_of(ty.span)),
-                kind: SymbolKind::Object,
-                range: whole,
-                selection: whole,
-                detail: None,
-                children: methods
-                    .iter()
-                    .map(|method| Symbol {
-                        name: method.name.clone(),
-                        kind: SymbolKind::Method,
-                        range: self.range(method.span),
-                        selection: self.name_range(method.span, &method.name),
-                        detail: None,
-                        children: Vec::new(),
-                    })
-                    .collect(),
+            | DeclKind::Class { name, methods, .. } => {
+                Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::Interface,
+                    range: whole,
+                    selection: name_range(name),
+                    detail: None,
+                    children: methods
+                        .iter()
+                        .map(|(method, ty)| {
+                            Symbol {
+                                name: method.clone(),
+                                kind: SymbolKind::Method,
+                                range: whole,
+                                selection: self.name_range(decl.span, method),
+                                detail: Some(self.text_of(ty.span)),
+                                children: Vec::new(),
+                            }
+                        })
+                        .collect(),
+                }
             },
-            DeclKind::Derive { .. } => return None,
-            DeclKind::Fn { name, body, .. } => Symbol {
-                name: name.clone(),
-                kind: SymbolKind::Function,
-                range: whole,
-                selection: name_range(name),
-                detail: detail(name),
-                children: self.nested(body),
+            | DeclKind::Instance { class, ty, methods } => {
+                Symbol {
+                    name: format!("instance {class} for {}", self.text_of(ty.span)),
+                    kind: SymbolKind::Object,
+                    range: whole,
+                    selection: whole,
+                    detail: None,
+                    children: methods
+                        .iter()
+                        .map(|method| {
+                            Symbol {
+                                name: method.name.clone(),
+                                kind: SymbolKind::Method,
+                                range: self.range(method.span),
+                                selection: self.name_range(method.span, &method.name),
+                                detail: None,
+                                children: Vec::new(),
+                            }
+                        })
+                        .collect(),
+                }
             },
-            DeclKind::Let { pattern, .. } => {
+            | DeclKind::Derive { .. } => return None,
+            | DeclKind::Fn { name, body, .. } => {
+                Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::Function,
+                    range: whole,
+                    selection: name_range(name),
+                    detail: detail(name),
+                    children: self.nested(body),
+                }
+            },
+            | DeclKind::Let { pattern, .. } => {
                 let PatKind::Var(name) = &pattern.kind else {
                     return None;
                 };
@@ -1397,29 +1536,36 @@ impl<'a> SymbolContext<'a> {
                     detail: detail(name),
                     children: Vec::new(),
                 }
-            }
-            DeclKind::Test { name, .. } => Symbol {
-                name: name.clone(),
-                kind: SymbolKind::Constant,
-                range: whole,
-                selection: whole,
-                detail: None,
-                children: Vec::new(),
+            },
+            | DeclKind::Test { name, .. } => {
+                Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::Constant,
+                    range: whole,
+                    selection: whole,
+                    detail: None,
+                    children: Vec::new(),
+                }
             },
         };
         Some(symbol)
     }
 
     /// The declarations nested directly in a function body.
-    fn nested(&self, body: &Expr) -> Vec<Symbol> {
+    fn nested(
+        &self,
+        body: &Expr,
+    ) -> Vec<Symbol> {
         let ExprKind::Block { stmts, .. } = &body.kind else {
             return Vec::new();
         };
         stmts
             .iter()
-            .filter_map(|stmt| match stmt {
-                BlockStmt::Fn(decl) => self.declaration_symbol(decl),
-                BlockStmt::Let { .. } => None,
+            .filter_map(|stmt| {
+                match stmt {
+                    | BlockStmt::Fn(decl) => self.declaration_symbol(decl),
+                    | BlockStmt::Let { .. } => None,
+                }
             })
             .collect()
     }
@@ -1449,7 +1595,10 @@ fn collect_workspace(
 }
 
 /// Appends an outline entry and its descendants, parents first.
-fn flatten(symbol: &Symbol, out: &mut Vec<Symbol>) {
+fn flatten(
+    symbol: &Symbol,
+    out: &mut Vec<Symbol>,
+) {
     out.push(symbol.clone());
     for child in &symbol.children {
         flatten(child, out);
@@ -1475,20 +1624,29 @@ fn prefixes(program: &Program) -> HashMap<String, usize> {
 }
 
 /// The range of `span` in a file whose text is `text`.
-fn range_in_file(text: &str, span: Span) -> Range {
+fn range_in_file(
+    text: &str,
+    span: Span,
+) -> Range {
     let index = LineIndex::new(text);
-    Range::new(index.position(text, span.start), index.position(text, span.end))
+    Range::new(
+        index.position(text, span.start),
+        index.position(text, span.end),
+    )
 }
 
 /// The scheme of an export, when the checker decided one.
 fn export_scheme(export: &Export) -> Option<&aevia_types::Type> {
     let scheme = match export {
-        Export::Value { scheme, .. }
+        | Export::Value { scheme, .. }
         | Export::Ctor { scheme, .. }
         | Export::TypeCtor { scheme, .. } => scheme,
-        Export::Type { .. } | Export::Alias { .. } | Export::Unit { .. } | Export::Dimension { .. } => {
+        | Export::Type { .. }
+        | Export::Alias { .. }
+        | Export::Unit { .. }
+        | Export::Dimension { .. } => {
             return None;
-        }
+        },
     };
     if scheme.ty.is_error() || aevia_types::class::has_variables(&scheme.ty) {
         return None;
@@ -1502,32 +1660,37 @@ fn export_scheme(export: &Export) -> Option<&aevia_types::Type> {
 /// that name: with two, the source alone cannot say which one a call reaches —
 /// the checker's `DictionaryUse` is what knows — and pointing at a coin flip
 /// would be worse than pointing at nothing.
-fn declarations(module: &Module, text: &str) -> HashMap<String, Span> {
+fn declarations(
+    module: &Module,
+    text: &str,
+) -> HashMap<String, Span> {
     let mut map: HashMap<String, Span> = HashMap::new();
     let mut methods: HashMap<&str, Vec<Span>> = HashMap::new();
     for decl in &module.decls {
         match &decl.kind {
-            DeclKind::Fn { name, .. }
+            | DeclKind::Fn { name, .. }
             | DeclKind::Type { name, .. }
             | DeclKind::Class { name, .. }
             | DeclKind::Dimension { name, .. }
             | DeclKind::Unit { name, .. } => {
                 add(&mut map, text, name, decl.span);
-            }
-            DeclKind::Let { pattern, .. } => {
+            },
+            | DeclKind::Let { pattern, .. } => {
                 if let PatKind::Var(name) = &pattern.kind {
                     add(&mut map, text, name, pattern.span);
                 }
-            }
-            DeclKind::Instance { methods: declared, .. } => {
+            },
+            | DeclKind::Instance {
+                methods: declared, ..
+            } => {
                 for method in declared {
                     methods
                         .entry(method.name.as_str())
                         .or_default()
                         .push(occurrence::name_span(text, method.span, &method.name));
                 }
-            }
-            DeclKind::Import { .. } | DeclKind::Derive { .. } | DeclKind::Test { .. } => {}
+            },
+            | DeclKind::Import { .. } | DeclKind::Derive { .. } | DeclKind::Test { .. } => {},
         }
         if let DeclKind::Type {
             body: TypeBody::Variants(ctors),
@@ -1549,7 +1712,12 @@ fn declarations(module: &Module, text: &str) -> HashMap<String, Span> {
 
 /// Records where `name` is written inside `within`, keeping the first
 /// declaration of a name.
-fn add(map: &mut HashMap<String, Span>, text: &str, name: &str, within: Span) {
+fn add(
+    map: &mut HashMap<String, Span>,
+    text: &str,
+    name: &str,
+    within: Span,
+) {
     map.entry(name.to_string())
         .or_insert_with(|| occurrence::name_span(text, within, name));
 }
@@ -1557,12 +1725,10 @@ fn add(map: &mut HashMap<String, Span>, text: &str, name: &str, within: Span) {
 /// True when an export's scheme has variables the occurrence could instantiate.
 fn export_is_polymorphic(export: &Export) -> bool {
     match export {
-        Export::Value { scheme, .. }
+        | Export::Value { scheme, .. }
         | Export::Ctor { scheme, .. }
-        | Export::TypeCtor { scheme, .. } => {
-            !scheme.vars.is_empty() || !scheme.dims.is_empty()
-        }
-        Export::Type { .. }
+        | Export::TypeCtor { scheme, .. } => !scheme.vars.is_empty() || !scheme.dims.is_empty(),
+        | Export::Type { .. }
         | Export::Alias { .. }
         | Export::Unit { .. }
         | Export::Dimension { .. } => false,
@@ -1572,12 +1738,12 @@ fn export_is_polymorphic(export: &Export) -> bool {
 /// The completion kind of an exported name.
 fn completion_kind(export: &Export) -> CompletionKind {
     match export {
-        Export::Value { arity, .. } if *arity > 0 => CompletionKind::Function,
-        Export::Value { .. } => CompletionKind::Value,
-        Export::Ctor { .. } | Export::TypeCtor { .. } => CompletionKind::Constructor,
-        Export::Type { .. } | Export::Alias { .. } => CompletionKind::Type,
-        Export::Unit { .. } => CompletionKind::Unit,
-        Export::Dimension { .. } => CompletionKind::Dimension,
+        | Export::Value { arity, .. } if *arity > 0 => CompletionKind::Function,
+        | Export::Value { .. } => CompletionKind::Value,
+        | Export::Ctor { .. } | Export::TypeCtor { .. } => CompletionKind::Constructor,
+        | Export::Type { .. } | Export::Alias { .. } => CompletionKind::Type,
+        | Export::Unit { .. } => CompletionKind::Unit,
+        | Export::Dimension { .. } => CompletionKind::Dimension,
     }
 }
 
@@ -1596,24 +1762,30 @@ fn scheme_is_known(scheme: &aevia_types::Scheme) -> bool {
 /// The detail line for an exported name.
 fn export_detail(export: &Export) -> Option<String> {
     match export {
-        Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
+        | Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
             scheme_is_known(scheme).then(|| scheme.to_string())
-        }
-        Export::TypeCtor { scheme, adt, .. } => scheme_is_known(scheme)
-            .then(|| format!("{} · {}", aevia_types::adt::name_of(*adt), scheme)),
-        Export::Type { adt } => Some(aevia_types::adt::name_of(*adt)),
-        Export::Alias { params } => Some(format!("{params} parameter(s)")),
-        Export::Unit { def } => Some(format!("unit: {}", def.dim.to_plain_string())),
-        Export::Dimension { dim } => dim
-            .as_ref()
-            .map(|dim| format!("dimension: {}", dim.to_plain_string())),
+        },
+        | Export::TypeCtor { scheme, adt, .. } => {
+            scheme_is_known(scheme)
+                .then(|| format!("{} · {}", aevia_types::adt::name_of(*adt), scheme))
+        },
+        | Export::Type { adt } => Some(aevia_types::adt::name_of(*adt)),
+        | Export::Alias { params } => Some(format!("{params} parameter(s)")),
+        | Export::Unit { def } => Some(format!("unit: {}", def.dim.to_plain_string())),
+        | Export::Dimension { dim } => {
+            dim.as_ref()
+                .map(|dim| format!("dimension: {}", dim.to_plain_string()))
+        },
     }
 }
 
 /// The hover text for an exported name, when the checker knows its type.
-fn describe_export(name: &str, export: &Export) -> Option<String> {
+fn describe_export(
+    name: &str,
+    export: &Export,
+) -> Option<String> {
     Some(match export {
-        Export::Value { scheme, arity, .. } => {
+        | Export::Value { scheme, arity, .. } => {
             if !scheme_is_known(scheme) {
                 return None;
             }
@@ -1622,8 +1794,8 @@ fn describe_export(name: &str, export: &Export) -> Option<String> {
                 text.push_str("\n\nvalue");
             }
             text
-        }
-        Export::Ctor { adt, scheme, .. } | Export::TypeCtor { adt, scheme, .. } => {
+        },
+        | Export::Ctor { adt, scheme, .. } | Export::TypeCtor { adt, scheme, .. } => {
             if !scheme_is_known(scheme) {
                 return None;
             }
@@ -1631,19 +1803,20 @@ fn describe_export(name: &str, export: &Export) -> Option<String> {
                 "```aevia\n{name}: {scheme}\n```\n\nconstructor of `{}`",
                 aevia_types::adt::name_of(*adt)
             )
-        }
-        Export::Type { .. } => format!("type `{name}`"),
-        Export::Alias { params } => format!("type alias `{name}` with {params} parameter(s)"),
-        Export::Unit { def } => format!(
-            "**unit** `{name}`\n\ndimension `{}`",
-            def.dim.to_plain_string()
-        ),
-        Export::Dimension { dim } => match dim {
-            Some(dim) => format!(
-                "**dimension** `{name}`\n\n= `{}`",
-                dim.to_plain_string()
-            ),
-            None => format!("**base dimension** `{name}`"),
+        },
+        | Export::Type { .. } => format!("type `{name}`"),
+        | Export::Alias { params } => format!("type alias `{name}` with {params} parameter(s)"),
+        | Export::Unit { def } => {
+            format!(
+                "**unit** `{name}`\n\ndimension `{}`",
+                def.dim.to_plain_string()
+            )
+        },
+        | Export::Dimension { dim } => {
+            match dim {
+                | Some(dim) => format!("**dimension** `{name}`\n\n= `{}`", dim.to_plain_string()),
+                | None => format!("**base dimension** `{name}`"),
+            }
         },
     })
 }
@@ -1664,13 +1837,13 @@ enum ExportKind {
 
 fn export_kind(export: &Export) -> ExportKind {
     match export {
-        Export::Value { .. } => ExportKind::Value,
-        Export::Ctor { .. } => ExportKind::Ctor,
-        Export::TypeCtor { .. } => ExportKind::TypeCtor,
-        Export::Type { .. } => ExportKind::Type,
-        Export::Alias { .. } => ExportKind::Alias,
-        Export::Unit { .. } => ExportKind::Unit,
-        Export::Dimension { .. } => ExportKind::Dimension,
+        | Export::Value { .. } => ExportKind::Value,
+        | Export::Ctor { .. } => ExportKind::Ctor,
+        | Export::TypeCtor { .. } => ExportKind::TypeCtor,
+        | Export::Type { .. } => ExportKind::Type,
+        | Export::Alias { .. } => ExportKind::Alias,
+        | Export::Unit { .. } => ExportKind::Unit,
+        | Export::Dimension { .. } => ExportKind::Dimension,
     }
 }
 
@@ -1692,16 +1865,25 @@ struct ModuleView<'a> {
     imports: Vec<(String, usize)>,
 }
 
-fn view_of<'v, 'a>(views: &'v [ModuleView<'a>], module: usize) -> Option<&'v ModuleView<'a>> {
+fn view_of<'v, 'a>(
+    views: &'v [ModuleView<'a>],
+    module: usize,
+) -> Option<&'v ModuleView<'a>> {
     views.iter().find(|view| view.index == module)
 }
 
-fn view_of_file<'v, 'a>(views: &'v [ModuleView<'a>], file: FileId) -> Option<&'v ModuleView<'a>> {
+fn view_of_file<'v, 'a>(
+    views: &'v [ModuleView<'a>],
+    file: FileId,
+) -> Option<&'v ModuleView<'a>> {
     views.iter().find(|view| view.file == file)
 }
 
 /// The prefixes `module`'s imports bring other modules in under.
-fn module_imports(paths: &[Vec<String>], module: &Module) -> Vec<(String, usize)> {
+fn module_imports(
+    paths: &[Vec<String>],
+    module: &Module,
+) -> Vec<(String, usize)> {
     let mut imports = Vec::new();
     for decl in &module.decls {
         let DeclKind::Import {
@@ -1726,14 +1908,20 @@ fn module_imports(paths: &[Vec<String>], module: &Module) -> Vec<(String, usize)
 }
 
 /// The module an `import` path reaches, matching the loader's own rule.
-fn module_target(paths: &[Vec<String>], import: &[String]) -> Option<usize> {
+fn module_target(
+    paths: &[Vec<String>],
+    import: &[String],
+) -> Option<usize> {
     if let Some(index) = paths.iter().position(|path| path == import) {
         return Some(index);
     }
     // `import Dep.A` reaches a module whose declared path is `A` inside the
     // dependency: the dependency's name is not part of the module's own path.
     if import.len() > 1 {
-        if let Some(index) = paths.iter().position(|path| path.as_slice() == &import[1..]) {
+        if let Some(index) = paths
+            .iter()
+            .position(|path| path.as_slice() == &import[1..])
+        {
             return Some(index);
         }
     }
@@ -1744,35 +1932,45 @@ fn module_target(paths: &[Vec<String>], import: &[String]) -> Option<usize> {
         .map(|(index, _)| index)
         .collect();
     match matches.as_slice() {
-        [index] => Some(*index),
-        _ => None,
+        | [index] => Some(*index),
+        | _ => None,
     }
 }
 
 /// The name a role carries, when it names a declaration or use.
 fn occurrence_name(role: &Role) -> Option<&str> {
     match role {
-        Role::Name(name) | Role::Constructor(name) | Role::TypeName(name) | Role::Unit(name) => {
+        | Role::Name(name) | Role::Constructor(name) | Role::TypeName(name) | Role::Unit(name) => {
             Some(name)
-        }
-        Role::Qualified(path) => path.last().map(String::as_str),
-        Role::Method { .. } => None,
+        },
+        | Role::Qualified(path) => path.last().map(String::as_str),
+        | Role::Method { .. } => None,
     }
 }
 
 /// The span of the name to replace: the last segment of a dotted name, so
 /// `A.sqrt` renames `sqrt` and not the module prefix.
-fn occurrence_edit_span(text: &str, occurrence: &Occurrence, name: &str) -> Span {
+fn occurrence_edit_span(
+    text: &str,
+    occurrence: &Occurrence,
+    name: &str,
+) -> Span {
     match &occurrence.role {
-        Role::Qualified(_) => last_name_span(text, occurrence.span, name),
-        _ => occurrence::name_span(text, occurrence.span, name),
+        | Role::Qualified(_) => last_name_span(text, occurrence.span, name),
+        | _ => occurrence::name_span(text, occurrence.span, name),
     }
 }
 
 /// The last whole-word occurrence of `name` inside `within`.
-fn last_name_span(text: &str, within: Span, name: &str) -> Span {
+fn last_name_span(
+    text: &str,
+    within: Span,
+    name: &str,
+) -> Span {
     let start = usize::try_from(within.start).unwrap_or(usize::MAX);
-    let end = usize::try_from(within.end).unwrap_or(usize::MAX).min(text.len());
+    let end = usize::try_from(within.end)
+        .unwrap_or(usize::MAX)
+        .min(text.len());
     let Some(slice) = text.get(start..end) else {
         return within;
     };
@@ -1784,7 +1982,10 @@ fn last_name_span(text: &str, within: Span, name: &str) -> Span {
                 .is_some_and(identifier_continue);
         let after = at + name.len();
         let after_ok = after >= slice.len()
-            || !slice[after..].chars().next().is_some_and(identifier_continue);
+            || !slice[after..]
+                .chars()
+                .next()
+                .is_some_and(identifier_continue);
         if before_ok && after_ok {
             return Span::new(within.file, start + at, start + after);
         }
@@ -1796,13 +1997,21 @@ fn identifier_continue(character: char) -> bool {
     is_xid_continue(character) || character == '\'' || ('₀'..='₉').contains(&character)
 }
 
-fn decl_span_in(views: &[ModuleView<'_>], module: usize, name: &str) -> Option<(FileId, Span)> {
+fn decl_span_in(
+    views: &[ModuleView<'_>],
+    module: usize,
+    name: &str,
+) -> Option<(FileId, Span)> {
     let view = view_of(views, module)?;
     let span = *view.definitions.get(name)?;
     Some((view.file, occurrence::name_span(view.text, span, name)))
 }
 
-fn resolve_export(views: &[ModuleView<'_>], module: usize, name: &str) -> Option<ExportKind> {
+fn resolve_export(
+    views: &[ModuleView<'_>],
+    module: usize,
+    name: &str,
+) -> Option<ExportKind> {
     view_of(views, module)?
         .checked
         .exports
@@ -1860,11 +2069,11 @@ fn canonical_decl_of(
         return Some((view.file, binding));
     }
     let (module, _) = match &occurrence.role {
-        Role::Qualified(path) => resolve_qualified_in(views, view, path)?,
-        Role::Name(_) | Role::Constructor(_) | Role::TypeName(_) | Role::Unit(_) => {
+        | Role::Qualified(path) => resolve_qualified_in(views, view, path)?,
+        | Role::Name(_) | Role::Constructor(_) | Role::TypeName(_) | Role::Unit(_) => {
             resolve_unqualified_in(views, view, name)?
-        }
-        Role::Method { .. } => return None,
+        },
+        | Role::Method { .. } => return None,
     };
     decl_span_in(views, module, name)
 }
@@ -1886,7 +2095,11 @@ enum Reach {
     Module { module: usize, kind: ExportKind },
 }
 
-fn resolve_target(views: &[ModuleView<'_>], entry: usize, offset: u32) -> Option<Target> {
+fn resolve_target(
+    views: &[ModuleView<'_>],
+    entry: usize,
+    offset: u32,
+) -> Option<Target> {
     let view = views.get(entry)?;
     let occurrence = occurrence::at(&view.occurrences, offset)?;
     let name = occurrence_name(&occurrence.role)?.to_string();
@@ -1928,11 +2141,11 @@ fn resolve_target(views: &[ModuleView<'_>], entry: usize, offset: u32) -> Option
         });
     }
     let (module, kind) = match &occurrence.role {
-        Role::Qualified(path) => resolve_qualified_in(views, view, path)?,
-        Role::Name(_) | Role::Constructor(_) | Role::TypeName(_) | Role::Unit(_) => {
+        | Role::Qualified(path) => resolve_qualified_in(views, view, path)?,
+        | Role::Name(_) | Role::Constructor(_) | Role::TypeName(_) | Role::Unit(_) => {
             resolve_unqualified_in(views, view, &name)?
-        }
-        Role::Method { .. } => return None,
+        },
+        | Role::Method { .. } => return None,
     };
     let (file, span) = decl_span_in(views, module, &name)?;
     Some(Target {
@@ -1986,26 +2199,35 @@ fn collect_references(
 
 fn check_renamable(target: &Target) -> Result<(), RenameError> {
     match &target.reach {
-        Reach::Local => Ok(()),
-        Reach::Module { kind, .. } => match kind {
-            ExportKind::Unit => Err(RenameError::NotRenamable(format!(
-                "`{}` is a unit; renaming it would change the unit system, not an identifier",
-                target.name
-            ))),
-            ExportKind::Dimension => Err(RenameError::NotRenamable(format!(
-                "`{}` is a dimension; renaming it would change the type system, not an identifier",
-                target.name
-            ))),
-            ExportKind::Value
-            | ExportKind::Ctor
-            | ExportKind::TypeCtor
-            | ExportKind::Type
-            | ExportKind::Alias => Ok(()),
+        | Reach::Local => Ok(()),
+        | Reach::Module { kind, .. } => {
+            match kind {
+                | ExportKind::Unit => {
+                    Err(RenameError::NotRenamable(format!(
+                        "`{}` is a unit; renaming it would change the unit system, not an identifier",
+                        target.name
+                    )))
+                },
+                | ExportKind::Dimension => {
+                    Err(RenameError::NotRenamable(format!(
+                        "`{}` is a dimension; renaming it would change the type system, not an identifier",
+                        target.name
+                    )))
+                },
+                | ExportKind::Value
+                | ExportKind::Ctor
+                | ExportKind::TypeCtor
+                | ExportKind::Type
+                | ExportKind::Alias => Ok(()),
+            }
         },
     }
 }
 
-fn validate_new_name(old: &str, new: &str) -> Result<(), RenameError> {
+fn validate_new_name(
+    old: &str,
+    new: &str,
+) -> Result<(), RenameError> {
     if new.is_empty() || !is_identifier(new) {
         return Err(RenameError::InvalidName(format!(
             "`{new}` is not an Aevia identifier"
@@ -2044,7 +2266,7 @@ fn check_collision(
         return Ok(());
     }
     match &target.reach {
-        Reach::Module { module, .. } => {
+        | Reach::Module { module, .. } => {
             let view = view_of(views, *module).ok_or_else(|| {
                 RenameError::NotRenamable("the declaring module is not loaded".to_string())
             })?;
@@ -2055,8 +2277,8 @@ fn check_collision(
                 )));
             }
             Ok(())
-        }
-        Reach::Local => {
+        },
+        | Reach::Local => {
             let Some(view) = view_of_file(views, target.file) else {
                 return Ok(());
             };
@@ -2081,7 +2303,7 @@ fn check_collision(
                 )));
             }
             Ok(())
-        }
+        },
     }
 }
 
@@ -2105,7 +2327,10 @@ struct FieldTarget {
 
 /// The field labels declared by record types in `module`, as
 /// `(type, field, label span)`.
-fn declared_record_fields(module: &Module, text: &str) -> Vec<(String, String, Span)> {
+fn declared_record_fields(
+    module: &Module,
+    text: &str,
+) -> Vec<(String, String, Span)> {
     let mut fields = Vec::new();
     for decl in &module.decls {
         let DeclKind::Type {
@@ -2132,7 +2357,10 @@ fn declared_record_fields(module: &Module, text: &str) -> Vec<(String, String, S
 
 /// Every field label written in `module`: type bodies, record expressions,
 /// field accesses and patterns in declarations.
-fn field_labels(module: &Module, text: &str) -> Vec<FieldLabel> {
+fn field_labels(
+    module: &Module,
+    text: &str,
+) -> Vec<FieldLabel> {
     let mut labels = Vec::new();
     for (owner, name, span) in declared_record_fields(module, text) {
         labels.push(FieldLabel {
@@ -2141,48 +2369,56 @@ fn field_labels(module: &Module, text: &str) -> Vec<FieldLabel> {
             owner: Some(owner),
         });
     }
-    walk::module_exprs(module, |expr| match &expr.kind {
-        ExprKind::Record { fields, .. } => {
-            for (field, value) in fields {
+    walk::module_exprs(module, |expr| {
+        match &expr.kind {
+            | ExprKind::Record { fields, .. } => {
+                for (field, value) in fields {
+                    labels.push(FieldLabel {
+                        name: field.clone(),
+                        span: label_before(text, expr.span.file, value.span.start, field),
+                        owner: None,
+                    });
+                }
+            },
+            | ExprKind::Field { name, .. } => {
                 labels.push(FieldLabel {
-                    name: field.clone(),
-                    span: label_before(text, expr.span.file, value.span.start, field),
+                    name: name.clone(),
+                    span: last_name_span(text, expr.span, name),
                     owner: None,
-                });
-            }
+                })
+            },
+            | _ => {},
         }
-        ExprKind::Field { name, .. } => labels.push(FieldLabel {
-            name: name.clone(),
-            span: last_name_span(text, expr.span, name),
-            owner: None,
-        }),
-        _ => {}
     });
     for decl in &module.decls {
         match &decl.kind {
-            DeclKind::Fn { args, .. } => {
+            | DeclKind::Fn { args, .. } => {
                 for param in args {
                     labels_in_pattern(text, &param.pattern, &mut labels);
                 }
-            }
-            DeclKind::Instance { methods, .. } => {
+            },
+            | DeclKind::Instance { methods, .. } => {
                 for method in methods {
                     for param in &method.params {
                         labels_in_pattern(text, &param.pattern, &mut labels);
                     }
                 }
-            }
-            DeclKind::Let { pattern, .. } => labels_in_pattern(text, pattern, &mut labels),
-            _ => {}
+            },
+            | DeclKind::Let { pattern, .. } => labels_in_pattern(text, pattern, &mut labels),
+            | _ => {},
         }
     }
     labels
 }
 
 /// Record-field labels in a pattern.
-fn labels_in_pattern(text: &str, pattern: &Pat, out: &mut Vec<FieldLabel>) {
+fn labels_in_pattern(
+    text: &str,
+    pattern: &Pat,
+    out: &mut Vec<FieldLabel>,
+) {
     match &pattern.kind {
-        PatKind::Record(fields) => {
+        | PatKind::Record(fields) => {
             for (field, sub) in fields {
                 let before = sub.as_ref().map_or(pattern.span.end, |sub| sub.span.start);
                 out.push(FieldLabel {
@@ -2194,28 +2430,25 @@ fn labels_in_pattern(text: &str, pattern: &Pat, out: &mut Vec<FieldLabel>) {
                     labels_in_pattern(text, sub, out);
                 }
             }
-        }
-        PatKind::Ctor { args, .. } => {
+        },
+        | PatKind::Ctor { args, .. } => {
             for arg in args {
                 labels_in_pattern(text, arg, out);
             }
-        }
-        PatKind::Tuple(items) => {
+        },
+        | PatKind::Tuple(items) => {
             for item in items {
                 labels_in_pattern(text, item, out);
             }
-        }
-        PatKind::Tensor { items, .. } => {
+        },
+        | PatKind::Tensor { items, .. } => {
             for item in items {
                 labels_in_pattern(text, item, out);
             }
-        }
-        PatKind::As { pattern, .. } => labels_in_pattern(text, pattern, out),
-        PatKind::Annot { pattern, .. } => labels_in_pattern(text, pattern, out),
-        PatKind::Wildcard
-        | PatKind::Error
-        | PatKind::Var(_)
-        | PatKind::Lit(_) => {}
+        },
+        | PatKind::As { pattern, .. } => labels_in_pattern(text, pattern, out),
+        | PatKind::Annot { pattern, .. } => labels_in_pattern(text, pattern, out),
+        | PatKind::Wildcard | PatKind::Error | PatKind::Var(_) | PatKind::Lit(_) => {},
     }
 }
 
@@ -2225,8 +2458,15 @@ fn labels_in_pattern(text: &str, pattern: &Pat, out: &mut Vec<FieldLabel>) {
 /// the label is the last whole-word `name` before its value or type. That is
 /// enough because a label and its value are adjacent; the window keeps it from
 /// matching an unrelated earlier name.
-fn label_before(text: &str, file: FileId, before: u32, name: &str) -> Span {
-    let end = usize::try_from(before).unwrap_or(usize::MAX).min(text.len());
+fn label_before(
+    text: &str,
+    file: FileId,
+    before: u32,
+    name: &str,
+) -> Span {
+    let end = usize::try_from(before)
+        .unwrap_or(usize::MAX)
+        .min(text.len());
     let window_start = end.saturating_sub(96);
     let Some(slice) = text.get(window_start..end) else {
         return Span::new(file, end, end);
@@ -2239,7 +2479,10 @@ fn label_before(text: &str, file: FileId, before: u32, name: &str) -> Span {
                 .is_some_and(identifier_continue);
         let after = at + name.len();
         let after_ok = after >= slice.len()
-            || !slice[after..].chars().next().is_some_and(identifier_continue);
+            || !slice[after..]
+                .chars()
+                .next()
+                .is_some_and(identifier_continue);
         if before_ok && after_ok {
             let start = window_start + at;
             return Span::new(file, start, start + name.len());
@@ -2276,7 +2519,7 @@ fn field_target(
         .map(|(owner, _, _)| owner)
         .collect();
     match owners.as_slice() {
-        [owner] => {
+        | [owner] => {
             if let Some(declared_in) = &cursor.owner {
                 if declared_in != *owner {
                     return Err(RenameError::NotRenamable(format!(
@@ -2291,16 +2534,20 @@ fn field_target(
                 owner: (*owner).clone(),
                 span: cursor.span,
             })
-        }
-        [] => Err(RenameError::NotRenamable(format!(
-            "`{}` is a record field of a type this document does not declare",
-            cursor.name
-        ))),
-        _ => Err(RenameError::NotRenamable(format!(
-            "`{}` is a field of several record types in this document; renaming it would be \
+        },
+        | [] => {
+            Err(RenameError::NotRenamable(format!(
+                "`{}` is a record field of a type this document does not declare",
+                cursor.name
+            )))
+        },
+        | _ => {
+            Err(RenameError::NotRenamable(format!(
+                "`{}` is a field of several record types in this document; renaming it would be \
              ambiguous",
-            cursor.name
-        ))),
+                cursor.name
+            )))
+        },
     }
 }
 
@@ -2315,46 +2562,57 @@ fn field_or_refusal(
     offset: u32,
 ) -> Result<FieldTarget, RenameError> {
     match field_target(views, entry, offset) {
-        Ok(field) => Ok(field),
-        Err(error) => match views.get(entry) {
-            Some(view) if occurrence::at(&view.occurrences, offset).is_some() => {
-                Err(undeclarable_error(view, offset))
+        | Ok(field) => Ok(field),
+        | Err(error) => {
+            match views.get(entry) {
+                | Some(view) if occurrence::at(&view.occurrences, offset).is_some() => {
+                    Err(undeclarable_error(view, offset))
+                },
+                | _ => Err(error),
             }
-            _ => Err(error),
         },
     }
 }
 
 /// Why a name the occurrence walk found cannot be renamed.
-fn undeclarable_error(view: &ModuleView<'_>, offset: u32) -> RenameError {
+fn undeclarable_error(
+    view: &ModuleView<'_>,
+    offset: u32,
+) -> RenameError {
     let Some(occurrence) = occurrence::at(&view.occurrences, offset) else {
         return RenameError::NotRenamable(
             "there is no declaration here that a rename could change".to_string(),
         );
     };
     match &occurrence.role {
-        Role::Qualified(path) if path.first().map(String::as_str) == Some("Rssn") => {
+        | Role::Qualified(path) if path.first().map(String::as_str) == Some("Rssn") => {
             RenameError::NotRenamable(format!(
                 "`{}` is a kernel operation; the kernel is not source",
                 path.join(".")
             ))
-        }
-        Role::Unit(name) => RenameError::NotRenamable(format!(
-            "`{name}` is a unit; renaming it would change the unit system, not an identifier"
-        )),
-        Role::Method { name, .. } => RenameError::NotRenamable(format!(
-            "instance method `{name}` is dispatched by the checker; methods are not renamable yet"
-        )),
-        Role::Name(name) | Role::Constructor(name) | Role::TypeName(name) => {
+        },
+        | Role::Unit(name) => {
+            RenameError::NotRenamable(format!(
+                "`{name}` is a unit; renaming it would change the unit system, not an identifier"
+            ))
+        },
+        | Role::Method { name, .. } => {
+            RenameError::NotRenamable(format!(
+                "instance method `{name}` is dispatched by the checker; methods are not renamable yet"
+            ))
+        },
+        | Role::Name(name) | Role::Constructor(name) | Role::TypeName(name) => {
             RenameError::NotRenamable(format!(
                 "`{name}` has no declaration in this program that a rename could change (a \
                  prelude builtin is not source)"
             ))
-        }
-        Role::Qualified(path) => RenameError::NotRenamable(format!(
-            "`{}` does not resolve to a declaration in this program",
-            path.join(".")
-        )),
+        },
+        | Role::Qualified(path) => {
+            RenameError::NotRenamable(format!(
+                "`{}` does not resolve to a declaration in this program",
+                path.join(".")
+            ))
+        },
     }
 }
 
@@ -2413,15 +2671,20 @@ fn check_field_collision(
 }
 
 /// Rename edits from locations, in their stable order.
-fn file_edits(locations: Vec<Location>, new_name: &str) -> Vec<FileEdit> {
+fn file_edits(
+    locations: Vec<Location>,
+    new_name: &str,
+) -> Vec<FileEdit> {
     locations
         .into_iter()
-        .map(|location| FileEdit {
-            document: location.document,
-            edit: TextEdit {
-                range: location.range,
-                new_text: new_name.to_string(),
-            },
+        .map(|location| {
+            FileEdit {
+                document: location.document,
+                edit: TextEdit {
+                    range: location.range,
+                    new_text: new_name.to_string(),
+                },
+            }
         })
         .collect()
 }
@@ -2429,7 +2692,10 @@ fn file_edits(locations: Vec<Location>, new_name: &str) -> Vec<FileEdit> {
 // --- Signature help --------------------------------------------------------
 
 /// The innermost call expression containing `offset`, as `(callee, call)`.
-fn innermost_call(module: &Module, offset: u32) -> Option<(&Expr, &Expr)> {
+fn innermost_call(
+    module: &Module,
+    offset: u32,
+) -> Option<(&Expr, &Expr)> {
     let mut best: Option<(&Expr, &Expr)> = None;
     walk::module_exprs(module, |expr| {
         let ExprKind::Call { callee, .. } = &expr.kind else {
@@ -2440,8 +2706,8 @@ fn innermost_call(module: &Module, offset: u32) -> Option<(&Expr, &Expr)> {
         }
         let length = expr.span.end.saturating_sub(expr.span.start);
         let replace = match best {
-            None => true,
-            Some((_, current)) => length < current.span.end.saturating_sub(current.span.start),
+            | None => true,
+            | Some((_, current)) => length < current.span.end.saturating_sub(current.span.start),
         };
         if replace {
             best = Some((callee.as_ref(), expr));
@@ -2451,18 +2717,21 @@ fn innermost_call(module: &Module, offset: u32) -> Option<(&Expr, &Expr)> {
 }
 
 /// The index of the `)` matching the `(` at `open`, by nesting depth.
-fn matching_paren(text: &str, open: usize) -> Option<usize> {
+fn matching_paren(
+    text: &str,
+    open: usize,
+) -> Option<usize> {
     let mut depth = 0usize;
     for (index, character) in text.char_indices().skip_while(|(index, _)| *index <= open) {
         match character {
-            '(' => depth += 1,
-            ')' => {
+            | '(' => depth += 1,
+            | ')' => {
                 if depth == 0 {
                     return Some(index);
                 }
                 depth -= 1;
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
     None
@@ -2473,7 +2742,10 @@ fn matching_paren(text: &str, open: usize) -> Option<usize> {
 /// The spans are the AST's, so a comma inside a nested call, a tuple or a
 /// record does not split an argument; a cursor between arguments is on the next
 /// one, which is what a trailing comma means.
-fn active_argument(args: &[Expr], offset: usize) -> usize {
+fn active_argument(
+    args: &[Expr],
+    offset: usize,
+) -> usize {
     let offset = u32::try_from(offset).unwrap_or(u32::MAX);
     let mut active = 0;
     for (index, argument) in args.iter().enumerate() {
@@ -2488,20 +2760,23 @@ fn active_argument(args: &[Expr], offset: usize) -> usize {
 /// The dotted path a callee expression spells, when it spells one.
 fn callee_path(expr: &Expr) -> Option<Vec<String>> {
     match &expr.kind {
-        ExprKind::QName(path) => Some(path.clone()),
-        ExprKind::Var(name) => Some(vec![name.clone()]),
-        ExprKind::Field { base, name } => {
+        | ExprKind::QName(path) => Some(path.clone()),
+        | ExprKind::Var(name) => Some(vec![name.clone()]),
+        | ExprKind::Field { base, name } => {
             let mut path = callee_path(base)?;
             path.push(name.clone());
             Some(path)
-        }
-        ExprKind::TypeApp { callee, .. } => callee_path(callee),
-        _ => None,
+        },
+        | ExprKind::TypeApp { callee, .. } => callee_path(callee),
+        | _ => None,
     }
 }
 
 /// The source text of a callee expression.
-fn callee_text(text: &str, callee: &Expr) -> String {
+fn callee_text(
+    text: &str,
+    callee: &Expr,
+) -> String {
     let start = usize::try_from(callee.span.start).unwrap_or(usize::MAX);
     let end = usize::try_from(callee.span.end)
         .unwrap_or(usize::MAX)
@@ -2510,7 +2785,10 @@ fn callee_text(text: &str, callee: &Expr) -> String {
 }
 
 /// Which overload an argument count selects; the first when none is exact.
-fn active_by_arity(signatures: &[SignatureInfo], argument_count: usize) -> usize {
+fn active_by_arity(
+    signatures: &[SignatureInfo],
+    argument_count: usize,
+) -> usize {
     signatures
         .iter()
         .position(|signature| signature.parameters.len() == argument_count)
@@ -2528,7 +2806,10 @@ impl VarNames {
     /// Replaces the checker's `t0`/`p1`/`r2` spellings with `a`, `b`, … so a
     /// signature is readable. Dimension variables keep their `d0` spelling: the
     /// surface language never invents names for them either.
-    fn readable(&mut self, text: &str) -> String {
+    fn readable(
+        &mut self,
+        text: &str,
+    ) -> String {
         let characters: Vec<char> = text.chars().collect();
         let mut out = String::new();
         let mut index = 0;
@@ -2567,7 +2848,11 @@ fn variable_name(index: usize) -> String {
 }
 
 /// One signature rendered from a declaration's scheme.
-fn scheme_signature(name: &str, scheme: &Scheme, documentation: Option<String>) -> SignatureInfo {
+fn scheme_signature(
+    name: &str,
+    scheme: &Scheme,
+    documentation: Option<String>,
+) -> SignatureInfo {
     let mut names = VarNames::default();
     if let Type::Fn(parameters, ret) = &scheme.ty {
         let parameters: Vec<String> = parameters
@@ -2600,7 +2885,11 @@ fn scheme_signature(name: &str, scheme: &Scheme, documentation: Option<String>) 
 }
 
 /// One signature rendered from a decided function type.
-fn type_signature(name: &str, ty: &Type, documentation: Option<String>) -> Option<SignatureInfo> {
+fn type_signature(
+    name: &str,
+    ty: &Type,
+    documentation: Option<String>,
+) -> Option<SignatureInfo> {
     let Type::Fn(parameters, ret) = ty else {
         return None;
     };
@@ -2628,15 +2917,17 @@ fn export_signatures(
     let view = view_of(views, module)?;
     let export = view.checked.exports.get(name)?;
     let signature = match export {
-        Export::Value { scheme, .. } => {
+        | Export::Value { scheme, .. } => {
             scheme_signature(&display, scheme, declaration_doc(view, name))
-        }
-        Export::Ctor { adt, scheme, .. } | Export::TypeCtor { adt, scheme, .. } => scheme_signature(
-            &display,
-            scheme,
-            type_declaration_doc(view, &aevia_types::adt::name_of(*adt)),
-        ),
-        Export::Type { .. }
+        },
+        | Export::Ctor { adt, scheme, .. } | Export::TypeCtor { adt, scheme, .. } => {
+            scheme_signature(
+                &display,
+                scheme,
+                type_declaration_doc(view, &aevia_types::adt::name_of(*adt)),
+            )
+        },
+        | Export::Type { .. }
         | Export::Alias { .. }
         | Export::Unit { .. }
         | Export::Dimension { .. } => return None,
@@ -2657,14 +2948,16 @@ fn rssn_signatures(
     let signatures: Vec<SignatureInfo> = entry
         .signatures
         .iter()
-        .map(|signature| SignatureInfo {
-            label: format!("Rssn.{operator}: {}", signature.render()),
-            parameters: signature
-                .params
-                .iter()
-                .map(aevia_rssn::registry::render_type)
-                .collect(),
-            documentation: (!entry.doc.is_empty()).then(|| entry.doc.clone()),
+        .map(|signature| {
+            SignatureInfo {
+                label: format!("Rssn.{operator}: {}", signature.render()),
+                parameters: signature
+                    .params
+                    .iter()
+                    .map(aevia_rssn::registry::render_type)
+                    .collect(),
+                documentation: (!entry.doc.is_empty()).then(|| entry.doc.clone()),
+            }
         })
         .collect();
     if signatures.is_empty() {
@@ -2723,14 +3016,17 @@ fn dictionary_signature(
 }
 
 /// The `##` documentation immediately above a declaration.
-fn declaration_doc(view: &ModuleView<'_>, name: &str) -> Option<String> {
+fn declaration_doc(
+    view: &ModuleView<'_>,
+    name: &str,
+) -> Option<String> {
     for decl in &view.module.decls {
         let matches = match &decl.kind {
-            DeclKind::Fn { name: declared, .. } => declared == name,
-            DeclKind::Let { pattern, .. } => {
+            | DeclKind::Fn { name: declared, .. } => declared == name,
+            | DeclKind::Let { pattern, .. } => {
                 matches!(&pattern.kind, PatKind::Var(bound) if bound == name)
-            }
-            _ => false,
+            },
+            | _ => false,
         };
         if matches {
             return doc_before(view.text, decl.span.start);
@@ -2740,12 +3036,12 @@ fn declaration_doc(view: &ModuleView<'_>, name: &str) -> Option<String> {
 }
 
 /// The `##` documentation immediately above a type declaration.
-fn type_declaration_doc(view: &ModuleView<'_>, name: &str) -> Option<String> {
+fn type_declaration_doc(
+    view: &ModuleView<'_>,
+    name: &str,
+) -> Option<String> {
     for decl in &view.module.decls {
-        if let DeclKind::Type {
-            name: declared, ..
-        } = &decl.kind
-        {
+        if let DeclKind::Type { name: declared, .. } = &decl.kind {
             if declared == name {
                 return doc_before(view.text, decl.span.start);
             }
@@ -2755,7 +3051,10 @@ fn type_declaration_doc(view: &ModuleView<'_>, name: &str) -> Option<String> {
 }
 
 /// The `##` comment lines immediately before byte `start`.
-fn doc_before(text: &str, start: u32) -> Option<String> {
+fn doc_before(
+    text: &str,
+    start: u32,
+) -> Option<String> {
     let start = usize::try_from(start).ok()?;
     let before = text.get(..start)?;
     let mut lines: Vec<&str> = before.split('\n').collect();
@@ -2790,7 +3089,10 @@ impl Analysis<'_> {
     /// field accesses are); a plain local variable's *use* has no entry, so the
     /// binder's annotation is read from the tree and resolved through the
     /// module's alias tables instead.
-    fn field_completions(&self, offset: u32) -> Option<Vec<Completion>> {
+    fn field_completions(
+        &self,
+        offset: u32,
+    ) -> Option<Vec<Completion>> {
         let offset = usize::try_from(offset).ok()?;
         let text = self.document.text();
         let mut start = offset;
@@ -2813,8 +3115,8 @@ impl Analysis<'_> {
         walk::module_exprs(view.module, |expr| {
             if usize::try_from(expr.span.end).ok() == Some(receiver_end) {
                 let replace = match receiver {
-                    None => true,
-                    Some(current) => expr.span.start >= current.span.start,
+                    | None => true,
+                    | Some(current) => expr.span.start >= current.span.start,
                 };
                 if replace {
                     receiver = Some(expr);
@@ -2824,11 +3126,13 @@ impl Analysis<'_> {
         let fields = self.receiver_fields(&views, view, receiver?)?;
         let mut items: Vec<Completion> = fields
             .into_iter()
-            .map(|(label, detail)| Completion {
-                label,
-                kind: CompletionKind::Field,
-                detail,
-                origin: Origin::Module,
+            .map(|(label, detail)| {
+                Completion {
+                    label,
+                    kind: CompletionKind::Field,
+                    detail,
+                    origin: Origin::Module,
+                }
             })
             .collect();
         items.sort_by(|left, right| left.label.cmp(&right.label));
@@ -2860,22 +3164,25 @@ impl Analysis<'_> {
 }
 
 /// The type annotation written on the binder at `binding`.
-fn binding_annotation<'a>(module: &'a Module, binding: Span) -> Option<&'a Ty> {
+fn binding_annotation<'a>(
+    module: &'a Module,
+    binding: Span,
+) -> Option<&'a Ty> {
     for decl in &module.decls {
         match &decl.kind {
-            DeclKind::Fn { args, .. } => {
+            | DeclKind::Fn { args, .. } => {
                 for param in args {
                     if param.pattern.span == binding {
                         return param.ty.as_ref();
                     }
                 }
-            }
-            DeclKind::Let { pattern, ty, .. } => {
+            },
+            | DeclKind::Let { pattern, ty, .. } => {
                 if pattern.span == binding {
                     return ty.as_ref();
                 }
-            }
-            DeclKind::Instance { methods, .. } => {
+            },
+            | DeclKind::Instance { methods, .. } => {
                 for method in methods {
                     for param in &method.params {
                         if param.pattern.span == binding {
@@ -2883,31 +3190,33 @@ fn binding_annotation<'a>(module: &'a Module, binding: Span) -> Option<&'a Ty> {
                         }
                     }
                 }
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
     let mut found = None;
-    walk::module_exprs(module, |expr| match &expr.kind {
-        ExprKind::Block { stmts, .. } => {
-            for statement in stmts {
-                if let BlockStmt::Let { pattern, ty, .. } = statement {
-                    if pattern.span == binding {
-                        found = ty.as_ref();
+    walk::module_exprs(module, |expr| {
+        match &expr.kind {
+            | ExprKind::Block { stmts, .. } => {
+                for statement in stmts {
+                    if let BlockStmt::Let { pattern, ty, .. } = statement {
+                        if pattern.span == binding {
+                            found = ty.as_ref();
+                        }
                     }
                 }
-            }
-        }
-        ExprKind::Do { stmts } => {
-            for statement in stmts {
-                if let DoStmt::Let { pattern, ty, .. } = statement {
-                    if pattern.span == binding {
-                        found = ty.as_ref();
+            },
+            | ExprKind::Do { stmts } => {
+                for statement in stmts {
+                    if let DoStmt::Let { pattern, ty, .. } = statement {
+                        if pattern.span == binding {
+                            found = ty.as_ref();
+                        }
                     }
                 }
-            }
+            },
+            | _ => {},
         }
-        _ => {}
     });
     found
 }
@@ -2919,13 +3228,15 @@ fn annotation_fields(
     annotation: &Ty,
 ) -> Option<Vec<(String, Option<String>)>> {
     match &annotation.kind {
-        TyKind::Record { fields, .. } => Some(
-            fields
-                .iter()
-                .map(|(name, field_ty)| (name.clone(), source_slice(view.text, field_ty.span)))
-                .collect(),
-        ),
-        TyKind::Named { path, .. } => {
+        | TyKind::Record { fields, .. } => {
+            Some(
+                fields
+                    .iter()
+                    .map(|(name, field_ty)| (name.clone(), source_slice(view.text, field_ty.span)))
+                    .collect(),
+            )
+        },
+        | TyKind::Named { path, .. } => {
             let name = path.last()?;
             let qualified = path.join(".");
             for candidate in views {
@@ -2951,13 +3262,16 @@ fn annotation_fields(
                 }
             }
             None
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }
 
 /// The source text a span covers, trimmed.
-fn source_slice(text: &str, span: Span) -> Option<String> {
+fn source_slice(
+    text: &str,
+    span: Span,
+) -> Option<String> {
     let start = usize::try_from(span.start).ok()?;
     let end = usize::try_from(span.end).ok()?.min(text.len());
     text.get(start..end).map(|slice| slice.trim().to_string())
@@ -2969,7 +3283,10 @@ fn source_slice(text: &str, span: Span) -> Option<String> {
 /// `|`, `->`, `do`, `then`, `else` or the pipe operator an expression is
 /// expected; at the top of a file, a declaration is. Loading the world for a
 /// keyword list would cost more than it is worth.
-fn expression_keywords(text: &str, offset: u32) -> Vec<&'static str> {
+fn expression_keywords(
+    text: &str,
+    offset: u32,
+) -> Vec<&'static str> {
     const KEYWORDS: [&str; 4] = ["do", "let", "match", "with"];
     if !expression_position(text, offset) {
         return Vec::new();
@@ -2977,7 +3294,10 @@ fn expression_keywords(text: &str, offset: u32) -> Vec<&'static str> {
     KEYWORDS.to_vec()
 }
 
-fn expression_position(text: &str, offset: u32) -> bool {
+fn expression_position(
+    text: &str,
+    offset: u32,
+) -> bool {
     let offset = usize::try_from(offset).unwrap_or(0).min(text.len());
     let mut start = offset;
     while start > 0 {
@@ -3004,4 +3324,3 @@ fn expression_position(text: &str, offset: u32) -> bool {
         || before.ends_with("then")
         || before.ends_with("else")
 }
-

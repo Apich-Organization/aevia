@@ -7,7 +7,9 @@
 //! live `manifest_hash`). A number typed here would be the stale-documentation
 //! failure this file exists to catch.
 
-use aevia_rssn::{codegen, registry, unit_table};
+use aevia_rssn::codegen;
+use aevia_rssn::registry;
+use aevia_rssn::unit_table;
 
 /// §5.3.3's common non-SI units that the kernel registry lacked until
 /// `rssn 3.0.0-rc.1`. They are asserted directly — not excused — because a
@@ -37,7 +39,7 @@ fn every_hand_written_unit_exists_in_the_manifest() {
     let mut missing = Vec::new();
     for unit in fixture.list() {
         match manifest.lookup(&unit.name) {
-            Some(other) => {
+            | Some(other) => {
                 assert_eq!(
                     other.dim, unit.dim,
                     "unit `{}` has a different dimension in the manifest",
@@ -48,8 +50,8 @@ fn every_hand_written_unit_exists_in_the_manifest() {
                     "unit `{}` has a different scale in the manifest",
                     unit.name
                 );
-            }
-            None => missing.push(unit.name.clone()),
+            },
+            | None => missing.push(unit.name.clone()),
         }
     }
     assert!(
@@ -80,7 +82,10 @@ fn the_specs_non_si_units_resolve_from_the_manifest() {
         );
     }
     // Two of them carry the aliases the standard names them by.
-    assert_eq!(table.lookup("u").map(|unit| unit.name), Some("Da".to_string()));
+    assert_eq!(
+        table.lookup("u").map(|unit| unit.name),
+        Some("Da".to_string())
+    );
     assert_eq!(
         table.lookup("byte").map(|unit| unit.name),
         Some("B".to_string())
@@ -185,7 +190,8 @@ fn affine_temperatures_keep_their_offset() {
 #[test]
 fn every_unit_dimension_survives_the_signature_mirror() {
     for unit in &registry().units {
-        let mirrored = aevia_rssn::registry::convert_dim(&aevia_rssn::registry::to_dim_expr(&unit.dim));
+        let mirrored =
+            aevia_rssn::registry::convert_dim(&aevia_rssn::registry::to_dim_expr(&unit.dim));
         assert_eq!(
             mirrored, unit.dim,
             "unit `{}` does not survive the dimension mirror",
@@ -247,10 +253,10 @@ fn the_manifest_shape_is_reported() {
     let mut none = 0;
     for op in registry.ops() {
         match op.source {
-            aevia_rssn::Source::Declared => declared += 1,
-            aevia_rssn::Source::Overlay => overlay += 1,
-            aevia_rssn::Source::Derived => derived += 1,
-            aevia_rssn::Source::None => none += 1,
+            | aevia_rssn::Source::Declared => declared += 1,
+            | aevia_rssn::Source::Overlay => overlay += 1,
+            | aevia_rssn::Source::Derived => derived += 1,
+            | aevia_rssn::Source::None => none += 1,
         }
     }
     eprintln!(

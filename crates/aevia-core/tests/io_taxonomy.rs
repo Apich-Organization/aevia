@@ -6,8 +6,10 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::value::{IoAction, Value};
-use aevia_core::{compile, Interp};
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::IoAction;
+use aevia_core::value::Value;
 use aevia_syntax::Span;
 use std::path::PathBuf;
 
@@ -28,12 +30,15 @@ fn err_text(value: &Value) -> String {
     };
     assert_eq!(variant.name, "Err", "expected Err, found Ok");
     match variant.fields.first() {
-        Some(Value::Str(text)) => text.to_string(),
-        other => panic!("the Err payload is not a String: {other:?}"),
+        | Some(Value::Str(text)) => text.to_string(),
+        | other => panic!("the Err payload is not a String: {other:?}"),
     }
 }
 
-fn run_action(interp: &mut Interp, action: Value) -> Value {
+fn run_action(
+    interp: &mut Interp,
+    action: Value,
+) -> Value {
     let Value::Io(action) = action else {
         panic!("expected an IO action, found {}", action.type_name());
     };
@@ -75,10 +80,8 @@ fn a_missing_file_propagates_through_readers() {
 
 #[test]
 fn a_malformed_data_file_is_e0903() {
-    let path: PathBuf = std::env::temp_dir().join(format!(
-        "aevia-bad-json-{}.json",
-        std::process::id()
-    ));
+    let path: PathBuf =
+        std::env::temp_dir().join(format!("aevia-bad-json-{}.json", std::process::id()));
     std::fs::write(&path, "{not json").expect("write the malformed file");
     let mut interp = interpreter();
     let action = interp
@@ -102,11 +105,7 @@ fn a_malformed_data_file_is_e0903() {
 fn an_unsupported_extension_is_e0904() {
     let mut interp = interpreter();
     let action = interp
-        .call_named(
-            "read_csv",
-            vec![Value::string("data.npy")],
-            Span::default(),
-        )
+        .call_named("read_csv", vec![Value::string("data.npy")], Span::default())
         .expect("read_csv builds a Result value");
     let text = err_text(&action);
     assert!(
@@ -143,7 +142,11 @@ fn a_failed_plot_write_is_e0905() {
         panic!("save answers an IO action")
     };
     let error = interp.run_io(&save).expect_err("the save must fail");
-    assert_eq!(error.code, "E0905", "found {}: {}", error.code, error.message);
+    assert_eq!(
+        error.code, "E0905",
+        "found {}: {}",
+        error.code, error.message
+    );
 }
 
 /// `args()` answers the host-set arguments as a rank-1 string tensor, and an
@@ -170,9 +173,11 @@ fn args_are_the_host_set_vector() {
     let rendered: Vec<String> = tensor
         .elements()
         .iter()
-        .map(|element| match element {
-            Value::Str(text) => text.to_string(),
-            other => panic!("args holds strings, found {}", other.type_name()),
+        .map(|element| {
+            match element {
+                | Value::Str(text) => text.to_string(),
+                | other => panic!("args holds strings, found {}", other.type_name()),
+            }
         })
         .collect();
     assert_eq!(rendered, vec!["one", "two"]);
@@ -187,9 +192,9 @@ fn plot_actions_are_still_built() {
         .call_named("plot", vec![Value::Unit], Span::default())
         .expect("plot");
     match action {
-        Value::Io(action) => {
+        | Value::Io(action) => {
             assert!(matches!(*action, IoAction::Plot(_)));
-        }
-        other => panic!("plot answers an IO action, found {}", other.type_name()),
+        },
+        | other => panic!("plot answers an IO action, found {}", other.type_name()),
     }
 }

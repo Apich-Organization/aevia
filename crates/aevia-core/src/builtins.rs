@@ -5,20 +5,40 @@
 //! this module owns the behaviour, and the two lists are kept in step by the
 //! conformance tests.
 
-use crate::eval::{build_tensor, type_argument_name, EvalError, Interp};
+use crate::eval::EvalError;
+use crate::eval::Interp;
+use crate::eval::build_tensor;
+use crate::eval::type_argument_name;
 use crate::kernel as bridge;
-use crate::sym::{Fun, Term};
-use crate::value::{
-    make_variant, show, DynValue, NativeFn, NumKind, NumVal, RecordValue, Storage, TensorData, Value,
-};
-use aevia_dim::{Dim, UnitDef};
-use aevia_syntax::ast::{BinOp, NatAst, ShapeAst, ShapeItem, Ty, TyKind};
+use crate::sym::Fun;
+use crate::sym::Term;
+use crate::value::DynValue;
+use crate::value::NativeFn;
+use crate::value::NumKind;
+use crate::value::NumVal;
+use crate::value::RecordValue;
+use crate::value::Storage;
+use crate::value::TensorData;
+use crate::value::Value;
+use crate::value::make_variant;
+use crate::value::show;
+use aevia_dim::Dim;
+use aevia_dim::UnitDef;
 use aevia_syntax::Span;
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::NatAst;
+use aevia_syntax::ast::ShapeAst;
+use aevia_syntax::ast::ShapeItem;
+use aevia_syntax::ast::Ty;
+use aevia_syntax::ast::TyKind;
 use aevia_types::adt;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, Signed, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::Signed;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::rc::Rc;
 
 /// Whether a builtin reads its explicit type argument (§8.4).
@@ -55,7 +75,7 @@ pub fn call_typed(
         .first()
         .map_or_else(|| "Float".to_string(), type_argument_name);
     match name {
-        "zeros" | "ones" => {
+        | "zeros" | "ones" => {
             let mut shape = Vec::with_capacity(args.len());
             for index in 0..args.len() {
                 shape.push(expect_int(&args, index, name, span)?.max(0) as usize);
@@ -63,22 +83,26 @@ pub fn call_typed(
             let count = checked_element_count(&shape, span)?;
             let one = name == "ones";
             let storage = match element.as_str() {
-                "Int" | "Real" => Storage::Exact(vec![
-                    if one {
-                        BigRational::one()
-                    } else {
-                        BigRational::zero()
-                    };
-                    count
-                ]),
-                "Float" => Storage::Dense(Rc::new(vec![if one { 1.0 } else { 0.0 }; count])),
-                other => {
+                | "Int" | "Real" => {
+                    Storage::Exact(vec![
+                        if one {
+                            BigRational::one()
+                        } else {
+                            BigRational::zero()
+                        };
+                        count
+                    ])
+                },
+                | "Float" => Storage::Dense(Rc::new(vec![if one { 1.0 } else { 0.0 }; count])),
+                | other => {
                     return Err(EvalError::new(
                         "E1001",
-                        format!("`{name}<{other}>` needs a representation this runtime cannot store"),
+                        format!(
+                            "`{name}<{other}>` needs a representation this runtime cannot store"
+                        ),
                     )
-                    .at(span))
-                }
+                    .at(span));
+                },
             };
             Ok(Value::Tensor(Rc::new(TensorData {
                 shape,
@@ -86,8 +110,8 @@ pub fn call_typed(
                 dim: Dim::one(),
                 display: None,
             })))
-        }
-        "zeros_of" | "ones_of" => {
+        },
+        | "zeros_of" | "ones_of" => {
             let Some(shape) = types.first().and_then(shape_of_type_argument) else {
                 return Err(EvalError::new(
                     "E0310",
@@ -96,15 +120,19 @@ pub fn call_typed(
                 .at(span));
             };
             let count = checked_element_count(&shape, span)?;
-            let fill = if name == "ones_of" { 1.0 } else { 0.0 };
+            let fill = if name == "ones_of" {
+                1.0
+            } else {
+                0.0
+            };
             Ok(Value::Tensor(Rc::new(TensorData {
                 shape,
                 storage: Storage::Dense(Rc::new(vec![fill; count])),
                 dim: Dim::one(),
                 display: None,
             })))
-        }
-        "reshape" => {
+        },
+        | "reshape" => {
             let Some(shape) = types.first().and_then(shape_of_type_argument) else {
                 return Err(EvalError::new(
                     "E0310",
@@ -133,8 +161,8 @@ pub fn call_typed(
                 dim: tensor.dim.clone(),
                 display: tensor.display.clone(),
             }))))
-        }
-        _ => call(interp, name, args, span),
+        },
+        | _ => call(interp, name, args, span),
     }
 }
 
@@ -146,34 +174,38 @@ pub fn call_typed(
 #[must_use]
 pub fn shape_of_type_argument(ty: &Ty) -> Option<Vec<usize>> {
     match &ty.kind {
-        TyKind::ShapeArg(shape) | TyKind::Tensor { shape, .. } | TyKind::Sparse { shape, .. } => {
+        | TyKind::ShapeArg(shape) | TyKind::Tensor { shape, .. } | TyKind::Sparse { shape, .. } => {
             shape_extents(shape)
-        }
-        TyKind::Matrix { rows, cols, .. } => Some(vec![nat_value(rows)?, nat_value(cols)?]),
-        TyKind::NatArg(nat) => Some(vec![nat_value(nat)?]),
-        _ => None,
+        },
+        | TyKind::Matrix { rows, cols, .. } => Some(vec![nat_value(rows)?, nat_value(cols)?]),
+        | TyKind::NatArg(nat) => Some(vec![nat_value(nat)?]),
+        | _ => None,
     }
 }
 
 fn shape_extents(shape: &ShapeAst) -> Option<Vec<usize>> {
     match shape {
-        ShapeAst::Rank(_) => None,
-        ShapeAst::Refined(items) => items
-            .iter()
-            .map(|item| match item {
-                ShapeItem::Known(nat) => nat_value(nat),
-                ShapeItem::Unknown => None,
-            })
-            .collect(),
+        | ShapeAst::Rank(_) => None,
+        | ShapeAst::Refined(items) => {
+            items
+                .iter()
+                .map(|item| {
+                    match item {
+                        | ShapeItem::Known(nat) => nat_value(nat),
+                        | ShapeItem::Unknown => None,
+                    }
+                })
+                .collect()
+        },
     }
 }
 
 fn nat_value(nat: &NatAst) -> Option<usize> {
     match nat {
-        NatAst::Lit(value) => Some(*value),
-        NatAst::Add(left, right) => Some(nat_value(left)? + nat_value(right)?),
-        NatAst::Mul(left, right) => Some(nat_value(left)? * nat_value(right)?),
-        NatAst::Var(_) => None,
+        | NatAst::Lit(value) => Some(*value),
+        | NatAst::Add(left, right) => Some(nat_value(left)? + nat_value(right)?),
+        | NatAst::Mul(left, right) => Some(nat_value(left)? * nat_value(right)?),
+        | NatAst::Var(_) => None,
     }
 }
 
@@ -191,112 +223,127 @@ pub fn call(
 ) -> Result<Value, EvalError> {
     match name {
         // ----- output -----------------------------------------------------
-        "print" => io_print(interp, &args, false, false, span),
-        "println" => io_print(interp, &args, true, false, span),
-        "eprintln" => io_print(interp, &args, true, true, span),
+        | "print" => io_print(interp, &args, false, false, span),
+        | "println" => io_print(interp, &args, true, false, span),
+        | "eprintln" => io_print(interp, &args, true, true, span),
         // §6.12.3: four renderers, four jobs. `repr` is round-trippable and
         // `to_latex`/`to_typst` emit their own syntax; aliasing them to `show`
         // is what let every test believe `3`, `3/1` and `3.0` were one value.
-        "show" => {
+        | "show" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(Value::string(crate::value::show(value)))
-        }
-        "repr" => {
+        },
+        | "repr" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(Value::string(crate::value::repr(value)))
-        }
-        "to_latex" | "to_typst" => {
+        },
+        | "to_latex" | "to_typst" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             let syntax = if name == "to_latex" {
                 crate::value::MathSyntax::Latex
             } else {
                 crate::value::MathSyntax::Typst
             };
-            crate::value::to_math(value, syntax).map(Value::string).map_err(|reason| {
-                EvalError::new(
-                    "E1001",
-                    format!("`{name}` cannot typeset this value: {reason}"),
-                )
-                .at(span)
-            })
-        }
+            crate::value::to_math(value, syntax)
+                .map(Value::string)
+                .map_err(|reason| {
+                    EvalError::new(
+                        "E1001",
+                        format!("`{name}` cannot typeset this value: {reason}"),
+                    )
+                    .at(span)
+                })
+        },
 
         // ----- elementary functions --------------------------------------
-        "sqrt" => unary_math(interp, name, &args, span, MathKind::Root(2)),
-        "cbrt" => unary_math(interp, name, &args, span, MathKind::Root(3)),
-        "exp" => unary_math(interp, name, &args, span, MathKind::Float(f64::exp)),
-        "ln" | "log" => unary_math(interp, name, &args, span, MathKind::Float(f64::ln)),
-        "log2" => unary_math(interp, name, &args, span, MathKind::Float(f64::log2)),
-        "log10" => unary_math(interp, name, &args, span, MathKind::Float(f64::log10)),
-        "sin" => unary_math(interp, name, &args, span, MathKind::Float(f64::sin)),
-        "cos" => unary_math(interp, name, &args, span, MathKind::Float(f64::cos)),
-        "tan" => unary_math(interp, name, &args, span, MathKind::Float(f64::tan)),
-        "asin" => unary_math(interp, name, &args, span, MathKind::Float(f64::asin)),
-        "acos" => unary_math(interp, name, &args, span, MathKind::Float(f64::acos)),
-        "atan" => unary_math(interp, name, &args, span, MathKind::Float(f64::atan)),
-        "sinh" => unary_math(interp, name, &args, span, MathKind::Float(f64::sinh)),
-        "cosh" => unary_math(interp, name, &args, span, MathKind::Float(f64::cosh)),
-        "tanh" => unary_math(interp, name, &args, span, MathKind::Float(f64::tanh)),
-        "asinh" => unary_math(interp, name, &args, span, MathKind::Float(f64::asinh)),
-        "acosh" => unary_math(interp, name, &args, span, MathKind::Float(f64::acosh)),
-        "atanh" => unary_math(interp, name, &args, span, MathKind::Float(f64::atanh)),
-        "gamma" => gamma(interp, name, &args, span),
-        "erf" => unary_math(interp, name, &args, span, MathKind::Float(erf)),
-        "erfc" => unary_math(interp, name, &args, span, MathKind::Float(|x| 1.0 - erf(x))),
-        "atan2" => {
+        | "sqrt" => unary_math(interp, name, &args, span, MathKind::Root(2)),
+        | "cbrt" => unary_math(interp, name, &args, span, MathKind::Root(3)),
+        | "exp" => unary_math(interp, name, &args, span, MathKind::Float(f64::exp)),
+        | "ln" | "log" => unary_math(interp, name, &args, span, MathKind::Float(f64::ln)),
+        | "log2" => unary_math(interp, name, &args, span, MathKind::Float(f64::log2)),
+        | "log10" => unary_math(interp, name, &args, span, MathKind::Float(f64::log10)),
+        | "sin" => unary_math(interp, name, &args, span, MathKind::Float(f64::sin)),
+        | "cos" => unary_math(interp, name, &args, span, MathKind::Float(f64::cos)),
+        | "tan" => unary_math(interp, name, &args, span, MathKind::Float(f64::tan)),
+        | "asin" => unary_math(interp, name, &args, span, MathKind::Float(f64::asin)),
+        | "acos" => unary_math(interp, name, &args, span, MathKind::Float(f64::acos)),
+        | "atan" => unary_math(interp, name, &args, span, MathKind::Float(f64::atan)),
+        | "sinh" => unary_math(interp, name, &args, span, MathKind::Float(f64::sinh)),
+        | "cosh" => unary_math(interp, name, &args, span, MathKind::Float(f64::cosh)),
+        | "tanh" => unary_math(interp, name, &args, span, MathKind::Float(f64::tanh)),
+        | "asinh" => unary_math(interp, name, &args, span, MathKind::Float(f64::asinh)),
+        | "acosh" => unary_math(interp, name, &args, span, MathKind::Float(f64::acosh)),
+        | "atanh" => unary_math(interp, name, &args, span, MathKind::Float(f64::atanh)),
+        | "gamma" => gamma(interp, name, &args, span),
+        | "erf" => unary_math(interp, name, &args, span, MathKind::Float(erf)),
+        | "erfc" => unary_math(interp, name, &args, span, MathKind::Float(|x| 1.0 - erf(x))),
+        | "atan2" => {
             let y = expect_num(&args, 0, name, span)?;
             let x = expect_num(&args, 1, name, span)?;
             Ok(Value::Num(NumVal::float(
-                y.to_f64().unwrap_or(f64::NAN).atan2(x.to_f64().unwrap_or(f64::NAN)),
+                y.to_f64()
+                    .unwrap_or(f64::NAN)
+                    .atan2(x.to_f64().unwrap_or(f64::NAN)),
                 Dim::one(),
             )))
-        }
-        "hypot" => {
+        },
+        | "hypot" => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             Ok(Value::Num(NumVal::float(
-                a.to_f64().unwrap_or(f64::NAN)
+                a.to_f64()
+                    .unwrap_or(f64::NAN)
                     .hypot(b.to_f64().unwrap_or(f64::NAN)),
                 a.dim.clone(),
             )))
-        }
+        },
 
         // ----- numeric ----------------------------------------------------
-        "abs" => map_scalar(&args, name, span, |num| {
-            let kind = match num.kind {
-                NumKind::Int(value) => NumKind::Int(value.abs()),
-                NumKind::Exact(value) => NumKind::Exact(value.abs()),
-                NumKind::Float(value) => NumKind::Float(value.abs()),
-                NumKind::Complex(re, im) => NumKind::Float(re.hypot(im)),
-                NumKind::Sym(term) => NumKind::Sym(Rc::new(Term::fun(Fun::Abs, vec![(*term).clone()]))),
-            };
-            NumVal {
-                kind,
-                dim: num.dim,
-                display: num.display,
-            }
-        }),
-        "sign" => map_scalar(&args, name, span, |num| {
-            let value = num.to_f64().unwrap_or(f64::NAN);
-            NumVal::int(BigInt::from(if value > 0.0 {
-                1
-            } else if value < 0.0 {
-                -1
-            } else {
-                0
-            }))
-        }),
-        "min" | "max" => {
+        | "abs" => {
+            map_scalar(&args, name, span, |num| {
+                let kind = match num.kind {
+                    | NumKind::Int(value) => NumKind::Int(value.abs()),
+                    | NumKind::Exact(value) => NumKind::Exact(value.abs()),
+                    | NumKind::Float(value) => NumKind::Float(value.abs()),
+                    | NumKind::Complex(re, im) => NumKind::Float(re.hypot(im)),
+                    | NumKind::Sym(term) => {
+                        NumKind::Sym(Rc::new(Term::fun(Fun::Abs, vec![(*term).clone()])))
+                    },
+                };
+                NumVal {
+                    kind,
+                    dim: num.dim,
+                    display: num.display,
+                }
+            })
+        },
+        | "sign" => {
+            map_scalar(&args, name, span, |num| {
+                let value = num.to_f64().unwrap_or(f64::NAN);
+                NumVal::int(BigInt::from(if value > 0.0 {
+                    1
+                } else if value < 0.0 {
+                    -1
+                } else {
+                    0
+                }))
+            })
+        },
+        | "min" | "max" => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             let (x, y) = (
                 a.to_f64().unwrap_or(f64::NAN),
                 b.to_f64().unwrap_or(f64::NAN),
             );
-            let take_a = if name == "min" { x <= y } else { x >= y };
+            let take_a = if name == "min" {
+                x <= y
+            } else {
+                x >= y
+            };
             Ok(Value::Num(if take_a { a } else { b }))
-        }
-        "clamp" => {
+        },
+        | "clamp" => {
             let x = expect_num(&args, 0, name, span)?;
             let lo = expect_num(&args, 1, name, span)?;
             let hi = expect_num(&args, 2, name, span)?;
@@ -305,18 +352,20 @@ pub fn call(
             let high = hi.to_f64().unwrap_or(f64::NAN);
             let clamped = value.max(low).min(high);
             Ok(Value::Num(NumVal::float(clamped, x.dim)))
-        }
-        "floor" | "ceil" | "round" | "trunc" => map_scalar(&args, name, span, |num| {
-            let value = num.to_f64().unwrap_or(f64::NAN);
-            let rounded = match name {
-                "floor" => value.floor(),
-                "ceil" => value.ceil(),
-                "round" => value.round(),
-                _ => value.trunc(),
-            };
-            NumVal::float(rounded, num.dim)
-        }),
-        "mod" | "rem" => {
+        },
+        | "floor" | "ceil" | "round" | "trunc" => {
+            map_scalar(&args, name, span, |num| {
+                let value = num.to_f64().unwrap_or(f64::NAN);
+                let rounded = match name {
+                    | "floor" => value.floor(),
+                    | "ceil" => value.ceil(),
+                    | "round" => value.round(),
+                    | _ => value.trunc(),
+                };
+                NumVal::float(rounded, num.dim)
+            })
+        },
+        | "mod" | "rem" => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             if b.is_zero() {
@@ -330,8 +379,8 @@ pub fn call(
                 x % y
             };
             Ok(Value::Num(NumVal::float(value, a.dim)))
-        }
-        "div" | "quot" => {
+        },
+        | "div" | "quot" => {
             let a = expect_int(&args, 0, name, span)?;
             let b = expect_int(&args, 1, name, span)?;
             if b == 0 {
@@ -343,8 +392,8 @@ pub fn call(
                 a / b
             };
             Ok(Value::Num(NumVal::int(BigInt::from(value))))
-        }
-        "gcd" | "lcm" => {
+        },
+        | "gcd" | "lcm" => {
             let a = expect_int(&args, 0, name, span)?;
             let b = expect_int(&args, 1, name, span)?;
             let value = if name == "gcd" {
@@ -355,8 +404,8 @@ pub fn call(
                 (a * b).abs() / gcd(a, b)
             };
             Ok(Value::Num(NumVal::int(BigInt::from(value))))
-        }
-        "factorial" | "double_factorial" => {
+        },
+        | "factorial" | "double_factorial" => {
             let n = expect_int(&args, 0, name, span)?;
             let step = if name == "factorial" { 1 } else { 2 };
             let mut result = BigInt::one();
@@ -366,29 +415,29 @@ pub fn call(
                 current -= step;
             }
             Ok(Value::Num(NumVal::int(result)))
-        }
-        "to_float" => {
+        },
+        | "to_float" => {
             let num = expect_num(&args, 0, name, span)?;
             match num.to_f64() {
-                Some(value) => Ok(ok(Value::Num(NumVal::float(value, num.dim)))),
-                None => Ok(err(Value::string("the value has free symbols"))),
+                | Some(value) => Ok(ok(Value::Num(NumVal::float(value, num.dim)))),
+                | None => Ok(err(Value::string("the value has free symbols"))),
             }
-        }
-        "to_real" => {
+        },
+        | "to_real" => {
             let num = expect_num(&args, 0, name, span)?;
             Ok(Value::Num(match num.to_rational() {
-                Some(value) => NumVal::exact(value, num.dim),
-                None => num,
+                | Some(value) => NumVal::exact(value, num.dim),
+                | None => num,
             }))
-        }
-        "to_int" => {
+        },
+        | "to_int" => {
             let num = expect_num(&args, 0, name, span)?;
             let value = num.to_f64().unwrap_or(f64::NAN).trunc();
             Ok(Value::Num(NumVal::int(BigInt::from(value as i64))))
-        }
+        },
 
         // ----- units ------------------------------------------------------
-        "to" | "delta_to" => {
+        | "to" | "delta_to" => {
             let unit = expect_unit(&args, 0, name, span)?;
             let mut num = expect_num(&args, 1, name, span)?;
             if num.dim != unit.dim {
@@ -404,8 +453,8 @@ pub fn call(
             }
             num.display = Some(unit);
             Ok(Value::Num(num))
-        }
-        "value_in" => {
+        },
+        | "value_in" => {
             let unit = expect_unit(&args, 0, name, span)?;
             let num = expect_num(&args, 1, name, span)?;
             if num.dim != unit.dim {
@@ -428,13 +477,13 @@ pub fn call(
                 (raw - offset) / scale
             };
             Ok(Value::Num(NumVal::float(value, Dim::one())))
-        }
-        "base" => {
+        },
+        | "base" => {
             let mut num = expect_num(&args, 0, name, span)?;
             num.display = None;
             Ok(Value::Num(num))
-        }
-        "point" => {
+        },
+        | "point" => {
             let coefficient = expect_float(&args, 0, name, span)?;
             let unit = expect_unit(&args, 1, name, span)?;
             let scale = unit.scale.to_f64();
@@ -442,10 +491,10 @@ pub fn call(
             let mut num = NumVal::float(coefficient * scale + offset, unit.dim.clone());
             num.display = Some(unit);
             Ok(Value::Num(num))
-        }
+        },
 
         // ----- tensors ----------------------------------------------------
-        "zeros" | "ones" => {
+        | "zeros" | "ones" => {
             let mut shape = Vec::with_capacity(args.len());
             for index in 0..args.len() {
                 shape.push(expect_int(&args, index, name, span)?.max(0) as usize);
@@ -461,8 +510,8 @@ pub fn call(
                 dim: Dim::one(),
                 display: None,
             })))
-        }
-        "fill" => {
+        },
+        | "fill" => {
             let first = args
                 .first()
                 .cloned()
@@ -474,8 +523,8 @@ pub fn call(
             let count = checked_element_count(&shape, span)?;
             let dim = crate::value::value_dim(&first);
             Ok(build_tensor(vec![first; count], shape, dim))
-        }
-        "linspace" => {
+        },
+        | "linspace" => {
             let start = expect_num(&args, 0, name, span)?;
             let end = expect_num(&args, 1, name, span)?;
             let count = expect_int(&args, 2, name, span)?.max(0) as usize;
@@ -496,8 +545,8 @@ pub fn call(
                 dim: start.dim,
                 display: None,
             })))
-        }
-        "range" => {
+        },
+        | "range" => {
             let start = expect_int(&args, 0, name, span)?;
             let end = expect_int(&args, 1, name, span)?;
             let step = if args.len() > 2 {
@@ -521,17 +570,21 @@ pub fn call(
                 dim: Dim::one(),
                 display: None,
             })))
-        }
-        "length" => match args.first() {
-            Some(Value::Str(text)) => Ok(Value::Num(NumVal::int(BigInt::from(
-                text.chars().count(),
-            )))),
-            Some(Value::Tensor(tensor)) => Ok(Value::Num(NumVal::int(BigInt::from(
-                tensor.shape.first().copied().unwrap_or(0),
-            )))),
-            _ => Err(arity(name, 1, args.len(), span)),
         },
-        "shape" => {
+        | "length" => {
+            match args.first() {
+                | Some(Value::Str(text)) => {
+                    Ok(Value::Num(NumVal::int(BigInt::from(text.chars().count()))))
+                },
+                | Some(Value::Tensor(tensor)) => {
+                    Ok(Value::Num(NumVal::int(BigInt::from(
+                        tensor.shape.first().copied().unwrap_or(0),
+                    ))))
+                },
+                | _ => Err(arity(name, 1, args.len(), span)),
+            }
+        },
+        | "shape" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let shape: Vec<BigRational> = tensor
                 .shape
@@ -545,12 +598,12 @@ pub fn call(
                 dim: Dim::one(),
                 display: None,
             })))
-        }
-        "rank" => {
+        },
+        | "rank" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             Ok(Value::Num(NumVal::int(BigInt::from(tensor.rank()))))
-        }
-        "sum" => {
+        },
+        | "sum" => {
             // §8.5: `sum(f, a, b)` is the calculus overload. Without this arm
             // the only `sum` was the tensor reduction, so every summation over
             // a range was `E0302`.
@@ -587,10 +640,7 @@ pub fn call(
                     .iter()
                     .map(|element| element.as_f64().unwrap_or(f64::NAN))
                     .collect();
-                let mut total = NumVal::float(
-                    crate::value::kahan_sum(&values),
-                    tensor.dim.clone(),
-                );
+                let mut total = NumVal::float(crate::value::kahan_sum(&values), tensor.dim.clone());
                 // A one-element reduction is the element itself, display unit
                 // included — the dense path keeps it for the same reason, and
                 // the two classes must stay indistinguishable.
@@ -602,16 +652,15 @@ pub fn call(
             let mut total: Option<Value> = None;
             for element in elements {
                 total = Some(match total {
-                    None => element,
-                    Some(acc) => interp
-                        .apply_binary("+", acc, element, span)?,
+                    | None => element,
+                    | Some(acc) => interp.apply_binary("+", acc, element, span)?,
                 });
             }
             Ok(total.unwrap_or_else(|| {
                 Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone()))
             }))
-        }
-        "mean" => {
+        },
+        | "mean" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §6.6.6: the mean of an empty `Float` tensor is `NaN` (IEEE), and
             // the mean of an empty `Real` tensor is `E0802` — `Real` has no
@@ -619,10 +668,7 @@ pub fn call(
             // what `Float` storage looks like.
             if tensor.storage.is_empty() {
                 if tensor.dense_flat().is_some() {
-                    return Ok(Value::Num(NumVal::float(
-                        f64::NAN,
-                        tensor.dim.clone(),
-                    )));
+                    return Ok(Value::Num(NumVal::float(f64::NAN, tensor.dim.clone())));
                 }
                 return Err(EvalError::new("E0802", "`mean` of an empty tensor").at(span));
             }
@@ -648,8 +694,8 @@ pub fn call(
                 total / values.len() as f64,
                 tensor.dim.clone(),
             )))
-        }
-        "var" | "std" => {
+        },
+        | "var" | "std" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let count = tensor.storage.len();
             let population = args
@@ -657,7 +703,9 @@ pub fn call(
                 .map(|value| matches!(value, Value::Bool(true)))
                 .unwrap_or(false);
             if count == 0 {
-                return Err(EvalError::new("E0802", format!("`{name}` of an empty tensor")).at(span));
+                return Err(
+                    EvalError::new("E0802", format!("`{name}` of an empty tensor")).at(span),
+                );
             }
             let squared = tensor.dim.pow(&BigRational::from_integer(BigInt::from(2)));
             if let Some(values) = exact_values(&tensor) {
@@ -667,11 +715,13 @@ pub fn call(
                     return Ok(exact_number(value, squared));
                 }
                 return Ok(match aevia_std::linalg::exact_sqrt(&value) {
-                    Some(root) => exact_number(root, tensor.dim.clone()),
-                    None => Value::Num(NumVal::float(
-                        aevia_dim::rat::to_f64(&value).sqrt(),
-                        tensor.dim.clone(),
-                    )),
+                    | Some(root) => exact_number(root, tensor.dim.clone()),
+                    | None => {
+                        Value::Num(NumVal::float(
+                            aevia_dim::rat::to_f64(&value).sqrt(),
+                            tensor.dim.clone(),
+                        ))
+                    },
                 });
             }
             if count < 2 {
@@ -698,10 +748,14 @@ pub fn call(
             } else {
                 tensor.dim.clone()
             };
-            let value = if name == "var" { variance } else { variance.sqrt() };
+            let value = if name == "var" {
+                variance
+            } else {
+                variance.sqrt()
+            };
             Ok(Value::Num(NumVal::float(value, dim)))
-        }
-        "min_all" | "max_all" => {
+        },
+        | "min_all" | "max_all" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §8.1: `min`/`max` are the *binary* functions; the tensor reduction
             // is only the whole-tensor `min_all`/`max_all` (no axis form and no
@@ -716,8 +770,8 @@ pub fn call(
                 let mut best: Option<(usize, f64)> = None;
                 for (index, value) in values.iter().copied().enumerate() {
                     best = Some(match best {
-                        None => (index, value),
-                        Some((best_index, current)) => {
+                        | None => (index, value),
+                        | Some((best_index, current)) => {
                             let take = if find_min {
                                 value < current
                             } else {
@@ -728,7 +782,7 @@ pub fn call(
                             } else {
                                 (best_index, current)
                             }
-                        }
+                        },
                     });
                 }
                 let Some((_, value)) = best else {
@@ -742,25 +796,21 @@ pub fn call(
             for element in tensor.elements() {
                 let value = element.as_f64().unwrap_or(f64::NAN);
                 best = Some(match best {
-                    None => element,
-                    Some(current) => {
+                    | None => element,
+                    | Some(current) => {
                         let current_value = current.as_f64().unwrap_or(f64::NAN);
                         let take = if name == "min_all" {
                             value < current_value
                         } else {
                             value > current_value
                         };
-                        if take {
-                            element
-                        } else {
-                            current
-                        }
-                    }
+                        if take { element } else { current }
+                    },
                 });
             }
             best.ok_or_else(|| EvalError::new("E0802", "empty tensor").at(span))
-        }
-        "norm" => {
+        },
+        | "norm" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let order = if args.len() > 1 {
                 expect_int(&args, 1, name, span)?
@@ -768,19 +818,19 @@ pub fn call(
                 2
             };
             let norm = match tensor.dense_flat() {
-                Some(values) => norm_of(&values, order),
-                None => {
+                | Some(values) => norm_of(&values, order),
+                | None => {
                     let values: Vec<f64> = tensor
                         .elements()
                         .iter()
                         .map(|element| element.as_f64().unwrap_or(f64::NAN))
                         .collect();
                     norm_of(&values, order)
-                }
+                },
             };
             Ok(Value::Num(NumVal::float(norm, tensor.dim.clone())))
-        }
-        "normalize" => {
+        },
+        | "normalize" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let norm = tensor
                 .elements()
@@ -799,18 +849,24 @@ pub fn call(
                 })
                 .collect::<Vec<_>>();
             Ok(build_tensor(elements, tensor.shape.clone(), Dim::one()))
-        }
-        "dot" | "matmul" | "matvec" | "vecmat" | "outer" => {
-            let left = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let right = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        },
+        | "dot" | "matmul" | "matvec" | "vecmat" | "outer" => {
+            let left = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let right = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             match name {
-                "dot" => interp.apply_binary("@", left, right, span),
-                "matmul" | "matvec" | "vecmat" => interp.apply_binary("@", left, right, span),
-                "outer" => outer_product(interp, left, right, span),
-                _ => unreachable!(),
+                | "dot" => interp.apply_binary("@", left, right, span),
+                | "matmul" | "matvec" | "vecmat" => interp.apply_binary("@", left, right, span),
+                | "outer" => outer_product(interp, left, right, span),
+                | _ => unreachable!(),
             }
-        }
-        "transpose" => {
+        },
+        | "transpose" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() != 2 {
                 return Err(EvalError::new("E0802", "transpose expects a rank-2 tensor").at(span));
@@ -837,8 +893,8 @@ pub fn call(
                 vec![columns, rows],
                 tensor.dim.clone(),
             ))
-        }
-        "trace" => {
+        },
+        | "trace" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() != 2 {
                 return Err(EvalError::new("E0802", "trace expects a rank-2 tensor").at(span));
@@ -850,16 +906,16 @@ pub fn call(
                     .get(&[index as isize, index as isize])
                     .unwrap_or(Value::Unit);
                 total = Some(match total {
-                    None => element,
-                    Some(acc) => interp.apply_binary("+", acc, element, span)?,
+                    | None => element,
+                    | Some(acc) => interp.apply_binary("+", acc, element, span)?,
                 });
             }
             Ok(total.unwrap_or_else(|| Value::float(0.0)))
-        }
-        "det" => determinant(interp, &args, span),
-        "inv" => inverse(&args, span),
-        "linsolve" => linsolve(interp, &args, span),
-        "eye" => {
+        },
+        | "det" => determinant(interp, &args, span),
+        | "inv" => inverse(&args, span),
+        | "linsolve" => linsolve(interp, &args, span),
+        | "eye" => {
             let n = expect_int(&args, 0, name, span)?.max(0) as usize;
             let mut values = vec![0.0; n * n];
             for index in 0..n {
@@ -871,8 +927,8 @@ pub fn call(
                 dim: Dim::one(),
                 display: None,
             })))
-        }
-        "diag" => {
+        },
+        | "diag" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() == 1 {
                 let n = tensor.shape[0];
@@ -906,14 +962,14 @@ pub fn call(
                     display: None,
                 })))
             }
-        }
-        "flatten" => {
+        },
+        | "flatten" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let elements = tensor.elements();
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
-        }
-        "at" => {
+        },
+        | "at" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let index = expect_int(&args, 1, name, span)?;
             let extent = tensor.shape.first().copied().unwrap_or(0);
@@ -945,9 +1001,13 @@ pub fn call(
                         elements.push(element);
                     }
                 }
-                Ok(build_tensor(elements, remaining.to_vec(), tensor.dim.clone()))
+                Ok(build_tensor(
+                    elements,
+                    remaining.to_vec(),
+                    tensor.dim.clone(),
+                ))
             }
-        }
+        },
         // §6.10 / §3.8.4: explicit parallelism, gated by the checker's
         // `Parallel` constraint (only `Int`/`Float` and tensors of them reach
         // here; symbolic `Real` is rejected statically). The *guarantee* is
@@ -956,15 +1016,14 @@ pub fn call(
         // interpreter is `!Send`, so a worker cannot borrow it — which is a
         // documented deviation from §9.7.2's rayon wording, not from its
         // result.
-        "par_map" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        | "par_map" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             if tensor.rank() != 1 {
-                return Err(EvalError::new(
-                    "E0802",
-                    "`par_map` expects a rank-1 tensor",
-                )
-                .at(span));
+                return Err(EvalError::new("E0802", "`par_map` expects a rank-1 tensor").at(span));
             }
             let mut elements = Vec::with_capacity(tensor.storage.len());
             for element in tensor.elements() {
@@ -975,11 +1034,14 @@ pub fn call(
                 .map_or_else(Dim::one, crate::value::value_dim);
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], dim))
-        }
-        "map" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "map" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             match args.get(1) {
-                Some(Value::Tensor(tensor)) => {
+                | Some(Value::Tensor(tensor)) => {
                     let mut elements = Vec::with_capacity(tensor.storage.len());
                     for element in tensor.elements() {
                         elements.push(interp.apply(function.clone(), vec![element], span)?);
@@ -988,8 +1050,8 @@ pub fn call(
                         .first()
                         .map_or_else(Dim::one, crate::value::value_dim);
                     Ok(build_tensor(elements, tensor.shape.clone(), dim))
-                }
-                Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
+                },
+                | Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
                     if variant.index == 0 {
                         Ok(Value::Variant(variant.clone()))
                     } else {
@@ -997,12 +1059,15 @@ pub fn call(
                         let mapped = interp.apply(function, vec![inner], span)?;
                         Ok(make_variant(adt::OPTION_ID, 1, "Some", vec![mapped]))
                     }
-                }
-                _ => Err(arity(name, 2, args.len(), span)),
+                },
+                | _ => Err(arity(name, 2, args.len(), span)),
             }
-        }
-        "map2" | "zip_with" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 3, 0, span))?;
+        },
+        | "map2" | "zip_with" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
             let a = expect_tensor(&args, 1, name, span)?;
             let b = expect_tensor(&args, 2, name, span)?;
             if a.shape != b.shape {
@@ -1016,9 +1081,12 @@ pub fn call(
                 .first()
                 .map_or_else(Dim::one, crate::value::value_dim);
             Ok(build_tensor(elements, a.shape.clone(), dim))
-        }
-        "filter" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "filter" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             // §8.11 overloads `filter` on a table: the predicate sees a row.
             if matches!(args.get(1), Some(Value::Record(_))) {
                 let table = table_from(&args, 1, name, span)?;
@@ -1050,18 +1118,23 @@ pub fn call(
             }
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
-        }
-        "fold" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 3, 0, span))?;
-            let mut accumulator = args.get(1).cloned().ok_or_else(|| arity(name, 3, 1, span))?;
+        },
+        | "fold" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
+            let mut accumulator = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 1, span))?;
             let tensor = expect_tensor(&args, 2, name, span)?;
             for element in tensor.elements() {
-                accumulator =
-                    interp.apply(function.clone(), vec![accumulator, element], span)?;
+                accumulator = interp.apply(function.clone(), vec![accumulator, element], span)?;
             }
             Ok(accumulator)
-        }
-        "take" | "drop" => {
+        },
+        | "take" | "drop" => {
             let count = expect_int(&args, 0, name, span)?.max(0) as usize;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let elements = tensor.elements();
@@ -1072,8 +1145,8 @@ pub fn call(
             };
             let len = selected.len();
             Ok(build_tensor(selected, vec![len], tensor.dim.clone()))
-        }
-        "reverse" => {
+        },
+        | "reverse" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §9.5: reversing a rank-1 `f64` tensor is a view — the same
             // buffer walked backwards — so `xs[::-1]` allocates nothing and
@@ -1090,8 +1163,8 @@ pub fn call(
             elements.reverse();
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
-        }
-        "sort" => {
+        },
+        | "sort" => {
             // §3.8.4: `sort` needs `TotalOrd`, and the checker rejects a type
             // without one. The order must therefore be the *total* one —
             // comparing `as_f64` made a tensor of strings sort as `NaN`, which
@@ -1101,21 +1174,26 @@ pub fn call(
             elements.sort_by(total_order);
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
-        }
-        "concat" => match (args.first(), args.get(1)) {
-            (Some(Value::Str(a)), Some(Value::Str(b))) => {
-                Ok(Value::string(format!("{a}{b}")))
-            }
-            (Some(Value::Tensor(a)), Some(Value::Tensor(b))) => {
-                let mut elements = a.elements();
-                elements.extend(b.elements());
-                let len = elements.len();
-                Ok(build_tensor(elements, vec![len], a.dim.clone()))
-            }
-            _ => Err(arity(name, 2, args.len(), span)),
         },
-        "any" | "all" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        | "concat" => {
+            match (args.first(), args.get(1)) {
+                | (Some(Value::Str(a)), Some(Value::Str(b))) => {
+                    Ok(Value::string(format!("{a}{b}")))
+                },
+                | (Some(Value::Tensor(a)), Some(Value::Tensor(b))) => {
+                    let mut elements = a.elements();
+                    elements.extend(b.elements());
+                    let len = elements.len();
+                    Ok(build_tensor(elements, vec![len], a.dim.clone()))
+                },
+                | _ => Err(arity(name, 2, args.len(), span)),
+            }
+        },
+        | "any" | "all" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let mut result = name == "all";
             for element in tensor.elements() {
@@ -1132,9 +1210,12 @@ pub fn call(
                 result = value;
             }
             Ok(Value::Bool(result))
-        }
-        "find" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "find" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             for element in tensor.elements() {
                 if matches!(
@@ -1145,8 +1226,8 @@ pub fn call(
                 }
             }
             Ok(make_variant(adt::OPTION_ID, 0, "None", Vec::new()))
-        }
-        "prod" => {
+        },
+        | "prod" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §6.6.6: the empty product is 1, in the phase the elements would
             // have had.
@@ -1159,13 +1240,13 @@ pub fn call(
             let mut total: Option<Value> = None;
             for element in tensor.elements() {
                 total = Some(match total {
-                    None => element,
-                    Some(acc) => interp.apply_binary("*", acc, element, span)?,
+                    | None => element,
+                    | Some(acc) => interp.apply_binary("*", acc, element, span)?,
                 });
             }
             Ok(total.unwrap_or_else(|| Value::Num(NumVal::int(BigInt::one()))))
-        }
-        "centroid" => {
+        },
+        | "centroid" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let count = tensor.storage.len();
             let mut total = 0.0;
@@ -1176,10 +1257,10 @@ pub fn call(
                 total / count.max(1) as f64,
                 tensor.dim.clone(),
             )))
-        }
+        },
 
         // ----- strings ----------------------------------------------------
-        "join" => {
+        | "join" => {
             // §8.11 overloads `join` on tables; the first argument decides.
             if matches!(args.first(), Some(Value::Record(_))) {
                 return join_tables(&args, name, span);
@@ -1189,20 +1270,20 @@ pub fn call(
             let parts: Vec<String> = tensor
                 .elements()
                 .iter()
-                .map(|element| match element {
-                    Value::Str(text) => text.to_string(),
-                    other => show(other),
+                .map(|element| {
+                    match element {
+                        | Value::Str(text) => text.to_string(),
+                        | other => show(other),
+                    }
                 })
                 .collect();
             Ok(Value::string(parts.join(&separator)))
-        }
-        "split" => {
+        },
+        | "split" => {
             let text = expect_str(&args, 0, name, span)?;
             let separator = expect_str(&args, 1, name, span)?;
             let parts: Vec<Value> = if separator.is_empty() {
-                text.chars()
-                    .map(|c| Value::string(c.to_string()))
-                    .collect()
+                text.chars().map(|c| Value::string(c.to_string())).collect()
             } else {
                 text.split(&separator)
                     .map(|part| Value::string(part.to_string()))
@@ -1210,62 +1291,65 @@ pub fn call(
             };
             let len = parts.len();
             Ok(build_tensor(parts, vec![len], Dim::one()))
-        }
-        "replace" => {
+        },
+        | "replace" => {
             let text = expect_str(&args, 0, name, span)?;
             let from = expect_str(&args, 1, name, span)?;
             let to = expect_str(&args, 2, name, span)?;
             Ok(Value::string(text.replace(&from, &to)))
-        }
-        "trim" => Ok(Value::string(expect_str(&args, 0, name, span)?.trim())),
-        "upper" => Ok(Value::string(
-            expect_str(&args, 0, name, span)?.to_uppercase(),
-        )),
-        "lower" => Ok(Value::string(
-            expect_str(&args, 0, name, span)?.to_lowercase(),
-        )),
-        "contains" | "starts_with" | "ends_with" => {
+        },
+        | "trim" => Ok(Value::string(expect_str(&args, 0, name, span)?.trim())),
+        | "upper" => {
+            Ok(Value::string(
+                expect_str(&args, 0, name, span)?.to_uppercase(),
+            ))
+        },
+        | "lower" => {
+            Ok(Value::string(
+                expect_str(&args, 0, name, span)?.to_lowercase(),
+            ))
+        },
+        | "contains" | "starts_with" | "ends_with" => {
             let text = expect_str(&args, 0, name, span)?;
             let pattern = expect_str(&args, 1, name, span)?;
             let value = match name {
-                "contains" => text.contains(&pattern),
-                "starts_with" => text.starts_with(&pattern),
-                _ => text.ends_with(&pattern),
+                | "contains" => text.contains(&pattern),
+                | "starts_with" => text.starts_with(&pattern),
+                | _ => text.ends_with(&pattern),
             };
             Ok(Value::Bool(value))
-        }
-        "parse_int" => {
+        },
+        | "parse_int" => {
             let text = expect_str(&args, 0, name, span)?;
             match text.trim().parse::<BigInt>() {
-                Ok(value) => Ok(ok(Value::Num(NumVal::int(value)))),
-                Err(error) => Ok(err(Value::string(error.to_string()))),
+                | Ok(value) => Ok(ok(Value::Num(NumVal::int(value)))),
+                | Err(error) => Ok(err(Value::string(error.to_string()))),
             }
-        }
-        "parse_float" => {
+        },
+        | "parse_float" => {
             let text = expect_str(&args, 0, name, span)?;
             match text.trim().parse::<f64>() {
-                Ok(value) => Ok(ok(Value::Num(NumVal::float(value, Dim::one())))),
-                Err(error) => Ok(err(Value::string(error.to_string()))),
+                | Ok(value) => Ok(ok(Value::Num(NumVal::float(value, Dim::one())))),
+                | Err(error) => Ok(err(Value::string(error.to_string()))),
             }
-        }
-        "chars" => {
+        },
+        | "chars" => {
             let text = expect_str(&args, 0, name, span)?;
-            let parts: Vec<Value> = text
-                .chars()
-                .map(|c| Value::string(c.to_string()))
-                .collect();
+            let parts: Vec<Value> = text.chars().map(|c| Value::string(c.to_string())).collect();
             let len = parts.len();
             Ok(build_tensor(parts, vec![len], Dim::one()))
-        }
-        "format" => {
+        },
+        | "format" => {
             let template = expect_str(&args, 0, name, span)?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let parts: Vec<String> = tensor
                 .elements()
                 .iter()
-                .map(|element| match element {
-                    Value::Str(text) => text.to_string(),
-                    other => show(other),
+                .map(|element| {
+                    match element {
+                        | Value::Str(text) => text.to_string(),
+                        | other => show(other),
+                    }
                 })
                 .collect();
             let mut out = template;
@@ -1273,48 +1357,58 @@ pub fn call(
                 out = out.replace(&format!("{{{index}}}"), part);
             }
             Ok(Value::string(out))
-        }
+        },
 
         // ----- Option / Result -------------------------------------------
-        "and_then" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        | "and_then" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             match args.get(1) {
-                Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
+                | Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
                     if variant.index == 0 {
                         Ok(Value::Variant(variant.clone()))
                     } else {
                         let inner = variant.fields.first().cloned().unwrap_or(Value::Unit);
                         interp.apply(function, vec![inner], span)
                     }
-                }
-                _ => Err(arity(name, 2, args.len(), span)),
+                },
+                | _ => Err(arity(name, 2, args.len(), span)),
             }
-        }
-        "unwrap_or" => {
+        },
+        | "unwrap_or" => {
             let fallback = args.get(1).cloned().unwrap_or(Value::Unit);
             match args.first() {
-                Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
+                | Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
                     if variant.index == 1 {
                         Ok(variant.fields.first().cloned().unwrap_or(fallback))
                     } else {
                         Ok(fallback)
                     }
-                }
-                _ => Ok(fallback),
+                },
+                | _ => Ok(fallback),
             }
-        }
-        "is_some" | "is_none" => match args.first() {
-            Some(Value::Variant(variant)) => Ok(Value::Bool(if name == "is_some" {
-                variant.index == 1
-            } else {
-                variant.index == 0
-            })),
-            _ => Err(arity(name, 1, args.len(), span)),
         },
-        "map_err" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        | "is_some" | "is_none" => {
+            match args.first() {
+                | Some(Value::Variant(variant)) => {
+                    Ok(Value::Bool(if name == "is_some" {
+                        variant.index == 1
+                    } else {
+                        variant.index == 0
+                    }))
+                },
+                | _ => Err(arity(name, 1, args.len(), span)),
+            }
+        },
+        | "map_err" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             match args.get(1) {
-                Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
+                | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
                     if variant.index == 0 {
                         Ok(Value::Variant(variant.clone()))
                     } else {
@@ -1322,18 +1416,15 @@ pub fn call(
                         let mapped = interp.apply(function, vec![inner], span)?;
                         Ok(make_variant(adt::RESULT_ID, 1, "Err", vec![mapped]))
                     }
-                }
-                _ => Err(arity(name, 2, args.len(), span)),
+                },
+                | _ => Err(arity(name, 2, args.len(), span)),
             }
-        }
+        },
 
         // ----- symbolic ---------------------------------------------------
-        "symbol" => {
+        | "symbol" => {
             let display = expect_str(&args, 0, name, span)?;
-            let count = interp
-                .symbol_counts
-                .entry(display.clone())
-                .or_insert(0);
+            let count = interp.symbol_counts.entry(display.clone()).or_insert(0);
             *count += 1;
             // The first `x` keeps its name; later ones become `x#2`, `x#3`.
             // The suffix makes identity structural, while `show` hides it.
@@ -1346,8 +1437,8 @@ pub fn call(
                 Term::Sym(internal),
                 Dim::one(),
             )))
-        }
-        "symfun" => {
+        },
+        | "symfun" => {
             let _ = expect_str(&args, 0, name, span)?;
             // Applying an unknown function symbol needs a term form for
             // uninterpreted functions, which arrives with the backend bridge.
@@ -1360,9 +1451,12 @@ pub fn call(
                     .at(span))
                 },
             )))))
-        }
-        "diff" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        },
+        | "diff" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             // A name that cannot collide with a user symbol (§6.4.1 creates a
             // fresh ξ; this is the same idea without a term-level name type).
             let variable = "x#diff";
@@ -1379,8 +1473,7 @@ pub fn call(
                     let argument = args
                         .first()
                         .ok_or_else(|| arity("derivative", 1, 0, span))?;
-                    let substituted =
-                        derivative.substitute(variable, &value_to_term(argument)?)?;
+                    let substituted = derivative.substitute(variable, &value_to_term(argument)?)?;
                     // §6.13 step 4: `df(2)` is the exact number `9`, not a
                     // symbolic value that happens to print as `9`.
                     if let Some(folded) = bridge::fold(&substituted, dim.clone()) {
@@ -1389,25 +1482,27 @@ pub fn call(
                     Ok(Value::Num(NumVal::symbolic(substituted, dim.clone())))
                 },
             )))))
-        }
-        "diff_at" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let at = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        },
+        | "diff_at" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let at = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             let derivative = call(interp, "diff", vec![function], span)?;
             interp.apply(derivative, vec![at], span)
-        }
+        },
         // ----- calculus, algebra and equations (rssn) ----------------------
-        "antiderivative" => {
+        | "antiderivative" => {
             // The argument is not known yet, so the integral is built against a
             // dimensionless variable and the dimension is recovered when the
             // returned function is applied (`e*d`, §8.6).
             let (variable, applied) = apply_to_fresh(interp, name, &args, span, Dim::one())?;
             let symbol = symbolic_variable(&variable, Dim::one());
-            let integral = bridge::call_term(
-                "integral",
-                &[applied, symbol],
-                Dim::one(),
-            )?;
+            let integral = bridge::call_term("integral", &[applied, symbol], Dim::one())?;
             let function = args
                 .first()
                 .cloned()
@@ -1420,11 +1515,9 @@ pub fn call(
                         .ok_or_else(|| arity("antiderivative", 1, 0, span))?;
                     // `f` is `Real[d] -> Real[e]`; applying it to a variable of
                     // dimension `d` gives `e`, and the antiderivative is `e*d`.
-                    let dim = argument_dim(interp, &function, &argument, span)?.mul(
-                        &crate::value::value_dim(&argument),
-                    );
-                    let substituted =
-                        integral.substitute(&variable, &value_to_term(&argument)?)?;
+                    let dim = argument_dim(interp, &function, &argument, span)?
+                        .mul(&crate::value::value_dim(&argument));
+                    let substituted = integral.substitute(&variable, &value_to_term(&argument)?)?;
                     // A value with nothing free in it is a number: fold it
                     // rather than print `1/3*3^3`.
                     if let Some(folded) = bridge::fold(&substituted, dim.clone()) {
@@ -1433,48 +1526,70 @@ pub fn call(
                     Ok(Value::Num(NumVal::symbolic(substituted, dim)))
                 },
             )))))
-        }
-        "defint" => {
-            let lower = args.get(1).cloned().ok_or_else(|| arity(name, 3, 1, span))?;
-            let upper = args.get(2).cloned().ok_or_else(|| arity(name, 3, 2, span))?;
+        },
+        | "defint" => {
+            let lower = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 1, span))?;
+            let upper = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 2, span))?;
             let variable_dim = crate::value::value_dim(&lower);
             let (variable, applied) =
                 apply_to_fresh(interp, name, &args, span, variable_dim.clone())?;
             let symbol = symbolic_variable(&variable, variable_dim);
             let dim = crate::value::value_dim(&applied).mul(&crate::value::value_dim(&lower));
-            math_result(bridge::call("defint", &[applied, symbol, lower, upper], dim))
-        }
-        "limit" => {
-            let at = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+            math_result(bridge::call(
+                "defint",
+                &[applied, symbol, lower, upper],
+                dim,
+            ))
+        },
+        | "limit" => {
+            let at = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             let variable_dim = crate::value::value_dim(&at);
             let (variable, applied) =
                 apply_to_fresh(interp, name, &args, span, variable_dim.clone())?;
             let symbol = symbolic_variable(&variable, variable_dim);
             let dim = crate::value::value_dim(&applied);
             math_result(bridge::call("limit", &[applied, symbol, at], dim))
-        }
-        "series" => {
-            let at = args.get(1).cloned().ok_or_else(|| arity(name, 3, 1, span))?;
-            let order = args.get(2).cloned().ok_or_else(|| arity(name, 3, 2, span))?;
+        },
+        | "series" => {
+            let at = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 1, span))?;
+            let order = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 2, span))?;
             let variable_dim = crate::value::value_dim(&at);
             let (variable, applied) =
                 apply_to_fresh(interp, name, &args, span, variable_dim.clone())?;
             let symbol = symbolic_variable(&variable, variable_dim);
             let dim = crate::value::value_dim(&applied);
             bridge::call("taylor", &[applied, symbol, at, order], dim)
-        }
-        "solve" => {
+        },
+        | "solve" => {
             // No argument fixes the variable's dimension, so the roots stay
             // dimensionless at run time; the static type is `Solutions<Real,d>`.
             let (variable, applied) = apply_to_fresh(interp, name, &args, span, Dim::one())?;
             let symbol = symbolic_variable(&variable, Dim::one());
             match solve("solve", &applied, &symbol) {
-                Ok(solutions) => Ok(ok(solutions_value(&solutions, Dim::one()))),
-                Err(error) => Ok(err(Value::string(error.message))),
+                | Ok(solutions) => Ok(ok(solutions_value(&solutions, Dim::one()))),
+                | Err(error) => Ok(err(Value::string(error.message))),
             }
-        }
-        "nsolve" => {
-            let start = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        },
+        | "nsolve" => {
+            let start = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             let variable_dim = crate::value::value_dim(&start);
             let (variable, applied) =
                 apply_to_fresh(interp, name, &args, span, variable_dim.clone())?;
@@ -1488,23 +1603,29 @@ pub fn call(
                 &aevia_rssn::Opts::numeric(1e-10),
                 dim,
             ))
-        }
-        "eval" | "simplify" => {
-            let value = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        },
+        | "eval" | "simplify" => {
+            let value = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             let dim = crate::value::value_dim(&value);
             let term = value_to_term(&value)?;
             let sym = bridge::term_val(&term)?;
             let handle = match sym {
-                aevia_rssn::Val::Term(handle) => handle,
-                _ => return Ok(value),
+                | aevia_rssn::Val::Term(handle) => handle,
+                | _ => return Ok(value),
             };
             let computed = aevia_rssn::kernel()
                 .compute(handle, &aevia_rssn::Opts::symbolic())
                 .map_err(|failure| bridge::error(&failure))?;
             Ok(bridge::from_val(&computed.val, dim))
-        }
-        "approx" => {
-            let value = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        },
+        | "approx" => {
+            let value = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             let dim = crate::value::value_dim(&value);
             // A concrete value is already its own approximation: `approx(9)`
             // is `Ok(9.0)` (§6.13 step 5), not a kernel round trip.
@@ -1525,28 +1646,38 @@ pub fn call(
             }
             let sym = bridge::term_val(&term)?;
             let handle = match sym {
-                aevia_rssn::Val::Term(handle) => handle,
-                _ => return Ok(err(Value::string("not numeric"))),
+                | aevia_rssn::Val::Term(handle) => handle,
+                | _ => return Ok(err(Value::string("not numeric"))),
             };
             match aevia_rssn::kernel().compute(handle, &aevia_rssn::Opts::numeric(1e-12)) {
-                Ok(computed) => match computed.numeric {
-                    // §6.3.4: a *formal* expression outside its domain — the
-                    // numeric target answers `NaN` for `asin(2)` — is a domain
-                    // error `E0806`, not a successful `NaN`. A concrete `NaN`
-                    // program value still approximates to itself above.
-                    Some(number) if number.is_nan() => Ok(err(Value::string(
-                        "E0806: the expression has no real value (domain error)",
-                    ))),
-                    Some(number) => Ok(ok(Value::Num(NumVal::float(number, dim)))),
-                    None => Ok(err(Value::string("not numeric"))),
+                | Ok(computed) => {
+                    match computed.numeric {
+                        // §6.3.4: a *formal* expression outside its domain — the
+                        // numeric target answers `NaN` for `asin(2)` — is a domain
+                        // error `E0806`, not a successful `NaN`. A concrete `NaN`
+                        // program value still approximates to itself above.
+                        | Some(number) if number.is_nan() => {
+                            Ok(err(Value::string(
+                                "E0806: the expression has no real value (domain error)",
+                            )))
+                        },
+                        | Some(number) => Ok(ok(Value::Num(NumVal::float(number, dim)))),
+                        | None => Ok(err(Value::string("not numeric"))),
+                    }
                 },
-                Err(failure) => Ok(err(Value::string(failure.message))),
+                | Err(failure) => Ok(err(Value::string(failure.message))),
             }
-        }
-        "subst" => {
+        },
+        | "subst" => {
             let symbol = expect_num(&args, 0, name, span)?;
-            let replacement = args.get(1).cloned().ok_or_else(|| arity(name, 3, 1, span))?;
-            let target = args.get(2).cloned().ok_or_else(|| arity(name, 3, 2, span))?;
+            let replacement = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 1, span))?;
+            let target = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 2, span))?;
             let replacement = value_to_term(&replacement)?;
             let target = value_to_term(&target)?;
             let Some(symbol_name) = symbol_name(&symbol) else {
@@ -1561,29 +1692,29 @@ pub fn call(
                 return Ok(folded);
             }
             Ok(Value::Num(NumVal::symbolic(substituted, dim)))
-        }
-        "to_value" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
-        "from_value" => Ok(ok(args.first().cloned().unwrap_or(Value::Unit))),
-        "decide" => Ok(decide(&args, span)),
-        "assuming" | "by_cases" => branch_on(interp, name, &args, span),
+        },
+        | "to_value" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
+        | "from_value" => Ok(ok(args.first().cloned().unwrap_or(Value::Unit))),
+        | "decide" => Ok(decide(&args, span)),
+        | "assuming" | "by_cases" => branch_on(interp, name, &args, span),
 
         // ----- IO ---------------------------------------------------------
-        "read_file" => {
+        | "read_file" => {
             let path = expect_str(&args, 0, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::ReadFile(path))))
-        }
-        "write_file" => {
+        },
+        | "write_file" => {
             let path = expect_str(&args, 0, name, span)?;
             let contents = expect_str(&args, 1, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::WriteFile {
                 path,
                 contents,
             })))
-        }
-        "read_line" => Ok(Value::Io(Rc::new(crate::value::IoAction::ReadLine))),
+        },
+        | "read_line" => Ok(Value::Io(Rc::new(crate::value::IoAction::ReadLine))),
         // §9.12: the program arguments the host set with `Interp::set_args`,
         // as a rank-1 `Tensor<1, String>`.
-        "args" => {
+        | "args" => {
             if !args.is_empty() {
                 return Err(arity(name, 0, args.len(), span));
             }
@@ -1594,17 +1725,17 @@ pub fn call(
                 .collect();
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
-        }
+        },
         // §6.8.2: the clock is read when the action runs, and `random` advances
         // the RNG then too — building the description must not consume a value
         // from the sequence (§6.10).
-        "time_now" => Ok(Value::Io(Rc::new(crate::value::IoAction::TimeNow))),
-        "random" => Ok(Value::Io(Rc::new(crate::value::IoAction::Random))),
+        | "time_now" => Ok(Value::Io(Rc::new(crate::value::IoAction::TimeNow))),
+        | "random" => Ok(Value::Io(Rc::new(crate::value::IoAction::Random))),
         // §6.10: the pure, seeded generator. `rng(seed)` answers `() -> Float`,
         // a closure over its own LCG state, so the same seed always produces
         // the same stream and nothing is consumed from the session's RNG — the
         // purity the standard asks for ("rng(seed) 是纯的、确定的").
-        "rng" => {
+        | "rng" => {
             let seed = expect_int(&args, 0, name, span)?;
             let state = Rc::new(std::cell::RefCell::new(seed as u64));
             Ok(Value::Native(Rc::new(NativeFn(Box::new(
@@ -1613,61 +1744,80 @@ pub fn call(
                     Ok(Value::float(value))
                 },
             )))))
-        }
+        },
 
         // ----- testing ----------------------------------------------------
-        "assert" => match args.first() {
-            Some(Value::Bool(true)) => Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
-                Value::Unit,
-            )))),
-            // §6.8.1: an assertion is part of the description. Failing while
-            // the block is built would run it before the `println` above it.
-            Some(Value::Bool(false)) => Ok(Value::Io(Rc::new(crate::value::IoAction::Assert {
-                message: "assertion failed".to_string(),
-            }))),
-            Some(Value::Prop(prop)) => match decide_prop(prop) {
-                Some(true) => Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
-                    Value::Unit,
-                )))),
-                Some(false) => Ok(Value::Io(Rc::new(crate::value::IoAction::Assert {
-                    message: format!("assertion failed: {}", prop.text),
-                }))),
-                None => Err(
-                    EvalError::new("E0804", format!("cannot decide `{}`", prop.text)).at(span),
-                ),
-            },
-            _ => Err(arity(name, 1, args.len(), span)),
+        | "assert" => {
+            match args.first() {
+                | Some(Value::Bool(true)) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
+                        Value::Unit,
+                    ))))
+                },
+                // §6.8.1: an assertion is part of the description. Failing while
+                // the block is built would run it before the `println` above it.
+                | Some(Value::Bool(false)) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::Assert {
+                        message: "assertion failed".to_string(),
+                    })))
+                },
+                | Some(Value::Prop(prop)) => {
+                    match decide_prop(prop) {
+                        | Some(true) => {
+                            Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
+                                Value::Unit,
+                            ))))
+                        },
+                        | Some(false) => {
+                            Ok(Value::Io(Rc::new(crate::value::IoAction::Assert {
+                                message: format!("assertion failed: {}", prop.text),
+                            })))
+                        },
+                        | None => {
+                            Err(
+                                EvalError::new("E0804", format!("cannot decide `{}`", prop.text))
+                                    .at(span),
+                            )
+                        },
+                    }
+                },
+                | _ => Err(arity(name, 1, args.len(), span)),
+            }
         },
-        "assert_eq" => {
+        | "assert_eq" => {
             let a = args.first().cloned().unwrap_or(Value::Unit);
             let b = args.get(1).cloned().unwrap_or(Value::Unit);
             // §6.12.1: equality is structural. Comparing renderings passed
             // `1` against `1.0` and `1/2` against `0.5`, which is the very
             // mistake the phase split exists to prevent.
             match crate::value::equal(&a, &b) {
-                Ok(true) => Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
-                    Value::Unit,
-                )))),
-                Ok(false) => Ok(Value::Io(Rc::new(crate::value::IoAction::Assert {
-                    message: format!(
-                        "assertion failed: {} != {}",
-                        crate::value::repr(&a),
-                        crate::value::repr(&b)
-                    ),
-                }))),
-                Err(reason) => Err(EvalError::new("E0302", reason.to_string()).at(span)),
+                | Ok(true) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
+                        Value::Unit,
+                    ))))
+                },
+                | Ok(false) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::Assert {
+                        message: format!(
+                            "assertion failed: {} != {}",
+                            crate::value::repr(&a),
+                            crate::value::repr(&b)
+                        ),
+                    })))
+                },
+                | Err(reason) => Err(EvalError::new("E0302", reason.to_string()).at(span)),
             }
-        }
-        "approx_eq" => {
+        },
+        | "approx_eq" => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             let tolerance = expect_num(&args, 2, name, span)?;
             let tolerance = NumVal {
                 kind: match tolerance.kind {
-                    NumKind::Int(value) => NumKind::Int(value.abs()),
-                    NumKind::Exact(value) => NumKind::Exact(value.abs()),
-                    NumKind::Float(value) => NumKind::Float(value.abs()),
-                    other => other,
+                    | NumKind::Int(value) => NumKind::Int(value.abs()),
+                    | NumKind::Exact(value) => NumKind::Exact(value.abs()),
+                    | NumKind::Float(value) => NumKind::Float(value.abs()),
+                    | other => other,
                 },
                 dim: tolerance.dim,
                 display: tolerance.display,
@@ -1687,19 +1837,21 @@ pub fn call(
                 .at(span));
             }
             let difference = match (a.to_rational(), b.to_rational()) {
-                (Some(a), Some(b)) => (a - b).abs(),
-                _ => BigRational::from_float(
-                    (a.to_f64().unwrap_or(f64::NAN) - b.to_f64().unwrap_or(f64::NAN)).abs(),
-                )
-                .unwrap_or_else(BigRational::zero),
+                | (Some(a), Some(b)) => (a - b).abs(),
+                | _ => {
+                    BigRational::from_float(
+                        (a.to_f64().unwrap_or(f64::NAN) - b.to_f64().unwrap_or(f64::NAN)).abs(),
+                    )
+                    .unwrap_or_else(BigRational::zero)
+                },
             };
             let limit = tolerance.to_rational().unwrap_or_else(BigRational::zero);
             Ok(Value::Bool(difference <= limit))
-        }
-        "forall" => forall(interp, &args, span),
+        },
+        | "forall" => forall(interp, &args, span),
 
         // ----- plotting ---------------------------------------------------
-        "line" | "scatter" => {
+        | "line" | "scatter" => {
             let x = args.first().cloned().unwrap_or(Value::Unit);
             let y = args.get(1).cloned().unwrap_or(Value::Unit);
             let mut fields = IndexMap::new();
@@ -1708,23 +1860,25 @@ pub fn call(
             fields.insert("y".to_string(), y);
             fields.insert("label".to_string(), Value::string(""));
             Ok(Value::Record(Rc::new(RecordValue { fields })))
-        }
-        "label" => {
+        },
+        | "label" => {
             let mut series = match args.first().cloned() {
-                Some(Value::Record(record)) => (*record).clone(),
-                _ => return Err(arity(name, 2, args.len(), span)),
+                | Some(Value::Record(record)) => (*record).clone(),
+                | _ => return Err(arity(name, 2, args.len(), span)),
             };
             let text = expect_str(&args, 1, name, span)?;
-            series.fields.insert("label".to_string(), Value::string(text));
+            series
+                .fields
+                .insert("label".to_string(), Value::string(text));
             Ok(Value::Record(Rc::new(series)))
-        }
-        "combine" => {
+        },
+        | "combine" => {
             let series = args.first().cloned().unwrap_or(Value::Unit);
             let mut fields = IndexMap::new();
             fields.insert("series".to_string(), series);
             Ok(Value::Record(Rc::new(RecordValue { fields })))
-        }
-        "plot" | "save" => {
+        },
+        | "plot" | "save" => {
             let spec = args.last().cloned().unwrap_or(Value::Unit);
             let html = render_plot(&spec);
             if name == "plot" {
@@ -1736,49 +1890,54 @@ pub fn call(
                     html,
                 })))
             }
-        }
+        },
 
         // ----- §8.2 constants ---------------------------------------------
         // `Interp::seed_constants` binds these in the global scope, which is
         // where a bare `pi` is found. These arms exist so that reaching the
         // builtin table — `map(pi, xs)`, or a call through `apply` — gives the
         // same value instead of "typed but not implemented".
-        "pi" | "e" | "oo" => {
+        | "pi" | "e" | "oo" => {
             if name == "e" {
                 let one_value = Value::Num(NumVal::int(BigInt::one()));
                 return crate::kernel::call("exp", &[one_value], Dim::one());
             }
             crate::kernel::call(name, &[], Dim::one())
-        }
-        "nan" => Ok(Value::Num(NumVal::float(f64::NAN, Dim::one()))),
-        "i" => Ok(Value::Num(NumVal {
-            kind: NumKind::Complex(0.0, 1.0),
-            dim: Dim::one(),
-            display: None,
-        })),
-        "lgamma" => {
+        },
+        | "nan" => Ok(Value::Num(NumVal::float(f64::NAN, Dim::one()))),
+        | "i" => {
+            Ok(Value::Num(NumVal {
+                kind: NumKind::Complex(0.0, 1.0),
+                dim: Dim::one(),
+                display: None,
+            }))
+        },
+        | "lgamma" => {
             let num = expect_num(&args, 0, name, span)?;
             let value = num.to_f64().unwrap_or(f64::NAN);
             Ok(Value::Num(NumVal::float(
                 aevia_std::special::ln_gamma(value),
                 num.dim,
             )))
-        }
+        },
 
         // ----- §8.1.5 containers that arrived with the chapter-8 sweep -----
-        "enumerate" => {
+        | "enumerate" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let mut elements = Vec::with_capacity(tensor.storage.len());
             for (index, element) in tensor.elements().into_iter().enumerate() {
                 elements.push(record_of(vec![
-                    ("index", Value::int(i64::try_from(index).unwrap_or(i64::MAX))),
+                    (
+                        "index",
+                        Value::int(i64::try_from(index).unwrap_or(i64::MAX)),
+                    ),
                     ("value", element),
                 ]));
             }
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
-        }
-        "zip" => {
+        },
+        | "zip" => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
             let mut elements = Vec::with_capacity(left.storage.len());
@@ -1787,19 +1946,27 @@ pub fn call(
             }
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
-        }
-        "fold_left" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 3, 0, span))?;
-            let mut accumulator = args.get(1).cloned().ok_or_else(|| arity(name, 3, 1, span))?;
+        },
+        | "fold_left" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
+            let mut accumulator = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 1, span))?;
             let tensor = expect_tensor(&args, 2, name, span)?;
             for element in tensor.elements() {
-                accumulator =
-                    interp.apply(function.clone(), vec![accumulator, element], span)?;
+                accumulator = interp.apply(function.clone(), vec![accumulator, element], span)?;
             }
             Ok(accumulator)
-        }
-        "sort_by" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "sort_by" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let mut elements = tensor.elements();
             // An insertion sort over `Value`s: the comparator is an Aevia
@@ -1815,18 +1982,21 @@ pub fn call(
                         span,
                     );
                     let ordering = match ordering {
-                        Ok(Value::Variant(variant)) => variant.index,
-                        Ok(other) => {
+                        | Ok(Value::Variant(variant)) => variant.index,
+                        | Ok(other) => {
                             failure = Some(EvalError::new(
                                 "E0302",
-                                format!("a comparator must return an `Ordering`, found {}", other.type_name()),
+                                format!(
+                                    "a comparator must return an `Ordering`, found {}",
+                                    other.type_name()
+                                ),
                             ));
                             break;
-                        }
-                        Err(error) => {
+                        },
+                        | Err(error) => {
                             failure = Some(error);
                             break;
-                        }
+                        },
                     };
                     if ordering != 2 {
                         break;
@@ -1843,8 +2013,8 @@ pub fn call(
             }
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
-        }
-        "sort_float" => {
+        },
+        | "sort_float" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let nan_last = args
                 .get(1)
@@ -1855,55 +2025,73 @@ pub fn call(
                 let x = a.as_f64().unwrap_or(f64::NAN);
                 let y = b.as_f64().unwrap_or(f64::NAN);
                 match (x.is_nan(), y.is_nan()) {
-                    (true, true) => std::cmp::Ordering::Equal,
-                    (true, false) => {
+                    | (true, true) => std::cmp::Ordering::Equal,
+                    | (true, false) => {
                         if nan_last {
                             std::cmp::Ordering::Greater
                         } else {
                             std::cmp::Ordering::Less
                         }
-                    }
-                    (false, true) => {
+                    },
+                    | (false, true) => {
                         if nan_last {
                             std::cmp::Ordering::Less
                         } else {
                             std::cmp::Ordering::Greater
                         }
-                    }
-                    (false, false) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                    },
+                    | (false, false) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
                 }
             });
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
-        }
+        },
 
         // ----- §8.1.1 combinators ----------------------------------------
-        "id" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
-        "const" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
-        "apply" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let argument = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        | "id" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
+        | "const" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
+        | "apply" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let argument = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             interp.apply(function, vec![argument], span)
-        }
-        "compose" => {
-            let outer = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let inner = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        },
+        | "compose" => {
+            let outer = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let inner = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             Ok(native(move |interp, call_args, span| {
                 let value = interp.apply(inner.clone(), call_args, span)?;
                 interp.apply(outer.clone(), vec![value], span)
             }))
-        }
-        "flip" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        },
+        | "flip" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(native(move |interp, mut call_args, span| {
                 if call_args.len() >= 2 {
                     call_args.swap(0, 1);
                 }
                 interp.apply(function.clone(), call_args, span)
             }))
-        }
-        "curry" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        },
+        | "curry" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(native(move |_interp, call_args, _span| {
                 let first = call_args.first().cloned().unwrap_or(Value::Unit);
                 let function = function.clone();
@@ -1913,9 +2101,12 @@ pub fn call(
                     interp.apply(function.clone(), all, span)
                 }))
             }))
-        }
-        "uncurry" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        },
+        | "uncurry" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(native(move |interp, call_args, span| {
                 let mut current = interp.apply(
                     function.clone(),
@@ -1927,60 +2118,85 @@ pub fn call(
                 }
                 Ok(current)
             }))
-        }
-        "partial" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let bound = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        },
+        | "partial" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let bound = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             Ok(native(move |interp, rest, span| {
                 let mut all = vec![bound.clone()];
                 all.extend(rest);
                 interp.apply(function.clone(), all, span)
             }))
-        }
+        },
 
         // ----- §8.1.2 booleans and comparisons ----------------------------
-        "not" => match args.first() {
-            Some(Value::Bool(flag)) => Ok(Value::Bool(!flag)),
-            other => Err(EvalError::new(
-                "E0302",
-                format!(
-                    "`not` expects a Bool, found {}",
-                    other.map_or("nothing", Value::type_name)
-                ),
-            )
-            .at(span)),
-        },
-        "xor" => match (args.first(), args.get(1)) {
-            (Some(Value::Bool(a)), Some(Value::Bool(b))) => Ok(Value::Bool(a != b)),
-            _ => Err(EvalError::new("E0302", "`xor` expects two Bools").at(span)),
-        },
-        "compare" => {
-            let left = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let right = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
-            match compare_values(&left, &right) {
-                Some(ordering) => Ok(some(ordering_value(ordering))),
-                None => Ok(none()),
+        | "not" => {
+            match args.first() {
+                | Some(Value::Bool(flag)) => Ok(Value::Bool(!flag)),
+                | other => {
+                    Err(EvalError::new(
+                        "E0302",
+                        format!(
+                            "`not` expects a Bool, found {}",
+                            other.map_or("nothing", Value::type_name)
+                        ),
+                    )
+                    .at(span))
+                },
             }
-        }
-        "partial_compare" => {
+        },
+        | "xor" => {
+            match (args.first(), args.get(1)) {
+                | (Some(Value::Bool(a)), Some(Value::Bool(b))) => Ok(Value::Bool(a != b)),
+                | _ => Err(EvalError::new("E0302", "`xor` expects two Bools").at(span)),
+            }
+        },
+        | "compare" => {
+            let left = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let right = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
+            match compare_values(&left, &right) {
+                | Some(ordering) => Ok(some(ordering_value(ordering))),
+                | None => Ok(none()),
+            }
+        },
+        | "partial_compare" => {
             let left = expect_float(&args, 0, name, span)?;
             let right = expect_float(&args, 1, name, span)?;
             if left.is_nan() || right.is_nan() {
                 Ok(none())
             } else {
                 Ok(some(ordering_value(
-                    left.partial_cmp(&right).unwrap_or(std::cmp::Ordering::Equal),
+                    left.partial_cmp(&right)
+                        .unwrap_or(std::cmp::Ordering::Equal),
                 )))
             }
-        }
-        "total_compare" => {
-            let left = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let right = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        },
+        | "total_compare" => {
+            let left = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let right = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             Ok(ordering_value(total_order(&left, &right)))
-        }
+        },
         // §3.8.4: `hash` is the `Hash` class method. The checker proves a
         // prelude instance, so the runtime applies the structural hash.
-        "hash" => {
+        | "hash" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             hash_value(value).map_or_else(
                 || {
@@ -1992,51 +2208,62 @@ pub fn call(
                 },
                 |hash| Ok(Value::int(i64::from_ne_bytes(hash.to_ne_bytes()))),
             )
-        }
-        "sym_eq" | "sym_ne" | "sym_lt" => {
-            let left = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
-            let right = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+        },
+        | "sym_eq" | "sym_ne" | "sym_lt" => {
+            let left = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let right = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             let op = match name {
-                "sym_eq" => BinOp::Eq,
-                "sym_ne" => BinOp::Ne,
-                _ => BinOp::Lt,
+                | "sym_eq" => BinOp::Eq,
+                | "sym_ne" => BinOp::Ne,
+                | _ => BinOp::Lt,
             };
             Ok(proposition(op, left, right))
-        }
+        },
 
         // ----- §8.1.3 `zero` ----------------------------------------------
         // `zero` is the identity of `fold((+), zero, xs)`. The dimension comes
         // from the static type, so the runtime value is dimensionless; adding
         // it to a dimensioned value needs the representation to be passed at
         // run time (see the report).
-        "zero" => Ok(Value::Num(NumVal::exact(
-            BigRational::zero(),
-            Dim::one(),
-        ))),
+        | "zero" => Ok(Value::Num(NumVal::exact(BigRational::zero(), Dim::one()))),
 
         // ----- §8.2.2 special functions -----------------------------------
-        "beta" => {
+        | "beta" => {
             let a = expect_float(&args, 0, name, span)?;
             let b = expect_float(&args, 1, name, span)?;
             Ok(Value::float(aevia_std::special::beta(a, b)))
-        }
-        "zeta" => {
+        },
+        | "zeta" => {
             let x = expect_float(&args, 0, name, span)?;
             Ok(Value::float(aevia_std::special::zeta(x)))
-        }
-        "bessel_j0" => Ok(Value::float(aevia_std::special::bessel_j0(
-            expect_float(&args, 0, name, span)?,
-        ))),
-        "bessel_j1" | "j1" => Ok(Value::float(aevia_std::special::bessel_j1(
-            expect_float(&args, 0, name, span)?,
-        ))),
-        "bessel_y0" => Ok(Value::float(aevia_std::special::bessel_y0(
-            expect_float(&args, 0, name, span)?,
-        ))),
-        "bessel_y1" | "y1" => Ok(Value::float(aevia_std::special::bessel_y1(
-            expect_float(&args, 0, name, span)?,
-        ))),
-        "bessel_jn" | "bessel_yn" => {
+        },
+        | "bessel_j0" => {
+            Ok(Value::float(aevia_std::special::bessel_j0(expect_float(
+                &args, 0, name, span,
+            )?)))
+        },
+        | "bessel_j1" | "j1" => {
+            Ok(Value::float(aevia_std::special::bessel_j1(expect_float(
+                &args, 0, name, span,
+            )?)))
+        },
+        | "bessel_y0" => {
+            Ok(Value::float(aevia_std::special::bessel_y0(expect_float(
+                &args, 0, name, span,
+            )?)))
+        },
+        | "bessel_y1" | "y1" => {
+            Ok(Value::float(aevia_std::special::bessel_y1(expect_float(
+                &args, 0, name, span,
+            )?)))
+        },
+        | "bessel_jn" | "bessel_yn" => {
             let order = expect_int(&args, 0, name, span)?;
             let x = expect_float(&args, 1, name, span)?;
             let order = i32::try_from(order).unwrap_or(0);
@@ -2045,13 +2272,13 @@ pub fn call(
             } else {
                 aevia_std::special::bessel_yn(order, x)
             }))
-        }
-        "legendre_p" | "hermite_h" | "laguerre_l" | "chebyshev_t" | "chebyshev_u" => {
+        },
+        | "legendre_p" | "hermite_h" | "laguerre_l" | "chebyshev_t" | "chebyshev_u" => {
             classical_polynomial(&args, name, span)
-        }
+        },
 
         // ----- §8.15 complex ----------------------------------------------
-        "complex" => {
+        | "complex" => {
             let re = expect_float(&args, 0, name, span)?;
             let im = expect_float(&args, 1, name, span)?;
             Ok(Value::Num(NumVal {
@@ -2059,49 +2286,46 @@ pub fn call(
                 dim: Dim::one(),
                 display: None,
             }))
-        }
-        "re" | "im" | "conj" | "magnitude" | "arg" => {
+        },
+        | "re" | "im" | "conj" | "magnitude" | "arg" => {
             let num = expect_num(&args, 0, name, span)?;
             let NumKind::Complex(re, im) = num.kind else {
-                return Err(EvalError::new(
-                    "E0302",
-                    format!("`{name}` expects a complex number"),
-                )
-                .at(span));
+                return Err(
+                    EvalError::new("E0302", format!("`{name}` expects a complex number")).at(span),
+                );
             };
             Ok(match name {
-                "re" => Value::Num(NumVal::float(re, num.dim.clone())),
-                "im" => Value::Num(NumVal::float(im, num.dim.clone())),
-                "conj" => Value::Num(NumVal {
-                    kind: NumKind::Complex(re, -im),
-                    dim: num.dim.clone(),
-                    display: None,
-                }),
-                "magnitude" => {
-                    Value::Num(NumVal::float(re.hypot(im), num.dim.clone()))
-                }
-                _ => Value::Num(NumVal::float(im.atan2(re), Dim::one())),
+                | "re" => Value::Num(NumVal::float(re, num.dim.clone())),
+                | "im" => Value::Num(NumVal::float(im, num.dim.clone())),
+                | "conj" => {
+                    Value::Num(NumVal {
+                        kind: NumKind::Complex(re, -im),
+                        dim: num.dim.clone(),
+                        display: None,
+                    })
+                },
+                | "magnitude" => Value::Num(NumVal::float(re.hypot(im), num.dim.clone())),
+                | _ => Value::Num(NumVal::float(im.atan2(re), Dim::one())),
             })
-        }
-        "complex_sqrt" | "complex_exp" | "complex_ln" | "complex_sin" | "complex_cos" => {
+        },
+        | "complex_sqrt" | "complex_exp" | "complex_ln" | "complex_sin" | "complex_cos" => {
             let num = expect_num(&args, 0, name, span)?;
             let NumKind::Complex(re, im) = num.kind else {
-                return Err(EvalError::new(
-                    "E0302",
-                    format!("`{name}` expects a complex number"),
-                )
-                .at(span));
+                return Err(
+                    EvalError::new("E0302", format!("`{name}` expects a complex number")).at(span),
+                );
             };
             let value = aevia_std::Complex::new(re, im);
             let result = match name {
-                "complex_sqrt" => value.sqrt(),
-                "complex_exp" => value.exp(),
-                "complex_ln" => value.ln(),
-                "complex_sin" => aevia_std::complex::sin(value),
-                _ => aevia_std::complex::cos(value),
+                | "complex_sqrt" => value.sqrt(),
+                | "complex_exp" => value.exp(),
+                | "complex_ln" => value.ln(),
+                | "complex_sin" => aevia_std::complex::sin(value),
+                | _ => aevia_std::complex::cos(value),
             };
             let dim = if name == "complex_sqrt" {
-                num.dim.pow(&BigRational::new(BigInt::one(), BigInt::from(2)))
+                num.dim
+                    .pow(&BigRational::new(BigInt::one(), BigInt::from(2)))
             } else {
                 num.dim.clone()
             };
@@ -2110,10 +2334,10 @@ pub fn call(
                 dim,
                 display: None,
             }))
-        }
+        },
 
         // ----- §8.16 number theory, combinatorics, geometry ---------------
-        "factor" => {
+        | "factor" => {
             let n = expect_int(&args, 0, name, span)?;
             let factors = aevia_std::number::factor(n);
             let elements: Vec<Value> = factors
@@ -2124,11 +2348,13 @@ pub fn call(
                 .collect();
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
-        }
-        "is_prime" => Ok(Value::Bool(aevia_std::number::is_prime(
-            u64::try_from(expect_int(&args, 0, name, span)?).unwrap_or(0),
-        ))),
-        "primes" => {
+        },
+        | "is_prime" => {
+            Ok(Value::Bool(aevia_std::number::is_prime(
+                u64::try_from(expect_int(&args, 0, name, span)?).unwrap_or(0),
+            )))
+        },
+        | "primes" => {
             let limit = expect_int(&args, 0, name, span)?;
             let values = aevia_std::number::primes(limit);
             let len = values.len();
@@ -2143,19 +2369,17 @@ pub fn call(
                 dim: Dim::one(),
                 display: None,
             })))
-        }
-        "binomial" => {
+        },
+        | "binomial" => {
             let n = expect_int(&args, 0, name, span)?;
             let k = expect_int(&args, 1, name, span)?;
             Ok(Value::Num(NumVal::int(aevia_std::number::binomial(n, k))))
-        }
-        "permutations" => {
+        },
+        | "permutations" => {
             let n = expect_int(&args, 0, name, span)?;
-            Ok(Value::Num(NumVal::int(aevia_std::number::permutations(
-                n,
-            ))))
-        }
-        "polygon_area" => {
+            Ok(Value::Num(NumVal::int(aevia_std::number::permutations(n))))
+        },
+        | "polygon_area" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let points = tensor_values(&tensor)?;
             let area = aevia_std::geom::polygon_area(&points);
@@ -2163,17 +2387,18 @@ pub fn call(
                 area,
                 tensor.dim.pow(&BigRational::from_integer(BigInt::from(2))),
             )))
-        }
-        "distance" => {
+        },
+        | "distance" => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
-            let distance = aevia_std::geom::distance(&tensor_values(&left)?, &tensor_values(&right)?)
-                .map_err(|error| numeric_error(name, error, span))?;
+            let distance =
+                aevia_std::geom::distance(&tensor_values(&left)?, &tensor_values(&right)?)
+                    .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(distance, left.dim.clone())))
-        }
+        },
 
         // ----- §8.14 measurement ------------------------------------------
-        "measure" => {
+        | "measure" => {
             let value = expect_num(&args, 0, name, span)?;
             let uncertainty = expect_num(&args, 1, name, span)?;
             if value.dim != uncertainty.dim {
@@ -2187,33 +2412,27 @@ pub fn call(
                 ("value", Value::Num(value)),
                 ("uncertainty", Value::Num(uncertainty)),
             ]))
-        }
-        "value" | "uncertainty" => {
+        },
+        | "value" | "uncertainty" => {
             let Some(Value::Record(measurement)) = args.first() else {
-                return Err(EvalError::new(
-                    "E0302",
-                    format!("`{name}` expects a measurement"),
-                )
-                .at(span));
+                return Err(
+                    EvalError::new("E0302", format!("`{name}` expects a measurement")).at(span),
+                );
             };
-            measurement
-                .fields
-                .get(name)
-                .cloned()
-                .ok_or_else(|| {
-                    EvalError::new("E0306", format!("a measurement has no field `{name}`")).at(span)
-                })
-        }
+            measurement.fields.get(name).cloned().ok_or_else(|| {
+                EvalError::new("E0306", format!("a measurement has no field `{name}`")).at(span)
+            })
+        },
 
         // ----- §8.13 testing ----------------------------------------------
-        "compile_fail" => {
+        | "compile_fail" => {
             let source = expect_str(&args, 0, name, span)?;
             let compilation = crate::compile("compile_fail.aev", &source);
             Ok(Value::Bool(compilation.diagnostics.has_errors()))
-        }
+        },
 
         // ----- §8.4 decompositions and shape operations -------------------
-        "lstsq" => {
+        | "lstsq" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let vector = expect_tensor(&args, 1, name, span)?;
@@ -2233,8 +2452,8 @@ pub fn call(
                 aevia_std::linalg::lstsq(rows, cols, &entries, &rhs)
                     .map(|solution| float_tensor(vec![cols], solution, dim)),
             ))
-        }
-        "eig" => {
+        },
+        | "eig" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, _, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -2244,16 +2463,16 @@ pub fn call(
                 complex_tensor(vec![values.len()], &values, dim),
                 complex_tensor(vec![rows, rows], &vectors, Dim::one()),
             ]))
-        }
-        "eigvals" => {
+        },
+        | "eigvals" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, _, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
             let values = aevia_std::linalg::eigvals(rows, rows, &entries)
                 .map_err(|error| numeric_error(name, error, span))?;
             Ok(complex_tensor(vec![values.len()], &values, dim))
-        }
-        "svd" => {
+        },
+        | "svd" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -2265,8 +2484,8 @@ pub fn call(
                 float_tensor(vec![k], s, dim),
                 float_tensor(vec![k, cols], vt, Dim::one()),
             ]))
-        }
-        "qr" => {
+        },
+        | "qr" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -2289,8 +2508,8 @@ pub fn call(
                 float_tensor(vec![rows, rows], q, Dim::one()),
                 float_tensor(vec![rows, cols], r, dim),
             ]))
-        }
-        "lu" => {
+        },
+        | "lu" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -2312,24 +2531,24 @@ pub fn call(
                 float_tensor(vec![rows, rows], l, Dim::one()),
                 float_tensor(vec![rows, cols], u, dim),
             ]))
-        }
-        "cholesky" => {
+        },
+        | "cholesky" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, _, entries) = tensor_matrix(&matrix, name, span)?;
-            let dim = matrix.dim.pow(&BigRational::new(BigInt::one(), BigInt::from(2)));
+            let dim = matrix
+                .dim
+                .pow(&BigRational::new(BigInt::one(), BigInt::from(2)));
             Ok(lin_result(
                 aevia_std::linalg::cholesky(rows, rows, &entries)
                     .map(|l| float_tensor(vec![rows, rows], l, dim)),
             ))
-        }
-        "tril" | "triu" => {
+        },
+        | "tril" | "triu" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() != 2 {
-                return Err(EvalError::new(
-                    "E0802",
-                    format!("`{name}` expects a rank-2 tensor"),
-                )
-                .at(span));
+                return Err(
+                    EvalError::new("E0802", format!("`{name}` expects a rank-2 tensor")).at(span),
+                );
             }
             let (rows, cols) = (tensor.shape[0], tensor.shape[1]);
             let mut elements = Vec::with_capacity(tensor.storage.len());
@@ -2350,18 +2569,18 @@ pub fn call(
                 }
             }
             Ok(build_tensor(elements, vec![rows, cols], tensor.dim.clone()))
-        }
+        },
         // `reshape`/`zeros_of`/`ones_of` read their shape from the type
         // argument (`call_typed`). Reaching this arm means the call was
         // written without one, and the runtime has no shape to build.
-        "reshape" | "zeros_of" | "ones_of" => Err(EvalError::new(
-            "E0310",
-            format!(
-                "`{name}` needs its shape type argument, as in `{name}<[3, 2]>(…)`"
-            ),
-        )
-        .at(span)),
-        "reshape_dyn" => {
+        | "reshape" | "zeros_of" | "ones_of" => {
+            Err(EvalError::new(
+                "E0310",
+                format!("`{name}` needs its shape type argument, as in `{name}<[3, 2]>(…)`"),
+            )
+            .at(span))
+        },
+        | "reshape_dyn" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let shape_tensor = expect_tensor(&args, 1, name, span)?;
             let mut shape = Vec::new();
@@ -2392,11 +2611,14 @@ pub fn call(
                 dim: tensor.dim.clone(),
                 display: tensor.display.clone(),
             })))
-        }
-        "set" => {
+        },
+        | "set" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let indices = expect_tensor(&args, 1, name, span)?;
-            let value = args.get(2).cloned().ok_or_else(|| arity(name, 3, 2, span))?;
+            let value = args
+                .get(2)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 2, span))?;
             let mut coordinates = Vec::new();
             for element in indices.elements() {
                 coordinates.push(element.as_f64().unwrap_or(0.0) as isize);
@@ -2416,10 +2638,17 @@ pub fn call(
             let flat = flat_index(&tensor.shape, &coordinates)
                 .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
             elements[flat] = value;
-            Ok(build_tensor(elements, tensor.shape.clone(), tensor.dim.clone()))
-        }
-        "map_indexed" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+            Ok(build_tensor(
+                elements,
+                tensor.shape.clone(),
+                tensor.dim.clone(),
+            ))
+        },
+        | "map_indexed" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let mut elements = Vec::with_capacity(tensor.storage.len());
             for (index, element) in tensor.elements().into_iter().enumerate() {
@@ -2430,28 +2659,31 @@ pub fn call(
                 .first()
                 .map_or_else(Dim::one, crate::value::value_dim);
             Ok(build_tensor(elements, tensor.shape.clone(), dim))
-        }
-        "approx_map" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "approx_map" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let mut values = Vec::with_capacity(tensor.storage.len());
             for element in tensor.elements() {
                 let mapped = interp.apply(function.clone(), vec![element], span)?;
                 match mapped.as_f64() {
-                    Some(value) => values.push(value),
-                    None => {
+                    | Some(value) => values.push(value),
+                    | None => {
                         return Err(EvalError::new(
                             "E0806",
                             "`approx_map` needs a numeric result for every element",
                         )
-                        .at(span))
-                    }
+                        .at(span));
+                    },
                 }
             }
             let dim = tensor.dim.clone();
             Ok(float_tensor(vec![values.len()], values, dim))
-        }
-        "det_unit" => {
+        },
+        | "det_unit" => {
             // §4.9.5: `det_unit(A, u)` answers with a `Dyn`, because the
             // determinant of an `n × n` matrix over `d` has dimension `d^n`
             // and `n` is only known at run time.
@@ -2467,7 +2699,7 @@ pub fn call(
                 dim,
                 display: None,
             })))
-        }
+        },
 
         // ----- §3.11 / §4.9 dynamic dimension -----------------------------
         // `dyn` is a type-directed primitive: the checker materialises the
@@ -2475,18 +2707,18 @@ pub fn call(
         // value's own dimension is the one that travels — which is what makes
         // `dim_of` and `value_of` total, and `check` exact for a value that
         // has never left the program.
-        "dyn" => {
+        | "dyn" => {
             let num = expect_num(&args, 0, name, span)?;
             Ok(Value::Dyn(Rc::new(DynValue::new(&num))))
-        }
-        "dyn_with" => {
+        },
+        | "dyn_with" => {
             let num = expect_num(&args, 0, name, span)?;
             let dim = expect_dim_value(&args, 1, name, span)?;
             let mut dynamic = DynValue::new(&num);
             dynamic.dim = dim;
             Ok(Value::Dyn(Rc::new(dynamic)))
-        }
-        "check" => {
+        },
+        | "check" => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             // §4.9.4: `check<d>(x)` is type-directed — the concrete `d` never
             // reaches the runtime in the argument list, so the checker records
@@ -2499,8 +2731,8 @@ pub fn call(
                 }
             }
             Ok(ok(Value::Num(dynamic.as_scalar())))
-        }
-        "check_with" => {
+        },
+        | "check_with" => {
             let dim = expect_dim_value(&args, 0, name, span)?;
             let dynamic = expect_dyn(&args, 1, name, span)?;
             if dynamic.dim == dim {
@@ -2508,16 +2740,16 @@ pub fn call(
             } else {
                 Ok(err(dim_error(&dim, &dynamic.dim)))
             }
-        }
-        "dim_of" => {
+        },
+        | "dim_of" => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             Ok(dim_value(&dynamic.dim))
-        }
-        "value_of" => {
+        },
+        | "value_of" => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             Ok(Value::Num(dynamic.payload()))
-        }
-        "pow_dyn" => {
+        },
+        | "pow_dyn" => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             let exponent = expect_int(&args, 1, name, span)?;
             let payload = interp.apply_binary(
@@ -2534,11 +2766,13 @@ pub fn call(
             value.display = None;
             Ok(Value::Dyn(Rc::new(DynValue {
                 value,
-                dim: dynamic.dim.pow(&BigRational::from_integer(BigInt::from(exponent))),
+                dim: dynamic
+                    .dim
+                    .pow(&BigRational::from_integer(BigInt::from(exponent))),
                 display: None,
             })))
-        }
-        "from_dense" => {
+        },
+        | "from_dense" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&tensor, name, span)?;
             let mut values = Vec::new();
@@ -2561,7 +2795,10 @@ pub fn call(
                 ("format", Value::string("Csr")),
                 ("rows", Value::int(i64::try_from(rows).unwrap_or(0))),
                 ("cols", Value::int(i64::try_from(cols).unwrap_or(0))),
-                ("values", float_tensor(vec![values.len()], values, tensor.dim.clone())),
+                (
+                    "values",
+                    float_tensor(vec![values.len()], values, tensor.dim.clone()),
+                ),
                 (
                     "col_indices",
                     build_tensor(columns, vec![column_count], Dim::one()),
@@ -2571,8 +2808,8 @@ pub fn call(
                     build_tensor(row_pointer, vec![pointer_count], Dim::one()),
                 ),
             ]))
-        }
-        "to_dense" => {
+        },
+        | "to_dense" => {
             let Value::Record(sparse) = args.first().cloned().unwrap_or(Value::Unit) else {
                 return Err(EvalError::new("E0302", "`to_dense` expects a sparse matrix").at(span));
             };
@@ -2589,27 +2826,39 @@ pub fn call(
             let values = sparse
                 .fields
                 .get("values")
-                .and_then(|value| match value {
-                    Value::Tensor(tensor) => Some(tensor.clone()),
-                    _ => None,
+                .and_then(|value| {
+                    match value {
+                        | Value::Tensor(tensor) => Some(tensor.clone()),
+                        | _ => None,
+                    }
                 })
-                .ok_or_else(|| EvalError::new("E0306", "the sparse matrix has no `values`").at(span))?;
+                .ok_or_else(|| {
+                    EvalError::new("E0306", "the sparse matrix has no `values`").at(span)
+                })?;
             let indices = sparse
                 .fields
                 .get("col_indices")
-                .and_then(|value| match value {
-                    Value::Tensor(tensor) => Some(tensor.clone()),
-                    _ => None,
+                .and_then(|value| {
+                    match value {
+                        | Value::Tensor(tensor) => Some(tensor.clone()),
+                        | _ => None,
+                    }
                 })
-                .ok_or_else(|| EvalError::new("E0306", "the sparse matrix has no `col_indices`").at(span))?;
+                .ok_or_else(|| {
+                    EvalError::new("E0306", "the sparse matrix has no `col_indices`").at(span)
+                })?;
             let row_ptr = sparse
                 .fields
                 .get("row_ptr")
-                .and_then(|value| match value {
-                    Value::Tensor(tensor) => Some(tensor.clone()),
-                    _ => None,
+                .and_then(|value| {
+                    match value {
+                        | Value::Tensor(tensor) => Some(tensor.clone()),
+                        | _ => None,
+                    }
                 })
-                .ok_or_else(|| EvalError::new("E0306", "the sparse matrix has no `row_ptr`").at(span))?;
+                .ok_or_else(|| {
+                    EvalError::new("E0306", "the sparse matrix has no `row_ptr`").at(span)
+                })?;
             let numbers = tensor_values(&values)?;
             let pointers: Vec<usize> = row_ptr
                 .elements()
@@ -2632,24 +2881,26 @@ pub fn call(
                 }
             }
             Ok(float_tensor(vec![rows, cols], dense, values.dim.clone()))
-        }
-        "nnz" => {
+        },
+        | "nnz" => {
             let Some(Value::Record(sparse)) = args.first() else {
                 return Err(EvalError::new("E0302", "`nnz` expects a sparse matrix").at(span));
             };
             let count = sparse
                 .fields
                 .get("values")
-                .and_then(|value| match value {
-                    Value::Tensor(tensor) => Some(tensor.storage.len()),
-                    _ => None,
+                .and_then(|value| {
+                    match value {
+                        | Value::Tensor(tensor) => Some(tensor.storage.len()),
+                        | _ => None,
+                    }
                 })
                 .unwrap_or(0);
             Ok(Value::int(i64::try_from(count).unwrap_or(i64::MAX)))
-        }
+        },
 
         // ----- §8.7 statistics --------------------------------------------
-        "median" | "mode" => {
+        | "median" | "mode" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if let Some(mut exact) = exact_values(&tensor) {
                 let value = if name == "median" {
@@ -2668,8 +2919,8 @@ pub fn call(
             }
             .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, tensor.dim.clone())))
-        }
-        "quantile" => {
+        },
+        | "quantile" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let fraction = expect_num(&args, 1, name, span)?;
             if let (Some(mut exact), Some(q)) = (exact_values(&tensor), fraction.to_rational()) {
@@ -2678,14 +2929,14 @@ pub fn call(
                 exact.sort();
                 return Ok(exact_number(value, tensor.dim.clone()));
             }
-            let q = fraction
-                .to_f64()
-                .ok_or_else(|| EvalError::new("E0806", "`quantile` needs a concrete fraction").at(span))?;
+            let q = fraction.to_f64().ok_or_else(|| {
+                EvalError::new("E0806", "`quantile` needs a concrete fraction").at(span)
+            })?;
             let value = aevia_std::stats::quantile(&tensor_values(&tensor)?, q)
                 .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, tensor.dim.clone())))
-        }
-        "cov" => {
+        },
+        | "cov" => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
             let dim = left.dim.mul(&right.dim);
@@ -2694,18 +2945,20 @@ pub fn call(
                     .map_err(|error| numeric_error(name, error, span))?;
                 return Ok(exact_number(value, dim));
             }
-            let value = aevia_std::stats::cov(&tensor_values(&left)?, &tensor_values(&right)?, false)
-                .map_err(|error| numeric_error(name, error, span))?;
+            let value =
+                aevia_std::stats::cov(&tensor_values(&left)?, &tensor_values(&right)?, false)
+                    .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, dim)))
-        }
-        "corr" => {
+        },
+        | "corr" => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
-            let value = aevia_std::stats::corr(&tensor_values(&left)?, &tensor_values(&right)?, false)
-                .map_err(|error| numeric_error(name, error, span))?;
+            let value =
+                aevia_std::stats::corr(&tensor_values(&left)?, &tensor_values(&right)?, false)
+                    .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, Dim::one())))
-        }
-        "skewness" | "kurtosis" => {
+        },
+        | "skewness" | "kurtosis" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let values = tensor_values(&tensor)?;
             let value = if name == "skewness" {
@@ -2715,8 +2968,8 @@ pub fn call(
             }
             .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, Dim::one())))
-        }
-        "histogram" => {
+        },
+        | "histogram" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let bins = expect_int(&args, 1, name, span)?.max(1) as usize;
             let (counts, edges) = aevia_std::stats::histogram(&tensor_values(&tensor)?, bins)
@@ -2728,11 +2981,14 @@ pub fn call(
                 ("counts", build_tensor(counts, vec![len], Dim::one())),
                 ("edges", float_tensor(vec![edges.len()], edges, dim)),
             ]))
-        }
+        },
 
         // ----- §8.5 numeric calculus --------------------------------------
-        "numeric_deriv" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        | "numeric_deriv" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(native(move |interp, call_args, span| {
                 let point = call_args
                     .first()
@@ -2756,9 +3012,12 @@ pub fn call(
                 let dim = crate::value::value_dim(&codomain).div(&argument_dim);
                 Ok(Value::Num(NumVal::float(slope, dim)))
             }))
-        }
-        "quadrature" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 3, 0, span))?;
+        },
+        | "quadrature" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
             let lower = expect_num(&args, 1, name, span)?;
             let upper = expect_num(&args, 2, name, span)?;
             let (a, b) = (
@@ -2770,33 +3029,35 @@ pub fn call(
             if let Some(error) = failure.take() {
                 return Err(error);
             }
-            let mut f = |value: f64| {
-                apply_scalar(interp, &function, value, &lower.dim, span, &mut failure)
-            };
+            let mut f =
+                |value: f64| apply_scalar(interp, &function, value, &lower.dim, span, &mut failure);
             let outcome = aevia_std::calc::quadrature(&mut f, a, b);
             if let Some(error) = failure {
                 return Err(error);
             }
             let dim = crate::value::value_dim(&codomain).mul(&lower.dim);
             Ok(match outcome {
-                Ok(value) => ok(Value::Num(NumVal::float(value, dim))),
-                Err(error) => err(Value::string(error.to_string())),
+                | Ok(value) => ok(Value::Num(NumVal::float(value, dim))),
+                | Err(error) => err(Value::string(error.to_string())),
             })
-        }
-        "product" | "product_dyn" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 3, 0, span))?;
+        },
+        | "product" | "product_dyn" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
             let lower = expect_num(&args, 1, name, span)?;
             let upper = expect_num(&args, 2, name, span)?;
             let (a, b) = match (lower.to_rational(), upper.to_rational()) {
-                (Some(a), Some(b)) => (a, b),
-                _ => {
+                | (Some(a), Some(b)) => (a, b),
+                | _ => {
                     return Err(EvalError::new(
                         "E1001",
                         "`product` needs numeric bounds; a symbolic one needs the \
                          `core.symbolic` capability",
                     )
-                    .at(span))
-                }
+                    .at(span));
+                },
             };
             let mut index = a;
             let mut total = Value::Num(NumVal::int(BigInt::one()));
@@ -2814,9 +3075,12 @@ pub fn call(
                 index += BigRational::one();
             }
             Ok(total)
-        }
-        "sum_f" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 3, 0, span))?;
+        },
+        | "sum_f" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
             let lower = expect_num(&args, 1, name, span)?;
             let upper = expect_num(&args, 2, name, span)?;
             let (a, b) = (
@@ -2847,9 +3111,12 @@ pub fn call(
                 total,
                 crate::value::value_dim(&codomain),
             )))
-        }
-        "grad" | "grad_f" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "grad" | "grad_f" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let point = expect_tensor(&args, 1, name, span)?;
             let x = tensor_values(&point)?;
             let mut failure = None;
@@ -2857,18 +3124,20 @@ pub fn call(
             if let Some(error) = failure.take() {
                 return Err(error);
             }
-            let mut f = |state: &[f64]| {
-                apply_tensor(interp, &function, state, &point, span, &mut failure)
-            };
+            let mut f =
+                |state: &[f64]| apply_tensor(interp, &function, state, &point, span, &mut failure);
             let gradient = aevia_std::calc::grad(&mut f, &x);
             if let Some(error) = failure {
                 return Err(error);
             }
             let dim = crate::value::value_dim(&codomain).div(&point.dim);
             Ok(float_tensor(vec![gradient.len()], gradient, dim))
-        }
-        "jacobian" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "jacobian" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let point = expect_tensor(&args, 1, name, span)?;
             let x = tensor_values(&point)?;
             let mut failure = None;
@@ -2884,9 +3153,12 @@ pub fn call(
                 entries,
                 Dim::one().div(&point.dim),
             ))
-        }
-        "hessian" | "laplacian" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "hessian" | "laplacian" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let point = expect_tensor(&args, 1, name, span)?;
             let x = tensor_values(&point)?;
             let mut failure = None;
@@ -2894,9 +3166,8 @@ pub fn call(
             if let Some(error) = failure.take() {
                 return Err(error);
             }
-            let mut f = |state: &[f64]| {
-                apply_tensor(interp, &function, state, &point, span, &mut failure)
-            };
+            let mut f =
+                |state: &[f64]| apply_tensor(interp, &function, state, &point, span, &mut failure);
             let squared = point.dim.pow(&BigRational::from_integer(BigInt::from(2)));
             let dim = crate::value::value_dim(&codomain).div(&squared);
             if name == "laplacian" {
@@ -2912,9 +3183,12 @@ pub fn call(
             }
             let n = x.len();
             Ok(float_tensor(vec![n, n], entries, dim))
-        }
-        "divergence" | "curl" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "divergence" | "curl" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let point = expect_tensor(&args, 1, name, span)?;
             let x = tensor_values(&point)?;
             let mut failure = None;
@@ -2935,36 +3209,41 @@ pub fn call(
                 return Err(error);
             }
             Ok(float_tensor(vec![value.len()], value, dim))
-        }
+        },
 
         // ----- §8.6 solving and optimisation ------------------------------
-        "solve_complex" => {
+        | "solve_complex" => {
             let (variable, applied) = apply_to_fresh(interp, name, &args, span, Dim::one())?;
             let symbol = symbolic_variable(&variable, Dim::one());
             match solve("solve_complex", &applied, &symbol) {
-                Ok(solutions) => Ok(ok(solutions_value(&solutions, Dim::one()))),
-                Err(error) => Ok(err(Value::string(error.message))),
+                | Ok(solutions) => Ok(ok(solutions_value(&solutions, Dim::one()))),
+                | Err(error) => Ok(err(Value::string(error.message))),
             }
-        }
-        "nsolve_f" | "root" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "nsolve_f" | "root" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let start = expect_num(&args, 1, name, span)?;
             let x = start.to_f64().unwrap_or(f64::NAN);
             let mut failure = None;
-            let mut f = |value: f64| {
-                apply_scalar(interp, &function, value, &start.dim, span, &mut failure)
-            };
+            let mut f =
+                |value: f64| apply_scalar(interp, &function, value, &start.dim, span, &mut failure);
             let outcome = aevia_std::calc::root(&mut f, x);
             if let Some(error) = failure {
                 return Err(error);
             }
             Ok(match outcome {
-                Ok(value) => ok(Value::Num(NumVal::float(value, start.dim.clone()))),
-                Err(error) => err(Value::string(error.to_string())),
+                | Ok(value) => ok(Value::Num(NumVal::float(value, start.dim.clone()))),
+                | Err(error) => err(Value::string(error.to_string())),
             })
-        }
-        "solve_system" | "least_squares" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "solve_system" | "least_squares" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let point = expect_tensor(&args, 1, name, span)?;
             let x = tensor_values(&point)?;
             let mut failure = None;
@@ -2980,22 +3259,26 @@ pub fn call(
                 return Err(error);
             }
             Ok(match outcome {
-                Ok(solution) => ok(float_tensor(
-                    vec![solution.len()],
-                    solution,
-                    point.dim.clone(),
-                )),
-                Err(error) => err(Value::string(error.to_string())),
+                | Ok(solution) => {
+                    ok(float_tensor(
+                        vec![solution.len()],
+                        solution,
+                        point.dim.clone(),
+                    ))
+                },
+                | Err(error) => err(Value::string(error.to_string())),
             })
-        }
-        "minimize" | "maximize" | "minimize_f" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 2, 0, span))?;
+        },
+        | "minimize" | "maximize" | "minimize_f" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let point = expect_tensor(&args, 1, name, span)?;
             let x = tensor_values(&point)?;
             let mut failure = None;
-            let mut f = |state: &[f64]| {
-                apply_tensor(interp, &function, state, &point, span, &mut failure)
-            };
+            let mut f =
+                |state: &[f64]| apply_tensor(interp, &function, state, &point, span, &mut failure);
             let outcome = if name == "maximize" {
                 aevia_std::calc::maximize(&mut f, &x)
             } else {
@@ -3005,18 +3288,19 @@ pub fn call(
                 return Err(error);
             }
             Ok(match outcome {
-                Ok(solution) => ok(float_tensor(
-                    vec![solution.len()],
-                    solution,
-                    point.dim.clone(),
-                )),
-                Err(error) => err(Value::string(error.to_string())),
+                | Ok(solution) => {
+                    ok(float_tensor(
+                        vec![solution.len()],
+                        solution,
+                        point.dim.clone(),
+                    ))
+                },
+                | Err(error) => err(Value::string(error.to_string())),
             })
-        }
-
+        },
 
         // ----- §8.7.1 distributions ---------------------------------------
-        "pdf" | "cdf" => {
+        | "pdf" | "cdf" => {
             let distribution = distribution_from(&args, name, span)?;
             let point = expect_num(&args, 1, name, span)?;
             let x = point.to_f64().ok_or_else(|| {
@@ -3040,17 +3324,16 @@ pub fn call(
                 Dim::one()
             };
             Ok(Value::Num(NumVal::float(value, dim)))
-        }
-        "sample" => {
+        },
+        | "sample" => {
             let distribution = distribution_from(&args, name, span)?;
             let dim = distribution_dim(&args, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
                 action: Rc::new(crate::value::IoAction::Random),
                 func: native(move |_interp, values, span| {
-                    let uniform = values
-                        .first()
-                        .and_then(Value::as_f64)
-                        .ok_or_else(|| EvalError::new("E0809", "the RNG gave no number").at(span))?;
+                    let uniform = values.first().and_then(Value::as_f64).ok_or_else(|| {
+                        EvalError::new("E0809", "the RNG gave no number").at(span)
+                    })?;
                     let value = distribution
                         .quantile(uniform)
                         .map_err(|error| numeric_error("sample", error, span))?;
@@ -3059,8 +3342,8 @@ pub fn call(
                     ))))
                 }),
             })))
-        }
-        "sample_n" => {
+        },
+        | "sample_n" => {
             let distribution = distribution_from(&args, name, span)?;
             let count = expect_int(&args, 1, name, span)?.max(0) as usize;
             let dim = distribution_dim(&args, span)?;
@@ -3074,8 +3357,8 @@ pub fn call(
             let mut values = Vec::with_capacity(count);
             for _ in 0..count {
                 let uniform = match seed.as_mut() {
-                    Some(state) => crate::eval::next_unit(state),
-                    None => interp.next_random(),
+                    | Some(state) => crate::eval::next_unit(state),
+                    | None => interp.next_random(),
                 };
                 let value = distribution
                     .quantile(uniform)
@@ -3083,60 +3366,58 @@ pub fn call(
                 values.push(value);
             }
             Ok(float_tensor(vec![values.len()], values, dim))
-        }
+        },
 
         // ----- §8.8 FFT and interpolation ---------------------------------
-        "fft" | "ifft" | "fft_norm" => {
+        | "fft" | "ifft" | "fft_norm" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let mut input = complex_values(&tensor)?;
             let norm = if name == "fft_norm" {
                 let Some(Value::Variant(variant)) = args.get(1) else {
-                    return Err(EvalError::new(
-                        "E0302",
-                        "`fft_norm` expects a `Norm` value",
-                    )
-                    .at(span));
+                    return Err(
+                        EvalError::new("E0302", "`fft_norm` expects a `Norm` value").at(span)
+                    );
                 };
                 match variant.name.as_str() {
-                    "Forward" => aevia_std::fft::Norm::Forward,
-                    "Unitary" => aevia_std::fft::Norm::Unitary,
-                    _ => aevia_std::fft::Norm::Backward,
+                    | "Forward" => aevia_std::fft::Norm::Forward,
+                    | "Unitary" => aevia_std::fft::Norm::Unitary,
+                    | _ => aevia_std::fft::Norm::Backward,
                 }
             } else {
                 aevia_std::fft::Norm::Backward
             };
             let output = match name {
-                "ifft" => aevia_std::fft::ifft(&input),
-                "fft_norm" => aevia_std::fft::fft_norm(&input, norm),
-                _ => aevia_std::fft::fft(&input),
+                | "ifft" => aevia_std::fft::ifft(&input),
+                | "fft_norm" => aevia_std::fft::fft_norm(&input, norm),
+                | _ => aevia_std::fft::fft(&input),
             };
             input.clear();
             let len = output.len();
             Ok(complex_tensor(vec![len], &output, tensor.dim.clone()))
-        }
-        "rfft" => {
+        },
+        | "rfft" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let signal = tensor_values(&tensor)?;
             let spectrum = aevia_std::fft::rfft(&signal);
             let len = spectrum.len();
             Ok(complex_tensor(vec![len], &spectrum, tensor.dim.clone()))
-        }
-        "irfft" => {
+        },
+        | "irfft" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let spectrum = complex_values(&tensor)?;
             let signal = aevia_std::fft::irfft(&spectrum, 2 * (spectrum.len().saturating_sub(1)));
             let len = signal.len();
             Ok(float_tensor(vec![len], signal, tensor.dim.clone()))
-        }
-        "fftfreq" => {
+        },
+        | "fftfreq" => {
             let count = expect_int(&args, 0, name, span)?.max(0) as usize;
             let spacing = expect_num(&args, 1, name, span)?;
             let d = spacing.to_f64().unwrap_or(1.0);
             let frequencies = aevia_std::fft::fftfreq(count, d);
             let len = frequencies.len();
             Ok(float_tensor(vec![len], frequencies, spacing.dim.inverse()))
-        }
-        "interp1" | "spline" => {
+        },
+        | "interp1" | "spline" => {
             let xs = expect_tensor(&args, 0, name, span)?;
             let ys = expect_tensor(&args, 1, name, span)?;
             let at = expect_num(&args, 2, name, span)?;
@@ -3148,8 +3429,8 @@ pub fn call(
             };
             let value = outcome.map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, ys.dim.clone())))
-        }
-        "interp2" => {
+        },
+        | "interp2" => {
             let xs = expect_tensor(&args, 0, name, span)?;
             let ys = expect_tensor(&args, 1, name, span)?;
             let grid = expect_tensor(&args, 2, name, span)?;
@@ -3164,8 +3445,8 @@ pub fn call(
             )
             .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, grid.dim.clone())))
-        }
-        "polyfit" | "chebyshev_fit" => {
+        },
+        | "polyfit" | "chebyshev_fit" => {
             let xs = expect_tensor(&args, 0, name, span)?;
             let ys = expect_tensor(&args, 1, name, span)?;
             let degree = expect_int(&args, 2, name, span)?.max(0) as usize;
@@ -3177,8 +3458,8 @@ pub fn call(
             let coefficients = outcome.map_err(|error| numeric_error(name, error, span))?;
             let len = coefficients.len();
             Ok(float_tensor(vec![len], coefficients, ys.dim.clone()))
-        }
-        "polyval" => {
+        },
+        | "polyval" => {
             let coefficients = expect_tensor(&args, 0, name, span)?;
             let at = expect_num(&args, 1, name, span)?;
             let values = tensor_values(&coefficients)?;
@@ -3187,12 +3468,18 @@ pub fn call(
                 aevia_std::interp::polyval(&values, x),
                 coefficients.dim.clone(),
             )))
-        }
+        },
 
         // ----- §8.9 ODE ---------------------------------------------------
-        "odeint" | "odeint_with" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 3, 0, span))?;
-            let initial = args.get(1).cloned().ok_or_else(|| arity(name, 3, 1, span))?;
+        | "odeint" | "odeint_with" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
+            let initial = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 1, span))?;
             let times = expect_tensor(&args, 2, name, span)?;
             let grid = tensor_values(&times)?;
             let options = if name == "odeint_with" {
@@ -3208,17 +3495,16 @@ pub fn call(
                     rebuild_state(&shape, state),
                 ];
                 match interp.apply(function.clone(), argument, span) {
-                    Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
-                    Err(error) => {
+                    | Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
+                    | Err(error) => {
                         if failure.is_none() {
                             failure = Some(error);
                         }
                         vec![0.0; state.len()]
-                    }
+                    },
                 }
             };
-            let solution =
-                aevia_std::ode::integrate(&mut rhs, &flat, &grid, options);
+            let solution = aevia_std::ode::integrate(&mut rhs, &flat, &grid, options);
             if let Some(error) = failure {
                 return Err(error);
             }
@@ -3238,16 +3524,20 @@ pub fn call(
                 ("t", float_tensor(vec![grid.len()], grid, times.dim.clone())),
                 ("y", build_tensor(elements, vec![len], dim)),
             ]))
-        }
-        "solve_ivp" => {
-            let function = args.first().cloned().ok_or_else(|| arity(name, 4, 0, span))?;
-            let initial = args.get(1).cloned().ok_or_else(|| arity(name, 4, 1, span))?;
+        },
+        | "solve_ivp" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 4, 0, span))?;
+            let initial = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 4, 1, span))?;
             let Some(Value::Record(interval)) = args.get(2) else {
-                return Err(EvalError::new(
-                    "E0302",
-                    "`solve_ivp` expects a `(t0, t1)` pair",
-                )
-                .at(span));
+                return Err(
+                    EvalError::new("E0302", "`solve_ivp` expects a `(t0, t1)` pair").at(span),
+                );
             };
             let start = interval
                 .fields
@@ -3276,13 +3566,13 @@ pub fn call(
                     rebuild_state(&shape, state),
                 ];
                 match interp.apply(function.clone(), argument, span) {
-                    Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
-                    Err(error) => {
+                    | Ok(value) => ode_rates(&value, state.len(), span, &mut failure),
+                    | Err(error) => {
                         if failure.is_none() {
                             failure = Some(error);
                         }
                         vec![0.0; state.len()]
-                    }
+                    },
                 }
             };
             let solution = aevia_std::ode::integrate(&mut rhs, &flat, &grid, options);
@@ -3300,25 +3590,29 @@ pub fn call(
                 ("t", float_tensor(vec![grid.len()], grid, time_dim)),
                 ("y", build_tensor(elements, vec![len], dim)),
             ]))
-        }
+        },
 
         // ----- §8.9.1 stochastic differential equations -------------------
-        "wiener" | "sde_order" | "sde_ensemble_seed" | "sdeint_diag" | "sdeint_general" => {
+        | "wiener" | "sde_order" | "sde_ensemble_seed" | "sdeint_diag" | "sdeint_general" => {
             sde_call(interp, name, &args, span)
-        }
+        },
 
         // ----- §8.10 PDE --------------------------------------------------
-        "solve_poisson" => {
+        | "solve_poisson" => {
             let Some(Value::Record(spec)) = args.first() else {
-                return Err(EvalError::new("E0302", "`solve_poisson` expects a spec record").at(span));
+                return Err(
+                    EvalError::new("E0302", "`solve_poisson` expects a spec record").at(span),
+                );
             };
             let grid = grid_from(spec, name, span)?;
             let source = spec
                 .fields
                 .get("source")
-                .map(|value| match value {
-                    Value::Tensor(tensor) => tensor_values(tensor),
-                    _ => Err(EvalError::new("E0302", "`source` must be a tensor").at(span)),
+                .map(|value| {
+                    match value {
+                        | Value::Tensor(tensor) => tensor_values(tensor),
+                        | _ => Err(EvalError::new("E0302", "`source` must be a tensor").at(span)),
+                    }
                 })
                 .transpose()?
                 .unwrap_or_else(|| vec![0.0; grid.len()]);
@@ -3339,17 +3633,15 @@ pub fn call(
                 tolerance,
             });
             Ok(match outcome {
-                Ok(field) => ok(field_value(&field)),
-                Err(error) => err(pde_error_value(&error)),
+                | Ok(field) => ok(field_value(&field)),
+                | Err(error) => err(pde_error_value(&error)),
             })
-        }
-        "solve_heat" | "solve_wave" | "solve_advection" => {
+        },
+        | "solve_heat" | "solve_wave" | "solve_advection" => {
             let Some(Value::Record(spec)) = args.first() else {
-                return Err(EvalError::new(
-                    "E0302",
-                    format!("`{name}` expects a spec record"),
-                )
-                .at(span));
+                return Err(
+                    EvalError::new("E0302", format!("`{name}` expects a spec record")).at(span),
+                );
             };
             let grid = grid_from(spec, name, span)?;
             let number = |field: &str, default: f64| -> f64 {
@@ -3360,56 +3652,64 @@ pub fn call(
             };
             let field_of = |field: &str| -> Result<Vec<f64>, EvalError> {
                 match spec.fields.get(field) {
-                    Some(Value::Tensor(tensor)) => tensor_values(tensor),
-                    _ => Err(EvalError::new(
-                        "E0306",
-                        format!("`{name}`: the spec needs a tensor field `{field}`"),
-                    )
-                    .at(span)),
+                    | Some(Value::Tensor(tensor)) => tensor_values(tensor),
+                    | _ => {
+                        Err(EvalError::new(
+                            "E0306",
+                            format!("`{name}`: the spec needs a tensor field `{field}`"),
+                        )
+                        .at(span))
+                    },
                 }
             };
             let steps = number("steps", 10.0).max(0.0) as usize;
             let dt = number("dt", 0.01);
             let initial = field_of("initial")?;
             let outcome = match name {
-                "solve_heat" => aevia_std::pde::solve_heat(&aevia_std::pde::HeatSpec {
-                    grid,
-                    alpha: number("alpha", 1.0),
-                    steps,
-                    dt,
-                    initial,
-                })
-                .map(|frames| frames.iter().map(field_value).collect::<Vec<_>>()),
-                "solve_wave" => aevia_std::pde::solve_wave(&aevia_std::pde::WaveSpec {
-                    grid,
-                    c: number("c", 1.0),
-                    steps,
-                    dt,
-                    initial,
-                    velocity: field_of("velocity")?,
-                })
-                .map(|frames| frames.iter().map(field_value).collect::<Vec<_>>()),
-                _ => aevia_std::pde::solve_advection(&aevia_std::pde::AdvectionSpec {
-                    grid,
-                    vx: number("vx", 1.0),
-                    vy: number("vy", 0.0),
-                    steps,
-                    dt,
-                    initial,
-                })
-                .map(|frames| frames.iter().map(field_value).collect::<Vec<_>>()),
+                | "solve_heat" => {
+                    aevia_std::pde::solve_heat(&aevia_std::pde::HeatSpec {
+                        grid,
+                        alpha: number("alpha", 1.0),
+                        steps,
+                        dt,
+                        initial,
+                    })
+                    .map(|frames| frames.iter().map(field_value).collect::<Vec<_>>())
+                },
+                | "solve_wave" => {
+                    aevia_std::pde::solve_wave(&aevia_std::pde::WaveSpec {
+                        grid,
+                        c: number("c", 1.0),
+                        steps,
+                        dt,
+                        initial,
+                        velocity: field_of("velocity")?,
+                    })
+                    .map(|frames| frames.iter().map(field_value).collect::<Vec<_>>())
+                },
+                | _ => {
+                    aevia_std::pde::solve_advection(&aevia_std::pde::AdvectionSpec {
+                        grid,
+                        vx: number("vx", 1.0),
+                        vy: number("vy", 0.0),
+                        steps,
+                        dt,
+                        initial,
+                    })
+                    .map(|frames| frames.iter().map(field_value).collect::<Vec<_>>())
+                },
             };
             Ok(match outcome {
-                Ok(frames) => {
+                | Ok(frames) => {
                     let len = frames.len();
                     ok(build_tensor(frames, vec![len], Dim::one()))
-                }
-                Err(error) => err(pde_error_value(&error)),
+                },
+                | Err(error) => err(pde_error_value(&error)),
             })
-        }
+        },
 
         // ----- §8.11 data -------------------------------------------------
-        "read_npy" => {
+        | "read_npy" => {
             let path = expect_str(&args, 0, name, span)?;
             let extension = std::path::Path::new(&path)
                 .extension()
@@ -3419,12 +3719,16 @@ pub fn call(
             if extension != "npy" {
                 return Ok(err(Value::string(format!(
                     "E0904: `read_npy` reads .npy files, not `{}`",
-                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                    if extension.is_empty() {
+                        "a file with no extension"
+                    } else {
+                        &extension
+                    }
                 ))));
             }
             Ok(Value::Io(Rc::new(crate::value::IoAction::ReadNpy(path))))
-        }
-        "write_npy" => {
+        },
+        | "write_npy" => {
             let path = expect_str(&args, 0, name, span)?;
             let extension = std::path::Path::new(&path)
                 .extension()
@@ -3434,10 +3738,17 @@ pub fn call(
             if extension != "npy" {
                 return Ok(err(Value::string(format!(
                     "E0904: `write_npy` writes .npy files, not `{}`",
-                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                    if extension.is_empty() {
+                        "a file with no extension"
+                    } else {
+                        &extension
+                    }
                 ))));
             }
-            let value = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+            let value = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             let Value::Tensor(tensor) = value else {
                 return Ok(err(Value::string(format!(
                     "E0902: `write_npy` needs a tensor, found {}",
@@ -3445,14 +3756,16 @@ pub fn call(
                 ))));
             };
             match npy_encode(&tensor) {
-                Ok(bytes) => Ok(Value::Io(Rc::new(crate::value::IoAction::WriteNpy {
-                    path,
-                    bytes,
-                }))),
-                Err(message) => Ok(err(Value::string(message))),
+                | Ok(bytes) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::WriteNpy {
+                        path,
+                        bytes,
+                    })))
+                },
+                | Err(message) => Ok(err(Value::string(message))),
             }
-        }
-        "read_csv" | "read_csv_dyn" => {
+        },
+        | "read_csv" | "read_csv_dyn" => {
             let path = expect_str(&args, 0, name, span)?;
             // Appendix B E0904: an extension this reader cannot decode is a
             // typed `Err`, not a generic parse failure later.
@@ -3464,7 +3777,11 @@ pub fn call(
             if !matches!(extension.as_str(), "csv" | "tsv") {
                 return Ok(err(Value::string(format!(
                     "E0904: `read_csv` reads .csv/.tsv files, not `{}`",
-                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                    if extension.is_empty() {
+                        "a file with no extension"
+                    } else {
+                        &extension
+                    }
                 ))));
             }
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
@@ -3474,77 +3791,66 @@ pub fn call(
                     // `read_file`: unwrap `Ok(contents)`, propagate `Err` with
                     // its taxonomy (E0901/E0902).
                     let text = match values.first() {
-                        Some(Value::Variant(result))
+                        | Some(Value::Variant(result))
                             if result.adt == adt::RESULT_ID && result.index == 0 =>
                         {
                             match result.fields.first() {
-                                Some(Value::Str(text)) => text.to_string(),
-                                other => {
+                                | Some(Value::Str(text)) => text.to_string(),
+                                | other => {
                                     let reason = Value::string(format!(
                                         "the file could not be read: {}",
                                         other.map_or("nothing", Value::type_name)
                                     ));
-                                    let failed = Value::Io(Rc::new(
-                                        crate::value::IoAction::Pure(err(reason)),
-                                    ));
+                                    let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(
+                                        err(reason),
+                                    )));
                                     return Ok(failed);
-                                }
+                                },
                             }
-                        }
-                        Some(Value::Variant(previous))
+                        },
+                        | Some(Value::Variant(previous))
                             if previous.adt == adt::RESULT_ID && previous.index == 1 =>
                         {
-                            let failed = previous
-                                .fields
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| Value::string("E0901: the file could not be read"));
-                            let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                                failed,
-                            ))));
+                            let failed = previous.fields.first().cloned().unwrap_or_else(|| {
+                                Value::string("E0901: the file could not be read")
+                            });
+                            let failed =
+                                Value::Io(Rc::new(crate::value::IoAction::Pure(err(failed))));
                             return Ok(failed);
-                        }
-                        other => {
+                        },
+                        | other => {
                             let reason = Value::string(format!(
                                 "the file could not be read: {}",
                                 other.map_or("nothing", Value::type_name)
                             ));
-                            let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                                reason,
-                            ))));
+                            let failed =
+                                Value::Io(Rc::new(crate::value::IoAction::Pure(err(reason))));
                             return Ok(failed);
-                        }
+                        },
                     };
                     let result = match aevia_std::table::parse_csv(&text) {
-                        Ok(table) => ok(table_value(&table)),
-                        Err(error) => err(Value::string(format!("E0903: {error}"))),
+                        | Ok(table) => ok(table_value(&table)),
+                        | Err(error) => err(Value::string(format!("E0903: {error}"))),
                     };
                     let _ = span;
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(result))))
                 }),
             })))
-        }
-        "write_csv" => {
+        },
+        | "write_csv" => {
             let path = expect_str(&args, 0, name, span)?;
             let table = table_from(&args, 1, name, span)?;
             let text = aevia_std::table::write_csv(&table);
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
-                action: Rc::new(crate::value::IoAction::WriteFile {
-                    path,
-                    contents: text,
-                }),
+                action: Rc::new(crate::value::IoAction::WriteFile { path, contents: text }),
                 func: native(|_interp, values, _span| {
                     // Propagate a failed write with its taxonomy code instead of
                     // reporting success.
                     if let Some(Value::Variant(result)) = values.first() {
                         if result.adt == adt::RESULT_ID && result.index == 1 {
-                            let failed = result
-                                .fields
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    Value::string("E0901: the file could not be written")
-                                });
+                            let failed = result.fields.first().cloned().unwrap_or_else(|| {
+                                Value::string("E0901: the file could not be written")
+                            });
                             return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
                                 failed,
                             )))));
@@ -3555,22 +3861,22 @@ pub fn call(
                     )))))
                 }),
             })))
-        }
+        },
         // §8.17: `Json` is the *decoded* value channel. `read_json` and
         // `simulate` already decode on the way in (`value_from_json`) and
         // `simulate`/`write_json` encode on the way out (`json_from_value`), so
         // `to_json`/`from_json` are the identity over that representation.
         // Returning JSON *text* here would make `simulate("ising", to_json(p))`
         // send a JSON string literal instead of the object.
-        "to_json" => args
-            .first()
-            .cloned()
-            .ok_or_else(|| arity(name, 1, 0, span)),
-        "from_json" => {
-            let value = args.first().cloned().ok_or_else(|| arity(name, 1, 0, span))?;
+        | "to_json" => args.first().cloned().ok_or_else(|| arity(name, 1, 0, span)),
+        | "from_json" => {
+            let value = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(ok(value))
-        }
-        "read_json" => {
+        },
+        | "read_json" => {
             let path = expect_str(&args, 0, name, span)?;
             let extension = std::path::Path::new(&path)
                 .extension()
@@ -3580,83 +3886,78 @@ pub fn call(
             if extension != "json" {
                 return Ok(err(Value::string(format!(
                     "E0904: `read_json` reads .json files, not `{}`",
-                    if extension.is_empty() { "a file with no extension" } else { &extension }
+                    if extension.is_empty() {
+                        "a file with no extension"
+                    } else {
+                        &extension
+                    }
                 ))));
             }
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
                 action: Rc::new(crate::value::IoAction::ReadFile(path)),
                 func: native(|_interp, values, _span| {
                     let text = match values.first() {
-                        Some(Value::Variant(result))
+                        | Some(Value::Variant(result))
                             if result.adt == adt::RESULT_ID && result.index == 0 =>
                         {
                             match result.fields.first() {
-                                Some(Value::Str(text)) => text.to_string(),
-                                other => {
+                                | Some(Value::Str(text)) => text.to_string(),
+                                | other => {
                                     let reason = Value::string(format!(
                                         "the file could not be read: {}",
                                         other.map_or("nothing", Value::type_name)
                                     ));
-                                    let failed = Value::Io(Rc::new(
-                                        crate::value::IoAction::Pure(err(reason)),
-                                    ));
+                                    let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(
+                                        err(reason),
+                                    )));
                                     return Ok(failed);
-                                }
+                                },
                             }
-                        }
-                        Some(Value::Variant(previous))
+                        },
+                        | Some(Value::Variant(previous))
                             if previous.adt == adt::RESULT_ID && previous.index == 1 =>
                         {
-                            let failed = previous
-                                .fields
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| Value::string("E0901: the file could not be read"));
-                            let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                                failed,
-                            ))));
+                            let failed = previous.fields.first().cloned().unwrap_or_else(|| {
+                                Value::string("E0901: the file could not be read")
+                            });
+                            let failed =
+                                Value::Io(Rc::new(crate::value::IoAction::Pure(err(failed))));
                             return Ok(failed);
-                        }
-                        other => {
+                        },
+                        | other => {
                             let reason = Value::string(format!(
                                 "the file could not be read: {}",
                                 other.map_or("nothing", Value::type_name)
                             ));
-                            let failed = Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                                reason,
-                            ))));
+                            let failed =
+                                Value::Io(Rc::new(crate::value::IoAction::Pure(err(reason))));
                             return Ok(failed);
-                        }
+                        },
                     };
                     let result = match aevia_std::table::parse_json(&text) {
-                        Ok(json) => ok(value_from_json(&json)),
-                        Err(error) => err(Value::string(format!("E0903: {error}"))),
+                        | Ok(json) => ok(value_from_json(&json)),
+                        | Err(error) => err(Value::string(format!("E0903: {error}"))),
                     };
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(result))))
                 }),
             })))
-        }
-        "write_json" => {
+        },
+        | "write_json" => {
             let path = expect_str(&args, 0, name, span)?;
-            let value = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
-            let json = json_from_value(&value)
-                .map_err(|error| error.at(span))?;
+            let value = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
+            let json = json_from_value(&value).map_err(|error| error.at(span))?;
             let text = aevia_std::table::write_json(&json);
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
-                action: Rc::new(crate::value::IoAction::WriteFile {
-                    path,
-                    contents: text,
-                }),
+                action: Rc::new(crate::value::IoAction::WriteFile { path, contents: text }),
                 func: native(|_interp, values, _span| {
                     if let Some(Value::Variant(result)) = values.first() {
                         if result.adt == adt::RESULT_ID && result.index == 1 {
-                            let failed = result
-                                .fields
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    Value::string("E0901: the file could not be written")
-                                });
+                            let failed = result.fields.first().cloned().unwrap_or_else(|| {
+                                Value::string("E0901: the file could not be written")
+                            });
                             return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
                                 failed,
                             )))));
@@ -3667,25 +3968,25 @@ pub fn call(
                     )))))
                 }),
             })))
-        }
-        "column" | "column_dyn" => {
+        },
+        | "column" | "column_dyn" => {
             let table = table_from(&args, 0, name, span)?;
             let column = expect_str(&args, 1, name, span)?;
             let cells = match table.column(&column) {
-                Ok(cells) => cells,
-                Err(error) => return Ok(err(Value::string(error.to_string()))),
+                | Ok(cells) => cells,
+                | Err(error) => return Ok(err(Value::string(error.to_string()))),
             };
             let mut elements = Vec::with_capacity(cells.len());
             let mut numbers = Vec::with_capacity(cells.len());
             let mut all_numeric = true;
             for cell in &cells {
                 match cell.parse::<f64>() {
-                    Ok(number) => numbers.push(number),
-                    Err(_) => all_numeric = false,
+                    | Ok(number) => numbers.push(number),
+                    | Err(_) => all_numeric = false,
                 }
                 elements.push(match cell.parse::<f64>() {
-                    Ok(number) => Value::float(number),
-                    Err(_) => Value::string(*cell),
+                    | Ok(number) => Value::float(number),
+                    | Err(_) => Value::string(*cell),
                 });
             }
             let dim = Dim::one();
@@ -3696,8 +3997,8 @@ pub fn call(
                 build_tensor(elements, vec![len], dim)
             };
             Ok(ok(tensor))
-        }
-        "row" => {
+        },
+        | "row" => {
             let table = table_from(&args, 0, name, span)?;
             let index = expect_int(&args, 1, name, span)?;
             let normalized = if index < 0 {
@@ -3709,8 +4010,8 @@ pub fn call(
                 return Ok(err(Value::string("row index out of range")));
             }
             Ok(ok(row_value(&table, normalized as usize)))
-        }
-        "select" => {
+        },
+        | "select" => {
             let table = table_from(&args, 0, name, span)?;
             let names = expect_tensor(&args, 1, name, span)?;
             let mut selected = Vec::new();
@@ -3744,15 +4045,15 @@ pub fn call(
                 units,
                 rows,
             }))
-        }
-        "schema" => {
+        },
+        | "schema" => {
             let table = table_from(&args, 0, name, span)?;
             let mut elements = Vec::with_capacity(table.columns.len());
             for (index, column) in table.columns.iter().enumerate() {
-                let numeric = table
-                    .rows
-                    .iter()
-                    .all(|row| row.get(index).is_some_and(|cell| cell.parse::<f64>().is_ok()));
+                let numeric = table.rows.iter().all(|row| {
+                    row.get(index)
+                        .is_some_and(|cell| cell.parse::<f64>().is_ok())
+                });
                 elements.push(record_of(vec![
                     ("name", Value::string(column.clone())),
                     (
@@ -3762,39 +4063,34 @@ pub fn call(
                     (
                         "unit",
                         match table.units.get(index).and_then(Option::as_ref) {
-                            Some(unit) => some(Value::string(unit.clone())),
-                            None => none(),
+                            | Some(unit) => some(Value::string(unit.clone())),
+                            | None => none(),
                         },
                     ),
                 ]));
             }
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
-        }
-        "to_table" => {
+        },
+        | "to_table" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let mut columns: Vec<String> = Vec::new();
             let mut rows: Vec<Vec<String>> = Vec::new();
             for element in tensor.elements() {
                 let Value::Record(record) = element else {
-                    return Ok(err(Value::string(
-                        "`to_table` needs a tensor of records",
-                    )));
+                    return Ok(err(Value::string("`to_table` needs a tensor of records")));
                 };
                 if columns.is_empty() {
                     columns = record.fields.keys().cloned().collect();
                 }
                 let mut row = Vec::with_capacity(columns.len());
                 for column in &columns {
-                    row.push(
-                        record
-                            .fields
-                            .get(column)
-                            .map_or_else(String::new, |value| match value {
-                                Value::Str(text) => text.to_string(),
-                                other => crate::value::show(other),
-                            }),
-                    );
+                    row.push(record.fields.get(column).map_or_else(String::new, |value| {
+                        match value {
+                            | Value::Str(text) => text.to_string(),
+                            | other => crate::value::show(other),
+                        }
+                    }));
                 }
                 rows.push(row);
             }
@@ -3804,19 +4100,19 @@ pub fn call(
                 units,
                 rows,
             })))
-        }
-        "to_dynamic" => {
+        },
+        | "to_dynamic" => {
             let table = table_from(&args, 0, name, span)?;
             Ok(table_value(&table))
-        }
+        },
 
         // ----- §8.12 plotting ---------------------------------------------
-        "line_with" | "scatter_with" | "hist" | "hist_with" | "heatmap"
-        | "heatmap_with" | "errorbar" | "errorbar_with" => {
+        | "line_with" | "scatter_with" | "hist" | "hist_with" | "heatmap" | "heatmap_with"
+        | "errorbar" | "errorbar_with" => {
             let mut fields = IndexMap::new();
             fields.insert("kind".to_string(), Value::string(name));
             match name {
-                "hist" | "hist_with" => {
+                | "hist" | "hist_with" => {
                     let values = expect_tensor(&args, 0, name, span)?;
                     let bins = expect_int(&args, 1, name, span)?.max(1) as usize;
                     let (counts, edges) =
@@ -3832,13 +4128,13 @@ pub fn call(
                         float_tensor(vec![edges.len()], edges.clone(), values.dim.clone()),
                     );
                     fields.insert("y".to_string(), build_tensor(counts, vec![len], Dim::one()));
-                }
-                "heatmap" | "heatmap_with" => {
+                },
+                | "heatmap" | "heatmap_with" => {
                     let values = expect_tensor(&args, 0, name, span)?;
                     fields.insert("x".to_string(), Value::Tensor(values));
                     fields.insert("y".to_string(), Value::Unit);
-                }
-                _ => {
+                },
+                | _ => {
                     let x = args.first().cloned().unwrap_or(Value::Unit);
                     let y = args.get(1).cloned().unwrap_or(Value::Unit);
                     fields.insert("x".to_string(), x);
@@ -3847,57 +4143,67 @@ pub fn call(
                         let error = args.get(2).cloned().unwrap_or(Value::Unit);
                         fields.insert("error".to_string(), error);
                     }
-                }
+                },
             }
             fields.insert("label".to_string(), Value::string(""));
             Ok(Value::Record(Rc::new(RecordValue { fields })))
-        }
-        "default_plot_opts" => Ok(record_of(vec![
-            ("label", none()),
-            ("color", none()),
-            ("xunit", none()),
-            ("yunit", none()),
-            ("xscale", make_variant(
-                adt::intern(adt::Adt {
-                    name: "AxisScale".to_string(),
-                    params: Vec::new(),
-                    ctors: Vec::new(),
-                }),
-                0,
-                "Linear",
-                Vec::new(),
-            )),
-            ("yscale", make_variant(
-                adt::intern(adt::Adt {
-                    name: "AxisScale".to_string(),
-                    params: Vec::new(),
-                    ctors: Vec::new(),
-                }),
-                0,
-                "Linear",
-                Vec::new(),
-            )),
-            ("xlim", none()),
-            ("ylim", none()),
-        ])),
+        },
+        | "default_plot_opts" => {
+            Ok(record_of(vec![
+                ("label", none()),
+                ("color", none()),
+                ("xunit", none()),
+                ("yunit", none()),
+                (
+                    "xscale",
+                    make_variant(
+                        adt::intern(adt::Adt {
+                            name: "AxisScale".to_string(),
+                            params: Vec::new(),
+                            ctors: Vec::new(),
+                        }),
+                        0,
+                        "Linear",
+                        Vec::new(),
+                    ),
+                ),
+                (
+                    "yscale",
+                    make_variant(
+                        adt::intern(adt::Adt {
+                            name: "AxisScale".to_string(),
+                            params: Vec::new(),
+                            ctors: Vec::new(),
+                        }),
+                        0,
+                        "Linear",
+                        Vec::new(),
+                    ),
+                ),
+                ("xlim", none()),
+                ("ylim", none()),
+            ]))
+        },
 
         // ----- §8.17 simulation -------------------------------------------
-        "simulate" => {
+        | "simulate" => {
             let scenario = expect_str(&args, 0, name, span)?;
             let value = args.get(1).cloned().unwrap_or(Value::Unit);
             let json = json_from_value(&value).map_err(|error| error.at(span))?;
             let text = aevia_std::table::write_json(&json);
             match aevia_std::sim::simulate(&scenario, &text) {
-                Ok(result) => match aevia_std::table::parse_json(&result) {
-                    Ok(json) => Ok(ok(value_from_json(&json))),
-                    Err(error) => Ok(err(Value::string(error.to_string()))),
+                | Ok(result) => {
+                    match aevia_std::table::parse_json(&result) {
+                        | Ok(json) => Ok(ok(value_from_json(&json))),
+                        | Err(error) => Ok(err(Value::string(error.to_string()))),
+                    }
                 },
-                Err(error) => Ok(err(Value::string(error))),
+                | Err(error) => Ok(err(Value::string(error))),
             }
-        }
+        },
 
         // ----- §8.18 device -----------------------------------------------
-        "device_of" => {
+        | "device_of" => {
             let _ = expect_tensor(&args, 0, name, span)?;
             Ok(make_variant(
                 adt::intern(adt::Adt {
@@ -3909,13 +4215,13 @@ pub fn call(
                 "Cpu",
                 Vec::new(),
             ))
-        }
-        "to_device" => {
+        },
+        | "to_device" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let device = args.get(1).cloned().unwrap_or(Value::Unit);
             let name_of_device = match &device {
-                Value::Variant(variant) => variant.name.clone(),
-                _ => "Cpu".to_string(),
+                | Value::Variant(variant) => variant.name.clone(),
+                | _ => "Cpu".to_string(),
             };
             if name_of_device == "Cpu" {
                 return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
@@ -3930,13 +4236,16 @@ pub fn call(
                 ),
             )
             .at(span))
-        }
-        "on" => {
+        },
+        | "on" => {
             let device = args.first().cloned().unwrap_or(Value::Unit);
-            let thunk = args.get(1).cloned().ok_or_else(|| arity(name, 2, 1, span))?;
+            let thunk = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
             let name_of_device = match &device {
-                Value::Variant(variant) => variant.name.clone(),
-                _ => "Cpu".to_string(),
+                | Value::Variant(variant) => variant.name.clone(),
+                | _ => "Cpu".to_string(),
             };
             if name_of_device != "Cpu" {
                 return Err(EvalError::new(
@@ -3950,18 +4259,22 @@ pub fn call(
             }
             let value = interp.apply(thunk, Vec::new(), span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(value))))
-        }
+        },
 
         // ----- §8.19 dynamic boundary -------------------------------------
-        "type_rep" => Ok(record_of(vec![
-            ("name", Value::string("TypeRep")),
-            ("kind", Value::string("opaque")),
-        ])),
-        _ => Err(EvalError::new(
-            "E1001",
-            format!("builtin `{name}` is typed but not implemented yet"),
-        )
-        .at(span)),
+        | "type_rep" => {
+            Ok(record_of(vec![
+                ("name", Value::string("TypeRep")),
+                ("kind", Value::string("opaque")),
+            ]))
+        },
+        | _ => {
+            Err(EvalError::new(
+                "E1001",
+                format!("builtin `{name}` is typed but not implemented yet"),
+            )
+            .at(span))
+        },
     }
 }
 
@@ -4018,7 +4331,10 @@ fn fresh_variable_name() -> String {
 }
 
 /// A symbolic variable with the given dimension.
-fn symbolic_variable(name: &str, dim: Dim) -> Value {
+fn symbolic_variable(
+    name: &str,
+    dim: Dim,
+) -> Value {
     Value::Num(NumVal::symbolic(Term::Sym(name.to_string()), dim))
 }
 
@@ -4033,7 +4349,10 @@ fn argument_dim(
     let variable = fresh_variable_name();
     let applied = interp.apply(
         function.clone(),
-        vec![symbolic_variable(&variable, crate::value::value_dim(argument))],
+        vec![symbolic_variable(
+            &variable,
+            crate::value::value_dim(argument),
+        )],
         span,
     )?;
     Ok(crate::value::value_dim(&applied))
@@ -4049,8 +4368,8 @@ fn argument_dim(
 /// Answers with free symbols are untouched.
 fn math_result(result: Result<Value, EvalError>) -> Result<Value, EvalError> {
     Ok(match result {
-        Ok(value) => ok(fold_closed(value)),
-        Err(error) => err(Value::string(error.message)),
+        | Ok(value) => ok(fold_closed(value)),
+        | Err(error) => err(Value::string(error.message)),
     })
 }
 
@@ -4101,7 +4420,10 @@ fn solve(
 /// Nothing is derived. `multiplicities` is whatever the solver reported —
 /// empty when it did not distinguish the roots, which is not the same as a
 /// reported `1` — and `complete` is the solver's claim, not a constant.
-fn solutions_value(solutions: &aevia_rssn::Val, roots_dim: Dim) -> Value {
+fn solutions_value(
+    solutions: &aevia_rssn::Val,
+    roots_dim: Dim,
+) -> Value {
     let aevia_rssn::Val::Record(fields) = solutions else {
         // The bridge always answers with the record; a value of any other
         // shape is a bridge defect, and showing it is better than inventing
@@ -4111,23 +4433,25 @@ fn solutions_value(solutions: &aevia_rssn::Val, roots_dim: Dim) -> Value {
     let mut converted = IndexMap::new();
     for (name, value) in fields {
         let field = match name.as_str() {
-            "variable" => match value {
-                aevia_rssn::Val::Symbol(name) | aevia_rssn::Val::Str(name)
-                    if !name.is_empty() =>
-                {
-                    make_variant(
-                        adt::OPTION_ID,
-                        1,
-                        "Some",
-                        vec![Value::string(crate::kernel::clean_internal_names(name))],
-                    )
+            | "variable" => {
+                match value {
+                    | aevia_rssn::Val::Symbol(name) | aevia_rssn::Val::Str(name)
+                        if !name.is_empty() =>
+                    {
+                        make_variant(
+                            adt::OPTION_ID,
+                            1,
+                            "Some",
+                            vec![Value::string(crate::kernel::clean_internal_names(name))],
+                        )
+                    },
+                    | _ => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
                 }
-                _ => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
             },
             // The roots are values of the unknown, so they carry its
             // dimension; the three metadata fields do not.
-            "roots" => bridge::from_val(value, roots_dim.clone()),
-            _ => bridge::from_val(value, Dim::one()),
+            | "roots" => bridge::from_val(value, roots_dim.clone()),
+            | _ => bridge::from_val(value, Dim::one()),
         };
         converted.insert(name.clone(), field);
     }
@@ -4138,7 +4462,10 @@ fn solutions_value(solutions: &aevia_rssn::Val, roots_dim: Dim) -> Value {
 ///
 /// Exact operands are compared as rationals (§6.12.1): routing them through
 /// `f64` made `decide(1/3 + 1/3 == 2/3)` depend on the rounding of `1/3`.
-fn decide(args: &[Value], span: Span) -> Value {
+fn decide(
+    args: &[Value],
+    span: Span,
+) -> Value {
     let _ = span;
     match args.first() {
         // §6.12.1: `Real == Real` is typed `Prop`, but after type erasure the
@@ -4146,14 +4473,18 @@ fn decide(args: &[Value], span: Span) -> Value {
         // compared at run time). A decided proposition is its own verdict, so
         // `decide(x == x)` on exact values answers `Some(true)` instead of
         // `None` — the alternative is a guarantee the checker cannot see.
-        Some(Value::Bool(verdict)) => {
+        | Some(Value::Bool(verdict)) => {
             make_variant(adt::OPTION_ID, 1, "Some", vec![Value::Bool(*verdict)])
-        }
-        Some(Value::Prop(prop)) => match decide_prop(prop) {
-            Some(verdict) => make_variant(adt::OPTION_ID, 1, "Some", vec![Value::Bool(verdict)]),
-            None => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
         },
-        _ => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
+        | Some(Value::Prop(prop)) => {
+            match decide_prop(prop) {
+                | Some(verdict) => {
+                    make_variant(adt::OPTION_ID, 1, "Some", vec![Value::Bool(verdict)])
+                },
+                | None => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
+            }
+        },
+        | _ => make_variant(adt::OPTION_ID, 0, "None", Vec::new()),
     }
 }
 
@@ -4167,20 +4498,20 @@ fn decide_prop(prop: &crate::value::PropValue) -> Option<bool> {
         }
         if let (Some(a), Some(b)) = (a.to_rational(), b.to_rational()) {
             return Some(match op {
-                BinOp::Eq => a == b,
-                BinOp::Ne => a != b,
-                BinOp::Lt => a < b,
-                BinOp::Le => a <= b,
-                BinOp::Gt => a > b,
-                BinOp::Ge => a >= b,
-                _ => return None,
+                | BinOp::Eq => a == b,
+                | BinOp::Ne => a != b,
+                | BinOp::Lt => a < b,
+                | BinOp::Le => a <= b,
+                | BinOp::Gt => a > b,
+                | BinOp::Ge => a >= b,
+                | _ => return None,
             });
         }
     }
     match op {
-        BinOp::Eq => crate::value::equal(left, right).ok(),
-        BinOp::Ne => crate::value::equal(left, right).ok().map(|equal| !equal),
-        _ => None,
+        | BinOp::Eq => crate::value::equal(left, right).ok(),
+        | BinOp::Ne => crate::value::equal(left, right).ok().map(|equal| !equal),
+        | _ => None,
     }
 }
 
@@ -4193,18 +4524,18 @@ fn condition_term(prop: &crate::value::PropValue) -> Result<Term, EvalError> {
         ));
     };
     let name = match comparison.op {
-        BinOp::Eq => "eq",
-        BinOp::Ne => "ne",
-        BinOp::Lt => "lt",
-        BinOp::Le => "le",
-        BinOp::Gt => "gt",
-        BinOp::Ge => "ge",
-        _ => {
+        | BinOp::Eq => "eq",
+        | BinOp::Ne => "ne",
+        | BinOp::Lt => "lt",
+        | BinOp::Le => "le",
+        | BinOp::Gt => "gt",
+        | BinOp::Ge => "ge",
+        | _ => {
             return Err(EvalError::new(
                 "E1001",
                 "only a comparison can be turned into a symbolic condition",
-            ))
-        }
+            ));
+        },
     };
     Ok(Term::fun(
         Fun::Other(name),
@@ -4236,23 +4567,26 @@ fn branch_on(
         .cloned()
         .ok_or_else(|| arity(name, 2, args.len(), span))?;
     let verdict = match &proposition {
-        Value::Bool(flag) => Some(*flag),
-        Value::Prop(prop) => decide_prop(prop),
-        other => {
+        | Value::Bool(flag) => Some(*flag),
+        | Value::Prop(prop) => decide_prop(prop),
+        | other => {
             return Err(EvalError::new(
                 "E0302",
-                format!("`{name}` expects a proposition, found {}", other.type_name()),
+                format!(
+                    "`{name}` expects a proposition, found {}",
+                    other.type_name()
+                ),
             )
-            .at(span))
-        }
+            .at(span));
+        },
     };
     if name == "assuming" {
         // §8.1.2: `assuming` states a fact about a symbol. A proposition the
         // runtime can prove false makes the assumption contradictory, which is
         // `E0804`; otherwise the thunk is evaluated under it.
         return match verdict {
-            Some(false) => Err(EvalError::new("E0804", "the assumption is false").at(span)),
-            _ => interp.apply(thunk, Vec::new(), span),
+            | Some(false) => Err(EvalError::new("E0804", "the assumption is false").at(span)),
+            | _ => interp.apply(thunk, Vec::new(), span),
         };
     }
     let alternative = args
@@ -4260,9 +4594,9 @@ fn branch_on(
         .cloned()
         .ok_or_else(|| arity(name, 3, args.len(), span))?;
     match verdict {
-        Some(true) => interp.apply(thunk, Vec::new(), span),
-        Some(false) => interp.apply(alternative, Vec::new(), span),
-        None => {
+        | Some(true) => interp.apply(thunk, Vec::new(), span),
+        | Some(false) => interp.apply(alternative, Vec::new(), span),
+        | None => {
             // Undecidable: keep both branches in the term (§8.1.2).
             let Value::Prop(prop) = &proposition else {
                 return Err(EvalError::new(
@@ -4282,7 +4616,7 @@ fn branch_on(
                 term,
                 crate::value::value_dim(&yes),
             )))
-        }
+        },
     }
 }
 
@@ -4292,14 +4626,18 @@ fn branch_on(
 /// `Arbitrary` instance of `Real`/`Int`/`Float` includes. A parameter that
 /// cannot take a number is a missing capability, named as `E1001` — returning
 /// `true` for every property was worse than saying so.
-fn forall(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, EvalError> {
+fn forall(
+    interp: &mut Interp,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
     let function = args
         .first()
         .cloned()
         .ok_or_else(|| arity("forall", 1, 0, span))?;
     let arity_count = match &function {
-        Value::Closure(closure) => closure.arity(),
-        _ => {
+        | Value::Closure(closure) => closure.arity(),
+        | _ => {
             return Err(EvalError::new(
                 "E0302",
                 format!(
@@ -4307,8 +4645,8 @@ fn forall(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, Eval
                     function.type_name()
                 ),
             )
-            .at(span))
-        }
+            .at(span));
+        },
     };
     if arity_count == 0 || arity_count > 3 {
         return Err(EvalError::new(
@@ -4331,48 +4669,52 @@ fn forall(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, Eval
     let mut undecidable = false;
     let mut indices = vec![0usize; arity_count];
     loop {
-        let arguments: Vec<Value> = indices.iter().map(|index| samples[*index].clone()).collect();
+        let arguments: Vec<Value> = indices
+            .iter()
+            .map(|index| samples[*index].clone())
+            .collect();
         let outcome = interp.apply(function.clone(), arguments, span);
         let value = match outcome {
-            Ok(value) => value,
+            | Ok(value) => value,
             // The sampled value does not fit the parameter type: `forall` has
             // no `Arbitrary` instance for that type.
-            Err(error) if matches!(error.code, "E0302" | "E0305" | "E0308") => {
+            | Err(error) if matches!(error.code, "E0302" | "E0305" | "E0308") => {
                 return Err(EvalError::new(
                     "E1001",
                     "`forall` has no `Arbitrary` instance for this argument type",
                 )
                 .at(span)
-                .with_note(error.message))
-            }
-            Err(error) => return Err(error),
+                .with_note(error.message));
+            },
+            | Err(error) => return Err(error),
         };
         match value {
-            Value::Prop(prop) => match decide_prop(&prop) {
-                Some(true) => {}
-                Some(false) => return Ok(Value::Bool(false)),
-                None => undecidable = true,
+            | Value::Prop(prop) => {
+                match decide_prop(&prop) {
+                    | Some(true) => {},
+                    | Some(false) => return Ok(Value::Bool(false)),
+                    | None => undecidable = true,
+                }
             },
-            Value::Bool(true) => {}
-            Value::Bool(false) => return Ok(Value::Bool(false)),
-            other => {
+            | Value::Bool(true) => {},
+            | Value::Bool(false) => return Ok(Value::Bool(false)),
+            | other => {
                 return Err(EvalError::new(
                     "E0302",
                     format!("`forall` expects a `Prop`, found {}", other.type_name()),
                 )
-                .at(span))
-            }
+                .at(span));
+            },
         }
         // Odometer over the cartesian product of the samples.
         let mut position = 0;
         loop {
             if position == arity_count {
                 return if undecidable {
-                    Err(EvalError::new(
-                        "E0804",
-                        "`forall` sampled a proposition it cannot decide",
+                    Err(
+                        EvalError::new("E0804", "`forall` sampled a proposition it cannot decide")
+                            .at(span),
                     )
-                    .at(span))
                 } else {
                     Ok(Value::Bool(true))
                 };
@@ -4392,7 +4734,11 @@ fn forall(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, Eval
 /// The bound is exact: `f` is applied at every integer in `[a, b]` and the
 /// values are added with the same promotion rules as `+`. A symbolic or
 /// non-integral bound needs the kernel's summation and is `E1001`.
-fn sum_range(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, EvalError> {
+fn sum_range(
+    interp: &mut Interp,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
     let function = args[0].clone();
     let lower = expect_int(args, 1, "sum", span)?;
     let upper = expect_int(args, 2, "sum", span)?;
@@ -4411,41 +4757,53 @@ fn sum_range(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, E
     Ok(total)
 }
 
-
 /// `gamma(x)`: the Gamma function, not its logarithm (§8.2).
 ///
 /// A positive integer is exactly `(n-1)!`, so `gamma(5)` is `24` and not
 /// `3.17805` (which is `ln 24`).
-fn gamma(_interp: &mut Interp, name: &str, args: &[Value], span: Span) -> Result<Value, EvalError> {
+fn gamma(
+    _interp: &mut Interp,
+    name: &str,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
     let num = expect_num(args, 0, name, span)?;
     match &num.kind {
-        NumKind::Int(value) => match value.to_i64() {
-            Some(n) if (1..=2000).contains(&n) => {
-                let mut result = BigInt::one();
-                for factor in 2..n {
-                    result *= BigInt::from(factor);
-                }
-                Ok(Value::Num(NumVal::int(result)))
+        | NumKind::Int(value) => {
+            match value.to_i64() {
+                | Some(n) if (1..=2000).contains(&n) => {
+                    let mut result = BigInt::one();
+                    for factor in 2..n {
+                        result *= BigInt::from(factor);
+                    }
+                    Ok(Value::Num(NumVal::int(result)))
+                },
+                | Some(n) if n <= 0 => Err(domain_error(name, &num, span)),
+                | _ => {
+                    Ok(Value::Num(NumVal::float(
+                        gamma_f64(num.to_f64().unwrap_or(f64::NAN)),
+                        num.dim,
+                    )))
+                },
             }
-            Some(n) if n <= 0 => Err(domain_error(name, &num, span)),
-            _ => Ok(Value::Num(NumVal::float(
-                gamma_f64(num.to_f64().unwrap_or(f64::NAN)),
-                num.dim,
-            ))),
         },
-        NumKind::Exact(value) if value.denom().is_one() => {
+        | NumKind::Exact(value) if value.denom().is_one() => {
             let integer = NumVal::int(value.numer().clone());
             gamma(_interp, name, &[Value::Num(integer)], span)
-        }
-        NumKind::Exact(_) | NumKind::Float(_) => Ok(Value::Num(NumVal::float(
-            gamma_f64(num.to_f64().unwrap_or(f64::NAN)),
-            num.dim,
-        ))),
-        NumKind::Sym(term) => Ok(Value::Num(NumVal::symbolic(
-            Term::fun(Fun::Other("gamma"), vec![(**term).clone()]),
-            num.dim,
-        ))),
-        NumKind::Complex(..) => Err(domain_error(name, &num, span)),
+        },
+        | NumKind::Exact(_) | NumKind::Float(_) => {
+            Ok(Value::Num(NumVal::float(
+                gamma_f64(num.to_f64().unwrap_or(f64::NAN)),
+                num.dim,
+            )))
+        },
+        | NumKind::Sym(term) => {
+            Ok(Value::Num(NumVal::symbolic(
+                Term::fun(Fun::Other("gamma"), vec![(**term).clone()]),
+                num.dim,
+            )))
+        },
+        | NumKind::Complex(..) => Err(domain_error(name, &num, span)),
     }
 }
 
@@ -4461,7 +4819,8 @@ fn gamma_f64(x: f64) -> f64 {
 fn lgamma_free(x: f64) -> f64 {
     // Lanczos approximation, enough for the examples and `gamma`.
     if x < 0.5 {
-        return std::f64::consts::PI.ln() - (std::f64::consts::PI * x).sin().abs().ln()
+        return std::f64::consts::PI.ln()
+            - (std::f64::consts::PI * x).sin().abs().ln()
             - lgamma_free(1.0 - x);
     }
     let coefficients = [
@@ -4497,7 +4856,10 @@ fn erf(x: f64) -> f64 {
 }
 
 /// Rejects shapes whose element count would exhaust memory or overflow.
-fn checked_element_count(shape: &[usize], span: Span) -> Result<usize, EvalError> {
+fn checked_element_count(
+    shape: &[usize],
+    span: Span,
+) -> Result<usize, EvalError> {
     let mut count: usize = 1;
     for extent in shape {
         count = count
@@ -4510,7 +4872,10 @@ fn checked_element_count(shape: &[usize], span: Span) -> Result<usize, EvalError
     Ok(count)
 }
 
-fn gcd(a: i64, b: i64) -> i64 {
+fn gcd(
+    a: i64,
+    b: i64,
+) -> i64 {
     let mut a = a.abs();
     let mut b = b.abs();
     while b != 0 {
@@ -4521,7 +4886,12 @@ fn gcd(a: i64, b: i64) -> i64 {
     a
 }
 
-fn arity(name: &str, expected: usize, got: usize, span: Span) -> EvalError {
+fn arity(
+    name: &str,
+    expected: usize,
+    got: usize,
+    span: Span,
+) -> EvalError {
     EvalError::new(
         "E0315",
         format!("`{name}` takes {expected} argument(s), found {got}"),
@@ -4537,35 +4907,59 @@ fn err(value: Value) -> Value {
     make_variant(adt::RESULT_ID, 1, "Err", vec![value])
 }
 
-fn expect_num(args: &[Value], index: usize, name: &str, span: Span) -> Result<NumVal, EvalError> {
+fn expect_num(
+    args: &[Value],
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<NumVal, EvalError> {
     match args.get(index) {
-        Some(Value::Num(num)) => Ok(num.clone()),
-        Some(other) => Err(EvalError::new(
-            "E0302",
-            format!("`{name}` expects a number, found {}", other.type_name()),
-        )
-        .at(span)),
-        None => Err(arity(name, index + 1, args.len(), span)),
+        | Some(Value::Num(num)) => Ok(num.clone()),
+        | Some(other) => {
+            Err(EvalError::new(
+                "E0302",
+                format!("`{name}` expects a number, found {}", other.type_name()),
+            )
+            .at(span))
+        },
+        | None => Err(arity(name, index + 1, args.len(), span)),
     }
 }
 
-fn expect_float(args: &[Value], index: usize, name: &str, span: Span) -> Result<f64, EvalError> {
+fn expect_float(
+    args: &[Value],
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<f64, EvalError> {
     expect_num(args, index, name, span)?
         .to_f64()
-        .ok_or_else(|| EvalError::new("E0806", format!("`{name}` expects a concrete number")).at(span))
+        .ok_or_else(|| {
+            EvalError::new("E0806", format!("`{name}` expects a concrete number")).at(span)
+        })
 }
 
-fn expect_int(args: &[Value], index: usize, name: &str, span: Span) -> Result<i64, EvalError> {
+fn expect_int(
+    args: &[Value],
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<i64, EvalError> {
     let num = expect_num(args, index, name, span)?;
     num.to_f64()
         .map(|value| value as i64)
         .ok_or_else(|| EvalError::new("E0302", format!("`{name}` expects an Int")).at(span))
 }
 
-fn expect_str(args: &[Value], index: usize, name: &str, span: Span) -> Result<String, EvalError> {
+fn expect_str(
+    args: &[Value],
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<String, EvalError> {
     match args.get(index) {
-        Some(Value::Str(text)) => Ok(text.to_string()),
-        _ => Err(arity(name, index + 1, args.len(), span)),
+        | Some(Value::Str(text)) => Ok(text.to_string()),
+        | _ => Err(arity(name, index + 1, args.len(), span)),
     }
 }
 
@@ -4576,20 +4970,27 @@ fn expect_tensor(
     span: Span,
 ) -> Result<Rc<TensorData>, EvalError> {
     match args.get(index) {
-        Some(Value::Tensor(tensor)) => Ok(tensor.clone()),
-        Some(other) => Err(EvalError::new(
-            "E0302",
-            format!("`{name}` expects a tensor, found {}", other.type_name()),
-        )
-        .at(span)),
-        None => Err(arity(name, index + 1, args.len(), span)),
+        | Some(Value::Tensor(tensor)) => Ok(tensor.clone()),
+        | Some(other) => {
+            Err(EvalError::new(
+                "E0302",
+                format!("`{name}` expects a tensor, found {}", other.type_name()),
+            )
+            .at(span))
+        },
+        | None => Err(arity(name, index + 1, args.len(), span)),
     }
 }
 
-fn expect_unit(args: &[Value], index: usize, name: &str, span: Span) -> Result<Rc<UnitDef>, EvalError> {
+fn expect_unit(
+    args: &[Value],
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<Rc<UnitDef>, EvalError> {
     match args.get(index) {
-        Some(Value::UnitOf(unit)) => Ok(unit.clone()),
-        _ => Err(arity(name, index + 1, args.len(), span)),
+        | Some(Value::UnitOf(unit)) => Ok(unit.clone()),
+        | _ => Err(arity(name, index + 1, args.len(), span)),
     }
 }
 
@@ -4601,13 +5002,15 @@ fn expect_dyn(
     span: Span,
 ) -> Result<Rc<crate::value::DynValue>, EvalError> {
     match args.get(index) {
-        Some(Value::Dyn(dynamic)) => Ok(dynamic.clone()),
-        Some(other) => Err(EvalError::new(
-            "E0302",
-            format!("`{name}` expects a Dyn, found {}", other.type_name()),
-        )
-        .at(span)),
-        None => Err(arity(name, index + 1, args.len(), span)),
+        | Some(Value::Dyn(dynamic)) => Ok(dynamic.clone()),
+        | Some(other) => {
+            Err(EvalError::new(
+                "E0302",
+                format!("`{name}` expects a Dyn, found {}", other.type_name()),
+            )
+            .at(span))
+        },
+        | None => Err(arity(name, index + 1, args.len(), span)),
     }
 }
 
@@ -4618,10 +5021,7 @@ fn expect_dyn(
 /// (`L/T`, `L^2`). It round-trips through `Dim::parse_plain`, which is what
 /// makes `dyn_with` and `check_with` total.
 fn dim_value(dim: &Dim) -> Value {
-    record_of(vec![(
-        "dimension",
-        Value::string(dim.to_plain_string()),
-    )])
+    record_of(vec![("dimension", Value::string(dim.to_plain_string()))])
 }
 
 fn as_dim_value(value: &Value) -> Option<Dim> {
@@ -4640,15 +5040,13 @@ fn expect_dim_value(
     name: &str,
     span: Span,
 ) -> Result<Dim, EvalError> {
-    args.get(index)
-        .and_then(as_dim_value)
-        .ok_or_else(|| {
-            EvalError::new(
-                "E0302",
-                format!("`{name}` expects a DimValue (as `dim_of` returns)"),
-            )
-            .at(span)
-        })
+    args.get(index).and_then(as_dim_value).ok_or_else(|| {
+        EvalError::new(
+            "E0302",
+            format!("`{name}` expects a DimValue (as `dim_of` returns)"),
+        )
+        .at(span)
+    })
 }
 
 /// The `DimError` a failed `check`/`check_with` returns (§4.9.2).
@@ -4656,7 +5054,10 @@ fn expect_dim_value(
 /// This is the appendix-B `E0412` class — "`Dyn` runtime dimension check
 /// failed" — travelling as the recoverable `Err` payload the signature
 /// promises, not as a fatal diagnostic.
-fn dim_error(expected: &Dim, found: &Dim) -> Value {
+fn dim_error(
+    expected: &Dim,
+    found: &Dim,
+) -> Value {
     let id = adt::intern(adt::Adt {
         name: "DimError".to_string(),
         params: Vec::new(),
@@ -4707,31 +5108,33 @@ enum MathKind {
 /// The symbolic node for an elementary function.
 fn fun_of(name: &str) -> Fun {
     match name {
-        "sqrt" => Fun::Sqrt,
-        "exp" => Fun::Exp,
-        "ln" | "log" => Fun::Ln,
-        "sin" => Fun::Sin,
-        "cos" => Fun::Cos,
-        "tan" => Fun::Tan,
-        "abs" => Fun::Abs,
-        other => Fun::Other(match other {
-            "cbrt" => "cbrt",
-            "log2" => "log2",
-            "log10" => "log10",
-            "asin" => "asin",
-            "acos" => "acos",
-            "atan" => "atan",
-            "sinh" => "sinh",
-            "cosh" => "cosh",
-            "tanh" => "tanh",
-            "asinh" => "asinh",
-            "acosh" => "acosh",
-            "atanh" => "atanh",
-            "erf" => "erf",
-            "erfc" => "erfc",
-            "gamma" => "gamma",
-            _ => "f",
-        }),
+        | "sqrt" => Fun::Sqrt,
+        | "exp" => Fun::Exp,
+        | "ln" | "log" => Fun::Ln,
+        | "sin" => Fun::Sin,
+        | "cos" => Fun::Cos,
+        | "tan" => Fun::Tan,
+        | "abs" => Fun::Abs,
+        | other => {
+            Fun::Other(match other {
+                | "cbrt" => "cbrt",
+                | "log2" => "log2",
+                | "log10" => "log10",
+                | "asin" => "asin",
+                | "acos" => "acos",
+                | "atan" => "atan",
+                | "sinh" => "sinh",
+                | "cosh" => "cosh",
+                | "tanh" => "tanh",
+                | "asinh" => "asinh",
+                | "acosh" => "acosh",
+                | "atanh" => "atanh",
+                | "erf" => "erf",
+                | "erfc" => "erfc",
+                | "gamma" => "gamma",
+                | _ => "f",
+            })
+        },
     }
 }
 
@@ -4764,7 +5167,9 @@ fn unary_math(
                 MathKind::Root(2),
             )?;
             let Value::Num(mut root) = root else {
-                return Err(EvalError::new("E0809", "sqrt of a Dyn payload is not a scalar").at(span));
+                return Err(
+                    EvalError::new("E0809", "sqrt of a Dyn payload is not a scalar").at(span),
+                );
             };
             root.dim = Dim::one();
             let half = BigRational::new(BigInt::one(), BigInt::from(2));
@@ -4789,11 +5194,11 @@ fn unary_math(
         return Ok(special);
     }
     match kind {
-        MathKind::Root(degree) => {
+        | MathKind::Root(degree) => {
             let exponent = BigRational::new(BigInt::one(), BigInt::from(degree));
             let dim = num.dim.pow(&exponent);
             match &num.kind {
-                NumKind::Float(value) if *value < 0.0 => {
+                | NumKind::Float(value) if *value < 0.0 => {
                     // §6.3.4: a negative radicand is a formal term, never NaN
                     // and never an error — `Real`'s roots are formal.
                     let rational = num
@@ -4803,20 +5208,22 @@ fn unary_math(
                         Term::pow(Term::Num(rational), exponent),
                         dim,
                     )))
-                }
-                NumKind::Float(value) => {
+                },
+                | NumKind::Float(value) => {
                     let result = value.powf(1.0 / f64::from(degree));
                     if result.is_nan() && !value.is_nan() {
                         return Err(domain_error(name, &num, span));
                     }
                     Ok(Value::Num(NumVal::float(result, dim)))
-                }
-                NumKind::Complex(..) => Err(domain_error(name, &num, span)),
-                NumKind::Sym(term) => Ok(Value::Num(NumVal::symbolic(
-                    Term::pow((**term).clone(), exponent),
-                    dim,
-                ))),
-                NumKind::Int(_) | NumKind::Exact(_) => {
+                },
+                | NumKind::Complex(..) => Err(domain_error(name, &num, span)),
+                | NumKind::Sym(term) => {
+                    Ok(Value::Num(NumVal::symbolic(
+                        Term::pow((**term).clone(), exponent),
+                        dim,
+                    )))
+                },
+                | NumKind::Int(_) | NumKind::Exact(_) => {
                     let rational = num
                         .to_rational()
                         .ok_or_else(|| domain_error(name, &num, span))?;
@@ -4829,40 +5236,46 @@ fn unary_math(
                         Term::pow(Term::Num(rational), exponent),
                         dim,
                     )))
-                }
+                },
             }
-        }
-        MathKind::Float(function) => {
+        },
+        | MathKind::Float(function) => {
             let fun = fun_of(name);
             match &num.kind {
-                NumKind::Float(value) => {
+                | NumKind::Float(value) => {
                     let result = function(*value);
                     if result.is_nan() && !value.is_nan() {
                         return Err(domain_error(name, &num, span));
                     }
                     Ok(Value::Num(NumVal::float(result, num.dim)))
-                }
-                NumKind::Complex(..) => Err(domain_error(name, &num, span)),
-                NumKind::Sym(term) => Ok(Value::Num(NumVal::symbolic(
-                    Term::fun(fun, vec![(**term).clone()]),
-                    num.dim,
-                ))),
-                NumKind::Int(_) | NumKind::Exact(_) => {
+                },
+                | NumKind::Complex(..) => Err(domain_error(name, &num, span)),
+                | NumKind::Sym(term) => {
+                    Ok(Value::Num(NumVal::symbolic(
+                        Term::fun(fun, vec![(**term).clone()]),
+                        num.dim,
+                    )))
+                },
+                | NumKind::Int(_) | NumKind::Exact(_) => {
                     let rational = num
                         .to_rational()
                         .ok_or_else(|| domain_error(name, &num, span))?;
                     let term = Term::fun(fun, vec![Term::Num(rational)]);
                     match term {
-                        Term::Num(value) => Ok(Value::Num(NumVal::exact(value, num.dim))),
-                        other => Ok(Value::Num(NumVal::symbolic(other, num.dim))),
+                        | Term::Num(value) => Ok(Value::Num(NumVal::exact(value, num.dim))),
+                        | other => Ok(Value::Num(NumVal::symbolic(other, num.dim))),
                     }
-                }
+                },
             }
-        }
+        },
     }
 }
 
-fn domain_error(name: &str, num: &NumVal, span: Span) -> EvalError {
+fn domain_error(
+    name: &str,
+    num: &NumVal,
+    span: Span,
+) -> EvalError {
     EvalError::new(
         "E0806",
         format!(
@@ -4887,25 +5300,27 @@ fn special_value(
     span: Span,
 ) -> Result<Option<Value>, EvalError> {
     match name {
-        "ln" | "log" => {
+        | "ln" | "log" => {
             if infinity_sign(num) == Some(1) {
                 return Ok(Some(Value::Num(num.clone())));
             }
             if is_exact_zero(num) {
                 return Ok(Some(negative_infinity(interp, &num.dim, span)?));
             }
-        }
-        "exp" => match infinity_sign(num) {
-            Some(1) => return Ok(Some(Value::Num(num.clone()))),
-            Some(-1) => {
-                return Ok(Some(Value::Num(NumVal::exact(
-                    BigRational::zero(),
-                    num.dim.clone(),
-                ))))
-            }
-            _ => {}
         },
-        _ => {}
+        | "exp" => {
+            match infinity_sign(num) {
+                | Some(1) => return Ok(Some(Value::Num(num.clone()))),
+                | Some(-1) => {
+                    return Ok(Some(Value::Num(NumVal::exact(
+                        BigRational::zero(),
+                        num.dim.clone(),
+                    ))));
+                },
+                | _ => {},
+            }
+        },
+        | _ => {},
     }
     Ok(None)
 }
@@ -4914,40 +5329,46 @@ fn special_value(
 /// the `Float` IEEE form.
 fn infinity_sign(num: &NumVal) -> Option<i8> {
     match &num.kind {
-        NumKind::Float(value) if value.is_infinite() => Some(if *value > 0.0 { 1 } else { -1 }),
-        NumKind::Sym(term) => infinity_term_sign(term),
-        _ => None,
+        | NumKind::Float(value) if value.is_infinite() => Some(if *value > 0.0 { 1 } else { -1 }),
+        | NumKind::Sym(term) => infinity_term_sign(term),
+        | _ => None,
     }
 }
 
 fn infinity_term_sign(term: &Term) -> Option<i8> {
     match term {
-        Term::Sym(name) if name == "oo" => Some(1),
-        Term::Foreign { text, .. } if text.as_ref() == "oo" => Some(1),
-        Term::Foreign { text, .. } if text.as_ref() == "-oo" => Some(-1),
-        Term::Mul(items) => match items.as_slice() {
-            [Term::Num(coefficient), rest]
-                if coefficient == &BigRational::from_integer(BigInt::from(-1))
-                    && infinity_term_sign(rest) == Some(1) =>
-            {
-                Some(-1)
+        | Term::Sym(name) if name == "oo" => Some(1),
+        | Term::Foreign { text, .. } if text.as_ref() == "oo" => Some(1),
+        | Term::Foreign { text, .. } if text.as_ref() == "-oo" => Some(-1),
+        | Term::Mul(items) => {
+            match items.as_slice() {
+                | [Term::Num(coefficient), rest]
+                    if coefficient == &BigRational::from_integer(BigInt::from(-1))
+                        && infinity_term_sign(rest) == Some(1) =>
+                {
+                    Some(-1)
+                },
+                | _ => None,
             }
-            _ => None,
         },
-        _ => None,
+        | _ => None,
     }
 }
 
 fn is_exact_zero(num: &NumVal) -> bool {
     match &num.kind {
-        NumKind::Int(value) => value.is_zero(),
-        NumKind::Exact(value) => value.is_zero(),
-        _ => false,
+        | NumKind::Int(value) => value.is_zero(),
+        | NumKind::Exact(value) => value.is_zero(),
+        | _ => false,
     }
 }
 
 /// The `Real` value `-oo` in the same dimension as `dim`.
-fn negative_infinity(interp: &mut Interp, dim: &Dim, span: Span) -> Result<Value, EvalError> {
+fn negative_infinity(
+    interp: &mut Interp,
+    dim: &Dim,
+    span: Span,
+) -> Result<Value, EvalError> {
     let infinity = interp.lookup_global("oo", None, span)?;
     let Value::Num(number) = infinity else {
         return Err(EvalError::new("E0809", "`oo` is not a scalar").at(span));
@@ -4959,7 +5380,10 @@ fn negative_infinity(interp: &mut Interp, dim: &Dim, span: Span) -> Result<Value
     Ok(Value::Num(NumVal::symbolic(Term::neg(term), dim.clone())))
 }
 
-fn exact_root(value: &BigRational, degree: u32) -> Option<BigRational> {
+fn exact_root(
+    value: &BigRational,
+    degree: u32,
+) -> Option<BigRational> {
     if value.is_negative() {
         return None;
     }
@@ -5116,8 +5540,8 @@ fn sum_axis_elementwise(
                 point[axis] = 0;
                 let point: Vec<isize> = point.iter().map(|value| *value as isize).collect();
                 match tensor.get(&point) {
-                    Some(Value::Num(only)) => only,
-                    _ => NumVal::float(crate::value::kahan_sum(&group), tensor.dim.clone()),
+                    | Some(Value::Num(only)) => only,
+                    | _ => NumVal::float(crate::value::kahan_sum(&group), tensor.dim.clone()),
                 }
             } else {
                 NumVal::float(crate::value::kahan_sum(&group), tensor.dim.clone())
@@ -5132,8 +5556,8 @@ fn sum_axis_elementwise(
             let point: Vec<isize> = point.iter().map(|value| *value as isize).collect();
             if let Some(element) = tensor.get(&point) {
                 total = Some(match total {
-                    None => element,
-                    Some(acc) => interp.apply_binary("+", acc, element, span)?,
+                    | None => element,
+                    | Some(acc) => interp.apply_binary("+", acc, element, span)?,
                 });
             }
         }
@@ -5142,7 +5566,10 @@ fn sum_axis_elementwise(
     Ok(build_tensor(out, shape.to_vec(), tensor.dim.clone()))
 }
 
-fn unravel(mut index: usize, shape: &[usize]) -> Vec<usize> {
+fn unravel(
+    mut index: usize,
+    shape: &[usize],
+) -> Vec<usize> {
     let mut coordinates = vec![0; shape.len()];
     for axis in (0..shape.len()).rev() {
         let extent = shape[axis].max(1);
@@ -5170,14 +5597,14 @@ fn outer_product(
     let dim = elements
         .first()
         .map_or_else(Dim::one, crate::value::value_dim);
-    Ok(build_tensor(
-        elements,
-        vec![a.shape[0], b.shape[0]],
-        dim,
-    ))
+    Ok(build_tensor(elements, vec![a.shape[0], b.shape[0]], dim))
 }
 
-fn determinant(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, EvalError> {
+fn determinant(
+    interp: &mut Interp,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
     let tensor = expect_tensor(args, 0, "det", span)?;
     if tensor.rank() != 2 || tensor.shape[0] != tensor.shape[1] {
         return Err(EvalError::new("E0802", "`det` expects a square matrix").at(span));
@@ -5203,11 +5630,11 @@ fn determinant(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value,
     }
     let _ = interp;
     let determinant = match aevia_std::linalg::det(n, n, &flattened(&matrix)) {
-        Ok(value) => value,
+        | Ok(value) => value,
         // The dispatcher cannot express this call; the elimination it replaced
         // still answers. `det` has no error case beyond the shape already
         // checked, so this arm is the fallback and not a result.
-        Err(_) => gaussian_determinant(&mut matrix),
+        | Err(_) => gaussian_determinant(&mut matrix),
     };
     Ok(Value::Num(NumVal::float(determinant, det_dim)))
 }
@@ -5244,7 +5671,10 @@ fn exact_matrix(tensor: &TensorData) -> Option<Vec<Vec<BigRational>>> {
 }
 
 /// A rational as the narrowest runtime scalar: `Int` when it is integral.
-fn exact_number(value: BigRational, dim: Dim) -> Value {
+fn exact_number(
+    value: BigRational,
+    dim: Dim,
+) -> Value {
     if value.denom().is_one() {
         Value::Num(NumVal {
             kind: NumKind::Int(value.numer().clone()),
@@ -5301,15 +5731,13 @@ fn invert_exact(matrix: &[Vec<BigRational>]) -> Option<Vec<Vec<BigRational>>> {
     if !gauss_jordan_exact(&mut augmented, n) {
         return None;
     }
-    Some(
-        augmented
-            .into_iter()
-            .map(|row| row[n..].to_vec())
-            .collect(),
-    )
+    Some(augmented.into_iter().map(|row| row[n..].to_vec()).collect())
 }
 
-fn gauss_jordan_exact(matrix: &mut [Vec<BigRational>], columns: usize) -> bool {
+fn gauss_jordan_exact(
+    matrix: &mut [Vec<BigRational>],
+    columns: usize,
+) -> bool {
     let rows = matrix.len();
     for column in 0..columns {
         let pivot = (column..rows).find(|row| !matrix[*row][column].is_zero());
@@ -5363,7 +5791,10 @@ fn gaussian_determinant(matrix: &mut [Vec<f64>]) -> f64 {
     determinant
 }
 
-fn inverse(args: &[Value], span: Span) -> Result<Value, EvalError> {
+fn inverse(
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
     let tensor = expect_tensor(args, 0, "inv", span)?;
     if tensor.rank() != 2 || tensor.shape[0] != tensor.shape[1] {
         return Ok(err(linalg_error_value(&aevia_std::NumericError::NotSquare)));
@@ -5397,13 +5828,13 @@ fn inverse(args: &[Value], span: Span) -> Result<Value, EvalError> {
         })
         .collect();
     let inverse = match aevia_std::linalg::inv(n, n, &flattened(&matrix)) {
-        Ok(values) => values,
-        Err(aevia_std::NumericError::Singular) => {
+        | Ok(values) => values,
+        | Err(aevia_std::NumericError::Singular) => {
             return Ok(err(linalg_error_value(&aevia_std::NumericError::Singular)));
-        }
+        },
         // The dispatcher cannot express this call; the Gauss-Jordan it replaced
         // still answers, and reports singularity the way it always did.
-        Err(_) => {
+        | Err(_) => {
             let mut augmented: Vec<Vec<f64>> = (0..n)
                 .map(|row| {
                     let mut values = Vec::with_capacity(2 * n);
@@ -5424,7 +5855,7 @@ fn inverse(args: &[Value], span: Span) -> Result<Value, EvalError> {
                 }
             }
             values
-        }
+        },
     };
     let mut elements = Vec::with_capacity(n * n);
     for value in inverse {
@@ -5467,7 +5898,11 @@ fn gauss_jordan(matrix: &mut [Vec<f64>]) -> bool {
     true
 }
 
-fn linsolve(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, EvalError> {
+fn linsolve(
+    interp: &mut Interp,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
     let matrix = expect_tensor(args, 0, "linsolve", span)?;
     let vector = expect_tensor(args, 1, "linsolve", span)?;
     if matrix.rank() != 2 || vector.rank() != 1 || matrix.shape[0] != matrix.shape[1] {
@@ -5520,13 +5955,13 @@ fn linsolve(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, Ev
         })
         .collect();
     let solution = match aevia_std::linalg::solve(n, n, &flattened(&coefficients), &rhs) {
-        Ok(values) => values,
-        Err(aevia_std::NumericError::Singular) => {
+        | Ok(values) => values,
+        | Err(aevia_std::NumericError::Singular) => {
             return Ok(err(linalg_error_value(&aevia_std::NumericError::Singular)));
-        }
+        },
         // The dispatcher cannot express this call; the Gauss-Jordan it replaced
         // still answers, and reports singularity the way it always did.
-        Err(_) => {
+        | Err(_) => {
             let mut augmented: Vec<Vec<f64>> = (0..n)
                 .map(|row| {
                     let mut values = Vec::with_capacity(n + 1);
@@ -5539,7 +5974,7 @@ fn linsolve(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, Ev
                 return Ok(err(linalg_error_value(&aevia_std::NumericError::Singular)));
             }
             (0..n).map(|row| augmented[row][n]).collect()
-        }
+        },
     };
     let _ = interp;
     let elements: Vec<Value> = solution
@@ -5551,29 +5986,42 @@ fn linsolve(interp: &mut Interp, args: &[Value], span: Span) -> Result<Value, Ev
 
 fn value_to_term(value: &Value) -> Result<Term, EvalError> {
     match value {
-        Value::Num(num) => match &num.kind {
-            NumKind::Int(value) => Ok(Term::Num(BigRational::from_integer(value.clone()))),
-            NumKind::Exact(value) => Ok(Term::Num(value.clone())),
-            NumKind::Float(value) => Ok(Term::Num(
-                BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
-            )),
-            NumKind::Sym(term) => Ok((**term).clone()),
-            NumKind::Complex(..) => Err(EvalError::new("E0302", "complex symbolic values are not supported")),
+        | Value::Num(num) => {
+            match &num.kind {
+                | NumKind::Int(value) => Ok(Term::Num(BigRational::from_integer(value.clone()))),
+                | NumKind::Exact(value) => Ok(Term::Num(value.clone())),
+                | NumKind::Float(value) => {
+                    Ok(Term::Num(
+                        BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
+                    ))
+                },
+                | NumKind::Sym(term) => Ok((**term).clone()),
+                | NumKind::Complex(..) => {
+                    Err(EvalError::new(
+                        "E0302",
+                        "complex symbolic values are not supported",
+                    ))
+                },
+            }
         },
-        other => Err(EvalError::new(
-            "E0302",
-            format!("expected a scalar, found {}", other.type_name()),
-        )),
+        | other => {
+            Err(EvalError::new(
+                "E0302",
+                format!("expected a scalar, found {}", other.type_name()),
+            ))
+        },
     }
 }
 
 fn symbol_name(num: &NumVal) -> Option<String> {
     match &num.kind {
-        NumKind::Sym(term) => match &**term {
-            Term::Sym(name) => Some(name.clone()),
-            _ => None,
+        | NumKind::Sym(term) => {
+            match &**term {
+                | Term::Sym(name) => Some(name.clone()),
+                | _ => None,
+            }
         },
-        _ => None,
+        | _ => None,
     }
 }
 
@@ -5583,10 +6031,7 @@ fn render_plot(spec: &Value) -> String {
         if let Some(Value::Tensor(series)) = record.fields.get("series") {
             for item in series.elements() {
                 if let Value::Record(series) = item {
-                    let label = series
-                        .fields
-                        .get("label")
-                        .map_or_else(String::new, show);
+                    let label = series.fields.get("label").map_or_else(String::new, show);
                     let x = series.fields.get("x").cloned().unwrap_or(Value::Unit);
                     let y = series.fields.get("y").cloned().unwrap_or(Value::Unit);
                     if let (Value::Tensor(x), Value::Tensor(y)) = (&x, &y) {
@@ -5637,14 +6082,16 @@ fn complex_values(tensor: &TensorData) -> Result<Vec<aevia_std::Complex>, EvalEr
             ));
         };
         out.push(match &num.kind {
-            NumKind::Complex(re, im) => aevia_std::Complex::new(*re, *im),
-            _ => match num.to_f64() {
-                Some(value) => aevia_std::Complex::new(value, 0.0),
-                None => {
-                    return Err(EvalError::new(
-                        "E0806",
-                        "expected a concrete element in the transform",
-                    ))
+            | NumKind::Complex(re, im) => aevia_std::Complex::new(*re, *im),
+            | _ => {
+                match num.to_f64() {
+                    | Some(value) => aevia_std::Complex::new(value, 0.0),
+                    | None => {
+                        return Err(EvalError::new(
+                            "E0806",
+                            "expected a concrete element in the transform",
+                        ));
+                    },
                 }
             },
         });
@@ -5677,8 +6124,8 @@ fn ode_rates(
     failure: &mut Option<EvalError>,
 ) -> Vec<f64> {
     match flatten_state(value) {
-        Ok((_, flat)) if flat.len() == expected => flat,
-        Ok((_, flat)) => {
+        | Ok((_, flat)) if flat.len() == expected => flat,
+        | Ok((_, flat)) => {
             if failure.is_none() {
                 *failure = Some(
                     EvalError::new(
@@ -5694,13 +6141,13 @@ fn ode_rates(
                 );
             }
             vec![0.0; expected]
-        }
-        Err(error) => {
+        },
+        | Err(error) => {
             if failure.is_none() {
                 *failure = Some(error);
             }
             vec![0.0; expected]
-        }
+        },
     }
 }
 
@@ -5735,8 +6182,7 @@ pub fn npy_encode(tensor: &crate::value::TensorData) -> Result<Vec<u8>, String> 
     } else {
         format!("({}, {})", tensor.shape[0], tensor.shape[1])
     };
-    let mut header =
-        format!("{{'descr': '<f8', 'fortran_order': False, 'shape': {shape}, }}");
+    let mut header = format!("{{'descr': '<f8', 'fortran_order': False, 'shape': {shape}, }}");
     // magic(6) + version(2) + header length(2) + header must be a multiple of 64.
     let padding = (64 - ((10 + header.len() + 1) % 64)) % 64;
     header.push_str(&" ".repeat(padding));
@@ -5768,8 +6214,8 @@ pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
     }
     let major = bytes[6];
     let header_len = match major {
-        1 => usize::from(u16::from_le_bytes([bytes[8], bytes[9]])),
-        2 | 3 => {
+        | 1 => usize::from(u16::from_le_bytes([bytes[8], bytes[9]])),
+        | 2 | 3 => {
             if bytes.len() < 12 {
                 return Err("E0903: truncated NPY header".to_string());
             }
@@ -5777,13 +6223,13 @@ pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
                 bytes[8], bytes[9], bytes[10], bytes[11],
             ]))
             .unwrap_or(0)
-        }
-        _ => {
+        },
+        | _ => {
             return Err(format!(
                 "E0904: unsupported NPY version {major}.{}",
                 bytes[7]
-            ))
-        }
+            ));
+        },
     };
     if header_len > 10 * 1024 {
         return Err("E0903: the NPY header exceeds 10 KiB".to_string());
@@ -5805,13 +6251,13 @@ pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
         .ok_or_else(|| "E0903: the NPY `descr` is unterminated".to_string())?;
     let descr = &header[descr_start..descr_end];
     let width = match descr {
-        "<f8" | "|f8" | "=f8" => 8usize,
-        "<f4" | "|f4" | "=f4" => 4usize,
-        _ => {
+        | "<f8" | "|f8" | "=f8" => 8usize,
+        | "<f4" | "|f4" | "=f4" => 4usize,
+        | _ => {
             return Err(format!(
                 "E0904: unsupported NPY dtype `{descr}` (only little-endian f4/f8)"
-            ))
-        }
+            ));
+        },
     };
     if header.contains("'fortran_order': True") {
         return Err("E0904: Fortran-ordered NPY is not supported".to_string());
@@ -5866,25 +6312,25 @@ pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
 /// The Aevia spelling of an `SdeMethod` constructor → the standard scheme.
 fn sde_method_named(name: &str) -> Option<aevia_std::sde::Method> {
     Some(match name {
-        "EulerMaruyama" => aevia_std::sde::Method::EulerMaruyama,
-        "Milstein" => aevia_std::sde::Method::Milstein,
-        "MilsteinStratonovich" => aevia_std::sde::Method::MilsteinStratonovich,
-        "HeunStratonovich" => aevia_std::sde::Method::HeunStratonovich,
-        "SrkPlaten" => aevia_std::sde::Method::SrkPlaten,
-        "MilsteinNoncommutative" => aevia_std::sde::Method::MilsteinNoncommutative,
-        _ => return None,
+        | "EulerMaruyama" => aevia_std::sde::Method::EulerMaruyama,
+        | "Milstein" => aevia_std::sde::Method::Milstein,
+        | "MilsteinStratonovich" => aevia_std::sde::Method::MilsteinStratonovich,
+        | "HeunStratonovich" => aevia_std::sde::Method::HeunStratonovich,
+        | "SrkPlaten" => aevia_std::sde::Method::SrkPlaten,
+        | "MilsteinNoncommutative" => aevia_std::sde::Method::MilsteinNoncommutative,
+        | _ => return None,
     })
 }
 
 /// The `SdeMethod` value the `SdePath` record reports.
 fn sde_method_value(method: aevia_std::sde::Method) -> Value {
     let (index, name) = match method {
-        aevia_std::sde::Method::EulerMaruyama => (0, "EulerMaruyama"),
-        aevia_std::sde::Method::Milstein => (1, "Milstein"),
-        aevia_std::sde::Method::MilsteinStratonovich => (2, "MilsteinStratonovich"),
-        aevia_std::sde::Method::HeunStratonovich => (3, "HeunStratonovich"),
-        aevia_std::sde::Method::SrkPlaten => (4, "SrkPlaten"),
-        aevia_std::sde::Method::MilsteinNoncommutative => (5, "MilsteinNoncommutative"),
+        | aevia_std::sde::Method::EulerMaruyama => (0, "EulerMaruyama"),
+        | aevia_std::sde::Method::Milstein => (1, "Milstein"),
+        | aevia_std::sde::Method::MilsteinStratonovich => (2, "MilsteinStratonovich"),
+        | aevia_std::sde::Method::HeunStratonovich => (3, "HeunStratonovich"),
+        | aevia_std::sde::Method::SrkPlaten => (4, "SrkPlaten"),
+        | aevia_std::sde::Method::MilsteinNoncommutative => (5, "MilsteinNoncommutative"),
     };
     let id = adt::intern(adt::Adt {
         name: "SdeMethod".to_string(),
@@ -5906,8 +6352,8 @@ fn sde_structure(value: &Value) -> Result<aevia_std::sde::Structure, SdeError> {
         ));
     };
     match variant.name.as_str() {
-        "Diagonal" => Ok(aevia_std::sde::Structure::Diagonal),
-        "General" | "GeneralNoncommutative" => {
+        | "Diagonal" => Ok(aevia_std::sde::Structure::Diagonal),
+        | "General" | "GeneralNoncommutative" => {
             let noise = variant
                 .fields
                 .first()
@@ -5919,14 +6365,19 @@ fn sde_structure(value: &Value) -> Result<aevia_std::sde::Structure, SdeError> {
                 noise: usize::try_from(noise.max(0.0) as u64).unwrap_or(0),
                 commutative: variant.name == "General",
             })
-        }
-        other => Err(SdeError::Invalid(format!(
-            "`{other}` is not an `SdeStructure`"
-        ))),
+        },
+        | other => {
+            Err(SdeError::Invalid(format!(
+                "`{other}` is not an `SdeStructure`"
+            )))
+        },
     }
 }
 
-fn sde_float_field(record: &RecordValue, field: &str) -> Result<f64, SdeError> {
+fn sde_float_field(
+    record: &RecordValue,
+    field: &str,
+) -> Result<f64, SdeError> {
     record
         .fields
         .get(field)
@@ -5934,7 +6385,10 @@ fn sde_float_field(record: &RecordValue, field: &str) -> Result<f64, SdeError> {
         .ok_or_else(|| SdeError::Invalid(format!("the SDE options need `{field}`")))
 }
 
-fn sde_int_field(record: &RecordValue, field: &str) -> Result<i64, SdeError> {
+fn sde_int_field(
+    record: &RecordValue,
+    field: &str,
+) -> Result<i64, SdeError> {
     record
         .fields
         .get(field)
@@ -5943,12 +6397,13 @@ fn sde_int_field(record: &RecordValue, field: &str) -> Result<i64, SdeError> {
         .ok_or_else(|| SdeError::Invalid(format!("the SDE options need `{field}`")))
 }
 
-fn sde_dim_field(record: &RecordValue, field: &str) -> Result<NumVal, SdeError> {
+fn sde_dim_field(
+    record: &RecordValue,
+    field: &str,
+) -> Result<NumVal, SdeError> {
     match record.fields.get(field) {
-        Some(Value::Num(num)) => Ok(num.clone()),
-        _ => Err(SdeError::Invalid(format!(
-            "the SDE options need `{field}`"
-        ))),
+        | Some(Value::Num(num)) => Ok(num.clone()),
+        | _ => Err(SdeError::Invalid(format!("the SDE options need `{field}`"))),
     }
 }
 
@@ -5966,10 +6421,16 @@ fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError
         ));
     };
     let method = match record.fields.get("method") {
-        Some(Value::Variant(method)) => sde_method_named(&method.name).ok_or_else(|| {
-            SdeError::Invalid(format!("`{}` is not an `SdeMethod`", method.name))
-        })?,
-        _ => return Err(SdeError::Invalid("the SDE options need `method`".to_string())),
+        | Some(Value::Variant(method)) => {
+            sde_method_named(&method.name).ok_or_else(|| {
+                SdeError::Invalid(format!("`{}` is not an `SdeMethod`", method.name))
+            })?
+        },
+        | _ => {
+            return Err(SdeError::Invalid(
+                "the SDE options need `method`".to_string(),
+            ));
+        },
     };
     let structure = sde_structure(
         record
@@ -5985,32 +6446,36 @@ fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError
         .ok_or_else(|| SdeError::Invalid("`t0` must be concrete".to_string()))?;
     let time_dim = t0.dim.clone();
     let options = match option.name.as_str() {
-        "Fixed" => aevia_std::sde::Options::fixed(
-            method,
-            structure,
-            seed,
-            t0_value,
-            sde_float_field(record, "dt")?,
-            sde_int_field(record, "steps")?.max(0) as usize,
-        )
-        .with_terms(terms),
-        "Adaptive" => aevia_std::sde::Options::adaptive(
-            method,
-            structure,
-            seed,
-            t0_value,
-            sde_float_field(record, "t1")?,
-            sde_float_field(record, "rtol")?,
-            sde_float_field(record, "atol")?,
-            sde_int_field(record, "max_steps")?.max(0) as usize,
-            sde_int_field(record, "cells")?.max(0) as usize,
-        )
-        .with_terms(terms),
-        other => {
+        | "Fixed" => {
+            aevia_std::sde::Options::fixed(
+                method,
+                structure,
+                seed,
+                t0_value,
+                sde_float_field(record, "dt")?,
+                sde_int_field(record, "steps")?.max(0) as usize,
+            )
+            .with_terms(terms)
+        },
+        | "Adaptive" => {
+            aevia_std::sde::Options::adaptive(
+                method,
+                structure,
+                seed,
+                t0_value,
+                sde_float_field(record, "t1")?,
+                sde_float_field(record, "rtol")?,
+                sde_float_field(record, "atol")?,
+                sde_int_field(record, "max_steps")?.max(0) as usize,
+                sde_int_field(record, "cells")?.max(0) as usize,
+            )
+            .with_terms(terms)
+        },
+        | other => {
             return Err(SdeError::Invalid(format!(
                 "`{other}` is not a step policy (`Fixed`/`Adaptive`)"
-            )))
-        }
+            )));
+        },
     };
     Ok((options, time_dim))
 }
@@ -6018,18 +6483,17 @@ fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError
 /// An `SdeError` as the opaque error value the `Result` carries.
 fn sde_error_value(error: &SdeError) -> Value {
     let (index, name, payload): (usize, &str, Vec<Value>) = match error {
-        SdeError::Invalid(message) => (0, "Invalid", vec![Value::string(message.clone())]),
-        SdeError::Shape(message) => (1, "Shape", vec![Value::string(message.clone())]),
-        SdeError::NonFinite(message) => (2, "NonFinite", vec![Value::string(message.clone())]),
-        SdeError::StepLimit(message) => (3, "StepLimit", vec![Value::string(message.clone())]),
-        SdeError::Unsupported {
-            capability,
-            detail,
-        } => (
-            4,
-            "Unsupported",
-            vec![Value::string(*capability), Value::string(detail.clone())],
-        ),
+        | SdeError::Invalid(message) => (0, "Invalid", vec![Value::string(message.clone())]),
+        | SdeError::Shape(message) => (1, "Shape", vec![Value::string(message.clone())]),
+        | SdeError::NonFinite(message) => (2, "NonFinite", vec![Value::string(message.clone())]),
+        | SdeError::StepLimit(message) => (3, "StepLimit", vec![Value::string(message.clone())]),
+        | SdeError::Unsupported { capability, detail } => {
+            (
+                4,
+                "Unsupported",
+                vec![Value::string(*capability), Value::string(detail.clone())],
+            )
+        },
     };
     let id = adt::intern(adt::Adt {
         name: "SdeError".to_string(),
@@ -6047,48 +6511,40 @@ fn sde_call(
     span: Span,
 ) -> Result<Value, EvalError> {
     match name {
-        "wiener" => {
+        | "wiener" => {
             let seed = expect_int(args, 0, name, span)?.max(0) as u64;
             let noise = expect_int(args, 1, name, span)?.max(0) as usize;
             let steps = expect_int(args, 2, name, span)?.max(0) as usize;
             let dt = expect_num(args, 3, name, span)?;
-            let dt_value = dt
-                .to_f64()
-                .ok_or_else(|| EvalError::new("E0302", "`wiener` needs a concrete `dt`").at(span))?;
+            let dt_value = dt.to_f64().ok_or_else(|| {
+                EvalError::new("E0302", "`wiener` needs a concrete `dt`").at(span)
+            })?;
             let increments = aevia_std::sde::wiener(seed, noise, steps, dt_value);
             let flat: Vec<f64> = increments.into_iter().flatten().collect();
             let half = BigRational::new(BigInt::one(), BigInt::from(2));
-            Ok(float_tensor(
-                vec![steps, noise],
-                flat,
-                dt.dim.pow(&half),
-            ))
-        }
-        "sde_order" => {
+            Ok(float_tensor(vec![steps, noise], flat, dt.dim.pow(&half)))
+        },
+        | "sde_order" => {
             let Some(Value::Variant(method)) = args.first() else {
                 return Err(EvalError::new("E0302", "`sde_order` expects an `SdeMethod`").at(span));
             };
             let method = sde_method_named(&method.name).ok_or_else(|| {
-                EvalError::new(
-                    "E0302",
-                    format!("`{}` is not an `SdeMethod`", method.name),
-                )
-                .at(span)
+                EvalError::new("E0302", format!("`{}` is not an `SdeMethod`", method.name)).at(span)
             })?;
             let order = aevia_std::sde::sde_order(method);
             Ok(record_of(vec![
                 ("strong", Value::float(order.strong)),
                 ("weak", Value::float(order.weak)),
             ]))
-        }
-        "sde_ensemble_seed" => {
+        },
+        | "sde_ensemble_seed" => {
             let seed = expect_int(args, 0, name, span)?.max(0) as u64;
             let index = expect_int(args, 1, name, span)?.max(0) as usize;
             Ok(Value::Num(NumVal::int(BigInt::from(
                 aevia_std::sde::ensemble_seed(seed, index),
             ))))
-        }
-        _ => sde_integrate(interp, name, args, span),
+        },
+        | _ => sde_integrate(interp, name, args, span),
     }
 }
 
@@ -6117,8 +6573,8 @@ fn sde_integrate(
         .ok_or_else(|| arity(name, 4, 3, span))?;
     let general = name == "sdeint_general";
     let (options, time_dim) = match sde_options(&options_value) {
-        Ok(pair) => pair,
-        Err(error) => return Ok(err(sde_error_value(&error))),
+        | Ok(pair) => pair,
+        | Err(error) => return Ok(err(sde_error_value(&error))),
     };
     // The step-policy stubs carry a dimension-free `T` field only for typing;
     // the path reports the initial time's dimension.
@@ -6144,12 +6600,12 @@ fn sde_integrate(
         state_count
     } else {
         match state_count.checked_mul(noise) {
-            Some(count) => count,
-            None => {
+            | Some(count) => count,
+            | None => {
                 return Ok(err(sde_error_value(&SdeError::Shape(
                     "the state × noise size overflows".to_string(),
-                ))))
-            }
+                ))));
+            },
         }
     };
     let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
@@ -6166,26 +6622,30 @@ fn sde_integrate(
             rebuild_state(&drift_shape, state),
         ];
         match interp.apply(drift_value.clone(), argument, span) {
-            Ok(value) => match flatten_state(&value) {
-                Ok((_, rates)) if rates.len() == state.len() => Ok(rates),
-                Ok((_, rates)) => Err(SdeError::Shape(format!(
-                    "the drift returned {} rate(s) for a state of {}",
-                    rates.len(),
-                    state.len()
-                ))),
-                Err(error) => {
-                    if drift_failure.borrow().is_none() {
-                        *drift_failure.borrow_mut() = Some(error);
-                    }
-                    Err(SdeError::Invalid("the drift failed".to_string()))
+            | Ok(value) => {
+                match flatten_state(&value) {
+                    | Ok((_, rates)) if rates.len() == state.len() => Ok(rates),
+                    | Ok((_, rates)) => {
+                        Err(SdeError::Shape(format!(
+                            "the drift returned {} rate(s) for a state of {}",
+                            rates.len(),
+                            state.len()
+                        )))
+                    },
+                    | Err(error) => {
+                        if drift_failure.borrow().is_none() {
+                            *drift_failure.borrow_mut() = Some(error);
+                        }
+                        Err(SdeError::Invalid("the drift failed".to_string()))
+                    },
                 }
             },
-            Err(error) => {
+            | Err(error) => {
                 if drift_failure.borrow().is_none() {
                     *drift_failure.borrow_mut() = Some(error);
                 }
                 Err(SdeError::Invalid("the drift failed".to_string()))
-            }
+            },
         }
     };
     let diffusion_shape = shape.clone();
@@ -6201,25 +6661,29 @@ fn sde_integrate(
             rebuild_state(&diffusion_shape, state),
         ];
         match interp.apply(diffusion_value.clone(), argument, span) {
-            Ok(value) => match flatten_state(&value) {
-                Ok((_, values)) if values.len() == expected => Ok(values),
-                Ok((_, values)) => Err(SdeError::Shape(format!(
-                    "the diffusion returned {} coefficient(s); this structure needs {expected}",
-                    values.len(),
-                ))),
-                Err(error) => {
-                    if diffusion_failure.borrow().is_none() {
-                        *diffusion_failure.borrow_mut() = Some(error);
-                    }
-                    Err(SdeError::Invalid("the diffusion failed".to_string()))
+            | Ok(value) => {
+                match flatten_state(&value) {
+                    | Ok((_, values)) if values.len() == expected => Ok(values),
+                    | Ok((_, values)) => {
+                        Err(SdeError::Shape(format!(
+                            "the diffusion returned {} coefficient(s); this structure needs {expected}",
+                            values.len(),
+                        )))
+                    },
+                    | Err(error) => {
+                        if diffusion_failure.borrow().is_none() {
+                            *diffusion_failure.borrow_mut() = Some(error);
+                        }
+                        Err(SdeError::Invalid("the diffusion failed".to_string()))
+                    },
                 }
             },
-            Err(error) => {
+            | Err(error) => {
                 if diffusion_failure.borrow().is_none() {
                     *diffusion_failure.borrow_mut() = Some(error);
                 }
                 Err(SdeError::Invalid("the diffusion failed".to_string()))
-            }
+            },
         }
     };
     let result = aevia_std::sde::integrate(drift_fn, diffusion_fn, &flat, &options);
@@ -6228,7 +6692,7 @@ fn sde_integrate(
         return Err(error);
     }
     match result {
-        Ok(path) => {
+        | Ok(path) => {
             let states: Vec<Value> = path
                 .y
                 .iter()
@@ -6254,30 +6718,30 @@ fn sde_integrate(
                 ("noise", Value::Num(NumVal::int(BigInt::from(noise)))),
                 ("method", sde_method_value(path.method)),
             ])))
-        }
-        Err(error) => Ok(err(sde_error_value(&error))),
+        },
+        | Err(error) => Ok(err(sde_error_value(&error))),
     }
 }
 
-
-///
 /// # Errors
 ///
 /// `E0302` for a state that holds something other than numbers — an `Int`,
 /// a `Bool` or a function cannot be integrated.
 fn flatten_state(value: &Value) -> Result<(StateShape, Vec<f64>), EvalError> {
     match value {
-        Value::Num(num) => {
+        | Value::Num(num) => {
             let scalar = num.to_f64().ok_or_else(|| {
                 EvalError::new("E0302", "an ODE state must be a concrete `Float`")
             })?;
             Ok((StateShape::Scalar(num.dim.clone()), vec![scalar]))
-        }
-        Value::Tensor(tensor) => Ok((
-            StateShape::Tensor(tensor.shape.clone(), tensor.dim.clone()),
-            tensor_values(tensor)?,
-        )),
-        Value::Record(record) => {
+        },
+        | Value::Tensor(tensor) => {
+            Ok((
+                StateShape::Tensor(tensor.shape.clone(), tensor.dim.clone()),
+                tensor_values(tensor)?,
+            ))
+        },
+        | Value::Record(record) => {
             let mut shapes = Vec::with_capacity(record.fields.len());
             let mut flat = Vec::new();
             for (name, field) in &record.fields {
@@ -6286,45 +6750,54 @@ fn flatten_state(value: &Value) -> Result<(StateShape, Vec<f64>), EvalError> {
                 flat.extend(values);
             }
             Ok((StateShape::Record(shapes), flat))
-        }
-        other => Err(EvalError::new(
-            "E0302",
-            format!(
-                "an ODE state cannot hold a value of type {} (§8.9)",
-                other.type_name()
-            ),
-        )),
+        },
+        | other => {
+            Err(EvalError::new(
+                "E0302",
+                format!(
+                    "an ODE state cannot hold a value of type {} (§8.9)",
+                    other.type_name()
+                ),
+            ))
+        },
     }
 }
 
 /// Rebuilds a state from its flat form.
-fn rebuild_state(shape: &StateShape, flat: &[f64]) -> Value {
+fn rebuild_state(
+    shape: &StateShape,
+    flat: &[f64],
+) -> Value {
     let mut cursor = 0usize;
     rebuild_state_at(shape, flat, &mut cursor)
 }
 
-fn rebuild_state_at(shape: &StateShape, flat: &[f64], cursor: &mut usize) -> Value {
+fn rebuild_state_at(
+    shape: &StateShape,
+    flat: &[f64],
+    cursor: &mut usize,
+) -> Value {
     match shape {
-        StateShape::Scalar(dim) => {
+        | StateShape::Scalar(dim) => {
             let value = flat.get(*cursor).copied().unwrap_or(0.0);
             *cursor += 1;
             Value::Num(NumVal::float(value, dim.clone()))
-        }
-        StateShape::Tensor(shape, dim) => {
+        },
+        | StateShape::Tensor(shape, dim) => {
             let count = TensorData::element_count(shape);
             let values: Vec<f64> = (0..count)
                 .map(|index| flat.get(*cursor + index).copied().unwrap_or(0.0))
                 .collect();
             *cursor += count;
             float_tensor(shape.clone(), values, dim.clone())
-        }
-        StateShape::Record(fields) => {
+        },
+        | StateShape::Record(fields) => {
             let mut map = IndexMap::new();
             for (name, field) in fields {
                 map.insert(name.clone(), rebuild_state_at(field, flat, cursor));
             }
             Value::Record(Rc::new(RecordValue { fields: map }))
-        }
+        },
     }
 }
 
@@ -6338,7 +6811,11 @@ fn rebuild_state_at(shape: &StateShape, flat: &[f64], cursor: &mut usize) -> Val
 /// naming `core.ode.events` for a non-`None` `events` field: the linked kernel
 /// does not expose `solve_fixed_events`, and silently integrating past an event
 /// would answer a different problem than the one asked.
-fn ode_options(args: &[Value], index: usize, span: Span) -> Result<aevia_std::ode::Options, EvalError> {
+fn ode_options(
+    args: &[Value],
+    index: usize,
+    span: Span,
+) -> Result<aevia_std::ode::Options, EvalError> {
     let mut options = aevia_std::ode::Options::default();
     let Some(Value::Record(record)) = args.get(index) else {
         return Ok(options);
@@ -6356,8 +6833,8 @@ fn ode_options(args: &[Value], index: usize, span: Span) -> Result<aevia_std::od
     // kernel has no event support, so a request for it is a *named* capability
     // gap — never an option that the runtime quietly drops.
     match record.fields.get("events") {
-        None => {}
-        Some(Value::Variant(option)) if option.adt == adt::OPTION_ID => {
+        | None => {},
+        | Some(Value::Variant(option)) if option.adt == adt::OPTION_ID => {
             if option.name != "None" {
                 return Err(EvalError::new(
                     "E1001",
@@ -6367,31 +6844,29 @@ fn ode_options(args: &[Value], index: usize, span: Span) -> Result<aevia_std::od
                 )
                 .at(span));
             }
-        }
+        },
         // A direct dispatch may pass `()` where the source would write `None`.
-        Some(Value::Unit) => {}
-        Some(_) => {
+        | Some(Value::Unit) => {},
+        | Some(_) => {
             return Err(EvalError::new(
                 "E0302",
                 "`events` must be `Option<(Float[T], s) -> Float[1]>`",
             )
-            .at(span))
-        }
+            .at(span));
+        },
     }
     if let Some(Value::Variant(method)) = record.fields.get("method") {
         options.method = match method.name.as_str() {
-            "Rk4" => aevia_std::ode::Method::Rk4,
-            "Dopri5" => aevia_std::ode::Method::Dopri5,
-            "Radau" => aevia_std::ode::Method::Radau,
-            "Bdf" => aevia_std::ode::Method::Bdf,
-            "Rosenbrock23" => aevia_std::ode::Method::Rosenbrock23,
-            other => {
-                return Err(EvalError::new(
-                    "E0302",
-                    format!("`{other}` is not an `OdeMethod`"),
-                )
-                .at(span))
-            }
+            | "Rk4" => aevia_std::ode::Method::Rk4,
+            | "Dopri5" => aevia_std::ode::Method::Dopri5,
+            | "Radau" => aevia_std::ode::Method::Radau,
+            | "Bdf" => aevia_std::ode::Method::Bdf,
+            | "Rosenbrock23" => aevia_std::ode::Method::Rosenbrock23,
+            | other => {
+                return Err(
+                    EvalError::new("E0302", format!("`{other}` is not an `OdeMethod`")).at(span),
+                );
+            },
         };
         if let Some(capability) = options.method.capability() {
             return Err(EvalError::new(
@@ -6413,13 +6888,15 @@ fn ode_options(args: &[Value], index: usize, span: Span) -> Result<aevia_std::od
 /// # Errors
 ///
 /// `E0306` when the spec has no `grid` field with `nx`, `ny` and `h`.
-fn grid_from(record: &RecordValue, name: &str, span: Span) -> Result<aevia_std::pde::Grid, EvalError> {
+fn grid_from(
+    record: &RecordValue,
+    name: &str,
+    span: Span,
+) -> Result<aevia_std::pde::Grid, EvalError> {
     let Some(Value::Record(grid)) = record.fields.get("grid") else {
-        return Err(EvalError::new(
-            "E0306",
-            format!("`{name}`: the spec needs a `grid` record"),
-        )
-        .at(span));
+        return Err(
+            EvalError::new("E0306", format!("`{name}`: the spec needs a `grid` record")).at(span),
+        );
     };
     let extent = |field: &str| -> Result<usize, EvalError> {
         grid.fields
@@ -6437,11 +6914,7 @@ fn grid_from(record: &RecordValue, name: &str, span: Span) -> Result<aevia_std::
     Ok(aevia_std::pde::Grid {
         nx: extent("nx")?,
         ny: extent("ny")?,
-        h: grid
-            .fields
-            .get("h")
-            .and_then(Value::as_f64)
-            .unwrap_or(1.0),
+        h: grid.fields.get("h").and_then(Value::as_f64).unwrap_or(1.0),
     })
 }
 
@@ -6470,14 +6943,14 @@ fn field_value(field: &aevia_std::pde::Field) -> Value {
 /// A `PdeError` constructor value.
 fn pde_error_value(error: &aevia_std::NumericError) -> Value {
     let name = match error {
-        aevia_std::NumericError::NotConverged => "NotConverged",
-        aevia_std::NumericError::ShapeMismatch(_) => "ShapeMismatch",
-        _ => "InvalidSpec",
+        | aevia_std::NumericError::NotConverged => "NotConverged",
+        | aevia_std::NumericError::ShapeMismatch(_) => "ShapeMismatch",
+        | _ => "InvalidSpec",
     };
     let index = match name {
-        "NotConverged" => 0,
-        "ShapeMismatch" => 1,
-        _ => 2,
+        | "NotConverged" => 0,
+        | "ShapeMismatch" => 1,
+        | _ => 2,
     };
     error_constructor("PdeError", name, index)
 }
@@ -6492,19 +6965,28 @@ fn table_value(table: &aevia_std::table::Table) -> Value {
     let units: Vec<Value> = table
         .units
         .iter()
-        .map(|unit| unit.as_ref().map_or_else(|| Value::string(""), |unit| Value::string(unit.clone())))
+        .map(|unit| {
+            unit.as_ref()
+                .map_or_else(|| Value::string(""), |unit| Value::string(unit.clone()))
+        })
         .collect();
     let rows: Vec<Value> = (0..table.len()).map(|row| row_value(table, row)).collect();
     let (column_count, unit_count, row_count) = (columns.len(), units.len(), rows.len());
     record_of(vec![
-        ("columns", build_tensor(columns, vec![column_count], Dim::one())),
+        (
+            "columns",
+            build_tensor(columns, vec![column_count], Dim::one()),
+        ),
         ("units", build_tensor(units, vec![unit_count], Dim::one())),
         ("rows", build_tensor(rows, vec![row_count], Dim::one())),
     ])
 }
 
 /// One row of a table as a record.
-fn row_value(table: &aevia_std::table::Table, row: usize) -> Value {
+fn row_value(
+    table: &aevia_std::table::Table,
+    row: usize,
+) -> Value {
     let mut map = IndexMap::new();
     for (index, column) in table.columns.iter().enumerate() {
         let cell = table
@@ -6513,8 +6995,8 @@ fn row_value(table: &aevia_std::table::Table, row: usize) -> Value {
             .and_then(|cells| cells.get(index))
             .map_or("", String::as_str);
         let value = match cell.parse::<f64>() {
-            Ok(number) => Value::float(number),
-            Err(_) => Value::string(cell),
+            | Ok(number) => Value::float(number),
+            | Err(_) => Value::string(cell),
         };
         map.insert(column.clone(), value);
     }
@@ -6533,29 +7015,35 @@ fn table_from(
     span: Span,
 ) -> Result<aevia_std::table::Table, EvalError> {
     let Some(Value::Record(record)) = args.get(index) else {
-        return Err(EvalError::new(
-            "E0302",
-            format!("`{name}` expects a table"),
-        )
-        .at(span));
+        return Err(EvalError::new("E0302", format!("`{name}` expects a table")).at(span));
     };
     let string_column = |field: &str| -> Vec<String> {
         match record.fields.get(field) {
-            Some(Value::Tensor(tensor)) => tensor
-                .elements()
-                .iter()
-                .map(|element| match element {
-                    Value::Str(text) => text.to_string(),
-                    other => crate::value::show(other),
-                })
-                .collect(),
-            _ => Vec::new(),
+            | Some(Value::Tensor(tensor)) => {
+                tensor
+                    .elements()
+                    .iter()
+                    .map(|element| {
+                        match element {
+                            | Value::Str(text) => text.to_string(),
+                            | other => crate::value::show(other),
+                        }
+                    })
+                    .collect()
+            },
+            | _ => Vec::new(),
         }
     };
     let columns = string_column("columns");
     let units: Vec<Option<String>> = string_column("units")
         .into_iter()
-        .map(|unit| if unit.is_empty() { None } else { Some(unit) })
+        .map(|unit| {
+            if unit.is_empty() {
+                None
+            } else {
+                Some(unit)
+            }
+        })
         .collect();
     let mut rows = Vec::new();
     if let Some(Value::Tensor(tensor)) = record.fields.get("rows") {
@@ -6567,22 +7055,18 @@ fn table_from(
                 columns
                     .iter()
                     .map(|column| {
-                        row.fields
-                            .get(column)
-                            .map_or_else(String::new, |value| match value {
-                                Value::Str(text) => text.to_string(),
-                                other => crate::value::show(other),
-                            })
+                        row.fields.get(column).map_or_else(String::new, |value| {
+                            match value {
+                                | Value::Str(text) => text.to_string(),
+                                | other => crate::value::show(other),
+                            }
+                        })
                     })
                     .collect(),
             );
         }
     }
-    Ok(aevia_std::table::Table {
-        columns,
-        units,
-        rows,
-    })
+    Ok(aevia_std::table::Table { columns, units, rows })
 }
 
 /// A runtime value as JSON (§8.11).
@@ -6595,33 +7079,34 @@ fn table_from(
 fn json_from_value(value: &Value) -> Result<aevia_std::table::Json, EvalError> {
     use aevia_std::table::Json;
     Ok(match value {
-        Value::Unit => Json::Null,
-        Value::Bool(flag) => Json::Bool(*flag),
-        Value::Str(text) => Json::String(text.to_string()),
-        Value::Num(num) => match num.to_f64() {
-            Some(number) => Json::Number(number),
-            None => {
-                return Err(EvalError::new(
-                    "E0302",
-                    "a symbolic value has no JSON form",
-                ))
+        | Value::Unit => Json::Null,
+        | Value::Bool(flag) => Json::Bool(*flag),
+        | Value::Str(text) => Json::String(text.to_string()),
+        | Value::Num(num) => {
+            match num.to_f64() {
+                | Some(number) => Json::Number(number),
+                | None => return Err(EvalError::new("E0302", "a symbolic value has no JSON form")),
             }
         },
-        Value::Tensor(tensor) => Json::Array(
-            tensor
-                .elements()
-                .iter()
-                .map(json_from_value)
-                .collect::<Result<_, _>>()?,
-        ),
-        Value::Record(record) => Json::Object(
-            record
-                .fields
-                .iter()
-                .map(|(name, field)| Ok((name.clone(), json_from_value(field)?)))
-                .collect::<Result<_, EvalError>>()?,
-        ),
-        Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
+        | Value::Tensor(tensor) => {
+            Json::Array(
+                tensor
+                    .elements()
+                    .iter()
+                    .map(json_from_value)
+                    .collect::<Result<_, _>>()?,
+            )
+        },
+        | Value::Record(record) => {
+            Json::Object(
+                record
+                    .fields
+                    .iter()
+                    .map(|(name, field)| Ok((name.clone(), json_from_value(field)?)))
+                    .collect::<Result<_, EvalError>>()?,
+            )
+        },
+        | Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
             // §8.17: a record field typed `Option<Int>` (e.g. `seed`) must
             // cross the JSON boundary. `None` is JSON null, `Some(x)` is `x`;
             // anything else keeps the historical variant encoding below.
@@ -6629,22 +7114,22 @@ fn json_from_value(value: &Value) -> Result<aevia_std::table::Json, EvalError> {
                 Json::Null
             } else {
                 match variant.fields.first() {
-                    Some(value) => json_from_value(value)?,
+                    | Some(value) => json_from_value(value)?,
                     // A malformed `Some` has no payload; JSON null is the only
                     // honest encoding rather than inventing one.
-                    None => Json::Null,
+                    | None => Json::Null,
                 }
             }
-        }
-        Value::Variant(variant) if variant.fields.is_empty() => {
+        },
+        | Value::Variant(variant) if variant.fields.is_empty() => {
             Json::String(variant.name.clone())
-        }
-        other => {
+        },
+        | other => {
             return Err(EvalError::new(
                 "E0302",
                 format!("a value of type {} has no JSON form", other.type_name()),
-            ))
-        }
+            ));
+        },
     })
 }
 
@@ -6652,21 +7137,23 @@ fn json_from_value(value: &Value) -> Result<aevia_std::table::Json, EvalError> {
 fn value_from_json(json: &aevia_std::table::Json) -> Value {
     use aevia_std::table::Json;
     match json {
-        Json::Null => Value::Unit,
-        Json::Bool(flag) => Value::Bool(*flag),
-        Json::Number(number) => Value::float(*number),
-        Json::String(text) => Value::string(text.clone()),
-        Json::Array(items) => {
+        | Json::Null => Value::Unit,
+        | Json::Bool(flag) => Value::Bool(*flag),
+        | Json::Number(number) => Value::float(*number),
+        | Json::String(text) => Value::string(text.clone()),
+        | Json::Array(items) => {
             let elements: Vec<Value> = items.iter().map(value_from_json).collect();
             let len = elements.len();
             build_tensor(elements, vec![len], Dim::one())
-        }
-        Json::Object(fields) => record_of(
-            fields
-                .iter()
-                .map(|(name, value)| (name.as_str(), value_from_json(value)))
-                .collect(),
-        ),
+        },
+        | Json::Object(fields) => {
+            record_of(
+                fields
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value_from_json(value)))
+                    .collect(),
+            )
+        },
     }
 }
 
@@ -6675,7 +7162,10 @@ fn value_from_json(json: &aevia_std::table::Json) -> Value {
 /// # Errors
 ///
 /// Propagates the builtin's error.
-pub fn call_simple(name: &str, args: Vec<Value>) -> Result<Value, EvalError> {
+pub fn call_simple(
+    name: &str,
+    args: Vec<Value>,
+) -> Result<Value, EvalError> {
     let mut interp = Interp::new(&aevia_types::CheckedModule::default());
     call(&mut interp, name, args, Span::default())
 }
@@ -6703,9 +7193,9 @@ fn none() -> Value {
 /// `Ordering.Less` / `Ordering.Equal` / `Ordering.Greater`.
 fn ordering_value(ordering: std::cmp::Ordering) -> Value {
     match ordering {
-        std::cmp::Ordering::Less => make_variant(adt::ORDERING_ID, 0, "Less", Vec::new()),
-        std::cmp::Ordering::Equal => make_variant(adt::ORDERING_ID, 1, "Equal", Vec::new()),
-        std::cmp::Ordering::Greater => make_variant(adt::ORDERING_ID, 2, "Greater", Vec::new()),
+        | std::cmp::Ordering::Less => make_variant(adt::ORDERING_ID, 0, "Less", Vec::new()),
+        | std::cmp::Ordering::Equal => make_variant(adt::ORDERING_ID, 1, "Equal", Vec::new()),
+        | std::cmp::Ordering::Greater => make_variant(adt::ORDERING_ID, 2, "Greater", Vec::new()),
     }
 }
 
@@ -6720,7 +7210,10 @@ fn ordering_value(ordering: std::cmp::Ordering) -> Value {
 /// shape — still has to compare, so the rendering is the last resort, exactly
 /// as `total_compare` uses it. `NaN` sorts last because `"nan"` sorts after
 /// every digit.
-fn total_order(left: &Value, right: &Value) -> std::cmp::Ordering {
+fn total_order(
+    left: &Value,
+    right: &Value,
+) -> std::cmp::Ordering {
     compare_values(left, right)
         .unwrap_or_else(|| crate::value::repr(left).cmp(&crate::value::repr(right)))
 }
@@ -6730,7 +7223,10 @@ const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 /// The FNV-1a prime.
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-fn mix(state: &mut u64, bytes: &[u8]) {
+fn mix(
+    state: &mut u64,
+    bytes: &[u8],
+) {
     for byte in bytes {
         *state ^= u64::from(*byte);
         *state = state.wrapping_mul(FNV_PRIME);
@@ -6750,47 +7246,56 @@ fn hash_value(value: &Value) -> Option<u64> {
     Some(state)
 }
 
-fn hash_into(value: &Value, state: &mut u64) -> Option<()> {
+fn hash_into(
+    value: &Value,
+    state: &mut u64,
+) -> Option<()> {
     match value {
-        Value::Unit => mix(state, b"u"),
-        Value::Bool(flag) => {
+        | Value::Unit => mix(state, b"u"),
+        | Value::Bool(flag) => {
             mix(state, b"b");
             mix(state, &[u8::from(*flag)]);
-        }
-        Value::Num(num) => {
+        },
+        | Value::Num(num) => {
             mix(state, b"n");
             match &num.kind {
-                NumKind::Sym(_) => mix(
-                    state,
-                    crate::value::repr(&Value::Num(num.clone())).as_bytes(),
-                ),
-                _ => match num.to_rational() {
-                    Some(rational) => {
-                        mix(state, b"r");
-                        mix(state, rational.numer().to_signed_bytes_le().as_slice());
-                        mix(state, b"/");
-                        mix(state, rational.denom().to_signed_bytes_le().as_slice());
+                | NumKind::Sym(_) => {
+                    mix(
+                        state,
+                        crate::value::repr(&Value::Num(num.clone())).as_bytes(),
+                    )
+                },
+                | _ => {
+                    match num.to_rational() {
+                        | Some(rational) => {
+                            mix(state, b"r");
+                            mix(state, rational.numer().to_signed_bytes_le().as_slice());
+                            mix(state, b"/");
+                            mix(state, rational.denom().to_signed_bytes_le().as_slice());
+                        },
+                        | None => {
+                            match &num.kind {
+                                | NumKind::Complex(re, im) => {
+                                    mix(state, b"c");
+                                    mix(state, &re.to_bits().to_le_bytes());
+                                    mix(state, &im.to_bits().to_le_bytes());
+                                },
+                                | NumKind::Float(float) => {
+                                    mix(state, b"f");
+                                    mix(state, &float.to_bits().to_le_bytes());
+                                },
+                                | _ => return None,
+                            }
+                        },
                     }
-                    None => match &num.kind {
-                        NumKind::Complex(re, im) => {
-                            mix(state, b"c");
-                            mix(state, &re.to_bits().to_le_bytes());
-                            mix(state, &im.to_bits().to_le_bytes());
-                        }
-                        NumKind::Float(float) => {
-                            mix(state, b"f");
-                            mix(state, &float.to_bits().to_le_bytes());
-                        }
-                        _ => return None,
-                    },
                 },
             }
-        }
-        Value::Str(text) => {
+        },
+        | Value::Str(text) => {
             mix(state, b"s");
             mix(state, text.as_bytes());
-        }
-        Value::Tensor(tensor) => {
+        },
+        | Value::Tensor(tensor) => {
             mix(state, b"T");
             for extent in &tensor.shape {
                 mix(state, &extent.to_le_bytes());
@@ -6798,8 +7303,8 @@ fn hash_into(value: &Value, state: &mut u64) -> Option<()> {
             for element in tensor.elements() {
                 hash_into(&element, state)?;
             }
-        }
-        Value::Record(record) => {
+        },
+        | Value::Record(record) => {
             mix(state, b"R");
             let mut names: Vec<&String> = record.fields.keys().collect();
             names.sort();
@@ -6807,50 +7312,58 @@ fn hash_into(value: &Value, state: &mut u64) -> Option<()> {
                 mix(state, name.as_bytes());
                 hash_into(&record.fields[name], state)?;
             }
-        }
-        Value::Variant(variant) => {
+        },
+        | Value::Variant(variant) => {
             mix(state, b"V");
             mix(state, &variant.adt.to_le_bytes());
             mix(state, &(variant.index as u64).to_le_bytes());
             for field in &variant.fields {
                 hash_into(field, state)?;
             }
-        }
-        Value::UnitOf(unit) => {
+        },
+        | Value::UnitOf(unit) => {
             mix(state, b"U");
             mix(state, unit.name.as_bytes());
-        }
-        Value::Prop(prop) => {
+        },
+        | Value::Prop(prop) => {
             mix(state, b"P");
             mix(state, prop.text.as_bytes());
-        }
-        Value::Dyn(dynamic) => {
+        },
+        | Value::Dyn(dynamic) => {
             mix(state, b"D");
             mix(state, &dynamic.dim.to_plain_string().into_bytes());
             hash_into(&Value::Num(dynamic.payload()), state)?;
-        }
-        Value::Closure(_)
+        },
+        | Value::Closure(_)
         | Value::Native(_)
         | Value::Ctor { .. }
         | Value::Io(_)
-        | Value::Error => return None,
+        | Value::Error => {
+            return None;
+        },
     }
     Some(())
 }
 
-fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
+fn compare_values(
+    left: &Value,
+    right: &Value,
+) -> Option<std::cmp::Ordering> {
     match (left, right) {
-        (Value::Num(a), Value::Num(b)) => match (a.to_rational(), b.to_rational()) {
-            (Some(a), Some(b)) => Some(a.cmp(&b)),
-            _ => a
-                .to_f64()
-                .zip(b.to_f64())
-                .and_then(|(a, b)| a.partial_cmp(&b)),
+        | (Value::Num(a), Value::Num(b)) => {
+            match (a.to_rational(), b.to_rational()) {
+                | (Some(a), Some(b)) => Some(a.cmp(&b)),
+                | _ => {
+                    a.to_f64()
+                        .zip(b.to_f64())
+                        .and_then(|(a, b)| a.partial_cmp(&b))
+                },
+            }
         },
-        (Value::Str(a), Value::Str(b)) => Some(a.as_ref().cmp(b.as_ref())),
-        (Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
-        (Value::Unit, Value::Unit) => Some(std::cmp::Ordering::Equal),
-        (Value::Tensor(a), Value::Tensor(b)) => {
+        | (Value::Str(a), Value::Str(b)) => Some(a.as_ref().cmp(b.as_ref())),
+        | (Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
+        | (Value::Unit, Value::Unit) => Some(std::cmp::Ordering::Equal),
+        | (Value::Tensor(a), Value::Tensor(b)) => {
             if a.shape != b.shape {
                 return Some(a.shape.cmp(&b.shape));
             }
@@ -6862,8 +7375,8 @@ fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
                 }
             }
             Some(std::cmp::Ordering::Equal)
-        }
-        (Value::Variant(a), Value::Variant(b)) => {
+        },
+        | (Value::Variant(a), Value::Variant(b)) => {
             let ordering = a.index.cmp(&b.index);
             if ordering != std::cmp::Ordering::Equal {
                 return Some(ordering);
@@ -6875,24 +7388,28 @@ fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
                 }
             }
             Some(std::cmp::Ordering::Equal)
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }
 
 /// A symbolic proposition, the `Prop` of §3.8.6.
-fn proposition(op: BinOp, left: Value, right: Value) -> Value {
+fn proposition(
+    op: BinOp,
+    left: Value,
+    right: Value,
+) -> Value {
     let text = format!(
         "{} {} {}",
         crate::value::show(&left),
         match op {
-            BinOp::Eq => "==",
-            BinOp::Ne => "!=",
-            BinOp::Lt => "<",
-            BinOp::Le => "<=",
-            BinOp::Gt => ">",
-            BinOp::Ge => ">=",
-            _ => "?",
+            | BinOp::Eq => "==",
+            | BinOp::Ne => "!=",
+            | BinOp::Lt => "<",
+            | BinOp::Le => "<=",
+            | BinOp::Gt => ">",
+            | BinOp::Ge => ">=",
+            | _ => "?",
         },
         crate::value::show(&right)
     );
@@ -6924,13 +7441,18 @@ fn tuple(items: Vec<Value>) -> Value {
 ///
 /// The arithmetic is the same expression the boxed loop used, so a dense
 /// tensor and its boxed mirror produce the same bits.
-fn norm_of(values: &[f64], order: i64) -> f64 {
+fn norm_of(
+    values: &[f64],
+    order: i64,
+) -> f64 {
     match order {
-        1 => values.iter().map(|value| value.abs()).sum::<f64>(),
-        i64::MAX => values
-            .iter()
-            .fold(0.0_f64, |acc, value| acc.max(value.abs())),
-        _ => values.iter().map(|value| value * value).sum::<f64>().sqrt(),
+        | 1 => values.iter().map(|value| value.abs()).sum::<f64>(),
+        | i64::MAX => {
+            values
+                .iter()
+                .fold(0.0_f64, |acc, value| acc.max(value.abs()))
+        },
+        | _ => values.iter().map(|value| value * value).sum::<f64>().sqrt(),
     }
 }
 
@@ -6949,23 +7471,27 @@ fn tensor_values(tensor: &TensorData) -> Result<Vec<f64>, EvalError> {
     let mut out = Vec::with_capacity(tensor.storage.len());
     for element in tensor.elements() {
         match element.as_f64() {
-            Some(value) => out.push(value),
-            None => {
+            | Some(value) => out.push(value),
+            | None => {
                 return Err(EvalError::new(
                     "E0302",
                     format!(
                         "expected a numeric tensor, found an element of type {}",
                         element.type_name()
                     ),
-                ))
-            }
+                ));
+            },
         }
     }
     Ok(out)
 }
 
 /// A tensor of exact rationals, keeping the narrowest representation.
-fn rational_tensor(shape: Vec<usize>, data: &[BigRational], dim: Dim) -> Value {
+fn rational_tensor(
+    shape: Vec<usize>,
+    data: &[BigRational],
+    dim: Dim,
+) -> Value {
     let elements = data
         .iter()
         .map(|value| exact_number(value.clone(), dim.clone()))
@@ -6974,7 +7500,11 @@ fn rational_tensor(shape: Vec<usize>, data: &[BigRational], dim: Dim) -> Value {
 }
 
 /// A tensor of `f64`.
-fn float_tensor(shape: Vec<usize>, data: Vec<f64>, dim: Dim) -> Value {
+fn float_tensor(
+    shape: Vec<usize>,
+    data: Vec<f64>,
+    dim: Dim,
+) -> Value {
     Value::Tensor(Rc::new(TensorData {
         shape,
         storage: Storage::Dense(Rc::new(data)),
@@ -6984,7 +7514,11 @@ fn float_tensor(shape: Vec<usize>, data: Vec<f64>, dim: Dim) -> Value {
 }
 
 /// A tensor of complex numbers, in boxed storage.
-fn complex_tensor(shape: Vec<usize>, data: &[aevia_std::Complex], dim: Dim) -> Value {
+fn complex_tensor(
+    shape: Vec<usize>,
+    data: &[aevia_std::Complex],
+    dim: Dim,
+) -> Value {
     let elements = data
         .iter()
         .map(|value| {
@@ -7005,17 +7539,25 @@ fn complex_tensor(shape: Vec<usize>, data: &[aevia_std::Complex], dim: Dim) -> V
 /// refusal is `E0802`. Collapsing every non-domain failure into `E0802` made a
 /// solver that ran out of iterations report a shape error, which sends the
 /// reader looking in the wrong place.
-fn numeric_error(name: &str, error: aevia_std::NumericError, span: Span) -> EvalError {
+fn numeric_error(
+    name: &str,
+    error: aevia_std::NumericError,
+    span: Span,
+) -> EvalError {
     let code = match &error {
-        aevia_std::NumericError::Domain(_) => "E0806",
-        aevia_std::NumericError::NotConverged => "E0807",
-        _ => "E0802",
+        | aevia_std::NumericError::Domain(_) => "E0806",
+        | aevia_std::NumericError::NotConverged => "E0807",
+        | _ => "E0802",
     };
     EvalError::new(code, format!("`{name}`: {error}")).at(span)
 }
 
 /// A `LinAlgError`/`MathError` constructor value, for the `Err` arm.
-fn error_constructor(type_name: &str, constructor: &str, index: usize) -> Value {
+fn error_constructor(
+    type_name: &str,
+    constructor: &str,
+    index: usize,
+) -> Value {
     let id = adt::intern(adt::Adt {
         name: type_name.to_string(),
         params: Vec::new(),
@@ -7028,10 +7570,10 @@ fn error_constructor(type_name: &str, constructor: &str, index: usize) -> Value 
 fn linalg_error_value(error: &aevia_std::NumericError) -> Value {
     let name = error.constructor();
     let index = match name {
-        "Singular" => 0,
-        "NotConverged" => 1,
-        "NotPositiveDefinite" => 2,
-        _ => 3,
+        | "Singular" => 0,
+        | "NotConverged" => 1,
+        | "NotPositiveDefinite" => 2,
+        | _ => 3,
     };
     error_constructor("LinAlgError", name, index)
 }
@@ -7039,8 +7581,8 @@ fn linalg_error_value(error: &aevia_std::NumericError) -> Value {
 /// Wraps a kernel result in `Result<_, LinAlgError>`.
 fn lin_result(result: Result<Value, aevia_std::NumericError>) -> Value {
     match result {
-        Ok(value) => ok(value),
-        Err(error) => err(linalg_error_value(&error)),
+        | Ok(value) => ok(value),
+        | Err(error) => err(linalg_error_value(&error)),
     }
 }
 
@@ -7057,7 +7599,10 @@ fn tensor_matrix(
     if tensor.rank() != 2 {
         return Err(EvalError::new(
             "E0802",
-            format!("`{name}` expects a rank-2 tensor, found rank {}", tensor.rank()),
+            format!(
+                "`{name}` expects a rank-2 tensor, found rank {}",
+                tensor.rank()
+            ),
         )
         .at(span));
     }
@@ -7065,14 +7610,21 @@ fn tensor_matrix(
 }
 
 /// The flat index of a coordinate, or `None` when it is out of range.
-fn flat_index(shape: &[usize], coordinates: &[isize]) -> Option<usize> {
+fn flat_index(
+    shape: &[usize],
+    coordinates: &[isize],
+) -> Option<usize> {
     if shape.len() != coordinates.len() {
         return None;
     }
     let mut flat = 0usize;
     for (index, extent) in coordinates.iter().zip(shape.iter()) {
         let extent = isize::try_from(*extent).ok()?;
-        let normalized = if *index < 0 { extent + index } else { *index };
+        let normalized = if *index < 0 {
+            extent + index
+        } else {
+            *index
+        };
         if normalized < 0 || normalized >= extent {
             return None;
         }
@@ -7084,12 +7636,12 @@ fn flat_index(shape: &[usize], coordinates: &[isize]) -> Option<usize> {
 /// A zero of the tensor's element representation and dimension.
 fn zero_like(tensor: &TensorData) -> Value {
     match &tensor.storage {
-        Storage::Dense(_) | Storage::View(_) => {
+        | Storage::Dense(_) | Storage::View(_) => {
             Value::Num(NumVal::float(0.0, tensor.dim.clone()))
-        }
-        Storage::Exact(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
-        Storage::Bool(_) => Value::Bool(false),
-        Storage::Boxed(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
+        },
+        | Storage::Exact(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
+        | Storage::Bool(_) => Value::Bool(false),
+        | Storage::Boxed(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
     }
 }
 
@@ -7109,9 +7661,9 @@ fn exact_values(tensor: &TensorData) -> Option<Vec<BigRational>> {
     for element in tensor.elements() {
         let num = element.as_num()?;
         match &num.kind {
-            NumKind::Int(value) => out.push(BigRational::from_integer(value.clone())),
-            NumKind::Exact(value) => out.push(value.clone()),
-            _ => return None,
+            | NumKind::Int(value) => out.push(BigRational::from_integer(value.clone())),
+            | NumKind::Exact(value) => out.push(value.clone()),
+            | _ => return None,
         }
     }
     Some(out)
@@ -7131,13 +7683,13 @@ fn apply_scalar_value(
 ) -> Value {
     let argument = Value::Num(NumVal::float(x, dim.clone()));
     match interp.apply(function.clone(), vec![argument], span) {
-        Ok(value) => value,
-        Err(error) => {
+        | Ok(value) => value,
+        | Err(error) => {
             if failure.is_none() {
                 *failure = Some(error);
             }
             Value::Num(NumVal::float(f64::NAN, dim.clone()))
-        }
+        },
     }
 }
 
@@ -7166,13 +7718,13 @@ fn apply_tensor_value(
 ) -> Value {
     let argument = float_tensor(template.shape.clone(), state.to_vec(), template.dim.clone());
     match interp.apply(function.clone(), vec![argument], span) {
-        Ok(value) => value,
-        Err(error) => {
+        | Ok(value) => value,
+        | Err(error) => {
             if failure.is_none() {
                 *failure = Some(error);
             }
             Value::float(f64::NAN)
-        }
+        },
     }
 }
 
@@ -7201,9 +7753,9 @@ fn apply_tensor_elements(
 ) -> Vec<f64> {
     let value = apply_tensor_value(interp, function, state, template, span, failure);
     match &value {
-        Value::Tensor(tensor) => tensor_values(tensor).unwrap_or_default(),
-        Value::Num(num) => vec![num.to_f64().unwrap_or(f64::NAN)],
-        _ => Vec::new(),
+        | Value::Tensor(tensor) => tensor_values(tensor).unwrap_or_default(),
+        | Value::Num(num) => vec![num.to_f64().unwrap_or(f64::NAN)],
+        | _ => Vec::new(),
     }
 }
 
@@ -7221,11 +7773,9 @@ fn distribution_from(
 ) -> Result<aevia_std::dist::Distribution, EvalError> {
     use aevia_std::dist::Distribution;
     let Some(Value::Record(record)) = args.first() else {
-        return Err(EvalError::new(
-            "E0302",
-            format!("`{name}` expects a distribution record"),
-        )
-        .at(span));
+        return Err(
+            EvalError::new("E0302", format!("`{name}` expects a distribution record")).at(span),
+        );
     };
     let number = |field: &str| -> Result<f64, EvalError> {
         record
@@ -7242,8 +7792,8 @@ fn distribution_from(
     };
     let has = |field: &str| record.fields.contains_key(field);
     let kind = match record.fields.get("kind") {
-        Some(Value::Str(text)) => Some(text.to_string()),
-        _ => None,
+        | Some(Value::Str(text)) => Some(text.to_string()),
+        | _ => None,
     };
     if has("mu") && has("sigma") {
         return Ok(Distribution::Normal {
@@ -7306,7 +7856,10 @@ fn distribution_from(
 }
 
 /// The dimension of a distribution's samples (§8.7.1).
-fn distribution_dim(args: &[Value], span: Span) -> Result<Dim, EvalError> {
+fn distribution_dim(
+    args: &[Value],
+    span: Span,
+) -> Result<Dim, EvalError> {
     let Some(Value::Record(record)) = args.first() else {
         return Err(EvalError::new("E0302", "expected a distribution record").at(span));
     };
@@ -7329,111 +7882,127 @@ fn distribution_dim(args: &[Value], span: Span) -> Result<Dim, EvalError> {
 /// reproducible and leaves the session's RNG untouched; `None` draws from the
 /// session's RNG. A direct dispatch has no `Option` value to pass and uses
 /// `()`, which is read as `None` so the runtime entry point stays callable.
-fn sample_seed(args: &[Value], span: Span) -> Result<Option<u64>, EvalError> {
+fn sample_seed(
+    args: &[Value],
+    span: Span,
+) -> Result<Option<u64>, EvalError> {
     let Some(argument) = args.get(2) else {
         return Ok(None);
     };
     match argument {
-        Value::Unit => Ok(None),
-        Value::Variant(option) if option.adt == adt::OPTION_ID => {
+        | Value::Unit => Ok(None),
+        | Value::Variant(option) if option.adt == adt::OPTION_ID => {
             if option.name != "Some" {
                 return Ok(None);
             }
             let Some(Value::Num(seed)) = option.fields.first() else {
-                return Err(EvalError::new(
-                    "E0302",
-                    "the seed of `sample_n` must be an Int",
-                )
-                .at(span));
+                return Err(
+                    EvalError::new("E0302", "the seed of `sample_n` must be an Int").at(span),
+                );
             };
             match &seed.kind {
-                NumKind::Int(value) => value.to_u64().map(Some).ok_or_else(|| {
-                    EvalError::new("E0302", "the seed of `sample_n` is out of range").at(span)
-                }),
-                _ => Err(EvalError::new(
-                    "E0302",
-                    "the seed of `sample_n` must be an Int",
-                )
-                .at(span)),
+                | NumKind::Int(value) => {
+                    value.to_u64().map(Some).ok_or_else(|| {
+                        EvalError::new("E0302", "the seed of `sample_n` is out of range").at(span)
+                    })
+                },
+                | _ => {
+                    Err(EvalError::new("E0302", "the seed of `sample_n` must be an Int").at(span))
+                },
             }
-        }
-        _ => Err(EvalError::new(
-            "E0302",
-            "`sample_n` expects `Option<Int>` as its seed",
-        )
-        .at(span)),
+        },
+        | _ => {
+            Err(EvalError::new("E0302", "`sample_n` expects `Option<Int>` as its seed").at(span))
+        },
     }
 }
 
 /// The exact argument of a classical polynomial, when it has one.
-fn classical_polynomial(args: &[Value], name: &str, span: Span) -> Result<Value, EvalError> {
+fn classical_polynomial(
+    args: &[Value],
+    name: &str,
+    span: Span,
+) -> Result<Value, EvalError> {
     let order = expect_int(args, 0, name, span)?;
     let num = expect_num(args, 1, name, span)?;
     let order = u32::try_from(order.max(0)).unwrap_or(0);
     let function = match name {
-        "legendre_p" => aevia_std::special::legendre_p_exact,
-        "hermite_h" => aevia_std::special::hermite_h_exact,
-        "laguerre_l" => aevia_std::special::laguerre_l_exact,
-        "chebyshev_t" => aevia_std::special::chebyshev_t_exact,
-        _ => aevia_std::special::chebyshev_u_exact,
+        | "legendre_p" => aevia_std::special::legendre_p_exact,
+        | "hermite_h" => aevia_std::special::hermite_h_exact,
+        | "laguerre_l" => aevia_std::special::laguerre_l_exact,
+        | "chebyshev_t" => aevia_std::special::chebyshev_t_exact,
+        | _ => aevia_std::special::chebyshev_u_exact,
     };
     // An exact argument stays exact: these are polynomials with rational
     // coefficients, so `legendre_p(2, 1/2)` is `-1/8` (§8.2.2 keeps ρ).
     if let Some(rational) = num.to_rational() {
-        return Ok(Value::Num(NumVal::exact(function(order, &rational), num.dim)));
+        return Ok(Value::Num(NumVal::exact(
+            function(order, &rational),
+            num.dim,
+        )));
     }
     let x = num.to_f64().unwrap_or(f64::NAN);
     let value = match name {
-        "legendre_p" => aevia_std::special::legendre_p(order as i32, x),
-        "hermite_h" => aevia_std::special::hermite_h(order as i32, x),
-        "laguerre_l" => aevia_std::special::laguerre_l(order as i32, x),
-        "chebyshev_t" => aevia_std::special::chebyshev_t(order as i32, x),
-        _ => aevia_std::special::chebyshev_u(order as i32, x),
+        | "legendre_p" => aevia_std::special::legendre_p(order as i32, x),
+        | "hermite_h" => aevia_std::special::hermite_h(order as i32, x),
+        | "laguerre_l" => aevia_std::special::laguerre_l(order as i32, x),
+        | "chebyshev_t" => aevia_std::special::chebyshev_t(order as i32, x),
+        | _ => aevia_std::special::chebyshev_u(order as i32, x),
     };
     Ok(Value::Num(NumVal::float(value, num.dim)))
 }
 
 /// `join` on two tables, keyed by a column name (§8.11).
-fn join_tables(args: &[Value], name: &str, span: Span) -> Result<Value, EvalError> {
-        let left = table_from(&args, 0, name, span)?;
-        let right = table_from(&args, 1, name, span)?;
-        let key = expect_str(&args, 2, name, span)?;
-        let Some(left_index) = left.columns.iter().position(|name| *name == key) else {
-            return Ok(err(Value::string(format!("the left table has no column `{key}`"))));
+fn join_tables(
+    args: &[Value],
+    name: &str,
+    span: Span,
+) -> Result<Value, EvalError> {
+    let left = table_from(&args, 0, name, span)?;
+    let right = table_from(&args, 1, name, span)?;
+    let key = expect_str(&args, 2, name, span)?;
+    let Some(left_index) = left.columns.iter().position(|name| *name == key) else {
+        return Ok(err(Value::string(format!(
+            "the left table has no column `{key}`"
+        ))));
+    };
+    let Some(right_index) = right.columns.iter().position(|name| *name == key) else {
+        return Ok(err(Value::string(format!(
+            "the right table has no column `{key}`"
+        ))));
+    };
+    let mut columns = left.columns.clone();
+    let mut units = left.units.clone();
+    for (index, column) in right.columns.iter().enumerate() {
+        if index == right_index {
+            continue;
+        }
+        if columns.contains(column) {
+            return Ok(err(Value::string(format!(
+                "both tables have a column `{column}`"
+            ))));
+        }
+        columns.push(column.clone());
+        units.push(right.units[index].clone());
+    }
+    let mut rows = Vec::new();
+    for left_row in &left.rows {
+        let Some(value) = left_row.get(left_index) else {
+            continue;
         };
-        let Some(right_index) = right.columns.iter().position(|name| *name == key) else {
-            return Ok(err(Value::string(format!("the right table has no column `{key}`"))));
-        };
-        let mut columns = left.columns.clone();
-        let mut units = left.units.clone();
-        for (index, column) in right.columns.iter().enumerate() {
-            if index == right_index {
+        for right_row in &right.rows {
+            if right_row.get(right_index) != Some(value) {
                 continue;
             }
-            if columns.contains(column) {
-                return Ok(err(Value::string(format!("both tables have a column `{column}`"))));
-            }
-            columns.push(column.clone());
-            units.push(right.units[index].clone());
-        }
-        let mut rows = Vec::new();
-        for left_row in &left.rows {
-            let Some(value) = left_row.get(left_index) else {
-                continue;
-            };
-            for right_row in &right.rows {
-                if right_row.get(right_index) != Some(value) {
-                    continue;
+            let mut merged = left_row.clone();
+            for (index, cell) in right_row.iter().enumerate() {
+                if index != right_index {
+                    merged.push(cell.clone());
                 }
-                let mut merged = left_row.clone();
-                for (index, cell) in right_row.iter().enumerate() {
-                    if index != right_index {
-                        merged.push(cell.clone());
-                    }
-                }
-                rows.push(merged);
             }
+            rows.push(merged);
         }
+    }
     Ok(table_value(&aevia_std::table::Table {
         columns,
         units,
@@ -7443,8 +8012,10 @@ fn join_tables(args: &[Value], name: &str, span: Span) -> Result<Value, EvalErro
 
 #[cfg(test)]
 mod tests {
-    use super::{json_from_value, numeric_error};
-    use crate::value::{make_variant, Value};
+    use super::json_from_value;
+    use super::numeric_error;
+    use crate::value::Value;
+    use crate::value::make_variant;
     use aevia_std::table::Json;
     use aevia_syntax::Span;
     use aevia_types::adt;
@@ -7471,7 +8042,10 @@ mod tests {
     #[test]
     fn an_option_field_encodes_as_null_or_its_payload() {
         let none = make_variant(adt::OPTION_ID, 0, "None", Vec::new());
-        assert!(matches!(json_from_value(&none).expect("none encodes"), Json::Null));
+        assert!(matches!(
+            json_from_value(&none).expect("none encodes"),
+            Json::Null
+        ));
         let some = make_variant(adt::OPTION_ID, 1, "Some", vec![Value::int(7)]);
         assert!(
             matches!(

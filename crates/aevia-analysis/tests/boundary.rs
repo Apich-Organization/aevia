@@ -6,7 +6,8 @@
 //! review. A future contributor who adds `lsp-types` to make one query easier
 //! breaks this test, and the failure says why.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 /// The crate's own manifest, read at compile time.
 const MANIFEST: &str = include_str!("../Cargo.toml");

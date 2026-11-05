@@ -19,9 +19,14 @@
 //! re-running this test re-verifies the front-end half; the `OtherCrate`
 //! pointers are documentation for the runtime owner, not executed claims.
 
-use aevia_syntax::{lex, parse_module};
-use aevia_types::check::{check_module, check_module_with_imports, Export, Import};
-use aevia_types::{Scheme, Type};
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
+use aevia_types::Scheme;
+use aevia_types::Type;
+use aevia_types::check::Export;
+use aevia_types::check::Import;
+use aevia_types::check::check_module;
+use aevia_types::check::check_module_with_imports;
 
 /// How one appendix-B code is reached.
 enum Cover {
@@ -50,8 +55,8 @@ fn extension_codes() -> &'static [&'static str] {
 fn codes_of(source: &str) -> Vec<String> {
     let mut codes = Vec::new();
     let lexed = match lex(0, source) {
-        Ok(lexed) => lexed,
-        Err(diagnostics) => return codes_of_diagnostics(&diagnostics),
+        | Ok(lexed) => lexed,
+        | Err(diagnostics) => return codes_of_diagnostics(&diagnostics),
     };
     let (module, parse_diagnostics) = parse_module(0, source, &lexed);
     codes.extend(codes_of_diagnostics(&parse_diagnostics));
@@ -67,15 +72,19 @@ fn codes_of_ambiguous_imports(source: &str) -> Vec<String> {
     let lexed = lex(0, source).expect("lexes");
     let (module, parse_diagnostics) = parse_module(0, source, &lexed);
     assert!(!parse_diagnostics.has_errors());
-    let value = |ty: Type| Export::Value {
-        scheme: Scheme::mono(ty),
-        decl: 0,
-        arity: 0,
+    let value = |ty: Type| {
+        Export::Value {
+            scheme: Scheme::mono(ty),
+            decl: 0,
+            arity: 0,
+        }
     };
     let imports: Vec<Import> = vec![
         (
             String::new(),
-            [("x".to_string(), value(Type::int()))].into_iter().collect(),
+            [("x".to_string(), value(Type::int()))]
+                .into_iter()
+                .collect(),
         ),
         (
             String::new(),
@@ -89,7 +98,11 @@ fn codes_of_ambiguous_imports(source: &str) -> Vec<String> {
 }
 
 fn codes_of_diagnostics(diagnostics: &aevia_syntax::Diagnostics) -> Vec<String> {
-    diagnostics.items.iter().map(|item| item.code.clone()).collect()
+    diagnostics
+        .items
+        .iter()
+        .map(|item| item.code.clone())
+        .collect()
 }
 
 /// The codes appendix B documents, transcribed from the spec.
@@ -145,7 +158,10 @@ fn documented_codes() -> Vec<&'static str> {
 
 /// The audit: one disposition per documented code.
 fn table() -> Vec<(&'static str, Cover)> {
-    use Cover::{Front, Imports, OtherCrate, Unreachable};
+    use Cover::Front;
+    use Cover::Imports;
+    use Cover::OtherCrate;
+    use Cover::Unreachable;
     vec![
         // ----- B.3 lexical -------------------------------------------------
         ("E0101", Front("fn f() =\n\t1\n")),
@@ -199,7 +215,9 @@ fn table() -> Vec<(&'static str, Cover)> {
         ),
         (
             "E0307",
-            Front("fn f(o: Option<Int>): Int = match o with\n    | Some(a, b) -> 1\n    | None -> 0\n"),
+            Front(
+                "fn f(o: Option<Int>): Int = match o with\n    | Some(a, b) -> 1\n    | None -> 0\n",
+            ),
         ),
         (
             "E0308",
@@ -217,7 +235,10 @@ fn table() -> Vec<(&'static str, Cover)> {
             ),
         ),
         ("E0312", Front("type Loop = Loop -> Int\n")),
-        ("E0313", Front("fn f(): Int = do\n    println(\"x\")\n    1\n")),
+        (
+            "E0313",
+            Front("fn f(): Int = do\n    println(\"x\")\n    1\n"),
+        ),
         ("E0314", Front("let e = []\n")),
         ("E0315", Front("fn f(x: Int): Int = x\nlet y = f()\n")),
         ("E0316", Front("fn f(): Int = 1\nfn f(): Int = 2\n")),
@@ -274,7 +295,10 @@ fn table() -> Vec<(&'static str, Cover)> {
             ),
         ),
         ("E0504", Front("unit bad : Length = 1 m offset 5 K\n")),
-        ("E0505", Front("unit foo : Length = 1 m\nunit foo : Length = 2 m\n")),
+        (
+            "E0505",
+            Front("unit foo : Length = 1 m\nunit foo : Length = 2 m\n"),
+        ),
         ("E0506", Front("let x = 3 ft^(1/2)\n")),
         (
             "E0507",
@@ -283,7 +307,10 @@ fn table() -> Vec<(&'static str, Cover)> {
             ),
         ),
         ("E0508", Front("let x = 3 °C*m\n")),
-        ("E0509", Front("let d: Float[L] = 3.0 m\nlet c = value_in(s, d)\n")),
+        (
+            "E0509",
+            Front("let d: Float[L] = 3.0 m\nlet c = value_in(s, d)\n"),
+        ),
         (
             "E0510",
             Front("let t: Float[Θ] = 10 K\nlet c = value_in(°C, t)\n"),
@@ -297,16 +324,20 @@ fn table() -> Vec<(&'static str, Cover)> {
         ),
         (
             "E0602",
-            OtherCrate("aevia-core/src/driver.rs:134 (import-cycle detection before the checker runs)"),
+            OtherCrate(
+                "aevia-core/src/driver.rs:134 (import-cycle detection before the checker runs)",
+            ),
         ),
+        ("E0603", Imports("fn f(): Int = x\n")),
         (
-            "E0603",
-            Imports("fn f(): Int = x\n"),
+            "E0604",
+            Front("instance Show for Int where\n    show(x) = \"n\"\n"),
         ),
-        ("E0604", Front("instance Show for Int where\n    show(x) = \"n\"\n")),
         (
             "E0605",
-            OtherCrate("aevia-core/src/manifest.rs:121 (first of many manifest-validation sites, e.g. :625, :797, :1090)"),
+            OtherCrate(
+                "aevia-core/src/manifest.rs:121 (first of many manifest-validation sites, e.g. :625, :797, :1090)",
+            ),
         ),
         (
             "E0606",
@@ -314,7 +345,9 @@ fn table() -> Vec<(&'static str, Cover)> {
         ),
         (
             "E0607",
-            OtherCrate("aevia-core/src/driver.rs:146 and manifest.rs:227, :377, :699, :928 (module/package not found)"),
+            OtherCrate(
+                "aevia-core/src/driver.rs:146 and manifest.rs:227, :377, :699, :928 (module/package not found)",
+            ),
         ),
         (
             "E0608",
@@ -324,26 +357,62 @@ fn table() -> Vec<(&'static str, Cover)> {
         ("E0701", Front("fn f(): IO Unit = do\n    1\n")),
         ("E0702", Front("fn f(): Int = Ok(1)?\n")),
         // ----- B.10 runtime ------------------------------------------------
-        ("E0801", OtherCrate("aevia-core/src/builtins.rs:322 and eval.rs:1107, :1646 (division by zero)")),
+        (
+            "E0801",
+            OtherCrate("aevia-core/src/builtins.rs:322 and eval.rs:1107, :1646 (division by zero)"),
+        ),
         (
             "E0802",
             Front("fn f(m: Tensor<[2, 3], Float>): Float = m[5]\n"),
         ),
-        ("E0803", OtherCrate("aevia-rssn/src/error.rs:252 (`OpError::FreeSymbols` -> E0803, raised through the bridge)")),
+        (
+            "E0803",
+            OtherCrate(
+                "aevia-rssn/src/error.rs:252 (`OpError::FreeSymbols` -> E0803, raised through the bridge)",
+            ),
+        ),
         (
             "E0804",
             OtherCrate("aevia-core/src/builtins.rs:1579 (undecidable symbolic condition)"),
         ),
-        ("E0805", OtherCrate("aevia-core/src/eval.rs:750 and eval_ir.rs:161 (stack depth / tail budget)")),
-        ("E0806", OtherCrate("aevia-core/src/builtins.rs:2387 (first domain-error site) and aevia-rssn/src/error.rs:263")),
-        ("E0807", OtherCrate("aevia-core/src/builtins.rs:6052 and aevia-rssn/src/error.rs:257 (numeric non-convergence)")),
-        ("E0808", OtherCrate("aevia-core/src/builtins.rs:2751 and aevia-rssn/src/error.rs:266 (budget exhausted)")),
+        (
+            "E0805",
+            OtherCrate("aevia-core/src/eval.rs:750 and eval_ir.rs:161 (stack depth / tail budget)"),
+        ),
+        (
+            "E0806",
+            OtherCrate(
+                "aevia-core/src/builtins.rs:2387 (first domain-error site) and aevia-rssn/src/error.rs:263",
+            ),
+        ),
+        (
+            "E0807",
+            OtherCrate(
+                "aevia-core/src/builtins.rs:6052 and aevia-rssn/src/error.rs:257 (numeric non-convergence)",
+            ),
+        ),
+        (
+            "E0808",
+            OtherCrate(
+                "aevia-core/src/builtins.rs:2751 and aevia-rssn/src/error.rs:266 (budget exhausted)",
+            ),
+        ),
         (
             "E0809",
-            OtherCrate("aevia-core/src/eval.rs:1074, :1349, :2270 and eval_ir.rs:99 (internal invariant violated)"),
+            OtherCrate(
+                "aevia-core/src/eval.rs:1074, :1349, :2270 and eval_ir.rs:99 (internal invariant violated)",
+            ),
         ),
-        ("E0810", OtherCrate("aevia-core/src/eval.rs:2964, :2978, :2983 (IO failures)")),
-        ("E0899", OtherCrate("aevia-core/src/eval.rs:3007 and eval_ir.rs:428; aevia-rssn/src/error.rs:113 (panic)")),
+        (
+            "E0810",
+            OtherCrate("aevia-core/src/eval.rs:2964, :2978, :2983 (IO failures)"),
+        ),
+        (
+            "E0899",
+            OtherCrate(
+                "aevia-core/src/eval.rs:3007 and eval_ir.rs:428; aevia-rssn/src/error.rs:113 (panic)",
+            ),
+        ),
         // ----- B.11 IO -----------------------------------------------------
         (
             "E0901",
@@ -416,20 +485,19 @@ fn table() -> Vec<(&'static str, Cover)> {
         ),
         // ----- B.17 extension/backend --------------------------------------
         ("E1001", Front("@jit\nfn hot(x: Float): Float = x * 2.0\n")),
-        (
-            "E1002",
-            Front(
-                "fn f(x) = Rssn.sin(x)\n",
-            ),
-        ),
+        ("E1002", Front("fn f(x) = Rssn.sin(x)\n")),
         ("E1003", Front("let a = Rssn.sin(1, 2)\n")),
         (
             "E1004",
-            OtherCrate("aevia-rssn/src/lib.rs:55 (api_version) and aevia-core/src/kernel.rs:101 (incompatible API)"),
+            OtherCrate(
+                "aevia-rssn/src/lib.rs:55 (api_version) and aevia-core/src/kernel.rs:101 (incompatible API)",
+            ),
         ),
         (
             "E1005",
-            OtherCrate("aevia-core/src/eval.rs:2317 and rssn_module.rs:83, :479 (pinned `OpKey` missing from the manifest)"),
+            OtherCrate(
+                "aevia-core/src/eval.rs:2317 and rssn_module.rs:83, :479 (pinned `OpKey` missing from the manifest)",
+            ),
         ),
         (
             "E1006",
@@ -471,7 +539,10 @@ fn every_documented_code_has_exactly_one_disposition() {
     }
     // The extension list must itself stay covered.
     for code in extension_codes() {
-        assert!(seen.contains(code), "extension `{code}` is missing from the table");
+        assert!(
+            seen.contains(code),
+            "extension `{code}` is missing from the table"
+        );
     }
 }
 
@@ -480,9 +551,9 @@ fn every_frontend_code_is_actually_produced() {
     let mut failures = Vec::new();
     for (code, cover) in table() {
         let produced = match cover {
-            Cover::Front(source) => codes_of(source),
-            Cover::Imports(source) => codes_of_ambiguous_imports(source),
-            Cover::OtherCrate(_) | Cover::Unreachable(_) => continue,
+            | Cover::Front(source) => codes_of(source),
+            | Cover::Imports(source) => codes_of_ambiguous_imports(source),
+            | Cover::OtherCrate(_) | Cover::Unreachable(_) => continue,
         };
         if !produced.iter().any(|found| found == code) {
             failures.push(format!("{code}: produced {produced:?}"));
@@ -499,8 +570,8 @@ fn every_frontend_code_is_actually_produced() {
 fn non_frontend_entries_state_a_reason() {
     for (code, cover) in table() {
         let reason = match cover {
-            Cover::Front(_) | Cover::Imports(_) => continue,
-            Cover::OtherCrate(reason) | Cover::Unreachable(reason) => reason,
+            | Cover::Front(_) | Cover::Imports(_) => continue,
+            | Cover::OtherCrate(reason) | Cover::Unreachable(reason) => reason,
         };
         assert!(
             !reason.trim().is_empty(),

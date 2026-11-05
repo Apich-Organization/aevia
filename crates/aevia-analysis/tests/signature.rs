@@ -3,7 +3,8 @@
 //! Each case asserts the part a user reads: the rendered label, the parameter
 //! labels, which overload is active, and which argument the cursor is in.
 
-use aevia_analysis::{Analysis, Document};
+use aevia_analysis::Analysis;
+use aevia_analysis::Document;
 
 /// A temporary package that removes itself.
 struct Package {
@@ -24,13 +25,20 @@ impl Package {
         Self { root }
     }
 
-    fn write(&self, name: &str, source: &str) -> std::path::PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> std::path::PathBuf {
         let path = self.root.join(name);
         std::fs::write(&path, source).expect("write source");
         path
     }
 
-    fn path(&self, name: &str) -> std::path::PathBuf {
+    fn path(
+        &self,
+        name: &str,
+    ) -> std::path::PathBuf {
         self.root.join(name)
     }
 }
@@ -41,7 +49,10 @@ impl Drop for Package {
     }
 }
 
-fn offset_of(source: &str, needle: &str) -> u32 {
+fn offset_of(
+    source: &str,
+    needle: &str,
+) -> u32 {
     u32::try_from(source.find(needle).expect("the needle is in the source")).expect("offset")
 }
 
@@ -77,9 +88,11 @@ fn signature_help_is_none_outside_the_parentheses() {
     // On the callee name, before its `(`.
     assert!(analysis.signature_help(offset_of(source, "f(1)")).is_none());
     // After the closing `)`.
-    assert!(analysis
-        .signature_help(offset_of(source, "f(1)") + 4)
-        .is_none());
+    assert!(
+        analysis
+            .signature_help(offset_of(source, "f(1)") + 4)
+            .is_none()
+    );
     // Nowhere near a call.
     assert!(analysis.signature_help(0).is_none());
 }
@@ -98,7 +111,10 @@ fn signature_help_follows_the_innermost_call() {
     let outer = analysis
         .signature_help(offset_of(source, "), 2)") + 3)
         .expect("inside the outer call's second argument");
-    assert_eq!(outer.signatures[0].label, "g: (Int, Int) -> Int", "{outer:#?}");
+    assert_eq!(
+        outer.signatures[0].label, "g: (Int, Int) -> Int",
+        "{outer:#?}"
+    );
     assert_eq!(outer.active_parameter, 1, "{outer:#?}");
 }
 
@@ -146,8 +162,7 @@ fn signature_help_uses_an_imported_declarations_scheme_and_docs() {
         .signature_help(offset_of(&source, "2.0 m"))
         .expect("inside the imported call");
     assert_eq!(
-        help.signatures[0].label,
-        "A.magnitude: (Real[L]) -> Real[L]",
+        help.signatures[0].label, "A.magnitude: (Real[L]) -> Real[L]",
         "{help:#?}"
     );
     assert_eq!(
@@ -233,9 +248,6 @@ fn a_class_method_names_its_class_and_proved_instance() {
     let help = analysis
         .signature_help(offset_of(source, "pretty(1)") + 7)
         .expect("inside the method call");
-    assert!(
-        help.signatures[0].label.contains("Pretty"),
-        "{help:#?}"
-    );
+    assert!(help.signatures[0].label.contains("Pretty"), "{help:#?}");
     assert_eq!(help.active_parameter, 0);
 }

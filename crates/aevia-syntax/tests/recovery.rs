@@ -6,8 +6,12 @@
 
 mod support;
 
-use aevia_syntax::ast::{DeclKind, ExprKind, PatKind};
-use support::{codes, expect_clean, parse};
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::PatKind;
+use support::codes;
+use support::expect_clean;
+use support::parse;
 
 #[test]
 fn a_missing_operand_is_an_error_node() {

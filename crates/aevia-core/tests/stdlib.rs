@@ -7,9 +7,13 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::EvalError;
+use aevia_core::Interp;
 use aevia_core::builtins::call_simple;
-use aevia_core::value::{NumKind, Storage, Value};
-use aevia_core::{compile, EvalError, Interp};
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Storage;
+use aevia_core::value::Value;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 
@@ -21,7 +25,10 @@ fn float(value: f64) -> Value {
     Value::float(value)
 }
 
-fn tensor(shape: Vec<usize>, values: Vec<f64>) -> Value {
+fn tensor(
+    shape: Vec<usize>,
+    values: Vec<f64>,
+) -> Value {
     Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData {
         shape,
         storage: Storage::Dense(std::rc::Rc::new(values)),
@@ -33,29 +40,33 @@ fn tensor(shape: Vec<usize>, values: Vec<f64>) -> Value {
 fn exact(values: Vec<i64>) -> Value {
     let elements: Vec<Value> = values
         .into_iter()
-        .map(|value| {
-            Value::Num(aevia_core::value::NumVal::int(BigInt::from(value)))
-        })
+        .map(|value| Value::Num(aevia_core::value::NumVal::int(BigInt::from(value))))
         .collect();
     let len = elements.len();
     aevia_core::eval::build_tensor(elements, vec![len], aevia_dim::Dim::one())
 }
 
-fn call(name: &str, args: Vec<Value>) -> Value {
+fn call(
+    name: &str,
+    args: Vec<Value>,
+) -> Value {
     call_simple(name, args).unwrap_or_else(|error| panic!("`{name}` failed: {error:?}"))
 }
 
-fn call_error(name: &str, args: Vec<Value>) -> EvalError {
+fn call_error(
+    name: &str,
+    args: Vec<Value>,
+) -> EvalError {
     match call_simple(name, args) {
-        Ok(value) => panic!("`{name}` answered {value:?} instead of failing"),
-        Err(error) => error,
+        | Ok(value) => panic!("`{name}` answered {value:?} instead of failing"),
+        | Err(error) => error,
     }
 }
 
 fn num(value: &Value) -> &aevia_core::value::NumVal {
     match value {
-        Value::Num(number) => number,
-        other => panic!("expected a scalar, found {}", other.type_name()),
+        | Value::Num(number) => number,
+        | other => panic!("expected a scalar, found {}", other.type_name()),
     }
 }
 
@@ -65,13 +76,16 @@ fn as_f64(value: &Value) -> f64 {
 
 fn tensor_of(value: &Value) -> &aevia_core::value::TensorData {
     match value {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
 /// Runs a program and returns the value of a top-level name.
-fn run_value(source: &str, name: &str) -> Value {
+fn run_value(
+    source: &str,
+    name: &str,
+) -> Value {
     let compilation = compile("test.aev", source);
     assert!(
         !compilation.diagnostics.has_errors(),
@@ -117,26 +131,35 @@ fn id_const_and_zero_keep_their_representation() {
         call("id", vec![int(3)]).as_num().map(|n| &n.kind),
         Some(NumKind::Int(_))
     ));
-    assert_eq!(as_f64(&call("const", vec![int(1), Value::string("x")])), 1.0);
+    assert_eq!(
+        as_f64(&call("const", vec![int(1), Value::string("x")])),
+        1.0
+    );
     // `zero` is the exact zero of `fold((+), zero, xs)`.
     let zero = call("zero", Vec::new());
-    assert!(zero.as_num().is_some_and(aevia_core::value::NumVal::is_zero));
-    assert!(matches!(zero.as_num().map(|n| &n.kind), Some(NumKind::Exact(_))));
+    assert!(
+        zero.as_num()
+            .is_some_and(aevia_core::value::NumVal::is_zero)
+    );
+    assert!(matches!(
+        zero.as_num().map(|n| &n.kind),
+        Some(NumKind::Exact(_))
+    ));
 }
 
 #[test]
 fn compare_returns_an_option_of_ordering() {
     let less = call("compare", vec![int(1), int(2)]);
     match &less {
-        Value::Variant(variant) => {
+        | Value::Variant(variant) => {
             assert_eq!(variant.name, "Some");
             let inner = &variant.fields[0];
             assert!(
                 matches!(inner, Value::Variant(ordering) if ordering.name == "Less"),
                 "{inner:?}"
             );
-        }
-        other => panic!("expected an Option, found {}", other.type_name()),
+        },
+        | other => panic!("expected an Option, found {}", other.type_name()),
     }
     // `partial_compare` refuses to order a NaN (§8.1.2).
     let unordered = call("partial_compare", vec![float(f64::NAN), float(1.0)]);
@@ -152,11 +175,11 @@ fn the_symbolic_comparisons_build_propositions() {
     // A proposition over concrete numbers is decidable.
     let decided = call("decide", vec![proposition]);
     match &decided {
-        Value::Variant(variant) => {
+        | Value::Variant(variant) => {
             assert_eq!(variant.name, "Some");
             assert!(matches!(variant.fields[0], Value::Bool(true)));
-        }
-        other => panic!("expected an Option, found {}", other.type_name()),
+        },
+        | other => panic!("expected an Option, found {}", other.type_name()),
     }
     assert!(matches!(
         call("sym_eq", vec![int(2), int(2)]),
@@ -168,7 +191,10 @@ fn the_symbolic_comparisons_build_propositions() {
 fn statistics_keep_exactness_and_report_shapes() {
     // `median` of an exact sample is exact: 2, not 2.0.
     let median = call("median", vec![exact(vec![3, 1, 2])]);
-    assert!(matches!(median.as_num().map(|n| &n.kind), Some(NumKind::Int(_))));
+    assert!(matches!(
+        median.as_num().map(|n| &n.kind),
+        Some(NumKind::Int(_))
+    ));
     assert_eq!(as_f64(&median), 2.0);
 
     // A float sample stays a float.
@@ -181,10 +207,13 @@ fn statistics_keep_exactness_and_report_shapes() {
     // The type-7 quantile of [0, 10] at 1/4 is exactly 5/2.
     let quantile = call(
         "quantile",
-        vec![exact(vec![0, 10]), Value::Num(aevia_core::value::NumVal::exact(
-            BigRational::new(BigInt::from(1), BigInt::from(4)),
-            aevia_dim::Dim::one(),
-        ))],
+        vec![
+            exact(vec![0, 10]),
+            Value::Num(aevia_core::value::NumVal::exact(
+                BigRational::new(BigInt::from(1), BigInt::from(4)),
+                aevia_dim::Dim::one(),
+            )),
+        ],
     );
     assert_eq!(
         num(&quantile).to_rational(),
@@ -193,12 +222,18 @@ fn statistics_keep_exactness_and_report_shapes() {
 
     // The sample covariance of (1,2,3) with (2,4,6) is exactly 2.
     let covariance = call("cov", vec![exact(vec![1, 2, 3]), exact(vec![2, 4, 6])]);
-    assert_eq!(num(&covariance).to_rational(), Some(BigRational::from_integer(2.into())));
+    assert_eq!(
+        num(&covariance).to_rational(),
+        Some(BigRational::from_integer(2.into()))
+    );
 
     // The correlation of two identical lines is 1.
     let correlation = call(
         "corr",
-        vec![tensor(vec![3], vec![1.0, 2.0, 3.0]), tensor(vec![3], vec![2.0, 4.0, 6.0])],
+        vec![
+            tensor(vec![3], vec![1.0, 2.0, 3.0]),
+            tensor(vec![3], vec![2.0, 4.0, 6.0]),
+        ],
     );
     assert!((as_f64(&correlation) - 1.0).abs() < 1e-12);
 }
@@ -225,17 +260,9 @@ fn a_histogram_reports_counts_and_edges() {
 #[test]
 fn the_distributions_have_densities_and_cdfs() {
     // Normal{mu = 0, sigma = 1} at 0: pdf = 1/sqrt(2 pi), cdf = 1/2.
-    let normal = aevia_core::value::make_variant(
-        u32::MAX - 1,
-        0,
-        "Normal",
-        Vec::new(),
-    );
+    let normal = aevia_core::value::make_variant(u32::MAX - 1, 0, "Normal", Vec::new());
     let _ = normal;
-    let distribution = record(vec![
-        ("mu", float(0.0)),
-        ("sigma", float(1.0)),
-    ]);
+    let distribution = record(vec![("mu", float(0.0)), ("sigma", float(1.0))]);
     let pdf = call("pdf", vec![distribution.clone(), float(0.0)]);
     assert!((as_f64(&pdf) - 1.0 / (2.0 * std::f64::consts::PI).sqrt()).abs() < 1e-12);
     let cdf = call("cdf", vec![distribution, float(0.0)]);
@@ -258,7 +285,9 @@ fn record(fields: Vec<(&str, Value)>) -> Value {
     for (name, value) in fields {
         map.insert(name.to_string(), value);
     }
-    Value::Record(std::rc::Rc::new(aevia_core::value::RecordValue { fields: map }))
+    Value::Record(std::rc::Rc::new(aevia_core::value::RecordValue {
+        fields: map,
+    }))
 }
 
 #[test]
@@ -266,54 +295,78 @@ fn the_dense_decompositions_have_the_documented_shapes() {
     let matrix = tensor(vec![2, 2], vec![4.0, 7.0, 2.0, 6.0]);
 
     let qr = call("qr", vec![matrix.clone()]);
-    let Value::Record(qr) = &qr else { panic!("qr must return a pair") };
+    let Value::Record(qr) = &qr else {
+        panic!("qr must return a pair")
+    };
     assert_eq!(tensor_of(&qr.fields["0"]).shape, vec![2, 2]);
     assert_eq!(tensor_of(&qr.fields["1"]).shape, vec![2, 2]);
 
     let lu = call("lu", vec![matrix.clone()]);
-    let Value::Record(lu) = &lu else { panic!("lu must return a triple") };
+    let Value::Record(lu) = &lu else {
+        panic!("lu must return a triple")
+    };
     for field in ["0", "1", "2"] {
         assert_eq!(tensor_of(&lu.fields[field]).shape, vec![2, 2]);
     }
 
     // A positive definite matrix has a Cholesky factor.
-    let cholesky = call("cholesky", vec![tensor(vec![2, 2], vec![4.0, 2.0, 2.0, 3.0])]);
-    let Value::Variant(result) = &cholesky else { panic!("cholesky returns a Result") };
+    let cholesky = call(
+        "cholesky",
+        vec![tensor(vec![2, 2], vec![4.0, 2.0, 2.0, 3.0])],
+    );
+    let Value::Variant(result) = &cholesky else {
+        panic!("cholesky returns a Result")
+    };
     assert_eq!(result.name, "Ok");
     assert_eq!(tensor_of(&result.fields[0]).shape, vec![2, 2]);
     // A matrix that is not positive definite is reported, not approximated.
-    let indefinite = call("cholesky", vec![tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 1.0])]);
+    let indefinite = call(
+        "cholesky",
+        vec![tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 1.0])],
+    );
     match &indefinite {
-        Value::Variant(variant) => {
+        | Value::Variant(variant) => {
             assert_eq!(variant.name, "Err");
-            assert!(matches!(&variant.fields[0], Value::Variant(e) if e.name == "NotPositiveDefinite"));
-        }
-        other => panic!("expected a Result, found {}", other.type_name()),
+            assert!(
+                matches!(&variant.fields[0], Value::Variant(e) if e.name == "NotPositiveDefinite")
+            );
+        },
+        | other => panic!("expected a Result, found {}", other.type_name()),
     }
 
     // The economy SVD of a 2x3 matrix is 2x2, 2, 2x3.
-    let (u, s, vt) = match call("svd", vec![tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]) {
-        Value::Record(record) => (
-            tensor_of(&record.fields["0"]).shape.clone(),
-            tensor_of(&record.fields["1"]).shape.clone(),
-            tensor_of(&record.fields["2"]).shape.clone(),
-        ),
-        other => panic!("expected a triple, found {}", other.type_name()),
+    let (u, s, vt) = match call(
+        "svd",
+        vec![tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])],
+    ) {
+        | Value::Record(record) => {
+            (
+                tensor_of(&record.fields["0"]).shape.clone(),
+                tensor_of(&record.fields["1"]).shape.clone(),
+                tensor_of(&record.fields["2"]).shape.clone(),
+            )
+        },
+        | other => panic!("expected a triple, found {}", other.type_name()),
     };
     assert_eq!((u, s, vt), (vec![2, 2], vec![2], vec![2, 3]));
 }
 
 #[test]
 fn eigenvalues_of_a_symmetric_matrix_are_complex_numbers_with_a_real_part() {
-    let eigenvalues = call("eigvals", vec![tensor(vec![2, 2], vec![2.0, 1.0, 1.0, 2.0])]);
+    let eigenvalues = call(
+        "eigvals",
+        vec![tensor(vec![2, 2], vec![2.0, 1.0, 1.0, 2.0])],
+    );
     let tensor = tensor_of(&eigenvalues);
     assert_eq!(tensor.shape, vec![2]);
     let mut reals: Vec<f64> = tensor
         .elements()
         .iter()
-        .map(|element| match element.as_num().map(|n| &n.kind) {
-            Some(NumKind::Complex(re, _)) => *re,
-            other => panic!("expected a complex eigenvalue, found {other:?}"),
+        .map(|element| {
+            match element.as_num().map(|n| &n.kind) {
+                | Some(NumKind::Complex(re, _)) => *re,
+                | other => panic!("expected a complex eigenvalue, found {other:?}"),
+            }
         })
         .collect();
     reals.sort_by(f64::total_cmp);
@@ -323,16 +376,19 @@ fn eigenvalues_of_a_symmetric_matrix_are_complex_numbers_with_a_real_part() {
 
 #[test]
 fn a_singular_system_reports_singular_rather_than_a_number() {
-    let outcome = call("linsolve", vec![
-        tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]),
-        tensor(vec![2], vec![1.0, 2.0]),
-    ]);
+    let outcome = call(
+        "linsolve",
+        vec![
+            tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]),
+            tensor(vec![2], vec![1.0, 2.0]),
+        ],
+    );
     match &outcome {
-        Value::Variant(variant) => {
+        | Value::Variant(variant) => {
             assert_eq!(variant.name, "Err");
             assert!(matches!(&variant.fields[0], Value::Variant(e) if e.name == "Singular"));
-        }
-        other => panic!("expected a Result, found {}", other.type_name()),
+        },
+        | other => panic!("expected a Result, found {}", other.type_name()),
     }
 }
 
@@ -345,7 +401,9 @@ fn least_squares_fits_a_line_through_three_points() {
             tensor(vec![3], vec![1.0, 3.0, 5.0]),
         ],
     );
-    let Value::Variant(result) = &outcome else { panic!("lstsq returns a Result") };
+    let Value::Variant(result) = &outcome else {
+        panic!("lstsq returns a Result")
+    };
     assert_eq!(result.name, "Ok");
     let solution = tensor_of(&result.fields[0]);
     assert_eq!(solution.shape, vec![2]);
@@ -375,11 +433,14 @@ fn the_shape_operations_keep_the_element_count() {
     // `Result` promises, not with a diagnostic.
     let refused = call(
         "reshape_dyn",
-        vec![tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), tensor(vec![1], vec![4.0])],
+        vec![
+            tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+            tensor(vec![1], vec![4.0]),
+        ],
     );
     match refused {
-        Value::Variant(result) => assert_eq!(result.index, 1, "Err"),
-        other => panic!("expected a Result, found {}", other.type_name()),
+        | Value::Variant(result) => assert_eq!(result.index, 1, "Err"),
+        | other => panic!("expected a Result, found {}", other.type_name()),
     }
     // `set` replaces one element.
     let updated = call(
@@ -407,7 +468,11 @@ fn a_shape_type_argument_is_read_when_it_is_present() {
     // which also pins the `[3,2]` spelling the parser does not accept yet.)
     let error = call_error("reshape", vec![tensor(vec![2], vec![1.0, 2.0])]);
     assert_eq!(error.code, "E0310");
-    assert!(error.message.contains("shape type argument"), "{}", error.message);
+    assert!(
+        error.message.contains("shape type argument"),
+        "{}",
+        error.message
+    );
     // NPY is implemented (§8.11): `read_npy` builds the IO action, and only
     // running it can fail (a missing file is the IO taxonomy's `E0901`).
     assert!(
@@ -417,14 +482,14 @@ fn a_shape_type_argument_is_read_when_it_is_present() {
     // The extension check is the recoverable `Err(E0904)` value, not a panic.
     let refused = call("read_npy", vec![Value::string("x.txt")]);
     match &refused {
-        Value::Variant(result) => {
+        | Value::Variant(result) => {
             assert_eq!(result.name, "Err");
             let Value::Str(message) = &result.fields[0] else {
                 panic!("the byte payload is a message");
             };
             assert!(message.contains("E0904"), "{message}");
-        }
-        other => panic!("expected a Result, found {}", other.type_name()),
+        },
+        | other => panic!("expected a Result, found {}", other.type_name()),
     }
 }
 
@@ -452,17 +517,20 @@ fn the_fourier_transform_round_trips() {
     let restored = call("ifft", vec![spectrum]);
     let tensor = tensor_of(&restored);
     for (a, b) in signal.iter().zip(tensor.elements()) {
-        let (Some(NumKind::Complex(ar, ai)), Some(NumKind::Complex(br, bi))) = (
-            a.as_num().map(|n| &n.kind),
-            b.as_num().map(|n| &n.kind),
-        ) else {
+        let (Some(NumKind::Complex(ar, ai)), Some(NumKind::Complex(br, bi))) =
+            (a.as_num().map(|n| &n.kind), b.as_num().map(|n| &n.kind))
+        else {
             panic!("a transform of complex input is complex");
         };
         assert!((ar - br).abs() < 1e-12 && (ai - bi).abs() < 1e-12);
     }
     // `fftfreq` gives the sample frequencies, wrapping at the Nyquist bin.
     let frequencies = call("fftfreq", vec![int(4), float(1.0)]);
-    let values: Vec<f64> = tensor_of(&frequencies).elements().iter().map(as_f64).collect();
+    let values: Vec<f64> = tensor_of(&frequencies)
+        .elements()
+        .iter()
+        .map(as_f64)
+        .collect();
     assert_eq!(values, vec![0.0, 0.25, -0.5, -0.25]);
 }
 
@@ -500,7 +568,6 @@ fn numeric_calculus_agrees_with_the_symbolic_answers() {
         "d",
     );
     assert!((as_f64(&derivative) - 12.0).abs() < 1e-4);
-
 }
 
 /// A native `sin` function value, for the calculus tests that take a function.
@@ -519,7 +586,9 @@ fn quadrature_minimisation_and_root_finding() {
         "quadrature",
         vec![native_capture(), float(0.0), float(std::f64::consts::PI)],
     );
-    let Value::Variant(result) = &integral else { panic!("quadrature returns a Result") };
+    let Value::Variant(result) = &integral else {
+        panic!("quadrature returns a Result")
+    };
     assert_eq!(result.name, "Ok");
     assert!((as_f64(&result.fields[0]) - 2.0).abs() < 1e-8);
 
@@ -528,9 +597,15 @@ fn quadrature_minimisation_and_root_finding() {
         "let m = minimize(fn p => (p[0] - 1.0) * (p[0] - 1.0) + (p[1] + 2.0) * (p[1] + 2.0), [0.0, 0.0])\n",
         "m",
     );
-    let Value::Variant(result) = &minimum else { panic!("minimize returns a Result") };
+    let Value::Variant(result) = &minimum else {
+        panic!("minimize returns a Result")
+    };
     assert_eq!(result.name, "Ok");
-    let point: Vec<f64> = tensor_of(&result.fields[0]).elements().iter().map(as_f64).collect();
+    let point: Vec<f64> = tensor_of(&result.fields[0])
+        .elements()
+        .iter()
+        .map(as_f64)
+        .collect();
     assert!((point[0] - 1.0).abs() < 1e-3);
     assert!((point[1] + 2.0).abs() < 1e-3);
 
@@ -545,7 +620,9 @@ fn quadrature_minimisation_and_root_finding() {
 
     // A root of x^3 - 2.
     let root = run_value("let r = root(fn x => x * x * x - 2.0, 1.0)\n", "r");
-    let Value::Variant(result) = &root else { panic!("root returns a Result") };
+    let Value::Variant(result) = &root else {
+        panic!("root returns a Result")
+    };
     assert_eq!(result.name, "Ok");
     assert!((as_f64(&result.fields[0]) - 2.0f64.cbrt()).abs() < 1e-8);
 }
@@ -583,12 +660,21 @@ let s = solve_poisson({ grid = { nx = 11, ny = 11, h = 0.1 }, source = zeros(11,
         "s",
     );
     // The spec is a record; a zero source has the zero solution.
-    let Value::Variant(result) = &solution else { panic!("solve_poisson returns a Result") };
+    let Value::Variant(result) = &solution else {
+        panic!("solve_poisson returns a Result")
+    };
     assert_eq!(result.name, "Ok");
-    let Value::Record(field) = &result.fields[0] else { panic!("a field is a record") };
+    let Value::Record(field) = &result.fields[0] else {
+        panic!("a field is a record")
+    };
     let values = tensor_of(&field.fields["values"]);
     assert_eq!(values.shape, vec![11, 11]);
-    assert!(values.elements().iter().all(|value| as_f64(value).abs() < 1e-9));
+    assert!(
+        values
+            .elements()
+            .iter()
+            .all(|value| as_f64(value).abs() < 1e-9)
+    );
 }
 
 #[test]
@@ -603,28 +689,36 @@ fn the_table_layer_columns_selects_and_joins() {
         aevia_dim::Dim::one(),
     );
     let table = call("to_table", vec![rows]);
-    let Value::Variant(result) = &table else { panic!("to_table returns a Result") };
+    let Value::Variant(result) = &table else {
+        panic!("to_table returns a Result")
+    };
     assert_eq!(result.name, "Ok");
     let table = result.fields[0].clone();
 
     let column = call("column", vec![table.clone(), Value::string("x")]);
-    let Value::Variant(result) = &column else { panic!("column returns a Result") };
+    let Value::Variant(result) = &column else {
+        panic!("column returns a Result")
+    };
     assert_eq!(result.name, "Ok");
     assert_eq!(tensor_of(&result.fields[0]).shape, vec![2]);
-    assert!(matches!(tensor_of(&result.fields[0]).storage, Storage::Dense(_)));
+    assert!(matches!(
+        tensor_of(&result.fields[0]).storage,
+        Storage::Dense(_)
+    ));
 
     let row = call("row", vec![table.clone(), int(1)]);
-    let Value::Variant(result) = &row else { panic!("row returns a Result") };
+    let Value::Variant(result) = &row else {
+        panic!("row returns a Result")
+    };
     assert_eq!(result.name, "Ok");
     assert!(matches!(&result.fields[0], Value::Record(_)));
 
-    let names = aevia_core::eval::build_tensor(
-        vec![Value::string("y")],
-        vec![1],
-        aevia_dim::Dim::one(),
-    );
+    let names =
+        aevia_core::eval::build_tensor(vec![Value::string("y")], vec![1], aevia_dim::Dim::one());
     let selected = call("select", vec![table.clone(), names]);
-    let Value::Record(selected) = &selected else { panic!("select returns a table") };
+    let Value::Record(selected) = &selected else {
+        panic!("select returns a table")
+    };
     assert_eq!(tensor_of(&selected.fields["columns"]).elements().len(), 1);
 
     let schema = call("schema", vec![table]);
@@ -637,7 +731,9 @@ fn complex_number_theory_and_geometry() {
     assert!((as_f64(&call("magnitude", vec![z.clone()])) - 5.0).abs() < 1e-12);
     assert!((as_f64(&call("arg", vec![z.clone()])) - 4.0f64.atan2(3.0)).abs() < 1e-12);
     let conjugate = call("conj", vec![z]);
-    assert!(matches!(conjugate.as_num().map(|n| &n.kind), Some(NumKind::Complex(_, im)) if *im == -4.0));
+    assert!(
+        matches!(conjugate.as_num().map(|n| &n.kind), Some(NumKind::Complex(_, im)) if *im == -4.0)
+    );
 
     let factors = call("factor", vec![int(12)]);
     assert_eq!(tensor_of(&factors).shape, vec![2]);
@@ -647,12 +743,18 @@ fn complex_number_theory_and_geometry() {
 
     let area = call(
         "polygon_area",
-        vec![tensor(vec![4, 2], vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])],
+        vec![tensor(
+            vec![4, 2],
+            vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+        )],
     );
     assert!((as_f64(&area) - 1.0).abs() < 1e-12);
     let distance = call(
         "distance",
-        vec![tensor(vec![2], vec![0.0, 0.0]), tensor(vec![2], vec![3.0, 4.0])],
+        vec![
+            tensor(vec![2], vec![0.0, 0.0]),
+            tensor(vec![2], vec![3.0, 4.0]),
+        ],
     );
     assert!((as_f64(&distance) - 5.0).abs() < 1e-12);
 }
@@ -680,8 +782,8 @@ fn simulation_delegates_to_the_backend() {
     ]);
     let outcome = call("simulate", vec![Value::string("ising"), parameters]);
     match &outcome {
-        Value::Variant(variant) => assert_eq!(variant.name, "Ok"),
-        other => panic!("expected a Result, found {}", other.type_name()),
+        | Value::Variant(variant) => assert_eq!(variant.name, "Ok"),
+        | other => panic!("expected a Result, found {}", other.type_name()),
     }
     // An unknown scenario is an `Err`, not a panic.
     let unknown = call("simulate", vec![Value::string("nope"), record(Vec::new())]);
@@ -709,19 +811,23 @@ fn an_exact_factorisation_stays_exact() {
         aevia_dim::Dim::one(),
     );
     let lu = call("lu", vec![matrix]);
-    let Value::Record(lu) = &lu else { panic!("lu returns a triple") };
+    let Value::Record(lu) = &lu else {
+        panic!("lu returns a triple")
+    };
     let u = tensor_of(&lu.fields["2"]);
     assert!(matches!(u.storage, Storage::Exact(_)));
     let entries: Vec<BigRational> = match &u.storage {
-        Storage::Exact(values) => values.clone(),
-        _ => unreachable!(),
+        | Storage::Exact(values) => values.clone(),
+        | _ => unreachable!(),
     };
     // U = [[1, 2], [0, -2]].
     assert_eq!(entries[3], BigRational::from_integer(BigInt::from(-2)));
 
     // A float matrix keeps floats.
     let float_lu = call("lu", vec![tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])]);
-    let Value::Record(float_lu) = &float_lu else { panic!("lu returns a triple") };
+    let Value::Record(float_lu) = &float_lu else {
+        panic!("lu returns a triple")
+    };
     assert!(matches!(
         tensor_of(&float_lu.fields["2"]).storage,
         Storage::Dense(_)

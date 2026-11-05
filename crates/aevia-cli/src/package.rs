@@ -4,8 +4,13 @@
 //! directory, and `update` re-resolves that directory's `aevia.lock`. Nothing
 //! here pretends a version range was resolved.
 
-use aevia_core::manifest::{import_root, valid_package_name, Dependency, Manifest, Package};
-use std::path::{Path, PathBuf};
+use aevia_core::manifest::Dependency;
+use aevia_core::manifest::Manifest;
+use aevia_core::manifest::Package;
+use aevia_core::manifest::import_root;
+use aevia_core::manifest::valid_package_name;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 const LOCK: &str = "aevia.lock";
@@ -52,7 +57,10 @@ pub fn init(args: &[String]) -> ExitCode {
     }
     let manifest = Manifest::new(name);
     if let Err(error) = std::fs::create_dir_all(dir.join("src")) {
-        eprintln!("aevia init: cannot create `{}`: {error}", dir.join("src").display());
+        eprintln!(
+            "aevia init: cannot create `{}`: {error}",
+            dir.join("src").display()
+        );
         return ExitCode::from(1);
     }
     let main = dir.join(&manifest.entry);
@@ -73,16 +81,16 @@ pub fn init(args: &[String]) -> ExitCode {
         manifest,
     };
     match package.resolve() {
-        Ok(lock) => {
+        | Ok(lock) => {
             if let Err(error) = lock.save(&dir.join(LOCK)) {
                 eprintln!("aevia init: {}", error.render());
                 return ExitCode::from(1);
             }
-        }
-        Err(error) => {
+        },
+        | Err(error) => {
             eprintln!("aevia init: {}", error.render());
             return ExitCode::from(1);
-        }
+        },
     }
     println!("created {}", dir.join("aevia.toml").display());
     println!("created {}", main.display());
@@ -91,7 +99,10 @@ pub fn init(args: &[String]) -> ExitCode {
 }
 
 /// `aevia add <path>` (with `--locked`, adding a dependency is refused).
-pub fn add(args: &[String], locked: bool) -> ExitCode {
+pub fn add(
+    args: &[String],
+    locked: bool,
+) -> ExitCode {
     let Some(path) = args.first() else {
         eprintln!(
             "aevia add: expected the path of a package, as in `aevia add ../units-extra`\n\
@@ -115,23 +126,23 @@ pub fn add(args: &[String], locked: bool) -> ExitCode {
         return ExitCode::from(1);
     }
     let mut package = match current() {
-        Ok(package) => package,
-        Err(message) => {
+        | Ok(package) => package,
+        | Err(message) => {
             eprintln!("aevia add: {message}");
             return ExitCode::from(1);
-        }
+        },
     };
     let dependency_dir = package.dir.join(path);
     let dependency_manifest = match Manifest::load(&dependency_dir.join("aevia.toml")) {
-        Ok(manifest) => manifest,
-        Err(error) => {
+        | Ok(manifest) => manifest,
+        | Err(error) => {
             eprintln!(
                 "aevia add: `{}` is not a package ({})",
                 dependency_dir.display(),
                 error.render()
             );
             return ExitCode::from(1);
-        }
+        },
     };
     let key = import_root(&dependency_manifest.name);
     let dependency = Dependency::Path {
@@ -139,14 +150,15 @@ pub fn add(args: &[String], locked: bool) -> ExitCode {
     };
     if let Some(existing) = package.manifest.dependencies.get(&key) {
         if *existing != dependency {
-            eprintln!(
-                "aevia add: E0606: `{key}` is already a dependency with a different path"
-            );
+            eprintln!("aevia add: E0606: `{key}` is already a dependency with a different path");
             return ExitCode::from(1);
         }
         println!("`{key}` is already a dependency");
     } else {
-        package.manifest.dependencies.insert(key.clone(), dependency);
+        package
+            .manifest
+            .dependencies
+            .insert(key.clone(), dependency);
         if let Err(error) = package.manifest.save(&package.dir.join("aevia.toml")) {
             eprintln!("aevia add: {}", error.render());
             return ExitCode::from(1);
@@ -160,17 +172,20 @@ pub fn add(args: &[String], locked: bool) -> ExitCode {
 }
 
 /// `aevia update` — with `--locked`, a change is an error rather than a write.
-pub fn update(args: &[String], locked: bool) -> ExitCode {
+pub fn update(
+    args: &[String],
+    locked: bool,
+) -> ExitCode {
     if let Some(extra) = args.first() {
         eprintln!("aevia update: expected no arguments, found `{extra}`");
         return ExitCode::from(2);
     }
     let package = match current() {
-        Ok(package) => package,
-        Err(message) => {
+        | Ok(package) => package,
+        | Err(message) => {
             eprintln!("aevia update: {message}");
             return ExitCode::from(1);
-        }
+        },
     };
     write_lock(&package, true, locked)
 }
@@ -188,11 +203,11 @@ pub fn clean(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     let package = match current() {
-        Ok(package) => package,
-        Err(message) => {
+        | Ok(package) => package,
+        | Err(message) => {
             eprintln!("aevia clean: {message}");
             return ExitCode::from(1);
-        }
+        },
     };
     let cache = package.dir.join(".aevia");
     if !cache.exists() {
@@ -204,18 +219,18 @@ pub fn clean(args: &[String]) -> ExitCode {
     }
     let files = count_files(&cache);
     match std::fs::remove_dir_all(&cache) {
-        Ok(()) => {
+        | Ok(()) => {
             println!(
                 "removed {} ({files} file{})",
                 cache.display(),
                 if files == 1 { "" } else { "s" }
             );
             ExitCode::SUCCESS
-        }
-        Err(error) => {
+        },
+        | Err(error) => {
             eprintln!("aevia clean: cannot remove `{}`: {error}", cache.display());
             ExitCode::from(1)
-        }
+        },
     }
 }
 
@@ -238,20 +253,28 @@ fn count_files(dir: &Path) -> usize {
 }
 
 /// Resolves the lock and writes it when it changed.
-fn write_lock(package: &Package, report_unchanged: bool, locked: bool) -> ExitCode {
+fn write_lock(
+    package: &Package,
+    report_unchanged: bool,
+    locked: bool,
+) -> ExitCode {
     let lock = match package.resolve() {
-        Ok(lock) => lock,
-        Err(error) => {
+        | Ok(lock) => lock,
+        | Err(error) => {
             eprintln!("aevia update: {}", error.render());
             return ExitCode::from(1);
-        }
+        },
     };
     let path = package.dir.join(LOCK);
     let text = lock.render();
     let previous = std::fs::read_to_string(&path).ok();
     if previous.as_deref() == Some(text.as_str()) {
         if report_unchanged {
-            println!("{} is up to date ({} packages)", path.display(), lock.packages.len());
+            println!(
+                "{} is up to date ({} packages)",
+                path.display(),
+                lock.packages.len()
+            );
         }
         return ExitCode::SUCCESS;
     }
@@ -300,10 +323,14 @@ pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
             continue;
         }
         let (parent, pattern) = match name.rfind(['/', '\\']) {
-            Some(index) => (&name[..index], &name[index + 1..]),
-            None => (".", name.as_str()),
+            | Some(index) => (&name[..index], &name[index + 1..]),
+            | None => (".", name.as_str()),
         };
-        let Ok(entries) = std::fs::read_dir(if parent.is_empty() { "." } else { parent }) else {
+        let Ok(entries) = std::fs::read_dir(if parent.is_empty() {
+            "."
+        } else {
+            parent
+        }) else {
             paths.push(PathBuf::from(name));
             continue;
         };
@@ -312,7 +339,11 @@ pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
             .filter(|entry| {
                 wildcard_matches(
                     &pattern.chars().collect::<Vec<_>>(),
-                    &entry.file_name().to_string_lossy().chars().collect::<Vec<_>>(),
+                    &entry
+                        .file_name()
+                        .to_string_lossy()
+                        .chars()
+                        .collect::<Vec<_>>(),
                 )
             })
             .map(|entry| PathBuf::from(parent).join(entry.file_name()))
@@ -328,18 +359,24 @@ pub fn expand_globs(names: &[String]) -> Vec<PathBuf> {
 }
 
 /// Shell-style matching of one file name against `*`/`?`.
-fn wildcard_matches(pattern: &[char], name: &[char]) -> bool {
+fn wildcard_matches(
+    pattern: &[char],
+    name: &[char],
+) -> bool {
     match pattern.split_first() {
-        None => name.is_empty(),
-        Some(('*', rest)) => (0..=name.len()).any(|start| wildcard_matches(rest, &name[start..])),
-        Some(('?', rest)) => !name.is_empty() && wildcard_matches(rest, &name[1..]),
-        Some((character, rest)) => {
+        | None => name.is_empty(),
+        | Some(('*', rest)) => (0..=name.len()).any(|start| wildcard_matches(rest, &name[start..])),
+        | Some(('?', rest)) => !name.is_empty() && wildcard_matches(rest, &name[1..]),
+        | Some((character, rest)) => {
             name.first() == Some(character) && wildcard_matches(rest, &name[1..])
-        }
+        },
     }
 }
 
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

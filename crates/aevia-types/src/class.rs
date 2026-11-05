@@ -9,10 +9,16 @@
 //! structurally, and two instances whose heads overlap are rejected when they
 //! are declared (`E0311`).
 
-use crate::keys::{
-    head_key, witness_of, ClassKey, InstanceKey, ModulePath,
-};
-use crate::ty::{Rep, Row, Scheme, Shape, Type};
+use crate::keys::ClassKey;
+use crate::keys::InstanceKey;
+use crate::keys::ModulePath;
+use crate::keys::head_key;
+use crate::keys::witness_of;
+use crate::ty::Rep;
+use crate::ty::Row;
+use crate::ty::Scheme;
+use crate::ty::Shape;
+use crate::ty::Type;
 use std::collections::HashMap;
 
 /// A class declaration.
@@ -139,40 +145,31 @@ fn prelude_methods(class: &str) -> Vec<(String, Type)> {
     let ordering = Type::Adt(crate::adt::ORDERING_ID, Vec::new());
     let func = |args: Vec<Type>, ret: Type| Type::func(args, ret);
     match class {
-        "Show" => vec![
-            (
-                "show".to_string(),
-                func(vec![param.clone()], Type::Str),
-            ),
-            (
-                "repr".to_string(),
-                func(vec![param.clone()], Type::Str),
-            ),
-            (
-                "to_latex".to_string(),
-                func(vec![param.clone()], Type::Str),
-            ),
-            (
-                "to_typst".to_string(),
-                func(vec![param], Type::Str),
-            ),
-        ],
-        "Ord" => vec![(
-            "compare".to_string(),
-            func(
-                vec![Type::Param(0), Type::Param(0)],
-                Type::option(ordering),
-            ),
-        )],
-        "TotalOrd" => vec![(
-            "total_compare".to_string(),
-            func(
-                vec![Type::Param(0), Type::Param(0)],
-                Type::Adt(crate::adt::ORDERING_ID, Vec::new()),
-            ),
-        )],
-        "Hash" => vec![("hash".to_string(), func(vec![Type::Param(0)], Type::int()))],
-        _ => Vec::new(),
+        | "Show" => {
+            vec![
+                ("show".to_string(), func(vec![param.clone()], Type::Str)),
+                ("repr".to_string(), func(vec![param.clone()], Type::Str)),
+                ("to_latex".to_string(), func(vec![param.clone()], Type::Str)),
+                ("to_typst".to_string(), func(vec![param], Type::Str)),
+            ]
+        },
+        | "Ord" => {
+            vec![(
+                "compare".to_string(),
+                func(vec![Type::Param(0), Type::Param(0)], Type::option(ordering)),
+            )]
+        },
+        | "TotalOrd" => {
+            vec![(
+                "total_compare".to_string(),
+                func(
+                    vec![Type::Param(0), Type::Param(0)],
+                    Type::Adt(crate::adt::ORDERING_ID, Vec::new()),
+                ),
+            )]
+        },
+        | "Hash" => vec![("hash".to_string(), func(vec![Type::Param(0)], Type::int()))],
+        | _ => Vec::new(),
     }
 }
 
@@ -295,7 +292,13 @@ impl ClassTable {
         ] {
             table.add_prelude("Show", head);
         }
-        for head in [int.clone(), Type::Bool, Type::Str, Type::Unit, float.clone()] {
+        for head in [
+            int.clone(),
+            Type::Bool,
+            Type::Str,
+            Type::Unit,
+            float.clone(),
+        ] {
             table.add_prelude("Hash", head);
         }
         for head in [int.clone(), real.clone(), float.clone(), complex.clone()] {
@@ -321,13 +324,13 @@ impl ClassTable {
         table
     }
 
-    fn add_prelude(&mut self, class: &str, head: Type) {
+    fn add_prelude(
+        &mut self,
+        class: &str,
+        head: Type,
+    ) {
         let class_key = ClassKey::prelude(class);
-        let key = InstanceKey::new(
-            ModulePath::prelude(),
-            class_key.clone(),
-            head_key(&head),
-        );
+        let key = InstanceKey::new(ModulePath::prelude(), class_key.clone(), head_key(&head));
         let instances = self.instances.entry(class.to_string()).or_default();
         instances.push(Instance {
             class: class.to_string(),
@@ -372,26 +375,39 @@ impl ClassTable {
 
     /// Whether a class exists.
     #[must_use]
-    pub fn has_class(&self, name: &str) -> bool {
+    pub fn has_class(
+        &self,
+        name: &str,
+    ) -> bool {
         self.classes.contains_key(name)
     }
 
     /// The class declaration.
     #[must_use]
-    pub fn class(&self, name: &str) -> Option<&ClassDef> {
+    pub fn class(
+        &self,
+        name: &str,
+    ) -> Option<&ClassDef> {
         self.classes.get(name)
     }
 
     /// The symbolic key of a declared class.
     #[must_use]
-    pub fn class_key(&self, name: &str) -> Option<ClassKey> {
+    pub fn class_key(
+        &self,
+        name: &str,
+    ) -> Option<ClassKey> {
         self.classes.get(name).map(|class| class.key.clone())
     }
 
     /// Whether a class is declared by the module that owns this table (as
     /// opposed to being imported or built in).
     #[must_use]
-    pub fn class_is_local(&self, module: &ModulePath, name: &str) -> bool {
+    pub fn class_is_local(
+        &self,
+        module: &ModulePath,
+        name: &str,
+    ) -> bool {
         self.classes
             .get(name)
             .is_some_and(|class| &class.key.module == module)
@@ -399,7 +415,10 @@ impl ClassTable {
 
     /// The class that declares a method, if any.
     #[must_use]
-    pub fn class_of_method(&self, method: &str) -> Option<(&str, &Type)> {
+    pub fn class_of_method(
+        &self,
+        method: &str,
+    ) -> Option<(&str, &Type)> {
         for (name, class) in &self.classes {
             if let Some((_, ty)) = class.methods.iter().find(|(m, _)| m == method) {
                 return Some((name, ty));
@@ -439,10 +458,7 @@ impl ClassTable {
         // type or to the module that declares the class. The rule is a
         // *declaration* rule; an instance that came with an interface already
         // passed it where it was declared.
-        if matches!(origin, Origin::User | Origin::Derived)
-            && !head_is_local
-            && !class_is_local
-        {
+        if matches!(origin, Origin::User | Origin::Derived) && !head_is_local && !class_is_local {
             return Err(InstanceError::Orphan);
         }
         let class_key = definition.key.clone();
@@ -464,9 +480,10 @@ impl ClassTable {
         // (round-2 decision 1c).
         let incoming_witness = witness_of(&head);
         if let Some(witness) = &incoming_witness {
-            if let Some(existing) = instances.iter().find(|existing| {
-                witness_of(&existing.head).as_ref() == Some(witness)
-            }) {
+            if let Some(existing) = instances
+                .iter()
+                .find(|existing| witness_of(&existing.head).as_ref() == Some(witness))
+            {
                 return Err(InstanceError::WitnessCollision {
                     incoming: key,
                     existing: existing.key.clone(),
@@ -485,7 +502,11 @@ impl ClassTable {
 
     /// Solves `class τ` against the instance set (§3.8.2).
     #[must_use]
-    pub fn resolve(&self, class: &str, ty: &Type) -> Resolution {
+    pub fn resolve(
+        &self,
+        class: &str,
+        ty: &Type,
+    ) -> Resolution {
         let Some(instances) = self.instances.get(class) else {
             return Resolution::Missing;
         };
@@ -501,15 +522,20 @@ impl ClassTable {
             }
         }
         match found {
-            Some(index) => Resolution::Found { index },
-            None if has_variables(ty) => Resolution::Deferred,
-            None => Resolution::Missing,
+            | Some(index) => Resolution::Found { index },
+            | None if has_variables(ty) => Resolution::Deferred,
+            | None => Resolution::Missing,
         }
     }
 
     /// The type of `method` for the instance that matches `ty`.
     #[must_use]
-    pub fn method_type(&self, class: &str, ty: &Type, method: &str) -> Option<Type> {
+    pub fn method_type(
+        &self,
+        class: &str,
+        ty: &Type,
+        method: &str,
+    ) -> Option<Type> {
         let Resolution::Found { index } = self.resolve(class, ty) else {
             return None;
         };
@@ -519,7 +545,11 @@ impl ClassTable {
 
     /// The symbolic key of the instance that matches `ty`, when one does.
     #[must_use]
-    pub fn resolve_key(&self, class: &str, ty: &Type) -> Option<InstanceKey> {
+    pub fn resolve_key(
+        &self,
+        class: &str,
+        ty: &Type,
+    ) -> Option<InstanceKey> {
         let Resolution::Found { index } = self.resolve(class, ty) else {
             return None;
         };
@@ -528,7 +558,11 @@ impl ClassTable {
 
     /// The key of an instance by position.
     #[must_use]
-    pub fn instance_key(&self, class: &str, index: usize) -> Option<InstanceKey> {
+    pub fn instance_key(
+        &self,
+        class: &str,
+        index: usize,
+    ) -> Option<InstanceKey> {
         self.instances
             .get(class)?
             .get(index)
@@ -537,7 +571,10 @@ impl ClassTable {
 
     /// The instances of a class, with their keys, in registration order.
     #[must_use]
-    pub fn instances_of(&self, class: &str) -> Vec<&Instance> {
+    pub fn instances_of(
+        &self,
+        class: &str,
+    ) -> Vec<&Instance> {
         self.instances
             .get(class)
             .map(|instances| instances.iter().collect())
@@ -555,7 +592,10 @@ impl ClassTable {
     /// A prelude instance is not exported by a user module; an imported one is
     /// not re-exported (imports are not transitive, §7.2.1).
     #[must_use]
-    pub fn instances_declared_in(&self, module: &ModulePath) -> Vec<&Instance> {
+    pub fn instances_declared_in(
+        &self,
+        module: &ModulePath,
+    ) -> Vec<&Instance> {
         self.instances
             .values()
             .flatten()
@@ -565,16 +605,27 @@ impl ClassTable {
 
     /// Every instance of a class, for diagnostics.
     #[must_use]
-    pub fn instance_heads(&self, class: &str) -> Vec<Type> {
+    pub fn instance_heads(
+        &self,
+        class: &str,
+    ) -> Vec<Type> {
         self.instances
             .get(class)
-            .map(|instances| instances.iter().map(|instance| instance.head.clone()).collect())
+            .map(|instances| {
+                instances
+                    .iter()
+                    .map(|instance| instance.head.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     /// The symbolic keys of every instance of a class.
     #[must_use]
-    pub fn instance_keys(&self, class: &str) -> Vec<InstanceKey> {
+    pub fn instance_keys(
+        &self,
+        class: &str,
+    ) -> Vec<InstanceKey> {
         self.instances
             .get(class)
             .map(|instances| {
@@ -594,7 +645,10 @@ impl ClassTable {
 
     /// The classes a module declares, with their methods, for the interface.
     #[must_use]
-    pub fn classes_declared_in(&self, module: &ModulePath) -> Vec<&ClassDef> {
+    pub fn classes_declared_in(
+        &self,
+        module: &ModulePath,
+    ) -> Vec<&ClassDef> {
         self.classes
             .values()
             .filter(|class| &class.key.module == module)
@@ -709,18 +763,22 @@ impl ClassTable {
             head_is_local,
             class_is_local,
         ) {
-            Ok(key) => Ok(key),
-            Err(InstanceError::Overlapping { .. }) => Err(DeriveError::Overlapping(class_key)),
-            Err(InstanceError::Orphan) => Err(DeriveError::Orphan),
-            Err(_) => Err(DeriveError::UnsupportedClass(class.to_string())),
+            | Ok(key) => Ok(key),
+            | Err(InstanceError::Overlapping { .. }) => Err(DeriveError::Overlapping(class_key)),
+            | Err(InstanceError::Orphan) => Err(DeriveError::Orphan),
+            | Err(_) => Err(DeriveError::UnsupportedClass(class.to_string())),
         }
     }
 
     /// Whether a field type has an instance of `class`.
-    fn instance_for_field(&self, class: &str, field: &Type) -> bool {
+    fn instance_for_field(
+        &self,
+        class: &str,
+        field: &Type,
+    ) -> bool {
         let resolved = match field {
-            Type::Param(_) => return true,
-            other => other.clone(),
+            | Type::Param(_) => return true,
+            | other => other.clone(),
         };
         // `Show`/`Eq` of a container needs the element instance, which a
         // derived instance does not check transitively (§3.8.5 is structural).
@@ -736,12 +794,12 @@ pub const DERIVABLE: &[&str] = &["Eq", "Ord", "TotalOrd", "Show", "Hash"];
 
 fn field_has_function(ty: &Type) -> bool {
     match ty {
-        Type::Fn(..) => true,
-        Type::Tensor { elem, .. } => field_has_function(elem),
-        Type::Record(row) => row.fields().iter().any(|(_, ty)| field_has_function(ty)),
-        Type::Adt(_, args) => args.iter().any(field_has_function),
-        Type::Io(inner) => field_has_function(inner),
-        _ => false,
+        | Type::Fn(..) => true,
+        | Type::Tensor { elem, .. } => field_has_function(elem),
+        | Type::Record(row) => row.fields().iter().any(|(_, ty)| field_has_function(ty)),
+        | Type::Adt(_, args) => args.iter().any(field_has_function),
+        | Type::Io(inner) => field_has_function(inner),
+        | _ => false,
     }
 }
 
@@ -752,37 +810,35 @@ fn field_has_function(ty: &Type) -> bool {
 /// rejected legal instance sets, and treating them as matching would let an
 /// instance silently capture a different type.
 #[must_use]
-pub fn heads_overlap(left: &Type, right: &Type) -> bool {
+pub fn heads_overlap(
+    left: &Type,
+    right: &Type,
+) -> bool {
     match (left, right) {
-        (Type::Param(_) | Type::Var(_), _) | (_, Type::Param(_) | Type::Var(_)) => true,
-        (Type::Scalar(a, _), Type::Scalar(b, _)) => a == b || is_rep_var(*a) || is_rep_var(*b),
-        (Type::Bool, Type::Bool)
+        | (Type::Param(_) | Type::Var(_), _) | (_, Type::Param(_) | Type::Var(_)) => true,
+        | (Type::Scalar(a, _), Type::Scalar(b, _)) => a == b || is_rep_var(*a) || is_rep_var(*b),
+        | (Type::Bool, Type::Bool)
         | (Type::Prop, Type::Prop)
         | (Type::Str, Type::Str)
         | (Type::Unit, Type::Unit) => true,
-        (
-            Type::Tensor {
-                shape: sa,
-                elem: a,
-            },
-            Type::Tensor {
-                shape: sb,
-                elem: b,
-            },
-        ) => shape_heads_overlap(sa, sb) && heads_overlap(a, b),
-        (Type::Point(_), Type::Point(_)) | (Type::UnitOf(_), Type::UnitOf(_)) => true,
-        (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
+        | (Type::Tensor { shape: sa, elem: a }, Type::Tensor { shape: sb, elem: b }) => {
+            shape_heads_overlap(sa, sb) && heads_overlap(a, b)
+        },
+        | (Type::Point(_), Type::Point(_)) | (Type::UnitOf(_), Type::UnitOf(_)) => true,
+        | (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
             pa.len() == pb.len()
                 && pa.iter().zip(pb.iter()).all(|(a, b)| heads_overlap(a, b))
                 && heads_overlap(ra, rb)
-        }
-        (Type::Record(a), Type::Record(b)) => rows_overlap(a, b),
-        (Type::Adt(a, aa), Type::Adt(b, ab)) => {
-            a == b && aa.len() == ab.len() && aa.iter().zip(ab.iter()).all(|(x, y)| heads_overlap(x, y))
-        }
-        (Type::Io(a), Type::Io(b)) => heads_overlap(a, b),
-        (Type::Dyn(_), Type::Dyn(_)) => true,
-        _ => false,
+        },
+        | (Type::Record(a), Type::Record(b)) => rows_overlap(a, b),
+        | (Type::Adt(a, aa), Type::Adt(b, ab)) => {
+            a == b
+                && aa.len() == ab.len()
+                && aa.iter().zip(ab.iter()).all(|(x, y)| heads_overlap(x, y))
+        },
+        | (Type::Io(a), Type::Io(b)) => heads_overlap(a, b),
+        | (Type::Dyn(_), Type::Dyn(_)) => true,
+        | _ => false,
     }
 }
 
@@ -792,64 +848,81 @@ pub fn heads_overlap(left: &Type, right: &Type) -> bool {
 #[must_use]
 pub fn is_structural_show_head(ty: &Type) -> bool {
     match ty {
-        Type::Scalar(..) | Type::Bool | Type::Prop | Type::Str | Type::Unit => true,
-        Type::Tensor { elem, .. } => is_structural_show_head(elem),
+        | Type::Scalar(..) | Type::Bool | Type::Prop | Type::Str | Type::Unit => true,
+        | Type::Tensor { elem, .. } => is_structural_show_head(elem),
         // §4.9.4: a `Dyn` prints as the scalar it carries.
-        Type::Dyn(_) | Type::UnitOf(_) | Type::Io(_) => true,
-        Type::Record(row) => {
+        | Type::Dyn(_) | Type::UnitOf(_) | Type::Io(_) => true,
+        | Type::Record(row) => {
             row.tail_var().is_none()
                 && row
                     .fields()
                     .iter()
                     .all(|(_, field)| is_structural_show_head(field))
-        }
+        },
         // A nominal user type needs its own `Show` instance (or `derive`): the
         // printer cannot know a variant's field order or constructor names.
-        Type::Adt(..) | Type::Point(_) | Type::Fn(..) | Type::Var(_) | Type::Param(_) | Type::Error => {
-            false
-        }
+        | Type::Adt(..)
+        | Type::Point(_)
+        | Type::Fn(..)
+        | Type::Var(_)
+        | Type::Param(_)
+        | Type::Error => false,
     }
 }
 
 /// Whether two tensor shapes can describe the same type.
-fn shape_heads_overlap(left: &Shape, right: &Shape) -> bool {
+fn shape_heads_overlap(
+    left: &Shape,
+    right: &Shape,
+) -> bool {
     if left.rank() != right.rank() {
         return false;
     }
     match (left, right) {
-        (Shape::Refined(a), Shape::Refined(b)) => a
-            .iter()
-            .zip(b.iter())
-            .all(|(left, right)| match (left, right) {
-                (Some(left), Some(right)) => left == right,
-                _ => true,
-            }),
-        _ => true,
+        | (Shape::Refined(a), Shape::Refined(b)) => {
+            a.iter().zip(b.iter()).all(|(left, right)| {
+                match (left, right) {
+                    | (Some(left), Some(right)) => left == right,
+                    | _ => true,
+                }
+            })
+        },
+        | _ => true,
     }
 }
 
 /// Whether a concrete tensor type can match a head shape.
-fn shape_head_matches(pattern: &Shape, concrete: &Shape) -> bool {
+fn shape_head_matches(
+    pattern: &Shape,
+    concrete: &Shape,
+) -> bool {
     if pattern.rank() != concrete.rank() {
         return false;
     }
     match (pattern, concrete) {
-        (Shape::Refined(pattern), Shape::Refined(concrete)) => pattern
-            .iter()
-            .zip(concrete.iter())
-            .all(|(pattern, concrete)| match (pattern, concrete) {
-                (Some(pattern), Some(concrete)) => pattern == concrete,
-                // Unknown extents on either side cannot be disproved here.
-                _ => true,
-            }),
+        | (Shape::Refined(pattern), Shape::Refined(concrete)) => {
+            pattern
+                .iter()
+                .zip(concrete.iter())
+                .all(|(pattern, concrete)| {
+                    match (pattern, concrete) {
+                        | (Some(pattern), Some(concrete)) => pattern == concrete,
+                        // Unknown extents on either side cannot be disproved here.
+                        | _ => true,
+                    }
+                })
+        },
         // A rank-only concrete type is the erased form: the extents are not
         // statically known, so a refined head cannot be ruled out.
-        (Shape::Refined(_), Shape::Rank(_)) => true,
-        _ => true,
+        | (Shape::Refined(_), Shape::Rank(_)) => true,
+        | _ => true,
     }
 }
 
-fn rows_overlap(left: &Row, right: &Row) -> bool {
+fn rows_overlap(
+    left: &Row,
+    right: &Row,
+) -> bool {
     let left_fields = left.fields();
     let right_fields = right.fields();
     let left_open = left.tail_var().is_some();
@@ -884,21 +957,24 @@ fn is_rep_var(rep: Rep) -> bool {
 /// Structural head matching: `pattern` may contain wildcards, `concrete` may
 /// not.
 #[must_use]
-pub fn matches_head(pattern: &Type, concrete: &Type) -> bool {
+pub fn matches_head(
+    pattern: &Type,
+    concrete: &Type,
+) -> bool {
     match (pattern, concrete) {
-        (Type::Param(_) | Type::Var(_), _) => true,
-        (Type::Scalar(a, _), Type::Scalar(b, _)) => {
+        | (Type::Param(_) | Type::Var(_), _) => true,
+        | (Type::Scalar(a, _), Type::Scalar(b, _)) => {
             if is_rep_var(*a) {
                 true
             } else {
                 *a == *b
             }
-        }
-        (Type::Bool, Type::Bool)
+        },
+        | (Type::Bool, Type::Bool)
         | (Type::Prop, Type::Prop)
         | (Type::Str, Type::Str)
         | (Type::Unit, Type::Unit) => true,
-        (
+        | (
             Type::Tensor {
                 shape: pattern,
                 elem: a,
@@ -908,13 +984,13 @@ pub fn matches_head(pattern: &Type, concrete: &Type) -> bool {
                 elem: b,
             },
         ) => shape_head_matches(pattern, concrete) && matches_head(a, b),
-        (Type::Point(_), Type::Point(_)) | (Type::UnitOf(_), Type::UnitOf(_)) => true,
-        (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
+        | (Type::Point(_), Type::Point(_)) | (Type::UnitOf(_), Type::UnitOf(_)) => true,
+        | (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
             pa.len() == pb.len()
                 && pa.iter().zip(pb.iter()).all(|(a, b)| matches_head(a, b))
                 && matches_head(ra, rb)
-        }
-        (Type::Record(pattern), Type::Record(concrete)) => {
+        },
+        | (Type::Record(pattern), Type::Record(concrete)) => {
             let pattern_fields = pattern.fields();
             let concrete_fields = concrete.fields();
             let pattern_open = pattern.tail_var().is_some();
@@ -929,13 +1005,15 @@ pub fn matches_head(pattern: &Type, concrete: &Type) -> bool {
                     .find(|(name, _)| name == label)
                     .is_some_and(|(_, other)| matches_head(ty, other))
             }) && (pattern_open || concrete_fields.len() == pattern_fields.len())
-        }
-        (Type::Adt(a, aa), Type::Adt(b, ab)) => {
-            a == b && aa.len() == ab.len() && aa.iter().zip(ab.iter()).all(|(x, y)| matches_head(x, y))
-        }
-        (Type::Io(a), Type::Io(b)) => matches_head(a, b),
-        (Type::Dyn(_), Type::Dyn(_)) => true,
-        _ => false,
+        },
+        | (Type::Adt(a, aa), Type::Adt(b, ab)) => {
+            a == b
+                && aa.len() == ab.len()
+                && aa.iter().zip(ab.iter()).all(|(x, y)| matches_head(x, y))
+        },
+        | (Type::Io(a), Type::Io(b)) => matches_head(a, b),
+        | (Type::Dyn(_), Type::Dyn(_)) => true,
+        | _ => false,
     }
 }
 
@@ -943,24 +1021,24 @@ pub fn matches_head(pattern: &Type, concrete: &Type) -> bool {
 #[must_use]
 pub fn has_variables(ty: &Type) -> bool {
     match ty {
-        Type::Var(_) | Type::Param(_) => true,
-        Type::Scalar(rep, dim) => matches!(rep, Rep::Var(_)) || !dim.vars().is_empty(),
-        Type::Tensor { elem, .. } => has_variables(elem),
-        Type::Fn(params, ret) => params.iter().any(has_variables) || has_variables(ret),
-        Type::Record(row) => row_has_variables(row),
-        Type::Adt(_, args) => args.iter().any(has_variables),
-        Type::Io(inner) => has_variables(inner),
-        Type::Point(dim) | Type::UnitOf(dim) => !dim.vars().is_empty(),
-        Type::Dyn(rep) => matches!(rep, Rep::Var(_)),
-        Type::Bool | Type::Prop | Type::Str | Type::Unit | Type::Error => false,
+        | Type::Var(_) | Type::Param(_) => true,
+        | Type::Scalar(rep, dim) => matches!(rep, Rep::Var(_)) || !dim.vars().is_empty(),
+        | Type::Tensor { elem, .. } => has_variables(elem),
+        | Type::Fn(params, ret) => params.iter().any(has_variables) || has_variables(ret),
+        | Type::Record(row) => row_has_variables(row),
+        | Type::Adt(_, args) => args.iter().any(has_variables),
+        | Type::Io(inner) => has_variables(inner),
+        | Type::Point(dim) | Type::UnitOf(dim) => !dim.vars().is_empty(),
+        | Type::Dyn(rep) => matches!(rep, Rep::Var(_)),
+        | Type::Bool | Type::Prop | Type::Str | Type::Unit | Type::Error => false,
     }
 }
 
 fn row_has_variables(row: &Row) -> bool {
     match row {
-        Row::Empty => false,
-        Row::Var(_) => true,
-        Row::Extend { ty, tail, .. } => has_variables(ty) || row_has_variables(tail),
+        | Row::Empty => false,
+        | Row::Var(_) => true,
+        | Row::Extend { ty, tail, .. } => has_variables(ty) || row_has_variables(tail),
     }
 }
 
@@ -969,7 +1047,11 @@ fn row_has_variables(row: &Row) -> bool {
 /// `ty` is written in terms of `Type::Var(0..params)`; instantiation replaces
 /// them, so the small ids never escape.
 #[must_use]
-pub fn method_scheme(class: &str, params: usize, ty: Type) -> Scheme {
+pub fn method_scheme(
+    class: &str,
+    params: usize,
+    ty: Type,
+) -> Scheme {
     let count = u32::try_from(params).unwrap_or(0);
     // The class declaration stores its parameters as `Type::Param(i)` so that
     // an instance can substitute the head with `substitute_params`. A scheme

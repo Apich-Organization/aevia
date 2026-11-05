@@ -69,11 +69,16 @@ pub mod protocol;
 pub mod server;
 pub mod transport;
 
-use std::io::{BufReader, Read, Write};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Write;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::channel;
 use std::thread;
 
-pub use server::{Control, Server};
+pub use server::Control;
+pub use server::Server;
 
 /// How the session ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,7 +101,10 @@ enum Incoming {
 ///
 /// Reads framed messages from `input`, writes framed messages to `output`, and
 /// returns when the client sends `exit` or closes the stream.
-pub fn serve<R, W>(input: R, output: W) -> Exit
+pub fn serve<R, W>(
+    input: R,
+    output: W,
+) -> Exit
 where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
@@ -124,12 +132,14 @@ where
         let mut reader = transport::Reader::new(BufReader::new(input));
         loop {
             let incoming = match reader.next_message() {
-                Ok(Some(message)) => Incoming::Message(message),
-                Ok(None) => break,
-                Err(transport::TransportError::Json(error)) => Incoming::Malformed(error.to_string()),
+                | Ok(Some(message)) => Incoming::Message(message),
+                | Ok(None) => break,
+                | Err(transport::TransportError::Json(error)) => {
+                    Incoming::Malformed(error.to_string())
+                },
                 // A broken frame cannot be resynchronised, so the session ends
                 // rather than inventing message boundaries.
-                Err(_) => break,
+                | Err(_) => break,
             };
             if to_server.send(incoming).is_err() {
                 break;
@@ -141,15 +151,15 @@ where
     let mut exit = Exit::Graceful;
     for incoming in from_client {
         match incoming {
-            Incoming::Message(message) => {
+            | Incoming::Message(message) => {
                 if let Control::Exit { graceful } = server.handle(message) {
                     if !graceful {
                         exit = Exit::Ungraceful;
                     }
                     break;
                 }
-            }
-            Incoming::Malformed(detail) => server.parse_error(&detail),
+            },
+            | Incoming::Malformed(detail) => server.parse_error(&detail),
         }
     }
 

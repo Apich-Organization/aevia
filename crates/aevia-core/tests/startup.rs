@@ -9,8 +9,10 @@
 //! Debug numbers are reported as well — they are what the test suite sees, and
 //! they bound the work — but the §9.13 target is a release-mode claim.
 
-use aevia_core::{compile, Interp};
-use std::time::{Duration, Instant};
+use aevia_core::Interp;
+use aevia_core::compile;
+use std::time::Duration;
+use std::time::Instant;
 
 const ROUNDS: usize = 25;
 
@@ -32,10 +34,7 @@ fn measure(mut body: impl FnMut()) -> Duration {
 #[test]
 fn startup_phases_are_profiled() {
     let source = "fn main(): IO Unit = println(\"\")\n";
-    let path = std::env::temp_dir().join(format!(
-        "aevia-startup-{}.aev",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("aevia-startup-{}.aev", std::process::id()));
     std::fs::write(&path, source).expect("write the empty program");
 
     let read = measure(|| {

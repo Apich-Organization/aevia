@@ -10,7 +10,8 @@
 //! what makes the fit stable; converting back is a change of basis, not a
 //! different answer.
 
-use crate::{linalg, NumericError};
+use crate::NumericError;
+use crate::linalg;
 
 /// Linear interpolation of `(xs, ys)` at `x`.
 ///
@@ -21,7 +22,11 @@ use crate::{linalg, NumericError};
 ///
 /// [`NumericError::ShapeMismatch`] when the two samples differ in length, and
 /// [`NumericError::Empty`] when there are no points.
-pub fn interp1(xs: &[f64], ys: &[f64], x: f64) -> Result<f64, NumericError> {
+pub fn interp1(
+    xs: &[f64],
+    ys: &[f64],
+    x: f64,
+) -> Result<f64, NumericError> {
     if xs.len() != ys.len() {
         return Err(NumericError::ShapeMismatch(format!(
             "interp1 needs two samples of one length, found {} and {}",
@@ -64,7 +69,11 @@ pub fn interp1(xs: &[f64], ys: &[f64], x: f64) -> Result<f64, NumericError> {
 /// [`NumericError::ShapeMismatch`] when the samples differ in length, and
 /// [`NumericError::Domain`] when fewer than three points are given (a natural
 /// spline needs a second derivative to pin down).
-pub fn spline(xs: &[f64], ys: &[f64], x: f64) -> Result<f64, NumericError> {
+pub fn spline(
+    xs: &[f64],
+    ys: &[f64],
+    x: f64,
+) -> Result<f64, NumericError> {
     if xs.len() != ys.len() {
         return Err(NumericError::ShapeMismatch(format!(
             "spline needs two samples of one length, found {} and {}",
@@ -176,7 +185,11 @@ pub fn interp2(
 ///
 /// [`NumericError::ShapeMismatch`] when the samples differ in length, and
 /// [`NumericError::Domain`] when there are fewer points than coefficients.
-pub fn polyfit(xs: &[f64], ys: &[f64], degree: usize) -> Result<Vec<f64>, NumericError> {
+pub fn polyfit(
+    xs: &[f64],
+    ys: &[f64],
+    degree: usize,
+) -> Result<Vec<f64>, NumericError> {
     if xs.len() != ys.len() {
         return Err(NumericError::ShapeMismatch(format!(
             "polyfit needs two samples of one length, found {} and {}",
@@ -204,12 +217,17 @@ pub fn polyfit(xs: &[f64], ys: &[f64], degree: usize) -> Result<Vec<f64>, Numeri
 
 /// Evaluates a polynomial given its coefficients in ascending order.
 #[must_use]
-pub fn polyval(coefficients: &[f64], x: f64) -> f64 {
+pub fn polyval(
+    coefficients: &[f64],
+    x: f64,
+) -> f64 {
     // Horner, from the highest power down.
     coefficients
         .iter()
         .rev()
-        .fold(0.0, |accumulator, coefficient| accumulator * x + coefficient)
+        .fold(0.0, |accumulator, coefficient| {
+            accumulator * x + coefficient
+        })
 }
 
 /// The monomial coefficients of the polynomial interpolating `(xs, ys)` at
@@ -219,7 +237,11 @@ pub fn polyval(coefficients: &[f64], x: f64) -> f64 {
 ///
 /// [`NumericError::ShapeMismatch`] when the samples differ in length, and
 /// [`NumericError::Empty`] when there are none.
-pub fn chebyshev_fit(xs: &[f64], ys: &[f64], degree: usize) -> Result<Vec<f64>, NumericError> {
+pub fn chebyshev_fit(
+    xs: &[f64],
+    ys: &[f64],
+    degree: usize,
+) -> Result<Vec<f64>, NumericError> {
     if xs.len() != ys.len() {
         return Err(NumericError::ShapeMismatch(format!(
             "chebyshev_fit needs two samples of one length, found {} and {}",
@@ -328,7 +350,10 @@ pub fn chebyshev_fit(xs: &[f64], ys: &[f64], degree: usize) -> Result<Vec<f64>, 
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+    ) -> bool {
         (a - b).abs() < 1e-9
     }
 

@@ -11,8 +11,12 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::value::{kahan_sum, NumKind, Storage, Value};
-use aevia_core::{compile, Interp};
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Storage;
+use aevia_core::value::Value;
+use aevia_core::value::kahan_sum;
 use aevia_syntax::Span;
 
 // ---------------------------------------------------------------------------
@@ -109,15 +113,17 @@ fn run_error(source: &str) -> Failure {
         .spawn(move || {
             let mut interpreter = interp(&source);
             match interpreter.run_main() {
-                Ok(_) => panic!("expected a runtime error from:\n{source}"),
-                Err(error) => Failure {
-                    code: error.code,
-                    message: error.message,
-                    stack: error
-                        .stack
-                        .iter()
-                        .map(|frame| (frame.function.to_string(), frame.span.start))
-                        .collect(),
+                | Ok(_) => panic!("expected a runtime error from:\n{source}"),
+                | Err(error) => {
+                    Failure {
+                        code: error.code,
+                        message: error.message,
+                        stack: error
+                            .stack
+                            .iter()
+                            .map(|frame| (frame.function.to_string(), frame.span.start))
+                            .collect(),
+                    }
                 },
             }
         })
@@ -126,22 +132,31 @@ fn run_error(source: &str) -> Failure {
         .expect("the test body panicked")
 }
 
-fn value(source: &str, name: &str) -> Value {
+fn value(
+    source: &str,
+    name: &str,
+) -> Value {
     let mut interpreter = interp(source);
     interpreter.eval_toplevel(name).expect("the name is bound")
 }
 
-fn num(source: &str, name: &str) -> aevia_core::value::NumVal {
+fn num(
+    source: &str,
+    name: &str,
+) -> aevia_core::value::NumVal {
     match value(source, name) {
-        Value::Num(number) => number,
-        other => panic!("expected a scalar, found {}", other.type_name()),
+        | Value::Num(number) => number,
+        | other => panic!("expected a scalar, found {}", other.type_name()),
     }
 }
 
-fn tensor_value(source: &str, name: &str) -> std::rc::Rc<aevia_core::value::TensorData> {
+fn tensor_value(
+    source: &str,
+    name: &str,
+) -> std::rc::Rc<aevia_core::value::TensorData> {
     match value(source, name) {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -196,10 +211,7 @@ fn record_fields_evaluate_in_written_order() {
 /// §6.1: "`if` 只求值被选中的分支."
 #[test]
 fn if_evaluates_only_the_selected_branch() {
-    let number = num(
-        "let x = if true then zeros(2)[0] else zeros(2)[5]\n",
-        "x",
-    );
+    let number = num("let x = if true then zeros(2)[0] else zeros(2)[5]\n", "x");
     assert!(matches!(number.kind, NumKind::Float(value) if value == 0.0));
 }
 
@@ -240,7 +252,10 @@ fn tensor_elements_evaluate_in_row_major_order() {
     println(show(t))
 "#,
     );
-    assert_eq!(error.code, "E0802", "row-major: the earlier element fails first");
+    assert_eq!(
+        error.code, "E0802",
+        "row-major: the earlier element fails first"
+    );
 }
 
 /// §6.1: "`let` 的右侧立即求值，然后绑定."
@@ -347,10 +362,7 @@ fn the_exactness_matrix_keeps_its_phases() {
         matches!(coerced_int.kind, NumKind::Float(value) if value == 1.0),
         "`let y: Float = 1` must be a Float at run time"
     );
-    let coerced_sum = num(
-        "fn f(x: Float): Float = x + 1\nlet r = f(2.0)\n",
-        "r",
-    );
+    let coerced_sum = num("fn f(x: Float): Float = x + 1\nlet r = f(2.0)\n", "r");
     assert!(
         matches!(coerced_sum.kind, NumKind::Float(value) if value == 3.0),
         "`2.0 + 1` in a Float context is a Float 3.0, found {}",
@@ -381,18 +393,21 @@ fn division_by_zero_depends_on_the_phase() {
 #[test]
 fn a_formal_root_outside_its_domain_is_e0806_on_approximation() {
     let root = num("let x = sqrt(-1)\n", "x");
-    assert!(matches!(&root.kind, NumKind::Sym(_)), "sqrt(-1) stays formal");
+    assert!(
+        matches!(&root.kind, NumKind::Sym(_)),
+        "sqrt(-1) stays formal"
+    );
     let approximate = value("let r = approx(sqrt(-1))\n", "r");
     match approximate {
-        Value::Variant(result) => {
+        | Value::Variant(result) => {
             assert_eq!(result.index, 1, "approx answers `Err`");
             let payload = aevia_core::value::show(&result.fields[0]);
             assert!(
                 payload.contains("E0806"),
                 "the payload names the domain code: {payload}"
             );
-        }
-        other => panic!("approx answers a Result, found {}", other.type_name()),
+        },
+        | other => panic!("approx answers a Result, found {}", other.type_name()),
     }
     // The `Float` phase reports the domain error directly.
     assert_eq!(load_error("let x = asin(2.0)\n").0, "E0806");
@@ -506,7 +521,11 @@ let b = match 2 with
     | n -> n
 "#;
     assert_eq!(float_of(&value(source, "a")), 20.0);
-    assert_eq!(float_of(&value(source, "b")), 2.0, "the guard rejects the first arm");
+    assert_eq!(
+        float_of(&value(source, "b")),
+        2.0,
+        "the guard rejects the first arm"
+    );
 }
 
 /// §6.5: a tensor pattern matches only rank 1, with at least the written
@@ -599,9 +618,15 @@ fn empty_tensor_reductions_follow_the_element_phase() {
     let float_prod = num("let x = prod(zeros(0))\n", "x");
     assert!(matches!(float_prod.kind, NumKind::Float(value) if value == 1.0));
     let exact_sum = num("let x = sum(range(0, 0))\n", "x");
-    assert!(matches!(exact_sum.kind, NumKind::Int(_) | NumKind::Exact(_)));
+    assert!(matches!(
+        exact_sum.kind,
+        NumKind::Int(_) | NumKind::Exact(_)
+    ));
     let exact_prod = num("let x = prod(range(0, 0))\n", "x");
-    assert!(matches!(exact_prod.kind, NumKind::Int(_) | NumKind::Exact(_)));
+    assert!(matches!(
+        exact_prod.kind,
+        NumKind::Int(_) | NumKind::Exact(_)
+    ));
 
     let float_mean = num("let x = mean(zeros(0))\n", "x");
     assert!(
@@ -651,7 +676,11 @@ fn broadcasting_and_shape_errors() {
     let broadcast = tensor_value("let t = ones(2, 1) * ones(1, 3)\n", "t");
     assert_eq!(broadcast.shape, vec![2, 3]);
     assert_eq!(
-        broadcast.elements().iter().map(float_of).collect::<Vec<_>>(),
+        broadcast
+            .elements()
+            .iter()
+            .map(float_of)
+            .collect::<Vec<_>>(),
         vec![1.0; 6]
     );
 
@@ -668,7 +697,10 @@ fn broadcasting_and_shape_errors() {
 
     // §6.6.3: different ranks are a compile error unless `reshape` is explicit.
     let errors = compile_errors("let t = zeros(2, 3) + zeros(3)\n");
-    assert!(!errors.is_empty(), "rank mismatch must not compile: {errors:?}");
+    assert!(
+        !errors.is_empty(),
+        "rank mismatch must not compile: {errors:?}"
+    );
 }
 
 /// §6.6.4: negative indices count from the end; out of range is `E0802`.
@@ -676,10 +708,7 @@ fn broadcasting_and_shape_errors() {
 fn indexing_and_slicing() {
     let last = num("let a = [10.0, 20.0, 30.0]\nlet x = a[-1]\n", "x");
     assert!(matches!(last.kind, NumKind::Float(value) if value == 30.0));
-    assert_eq!(
-        load_error("let a = zeros(2)\nlet x = a[5]\n").0,
-        "E0802"
-    );
+    assert_eq!(load_error("let a = zeros(2)\nlet x = a[5]\n").0, "E0802");
 }
 
 /// §6.6.4: "`a[i]` 返回子张量视图（rank 减一）", and a slice of a dense buffer is
@@ -876,11 +905,8 @@ fn a_reduction_along_an_axis_keeps_the_rank() {
 fn set_is_a_functional_update() {
     let mut interpreter = interp("let a = [1.0, 2.0]\n");
     let source = interpreter.eval_toplevel("a").expect("a");
-    let indices = aevia_core::eval::build_tensor(
-        vec![Value::int(0)],
-        vec![1],
-        aevia_dim::Dim::one(),
-    );
+    let indices =
+        aevia_core::eval::build_tensor(vec![Value::int(0)], vec![1], aevia_dim::Dim::one());
     let updated = interpreter
         .call_named(
             "set",

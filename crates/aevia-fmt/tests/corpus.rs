@@ -6,9 +6,13 @@
 //! the printed text parses to the same tree (spans excluded), and formatting it
 //! again changes nothing.
 
-use aevia_fmt::{fingerprint, format_source};
-use aevia_syntax::{lex, parse_module, Module};
-use std::path::{Path, PathBuf};
+use aevia_fmt::fingerprint;
+use aevia_fmt::format_source;
+use aevia_syntax::Module;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
+use std::path::Path;
+use std::path::PathBuf;
 
 fn corpus() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -21,7 +25,10 @@ fn corpus() -> Vec<PathBuf> {
     files
 }
 
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

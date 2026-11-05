@@ -5,7 +5,8 @@
 //! actionable suggestion. The renderer is deliberately simple: it prints the
 //! offending source line with a caret underline, the way the appendix shows.
 
-use crate::span::{SourceMap, Span};
+use crate::span::SourceMap;
+use crate::span::Span;
 use std::fmt::Write as _;
 
 /// How serious a diagnostic is.
@@ -22,9 +23,9 @@ pub enum Severity {
 impl Severity {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Error => "error",
-            Self::Warning => "warning",
-            Self::Note => "note",
+            | Self::Error => "error",
+            | Self::Warning => "warning",
+            | Self::Note => "note",
         }
     }
 }
@@ -62,7 +63,11 @@ pub struct Diagnostic {
 impl Diagnostic {
     /// Creates an error.
     #[must_use]
-    pub fn error(code: &str, message: impl Into<String>, span: Span) -> Self {
+    pub fn error(
+        code: &str,
+        message: impl Into<String>,
+        span: Span,
+    ) -> Self {
         Self {
             severity: Severity::Error,
             code: code.to_string(),
@@ -77,7 +82,11 @@ impl Diagnostic {
 
     /// Creates a warning.
     #[must_use]
-    pub fn warning(code: &str, message: impl Into<String>, span: Span) -> Self {
+    pub fn warning(
+        code: &str,
+        message: impl Into<String>,
+        span: Span,
+    ) -> Self {
         Self {
             severity: Severity::Warning,
             code: code.to_string(),
@@ -92,14 +101,21 @@ impl Diagnostic {
 
     /// Sets the text printed beside the primary caret.
     #[must_use]
-    pub fn with_primary_label(mut self, label: impl Into<String>) -> Self {
+    pub fn with_primary_label(
+        mut self,
+        label: impl Into<String>,
+    ) -> Self {
         self.label = label.into();
         self
     }
 
     /// Attaches a label to a secondary span.
     #[must_use]
-    pub fn with_label(mut self, span: Span, message: impl Into<String>) -> Self {
+    pub fn with_label(
+        mut self,
+        span: Span,
+        message: impl Into<String>,
+    ) -> Self {
         self.labels.push(Label {
             span,
             message: message.into(),
@@ -109,14 +125,20 @@ impl Diagnostic {
 
     /// Adds a `= ...` note.
     #[must_use]
-    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+    pub fn with_note(
+        mut self,
+        note: impl Into<String>,
+    ) -> Self {
         self.notes.push(note.into());
         self
     }
 
     /// Adds a `help:` line.
     #[must_use]
-    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+    pub fn with_help(
+        mut self,
+        help: impl Into<String>,
+    ) -> Self {
         self.helps.push(help.into());
         self
     }
@@ -129,7 +151,10 @@ impl Diagnostic {
 
     /// Renders the diagnostic against a source map.
     #[must_use]
-    pub fn render(&self, sources: &SourceMap) -> String {
+    pub fn render(
+        &self,
+        sources: &SourceMap,
+    ) -> String {
         self.render_with(sources, Style::Plain)
     }
 
@@ -140,7 +165,11 @@ impl Diagnostic {
     /// global: a test that compares a rendering must be able to ask for the
     /// plain one.
     #[must_use]
-    pub fn render_with(&self, sources: &SourceMap, style: Style) -> String {
+    pub fn render_with(
+        &self,
+        sources: &SourceMap,
+        style: Style,
+    ) -> String {
         let mut out = String::new();
         let code = if self.code.is_empty() {
             String::new()
@@ -148,9 +177,9 @@ impl Diagnostic {
             format!("[{}]", self.code)
         };
         let paint = match self.severity {
-            Severity::Error => "1;31",
-            Severity::Warning => "1;33",
-            Severity::Note => "1;36",
+            | Severity::Error => "1;31",
+            | Severity::Warning => "1;33",
+            | Severity::Note => "1;36",
         };
         let header = format!("{}{}: {}", self.severity.as_str(), code, self.message);
         let _ = writeln!(out, "{}", style.paint(&header, paint));
@@ -191,8 +220,7 @@ impl Diagnostic {
                     let _ = writeln!(
                         out,
                         "{pad} = note: {} at {}:{label_line}:{label_column}",
-                        label.message,
-                        file.name
+                        label.message, file.name
                     );
                     continue;
                 }
@@ -235,7 +263,10 @@ impl Diagnostics {
     }
 
     /// Appends a diagnostic.
-    pub fn push(&mut self, diagnostic: Diagnostic) {
+    pub fn push(
+        &mut self,
+        diagnostic: Diagnostic,
+    ) {
         self.items.push(diagnostic);
     }
 
@@ -264,13 +295,20 @@ impl Diagnostics {
 
     /// Renders every diagnostic, separated by blank lines.
     #[must_use]
-    pub fn render(&self, sources: &SourceMap) -> String {
+    pub fn render(
+        &self,
+        sources: &SourceMap,
+    ) -> String {
         self.render_with(sources, Style::Plain)
     }
 
     /// Renders every diagnostic with the given style.
     #[must_use]
-    pub fn render_with(&self, sources: &SourceMap, style: Style) -> String {
+    pub fn render_with(
+        &self,
+        sources: &SourceMap,
+        style: Style,
+    ) -> String {
         self.items
             .iter()
             .map(|item| item.render_with(sources, style))
@@ -279,7 +317,10 @@ impl Diagnostics {
     }
 
     /// Merges another list into this one.
-    pub fn extend(&mut self, other: Self) {
+    pub fn extend(
+        &mut self,
+        other: Self,
+    ) {
         self.items.extend(other.items);
     }
 }
@@ -320,10 +361,14 @@ pub enum Style {
 
 impl Style {
     /// Wraps `text` in the ANSI sequence `code`, or returns it unchanged.
-    fn paint(self, text: &str, code: &str) -> String {
+    fn paint(
+        self,
+        text: &str,
+        code: &str,
+    ) -> String {
         match self {
-            Self::Plain => text.to_string(),
-            Self::Ansi => format!("\u{1b}[{code}m{text}\u{1b}[0m"),
+            | Self::Plain => text.to_string(),
+            | Self::Ansi => format!("\u{1b}[{code}m{text}\u{1b}[0m"),
         }
     }
 }

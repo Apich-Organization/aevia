@@ -25,10 +25,15 @@
 //! with the files again on the next request, and a changed dependency reloads.
 //! A failure to stat the tree is a cache miss, not a stale hit.
 
-use aevia_core::driver::{self, Program};
-use aevia_core::manifest::{Package, Roots};
+use aevia_core::driver::Program;
+use aevia_core::driver::{
+    self,
+};
+use aevia_core::manifest::Package;
+use aevia_core::manifest::Roots;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::SystemTime;
 
@@ -67,12 +72,18 @@ impl CacheKey {
     ///
     /// A dirty buffer has no readable entry file to complain about: its text is
     /// the input, and the imports are what the key protects.
-    fn of_source(path: &Path, source: &str) -> Self {
+    fn of_source(
+        path: &Path,
+        source: &str,
+    ) -> Self {
         Self::build(path, source.as_bytes())
     }
 
     /// The key for one entry text and the files under the roots.
-    fn build(path: &Path, entry: &[u8]) -> Self {
+    fn build(
+        path: &Path,
+        entry: &[u8],
+    ) -> Self {
         let entry_hash = hash_bytes(entry);
         let roots = roots_for(path);
         let mut files = Vec::new();
@@ -96,10 +107,7 @@ impl CacheKey {
         stamp_file(path, &mut files);
         files.sort_by(|left, right| left.0.cmp(&right.0));
         files.dedup_by(|left, right| left.0 == right.0);
-        Self {
-            entry_hash,
-            files,
-        }
+        Self { entry_hash, files }
     }
 }
 
@@ -107,12 +115,12 @@ impl CacheKey {
 /// [`load_program`] hands the driver.
 fn roots_for(path: &Path) -> Roots {
     let roots = match Package::owning(path) {
-        Ok(Some(package)) => package.roots().unwrap_or_else(|_| Roots::adjacent(path)),
-        _ => Roots::adjacent(path),
+        | Ok(Some(package)) => package.roots().unwrap_or_else(|_| Roots::adjacent(path)),
+        | _ => Roots::adjacent(path),
     };
     match path.parent() {
-        Some(dir) => roots.with_local(dir),
-        None => roots,
+        | Some(dir) => roots.with_local(dir),
+        | None => roots,
     }
 }
 
@@ -130,17 +138,22 @@ pub(crate) fn analysable(path: &Path) -> bool {
 /// Loads `path` and its import graph with the package's roots.
 pub(crate) fn load_program(path: &Path) -> Program {
     match Package::owning(path) {
-        Ok(Some(package)) => match package.roots() {
-            Ok(roots) => driver::load_with_roots(path, roots),
-            Err(_) => driver::load(path),
+        | Ok(Some(package)) => {
+            match package.roots() {
+                | Ok(roots) => driver::load_with_roots(path, roots),
+                | Err(_) => driver::load(path),
+            }
         },
-        _ => driver::load(path),
+        | _ => driver::load(path),
     }
 }
 
 /// Loads `path` with `source` as the entry text — a dirty editor buffer — while
 /// the imports still resolve from disk.
-pub(crate) fn load_dirty_program(path: &Path, source: &str) -> Program {
+pub(crate) fn load_dirty_program(
+    path: &Path,
+    source: &str,
+) -> Program {
     driver::load_with_roots_and_source(
         path,
         roots_for(path),
@@ -150,7 +163,10 @@ pub(crate) fn load_dirty_program(path: &Path, source: &str) -> Program {
 }
 
 /// Adds the stamp of one file, when it can be read.
-fn stamp_file(path: &Path, files: &mut Vec<(PathBuf, u64, Option<SystemTime>)>) {
+fn stamp_file(
+    path: &Path,
+    files: &mut Vec<(PathBuf, u64, Option<SystemTime>)>,
+) {
     let Ok(metadata) = std::fs::metadata(path) else {
         return;
     };
@@ -236,7 +252,10 @@ impl AnalysisCache {
     ///
     /// An entry that cannot be read is loaded uncached: the driver reports the
     /// failure, and there is no state to key.
-    pub fn program(&mut self, path: &Path) -> Rc<Program> {
+    pub fn program(
+        &mut self,
+        path: &Path,
+    ) -> Rc<Program> {
         let Some(key) = CacheKey::of(path) else {
             self.loads += 1;
             return Rc::new(load_program(path));
@@ -256,7 +275,11 @@ impl AnalysisCache {
     /// Imports resolve exactly as for the saved file: only the entry module is
     /// the buffer's text, which is what makes an unsaved file keep its imports
     /// instead of reporting them as unbound.
-    pub fn program_with_source(&mut self, path: &Path, source: &str) -> Rc<Program> {
+    pub fn program_with_source(
+        &mut self,
+        path: &Path,
+        source: &str,
+    ) -> Rc<Program> {
         let key = CacheKey::of_source(path, source);
         if let Some(program) = self.hit(path, &key) {
             return program;
@@ -275,7 +298,11 @@ impl AnalysisCache {
     /// rather than starting a walk without a boundary.
     ///
     /// [`Analysis::new`]: crate::Analysis::new
-    pub fn program_for_document(&mut self, path: &Path, source: &str) -> Option<Rc<Program>> {
+    pub fn program_for_document(
+        &mut self,
+        path: &Path,
+        source: &str,
+    ) -> Option<Rc<Program>> {
         if !analysable(path) {
             return None;
         }
@@ -283,7 +310,11 @@ impl AnalysisCache {
     }
 
     /// The cached program for this key, moved to the most-recently-used end.
-    fn hit(&mut self, path: &Path, key: &CacheKey) -> Option<Rc<Program>> {
+    fn hit(
+        &mut self,
+        path: &Path,
+        key: &CacheKey,
+    ) -> Option<Rc<Program>> {
         let index = self
             .entries
             .iter()
@@ -295,7 +326,12 @@ impl AnalysisCache {
     }
 
     /// Stores a program, keeping one entry per path and the LRU bound.
-    fn remember(&mut self, path: &Path, key: CacheKey, program: Rc<Program>) {
+    fn remember(
+        &mut self,
+        path: &Path,
+        key: CacheKey,
+        program: Rc<Program>,
+    ) {
         self.entries.retain(|entry| entry.path != path);
         self.entries.push(CacheEntry {
             path: path.to_path_buf(),

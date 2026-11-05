@@ -14,10 +14,17 @@
 //! language cannot write, a malformed pinned hash, or a `Value`-where-`Real`
 //! lie all show up as a diagnostic here.
 
-use aevia_rssn::{codegen, kernel, registry};
-use aevia_syntax::{SourceMap, lex, parse_module};
+use aevia_rssn::codegen;
+use aevia_rssn::kernel;
+use aevia_rssn::registry;
+use aevia_syntax::SourceMap;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 
-fn parse(name: &str, text: &str) -> aevia_syntax::Module {
+fn parse(
+    name: &str,
+    text: &str,
+) -> aevia_syntax::Module {
     let lexed = lex(0, text).unwrap_or_else(|errors| {
         panic!("{name} does not lex: {:?}", errors.items[0]);
     });

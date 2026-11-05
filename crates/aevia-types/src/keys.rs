@@ -20,7 +20,11 @@
 //! crosses a module boundary or a process boundary.
 
 use crate::adt;
-use crate::ty::{Nat, Rep, Row, Shape, Type};
+use crate::ty::Nat;
+use crate::ty::Rep;
+use crate::ty::Row;
+use crate::ty::Shape;
+use crate::ty::Type;
 use std::fmt;
 
 /// A module path, `[]` for the prelude/builtin scope, `["A", "B"]` for `A.B`.
@@ -58,7 +62,10 @@ impl ModulePath {
 }
 
 impl fmt::Display for ModulePath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(&self.dotted())
     }
 }
@@ -75,7 +82,10 @@ pub struct AdtKey {
 impl AdtKey {
     /// A key from its parts.
     #[must_use]
-    pub fn new(module: ModulePath, name: impl Into<String>) -> Self {
+    pub fn new(
+        module: ModulePath,
+        name: impl Into<String>,
+    ) -> Self {
         Self {
             module,
             name: name.into(),
@@ -84,7 +94,10 @@ impl AdtKey {
 }
 
 impl fmt::Display for AdtKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         if self.module.is_prelude() {
             f.write_str(&self.name)
         } else {
@@ -105,7 +118,10 @@ pub struct ClassKey {
 impl ClassKey {
     /// A key from its parts.
     #[must_use]
-    pub fn new(module: ModulePath, name: impl Into<String>) -> Self {
+    pub fn new(
+        module: ModulePath,
+        name: impl Into<String>,
+    ) -> Self {
         Self {
             module,
             name: name.into(),
@@ -123,7 +139,10 @@ impl ClassKey {
 }
 
 impl fmt::Display for ClassKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         if self.module.is_prelude() {
             f.write_str(&self.name)
         } else {
@@ -151,22 +170,25 @@ impl RepKind {
     #[must_use]
     pub fn of(rep: Rep) -> Option<Self> {
         match rep {
-            Rep::Int => Some(Self::Int),
-            Rep::Real => Some(Self::Real),
-            Rep::Float => Some(Self::Float),
-            Rep::Complex => Some(Self::Complex),
-            Rep::Var(_) => None,
+            | Rep::Int => Some(Self::Int),
+            | Rep::Real => Some(Self::Real),
+            | Rep::Float => Some(Self::Float),
+            | Rep::Complex => Some(Self::Complex),
+            | Rep::Var(_) => None,
         }
     }
 }
 
 impl fmt::Display for RepKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(match self {
-            Self::Int => "Int",
-            Self::Real => "Real",
-            Self::Float => "Float",
-            Self::Complex => "Complex",
+            | Self::Int => "Int",
+            | Self::Real => "Real",
+            | Self::Float => "Float",
+            | Self::Complex => "Complex",
         })
     }
 }
@@ -192,20 +214,23 @@ impl StorageClass {
     #[must_use]
     pub fn of(rep: Rep) -> Option<Self> {
         match rep {
-            Rep::Int | Rep::Real => Some(Self::Exact),
-            Rep::Float => Some(Self::Float),
-            Rep::Complex => Some(Self::Complex),
-            Rep::Var(_) => None,
+            | Rep::Int | Rep::Real => Some(Self::Exact),
+            | Rep::Float => Some(Self::Float),
+            | Rep::Complex => Some(Self::Complex),
+            | Rep::Var(_) => None,
         }
     }
 }
 
 impl fmt::Display for StorageClass {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.write_str(match self {
-            Self::Exact => "Exact",
-            Self::Float => "Float",
-            Self::Complex => "Complex",
+            | Self::Exact => "Exact",
+            | Self::Float => "Float",
+            | Self::Complex => "Complex",
         })
     }
 }
@@ -257,17 +282,20 @@ pub enum HeadKey {
 }
 
 impl fmt::Display for HeadKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Scalar(rep) => write!(f, "{rep}"),
-            Self::ScalarVar => f.write_str("<scalar>"),
-            Self::Bool => f.write_str("Bool"),
-            Self::String => f.write_str("String"),
-            Self::Unit => f.write_str("()"),
-            Self::Prop => f.write_str("Prop"),
-            Self::Point => f.write_str("Point"),
-            Self::UnitOf => f.write_str("Unit"),
-            Self::Tensor { shape, elem } => {
+            | Self::Scalar(rep) => write!(f, "{rep}"),
+            | Self::ScalarVar => f.write_str("<scalar>"),
+            | Self::Bool => f.write_str("Bool"),
+            | Self::String => f.write_str("String"),
+            | Self::Unit => f.write_str("()"),
+            | Self::Prop => f.write_str("Prop"),
+            | Self::Point => f.write_str("Point"),
+            | Self::UnitOf => f.write_str("Unit"),
+            | Self::Tensor { shape, elem } => {
                 f.write_str("Tensor<")?;
                 f.write_str("[")?;
                 for (index, extent) in shape.iter().enumerate() {
@@ -275,14 +303,14 @@ impl fmt::Display for HeadKey {
                         f.write_str(", ")?;
                     }
                     match extent {
-                        Some(extent) => write!(f, "{extent}")?,
-                        None => f.write_str("?")?,
+                        | Some(extent) => write!(f, "{extent}")?,
+                        | None => f.write_str("?")?,
                     }
                 }
                 f.write_str("], ")?;
                 write!(f, "{elem}>")
-            }
-            Self::Adt(key, args) => {
+            },
+            | Self::Adt(key, args) => {
                 write!(f, "{key}")?;
                 if !args.is_empty() {
                     f.write_str("<")?;
@@ -295,8 +323,8 @@ impl fmt::Display for HeadKey {
                     f.write_str(">")?;
                 }
                 Ok(())
-            }
-            Self::Record(labels) => {
+            },
+            | Self::Record(labels) => {
                 f.write_str("{")?;
                 for (index, label) in labels.iter().enumerate() {
                     if index > 0 {
@@ -305,11 +333,11 @@ impl fmt::Display for HeadKey {
                     write!(f, "{label}")?;
                 }
                 f.write_str("}")
-            }
-            Self::Fn => f.write_str("->"),
-            Self::Dyn => f.write_str("Dyn"),
-            Self::Io(inner) => write!(f, "IO {inner}"),
-            Self::Wildcard => f.write_str("_"),
+            },
+            | Self::Fn => f.write_str("->"),
+            | Self::Dyn => f.write_str("Dyn"),
+            | Self::Io(inner) => write!(f, "IO {inner}"),
+            | Self::Wildcard => f.write_str("_"),
         }
     }
 }
@@ -320,13 +348,13 @@ impl HeadKey {
     #[must_use]
     pub fn is_concrete(&self) -> bool {
         match self {
-            Self::ScalarVar | Self::Wildcard => false,
-            Self::Tensor { shape, elem } => {
+            | Self::ScalarVar | Self::Wildcard => false,
+            | Self::Tensor { shape, elem } => {
                 shape.iter().all(Option::is_some) && elem.is_concrete()
-            }
-            Self::Adt(_, args) => args.iter().all(Self::is_concrete),
-            Self::Io(inner) => inner.is_concrete(),
-            Self::Scalar(_)
+            },
+            | Self::Adt(_, args) => args.iter().all(Self::is_concrete),
+            | Self::Io(inner) => inner.is_concrete(),
+            | Self::Scalar(_)
             | Self::Bool
             | Self::String
             | Self::Unit
@@ -348,38 +376,46 @@ impl HeadKey {
 #[must_use]
 pub fn head_key(ty: &Type) -> HeadKey {
     match ty {
-        Type::Scalar(rep, _) => RepKind::of(*rep).map_or(HeadKey::ScalarVar, HeadKey::Scalar),
-        Type::Bool => HeadKey::Bool,
-        Type::Prop => HeadKey::Prop,
-        Type::Str => HeadKey::String,
-        Type::Unit => HeadKey::Unit,
-        Type::Point(_) => HeadKey::Point,
-        Type::UnitOf(_) => HeadKey::UnitOf,
-        Type::Tensor { shape, elem } => HeadKey::Tensor {
-            shape: shape_items(shape),
-            elem: Box::new(head_key(elem)),
+        | Type::Scalar(rep, _) => RepKind::of(*rep).map_or(HeadKey::ScalarVar, HeadKey::Scalar),
+        | Type::Bool => HeadKey::Bool,
+        | Type::Prop => HeadKey::Prop,
+        | Type::Str => HeadKey::String,
+        | Type::Unit => HeadKey::Unit,
+        | Type::Point(_) => HeadKey::Point,
+        | Type::UnitOf(_) => HeadKey::UnitOf,
+        | Type::Tensor { shape, elem } => {
+            HeadKey::Tensor {
+                shape: shape_items(shape),
+                elem: Box::new(head_key(elem)),
+            }
         },
-        Type::Record(row) => HeadKey::Record(row_labels(row)),
-        Type::Adt(id, args) => HeadKey::Adt(adt::key_of(*id), args.iter().map(head_key).collect()),
-        Type::Io(inner) => HeadKey::Io(Box::new(head_key(inner))),
-        Type::Dyn(rep) => match RepKind::of(*rep) {
-            Some(_) => HeadKey::Dyn,
-            None => HeadKey::Wildcard,
+        | Type::Record(row) => HeadKey::Record(row_labels(row)),
+        | Type::Adt(id, args) => {
+            HeadKey::Adt(adt::key_of(*id), args.iter().map(head_key).collect())
         },
-        Type::Fn(..) => HeadKey::Fn,
-        Type::Var(_) | Type::Param(_) | Type::Error => HeadKey::Wildcard,
+        | Type::Io(inner) => HeadKey::Io(Box::new(head_key(inner))),
+        | Type::Dyn(rep) => {
+            match RepKind::of(*rep) {
+                | Some(_) => HeadKey::Dyn,
+                | None => HeadKey::Wildcard,
+            }
+        },
+        | Type::Fn(..) => HeadKey::Fn,
+        | Type::Var(_) | Type::Param(_) | Type::Error => HeadKey::Wildcard,
     }
 }
 
 fn shape_items(shape: &Shape) -> Vec<Option<usize>> {
     match shape {
-        Shape::Rank(rank) => vec![None; usize::try_from(*rank).unwrap_or(0)],
+        | Shape::Rank(rank) => vec![None; usize::try_from(*rank).unwrap_or(0)],
         // Only concrete extents can name a head: a shape that still has a
         // variable is `?` in the key (witness dispatch, not exact key).
-        Shape::Refined(items) => items
-            .iter()
-            .map(|item| item.as_ref().and_then(Nat::as_const))
-            .collect(),
+        | Shape::Refined(items) => {
+            items
+                .iter()
+                .map(|item| item.as_ref().and_then(Nat::as_const))
+                .collect()
+        },
     }
 }
 
@@ -414,12 +450,12 @@ pub struct InstanceKey {
 impl InstanceKey {
     /// A key from its parts.
     #[must_use]
-    pub fn new(module: ModulePath, class: ClassKey, head: HeadKey) -> Self {
-        Self {
-            module,
-            class,
-            head,
-        }
+    pub fn new(
+        module: ModulePath,
+        class: ClassKey,
+        head: HeadKey,
+    ) -> Self {
+        Self { module, class, head }
     }
 
     /// A deterministic, process-local mangled name for an instance body.
@@ -436,7 +472,10 @@ impl InstanceKey {
 }
 
 impl fmt::Display for InstanceKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         write!(f, "{}@{}", self.class, self.head)?;
         if !self.module.is_prelude() {
             write!(f, " [{}]", self.module)?;
@@ -478,9 +517,12 @@ pub enum Witness {
 }
 
 impl fmt::Display for Witness {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Adt(key, args) => {
+            | Self::Adt(key, args) => {
                 write!(f, "adt {key}")?;
                 if !args.is_empty() {
                     f.write_str("<")?;
@@ -493,10 +535,10 @@ impl fmt::Display for Witness {
                     f.write_str(">")?;
                 }
                 Ok(())
-            }
-            Self::Num(rep) => write!(f, "num {rep}"),
-            Self::Tensor { rank, storage } => write!(f, "tensor rank {rank} {storage}"),
-            Self::Record(labels) => {
+            },
+            | Self::Num(rep) => write!(f, "num {rep}"),
+            | Self::Tensor { rank, storage } => write!(f, "tensor rank {rank} {storage}"),
+            | Self::Record(labels) => {
                 f.write_str("record {")?;
                 for (index, label) in labels.iter().enumerate() {
                     if index > 0 {
@@ -505,11 +547,11 @@ impl fmt::Display for Witness {
                     f.write_str(label)?;
                 }
                 f.write_str("}")
-            }
-            Self::Bool => f.write_str("Bool"),
-            Self::String => f.write_str("String"),
-            Self::Unit => f.write_str("()"),
-            Self::Prop => f.write_str("Prop"),
+            },
+            | Self::Bool => f.write_str("Bool"),
+            | Self::String => f.write_str("String"),
+            | Self::Unit => f.write_str("()"),
+            | Self::Prop => f.write_str("Prop"),
         }
     }
 }
@@ -518,12 +560,12 @@ impl fmt::Display for Witness {
 #[must_use]
 pub fn witness_of(ty: &Type) -> Option<Witness> {
     match ty {
-        Type::Scalar(rep, _) => RepKind::of(*rep).map(Witness::Num),
-        Type::Bool => Some(Witness::Bool),
-        Type::Prop => Some(Witness::Prop),
-        Type::Str => Some(Witness::String),
-        Type::Unit => Some(Witness::Unit),
-        Type::Tensor { shape, elem } => {
+        | Type::Scalar(rep, _) => RepKind::of(*rep).map(Witness::Num),
+        | Type::Bool => Some(Witness::Bool),
+        | Type::Prop => Some(Witness::Prop),
+        | Type::Str => Some(Witness::String),
+        | Type::Unit => Some(Witness::Unit),
+        | Type::Tensor { shape, elem } => {
             let Type::Scalar(rep, _) = **elem else {
                 return None;
             };
@@ -531,18 +573,18 @@ pub fn witness_of(ty: &Type) -> Option<Witness> {
                 rank: shape.rank(),
                 storage: StorageClass::of(rep)?,
             })
-        }
-        Type::Record(row) => Some(Witness::Record(row_labels(row))),
-        Type::Adt(id, args) => {
+        },
+        | Type::Record(row) => Some(Witness::Record(row_labels(row))),
+        | Type::Adt(id, args) => {
             let args = args
                 .iter()
                 .map(witness_of)
                 .collect::<Option<Vec<Witness>>>()?;
             Some(Witness::Adt(adt::key_of(*id), args))
-        }
+        },
         // Functions, `Dyn`, `Point`, `Unit` values, `IO` and open variables have
         // no witness the dispatcher can read.
-        Type::Fn(..)
+        | Type::Fn(..)
         | Type::Dyn(_)
         | Type::Point(_)
         | Type::UnitOf(_)
@@ -555,7 +597,10 @@ pub fn witness_of(ty: &Type) -> Option<Witness> {
 
 /// Whether two witnesses are distinguishable at run time.
 #[must_use]
-pub fn witnesses_are_disjoint(left: &Witness, right: &Witness) -> bool {
+pub fn witnesses_are_disjoint(
+    left: &Witness,
+    right: &Witness,
+) -> bool {
     left != right
 }
 
@@ -565,10 +610,10 @@ pub fn witness_collision(witnesses: &[Option<Witness>]) -> Option<(usize, usize)
     for (index, left) in witnesses.iter().enumerate() {
         for (other_index, right) in witnesses.iter().enumerate().skip(index + 1) {
             match (left, right) {
-                (Some(left), Some(right)) if !witnesses_are_disjoint(left, right) => {
+                | (Some(left), Some(right)) if !witnesses_are_disjoint(left, right) => {
                     return Some((index, other_index));
-                }
-                _ => {}
+                },
+                | _ => {},
             }
         }
     }
@@ -578,14 +623,24 @@ pub fn witness_collision(witnesses: &[Option<Witness>]) -> Option<(usize, usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adt::{self, Ctor};
+    use crate::adt::Ctor;
+    use crate::adt::{
+        self,
+    };
     use aevia_dim::Dim;
 
     fn record(labels: &[&str]) -> Type {
-        Type::record(labels.iter().map(|label| ((*label).to_string(), Type::int())))
+        Type::record(
+            labels
+                .iter()
+                .map(|label| ((*label).to_string(), Type::int())),
+        )
     }
 
-    fn user_adt(module: &str, name: &str) -> Type {
+    fn user_adt(
+        module: &str,
+        name: &str,
+    ) -> Type {
         let id = adt::allocate_in(ModulePath::new([module]), name, Vec::new());
         adt::set_ctors(
             id,
@@ -662,10 +717,7 @@ mod tests {
 
     #[test]
     fn the_witness_table_covers_the_reviewed_heads() {
-        assert_eq!(
-            witness_of(&Type::int()),
-            Some(Witness::Num(RepKind::Int))
-        );
+        assert_eq!(witness_of(&Type::int()), Some(Witness::Num(RepKind::Int)));
         // Int and Real are different NumKinds, so they can be witnesses.
         assert_ne!(
             witness_of(&Type::int()),
@@ -701,10 +753,7 @@ mod tests {
         // `Tensor<1, Int>` and `Tensor<1, Real>` are distinct heads but one
         // storage class: dispatching between them by witness is impossible.
         let left = witness_of(&Type::tensor(Shape::Rank(1), Type::int()));
-        let right = witness_of(&Type::tensor(
-            Shape::Rank(1),
-            Type::real(Dim::one()),
-        ));
+        let right = witness_of(&Type::tensor(Shape::Rank(1), Type::real(Dim::one())));
         assert_eq!(witness_collision(&[left, right]), Some((0, 1)));
         // Different ADT modules never collide.
         let a = witness_of(&user_adt("A", "Shape"));
@@ -724,7 +773,10 @@ mod tests {
 
     #[test]
     fn builtin_heads_print_with_their_module() {
-        assert_eq!(AdtKey::new(ModulePath::prelude(), "Option").to_string(), "Option");
+        assert_eq!(
+            AdtKey::new(ModulePath::prelude(), "Option").to_string(),
+            "Option"
+        );
         assert_eq!(
             AdtKey::new(ModulePath::new(["A", "B"]), "Shape").to_string(),
             "A.B.Shape"

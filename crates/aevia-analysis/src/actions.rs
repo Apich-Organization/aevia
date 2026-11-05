@@ -21,10 +21,14 @@
 
 use crate::document::Document;
 use crate::position::Range;
-use crate::types::{CodeAction, CodeActionKind, TextEdit};
+use crate::types::CodeAction;
+use crate::types::CodeActionKind;
+use crate::types::TextEdit;
 use crate::walk;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::Severity;
+use aevia_syntax::Span;
 use aevia_syntax::ast::*;
-use aevia_syntax::{Diagnostics, Severity, Span};
 use aevia_types::check::CheckedModule;
 
 /// Builds the actions that apply to `request`.
@@ -40,16 +44,15 @@ pub(crate) fn actions(
     else {
         return Vec::new();
     };
-    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+    let (start, end) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
     let old_errors = error_count(compiler_diagnostics);
     let mut actions = Vec::new();
     actions.extend(annotation_actions(
-        document,
-        module,
-        checked,
-        start,
-        end,
-        old_errors,
+        document, module, checked, start, end, old_errors,
     ));
     actions.extend(celsius_actions(document, module, start, end, old_errors));
     actions.extend(extract_actions(document, module, start, end, old_errors));
@@ -88,58 +91,64 @@ fn binders<'a>(module: &'a Module) -> Vec<Binder<'a>> {
     };
     for declaration in &module.decls {
         match &declaration.kind {
-            DeclKind::Fn { args, .. } => push_params(args, &mut binders),
-            DeclKind::Let { pattern, ty, .. } => binders.push(Binder {
-                pattern,
-                ty: ty.as_ref(),
-                annotatable: true,
-            }),
-            DeclKind::Instance { methods, .. } => {
+            | DeclKind::Fn { args, .. } => push_params(args, &mut binders),
+            | DeclKind::Let { pattern, ty, .. } => {
+                binders.push(Binder {
+                    pattern,
+                    ty: ty.as_ref(),
+                    annotatable: true,
+                })
+            },
+            | DeclKind::Instance { methods, .. } => {
                 for method in methods {
                     push_params(&method.params, &mut binders);
                 }
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
-    walk::module_exprs(module, |expr| match &expr.kind {
-        ExprKind::Lambda { params, .. } => {
-            for param in params {
+    walk::module_exprs(module, |expr| {
+        match &expr.kind {
+            | ExprKind::Lambda { params, .. } => {
+                for param in params {
+                    binders.push(Binder {
+                        pattern: &param.pattern,
+                        ty: param.ty.as_ref(),
+                        annotatable: true,
+                    });
+                }
+            },
+            | ExprKind::LetIn { pattern, ty, .. } => {
                 binders.push(Binder {
-                    pattern: &param.pattern,
-                    ty: param.ty.as_ref(),
+                    pattern,
+                    ty: ty.as_ref(),
                     annotatable: true,
-                });
-            }
-        }
-        ExprKind::LetIn { pattern, ty, .. } => binders.push(Binder {
-            pattern,
-            ty: ty.as_ref(),
-            annotatable: true,
-        }),
-        ExprKind::Block { stmts, .. } => {
-            for statement in stmts {
-                if let BlockStmt::Let { pattern, ty, .. } = statement {
-                    binders.push(Binder {
-                        pattern,
-                        ty: ty.as_ref(),
-                        annotatable: true,
-                    });
+                })
+            },
+            | ExprKind::Block { stmts, .. } => {
+                for statement in stmts {
+                    if let BlockStmt::Let { pattern, ty, .. } = statement {
+                        binders.push(Binder {
+                            pattern,
+                            ty: ty.as_ref(),
+                            annotatable: true,
+                        });
+                    }
                 }
-            }
-        }
-        ExprKind::Do { stmts } => {
-            for statement in stmts {
-                if let DoStmt::Let { pattern, ty, .. } = statement {
-                    binders.push(Binder {
-                        pattern,
-                        ty: ty.as_ref(),
-                        annotatable: true,
-                    });
+            },
+            | ExprKind::Do { stmts } => {
+                for statement in stmts {
+                    if let DoStmt::Let { pattern, ty, .. } = statement {
+                        binders.push(Binder {
+                            pattern,
+                            ty: ty.as_ref(),
+                            annotatable: true,
+                        });
+                    }
                 }
-            }
+            },
+            | _ => {},
         }
-        _ => {}
     });
     binders
 }
@@ -208,7 +217,8 @@ fn celsius_actions(
         walk::module_exprs(module, |expr| found.push(expr));
         found
     } {
-        if !matches!(expr.kind, ExprKind::Quantity { .. }) || !walk::touches(expr.span, start, end) {
+        if !matches!(expr.kind, ExprKind::Quantity { .. }) || !walk::touches(expr.span, start, end)
+        {
             continue;
         }
         let Some(source) = slice(text, expr.span) else {
@@ -314,7 +324,11 @@ fn extract_actions(
 }
 
 /// The innermost expression inside `outer` that the request touches.
-fn innermost_inside<'a>(outer: &'a Expr, start: u32, end: u32) -> Option<&'a Expr> {
+fn innermost_inside<'a>(
+    outer: &'a Expr,
+    start: u32,
+    end: u32,
+) -> Option<&'a Expr> {
     let mut best: Option<&Expr> = None;
     walk::expression(outer, &mut |expr| {
         if !walk::touches(expr.span, start, end) {
@@ -332,7 +346,11 @@ fn innermost_inside<'a>(outer: &'a Expr, start: u32, end: u32) -> Option<&'a Exp
 }
 
 /// A name derived from `base` that nothing in the module already uses.
-fn fresh_name(text: &str, module: &Module, base: &str) -> String {
+fn fresh_name(
+    text: &str,
+    module: &Module,
+    base: &str,
+) -> String {
     let mut used = std::collections::HashSet::new();
     walk::module_exprs(module, |expr| {
         if let ExprKind::Var(name) = &expr.kind {
@@ -385,7 +403,10 @@ fn dimension_actions(
         else {
             continue;
         };
-        let operands = [(left.as_ref(), right.as_ref()), (right.as_ref(), left.as_ref())];
+        let operands = [
+            (left.as_ref(), right.as_ref()),
+            (right.as_ref(), left.as_ref()),
+        ];
         for (with_unit, without_unit) in operands {
             let (Some(with_unit_text), Some(without_unit_text)) =
                 (slice(text, with_unit.span), slice(text, without_unit.span))
@@ -429,7 +450,9 @@ fn unit_suffix(text: &str) -> Option<&str> {
     let text = text.trim();
     let bytes = text.as_bytes();
     let mut index = 0;
-    while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'.' || bytes[index] == b'_') {
+    while index < bytes.len()
+        && (bytes[index].is_ascii_digit() || bytes[index] == b'.' || bytes[index] == b'_')
+    {
         index += 1;
     }
     if index == 0 {
@@ -460,9 +483,9 @@ fn is_number_literal(text: &str) -> bool {
     let text = text.trim();
     text.starts_with(|character: char| character.is_ascii_digit())
         && unit_suffix(text).is_none()
-        && text
-            .chars()
-            .all(|character| character.is_ascii_digit() || matches!(character, '.' | '_' | 'e' | 'E' | '+' | '-'))
+        && text.chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, '.' | '_' | 'e' | 'E' | '+' | '-')
+        })
 }
 
 // --- validation ------------------------------------------------------------
@@ -477,27 +500,41 @@ fn error_count(diagnostics: &Diagnostics) -> usize {
 }
 
 /// Compiles the document with `edit` applied and counts its errors.
-fn compile_errors(document: &Document, text: &str) -> usize {
+fn compile_errors(
+    document: &Document,
+    text: &str,
+) -> usize {
     let compilation = aevia_core::compile(document.name(), text);
     error_count(&compilation.diagnostics)
 }
 
 /// True when applying `edit` does not make the program worse.
-fn compiles_at_least_as_well(document: &Document, edit: &(Span, String), old_errors: usize) -> bool {
+fn compiles_at_least_as_well(
+    document: &Document,
+    edit: &(Span, String),
+    old_errors: usize,
+) -> bool {
     let text = candidate_text(document, std::slice::from_ref(edit));
     compile_errors(document, &text) <= old_errors
 }
 
 /// The document's text with the edits applied.
-fn candidate_text(document: &Document, edits: &[(Span, String)]) -> String {
+fn candidate_text(
+    document: &Document,
+    edits: &[(Span, String)],
+) -> String {
     let original = document.text();
     let mut ordered: Vec<&(Span, String)> = edits.iter().collect();
     ordered.sort_by_key(|(span, _)| span.start);
     let mut out = String::with_capacity(original.len() + 64);
     let mut cursor = 0usize;
     for (span, text) in ordered {
-        let start = usize::try_from(span.start).unwrap_or(usize::MAX).min(original.len());
-        let end = usize::try_from(span.end).unwrap_or(usize::MAX).min(original.len());
+        let start = usize::try_from(span.start)
+            .unwrap_or(usize::MAX)
+            .min(original.len());
+        let end = usize::try_from(span.end)
+            .unwrap_or(usize::MAX)
+            .min(original.len());
         if start < cursor || end < start {
             continue;
         }
@@ -509,14 +546,20 @@ fn candidate_text(document: &Document, edits: &[(Span, String)]) -> String {
     out
 }
 
-fn to_edit(document: &Document, (span, text): (Span, String)) -> TextEdit {
+fn to_edit(
+    document: &Document,
+    (span, text): (Span, String),
+) -> TextEdit {
     TextEdit {
         range: document.range_of(span.start, span.end),
         new_text: text,
     }
 }
 
-fn slice(text: &str, span: Span) -> Option<&str> {
+fn slice(
+    text: &str,
+    span: Span,
+) -> Option<&str> {
     let start = usize::try_from(span.start).ok()?;
     let end = usize::try_from(span.end).ok()?;
     text.get(start..end)

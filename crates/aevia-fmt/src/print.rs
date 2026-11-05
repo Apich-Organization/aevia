@@ -100,7 +100,10 @@ impl Printer {
     /// # Errors
     ///
     /// The description of the construct that cannot be reproduced.
-    pub fn module(mut self, module: &Module) -> Result<String, String> {
+    pub fn module(
+        mut self,
+        module: &Module,
+    ) -> Result<String, String> {
         if let Some(name) = &module.name {
             self.line(&format!("module {}", name.join(".")));
             self.blank();
@@ -124,7 +127,10 @@ impl Printer {
     /// # Errors
     ///
     /// The description of the construct that cannot be reproduced.
-    pub fn expression(mut self, expr: &Expr) -> Result<String, String> {
+    pub fn expression(
+        mut self,
+        expr: &Expr,
+    ) -> Result<String, String> {
         self.expr(expr, Ctx::tail());
         if let Some(error) = self.error {
             return Err(error);
@@ -137,7 +143,10 @@ impl Printer {
     /// # Errors
     ///
     /// The description of the construct that cannot be reproduced.
-    pub fn type_(mut self, ty: &Ty) -> Result<String, String> {
+    pub fn type_(
+        mut self,
+        ty: &Ty,
+    ) -> Result<String, String> {
         self.ty(ty, false);
         if let Some(error) = self.error {
             return Err(error);
@@ -147,7 +156,10 @@ impl Printer {
 
     // ----- low-level output ----------------------------------------------
 
-    fn push(&mut self, text: &str) {
+    fn push(
+        &mut self,
+        text: &str,
+    ) {
         if text.is_empty() {
             return;
         }
@@ -173,7 +185,10 @@ impl Printer {
     ///
     /// A block ends at the start of a line, so `else` after one must not be
     /// written with a leading space — that would be an indentation level.
-    fn push_after(&mut self, text: &str) {
+    fn push_after(
+        &mut self,
+        text: &str,
+    ) {
         if !self.at_line_start {
             self.push(" ");
         }
@@ -186,7 +201,10 @@ impl Printer {
         }
     }
 
-    fn line(&mut self, text: &str) {
+    fn line(
+        &mut self,
+        text: &str,
+    ) {
         self.push(text);
         self.newline();
     }
@@ -199,7 +217,10 @@ impl Printer {
         self.at_line_start = true;
     }
 
-    fn fail(&mut self, reason: impl Into<String>) {
+    fn fail(
+        &mut self,
+        reason: impl Into<String>,
+    ) {
         if self.error.is_none() {
             let subject = self.subject.clone();
             self.error = Some(format!("{subject}: {}", reason.into()));
@@ -207,7 +228,10 @@ impl Printer {
     }
 
     /// Emits every comment that starts before `offset`.
-    fn flush_comments(&mut self, offset: usize) {
+    fn flush_comments(
+        &mut self,
+        offset: usize,
+    ) {
         while let Some(comment) = self.comments.get(self.next_comment) {
             if comment.start >= offset {
                 break;
@@ -222,7 +246,10 @@ impl Printer {
 
     // ----- declarations ---------------------------------------------------
 
-    fn decl(&mut self, decl: &Decl) {
+    fn decl(
+        &mut self,
+        decl: &Decl,
+    ) {
         self.flush_comments(usize::try_from(decl.span.start).unwrap_or(0));
         self.subject = describe(decl);
         if let Some(doc) = &decl.doc {
@@ -246,13 +273,11 @@ impl Printer {
                         let _ = write!(text, "{name} = ");
                     }
                     match Printer::new(Vec::new()).expression(&arg.value) {
-                        Ok(rendered) => text.push_str(&rendered),
-                        Err(error) => {
-                            self.fail(format!(
-                                "an attribute argument cannot be printed: {error}"
-                            ));
+                        | Ok(rendered) => text.push_str(&rendered),
+                        | Err(error) => {
+                            self.fail(format!("an attribute argument cannot be printed: {error}"));
                             return;
-                        }
+                        },
                     }
                 }
                 text.push(')');
@@ -263,7 +288,7 @@ impl Printer {
             self.push("private ");
         }
         match &decl.kind {
-            DeclKind::Import {
+            | DeclKind::Import {
                 path,
                 alias,
                 names,
@@ -281,15 +306,15 @@ impl Printer {
                     let _ = write!(text, " {{ {} }}", names.join(", "));
                 }
                 self.line(&text);
-            }
-            DeclKind::Dimension { name, value } => {
+            },
+            | DeclKind::Dimension { name, value } => {
                 let mut text = format!("dimension {name}");
                 if let Some(value) = value {
                     let _ = write!(text, " = {}", value.to_source());
                 }
                 self.line(&text);
-            }
-            DeclKind::Unit {
+            },
+            | DeclKind::Unit {
                 name,
                 dim,
                 scale,
@@ -321,15 +346,15 @@ impl Printer {
                     text.push_str(" prefixable");
                 }
                 self.line(&text);
-            }
-            DeclKind::Type { name, params, body } => {
+            },
+            | DeclKind::Type { name, params, body } => {
                 let mut text = format!("type {name}{}", type_params(params));
                 match body {
-                    TypeBody::Alias(ty) => {
+                    | TypeBody::Alias(ty) => {
                         let rendered = self.ty_text(ty);
                         let _ = write!(text, " = {rendered}");
-                    }
-                    TypeBody::Variants(variants) => {
+                    },
+                    | TypeBody::Variants(variants) => {
                         text.push_str(" =");
                         for variant in variants {
                             let _ = write!(text, " | {}", variant.name);
@@ -343,12 +368,12 @@ impl Printer {
                                 let _ = write!(text, "({args})");
                             }
                         }
-                    }
-                    TypeBody::Abstract => {}
+                    },
+                    | TypeBody::Abstract => {},
                 }
                 self.line(&text);
-            }
-            DeclKind::Class {
+            },
+            | DeclKind::Class {
                 name,
                 params,
                 methods,
@@ -370,12 +395,8 @@ impl Printer {
                     self.line(&format!("{method}: {rendered}"));
                 }
                 self.indent -= 1;
-            }
-            DeclKind::Instance {
-                class,
-                ty,
-                methods,
-            } => {
+            },
+            | DeclKind::Instance { class, ty, methods } => {
                 let head = self.ty_text(ty);
                 let mut text = format!("instance {class} for {head}");
                 if !methods.is_empty() {
@@ -395,12 +416,12 @@ impl Printer {
                     self.body(&method.body);
                 }
                 self.indent -= 1;
-            }
-            DeclKind::Derive { classes, ty } => {
+            },
+            | DeclKind::Derive { classes, ty } => {
                 let head = self.ty_text(ty);
                 self.line(&format!("derive {} for {head}", classes.join(", ")));
-            }
-            DeclKind::Fn {
+            },
+            | DeclKind::Fn {
                 name,
                 params,
                 args,
@@ -417,8 +438,8 @@ impl Printer {
                 text.push_str(" =");
                 self.push(&text);
                 self.body(body);
-            }
-            DeclKind::Let {
+            },
+            | DeclKind::Let {
                 pattern,
                 ty,
                 value,
@@ -438,11 +459,11 @@ impl Printer {
                 text.push_str(" =");
                 self.push(&text);
                 self.body(value);
-            }
-            DeclKind::Test { name, body } => {
+            },
+            | DeclKind::Test { name, body } => {
                 self.push(&format!("test {} =", quote(name)));
                 self.body(body);
-            }
+            },
         }
     }
 
@@ -450,28 +471,34 @@ impl Printer {
     ///
     /// A layout block and a `match` both read as blocks, so both start on the
     /// next line; everything else follows the `=` on the same line.
-    fn body(&mut self, expr: &Expr) {
+    fn body(
+        &mut self,
+        expr: &Expr,
+    ) {
         match &expr.kind {
-            ExprKind::Block { .. } => {
+            | ExprKind::Block { .. } => {
                 self.expr(expr, Ctx::tail());
                 self.end_line();
-            }
-            ExprKind::Match { .. } => {
+            },
+            | ExprKind::Match { .. } => {
                 self.end_line();
                 self.indent += 1;
                 self.expr(expr, Ctx::tail());
                 self.end_line();
                 self.indent -= 1;
-            }
-            _ => {
+            },
+            | _ => {
                 self.push(" ");
                 self.expr(expr, Ctx::tail());
                 self.end_line();
-            }
+            },
         }
     }
 
-    fn params(&mut self, params: &[Param]) -> String {
+    fn params(
+        &mut self,
+        params: &[Param],
+    ) -> String {
         let mut out = Vec::new();
         for param in params {
             let mut text = self.pattern_text(&param.pattern);
@@ -484,7 +511,10 @@ impl Printer {
         out.join(", ")
     }
 
-    fn pattern_text(&mut self, pat: &Pat) -> String {
+    fn pattern_text(
+        &mut self,
+        pat: &Pat,
+    ) -> String {
         let mut printer = Printer::new(Vec::new());
         printer.pattern(pat);
         if let Some(error) = printer.error {
@@ -494,7 +524,10 @@ impl Printer {
     }
 
     /// A type as text, failing the whole print when it has no source form.
-    fn ty_text(&mut self, ty: &Ty) -> String {
+    fn ty_text(
+        &mut self,
+        ty: &Ty,
+    ) -> String {
         let mut printer = Printer::new(Vec::new());
         printer.ty(ty, false);
         if let Some(error) = printer.error {
@@ -505,22 +538,25 @@ impl Printer {
 
     // ----- expressions ----------------------------------------------------
 
-    fn expr(&mut self, expr: &Expr, cx: Ctx) {
+    fn expr(
+        &mut self,
+        expr: &Expr,
+        cx: Ctx,
+    ) {
         if self.error.is_some() {
             return;
         }
         let (prec, open) = precedence(&expr.kind);
-        let needs_brackets =
-            prec < cx.prec || (open && !cx.tail && !cx.bracketed);
+        let needs_brackets = prec < cx.prec || (open && !cx.tail && !cx.bracketed);
         if needs_brackets {
             if matches!(
                 expr.kind,
                 ExprKind::Block { .. } | ExprKind::Do { .. } | ExprKind::Match { .. }
             ) {
                 let what = match expr.kind {
-                    ExprKind::Block { .. } => "a layout block",
-                    ExprKind::Do { .. } => "a `do` block",
-                    _ => "a `match`",
+                    | ExprKind::Block { .. } => "a layout block",
+                    | ExprKind::Do { .. } => "a `do` block",
+                    | _ => "a `match`",
                 };
                 self.fail(format!(
                     "{what} can only be printed where a line ends, not inside an expression"
@@ -533,32 +569,32 @@ impl Printer {
             return;
         }
         match &expr.kind {
-            ExprKind::UnitLit => self.push("()"),
-            ExprKind::Error => self.fail("the parser reported an error here"),
-            ExprKind::Bool(value) => self.push(if *value { "true" } else { "false" }),
-            ExprKind::Int(value) => self.push(&value.to_string()),
-            ExprKind::Float(text) => self.push(text),
-            ExprKind::Str(pieces) => self.string(pieces),
-            ExprKind::Quantity { value, unit } => {
+            | ExprKind::UnitLit => self.push("()"),
+            | ExprKind::Error => self.fail("the parser reported an error here"),
+            | ExprKind::Bool(value) => self.push(if *value { "true" } else { "false" }),
+            | ExprKind::Int(value) => self.push(&value.to_string()),
+            | ExprKind::Float(text) => self.push(text),
+            | ExprKind::Str(pieces) => self.string(pieces),
+            | ExprKind::Quantity { value, unit } => {
                 match value {
-                    NumberLit::Int(value) => self.push(&value.to_string()),
-                    NumberLit::Decimal(text) => self.push(text),
+                    | NumberLit::Int(value) => self.push(&value.to_string()),
+                    | NumberLit::Decimal(text) => self.push(text),
                 }
                 self.push(" ");
                 self.push(&unit.to_source());
-            }
-            ExprKind::Var(name) => self.push(name),
-            ExprKind::QName(path) => self.push(&path.join(".")),
-            ExprKind::Unary { op, operand } => {
+            },
+            | ExprKind::Var(name) => self.push(name),
+            | ExprKind::QName(path) => self.push(&path.join(".")),
+            | ExprKind::Unary { op, operand } => {
                 self.push(match op {
-                    UnOp::Neg => "-",
-                    UnOp::Pos => "+",
-                    UnOp::Not => "!",
-                    UnOp::Sqrt => "\u{221a}",
+                    | UnOp::Neg => "-",
+                    | UnOp::Pos => "+",
+                    | UnOp::Not => "!",
+                    | UnOp::Sqrt => "\u{221a}",
                 });
                 self.expr(operand, Ctx::operand(UNARY));
-            }
-            ExprKind::Binary { op, left, right } => {
+            },
+            | ExprKind::Binary { op, left, right } => {
                 let prec = binary_prec(*op);
                 let (left_prec, right_prec) = if *op == BinOp::Pow {
                     (POSTFIX, UNARY)
@@ -571,8 +607,8 @@ impl Printer {
                 let separator = format!(" {} ", op.as_str());
                 self.push(&separator);
                 self.expr(right, Ctx::operand(right_prec));
-            }
-            ExprKind::Call { callee, args } => {
+            },
+            | ExprKind::Call { callee, args } => {
                 self.expr(callee, Ctx::operand(POSTFIX));
                 self.push("(");
                 for (index, arg) in args.iter().enumerate() {
@@ -582,8 +618,8 @@ impl Printer {
                     self.expr(arg, Ctx::bracketed());
                 }
                 self.push(")");
-            }
-            ExprKind::TypeApp { callee, args } => {
+            },
+            | ExprKind::TypeApp { callee, args } => {
                 self.expr(callee, Ctx::operand(POSTFIX));
                 self.push("<");
                 for (index, arg) in args.iter().enumerate() {
@@ -594,11 +630,14 @@ impl Printer {
                     self.push(&text);
                 }
                 self.push(">");
-            }
-            ExprKind::Lambda { params, ret, body } => {
+            },
+            | ExprKind::Lambda { params, ret, body } => {
                 let bare = params.len() == 1
                     && params[0].ty.is_none()
-                    && !matches!(params[0].pattern.kind, PatKind::Tuple(_) | PatKind::Annot { .. });
+                    && !matches!(
+                        params[0].pattern.kind,
+                        PatKind::Tuple(_) | PatKind::Annot { .. }
+                    );
                 if bare {
                     // `fn t => …` is the form the corpus writes; `fn (t) => …`
                     // is the same tree, but a bare parameter list is not.
@@ -618,8 +657,8 @@ impl Printer {
                 }
                 self.push(" => ");
                 self.expr(body, Ctx::tail());
-            }
-            ExprKind::If {
+            },
+            | ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
@@ -630,8 +669,8 @@ impl Printer {
                 self.branch(then_branch);
                 self.push_after("else");
                 self.branch(else_branch);
-            }
-            ExprKind::Match { scrutinee, arms } => {
+            },
+            | ExprKind::Match { scrutinee, arms } => {
                 self.push("match ");
                 self.expr(scrutinee, Ctx::operand(TAIL));
                 self.push(" with");
@@ -649,8 +688,8 @@ impl Printer {
                     self.body(&arm.body);
                 }
                 self.flush_comments(usize::try_from(expr.span.end).unwrap_or(usize::MAX));
-            }
-            ExprKind::LetIn {
+            },
+            | ExprKind::LetIn {
                 pattern,
                 ty,
                 value,
@@ -668,14 +707,14 @@ impl Printer {
                 self.expr(value, Ctx::operand(TAIL));
                 self.push_after("in");
                 self.branch(body);
-            }
-            ExprKind::Block { stmts, tail } => {
+            },
+            | ExprKind::Block { stmts, tail } => {
                 self.end_line();
                 self.indent += 1;
                 for stmt in stmts {
                     self.flush_comments(block_stmt_start(stmt));
                     match stmt {
-                        BlockStmt::Let {
+                        | BlockStmt::Let {
                             pattern,
                             ty,
                             value,
@@ -696,8 +735,8 @@ impl Printer {
                             text.push_str(" =");
                             self.push(&text);
                             self.body(value);
-                        }
-                        BlockStmt::Fn(decl) => self.decl(decl),
+                        },
+                        | BlockStmt::Fn(decl) => self.decl(decl),
                     }
                 }
                 if let Some(tail) = tail {
@@ -706,19 +745,16 @@ impl Printer {
                 }
                 self.flush_comments(usize::try_from(expr.span.end).unwrap_or(usize::MAX));
                 self.indent -= 1;
-            }
-            ExprKind::Do { stmts } => {
+            },
+            | ExprKind::Do { stmts } => {
                 self.push("do");
                 self.end_line();
                 self.indent += 1;
                 for stmt in stmts {
                     self.flush_comments(do_stmt_start(stmt));
                     match stmt {
-                        DoStmt::Let {
-                            pattern,
-                            ty,
-                            value,
-                            ..
+                        | DoStmt::Let {
+                            pattern, ty, value, ..
                         } => {
                             let bound = self.pattern_text(pattern);
                             let mut text = format!("let {bound}");
@@ -729,8 +765,8 @@ impl Printer {
                             text.push_str(" =");
                             self.push(&text);
                             self.body(value);
-                        }
-                        DoStmt::Bind { pattern, value, .. } => {
+                        },
+                        | DoStmt::Bind { pattern, value, .. } => {
                             // The source form is `p <- action`; the `let` is
                             // only for a pure binding.
                             let bound = self.pattern_text(pattern);
@@ -738,17 +774,17 @@ impl Printer {
                             self.push(&text);
                             self.expr(value, Ctx::operand(TAIL));
                             self.end_line();
-                        }
-                        DoStmt::Expr(expr) => {
+                        },
+                        | DoStmt::Expr(expr) => {
                             self.expr(expr, Ctx::tail());
                             self.end_line();
-                        }
+                        },
                     }
                 }
                 self.flush_comments(usize::try_from(expr.span.end).unwrap_or(usize::MAX));
                 self.indent -= 1;
-            }
-            ExprKind::Record { base, fields } => {
+            },
+            | ExprKind::Record { base, fields } => {
                 self.push("{ ");
                 if let Some(base) = base {
                     self.expr(base, Ctx::bracketed());
@@ -763,13 +799,13 @@ impl Printer {
                     self.expr(value, Ctx::bracketed());
                 }
                 self.push(" }");
-            }
-            ExprKind::Field { base, name } => {
+            },
+            | ExprKind::Field { base, name } => {
                 self.expr(base, Ctx::operand(POSTFIX));
                 self.push(".");
                 self.push(name);
-            }
-            ExprKind::Tuple(items) => {
+            },
+            | ExprKind::Tuple(items) => {
                 self.push("(");
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
@@ -778,8 +814,8 @@ impl Printer {
                     self.expr(item, Ctx::bracketed());
                 }
                 self.push(")");
-            }
-            ExprKind::Tensor(items) => {
+            },
+            | ExprKind::Tensor(items) => {
                 self.push("[");
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
@@ -788,8 +824,8 @@ impl Printer {
                     self.expr(item, Ctx::bracketed());
                 }
                 self.push("]");
-            }
-            ExprKind::Index { base, indices } => {
+            },
+            | ExprKind::Index { base, indices } => {
                 self.expr(base, Ctx::operand(POSTFIX));
                 self.push("[");
                 for (index, slice) in indices.iter().enumerate() {
@@ -797,8 +833,8 @@ impl Printer {
                         self.push(", ");
                     }
                     match slice {
-                        SliceAst::Index(expr) => self.expr(expr, Ctx::bracketed()),
-                        SliceAst::Range {
+                        | SliceAst::Index(expr) => self.expr(expr, Ctx::bracketed()),
+                        | SliceAst::Range {
                             start,
                             end,
                             inclusive,
@@ -808,9 +844,9 @@ impl Printer {
                             // is the only one that carries one; a slice
                             // without a step keeps the `..` spelling it had.
                             let separator = match step {
-                                Some(_) => ":",
-                                None if *inclusive => "..=",
-                                None => "..",
+                                | Some(_) => ":",
+                                | None if *inclusive => "..=",
+                                | None => "..",
                             };
                             if let Some(start) = start {
                                 self.expr(start, Ctx::bracketed());
@@ -823,31 +859,34 @@ impl Printer {
                                 self.push(":");
                                 self.expr(step, Ctx::bracketed());
                             }
-                        }
+                        },
                     }
                 }
                 self.push("]");
-            }
-            ExprKind::Annot { expr: inner, ty } => {
+            },
+            | ExprKind::Annot { expr: inner, ty } => {
                 self.expr(inner, Ctx::operand(TAIL));
                 let rendered = self.ty_text(ty);
                 let text = format!(" : {rendered}");
                 self.push(&text);
-            }
-            ExprKind::Placeholder => self.push("_"),
-            ExprKind::Try(inner) => {
+            },
+            | ExprKind::Placeholder => self.push("_"),
+            | ExprKind::Try(inner) => {
                 self.expr(inner, Ctx::operand(POSTFIX));
                 self.push("?");
-            }
-            ExprKind::Factorial { expr: inner, double } => {
+            },
+            | ExprKind::Factorial { expr: inner, double } => {
                 self.expr(inner, Ctx::operand(POSTFIX));
                 self.push(if *double { "!!" } else { "!" });
-            }
+            },
         }
     }
 
     /// A branch of `if` or `let … in`: inline, or an indented block.
-    fn branch(&mut self, expr: &Expr) {
+    fn branch(
+        &mut self,
+        expr: &Expr,
+    ) {
         if matches!(expr.kind, ExprKind::Block { .. }) {
             self.expr(expr, Ctx::tail());
         } else {
@@ -856,19 +895,22 @@ impl Printer {
         }
     }
 
-    fn string(&mut self, pieces: &[StrPiece]) {
+    fn string(
+        &mut self,
+        pieces: &[StrPiece],
+    ) {
         self.push("\"");
         for piece in pieces {
             match piece {
-                StrPiece::Text(text) => {
+                | StrPiece::Text(text) => {
                     let escaped = escape(text);
                     self.push(&escaped);
-                }
-                StrPiece::Expr(inner) => {
+                },
+                | StrPiece::Expr(inner) => {
                     self.push("{");
                     self.expr(inner, Ctx::bracketed());
                     self.push("}");
-                }
+                },
             }
         }
         self.push("\"");
@@ -876,12 +918,15 @@ impl Printer {
 
     // ----- patterns -------------------------------------------------------
 
-    fn pattern(&mut self, pat: &Pat) {
+    fn pattern(
+        &mut self,
+        pat: &Pat,
+    ) {
         match &pat.kind {
-            PatKind::Wildcard => self.push("_"),
-            PatKind::Error => self.fail("the parser reported an error here"),
-            PatKind::Var(name) => self.push(name),
-            PatKind::Ctor { name, args } => {
+            | PatKind::Wildcard => self.push("_"),
+            | PatKind::Error => self.fail("the parser reported an error here"),
+            | PatKind::Var(name) => self.push(name),
+            | PatKind::Ctor { name, args } => {
                 self.push(name);
                 if !args.is_empty() {
                     self.push("(");
@@ -893,8 +938,8 @@ impl Printer {
                     }
                     self.push(")");
                 }
-            }
-            PatKind::Record(fields) => {
+            },
+            | PatKind::Record(fields) => {
                 self.push("{ ");
                 for (index, (name, sub)) in fields.iter().enumerate() {
                     if index > 0 {
@@ -907,8 +952,8 @@ impl Printer {
                     }
                 }
                 self.push(" }");
-            }
-            PatKind::Tuple(items) => {
+            },
+            | PatKind::Tuple(items) => {
                 self.push("(");
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
@@ -917,8 +962,8 @@ impl Printer {
                     self.pattern(item);
                 }
                 self.push(")");
-            }
-            PatKind::Tensor { items, rest } => {
+            },
+            | PatKind::Tensor { items, rest } => {
                 self.push("[");
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
@@ -934,17 +979,19 @@ impl Printer {
                     self.push(&text);
                 }
                 self.push("]");
-            }
-            PatKind::Lit(lit) => match lit {
-                PatLit::Int(value) => self.push(&value.to_string()),
-                PatLit::Str(text) => {
-                    let quoted = quote(text);
-                    self.push(&quoted);
-                }
-                PatLit::Bool(value) => self.push(if *value { "true" } else { "false" }),
-                PatLit::Unit => self.push("()"),
             },
-            PatKind::As { pattern, name } => {
+            | PatKind::Lit(lit) => {
+                match lit {
+                    | PatLit::Int(value) => self.push(&value.to_string()),
+                    | PatLit::Str(text) => {
+                        let quoted = quote(text);
+                        self.push(&quoted);
+                    },
+                    | PatLit::Bool(value) => self.push(if *value { "true" } else { "false" }),
+                    | PatLit::Unit => self.push("()"),
+                }
+            },
+            | PatKind::As { pattern, name } => {
                 if matches!(pattern.kind, PatKind::As { .. }) {
                     self.push("(");
                     self.pattern(pattern);
@@ -954,47 +1001,51 @@ impl Printer {
                 }
                 let text = format!(" as {name}");
                 self.push(&text);
-            }
-            PatKind::Annot { pattern, ty } => {
+            },
+            | PatKind::Annot { pattern, ty } => {
                 self.push("(");
                 self.pattern(pattern);
                 let rendered = self.ty_text(ty);
                 let text = format!(": {rendered})");
                 self.push(&text);
-            }
+            },
         }
     }
 
     // ----- types ----------------------------------------------------------
 
     /// Prints a type. `atom` asks for a form that `ty_atom` accepts.
-    fn ty(&mut self, ty: &Ty, atom: bool) {
+    fn ty(
+        &mut self,
+        ty: &Ty,
+        atom: bool,
+    ) {
         if self.error.is_some() {
             return;
         }
         match &ty.kind {
-            TyKind::Int => self.push("Int"),
-            TyKind::Bool => self.push("Bool"),
-            TyKind::Prop => self.push("Prop"),
-            TyKind::Str => self.push("String"),
+            | TyKind::Int => self.push("Int"),
+            | TyKind::Bool => self.push("Bool"),
+            | TyKind::Prop => self.push("Prop"),
+            | TyKind::Str => self.push("String"),
             // `Unit` and `()` are the same type; the tree cannot tell them
             // apart, and `Unit` is how the specification writes it in a
             // signature (`fn main(): IO Unit`).
-            TyKind::Unit => self.push("Unit"),
+            | TyKind::Unit => self.push("Unit"),
             // A lowercase type variable (`fn f(x: a): a`): the parser records
             // it as a name, and the printer writes that name back.
-            TyKind::Var(name) => self.push(name),
-            TyKind::Real(dim) => self.numeric("Real", dim),
-            TyKind::Float(dim) => self.numeric("Float", dim),
-            TyKind::Complex(dim) => self.numeric("Complex", dim),
-            TyKind::Tensor { shape, elem } => {
+            | TyKind::Var(name) => self.push(name),
+            | TyKind::Real(dim) => self.numeric("Real", dim),
+            | TyKind::Float(dim) => self.numeric("Float", dim),
+            | TyKind::Complex(dim) => self.numeric("Complex", dim),
+            | TyKind::Tensor { shape, elem } => {
                 self.push("Tensor<");
                 self.shape(shape);
                 self.push(", ");
                 self.ty(elem, false);
                 self.push(">");
-            }
-            TyKind::Matrix { rows, cols, elem } => {
+            },
+            | TyKind::Matrix { rows, cols, elem } => {
                 self.push("Matrix<");
                 self.nat(rows);
                 self.push(", ");
@@ -1002,20 +1053,16 @@ impl Printer {
                 self.push(", ");
                 self.ty(elem, false);
                 self.push(">");
-            }
-            TyKind::Sparse {
-                format,
-                shape,
-                elem,
-            } => {
+            },
+            | TyKind::Sparse { format, shape, elem } => {
                 let head = format!("Sparse<{format}, ");
                 self.push(&head);
                 self.shape(shape);
                 self.push(", ");
                 self.ty(elem, false);
                 self.push(">");
-            }
-            TyKind::Row(items) => {
+            },
+            | TyKind::Row(items) => {
                 // A row sum is only reachable inside `Table<…>`; there is no
                 // parenthesised row production to fall back on.
                 if atom {
@@ -1028,71 +1075,67 @@ impl Printer {
                     }
                     self.ty(item, false);
                 }
-            }
-            TyKind::DimArg(dim) => {
+            },
+            | TyKind::DimArg(dim) => {
                 let text = format!("[{}]", dim.to_source());
                 self.push(&text);
-            }
-            TyKind::NatArg(nat) => self.nat(nat),
-            TyKind::ShapeArg(shape) => self.shape(shape),
-            TyKind::Point(dim) => {
+            },
+            | TyKind::NatArg(nat) => self.nat(nat),
+            | TyKind::ShapeArg(shape) => self.shape(shape),
+            | TyKind::Point(dim) => {
                 let text = format!("Point[{}]", dim.to_source());
                 self.push(&text);
-            }
-            TyKind::UnitOf(dim) => {
+            },
+            | TyKind::UnitOf(dim) => {
                 let text = format!("Unit[{}]", dim.to_source());
                 self.push(&text);
-            }
-            TyKind::Option(inner) => {
+            },
+            | TyKind::Option(inner) => {
                 self.push("Option<");
                 self.ty(inner, false);
                 self.push(">");
-            }
-            TyKind::Set(inner) => {
+            },
+            | TyKind::Set(inner) => {
                 self.push("Set<");
                 self.ty(inner, false);
                 self.push(">");
-            }
-            TyKind::Table(row) => {
+            },
+            | TyKind::Table(row) => {
                 self.push("Table<");
                 self.ty(row, false);
                 self.push(">");
-            }
-            TyKind::Result(ok, err) => {
+            },
+            | TyKind::Result(ok, err) => {
                 self.push("Result<");
                 self.ty(ok, false);
                 self.push(", ");
                 self.ty(err, false);
                 self.push(">");
-            }
-            TyKind::Dyn(rep) => {
+            },
+            | TyKind::Dyn(rep) => {
                 let text = format!("Dyn<{rep}>");
                 self.push(&text);
-            }
-            TyKind::RateOf(inner) => {
+            },
+            | TyKind::RateOf(inner) => {
                 self.push("RateOf<");
                 self.ty(inner, false);
                 self.push(">");
-            }
+            },
             // §8.9.1: the diffusion's dimension is the state's.
-            TyKind::DiffusionOf(inner) => {
+            | TyKind::DiffusionOf(inner) => {
                 self.push("DiffusionOf<");
                 self.ty(inner, false);
                 self.push(">");
-            }
-            TyKind::SymFun(domain, codomain) => {
-                let text = format!(
-                    "SymFun<{}, {}>",
-                    domain.to_source(),
-                    codomain.to_source()
-                );
+            },
+            | TyKind::SymFun(domain, codomain) => {
+                let text = format!("SymFun<{}, {}>", domain.to_source(), codomain.to_source());
                 self.push(&text);
-            }
-            TyKind::Io(inner) => {
+            },
+            | TyKind::Io(inner) => {
                 self.push("IO ");
                 self.ty(inner, true);
-            }
-            TyKind::Fn(args, ret) => {
+            },
+            | TyKind::Fn(args, ret) => {
                 if args.is_empty() {
                     // `() -> t` re-parses as one unit argument, so a zero-argument
                     // function type has no source form to print.
@@ -1122,8 +1165,8 @@ impl Printer {
                 if atom {
                     self.push(")");
                 }
-            }
-            TyKind::Record { fields, rest } => {
+            },
+            | TyKind::Record { fields, rest } => {
                 self.push("{ ");
                 for (index, (name, field)) in fields.iter().enumerate() {
                     if index > 0 {
@@ -1141,8 +1184,8 @@ impl Printer {
                     self.push(&text);
                 }
                 self.push(" }");
-            }
-            TyKind::Tuple(items) => {
+            },
+            | TyKind::Tuple(items) => {
                 self.push("(");
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
@@ -1151,8 +1194,8 @@ impl Printer {
                     self.ty(item, false);
                 }
                 self.push(")");
-            }
-            TyKind::Named { path, args } => {
+            },
+            | TyKind::Named { path, args } => {
                 let name = path.join(".");
                 self.push(&name);
                 // `T[a]` is how the parser records a dimension argument and
@@ -1174,33 +1217,41 @@ impl Printer {
                 }
                 for arg in &args[split..] {
                     match &arg.kind {
-                        TyKind::DimArg(dim) => {
+                        | TyKind::DimArg(dim) => {
                             let text = format!("[{}]", dim.to_source());
                             self.push(&text);
-                        }
-                        _ => self.fail(
-                            "a type argument after a dimension argument has no source form",
-                        ),
+                        },
+                        | _ => {
+                            self.fail(
+                                "a type argument after a dimension argument has no source form",
+                            )
+                        },
                     }
                 }
-            }
-            TyKind::Forall(params, body) => {
+            },
+            | TyKind::Forall(params, body) => {
                 let names = params
                     .iter()
-                    .map(|param| match param.kind {
-                        Some(kind) => format!("{}: {}", param.name, kind.as_str()),
-                        None => param.name.clone(),
+                    .map(|param| {
+                        match param.kind {
+                            | Some(kind) => format!("{}: {}", param.name, kind.as_str()),
+                            | None => param.name.clone(),
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
                 let head = format!("forall {names}. ");
                 self.push(&head);
                 self.ty(body, false);
-            }
+            },
         }
     }
 
-    fn numeric(&mut self, name: &str, dim: &DimAst) {
+    fn numeric(
+        &mut self,
+        name: &str,
+        dim: &DimAst,
+    ) {
         self.push(name);
         if !matches!(dim, DimAst::One) {
             let text = format!("[{}]", dim.to_source());
@@ -1208,30 +1259,36 @@ impl Printer {
         }
     }
 
-    fn shape(&mut self, shape: &ShapeAst) {
+    fn shape(
+        &mut self,
+        shape: &ShapeAst,
+    ) {
         match shape {
-            ShapeAst::Rank(nat) => self.nat(nat),
-            ShapeAst::Refined(items) => {
+            | ShapeAst::Rank(nat) => self.nat(nat),
+            | ShapeAst::Refined(items) => {
                 self.push("[");
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
                         self.push(", ");
                     }
                     match item {
-                        ShapeItem::Known(nat) => self.nat(nat),
-                        ShapeItem::Unknown => self.push("?"),
+                        | ShapeItem::Known(nat) => self.nat(nat),
+                        | ShapeItem::Unknown => self.push("?"),
                     }
                 }
                 self.push("]");
-            }
+            },
         }
     }
 
-    fn nat(&mut self, nat: &NatAst) {
+    fn nat(
+        &mut self,
+        nat: &NatAst,
+    ) {
         match nat {
-            NatAst::Lit(value) => self.push(&value.to_string()),
-            NatAst::Var(name) => self.push(name),
-            NatAst::Add(left, right) => {
+            | NatAst::Lit(value) => self.push(&value.to_string()),
+            | NatAst::Var(name) => self.push(name),
+            | NatAst::Add(left, right) => {
                 if matches!(**right, NatAst::Add(..)) {
                     self.fail("a right-nested `+` in a shape has no source form");
                     return;
@@ -1239,11 +1296,11 @@ impl Printer {
                 self.nat(left);
                 self.push(" + ");
                 self.nat(right);
-            }
+            },
             // `*` binds tighter than `+`, so a sum operand needs brackets.
             // `NatAst` keeps no bracket nodes, but `(a + b) * c` and `a * (b
             // + c)` both re-parse to the same tree the printer writes back.
-            NatAst::Mul(left, right) => {
+            | NatAst::Mul(left, right) => {
                 self.nat_operand(left);
                 self.push(" * ");
                 // A right-nested product would re-parse left-associated, so
@@ -1255,12 +1312,15 @@ impl Printer {
                 } else {
                     self.nat(right);
                 }
-            }
+            },
         }
     }
 
     /// One operand of `*`, bracketed when it is a sum.
-    fn nat_operand(&mut self, nat: &NatAst) {
+    fn nat_operand(
+        &mut self,
+        nat: &NatAst,
+    ) {
         if matches!(nat, NatAst::Add(..)) {
             self.push("(");
             self.nat(nat);
@@ -1275,35 +1335,35 @@ impl Printer {
 /// consumes what follows it.
 fn precedence(kind: &ExprKind) -> (u8, bool) {
     match kind {
-        ExprKind::If { .. }
+        | ExprKind::If { .. }
         | ExprKind::Match { .. }
         | ExprKind::LetIn { .. }
         | ExprKind::Lambda { .. }
         | ExprKind::Do { .. }
         | ExprKind::Block { .. }
         | ExprKind::Annot { .. } => (TAIL, true),
-        ExprKind::Binary { op, .. } => (binary_prec(*op), false),
-        ExprKind::Unary { .. } => (UNARY, false),
-        ExprKind::Call { .. }
+        | ExprKind::Binary { op, .. } => (binary_prec(*op), false),
+        | ExprKind::Unary { .. } => (UNARY, false),
+        | ExprKind::Call { .. }
         | ExprKind::TypeApp { .. }
         | ExprKind::Field { .. }
         | ExprKind::Index { .. }
         | ExprKind::Try(_)
         | ExprKind::Factorial { .. } => (POSTFIX, false),
-        _ => (ATOM, false),
+        | _ => (ATOM, false),
     }
 }
 
 fn binary_prec(op: BinOp) -> u8 {
     match op {
-        BinOp::Pipe | BinOp::PipeBack => PIPE,
-        BinOp::Or => OR,
-        BinOp::And => AND,
-        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => CMP,
-        BinOp::Cons => CONS,
-        BinOp::Add | BinOp::Sub => ADD,
-        BinOp::Mul | BinOp::Div | BinOp::MatMul => MUL,
-        BinOp::Pow => POW,
+        | BinOp::Pipe | BinOp::PipeBack => PIPE,
+        | BinOp::Or => OR,
+        | BinOp::And => AND,
+        | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => CMP,
+        | BinOp::Cons => CONS,
+        | BinOp::Add | BinOp::Sub => ADD,
+        | BinOp::Mul | BinOp::Div | BinOp::MatMul => MUL,
+        | BinOp::Pow => POW,
     }
 }
 
@@ -1313,17 +1373,17 @@ fn is_right_associative(op: BinOp) -> bool {
 
 fn block_stmt_start(stmt: &BlockStmt) -> usize {
     match stmt {
-        BlockStmt::Let { span, .. } => usize::try_from(span.start).unwrap_or(0),
-        BlockStmt::Fn(decl) => usize::try_from(decl.span.start).unwrap_or(0),
+        | BlockStmt::Let { span, .. } => usize::try_from(span.start).unwrap_or(0),
+        | BlockStmt::Fn(decl) => usize::try_from(decl.span.start).unwrap_or(0),
     }
 }
 
 fn do_stmt_start(stmt: &DoStmt) -> usize {
     match stmt {
-        DoStmt::Let { span, .. } | DoStmt::Bind { span, .. } => {
+        | DoStmt::Let { span, .. } | DoStmt::Bind { span, .. } => {
             usize::try_from(span.start).unwrap_or(0)
-        }
-        DoStmt::Expr(expr) => usize::try_from(expr.span.start).unwrap_or(0),
+        },
+        | DoStmt::Expr(expr) => usize::try_from(expr.span.start).unwrap_or(0),
     }
 }
 
@@ -1335,20 +1395,22 @@ pub fn describe_decl(decl: &Decl) -> String {
 
 fn describe(decl: &Decl) -> String {
     match &decl.kind {
-        DeclKind::Import { path, .. } => format!("`import {}`", path.join(".")),
-        DeclKind::Dimension { name, .. } => format!("`dimension {name}`"),
-        DeclKind::Unit { name, .. } => format!("`unit {name}`"),
-        DeclKind::Type { name, .. } => format!("`type {name}`"),
-        DeclKind::Class { name, .. } => format!("`class {name}`"),
-        DeclKind::Instance { class, .. } => format!("`instance {class}`"),
-        DeclKind::Derive { classes, .. } => format!("`derive {}`", classes.join(", ")),
-        DeclKind::Fn { name, .. } => format!("`fn {name}`"),
-        DeclKind::Let { pattern, .. } => match &pattern.kind {
-            PatKind::Var(name) => format!("`let {name}`"),
-            PatKind::Wildcard => "`let _`".to_string(),
-            _ => "a `let`".to_string(),
+        | DeclKind::Import { path, .. } => format!("`import {}`", path.join(".")),
+        | DeclKind::Dimension { name, .. } => format!("`dimension {name}`"),
+        | DeclKind::Unit { name, .. } => format!("`unit {name}`"),
+        | DeclKind::Type { name, .. } => format!("`type {name}`"),
+        | DeclKind::Class { name, .. } => format!("`class {name}`"),
+        | DeclKind::Instance { class, .. } => format!("`instance {class}`"),
+        | DeclKind::Derive { classes, .. } => format!("`derive {}`", classes.join(", ")),
+        | DeclKind::Fn { name, .. } => format!("`fn {name}`"),
+        | DeclKind::Let { pattern, .. } => {
+            match &pattern.kind {
+                | PatKind::Var(name) => format!("`let {name}`"),
+                | PatKind::Wildcard => "`let _`".to_string(),
+                | _ => "a `let`".to_string(),
+            }
         },
-        DeclKind::Test { name, .. } => format!("`test {name}`"),
+        | DeclKind::Test { name, .. } => format!("`test {name}`"),
     }
 }
 
@@ -1358,9 +1420,11 @@ fn type_params(params: &[TypeParam]) -> String {
     }
     let inner = params
         .iter()
-        .map(|param| match param.kind {
-            Some(kind) => format!("{}: {}", param.name, kind.as_str()),
-            None => param.name.clone(),
+        .map(|param| {
+            match param.kind {
+                | Some(kind) => format!("{}: {}", param.name, kind.as_str()),
+                | None => param.name.clone(),
+            }
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -1368,28 +1432,35 @@ fn type_params(params: &[TypeParam]) -> String {
 }
 
 /// Renders a unit scale as source: `1000`, `1/1000`, `pi/180`.
-fn scale_into(out: &mut String, scale: &aevia_dim::Scale) -> bool {
+fn scale_into(
+    out: &mut String,
+    scale: &aevia_dim::Scale,
+) -> bool {
     use num_traits::One;
     let numer = scale.rat.numer();
     let denom = scale.rat.denom();
     let negative_one = -numer.clone();
     match scale.pi {
-        0 => {
+        | 0 => {
             if denom.is_one() {
                 let _ = write!(out, "{numer}");
             } else {
                 let _ = write!(out, "{numer}/{denom}");
             }
             true
-        }
-        1 if numer.is_one() || negative_one.is_one() => {
-            out.push_str(if numer.is_one() { "pi" } else { "-pi" });
+        },
+        | 1 if numer.is_one() || negative_one.is_one() => {
+            out.push_str(if numer.is_one() {
+                "pi"
+            } else {
+                "-pi"
+            });
             if !denom.is_one() {
                 let _ = write!(out, "/{denom}");
             }
             true
-        }
-        _ => false,
+        },
+        | _ => false,
     }
 }
 
@@ -1399,18 +1470,18 @@ pub fn escape(text: &str) -> String {
     let mut out = String::new();
     for c in text.chars() {
         match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '{' => out.push_str("\\{"),
-            '}' => out.push_str("\\}"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            '\0' => out.push_str("\\0"),
-            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+            | '\\' => out.push_str("\\\\"),
+            | '"' => out.push_str("\\\""),
+            | '{' => out.push_str("\\{"),
+            | '}' => out.push_str("\\}"),
+            | '\n' => out.push_str("\\n"),
+            | '\t' => out.push_str("\\t"),
+            | '\r' => out.push_str("\\r"),
+            | '\0' => out.push_str("\\0"),
+            | c if (c as u32) < 0x20 || c == '\u{7f}' => {
                 let _ = write!(out, "\\u{{{:x}}}", c as u32);
-            }
-            c => out.push(c),
+            },
+            | c => out.push(c),
         }
     }
     out

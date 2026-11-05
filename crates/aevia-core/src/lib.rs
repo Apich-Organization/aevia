@@ -2,7 +2,8 @@
 //! built-in functions.
 //!
 //! ```
-//! use aevia_core::{compile, Interp};
+//! use aevia_core::Interp;
+//! use aevia_core::compile;
 //!
 //! let source = "let g = 9.80665 m/s^2\nlet h = 20.0 m\nlet t = sqrt(2 * h / g)\n";
 //! let compilation = compile("test.aev", source);
@@ -25,22 +26,32 @@
 )]
 
 pub mod builtins;
+pub mod driver;
 pub mod eval;
 pub mod eval_ir;
-pub mod driver;
 pub mod kernel;
 pub mod manifest;
 pub mod rssn_module;
 pub mod sym;
 pub mod value;
 
-use aevia_syntax::{lex, parse_module, Diagnostic, Diagnostics, Module, SourceMap};
-use aevia_types::check::check_module;
+use aevia_syntax::Diagnostic;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::Module;
+use aevia_syntax::SourceMap;
+use aevia_syntax::lex;
+use aevia_syntax::parse_module;
 use aevia_types::CheckedModule;
+use aevia_types::check::check_module;
 use std::rc::Rc;
-use value::{Closure, Scope, Value};
+use value::Closure;
+use value::Scope;
+use value::Value;
 
-pub use eval::{EvalError, Interp, Mode, Output};
+pub use eval::EvalError;
+pub use eval::Interp;
+pub use eval::Mode;
+pub use eval::Output;
 pub use value::show;
 
 /// The result of compiling one file.
@@ -57,20 +68,23 @@ pub struct Compilation {
 
 /// Lexes, parses and checks a source file.
 #[must_use]
-pub fn compile(name: &str, source: &str) -> Compilation {
+pub fn compile(
+    name: &str,
+    source: &str,
+) -> Compilation {
     let mut sources = SourceMap::new();
     let file = sources.add(name, source);
     let mut diagnostics = Diagnostics::new();
     let lexed = match lex(file, source) {
-        Ok(lexed) => lexed,
-        Err(errors) => {
+        | Ok(lexed) => lexed,
+        | Err(errors) => {
             return Compilation {
                 module: None,
                 checked: CheckedModule::default(),
                 diagnostics: errors,
                 sources,
             };
-        }
+        },
     };
     let (module, parse_diagnostics) = parse_module(file, source, &lexed);
     diagnostics.extend(parse_diagnostics);
@@ -104,8 +118,8 @@ impl Interp {
         let mut diagnostics = Diagnostics::new();
         for registration in &self.registrations {
             let kind = match registration.kind {
-                aevia_types::check::HostRegistrationKind::Op => "op",
-                aevia_types::check::HostRegistrationKind::Rule => "rule",
+                | aevia_types::check::HostRegistrationKind::Op => "op",
+                | aevia_types::check::HostRegistrationKind::Rule => "rule",
             };
             diagnostics.push(Diagnostic::error(
                 "E1001",
@@ -125,7 +139,10 @@ impl Interp {
     /// Returns the diagnostics raised while initialising the module; they are
     /// returned rather than printed so the caller can render them with source
     /// context.
-    pub fn load(&mut self, module: &Module) -> Diagnostics {
+    pub fn load(
+        &mut self,
+        module: &Module,
+    ) -> Diagnostics {
         let mut diagnostics = self.publish_registrations();
         let root = Scope::root();
         diagnostics.extend(self.load_into(module, &root));
@@ -143,7 +160,11 @@ impl Interp {
     ///
     /// Each module gets its own scope, so two modules may both define a
     /// private helper without one shadowing the other.
-    pub fn load_qualified(&mut self, module: &Module, path: &[String]) -> Diagnostics {
+    pub fn load_qualified(
+        &mut self,
+        module: &Module,
+        path: &[String],
+    ) -> Diagnostics {
         let mut diagnostics = self.publish_registrations();
         let scope = Scope::child(&Scope::root());
         diagnostics.extend(self.load_into(module, &scope));
@@ -166,24 +187,29 @@ impl Interp {
     }
 
     /// Evaluates a module's declarations into one scope.
-    fn load_into(&mut self, module: &Module, root: &Rc<Scope>) -> Diagnostics {
+    fn load_into(
+        &mut self,
+        module: &Module,
+        root: &Rc<Scope>,
+    ) -> Diagnostics {
         match self.mode {
-            Mode::Ast => self.load_into_ast(module, root),
-            Mode::Ir => self.load_into_ir(module, root),
+            | Mode::Ast => self.load_into_ast(module, root),
+            | Mode::Ir => self.load_into_ir(module, root),
         }
     }
 
     /// Initialises a module by walking the typed AST.
-    fn load_into_ast(&mut self, module: &Module, root: &Rc<Scope>) -> Diagnostics {
+    fn load_into_ast(
+        &mut self,
+        module: &Module,
+        root: &Rc<Scope>,
+    ) -> Diagnostics {
         let mut diagnostics = Diagnostics::new();
         let root = root.clone();
         // Functions first: they are values, and §7.1.2 lets them refer to any
         // top-level name of their module.
         for decl in &module.decls {
-            if let aevia_syntax::DeclKind::Fn {
-                name, args, body, ..
-            } = &decl.kind
-            {
+            if let aevia_syntax::DeclKind::Fn { name, args, body, .. } = &decl.kind {
                 let closure = Value::Closure(Rc::new(Closure::ast(
                     args.iter().map(|arg| arg.pattern.clone()).collect(),
                     body.clone(),
@@ -197,12 +223,7 @@ impl Interp {
         // before the declaration is seen (§7.1.2). They are bound under the
         // mangled global the checker names them with (§3.8.1).
         for decl in &module.decls {
-            if let aevia_syntax::DeclKind::Instance {
-                class,
-                ty,
-                methods,
-            } = &decl.kind
-            {
+            if let aevia_syntax::DeclKind::Instance { class, ty, methods } = &decl.kind {
                 let export = self.take_instance_export();
                 for method in methods {
                     self.register_instance(class, ty, export.as_ref(), method, &root);
@@ -232,21 +253,21 @@ impl Interp {
                     continue;
                 };
                 match self.eval(value, &root) {
-                    Ok(bound) => {
+                    | Ok(bound) => {
                         progress = true;
                         if let aevia_syntax::PatKind::Var(name) = &pattern.kind {
                             root.vars.borrow_mut().insert(name.clone(), bound);
                         } else if let Err(error) = self.bind_public(pattern, &bound, &root) {
                             diagnostics.push(error.diagnostic());
                         }
-                    }
+                    },
                     // A name that is not bound yet may be bound by a later
                     // declaration; anything else is a real failure.
-                    Err(error) if error.code == "E0301" => deferred.push((index, error)),
-                    Err(error) => {
+                    | Err(error) if error.code == "E0301" => deferred.push((index, error)),
+                    | Err(error) => {
                         progress = true;
                         diagnostics.push(error.diagnostic());
-                    }
+                    },
                 }
             }
             if deferred.is_empty() {
@@ -269,7 +290,11 @@ impl Interp {
     /// it (§7.1.2): `fn`s first so they can refer to each other and to any
     /// top-level name, then instance methods, then the `let`s in passes, so a
     /// forward reference is deferred rather than reported.
-    fn load_into_ir(&mut self, module: &Module, root: &Rc<Scope>) -> Diagnostics {
+    fn load_into_ir(
+        &mut self,
+        module: &Module,
+        root: &Rc<Scope>,
+    ) -> Diagnostics {
         let mut diagnostics = Diagnostics::new();
         let lowered = aevia_ir::lower::lower_module_with_literals(
             module,
@@ -303,7 +328,7 @@ impl Interp {
             for index in pending {
                 let decl = &lowered.lets[index];
                 match crate::eval_ir::eval_top(self, &decl.block, decl.nslots, &root) {
-                    Ok(bound) => {
+                    | Ok(bound) => {
                         progress = true;
                         if let aevia_syntax::PatKind::Var(name) = &decl.pattern.kind {
                             root.vars.borrow_mut().insert(name.clone(), bound);
@@ -312,12 +337,12 @@ impl Interp {
                         {
                             diagnostics.push(error.diagnostic());
                         }
-                    }
-                    Err(error) if error.code == "E0301" => deferred.push((index, error)),
-                    Err(error) => {
+                    },
+                    | Err(error) if error.code == "E0301" => deferred.push((index, error)),
+                    | Err(error) => {
                         progress = true;
                         diagnostics.push(error.diagnostic());
-                    }
+                    },
                 }
             }
             if deferred.is_empty() {
@@ -356,12 +381,13 @@ impl Interp {
             )
         });
         let name = match &key {
-            Some(key) => Interp::instance_global(key, method),
-            None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
+            | Some(key) => Interp::instance_global(key, method),
+            | None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
         };
         let closure = crate::eval_ir::module_closure(function, env);
         self.globals.insert(name.clone(), closure);
-        self.method_classes.insert(method.to_string(), class.to_string());
+        self.method_classes
+            .insert(method.to_string(), class.to_string());
         self.instance_methods
             .entry(format!("{class}::{method}"))
             .or_default()
@@ -379,7 +405,10 @@ impl Interp {
     /// # Errors
     ///
     /// Returns an error when the name is unknown.
-    pub fn eval_toplevel(&mut self, name: &str) -> Result<Value, EvalError> {
+    pub fn eval_toplevel(
+        &mut self,
+        name: &str,
+    ) -> Result<Value, EvalError> {
         self.globals
             .get(name)
             .cloned()
@@ -396,8 +425,12 @@ impl Interp {
     /// # Errors
     ///
     /// Propagates the declaration's own runtime failure.
-    pub fn load_decl(&mut self, decl: &aevia_syntax::Decl) -> Result<(), EvalError> {
-        use aevia_syntax::{DeclKind, PatKind};
+    pub fn load_decl(
+        &mut self,
+        decl: &aevia_syntax::Decl,
+    ) -> Result<(), EvalError> {
+        use aevia_syntax::DeclKind;
+        use aevia_syntax::PatKind;
         if self.mode == Mode::Ir {
             if let Some(lowered) = aevia_ir::lower::lower_decl_with_literals(
                 decl,
@@ -410,9 +443,7 @@ impl Interp {
         }
         let root = self.root();
         match &decl.kind {
-            DeclKind::Fn {
-                name, args, body, ..
-            } => {
+            | DeclKind::Fn { name, args, body, .. } => {
                 let closure = Value::Closure(Rc::new(Closure::ast(
                     args.iter().map(|arg| arg.pattern.clone()).collect(),
                     body.clone(),
@@ -421,8 +452,8 @@ impl Interp {
                 )));
                 self.globals.insert(name.clone(), closure);
                 Ok(())
-            }
-            DeclKind::Let { pattern, value, .. } => {
+            },
+            | DeclKind::Let { pattern, value, .. } => {
                 let bound = self.eval(value, &root)?;
                 if let PatKind::Var(name) = &pattern.kind {
                     self.globals.insert(name.clone(), bound);
@@ -433,33 +464,32 @@ impl Interp {
                     self.globals.insert(name.clone(), value.clone());
                 }
                 Ok(())
-            }
-            DeclKind::Instance {
-                class,
-                ty,
-                methods,
-            } => {
+            },
+            | DeclKind::Instance { class, ty, methods } => {
                 let export = self.take_instance_export();
                 for method in methods {
                     self.register_instance(class, ty, export.as_ref(), method, &root);
                 }
                 Ok(())
-            }
-            _ => Ok(()),
+            },
+            | _ => Ok(()),
         }
     }
 
     /// Adds one declaration that was lowered to the Core IR (§9.8).
-    fn load_lowered(&mut self, decl: aevia_ir::lower::LoweredDecl) -> Result<(), EvalError> {
+    fn load_lowered(
+        &mut self,
+        decl: aevia_ir::lower::LoweredDecl,
+    ) -> Result<(), EvalError> {
         use aevia_syntax::PatKind;
         let root = self.root();
         match decl {
-            aevia_ir::lower::LoweredDecl::Fn(decl) => {
+            | aevia_ir::lower::LoweredDecl::Fn(decl) => {
                 let closure = crate::eval_ir::module_closure(&decl.function, &root);
                 self.globals.insert(decl.name, closure);
                 Ok(())
-            }
-            aevia_ir::lower::LoweredDecl::Let(decl) => {
+            },
+            | aevia_ir::lower::LoweredDecl::Let(decl) => {
                 let bound = crate::eval_ir::eval_top(self, &decl.block, decl.nslots, &root)?;
                 if let PatKind::Var(name) = &decl.pattern.kind {
                     self.globals.insert(name.clone(), bound);
@@ -470,8 +500,8 @@ impl Interp {
                     self.globals.insert(name.clone(), value.clone());
                 }
                 Ok(())
-            }
-            aevia_ir::lower::LoweredDecl::Instance(instance) => {
+            },
+            | aevia_ir::lower::LoweredDecl::Instance(instance) => {
                 let export = self.take_instance_export();
                 for method in &instance.methods {
                     self.register_instance_function(
@@ -484,7 +514,7 @@ impl Interp {
                     );
                 }
                 Ok(())
-            }
+            },
         }
     }
 
@@ -498,26 +528,30 @@ impl Interp {
             return Ok(None);
         };
         let value = match main {
-            Value::Io(action) => return self.run_io(&action).map(Some),
-            Value::Closure(closure) if closure.arity() == 0 => self.apply(
-                Value::Closure(closure),
-                Vec::new(),
-                aevia_syntax::Span::default(),
-            )?,
-            other => other,
+            | Value::Io(action) => return self.run_io(&action).map(Some),
+            | Value::Closure(closure) if closure.arity() == 0 => {
+                self.apply(
+                    Value::Closure(closure),
+                    Vec::new(),
+                    aevia_syntax::Span::default(),
+                )?
+            },
+            | other => other,
         };
         match value {
-            Value::Io(action) => self.run_io(&action).map(Some),
+            | Value::Io(action) => self.run_io(&action).map(Some),
             // §6.8.1: `main` describes an action. A `Result` payload that
             // escaped a `?` is not one, and reporting it as success made
             // `fn main(): IO Unit = do let x = parse_int("abc")? …` exit 0
             // without running a single statement.
-            Value::Unit => Ok(Some(Value::Unit)),
-            Value::Variant(_) => Err(EvalError::new(
-                "E0702",
-                "`?` in `main` tried to return an error from a function that does not                  return a `Result`",
-            )),
-            other => Ok(Some(other)),
+            | Value::Unit => Ok(Some(Value::Unit)),
+            | Value::Variant(_) => {
+                Err(EvalError::new(
+                    "E0702",
+                    "`?` in `main` tried to return an error from a function that does not                  return a `Result`",
+                ))
+            },
+            | other => Ok(Some(other)),
         }
     }
 
@@ -537,7 +571,11 @@ impl Interp {
 /// different constructors even though both are spelled `Circle`; the runtime
 /// must take the id from the defining module rather than the name-keyed global
 /// registry.
-fn bind_module_constructors(interp: &Interp, module: &Module, root: &Rc<Scope>) {
+fn bind_module_constructors(
+    interp: &Interp,
+    module: &Module,
+    root: &Rc<Scope>,
+) {
     for decl in &module.decls {
         let aevia_syntax::DeclKind::Type {
             body: aevia_syntax::ast::TypeBody::Variants(ctors),
@@ -560,13 +598,13 @@ pub fn top_level_names(module: &Module) -> Vec<String> {
     let mut names = Vec::new();
     for decl in &module.decls {
         match &decl.kind {
-            aevia_syntax::DeclKind::Fn { name, .. } => names.push(name.clone()),
-            aevia_syntax::DeclKind::Let { pattern, .. } => {
+            | aevia_syntax::DeclKind::Fn { name, .. } => names.push(name.clone()),
+            | aevia_syntax::DeclKind::Let { pattern, .. } => {
                 if let aevia_syntax::PatKind::Var(name) = &pattern.kind {
                     names.push(name.clone());
                 }
-            }
-            _ => {}
+            },
+            | _ => {},
         }
     }
     names
@@ -578,7 +616,10 @@ pub fn top_level_names(module: &Module) -> Vec<String> {
 ///
 /// Returns the first diagnostic when the program does not compile, or the
 /// runtime error when `main` fails.
-pub fn run(source: &str, name: &str) -> Result<String, Diagnostic> {
+pub fn run(
+    source: &str,
+    name: &str,
+) -> Result<String, Diagnostic> {
     let compilation = compile(name, source);
     if compilation.diagnostics.has_errors() {
         return Err(compilation.diagnostics.items[0].clone());

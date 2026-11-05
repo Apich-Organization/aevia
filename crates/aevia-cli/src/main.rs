@@ -19,12 +19,25 @@ mod doctest;
 mod package;
 mod tooling;
 
-use aevia_core::driver::{self, Program};
+use aevia_core::Interp;
+use aevia_core::Output;
+use aevia_core::compile;
+use aevia_core::driver::Program;
+use aevia_core::driver::{
+    self,
+};
 use aevia_core::manifest::Package;
-use aevia_core::{compile, Interp, Output};
-use aevia_syntax::{DeclKind, Diagnostics, Style};
-use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use aevia_syntax::DeclKind;
+use aevia_syntax::Diagnostics;
+use aevia_syntax::Style;
+use std::io::BufRead;
+use std::io::IsTerminal;
+use std::io::Write;
+use std::io::{
+    self,
+};
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// The options that apply to every command.
@@ -106,8 +119,8 @@ impl Options {
         while index < args.len() {
             let arg = args[index].clone();
             let (name, inline) = match arg.split_once('=') {
-                Some((name, value)) => (name.to_string(), Some(value.to_string())),
-                None => (arg.clone(), None),
+                | Some((name, value)) => (name.to_string(), Some(value.to_string())),
+                | None => (arg.clone(), None),
             };
             let take = |what: &str, index: &mut usize| -> Result<String, String> {
                 if let Some(value) = inline.clone() {
@@ -119,7 +132,7 @@ impl Options {
                     .ok_or_else(|| format!("`{what}` expects a value"))
             };
             match name.as_str() {
-                "--max-stack" => {
+                | "--max-stack" => {
                     let raw = take("--max-stack", &mut index)?;
                     options.max_stack_mb = raw.parse().map_err(|_| {
                         format!("`--max-stack` expects a number of MiB, found `{raw}`")
@@ -127,29 +140,29 @@ impl Options {
                     if options.max_stack_mb == 0 {
                         return Err("`--max-stack` must be at least 1 MiB".to_string());
                     }
-                }
-                "--color" => {
+                },
+                | "--color" => {
                     let raw = take("--color", &mut index)?;
                     options.color = match raw.as_str() {
-                        "auto" => ColorChoice::Auto,
-                        "always" => ColorChoice::Always,
-                        "never" => ColorChoice::Never,
-                        other => {
+                        | "auto" => ColorChoice::Auto,
+                        | "always" => ColorChoice::Always,
+                        | "never" => ColorChoice::Never,
+                        | other => {
                             return Err(format!(
                                 "`--color` expects auto, always or never, found `{other}`"
                             ));
-                        }
+                        },
                     };
-                }
-                "--budget" => {
+                },
+                | "--budget" => {
                     let raw = take("--budget", &mut index)?;
                     options.budget = Some(raw.parse().map_err(|_| {
                         format!("`--budget` expects a number of tail calls, found `{raw}`")
                     })?);
-                }
-                "--release" => options.release = true,
-                "--locked" => options.locked = true,
-                "--jobs" => {
+                },
+                | "--release" => options.release = true,
+                | "--locked" => options.locked = true,
+                | "--jobs" => {
                     let raw = take("--jobs", &mut index)?;
                     let jobs: usize = raw.parse().map_err(|_| {
                         format!("`--jobs` expects a number of threads, found `{raw}`")
@@ -158,8 +171,8 @@ impl Options {
                         return Err("`--jobs` must be at least 1".to_string());
                     }
                     options.jobs = Some(jobs);
-                }
-                _ => rest.push(arg),
+                },
+                | _ => rest.push(arg),
             }
             index += 1;
         }
@@ -170,11 +183,11 @@ impl Options {
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let (options, args) = match Options::parse(&raw) {
-        Ok(parsed) => parsed,
-        Err(message) => {
+        | Ok(parsed) => parsed,
+        | Err(message) => {
             eprintln!("aevia: {message}");
             return ExitCode::from(2);
-        }
+        },
     };
     let stack = options.max_stack_mb.saturating_mul(1024 * 1024);
     // A dedicated thread also turns an exhausted stack into a normal `E0805`
@@ -184,33 +197,43 @@ fn main() -> ExitCode {
         .stack_size(stack)
         .spawn(move || run_cli(options, args));
     match worker {
-        Ok(handle) => handle.join().unwrap_or_else(|_| ExitCode::from(101)),
-        Err(error) => {
+        | Ok(handle) => handle.join().unwrap_or_else(|_| ExitCode::from(101)),
+        | Err(error) => {
             eprintln!("aevia: cannot start the interpreter thread: {error}");
             ExitCode::from(101)
-        }
+        },
     }
 }
 
 /// The rendering style the options ask for.
 fn style(options: Options) -> Style {
     let ansi = match options.color {
-        ColorChoice::Always => true,
-        ColorChoice::Never => false,
+        | ColorChoice::Always => true,
+        | ColorChoice::Never => false,
         // A pipe or a file gets no escape sequences.
-        ColorChoice::Auto => std::io::stderr().is_terminal(),
+        | ColorChoice::Auto => std::io::stderr().is_terminal(),
     };
-    if ansi { Style::Ansi } else { Style::Plain }
+    if ansi {
+        Style::Ansi
+    } else {
+        Style::Plain
+    }
 }
 
 /// Applies the command-line options to an interpreter.
-fn apply_options(interp: &mut Interp, options: Options) {
+fn apply_options(
+    interp: &mut Interp,
+    options: Options,
+) {
     if let Some(budget) = options.budget {
         interp.max_tail_calls = budget;
     }
 }
 
-fn run_cli(options: Options, args: Vec<String>) -> ExitCode {
+fn run_cli(
+    options: Options,
+    args: Vec<String>,
+) -> ExitCode {
     for note in options.notes() {
         eprintln!("aevia: note: {note}");
     }
@@ -220,32 +243,32 @@ fn run_cli(options: Options, args: Vec<String>) -> ExitCode {
         }
     }
     match args.first().map(String::as_str) {
-        Some("run") => run_command(options, &args[1..]),
-        Some("check") => check_command(options, &args[1..]),
-        Some("test") => test_command(options, &args[1..]),
-        Some("repl") => repl(options),
-        Some("fmt") => tooling::fmt(options, &args[1..]),
-        Some("doc") => tooling::doc(options, &args[1..]),
-        Some("bench") => tooling::bench(options, &args[1..]),
-        Some("clean") => package::clean(&args[1..]),
-        Some("lsp") => lsp_command(&args[1..]),
-        Some("init") => package::init(&args[1..]),
-        Some("add") => package::add(&args[1..], options.locked),
-        Some("update") => package::update(&args[1..], options.locked),
-        Some("rssn") => rssn_command(&args[1..]),
-        Some("--version" | "-V") => {
+        | Some("run") => run_command(options, &args[1..]),
+        | Some("check") => check_command(options, &args[1..]),
+        | Some("test") => test_command(options, &args[1..]),
+        | Some("repl") => repl(options),
+        | Some("fmt") => tooling::fmt(options, &args[1..]),
+        | Some("doc") => tooling::doc(options, &args[1..]),
+        | Some("bench") => tooling::bench(options, &args[1..]),
+        | Some("clean") => package::clean(&args[1..]),
+        | Some("lsp") => lsp_command(&args[1..]),
+        | Some("init") => package::init(&args[1..]),
+        | Some("add") => package::add(&args[1..], options.locked),
+        | Some("update") => package::update(&args[1..], options.locked),
+        | Some("rssn") => rssn_command(&args[1..]),
+        | Some("--version" | "-V") => {
             println!("aevia {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
-        }
-        Some("--help" | "-h") | None => {
+        },
+        | Some("--help" | "-h") | None => {
             help();
             ExitCode::SUCCESS
-        }
-        Some(other) => {
+        },
+        | Some(other) => {
             eprintln!("aevia: unknown command `{other}`");
             help();
             ExitCode::from(2)
-        }
+        },
     }
 }
 
@@ -256,18 +279,18 @@ fn run_cli(options: Options, args: Vec<String>) -> ExitCode {
 /// their own handling because they are the commands that would write the lock.
 fn locked_precheck(args: &[String]) -> Result<(), ExitCode> {
     match args.first().map(String::as_str) {
-        Some("run" | "check" | "test" | "fmt" | "doc" | "bench") => verify_lock(),
+        | Some("run" | "check" | "test" | "fmt" | "doc" | "bench") => verify_lock(),
         // They handle `--locked` themselves: they may legitimately decide
         // whether a change is allowed.
-        Some("update" | "add") => Ok(()),
-        Some(other) => {
+        | Some("update" | "add") => Ok(()),
+        | Some(other) => {
             eprintln!("aevia: `--locked` is not meaningful for `{other}`");
             Err(ExitCode::from(2))
-        }
-        None => {
+        },
+        | None => {
             eprintln!("aevia: `--locked` needs a command that reads a package");
             Err(ExitCode::from(2))
-        }
+        },
     }
 }
 
@@ -275,27 +298,27 @@ fn locked_precheck(args: &[String]) -> Result<(), ExitCode> {
 fn verify_lock() -> Result<(), ExitCode> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let package = match Package::find(&cwd) {
-        Ok(Some(package)) => package,
-        Ok(None) => {
+        | Ok(Some(package)) => package,
+        | Ok(None) => {
             eprintln!(
                 "aevia: `--locked` needs an `aevia.toml` in `{}` or any parent to read a lock \
                  file from",
                 cwd.display()
             );
             return Err(ExitCode::from(2));
-        }
-        Err(error) => {
+        },
+        | Err(error) => {
             eprintln!("aevia: `--locked`: {}", error.render());
             return Err(ExitCode::from(1));
-        }
+        },
     };
     let lock_path = package.dir.join("aevia.lock");
     let resolved = match package.resolve() {
-        Ok(lock) => lock,
-        Err(error) => {
+        | Ok(lock) => lock,
+        | Err(error) => {
             eprintln!("aevia: `--locked`: {}", error.render());
             return Err(ExitCode::from(1));
-        }
+        },
     };
     let expected = resolved.render();
     let on_disk = std::fs::read_to_string(&lock_path).ok();
@@ -319,8 +342,8 @@ fn lsp_command(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     match aevia_lsp::serve_stdio() {
-        aevia_lsp::Exit::Graceful => ExitCode::SUCCESS,
-        aevia_lsp::Exit::Ungraceful => ExitCode::from(1),
+        | aevia_lsp::Exit::Graceful => ExitCode::SUCCESS,
+        | aevia_lsp::Exit::Ungraceful => ExitCode::from(1),
     }
 }
 
@@ -389,8 +412,11 @@ known gaps (each command says so rather than pretending):
     );
 }
 
-
-fn report(diagnostics: &Diagnostics, sources: &aevia_syntax::SourceMap, style: Style) -> bool {
+fn report(
+    diagnostics: &Diagnostics,
+    sources: &aevia_syntax::SourceMap,
+    style: Style,
+) -> bool {
     if diagnostics.is_empty() {
         return false;
     }
@@ -401,7 +427,10 @@ fn report(diagnostics: &Diagnostics, sources: &aevia_syntax::SourceMap, style: S
 /// The file a command works on: the argument, or the package's entry.
 ///
 /// §9.9 writes `aevia run [file]`, so inside a package the file is optional.
-fn entry_path(args: &[String], command: &str) -> Result<PathBuf, ExitCode> {
+fn entry_path(
+    args: &[String],
+    command: &str,
+) -> Result<PathBuf, ExitCode> {
     if let Some(first) = args.first() {
         if first.starts_with('-') {
             eprintln!("aevia {command}: unknown option `{first}`");
@@ -421,19 +450,19 @@ fn entry_path(args: &[String], command: &str) -> Result<PathBuf, ExitCode> {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match Package::find(&cwd) {
-        Ok(Some(package)) => Ok(package.entry_path()),
-        Ok(None) => {
+        | Ok(Some(package)) => Ok(package.entry_path()),
+        | Ok(None) => {
             eprintln!(
                 "aevia {command}: expected a file (there is no `aevia.toml` in `{}` or any parent \
                  to take the entry from)",
                 cwd.display()
             );
             Err(ExitCode::from(2))
-        }
-        Err(error) => {
+        },
+        | Err(error) => {
             eprintln!("aevia {command}: {}", error.render());
             Err(ExitCode::from(1))
-        }
+        },
     }
 }
 
@@ -444,12 +473,14 @@ fn entry_path(args: &[String], command: &str) -> Result<PathBuf, ExitCode> {
 /// reads `examples/modules/Geometry/Shapes.aev`.
 fn load_at(path: &Path) -> Program {
     match Package::owning(path) {
-        Ok(Some(package)) => match package.roots() {
-            Ok(roots) => driver::load_with_roots(path, roots),
-            Err(error) => manifest_failure(&error),
+        | Ok(Some(package)) => {
+            match package.roots() {
+                | Ok(roots) => driver::load_with_roots(path, roots),
+                | Err(error) => manifest_failure(&error),
+            }
         },
-        Ok(None) => driver::load(path),
-        Err(error) => manifest_failure(&error),
+        | Ok(None) => driver::load(path),
+        | Err(error) => manifest_failure(&error),
     }
 }
 
@@ -467,7 +498,10 @@ fn manifest_failure(error: &aevia_core::manifest::ManifestError) -> Program {
     }
 }
 
-fn run_command(options: Options, args: &[String]) -> ExitCode {
+fn run_command(
+    options: Options,
+    args: &[String],
+) -> ExitCode {
     // §9.9: `aevia run [file] [-- args…]`. Everything after `--` belongs to
     // the program; without `--` an extra positional is a mistake, not an
     // argument, because the runtime cannot know which the user meant.
@@ -482,29 +516,29 @@ fn run_command(options: Options, args: &[String]) -> ExitCode {
             break;
         }
         match argument {
-            "--example" => {
+            | "--example" => {
                 index += 1;
                 let Some(name) = args.get(index) else {
                     eprintln!("aevia run: `--example` expects an example name");
                     return ExitCode::from(2);
                 };
                 example = Some(name.clone());
-            }
-            other if other.starts_with('-') => {
+            },
+            | other if other.starts_with('-') => {
                 eprintln!(
                     "aevia run: unknown option `{other}` (the options are `--example NAME`; \
                      program arguments go after `--`)"
                 );
                 return ExitCode::from(2);
-            }
-            other if file.is_none() => file = Some(other.to_string()),
-            other => {
+            },
+            | other if file.is_none() => file = Some(other.to_string()),
+            | other => {
                 eprintln!(
                     "aevia run: unexpected argument `{other}`; program arguments go after `--`, \
                      as in `aevia run file.aev -- {other}`"
                 );
                 return ExitCode::from(2);
-            }
+            },
         }
         index += 1;
     }
@@ -514,19 +548,19 @@ fn run_command(options: Options, args: &[String]) -> ExitCode {
     }
     let path = if let Some(name) = example {
         match example_path(&name) {
-            Ok(path) => path,
-            Err(code) => return code,
+            | Ok(path) => path,
+            | Err(code) => return code,
         }
     } else {
         let files: Vec<String> = file.into_iter().collect();
         match entry_path(&files, "run") {
-            Ok(path) => path,
-            Err(code) => return code,
+            | Ok(path) => path,
+            | Err(code) => return code,
         }
     };
     let program = match load_program(&path, style(options)) {
-        Ok(program) => program,
-        Err(code) => return code,
+        | Ok(program) => program,
+        | Err(code) => return code,
     };
     if report(&program.diagnostics, &program.sources, style(options)) {
         return ExitCode::from(1);
@@ -545,17 +579,17 @@ fn run_command(options: Options, args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
     match interp.run_main() {
-        Ok(Some(_)) => ExitCode::SUCCESS,
-        Ok(None) => {
+        | Ok(Some(_)) => ExitCode::SUCCESS,
+        | Ok(None) => {
             eprintln!("aevia: this program has no `main`");
             ExitCode::from(1)
-        }
-        Err(error) => {
+        },
+        | Err(error) => {
             let mut diagnostics = Diagnostics::new();
             diagnostics.push(error.diagnostic());
             report(&diagnostics, &program.sources, style(options));
             ExitCode::from(1)
-        }
+        },
     }
 }
 
@@ -566,10 +600,7 @@ fn run_command(options: Options, args: &[String]) -> ExitCode {
 /// example lists the ones that exist, so a typo is fixable without `ls`.
 fn example_path(name: &str) -> Result<PathBuf, ExitCode> {
     let stem = name.strip_suffix(".aev").unwrap_or(name);
-    if stem.is_empty()
-        || stem.contains(['/', '\\'])
-        || stem.contains("..")
-        || stem.starts_with('.')
+    if stem.is_empty() || stem.contains(['/', '\\']) || stem.contains("..") || stem.starts_with('.')
     {
         eprintln!(
             "aevia run: `{name}` is not an example name; examples live directly in \
@@ -579,12 +610,12 @@ fn example_path(name: &str) -> Result<PathBuf, ExitCode> {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let base = match Package::find(&cwd) {
-        Ok(Some(package)) => package.dir.join("examples"),
-        Ok(None) => cwd.join("examples"),
-        Err(error) => {
+        | Ok(Some(package)) => package.dir.join("examples"),
+        | Ok(None) => cwd.join("examples"),
+        | Err(error) => {
             eprintln!("aevia run: {}", error.render());
             return Err(ExitCode::from(1));
-        }
+        },
     };
     let path = base.join(format!("{stem}.aev"));
     if path.is_file() {
@@ -597,7 +628,8 @@ fn example_path(name: &str) -> Result<PathBuf, ExitCode> {
                 .filter_map(|entry| {
                     let path = entry.path();
                     if path.extension().is_some_and(|extension| extension == "aev") {
-                        path.file_stem().map(|stem| stem.to_string_lossy().to_string())
+                        path.file_stem()
+                            .map(|stem| stem.to_string_lossy().to_string())
                     } else {
                         None
                     }
@@ -622,7 +654,10 @@ fn example_path(name: &str) -> Result<PathBuf, ExitCode> {
 }
 
 /// Loads a program and reports the diagnostics that stop it.
-fn load_program(path: &Path, style: Style) -> Result<Program, ExitCode> {
+fn load_program(
+    path: &Path,
+    style: Style,
+) -> Result<Program, ExitCode> {
     let program = load_at(path);
     if program.modules.is_empty() && program.diagnostics.has_errors() {
         report(&program.diagnostics, &program.sources, style);
@@ -631,7 +666,10 @@ fn load_program(path: &Path, style: Style) -> Result<Program, ExitCode> {
     Ok(program)
 }
 
-fn check_command(options: Options, args: &[String]) -> ExitCode {
+fn check_command(
+    options: Options,
+    args: &[String],
+) -> ExitCode {
     let all = args.iter().any(|argument| argument == "--all");
     let files: Vec<String> = args
         .iter()
@@ -657,8 +695,8 @@ fn check_command(options: Options, args: &[String]) -> ExitCode {
         return check_files(options, &files);
     }
     let path = match entry_path(&files, "check") {
-        Ok(path) => path,
-        Err(code) => return code,
+        | Ok(path) => path,
+        | Err(code) => return code,
     };
     let program = load_at(&path);
     if report(&program.diagnostics, &program.sources, style(options)) {
@@ -675,7 +713,10 @@ fn check_command(options: Options, args: &[String]) -> ExitCode {
 }
 
 /// `aevia check <file>…`: one file per argument, each checked on its own.
-fn check_files(options: Options, files: &[String]) -> ExitCode {
+fn check_files(
+    options: Options,
+    files: &[String],
+) -> ExitCode {
     let mut failed = 0usize;
     for name in files {
         let path = PathBuf::from(name);
@@ -699,7 +740,10 @@ fn check_files(options: Options, files: &[String]) -> ExitCode {
 /// `check` with no `--all` checks what the entry reaches. A module that
 /// nothing imports is still part of the package (§7.5.3), and `--all` is the
 /// command that checks it.
-fn check_all(options: Options, files: &[String]) -> ExitCode {
+fn check_all(
+    options: Options,
+    files: &[String],
+) -> ExitCode {
     if let Some(extra) = files.first() {
         eprintln!(
             "aevia check: `--all` checks every module of the package, so it takes no file \
@@ -709,18 +753,18 @@ fn check_all(options: Options, files: &[String]) -> ExitCode {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let package = match Package::find(&cwd) {
-        Ok(Some(package)) => package,
-        Ok(None) => {
+        | Ok(Some(package)) => package,
+        | Ok(None) => {
             eprintln!(
                 "aevia check: `--all` needs an `aevia.toml` in `{}` or any parent",
                 cwd.display()
             );
             return ExitCode::from(2);
-        }
-        Err(error) => {
+        },
+        | Err(error) => {
             eprintln!("aevia check: {}", error.render());
             return ExitCode::from(1);
-        }
+        },
     };
     let paths = package::sources_under(&package.source_dir());
     if paths.is_empty() {
@@ -731,19 +775,16 @@ fn check_all(options: Options, files: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
     let roots = match package.roots() {
-        Ok(roots) => roots,
-        Err(error) => {
+        | Ok(roots) => roots,
+        | Err(error) => {
             eprintln!("aevia check: {}", error.render());
             return ExitCode::from(1);
-        }
+        },
     };
     // One loader for every entry: a module shared by several entries is parsed
     // and checked once, not once per entry.
-    let (program, stats) = driver::load_all_with_roots(
-        &paths,
-        roots,
-        &aevia_types::check::CheckOptions::default(),
-    );
+    let (program, stats) =
+        driver::load_all_with_roots(&paths, roots, &aevia_types::check::CheckOptions::default());
     // The loader names each source by the path it was asked for, so each entry
     // maps to the file id its diagnostics carry.
     let mut ids: std::collections::HashMap<String, aevia_syntax::FileId> =
@@ -797,31 +838,34 @@ fn check_all(options: Options, files: &[String]) -> ExitCode {
     }
 }
 
-fn test_command(options: Options, args: &[String]) -> ExitCode {
+fn test_command(
+    options: Options,
+    args: &[String],
+) -> ExitCode {
     let mut filter: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
     let mut doc = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--filter" => {
+            | "--filter" => {
                 index += 1;
                 let Some(value) = args.get(index) else {
                     eprintln!("aevia test: `--filter` expects a pattern");
                     return ExitCode::from(2);
                 };
                 filter = Some(value.clone());
-            }
+            },
             // §7.5.5/§9.12: compile the ```aevia blocks of the `##` docs.
-            "--doc" => doc = true,
-            other if other.starts_with('-') => {
+            | "--doc" => doc = true,
+            | other if other.starts_with('-') => {
                 eprintln!(
                     "aevia test: unknown option `{other}` (the options are `--filter PAT` and \
                      `--doc`)"
                 );
                 return ExitCode::from(2);
-            }
-            other => files.push(other.to_string()),
+            },
+            | other => files.push(other.to_string()),
         }
         index += 1;
     }
@@ -829,12 +873,12 @@ fn test_command(options: Options, args: &[String]) -> ExitCode {
         return doctest::run(options, &files, filter.as_deref());
     }
     let path = match entry_path(&files, "test") {
-        Ok(path) => path,
-        Err(code) => return code,
+        | Ok(path) => path,
+        | Err(code) => return code,
     };
     let program = match load_program(&path, style(options)) {
-        Ok(program) => program,
-        Err(code) => return code,
+        | Ok(program) => program,
+        | Err(code) => return code,
     };
     if report(&program.diagnostics, &program.sources, style(options)) {
         return ExitCode::from(1);
@@ -862,21 +906,21 @@ fn test_command(options: Options, args: &[String]) -> ExitCode {
             }
             matched += 1;
             match interp.eval(body, &root) {
-                Ok(aevia_core::value::Value::Bool(true)) => {
+                | Ok(aevia_core::value::Value::Bool(true)) => {
                     println!("test {name} ... ok");
                     passed += 1;
-                }
-                Ok(other) => {
+                },
+                | Ok(other) => {
                     println!(
                         "test {name} ... FAILED (returned {})",
                         aevia_core::value::show(&other)
                     );
                     failed += 1;
-                }
-                Err(error) => {
+                },
+                | Err(error) => {
                     println!("test {name} ... FAILED ({})", error.message);
                     failed += 1;
-                }
+                },
             }
         }
     }
@@ -911,7 +955,7 @@ fn rssn_command(args: &[String]) -> ExitCode {
             // `--emit` is a flag; §9.9 calls the destination `--out`. The old
             // `--emit DIR` spelling still works, because a directory after
             // `--emit` can only have been the destination.
-            "--emit" => {
+            | "--emit" => {
                 emit = true;
                 if let Some(next) = args.get(index + 1) {
                     if !next.starts_with('-') {
@@ -920,23 +964,23 @@ fn rssn_command(args: &[String]) -> ExitCode {
                     }
                 }
                 index += 1;
-            }
-            "--out" => {
+            },
+            | "--out" => {
                 let Some(path) = args.get(index + 1) else {
                     eprintln!("aevia rssn: `--out` needs a directory");
                     return ExitCode::from(2);
                 };
                 out = Some(path.clone());
                 index += 2;
-            }
-            "--audit" => {
+            },
+            | "--audit" => {
                 audit = true;
                 index += 1;
-            }
-            other => {
+            },
+            | other => {
                 eprintln!("aevia rssn: unknown argument `{other}`");
                 return ExitCode::from(2);
-            }
+            },
         }
     }
     if out.is_some() && !emit {
@@ -965,10 +1009,10 @@ fn rssn_command(args: &[String]) -> ExitCode {
     let mut none = 0;
     for op in &ops {
         match op.source {
-            aevia_rssn::Source::Declared => declared += 1,
-            aevia_rssn::Source::Overlay => overlay += 1,
-            aevia_rssn::Source::Derived => derived += 1,
-            aevia_rssn::Source::None => none += 1,
+            | aevia_rssn::Source::Declared => declared += 1,
+            | aevia_rssn::Source::Overlay => overlay += 1,
+            | aevia_rssn::Source::Derived => derived += 1,
+            | aevia_rssn::Source::None => none += 1,
         }
     }
     println!("operators: {}", ops.len());
@@ -1004,11 +1048,11 @@ fn rssn_command(args: &[String]) -> ExitCode {
         for (name, text) in aevia_rssn::codegen::files(registry) {
             let path = std::path::Path::new(&directory).join(name);
             match std::fs::write(&path, text) {
-                Ok(()) => println!("wrote {}", path.display()),
-                Err(error) => {
+                | Ok(()) => println!("wrote {}", path.display()),
+                | Err(error) => {
                     eprintln!("aevia rssn: cannot write `{}`: {error}", path.display());
                     return ExitCode::from(1);
-                }
+                },
             }
         }
     }
@@ -1051,7 +1095,10 @@ impl Session {
     /// `limit` is the number of declarations to load; an expression line
     /// compiles as `… let __repl = <expr>`, and that synthetic declaration is
     /// evaluated by [`Session::evaluate`] instead of being loaded.
-    fn sync(&mut self, compilation: &aevia_core::Compilation) -> Result<(), String> {
+    fn sync(
+        &mut self,
+        compilation: &aevia_core::Compilation,
+    ) -> Result<(), String> {
         self.sync_to(compilation, usize::MAX)
     }
 
@@ -1063,13 +1110,11 @@ impl Session {
         let Some(module) = &compilation.module else {
             return Ok(());
         };
-        let interp = self
-            .interp
-            .get_or_insert_with(|| {
-                let mut interp = Interp::new(&compilation.checked);
-                apply_options(&mut interp, self.options);
-                interp
-            });
+        let interp = self.interp.get_or_insert_with(|| {
+            let mut interp = Interp::new(&compilation.checked);
+            apply_options(&mut interp, self.options);
+            interp
+        });
         // A later line may declare a unit or a dimension.
         interp.units = compilation.checked.units.clone();
         interp.dims = compilation.checked.dims.clone();
@@ -1101,7 +1146,9 @@ impl Session {
         self.sync_to(compilation, declarations)?;
         let interp = self.interp.as_mut().ok_or("no session")?;
         let root = interp.root();
-        interp.eval(expression, &root).map_err(|error| error.message)
+        interp
+            .eval(expression, &root)
+            .map_err(|error| error.message)
     }
 }
 
@@ -1123,8 +1170,8 @@ fn repl(options: Options) -> ExitCode {
         }
         if let Some(command) = trimmed.strip_prefix(':') {
             match handle_repl_command(command, &mut session) {
-                ReplControl::Continue => continue,
-                ReplControl::Quit => return ExitCode::SUCCESS,
+                | ReplControl::Continue => continue,
+                | ReplControl::Quit => return ExitCode::SUCCESS,
             }
         }
         // A block opened with `=`/`do`/`where`/`with` is one input: read
@@ -1144,11 +1191,11 @@ fn repl(options: Options) -> ExitCode {
                 print!("  ");
                 let _ = io::stdout().flush();
                 match lines.next() {
-                    Some(Ok(next)) => {
+                    | Some(Ok(next)) => {
                         input.push('\n');
                         input.push_str(&next);
-                    }
-                    _ => break,
+                    },
+                    | _ => break,
                 }
             }
         }
@@ -1183,14 +1230,16 @@ fn repl(options: Options) -> ExitCode {
                 .checked
                 .exports
                 .get("__repl")
-                .map(|export| match export {
-                    aevia_types::Export::Value { scheme, .. } => scheme.ty.to_string(),
-                    _ => String::new(),
+                .map(|export| {
+                    match export {
+                        | aevia_types::Export::Value { scheme, .. } => scheme.ty.to_string(),
+                        | _ => String::new(),
+                    }
                 })
                 .unwrap_or_default();
             match session.evaluate(&compilation, value) {
-                Ok(value) => println!("{ty} = {}", aevia_core::value::show(&value)),
-                Err(message) => eprintln!("{message}"),
+                | Ok(value) => println!("{ty} = {}", aevia_core::value::show(&value)),
+                | Err(message) => eprintln!("{message}"),
             }
         }
     }
@@ -1201,17 +1250,20 @@ enum ReplControl {
     Quit,
 }
 
-fn handle_repl_command(command: &str, session: &mut Session) -> ReplControl {
+fn handle_repl_command(
+    command: &str,
+    session: &mut Session,
+) -> ReplControl {
     let mut parts = command.splitn(2, ' ');
     let name = parts.next().unwrap_or("");
     let argument = parts.next().unwrap_or("").trim();
     match name {
-        "quit" | "q" => return ReplControl::Quit,
-        "reset" => {
+        | "quit" | "q" => return ReplControl::Quit,
+        | "reset" => {
             session.reset();
             println!("session cleared");
-        }
-        "help" => {
+        },
+        | "help" => {
             println!(
                 ":type <expr>   show the type of an expression
 :dims          list the base dimensions
@@ -1224,14 +1276,14 @@ fn handle_repl_command(command: &str, session: &mut Session) -> ReplControl {
 :reset         clear the session
 :quit          exit"
             );
-        }
-        "dims" => {
+        },
+        | "dims" => {
             let env = aevia_dim::DimEnv::si();
             for base in env.base_names() {
                 println!("{base}");
             }
-        }
-        "units" => {
+        },
+        | "units" => {
             let table = aevia_rssn::unit_table();
             let filter = if argument.is_empty() {
                 None
@@ -1243,8 +1295,8 @@ fn handle_repl_command(command: &str, session: &mut Session) -> ReplControl {
                     println!("{} ({})", unit.display, unit.dim.to_plain_string());
                 }
             }
-        }
-        "type" => {
+        },
+        | "type" => {
             // A builtin has a scheme, not just an instantiation; show it as
             // written in the standard library.
             if let Some(first) = aevia_types::builtins::schemes(argument)
@@ -1270,47 +1322,60 @@ fn handle_repl_command(command: &str, session: &mut Session) -> ReplControl {
             {
                 println!("{}", scheme.ty);
             }
-        }
+        },
         // The three inspection commands parse or type-check the expression but
         // never evaluate it, so they leave the session exactly as it was.
-        "ast" => match repl_ast(argument) {
-            Ok(text) => println!("{text}"),
-            Err(message) => eprintln!("{message}"),
-        },
-        "core" => match repl_core(session, argument) {
-            Ok(text) => println!("{text}"),
-            Err(message) => eprintln!("{message}"),
-        },
-        "time" => match repl_time(session, argument) {
-            Ok(text) => println!("{text}"),
-            Err(message) => eprintln!("{message}"),
-        },
-        "latex" => match repl_latex(session, argument) {
-            Ok(text) => println!("{text}"),
-            Err(message) => eprintln!("{message}"),
-        },
-        "load" => match std::fs::read_to_string(argument) {
-            Ok(text) => {
-                let candidate = format!("{}{text}\n", session.declarations);
-                let compilation = compile(argument, &candidate);
-                if compilation.diagnostics.has_errors() {
-                    eprint!("{}", compilation.diagnostics.render(&compilation.sources));
-                } else if let Err(message) = session.sync(&compilation) {
-                    eprintln!("{message}");
-                } else {
-                    session.declarations = candidate;
-                    println!("loaded {argument}");
-                }
+        | "ast" => {
+            match repl_ast(argument) {
+                | Ok(text) => println!("{text}"),
+                | Err(message) => eprintln!("{message}"),
             }
-            Err(error) => eprintln!("cannot read `{argument}`: {error}"),
         },
-        other => eprintln!("unknown command `:{other}`"),
+        | "core" => {
+            match repl_core(session, argument) {
+                | Ok(text) => println!("{text}"),
+                | Err(message) => eprintln!("{message}"),
+            }
+        },
+        | "time" => {
+            match repl_time(session, argument) {
+                | Ok(text) => println!("{text}"),
+                | Err(message) => eprintln!("{message}"),
+            }
+        },
+        | "latex" => {
+            match repl_latex(session, argument) {
+                | Ok(text) => println!("{text}"),
+                | Err(message) => eprintln!("{message}"),
+            }
+        },
+        | "load" => {
+            match std::fs::read_to_string(argument) {
+                | Ok(text) => {
+                    let candidate = format!("{}{text}\n", session.declarations);
+                    let compilation = compile(argument, &candidate);
+                    if compilation.diagnostics.has_errors() {
+                        eprint!("{}", compilation.diagnostics.render(&compilation.sources));
+                    } else if let Err(message) = session.sync(&compilation) {
+                        eprintln!("{message}");
+                    } else {
+                        session.declarations = candidate;
+                        println!("loaded {argument}");
+                    }
+                },
+                | Err(error) => eprintln!("cannot read `{argument}`: {error}"),
+            }
+        },
+        | other => eprintln!("unknown command `:{other}`"),
     }
     ReplControl::Continue
 }
 
 /// The text the REPL prints for a message, with the trailing newline removed.
-fn rendered(diagnostics: &aevia_syntax::Diagnostics, sources: &aevia_syntax::SourceMap) -> String {
+fn rendered(
+    diagnostics: &aevia_syntax::Diagnostics,
+    sources: &aevia_syntax::SourceMap,
+) -> String {
     diagnostics.render(sources).trim_end().to_string()
 }
 
@@ -1352,7 +1417,10 @@ fn repl_ast(expression: &str) -> Result<String, String> {
 /// The lowering is `aevia_ir`'s, with the checker's pinned `Rssn` overloads and
 /// class instances — this is the same Core IR the interpreter would run, not a
 /// second rendering of the AST.
-fn repl_core(session: &Session, expression: &str) -> Result<String, String> {
+fn repl_core(
+    session: &Session,
+    expression: &str,
+) -> Result<String, String> {
     if expression.is_empty() {
         return Err("`:core` expects an expression, as in `:core f(1) + 2`".to_string());
     }
@@ -1376,7 +1444,10 @@ fn repl_core(session: &Session, expression: &str) -> Result<String, String> {
 /// One evaluation, so the number is what the user's expression costs; the
 /// value is printed first because a timing without the result it timed is not
 /// reproducible.
-fn repl_time(session: &mut Session, expression: &str) -> Result<String, String> {
+fn repl_time(
+    session: &mut Session,
+    expression: &str,
+) -> Result<String, String> {
     if expression.is_empty() {
         return Err("`:time` expects an expression, as in `:time simplify(x^2)`".to_string());
     }
@@ -1393,14 +1464,19 @@ fn repl_time(session: &mut Session, expression: &str) -> Result<String, String> 
     let interp = session.interp.as_mut().ok_or("no session")?;
     let root = interp.root();
     let start = std::time::Instant::now();
-    let value = interp.eval(&expression, &root).map_err(|error| error.message)?;
+    let value = interp
+        .eval(&expression, &root)
+        .map_err(|error| error.message)?;
     let elapsed = start.elapsed();
     let shown = aevia_core::value::show(&value);
     Ok(format!("{shown}\ntime: {}", repl_duration(elapsed)))
 }
 
 /// `:latex e` — evaluate `e` and render the value with `to_latex`'s engine.
-fn repl_latex(session: &mut Session, expression: &str) -> Result<String, String> {
+fn repl_latex(
+    session: &mut Session,
+    expression: &str,
+) -> Result<String, String> {
     if expression.is_empty() {
         return Err("`:latex` expects an expression, as in `:latex sqrt(2 * h / g)`".to_string());
     }
@@ -1416,7 +1492,10 @@ fn compile_repl_expression(
     label: &str,
     expression: &str,
 ) -> Result<aevia_core::Compilation, String> {
-    let candidate = format!("{}let __repl_{label} = {expression}\n", session.declarations);
+    let candidate = format!(
+        "{}let __repl_{label} = {expression}\n",
+        session.declarations
+    );
     let compilation = compile("<repl>", &candidate);
     if compilation.diagnostics.has_errors() {
         return Err(rendered(&compilation.diagnostics, &compilation.sources));
@@ -1426,7 +1505,7 @@ fn compile_repl_expression(
 
 /// The synthetic expression declaration of a REPL compilation.
 fn repl_expression<'a>(
-    compilation: &'a aevia_core::Compilation,
+    compilation: &'a aevia_core::Compilation
 ) -> Result<&'a aevia_syntax::Expr, String> {
     let module = compilation
         .module
@@ -1434,8 +1513,8 @@ fn repl_expression<'a>(
         .ok_or("the expression did not parse")?;
     let decl = module.decls.last().ok_or("the expression did not parse")?;
     match &decl.kind {
-        DeclKind::Let { value, .. } => Ok(value),
-        _ => Err("the expression did not parse".to_string()),
+        | DeclKind::Let { value, .. } => Ok(value),
+        | _ => Err("the expression did not parse".to_string()),
     }
 }
 
@@ -1482,51 +1561,59 @@ impl AstNode {
 /// Brackets are not in the AST (§9.2.1), so the tree is the precedence-resolved
 /// shape: `(1 + 2) * 3` renders with `*` at the root.
 fn ast_node(expr: &aevia_syntax::Expr) -> AstNode {
-    use aevia_syntax::ast::{BlockStmt, DoStmt, ExprKind, SliceAst, StrPiece};
+    use aevia_syntax::ast::BlockStmt;
+    use aevia_syntax::ast::DoStmt;
+    use aevia_syntax::ast::ExprKind;
+    use aevia_syntax::ast::SliceAst;
+    use aevia_syntax::ast::StrPiece;
     let node = |label: String, children: Vec<AstNode>| AstNode { label, children };
     match &expr.kind {
-        ExprKind::UnitLit => AstNode::leaf("UnitLit".to_string()),
-        ExprKind::Error => AstNode::leaf("Error".to_string()),
-        ExprKind::Bool(value) => AstNode::leaf(format!("Bool {value}")),
-        ExprKind::Int(value) => AstNode::leaf(format!("Int {value}")),
-        ExprKind::Float(text) => AstNode::leaf(format!("Float {text}")),
-        ExprKind::Str(pieces) => node(
-            "Str".to_string(),
-            pieces
-                .iter()
-                .filter_map(|piece| match piece {
-                    StrPiece::Expr(inner) => Some(ast_node(inner)),
-                    StrPiece::Text(_) => None,
-                })
-                .collect(),
-        ),
-        ExprKind::Quantity { value, unit } => {
+        | ExprKind::UnitLit => AstNode::leaf("UnitLit".to_string()),
+        | ExprKind::Error => AstNode::leaf("Error".to_string()),
+        | ExprKind::Bool(value) => AstNode::leaf(format!("Bool {value}")),
+        | ExprKind::Int(value) => AstNode::leaf(format!("Int {value}")),
+        | ExprKind::Float(text) => AstNode::leaf(format!("Float {text}")),
+        | ExprKind::Str(pieces) => {
+            node(
+                "Str".to_string(),
+                pieces
+                    .iter()
+                    .filter_map(|piece| {
+                        match piece {
+                            | StrPiece::Expr(inner) => Some(ast_node(inner)),
+                            | StrPiece::Text(_) => None,
+                        }
+                    })
+                    .collect(),
+            )
+        },
+        | ExprKind::Quantity { value, unit } => {
             let coefficient = match value {
-                aevia_syntax::ast::NumberLit::Int(value) => value.to_string(),
-                aevia_syntax::ast::NumberLit::Decimal(text) => text.clone(),
+                | aevia_syntax::ast::NumberLit::Int(value) => value.to_string(),
+                | aevia_syntax::ast::NumberLit::Decimal(text) => text.clone(),
             };
             AstNode::leaf(format!("Quantity {coefficient} {}", unit.to_source()))
-        }
-        ExprKind::Var(name) => AstNode::leaf(format!("Var {name}")),
-        ExprKind::QName(path) => AstNode::leaf(format!("QName {}", path.join("."))),
-        ExprKind::Unary { op, operand } => {
-            node(format!("Unary {op:?}"), vec![ast_node(operand)])
-        }
-        ExprKind::Binary { op, left, right } => node(
-            format!("Binary {}", op.as_str()),
-            vec![ast_node(left), ast_node(right)],
-        ),
-        ExprKind::Call { callee, args } => {
+        },
+        | ExprKind::Var(name) => AstNode::leaf(format!("Var {name}")),
+        | ExprKind::QName(path) => AstNode::leaf(format!("QName {}", path.join("."))),
+        | ExprKind::Unary { op, operand } => node(format!("Unary {op:?}"), vec![ast_node(operand)]),
+        | ExprKind::Binary { op, left, right } => {
+            node(
+                format!("Binary {}", op.as_str()),
+                vec![ast_node(left), ast_node(right)],
+            )
+        },
+        | ExprKind::Call { callee, args } => {
             let mut children = vec![ast_node(callee)];
             children.extend(args.iter().map(ast_node));
             node("Call".to_string(), children)
-        }
-        ExprKind::TypeApp { callee, args } => {
+        },
+        | ExprKind::TypeApp { callee, args } => {
             let mut children = vec![ast_node(callee)];
             children.extend(args.iter().map(ty_node));
             node("TypeApp".to_string(), children)
-        }
-        ExprKind::Lambda { params, ret, body } => {
+        },
+        | ExprKind::Lambda { params, ret, body } => {
             let mut children: Vec<AstNode> = params
                 .iter()
                 .map(|param| {
@@ -1542,20 +1629,18 @@ fn ast_node(expr: &aevia_syntax::Expr) -> AstNode {
             }
             children.push(ast_node(body));
             node("Lambda".to_string(), children)
-        }
-        ExprKind::If {
+        },
+        | ExprKind::If {
             cond,
             then_branch,
             else_branch,
-        } => node(
-            "If".to_string(),
-            vec![
-                ast_node(cond),
-                ast_node(then_branch),
-                ast_node(else_branch),
-            ],
-        ),
-        ExprKind::Match { scrutinee, arms } => {
+        } => {
+            node(
+                "If".to_string(),
+                vec![ast_node(cond), ast_node(then_branch), ast_node(else_branch)],
+            )
+        },
+        | ExprKind::Match { scrutinee, arms } => {
             let mut children = vec![ast_node(scrutinee)];
             for arm in arms {
                 let mut arm_node = AstNode::leaf(format!("arm {:?}", arm.pattern.kind));
@@ -1566,8 +1651,8 @@ fn ast_node(expr: &aevia_syntax::Expr) -> AstNode {
                 children.push(arm_node);
             }
             node("Match".to_string(), children)
-        }
-        ExprKind::LetIn {
+        },
+        | ExprKind::LetIn {
             pattern,
             ty,
             value,
@@ -1580,55 +1665,51 @@ fn ast_node(expr: &aevia_syntax::Expr) -> AstNode {
             children.push(AstNode::leaf(format!("bind {:?}", pattern.kind)));
             children.push(ast_node(body));
             node("LetIn".to_string(), children)
-        }
-        ExprKind::Block { stmts, tail } => {
+        },
+        | ExprKind::Block { stmts, tail } => {
             let mut children = Vec::new();
             for stmt in stmts {
                 match stmt {
-                    BlockStmt::Let {
-                        pattern,
-                        ty,
-                        value,
-                        ..
+                    | BlockStmt::Let {
+                        pattern, ty, value, ..
                     } => {
-                        let mut stmt_node =
-                            AstNode::leaf(format!("let {:?}", pattern.kind));
+                        let mut stmt_node = AstNode::leaf(format!("let {:?}", pattern.kind));
                         if let Some(ty) = ty {
                             stmt_node.children.push(ty_node(ty));
                         }
                         stmt_node.children.push(ast_node(value));
                         children.push(stmt_node);
-                    }
-                    BlockStmt::Fn(decl) => {
+                    },
+                    | BlockStmt::Fn(decl) => {
                         children.push(AstNode::leaf(format!("fn {}", decl_name(decl))));
-                    }
+                    },
                 }
             }
             if let Some(tail) = tail {
                 children.push(ast_node(tail));
             }
             node("Block".to_string(), children)
-        }
-        ExprKind::Do { stmts } => {
+        },
+        | ExprKind::Do { stmts } => {
             let mut children = Vec::new();
             for stmt in stmts {
                 match stmt {
-                    DoStmt::Let { pattern, value, .. } => {
+                    | DoStmt::Let { pattern, value, .. } => {
                         let mut stmt_node = AstNode::leaf(format!("let {:?}", pattern.kind));
                         stmt_node.children.push(ast_node(value));
                         children.push(stmt_node);
-                    }
-                    DoStmt::Bind { pattern, value, .. } => {
+                    },
+                    | DoStmt::Bind { pattern, value, .. } => {
                         let mut stmt_node = AstNode::leaf(format!("bind {:?}", pattern.kind));
                         stmt_node.children.push(ast_node(value));
                         children.push(stmt_node);
-                    }
-                    DoStmt::Expr(inner) => children.push(ast_node(inner)),
+                    },
+                    | DoStmt::Expr(inner) => children.push(ast_node(inner)),
                 }
             }
             node("Do".to_string(), children)
-        }
-        ExprKind::Record { base, fields } => {
+        },
+        | ExprKind::Record { base, fields } => {
             let mut children: Vec<AstNode> = base.iter().map(|base| ast_node(base)).collect();
             children.extend(fields.iter().map(|(name, value)| {
                 let mut field = AstNode::leaf(format!("field {name}"));
@@ -1636,49 +1717,48 @@ fn ast_node(expr: &aevia_syntax::Expr) -> AstNode {
                 field
             }));
             node("Record".to_string(), children)
-        }
-        ExprKind::Field { base, name } => {
-            node(format!("Field .{name}"), vec![ast_node(base)])
-        }
-        ExprKind::Tuple(items) => node("Tuple".to_string(), items.iter().map(ast_node).collect()),
-        ExprKind::Tensor(items) => {
+        },
+        | ExprKind::Field { base, name } => node(format!("Field .{name}"), vec![ast_node(base)]),
+        | ExprKind::Tuple(items) => node("Tuple".to_string(), items.iter().map(ast_node).collect()),
+        | ExprKind::Tensor(items) => {
             node("Tensor".to_string(), items.iter().map(ast_node).collect())
-        }
-        ExprKind::Index { base, indices } => {
+        },
+        | ExprKind::Index { base, indices } => {
             let mut children = vec![ast_node(base)];
             for index in indices {
                 match index {
-                    SliceAst::Index(inner) => children.push(ast_node(inner)),
-                    SliceAst::Range {
+                    | SliceAst::Index(inner) => children.push(ast_node(inner)),
+                    | SliceAst::Range {
                         start,
                         end,
                         inclusive,
                         step,
                     } => {
-                        let mut range =
-                            AstNode::leaf(format!("range inclusive={inclusive}"));
+                        let mut range = AstNode::leaf(format!("range inclusive={inclusive}"));
                         for part in [start, end, step].into_iter().flatten() {
                             range.children.push(ast_node(part));
                         }
                         children.push(range);
-                    }
+                    },
                 }
             }
             node("Index".to_string(), children)
-        }
-        ExprKind::Annot { expr, ty } => {
+        },
+        | ExprKind::Annot { expr, ty } => {
             node("Annot".to_string(), vec![ast_node(expr), ty_node(ty)])
-        }
-        ExprKind::Placeholder => AstNode::leaf("Placeholder".to_string()),
-        ExprKind::Try(inner) => node("Try".to_string(), vec![ast_node(inner)]),
-        ExprKind::Factorial { expr, double } => node(
-            if *double {
-                "Factorial !!".to_string()
-            } else {
-                "Factorial !".to_string()
-            },
-            vec![ast_node(expr)],
-        ),
+        },
+        | ExprKind::Placeholder => AstNode::leaf("Placeholder".to_string()),
+        | ExprKind::Try(inner) => node("Try".to_string(), vec![ast_node(inner)]),
+        | ExprKind::Factorial { expr, double } => {
+            node(
+                if *double {
+                    "Factorial !!".to_string()
+                } else {
+                    "Factorial !".to_string()
+                },
+                vec![ast_node(expr)],
+            )
+        },
     }
 }
 
@@ -1696,17 +1776,22 @@ fn type_source(ty: &aevia_syntax::ast::Ty) -> String {
 
 fn decl_name(decl: &aevia_syntax::ast::Decl) -> String {
     match &decl.kind {
-        DeclKind::Fn { name, .. }
+        | DeclKind::Fn { name, .. }
         | DeclKind::Type { name, .. }
         | DeclKind::Class { name, .. }
         | DeclKind::Dimension { name, .. }
         | DeclKind::Unit { name, .. } => name.clone(),
-        _ => "<declaration>".to_string(),
+        | _ => "<declaration>".to_string(),
     }
 }
 
 /// Renders one AST node and its subtree.
-fn print_ast(node: &AstNode, prefix: &str, last: bool, out: &mut String) {
+fn print_ast(
+    node: &AstNode,
+    prefix: &str,
+    last: bool,
+    out: &mut String,
+) {
     out.push_str(prefix);
     out.push_str(if last { "└─ " } else { "├─ " });
     out.push_str(&node.label);
@@ -1717,7 +1802,6 @@ fn print_ast(node: &AstNode, prefix: &str, last: bool, out: &mut String) {
         print_ast(child, &child_prefix, index + 1 == count, out);
     }
 }
-
 
 fn needs_continuation(input: &str) -> bool {
     let trimmed = input.trim_end();
@@ -1745,10 +1829,10 @@ fn needs_continuation(input: &str) -> bool {
             }
         } else {
             match c {
-                '"' => in_string = true,
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' => depth -= 1,
-                _ => {}
+                | '"' => in_string = true,
+                | '(' | '[' | '{' => depth += 1,
+                | ')' | ']' | '}' => depth -= 1,
+                | _ => {},
             }
         }
         previous = c;
@@ -1761,7 +1845,10 @@ fn needs_continuation(input: &str) -> bool {
 /// The REPL has to read a whole block before compiling it. Two things say the
 /// block is not finished: the next line is more indented than the first, or
 /// it is a `match` arm of an input that starts with `match`.
-fn continues_block(input: &str, next: Option<&str>) -> bool {
+fn continues_block(
+    input: &str,
+    next: Option<&str>,
+) -> bool {
     let Some(next) = next else {
         return false;
     };
@@ -1812,11 +1899,13 @@ mod tests {
     fn options_are_taken_from_anywhere_on_the_line() {
         // Both spellings have to work: a user who puts the flag after the
         // command is not making a mistake.
-        let (before, rest) = Options::parse(&args(&["--budget", "10", "run", "a.aev"])).expect("parses");
+        let (before, rest) =
+            Options::parse(&args(&["--budget", "10", "run", "a.aev"])).expect("parses");
         assert_eq!(before.budget, Some(10));
         assert_eq!(rest, args(&["run", "a.aev"]));
 
-        let (after, rest) = Options::parse(&args(&["run", "--budget=10", "a.aev"])).expect("parses");
+        let (after, rest) =
+            Options::parse(&args(&["run", "--budget=10", "a.aev"])).expect("parses");
         assert_eq!(after.budget, Some(10));
         assert_eq!(rest, args(&["run", "a.aev"]));
     }
@@ -1841,7 +1930,10 @@ mod tests {
     }
 
     /// Feeds declaration lines into one session, as the REPL does.
-    fn declare(session: &mut Session, line: &str) {
+    fn declare(
+        session: &mut Session,
+        line: &str,
+    ) {
         let candidate = format!("{}{line}\n", session.declarations);
         let compilation = compile("<repl>", &candidate);
         assert!(
@@ -1859,7 +1951,10 @@ mod tests {
     }
 
     /// Evaluates one expression line in the session.
-    fn evaluate(session: &mut Session, line: &str) -> String {
+    fn evaluate(
+        session: &mut Session,
+        line: &str,
+    ) -> String {
         let candidate = format!("{}let __repl = {line}\n", session.declarations);
         let compilation = compile("<repl>", &candidate);
         assert!(
@@ -1911,14 +2006,9 @@ mod tests {
 
     #[test]
     fn the_ineffective_flags_are_parsed_and_reported() {
-        let (options, rest) = Options::parse(&args(&[
-            "--release",
-            "--jobs",
-            "4",
-            "--locked",
-            "check",
-        ]))
-        .expect("parses");
+        let (options, rest) =
+            Options::parse(&args(&["--release", "--jobs", "4", "--locked", "check"]))
+                .expect("parses");
         assert!(options.release);
         assert_eq!(options.jobs, Some(4));
         assert!(options.locked);
@@ -1993,11 +2083,17 @@ mod tests {
     #[test]
     fn the_latex_command_renders_the_value() {
         let mut session = Session::new(Options::default());
-        assert_eq!(repl_latex(&mut session, "1/2").expect("renders"), r"\frac{1}{2}");
+        assert_eq!(
+            repl_latex(&mut session, "1/2").expect("renders"),
+            r"\frac{1}{2}"
+        );
         // A symbolic value goes through the same `to_latex` engine; a bare
         // symbol is typeset upright, which is what `to_latex("x")` does.
         declare(&mut session, "let s = symbol(\"x\")");
-        assert_eq!(repl_latex(&mut session, "s").expect("renders"), r"\mathrm{x}");
+        assert_eq!(
+            repl_latex(&mut session, "s").expect("renders"),
+            r"\mathrm{x}"
+        );
     }
 
     #[test]
@@ -2031,7 +2127,10 @@ mod tests {
         assert!(needs_continuation("match x with"));
         assert!(continues_block("match x with", Some("| A -> 1")));
         assert!(continues_block("match x with\n| A -> 1", Some("| _ -> 2")));
-        assert!(!continues_block("match x with\n| A -> 1", Some("let y = 2")));
+        assert!(!continues_block(
+            "match x with\n| A -> 1",
+            Some("let y = 2")
+        ));
         // `class … where` and `instance … where` open their bodies too.
         assert!(needs_continuation("class Show a where"));
         assert!(needs_continuation("instance Show for Float where"));

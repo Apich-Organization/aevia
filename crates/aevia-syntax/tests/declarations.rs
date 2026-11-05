@@ -6,8 +6,15 @@
 
 mod support;
 
-use aevia_syntax::ast::{DeclKind, ExprKind, Param, PatKind, TyKind};
-use support::{expect_clean, expect_error, parse, span_text};
+use aevia_syntax::ast::DeclKind;
+use aevia_syntax::ast::ExprKind;
+use aevia_syntax::ast::Param;
+use aevia_syntax::ast::PatKind;
+use aevia_syntax::ast::TyKind;
+use support::expect_clean;
+use support::expect_error;
+use support::parse;
+use support::span_text;
 
 #[test]
 fn two_let_declarations_on_one_line_are_rejected() {
@@ -169,7 +176,8 @@ fn an_abstract_type_needs_no_body() {
 
 #[test]
 fn a_variant_type_with_equals_and_a_block_is_accepted() {
-    let module = expect_clean("type Shape =\n    | Circle(Real[L])\n    | Rect(Real[L], Real[L])\n");
+    let module =
+        expect_clean("type Shape =\n    | Circle(Real[L])\n    | Rect(Real[L], Real[L])\n");
     let DeclKind::Type { body, .. } = &module.decls[0].kind else {
         panic!("expected a type");
     };
@@ -191,17 +199,17 @@ fn a_typed_let_still_parses() {
     let DeclKind::Let { ty, .. } = &module.decls[0].kind else {
         panic!("expected a let");
     };
-    assert!(matches!(ty.as_ref().map(|ty| &ty.kind), Some(TyKind::Tensor { .. })));
+    assert!(matches!(
+        ty.as_ref().map(|ty| &ty.kind),
+        Some(TyKind::Tensor { .. })
+    ));
 }
 
 #[test]
 fn a_reserved_word_cannot_be_a_binding() {
     // §B.4 E0206: a keyword where a binder belongs is a reserved-word error, not
     // a generic syntax error.
-    for source in [
-        "let if = 1\n",
-        "let x = match 1 with\n    | match -> 0\n",
-    ] {
+    for source in ["let if = 1\n", "let x = match 1 with\n    | match -> 0\n"] {
         let diagnostic = support::expect_code(source, "E0206");
         assert_eq!(diagnostic.severity, aevia_syntax::Severity::Error);
     }
@@ -211,11 +219,7 @@ fn a_reserved_word_cannot_be_a_binding() {
 fn an_invalid_pattern_is_e0204() {
     // §B.4 E0204: a float literal cannot be a pattern.
     assert_eq!(
-        support::expect_error(
-            "let x = match 1 with\n    | 1.5 -> 0\n",
-            "E0204",
-        )
-        .code,
+        support::expect_error("let x = match 1 with\n    | 1.5 -> 0\n", "E0204",).code,
         "E0204"
     );
 }

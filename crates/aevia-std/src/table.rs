@@ -42,7 +42,10 @@ impl Table {
     /// # Errors
     ///
     /// [`NumericError::Domain`] when the name is not a column.
-    pub fn column(&self, name: &str) -> Result<Vec<&str>, NumericError> {
+    pub fn column(
+        &self,
+        name: &str,
+    ) -> Result<Vec<&str>, NumericError> {
         let index = self
             .columns
             .iter()
@@ -61,7 +64,10 @@ impl Table {
     ///
     /// [`NumericError::Domain`] when the name is not a column or a cell is not
     /// a number.
-    pub fn numeric_column(&self, name: &str) -> Result<Vec<f64>, NumericError> {
+    pub fn numeric_column(
+        &self,
+        name: &str,
+    ) -> Result<Vec<f64>, NumericError> {
         let cells = self.column(name)?;
         let mut out = Vec::with_capacity(cells.len());
         for cell in cells {
@@ -88,12 +94,19 @@ pub fn parse_csv(text: &str) -> Result<Table, NumericError> {
     let mut units = Vec::new();
     for field in split_csv(header) {
         let (name, unit) = match field.find('[') {
-            Some(open) if field.trim_end().ends_with(']') => {
+            | Some(open) if field.trim_end().ends_with(']') => {
                 let name = field[..open].trim().to_string();
                 let unit = field[open + 1..].trim_end_matches(']').trim().to_string();
-                (name, if unit.is_empty() { None } else { Some(unit) })
-            }
-            _ => (field.trim().to_string(), None),
+                (
+                    name,
+                    if unit.is_empty() {
+                        None
+                    } else {
+                        Some(unit)
+                    },
+                )
+            },
+            | _ => (field.trim().to_string(), None),
         };
         columns.push(name);
         units.push(unit);
@@ -110,11 +123,7 @@ pub fn parse_csv(text: &str) -> Result<Table, NumericError> {
         }
         rows.push(cells);
     }
-    Ok(Table {
-        columns,
-        units,
-        rows,
-    })
+    Ok(Table { columns, units, rows })
 }
 
 /// Splits one CSV line, honouring double quotes.
@@ -124,12 +133,12 @@ fn split_csv(line: &str) -> Vec<String> {
     let mut quoted = false;
     for character in line.chars() {
         match character {
-            '"' => quoted = !quoted,
-            ',' if !quoted => {
+            | '"' => quoted = !quoted,
+            | ',' if !quoted => {
                 out.push(current.trim().to_string());
                 current = String::new();
-            }
-            other => current.push(other),
+            },
+            | other => current.push(other),
         }
     }
     out.push(current.trim().to_string());
@@ -190,13 +199,18 @@ pub enum Json {
 impl Json {
     /// The value under a key, when this is an object.
     #[must_use]
-    pub fn get(&self, key: &str) -> Option<&Json> {
+    pub fn get(
+        &self,
+        key: &str,
+    ) -> Option<&Json> {
         match self {
-            Self::Object(fields) => fields
-                .iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, value)| value),
-            _ => None,
+            | Self::Object(fields) => {
+                fields
+                    .iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| value)
+            },
+            | _ => None,
         }
     }
 }
@@ -219,23 +233,29 @@ pub fn parse_json(text: &str) -> Result<Json, NumericError> {
     Ok(value)
 }
 
-fn skip_space(text: &[char], position: &mut usize) {
+fn skip_space(
+    text: &[char],
+    position: &mut usize,
+) {
     while *position < text.len() && text[*position].is_whitespace() {
         *position += 1;
     }
 }
 
-fn parse_value(text: &[char], position: &mut usize) -> Result<Json, NumericError> {
+fn parse_value(
+    text: &[char],
+    position: &mut usize,
+) -> Result<Json, NumericError> {
     skip_space(text, position);
     let Some(character) = text.get(*position).copied() else {
         return Err(NumericError::Domain("unexpected end of input".to_string()));
     };
     match character {
-        'n' => expect_word(text, position, "null").map(|()| Json::Null),
-        't' => expect_word(text, position, "true").map(|()| Json::Bool(true)),
-        'f' => expect_word(text, position, "false").map(|()| Json::Bool(false)),
-        '"' => parse_string(text, position).map(Json::String),
-        '[' => {
+        | 'n' => expect_word(text, position, "null").map(|()| Json::Null),
+        | 't' => expect_word(text, position, "true").map(|()| Json::Bool(true)),
+        | 'f' => expect_word(text, position, "false").map(|()| Json::Bool(false)),
+        | '"' => parse_string(text, position).map(Json::String),
+        | '[' => {
             *position += 1;
             let mut items = Vec::new();
             skip_space(text, position);
@@ -247,20 +267,20 @@ fn parse_value(text: &[char], position: &mut usize) -> Result<Json, NumericError
                 items.push(parse_value(text, position)?);
                 skip_space(text, position);
                 match text.get(*position) {
-                    Some(',') => *position += 1,
-                    Some(']') => {
+                    | Some(',') => *position += 1,
+                    | Some(']') => {
                         *position += 1;
                         return Ok(Json::Array(items));
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         return Err(NumericError::Domain(format!(
                             "expected `,` or `]` at offset {position}"
-                        )))
-                    }
+                        )));
+                    },
                 }
             }
-        }
-        '{' => {
+        },
+        | '{' => {
             *position += 1;
             let mut fields = Vec::new();
             skip_space(text, position);
@@ -282,24 +302,28 @@ fn parse_value(text: &[char], position: &mut usize) -> Result<Json, NumericError
                 fields.push((key, value));
                 skip_space(text, position);
                 match text.get(*position) {
-                    Some(',') => *position += 1,
-                    Some('}') => {
+                    | Some(',') => *position += 1,
+                    | Some('}') => {
                         *position += 1;
                         return Ok(Json::Object(fields));
-                    }
-                    _ => {
+                    },
+                    | _ => {
                         return Err(NumericError::Domain(format!(
                             "expected `,` or `}}` at offset {position}"
-                        )))
-                    }
+                        )));
+                    },
                 }
             }
-        }
-        _ => parse_number(text, position),
+        },
+        | _ => parse_number(text, position),
     }
 }
 
-fn expect_word(text: &[char], position: &mut usize, word: &str) -> Result<(), NumericError> {
+fn expect_word(
+    text: &[char],
+    position: &mut usize,
+    word: &str,
+) -> Result<(), NumericError> {
     for expected in word.chars() {
         if text.get(*position) != Some(&expected) {
             return Err(NumericError::Domain(format!(
@@ -311,7 +335,10 @@ fn expect_word(text: &[char], position: &mut usize, word: &str) -> Result<(), Nu
     Ok(())
 }
 
-fn parse_string(text: &[char], position: &mut usize) -> Result<String, NumericError> {
+fn parse_string(
+    text: &[char],
+    position: &mut usize,
+) -> Result<String, NumericError> {
     if text.get(*position) != Some(&'"') {
         return Err(NumericError::Domain(format!(
             "expected a string at offset {position}"
@@ -322,22 +349,23 @@ fn parse_string(text: &[char], position: &mut usize) -> Result<String, NumericEr
     while let Some(character) = text.get(*position).copied() {
         *position += 1;
         match character {
-            '"' => return Ok(out),
-            '\\' => {
-                let escape = text.get(*position).copied().ok_or_else(|| {
-                    NumericError::Domain("unterminated escape".to_string())
-                })?;
+            | '"' => return Ok(out),
+            | '\\' => {
+                let escape = text
+                    .get(*position)
+                    .copied()
+                    .ok_or_else(|| NumericError::Domain("unterminated escape".to_string()))?;
                 *position += 1;
                 match escape {
-                    '"' => out.push('"'),
-                    '\\' => out.push('\\'),
-                    '/' => out.push('/'),
-                    'b' => out.push('\u{8}'),
-                    'f' => out.push('\u{c}'),
-                    'n' => out.push('\n'),
-                    'r' => out.push('\r'),
-                    't' => out.push('\t'),
-                    'u' => {
+                    | '"' => out.push('"'),
+                    | '\\' => out.push('\\'),
+                    | '/' => out.push('/'),
+                    | 'b' => out.push('\u{8}'),
+                    | 'f' => out.push('\u{c}'),
+                    | 'n' => out.push('\n'),
+                    | 'r' => out.push('\r'),
+                    | 't' => out.push('\t'),
+                    | 'u' => {
                         let mut code = 0u32;
                         for _ in 0..4 {
                             let digit = text.get(*position).copied().ok_or_else(|| {
@@ -350,21 +378,22 @@ fn parse_string(text: &[char], position: &mut usize) -> Result<String, NumericEr
                                 })?;
                         }
                         out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
-                    }
-                    other => {
-                        return Err(NumericError::Domain(format!(
-                            "unknown escape `\\{other}`"
-                        )))
-                    }
+                    },
+                    | other => {
+                        return Err(NumericError::Domain(format!("unknown escape `\\{other}`")));
+                    },
                 }
-            }
-            other => out.push(other),
+            },
+            | other => out.push(other),
         }
     }
     Err(NumericError::Domain("unterminated string".to_string()))
 }
 
-fn parse_number(text: &[char], position: &mut usize) -> Result<Json, NumericError> {
+fn parse_number(
+    text: &[char],
+    position: &mut usize,
+) -> Result<Json, NumericError> {
     let start = *position;
     if text.get(*position) == Some(&'-') {
         *position += 1;
@@ -391,30 +420,33 @@ pub fn write_json(value: &Json) -> String {
     out
 }
 
-fn write_json_into(value: &Json, out: &mut String) {
+fn write_json_into(
+    value: &Json,
+    out: &mut String,
+) {
     match value {
-        Json::Null => out.push_str("null"),
-        Json::Bool(true) => out.push_str("true"),
-        Json::Bool(false) => out.push_str("false"),
-        Json::Number(number) => out.push_str(&format_json_number(*number)),
-        Json::String(text) => {
+        | Json::Null => out.push_str("null"),
+        | Json::Bool(true) => out.push_str("true"),
+        | Json::Bool(false) => out.push_str("false"),
+        | Json::Number(number) => out.push_str(&format_json_number(*number)),
+        | Json::String(text) => {
             out.push('"');
             for character in text.chars() {
                 match character {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    other if (other as u32) < 0x20 => {
+                    | '"' => out.push_str("\\\""),
+                    | '\\' => out.push_str("\\\\"),
+                    | '\n' => out.push_str("\\n"),
+                    | '\r' => out.push_str("\\r"),
+                    | '\t' => out.push_str("\\t"),
+                    | other if (other as u32) < 0x20 => {
                         out.push_str(&format!("\\u{:04x}", other as u32));
-                    }
-                    other => out.push(other),
+                    },
+                    | other => out.push(other),
                 }
             }
             out.push('"');
-        }
-        Json::Array(items) => {
+        },
+        | Json::Array(items) => {
             out.push('[');
             for (index, item) in items.iter().enumerate() {
                 if index > 0 {
@@ -423,8 +455,8 @@ fn write_json_into(value: &Json, out: &mut String) {
                 write_json_into(item, out);
             }
             out.push(']');
-        }
-        Json::Object(fields) => {
+        },
+        | Json::Object(fields) => {
             out.push('{');
             for (index, (name, item)) in fields.iter().enumerate() {
                 if index > 0 {
@@ -435,7 +467,7 @@ fn write_json_into(value: &Json, out: &mut String) {
                 write_json_into(item, out);
             }
             out.push('}');
-        }
+        },
     }
 }
 
@@ -544,7 +576,10 @@ fn parse_npy_shape(header: &str) -> Result<Vec<usize>, NumericError> {
 
 /// Writes a NumPy v1.0 `.npy` array of `float64` in C order.
 #[must_use]
-pub fn write_npy(shape: &[usize], values: &[f64]) -> Vec<u8> {
+pub fn write_npy(
+    shape: &[usize],
+    values: &[f64],
+) -> Vec<u8> {
     let shape_text = if shape.len() == 1 {
         format!("({},)", shape[0])
     } else {
@@ -613,8 +648,8 @@ mod tests {
     fn json_parses_every_value_kind() {
         let value = parse_json(r#"{"a": [1, 2.5, true, null], "b": "x\ny"}"#).unwrap();
         let array = match value.get("a") {
-            Some(Json::Array(items)) => items.clone(),
-            other => panic!("expected an array, found {other:?}"),
+            | Some(Json::Array(items)) => items.clone(),
+            | other => panic!("expected an array, found {other:?}"),
         };
         assert_eq!(array[0], Json::Number(1.0));
         assert_eq!(array[1], Json::Number(2.5));

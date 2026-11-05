@@ -10,10 +10,13 @@
 
 #![allow(clippy::result_large_err)]
 
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
 use aevia_core::driver;
 use aevia_core::value::Value;
-use aevia_core::{compile, Interp, Mode};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 const PRETTY: &str = "\
 class Pretty a where
@@ -32,7 +35,11 @@ impl Scratch {
         Self(path)
     }
 
-    fn write(&self, name: &str, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.0.join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create parent");
@@ -67,7 +74,11 @@ fn compile_ok(source: &str) -> (aevia_syntax::Module, aevia_types::CheckedModule
 }
 
 /// Runs one program on one evaluator and returns the top-level values asked for.
-fn values_with_mode(source: &str, mode: Mode, names: &[&str]) -> Vec<String> {
+fn values_with_mode(
+    source: &str,
+    mode: Mode,
+    names: &[&str],
+) -> Vec<String> {
     let (module, checked) = compile_ok(source);
     let mut interpreter = Interp::new(&checked).with_buffer().with_mode(mode);
     let diagnostics = interpreter.load(&module);
@@ -85,9 +96,9 @@ fn values_with_mode(source: &str, mode: Mode, names: &[&str]) -> Vec<String> {
         .map(|name| {
             let value = interpreter.eval_toplevel(name).expect("the name is bound");
             match value {
-                Value::Str(text) => text.to_string(),
-                Value::Num(number) => aevia_core::value::repr(&Value::Num(number)),
-                other => aevia_core::value::repr(&other),
+                | Value::Str(text) => text.to_string(),
+                | Value::Num(number) => aevia_core::value::repr(&Value::Num(number)),
+                | other => aevia_core::value::repr(&other),
             }
         })
         .collect()
@@ -95,7 +106,10 @@ fn values_with_mode(source: &str, mode: Mode, names: &[&str]) -> Vec<String> {
 
 /// Runs the program on both evaluators, asserts they agree, and returns the
 /// values (from the IR path, after agreement).
-fn values(source: &str, names: &[&str]) -> Vec<String> {
+fn values(
+    source: &str,
+    names: &[&str],
+) -> Vec<String> {
     let ast = values_with_mode(source, Mode::Ast, names);
     let ir = values_with_mode(source, Mode::Ir, names);
     assert_eq!(ast, ir, "the two evaluators disagree");

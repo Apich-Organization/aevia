@@ -7,25 +7,59 @@
 //! pattern matching is first-match, and arithmetic promotes `Int < Real <
 //! Float < Complex` while keeping exactness when it can.
 
+use crate::value::Closure;
+use crate::value::ClosureBody;
+use crate::value::ClosureEnv;
+use crate::value::DynValue;
+use crate::value::IoAction;
+use crate::value::NativeFn;
+use crate::value::NumKind;
+use crate::value::NumVal;
+use crate::value::PropValue;
+use crate::value::RecordValue;
+use crate::value::Scope;
+use crate::value::Storage;
+use crate::value::TensorData;
+use crate::value::Value;
+use crate::value::ctor_name;
+use crate::value::format_scalar;
+use crate::value::make_variant;
 use crate::value::{
-    self, ctor_name, format_scalar, make_variant, Closure, ClosureBody, ClosureEnv, DynValue,
-    IoAction, NativeFn, NumKind, NumVal, PropValue, RecordValue, Scope, Storage, TensorData, Value,
+    self,
 };
-use aevia_dim::{Dim, DimEnv, UnitDef, UnitTable};
+use aevia_dim::Dim;
+use aevia_dim::DimEnv;
+use aevia_dim::UnitDef;
+use aevia_dim::UnitTable;
+use aevia_syntax::Diagnostic;
+use aevia_syntax::Span;
 use aevia_syntax::ast::*;
-use aevia_syntax::{Diagnostic, Span};
 use aevia_types::adt;
-use aevia_types::check::{
-    BuiltinDispatch, CheckedModule, DictTarget, DictionaryUse, Export, InstanceExport,
-    ModuleInterface,
+use aevia_types::check::BuiltinDispatch;
+use aevia_types::check::CheckedModule;
+use aevia_types::check::DictTarget;
+use aevia_types::check::DictionaryUse;
+use aevia_types::check::Export;
+use aevia_types::check::InstanceExport;
+use aevia_types::check::ModuleInterface;
+use aevia_types::class::ClassTable;
+use aevia_types::class::Resolution;
+use aevia_types::class::has_variables;
+use aevia_types::keys::ClassKey;
+use aevia_types::keys::InstanceKey;
+use aevia_types::keys::RepKind;
+use aevia_types::keys::StorageClass;
+use aevia_types::keys::Witness;
+use aevia_types::keys::{
+    self,
 };
-use aevia_types::class::{has_variables, ClassTable, Resolution};
-use aevia_types::keys::{self, ClassKey, InstanceKey, RepKind, StorageClass, Witness};
 use aevia_types::ty::Rep;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -120,28 +154,31 @@ pub(crate) enum HeadShape {
 
 impl HeadShape {
     /// Whether a value of this shape is an instance of the head.
-    fn accepts(&self, value: &Value) -> bool {
+    fn accepts(
+        &self,
+        value: &Value,
+    ) -> bool {
         match (self, value) {
-            (Self::Nominal(name), Value::Variant(variant)) => {
-                adt::name_of(variant.adt) == *name
-            }
-            (Self::Tensor, Value::Tensor(_)) => true,
-            (Self::Record(labels), Value::Record(record)) => {
+            | (Self::Nominal(name), Value::Variant(variant)) => adt::name_of(variant.adt) == *name,
+            | (Self::Tensor, Value::Tensor(_)) => true,
+            | (Self::Record(labels), Value::Record(record)) => {
                 record.fields.len() == labels.len()
                     && labels.iter().all(|label| record.fields.contains_key(label))
-            }
-            (Self::Scalar(rep), Value::Num(num)) => match (rep, &num.kind) {
-                (&"Int", NumKind::Int(_)) => true,
-                (&"Real", NumKind::Exact(_) | NumKind::Sym(_)) => true,
-                (&"Float", NumKind::Float(_)) => true,
-                (&"Complex", NumKind::Complex(..)) => true,
-                _ => false,
             },
-            (Self::Bool, Value::Bool(_))
+            | (Self::Scalar(rep), Value::Num(num)) => {
+                match (rep, &num.kind) {
+                    | (&"Int", NumKind::Int(_)) => true,
+                    | (&"Real", NumKind::Exact(_) | NumKind::Sym(_)) => true,
+                    | (&"Float", NumKind::Float(_)) => true,
+                    | (&"Complex", NumKind::Complex(..)) => true,
+                    | _ => false,
+                }
+            },
+            | (Self::Bool, Value::Bool(_))
             | (Self::Str, Value::Str(_))
             | (Self::Unit, Value::Unit)
             | (Self::Prop, Value::Prop(_)) => true,
-            _ => false,
+            | _ => false,
         }
     }
 }
@@ -161,34 +198,41 @@ pub(crate) enum Dispatch {
 /// and only the checker knows which labels it has, so an alias head stays
 /// [`HeadShape::Unknown`] and is found by the recorded head or the
 /// single-instance rule.
-pub(crate) fn head_shape(ty: &Ty, aliases: &HashMap<String, aevia_types::ty::Type>) -> HeadShape {
+pub(crate) fn head_shape(
+    ty: &Ty,
+    aliases: &HashMap<String, aevia_types::ty::Type>,
+) -> HeadShape {
     match &ty.kind {
-        TyKind::Named { path, .. } => path.last().cloned().map_or(HeadShape::Unknown, |name| {
-            if name.chars().next().is_some_and(char::is_uppercase) {
-                // An alias is transparent: `type Vec2 = { x, y }` names a
-                // record, and the value at run time is a record, not a variant.
-                aliases
-                    .get(&name)
-                    .map_or(HeadShape::Nominal(name), |aliased| type_head_shape(aliased))
-            } else {
-                HeadShape::Unknown
-            }
-        }),
-        TyKind::Tensor { .. } | TyKind::Matrix { .. } | TyKind::Sparse { .. } => HeadShape::Tensor,
-        TyKind::Record { fields, .. } => {
+        | TyKind::Named { path, .. } => {
+            path.last().cloned().map_or(HeadShape::Unknown, |name| {
+                if name.chars().next().is_some_and(char::is_uppercase) {
+                    // An alias is transparent: `type Vec2 = { x, y }` names a
+                    // record, and the value at run time is a record, not a variant.
+                    aliases
+                        .get(&name)
+                        .map_or(HeadShape::Nominal(name), |aliased| type_head_shape(aliased))
+                } else {
+                    HeadShape::Unknown
+                }
+            })
+        },
+        | TyKind::Tensor { .. } | TyKind::Matrix { .. } | TyKind::Sparse { .. } => {
+            HeadShape::Tensor
+        },
+        | TyKind::Record { fields, .. } => {
             let mut labels: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
             labels.sort();
             HeadShape::Record(labels)
-        }
-        TyKind::Int => HeadShape::Scalar("Int"),
-        TyKind::Real(_) => HeadShape::Scalar("Real"),
-        TyKind::Float(_) => HeadShape::Scalar("Float"),
-        TyKind::Complex(_) => HeadShape::Scalar("Complex"),
-        TyKind::Bool => HeadShape::Bool,
-        TyKind::Str => HeadShape::Str,
-        TyKind::Unit => HeadShape::Unit,
-        TyKind::Prop => HeadShape::Prop,
-        _ => HeadShape::Unknown,
+        },
+        | TyKind::Int => HeadShape::Scalar("Int"),
+        | TyKind::Real(_) => HeadShape::Scalar("Real"),
+        | TyKind::Float(_) => HeadShape::Scalar("Float"),
+        | TyKind::Complex(_) => HeadShape::Scalar("Complex"),
+        | TyKind::Bool => HeadShape::Bool,
+        | TyKind::Str => HeadShape::Str,
+        | TyKind::Unit => HeadShape::Unit,
+        | TyKind::Prop => HeadShape::Prop,
+        | _ => HeadShape::Unknown,
     }
 }
 
@@ -196,8 +240,8 @@ pub(crate) fn head_shape(ty: &Ty, aliases: &HashMap<String, aevia_types::ty::Typ
 fn type_head_shape(ty: &aevia_types::ty::Type) -> HeadShape {
     use aevia_types::ty::Type;
     match ty {
-        Type::Adt(id, _) => HeadShape::Nominal(adt::name_of(*id)),
-        Type::Record(row) => {
+        | Type::Adt(id, _) => HeadShape::Nominal(adt::name_of(*id)),
+        | Type::Record(row) => {
             let mut labels = Vec::new();
             let mut current = row;
             while let aevia_types::ty::Row::Extend { label, tail, .. } = current {
@@ -206,13 +250,13 @@ fn type_head_shape(ty: &aevia_types::ty::Type) -> HeadShape {
             }
             labels.sort();
             HeadShape::Record(labels)
-        }
-        Type::Tensor { .. } => HeadShape::Tensor,
-        Type::Scalar(rep, _) => HeadShape::Scalar(rep.name()),
-        Type::Bool => HeadShape::Bool,
-        Type::Str => HeadShape::Str,
-        Type::Unit => HeadShape::Unit,
-        _ => HeadShape::Unknown,
+        },
+        | Type::Tensor { .. } => HeadShape::Tensor,
+        | Type::Scalar(rep, _) => HeadShape::Scalar(rep.name()),
+        | Type::Bool => HeadShape::Bool,
+        | Type::Str => HeadShape::Str,
+        | Type::Unit => HeadShape::Unit,
+        | _ => HeadShape::Unknown,
     }
 }
 
@@ -237,7 +281,10 @@ pub struct EvalError {
 impl EvalError {
     /// Builds an error.
     #[must_use]
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
             message: message.into(),
@@ -250,14 +297,20 @@ impl EvalError {
 
     /// Attaches a span.
     #[must_use]
-    pub fn at(mut self, span: Span) -> Self {
+    pub fn at(
+        mut self,
+        span: Span,
+    ) -> Self {
         self.span = Some(span);
         self
     }
 
     /// Attaches a call stack, when the error does not have one yet.
     #[must_use]
-    pub fn with_stack(mut self, stack: Vec<Frame>) -> Self {
+    pub fn with_stack(
+        mut self,
+        stack: Vec<Frame>,
+    ) -> Self {
         if self.stack.is_empty() {
             self.stack = stack;
         }
@@ -458,21 +511,21 @@ fn measurement_parts(value: &Value) -> Option<(NumVal, NumVal)> {
     if record.fields.len() != 2 {
         return None;
     }
-    match (
-        record.fields.get("value"),
-        record.fields.get("uncertainty"),
-    ) {
-        (Some(Value::Num(value)), Some(Value::Num(uncertainty)))
+    match (record.fields.get("value"), record.fields.get("uncertainty")) {
+        | (Some(Value::Num(value)), Some(Value::Num(uncertainty)))
             if value.dim == uncertainty.dim =>
         {
             Some((value.clone(), uncertainty.clone()))
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }
 
 /// A measurement record, fields in spec order (§8.14).
-fn measurement_record(value: NumVal, uncertainty: NumVal) -> Value {
+fn measurement_record(
+    value: NumVal,
+    uncertainty: NumVal,
+) -> Value {
     let mut fields = IndexMap::new();
     fields.insert("value".to_string(), Value::Num(value));
     fields.insert("uncertainty".to_string(), Value::Num(uncertainty));
@@ -537,7 +590,11 @@ impl Interp {
             instance_methods: HashMap::new(),
             method_classes: HashMap::new(),
             prelude_classes: ClassTable::prelude(),
-            aliases: checked.aliases.iter().map(|(name, ty)| (name.clone(), ty.clone())).collect(),
+            aliases: checked
+                .aliases
+                .iter()
+                .map(|(name, ty)| (name.clone(), ty.clone()))
+                .collect(),
         }
     }
 
@@ -547,7 +604,10 @@ impl Interp {
     /// plain strings and `args()` answers a rank-1 `Tensor<1, String>`, so a
     /// program can index them like any other vector. Building the tensor is
     /// deferred to the call, so setting them cannot fail.
-    pub fn set_args(&mut self, arguments: impl IntoIterator<Item = String>) {
+    pub fn set_args(
+        &mut self,
+        arguments: impl IntoIterator<Item = String>,
+    ) {
         self.program_args = arguments.into_iter().collect();
     }
 
@@ -592,7 +652,10 @@ impl Interp {
     ///
     /// A call in an imported module has a span in *that* file, so without its
     /// records the evaluator would fall back to the global of the method name.
-    pub fn add_dictionaries(&mut self, uses: &[DictionaryUse]) {
+    pub fn add_dictionaries(
+        &mut self,
+        uses: &[DictionaryUse],
+    ) {
         for use_site in uses {
             self.dictionaries
                 .entry(use_site.span)
@@ -606,7 +669,10 @@ impl Interp {
     ///
     /// The lowering needs the records themselves, not just the resolved keys,
     /// so a call in an imported module carries its overload into the IR.
-    pub fn add_rssn_calls(&mut self, calls: &[aevia_types::check::RssnCall]) {
+    pub fn add_rssn_calls(
+        &mut self,
+        calls: &[aevia_types::check::RssnCall],
+    ) {
         for call in calls {
             self.rssn_calls.insert(call.span, call.key.clone());
             self.rssn_call_sites.push(call.clone());
@@ -620,7 +686,10 @@ impl Interp {
     /// with its own list; a module's instances are matched to its `instance`
     /// declarations in order. The entry module is already set by
     /// [`Interp::new`], so a single-file program needs no call.
-    pub fn prepare_module(&mut self, checked: &CheckedModule) {
+    pub fn prepare_module(
+        &mut self,
+        checked: &CheckedModule,
+    ) {
         self.current_module = checked.module_path();
         self.instance_exports = checked
             .instances
@@ -635,7 +704,10 @@ impl Interp {
     /// Makes an imported module's classes, instances and alias definitions
     /// reachable (§7.4): an importer can use a class it did not declare, and an
     /// alias expands to its definition instead of looking opaque.
-    pub fn add_interface(&mut self, interface: &ModuleInterface) {
+    pub fn add_interface(
+        &mut self,
+        interface: &ModuleInterface,
+    ) {
         for key in interface.classes.keys() {
             self.class_keys
                 .entry(key.name.clone())
@@ -650,7 +722,10 @@ impl Interp {
 
     /// The next `instance` declaration's export, if the checker supplied one.
     pub(crate) fn take_instance_export(&mut self) -> Option<InstanceExport> {
-        let export = self.instance_exports.get(self.next_instance_export).cloned();
+        let export = self
+            .instance_exports
+            .get(self.next_instance_export)
+            .cloned();
         if export.is_some() {
             self.next_instance_export += 1;
         }
@@ -663,7 +738,10 @@ impl Interp {
     /// runtime both use (round-2 decision 1a); `Pretty@Int` and
     /// `Pretty@String` therefore get different globals.
     #[must_use]
-    pub fn instance_global(key: &InstanceKey, method: &str) -> String {
+    pub fn instance_global(
+        key: &InstanceKey,
+        method: &str,
+    ) -> String {
         format!("{}::{method}", key.mangle())
     }
 
@@ -687,15 +765,21 @@ impl Interp {
             (Some(export.key.clone()), keys::witness_of(&export.head))
         });
         let name = match &key {
-            Some(key) => Self::instance_global(key, &method.name),
-            None => format!(
-                "{class}@{}::{}",
-                spelled.as_deref().unwrap_or("?"),
-                method.name
-            ),
+            | Some(key) => Self::instance_global(key, &method.name),
+            | None => {
+                format!(
+                    "{class}@{}::{}",
+                    spelled.as_deref().unwrap_or("?"),
+                    method.name
+                )
+            },
         };
         let closure = Value::Closure(Rc::new(Closure::ast(
-            method.params.iter().map(|param| param.pattern.clone()).collect(),
+            method
+                .params
+                .iter()
+                .map(|param| param.pattern.clone())
+                .collect(),
             method.body.clone(),
             env.clone(),
             Some(name.clone()),
@@ -716,7 +800,11 @@ impl Interp {
     }
 
     /// The dictionary the checker recorded for a class-method call at `span`.
-    pub(crate) fn dictionary_use(&self, span: Span, method: &str) -> Option<DictionaryUse> {
+    pub(crate) fn dictionary_use(
+        &self,
+        span: Span,
+        method: &str,
+    ) -> Option<DictionaryUse> {
         self.dictionaries
             .get(&span)?
             .iter()
@@ -729,9 +817,13 @@ impl Interp {
     /// §3.8.4: `Eq`/`Ord`/`TotalOrd`/`Show`/`Hash` have prelude instances, and
     /// coherence (`add_instance`) forbids a user instance whose head overlaps
     /// one, so a prelude match is necessarily the instance the checker proved.
-    fn is_builtin_instance(&self, use_site: &DictionaryUse) -> bool {
+    fn is_builtin_instance(
+        &self,
+        use_site: &DictionaryUse,
+    ) -> bool {
         matches!(
-            self.prelude_classes.resolve(&use_site.class, &use_site.head),
+            self.prelude_classes
+                .resolve(&use_site.class, &use_site.head),
             Resolution::Found { .. }
         )
     }
@@ -746,14 +838,16 @@ impl Interp {
         method: &str,
         args: &[Value],
     ) -> Option<Dispatch> {
-        let entries = self.instance_methods.get(&format!("{}::{method}", use_site.class));
+        let entries = self
+            .instance_methods
+            .get(&format!("{}::{method}", use_site.class));
         // The checker pinned the target (round-2 decision 1c); this is the
         // authority. A concrete instance runs by its symbolic key (so two
         // primitive heads never share a global), a quantified site dispatches
         // among the proved candidates by value witness, and §3.8.4's
         // structural `Show` falls through to the builtin printer.
         match &use_site.target {
-            DictTarget::Instance(key) => {
+            | DictTarget::Instance(key) => {
                 let global = Self::instance_global(key, method);
                 if let Some(body) = self.globals.get(&global).cloned() {
                     return Some(Dispatch::Instance(body));
@@ -761,17 +855,19 @@ impl Interp {
                 // The body may still be under the legacy spelling when the
                 // caller loaded a default checked module; the shape fallback
                 // below finds it.
-            }
-            DictTarget::Builtin(BuiltinDispatch::ShowStructural) => {
+            },
+            | DictTarget::Builtin(BuiltinDispatch::ShowStructural) => {
                 return Some(Dispatch::Builtin);
-            }
-            DictTarget::Witness { candidates } => {
+            },
+            | DictTarget::Witness { candidates } => {
                 if let (Some(pool), Some(first)) = (entries, args.first()) {
                     if let Some(witness) = witness_of_value(first) {
                         let mut chosen: Option<&InstanceEntry> = None;
                         let mut ambiguous = false;
                         for entry in pool {
-                            let Some(entry_key) = &entry.key else { continue };
+                            let Some(entry_key) = &entry.key else {
+                                continue;
+                            };
                             if !candidates.contains(entry_key) {
                                 continue;
                             }
@@ -796,7 +892,7 @@ impl Interp {
                         // checker's `E0311` witness-disjointness rule.
                     }
                 }
-            }
+            },
         }
         // (a) The argument's runtime shape decides. At a concrete call site it
         //     agrees with the record; inside a polymorphic function it is the
@@ -903,7 +999,10 @@ impl Interp {
     /// The AST path is the semantic reference; the IR path is the default once
     /// the two agree on the whole suite (§9.2.2, PLAN D2).
     #[must_use]
-    pub fn with_mode(mut self, mode: Mode) -> Self {
+    pub fn with_mode(
+        mut self,
+        mode: Mode,
+    ) -> Self {
         self.mode = mode;
         self
     }
@@ -912,14 +1011,19 @@ impl Interp {
     #[must_use]
     pub fn captured(&self) -> String {
         match &self.output {
-            Output::Buffer(buffer) => buffer.borrow().clone(),
-            Output::Console => String::new(),
+            | Output::Buffer(buffer) => buffer.borrow().clone(),
+            | Output::Console => String::new(),
         }
     }
 
-    fn write_out(&mut self, text: &str, newline: bool, stderr: bool) {
+    fn write_out(
+        &mut self,
+        text: &str,
+        newline: bool,
+        stderr: bool,
+    ) {
         match &self.output {
-            Output::Console => {
+            | Output::Console => {
                 if stderr {
                     eprint!("{text}");
                     if newline {
@@ -931,14 +1035,14 @@ impl Interp {
                         println!();
                     }
                 }
-            }
-            Output::Buffer(buffer) => {
+            },
+            | Output::Buffer(buffer) => {
                 let mut buffer = buffer.borrow_mut();
                 buffer.push_str(text);
                 if newline {
                     buffer.push('\n');
                 }
-            }
+            },
         }
     }
 
@@ -956,7 +1060,11 @@ impl Interp {
     ///
     /// Returns [`EvalError`] for runtime failures (division by zero, shape
     /// mismatches, unmatched patterns, and so on).
-    pub fn eval(&mut self, expr: &Expr, env: &Rc<Scope>) -> Result<Value, EvalError> {
+    pub fn eval(
+        &mut self,
+        expr: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
         self.nodes += 1;
         if self.nodes > self.max_nodes {
             self.nodes -= 1;
@@ -969,52 +1077,56 @@ impl Interp {
         result
     }
 
-    fn eval_inner(&mut self, expr: &Expr, env: &Rc<Scope>) -> Result<Value, EvalError> {
+    fn eval_inner(
+        &mut self,
+        expr: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
         match &expr.kind {
             // A parser recovery node: the syntax error was already reported.
-            ExprKind::Error => Ok(Value::Unit),
-            ExprKind::UnitLit => Ok(Value::Unit),
-            ExprKind::Bool(value) => Ok(Value::Bool(*value)),
+            | ExprKind::Error => Ok(Value::Unit),
+            | ExprKind::UnitLit => Ok(Value::Unit),
+            | ExprKind::Bool(value) => Ok(Value::Bool(*value)),
             // §3.10.1 / §6.3.2: the checker's instantiated representation is
             // the runtime's, so a literal in a `Float` context is an f64 and one
             // in a `Real` context is exact.
-            ExprKind::Int(value) => Ok(Value::Num(self.integer_literal(value, expr.span))),
-            ExprKind::Float(text) => Ok(Value::Num(self.float_literal(text, expr.span))),
-            ExprKind::Str(pieces) => {
+            | ExprKind::Int(value) => Ok(Value::Num(self.integer_literal(value, expr.span))),
+            | ExprKind::Float(text) => Ok(Value::Num(self.float_literal(text, expr.span))),
+            | ExprKind::Str(pieces) => {
                 let mut out = String::new();
                 for piece in pieces {
                     match piece {
-                        StrPiece::Text(text) => out.push_str(text),
-                        StrPiece::Expr(inner) => {
+                        | StrPiece::Text(text) => out.push_str(text),
+                        | StrPiece::Expr(inner) => {
                             let value = self.eval(inner, env)?;
                             out.push_str(&value::show(&value));
-                        }
+                        },
                     }
                 }
                 Ok(Value::string(out))
-            }
-            ExprKind::Quantity { value, unit } => {
+            },
+            | ExprKind::Quantity { value, unit } => {
                 let as_float = self.literal_rep(expr.span) == Some(Rep::Float);
                 self.quantity(value, unit, expr.span, as_float)
-            }
-            ExprKind::Var(name) => self.lookup(name, env, expr.span),
-            ExprKind::QName(path) => {
+            },
+            | ExprKind::Var(name) => self.lookup(name, env, expr.span),
+            | ExprKind::QName(path) => {
                 if path.len() == 2 && path[0] == "Rssn" {
                     return Ok(crate::rssn_module::member(&path[1]));
                 }
                 self.lookup(&path.join("."), env, expr.span)
-            }
-            ExprKind::Unary { op, operand } => {
+            },
+            | ExprKind::Unary { op, operand } => {
                 let value = self.eval(operand, env)?;
                 self.unary(*op, value, expr.span)
-            }
-            ExprKind::Binary { op, left, right } => {
+            },
+            | ExprKind::Binary { op, left, right } => {
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let left_value = self.eval(left, env)?;
                     let short_circuit = match (op, &left_value) {
-                        (BinOp::And, Value::Bool(false)) => Some(false),
-                        (BinOp::Or, Value::Bool(true)) => Some(true),
-                        _ => None,
+                        | (BinOp::And, Value::Bool(false)) => Some(false),
+                        | (BinOp::Or, Value::Bool(true)) => Some(true),
+                        | _ => None,
                     };
                     if let Some(value) = short_circuit {
                         return Ok(Value::Bool(value));
@@ -1025,8 +1137,8 @@ impl Interp {
                 let left_value = self.eval(left, env)?;
                 let right_value = self.eval(right, env)?;
                 self.binary(*op, left_value, right_value, expr.span)
-            }
-            ExprKind::Call { callee, args } => {
+            },
+            | ExprKind::Call { callee, args } => {
                 if args
                     .iter()
                     .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
@@ -1111,37 +1223,43 @@ impl Interp {
                     values.push(self.eval(arg, env)?);
                 }
                 self.apply(function, values, expr.span)
-            }
-            ExprKind::TypeApp { callee, .. } => self.eval(callee, env),
-            ExprKind::Lambda { params, body, .. } => Ok(Value::Closure(Rc::new(Closure::ast(
-                params.iter().map(|param| param.pattern.clone()).collect(),
-                (**body).clone(),
-                env.clone(),
-                None,
-            )))),
-            ExprKind::If {
+            },
+            | ExprKind::TypeApp { callee, .. } => self.eval(callee, env),
+            | ExprKind::Lambda { params, body, .. } => {
+                Ok(Value::Closure(Rc::new(Closure::ast(
+                    params.iter().map(|param| param.pattern.clone()).collect(),
+                    (**body).clone(),
+                    env.clone(),
+                    None,
+                ))))
+            },
+            | ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
-            } => match self.eval(cond, env)? {
-                Value::Bool(true) => self.eval(then_branch, env),
-                Value::Bool(false) => self.eval(else_branch, env),
-                other => Err(EvalError::new(
-                    "E0302",
-                    format!("`if` expects a Bool condition, found {}", other.type_name()),
-                )
-                .at(cond.span)),
+            } => {
+                match self.eval(cond, env)? {
+                    | Value::Bool(true) => self.eval(then_branch, env),
+                    | Value::Bool(false) => self.eval(else_branch, env),
+                    | other => {
+                        Err(EvalError::new(
+                            "E0302",
+                            format!("`if` expects a Bool condition, found {}", other.type_name()),
+                        )
+                        .at(cond.span))
+                    },
+                }
             },
-            ExprKind::Match { scrutinee, arms } => {
+            | ExprKind::Match { scrutinee, arms } => {
                 let subject = self.eval(scrutinee, env)?;
                 for arm in arms {
                     let scope = Scope::child(env);
                     if self.match_pattern(&arm.pattern, &subject, &scope)? {
                         if let Some(guard) = &arm.guard {
                             match self.eval(guard, &scope)? {
-                                Value::Bool(true) => {}
-                                Value::Bool(false) => continue,
-                                other => {
+                                | Value::Bool(true) => {},
+                                | Value::Bool(false) => continue,
+                                | other => {
                                     return Err(EvalError::new(
                                         "E0308",
                                         format!(
@@ -1150,7 +1268,7 @@ impl Interp {
                                         ),
                                     )
                                     .at(guard.span));
-                                }
+                                },
                             }
                         }
                         return self.eval(&arm.body, &scope);
@@ -1161,19 +1279,16 @@ impl Interp {
                     format!("no match arm accepted {}", value::show(&subject)),
                 )
                 .at(expr.span))
-            }
-            ExprKind::LetIn {
-                pattern,
-                value,
-                body,
-                ..
+            },
+            | ExprKind::LetIn {
+                pattern, value, body, ..
             } => {
                 let bound = self.eval(value, env)?;
                 let scope = Scope::child(env);
                 self.bind_pattern(pattern, &bound, &scope)?;
                 self.eval(body, &scope)
-            }
-            ExprKind::Block { stmts, tail } => {
+            },
+            | ExprKind::Block { stmts, tail } => {
                 // One scope per *binding*, not one per block. A block-wide
                 // scope is mutated by every `let`, so a closure created before
                 // a later `let x = …` in the same block would read the later
@@ -1182,17 +1297,14 @@ impl Interp {
                 let mut scope = Scope::child(env);
                 for stmt in stmts {
                     match stmt {
-                        BlockStmt::Let { pattern, value, .. } => {
+                        | BlockStmt::Let { pattern, value, .. } => {
                             let bound = self.eval(value, &scope)?;
                             let next = Scope::child(&scope);
                             self.bind_pattern(pattern, &bound, &next)?;
                             scope = next;
-                        }
-                        BlockStmt::Fn(decl) => {
-                            if let DeclKind::Fn {
-                                name, args, body, ..
-                            } = &decl.kind
-                            {
+                        },
+                        | BlockStmt::Fn(decl) => {
+                            if let DeclKind::Fn { name, args, body, .. } = &decl.kind {
                                 let closure = Value::Closure(Rc::new(Closure::ast(
                                     args.iter().map(|arg| arg.pattern.clone()).collect(),
                                     body.clone(),
@@ -1203,31 +1315,34 @@ impl Interp {
                                 next.vars.borrow_mut().insert(name.clone(), closure);
                                 scope = next;
                             }
-                        }
+                        },
                     }
                 }
                 match tail {
-                    Some(tail) => self.eval(tail, &scope),
-                    None => Ok(Value::Unit),
+                    | Some(tail) => self.eval(tail, &scope),
+                    | None => Ok(Value::Unit),
                 }
-            }
-            ExprKind::Do { stmts } => self.eval_do(stmts, env),
-            ExprKind::Record { base, fields } => {
+            },
+            | ExprKind::Do { stmts } => self.eval_do(stmts, env),
+            | ExprKind::Record { base, fields } => {
                 let mut collected: IndexMap<String, Value> = IndexMap::new();
                 if let Some(base) = base {
                     match self.eval(base, env)? {
-                        Value::Record(record) => {
+                        | Value::Record(record) => {
                             for (name, value) in &record.fields {
                                 collected.insert(name.clone(), value.clone());
                             }
-                        }
-                        other => {
+                        },
+                        | other => {
                             return Err(EvalError::new(
                                 "E0302",
-                                format!("record update expects a record, found {}", other.type_name()),
+                                format!(
+                                    "record update expects a record, found {}",
+                                    other.type_name()
+                                ),
                             )
                             .at(base.span));
-                        }
+                        },
                     }
                 }
                 for (name, value) in fields {
@@ -1235,8 +1350,8 @@ impl Interp {
                     collected.insert(name.clone(), evaluated);
                 }
                 Ok(Value::Record(Rc::new(RecordValue { fields: collected })))
-            }
-            ExprKind::Field { base, name } => {
+            },
+            | ExprKind::Field { base, name } => {
                 if is_rssn_root(base) {
                     // `Rssn.sin` is a kernel operator, not a record field.
                     return Ok(crate::rssn_module::member(name));
@@ -1247,38 +1362,40 @@ impl Interp {
                     }
                 }
                 match self.eval(base, env)? {
-                Value::Record(record) => record.fields.get(name).cloned().ok_or_else(|| {
-                    EvalError::new("E0306", format!("no field `{name}`")).at(expr.span)
-                }),
-                other => Err(EvalError::new(
-                    "E0302",
-                    format!("field access expects a record, found {}", other.type_name()),
-                )
-                .at(expr.span)),
+                    | Value::Record(record) => {
+                        record.fields.get(name).cloned().ok_or_else(|| {
+                            EvalError::new("E0306", format!("no field `{name}`")).at(expr.span)
+                        })
+                    },
+                    | other => {
+                        Err(EvalError::new(
+                            "E0302",
+                            format!("field access expects a record, found {}", other.type_name()),
+                        )
+                        .at(expr.span))
+                    },
                 }
-            }
-            ExprKind::Tuple(items) => {
+            },
+            | ExprKind::Tuple(items) => {
                 let mut fields = IndexMap::new();
                 for (index, item) in items.iter().enumerate() {
                     fields.insert(index.to_string(), self.eval(item, env)?);
                 }
                 Ok(Value::Record(Rc::new(RecordValue { fields })))
-            }
-            ExprKind::Tensor(items) => self.tensor_literal(items, env, expr.span),
-            ExprKind::Index { base, indices } => {
+            },
+            | ExprKind::Tensor(items) => self.tensor_literal(items, env, expr.span),
+            | ExprKind::Index { base, indices } => {
                 let tensor = self.eval(base, env)?;
                 self.index_value(tensor, indices, env, expr.span)
-            }
-            ExprKind::Annot { expr: inner, .. } => self.eval(inner, env),
-            ExprKind::Placeholder => Err(EvalError::new(
-                "E0202",
-                "`_` cannot be evaluated outside a call",
-            )
-            .at(expr.span)),
-            ExprKind::Try(inner) => {
+            },
+            | ExprKind::Annot { expr: inner, .. } => self.eval(inner, env),
+            | ExprKind::Placeholder => {
+                Err(EvalError::new("E0202", "`_` cannot be evaluated outside a call").at(expr.span))
+            },
+            | ExprKind::Try(inner) => {
                 let value = self.eval(inner, env)?;
                 match &value {
-                    Value::Variant(variant) if variant.adt == adt::RESULT_ID => {
+                    | Value::Variant(variant) if variant.adt == adt::RESULT_ID => {
                         if variant.index == 0 {
                             variant
                                 .fields
@@ -1290,8 +1407,8 @@ impl Interp {
                             error.payload = Some(value.clone());
                             Err(error)
                         }
-                    }
-                    Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
+                    },
+                    | Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
                         if variant.index == 1 {
                             variant
                                 .fields
@@ -1299,45 +1416,54 @@ impl Interp {
                                 .cloned()
                                 .ok_or_else(|| EvalError::new("E0809", "malformed Some"))
                         } else {
-                            let mut error = EvalError::new("E0702", "propagated None").at(expr.span);
+                            let mut error =
+                                EvalError::new("E0702", "propagated None").at(expr.span);
                             error.payload = Some(value.clone());
                             Err(error)
                         }
-                    }
-                    other => Err(EvalError::new(
-                        "E0702",
-                        format!("`?` expects Result or Option, found {}", other.type_name()),
-                    )
-                    .at(expr.span)),
+                    },
+                    | other => {
+                        Err(EvalError::new(
+                            "E0702",
+                            format!("`?` expects Result or Option, found {}", other.type_name()),
+                        )
+                        .at(expr.span))
+                    },
                 }
-            }
-            ExprKind::Factorial { expr: inner, double } => {
+            },
+            | ExprKind::Factorial { expr: inner, double } => {
                 let value = self.eval(inner, env)?;
                 let n = match &value {
-                    Value::Num(num) => match &num.kind {
-                        NumKind::Int(value) => value
-                            .to_i64()
-                            .ok_or_else(|| EvalError::new("E0801", "factorial is too large"))?,
-                        _ => {
-                            return Err(EvalError::new(
-                                "E0302",
-                                "factorial expects an Int",
-                            )
-                            .at(expr.span));
+                    | Value::Num(num) => {
+                        match &num.kind {
+                            | NumKind::Int(value) => {
+                                value.to_i64().ok_or_else(|| {
+                                    EvalError::new("E0801", "factorial is too large")
+                                })?
+                            },
+                            | _ => {
+                                return Err(EvalError::new("E0302", "factorial expects an Int")
+                                    .at(expr.span));
+                            },
                         }
                     },
-                    _ => {
+                    | _ => {
                         return Err(
                             EvalError::new("E0302", "factorial expects an Int").at(expr.span)
                         );
-                    }
+                    },
                 };
                 Ok(Value::Num(NumVal::int(factorial(n, *double))))
-            }
+            },
         }
     }
 
-    fn lookup(&mut self, name: &str, env: &Rc<Scope>, span: Span) -> Result<Value, EvalError> {
+    fn lookup(
+        &mut self,
+        name: &str,
+        env: &Rc<Scope>,
+        span: Span,
+    ) -> Result<Value, EvalError> {
         if let Some(value) = env.lookup(name) {
             return Ok(value);
         }
@@ -1423,27 +1549,40 @@ impl Interp {
     }
 
     /// The representation the checker instantiated for the literal at `span`.
-    fn literal_rep(&self, span: Span) -> Option<Rep> {
+    fn literal_rep(
+        &self,
+        span: Span,
+    ) -> Option<Rep> {
         self.literal_reps.get(&span).copied()
     }
 
     /// An integer literal in the representation its context chose (§3.10.1).
-    fn integer_literal(&self, value: &BigInt, span: Span) -> NumVal {
+    fn integer_literal(
+        &self,
+        value: &BigInt,
+        span: Span,
+    ) -> NumVal {
         match self.literal_rep(span) {
-            Some(Rep::Float) => NumVal::float(
-                num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
-                Dim::one(),
-            ),
-            Some(Rep::Real) => NumVal::exact(BigRational::from_integer(value.clone()), Dim::one()),
-            Some(Rep::Complex) => NumVal {
-                kind: NumKind::Complex(
+            | Some(Rep::Float) => {
+                NumVal::float(
                     num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
-                    0.0,
-                ),
-                dim: Dim::one(),
-                display: None,
+                    Dim::one(),
+                )
             },
-            _ => NumVal::int(value.clone()),
+            | Some(Rep::Real) => {
+                NumVal::exact(BigRational::from_integer(value.clone()), Dim::one())
+            },
+            | Some(Rep::Complex) => {
+                NumVal {
+                    kind: NumKind::Complex(
+                        num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+                        0.0,
+                    ),
+                    dim: Dim::one(),
+                    display: None,
+                }
+            },
+            | _ => NumVal::int(value.clone()),
         }
     }
 
@@ -1451,20 +1590,28 @@ impl Interp {
     ///
     /// A `Real` context keeps the exact rational the decimal text denotes
     /// (§6.3.2); a `Float` context uses the nearest `f64`.
-    fn float_literal(&self, text: &str, span: Span) -> NumVal {
+    fn float_literal(
+        &self,
+        text: &str,
+        span: Span,
+    ) -> NumVal {
         let cleaned = text.replace('_', "");
         let as_float = || cleaned.parse::<f64>().unwrap_or(f64::NAN);
         match self.literal_rep(span) {
-            Some(Rep::Real) => aevia_dim::parse_decimal(&cleaned)
-                .map_or_else(|| NumVal::float(as_float(), Dim::one()), |value| {
-                    NumVal::exact(value, Dim::one())
-                }),
-            Some(Rep::Complex) => NumVal {
-                kind: NumKind::Complex(as_float(), 0.0),
-                dim: Dim::one(),
-                display: None,
+            | Some(Rep::Real) => {
+                aevia_dim::parse_decimal(&cleaned).map_or_else(
+                    || NumVal::float(as_float(), Dim::one()),
+                    |value| NumVal::exact(value, Dim::one()),
+                )
             },
-            _ => NumVal::float(as_float(), Dim::one()),
+            | Some(Rep::Complex) => {
+                NumVal {
+                    kind: NumKind::Complex(as_float(), 0.0),
+                    dim: Dim::one(),
+                    display: None,
+                }
+            },
+            | _ => NumVal::float(as_float(), Dim::one()),
         }
     }
 
@@ -1528,24 +1675,30 @@ impl Interp {
             return Ok(Value::Num(num));
         }
         let num = match value {
-            NumberLit::Int(coefficient) => {
-                let scaled = BigRational::from_integer(coefficient.clone()) * resolved.scale.rat.clone();
+            | NumberLit::Int(coefficient) => {
+                let scaled =
+                    BigRational::from_integer(coefficient.clone()) * resolved.scale.rat.clone();
                 NumVal::exact(scaled, resolved.dim)
-            }
-            NumberLit::Decimal(text) => {
+            },
+            | NumberLit::Decimal(text) => {
                 let coefficient = aevia_dim::parse_decimal(text)
                     .ok_or_else(|| EvalError::new("E0106", "invalid decimal literal").at(span))?;
                 let scaled = coefficient * resolved.scale.rat.clone();
                 NumVal::exact(scaled, resolved.dim)
-            }
+            },
         };
         Ok(Value::Num(num.with_display(display)))
     }
 
-    pub(crate) fn unary(&mut self, op: UnOp, value: Value, span: Span) -> Result<Value, EvalError> {
+    pub(crate) fn unary(
+        &mut self,
+        op: UnOp,
+        value: Value,
+        span: Span,
+    ) -> Result<Value, EvalError> {
         match op {
-            UnOp::Pos => Ok(value),
-            UnOp::Neg => {
+            | UnOp::Pos => Ok(value),
+            | UnOp::Neg => {
                 // §8.14: negating a measurement negates its value; the
                 // uncertainty is a magnitude and stays positive.
                 if let Some((value, uncertainty)) = measurement_parts(&value) {
@@ -1560,64 +1713,76 @@ impl Interp {
                     return Ok(measurement_record(negated, uncertainty));
                 }
                 match value {
-                Value::Num(mut num) => {
-                    num.kind = match num.kind {
-                        NumKind::Int(value) => NumKind::Int(-value),
-                        NumKind::Exact(value) => NumKind::Exact(-value),
-                        NumKind::Float(value) => NumKind::Float(-value),
-                        NumKind::Sym(term) => NumKind::Sym(Rc::new(crate::sym::Term::neg(
-                            (*term).clone(),
-                        ))),
-                        NumKind::Complex(re, im) => NumKind::Complex(-re, -im),
-                    };
-                    Ok(Value::Num(num))
-                }
-                Value::Tensor(tensor) => {
-                    let elements = tensor
-                        .elements()
-                        .into_iter()
-                        .map(|element| self.unary(UnOp::Neg, element, span))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(build_tensor(elements, tensor.shape.clone(), tensor.dim.clone()))
-                }
-                // §4.9.3: unary `-` preserves the dimension of a `Dyn` and
-                // negates its payload (the dimension lives beside the value).
-                Value::Dyn(dynamic) => {
-                    let payload = self.unary(UnOp::Neg, Value::Num(dynamic.payload()), span)?;
-                    let Value::Num(mut payload) = payload else {
-                        return Err(EvalError::new(
-                            "E0809",
-                            "the negation of a Dyn payload is not a scalar",
+                    | Value::Num(mut num) => {
+                        num.kind = match num.kind {
+                            | NumKind::Int(value) => NumKind::Int(-value),
+                            | NumKind::Exact(value) => NumKind::Exact(-value),
+                            | NumKind::Float(value) => NumKind::Float(-value),
+                            | NumKind::Sym(term) => {
+                                NumKind::Sym(Rc::new(crate::sym::Term::neg((*term).clone())))
+                            },
+                            | NumKind::Complex(re, im) => NumKind::Complex(-re, -im),
+                        };
+                        Ok(Value::Num(num))
+                    },
+                    | Value::Tensor(tensor) => {
+                        let elements = tensor
+                            .elements()
+                            .into_iter()
+                            .map(|element| self.unary(UnOp::Neg, element, span))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(build_tensor(
+                            elements,
+                            tensor.shape.clone(),
+                            tensor.dim.clone(),
+                        ))
+                    },
+                    // §4.9.3: unary `-` preserves the dimension of a `Dyn` and
+                    // negates its payload (the dimension lives beside the value).
+                    | Value::Dyn(dynamic) => {
+                        let payload = self.unary(UnOp::Neg, Value::Num(dynamic.payload()), span)?;
+                        let Value::Num(mut payload) = payload else {
+                            return Err(EvalError::new(
+                                "E0809",
+                                "the negation of a Dyn payload is not a scalar",
+                            )
+                            .at(span));
+                        };
+                        payload.dim = Dim::one();
+                        Ok(Value::Dyn(Rc::new(DynValue {
+                            value: payload,
+                            dim: dynamic.dim.clone(),
+                            display: dynamic.display.clone(),
+                        })))
+                    },
+                    | other => {
+                        Err(EvalError::new(
+                            "E0302",
+                            format!("`-` is not defined for {}", other.type_name()),
                         )
-                        .at(span));
-                    };
-                    payload.dim = Dim::one();
-                    Ok(Value::Dyn(Rc::new(DynValue {
-                        value: payload,
-                        dim: dynamic.dim.clone(),
-                        display: dynamic.display.clone(),
-                    })))
+                        .at(span))
+                    },
                 }
-                other => Err(EvalError::new(
-                    "E0302",
-                    format!("`-` is not defined for {}", other.type_name()),
-                )
-                .at(span)),
-                }
-            }
-            UnOp::Not => match value {
-                Value::Bool(value) => Ok(Value::Bool(!value)),
-                Value::Prop(prop) => Ok(Value::Prop(Rc::new(PropValue {
-                    text: format!("!({})", prop.text),
-                    comparison: None,
-                }))),
-                other => Err(EvalError::new(
-                    "E0302",
-                    format!("`!` expects Bool, found {}", other.type_name()),
-                )
-                .at(span)),
             },
-            UnOp::Sqrt => self.call_named("sqrt", vec![value], span),
+            | UnOp::Not => {
+                match value {
+                    | Value::Bool(value) => Ok(Value::Bool(!value)),
+                    | Value::Prop(prop) => {
+                        Ok(Value::Prop(Rc::new(PropValue {
+                            text: format!("!({})", prop.text),
+                            comparison: None,
+                        })))
+                    },
+                    | other => {
+                        Err(EvalError::new(
+                            "E0302",
+                            format!("`!` expects Bool, found {}", other.type_name()),
+                        )
+                        .at(span))
+                    },
+                }
+            },
+            | UnOp::Sqrt => self.call_named("sqrt", vec![value], span),
         }
     }
 
@@ -1635,43 +1800,53 @@ impl Interp {
             return Ok(result);
         }
         match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
+            | BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow => {
                 self.arithmetic(op, left, right, span)
-            }
-            BinOp::MatMul => self.matmul(left, right, span),
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                self.compare(op, left, right, span)
-            }
-            BinOp::And | BinOp::Or => match (&left, &right) {
-                (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(if op == BinOp::And {
-                    *a && *b
-                } else {
-                    *a || *b
-                })),
-                (Value::Prop(a), Value::Prop(b)) => Ok(Value::Prop(Rc::new(PropValue {
-                    text: format!(
-                        "({}) {} ({})",
-                        a.text,
-                        if op == BinOp::And { "&&" } else { "||" },
-                        b.text
-                    ),
-                    comparison: None,
-                }))),
-                _ => Err(EvalError::new("E0302", "`&&`/`||` expect Bool operands").at(span)),
             },
-            BinOp::Cons => {
+            | BinOp::MatMul => self.matmul(left, right, span),
+            | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                self.compare(op, left, right, span)
+            },
+            | BinOp::And | BinOp::Or => {
+                match (&left, &right) {
+                    | (Value::Bool(a), Value::Bool(b)) => {
+                        Ok(Value::Bool(if op == BinOp::And {
+                            *a && *b
+                        } else {
+                            *a || *b
+                        }))
+                    },
+                    | (Value::Prop(a), Value::Prop(b)) => {
+                        Ok(Value::Prop(Rc::new(PropValue {
+                            text: format!(
+                                "({}) {} ({})",
+                                a.text,
+                                if op == BinOp::And {
+                                    "&&"
+                                } else {
+                                    "||"
+                                },
+                                b.text
+                            ),
+                            comparison: None,
+                        })))
+                    },
+                    | _ => Err(EvalError::new("E0302", "`&&`/`||` expect Bool operands").at(span)),
+                }
+            },
+            | BinOp::Cons => {
                 let mut elements = vec![left];
                 match right {
-                    Value::Tensor(tensor) => elements.extend(tensor.elements()),
-                    other => elements.push(other),
+                    | Value::Tensor(tensor) => elements.extend(tensor.elements()),
+                    | other => elements.push(other),
                 }
                 let len = elements.len();
                 let dim = value::value_dim(&elements[0]);
                 Ok(build_tensor(elements, vec![len], dim))
-            }
-            BinOp::Pipe | BinOp::PipeBack => {
+            },
+            | BinOp::Pipe | BinOp::PipeBack => {
                 Err(EvalError::new("E0809", "pipes must be desugared").at(span))
-            }
+            },
         }
     }
 
@@ -1692,9 +1867,9 @@ impl Interp {
         let left_measurement = measurement_parts(left);
         let right_measurement = measurement_parts(right);
         match (left_measurement, right_measurement) {
-            (Some((left_value, left_uncertainty)), Some((right_value, right_uncertainty))) => {
+            | (Some((left_value, left_uncertainty)), Some((right_value, right_uncertainty))) => {
                 match op {
-                    BinOp::Add | BinOp::Sub => {
+                    | BinOp::Add | BinOp::Sub => {
                         if left_value.dim != right_value.dim {
                             return Err(EvalError::new(
                                 "E0401",
@@ -1702,20 +1877,16 @@ impl Interp {
                             )
                             .at(span));
                         }
-                        let value = self.binary(
-                            op,
-                            Value::Num(left_value),
-                            Value::Num(right_value),
-                            span,
-                        )?;
+                        let value =
+                            self.binary(op, Value::Num(left_value), Value::Num(right_value), span)?;
                         let uncertainty = self.quadrature(
                             Value::Num(left_uncertainty),
                             Value::Num(right_uncertainty),
                             span,
                         )?;
                         self.finish_measurement(value, uncertainty, span)
-                    }
-                    BinOp::Mul => {
+                    },
+                    | BinOp::Mul => {
                         let product = self.binary(
                             BinOp::Mul,
                             Value::Num(left_value.clone()),
@@ -1736,8 +1907,8 @@ impl Interp {
                         )?;
                         let uncertainty = self.quadrature(first, second, span)?;
                         self.finish_measurement(product, uncertainty, span)
-                    }
-                    BinOp::Div => {
+                    },
+                    | BinOp::Div => {
                         let quotient = self.binary(
                             BinOp::Div,
                             Value::Num(left_value.clone()),
@@ -1765,38 +1936,33 @@ impl Interp {
                         let second = self.binary(BinOp::Div, numerator, square, span)?;
                         let uncertainty = self.quadrature(first, second, span)?;
                         self.finish_measurement(quotient, uncertainty, span)
-                    }
-                    _ => Ok(None),
+                    },
+                    | _ => Ok(None),
                 }
-            }
+            },
             // A scalar scales a measurement; `measurement + scalar` is not a
             // declared operator, so it stays an `E0302` from the normal path.
-            (Some((measurement_value, measurement_uncertainty)), None) => {
+            | (Some((measurement_value, measurement_uncertainty)), None) => {
                 let Value::Num(scalar) = right.clone() else {
                     return Ok(None);
                 };
                 match op {
-                    BinOp::Mul | BinOp::Div => {
+                    | BinOp::Mul | BinOp::Div => {
                         let value = self.binary(
                             op,
                             Value::Num(measurement_value),
                             Value::Num(scalar.clone()),
                             span,
                         )?;
-                        let magnitude =
-                            self.call_named("abs", vec![Value::Num(scalar)], span)?;
-                        let uncertainty = self.binary(
-                            op,
-                            Value::Num(measurement_uncertainty),
-                            magnitude,
-                            span,
-                        )?;
+                        let magnitude = self.call_named("abs", vec![Value::Num(scalar)], span)?;
+                        let uncertainty =
+                            self.binary(op, Value::Num(measurement_uncertainty), magnitude, span)?;
                         self.finish_measurement(value, uncertainty, span)
-                    }
-                    _ => Ok(None),
+                    },
+                    | _ => Ok(None),
                 }
-            }
-            (None, Some((measurement_value, measurement_uncertainty))) => {
+            },
+            | (None, Some((measurement_value, measurement_uncertainty))) => {
                 let Value::Num(scalar) = left.clone() else {
                     return Ok(None);
                 };
@@ -1817,8 +1983,8 @@ impl Interp {
                     span,
                 )?;
                 self.finish_measurement(value, uncertainty, span)
-            }
-            (None, None) => Ok(None),
+            },
+            | (None, None) => Ok(None),
         }
     }
 
@@ -1842,11 +2008,9 @@ impl Interp {
         span: Span,
     ) -> Result<Option<Value>, EvalError> {
         let (Value::Num(value), Value::Num(uncertainty)) = (value, uncertainty) else {
-            return Err(EvalError::new(
-                "E0809",
-                "measurement arithmetic produced a non-scalar",
-            )
-            .at(span));
+            return Err(
+                EvalError::new("E0809", "measurement arithmetic produced a non-scalar").at(span),
+            );
         };
         Ok(Some(measurement_record(value, uncertainty)))
     }
@@ -1859,10 +2023,10 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         match (&left, &right) {
-            (Value::Tensor(a), Value::Tensor(b)) => {
+            | (Value::Tensor(a), Value::Tensor(b)) => {
                 self.tensor_arithmetic(op, a.as_ref(), b.as_ref(), span)
-            }
-            (Value::Tensor(tensor), Value::Num(num))
+            },
+            | (Value::Tensor(tensor), Value::Num(num))
             | (Value::Num(num), Value::Tensor(tensor)) => {
                 let flipped = matches!(left, Value::Num(_));
                 // §9.13: a dense buffer of floats and a float scalar stay in
@@ -1893,57 +2057,66 @@ impl Interp {
                     .first()
                     .map_or_else(|| tensor.dim.clone(), value::value_dim);
                 Ok(build_tensor(elements, tensor.shape.clone(), dim))
-            }
-            (Value::Num(a), Value::Num(b)) => {
-                Ok(Value::Num(self.scalar_arithmetic(op, a.clone(), b.clone(), span)?))
-            }
-            (Value::UnitOf(a), Value::UnitOf(b)) => match op {
-                BinOp::Mul => Ok(Value::UnitOf(Rc::new(combine_units(a, b, true)))),
-                BinOp::Div => Ok(Value::UnitOf(Rc::new(combine_units(a, b, false)))),
-                _ => Err(EvalError::new("E0302", "units support `*` and `/`").at(span)),
             },
-            (Value::UnitOf(unit), Value::Num(num)) => {
+            | (Value::Num(a), Value::Num(b)) => {
+                Ok(Value::Num(self.scalar_arithmetic(
+                    op,
+                    a.clone(),
+                    b.clone(),
+                    span,
+                )?))
+            },
+            | (Value::UnitOf(a), Value::UnitOf(b)) => {
+                match op {
+                    | BinOp::Mul => Ok(Value::UnitOf(Rc::new(combine_units(a, b, true)))),
+                    | BinOp::Div => Ok(Value::UnitOf(Rc::new(combine_units(a, b, false)))),
+                    | _ => Err(EvalError::new("E0302", "units support `*` and `/`").at(span)),
+                }
+            },
+            | (Value::UnitOf(unit), Value::Num(num)) => {
                 let mut result = num.clone();
                 result.dim = match op {
-                    BinOp::Mul => num.dim.mul(&unit.dim),
-                    BinOp::Div => num.dim.div(&unit.dim),
-                    _ => return Err(EvalError::new("E0302", "invalid unit arithmetic").at(span)),
+                    | BinOp::Mul => num.dim.mul(&unit.dim),
+                    | BinOp::Div => num.dim.div(&unit.dim),
+                    | _ => return Err(EvalError::new("E0302", "invalid unit arithmetic").at(span)),
                 };
                 result.display = Some(unit.clone());
                 Ok(Value::Num(result))
-            }
-            (Value::Num(num), Value::UnitOf(unit)) if op == BinOp::Mul => {
+            },
+            | (Value::Num(num), Value::UnitOf(unit)) if op == BinOp::Mul => {
                 let mut result = num.clone();
                 result.dim = num.dim.mul(&unit.dim);
                 result.display = Some(unit.clone());
                 Ok(Value::Num(result))
-            }
+            },
             // §3.5.3 / §4.5.2: a unit scales a tensor elementwise. The
             // coefficient of every element is unchanged — only the element
             // dimension and the display metadata move — so the buffer is
             // shared. `Float` stays `Float`, `Real` stays `Real`.
-            (Value::Tensor(tensor), Value::UnitOf(unit)) => {
+            | (Value::Tensor(tensor), Value::UnitOf(unit)) => {
                 self.tensor_with_unit(op, tensor, unit, false, span)
-            }
-            (Value::UnitOf(unit), Value::Tensor(tensor)) => {
+            },
+            | (Value::UnitOf(unit), Value::Tensor(tensor)) => {
                 self.tensor_with_unit(op, tensor, unit, true, span)
-            }
+            },
             // §4.9.3: the `Dyn` escape layer's arithmetic. Dimensions are
             // checked/combined at run time because they are data there.
-            (Value::Dyn(left), Value::Dyn(right)) => self.dyn_arithmetic(op, left, right, span),
-            (Value::Dyn(dynamic), Value::Num(exponent)) if op == BinOp::Pow => {
+            | (Value::Dyn(left), Value::Dyn(right)) => self.dyn_arithmetic(op, left, right, span),
+            | (Value::Dyn(dynamic), Value::Num(exponent)) if op == BinOp::Pow => {
                 self.dyn_pow(dynamic, exponent, span)
-            }
-            _ => Err(EvalError::new(
-                "E0302",
-                format!(
-                    "`{}` is not defined for {} and {}",
-                    op.as_str(),
-                    left.type_name(),
-                    right.type_name()
-                ),
-            )
-            .at(span)),
+            },
+            | _ => {
+                Err(EvalError::new(
+                    "E0302",
+                    format!(
+                        "`{}` is not defined for {} and {}",
+                        op.as_str(),
+                        left.type_name(),
+                        right.type_name()
+                    ),
+                )
+                .at(span))
+            },
         }
     }
 
@@ -1955,16 +2128,16 @@ impl Interp {
         span: Span,
     ) -> Result<NumVal, EvalError> {
         let dim = match op {
-            BinOp::Add | BinOp::Sub => left.dim.clone(),
-            BinOp::Mul => left.dim.mul(&right.dim),
-            BinOp::Div => left.dim.div(&right.dim),
-            BinOp::Pow => {
+            | BinOp::Add | BinOp::Sub => left.dim.clone(),
+            | BinOp::Mul => left.dim.mul(&right.dim),
+            | BinOp::Div => left.dim.div(&right.dim),
+            | BinOp::Pow => {
                 let exponent = right
                     .to_rational()
                     .ok_or_else(|| EvalError::new("E0402", "exponent must be finite").at(span))?;
                 left.dim.pow(&exponent)
-            }
-            _ => left.dim.clone(),
+            },
+            | _ => left.dim.clone(),
         };
         // Symbolic if either side is symbolic.
         if left.is_symbolic() || right.is_symbolic() {
@@ -1987,40 +2160,41 @@ impl Interp {
                 None
             };
             let term = match op {
-                BinOp::Add => crate::sym::Term::add(a.clone(), b.clone()),
-                BinOp::Sub => crate::sym::Term::sub(a.clone(), b.clone()),
-                BinOp::Mul => crate::sym::Term::mul(a.clone(), b.clone()),
-                BinOp::Div => {
+                | BinOp::Add => crate::sym::Term::add(a.clone(), b.clone()),
+                | BinOp::Sub => crate::sym::Term::sub(a.clone(), b.clone()),
+                | BinOp::Mul => crate::sym::Term::mul(a.clone(), b.clone()),
+                | BinOp::Div => {
                     let inverse = crate::sym::Term::pow(
                         b.clone(),
                         BigRational::from_integer(BigInt::from(-1)),
                     );
                     crate::sym::Term::mul(a.clone(), inverse)
-                }
-                BinOp::Pow => {
+                },
+                | BinOp::Pow => {
                     let exponent = power.clone().expect("computed above");
                     crate::sym::Term::pow(a.clone(), exponent)
-                }
-                _ => return Err(EvalError::new("E0809", "unexpected operator").at(span)),
+                },
+                | _ => return Err(EvalError::new("E0809", "unexpected operator").at(span)),
             };
             if let crate::sym::Term::Num(value) = &term {
                 if has_infinity {
                     let unevaluated = match op {
-                        BinOp::Add => crate::sym::Term::Add(vec![a, b]),
-                        BinOp::Sub => crate::sym::Term::Add(vec![a, crate::sym::Term::neg(b)]),
-                        BinOp::Mul => crate::sym::Term::Mul(vec![a, b]),
-                        BinOp::Div => crate::sym::Term::Mul(vec![
-                            a,
-                            crate::sym::Term::pow(
-                                b,
-                                BigRational::from_integer(BigInt::from(-1)),
-                            ),
-                        ]),
-                        BinOp::Pow => crate::sym::Term::Pow(
-                            Box::new(a),
-                            power.expect("computed above"),
-                        ),
-                        _ => crate::sym::Term::Num(value.clone()),
+                        | BinOp::Add => crate::sym::Term::Add(vec![a, b]),
+                        | BinOp::Sub => crate::sym::Term::Add(vec![a, crate::sym::Term::neg(b)]),
+                        | BinOp::Mul => crate::sym::Term::Mul(vec![a, b]),
+                        | BinOp::Div => {
+                            crate::sym::Term::Mul(vec![
+                                a,
+                                crate::sym::Term::pow(
+                                    b,
+                                    BigRational::from_integer(BigInt::from(-1)),
+                                ),
+                            ])
+                        },
+                        | BinOp::Pow => {
+                            crate::sym::Term::Pow(Box::new(a), power.expect("computed above"))
+                        },
+                        | _ => crate::sym::Term::Num(value.clone()),
                     };
                     return Ok(NumVal::symbolic(unevaluated, dim));
                 }
@@ -2036,21 +2210,24 @@ impl Interp {
             let (ar, ai) = to_complex(&left);
             let (br, bi) = to_complex(&right);
             let (re, im) = match op {
-                BinOp::Add => (ar + br, ai + bi),
-                BinOp::Sub => (ar - br, ai - bi),
-                BinOp::Mul => (ar * br - ai * bi, ar * bi + ai * br),
-                BinOp::Div => {
+                | BinOp::Add => (ar + br, ai + bi),
+                | BinOp::Sub => (ar - br, ai - bi),
+                | BinOp::Mul => (ar * br - ai * bi, ar * bi + ai * br),
+                | BinOp::Div => {
                     let denominator = br * br + bi * bi;
-                    ((ar * br + ai * bi) / denominator, (ai * br - ar * bi) / denominator)
-                }
-                BinOp::Pow => {
+                    (
+                        (ar * br + ai * bi) / denominator,
+                        (ai * br - ar * bi) / denominator,
+                    )
+                },
+                | BinOp::Pow => {
                     let value = (ar, ai);
                     let exponent = br;
                     let magnitude = value.0.hypot(value.1).powf(exponent);
                     let angle = value.1.atan2(value.0) * exponent;
                     (magnitude * angle.cos(), magnitude * angle.sin())
-                }
-                _ => return Err(EvalError::new("E0809", "unexpected operator").at(span)),
+                },
+                | _ => return Err(EvalError::new("E0809", "unexpected operator").at(span)),
             };
             return Ok(NumVal {
                 kind: NumKind::Complex(re, im),
@@ -2063,25 +2240,26 @@ impl Interp {
         // rational it denotes, so `1.0 + 2` is the exact `3` and
         // `1/3 + 0.5` is exactly `5/6` — the language's central claim, and the
         // reason `Float ⊗ Exact -> Real` is a rule and not an aspiration.
-        let both_float = matches!(left.kind, NumKind::Float(_))
-            && matches!(right.kind, NumKind::Float(_));
+        let both_float =
+            matches!(left.kind, NumKind::Float(_)) && matches!(right.kind, NumKind::Float(_));
         if both_float {
             let a = left.to_f64().unwrap_or(f64::NAN);
             let b = right.to_f64().unwrap_or(f64::NAN);
             let value = match op {
-                BinOp::Add => a + b,
-                BinOp::Sub => a - b,
-                BinOp::Mul => a * b,
-                BinOp::Div => a / b,
-                BinOp::Pow => a.powf(b),
-                _ => f64::NAN,
+                | BinOp::Add => a + b,
+                | BinOp::Sub => a - b,
+                | BinOp::Mul => a * b,
+                | BinOp::Div => a / b,
+                | BinOp::Pow => a.powf(b),
+                | _ => f64::NAN,
             };
             return Ok(NumVal::float(value, dim));
         }
         // The Real path: every operand is exact (a `Float` is the exact
         // rational it denotes), so an operation that is closed on the
         // rationals answers exactly, and one that is not answers symbolically.
-        let both_int = matches!(left.kind, NumKind::Int(_)) && matches!(right.kind, NumKind::Int(_));
+        let both_int =
+            matches!(left.kind, NumKind::Int(_)) && matches!(right.kind, NumKind::Int(_));
         let (Some(a), Some(b)) = (left.to_rational(), right.to_rational()) else {
             return Err(EvalError::new(
                 "E0302",
@@ -2095,16 +2273,16 @@ impl Interp {
             .at(span));
         };
         let value = match op {
-            BinOp::Add => Some(&a + &b),
-            BinOp::Sub => Some(&a - &b),
-            BinOp::Mul => Some(&a * &b),
-            BinOp::Div => {
+            | BinOp::Add => Some(&a + &b),
+            | BinOp::Sub => Some(&a - &b),
+            | BinOp::Mul => Some(&a * &b),
+            | BinOp::Div => {
                 if b.is_zero() {
                     return Err(EvalError::new("E0801", "division by zero").at(span));
                 }
                 Some(&a / &b)
-            }
-            BinOp::Pow => {
+            },
+            | BinOp::Pow => {
                 if a.is_zero() && b < BigRational::zero() {
                     return Err(EvalError::new("E0801", "division by zero").at(span));
                 }
@@ -2115,8 +2293,8 @@ impl Interp {
                 } else {
                     None
                 }
-            }
-            _ => None,
+            },
+            | _ => None,
         };
         if let Some(value) = value {
             // Integer arithmetic stays `Int` when the result is an integer:
@@ -2161,9 +2339,9 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         let dim = match op {
-            BinOp::Mul => tensor.dim.mul(&unit.dim),
-            BinOp::Div if !unit_on_left => tensor.dim.div(&unit.dim),
-            _ => {
+            | BinOp::Mul => tensor.dim.mul(&unit.dim),
+            | BinOp::Div if !unit_on_left => tensor.dim.div(&unit.dim),
+            | _ => {
                 return Err(EvalError::new(
                     "E0302",
                     format!(
@@ -2171,8 +2349,8 @@ impl Interp {
                         op.as_str()
                     ),
                 )
-                .at(span))
-            }
+                .at(span));
+            },
         };
         let display = if op == BinOp::Mul {
             Some(unit.clone())
@@ -2203,7 +2381,7 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         let dim = match op {
-            BinOp::Add | BinOp::Sub => {
+            | BinOp::Add | BinOp::Sub => {
                 if left.dim != right.dim {
                     return Err(EvalError::new(
                         "E0412",
@@ -2215,21 +2393,20 @@ impl Interp {
                     )
                     .at(span)
                     .with_note(
-                        "`+` and `-` on Dyn require equal runtime dimensions (§4.9.3)"
-                            .to_string(),
+                        "`+` and `-` on Dyn require equal runtime dimensions (§4.9.3)".to_string(),
                     ));
                 }
                 left.dim.clone()
-            }
-            BinOp::Mul => left.dim.mul(&right.dim),
-            BinOp::Div => left.dim.div(&right.dim),
-            _ => {
+            },
+            | BinOp::Mul => left.dim.mul(&right.dim),
+            | BinOp::Div => left.dim.div(&right.dim),
+            | _ => {
                 return Err(EvalError::new(
                     "E0302",
                     format!("`{}` is not defined on Dyn", op.as_str()),
                 )
-                .at(span))
-            }
+                .at(span));
+            },
         };
         let payload = self.scalar_arithmetic(op, left.payload(), right.payload(), span)?;
         Ok(Value::Dyn(Rc::new(DynValue {
@@ -2267,19 +2444,26 @@ impl Interp {
         })))
     }
 
-    fn num_to_term(&self, num: &NumVal) -> crate::sym::Term {
+    fn num_to_term(
+        &self,
+        num: &NumVal,
+    ) -> crate::sym::Term {
         match &num.kind {
-            NumKind::Int(value) => {
+            | NumKind::Int(value) => {
                 crate::sym::Term::Num(BigRational::from_integer(value.clone()))
-            }
-            NumKind::Exact(value) => crate::sym::Term::Num(value.clone()),
-            NumKind::Float(value) => crate::sym::Term::Num(
-                BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
-            ),
-            NumKind::Sym(term) => (**term).clone(),
-            NumKind::Complex(re, _) => {
-                crate::sym::Term::Num(BigRational::from_float(*re).unwrap_or_else(BigRational::zero))
-            }
+            },
+            | NumKind::Exact(value) => crate::sym::Term::Num(value.clone()),
+            | NumKind::Float(value) => {
+                crate::sym::Term::Num(
+                    BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
+                )
+            },
+            | NumKind::Sym(term) => (**term).clone(),
+            | NumKind::Complex(re, _) => {
+                crate::sym::Term::Num(
+                    BigRational::from_float(*re).unwrap_or_else(BigRational::zero),
+                )
+            },
         }
     }
 
@@ -2324,12 +2508,10 @@ impl Interp {
         let mut elements = Vec::with_capacity(count);
         for index in 0..count {
             let coordinates = unravel(index, &shape);
-            let a = element_at_broadcast(left, &coordinates).ok_or_else(|| {
-                EvalError::new("E0802", "shape mismatch").at(span)
-            })?;
-            let b = element_at_broadcast(right, &coordinates).ok_or_else(|| {
-                EvalError::new("E0802", "shape mismatch").at(span)
-            })?;
+            let a = element_at_broadcast(left, &coordinates)
+                .ok_or_else(|| EvalError::new("E0802", "shape mismatch").at(span))?;
+            let b = element_at_broadcast(right, &coordinates)
+                .ok_or_else(|| EvalError::new("E0802", "shape mismatch").at(span))?;
             elements.push(self.arithmetic(op, a, b, span)?);
         }
         let dim = elements
@@ -2338,7 +2520,12 @@ impl Interp {
         Ok(build_tensor(elements, shape, dim))
     }
 
-    fn matmul(&mut self, left: Value, right: Value, span: Span) -> Result<Value, EvalError> {
+    fn matmul(
+        &mut self,
+        left: Value,
+        right: Value,
+        span: Span,
+    ) -> Result<Value, EvalError> {
         let (Value::Tensor(a), Value::Tensor(b)) = (&left, &right) else {
             return Err(EvalError::new("E0302", "`@` expects two tensors").at(span));
         };
@@ -2346,7 +2533,7 @@ impl Interp {
             return Ok(value);
         }
         match (a.rank(), b.rank()) {
-            (2, 2) => {
+            | (2, 2) => {
                 let (m, k) = (a.shape[0], a.shape[1]);
                 let (k2, n) = (b.shape[0], b.shape[1]);
                 if k != k2 {
@@ -2373,8 +2560,8 @@ impl Interp {
                                 .ok_or_else(|| EvalError::new("E0802", "index out of range"))?;
                             let product = self.arithmetic(BinOp::Mul, x, y, span)?;
                             sum = Some(match sum {
-                                None => product,
-                                Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
+                                | None => product,
+                                | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
                             });
                         }
                         elements.push(sum.unwrap_or_else(|| Value::float(0.0)));
@@ -2384,8 +2571,8 @@ impl Interp {
                     .first()
                     .map_or_else(|| a.dim.mul(&b.dim), value::value_dim);
                 Ok(build_tensor(elements, vec![m, n], dim))
-            }
-            (2, 1) => {
+            },
+            | (2, 1) => {
                 let (m, k) = (a.shape[0], a.shape[1]);
                 if k != b.shape[0] {
                     return Err(EvalError::new(
@@ -2401,12 +2588,14 @@ impl Interp {
                 for row in 0..m {
                     let mut sum: Option<Value> = None;
                     for inner in 0..k {
-                        let x = a.get(&[row as isize, inner as isize]).unwrap_or(Value::Unit);
+                        let x = a
+                            .get(&[row as isize, inner as isize])
+                            .unwrap_or(Value::Unit);
                         let y = b.get(&[inner as isize]).unwrap_or(Value::Unit);
                         let product = self.arithmetic(BinOp::Mul, x, y, span)?;
                         sum = Some(match sum {
-                            None => product,
-                            Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
+                            | None => product,
+                            | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
                         });
                     }
                     elements.push(sum.unwrap_or_else(|| Value::float(0.0)));
@@ -2415,8 +2604,8 @@ impl Interp {
                     .first()
                     .map_or_else(|| a.dim.mul(&b.dim), value::value_dim);
                 Ok(build_tensor(elements, vec![m], dim))
-            }
-            (1, 2) => {
+            },
+            | (1, 2) => {
                 let k = a.shape[0];
                 let (k2, n) = (b.shape[0], b.shape[1]);
                 if k != k2 {
@@ -2427,11 +2616,13 @@ impl Interp {
                     let mut sum: Option<Value> = None;
                     for inner in 0..k {
                         let x = a.get(&[inner as isize]).unwrap_or(Value::Unit);
-                        let y = b.get(&[inner as isize, column as isize]).unwrap_or(Value::Unit);
+                        let y = b
+                            .get(&[inner as isize, column as isize])
+                            .unwrap_or(Value::Unit);
                         let product = self.arithmetic(BinOp::Mul, x, y, span)?;
                         sum = Some(match sum {
-                            None => product,
-                            Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
+                            | None => product,
+                            | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
                         });
                     }
                     elements.push(sum.unwrap_or_else(|| Value::float(0.0)));
@@ -2440,8 +2631,8 @@ impl Interp {
                     .first()
                     .map_or_else(|| a.dim.mul(&b.dim), value::value_dim);
                 Ok(build_tensor(elements, vec![n], dim))
-            }
-            (1, 1) => {
+            },
+            | (1, 1) => {
                 if a.shape[0] != b.shape[0] {
                     return Err(EvalError::new("E0802", "shape mismatch in `dot`").at(span));
                 }
@@ -2451,17 +2642,19 @@ impl Interp {
                     let y = b.get(&[index as isize]).unwrap_or(Value::Unit);
                     let product = self.arithmetic(BinOp::Mul, x, y, span)?;
                     sum = Some(match sum {
-                        None => product,
-                        Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
+                        | None => product,
+                        | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
                     });
                 }
                 Ok(sum.unwrap_or_else(|| Value::float(0.0)))
-            }
-            _ => Err(EvalError::new(
-                "E0802",
-                format!("`@` is not defined for ranks {} and {}", a.rank(), b.rank()),
-            )
-            .at(span)),
+            },
+            | _ => {
+                Err(EvalError::new(
+                    "E0802",
+                    format!("`@` is not defined for ranks {} and {}", a.rank(), b.rank()),
+                )
+                .at(span))
+            },
         }
     }
 
@@ -2473,7 +2666,7 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         match (&left, &right) {
-            (Value::Num(a), Value::Num(b)) => {
+            | (Value::Num(a), Value::Num(b)) => {
                 if a.is_symbolic() || b.is_symbolic() {
                     let text = format!(
                         "{} {} {}",
@@ -2494,7 +2687,11 @@ impl Interp {
                     // §6.12.1: a concrete `Int`/`Float` compares numerically,
                     // and two exact values compare as rationals.
                     let equal = value::equal(&left, &right).unwrap_or(false);
-                    return Ok(Value::Bool(if op == BinOp::Eq { equal } else { !equal }));
+                    return Ok(Value::Bool(if op == BinOp::Eq {
+                        equal
+                    } else {
+                        !equal
+                    }));
                 }
                 let both_exact = matches!(a.kind, NumKind::Int(_) | NumKind::Exact(_))
                     && matches!(b.kind, NumKind::Int(_) | NumKind::Exact(_));
@@ -2502,60 +2699,74 @@ impl Interp {
                     let a = a.to_rational().unwrap_or_else(BigRational::zero);
                     let b = b.to_rational().unwrap_or_else(BigRational::zero);
                     match op {
-                        BinOp::Lt => a < b,
-                        BinOp::Le => a <= b,
-                        BinOp::Gt => a > b,
-                        BinOp::Ge => a >= b,
-                        _ => false,
+                        | BinOp::Lt => a < b,
+                        | BinOp::Le => a <= b,
+                        | BinOp::Gt => a > b,
+                        | BinOp::Ge => a >= b,
+                        | _ => false,
                     }
                 } else {
                     let (a, b) = match (a.to_f64(), b.to_f64()) {
-                        (Some(a), Some(b)) => (a, b),
-                        _ => return Ok(Value::Bool(false)),
+                        | (Some(a), Some(b)) => (a, b),
+                        | _ => return Ok(Value::Bool(false)),
                     };
                     match op {
-                        BinOp::Lt => a < b,
-                        BinOp::Le => a <= b,
-                        BinOp::Gt => a > b,
-                        BinOp::Ge => a >= b,
-                        _ => false,
+                        | BinOp::Lt => a < b,
+                        | BinOp::Le => a <= b,
+                        | BinOp::Gt => a > b,
+                        | BinOp::Ge => a >= b,
+                        | _ => false,
                     }
                 };
                 Ok(Value::Bool(result))
-            }
-            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(match op {
-                BinOp::Eq => a == b,
-                BinOp::Ne => a != b,
-                _ => false,
-            })),
-            (Value::Str(a), Value::Str(b)) => Ok(Value::Bool(match op {
-                BinOp::Eq => a == b,
-                BinOp::Ne => a != b,
-                BinOp::Lt => a < b,
-                BinOp::Le => a <= b,
-                BinOp::Gt => a > b,
-                BinOp::Ge => a >= b,
-                _ => false,
-            })),
-            (Value::Unit, Value::Unit) => Ok(Value::Bool(matches!(op, BinOp::Eq | BinOp::Le | BinOp::Ge))),
-            _ if matches!(op, BinOp::Eq | BinOp::Ne) => {
+            },
+            | (Value::Bool(a), Value::Bool(b)) => {
+                Ok(Value::Bool(match op {
+                    | BinOp::Eq => a == b,
+                    | BinOp::Ne => a != b,
+                    | _ => false,
+                }))
+            },
+            | (Value::Str(a), Value::Str(b)) => {
+                Ok(Value::Bool(match op {
+                    | BinOp::Eq => a == b,
+                    | BinOp::Ne => a != b,
+                    | BinOp::Lt => a < b,
+                    | BinOp::Le => a <= b,
+                    | BinOp::Gt => a > b,
+                    | BinOp::Ge => a >= b,
+                    | _ => false,
+                }))
+            },
+            | (Value::Unit, Value::Unit) => {
+                Ok(Value::Bool(matches!(op, BinOp::Eq | BinOp::Le | BinOp::Ge)))
+            },
+            | _ if matches!(op, BinOp::Eq | BinOp::Ne) => {
                 // Structural equality for variants, records and tensors
                 // (§6.12.1): payloads and elements are compared, never the
                 // text they print as.
                 match value::equal(&left, &right) {
-                    Ok(equal) => Ok(Value::Bool(if op == BinOp::Eq { equal } else { !equal })),
-                    Err(reason) => Err(EvalError::new("E0302", reason.to_string()).at(span)),
+                    | Ok(equal) => {
+                        Ok(Value::Bool(if op == BinOp::Eq {
+                            equal
+                        } else {
+                            !equal
+                        }))
+                    },
+                    | Err(reason) => Err(EvalError::new("E0302", reason.to_string()).at(span)),
                 }
-            }
-            _ => Err(EvalError::new(
-                "E0302",
-                format!(
-                    "cannot compare {} with {}",
-                    left.type_name(),
-                    right.type_name()
-                ),
-            )
-            .at(span)),
+            },
+            | _ => {
+                Err(EvalError::new(
+                    "E0302",
+                    format!(
+                        "cannot compare {} with {}",
+                        left.type_name(),
+                        right.type_name()
+                    ),
+                )
+                .at(span))
+            },
         }
     }
 
@@ -2585,8 +2796,8 @@ impl Interp {
         let result = self.apply_inner(function, args, span);
         self.depth -= 1;
         match result {
-            Ok(value) => Ok(value),
-            Err(error) => Err(error.with_stack(self.frames.clone())),
+            | Ok(value) => Ok(value),
+            | Err(error) => Err(error.with_stack(self.frames.clone())),
         }
     }
 
@@ -2597,8 +2808,8 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         match function {
-            Value::Native(function) => (function.0)(self, args, span),
-            Value::Closure(closure) => {
+            | Value::Native(function) => (function.0)(self, args, span),
+            | Value::Closure(closure) => {
                 // §9.2.2: a closure lowered to the Core IR runs on the IR
                 // interpreter, which trampolines its tail calls. Everything
                 // else about applying a function — the depth guard, the stack
@@ -2644,13 +2855,13 @@ impl Interp {
                 match outcome {
                     // `?` returns from the enclosing function by unwinding to
                     // its call, which is where the `Err` value belongs.
-                    Err(error) if error.payload.is_some() => {
+                    | Err(error) if error.payload.is_some() => {
                         Ok(error.payload.expect("checked above"))
-                    }
-                    other => other,
+                    },
+                    | other => other,
                 }
-            }
-            Value::Ctor {
+            },
+            | Value::Ctor {
                 adt,
                 index,
                 name,
@@ -2683,12 +2894,13 @@ impl Interp {
                     .at(span));
                 }
                 Ok(make_variant(adt, index, &name, all))
-            }
-            other => Err(EvalError::new(
-                "E0305",
-                format!("{} is not a function", other.type_name()),
-            )
-            .at(span)),
+            },
+            | other => {
+                Err(
+                    EvalError::new("E0305", format!("{} is not a function", other.type_name()))
+                        .at(span),
+                )
+            },
         }
     }
 
@@ -2708,24 +2920,26 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         let op = match op {
-            "+" => BinOp::Add,
-            "-" => BinOp::Sub,
-            "*" => BinOp::Mul,
-            "/" => BinOp::Div,
-            "@" => BinOp::MatMul,
-            "^" => BinOp::Pow,
-            "==" => BinOp::Eq,
-            "!=" => BinOp::Ne,
-            "<" => BinOp::Lt,
-            "<=" => BinOp::Le,
-            ">" => BinOp::Gt,
-            ">=" => BinOp::Ge,
-            "&&" => BinOp::And,
-            "||" => BinOp::Or,
-            "::" => BinOp::Cons,
-            other => {
-                return Err(EvalError::new("E0809", format!("unknown operator `{other}`")).at(span));
-            }
+            | "+" => BinOp::Add,
+            | "-" => BinOp::Sub,
+            | "*" => BinOp::Mul,
+            | "/" => BinOp::Div,
+            | "@" => BinOp::MatMul,
+            | "^" => BinOp::Pow,
+            | "==" => BinOp::Eq,
+            | "!=" => BinOp::Ne,
+            | "<" => BinOp::Lt,
+            | "<=" => BinOp::Le,
+            | ">" => BinOp::Gt,
+            | ">=" => BinOp::Ge,
+            | "&&" => BinOp::And,
+            | "||" => BinOp::Or,
+            | "::" => BinOp::Cons,
+            | other => {
+                return Err(
+                    EvalError::new("E0809", format!("unknown operator `{other}`")).at(span),
+                );
+            },
         };
         self.binary(op, left, right, span)
     }
@@ -2789,8 +3003,8 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         match self.resolve_dictionary(use_site, method, &values, span)? {
-            Dispatch::Instance(body) => self.apply(body, values, span),
-            Dispatch::Builtin => self.call_named(method, values, span),
+            | Dispatch::Instance(body) => self.apply(body, values, span),
+            | Dispatch::Builtin => self.call_named(method, values, span),
         }
     }
 
@@ -2807,22 +3021,24 @@ impl Interp {
         span: Span,
     ) -> Result<Dispatch, EvalError> {
         match self.dispatch_method(use_site, method, values) {
-            Some(dispatch) => Ok(dispatch),
+            | Some(dispatch) => Ok(dispatch),
             // The checker proved a user instance the runtime cannot find.
             // Running the global of the method name here would be a silently
             // different program.
-            None => Err(EvalError::new(
-                "E0310",
-                format!(
-                    "no `{}` instance for {} is available at run time",
+            | None => {
+                Err(EvalError::new(
+                    "E0310",
+                    format!(
+                        "no `{}` instance for {} is available at run time",
+                        use_site.class, use_site.head
+                    ),
+                )
+                .at(span)
+                .with_note(format!(
+                    "the checker proved `{} {}` for `{method}`",
                     use_site.class, use_site.head
-                ),
-            )
-            .at(span)
-            .with_note(format!(
-                "the checker proved `{} {}` for `{method}`",
-                use_site.class, use_site.head
-            ))),
+                )))
+            },
         }
     }
 
@@ -2836,30 +3052,34 @@ impl Interp {
     ) -> Result<bool, EvalError> {
         match &pattern.kind {
             // A parser recovery node: it matches nothing.
-            PatKind::Error => Ok(false),
-            PatKind::Wildcard => Ok(true),
-            PatKind::Var(name) => {
+            | PatKind::Error => Ok(false),
+            | PatKind::Wildcard => Ok(true),
+            | PatKind::Var(name) => {
                 scope.vars.borrow_mut().insert(name.clone(), value.clone());
                 Ok(true)
-            }
-            PatKind::Lit(lit) => Ok(match (lit, value) {
-                (PatLit::Int(expected), Value::Num(num)) => match &num.kind {
-                    NumKind::Int(actual) => actual == expected,
-                    NumKind::Exact(actual) => {
-                        actual == &BigRational::from_integer(expected.clone())
-                    }
-                    NumKind::Float(actual) => {
-                        BigRational::from_float(*actual)
-                            == Some(BigRational::from_integer(expected.clone()))
-                    }
-                    _ => false,
-                },
-                (PatLit::Str(expected), Value::Str(actual)) => actual.as_ref() == expected,
-                (PatLit::Bool(expected), Value::Bool(actual)) => expected == actual,
-                (PatLit::Unit, Value::Unit) => true,
-                _ => false,
-            }),
-            PatKind::Ctor { name, args } => {
+            },
+            | PatKind::Lit(lit) => {
+                Ok(match (lit, value) {
+                    | (PatLit::Int(expected), Value::Num(num)) => {
+                        match &num.kind {
+                            | NumKind::Int(actual) => actual == expected,
+                            | NumKind::Exact(actual) => {
+                                actual == &BigRational::from_integer(expected.clone())
+                            },
+                            | NumKind::Float(actual) => {
+                                BigRational::from_float(*actual)
+                                    == Some(BigRational::from_integer(expected.clone()))
+                            },
+                            | _ => false,
+                        }
+                    },
+                    | (PatLit::Str(expected), Value::Str(actual)) => actual.as_ref() == expected,
+                    | (PatLit::Bool(expected), Value::Bool(actual)) => expected == actual,
+                    | (PatLit::Unit, Value::Unit) => true,
+                    | _ => false,
+                })
+            },
+            | PatKind::Ctor { name, args } => {
                 let Value::Variant(variant) = value else {
                     return Ok(false);
                 };
@@ -2872,8 +3092,8 @@ impl Interp {
                     }
                 }
                 Ok(true)
-            }
-            PatKind::Record(fields) => {
+            },
+            | PatKind::Record(fields) => {
                 let Value::Record(record) = value else {
                     return Ok(false);
                 };
@@ -2882,19 +3102,19 @@ impl Interp {
                         return Ok(false);
                     };
                     match sub {
-                        Some(sub) => {
+                        | Some(sub) => {
                             if !self.match_pattern(sub, field, scope)? {
                                 return Ok(false);
                             }
-                        }
-                        None => {
+                        },
+                        | None => {
                             scope.vars.borrow_mut().insert(name.clone(), field.clone());
-                        }
+                        },
                     }
                 }
                 Ok(true)
-            }
-            PatKind::Tuple(items) => {
+            },
+            | PatKind::Tuple(items) => {
                 let Value::Record(record) = value else {
                     return Ok(false);
                 };
@@ -2907,8 +3127,8 @@ impl Interp {
                     }
                 }
                 Ok(true)
-            }
-            PatKind::Tensor { items, rest } => {
+            },
+            | PatKind::Tensor { items, rest } => {
                 let Value::Tensor(tensor) = value else {
                     return Ok(false);
                 };
@@ -2933,16 +3153,16 @@ impl Interp {
                     );
                 }
                 Ok(true)
-            }
-            PatKind::As { pattern: inner, name } => {
+            },
+            | PatKind::As { pattern: inner, name } => {
                 if self.match_pattern(inner, value, scope)? {
                     scope.vars.borrow_mut().insert(name.clone(), value.clone());
                     Ok(true)
                 } else {
                     Ok(false)
                 }
-            }
-            PatKind::Annot { pattern: inner, .. } => self.match_pattern(inner, value, scope),
+            },
+            | PatKind::Annot { pattern: inner, .. } => self.match_pattern(inner, value, scope),
         }
     }
 
@@ -2957,10 +3177,7 @@ impl Interp {
         } else {
             Err(EvalError::new(
                 "E0308",
-                format!(
-                    "pattern does not match value {}",
-                    value::show(value)
-                ),
+                format!("pattern does not match value {}", value::show(value)),
             )
             .at(pattern.span))
         }
@@ -3041,27 +3258,27 @@ impl Interp {
         let mut resolved = Vec::with_capacity(indices.len());
         for index in indices {
             match index {
-                SliceAst::Index(expr) => {
+                | SliceAst::Index(expr) => {
                     let value = self.eval(expr, env)?;
                     resolved.push(SliceValue::Index(value.as_f64()));
-                }
-                SliceAst::Range {
+                },
+                | SliceAst::Range {
                     start,
                     end,
                     inclusive,
                     step,
                 } => {
                     let start = match start {
-                        Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
-                        None => None,
+                        | Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
+                        | None => None,
                     };
                     let end = match end {
-                        Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
-                        None => None,
+                        | Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(0.0)),
+                        | None => None,
                     };
                     let step = match step {
-                        Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(f64::NAN)),
-                        None => None,
+                        | Some(expr) => Some(self.eval(expr, env)?.as_f64().unwrap_or(f64::NAN)),
+                        | None => None,
                     };
                     resolved.push(SliceValue::Range {
                         start,
@@ -3069,7 +3286,7 @@ impl Interp {
                         inclusive: *inclusive,
                         step,
                     });
-                }
+                },
             }
         }
         self.index_resolved(base, &resolved, span)
@@ -3098,8 +3315,8 @@ impl Interp {
             let mut coordinates = Vec::with_capacity(indices.len());
             for index in indices {
                 if let SliceValue::Index(value) = index {
-                    let coordinate = value
-                        .ok_or_else(|| EvalError::new("E0802", "index must be an Int"))?;
+                    let coordinate =
+                        value.ok_or_else(|| EvalError::new("E0802", "index must be an Int"))?;
                     coordinates.push(coordinate as isize);
                 }
             }
@@ -3161,14 +3378,14 @@ impl Interp {
         for (axis, index) in indices.iter().enumerate() {
             let extent = tensor.shape.get(axis).copied().unwrap_or(0);
             match index {
-                SliceValue::Index(value) => {
+                | SliceValue::Index(value) => {
                     let coordinate = value.unwrap_or(0.0) as isize;
                     let normalized = normalize_index(coordinate, extent)
                         .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
                     ranges.push((normalized, normalized + 1));
                     walks.push((normalized, 1, 1));
-                }
-                SliceValue::Range {
+                },
+                | SliceValue::Range {
                     start,
                     end,
                     inclusive,
@@ -3188,7 +3405,7 @@ impl Interp {
                     }
                     ranges.push((start, end));
                     walks.push((start, end - start, 1));
-                }
+                },
             }
         }
         if stepped {
@@ -3259,16 +3476,17 @@ impl Interp {
     /// the statement runs when the action runs and not when it is built
     /// (§6.8.1) — and `run_io` drives that chain iteratively, so the stack does
     /// not grow with the number of bindings either.
-    fn eval_do(&mut self, stmts: &[DoStmt], env: &Rc<Scope>) -> Result<Value, EvalError> {
+    fn eval_do(
+        &mut self,
+        stmts: &[DoStmt],
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
         let mut actions: Vec<Rc<IoAction>> = Vec::new();
         for (index, stmt) in stmts.iter().enumerate() {
             let rest = &stmts[index + 1..];
             match stmt {
-                DoStmt::Let {
-                    pattern,
-                    ty,
-                    value,
-                    ..
+                | DoStmt::Let {
+                    pattern, ty, value, ..
                 } => {
                     // `do let x = e; rest` is `rest` evaluated in the scope
                     // `x` creates — but only when the action runs.
@@ -3278,9 +3496,7 @@ impl Interp {
                             ty: ty.clone(),
                             value: Box::new(value.clone()),
                             body: Box::new(Expr::new(
-                                ExprKind::Do {
-                                    stmts: rest.to_vec(),
-                                },
+                                ExprKind::Do { stmts: rest.to_vec() },
                                 first_span(stmt),
                             )),
                         },
@@ -3289,19 +3505,16 @@ impl Interp {
                     let thunk = Rc::new(Closure::ast(Vec::new(), body, env.clone(), None));
                     actions.push(Rc::new(IoAction::Defer(thunk)));
                     return Ok(Value::Io(Rc::new(IoAction::Seq(actions))));
-                }
-                DoStmt::Bind { pattern, value, .. } => {
+                },
+                | DoStmt::Bind { pattern, value, .. } => {
                     let action = self.eval(value, env)?;
                     let Value::Io(action) = action else {
-                        return Err(EvalError::new("E0701", "`<-` expects an IO action")
-                            .at(value.span));
+                        return Err(
+                            EvalError::new("E0701", "`<-` expects an IO action").at(value.span)
+                        );
                     };
-                    let rest_expr = Expr::new(
-                        ExprKind::Do {
-                            stmts: rest.to_vec(),
-                        },
-                        first_span(stmt),
-                    );
+                    let rest_expr =
+                        Expr::new(ExprKind::Do { stmts: rest.to_vec() }, first_span(stmt));
                     let continuation = Value::Closure(Rc::new(Closure::ast(
                         vec![pattern.clone()],
                         rest_expr,
@@ -3313,8 +3526,8 @@ impl Interp {
                         func: continuation,
                     }));
                     return Ok(Value::Io(Rc::new(IoAction::Seq(actions))));
-                }
-                DoStmt::Expr(expr) => {
+                },
+                | DoStmt::Expr(expr) => {
                     let action = self.eval(expr, env)?;
                     let Value::Io(action) = action else {
                         return Err(EvalError::new(
@@ -3327,13 +3540,13 @@ impl Interp {
                         .at(expr.span));
                     };
                     actions.push(action);
-                }
+                },
             }
         }
         match actions.len() {
-            0 => Ok(Value::Io(Rc::new(IoAction::Pure(Value::Unit)))),
-            1 => Ok(Value::Io(actions.remove(0))),
-            _ => Ok(Value::Io(Rc::new(IoAction::Seq(actions)))),
+            | 0 => Ok(Value::Io(Rc::new(IoAction::Pure(Value::Unit)))),
+            | 1 => Ok(Value::Io(actions.remove(0))),
+            | _ => Ok(Value::Io(Rc::new(IoAction::Seq(actions)))),
         }
     }
 
@@ -3347,7 +3560,10 @@ impl Interp {
     ///
     /// Reports IO failures (`E0810`), failed assertions (`E0899`) and a `?`
     /// that tries to leave an `IO` block (`E0702`).
-    pub fn run_io(&mut self, action: &Rc<IoAction>) -> Result<Value, EvalError> {
+    pub fn run_io(
+        &mut self,
+        action: &Rc<IoAction>,
+    ) -> Result<Value, EvalError> {
         enum Work {
             Run(Rc<IoAction>),
             Continue(Value),
@@ -3356,15 +3572,15 @@ impl Interp {
         let mut last = Value::Unit;
         while let Some(work) = pending.pop() {
             let action = match work {
-                Work::Continue(function) => {
+                | Work::Continue(function) => {
                     let value = last.clone();
                     let next = self.apply(function, vec![value], Span::default())?;
                     match next {
-                        Value::Io(next) => {
+                        | Value::Io(next) => {
                             pending.push(Work::Run(next));
                             continue;
-                        }
-                        other => {
+                        },
+                        | other => {
                             return Err(EvalError::new(
                                 "E0701",
                                 format!(
@@ -3372,128 +3588,127 @@ impl Interp {
                                     other.type_name()
                                 ),
                             ));
-                        }
+                        },
                     }
-                }
-                Work::Run(action) => action,
+                },
+                | Work::Run(action) => action,
             };
             match &*action {
-                IoAction::Pure(value) => last = value.clone(),
-                IoAction::Print {
+                | IoAction::Pure(value) => last = value.clone(),
+                | IoAction::Print {
                     text,
                     newline,
                     stderr,
                 } => {
                     self.write_out(text, *newline, *stderr);
                     last = Value::Unit;
-                }
-                IoAction::ReadFile(path) => {
+                },
+                | IoAction::ReadFile(path) => {
                     last = match std::fs::read_to_string(path) {
-                        Ok(contents) => make_variant(
-                            adt::RESULT_ID,
-                            0,
-                            "Ok",
-                            vec![Value::string(contents)],
-                        ),
-                        Err(error) => make_variant(
-                            adt::RESULT_ID,
-                            1,
-                            "Err",
-                            vec![Value::string(format!(
-                                "{}: {error}",
-                                io_error_code(&error)
-                            ))],
-                        ),
-                    };
-                }
-                IoAction::WriteFile { path, contents } => {
-                    last = match std::fs::write(path, contents) {
-                        Ok(()) => make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::Unit]),
-                        Err(error) => make_variant(
-                            adt::RESULT_ID,
-                            1,
-                            "Err",
-                            vec![Value::string(format!(
-                                "{}: {error}",
-                                io_error_code(&error)
-                            ))],
-                        ),
-                    };
-                }
-                IoAction::ReadNpy(path) => {
-                    let result = match std::fs::read(path) {
-                        Ok(bytes) => match crate::builtins::npy_decode(&bytes) {
-                            Ok(tensor) => make_variant(
+                        | Ok(contents) => {
+                            make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::string(contents)])
+                        },
+                        | Err(error) => {
+                            make_variant(
                                 adt::RESULT_ID,
-                                0,
-                                "Ok",
-                                vec![Value::Tensor(Rc::new(tensor))],
-                            ),
-                            Err(message) => {
-                                make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)])
+                                1,
+                                "Err",
+                                vec![Value::string(format!("{}: {error}", io_error_code(&error)))],
+                            )
+                        },
+                    };
+                },
+                | IoAction::WriteFile { path, contents } => {
+                    last = match std::fs::write(path, contents) {
+                        | Ok(()) => make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::Unit]),
+                        | Err(error) => {
+                            make_variant(
+                                adt::RESULT_ID,
+                                1,
+                                "Err",
+                                vec![Value::string(format!("{}: {error}", io_error_code(&error)))],
+                            )
+                        },
+                    };
+                },
+                | IoAction::ReadNpy(path) => {
+                    let result = match std::fs::read(path) {
+                        | Ok(bytes) => {
+                            match crate::builtins::npy_decode(&bytes) {
+                                | Ok(tensor) => {
+                                    make_variant(
+                                        adt::RESULT_ID,
+                                        0,
+                                        "Ok",
+                                        vec![Value::Tensor(Rc::new(tensor))],
+                                    )
+                                },
+                                | Err(message) => {
+                                    make_variant(
+                                        adt::RESULT_ID,
+                                        1,
+                                        "Err",
+                                        vec![Value::string(message)],
+                                    )
+                                },
                             }
                         },
-                        Err(error) => make_variant(
-                            adt::RESULT_ID,
-                            1,
-                            "Err",
-                            vec![Value::string(format!(
-                                "{}: {error}",
-                                io_error_code(&error)
-                            ))],
-                        ),
+                        | Err(error) => {
+                            make_variant(
+                                adt::RESULT_ID,
+                                1,
+                                "Err",
+                                vec![Value::string(format!("{}: {error}", io_error_code(&error)))],
+                            )
+                        },
                     };
                     last = result;
-                }
-                IoAction::WriteNpy { path, bytes } => {
+                },
+                | IoAction::WriteNpy { path, bytes } => {
                     last = match std::fs::write(path, bytes) {
-                        Ok(()) => make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::Unit]),
-                        Err(error) => make_variant(
-                            adt::RESULT_ID,
-                            1,
-                            "Err",
-                            vec![Value::string(format!(
-                                "{}: {error}",
-                                io_error_code(&error)
-                            ))],
-                        ),
+                        | Ok(()) => make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::Unit]),
+                        | Err(error) => {
+                            make_variant(
+                                adt::RESULT_ID,
+                                1,
+                                "Err",
+                                vec![Value::string(format!("{}: {error}", io_error_code(&error)))],
+                            )
+                        },
                     };
-                }
-                IoAction::ReadLine => {
+                },
+                | IoAction::ReadLine => {
                     let mut line = String::new();
                     std::io::stdin()
                         .read_line(&mut line)
                         .map_err(|error| EvalError::new("E0810", error.to_string()))?;
                     last = Value::string(line.trim_end_matches(['\n', '\r']));
-                }
-                IoAction::Bind { action, func } => {
+                },
+                | IoAction::Bind { action, func } => {
                     pending.push(Work::Continue(func.clone()));
                     pending.push(Work::Run(action.clone()));
-                }
-                IoAction::Seq(actions) => {
+                },
+                | IoAction::Seq(actions) => {
                     for action in actions.iter().rev() {
                         pending.push(Work::Run(action.clone()));
                     }
-                }
-                IoAction::Plot(html) => {
+                },
+                | IoAction::Plot(html) => {
                     std::fs::write("plot.html", html)
                         .map_err(|error| io_error("E0905", "plot rendering failed", &error))?;
                     last = Value::Unit;
-                }
-                IoAction::Save { path, html } => {
+                },
+                | IoAction::Save { path, html } => {
                     std::fs::write(path, html)
                         .map_err(|error| io_error("E0905", "plot rendering failed", &error))?;
                     last = Value::Unit;
-                }
-                IoAction::Defer(thunk) => {
-                    let produced = self.apply(
-                        Value::Closure(thunk.clone()),
-                        Vec::new(),
-                        Span::default(),
-                    )?;
+                },
+                | IoAction::Defer(thunk) => {
+                    let produced =
+                        self.apply(Value::Closure(thunk.clone()), Vec::new(), Span::default())?;
                     match produced {
-                        Value::Io(next) => pending.push(Work::Run(next)),
-                        other => {
+                        | Value::Io(next) => pending.push(Work::Run(next)),
+                        | other => {
                             return Err(EvalError::new(
                                 "E0702",
                                 format!(
@@ -3502,24 +3717,25 @@ impl Interp {
                                     other.type_name()
                                 ),
                             ));
-                        }
+                        },
                     }
-                }
-                IoAction::Assert { message } => {
-                    return Err(EvalError::new("E0899", message.clone())
-                        .with_stack(self.frames.clone()));
-                }
-                IoAction::Random => {
+                },
+                | IoAction::Assert { message } => {
+                    return Err(
+                        EvalError::new("E0899", message.clone()).with_stack(self.frames.clone())
+                    );
+                },
+                | IoAction::Random => {
                     last = Value::Num(NumVal::float(self.next_random(), Dim::one()));
-                }
-                IoAction::TimeNow => {
+                },
+                | IoAction::TimeNow => {
                     last = Value::Num(NumVal::float(
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map_or(0.0, |elapsed| elapsed.as_secs_f64()),
                         Dim::base("Time"),
                     ));
-                }
+                },
             }
         }
         Ok(last)
@@ -3537,14 +3753,18 @@ impl Interp {
 /// The appendix-B code for an IO failure (§9.12).
 fn io_error_code(error: &std::io::Error) -> &'static str {
     match error.kind() {
-        std::io::ErrorKind::NotFound => "E0901",
-        std::io::ErrorKind::PermissionDenied => "E0902",
-        _ => "E0901",
+        | std::io::ErrorKind::NotFound => "E0901",
+        | std::io::ErrorKind::PermissionDenied => "E0902",
+        | _ => "E0901",
     }
 }
 
 /// A fatal IO error with the taxonomy code and the OS message.
-fn io_error(code: &'static str, context: &str, error: &std::io::Error) -> EvalError {
+fn io_error(
+    code: &'static str,
+    context: &str,
+    error: &std::io::Error,
+) -> EvalError {
     EvalError::new(code, format!("{context}: {error}"))
 }
 
@@ -3564,7 +3784,10 @@ pub fn next_unit(state: &mut u64) -> f64 {
 impl EvalError {
     /// Adds a note.
     #[must_use]
-    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+    pub fn with_note(
+        mut self,
+        note: impl Into<String>,
+    ) -> Self {
         self.notes.push(note.into());
         self
     }
@@ -3572,15 +3795,15 @@ impl EvalError {
 
 fn first_span(stmt: &DoStmt) -> Span {
     match stmt {
-        DoStmt::Let { span, .. } | DoStmt::Bind { span, .. } => *span,
-        DoStmt::Expr(expr) => expr.span,
+        | DoStmt::Let { span, .. } | DoStmt::Bind { span, .. } => *span,
+        | DoStmt::Expr(expr) => expr.span,
     }
 }
 
 fn to_complex(num: &NumVal) -> (f64, f64) {
     match &num.kind {
-        NumKind::Complex(re, im) => (*re, *im),
-        _ => (num.to_f64().unwrap_or(f64::NAN), 0.0),
+        | NumKind::Complex(re, im) => (*re, *im),
+        | _ => (num.to_f64().unwrap_or(f64::NAN), 0.0),
     }
 }
 
@@ -3594,8 +3817,8 @@ fn to_complex(num: &NumVal) -> (f64, f64) {
 /// [`Interp::dictionary_body`].
 pub(crate) fn instance_head_name(ty: &Ty) -> Option<String> {
     match &ty.kind {
-        TyKind::Named { path, args } if args.is_empty() => path.last().cloned(),
-        _ => None,
+        | TyKind::Named { path, args } if args.is_empty() => path.last().cloned(),
+        | _ => None,
     }
 }
 
@@ -3603,7 +3826,10 @@ pub(crate) fn instance_head_name(ty: &Ty) -> Option<String> {
 fn dictionary_table(uses: &[DictionaryUse]) -> HashMap<Span, Vec<DictionaryUse>> {
     let mut table: HashMap<Span, Vec<DictionaryUse>> = HashMap::new();
     for use_site in uses {
-        table.entry(use_site.span).or_default().push(use_site.clone());
+        table
+            .entry(use_site.span)
+            .or_default()
+            .push(use_site.clone());
     }
     table
 }
@@ -3615,21 +3841,27 @@ fn dictionary_table(uses: &[DictionaryUse]) -> HashMap<Span, Vec<DictionaryUse>>
 #[must_use]
 pub fn type_argument_name(ty: &Ty) -> String {
     match &ty.kind {
-        TyKind::Int => "Int".to_string(),
-        TyKind::Real(_) => "Real".to_string(),
-        TyKind::Float(_) => "Float".to_string(),
-        TyKind::Complex(_) => "Complex".to_string(),
-        TyKind::Bool => "Bool".to_string(),
-        TyKind::Prop => "Prop".to_string(),
-        TyKind::Str => "String".to_string(),
-        TyKind::Unit => "()".to_string(),
-        TyKind::Var(name) => name.clone(),
-        TyKind::Tensor { .. } | TyKind::Matrix { .. } | TyKind::Sparse { .. } => "Tensor".to_string(),
-        _ => "?".to_string(),
+        | TyKind::Int => "Int".to_string(),
+        | TyKind::Real(_) => "Real".to_string(),
+        | TyKind::Float(_) => "Float".to_string(),
+        | TyKind::Complex(_) => "Complex".to_string(),
+        | TyKind::Bool => "Bool".to_string(),
+        | TyKind::Prop => "Prop".to_string(),
+        | TyKind::Str => "String".to_string(),
+        | TyKind::Unit => "()".to_string(),
+        | TyKind::Var(name) => name.clone(),
+        | TyKind::Tensor { .. } | TyKind::Matrix { .. } | TyKind::Sparse { .. } => {
+            "Tensor".to_string()
+        },
+        | _ => "?".to_string(),
     }
 }
 
-fn combine_units(left: &UnitDef, right: &UnitDef, multiply: bool) -> UnitDef {
+fn combine_units(
+    left: &UnitDef,
+    right: &UnitDef,
+    multiply: bool,
+) -> UnitDef {
     let dim = if multiply {
         left.dim.mul(&right.dim)
     } else {
@@ -3658,7 +3890,10 @@ fn combine_units(left: &UnitDef, right: &UnitDef, multiply: bool) -> UnitDef {
     }
 }
 
-fn factorial(n: i64, double: bool) -> BigInt {
+fn factorial(
+    n: i64,
+    double: bool,
+) -> BigInt {
     let mut result = BigInt::one();
     if n <= 0 {
         return result;
@@ -3672,9 +3907,16 @@ fn factorial(n: i64, double: bool) -> BigInt {
     result
 }
 
-fn normalize_index(index: isize, extent: usize) -> Option<usize> {
+fn normalize_index(
+    index: isize,
+    extent: usize,
+) -> Option<usize> {
     let extent = isize::try_from(extent).ok()?;
-    let normalized = if index < 0 { extent + index } else { index };
+    let normalized = if index < 0 {
+        extent + index
+    } else {
+        index
+    };
     if normalized < 0 || normalized >= extent {
         None
     } else {
@@ -3682,9 +3924,17 @@ fn normalize_index(index: isize, extent: usize) -> Option<usize> {
     }
 }
 
-fn normalize_bound(value: isize, extent: usize, inclusive: bool) -> usize {
+fn normalize_bound(
+    value: isize,
+    extent: usize,
+    inclusive: bool,
+) -> usize {
     let extent_i = isize::try_from(extent).unwrap_or(isize::MAX);
-    let normalized = if value < 0 { extent_i + value } else { value };
+    let normalized = if value < 0 {
+        extent_i + value
+    } else {
+        value
+    };
     let clamped = normalized.clamp(0, extent_i);
     let clamped = usize::try_from(clamped).unwrap_or(0);
     if inclusive {
@@ -3729,22 +3979,36 @@ fn walk_range(
     // A negative bound counts from the end, exactly as an index does. The
     // clamp keeps a start past the end past the end, so `xs[7:8:1]` is empty
     // rather than the last element.
-    let from_end = |value: isize| if value < 0 { extent + value } else { value };
-    let first = match start {
-        Some(value) => {
-            let high = if forward { extent } else { extent - 1 };
-            from_end(value as isize).clamp(0, high)
+    let from_end = |value: isize| {
+        if value < 0 {
+            extent + value
+        } else {
+            value
         }
-        None if forward => 0,
-        None => extent - 1,
+    };
+    let first = match start {
+        | Some(value) => {
+            let high = if forward {
+                extent
+            } else {
+                extent - 1
+            };
+            from_end(value as isize).clamp(0, high)
+        },
+        | None if forward => 0,
+        | None => extent - 1,
     };
     let stop = match end {
-        Some(value) => {
-            let high = if forward { extent } else { extent - 1 };
+        | Some(value) => {
+            let high = if forward {
+                extent
+            } else {
+                extent - 1
+            };
             from_end(value as isize).clamp(-1, high)
-        }
-        None if forward => extent,
-        None => -1,
+        },
+        | None if forward => extent,
+        | None => -1,
     };
     // `i128` because the step may be any `Int` the source wrote: a step near
     // `isize::MAX` must count one element, not overflow on `span + step`.
@@ -3759,10 +4023,21 @@ fn walk_range(
         // `ceil(span / divisor)`, in integers, with both terms positive.
         ((span + divisor - 1) / divisor) as usize
     };
-    Ok((if count == 0 { 0 } else { first as usize }, count, step))
+    Ok((
+        if count == 0 {
+            0
+        } else {
+            first as usize
+        },
+        count,
+        step,
+    ))
 }
 
-fn broadcast_shape(left: &[usize], right: &[usize]) -> Option<Vec<usize>> {
+fn broadcast_shape(
+    left: &[usize],
+    right: &[usize],
+) -> Option<Vec<usize>> {
     if left.len() != right.len() {
         return None;
     }
@@ -3781,7 +4056,10 @@ fn broadcast_shape(left: &[usize], right: &[usize]) -> Option<Vec<usize>> {
     Some(shape)
 }
 
-fn unravel(mut index: usize, shape: &[usize]) -> Vec<usize> {
+fn unravel(
+    mut index: usize,
+    shape: &[usize],
+) -> Vec<usize> {
     let mut coordinates = vec![0; shape.len()];
     for axis in (0..shape.len()).rev() {
         let extent = shape[axis].max(1);
@@ -3794,13 +4072,16 @@ fn unravel(mut index: usize, shape: &[usize]) -> Vec<usize> {
 /// The flat key a qualified field access names, when the base is a path or an
 /// import alias.
 #[must_use]
-pub fn qualified_name(base: &Expr, field: &str) -> Option<String> {
+pub fn qualified_name(
+    base: &Expr,
+    field: &str,
+) -> Option<String> {
     match &base.kind {
-        ExprKind::QName(path) => Some(format!("{}.{field}", path.join("."))),
-        ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
+        | ExprKind::QName(path) => Some(format!("{}.{field}", path.join("."))),
+        | ExprKind::Var(name) if name.chars().next().is_some_and(char::is_uppercase) => {
             Some(format!("{name}.{field}"))
-        }
-        _ => None,
+        },
+        | _ => None,
     }
 }
 
@@ -3808,9 +4089,9 @@ pub fn qualified_name(base: &Expr, field: &str) -> Option<String> {
 #[must_use]
 pub fn is_rssn_root(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Var(name) => name == "Rssn",
-        ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
-        _ => false,
+        | ExprKind::Var(name) => name == "Rssn",
+        | ExprKind::QName(path) => path.len() == 1 && path[0] == "Rssn",
+        | _ => false,
     }
 }
 
@@ -3822,9 +4103,9 @@ pub fn is_rssn_root(expr: &Expr) -> bool {
 #[must_use]
 pub fn rssn_operator_name(expr: &Expr) -> Option<String> {
     let name = match &expr.kind {
-        ExprKind::Field { base, name } if is_rssn_root(base) => name.clone(),
-        ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => path[1].clone(),
-        _ => return None,
+        | ExprKind::Field { base, name } if is_rssn_root(base) => name.clone(),
+        | ExprKind::QName(path) if path.len() == 2 && path[0] == "Rssn" => path[1].clone(),
+        | _ => return None,
     };
     if crate::rssn_module::is_entry_point(&name) || name == "overloads" {
         return None;
@@ -3832,17 +4113,28 @@ pub fn rssn_operator_name(expr: &Expr) -> Option<String> {
     Some(name)
 }
 
-fn element_at_broadcast(tensor: &TensorData, coordinates: &[usize]) -> Option<Value> {
+fn element_at_broadcast(
+    tensor: &TensorData,
+    coordinates: &[usize],
+) -> Option<Value> {
     let mut adjusted = Vec::with_capacity(coordinates.len());
     for (coordinate, extent) in coordinates.iter().zip(tensor.shape.iter()) {
-        adjusted.push(if *extent == 1 { 0 } else { *coordinate } as isize);
+        adjusted.push(if *extent == 1 {
+            0
+        } else {
+            *coordinate
+        } as isize);
     }
     tensor.get(&adjusted)
 }
 
 /// Builds a tensor from elements, choosing the narrowest storage.
 #[must_use]
-pub fn build_tensor(elements: Vec<Value>, shape: Vec<usize>, dim: Dim) -> Value {
+pub fn build_tensor(
+    elements: Vec<Value>,
+    shape: Vec<usize>,
+    dim: Dim,
+) -> Value {
     if elements.is_empty() {
         return Value::Tensor(Rc::new(TensorData {
             shape,
@@ -3851,10 +4143,15 @@ pub fn build_tensor(elements: Vec<Value>, shape: Vec<usize>, dim: Dim) -> Value 
             display: None,
         }));
     }
-    if elements
-        .iter()
-        .all(|element| matches!(element, Value::Num(NumVal { kind: NumKind::Float(_), .. })))
-    {
+    if elements.iter().all(|element| {
+        matches!(
+            element,
+            Value::Num(NumVal {
+                kind: NumKind::Float(_),
+                ..
+            })
+        )
+    }) {
         let mut values = Vec::with_capacity(elements.len());
         let mut display = None;
         for element in &elements {
@@ -3900,11 +4197,11 @@ pub fn build_tensor(elements: Vec<Value>, shape: Vec<usize>, dim: Dim) -> Value 
         for element in &elements {
             if let Value::Num(num) = element {
                 match num.to_f64() {
-                    Some(value) => values.push(value),
-                    None => {
+                    | Some(value) => values.push(value),
+                    | None => {
                         converted = false;
                         break;
-                    }
+                    },
                 }
                 if display.is_none() {
                     display = num.display.clone();
@@ -3993,54 +4290,60 @@ pub fn render_scalar(num: &NumVal) -> String {
 #[must_use]
 pub fn witness_of_value(value: &Value) -> Option<Witness> {
     match value {
-        Value::Num(num) => Some(Witness::Num(match &num.kind {
-            NumKind::Int(_) => RepKind::Int,
-            NumKind::Exact(_) | NumKind::Sym(_) => RepKind::Real,
-            NumKind::Float(_) => RepKind::Float,
-            NumKind::Complex(..) => RepKind::Complex,
-        })),
-        Value::Tensor(tensor) => {
+        | Value::Num(num) => {
+            Some(Witness::Num(match &num.kind {
+                | NumKind::Int(_) => RepKind::Int,
+                | NumKind::Exact(_) | NumKind::Sym(_) => RepKind::Real,
+                | NumKind::Float(_) => RepKind::Float,
+                | NumKind::Complex(..) => RepKind::Complex,
+            }))
+        },
+        | Value::Tensor(tensor) => {
             let storage = match &tensor.storage {
-                Storage::Dense(_) | Storage::View(_) => StorageClass::Float,
-                Storage::Exact(_) => StorageClass::Exact,
+                | Storage::Dense(_) | Storage::View(_) => StorageClass::Float,
+                | Storage::Exact(_) => StorageClass::Exact,
                 // A `Bool` tensor has no element representation in the witness
                 // table (`witness_of` requires a scalar element).
-                Storage::Bool(_) => return None,
-                Storage::Boxed(items) => match items.first() {
-                    Some(Value::Num(num)) => match &num.kind {
-                        NumKind::Int(_) | NumKind::Exact(_) | NumKind::Sym(_) => {
-                            StorageClass::Exact
-                        }
-                        NumKind::Float(_) => StorageClass::Float,
-                        NumKind::Complex(..) => StorageClass::Complex,
-                    },
-                    _ => return None,
+                | Storage::Bool(_) => return None,
+                | Storage::Boxed(items) => {
+                    match items.first() {
+                        | Some(Value::Num(num)) => {
+                            match &num.kind {
+                                | NumKind::Int(_) | NumKind::Exact(_) | NumKind::Sym(_) => {
+                                    StorageClass::Exact
+                                },
+                                | NumKind::Float(_) => StorageClass::Float,
+                                | NumKind::Complex(..) => StorageClass::Complex,
+                            }
+                        },
+                        | _ => return None,
+                    }
                 },
             };
             Some(Witness::Tensor {
                 rank: u32::try_from(tensor.rank()).ok()?,
                 storage,
             })
-        }
-        Value::Variant(variant) => {
+        },
+        | Value::Variant(variant) => {
             let args = variant
                 .fields
                 .iter()
                 .map(witness_of_value)
                 .collect::<Option<Vec<Witness>>>()?;
             Some(Witness::Adt(adt::key_of(variant.adt), args))
-        }
-        Value::Record(record) => {
+        },
+        | Value::Record(record) => {
             let mut labels: Vec<String> = record.fields.keys().cloned().collect();
             labels.sort();
             Some(Witness::Record(labels))
-        }
-        Value::Bool(_) => Some(Witness::Bool),
-        Value::Str(_) => Some(Witness::String),
-        Value::Unit => Some(Witness::Unit),
-        Value::Prop(_) => Some(Witness::Prop),
-        Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => None,
-        Value::Dyn(_) | Value::UnitOf(_) | Value::Error => None,
+        },
+        | Value::Bool(_) => Some(Witness::Bool),
+        | Value::Str(_) => Some(Witness::String),
+        | Value::Unit => Some(Witness::Unit),
+        | Value::Prop(_) => Some(Witness::Prop),
+        | Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => None,
+        | Value::Dyn(_) | Value::UnitOf(_) | Value::Error => None,
     }
 }
 
@@ -4071,9 +4374,15 @@ pub fn ctor_in_module(
 /// A constructor with no fields is already its variant; only a constructor with
 /// fields is a value that still needs arguments (§3.6.2).
 #[must_use]
-pub fn ctor_value(module: &keys::ModulePath, name: &str) -> Option<Value> {
+pub fn ctor_value(
+    module: &keys::ModulePath,
+    name: &str,
+) -> Option<Value> {
     let (adt, index, registered) = ctor_in_module(module, name)?;
-    let arity = registered.ctors.get(index).map_or(0, |ctor| ctor.fields.len());
+    let arity = registered
+        .ctors
+        .get(index)
+        .map_or(0, |ctor| ctor.fields.len());
     if arity == 0 {
         return Some(make_variant(adt, index, name, Vec::new()));
     }
@@ -4088,7 +4397,10 @@ pub fn ctor_value(module: &keys::ModulePath, name: &str) -> Option<Value> {
 
 /// Constructor name lookup, re-exported for the runtime's pattern matching.
 #[must_use]
-pub fn variant_name(adt: adt::AdtId, index: usize) -> Option<String> {
+pub fn variant_name(
+    adt: adt::AdtId,
+    index: usize,
+) -> Option<String> {
     ctor_name(adt, index)
 }
 
@@ -4105,7 +4417,10 @@ mod measurement_tests {
     use super::*;
 
     fn interpreter() -> Interp {
-        let compilation = crate::compile("measure-unit.aev", "fn main(): IO Unit = do\n    println(\"\")\n");
+        let compilation = crate::compile(
+            "measure-unit.aev",
+            "fn main(): IO Unit = do\n    println(\"\")\n",
+        );
         assert!(!compilation.diagnostics.has_errors());
         let mut interp = Interp::new(&compilation.checked).with_buffer();
         let diagnostics = interp.load(&compilation.module.expect("a module"));

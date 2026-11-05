@@ -8,7 +8,8 @@
 use aevia_core::driver;
 use aevia_core::manifest::Roots;
 use aevia_types::check::CheckOptions;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 struct Scratch(PathBuf);
 
@@ -21,7 +22,11 @@ impl Scratch {
         Self(path)
     }
 
-    fn write(&self, name: &str, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.0.join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create parent");
@@ -103,13 +108,19 @@ fn independent_entries_are_one_check_each() {
 #[test]
 fn diagnostics_are_deduplicated() {
     let scratch = Scratch::new("dedupe");
-    scratch.write("Dep.aev", "module Dep\n\nimport Missing\n\nlet shared = 1\n");
+    scratch.write(
+        "Dep.aev",
+        "module Dep\n\nimport Missing\n\nlet shared = 1\n",
+    );
     let first = scratch.write("A.aev", "module A\n\nimport Dep\n\nlet a = 1\n");
     let second = scratch.write("B.aev", "module B\n\nimport Dep\n\nlet b = 2\n");
     let entries = vec![first, second];
     let (program, stats) =
         driver::load_all_with_roots(&entries, roots(&entries[0]), &CheckOptions::default());
-    assert!(program.diagnostics.has_errors(), "the missing import is reported");
+    assert!(
+        program.diagnostics.has_errors(),
+        "the missing import is reported"
+    );
     let missing = program
         .diagnostics
         .items

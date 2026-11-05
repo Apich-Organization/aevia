@@ -27,8 +27,13 @@
 //! documented gap (see `tests/generated.rs::is_the_invoke_typing_gap`), while
 //! `Units.aev` and `Constants.aev` type-check cleanly.
 
-use crate::registry::{OpEntry, Registry, SigType, Source, render_type};
-use num_traits::{One, Signed};
+use crate::registry::OpEntry;
+use crate::registry::Registry;
+use crate::registry::SigType;
+use crate::registry::Source;
+use crate::registry::render_type;
+use num_traits::One;
+use num_traits::Signed;
 use std::fmt::Write as _;
 
 /// Renders the generated modules as `(file name, source)` pairs.
@@ -41,7 +46,12 @@ pub fn files(registry: &Registry) -> Vec<(String, String)> {
     ]
 }
 
-fn header(out: &mut String, registry: &Registry, module: &str, what: &str) {
+fn header(
+    out: &mut String,
+    registry: &Registry,
+    module: &str,
+    what: &str,
+) {
     let _ = writeln!(
         out,
         "## {what}\n\
@@ -118,12 +128,7 @@ pub fn operators(registry: &Registry) -> String {
 #[must_use]
 pub fn units(registry: &Registry) -> String {
     let mut out = String::new();
-    header(
-        &mut out,
-        registry,
-        "Units",
-        "The kernel's unit table.",
-    );
+    header(&mut out, registry, "Units", "The kernel's unit table.");
     // `s` is both second and siemens, `t` both tonne and tesla, because a
     // binding cannot be capitalised. The unit whose own spelling is already
     // lowercase keeps the plain name — that is the one Aevia source resolves —
@@ -137,15 +142,15 @@ pub fn units(registry: &Registry) -> String {
     let mut used: Vec<String> = Vec::new();
     for unit in &registry.units {
         let spelling = match spellable(&unit.name, &unit.aliases) {
-            Some(name) => name,
-            None => {
+            | Some(name) => name,
+            | None => {
                 let _ = writeln!(
                     out,
                     "## `{}` ({}) cannot be written in Aevia source: every spelling is a keyword",
                     unit.display, unit.category
                 );
                 continue;
-            }
+            },
         };
         let dim = unit.dim.to_plain_string();
         let ty = if unit.affine {
@@ -185,7 +190,10 @@ pub fn constants(registry: &Registry) -> String {
     // define one name twice. The second keeps its symbol with a numeric
     // suffix, in symbol order, so the output stays deterministic.
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let needs_pi = registry.constants.iter().any(|constant| constant.value.pi != 0);
+    let needs_pi = registry
+        .constants
+        .iter()
+        .any(|constant| constant.value.pi != 0);
     if needs_pi {
         let _ = writeln!(
             out,
@@ -242,14 +250,14 @@ pub fn unit_source(dim: &aevia_dim::Dim) -> String {
     let mut factors = Vec::new();
     for (base, exponent) in dim.base_factors() {
         let symbol = match base {
-            "Length" => "m",
-            "Mass" => "kg",
-            "Time" => "s",
-            "Current" => "A",
-            "Temperature" => "K",
-            "Amount" => "mol",
-            "Luminosity" => "cd",
-            other => other,
+            | "Length" => "m",
+            | "Mass" => "kg",
+            | "Time" => "s",
+            | "Current" => "A",
+            | "Temperature" => "K",
+            | "Amount" => "mol",
+            | "Luminosity" => "cd",
+            | other => other,
         };
         if exponent.is_one() {
             factors.push(symbol.to_string());
@@ -259,12 +267,14 @@ pub fn unit_source(dim: &aevia_dim::Dim) -> String {
         if exponent.denom().is_one() {
             factors.push(format!("{symbol}^{}", exponent.numer()));
         } else {
-            factors.push(format!("{symbol}^({})", aevia_dim::format_rational(exponent)));
+            factors.push(format!(
+                "{symbol}^({})",
+                aevia_dim::format_rational(exponent)
+            ));
         }
     }
     factors.join("*")
 }
-
 
 /// A constant as a value expression.
 ///
@@ -386,9 +396,7 @@ fn declaration(op: &OpEntry) -> String {
             .params
             .iter()
             .enumerate()
-            .map(|(position, ty)| {
-                format!("a{position}: {}", render_with(&mut dims, ty))
-            })
+            .map(|(position, ty)| format!("a{position}: {}", render_with(&mut dims, ty)))
             .collect();
         // The dynamic ABI takes `Value`s, so every argument crosses the
         // boundary through `to_value`, exactly as the specification writes it.
@@ -397,17 +405,17 @@ fn declaration(op: &OpEntry) -> String {
             .collect();
         // The third argument is a value list: `[]`, `rest`, or a literal.
         let arguments = match signature.variadic {
-            None => format!("[{}]", fixed.join(", ")),
+            | None => format!("[{}]", fixed.join(", ")),
             // A variadic operator takes the list as it stands, or after the
             // fixed arguments.
-            Some(_) if fixed.is_empty() => {
+            | Some(_) if fixed.is_empty() => {
                 params.push("rest: Tensor<1, Value>".to_string());
                 "rest".to_string()
-            }
-            Some(_) => {
+            },
+            | Some(_) => {
                 params.push("rest: Tensor<1, Value>".to_string());
                 format!("concat([{}], rest)", fixed.join(", "))
-            }
+            },
         };
         let _ = writeln!(
             out,
@@ -424,9 +432,9 @@ fn declaration(op: &OpEntry) -> String {
 fn stability(value: rssn::kernel::signature::Stability) -> &'static str {
     use rssn::kernel::signature::Stability;
     match value {
-        Stability::Stable => "stable",
-        Stability::Experimental => "experimental",
-        Stability::Deprecated => "deprecated",
+        | Stability::Stable => "stable",
+        | Stability::Experimental => "experimental",
+        | Stability::Deprecated => "deprecated",
     }
 }
 
@@ -467,7 +475,10 @@ struct DimNames {
 }
 
 impl DimNames {
-    fn name(&mut self, id: u32) -> String {
+    fn name(
+        &mut self,
+        id: u32,
+    ) -> String {
         if let Some(name) = self.names.get(&id) {
             return name.clone();
         }
@@ -482,44 +493,50 @@ impl DimNames {
     }
 }
 
-fn render_with(dims: &mut DimNames, ty: &SigType) -> String {
+fn render_with(
+    dims: &mut DimNames,
+    ty: &SigType,
+) -> String {
     match ty {
-        SigType::Tensor { rank: None, .. } | SigType::Sparse { rank: None, .. } => {
+        | SigType::Tensor { rank: None, .. } | SigType::Sparse { rank: None, .. } => {
             "Dyn<term>".to_string()
-        }
-        SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
+        },
+        | SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
             format!("Tensor<{}, {}>", rank.unwrap_or(1), render_with(dims, elem))
-        }
-        SigType::Var(_) | SigType::Table | SigType::Device | SigType::Never => {
+        },
+        | SigType::Var(_) | SigType::Table | SigType::Device | SigType::Never => {
             "Dyn<term>".to_string()
-        }
+        },
         // A host type has no Aevia spelling; the kernel decides.
-        SigType::Opaque(_) => "Dyn<term>".to_string(),
-        SigType::Unit(dim) => format!("Unit[{}]", render_dim(dims, dim)),
-        SigType::Point(dim) => format!("Point[{}]", render_dim(dims, dim)),
-        SigType::Dim(inner, dim) => {
+        | SigType::Opaque(_) => "Dyn<term>".to_string(),
+        | SigType::Unit(dim) => format!("Unit[{}]", render_dim(dims, dim)),
+        | SigType::Point(dim) => format!("Point[{}]", render_dim(dims, dim)),
+        | SigType::Dim(inner, dim) => {
             format!("{}[{}]", render_with(dims, inner), render_dim(dims, dim))
-        }
-        SigType::Func(params, ret) => {
+        },
+        | SigType::Func(params, ret) => {
             let types: Vec<String> = params.iter().map(|ty| render_with(dims, ty)).collect();
             format!("({}) -> {}", types.join(", "), render_with(dims, ret))
-        }
-        SigType::Record(fields) => {
+        },
+        | SigType::Record(fields) => {
             let items: Vec<String> = fields
                 .iter()
                 .map(|(name, ty)| format!("{name}: {}", render_with(dims, ty)))
                 .collect();
             format!("{{ {} }}", items.join(", "))
-        }
-        SigType::Variant(_) => "Dyn<term>".to_string(),
-        other => render_type(other),
+        },
+        | SigType::Variant(_) => "Dyn<term>".to_string(),
+        | other => render_type(other),
     }
 }
 
 /// The Aevia spelling of a dimension: canonical base names, and a generated
 /// variable name (`T`) for a dimension variable, so a declaration can state
 /// `Real[T^(1/2)]`.
-fn render_dim(dims: &mut DimNames, dim: &aevia_dim::Dim) -> String {
+fn render_dim(
+    dims: &mut DimNames,
+    dim: &aevia_dim::Dim,
+) -> String {
     if dim.is_one() {
         return "1".to_string();
     }
@@ -530,8 +547,8 @@ fn render_dim(dims: &mut DimNames, dim: &aevia_dim::Dim) -> String {
     let mut denominator = Vec::new();
     for (atom, exponent) in dim.factors() {
         let name = match atom {
-            aevia_dim::Atom::Base(name) => name.to_string(),
-            aevia_dim::Atom::Var(id) => dims.name(*id),
+            | aevia_dim::Atom::Base(name) => name.to_string(),
+            | aevia_dim::Atom::Var(id) => dims.name(*id),
         };
         let (target, magnitude) = if exponent.is_negative() {
             (&mut denominator, -exponent.clone())
@@ -555,21 +572,21 @@ fn render_dim(dims: &mut DimNames, dim: &aevia_dim::Dim) -> String {
         numerator.join("*")
     };
     match denominator.len() {
-        0 => numerator,
-        1 => format!("{numerator}/{}", denominator[0]),
-        _ => format!("{numerator}/({})", denominator.join("*")),
+        | 0 => numerator,
+        | 1 => format!("{numerator}/{}", denominator[0]),
+        | _ => format!("{numerator}/({})", denominator.join("*")),
     }
 }
 
 /// A spelling of `name` that Aevia source can contain.
-fn spellable(name: &str, aliases: &[String]) -> Option<String> {
+fn spellable(
+    name: &str,
+    aliases: &[String],
+) -> Option<String> {
     if !is_keyword(name) {
         return Some(name.to_string());
     }
-    aliases
-        .iter()
-        .find(|alias| !is_keyword(alias))
-        .cloned()
+    aliases.iter().find(|alias| !is_keyword(alias)).cloned()
 }
 
 /// Words that cannot be a declaration name.
@@ -628,8 +645,8 @@ fn value_name(name: &str) -> String {
     let sanitised = sanitise(name);
     let mut chars = sanitised.chars();
     match chars.next() {
-        Some(first) => format!("{}{}", first.to_lowercase(), chars.as_str()),
-        None => sanitised,
+        | Some(first) => format!("{}{}", first.to_lowercase(), chars.as_str()),
+        | None => sanitised,
     }
 }
 
@@ -658,11 +675,11 @@ fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => {}
-            other => out.push(other),
+            | '"' => out.push_str("\\\""),
+            | '\\' => out.push_str("\\\\"),
+            | '\n' => out.push_str("\\n"),
+            | '\r' => {},
+            | other => out.push(other),
         }
     }
     out

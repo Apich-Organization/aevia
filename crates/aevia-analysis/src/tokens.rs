@@ -16,10 +16,16 @@
 //! Tokens never overlap and come out in position order.
 
 use crate::document::Document;
-use crate::occurrence::{self, Occurrence, Role};
-use crate::types::{SemanticToken, TokenKind};
+use crate::occurrence::Occurrence;
+use crate::occurrence::Role;
+use crate::occurrence::{
+    self,
+};
+use crate::types::SemanticToken;
+use crate::types::TokenKind;
 use aevia_syntax::token::TokenKind as SyntaxToken;
-use aevia_types::check::{CheckedModule, Export};
+use aevia_types::check::CheckedModule;
+use aevia_types::check::Export;
 use std::collections::HashSet;
 
 /// The built-in types the parser recognises as their own `TyKind`.
@@ -48,14 +54,12 @@ pub(crate) fn tokens(
             continue;
         };
         let span = match &occurrence.role {
-            Role::Qualified(_) => occurrence.span,
-            Role::Name(name)
+            | Role::Qualified(_) => occurrence.span,
+            | Role::Name(name)
             | Role::Constructor(name)
             | Role::TypeName(name)
             | Role::Unit(name)
-            | Role::Method { name, .. } => {
-                occurrence::name_span(text, occurrence.span, name)
-            }
+            | Role::Method { name, .. } => occurrence::name_span(text, occurrence.span, name),
         };
         if span.start < span.end {
             spans.push((span.start, span.end, kind));
@@ -69,7 +73,8 @@ pub(crate) fn tokens(
     // Unknown upper-case words — module segments, attributes — are left
     // unhighlighted rather than guessed at.
     if let Ok(lexed) = aevia_syntax::lex(file, text) {
-        let covered: HashSet<(u32, u32)> = spans.iter().map(|(start, end, _)| (*start, *end)).collect();
+        let covered: HashSet<(u32, u32)> =
+            spans.iter().map(|(start, end, _)| (*start, *end)).collect();
         for token in lexed.tokens {
             let SyntaxToken::UpperIdent(name) = &token.kind else {
                 continue;
@@ -110,9 +115,12 @@ pub(crate) fn tokens(
 }
 
 /// The token kind for one occurrence, from the checker's records.
-fn classify(occurrence: &Occurrence, checked: &CheckedModule) -> Option<TokenKind> {
+fn classify(
+    occurrence: &Occurrence,
+    checked: &CheckedModule,
+) -> Option<TokenKind> {
     match &occurrence.role {
-        Role::Name(name) => {
+        | Role::Name(name) => {
             if let Some(export) = checked.exports.get(name) {
                 return Some(export_kind(export));
             }
@@ -143,36 +151,38 @@ fn classify(occurrence: &Occurrence, checked: &CheckedModule) -> Option<TokenKin
                 return Some(TokenKind::Function);
             }
             Some(TokenKind::Variable)
-        }
+        },
         // `Rssn.sin` is a pinned kernel operator: its whole dotted name is the
         // provenance the user is being shown.
-        Role::Qualified(path) => {
+        | Role::Qualified(path) => {
             if path.first().map(String::as_str) == Some("Rssn") {
                 Some(TokenKind::Operator)
             } else {
                 Some(TokenKind::Type)
             }
-        }
-        Role::Constructor(_) => Some(TokenKind::Constructor),
-        Role::Method { .. } => Some(TokenKind::Function),
-        Role::TypeName(name) => match checked.exports.get(name) {
-            Some(export) => Some(export_kind(export)),
-            None if checked.dims.lookup(name).is_some() => Some(TokenKind::Dimension),
-            None if checked.units.contains(name) => Some(TokenKind::Unit),
-            None => Some(TokenKind::Type),
         },
-        Role::Unit(_) => Some(TokenKind::Unit),
+        | Role::Constructor(_) => Some(TokenKind::Constructor),
+        | Role::Method { .. } => Some(TokenKind::Function),
+        | Role::TypeName(name) => {
+            match checked.exports.get(name) {
+                | Some(export) => Some(export_kind(export)),
+                | None if checked.dims.lookup(name).is_some() => Some(TokenKind::Dimension),
+                | None if checked.units.contains(name) => Some(TokenKind::Unit),
+                | None => Some(TokenKind::Type),
+            }
+        },
+        | Role::Unit(_) => Some(TokenKind::Unit),
     }
 }
 
 /// The token kind of an exported name.
 fn export_kind(export: &Export) -> TokenKind {
     match export {
-        Export::Value { arity, .. } if *arity > 0 => TokenKind::Function,
-        Export::Value { .. } => TokenKind::Variable,
-        Export::Ctor { .. } => TokenKind::Constructor,
-        Export::TypeCtor { .. } | Export::Type { .. } | Export::Alias { .. } => TokenKind::Type,
-        Export::Unit { .. } => TokenKind::Unit,
-        Export::Dimension { .. } => TokenKind::Dimension,
+        | Export::Value { arity, .. } if *arity > 0 => TokenKind::Function,
+        | Export::Value { .. } => TokenKind::Variable,
+        | Export::Ctor { .. } => TokenKind::Constructor,
+        | Export::TypeCtor { .. } | Export::Type { .. } | Export::Alias { .. } => TokenKind::Type,
+        | Export::Unit { .. } => TokenKind::Unit,
+        | Export::Dimension { .. } => TokenKind::Dimension,
     }
 }

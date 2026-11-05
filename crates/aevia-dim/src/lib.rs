@@ -21,9 +21,22 @@ pub mod dim;
 pub mod rat;
 pub mod units;
 
-pub use dim::{Atom, Dim, DimEnv, DimMismatch, DimParseError, DimUnifier};
-pub use rat::{format_rational, format_rational_decimal, parse_decimal, ratio};
-pub use units::{ResolvedUnit, Scale, UnitDef, UnitError, UnitExpr, UnitTable};
+pub use dim::Atom;
+pub use dim::Dim;
+pub use dim::DimEnv;
+pub use dim::DimMismatch;
+pub use dim::DimParseError;
+pub use dim::DimUnifier;
+pub use rat::format_rational;
+pub use rat::format_rational_decimal;
+pub use rat::parse_decimal;
+pub use rat::ratio;
+pub use units::ResolvedUnit;
+pub use units::Scale;
+pub use units::UnitDef;
+pub use units::UnitError;
+pub use units::UnitExpr;
+pub use units::UnitTable;
 
 /// The canonical names of the seven SI base dimensions, in SI order.
 pub const SI_BASE_DIMENSIONS: [&str; 7] = [

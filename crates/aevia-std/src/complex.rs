@@ -9,7 +9,10 @@ use crate::Complex;
 
 /// `re + im i`.
 #[must_use]
-pub fn complex(re: f64, im: f64) -> Complex {
+pub fn complex(
+    re: f64,
+    im: f64,
+) -> Complex {
     Complex::new(re, im)
 }
 
@@ -33,7 +36,10 @@ pub fn norm_squared(value: Complex) -> f64 {
 
 /// `z^n` for an integer exponent, by repeated squaring.
 #[must_use]
-pub fn pow(value: Complex, exponent: i64) -> Complex {
+pub fn pow(
+    value: Complex,
+    exponent: i64,
+) -> Complex {
     if exponent == 0 {
         return Complex::new(1.0, 0.0);
     }
@@ -74,7 +80,10 @@ pub fn cos(value: Complex) -> Complex {
 
 /// `z^w = exp(w ln z)`.
 #[must_use]
-pub fn powc(base: Complex, exponent: Complex) -> Complex {
+pub fn powc(
+    base: Complex,
+    exponent: Complex,
+) -> Complex {
     exponent.mul(base.ln()).exp()
 }
 
@@ -82,7 +91,10 @@ pub fn powc(base: Complex, exponent: Complex) -> Complex {
 mod tests {
     use super::*;
 
-    fn close(a: f64, b: f64) -> bool {
+    fn close(
+        a: f64,
+        b: f64,
+    ) -> bool {
         (a - b).abs() < 1e-12
     }
 

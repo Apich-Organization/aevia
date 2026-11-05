@@ -54,7 +54,8 @@
 //! guess.
 //!
 //! ```
-//! use aevia_analysis::{Analysis, Document};
+//! use aevia_analysis::Analysis;
+//! use aevia_analysis::Document;
 //!
 //! let document = Document::new("playground.aev", 1, "let g = 9.80665 m/s^2\n");
 //! let analysis = Analysis::new(&document);
@@ -72,8 +73,8 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
 
-pub mod analysis;
 mod actions;
+pub mod analysis;
 pub mod cache;
 pub mod diagnostic;
 pub mod document;
@@ -86,11 +87,31 @@ mod walk;
 
 pub use analysis::Analysis;
 pub use cache::AnalysisCache;
-pub use diagnostic::{Diagnostic, Related, Severity};
-pub use document::{Change, Document, DocumentStore, EditError};
-pub use position::{LineIndex, Position, Range};
-pub use types::{
-    CodeAction, CodeActionKind, Completion, CompletionKind, FileEdit, Hover, Location, Origin,
-    RenameError, RenamePlaceholder, SemanticToken, SignatureHelp, SignatureInfo, Symbol, SymbolKind,
-    TextEdit, TokenKind, WorkspaceSymbol,
-};
+pub use diagnostic::Diagnostic;
+pub use diagnostic::Related;
+pub use diagnostic::Severity;
+pub use document::Change;
+pub use document::Document;
+pub use document::DocumentStore;
+pub use document::EditError;
+pub use position::LineIndex;
+pub use position::Position;
+pub use position::Range;
+pub use types::CodeAction;
+pub use types::CodeActionKind;
+pub use types::Completion;
+pub use types::CompletionKind;
+pub use types::FileEdit;
+pub use types::Hover;
+pub use types::Location;
+pub use types::Origin;
+pub use types::RenameError;
+pub use types::RenamePlaceholder;
+pub use types::SemanticToken;
+pub use types::SignatureHelp;
+pub use types::SignatureInfo;
+pub use types::Symbol;
+pub use types::SymbolKind;
+pub use types::TextEdit;
+pub use types::TokenKind;
+pub use types::WorkspaceSymbol;

@@ -7,8 +7,12 @@
 
 #![allow(clippy::result_large_err)]
 
-use aevia_core::value::{Storage, TensorData, Value};
-use aevia_core::{compile, Interp, Mode};
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
+use aevia_core::value::Storage;
+use aevia_core::value::TensorData;
+use aevia_core::value::Value;
 use aevia_syntax::Span;
 
 fn interpreter() -> Interp {
@@ -21,7 +25,11 @@ fn interpreter() -> Interp {
 }
 
 /// Runs a source program on one evaluator, returning the rendered values.
-fn evaluate(mode: Mode, source: &str, names: &[&str]) -> Vec<String> {
+fn evaluate(
+    mode: Mode,
+    source: &str,
+    names: &[&str],
+) -> Vec<String> {
     let compilation = compile("axis.aev", source);
     assert!(
         !compilation.diagnostics.has_errors(),
@@ -56,14 +64,21 @@ fn evaluate(mode: Mode, source: &str, names: &[&str]) -> Vec<String> {
 }
 
 /// Both evaluators must agree; returns the IR rendering.
-fn evaluate_both(source: &str, names: &[&str]) -> Vec<String> {
+fn evaluate_both(
+    source: &str,
+    names: &[&str],
+) -> Vec<String> {
     let ir = evaluate(Mode::Ir, source, names);
     let ast = evaluate(Mode::Ast, source, names);
     assert_eq!(ast, ir, "the two evaluators disagree on {names:?}");
     ir
 }
 
-fn call(interp: &mut Interp, name: &str, args: Vec<Value>) -> Value {
+fn call(
+    interp: &mut Interp,
+    name: &str,
+    args: Vec<Value>,
+) -> Value {
     interp
         .call_named(name, args, Span::default())
         .unwrap_or_else(|error| panic!("`{name}` failed: {} {}", error.code, error.message))
@@ -71,8 +86,8 @@ fn call(interp: &mut Interp, name: &str, args: Vec<Value>) -> Value {
 
 fn tensor_of(value: &Value) -> &TensorData {
     match value {
-        Value::Tensor(tensor) => tensor,
-        other => panic!("expected a tensor, found {}", other.type_name()),
+        | Value::Tensor(tensor) => tensor,
+        | other => panic!("expected a tensor, found {}", other.type_name()),
     }
 }
 
@@ -84,7 +99,10 @@ fn floats(tensor: &TensorData) -> Vec<f64> {
         .collect()
 }
 
-fn dense(shape: Vec<usize>, values: Vec<f64>) -> Value {
+fn dense(
+    shape: Vec<usize>,
+    values: Vec<f64>,
+) -> Value {
     Value::Tensor(std::rc::Rc::new(TensorData {
         shape,
         storage: Storage::Dense(std::rc::Rc::new(values)),
@@ -109,7 +127,11 @@ fn dense_rank_two_reduces_each_axis_with_keepdims() {
     assert!(!diagnostics.has_errors());
     let m = session.eval_toplevel("m").expect("m");
     let rows = call(&mut interp, "sum", vec![m.clone(), Value::int(1)]);
-    assert_eq!(tensor_of(&rows).shape, vec![2, 1], "keepdims keeps the rank");
+    assert_eq!(
+        tensor_of(&rows).shape,
+        vec![2, 1],
+        "keepdims keeps the rank"
+    );
     assert_eq!(floats(tensor_of(&rows)), vec![6.0, 15.0]);
     let columns = call(&mut interp, "sum", vec![m, Value::int(0)]);
     assert_eq!(tensor_of(&columns).shape, vec![1, 3]);
@@ -172,15 +194,15 @@ fn rank_one_and_rank_zero_axes() {
         display: None,
     }));
     let error = interp
-        .call_named(
-            "sum",
-            vec![vector, Value::int(1)],
-            Span::default(),
-        )
+        .call_named("sum", vec![vector, Value::int(1)], Span::default())
         .expect_err("axis 1 on a rank-1 tensor is E0802");
     assert_eq!(error.code, "E0802");
     let error = interp
-        .call_named("sum", vec![Value::float(1.0), Value::int(0)], Span::default())
+        .call_named(
+            "sum",
+            vec![Value::float(1.0), Value::int(0)],
+            Span::default(),
+        )
         .expect_err("a scalar is not a tensor");
     assert_eq!(error.code, "E0302");
 
@@ -188,12 +210,15 @@ fn rank_one_and_rank_zero_axes() {
     let error = interp
         .call_named(
             "sum",
-            vec![Value::Tensor(std::rc::Rc::new(TensorData {
-                shape: Vec::new(),
-                storage: Storage::Dense(std::rc::Rc::new(vec![1.0])),
-                dim: aevia_dim::Dim::one(),
-                display: None,
-            })), Value::int(0)],
+            vec![
+                Value::Tensor(std::rc::Rc::new(TensorData {
+                    shape: Vec::new(),
+                    storage: Storage::Dense(std::rc::Rc::new(vec![1.0])),
+                    dim: aevia_dim::Dim::one(),
+                    display: None,
+                })),
+                Value::int(0),
+            ],
             Span::default(),
         )
         .expect_err("rank 0 has no axis 0");
@@ -228,11 +253,13 @@ fn empty_extents_take_the_element_phase() {
     let tensor = tensor_of(&sum);
     assert_eq!(tensor.shape, vec![1]);
     match tensor.get(&[0]) {
-        Some(Value::Num(num)) => assert!(matches!(
-            num.kind,
-            aevia_core::value::NumKind::Exact(_) | aevia_core::value::NumKind::Int(_)
-        )),
-        other => panic!("expected an exact element, found {other:?}"),
+        | Some(Value::Num(num)) => {
+            assert!(matches!(
+                num.kind,
+                aevia_core::value::NumKind::Exact(_) | aevia_core::value::NumKind::Int(_)
+            ))
+        },
+        | other => panic!("expected an exact element, found {other:?}"),
     }
 }
 

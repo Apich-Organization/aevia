@@ -10,11 +10,17 @@
 //! same table, which is why `unit EUR : Currency = 1.08 USD` behaves exactly
 //! like a built-in unit.
 
-use crate::dim::{Dim, DimEnv};
-use crate::rat::{format_rational, parse_decimal, pow_int, ratio};
+use crate::dim::Dim;
+use crate::dim::DimEnv;
+use crate::rat::format_rational;
+use crate::rat::parse_decimal;
+use crate::rat::pow_int;
+use crate::rat::ratio;
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::One;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -69,21 +75,24 @@ impl Scale {
             });
         }
         match text.split_once('/') {
-            Some((numerator, denominator)) => {
+            | Some((numerator, denominator)) => {
                 let numerator = parse_decimal(numerator)?;
                 let denominator = parse_decimal(denominator)?;
                 if denominator.is_zero() {
                     return None;
                 }
                 Some(Self::rational(numerator / denominator))
-            }
-            None => Some(Self::rational(parse_decimal(text)?)),
+            },
+            | None => Some(Self::rational(parse_decimal(text)?)),
         }
     }
 
     /// Multiplies two scales.
     #[must_use]
-    pub fn mul(&self, other: &Self) -> Self {
+    pub fn mul(
+        &self,
+        other: &Self,
+    ) -> Self {
         Self {
             rat: &self.rat * &other.rat,
             pi: self.pi + other.pi,
@@ -92,7 +101,10 @@ impl Scale {
 
     /// Divides two scales.
     #[must_use]
-    pub fn div(&self, other: &Self) -> Self {
+    pub fn div(
+        &self,
+        other: &Self,
+    ) -> Self {
         Self {
             rat: &self.rat / &other.rat,
             pi: self.pi - other.pi,
@@ -105,7 +117,10 @@ impl Scale {
     /// rational form, so it is rejected (the unit expression is ill-formed
     /// rather than silently approximated).
     #[must_use]
-    pub fn pow(&self, exponent: &BigRational) -> Option<Self> {
+    pub fn pow(
+        &self,
+        exponent: &BigRational,
+    ) -> Option<Self> {
         if exponent.is_zero() {
             return Some(Self::one());
         }
@@ -134,16 +149,16 @@ impl Scale {
         if candidate.pow(i32::try_from(degree).unwrap_or(i32::MAX)) != self.rat {
             return None;
         }
-        Some(Self::rational(pow_int(&candidate, exponent.numer().to_i32()?)))
+        Some(Self::rational(pow_int(
+            &candidate,
+            exponent.numer().to_i32()?,
+        )))
     }
 
     /// The numeric value of the scale, for kernels and printing.
     #[must_use]
     pub fn to_f64(&self) -> f64 {
-        let base = self
-            .rat
-            .to_f64()
-            .unwrap_or(f64::NAN);
+        let base = self.rat.to_f64().unwrap_or(f64::NAN);
         if self.pi == 0 {
             base
         } else {
@@ -165,13 +180,16 @@ impl Scale {
 }
 
 impl fmt::Display for Scale {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         if self.pi == 0 {
             f.write_str(&format_rational(&self.rat))
         } else if self.rat.is_one() {
             match self.pi {
-                1 => f.write_str("pi"),
-                _ => write!(f, "pi^{}", self.pi),
+                | 1 => f.write_str("pi"),
+                | _ => write!(f, "pi^{}", self.pi),
             }
         } else {
             write!(f, "{}*pi^{}", format_rational(&self.rat), self.pi)
@@ -205,7 +223,11 @@ pub struct UnitDef {
 impl UnitDef {
     /// Builds a linear unit.
     #[must_use]
-    pub fn linear(name: &str, dim: Dim, scale: Scale) -> Self {
+    pub fn linear(
+        name: &str,
+        dim: Dim,
+        scale: Scale,
+    ) -> Self {
         Self {
             name: name.to_string(),
             aliases: Vec::new(),
@@ -221,7 +243,10 @@ impl UnitDef {
 
     /// Adds an alias.
     #[must_use]
-    pub fn with_alias(mut self, alias: &str) -> Self {
+    pub fn with_alias(
+        mut self,
+        alias: &str,
+    ) -> Self {
         self.aliases.push(alias.to_string());
         self
     }
@@ -235,7 +260,10 @@ impl UnitDef {
 
     /// Marks the unit as affine with the given offset.
     #[must_use]
-    pub fn affine(mut self, offset: Scale) -> Self {
+    pub fn affine(
+        mut self,
+        offset: Scale,
+    ) -> Self {
         self.affine = true;
         self.offset = Some(offset);
         self
@@ -243,18 +271,24 @@ impl UnitDef {
 
     /// Sets the category.
     #[must_use]
-    pub fn category(mut self, category: &str) -> Self {
+    pub fn category(
+        mut self,
+        category: &str,
+    ) -> Self {
         self.category = category.to_string();
         self
     }
 
     /// The coherent-SI value of `amount` of this unit.
     #[must_use]
-    pub fn to_coherent(&self, amount: f64) -> f64 {
+    pub fn to_coherent(
+        &self,
+        amount: f64,
+    ) -> f64 {
         let scaled = amount * self.scale.to_f64();
         match &self.offset {
-            Some(offset) => scaled + offset.to_f64(),
-            None => scaled,
+            | Some(offset) => scaled + offset.to_f64(),
+            | None => scaled,
         }
     }
 }
@@ -284,18 +318,18 @@ impl UnitExpr {
     #[must_use]
     pub fn to_source(&self) -> String {
         match self {
-            Self::Name(name) => name.clone(),
-            Self::Percent => "%".to_string(),
-            Self::Mul(left, right) => format!("{}*{}", left.to_source(), right.to_source()),
-            Self::Div(left, right) => format!("{}/{}", left.to_source(), right.to_source()),
-            Self::Pow(base, exponent) => {
+            | Self::Name(name) => name.clone(),
+            | Self::Percent => "%".to_string(),
+            | Self::Mul(left, right) => format!("{}*{}", left.to_source(), right.to_source()),
+            | Self::Div(left, right) => format!("{}/{}", left.to_source(), right.to_source()),
+            | Self::Pow(base, exponent) => {
                 if exponent.denom().is_one() {
                     format!("{}^{}", base.to_source(), exponent.numer())
                 } else {
                     format!("{}^({})", base.to_source(), format_rational(exponent))
                 }
-            }
-            Self::Paren(inner) => format!("({})", inner.to_source()),
+            },
+            | Self::Paren(inner) => format!("({})", inner.to_source()),
         }
     }
 }
@@ -318,11 +352,14 @@ pub struct ResolvedUnit {
 impl ResolvedUnit {
     /// Converts a numeric coefficient in this unit to coherent SI.
     #[must_use]
-    pub fn to_coherent(&self, amount: f64) -> f64 {
+    pub fn to_coherent(
+        &self,
+        amount: f64,
+    ) -> f64 {
         let scaled = amount * self.scale.to_f64();
         match &self.offset {
-            Some(offset) => scaled + offset.to_f64(),
-            None => scaled,
+            | Some(offset) => scaled + offset.to_f64(),
+            | None => scaled,
         }
     }
 }
@@ -347,27 +384,36 @@ impl UnitError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Unknown(_) => "E0501",
-            Self::AffineInProduct(_) => "E0508",
-            Self::InexactPower(_) => "E0506",
-            Self::Duplicate(_) => "E0505",
-            Self::NotPrefixable(_) => "E0503",
+            | Self::Unknown(_) => "E0501",
+            | Self::AffineInProduct(_) => "E0508",
+            | Self::InexactPower(_) => "E0506",
+            | Self::Duplicate(_) => "E0505",
+            | Self::NotPrefixable(_) => "E0503",
         }
     }
 }
 
 impl fmt::Display for UnitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Self::Unknown(name) => write!(f, "unknown unit `{name}`"),
-            Self::AffineInProduct(name) => {
-                write!(f, "affine unit `{name}` cannot appear in a product or power")
-            }
-            Self::InexactPower(name) => {
-                write!(f, "the scale of `{name}` has no exact value for that exponent")
-            }
-            Self::Duplicate(name) => write!(f, "duplicate unit `{name}`"),
-            Self::NotPrefixable(name) => write!(f, "`{name}` does not accept SI prefixes"),
+            | Self::Unknown(name) => write!(f, "unknown unit `{name}`"),
+            | Self::AffineInProduct(name) => {
+                write!(
+                    f,
+                    "affine unit `{name}` cannot appear in a product or power"
+                )
+            },
+            | Self::InexactPower(name) => {
+                write!(
+                    f,
+                    "the scale of `{name}` has no exact value for that exponent"
+                )
+            },
+            | Self::Duplicate(name) => write!(f, "duplicate unit `{name}`"),
+            | Self::NotPrefixable(name) => write!(f, "`{name}` does not accept SI prefixes"),
         }
     }
 }
@@ -571,30 +617,27 @@ impl UnitTable {
         }
 
         // §5.3.3 — affine temperature scales.
-        add(
-            UnitDef::linear("°C", dim("Θ"), scale("1"))
-                .with_alias("degC")
-                .with_alias("celsius")
-                .affine(scale("273.15"))
-                .category("temperature"),
-        );
-        add(
-            UnitDef::linear("°F", dim("Θ"), scale("5/9"))
-                .with_alias("degF")
-                .with_alias("fahrenheit")
-                .affine(scale("255.3722222222222"))
-                .category("temperature"),
-        );
+        add(UnitDef::linear("°C", dim("Θ"), scale("1"))
+            .with_alias("degC")
+            .with_alias("celsius")
+            .affine(scale("273.15"))
+            .category("temperature"));
+        add(UnitDef::linear("°F", dim("Θ"), scale("5/9"))
+            .with_alias("degF")
+            .with_alias("fahrenheit")
+            .affine(scale("255.3722222222222"))
+            .category("temperature"));
 
         drop(add);
 
         // Units outside the coherent set that SI nevertheless prefixes.
-        for name in ["eV", "bar", "cal", "B", "bit", "l", "t", "Da", "pc", "au", "ly", "Å"] {
+        for name in [
+            "eV", "bar", "cal", "B", "bit", "l", "t", "Da", "pc", "au", "ly", "Å",
+        ] {
             if let Some(index) = table.index.get(name).copied() {
                 table.defs[index].prefixable = true;
             }
         }
-
 
         // Aliases for the non-SI spellings the spec lists explicitly.
         for (alias, canonical) in [
@@ -624,7 +667,10 @@ impl UnitTable {
     /// # Errors
     ///
     /// Returns [`UnitError::Duplicate`] when the name or an alias is taken.
-    pub fn insert(&mut self, unit: UnitDef) -> Result<(), UnitError> {
+    pub fn insert(
+        &mut self,
+        unit: UnitDef,
+    ) -> Result<(), UnitError> {
         if let Some(existing) = self.index.get(&unit.name) {
             let existing_name = self.defs[*existing].name.clone();
             return Err(UnitError::Duplicate(existing_name));
@@ -655,7 +701,10 @@ impl UnitTable {
     /// Exact names win over prefixed readings: `kg` is the base unit, not
     /// `k`+`g`, and `min` is minute, not `m`+`in` (§5.1.4).
     #[must_use]
-    pub fn lookup(&self, name: &str) -> Option<UnitDef> {
+    pub fn lookup(
+        &self,
+        name: &str,
+    ) -> Option<UnitDef> {
         if let Some(index) = self.index.get(name) {
             return Some(self.defs[*index].clone());
         }
@@ -697,7 +746,10 @@ impl UnitTable {
 
     /// True when the name resolves to a unit.
     #[must_use]
-    pub fn contains(&self, name: &str) -> bool {
+    pub fn contains(
+        &self,
+        name: &str,
+    ) -> bool {
         self.lookup(name).is_some()
     }
 
@@ -706,7 +758,10 @@ impl UnitTable {
     /// # Errors
     ///
     /// Returns [`UnitError::Unknown`] for an unregistered name.
-    pub fn resolve_name(&self, name: &str) -> Result<ResolvedUnit, UnitError> {
+    pub fn resolve_name(
+        &self,
+        name: &str,
+    ) -> Result<ResolvedUnit, UnitError> {
         let unit = self
             .lookup(name)
             .ok_or_else(|| UnitError::Unknown(name.to_string()))?;
@@ -725,18 +780,23 @@ impl UnitTable {
     ///
     /// Reports unknown names, affine units in products (§5.6.5) and scales
     /// whose rational power is not exact.
-    pub fn resolve(&self, expr: &UnitExpr) -> Result<ResolvedUnit, UnitError> {
+    pub fn resolve(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<ResolvedUnit, UnitError> {
         match expr {
-            UnitExpr::Name(name) => self.resolve_name(name),
-            UnitExpr::Percent => Ok(ResolvedUnit {
-                name: "%".to_string(),
-                dim: Dim::one(),
-                scale: Scale::rational(ratio(1, 100)),
-                offset: None,
-                affine: false,
-            }),
-            UnitExpr::Paren(inner) => self.resolve(inner),
-            UnitExpr::Mul(left, right) => {
+            | UnitExpr::Name(name) => self.resolve_name(name),
+            | UnitExpr::Percent => {
+                Ok(ResolvedUnit {
+                    name: "%".to_string(),
+                    dim: Dim::one(),
+                    scale: Scale::rational(ratio(1, 100)),
+                    offset: None,
+                    affine: false,
+                })
+            },
+            | UnitExpr::Paren(inner) => self.resolve(inner),
+            | UnitExpr::Mul(left, right) => {
                 let left = self.resolve(left)?;
                 let right = self.resolve(right)?;
                 reject_affine(&left)?;
@@ -748,8 +808,8 @@ impl UnitTable {
                     offset: None,
                     affine: false,
                 })
-            }
-            UnitExpr::Div(left, right) => {
+            },
+            | UnitExpr::Div(left, right) => {
                 let left = self.resolve(left)?;
                 let right = self.resolve(right)?;
                 reject_affine(&left)?;
@@ -761,8 +821,8 @@ impl UnitTable {
                     offset: None,
                     affine: false,
                 })
-            }
-            UnitExpr::Pow(base, exponent) => {
+            },
+            | UnitExpr::Pow(base, exponent) => {
                 let base = self.resolve(base)?;
                 reject_affine(&base)?;
                 let scale = base
@@ -776,7 +836,7 @@ impl UnitTable {
                     offset: None,
                     affine: false,
                 })
-            }
+            },
         }
     }
 }
@@ -816,7 +876,10 @@ mod tests {
         assert_eq!(table.lookup("kg").unwrap().scale.to_f64(), 1.0);
         assert_eq!(table.lookup("min").unwrap().scale.to_f64(), 60.0);
         assert_eq!(table.lookup("h").unwrap().scale.to_f64(), 3600.0);
-        assert_eq!(table.lookup("T").unwrap().dim, env().parse("M/(I*T^2)").unwrap());
+        assert_eq!(
+            table.lookup("T").unwrap().dim,
+            env().parse("M/(I*T^2)").unwrap()
+        );
     }
 
     #[test]
@@ -831,7 +894,10 @@ mod tests {
             ("ohm", "M*L^2/(I^2*T^3)"),
             ("Hz", "1/T"),
         ] {
-            assert_eq!(table.lookup(unit).unwrap().dim, env.parse(dimension).unwrap());
+            assert_eq!(
+                table.lookup(unit).unwrap().dim,
+                env.parse(dimension).unwrap()
+            );
         }
     }
 
@@ -904,7 +970,10 @@ mod regression_tests {
         let table = UnitTable::si();
         let env = DimEnv::si();
         assert_eq!(table.lookup("lm").unwrap().dim, env.parse("Lum").unwrap());
-        assert_eq!(table.lookup("lx").unwrap().dim, env.parse("Lum/L^2").unwrap());
+        assert_eq!(
+            table.lookup("lx").unwrap().dim,
+            env.parse("Lum/L^2").unwrap()
+        );
     }
 
     #[test]

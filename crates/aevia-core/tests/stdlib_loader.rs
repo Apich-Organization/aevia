@@ -6,7 +6,8 @@
 //! `run_modules` like any file module.
 
 use aevia_core::driver;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 struct Scratch(PathBuf);
 
@@ -19,7 +20,11 @@ impl Scratch {
         Self(path)
     }
 
-    fn write(&self, name: &str, source: &str) -> PathBuf {
+    fn write(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> PathBuf {
         let path = self.0.join(name);
         std::fs::write(&path, source).expect("write program");
         path
