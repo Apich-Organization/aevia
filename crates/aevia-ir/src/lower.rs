@@ -838,6 +838,7 @@ impl Lowerer {
             | PatKind::Ctor { name, args } => {
                 Pattern::Ctor {
                     name: name.clone(),
+                    identity: self.constructor_refs.get(&pattern.span).copied(),
                     args: args.iter().map(|arg| self.pattern(arg)).collect(),
                 }
             },

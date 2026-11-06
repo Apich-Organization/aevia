@@ -245,7 +245,7 @@ fn empty_tensor_has_schema(
     {
         return true;
     }
-    match (&tensor.storage, elem) {
+    match (tensor.storage.backing(), elem) {
         | (Storage::Dense(_) | Storage::View(_), Type::Scalar(Rep::Float, dim)) => {
             &tensor.dim == dim
         },

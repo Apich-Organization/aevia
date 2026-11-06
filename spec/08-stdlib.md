@@ -1152,6 +1152,15 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
   别名在调用时认证回调的具体签名，并按实例化结果类型验证返回值；无法证明
   类型或维度的签名仍只提供动态入口。
 
+`Rssn_numerical_callback` 中 `num_least_squares` 的生成 typed 别名接收初始
+参数向量、残差容差、梯度容差、步长容差、初始阻尼、迭代与求值预算以及
+残差回调。参数与残差分别具有量纲 `D`、`E`；初始向量确定参数长度 `N`，
+回调具体签名可约束残差长度 `M`，否则求解过程中要求实际残差长度保持不变。
+结果保留最佳参数、残差范数、迭代/残差求值/Jacobian 求值及接受/拒绝步数，
+并以 `converged` 和 `status` 区分残差或梯度收敛、预算耗尽和停滞。残差
+容差使用 `E`；其余数值控制量无量纲。回调错误原样传播。typed 别名名称可由
+绑定清单查询，其签名来自 RSSN 声明并固定到对应 overload。
+
 `Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、
 实验性入口都走它。多注册时 RSSN 在运行时按
 `Exact > Widened > Shaped > Generic > No` 选择，并列时报 `E1002`；参数不被

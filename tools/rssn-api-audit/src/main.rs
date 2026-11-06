@@ -144,6 +144,160 @@ fn collect_parent_imports(
     }
 }
 
+// Expand only named, local imports. Globs and external paths remain explicit
+// unresolved entries; guessing their exports would give false ABI evidence.
+fn named_uses(
+    tree: &syn::UseTree,
+    prefix: &[String],
+    out: &mut Vec<(Vec<String>, String)>,
+) {
+    match tree {
+        | syn::UseTree::Path(path) => {
+            let mut prefix = prefix.to_vec();
+            prefix.push(path.ident.to_string());
+            named_uses(&path.tree, &prefix, out);
+        },
+        | syn::UseTree::Name(name) => {
+            let mut path = prefix.to_vec();
+            path.push(name.ident.to_string());
+            out.push((path, name.ident.to_string()));
+        },
+        | syn::UseTree::Rename(name) => {
+            let mut path = prefix.to_vec();
+            path.push(name.ident.to_string());
+            out.push((path, name.rename.to_string()));
+        },
+        | syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                named_uses(tree, prefix, out);
+            }
+        },
+        | syn::UseTree::Glob(_) => {},
+    }
+}
+
+fn resolve_local_function(
+    items: &[Item],
+    dir: &Path,
+    path: &[String],
+    cfg_so_far: &str,
+    depth: usize,
+    module_depth: usize,
+) -> Result<Option<(syn::Signature, String)>, String> {
+    if depth > 32 {
+        return Ok(None);
+    }
+    let path = if path.first().is_some_and(|part| part == "self") {
+        &path[1..]
+    } else {
+        path
+    };
+    let Some((head, tail)) = path.split_first() else {
+        return Ok(None);
+    };
+    if tail.is_empty() {
+        for item in items {
+            if let Item::Fn(f) = item {
+                if public(&f.vis) && f.sig.ident == head.as_str() {
+                    return Ok(Some((
+                        f.sig.clone(),
+                        [cfg_so_far, &cfg(&f.attrs)].join(" ").trim().to_string(),
+                    )));
+                }
+            }
+            if let Item::Use(u) = item {
+                if !public(&u.vis) {
+                    continue;
+                }
+                let mut names = Vec::new();
+                named_uses(&u.tree, &[], &mut names);
+                for (target, alias) in names {
+                    if alias == *head {
+                        let child_cfg = [cfg_so_far, &cfg(&u.attrs)].join(" ").trim().to_string();
+                        if let Some(found) = resolve_local_function(
+                            items,
+                            dir,
+                            &target,
+                            &child_cfg,
+                            depth + 1,
+                            module_depth,
+                        )? {
+                            return Ok(Some(found));
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(None);
+    }
+    for item in items {
+        let Item::Mod(module) = item else {
+            continue;
+        };
+        if module.ident != head.as_str() {
+            continue;
+        }
+        // The first child may be private: this module can re-export its public
+        // contents. Further traversal must use public module boundaries.
+        if module_depth > 0 && !public(&module.vis) {
+            return Ok(None);
+        }
+        let child_cfg = [cfg_so_far, &cfg(&module.attrs)]
+            .join(" ")
+            .trim()
+            .to_string();
+        if let Some((_, children)) = &module.content {
+            return resolve_local_function(
+                children,
+                &dir.join(head),
+                tail,
+                &child_cfg,
+                depth + 1,
+                module_depth + 1,
+            );
+        }
+        let path_attr = module.attrs.iter().find_map(|attr| {
+            if !attr.path().is_ident("path") {
+                return None;
+            }
+            let syn::Meta::NameValue(value) = &attr.meta else {
+                return None;
+            };
+            let syn::Expr::Lit(value) = &value.value else {
+                return None;
+            };
+            let syn::Lit::Str(value) = &value.lit else {
+                return None;
+            };
+            Some(value.value())
+        });
+        let direct = dir.join(format!("{head}.rs"));
+        let nested = dir.join(head).join("mod.rs");
+        let file = if let Some(path) = path_attr {
+            dir.parent().unwrap_or(dir).join(path)
+        } else if direct.exists() {
+            direct
+        } else {
+            nested
+        };
+        if !file.exists() {
+            return Ok(None);
+        }
+        let text =
+            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let parsed = syn::parse_file(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+        return resolve_local_function(
+            &parsed.items,
+            &dir.join(head),
+            tail,
+            &child_cfg,
+            depth + 1,
+            module_depth + 1,
+        );
+    }
+    Ok(None)
+}
+
 fn visit_items(
     items: &[Item],
     prefix: &str,
@@ -237,6 +391,20 @@ fn visit_items(
                     (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
                 });
                 let c = [inherited_cfg, &cfg(&u.attrs)].join(" ").trim().to_string();
+                let mut names = Vec::new();
+                named_uses(&u.tree, &[], &mut names);
+                for (target, alias) in names {
+                    if let Some((signature, resolved_cfg)) =
+                        resolve_local_function(items, dir, &target, &c, 0, 0)?
+                    {
+                        out.push(Entry {
+                            path: format!("{prefix}::{alias}"),
+                            reason: type_reason(&signature, false),
+                            signature: compact(&signature),
+                            cfg: resolved_cfg,
+                        });
+                    }
+                }
                 out.push(Entry {
                     path: format!("{prefix}::<reexport:{hash:016x}>"),
                     signature: text,
@@ -514,6 +682,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_reexports_resolve_only_public_functions_and_detect_cycles() {
+        let parsed = syn::parse_file(
+            r#"
+            #[cfg(feature = "child")]
+            mod inner { pub fn actual(x: f64) -> f64 { x } fn secret() {} }
+            pub use inner::{actual as renamed, secret, missing};
+            pub use renamed as chained;
+            pub use cycle2 as cycle1;
+            pub use cycle1 as cycle2;
+            pub use inner::*;
+        "#,
+        )
+        .unwrap();
+        let mut entries = Vec::new();
+        visit_items(
+            &parsed.items,
+            "crate::kernels::example",
+            Path::new("."),
+            "",
+            &mut entries,
+        )
+        .unwrap();
+        let paths: BTreeSet<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
+        assert!(paths.contains("crate::kernels::example::renamed"));
+        assert!(paths.contains("crate::kernels::example::chained"));
+        for name in ["secret", "missing", "cycle1", "cycle2", "actual"] {
+            assert!(!paths.contains(format!("crate::kernels::example::{name}").as_str()));
+        }
+        assert!(
+            entries
+                .iter()
+                .find(|entry| entry.path.ends_with("::renamed"))
+                .unwrap()
+                .cfg
+                .contains("child")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.reason == "unresolved-reexport")
+        );
+    }
+
+    #[test]
+    fn named_reexport_reads_explicit_path_private_module() {
+        let root = std::env::temp_dir().join(format!("rssn-audit-path-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(
+            root.join("sub/actual.rs"),
+            "pub fn exposed() {} fn hidden() {}",
+        )
+        .unwrap();
+        let parsed = syn::parse_file("#[path = \"sub/actual.rs\"] mod implementation; pub use implementation::exposed as result;").unwrap();
+        let mut entries = Vec::new();
+        visit_items(
+            &parsed.items,
+            "crate::kernels::example",
+            &root.join("example"),
+            "",
+            &mut entries,
+        )
+        .unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.path == "crate::kernels::example::result")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn classifies_public_functions_methods_and_cfg_without_private_items() {

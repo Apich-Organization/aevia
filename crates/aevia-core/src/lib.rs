@@ -38,6 +38,7 @@ pub mod io_do;
 mod jit;
 pub mod kernel;
 pub mod manifest;
+mod pattern;
 pub mod rssn_module;
 pub mod source;
 pub mod sym;

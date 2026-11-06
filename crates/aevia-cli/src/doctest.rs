@@ -3,11 +3,9 @@
 //! `aevia doc` renders a declaration's `aevia`-labelled code blocks; this
 //! module compiles them. Each block becomes its own **synthetic module**: the
 //! declaring module's `import`/`open` lines are copied in verbatim, but the
-//! declaring module's declarations are not in scope (the compiler is run in
-//! single-file mode, which cannot resolve a package graph). A snippet that
-//! needs a function from the module it documents must therefore define what it
-//! uses — the limitation is stated in the command's output, and it is the same
-//! isolation `compile_fail("…")` has (§8.13).
+//! declaring module's declarations are not implicitly in scope. Imports resolve
+//! in that source file's package and adjacent directory, including an explicit
+//! import of the documented module. Snippets exist only as in-memory overlays.
 //!
 //! A block may declare an expected failure on its first line, as `compile_fail`
 //! alone (any error) or `compile_fail E0401` (that code). A block that says it
@@ -34,7 +32,7 @@ enum Outcome {
 
 /// `aevia test --doc [--filter PAT] [files…]`
 pub fn run(
-    _options: Options,
+    options: Options,
     files: &[String],
     filter: Option<&str>,
 ) -> ExitCode {
@@ -70,6 +68,23 @@ pub fn run(
                 continue;
             },
         };
+        if options.locked {
+            match aevia_core::manifest::Package::owning(path) {
+                | Ok(Some(package)) => {
+                    if let Err(code) = crate::verify_package_lock(&package) {
+                        return code;
+                    }
+                },
+                | Ok(None) => {
+                    eprintln!("aevia test --doc: --locked needs a package for `{shown}`");
+                    return ExitCode::from(2);
+                },
+                | Err(error) => {
+                    eprintln!("aevia test --doc: {}", error.render());
+                    return ExitCode::from(1);
+                },
+            }
+        }
         for doctest in &doctests {
             checked += 1;
             let (outcome, compilation) = check(doctest);
@@ -117,10 +132,38 @@ pub fn run(
 ///
 /// The compilation is returned alongside the outcome so a caller can print the
 /// compiler's own diagnostics when the snippet did not do what it promised.
-fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::Compilation>) {
+fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::driver::Program>) {
+    use aevia_core::manifest::Package;
+    use aevia_core::manifest::Roots;
     let source = candidate(doctest);
-    let name = format!("{}:{}", doctest.file, doctest.line);
-    let compilation = aevia_core::compile(&name, &source);
+    let declaring = std::path::Path::new(&doctest.file);
+    let roots = match Package::owning(declaring) {
+        | Ok(Some(package)) => {
+            match package.roots() {
+                | Ok(roots) => roots,
+                | Err(error) => return (Outcome::Fail(error.render()), None),
+            }
+        },
+        | Ok(None) => Roots::adjacent(declaring),
+        | Err(error) => return (Outcome::Fail(error.render()), None),
+    };
+    let parent = declaring
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let mut serial = 0usize;
+    let entry = loop {
+        let entry = parent.join(format!("AeviaDoctest{}_{}.aev", doctest.line, serial));
+        if !entry.exists() && entry != declaring {
+            break entry;
+        }
+        serial += 1;
+    };
+    let compilation = aevia_core::driver::load_with_roots_and_source(
+        &entry,
+        roots,
+        &source,
+        &aevia_types::check::CheckOptions::default(),
+    );
     let errors: Vec<&aevia_syntax::Diagnostic> = compilation
         .diagnostics
         .items
@@ -132,6 +175,21 @@ fn check(doctest: &Doctest) -> (Outcome, Option<aevia_core::Compilation>) {
         .filter(|diagnostic| !diagnostic.code.is_empty())
         .map(|diagnostic| diagnostic.code.clone())
         .collect();
+    let prefix_len = source.len() - (doctest.snippet.trim_end().len() + 1);
+    let entry_file = compilation.entry().map(|entry| entry.file);
+    if entry_file.is_none()
+        || errors.iter().any(|error| {
+            Some(error.span.file) != entry_file || (error.span.start as usize) < prefix_len
+        })
+    {
+        return (
+            Outcome::Fail(format!(
+                "dependency or inherited import failed ({})",
+                codes_or(&codes)
+            )),
+            Some(compilation),
+        );
+    }
     let outcome = match &doctest.expected {
         | Expected::Compiles => {
             if errors.is_empty() {
@@ -286,8 +344,7 @@ mod tests {
 
     #[test]
     fn the_declaring_modules_declarations_are_not_in_scope() {
-        // Documented limitation: a single-file compile cannot see the module
-        // the docs are attached to, so a snippet must be self-contained.
+        // Isolation is deliberate: declarations require an explicit module import.
         let Outcome::Fail(reason) = outcome("let x = area(2.0 m)", Expected::Compiles) else {
             panic!("expected a failure");
         };

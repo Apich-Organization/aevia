@@ -365,6 +365,7 @@ pub enum Mode {
 
 /// The interpreter state for one program.
 pub struct Interp {
+    pub(crate) tensor_inputs: crate::generics::TensorInputCache,
     pub(crate) session: Rc<()>,
     pub(crate) context: Rc<crate::evidence::ModuleContext>,
     pub(crate) active_scope: Option<Rc<Scope>>,
@@ -576,6 +577,7 @@ impl Interp {
             seed: 0x2545_f491_4f6c_dd1d,
             max_depth: 2048,
             max_tail_calls: 100_000_000,
+            tensor_inputs: crate::generics::TensorInputCache::default(),
             max_io_steps: 100_000_000,
             max_io_depth: 2048,
             max_nodes: 16_384,
@@ -2925,7 +2927,7 @@ impl Interp {
         let count = TensorData::element_count(&shape);
         if count == 0 && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
             if let (Storage::TypedExact(_, a), Storage::TypedExact(_, b)) =
-                (&left.storage, &right.storage)
+                (left.storage.backing(), right.storage.backing())
             {
                 let rep = if *a == value::ExactRep::Int && *b == value::ExactRep::Int {
                     value::ExactRep::Int
@@ -3937,120 +3939,18 @@ impl Interp {
         value: &Value,
         scope: &Rc<Scope>,
     ) -> Result<bool, EvalError> {
-        match &pattern.kind {
-            // A parser recovery node: it matches nothing.
-            | PatKind::Error => Ok(false),
-            | PatKind::Wildcard => Ok(true),
-            | PatKind::Var(name) => {
-                scope.vars.borrow_mut().insert(name.clone(), value.clone());
-                Ok(true)
-            },
-            | PatKind::Lit(lit) => {
-                Ok(match (lit, value) {
-                    | (PatLit::Int(expected), Value::Num(num)) => {
-                        match &num.kind {
-                            | NumKind::Int(actual) => actual == expected,
-                            | NumKind::Exact(actual) => {
-                                actual == &BigRational::from_integer(expected.clone())
-                            },
-                            | NumKind::Float(actual) => {
-                                BigRational::from_float(*actual)
-                                    == Some(BigRational::from_integer(expected.clone()))
-                            },
-                            | _ => false,
-                        }
-                    },
-                    | (PatLit::Str(expected), Value::Str(actual)) => actual.as_ref() == expected,
-                    | (PatLit::Bool(expected), Value::Bool(actual)) => expected == actual,
-                    | (PatLit::Unit, Value::Unit) => true,
-                    | _ => false,
-                })
-            },
-            | PatKind::Ctor { name, args } => {
-                let Value::Variant(variant) = value else {
-                    return Ok(false);
-                };
-                if &variant.name != name || variant.fields.len() != args.len() {
-                    return Ok(false);
-                }
-                for (sub, field) in args.iter().zip(variant.fields.iter()) {
-                    if !self.match_pattern(sub, field, scope)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            },
-            | PatKind::Record(fields) => {
-                let Value::Record(record) = value else {
-                    return Ok(false);
-                };
-                for (name, sub) in fields {
-                    let Some(field) = record.fields.get(name) else {
-                        return Ok(false);
-                    };
-                    match sub {
-                        | Some(sub) => {
-                            if !self.match_pattern(sub, field, scope)? {
-                                return Ok(false);
-                            }
-                        },
-                        | None => {
-                            scope.vars.borrow_mut().insert(name.clone(), field.clone());
-                        },
-                    }
-                }
-                Ok(true)
-            },
-            | PatKind::Tuple(items) => {
-                let Value::Record(record) = value else {
-                    return Ok(false);
-                };
-                for (index, item) in items.iter().enumerate() {
-                    let Some(field) = record.fields.get(&index.to_string()) else {
-                        return Ok(false);
-                    };
-                    if !self.match_pattern(item, field, scope)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            },
-            | PatKind::Tensor { items, rest } => {
-                let Value::Tensor(tensor) = value else {
-                    return Ok(false);
-                };
-                if tensor.rank() != 1 {
-                    return Ok(false);
-                }
-                let elements = tensor.elements();
-                if elements.len() < items.len() {
-                    return Ok(false);
-                }
-                for (index, item) in items.iter().enumerate() {
-                    if !self.match_pattern(item, &elements[index], scope)? {
-                        return Ok(false);
-                    }
-                }
-                if let Some(name) = rest {
-                    let remaining: Vec<Value> = elements[items.len()..].to_vec();
-                    let len = remaining.len();
-                    scope.vars.borrow_mut().insert(
-                        name.clone(),
-                        build_tensor(remaining, vec![len], tensor.dim.clone()),
-                    );
-                }
-                Ok(true)
-            },
-            | PatKind::As { pattern: inner, name } => {
-                if self.match_pattern(inner, value, scope)? {
-                    scope.vars.borrow_mut().insert(name.clone(), value.clone());
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            },
-            | PatKind::Annot { pattern: inner, .. } => self.match_pattern(inner, value, scope),
+        let Some(bindings) =
+            crate::pattern::ast(pattern, value, &self.context.evidence.constructor_refs)
+        else {
+            return Ok(false);
+        };
+        let mut variables = scope.vars.borrow_mut();
+        for binding in bindings {
+            if let crate::pattern::Binding::Name(name, value) = binding {
+                variables.insert(name, value);
+            }
         }
+        Ok(true)
     }
 
     fn bind_pattern(
@@ -5198,12 +5098,13 @@ fn empty_tensor_like(
     tensor: &TensorData,
     shape: Vec<usize>,
 ) -> Value {
-    let storage = match &tensor.storage {
+    let storage = match tensor.storage.backing() {
         | Storage::Dense(_) | Storage::View(_) => Storage::Dense(Rc::new(Vec::new())),
         | Storage::Exact(_) => Storage::Exact(Vec::new()),
         | Storage::TypedExact(_, rep) => Storage::TypedExact(Vec::new(), *rep),
         | Storage::Bool(_) => Storage::Bool(Vec::new()),
         | Storage::Boxed(_) => Storage::Boxed(Vec::new()),
+        | Storage::SharedSlice(_) => unreachable!("unwrapped storage"),
     };
     let result = Value::Tensor(Rc::new(TensorData {
         verified_element: None,
@@ -5418,7 +5319,7 @@ fn observable_type(value: &Value) -> Option<ObservableType> {
             if !tensor.dim.vars().is_empty() {
                 return None;
             }
-            let rep = match &tensor.storage {
+            let rep = match tensor.storage.backing() {
                 | Storage::Dense(_) | Storage::View(_) => RepKind::Float,
                 // Exact storage loses the Int/Real distinction, even if all
                 // values happen to be integers.
@@ -5426,7 +5327,7 @@ fn observable_type(value: &Value) -> Option<ObservableType> {
                 | Storage::TypedExact(_, value::ExactRep::Int) => RepKind::Int,
                 | Storage::TypedExact(_, value::ExactRep::Real) => RepKind::Real,
                 | Storage::Bool(_) => return None,
-                | Storage::Boxed(_) => return None,
+                | Storage::Boxed(_) | Storage::SharedSlice(_) => return None,
             };
             Some(ObservableType::Tensor(
                 tensor.shape.clone(),
@@ -5818,9 +5719,14 @@ fn runtime_structural_show(value: &Value) -> bool {
         | Value::UnitOf(_)
         | Value::Io(_) => true,
         | Value::Tensor(tensor) => {
-            match &tensor.storage {
-                | Storage::Boxed(items) => {
-                    !items.is_empty() && items.iter().all(runtime_structural_show)
+            match tensor.storage.backing() {
+                | Storage::Boxed(_) => {
+                    !tensor.storage.is_empty()
+                        && (0..tensor.storage.len()).all(|index| {
+                            tensor
+                                .get_flat(index)
+                                .is_some_and(|value| runtime_structural_show(&value))
+                        })
                 },
                 | _ => true,
             }
@@ -5868,7 +5774,7 @@ fn runtime_head_matches(
             {
                 return false;
             }
-            match (&**elem, &tensor.storage) {
+            match (&**elem, tensor.storage.backing()) {
                 | (Type::Var(id) | Type::Param(id), storage) => {
                     let actual = if !tensor.dim.vars().is_empty() {
                         None
@@ -5884,7 +5790,9 @@ fn runtime_head_matches(
                                 Some(ObservableType::Num(RepKind::Real, tensor.dim.clone()))
                             },
                             | Storage::Bool(_) => Some(ObservableType::Bool),
-                            | Storage::Exact(_) | Storage::Boxed(_) => None,
+                            | Storage::Exact(_) | Storage::Boxed(_) | Storage::SharedSlice(_) => {
+                                None
+                            },
                         }
                     };
                     bind_runtime_type((matches!(&**elem, Type::Param(_)), *id), actual, bindings)
@@ -5961,14 +5869,14 @@ pub fn witness_of_value(value: &Value) -> Option<Witness> {
             }))
         },
         | Value::Tensor(tensor) => {
-            let storage = match &tensor.storage {
+            let storage = match tensor.storage.backing() {
                 | Storage::Dense(_) | Storage::View(_) => StorageClass::Float,
                 | Storage::Exact(_) | Storage::TypedExact(..) => StorageClass::Exact,
                 // A `Bool` tensor has no element representation in the witness
                 // table (`witness_of` requires a scalar element).
-                | Storage::Bool(_) => return None,
-                | Storage::Boxed(items) => {
-                    match items.first() {
+                | Storage::Bool(_) | Storage::SharedSlice(_) => return None,
+                | Storage::Boxed(_) => {
+                    match tensor.get_flat(0).as_ref() {
                         | Some(Value::Num(num)) => {
                             match &num.kind {
                                 | NumKind::Int(_) | NumKind::Exact(_) | NumKind::Sym(_) => {

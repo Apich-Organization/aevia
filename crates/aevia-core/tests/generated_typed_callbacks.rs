@@ -172,3 +172,67 @@ let bad = Rssn_numerical_callback.{name}(0.0 s, 0.1 s, [1.0 m], 0.000001 m, 0.00
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn generated_least_squares_fits_dimensioned_vector_and_reports_budget() {
+    let name = alias("num_least_squares");
+    let source = format!(
+        r#"import Rssn_numerical_callback
+fn residual(x: Tensor<[1], Float[Length]>): Tensor<1, Float[Time]> = [x[0] / (1.0 m) * (1.0 s) - 2.0 s, x[0] / (1.0 m) * (2.0 s) - 4.0 s]
+let fit = Rssn_numerical_callback.{name}([0.0 m], 0.00000001 s, 0.00000001, 0.00000001, 0.001, 100, 1000, residual)
+let limited = Rssn_numerical_callback.{name}([0.0 m], 0.00000001 s, 0.00000001, 0.00000001, 0.001, 100, 1, residual)
+"#
+    );
+    let (program, dir) = load(&source, "least-squares");
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&program.entry().unwrap().checked).with_mode(mode);
+        let diagnostics = aevia_core::driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        let Value::Record(fit) = payload(interp.eval_toplevel("fit").unwrap(), mode, "fit") else {
+            panic!("expected fit record")
+        };
+        let Value::Tensor(x) = &fit.fields["x"] else {
+            panic!("expected vector")
+        };
+        assert!((x.get_flat(0).unwrap().as_f64().unwrap() - 2.0).abs() < 1e-5);
+        assert!(matches!(fit.fields["converged"], Value::Bool(true)));
+        assert!(fit.fields["evaluations"].as_f64().unwrap() > 0.0);
+        let Value::Record(limited) =
+            payload(interp.eval_toplevel("limited").unwrap(), mode, "limited")
+        else {
+            panic!("expected limited record")
+        };
+        assert!(matches!(limited.fields["converged"], Value::Bool(false)));
+        assert!(
+            matches!(&limited.fields["status"], Value::Str(status) if status.as_ref() == "evaluation_limit")
+        );
+        assert_eq!(limited.fields["evaluations"].as_f64(), Some(1.0));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn generated_least_squares_rejects_wrong_residual_units() {
+    let name = alias("num_least_squares");
+    let source = format!(
+        r#"import Rssn_numerical_callback
+fn residual(x: Tensor<[1], Float[Length]>): Tensor<1, Float[Length]> = x
+let bad = Rssn_numerical_callback.{name}([0.0 m], 0.01 s, 0.001, 0.001, 0.001, 10, 100, residual)
+"#
+    );
+    let (program, dir) = load(&source, "least-squares-units");
+    assert!(
+        program.diagnostics.has_errors(),
+        "wrong residual dimension must be rejected"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

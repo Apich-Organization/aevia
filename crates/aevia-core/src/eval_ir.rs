@@ -17,7 +17,6 @@ use crate::eval::EvalError;
 use crate::eval::Frame;
 use crate::eval::Interp;
 use crate::eval::SliceValue;
-use crate::eval::build_tensor;
 use crate::value::Closure;
 use crate::value::ClosureBody;
 use crate::value::ClosureEnv;
@@ -46,10 +45,8 @@ use aevia_ir::StrPart;
 use aevia_ir::Tail;
 use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
-use aevia_syntax::ast::PatLit;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
-use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -1147,107 +1144,13 @@ fn match_pattern(
     value: &Value,
     frame: &mut Vec<Value>,
 ) -> bool {
-    match pattern {
-        | Pattern::Error => false,
-        | Pattern::Wildcard => true,
-        | Pattern::Bind { slot, inner } => {
-            if let Some(inner) = inner {
-                if !match_pattern(inner, value, frame) {
-                    return false;
-                }
-            }
-            set(frame, *slot, value.clone());
-            true
-        },
-        | Pattern::Ctor { name, args } => {
-            let Value::Variant(variant) = value else {
-                return false;
-            };
-            if &variant.name != name || variant.fields.len() != args.len() {
-                return false;
-            }
-            for (sub, field) in args.iter().zip(variant.fields.iter()) {
-                if !match_pattern(sub, field, frame) {
-                    return false;
-                }
-            }
-            true
-        },
-        | Pattern::Record(fields) => {
-            let Value::Record(record) = value else {
-                return false;
-            };
-            for (name, sub) in fields {
-                let Some(field) = record.fields.get(name) else {
-                    return false;
-                };
-                if !match_pattern(sub, field, frame) {
-                    return false;
-                }
-            }
-            true
-        },
-        | Pattern::Tuple(items) => {
-            let Value::Record(record) = value else {
-                return false;
-            };
-            for (index, item) in items.iter().enumerate() {
-                let Some(field) = record.fields.get(&index.to_string()) else {
-                    return false;
-                };
-                if !match_pattern(item, field, frame) {
-                    return false;
-                }
-            }
-            true
-        },
-        | Pattern::Tensor { items, rest } => {
-            let Value::Tensor(tensor) = value else {
-                return false;
-            };
-            if tensor.rank() != 1 {
-                return false;
-            }
-            let elements = tensor.elements();
-            if elements.len() < items.len() {
-                return false;
-            }
-            for (index, item) in items.iter().enumerate() {
-                if !match_pattern(item, &elements[index], frame) {
-                    return false;
-                }
-            }
-            if let Some(slot) = rest {
-                let remaining: Vec<Value> = elements[items.len()..].to_vec();
-                let len = remaining.len();
-                set(
-                    frame,
-                    *slot,
-                    build_tensor(remaining, vec![len], tensor.dim.clone()),
-                );
-            }
-            true
-        },
-        | Pattern::Lit(literal) => {
-            match (literal, value) {
-                | (PatLit::Int(expected), Value::Num(num)) => {
-                    match &num.kind {
-                        | NumKind::Int(actual) => actual == expected,
-                        | NumKind::Exact(actual) => {
-                            actual == &BigRational::from_integer(expected.clone())
-                        },
-                        | NumKind::Float(actual) => {
-                            BigRational::from_float(*actual)
-                                == Some(BigRational::from_integer(expected.clone()))
-                        },
-                        | _ => false,
-                    }
-                },
-                | (PatLit::Str(expected), Value::Str(actual)) => actual.as_ref() == expected,
-                | (PatLit::Bool(expected), Value::Bool(actual)) => expected == actual,
-                | (PatLit::Unit, Value::Unit) => true,
-                | _ => false,
-            }
-        },
+    let Some(bindings) = crate::pattern::ir(pattern, value) else {
+        return false;
+    };
+    for binding in bindings {
+        if let crate::pattern::Binding::Slot(slot, value) = binding {
+            set(frame, slot, value);
+        }
     }
+    true
 }

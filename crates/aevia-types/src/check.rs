@@ -551,7 +551,7 @@ pub struct CheckedModule {
     /// Every locally declared constructor, including private types. Runtime
     /// initialization pins the exact registry witness from this compilation.
     pub constructors: IndexMap<String, (adt::AdtId, usize)>,
-    /// Actual source constructor references, excluding aliases and shadowing.
+    /// Checked source constructor expressions and patterns, excluding value aliases.
     pub constructor_refs: HashMap<Span, (adt::AdtId, usize)>,
     /// Function signatures by declaration/lambda site, retaining body variables.
     pub functions: HashMap<Span, FunctionEvidence>,
@@ -1262,10 +1262,6 @@ fn bare_type_name(ty: &Ty) -> Option<&String> {
     }
 }
 
-/// Deepest pattern nesting the §6.6 usefulness analysis follows. Beyond it the
-/// analysis answers "covered", so the bound can only suppress a warning, never
-/// invent one.
-const PATTERN_DEPTH_BOUND: u32 = 24;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct LiteralClass {
@@ -9472,95 +9468,14 @@ impl Checker {
         column
     }
 
-    /// Whether `patterns` cover every value of `ty` (§6.6).
-    ///
-    /// The recursion is bounded: past [`Self::PATTERN_DEPTH_BOUND`] the answer
-    /// is "covered", so a pathological pattern nest can suppress an
-    /// exhaustiveness warning but can never produce a false one.
+    /// Bounded matrix coverage preserves correlations between all fields.
     fn patterns_cover(
         &self,
         patterns: &[Pat],
         ty: &Type,
         depth: u32,
     ) -> bool {
-        if depth > PATTERN_DEPTH_BOUND {
-            return true;
-        }
-        if patterns.iter().any(Self::pattern_catch_all) {
-            return true;
-        }
-        let resolved = self.infer.resolve(ty);
-        match &resolved {
-            | Type::Adt(id, args) => {
-                let Some(registered) = adt::get(*id) else {
-                    return false;
-                };
-                if registered.ctors.is_empty() {
-                    // An empty enum has no values: zero arms are exhaustive.
-                    return true;
-                }
-                for ctor in &registered.ctors {
-                    let Some(columns) =
-                        Self::specialise_ctor(patterns, &ctor.name, ctor.fields.len())
-                    else {
-                        return false;
-                    };
-                    for (column, field_ty) in columns.iter().zip(ctor.fields.iter()) {
-                        // The constructor's fields are written with `Param`;
-                        // instantiate them at the scrutinee's arguments.
-                        let field_ty = field_ty.substitute_params(args);
-                        if !self.patterns_cover(column, &field_ty, depth + 1) {
-                            return false;
-                        }
-                    }
-                }
-                true
-            },
-            | Type::Bool => {
-                let mut yes = false;
-                let mut no = false;
-                for pattern in patterns {
-                    if let PatKind::Lit(PatLit::Bool(value)) = &Self::pattern_inner(pattern).kind {
-                        if *value {
-                            yes = true;
-                        } else {
-                            no = true;
-                        }
-                    }
-                }
-                yes && no
-            },
-            | Type::Unit => {
-                patterns.iter().any(|pattern| {
-                    matches!(
-                        Self::pattern_inner(pattern).kind,
-                        PatKind::Lit(PatLit::Unit)
-                    )
-                })
-            },
-            | Type::Record(row) => {
-                // An open row can always carry more fields; only a catch-all
-                // (handled above) covers it.
-                if row.tail_var().is_some() {
-                    return false;
-                }
-                let fields = row.fields();
-                if fields.is_empty() {
-                    return patterns.iter().any(|pattern| {
-                        matches!(Self::pattern_inner(pattern).kind, PatKind::Record(_))
-                    });
-                }
-                for (index, (label, field_ty)) in fields.iter().enumerate() {
-                    let column = Self::specialise_field(patterns, label, index);
-                    if !self.patterns_cover(&column, field_ty, depth + 1) {
-                        return false;
-                    }
-                }
-                true
-            },
-            // Infinite or statically opaque domains need a catch-all arm.
-            | _ => false,
-        }
+        crate::pattern_matrix::covers(patterns, ty, &self.infer, depth)
     }
 
     /// Whether an arm can never be reached because earlier arms cover it.
@@ -9697,6 +9612,72 @@ impl Checker {
         pattern: &Pat,
         ty: &Type,
     ) {
+        self.validate_pattern_names(std::iter::once(pattern));
+        self.bind_pattern_inner(pattern, ty);
+    }
+
+    fn validate_pattern_names<'a>(
+        &mut self,
+        patterns: impl IntoIterator<Item = &'a Pat>,
+    ) {
+        let mut pending = patterns.into_iter().collect::<Vec<_>>();
+        let mut names = HashSet::new();
+        while let Some(pattern) = pending.pop() {
+            let site = pattern.span;
+            let mut bind = |name: &str| {
+                if !names.insert(name.to_string()) {
+                    self.error(
+                        "E0308",
+                        format!("pattern binds `{name}` more than once"),
+                        pattern.span,
+                    );
+                }
+            };
+            match &pattern.kind {
+                | PatKind::Var(name) => bind(name),
+                | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => pending.extend(args),
+                | PatKind::Record(fields) => {
+                    let mut labels = HashSet::new();
+                    for (name, pattern) in fields {
+                        if !labels.insert(name) {
+                            self.error(
+                                "E0308",
+                                format!("record pattern repeats field `{name}`"),
+                                pattern.as_ref().map_or(site, |p| p.span),
+                            );
+                        }
+                        if let Some(pattern) = pattern {
+                            pending.push(pattern);
+                        } else if !names.insert(name.clone()) {
+                            self.error(
+                                "E0308",
+                                format!("pattern binds `{name}` more than once"),
+                                site,
+                            );
+                        }
+                    }
+                },
+                | PatKind::Tensor { items, rest } => {
+                    if let Some(name) = rest {
+                        bind(name);
+                    }
+                    pending.extend(items);
+                },
+                | PatKind::As { pattern, name } => {
+                    bind(name);
+                    pending.push(pattern);
+                },
+                | PatKind::Annot { pattern, .. } => pending.push(pattern),
+                | _ => {},
+            }
+        }
+    }
+
+    fn bind_pattern_inner(
+        &mut self,
+        pattern: &Pat,
+        ty: &Type,
+    ) {
         match &pattern.kind {
             // A parser recovery node: the syntax error was already reported.
             | PatKind::Error => {},
@@ -9741,6 +9722,18 @@ impl Checker {
                 }
             },
             | PatKind::Ctor { name, args } => {
+                if matches!(self.infer.resolve(ty), Type::Var(_)) {
+                    if let Some((id, index)) = self.constructor_bindings.get(name).copied() {
+                        let constructor = self.infer.instantiate(&ctor_scheme(id, index));
+                        let result = match constructor {
+                            | Type::Fn(_, result) => *result,
+                            | value => value,
+                        };
+                        if let Err(error) = self.infer.unify(ty, &result) {
+                            self.report_unify(error, pattern.span);
+                        }
+                    }
+                }
                 let resolved = self.infer.resolve(ty);
                 let (adt_id, adt_args) = match &resolved {
                     | Type::Adt(id, args) => (*id, args.clone()),
@@ -9765,6 +9758,22 @@ impl Checker {
                     );
                     return;
                 };
+                if adt::module_of(adt_id) != self.module_path
+                    && !self
+                        .constructor_bindings
+                        .values()
+                        .any(|(id, ctor)| adt::same_type(*id, adt_id) && *ctor == index)
+                {
+                    self.error(
+                        "E0307",
+                        format!("constructor `{name}` is not visible in this module"),
+                        pattern.span,
+                    );
+                    return;
+                }
+                self.checked
+                    .constructor_refs
+                    .insert(pattern.span, (adt_id, index));
                 let ctor = &registered.ctors[index];
                 if ctor.fields.len() != args.len() {
                     self.error(
@@ -9779,8 +9788,8 @@ impl Checker {
                     return;
                 }
                 for (sub, field) in args.iter().zip(ctor.fields.iter()) {
-                    let field_ty = field.substitute_params(&adt_args);
-                    self.bind_pattern(sub, &field_ty);
+                    let field_ty = instantiate_pattern_field(adt_id, field, &adt_args);
+                    self.bind_pattern_inner(sub, &field_ty);
                 }
             },
             | PatKind::Record(fields) => {
@@ -9803,7 +9812,7 @@ impl Checker {
                         continue;
                     };
                     match sub {
-                        | Some(sub) => self.bind_pattern(sub, &field_ty),
+                        | Some(sub) => self.bind_pattern_inner(sub, &field_ty),
                         | None => {
                             if !name.starts_with('_') {
                                 self.local_binders.push((name.clone(), pattern.span));
@@ -9825,17 +9834,35 @@ impl Checker {
                     );
                     return;
                 };
+                if row.tail_var().is_some()
+                    || row.fields().len() != items.len()
+                    || (0..items.len()).any(|index| row.field(&index.to_string()).is_none())
+                {
+                    self.error(
+                        "E0308",
+                        "tuple pattern arity does not match its value",
+                        pattern.span,
+                    );
+                    return;
+                }
                 for (index, item) in items.iter().enumerate() {
                     let field_ty = row
                         .field(&index.to_string())
                         .cloned()
                         .unwrap_or(Type::Error);
-                    self.bind_pattern(item, &field_ty);
+                    self.bind_pattern_inner(item, &field_ty);
                 }
             },
             | PatKind::Tensor { items, rest } => {
+                if matches!(self.infer.resolve(ty), Type::Var(_)) {
+                    let elem = self.infer.fresh_type();
+                    let tensor = Type::tensor(Shape::Rank(1), elem);
+                    if let Err(error) = self.infer.unify(ty, &tensor) {
+                        self.report_unify(error, pattern.span);
+                    }
+                }
                 let resolved = self.infer.resolve(ty);
-                let Type::Tensor { elem, .. } = resolved else {
+                let Type::Tensor { shape, elem } = resolved else {
                     self.error(
                         "E0308",
                         format!("a tensor pattern does not match {resolved}"),
@@ -9843,14 +9870,24 @@ impl Checker {
                     );
                     return;
                 };
+                if shape.rank() != 1 {
+                    self.error("E0308", "a tensor pattern requires rank one", pattern.span);
+                    return;
+                }
                 for item in items {
-                    self.bind_pattern(item, &elem);
+                    self.bind_pattern_inner(item, &elem);
                 }
                 if let Some(name) = rest {
                     if let Some(scope) = self.scopes.last_mut() {
                         scope.insert(
                             name.clone(),
-                            Scheme::mono(Type::tensor(Shape::Rank(1), (*elem).clone())),
+                            Scheme::mono(Type::tensor(
+                                shape
+                                    .extent(0)
+                                    .and_then(|n| n.checked_sub(items.len()))
+                                    .map_or(Shape::Rank(1), |n| Shape::refined(vec![Some(n)])),
+                                (*elem).clone(),
+                            )),
                         );
                     }
                 }
@@ -9867,7 +9904,7 @@ impl Checker {
                 }
             },
             | PatKind::As { pattern: inner, name } => {
-                self.bind_pattern(inner, ty);
+                self.bind_pattern_inner(inner, ty);
                 if let Some(scope) = self.scopes.last_mut() {
                     scope.insert(name.clone(), Scheme::mono(ty.clone()));
                 }
@@ -9880,7 +9917,7 @@ impl Checker {
                 if let Err(error) = self.infer.unify(&annotated, ty) {
                     self.report_unify(error, pattern.span);
                 }
-                self.bind_pattern(inner, &annotated);
+                self.bind_pattern_inner(inner, &annotated);
             },
         }
     }
@@ -11798,4 +11835,24 @@ mod literal_region_tests {
             }
         }
     }
+}
+
+pub(crate) fn instantiate_pattern_field(
+    id: adt::AdtId,
+    field: &Type,
+    arguments: &[Type],
+) -> Type {
+    let mut types = Vec::new();
+    let mut dims = HashMap::new();
+    for (kind, argument) in adt::param_kinds_of(id).iter().zip(arguments) {
+        match (kind, argument) {
+            | (adt::ParamKind::Type, value) => types.push(Some(value.clone())),
+            | (adt::ParamKind::Dim(id), Type::UnitOf(dim)) => {
+                types.push(None);
+                dims.insert(*id, dim.clone());
+            },
+            | _ => types.push(None),
+        }
+    }
+    field.substitute_kinded(&types, &dims, &HashMap::new(), &HashMap::new())
 }

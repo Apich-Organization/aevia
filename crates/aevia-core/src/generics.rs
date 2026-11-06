@@ -635,16 +635,47 @@ impl Interp {
                 {
                     return false;
                 }
+                if let Type::Scalar(_, dim) = &**elem {
+                    if &tensor.dim != dim {
+                        return false;
+                    }
+                }
+                if self.tensor_inputs.contains(tensor, elem) {
+                    return true;
+                }
+                // A suffix can reuse only a complete proof of its immutable
+                // root. If the root has not been seen, validate the whole root
+                // once; a valid suffix never certifies an invalid prefix.
+                if TensorInputCache::eligible(elem)
+                    && matches!(tensor.storage, crate::value::Storage::SharedSlice(_))
+                {
+                    let root = TensorInputCache::root(tensor);
+                    if tensor.dim == root.dim
+                        && self.runtime_input_matches(
+                            &Value::Tensor(root.clone()),
+                            &Type::tensor(
+                                aevia_types::Shape::Rank(root.rank() as u32),
+                                (**elem).clone(),
+                            ),
+                        )
+                    {
+                        return true;
+                    }
+                }
                 if tensor.storage.is_empty() {
                     return tensor.verified_element.as_ref().is_some_and(|actual| {
                         crate::host_witness::strict_schema_equal(actual, elem)
                     }) || crate::host_witness::capture(value, expected, false).is_some();
                 }
-                (0..tensor.storage.len()).all(|index| {
+                let valid = (0..tensor.storage.len()).all(|index| {
                     tensor
                         .get_flat(index)
                         .is_some_and(|value| self.runtime_input_matches(&value, elem))
-                })
+                });
+                if valid {
+                    self.tensor_inputs.remember(tensor, elem);
+                }
+                valid
             },
             | (Value::Record(record), Type::Record(row)) => {
                 row.fields().iter().all(|(name, ty)| {
@@ -689,5 +720,153 @@ impl Interp {
             },
             | _ => crate::host_witness::runtime_schema(value),
         }
+    }
+}
+
+// Primitive input proofs retain only Weak identities. A live Weak prevents
+// Rc::get_mut; Rc::make_mut either detaches it or clones to a different identity.
+// No proof survives such a change, and no proof keeps the payload alive.
+#[derive(Default)]
+pub(crate) struct TensorInputCache {
+    entries: std::cell::RefCell<
+        std::collections::VecDeque<(std::rc::Weak<crate::value::TensorData>, Type)>,
+    >,
+}
+impl TensorInputCache {
+    const CAPACITY: usize = 256;
+
+    fn eligible(schema: &Type) -> bool {
+        crate::host_witness::is_leaf_schema(schema) && !aevia_types::class::has_variables(schema)
+    }
+
+    fn root(mut tensor: &Rc<crate::value::TensorData>) -> &Rc<crate::value::TensorData> {
+        while let crate::value::Storage::SharedSlice(view) = &tensor.storage {
+            tensor = &view.source;
+        }
+        tensor
+    }
+
+    fn contains(
+        &self,
+        tensor: &Rc<crate::value::TensorData>,
+        schema: &Type,
+    ) -> bool {
+        if !Self::eligible(schema) {
+            return false;
+        }
+        let root = Self::root(tensor);
+        if tensor.dim != root.dim {
+            return false;
+        }
+        self.entries
+            .borrow()
+            .iter()
+            .rev()
+            .any(|(identity, proven)| {
+                identity
+                    .upgrade()
+                    .is_some_and(|source| Rc::ptr_eq(&source, root))
+                    && crate::host_witness::strict_schema_equal(proven, schema)
+            })
+    }
+
+    fn remember(
+        &self,
+        tensor: &Rc<crate::value::TensorData>,
+        schema: &Type,
+    ) {
+        if !Self::eligible(schema)
+            || matches!(tensor.storage, crate::value::Storage::SharedSlice(_))
+        {
+            return;
+        }
+        let mut entries = self.entries.borrow_mut();
+        entries.retain(|(identity, _)| identity.strong_count() != 0);
+        while entries.len() >= Self::CAPACITY {
+            entries.pop_front();
+        }
+        entries.push_back((Rc::downgrade(tensor), schema.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tensor_input_cache_tests {
+    use super::*;
+    use crate::value::Storage;
+    use crate::value::TensorData;
+    fn tensor() -> Rc<TensorData> {
+        Rc::new(TensorData::new(
+            vec![2],
+            Storage::Dense(Rc::new(vec![1., 2.])),
+            aevia_dim::Dim::one(),
+            None,
+        ))
+    }
+    fn matches(
+        i: &Interp,
+        tensor: &Rc<TensorData>,
+        elem: Type,
+    ) -> bool {
+        i.runtime_input_matches(
+            &Value::Tensor(tensor.clone()),
+            &Type::tensor(aevia_types::Shape::Rank(1), elem),
+        )
+    }
+    #[test]
+    fn weak_identity_proofs_block_get_mut_and_make_mut_invalidates_them() {
+        let i = Interp::new(&aevia_types::CheckedModule::default());
+        let mut data = tensor();
+        let schema = Type::float(aevia_dim::Dim::one());
+        assert!(matches(&i, &data, schema.clone()));
+        assert_eq!(i.tensor_inputs.entries.borrow().len(), 1);
+        let old = Rc::downgrade(&data);
+        assert!(Rc::get_mut(&mut data).is_none());
+        Rc::make_mut(&mut data).storage =
+            Storage::Boxed(vec![Value::string("bad"), Value::string("bad")]);
+        assert!(old.upgrade().is_none());
+        assert!(!matches(&i, &data, schema));
+    }
+    #[test]
+    fn shared_root_proofs_do_not_bypass_dimension_shape_or_schema_validation() {
+        let i = Interp::new(&aevia_types::CheckedModule::default());
+        let data = tensor();
+        let schema = Type::float(aevia_dim::Dim::one());
+        assert!(matches(&i, &data, schema.clone()));
+        let mut tail = data.tail_view(1).unwrap();
+        assert!(matches(&i, &tail, schema.clone()));
+        assert!(!matches(&i, &tail, Type::int()));
+        assert!(!matches(&i, &tail, Type::Var(77)));
+        Rc::make_mut(&mut tail).dim = aevia_dim::Dim::base("Length");
+        assert!(!matches(&i, &tail, schema.clone()));
+        Rc::make_mut(&mut tail).dim = aevia_dim::Dim::one();
+        Rc::make_mut(&mut tail).shape = vec![2];
+        assert!(!matches(&i, &tail, schema));
+    }
+    #[test]
+    fn proofs_are_strictly_bounded_even_when_all_input_roots_remain_alive() {
+        let i = Interp::new(&aevia_types::CheckedModule::default());
+        let roots = (0..400).map(|_| tensor()).collect::<Vec<_>>();
+        for root in &roots {
+            assert!(matches(&i, root, Type::float(aevia_dim::Dim::one())));
+        }
+        assert_eq!(
+            i.tensor_inputs.entries.borrow().len(),
+            TensorInputCache::CAPACITY
+        );
+    }
+    #[test]
+    fn a_homogeneous_suffix_never_certifies_a_malformed_prefix_of_its_root() {
+        let i = Interp::new(&aevia_types::CheckedModule::default());
+        let root = Rc::new(TensorData::new(
+            vec![2],
+            Storage::Boxed(vec![Value::string("bad"), Value::float(1.)]),
+            aevia_dim::Dim::one(),
+            None,
+        ));
+        let tail = root.tail_view(1).unwrap();
+        let schema = Type::float(aevia_dim::Dim::one());
+        assert!(matches(&i, &tail, schema.clone()));
+        assert!(!matches(&i, &root, schema));
+        assert!(i.tensor_inputs.entries.borrow().is_empty());
     }
 }

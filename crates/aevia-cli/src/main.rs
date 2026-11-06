@@ -279,6 +279,7 @@ fn run_cli(
 /// their own handling because they are the commands that would write the lock.
 fn locked_precheck(args: &[String]) -> Result<(), ExitCode> {
     match args.first().map(String::as_str) {
+        | Some("test") if args.iter().any(|arg| arg == "--doc") => Ok(()),
         | Some("run" | "check" | "test" | "fmt" | "doc" | "bench") => verify_lock(),
         // They handle `--locked` themselves: they may legitimately decide
         // whether a change is allowed.
@@ -312,6 +313,10 @@ fn verify_lock() -> Result<(), ExitCode> {
             return Err(ExitCode::from(1));
         },
     };
+    verify_package_lock(&package)
+}
+
+fn verify_package_lock(package: &Package) -> Result<(), ExitCode> {
     let lock_path = package.dir.join("aevia.lock");
     let resolved = match package.resolve() {
         | Ok(lock) => lock,

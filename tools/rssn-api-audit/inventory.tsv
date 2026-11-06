@@ -575,6 +575,10 @@ crate::kernels::jacobian::fd_jacobian_colored	callback			fn fd_jacobian_colored 
 crate::kernels::jacobian::fd_jacobian_colored_par	callback			fn fd_jacobian_colored_par < F : Fn (f64 , & [f64] , & mut [f64]) + Sync > (f : & F , t : f64 , y : & [f64] , f0 : & [f64] , pattern : & Csr , colors : & (Vec < usize > , usize) , nfev : & mut usize ,) -> Csr
 crate::kernels::jacobian::fd_jacobian_dense	callback			fn fd_jacobian_dense < F : Fn (f64 , & [f64] , & mut [f64]) > (f : & F , t : f64 , y : & [f64] , f0 : & [f64] ,) -> Mat
 crate::kernels::jacobian::fd_jacobian_dense_par	callback			fn fd_jacobian_dense_par < F : Fn (f64 , & [f64] , & mut [f64]) + Sync > (f : & F , t : f64 , y : & [f64] , f0 : & [f64] ,) -> Mat
+crate::kernels::krylov::<reexport:17a5b0d0f10ea974>	unresolved-reexport			ilut :: IlutStats
+crate::kernels::krylov::<reexport:2e224c2d9b055a4d>	unresolved-reexport			ilut :: IlutOptions
+crate::kernels::krylov::<reexport:6faa0e66f335a549>	unresolved-reexport			ilut :: IlutError
+crate::kernels::krylov::<reexport:cf5b30c3a21d259d>	unresolved-reexport			ilut :: Ilut
 crate::kernels::krylov::AutoPreconditioner::apply	associated-method			fn apply (& self , r : & [f64] , z : & mut [f64] ,)
 crate::kernels::krylov::AutoPreconditioner::as_preconditioner	associated-method			fn as_preconditioner (& self) -> Preconditioner < '_ >
 crate::kernels::krylov::AutoPreconditioner::kind	associated-method			const fn kind (& self) -> AutoPreconditionerKind
@@ -585,6 +589,7 @@ crate::kernels::krylov::Csr::diagonal	associated-method			fn diagonal (& self) -
 crate::kernels::krylov::Csr::from_triplets	associated-method			fn from_triplets (rows : usize , cols : usize , trip : & [(usize , usize , f64)] ,) -> Self
 crate::kernels::krylov::Csr::ic0	associated-method			fn ic0 (& self) -> Option < Ic0 >
 crate::kernels::krylov::Csr::ilu0	associated-method			fn ilu0 (& self) -> Option < Ilu0 >
+crate::kernels::krylov::Csr::ilut	associated-method			fn ilut (& self , options : IlutOptions ,) -> Result < Ilut , IlutError >
 crate::kernels::krylov::Csr::jacobi_inverse	associated-method			fn jacobi_inverse (& self) -> Vec < f64 >
 crate::kernels::krylov::Csr::matvec	associated-method			fn matvec (& self , x : & [f64] , y : & mut [f64] ,)
 crate::kernels::krylov::Csr::min_degree_ordering	associated-method			fn min_degree_ordering (& self) -> Vec < usize >
@@ -950,6 +955,7 @@ crate::kernels::rootfind::halley	callback			fn halley < F , D , E > (f : F , df 
 crate::kernels::rootfind::homotopy_system	opaque			fn homotopy_system (system : & [Vec < PolyTerm >]) -> Result < Vec < PathResult > , RootError >
 crate::kernels::rootfind::homotopy_system_with_gamma	opaque			fn homotopy_system_with_gamma (system : & [Vec < PolyTerm >] , gamma : (f64 , f64) ,) -> Result < Vec < PathResult > , RootError >
 crate::kernels::rootfind::homotopy_univariate	opaque			fn homotopy_univariate (coeffs : & [f64]) -> Result < Vec < (f64 , f64) > , RootError >
+crate::kernels::rootfind::least_squares	declared	num_least_squares		fn least_squares < F > (f : F , jac : Option < & LeastSquaresJacobian < '_ > > , x0 : & [f64] , options : LeastSquaresOptions ,) -> Result < LeastSquaresResult , LeastSquaresError > where F : Fn (& [f64]) -> Vec < f64 > ,
 crate::kernels::rootfind::levenberg_marquardt	callback			fn levenberg_marquardt < F : Fn (& [f64]) -> Vec < f64 > > (f : F , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> Result < SystemSolution , RootError >
 crate::kernels::rootfind::newton_bracketed	callback			fn newton_bracketed < F : Fn (f64) -> f64 , D : Fn (f64) -> f64 > (f : F , df : D , a : f64 , b : f64 , tol : f64 , max_iter : usize ,) -> Result < f64 , RootError >
 crate::kernels::rootfind::newton_system	callback			fn newton_system < F , J > (f : F , jac : Option < & J > , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> Result < SystemSolution , RootError > where F : Fn (& [f64]) -> Vec < f64 > , J : Fn (& [f64]) -> Mat ,

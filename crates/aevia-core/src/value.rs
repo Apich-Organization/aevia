@@ -241,7 +241,32 @@ pub enum Storage {
     /// the phase rule of [`Storage::Dense`] applies unchanged — a view is a
     /// `Float` tensor whatever it was sliced from.
     View(View),
+    /// A logical contiguous range sharing a tensor of any element representation.
+    /// Nested suffixes are flattened, so repeated pattern tails are O(1).
+    SharedSlice(SharedSlice),
 }
+
+/// A rank-one logical window over immutable shared tensor storage.
+#[derive(Clone, Debug)]
+pub struct SharedSlice {
+    pub(crate) source: Rc<TensorData>,
+    pub(crate) offset: usize,
+    pub(crate) len: usize,
+}
+impl SharedSlice {
+    /// The original tensor whose storage this window retains.
+    #[must_use]
+    pub fn source(&self) -> &Rc<TensorData> {
+        &self.source
+    }
+
+    /// The logical start within the original tensor.
+    #[must_use]
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+}
+
 
 /// A strided window over a shared `f64` buffer (§6.6.4, §9.5).
 ///
@@ -372,6 +397,14 @@ fn window_fits(
 }
 
 impl Storage {
+    pub(crate) fn backing(&self) -> &Self {
+        let mut current = self;
+        while let Self::SharedSlice(view) = current {
+            current = &view.source.storage;
+        }
+        current
+    }
+
     /// Number of stored elements.
     ///
     /// For a view this is the number of *logical* elements, which is what
@@ -385,6 +418,7 @@ impl Storage {
             | Self::Boxed(items) => items.len(),
             | Self::Bool(items) => items.len(),
             | Self::View(view) => view.len,
+            | Self::SharedSlice(view) => view.len,
         }
     }
 
@@ -403,7 +437,7 @@ impl Storage {
     /// True when the elements are a strided window.
     #[must_use]
     pub fn is_view(&self) -> bool {
-        matches!(self, Self::View(_))
+        matches!(self, Self::View(_) | Self::SharedSlice(_))
     }
 }
 
@@ -538,6 +572,17 @@ impl TensorData {
     ) -> Option<Value> {
         match &self.storage {
             | Storage::Dense(items) => items.get(index).map(|value| self.float_value(*value)),
+            | Storage::SharedSlice(view) => {
+                if index >= view.len {
+                    return None;
+                }
+                let mut value = view.source.get_flat(view.offset.checked_add(index)?)?;
+                if let Value::Num(number) = &mut value {
+                    number.dim = self.dim.clone();
+                    number.display = self.display.clone();
+                }
+                Some(value)
+            },
             | Storage::View(view) => {
                 let position = self.view_position(view, index)?;
                 view.data
@@ -620,6 +665,11 @@ impl TensorData {
         match &self.storage {
             | Storage::Dense(items) => Some(items.as_slice()),
             | Storage::View(view) => self.contiguous_window(view),
+            | Storage::SharedSlice(view) => {
+                view.source
+                    .dense()?
+                    .get(view.offset..view.offset.checked_add(view.len)?)
+            },
             | _ => None,
         }
     }
@@ -639,6 +689,13 @@ impl TensorData {
     pub fn dense_flat(&self) -> Option<Cow<'_, [f64]>> {
         match &self.storage {
             | Storage::Dense(items) => Some(Cow::Borrowed(items.as_slice())),
+            | Storage::SharedSlice(view) => {
+                let end = view.offset.checked_add(view.len)?;
+                match view.source.dense_flat()? {
+                    | Cow::Borrowed(data) => Some(Cow::Borrowed(data.get(view.offset..end)?)),
+                    | Cow::Owned(data) => Some(Cow::Owned(data.get(view.offset..end)?.to_vec())),
+                }
+            },
             | Storage::View(view) => {
                 match self.contiguous_window(view) {
                     | Some(window) => Some(Cow::Borrowed(window)),
@@ -787,6 +844,34 @@ impl TensorData {
             flat = flat * usize::try_from(extent).ok()? + usize::try_from(normalized).ok()?;
         }
         Some(flat)
+    }
+
+    /// A zero-copy suffix of a rank-one tensor, preserving its representation,
+    /// dimension, display unit and authenticated element schema. Repeated tails
+    /// point directly to the original storage instead of forming a view chain.
+    #[must_use]
+    pub fn tail_view(
+        self: &Rc<Self>,
+        start: usize,
+    ) -> Option<Rc<Self>> {
+        if self.rank() != 1 || self.shape[0] != self.storage.len() || start > self.shape[0] {
+            return None;
+        }
+        if start == 0 {
+            return Some(self.clone());
+        }
+        let len = self.shape[0] - start;
+        let (source, offset) = match &self.storage {
+            | Storage::SharedSlice(view) => (view.source.clone(), view.offset.checked_add(start)?),
+            | _ => (self.clone(), start),
+        };
+        Some(Rc::new(Self {
+            shape: vec![len],
+            storage: Storage::SharedSlice(SharedSlice { source, offset, len }),
+            dim: self.dim.clone(),
+            display: self.display.clone(),
+            verified_element: self.verified_element.clone(),
+        }))
     }
 
     /// The elements in row-major order.
@@ -1053,6 +1138,28 @@ impl TensorData {
                     row_major_strides(&self.shape),
                     vec![false; self.rank()],
                 ))
+            },
+            | Storage::SharedSlice(view) => {
+                let (data, offset, strides, reversed) = view.source.f64_window()?;
+                if strides.len() != 1 || reversed.len() != 1 {
+                    return None;
+                }
+                let step = signed_stride(*strides.first()?, *reversed.first()?)?;
+                let shift = step.checked_mul(isize::try_from(view.offset).ok()?)?;
+                let start = offset.checked_add_signed(shift)?;
+                if self.rank() != 1 {
+                    // A host may reuse logical suffix storage under a new
+                    // shape. Only a contiguous range has a strided f64 layout
+                    // in that shape; other layouts use the logical fallback.
+                    self.dense()?;
+                    return Some((
+                        data,
+                        start,
+                        row_major_strides(&self.shape),
+                        vec![false; self.rank()],
+                    ));
+                }
+                Some((data, start, strides, reversed))
             },
             | Storage::View(view) => {
                 Some((
@@ -1375,6 +1482,37 @@ impl TensorData {
     ) -> Option<Storage> {
         let len = Self::element_count(shape);
         match &self.storage {
+            | Storage::SharedSlice(_) => {
+                if len != self.storage.len() {
+                    return None;
+                }
+                if len == 0 {
+                    return Some(match self.storage.backing() {
+                        | Storage::Dense(_) | Storage::View(_) => {
+                            Storage::Dense(Rc::new(Vec::new()))
+                        },
+                        | Storage::Exact(_) => Storage::Exact(Vec::new()),
+                        | Storage::TypedExact(_, rep) => Storage::TypedExact(Vec::new(), *rep),
+                        | Storage::Bool(_) => Storage::Bool(Vec::new()),
+                        | Storage::Boxed(_) => Storage::Boxed(Vec::new()),
+                        | Storage::SharedSlice(_) => unreachable!("unwrapped storage"),
+                    });
+                }
+                if self.dense().is_some() {
+                    let (data, offset, _, _) = self.f64_window()?;
+                    return Some(Storage::View(View {
+                        data,
+                        offset,
+                        strides: row_major_strides(shape),
+                        reversed: vec![false; shape.len()],
+                        len,
+                    }));
+                }
+                if let Some(data) = self.dense_flat() {
+                    return Some(Storage::Dense(Rc::new(data.into_owned())));
+                }
+                Some(self.storage.clone())
+            },
             | Storage::View(view) => {
                 // `len == 0` cannot be a view (empty tensors stay boxed), but
                 // guarding it keeps the offset arithmetic honest.

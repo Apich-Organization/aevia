@@ -452,6 +452,8 @@ pub enum Pattern {
     Ctor {
         /// The constructor name.
         name: String,
+        /// Checked nominal constructor identity; absent for unchecked lowering.
+        identity: Option<(aevia_types::adt::AdtId, usize)>,
         /// Its arguments.
         args: Vec<Pattern>,
     },

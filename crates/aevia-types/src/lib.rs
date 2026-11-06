@@ -98,3 +98,5 @@ pub use ty::Type;
 pub use representation::NumericConstraint;
 pub use representation::RepDomain;
 pub use representation::RepRelation;
+
+mod pattern_matrix;

@@ -492,7 +492,7 @@ pub(crate) fn host_dimension_witness(value: &Value) -> aevia_rssn::witness::Dime
             } else {
                 Vec::new()
             };
-            let mut element_repr = match &tensor.storage {
+            let mut element_repr = match tensor.storage.backing() {
                 | crate::value::Storage::Dense(_) | crate::value::Storage::View(_) => {
                     Some(SigType::Float)
                 },

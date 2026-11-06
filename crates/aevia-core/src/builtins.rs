@@ -6327,17 +6327,16 @@ pub fn npy_encode(tensor: &crate::value::TensorData) -> Result<Vec<u8>, String> 
     }
     aevia_std::npy::checked_element_count(&tensor.shape)
         .ok_or_else(|| "E0902: NPY tensor shape or strides overflow".to_string())?;
-    let values = if let Storage::Boxed(items) = &tensor.storage {
-        if items.is_empty()
+    let values = if matches!(tensor.storage.backing(), Storage::Boxed(_)) {
+        if tensor.storage.is_empty()
             && !matches!(tensor.verified_element.as_deref(), Some(aevia_types::Type::Scalar(aevia_types::Rep::Float, dim)) if dim.is_one())
         {
             return Err("E0902: `write_npy` needs proven Float elements".to_string());
         }
-        let values = items
-            .iter()
-            .map(|item| {
-                match item {
-                    | Value::Num(number) if number.dim.is_one() => {
+        let values = (0..tensor.storage.len())
+            .map(|index| {
+                match tensor.get_flat(index) {
+                    | Some(Value::Num(number)) if number.dim.is_one() => {
                         match &number.kind {
                             | NumKind::Float(value) => Some(*value),
                             | _ => None,
@@ -7732,7 +7731,7 @@ fn flat_index(
 
 /// A zero of the tensor's element representation and dimension.
 fn zero_like(tensor: &TensorData) -> Value {
-    match &tensor.storage {
+    match tensor.storage.backing() {
         | Storage::Dense(_) | Storage::View(_) => {
             Value::Num(NumVal::float(0.0, tensor.dim.clone()))
         },
@@ -7748,6 +7747,7 @@ fn zero_like(tensor: &TensorData) -> Value {
         },
         | Storage::Bool(_) => Value::Bool(false),
         | Storage::Boxed(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
+        | Storage::SharedSlice(_) => unreachable!("unwrapped storage"),
     }
 }
 

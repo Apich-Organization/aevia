@@ -905,6 +905,76 @@ fn an_unknown_check_option_is_reported() {
 
 // --- §7.5.5 / §9.12 doctests ----------------------------------------------
 
+#[test]
+fn doctests_resolve_the_authors_package_and_can_explicitly_import_it() {
+    let scratch = Scratch::new("doc-package-imports");
+    scratch.write(
+        "aevia.toml",
+        "[package]\nname = \"docs\"\nversion = \"0.1.0\"\nentry = \"src/Author.aev\"\n",
+    );
+    scratch.write("src/Helper.aev", "module Helper\nfn answer(): Int = 42\n");
+    let author = scratch.write("src/Author.aev", "module Author\nimport Helper\n## ```aevia\n## import Author\n## let x: Int = Author.value() + Helper.answer()\n## ```\nfn value(): Int = 7\n");
+    let mut before: Vec<_> = std::fs::read_dir(author.parent().unwrap())
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .collect();
+    let output = aevia(
+        std::env::temp_dir().as_path(),
+        &["test", "--doc", author.to_str().unwrap()],
+    );
+    assert_eq!(code(&output), 0, "{} {}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("1 passed, 0 failed"));
+    let mut after: Vec<_> = std::fs::read_dir(author.parent().unwrap())
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .collect();
+    before.sort();
+    after.sort();
+    assert_eq!(before, after, "snippets must not create physical sources");
+}
+
+#[test]
+fn dependency_failures_cannot_satisfy_a_compile_fail_doctest() {
+    let scratch = Scratch::new("doc-dependency-failure");
+    scratch.write("Broken.aev", "module Broken\nlet bad = unknown_name\n");
+    let source = scratch.write("Author.aev", "import Broken\n## ```aevia\n## compile_fail E0301\n## let bad = another_unknown\n## ```\nfn documented(): Int = 1\n");
+    let output = aevia(scratch.path(), &["test", "--doc", source.to_str().unwrap()]);
+    assert_eq!(code(&output), 1);
+    assert!(
+        stdout(&output).contains("dependency or inherited import failed"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn doctest_lock_checks_use_the_documented_package_not_the_callers_directory() {
+    let scratch = Scratch::new("doc-package-lock");
+    scratch.write("aevia.toml", "[package]\nname = \"docs\"\nversion = \"0.1.0\"\nentry = \"src/Author.aev\"\n[dependencies]\nHelper = { path = \"dep\" }\n");
+    scratch.write(
+        "dep/aevia.toml",
+        "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nentry = \"src/Helper.aev\"\n",
+    );
+    scratch.write("dep/src/Helper.aev", "module Helper\nlet value = 1\n");
+    let author = scratch.write(
+        "src/Author.aev",
+        "## ```aevia\n## let value = 1\n## ```\nfn value(): Int = 1\n",
+    );
+    assert_eq!(code(&aevia(scratch.path(), &["update"])), 0);
+    let output = aevia(
+        std::env::temp_dir().as_path(),
+        &["--locked", "test", "--doc", author.to_str().unwrap()],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    scratch.write("dep/src/Changed.aev", "let changed = 2\n");
+    let output = aevia(
+        std::env::temp_dir().as_path(),
+        &["--locked", "test", "--doc", author.to_str().unwrap()],
+    );
+    assert_eq!(code(&output), 1);
+    assert!(stderr(&output).contains("out of date"));
+}
+
 /// The absolute path of a doctest fixture in this crate.
 fn fixture(name: &str) -> String {
     Path::new(env!("CARGO_MANIFEST_DIR"))

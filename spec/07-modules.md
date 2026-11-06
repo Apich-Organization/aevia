@@ -334,8 +334,9 @@ test "dimension rejection" =
 - 文档注释中的代码块标 `aevia` 会被编译检查（doctest）：`aevia test --doc
   [FILE…]` 抽取围栏块并逐个编译；块首行可写 `compile_fail` 或
   `compile_fail EXXXX`。片段在自己的合成模块中编译，声明模块的
-  `import`/`open` 行会被复制，但模块自身的声明不在作用域内（单文件编译器
-  的已知限制）。
+  `import`/`open` 行会被复制，依赖按声明文件所属包及相邻目录解析。
+  模块自身的声明不隐式进入片段；需要它们时显式导入声明模块。片段仅作为内存
+  源码加载，不创建临时源文件。依赖或继承导入失败不满足 `compile_fail`。
 
 ## 7.6 版本与兼容性
 
