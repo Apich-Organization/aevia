@@ -92,7 +92,10 @@ fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
         wiener.signatures.len(),
         "one key per overload"
     );
-    let SigType::Tensor { rank: Some(2), elem, .. } = &wiener.signatures[0].ret else {
+    let SigType::Tensor {
+        rank: Some(2), elem, ..
+    } = &wiener.signatures[0].ret
+    else {
         panic!(
             "`sde_wiener` must return a rank-2 tensor: {:?}",
             wiener.signatures[0]
@@ -123,7 +126,10 @@ fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
     assert_eq!(areas.source, aevia_rssn::Source::Overlay);
     assert_eq!(areas.signatures.len(), 1);
     assert_eq!(areas.keys.len(), areas.signatures.len());
-    let SigType::Tensor { rank: Some(1), elem, .. } = &areas.signatures[0].ret else {
+    let SigType::Tensor {
+        rank: Some(1), elem, ..
+    } = &areas.signatures[0].ret
+    else {
         panic!(
             "`sde_levy_areas` must return a rank-1 tensor: {:?}",
             areas.signatures[0]
@@ -1203,16 +1209,24 @@ fn the_dimension_term_round_trip_is_exact() {
 
 #[test]
 fn rssn_scalar_root_finders_handle_tiny_residuals() {
-    use rssn::kernels::rootfind::{RootError, brent, newton_bracketed};
+    use rssn::kernels::rootfind::RootError;
+    use rssn::kernels::rootfind::brent;
+    use rssn::kernels::rootfind::newton_bracketed;
     for scale in [1.0, 1e-200, 1e-300] {
         let f = |x: f64| scale * (x * x - 0.36);
         let b = brent(f, 0.0, 1.0, 1e-12, 200).unwrap();
         let n = newton_bracketed(f, |x| 2.0 * scale * x, 0.0, 1.0, 1e-12, 200).unwrap();
         assert!((b - 0.6).abs() < 1e-10, "Brent, scale {scale:e}: {b}");
         assert!((n - 0.6).abs() < 1e-10, "Newton, scale {scale:e}: {n}");
-        assert_eq!(brent(|x| scale * (x * x + 1.0), -1.0, 1.0, 1e-12, 100), Err(RootError::NotBracketed));
+        assert_eq!(
+            brent(|x| scale * (x * x + 1.0), -1.0, 1.0, 1e-12, 100),
+            Err(RootError::NotBracketed)
+        );
     }
-    assert_eq!(brent(|_| f64::NAN, 0.0, 1.0, 1e-12, 100), Err(RootError::Invalid));
+    assert_eq!(
+        brent(|_| f64::NAN, 0.0, 1.0, 1e-12, 100),
+        Err(RootError::Invalid)
+    );
     let f = |x: f64| (1e12 * x).exp() - 100.0_f64.exp();
     let df = |x: f64| 1e12 * (1e12 * x).exp();
     for (a, b) in [(0.0, 6e-10), (6e-10, 0.0)] {
@@ -1225,7 +1239,8 @@ fn rssn_scalar_root_finders_handle_tiny_residuals() {
 #[test]
 fn rssn_jit_rejects_load_offsets_outside_cranelift_range() {
     use rssn::backend::jit::JitFunction;
-    use rssn::backend::tape::{Inst, Tape};
+    use rssn::backend::tape::Inst;
+    use rssn::backend::tape::Tape;
     let limit = (i32::MAX / 8) as u32;
     for (is_input, index, accepted) in [
         (true, limit, true),
@@ -1234,70 +1249,139 @@ fn rssn_jit_rejects_load_offsets_outside_cranelift_range() {
         (false, limit + 1, false),
     ] {
         let tape = Tape {
-            insts: vec![if is_input { Inst::Input(index) } else { Inst::Param(index) }],
+            insts: vec![if is_input {
+                Inst::Input(index)
+            } else {
+                Inst::Param(index)
+            }],
             args: Vec::new(),
-            inputs: if is_input { index as usize + 1 } else { 0 },
-            params: if is_input { 0 } else { index as usize + 1 },
+            inputs: if is_input {
+                index as usize + 1
+            } else {
+                0
+            },
+            params: if is_input {
+                0
+            } else {
+                index as usize + 1
+            },
             outputs: vec![0],
         };
-        assert_eq!(JitFunction::compile(&tape).is_ok(), accepted, "is_input={is_input}, index={index}");
+        assert_eq!(
+            JitFunction::compile(&tape).is_ok(),
+            accepted,
+            "is_input={is_input}, index={index}"
+        );
     }
 }
 
 #[test]
 fn rssn_terminal_event_location_scales_with_step_and_time_spacing() {
-    use rssn::kernels::ode::{self, OdeSolverMethod};
-    use rssn::kernels::ode_adaptive::{self, Event, OdeOptions};
+    use rssn::kernels::ode::OdeSolverMethod;
+    use rssn::kernels::ode::{
+        self,
+    };
+    use rssn::kernels::ode_adaptive::Event;
+    use rssn::kernels::ode_adaptive::OdeOptions;
+    use rssn::kernels::ode_adaptive::{
+        self,
+    };
     for (start, width) in [(0.0_f64, 1e-15_f64), (1e12, 1.0)] {
         let end = start + width;
         let target = start + 0.6 * width;
         let rhs = |_t: f64, _y: &[f64], out: &mut [f64]| out[0] = 1.0;
         let event_fn = |t: f64, _y: &[f64]| ((t - start) / width).powi(2) - 0.36;
-        let events = [Event { g: &event_fn, terminal: true, direction: 0 }];
-        let (_, fixed_hits) = ode::solve_fixed_events(rhs, &[0.0], (start, end), 1, OdeSolverMethod::RungeKutta4, &events).unwrap();
-        let adaptive = ode_adaptive::dopri5(rhs, start, end, &[0.0], &OdeOptions::default(), &events).unwrap();
+        let events = [Event {
+            g: &event_fn,
+            terminal: true,
+            direction: 0,
+        }];
+        let (_, fixed_hits) = ode::solve_fixed_events(
+            rhs,
+            &[0.0],
+            (start, end),
+            1,
+            OdeSolverMethod::RungeKutta4,
+            &events,
+        )
+        .unwrap();
+        let adaptive =
+            ode_adaptive::dopri5(rhs, start, end, &[0.0], &OdeOptions::default(), &events).unwrap();
         let tolerance = (width * 1e-10).max(2.0 * (start.abs().next_up() - start.abs()));
         for found in [fixed_hits[0].t, adaptive.events[0].t] {
-            assert!((found - target).abs() <= tolerance, "start={start:e}, width={width:e}, got={found:e}, target={target:e}");
+            assert!(
+                (found - target).abs() <= tolerance,
+                "start={start:e}, width={width:e}, got={found:e}, target={target:e}"
+            );
         }
     }
 }
 
 #[test]
 fn rssn_streaming_covariance_merges_large_offset_shards() {
-    use rssn::kernels::stats::{OnlineCovariance, OnlineStatsError};
+    use rssn::kernels::stats::OnlineCovariance;
+    use rssn::kernels::stats::OnlineStatsError;
     let mut all = OnlineCovariance::new(2).unwrap();
     let mut left = all.clone();
     let mut right = all.clone();
     for i in 0..100 {
         let sample = [1e12 + i as f64, -1e12 + 2.0 * i as f64];
         all.push(&sample).unwrap();
-        if i < 43 { left.push(&sample).unwrap(); } else { right.push(&sample).unwrap(); }
+        if i < 43 {
+            left.push(&sample).unwrap();
+        } else {
+            right.push(&sample).unwrap();
+        }
     }
     left.merge(&right).unwrap();
     assert_eq!(left.count(), 100);
-    for (got, expected) in left.sample_covariance().unwrap().iter().zip(all.sample_covariance().unwrap()) {
+    for (got, expected) in left
+        .sample_covariance()
+        .unwrap()
+        .iter()
+        .zip(all.sample_covariance().unwrap())
+    {
         assert!((got - expected).abs() < 1e-9);
     }
     let before = left.mean().unwrap().to_vec();
-    assert_eq!(left.push(&[f64::NAN, 0.0]), Err(OnlineStatsError::NonFiniteInput));
+    assert_eq!(
+        left.push(&[f64::NAN, 0.0]),
+        Err(OnlineStatsError::NonFiniteInput)
+    );
     assert_eq!(left.count(), 100);
     assert_eq!(left.mean().unwrap(), before);
 }
 
 #[test]
 fn rssn_simplex_cubature_integrates_tetrahedron_moments() {
-    use rssn::kernels::quadrature::{SimplexError, integrate_simplex};
-    let vertices = vec![vec![0., 0., 0.], vec![1., 0., 0.], vec![0., 1., 0.], vec![0., 0., 1.]];
-    let q = integrate_simplex(|x| x[0] * x[0] * x[1] * x[2], &vertices, 1e-10, 1e-10, 200_000).unwrap();
+    use rssn::kernels::quadrature::SimplexError;
+    use rssn::kernels::quadrature::integrate_simplex;
+    let vertices = vec![
+        vec![0., 0., 0.],
+        vec![1., 0., 0.],
+        vec![0., 1., 0.],
+        vec![0., 0., 1.],
+    ];
+    let q = integrate_simplex(
+        |x| x[0] * x[0] * x[1] * x[2],
+        &vertices,
+        1e-10,
+        1e-10,
+        200_000,
+    )
+    .unwrap();
     assert!(q.converged, "{q:?}");
     assert!((q.value - 1.0 / 2520.0).abs() < 1e-9, "{q:?}");
-    assert_eq!(integrate_simplex(|_| f64::NAN, &vertices, 1e-6, 0.0, 100_000), Err(SimplexError::NonFiniteIntegrand));
+    assert_eq!(
+        integrate_simplex(|_| f64::NAN, &vertices, 1e-6, 0.0, 100_000),
+        Err(SimplexError::NonFiniteIntegrand)
+    );
 }
 
 #[test]
 fn rssn_large_natural_and_clamped_splines_use_linear_storage() {
-    use rssn::kernels::approx::{CubicSpline, SplineBc};
+    use rssn::kernels::approx::CubicSpline;
+    use rssn::kernels::approx::SplineBc;
     let x: Vec<_> = (0..50_000).map(|i| f64::from(i) * 0.01).collect();
     let y: Vec<_> = x.iter().map(|x| 2.0 * x + 1.0).collect();
     for boundary in [SplineBc::Natural, SplineBc::Clamped(2.0, 2.0)] {

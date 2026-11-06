@@ -1,14 +1,16 @@
 //! Audits public Rust numerical APIs against declared RSSN dynamic exports.
 //! A source inventory is not a count of callable operators: unregistered,
 //! generic, callback and Rust-only shapes remain separate.
-use rssn_api_model::{numerical_codegen, structured_codegen};
+use rssn_api_model::numerical_codegen;
+use rssn_api_model::structured_codegen;
 
 use quote::ToTokens;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
-};
-use syn::{Item, Visibility};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::path::Path;
+use std::path::PathBuf;
+use syn::Item;
+use syn::Visibility;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
@@ -49,6 +51,7 @@ impl<'ast> syn::visit::Visit<'ast> for TypeAudit {
         self.callback = true;
         syn::visit::visit_type_bare_fn(self, node);
     }
+
     fn visit_trait_bound(
         &mut self,
         node: &'ast syn::TraitBound,
@@ -63,6 +66,7 @@ impl<'ast> syn::visit::Visit<'ast> for TypeAudit {
         }
         syn::visit::visit_trait_bound(self, node);
     }
+
     fn visit_type_path(
         &mut self,
         node: &'ast syn::TypePath,
@@ -149,10 +153,12 @@ fn visit_items(
 ) -> Result<(), String> {
     let parent_types: BTreeSet<String> = items
         .iter()
-        .filter_map(|item| match item {
-            | Item::Struct(x) if public(&x.vis) => Some(x.ident.to_string()),
-            | Item::Enum(x) if public(&x.vis) => Some(x.ident.to_string()),
-            | _ => None,
+        .filter_map(|item| {
+            match item {
+                | Item::Struct(x) if public(&x.vis) => Some(x.ident.to_string()),
+                | Item::Enum(x) if public(&x.vis) => Some(x.ident.to_string()),
+                | _ => None,
+            }
         })
         .collect();
     for item in items {
@@ -335,23 +341,45 @@ fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
     let manifest = session.manifest();
     let mut paths: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for info in &manifest.ops {
-        let Some(path) = &info.rust_path else { continue };
-        if !path.starts_with("crate::") || info.signature_source != SignatureSource::Declared
-            || info.overloads.is_empty() || info.overloads.len() != info.keys.len()
+        let Some(path) = &info.rust_path else {
+            continue;
+        };
+        if !path.starts_with("crate::")
+            || info.signature_source != SignatureSource::Declared
+            || info.overloads.is_empty()
+            || info.overloads.len() != info.keys.len()
         {
-            return Err(format!("invalid source provenance or non-declared signature for {}", info.name));
+            return Err(format!(
+                "invalid source provenance or non-declared signature for {}",
+                info.name
+            ));
         }
         for (signature, key) in info.overloads.iter().zip(&info.keys) {
-            let expected = rssn::kernel::signature::OpKey::new(&info.rule_set, &info.name, Some(signature));
-            if *key != expected { return Err(format!("manifest key disagrees with declared signature for {}", info.name)); }
-            let label = if info.keys.len() == 1 { info.name.clone() } else {
-                let hash: String = key.signature_hash.iter().map(|byte| format!("{byte:02x}")).collect();
+            let expected =
+                rssn::kernel::signature::OpKey::new(&info.rule_set, &info.name, Some(signature));
+            if *key != expected {
+                return Err(format!(
+                    "manifest key disagrees with declared signature for {}",
+                    info.name
+                ));
+            }
+            let label = if info.keys.len() == 1 {
+                info.name.clone()
+            } else {
+                let hash: String = key
+                    .signature_hash
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
                 format!("{}@{hash}", info.name)
             };
             paths.entry(path.clone()).or_default().push(label);
         }
     }
-    for names in paths.values_mut() { names.sort(); names.dedup(); }
+    for names in paths.values_mut() {
+        names.sort();
+        names.dedup();
+    }
     Ok(paths)
 }
 
@@ -418,28 +446,47 @@ fn check_snapshot(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--structured-write" | "--structured-check" | "--structured-report")) {
+    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--structured-write" | "--structured-check" | "--structured-report"))
+    {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
         let policy = root.join("tools/rssn-api-gen/structured-policy.tsv");
         let target = root.join("src/rules/numerical_abi/structured_generated.rs");
         let result = structured_codegen::generate(&root, &std::fs::read_to_string(policy)?)?;
         match args[0].as_str() {
-            "--structured-report" => print!("{result}"),
-            "--structured-write" => { std::fs::write(&target, result)?; println!("wrote {}", target.display()); },
-            _ => { if std::fs::read_to_string(&target)? != result { return Err("generated structured codecs changed; review --structured-report and run --structured-write".into()); } println!("generated structured codecs verified"); }
+            | "--structured-report" => print!("{result}"),
+            | "--structured-write" => {
+                std::fs::write(&target, result)?;
+                println!("wrote {}", target.display());
+            },
+            | _ => {
+                if std::fs::read_to_string(&target)? != result {
+                    return Err("generated structured codecs changed; review --structured-report and run --structured-write".into());
+                }
+                println!("generated structured codecs verified");
+            },
         }
         return Ok(());
     }
-    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--bindings-write" | "--bindings-check" | "--bindings-report")) {
+    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--bindings-write" | "--bindings-check" | "--bindings-report"))
+    {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
         let policy = root.join("tools/rssn-api-gen/numerical-policy.tsv");
         let target = root.join("src/rules/numerical_abi/generated.rs");
         let source = std::fs::read_to_string(policy)?;
         let result = numerical_codegen::generate(&root, &source)?;
         match args[0].as_str() {
-            "--bindings-report" => print!("{result}"),
-            "--bindings-write" => { std::fs::write(&target, result)?; println!("wrote {}", target.display()); },
-            _ => { let saved = std::fs::read_to_string(&target)?; if saved != result { return Err("generated numerical bindings changed; review --bindings-report and run --bindings-write".into()); } println!("generated numerical bindings verified"); },
+            | "--bindings-report" => print!("{result}"),
+            | "--bindings-write" => {
+                std::fs::write(&target, result)?;
+                println!("wrote {}", target.display());
+            },
+            | _ => {
+                let saved = std::fs::read_to_string(&target)?;
+                if saved != result {
+                    return Err("generated numerical bindings changed; review --bindings-report and run --bindings-write".into());
+                }
+                println!("generated numerical bindings verified");
+            },
         }
         return Ok(());
     }

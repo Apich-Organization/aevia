@@ -29,7 +29,12 @@ fn tensor(
     shape: Vec<usize>,
     values: Vec<f64>,
 ) -> Value {
-    Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(shape, Storage::Dense(std::rc::Rc::new(values)), aevia_dim::Dim::one(), None)))
+    Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(
+        shape,
+        Storage::Dense(std::rc::Rc::new(values)),
+        aevia_dim::Dim::one(),
+        None,
+    )))
 }
 
 fn exact(values: Vec<i64>) -> Value {
@@ -244,7 +249,10 @@ fn a_histogram_reports_counts_and_edges() {
     };
     let counts = tensor_of(&record.fields["counts"]);
     assert_eq!(counts.shape, vec![2]);
-    assert!(matches!(counts.storage, Storage::Exact(_) | Storage::TypedExact(..)));
+    assert!(matches!(
+        counts.storage,
+        Storage::Exact(_) | Storage::TypedExact(..)
+    ));
     let edges = tensor_of(&record.fields["edges"]);
     assert_eq!(edges.shape, vec![3]);
     // Edges are [0, 2, 4]: 0 and 1 fall low, 2, 3 and 4 fall high.
@@ -657,7 +665,9 @@ let path = odeint_with(rhs, 0.0, [0.0 s, 0.5 s, 1.0 s], { rtol = 1e-8, atol = 1e
 "#,
         "path",
     );
-    let Value::Record(trajectory) = solution else { panic!("expected trajectory") };
+    let Value::Record(trajectory) = solution else {
+        panic!("expected trajectory")
+    };
     let times = tensor_of(&trajectory.fields["t"]).elements();
     let states = tensor_of(&trajectory.fields["y"]).elements();
     assert_eq!(times.len(), 3);
@@ -829,7 +839,10 @@ fn an_exact_factorisation_stays_exact() {
         panic!("lu returns a triple")
     };
     let u = tensor_of(&lu.fields["2"]);
-    assert!(matches!(u.storage, Storage::Exact(_) | Storage::TypedExact(..)));
+    assert!(matches!(
+        u.storage,
+        Storage::Exact(_) | Storage::TypedExact(..)
+    ));
     let entries: Vec<BigRational> = match &u.storage {
         | Storage::Exact(values) | Storage::TypedExact(values, _) => values.clone(),
         | _ => unreachable!(),

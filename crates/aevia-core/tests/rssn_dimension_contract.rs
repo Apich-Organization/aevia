@@ -1,8 +1,10 @@
 //! Exact manifest dimensions must survive both checker and runtime paths.
+use aevia_core::Interp;
+use aevia_core::compile;
 use aevia_core::eval::Mode;
 use aevia_core::value::Value;
-use aevia_core::{Interp, compile};
-use aevia_dim::{Dim, ratio};
+use aevia_dim::Dim;
+use aevia_dim::ratio;
 
 #[test]
 fn pinned_dimension_parameter_reaches_tensor_result_in_both_evaluators() {
@@ -102,13 +104,14 @@ fn numerical_equal_dimension_policy_rejects_incompatible_inputs() {
 
 #[test]
 fn empty_tensor_representation_is_evidence_not_guessed_from_parameter() {
-    use aevia_core::value::{ExactRep, Storage, TensorData};
+    use aevia_core::value::ExactRep;
+    use aevia_core::value::Storage;
+    use aevia_core::value::TensorData;
     use std::rc::Rc;
     let op = aevia_rssn::registry().op("num_norm").expect("numeric norm");
     let key = op.key(0).expect("pinned key");
-    let make = |storage| {
-        Value::Tensor(Rc::new(TensorData::new(vec![0], storage, Dim::one(), None)))
-    };
+    let make =
+        |storage| Value::Tensor(Rc::new(TensorData::new(vec![0], storage, Dim::one(), None)));
     let int_tensor = make(Storage::TypedExact(Vec::new(), ExactRep::Int));
     let error = aevia_core::rssn_module::call_operator(
         key,

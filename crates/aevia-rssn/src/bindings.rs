@@ -134,8 +134,15 @@ fn classify(
             inspect_type(ty, &mut dynamic, &mut unavailable);
         }
         if registry.capabilities.has("core.callback") {
-            if op.higher_order && !mirrored.params.iter().any(|ty| matches!(ty, crate::registry::SigType::Func(..))) {
-                unavailable.insert("higher-order signature has no supported trailing callback".to_string());
+            if op.higher_order
+                && !mirrored
+                    .params
+                    .iter()
+                    .any(|ty| matches!(ty, crate::registry::SigType::Func(..)))
+            {
+                unavailable.insert(
+                    "higher-order signature has no supported trailing callback".to_string(),
+                );
             }
             unavailable.remove(
                 "missing capability core.callback (function values cannot cross the kernel ABI)",
@@ -169,7 +176,8 @@ fn classify(
                     );
                 }
                 if !callback_parameters_supported(&mirrored.params)
-                    || !callback_raw_parameters_supported(&signature.params) {
+                    || !callback_raw_parameters_supported(&signature.params)
+                {
                     unavailable.insert(
                         "callback bridge requires supported recursive trailing callback schemas"
                             .to_string(),
@@ -204,22 +212,35 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
     use crate::registry::SigType as S;
     fn schema(ty: &S) -> bool {
         match ty {
-            S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
-            S::Dim(inner, _) => matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex),
-            S::Tensor { rank: Some(rank), shape, elem } => shape.as_ref().is_none_or(|shape| shape.len() == *rank) && schema(elem),
-            S::Record(fields) => {
-                let mut names = BTreeSet::new();
-                fields.iter().all(|(name, ty)| names.insert(name) && schema(ty))
+            | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
+            | S::Dim(inner, _) => {
+                matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex)
             },
-            _ => false,
+            | S::Tensor {
+                rank: Some(rank),
+                shape,
+                elem,
+            } => shape.as_ref().is_none_or(|shape| shape.len() == *rank) && schema(elem),
+            | S::Record(fields) => {
+                let mut names = BTreeSet::new();
+                fields
+                    .iter()
+                    .all(|(name, ty)| names.insert(name) && schema(ty))
+            },
+            | _ => false,
         }
     }
     let mut seen_callback = false;
     for param in params {
         match param {
-            S::Func(args, ret) => { seen_callback = true; if !args.iter().all(schema) || !schema(ret) { return false; } },
-            _ if seen_callback => return false,
-            _ => {},
+            | S::Func(args, ret) => {
+                seen_callback = true;
+                if !args.iter().all(schema) || !schema(ret) {
+                    return false;
+                }
+            },
+            | _ if seen_callback => return false,
+            | _ => {},
         }
     }
     seen_callback
@@ -231,30 +252,65 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
 fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
     fn dim(d: &DimExpr) -> bool {
         match d {
-            DimExpr::Dimless | DimExpr::Base(_) | DimExpr::Var(_) => true,
-            DimExpr::Mul(parts) => parts.iter().all(dim),
-            DimExpr::Inverse(inner) => dim(inner),
-            DimExpr::Pow(inner, Exp::Rat(power)) => power.denom != 0 && dim(inner),
-            _ => false,
+            | DimExpr::Dimless | DimExpr::Base(_) | DimExpr::Var(_) => true,
+            | DimExpr::Mul(parts) => parts.iter().all(dim),
+            | DimExpr::Inverse(inner) => dim(inner),
+            | DimExpr::Pow(inner, Exp::Rat(power)) => power.denom != 0 && dim(inner),
+            | _ => false,
         }
     }
     fn schema(ty: &TypeExpr) -> bool {
         match ty {
-            TypeExpr::Int | TypeExpr::Real | TypeExpr::Float | TypeExpr::Complex | TypeExpr::Bool | TypeExpr::String => true,
-            TypeExpr::Dim(inner, d) => matches!(inner.as_ref(), TypeExpr::Int | TypeExpr::Real | TypeExpr::Float | TypeExpr::Complex) && dim(d),
-            TypeExpr::Tensor { rank: NatExpr::Lit(rank), shape, elem } => {
-                usize::try_from(*rank).ok().is_some_and(|rank| shape.as_ref().is_none_or(|shape| shape.len() == rank && shape.iter().all(|extent| match extent { NatExpr::Lit(value) => usize::try_from(*value).is_ok(), NatExpr::Var(_) => true, _ => false }))) && schema(elem)
+            | TypeExpr::Int
+            | TypeExpr::Real
+            | TypeExpr::Float
+            | TypeExpr::Complex
+            | TypeExpr::Bool
+            | TypeExpr::String => true,
+            | TypeExpr::Dim(inner, d) => {
+                matches!(
+                    inner.as_ref(),
+                    TypeExpr::Int | TypeExpr::Real | TypeExpr::Float | TypeExpr::Complex
+                ) && dim(d)
             },
-            TypeExpr::Record(fields) => { let mut names = BTreeSet::new(); fields.iter().all(|(name, ty)| names.insert(name) && schema(ty)) },
-            _ => false,
+            | TypeExpr::Tensor {
+                rank: NatExpr::Lit(rank),
+                shape,
+                elem,
+            } => {
+                usize::try_from(*rank).ok().is_some_and(|rank| {
+                    shape.as_ref().is_none_or(|shape| {
+                        shape.len() == rank
+                            && shape.iter().all(|extent| {
+                                match extent {
+                                    | NatExpr::Lit(value) => usize::try_from(*value).is_ok(),
+                                    | NatExpr::Var(_) => true,
+                                    | _ => false,
+                                }
+                            })
+                    })
+                }) && schema(elem)
+            },
+            | TypeExpr::Record(fields) => {
+                let mut names = BTreeSet::new();
+                fields
+                    .iter()
+                    .all(|(name, ty)| names.insert(name) && schema(ty))
+            },
+            | _ => false,
         }
     }
     let mut seen_callback = false;
     for param in params {
         match param {
-            TypeExpr::Function(args, ret) => { seen_callback = true; if !args.iter().all(schema) || !schema(ret) { return false; } },
-            _ if seen_callback => return false,
-            _ => {},
+            | TypeExpr::Function(args, ret) => {
+                seen_callback = true;
+                if !args.iter().all(schema) || !schema(ret) {
+                    return false;
+                }
+            },
+            | _ if seen_callback => return false,
+            | _ => {},
         }
     }
     seen_callback
@@ -413,40 +469,85 @@ mod callback_strategy_tests {
         let scalar = S::Func(vec![S::Int, S::Bool], Box::new(S::Real));
         assert!(callback_parameters_supported(&[S::Float, scalar.clone()]));
         assert!(!callback_parameters_supported(&[scalar, S::Float]));
-        let tensor = S::Tensor { rank: Some(1), shape: Some(vec![2]), elem: Box::new(S::Float) };
+        let tensor = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Float),
+        };
         let record = S::Record(vec![("y".into(), tensor.clone()), ("ok".into(), S::Bool)]);
-        assert!(callback_parameters_supported(&[S::Func(vec![record.clone()], Box::new(tensor))]));
-        assert!(!callback_parameters_supported(&[S::Func(vec![S::Var("T".into())], Box::new(S::Float))]));
-        assert!(!callback_parameters_supported(&[S::Func(vec![S::Tensor { rank: None, shape: None, elem: Box::new(S::Float) }], Box::new(S::Float))]));
-        assert!(!callback_parameters_supported(&[S::Func(vec![S::Record(vec![("x".into(), S::Int), ("x".into(), S::Int)])], Box::new(S::Float))]));
-        assert!(!callback_parameters_supported(&[S::Func(vec![S::Func(vec![],Box::new(S::Float))], Box::new(record))]));
+        assert!(callback_parameters_supported(&[S::Func(
+            vec![record.clone()],
+            Box::new(tensor)
+        )]));
+        assert!(!callback_parameters_supported(&[S::Func(
+            vec![S::Var("T".into())],
+            Box::new(S::Float)
+        )]));
+        assert!(!callback_parameters_supported(&[S::Func(
+            vec![S::Tensor {
+                rank: None,
+                shape: None,
+                elem: Box::new(S::Float)
+            }],
+            Box::new(S::Float)
+        )]));
+        assert!(!callback_parameters_supported(&[S::Func(
+            vec![S::Record(vec![("x".into(), S::Int), ("x".into(), S::Int)])],
+            Box::new(S::Float)
+        )]));
+        assert!(!callback_parameters_supported(&[S::Func(
+            vec![S::Func(vec![], Box::new(S::Float))],
+            Box::new(record)
+        )]));
         assert!(!callback_parameters_supported(&[S::Float]));
     }
     #[test]
     fn raw_callback_schema_rejects_unknown_and_malformed_promises() {
         use super::callback_raw_parameters_supported as supports;
-        use rssn::kernel::signature::{DimExpr, NatExpr, TypeExpr as T};
-        let callback = |arg| T::Function(vec![arg],Box::new(T::Float));
-        let generic = T::Tensor { rank: NatExpr::Lit(1), shape: Some(vec![NatExpr::Var("N".into())]), elem: Box::new(T::Float) };
+        use rssn::kernel::signature::DimExpr;
+        use rssn::kernel::signature::NatExpr;
+        use rssn::kernel::signature::TypeExpr as T;
+        let callback = |arg| T::Function(vec![arg], Box::new(T::Float));
+        let generic = T::Tensor {
+            rank: NatExpr::Lit(1),
+            shape: Some(vec![NatExpr::Var("N".into())]),
+            elem: Box::new(T::Float),
+        };
         assert!(supports(&[callback(generic)]));
         assert!(!supports(&[callback(T::Var("T".into()))]));
         assert!(!supports(&[callback(T::Float.with_dim(DimExpr::Any))]));
-        assert!(!supports(&[callback(T::Tensor { rank: NatExpr::Lit(1), shape: Some(vec![NatExpr::Lit(1),NatExpr::Lit(2)]), elem: Box::new(T::Float) })]));
+        assert!(!supports(&[callback(T::Tensor {
+            rank: NatExpr::Lit(1),
+            shape: Some(vec![NatExpr::Lit(1), NatExpr::Lit(2)]),
+            elem: Box::new(T::Float)
+        })]));
         assert!(!supports(&[callback(T::Float), T::Var("T".into())]));
     }
     #[test]
     fn generic_dynamic_fallback_cannot_bypass_callback_guard() {
-        use super::{classify, Coverage};
+        use super::Coverage;
+        use super::classify;
         use rssn::kernel::signature::TypeExpr as T;
         let registry = crate::registry::registry();
-        let mut op = registry.op("num_integrate").expect("integration callback").clone();
+        let mut op = registry
+            .op("num_integrate")
+            .expect("integration callback")
+            .clone();
         let callback = T::Function(vec![T::Var("T".into())], Box::new(T::Float));
         op.raw[0].params = vec![callback, T::Var("T".into())];
-        op.signatures[0].params = vec![S::Func(vec![S::Var("T".into())],Box::new(S::Float)), S::Var("T".into())];
-        assert!(matches!(classify(registry, &op, Some(0)), Coverage::Unavailable(_)));
+        op.signatures[0].params = vec![
+            S::Func(vec![S::Var("T".into())], Box::new(S::Float)),
+            S::Var("T".into()),
+        ];
+        assert!(matches!(
+            classify(registry, &op, Some(0)),
+            Coverage::Unavailable(_)
+        ));
         op.raw[0].params = vec![T::Var("T".into())];
         op.signatures[0].params = vec![S::Var("T".into())];
-        assert!(matches!(classify(registry, &op, Some(0)), Coverage::Unavailable(_)));
+        assert!(matches!(
+            classify(registry, &op, Some(0)),
+            Coverage::Unavailable(_)
+        ));
     }
-
 }

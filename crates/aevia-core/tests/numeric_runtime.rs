@@ -183,7 +183,9 @@ fn an_ode_event_stops_the_trajectory_at_its_root() {
         |_interp: &mut Interp, _args: Vec<Value>, _span: Span| Ok(rate(1.0)),
     ))));
     let event = Value::Native(Rc::new(NativeFn(Box::new(
-        |_interp: &mut Interp, args: Vec<Value>, _span: Span| Ok(float(args[1].as_f64().unwrap() - 0.6)),
+        |_interp: &mut Interp, args: Vec<Value>, _span: Span| {
+            Ok(float(args[1].as_f64().unwrap() - 0.6))
+        },
     ))));
     let event = make_variant(adt::OPTION_ID, 1, "Some", vec![event]);
     let result = interpreter
@@ -193,7 +195,9 @@ fn an_ode_event_stops_the_trajectory_at_its_root() {
             Span::default(),
         )
         .expect("event integration");
-    let Value::Record(trajectory) = result else { panic!("expected trajectory") };
+    let Value::Record(trajectory) = result else {
+        panic!("expected trajectory")
+    };
     let times = tensor_values(trajectory.fields["t"].clone());
     let states = tensor_values(trajectory.fields["y"].clone());
     assert_eq!(times.len(), 4);
@@ -241,8 +245,15 @@ fn radau_integrates_a_stiff_problem_through_the_runtime() {
     ]);
     let mut interpreter = Interp::new(&aevia_types::CheckedModule::default());
     let Value::Record(trajectory) = interpreter
-        .call_named("odeint_with", vec![rhs, float(1.0), times(), options], Span::default())
-        .expect("Radau is available") else { panic!("expected trajectory") };
+        .call_named(
+            "odeint_with",
+            vec![rhs, float(1.0), times(), options],
+            Span::default(),
+        )
+        .expect("Radau is available")
+    else {
+        panic!("expected trajectory")
+    };
     let states = tensor_values(trajectory.fields["y"].clone());
     assert!((states[3] - 1.0_f64.cos()).abs() < 1e-6, "{states:?}");
 }

@@ -187,7 +187,12 @@ fn diagonal(
             }
         }
     }
-    Value::Tensor(std::rc::Rc::new(TensorData::new(vec![size, size], Storage::Dense(std::rc::Rc::new(data)), aevia_dim::Dim::one(), None)))
+    Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![size, size],
+        Storage::Dense(std::rc::Rc::new(data)),
+        aevia_dim::Dim::one(),
+        None,
+    )))
 }
 
 /// `det`, `inv` and `linsolve` on the `f64` branch.
@@ -202,7 +207,12 @@ fn the_float_factorisations_agree_on_a_large_matrix() {
     let size = 65;
     // 2^64 on the diagonal, halved once: the determinant is exactly 2^63.
     let a = diagonal(size, &[(size - 1, 0.5)]);
-    let b = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![size], Storage::Dense(std::rc::Rc::new(vec![1.0; size])), aevia_dim::Dim::one(), None)));
+    let b = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![size],
+        Storage::Dense(std::rc::Rc::new(vec![1.0; size])),
+        aevia_dim::Dim::one(),
+        None,
+    )));
 
     let determinant = call("det", vec![a.clone()]);
     let Value::Num(determinant) = determinant else {
@@ -226,7 +236,12 @@ fn the_float_factorisations_agree_on_a_large_matrix() {
 #[test]
 fn a_large_singular_matrix_still_reports_singular() {
     let a = diagonal(65, &[(0, 0.0)]);
-    let b = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![65], Storage::Dense(std::rc::Rc::new(vec![1.0; 65])), aevia_dim::Dim::one(), None)));
+    let b = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![65],
+        Storage::Dense(std::rc::Rc::new(vec![1.0; 65])),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     for (name, args) in [("inv", vec![a.clone()]), ("linsolve", vec![a, b])] {
         let Value::Variant(result) = call(name, args) else {
             panic!("{name}: expected a Result");

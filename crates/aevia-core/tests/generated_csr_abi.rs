@@ -12,7 +12,8 @@ fn generated_sparse_cg_runs_in_both_engines() {
         .find(|entry| entry.op.name == "num_csr_cg")
         .expect("num_csr_cg binding");
     let dynamic = !matches!(binding.coverage, Coverage::Typed);
-    let matrix = "{ rows = 2, cols = 2, indptr = [0, 1, 2], indices = [0, 1], values = [2.0, 4.0] }";
+    let matrix =
+        "{ rows = 2, cols = 2, indptr = [0, 1, 2], indices = [0, 1], values = [2.0, 4.0] }";
     let args = if dynamic {
         format!("[to_value({matrix}), to_value([2.0, 8.0]), to_value(0.0000000001), to_value(40)]")
     } else {

@@ -560,29 +560,35 @@ impl Term {
         Ok(match self {
             | Self::Sym(name) if name == symbol => value.clone(),
             | Self::Num(_) | Self::Sym(_) => self.clone(),
-            | Self::Add(items) => items
-                .iter()
-                .map(|item| item.substitute(symbol, value))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .reduce(Term::add)
-                .unwrap_or_else(zero),
-            | Self::Mul(items) => items
-                .iter()
-                .map(|item| item.substitute(symbol, value))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .reduce(Term::mul)
-                .unwrap_or_else(one),
+            | Self::Add(items) => {
+                items
+                    .iter()
+                    .map(|item| item.substitute(symbol, value))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .reduce(Term::add)
+                    .unwrap_or_else(zero)
+            },
+            | Self::Mul(items) => {
+                items
+                    .iter()
+                    .map(|item| item.substitute(symbol, value))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .reduce(Term::mul)
+                    .unwrap_or_else(one)
+            },
             | Self::Pow(base, exponent) => {
                 Term::pow(base.substitute(symbol, value)?, exponent.clone())
             },
-            | Self::Fun(function, args) => Term::fun(
-                *function,
-                args.iter()
-                    .map(|arg| arg.substitute(symbol, value))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
+            | Self::Fun(function, args) => {
+                Term::fun(
+                    *function,
+                    args.iter()
+                        .map(|arg| arg.substitute(symbol, value))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            },
             // The kernel owns the structure, so ask it.
             | Self::Foreign { .. } => {
                 let kernel = aevia_rssn::kernel();
@@ -621,13 +627,15 @@ impl Term {
                     zero()
                 }
             },
-            | Self::Add(items) => items
-                .iter()
-                .map(|item| item.diff(symbol))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .reduce(Term::add)
-                .unwrap_or_else(zero),
+            | Self::Add(items) => {
+                items
+                    .iter()
+                    .map(|item| item.diff(symbol))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .reduce(Term::add)
+                    .unwrap_or_else(zero)
+            },
             | Self::Mul(items) => {
                 // Product rule, term by term.
                 let mut sum = zero();
@@ -692,10 +700,12 @@ impl Term {
                         Term::pow(cos, BigRational::from_integer(BigInt::from(-2)))
                     },
                     // |u| is differentiated formally as sign(u) = |u| / u.
-                    | Fun::Abs => Term::mul(
-                        Term::fun(Fun::Abs, vec![arg.clone()]),
-                        Term::pow(arg.clone(), BigRational::from_integer(BigInt::from(-1))),
-                    ),
+                    | Fun::Abs => {
+                        Term::mul(
+                            Term::fun(Fun::Abs, vec![arg.clone()]),
+                            Term::pow(arg.clone(), BigRational::from_integer(BigInt::from(-1))),
+                        )
+                    },
                     | Fun::Ite => unreachable!("handled above"),
                     | Fun::Other(name) => {
                         return Err(EvalError::new(
@@ -844,14 +854,16 @@ fn infinity_sign_of(term: &Term) -> Option<i8> {
         return Some(1);
     }
     match term {
-        | Term::Mul(items) => match items.as_slice() {
-            | [Term::Num(coefficient), rest]
-                if coefficient == &BigRational::from_integer(BigInt::from(-1))
-                    && is_infinity_term(rest) =>
-            {
-                Some(-1)
-            },
-            | _ => None,
+        | Term::Mul(items) => {
+            match items.as_slice() {
+                | [Term::Num(coefficient), rest]
+                    if coefficient == &BigRational::from_integer(BigInt::from(-1))
+                        && is_infinity_term(rest) =>
+                {
+                    Some(-1)
+                },
+                | _ => None,
+            }
         },
         | _ => None,
     }
@@ -1170,9 +1182,11 @@ fn display_name(name: &str) -> &str {
 fn is_negative(term: &Term) -> bool {
     match term {
         | Term::Num(value) => value.is_negative(),
-        | Term::Mul(factors) => factors
-            .first()
-            .is_some_and(|first| matches!(first, Term::Num(value) if value.is_negative())),
+        | Term::Mul(factors) => {
+            factors
+                .first()
+                .is_some_and(|first| matches!(first, Term::Num(value) if value.is_negative()))
+        },
         | _ => false,
     }
 }

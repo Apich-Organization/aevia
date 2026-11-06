@@ -1,6 +1,11 @@
 //! Unknown manifest information must never become a concrete static claim.
-use aevia_rssn::{SigType, registry};
-use rssn::kernel::signature::{DimExpr, Exp, NatExpr, Signature, TypeExpr};
+use aevia_rssn::SigType;
+use aevia_rssn::registry;
+use rssn::kernel::signature::DimExpr;
+use rssn::kernel::signature::Exp;
+use rssn::kernel::signature::NatExpr;
+use rssn::kernel::signature::Signature;
+use rssn::kernel::signature::TypeExpr;
 
 #[test]
 fn unknown_tensor_ranks_remain_unknown() {
@@ -58,8 +63,10 @@ fn unrepresentable_dimension_expressions_are_not_dimensionless() {
 
 #[test]
 fn empty_tensor_witness_comes_from_schema_not_first_element() {
-    use aevia_rssn::witness::{DimensionWitness, extract};
-    use rssn::kernel::value::{TensorValue, Value};
+    use aevia_rssn::witness::DimensionWitness;
+    use aevia_rssn::witness::extract;
+    use rssn::kernel::value::TensorValue;
+    use rssn::kernel::value::Value;
     let empty = Value::Tensor(TensorValue {
         shape: vec![0],
         data: vec![],
@@ -76,15 +83,34 @@ fn empty_tensor_witness_comes_from_schema_not_first_element() {
 
 #[test]
 fn uniform_tensor_witnesses_do_not_allocate_per_scalar_but_keep_conflicts() {
-    use aevia_rssn::witness::{DimensionWitness, extract};
-    use rssn::kernel::value::{DynValue, TensorValue, Value};
+    use aevia_rssn::witness::DimensionWitness;
+    use aevia_rssn::witness::extract;
+    use rssn::kernel::value::DynValue;
+    use rssn::kernel::value::TensorValue;
+    use rssn::kernel::value::Value;
     let length = DimExpr::Base("Length".into());
-    let make = |data| Value::Tensor(TensorValue {
-        shape: vec![2], data, elem: TypeExpr::Dim(Box::new(TypeExpr::Float),length.clone()),
-    });
-    let value = |dim| Value::Dyn(DynValue {value:Box::new(Value::Float(1.0)),dim});
-    let correct = make(vec![value(length.clone()),value(length.clone())]);
-    assert!(matches!(extract(&correct,true), DimensionWitness::Tensor {elements,..} if elements.is_empty()));
-    let wrong = make(vec![value(length.clone()),value(DimExpr::Base("Time".into()))]);
-    assert!(matches!(extract(&wrong,true), DimensionWitness::Tensor {elements,..} if elements.len()==1));
+    let make = |data| {
+        Value::Tensor(TensorValue {
+            shape: vec![2],
+            data,
+            elem: TypeExpr::Dim(Box::new(TypeExpr::Float), length.clone()),
+        })
+    };
+    let value = |dim| {
+        Value::Dyn(DynValue {
+            value: Box::new(Value::Float(1.0)),
+            dim,
+        })
+    };
+    let correct = make(vec![value(length.clone()), value(length.clone())]);
+    assert!(
+        matches!(extract(&correct,true), DimensionWitness::Tensor {elements,..} if elements.is_empty())
+    );
+    let wrong = make(vec![
+        value(length.clone()),
+        value(DimExpr::Base("Time".into())),
+    ]);
+    assert!(
+        matches!(extract(&wrong,true), DimensionWitness::Tensor {elements,..} if elements.len()==1)
+    );
 }

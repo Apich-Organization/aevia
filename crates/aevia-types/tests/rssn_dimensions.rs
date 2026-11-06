@@ -1,9 +1,11 @@
 //! Static RSSN dimensions are instantiated and constrained per call.
 use aevia_dim::Dim;
-use aevia_rssn::{Sig, SigType};
+use aevia_rssn::Sig;
+use aevia_rssn::SigType;
 use aevia_types::infer::Infer;
 use aevia_types::rssn_resolve::instantiate_dimensions;
-use aevia_types::ty::{Shape, Type};
+use aevia_types::ty::Shape;
+use aevia_types::ty::Type;
 
 fn vector(dim: Dim) -> Type {
     Type::tensor(Shape::Rank(1), Type::float(dim))

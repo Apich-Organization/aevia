@@ -1,4 +1,8 @@
-use aevia_types::{CheckedModule, Export, ModulePath, adt, check::check_module_with_identity};
+use aevia_types::CheckedModule;
+use aevia_types::Export;
+use aevia_types::ModulePath;
+use aevia_types::adt;
+use aevia_types::check::check_module_with_identity;
 
 fn check(source: &str) -> CheckedModule {
     let lexed = aevia_syntax::lex(0, source).unwrap();

@@ -1732,10 +1732,17 @@ pub fn call(
                 return Err(arity(name, 1, args.len(), span));
             }
             let schema = interp.concrete_callable_type(&args[0]).ok_or_else(|| {
-                EvalError::new("E0304", "`to_callback` requires an authenticated concrete function signature").at(span)
+                EvalError::new(
+                    "E0304",
+                    "`to_callback` requires an authenticated concrete function signature",
+                )
+                .at(span)
             })?;
             let function = interp.reify_callable(&args[0], &schema)?;
-            Ok(Value::Callback(Rc::new(crate::value::CallbackValue { function, schema })))
+            Ok(Value::Callback(Rc::new(crate::value::CallbackValue {
+                function,
+                schema,
+            })))
         },
         | "from_value" => {
             // Plain host or higher-order application carries no authenticated source call evidence.

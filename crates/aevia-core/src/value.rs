@@ -1677,15 +1677,20 @@ impl Closure {
         }
     }
 
-    pub(crate) fn origin(closure:&Rc<Self>) -> std::rc::Weak<Self> {
-        if std::rc::Weak::ptr_eq(&closure.canonical_origin,&std::rc::Weak::new()) {
+    pub(crate) fn origin(closure: &Rc<Self>) -> std::rc::Weak<Self> {
+        if std::rc::Weak::ptr_eq(&closure.canonical_origin, &std::rc::Weak::new()) {
             Rc::downgrade(closure)
-        } else { closure.canonical_origin.clone() }
+        } else {
+            closure.canonical_origin.clone()
+        }
     }
 
     #[cfg(feature = "jit")]
-    pub(crate) fn same_origin(left:&Rc<Self>, right:&Rc<Self>) -> bool {
-        std::rc::Weak::ptr_eq(&Self::origin(left),&Self::origin(right))
+    pub(crate) fn same_origin(
+        left: &Rc<Self>,
+        right: &Rc<Self>,
+    ) -> bool {
+        std::rc::Weak::ptr_eq(&Self::origin(left), &Self::origin(right))
     }
 
     /// How many parameters the closure takes.

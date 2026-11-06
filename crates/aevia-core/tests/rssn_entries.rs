@@ -28,7 +28,12 @@ use std::rc::Rc;
 
 fn list(items: Vec<f64>) -> Value {
     let len = items.len();
-    Value::Tensor(Rc::new(TensorData::new(vec![len], Storage::Dense(Rc::new(items)), Dim::one(), None)))
+    Value::Tensor(Rc::new(TensorData::new(
+        vec![len],
+        Storage::Dense(Rc::new(items)),
+        Dim::one(),
+        None,
+    )))
 }
 
 fn type_rep() -> Value {
@@ -36,7 +41,12 @@ fn type_rep() -> Value {
 }
 
 fn vector_args() -> Value {
-    Value::Tensor(Rc::new(TensorData::new(vec![2], Storage::Boxed(vec![list(vec![1.0, 2.0]), list(vec![3.0, 4.0])]), Dim::one(), None)))
+    Value::Tensor(Rc::new(TensorData::new(
+        vec![2],
+        Storage::Boxed(vec![list(vec![1.0, 2.0]), list(vec![3.0, 4.0])]),
+        Dim::one(),
+        None,
+    )))
 }
 
 fn result(value: Value) -> (usize, Value) {
@@ -244,13 +254,22 @@ fn a_callback_free_call_ho_is_the_dynamic_call() {
     let (dynamic_index, dynamic_payload) = result(via_dynamic);
     assert_eq!(ho_index, 0);
     assert_eq!(dynamic_index, 0);
-    let (Value::KernelValue(ho), Value::KernelValue(dynamic)) = (ho_payload, dynamic_payload) else {
+    let (Value::KernelValue(ho), Value::KernelValue(dynamic)) = (ho_payload, dynamic_payload)
+    else {
         panic!("both calls must return opaque kernel values");
     };
-    let (aevia_rssn::Val::Num(aevia_rssn::Num::Float(a)), aevia_rssn::Val::Num(aevia_rssn::Num::Float(b))) = (&ho.payload, &dynamic.payload) else {
+    let (
+        aevia_rssn::Val::Num(aevia_rssn::Num::Float(a)),
+        aevia_rssn::Val::Num(aevia_rssn::Num::Float(b)),
+    ) = (&ho.payload, &dynamic.payload)
+    else {
         panic!("both calls must contain numeric payloads");
     };
-    assert_eq!(a.to_bits(), b.to_bits(), "callback-free call_ho and dynamic must agree");
+    assert_eq!(
+        a.to_bits(),
+        b.to_bits(),
+        "callback-free call_ho and dynamic must agree"
+    );
 }
 
 #[test]
@@ -264,8 +283,12 @@ fn call_ho_is_reachable_from_source() {
     );
     let (index, payload) = result(value);
     assert_eq!(index, 0);
-    let Value::KernelValue(payload) = payload else { panic!("expected opaque kernel value"); };
-    let aevia_rssn::Val::Num(aevia_rssn::Num::Float(number)) = &payload.payload else { panic!("expected numeric kernel payload"); };
+    let Value::KernelValue(payload) = payload else {
+        panic!("expected opaque kernel value");
+    };
+    let aevia_rssn::Val::Num(aevia_rssn::Num::Float(number)) = &payload.payload else {
+        panic!("expected numeric kernel payload");
+    };
     assert!((*number - 0.5f64.sin()).abs() < 1e-12);
 }
 
@@ -276,7 +299,8 @@ fn host_only_callback_dispatch_requires_an_interpreter_scope() {
         "call_ho",
         vec![Value::string("sin"), list(vec![0.5]), list(vec![1.0])],
         Span::default(),
-    ).expect_err("host-only dispatch cannot own an interpreter scope");
+    )
+    .expect_err("host-only dispatch cannot own an interpreter scope");
     assert_eq!(error.code, "E1001");
     assert!(error.message.contains("interpreter-owned"));
 }

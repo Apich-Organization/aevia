@@ -127,9 +127,12 @@ fn a_shape_written_as_a_shape_argument_works() {
         Span::default(),
     );
     let mut interp = Interp::new(&aevia_types::CheckedModule::default());
-    let matrix = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(vec![2, 3], aevia_core::value::Storage::Dense(std::rc::Rc::new(vec![
-            1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
-        ])), aevia_dim::Dim::one(), None)));
+    let matrix = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(
+        vec![2, 3],
+        aevia_core::value::Storage::Dense(std::rc::Rc::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     let reshaped = call_typed(&mut interp, "reshape", &[ty], vec![matrix], Span::default())
         .expect("a 2×3 tensor has six elements");
     let Value::Variant(result) = reshaped else {

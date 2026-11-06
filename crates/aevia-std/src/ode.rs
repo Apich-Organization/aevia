@@ -75,9 +75,15 @@ pub fn integrate_until_event(
     options: Options,
     event: &mut EventRate<'_>,
 ) -> Result<(Vec<f64>, Vec<Vec<f64>>), NumericError> {
-    use rssn::kernels::ode_adaptive::{self, Event, OdeOptions};
-    use rssn::kernels::{ode, ode_stiff};
-    use std::cell::{Cell, RefCell};
+    use rssn::kernels::ode;
+    use rssn::kernels::ode_adaptive::Event;
+    use rssn::kernels::ode_adaptive::OdeOptions;
+    use rssn::kernels::ode_adaptive::{
+        self,
+    };
+    use rssn::kernels::ode_stiff;
+    use std::cell::Cell;
+    use std::cell::RefCell;
 
     if ts.is_empty() {
         return Err(NumericError::Empty);
@@ -121,19 +127,16 @@ pub fn integrate_until_event(
     }
     let rhs = RefCell::new(rhs);
     let failure = RefCell::new(None);
-    let f = |t: f64, y: &[f64], out: &mut [f64]| match evaluate(
-        &mut **rhs.borrow_mut(),
-        t,
-        y,
-        out.len(),
-    ) {
-        | Ok(rate) => out.copy_from_slice(&rate),
-        | Err(error) => {
-            if failure.borrow().is_none() {
-                *failure.borrow_mut() = Some(error);
-            }
-            out.fill(f64::NAN);
-        },
+    let f = |t: f64, y: &[f64], out: &mut [f64]| {
+        match evaluate(&mut **rhs.borrow_mut(), t, y, out.len()) {
+            | Ok(rate) => out.copy_from_slice(&rate),
+            | Err(error) => {
+                if failure.borrow().is_none() {
+                    *failure.borrow_mut() = Some(error);
+                }
+                out.fill(f64::NAN);
+            },
+        }
     };
     let event = RefCell::new(event);
     let invalid_event = Cell::new(false);
@@ -364,7 +367,9 @@ fn evaluate(
         )));
     }
     if !rate.iter().all(|value| value.is_finite()) {
-        return Err(NumericError::Domain("the ODE right-hand side returned a non-finite value".into()));
+        return Err(NumericError::Domain(
+            "the ODE right-hand side returned a non-finite value".into(),
+        ));
     }
     Ok(rate)
 }
@@ -388,7 +393,10 @@ fn stiff_integrate(
     ts: &[f64],
     options: Options,
 ) -> Result<Vec<Vec<f64>>, NumericError> {
-    use rssn::kernels::ode_adaptive::{self, OdeOptions};
+    use rssn::kernels::ode_adaptive::OdeOptions;
+    use rssn::kernels::ode_adaptive::{
+        self,
+    };
     use rssn::kernels::ode_stiff;
     use std::cell::RefCell;
 
@@ -404,19 +412,16 @@ fn stiff_integrate(
     }
     let failure = RefCell::new(None);
     let rhs = RefCell::new(rhs);
-    let f = |t: f64, y: &[f64], out: &mut [f64]| match evaluate(
-        &mut **rhs.borrow_mut(),
-        t,
-        y,
-        out.len(),
-    ) {
-        | Ok(rate) => out.copy_from_slice(&rate),
-        | Err(error) => {
-            if failure.borrow().is_none() {
-                *failure.borrow_mut() = Some(error);
-            }
-            out.fill(f64::NAN);
-        },
+    let f = |t: f64, y: &[f64], out: &mut [f64]| {
+        match evaluate(&mut **rhs.borrow_mut(), t, y, out.len()) {
+            | Ok(rate) => out.copy_from_slice(&rate),
+            | Err(error) => {
+                if failure.borrow().is_none() {
+                    *failure.borrow_mut() = Some(error);
+                }
+                out.fill(f64::NAN);
+            },
+        }
     };
     let opts = OdeOptions {
         rtol: options.rtol,
@@ -562,7 +567,11 @@ fn dopri5(
             return Err(NumericError::NotConverged);
         }
         if error <= 1.0 {
-            t = if step == remaining { t1 } else { t + step };
+            t = if step == remaining {
+                t1
+            } else {
+                t + step
+            };
             y = candidate;
         }
         // 0.9 * error^(-1/5) keeps the step inside the stability region.
@@ -789,9 +798,27 @@ mod tests {
         let mut fast = |_t: f64, _y: &[f64]| vec![1e15];
         let trajectory = integrate(&mut fast, &[0.0], &[0.0, 1e-15], Options::default()).unwrap();
         assert!((trajectory[1][0] - 1.0).abs() < 1e-8);
-        for method in [Method::Rk4, Method::Dopri5, Method::Radau, Method::Bdf, Method::Rosenbrock23] {
+        for method in [
+            Method::Rk4,
+            Method::Dopri5,
+            Method::Radau,
+            Method::Bdf,
+            Method::Rosenbrock23,
+        ] {
             let mut invalid = |_t: f64, _y: &[f64]| vec![f64::NAN];
-            assert!(integrate(&mut invalid, &[1.0], &[0.0, 1.0], Options { method, ..Options::default() }).is_err(), "{method:?}");
+            assert!(
+                integrate(
+                    &mut invalid,
+                    &[1.0],
+                    &[0.0, 1.0],
+                    Options {
+                        method,
+                        ..Options::default()
+                    }
+                )
+                .is_err(),
+                "{method:?}"
+            );
         }
     }
 }

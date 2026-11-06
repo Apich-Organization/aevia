@@ -1118,7 +1118,10 @@ struct Session {
 fn repl_source_identity() -> aevia_core::source::SourceIdentity {
     static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let session = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    aevia_core::source::SourceIdentity::virtual_source(format!("aevia-repl://{}/{session}/Repl", std::process::id()))
+    aevia_core::source::SourceIdentity::virtual_source(format!(
+        "aevia-repl://{}/{session}/Repl",
+        std::process::id()
+    ))
 }
 
 impl Session {
@@ -1139,7 +1142,10 @@ impl Session {
         self.identity = repl_source_identity();
     }
 
-    fn compile(&self, source: &str) -> aevia_core::Compilation {
+    fn compile(
+        &self,
+        source: &str,
+    ) -> aevia_core::Compilation {
         aevia_core::compile_with_source_identity("<repl>", source, &self.identity)
     }
 
@@ -1401,7 +1407,11 @@ fn handle_repl_command(
             match std::fs::read_to_string(argument) {
                 | Ok(text) => {
                     let candidate = format!("{}{text}\n", session.declarations);
-                    let compilation = aevia_core::compile_with_source_identity(argument, &candidate, &session.identity);
+                    let compilation = aevia_core::compile_with_source_identity(
+                        argument,
+                        &candidate,
+                        &session.identity,
+                    );
                     if compilation.diagnostics.has_errors() {
                         eprint!("{}", compilation.diagnostics.render(&compilation.sources));
                     } else if let Err(message) = session.sync(&compilation) {
@@ -2198,9 +2208,13 @@ mod tests {
         let a = first.compile(source);
         let again = first.compile(&format!("{source}let other = 1\n"));
         let b = second.compile(source);
-        let nominal = |checked: &aevia_types::CheckedModule| match checked.exports.get("Token").unwrap() {
-            aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. } => aevia_types::adt::key_of(*adt),
-            _ => panic!("type"),
+        let nominal = |checked: &aevia_types::CheckedModule| {
+            match checked.exports.get("Token").unwrap() {
+                | aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. } => {
+                    aevia_types::adt::key_of(*adt)
+                },
+                | _ => panic!("type"),
+            }
         };
         assert_eq!(nominal(&a.checked), nominal(&again.checked));
         assert_ne!(nominal(&a.checked), nominal(&b.checked));
@@ -2217,10 +2231,25 @@ mod tests {
         declare(&mut session, "let floating: Float = 1");
         declare(&mut session, "let exact: Real = 1.25");
         let interp = session.interp.as_ref().unwrap();
-        assert!(matches!(interp.globals.get("floating"), Some(aevia_core::value::Value::Num(aevia_core::value::NumVal { kind: aevia_core::value::NumKind::Float(_), .. }))));
-        assert!(matches!(interp.globals.get("exact"), Some(aevia_core::value::Value::Num(aevia_core::value::NumVal { kind: aevia_core::value::NumKind::Exact(_), .. }))));
+        assert!(matches!(
+            interp.globals.get("floating"),
+            Some(aevia_core::value::Value::Num(aevia_core::value::NumVal {
+                kind: aevia_core::value::NumKind::Float(_),
+                ..
+            }))
+        ));
+        assert!(matches!(
+            interp.globals.get("exact"),
+            Some(aevia_core::value::Value::Num(aevia_core::value::NumVal {
+                kind: aevia_core::value::NumKind::Exact(_),
+                ..
+            }))
+        ));
         assert_eq!(evaluate(&mut session, "get()"), "Wrap(7)");
-        declare(&mut session, "fn reject_time(): Bool = match check<L>(dyn(2.0 s)) with\n    | Ok(_) -> false\n    | Err(_) -> true");
+        declare(
+            &mut session,
+            "fn reject_time(): Bool = match check<L>(dyn(2.0 s)) with\n    | Ok(_) -> false\n    | Err(_) -> true",
+        );
         assert_eq!(evaluate(&mut session, "reject_time()"), "true");
         assert_eq!(evaluate(&mut session, "repr(original)"), "\"session\"");
     }
@@ -2228,9 +2257,18 @@ mod tests {
     #[test]
     fn repl_appended_instances_keep_their_own_implementation_cursor() {
         let mut session = Session::new(Options::default());
-        declare(&mut session, "class Pretty a where\n    pretty(x: a): String");
-        declare(&mut session, "instance Pretty for Int where\n    pretty(x) = \"integer\"");
-        declare(&mut session, "instance Pretty for Bool where\n    pretty(x) = \"boolean\"");
+        declare(
+            &mut session,
+            "class Pretty a where\n    pretty(x: a): String",
+        );
+        declare(
+            &mut session,
+            "instance Pretty for Int where\n    pretty(x) = \"integer\"",
+        );
+        declare(
+            &mut session,
+            "instance Pretty for Bool where\n    pretty(x) = \"boolean\"",
+        );
         assert_eq!(evaluate(&mut session, "pretty(1)"), "\"integer\"");
         assert_eq!(evaluate(&mut session, "pretty(true)"), "\"boolean\"");
     }
@@ -2238,10 +2276,22 @@ mod tests {
     #[test]
     fn repl_private_and_public_instances_are_bound_by_source_site_after_append() {
         let mut session = Session::new(Options::default());
-        declare(&mut session, "private class Hidden a where\n    hidden(x: a): String");
-        declare(&mut session, "class Visible a where\n    visible(x: a): String");
-        declare(&mut session, "instance Hidden for Int where\n    hidden(x) = \"private\"");
-        declare(&mut session, "instance Visible for Bool where\n    visible(x) = \"public\"");
+        declare(
+            &mut session,
+            "private class Hidden a where\n    hidden(x: a): String",
+        );
+        declare(
+            &mut session,
+            "class Visible a where\n    visible(x: a): String",
+        );
+        declare(
+            &mut session,
+            "instance Hidden for Int where\n    hidden(x) = \"private\"",
+        );
+        declare(
+            &mut session,
+            "instance Visible for Bool where\n    visible(x) = \"public\"",
+        );
         declare(&mut session, "let first_class = hidden");
         assert_eq!(evaluate(&mut session, "hidden(1)"), "\"private\"");
         assert_eq!(evaluate(&mut session, "visible(true)"), "\"public\"");
@@ -2251,13 +2301,18 @@ mod tests {
     #[test]
     fn repl_core_inspection_uses_the_same_literal_and_method_identity_evidence_as_execution() {
         let mut session = Session::new(Options::default());
-        declare(&mut session, "private class Hidden a where\n    hidden(x: a): String");
-        declare(&mut session, "instance Hidden for Int where\n    hidden(x) = \"private\"");
+        declare(
+            &mut session,
+            "private class Hidden a where\n    hidden(x: a): String",
+        );
+        declare(
+            &mut session,
+            "instance Hidden for Int where\n    hidden(x) = \"private\"",
+        );
         let method = repl_core(&session, "hidden").expect("method IR");
         assert!(method.contains("ClassMethodRef"), "{method}");
         assert!(method.contains("Hidden"), "{method}");
         let scalar = repl_core(&session, "(1 : Float)").expect("typed literal IR");
         assert!(scalar.contains("Float("), "{scalar}");
     }
-
 }

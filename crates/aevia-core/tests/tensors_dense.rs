@@ -72,7 +72,12 @@ fn is_dense(value: &Value) -> bool {
 /// reproduce, not a different value.
 fn boxed(value: &Value) -> Value {
     let tensor = tensor_of(value);
-    Value::Tensor(Rc::new(TensorData::new(tensor.shape.clone(), Storage::Boxed(tensor.elements()), tensor.dim.clone(), tensor.display.clone())))
+    Value::Tensor(Rc::new(TensorData::new(
+        tensor.shape.clone(),
+        Storage::Boxed(tensor.elements()),
+        tensor.dim.clone(),
+        tensor.display.clone(),
+    )))
 }
 
 /// Strict equality: shape, dimension, element kind and element *bits*.
@@ -197,8 +202,18 @@ fn dense_and_boxed_render_and_compare_identically() {
         .map(Value::float)
         .collect();
     let shape = vec![2, 3];
-    let dense = Value::Tensor(Rc::new(TensorData::new(shape.clone(), Storage::Dense(Rc::new(vec![1.5, -2.0, 0.0, 1.0e300, -0.0, 3.25])), aevia_dim::Dim::one(), None)));
-    let boxed = Value::Tensor(Rc::new(TensorData::new(shape, Storage::Boxed(elements), aevia_dim::Dim::one(), None)));
+    let dense = Value::Tensor(Rc::new(TensorData::new(
+        shape.clone(),
+        Storage::Dense(Rc::new(vec![1.5, -2.0, 0.0, 1.0e300, -0.0, 3.25])),
+        aevia_dim::Dim::one(),
+        None,
+    )));
+    let boxed = Value::Tensor(Rc::new(TensorData::new(
+        shape,
+        Storage::Boxed(elements),
+        aevia_dim::Dim::one(),
+        None,
+    )));
 
     assert!(is_dense(&dense) && !is_dense(&boxed));
     assert_eq!(equal(&dense, &boxed), Ok(true), "structural equality");
@@ -341,7 +356,12 @@ fn broadcast_and_mixed_storage_still_take_the_boxed_path() {
     // A tensor that mixes phases is boxed, and the same expression agrees.
     // It is built here rather than written in source because a literal has a
     // single element type.
-    let mixed = Value::Tensor(Rc::new(TensorData::new(vec![2], Storage::Boxed(vec![Value::float(1.0), Value::int(2)]), aevia_dim::Dim::one(), None)));
+    let mixed = Value::Tensor(Rc::new(TensorData::new(
+        vec![2],
+        Storage::Boxed(vec![Value::float(1.0), Value::int(2)]),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     assert!(!is_dense(&mixed), "a mixed tensor is boxed");
     let dense = interp
         .apply_binary("+", mixed.clone(), mixed.clone(), Span::default())
@@ -467,7 +487,12 @@ fn dense_tensor(
     cols: usize,
     values: Vec<f64>,
 ) -> Value {
-    Value::Tensor(Rc::new(TensorData::new(vec![rows, cols], Storage::Dense(Rc::new(values)), aevia_dim::Dim::one(), None)))
+    Value::Tensor(Rc::new(TensorData::new(
+        vec![rows, cols],
+        Storage::Dense(Rc::new(values)),
+        aevia_dim::Dim::one(),
+        None,
+    )))
 }
 
 /// The `@` differential where the blocked kernel reassociates: the answers
@@ -561,7 +586,12 @@ fn the_example_tensor_program_agrees_with_the_boxed_path() {
     assert_eq!(
         equal(
             &dense,
-            &Value::Tensor(Rc::new(TensorData::new(vec![2], Storage::Dense(Rc::new(vec![17.0, 39.0])), aevia_dim::Dim::one(), None)))
+            &Value::Tensor(Rc::new(TensorData::new(
+                vec![2],
+                Storage::Dense(Rc::new(vec![17.0, 39.0])),
+                aevia_dim::Dim::one(),
+                None
+            )))
         ),
         Ok(true),
         "M @ v is [17, 39]"
@@ -591,7 +621,12 @@ fn the_example_tensor_program_agrees_with_the_boxed_path() {
 fn the_fast_paths_decline_non_dense_storage() {
     use aevia_syntax::ast::BinOp;
 
-    let dense = Value::Tensor(Rc::new(TensorData::new(vec![2], Storage::Dense(Rc::new(vec![1.0, 2.0])), aevia_dim::Dim::one(), None)));
+    let dense = Value::Tensor(Rc::new(TensorData::new(
+        vec![2],
+        Storage::Dense(Rc::new(vec![1.0, 2.0])),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     let boxed = boxed(&dense);
     let (Value::Tensor(dense_data), Value::Tensor(boxed_data)) = (&dense, &boxed) else {
         panic!("both are tensors");
@@ -617,10 +652,15 @@ fn the_fast_paths_decline_non_dense_storage() {
     );
     // An exact tensor never exposes a buffer, even when every value is an
     // integer that `f64` could hold.
-    let exact = Value::Tensor(Rc::new(TensorData::new(vec![2], Storage::Exact(vec![
+    let exact = Value::Tensor(Rc::new(TensorData::new(
+        vec![2],
+        Storage::Exact(vec![
             num_rational::BigRational::from_integer(1.into()),
             num_rational::BigRational::from_integer(2.into()),
-        ]), aevia_dim::Dim::one(), None)));
+        ]),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     let (Value::Tensor(exact_data),) = (&exact,) else {
         panic!("a tensor");
     };

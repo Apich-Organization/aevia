@@ -78,7 +78,12 @@ fn dense(
     shape: Vec<usize>,
     values: Vec<f64>,
 ) -> Value {
-    Value::Tensor(std::rc::Rc::new(TensorData::new(shape, Storage::Dense(std::rc::Rc::new(values)), aevia_dim::Dim::one(), None)))
+    Value::Tensor(std::rc::Rc::new(TensorData::new(
+        shape,
+        Storage::Dense(std::rc::Rc::new(values)),
+        aevia_dim::Dim::one(),
+        None,
+    )))
 }
 
 fn number(value: &Value) -> f64 {
@@ -110,12 +115,17 @@ fn dense_min_max_answer_the_whole_tensor_scalar() {
 
 #[test]
 fn exact_tensors_keep_exact_ordering() {
-    let exact = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![3], Storage::Exact(
+    let exact = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![3],
+        Storage::Exact(
             [-3, 7, 2]
                 .into_iter()
                 .map(|value| num_rational::BigRational::from_integer(value.into()))
                 .collect(),
-        ), aevia_dim::Dim::one(), None)));
+        ),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     let mut interp = interpreter();
     let lo = call(&mut interp, "min_all", vec![exact.clone()]);
     let hi = call(&mut interp, "max_all", vec![exact]);
@@ -171,7 +181,12 @@ fn nan_never_displaces_the_current_best() {
 fn dense_and_boxed_float_classes_agree() {
     let values = vec![0.5, -1.25, 3.75, 0.0, -0.5, 2.0];
     let dense_tensor = dense(vec![2, 3], values.clone());
-    let boxed = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![2, 3], Storage::Boxed(values.into_iter().map(Value::float).collect()), aevia_dim::Dim::one(), None)));
+    let boxed = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![2, 3],
+        Storage::Boxed(values.into_iter().map(Value::float).collect()),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     let mut interp = interpreter();
     for name in ["min_all", "max_all"] {
         let from_dense = call(&mut interp, name, vec![dense_tensor.clone()]);
@@ -199,13 +214,18 @@ fn a_strided_view_answers_like_its_dense_copy() {
     // A column-major (strided) 3×3 view over a row-major buffer: the logical
     // matrix is [[0,3,6],[1,4,7],[2,5,8]], so min is 0 and max is 8.
     let mut interp = interpreter();
-    let view = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![3, 3], Storage::View(aevia_core::value::View {
+    let view = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![3, 3],
+        Storage::View(aevia_core::value::View {
             data: std::rc::Rc::new((0..9).map(f64::from).collect()),
             offset: 0,
             strides: vec![1, 3],
             reversed: vec![false, false],
             len: 9,
-        }), aevia_dim::Dim::one(), None)));
+        }),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     assert_eq!(
         number(&call(&mut interp, "min_all", vec![view.clone()])),
         0.0
@@ -229,7 +249,12 @@ fn empty_tensors_are_e0802_and_single_elements_keep_their_identity() {
             .expect_err("an empty reduction is E0802");
         assert_eq!(error.code, "E0802");
         let empty_dense = dense(vec![0], Vec::new());
-        let empty_boxed = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![0], Storage::Boxed(Vec::new()), aevia_dim::Dim::one(), None)));
+        let empty_boxed = Value::Tensor(std::rc::Rc::new(TensorData::new(
+            vec![0],
+            Storage::Boxed(Vec::new()),
+            aevia_dim::Dim::one(),
+            None,
+        )));
         let error = interp
             .call_named(name, vec![empty_boxed], Span::default())
             .expect_err("an empty boxed reduction is E0802");
@@ -262,7 +287,12 @@ fn the_dense_scan_is_the_fast_path() {
     let values = vec![0.5f64; 512 * 512];
     let mut interp = interpreter();
     let dense_tensor = dense(vec![512, 512], values.clone());
-    let boxed_tensor = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![512, 512], Storage::Boxed(values.into_iter().map(Value::float).collect()), aevia_dim::Dim::one(), None)));
+    let boxed_tensor = Value::Tensor(std::rc::Rc::new(TensorData::new(
+        vec![512, 512],
+        Storage::Boxed(values.into_iter().map(Value::float).collect()),
+        aevia_dim::Dim::one(),
+        None,
+    )));
     for (label, tensor) in [("dense", dense_tensor), ("boxed", boxed_tensor)] {
         let start = std::time::Instant::now();
         for _ in 0..5 {

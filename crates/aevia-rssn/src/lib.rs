@@ -31,9 +31,9 @@
 pub mod bindings;
 pub mod codegen;
 pub mod error;
-pub mod kernel;
 #[cfg(feature = "jit")]
 pub mod jit;
+pub mod kernel;
 pub mod registry;
 pub mod value;
 pub mod witness;

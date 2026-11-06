@@ -295,6 +295,8 @@ mod tests {
     fn impossible_body_allocation_is_reported() {
         let frame = format!("Content-Length: {}\r\n\r\n", usize::MAX);
         let mut reader = Reader::new(Cursor::new(frame));
-        assert!(matches!(reader.next_message(), Err(TransportError::Io(e)) if e.kind() == io::ErrorKind::InvalidData));
+        assert!(
+            matches!(reader.next_message(), Err(TransportError::Io(e)) if e.kind() == io::ErrorKind::InvalidData)
+        );
     }
 }

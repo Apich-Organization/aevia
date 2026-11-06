@@ -1,6 +1,8 @@
 //! The generated physical constants preserve symbolic scale factors.
-use aevia_core::value::{NumKind, Value};
-use aevia_core::{Interp, compile};
+use aevia_core::Interp;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Value;
 
 #[test]
 fn generated_hbar_keeps_exact_pi_and_approximates_correctly() {

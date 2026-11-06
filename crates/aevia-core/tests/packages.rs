@@ -568,11 +568,13 @@ fn same_named_modules_in_distinct_packages_keep_nominal_types_and_instances_sepa
     let keys: Vec<_> = program
         .modules
         .iter()
-        .filter_map(|module| match module.checked.exports.get("Token") {
-            | Some(
-                aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. },
-            ) => Some(aevia_types::adt::key_of(*adt)),
-            | _ => None,
+        .filter_map(|module| {
+            match module.checked.exports.get("Token") {
+                | Some(
+                    aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. },
+                ) => Some(aevia_types::adt::key_of(*adt)),
+                | _ => None,
+            }
         })
         .collect();
     assert_eq!(keys.len(), 2);
@@ -753,7 +755,8 @@ fn checked_value_lists_preserve_nested_tensor_argument_boundaries() {
             aevia_core::value::Storage::Boxed(_)
         ));
         for (index, expected) in [(0, vec![1.0_f64, 2.0]), (1, vec![3.0_f64])] {
-            let Some(aevia_core::value::Value::KernelValue(argument)) = tensor.get_flat(index) else {
+            let Some(aevia_core::value::Value::KernelValue(argument)) = tensor.get_flat(index)
+            else {
                 panic!("opaque tensor argument {index}")
             };
             let aevia_rssn::Val::Tensor { shape, data } = &argument.payload else {
@@ -767,7 +770,12 @@ fn checked_value_lists_preserve_nested_tensor_argument_boundaries() {
                 };
                 assert_eq!(actual.to_bits(), expected.to_bits());
             }
-            let aevia_rssn::witness::DimensionWitness::Tensor { dimension, element_repr, .. } = &argument.witness else {
+            let aevia_rssn::witness::DimensionWitness::Tensor {
+                dimension,
+                element_repr,
+                ..
+            } = &argument.witness
+            else {
                 panic!("tensor dimension witness")
             };
             assert_eq!(dimension, &Some(aevia_dim::Dim::one()));

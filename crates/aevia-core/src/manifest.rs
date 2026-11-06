@@ -583,52 +583,94 @@ impl Roots {
     /// The entry source under the root package context explicitly supplied by
     /// the caller. This remains authoritative through symlinked source trees.
     #[must_use]
-    pub fn entry_module(&self, path: &Path) -> ResolvedModule {
-        ResolvedModule { path: path.to_path_buf(), owner: self.root_owner.clone() }
+    pub fn entry_module(
+        &self,
+        path: &Path,
+    ) -> ResolvedModule {
+        ResolvedModule {
+            path: path.to_path_buf(),
+            owner: self.root_owner.clone(),
+        }
     }
 
     /// Resolves an import under its explicit owning package. Dependencies
     /// switch owner at the import edge; local imports retain the current owner.
     #[must_use]
-    pub fn resolve_module(&self, importer: &ResolvedModule, path: &[String]) -> Option<ResolvedModule> {
-        self.module_candidates(importer, path).into_iter().find(|module| module.path.is_file())
+    pub fn resolve_module(
+        &self,
+        importer: &ResolvedModule,
+        path: &[String],
+    ) -> Option<ResolvedModule> {
+        self.module_candidates(importer, path)
+            .into_iter()
+            .find(|module| module.path.is_file())
     }
 
     /// All candidates with their original owner, for loading and diagnostics.
     #[must_use]
-    pub fn module_candidates(&self, importer: &ResolvedModule, path: &[String]) -> Vec<ResolvedModule> {
-        if path.is_empty() { return Vec::new(); }
-        let scope = importer.owner.as_ref().and_then(|owner| self.scopes.get(owner));
+    pub fn module_candidates(
+        &self,
+        importer: &ResolvedModule,
+        path: &[String],
+    ) -> Vec<ResolvedModule> {
+        if path.is_empty() {
+            return Vec::new();
+        }
+        let scope = importer
+            .owner
+            .as_ref()
+            .and_then(|owner| self.scopes.get(owner));
         let source = scope.map_or(self.source.as_path(), |scope| scope.source.as_path());
         let local = if let Some(scope) = scope {
             // Use logical paths first: a single src file may link outside the
             // package while still importing the package's own source modules.
             let file = crate::source::canonical_path(&importer.path);
-            let in_source = normalise(&absolute(&importer.path)).starts_with(normalise(&absolute(&scope.source)))
+            let in_source = normalise(&absolute(&importer.path))
+                .starts_with(normalise(&absolute(&scope.source)))
                 || file.starts_with(crate::source::canonical_path(&scope.source))
-                || (file == scope.entry && normalise(&scope.logical_entry).starts_with(normalise(&scope.source)));
-            if in_source { None }
-            else if file == scope.entry { scope.logical_entry.parent().map(Path::to_path_buf) }
-            else { file.parent().map(Path::to_path_buf) }
-        } else { self.local.clone() };
+                || (file == scope.entry
+                    && normalise(&scope.logical_entry).starts_with(normalise(&scope.source)));
+            if in_source {
+                None
+            } else if file == scope.entry {
+                scope.logical_entry.parent().map(Path::to_path_buf)
+            } else {
+                file.parent().map(Path::to_path_buf)
+            }
+        } else {
+            self.local.clone()
+        };
         let mut out = Vec::new();
         for base in std::iter::once(source).chain(local.as_deref()) {
             let mut file = base.to_path_buf();
-            for segment in path { file.push(segment); }
+            for segment in path {
+                file.push(segment);
+            }
             file.set_extension("aev");
-            out.push(ResolvedModule { path: file, owner: importer.owner.clone() });
+            out.push(ResolvedModule {
+                path: file,
+                owner: importer.owner.clone(),
+            });
         }
         if let Some((first, rest)) = path.split_first() {
             if let Some(base) = self.packages.get(first) {
                 let owner = self.package_owners.get(first).cloned();
                 if rest.is_empty() {
                     if let Some(entry) = self.entries.get(first) {
-                        out.push(ResolvedModule { path: entry.clone(), owner: owner.clone() });
+                        out.push(ResolvedModule {
+                            path: entry.clone(),
+                            owner: owner.clone(),
+                        });
                     }
-                    out.push(ResolvedModule { path: base.join(format!("{first}.aev")), owner });
+                    out.push(ResolvedModule {
+                        path: base.join(format!("{first}.aev")),
+                        owner,
+                    });
                 } else {
                     let mut file = base.clone();
-                    for segment in rest { file.push(segment); }
+                    for segment in rest {
+                        file.push(segment);
+                    }
                     file.set_extension("aev");
                     out.push(ResolvedModule { path: file, owner });
                 }
@@ -640,30 +682,71 @@ impl Roots {
     /// Nominal identity in the owner that selected this module, including a
     /// source that lives physically outside that package's canonical prefix.
     #[must_use]
-    pub fn resolved_module_identity(&self, module: &ResolvedModule, visible: &[String]) -> aevia_types::keys::ModulePath {
-        if let Some(scope) = module.owner.as_ref().and_then(|owner| self.scopes.get(owner)) {
-            crate::source::SourceIdentity::for_owner(scope.package.clone(), &scope.directory, &module.path).module_path(Some(visible))
-        } else { crate::source::SourceIdentity::for_path(&module.path).module_path(Some(visible)) }
+    pub fn resolved_module_identity(
+        &self,
+        module: &ResolvedModule,
+        visible: &[String],
+    ) -> aevia_types::keys::ModulePath {
+        if let Some(scope) = module
+            .owner
+            .as_ref()
+            .and_then(|owner| self.scopes.get(owner))
+        {
+            crate::source::SourceIdentity::for_owner(
+                scope.package.clone(),
+                &scope.directory,
+                &module.path,
+            )
+            .module_path(Some(visible))
+        } else {
+            crate::source::SourceIdentity::for_path(&module.path).module_path(Some(visible))
+        }
     }
 
-    pub(crate) fn resolved_name_matches(&self, module: &ResolvedModule, declared: &[String], expected: &[String]) -> bool {
-        if declared == expected { return true; }
-        let Some(scope) = module.owner.as_ref().and_then(|owner| self.scopes.get(owner)) else {
+    pub(crate) fn resolved_name_matches(
+        &self,
+        module: &ResolvedModule,
+        declared: &[String],
+        expected: &[String],
+    ) -> bool {
+        if declared == expected {
+            return true;
+        }
+        let Some(scope) = module
+            .owner
+            .as_ref()
+            .and_then(|owner| self.scopes.get(owner))
+        else {
             return self.declared_name_matches(&module.path, declared, expected);
         };
         let physical = crate::source::canonical_path(&module.path);
-        if physical == scope.entry && expected.len() == 1 && declared == [scope.name.clone()] { return true; }
+        if physical == scope.entry && expected.len() == 1 && declared == [scope.name.clone()] {
+            return true;
+        }
         let source = normalise(&absolute(&scope.source));
         let supplied = normalise(&absolute(&module.path));
         let logical = if physical == scope.entry && !supplied.starts_with(&source) {
             normalise(&scope.logical_entry)
-        } else { supplied };
+        } else {
+            supplied
+        };
         let physical_source = crate::source::canonical_path(&scope.source);
-        let relative = logical.strip_prefix(&source).or_else(|_| physical.strip_prefix(&physical_source));
-        let Ok(relative) = relative else { return false; };
+        let relative = logical
+            .strip_prefix(&source)
+            .or_else(|_| physical.strip_prefix(&physical_source));
+        let Ok(relative) = relative else {
+            return false;
+        };
         let relative = relative.with_extension("");
-        let parts: Vec<String> = relative.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
-        declared == parts || declared == std::iter::once(scope.name.clone()).chain(parts).collect::<Vec<_>>()
+        let parts: Vec<String> = relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        declared == parts
+            || declared
+                == std::iter::once(scope.name.clone())
+                    .chain(parts)
+                    .collect::<Vec<_>>()
     }
 
     /// Also tries `dir` after the package's `src/`.
@@ -1157,10 +1240,12 @@ fn parse_dependency(
     }
     match path {
         | Some(path) => Ok(Dependency::Path { path }),
-        | None => Err(ManifestError::new(
-            "E0605",
-            format!("{origin}:{number}: a dependency needs a `path`"),
-        )),
+        | None => {
+            Err(ManifestError::new(
+                "E0605",
+                format!("{origin}:{number}: a dependency needs a `path`"),
+            ))
+        },
     }
 }
 

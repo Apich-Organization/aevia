@@ -28,14 +28,14 @@
 pub mod builtins;
 mod callback;
 pub mod driver;
+pub mod eval;
+pub mod eval_ir;
 mod evidence;
 mod generics;
 mod host_witness;
-pub mod eval;
-pub mod eval_ir;
-pub mod kernel;
 #[cfg(feature = "jit")]
 mod jit;
+pub mod kernel;
 pub mod manifest;
 pub mod rssn_module;
 pub mod source;
@@ -84,7 +84,11 @@ pub fn compile(
 /// Compiles a revision of a host-owned source while retaining its stable
 /// nominal identity. `name` remains the display name in diagnostics.
 #[must_use]
-pub fn compile_with_source_identity(name: &str, source: &str, identity: &source::SourceIdentity) -> Compilation {
+pub fn compile_with_source_identity(
+    name: &str,
+    source: &str,
+    identity: &source::SourceIdentity,
+) -> Compilation {
     let mut sources = SourceMap::new();
     let file = sources.add(name, source);
     let mut diagnostics = Diagnostics::new();
@@ -110,8 +114,13 @@ pub fn compile_with_source_identity(name: &str, source: &str, identity: &source:
         };
     }
     let checked = check_module_with_identity(
-        file, &module, &[], &[], &aevia_types::check::CheckOptions::default(),
-        Some(identity.module_path(module.name.as_deref())), &[],
+        file,
+        &module,
+        &[],
+        &[],
+        &aevia_types::check::CheckOptions::default(),
+        Some(identity.module_path(module.name.as_deref())),
+        &[],
     );
     diagnostics.extend(checked.diagnostics.clone());
     Compilation {
@@ -400,15 +409,24 @@ impl Interp {
             | None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
         };
         let closure = crate::eval_ir::module_closure(function, env);
-        self.context.instances.borrow_mut().push(crate::evidence::InstanceTemplate {
-            entry: crate::eval::InstanceEntry {
-                key: key.clone(), checked_head: export.map(|export| export.head.clone()),
-                shape: crate::eval::head_shape(head, &self.aliases), global: name.clone(),
-            },
-            method: method.to_string(), code: Rc::new(crate::evidence::MethodCode::Ir(function.clone())),
-            cached: Rc::new(std::cell::RefCell::new(match &closure { Value::Closure(closure) => Rc::downgrade(closure), _ => unreachable!() })),
-            scope: Rc::downgrade(env),
-        });
+        self.context
+            .instances
+            .borrow_mut()
+            .push(crate::evidence::InstanceTemplate {
+                entry: crate::eval::InstanceEntry {
+                    key: key.clone(),
+                    checked_head: export.map(|export| export.head.clone()),
+                    shape: crate::eval::head_shape(head, &self.aliases),
+                    global: name.clone(),
+                },
+                method: method.to_string(),
+                code: Rc::new(crate::evidence::MethodCode::Ir(function.clone())),
+                cached: Rc::new(std::cell::RefCell::new(match &closure {
+                    | Value::Closure(closure) => Rc::downgrade(closure),
+                    | _ => unreachable!(),
+                })),
+                scope: Rc::downgrade(env),
+            });
         self.globals.insert(name.clone(), closure);
         self.method_classes
             .insert(method.to_string(), class.to_string());
@@ -440,10 +458,17 @@ impl Interp {
 
     /// Installs checked evidence for an append-only module revision while
     /// retaining the declaration cursor of already initialized instances.
-    pub fn prepare_incremental_module(&mut self, checked: &CheckedModule, loaded: &[aevia_syntax::Decl]) {
+    pub fn prepare_incremental_module(
+        &mut self,
+        checked: &CheckedModule,
+        loaded: &[aevia_syntax::Decl],
+    ) {
         self.prepare_module(checked);
         if self.instance_sites.is_empty() {
-            self.next_instance_export = loaded.iter().filter(|decl| matches!(decl.kind, aevia_syntax::DeclKind::Instance { .. })).count()
+            self.next_instance_export = loaded
+                .iter()
+                .filter(|decl| matches!(decl.kind, aevia_syntax::DeclKind::Instance { .. }))
+                .count()
                 .min(self.instance_exports.len());
         }
         self.units = checked.units.clone();
@@ -466,7 +491,11 @@ impl Interp {
     ) -> Result<(), EvalError> {
         use aevia_syntax::DeclKind;
         use aevia_syntax::PatKind;
-        if let DeclKind::Type { body: aevia_syntax::ast::TypeBody::Variants(ctors), .. } = &decl.kind {
+        if let DeclKind::Type {
+            body: aevia_syntax::ast::TypeBody::Variants(ctors),
+            ..
+        } = &decl.kind
+        {
             for ctor in ctors {
                 if let Some(&(adt, index)) = self.current_constructors.get(&ctor.name) {
                     if let Some(value) = crate::eval::source_ctor_value_at(adt, index) {
@@ -500,7 +529,7 @@ impl Interp {
                     Some(name.clone()),
                     decl.span,
                 );
-                root.vars.borrow_mut().insert(name.clone(),closure.clone());
+                root.vars.borrow_mut().insert(name.clone(), closure.clone());
                 self.globals.insert(name.clone(), closure);
                 Ok(())
             },
@@ -538,7 +567,9 @@ impl Interp {
         match decl {
             | aevia_ir::lower::LoweredDecl::Fn(decl) => {
                 let closure = crate::eval_ir::module_closure(&decl.function, &root);
-                root.vars.borrow_mut().insert(decl.name.clone(),closure.clone());
+                root.vars
+                    .borrow_mut()
+                    .insert(decl.name.clone(), closure.clone());
                 self.globals.insert(decl.name, closure);
                 Ok(())
             },

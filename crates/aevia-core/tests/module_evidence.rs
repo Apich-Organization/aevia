@@ -1,7 +1,10 @@
 //! Retained closures obey their checked lexical revision, including instances.
+use aevia_core::Compilation;
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile_with_source_identity;
 use aevia_core::source::SourceIdentity;
 use aevia_core::value::Value;
-use aevia_core::{Compilation, Interp, Mode, compile_with_source_identity};
 use aevia_syntax::Span;
 
 fn compile(source: &str) -> Compilation {

@@ -560,9 +560,10 @@ fn every_frontend_code_is_actually_produced() {
                 let (module, parsed) = parse_module(0, source, &lexed);
                 assert!(!parsed.has_errors());
                 let options = aevia_types::check::CheckOptions {
-                    capabilities: aevia_types::check::Capabilities::from_names(
-                        std::iter::empty::<&str>(),
-                    ),
+                    capabilities: aevia_types::check::Capabilities::from_names(std::iter::empty::<
+                        &str,
+                    >(
+                    )),
                 };
                 let checked =
                     aevia_types::check::check_module_with_options(0, &module, &[], &options);

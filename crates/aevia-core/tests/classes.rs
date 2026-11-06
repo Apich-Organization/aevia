@@ -409,7 +409,11 @@ let d = describe([1.0, 2.0, 3.0])
     for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
         let mut interp = Interp::new(&checked).with_buffer().with_mode(mode);
         let diagnostics = interp.load(&module);
-        assert!(!diagnostics.has_errors(), "{mode:?}: {:?}", diagnostics.items);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
         for (name, expected) in [("a", "int"), ("b", "string"), ("c", "two"), ("d", "three")] {
             match interp.eval_toplevel(name).expect("value") {
                 | Value::Str(value) => assert_eq!(value.as_ref(), expected, "{mode:?}: {name}"),

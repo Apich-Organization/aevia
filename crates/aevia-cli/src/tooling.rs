@@ -133,9 +133,11 @@ pub fn doc(
     )
     .ok()
     .flatten();
-    let directory = out.unwrap_or_else(|| match &package {
-        | Some(package) => package.dir.join("docs"),
-        | None => PathBuf::from("docs"),
+    let directory = out.unwrap_or_else(|| {
+        match &package {
+            | Some(package) => package.dir.join("docs"),
+            | None => PathBuf::from("docs"),
+        }
     });
     let name = package.as_ref().map_or_else(
         || "Aevia".to_string(),
@@ -397,9 +399,11 @@ pub fn bench(
             .decls
             .iter()
             .filter(|decl| decl.has_attribute("bench"))
-            .filter_map(|decl| match &decl.kind {
-                | DeclKind::Fn { name, body, .. } => Some((name.clone(), body)),
-                | _ => None,
+            .filter_map(|decl| {
+                match &decl.kind {
+                    | DeclKind::Fn { name, body, .. } => Some((name.clone(), body)),
+                    | _ => None,
+                }
             })
             .collect();
         if benches.is_empty() {
@@ -740,11 +744,13 @@ fn run_bench(
         .module
         .decls
         .iter()
-        .find_map(|decl| match &decl.kind {
-            | DeclKind::Fn {
-                name: declared, args, ..
-            } if declared == name => Some(args.len()),
-            | _ => None,
+        .find_map(|decl| {
+            match &decl.kind {
+                | DeclKind::Fn {
+                    name: declared, args, ..
+                } if declared == name => Some(args.len()),
+                | _ => None,
+            }
         })
         .unwrap_or(0);
     if arity > 0 {

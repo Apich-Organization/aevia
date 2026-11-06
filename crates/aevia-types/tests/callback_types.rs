@@ -25,7 +25,10 @@ fn concrete_functions_of_different_arities_and_aliases_are_accepted() {
 #[test]
 fn nonfunctions_and_wrong_arity_are_rejected() {
     let diagnostics = errors("let x = to_callback(1)\n");
-    assert!(diagnostics.contains(&"E0302".to_string()), "{diagnostics:?}");
+    assert!(
+        diagnostics.contains(&"E0302".to_string()),
+        "{diagnostics:?}"
+    );
     assert!(errors("let x = to_callback()\n").contains(&"E0315".to_string()));
 }
 
@@ -46,10 +49,21 @@ fn callback_callee_expression_evidence_preserves_intrinsic_identity() {
     let (module, parse) = parse_module(0, source, &tokens);
     assert!(!parse.has_errors(), "{:?}", parse.items);
     let checked = check_module(0, &module);
-    assert!(!checked.diagnostics.has_errors(), "{:?}", checked.diagnostics.items);
+    assert!(
+        !checked.diagnostics.has_errors(),
+        "{:?}",
+        checked.diagnostics.items
+    );
     for needle in ["to_callback(square)", "alias(square)"] {
         let start = source.find(needle).unwrap() as u32;
         let end = start + needle.find('(').unwrap() as u32;
-        assert!(checked.module.expr_types.iter().any(|(span, ty)| span.start == start && span.end == end && matches!(ty, aevia_types::Type::ToCallbackIntrinsic)), "missing intrinsic callee evidence for {needle}");
+        assert!(
+            checked.module.expr_types.iter().any(|(span, ty)| {
+                span.start == start
+                    && span.end == end
+                    && matches!(ty, aevia_types::Type::ToCallbackIntrinsic)
+            }),
+            "missing intrinsic callee evidence for {needle}"
+        );
     }
 }

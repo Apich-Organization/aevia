@@ -1,7 +1,9 @@
 //! A checked program owns its exact constructor witnesses, even after another
 //! check of the same named module changes its constructors.
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
 use aevia_core::value::Value;
-use aevia_core::{Interp, Mode, compile};
 
 #[test]
 fn rechecking_a_module_does_not_replace_an_earlier_programs_constructor_witnesses() {
@@ -68,14 +70,30 @@ fn private_type_constructors_are_local_runtime_bindings_and_are_never_exported()
 
 #[test]
 fn abi_value_type_is_shared_without_local_abstract_redeclarations() {
-    let compilation = compile("abi-types.aev", "fn identity(x: Symbol): Symbol = x\nlet values: Tensor<1, Value> = [to_value(1), to_value(2)]\n");
-    assert!(!compilation.diagnostics.has_errors(), "{:?}", compilation.diagnostics.items);
+    let compilation = compile(
+        "abi-types.aev",
+        "fn identity(x: Symbol): Symbol = x\nlet values: Tensor<1, Value> = [to_value(1), to_value(2)]\n",
+    );
+    assert!(
+        !compilation.diagnostics.has_errors(),
+        "{:?}",
+        compilation.diagnostics.items
+    );
     for mode in [Mode::Ast, Mode::Ir] {
         let mut interp = Interp::new(&compilation.checked).with_mode(mode);
         let diagnostics = interp.load(compilation.module.as_ref().unwrap());
-        assert!(!diagnostics.has_errors(), "{mode:?}: {:?}", diagnostics.items);
-        let Value::Tensor(values) = interp.eval_toplevel("values").unwrap() else { panic!("value list") };
-        assert!(matches!(values.storage, aevia_core::value::Storage::Boxed(_)));
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        let Value::Tensor(values) = interp.eval_toplevel("values").unwrap() else {
+            panic!("value list")
+        };
+        assert!(matches!(
+            values.storage,
+            aevia_core::value::Storage::Boxed(_)
+        ));
         assert_eq!(values.shape, vec![2]);
     }
 }

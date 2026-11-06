@@ -268,8 +268,12 @@ fn classify(error: &OpError) -> KernelError {
                 format!("argument {arg} is {got:?}, expected {expected:?}"),
             )
         },
-        | OpError::CallbackType { .. } => KernelError::of("E1003", Failure::Type, error.to_string()),
-        | OpError::HostDiagnostic { code, message } => KernelError::of(code, Failure::Other, message.clone()),
+        | OpError::CallbackType { .. } => {
+            KernelError::of("E1003", Failure::Type, error.to_string())
+        },
+        | OpError::HostDiagnostic { code, message } => {
+            KernelError::of(code, Failure::Other, message.clone())
+        },
         | OpError::Ambiguous { name, count } => {
             KernelError::of(
                 "E1002",
@@ -398,11 +402,19 @@ mod callback_error_tests {
 
     #[test]
     fn callback_failures_preserve_type_and_host_diagnostic_identity() {
-        let error = from_op_error(&OpError::CallbackType { callback: CallbackRef(2), argument: None, expected: Box::new(TypeExpr::Float), got: Box::new(TypeExpr::Bool) });
+        let error = from_op_error(&OpError::CallbackType {
+            callback: CallbackRef(2),
+            argument: None,
+            expected: Box::new(TypeExpr::Float),
+            got: Box::new(TypeExpr::Bool),
+        });
         assert_eq!(error.code, "E1003");
         assert_eq!(error.variant(), Some("CallbackType"));
         assert_eq!(error.kind, Failure::Type);
-        let error = from_op_error(&OpError::HostDiagnostic { code: "E0805", message: "callback recursion".into() });
+        let error = from_op_error(&OpError::HostDiagnostic {
+            code: "E0805",
+            message: "callback recursion".into(),
+        });
         assert_eq!(error.code, "E0805");
         assert_eq!(error.message, "callback recursion");
         assert_eq!(error.variant(), Some("HostDiagnostic"));
