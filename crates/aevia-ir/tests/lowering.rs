@@ -151,6 +151,21 @@ fn captures_are_ordered_by_first_use() {
 }
 
 #[test]
+fn type_applied_constructor_captures_its_callee() {
+    let module = lower("fn outer() =\n    let z = zeros\n    let f = fn () => z<Int>\n    f()\n");
+    let outer = top_function(&module, "outer");
+    let inner = closure_in(&outer.body.stmts).expect("closure");
+    assert_eq!(
+        inner.captures.len(),
+        1,
+        "the type application must capture z"
+    );
+    assert!(inner.body.stmts.iter().any(|stmt| matches!(stmt,
+        Stmt::Let(item) if matches!(&item.rhs, Rhs::TypeApply { callee: Atom::Capture(0), .. })
+    )), "type application must read its captured callee: {:?}", inner.body);
+}
+
+#[test]
 fn a_nested_capture_is_threaded_through_every_function() {
     // `a` is bound two functions up: the middle function must capture it so
     // the innermost one can.
@@ -426,7 +441,12 @@ fn collect_rhs_forms(
     out: &mut Vec<&'static str>,
 ) {
     match rhs {
+        | Rhs::ClassMethodRef { .. } => out.push("var"),
         | Rhs::Atom(atom) => collect_atom_form(atom, out),
+        | Rhs::TypeApply { callee, .. } => {
+            out.push("app");
+            collect_atom_form(callee, out);
+        },
         | Rhs::Error { .. } => {},
         | Rhs::Unary { operand, .. } => {
             out.push("prim");
@@ -499,7 +519,7 @@ fn collect_rhs_forms(
                 }
             }
         },
-        | Rhs::Quantity { .. } => out.push("literal"),
+        | Rhs::Quantity { .. } | Rhs::NumericLiteral(_) => out.push("literal"),
         | Rhs::Str(parts) => {
             for part in parts {
                 match part {

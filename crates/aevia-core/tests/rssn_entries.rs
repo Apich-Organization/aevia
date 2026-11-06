@@ -6,13 +6,10 @@
 //! program can reach — so every test here goes from Aevia source through the
 //! real checker and the real evaluator, not just through the bridge.
 //!
-//! Two of them cannot do their full job in this build, and the tests pin the
-//! *exact* honest outcome instead of a silent block:
+//! Scoped `Rssn.call_ho` supports concrete Float callbacks; the empty list
+//! remains the ordinary dynamic call. Source-level plugin construction remains
+//! a capability gap:
 //!
-//! * `Rssn.call_ho` needs `Tensor<1, Callback>`; the kernel's host-callback ABI
-//!   is `Send + Sync` and this evaluator is single-threaded, so a non-empty
-//!   callback list is `E1001("core.callback")`. The empty list is the kernel's
-//!   ordinary dynamic call and runs.
 //! * `Rssn.register`/`Rssn.register_plugin` need a `Plugin` value; in-process
 //!   plugins are Rust host objects (§13.5.1) and source-level `@op` packaging
 //!   (§13.5.2) is not implemented, so both are `E1001("core.plugin.source")`.
@@ -20,7 +17,6 @@
 #![allow(clippy::result_large_err)]
 
 use aevia_core::Interp;
-use aevia_core::builtins::call_simple;
 use aevia_core::compile;
 use aevia_core::rssn_module;
 use aevia_core::value::Storage;
@@ -32,16 +28,15 @@ use std::rc::Rc;
 
 fn list(items: Vec<f64>) -> Value {
     let len = items.len();
-    Value::Tensor(Rc::new(TensorData {
-        shape: vec![len],
-        storage: Storage::Dense(Rc::new(items)),
-        dim: Dim::one(),
-        display: None,
-    }))
+    Value::Tensor(Rc::new(TensorData::new(vec![len], Storage::Dense(Rc::new(items)), Dim::one(), None)))
 }
 
 fn type_rep() -> Value {
-    call_simple("type_rep", Vec::new()).expect("`type_rep` is implemented")
+    Value::TypeRep(Rc::new(aevia_types::Type::float(Dim::one())))
+}
+
+fn vector_args() -> Value {
+    Value::Tensor(Rc::new(TensorData::new(vec![2], Storage::Boxed(vec![list(vec![1.0, 2.0]), list(vec![3.0, 4.0])]), Dim::one(), None)))
 }
 
 fn result(value: Value) -> (usize, Value) {
@@ -97,67 +92,68 @@ fn toplevel(
 fn typed_runs_the_dynamic_call() {
     let value = rssn_module::call(
         "typed",
-        vec![Value::string("sin"), list(vec![0.5]), type_rep()],
+        vec![Value::string("num_dot"), vector_args(), type_rep()],
         Span::default(),
     )
-    .expect("`Rssn.typed` is an entry point");
+    .expect("typed call");
     let (index, payload) = result(value);
-    assert_eq!(index, 0, "the call succeeds");
-    let number = payload
-        .as_f64()
-        .unwrap_or_else(|| panic!("`sin` answers with a number, found {}", payload.type_name()));
-    assert!((number - 0.5f64.sin()).abs() < 1e-12);
+    assert_eq!(index, 0, "the call succeeds: {payload:?}");
+    assert!(
+        matches!(payload, Value::KernelValue(_)),
+        "typed retains the opaque boundary"
+    );
 }
 
 #[test]
 fn typed_is_reachable_from_source_and_executes() {
-    // §8.19 writes `Rssn.typed : (String, Tensor<1, Value>, TypeRep) ->
-    // Result<a, OpError>`. This build types it `Result<Value, OpError>`: the
-    // `TypeRep` `type_rep()` produces is opaque (it carries no type witness a
-    // runtime could check the answer against), so a fresh `a` would be the
-    // unsound `∀a.a` the bridge removed for `Rssn.invoke`. The caller converts
-    // the payload with `from_value`. The declaration is reachable and the call
-    // it types runs through the bridge.
     let value = toplevel(
-        r#"let r = Rssn.typed("sin", [to_value(0.5)], type_rep())
+        r#"let r = Rssn.typed("num_dot", [to_value([1.0, 2.0]), to_value([3.0, 4.0])], type_rep<Float>())
+let decoded = match r with
+    | Ok(v) -> from_value<Float>(v)
+    | Err(e) -> Err(e)
 "#,
-        "r",
+        "decoded",
     );
     let (index, payload) = result(value);
-    assert_eq!(index, 0, "the typed call succeeds");
-    let number = payload
-        .as_f64()
-        .unwrap_or_else(|| panic!("expected a number, found {}", payload.type_name()));
-    assert!((number - 0.5f64.sin()).abs() < 1e-12);
+    assert_eq!(index, 0, "conversion succeeds: {payload:?}");
+    assert_eq!(payload.as_f64(), Some(11.0));
 }
 
 #[test]
 fn the_entry_points_run_on_both_evaluators() {
-    // The fixed members are dispatched by the bridge, not by the evaluator, so
-    // the AST path and the IR path must agree about them. The AST evaluator is
-    // a second implementation, not the reference, but an entry point reachable
-    // on only one of the two is still a bug.
     use aevia_core::eval::Mode;
-
     let (module, checked) = checked(
-        r#"let r = Rssn.typed("sin", [to_value(0.5)], type_rep())
+        r#"let r = Rssn.typed("num_dot", [to_value([1.0, 2.0]), to_value([3.0, 4.0])], type_rep<Float>())
+let decoded = match r with
+    | Ok(v) -> from_value<Float>(v)
+    | Err(e) -> Err(e)
 "#,
     );
-    let run = |mode: Mode| -> Value {
+    for mode in [Mode::Ast, Mode::Ir] {
         let mut interp = Interp::new(&checked).with_mode(mode);
         let diagnostics = interp.load(&module);
-        assert!(!diagnostics.has_errors(), "load errors: {diagnostics:?}");
-        interp.eval_toplevel("r").expect("`r` evaluates")
+        assert!(!diagnostics.has_errors(), "{mode:?}: {diagnostics:?}");
+        let (index, payload) = result(interp.eval_toplevel("decoded").unwrap());
+        assert_eq!(index, 0, "{mode:?}: {payload:?}");
+        assert_eq!(payload.as_f64(), Some(11.0), "{mode:?}");
+    }
+}
+
+#[test]
+fn typed_rejects_a_result_that_does_not_match_the_witness() {
+    let witness = Value::TypeRep(Rc::new(aevia_types::Type::int()));
+    let value = rssn_module::call(
+        "typed",
+        vec![Value::string("num_dot"), vector_args(), witness],
+        Span::default(),
+    )
+    .expect("typed call");
+    let (index, payload) = result(value);
+    assert_eq!(index, 1, "a float result must not satisfy Int");
+    let Value::KernelError(error) = payload else {
+        panic!("expected a structured OpError")
     };
-    let (ir_index, ir_payload) = result(run(Mode::Ir));
-    let (ast_index, ast_payload) = result(run(Mode::Ast));
-    assert_eq!(ir_index, 0, "the IR path");
-    assert_eq!(ast_index, 0, "the AST path");
-    assert_eq!(
-        ir_payload.as_f64().map(f64::to_bits),
-        ast_payload.as_f64().map(f64::to_bits),
-        "the two evaluators must answer the same value"
-    );
+    assert_eq!(error.code, "TypeMismatch");
 }
 
 #[test]
@@ -196,6 +192,17 @@ fn the_entry_point_signatures_state_their_arguments() {
 
 #[test]
 fn typed_requires_a_type_rep() {
+    let fake = toplevel(
+        "let fake = { name = \"TypeRep\", kind = \"opaque\" }\n",
+        "fake",
+    );
+    let forged = rssn_module::call(
+        "typed",
+        vec![Value::string("sin"), list(vec![0.5]), fake],
+        Span::default(),
+    )
+    .expect_err("records cannot forge TypeRep");
+    assert_eq!(forged.code, "E0302");
     let error = rssn_module::call(
         "typed",
         vec![Value::string("sin"), list(vec![0.5]), Value::int(1)],
@@ -237,11 +244,13 @@ fn a_callback_free_call_ho_is_the_dynamic_call() {
     let (dynamic_index, dynamic_payload) = result(via_dynamic);
     assert_eq!(ho_index, 0);
     assert_eq!(dynamic_index, 0);
-    assert_eq!(
-        ho_payload.as_f64().map(f64::to_bits),
-        dynamic_payload.as_f64().map(f64::to_bits),
-        "the callback-free `call_ho` must answer exactly what `dynamic` answers"
-    );
+    let (Value::KernelValue(ho), Value::KernelValue(dynamic)) = (ho_payload, dynamic_payload) else {
+        panic!("both calls must return opaque kernel values");
+    };
+    let (aevia_rssn::Val::Num(aevia_rssn::Num::Float(a)), aevia_rssn::Val::Num(aevia_rssn::Num::Float(b))) = (&ho.payload, &dynamic.payload) else {
+        panic!("both calls must contain numeric payloads");
+    };
+    assert_eq!(a.to_bits(), b.to_bits(), "callback-free call_ho and dynamic must agree");
 }
 
 #[test]
@@ -255,35 +264,21 @@ fn call_ho_is_reachable_from_source() {
     );
     let (index, payload) = result(value);
     assert_eq!(index, 0);
-    let number = payload
-        .as_f64()
-        .unwrap_or_else(|| panic!("expected a number, found {}", payload.type_name()));
-    assert!((number - 0.5f64.sin()).abs() < 1e-12);
+    let Value::KernelValue(payload) = payload else { panic!("expected opaque kernel value"); };
+    let aevia_rssn::Val::Num(aevia_rssn::Num::Float(number)) = &payload.payload else { panic!("expected numeric kernel payload"); };
+    assert!((*number - 0.5f64.sin()).abs() < 1e-12);
 }
 
 #[test]
-fn a_non_empty_callback_list_names_the_callback_capability() {
+fn host_only_callback_dispatch_requires_an_interpreter_scope() {
+    assert!(aevia_rssn::registry().capabilities.has("core.callback"));
     let error = rssn_module::call(
         "call_ho",
         vec![Value::string("sin"), list(vec![0.5]), list(vec![1.0])],
         Span::default(),
-    )
-    .expect_err("an Aevia closure cannot cross as a kernel callback");
+    ).expect_err("host-only dispatch cannot own an interpreter scope");
     assert_eq!(error.code, "E1001");
-    assert!(
-        error.message.contains("core.callback"),
-        "the diagnostic must name the capability: {}",
-        error.message
-    );
-    assert!(
-        error.notes.iter().any(|note| note.contains("Send + Sync")),
-        "the note must say what the ABI requires: {:?}",
-        error.notes
-    );
-    assert!(
-        !aevia_rssn::registry().capabilities.has("core.callback"),
-        "the capability row exists but must be disabled"
-    );
+    assert!(error.message.contains("interpreter-owned"));
 }
 
 // ---------------------------------------------------------------------------

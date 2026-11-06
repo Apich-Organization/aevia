@@ -264,6 +264,7 @@ fn an_imported_instance_overlaps_with_e0311_naming_both_modules() {
             derived: false,
         }],
         aliases: IndexMap::new(),
+        function_headers: Default::default(),
     };
     let lexed = lex(0, "").expect("lexes");
     let (parsed_module, diagnostics) = parse_module(0, "", &lexed);
@@ -641,11 +642,16 @@ instance Same for { first: t, second: t } where
 "#,
     );
     let head = &module.instances[0].head;
-    let pair = |first, second| {
-        Type::record(vec![("first".into(), first), ("second".into(), second)])
-    };
-    assert!(aevia_types::class::matches_head(head, &pair(Type::int(), Type::int())));
-    assert!(!aevia_types::class::matches_head(head, &pair(Type::int(), Type::Str)));
+    let pair =
+        |first, second| Type::record(vec![("first".into(), first), ("second".into(), second)]);
+    assert!(aevia_types::class::matches_head(
+        head,
+        &pair(Type::int(), Type::int())
+    ));
+    assert!(!aevia_types::class::matches_head(
+        head,
+        &pair(Type::int(), Type::Str)
+    ));
 }
 
 #[test]
@@ -679,7 +685,10 @@ instance Classify for Tensor<[3], Float> where
     let keys: std::collections::HashSet<_> = module.instances.iter().map(|i| &i.key).collect();
     assert_eq!(keys.len(), 4);
     let fixed = &module.instances[2].head;
-    let erased = Type::tensor(aevia_types::ty::Shape::Rank(1), Type::float(aevia_dim::Dim::one()));
+    let erased = Type::tensor(
+        aevia_types::ty::Shape::Rank(1),
+        Type::float(aevia_dim::Dim::one()),
+    );
     assert!(!aevia_types::class::matches_head(fixed, &erased));
 }
 

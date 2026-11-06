@@ -30,6 +30,16 @@ use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
 
+/// A name or dotted name can receive explicit type arguments. This is a
+/// syntactic check only; the checker resolves the path and callable identity.
+fn is_named_type_callee(expr: &Expr) -> bool {
+    match &expr.kind {
+        | ExprKind::Var(_) | ExprKind::QName(_) => true,
+        | ExprKind::Field { base, .. } => is_named_type_callee(base),
+        | _ => false,
+    }
+}
+
 /// Parses a lexed file into a module.
 ///
 /// Always returns a tree; parse errors are reported in the second component.
@@ -1306,7 +1316,7 @@ impl<'a> Parser<'a> {
     fn is_fn_decl_start(&self) -> bool {
         self.at_kw(Keyword::Fn)
             && matches!(self.kind_at(1), TokenKind::Ident(_))
-            && self.punct_at(2, Punct::LParen)
+            && (self.punct_at(2, Punct::LParen) || self.punct_at(2, Punct::Lt))
     }
 
     fn block_let(&mut self) -> BlockStmt {
@@ -1896,11 +1906,9 @@ impl<'a> Parser<'a> {
                 }
                 if ok && self.eat_punct(Punct::Gt) {
                     let span = expr.span.join(self.previous_span());
-                    // §2.7.2: only a function *name* can take explicit type
-                    // arguments. `f()<Int>` or `(a + b)<Int>` has no reading
-                    // that the checker could honour, and the adjacency rule
-                    // makes the intent genuinely ambiguous: `E0207`.
-                    if !matches!(expr.kind, ExprKind::Var(_) | ExprKind::QName(_)) {
+                    // §2.7.2: a name or dotted name may take type arguments.
+                    // Calls and computed expressions stay ambiguous (`E0207`).
+                    if !is_named_type_callee(&expr) {
                         self.error(
                             "E0207",
                             "ambiguous type application: only a function name can take type arguments; add a space before `<` or parenthesise the callee",

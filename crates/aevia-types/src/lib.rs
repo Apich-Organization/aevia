@@ -33,10 +33,16 @@ pub mod adt;
 pub mod builtins;
 pub mod check;
 pub mod class;
+mod declaration_schema;
 pub mod diagnostic_bridge;
+pub use declaration_schema::DeclarationSchemaKey;
 pub mod infer;
+mod numeric_index;
 pub mod keys;
+pub mod representation;
 pub mod rssn_resolve;
+pub mod substitution;
+pub use substitution::TypeSubstitution;
 pub mod ty;
 
 pub use check::AliasExport;
@@ -85,3 +91,7 @@ pub use ty::Row;
 pub use ty::Scheme;
 pub use ty::Shape;
 pub use ty::Type;
+
+pub use representation::NumericConstraint;
+pub use representation::RepDomain;
+pub use representation::RepRelation;

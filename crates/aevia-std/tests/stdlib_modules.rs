@@ -15,12 +15,8 @@
 //! * the `Physics` wrappers are real typed façades over `simulate`, and the
 //!   Ising one is executed end to end.
 //!
-//! Two things cannot be expressed yet and are recorded rather than faked: three
-//! chapter-8 names are *call forms* (`zeros`, `ones`, `fill`), not first-class
-//! values, so no `let` alias can re-export them; and the physics wrappers need
-//! `to_json`/`from_json` (requested from the checker/runtime owners). Both are
-//! asserted with their exact current state, including the diagnostic, so the
-//! test starts failing the day the language catches up.
+//! Variadic tensor constructors carry their identity through aliases and imports;
+//! the checks below exercise those exports as well as the physics wrappers.
 
 mod common;
 
@@ -29,63 +25,10 @@ use common::Package;
 use common::errors;
 use common::rendered;
 use common::spec_stdlib_path;
-use common::stdlib_root;
 
-/// The `Units.Constants` module, generated from the live Kernel Manifest.
-///
-/// Header + the constants module aevia-rssn already generates (§13.6.5): this
-/// is the same code path `aevia rssn --emit` uses, so the standard library
-/// cannot grow a second constant table.
-fn constants_module_source() -> String {
-    let registry = aevia_rssn::registry();
-    let generated = aevia_rssn::codegen::constants(registry);
-    let body = generated
-        .split_once("module Constants\n")
-        .unwrap_or_else(|| panic!("codegen::constants did not emit a `module Constants` header"))
-        .1;
-    format!(
-        "## The `Units.Constants` module of §8.20.\n\
-         ##\n\
-         ## Generated from the rssn Kernel Manifest: one quantity per physical\n\
-         ## constant of `manifest.constants` (§13.6.5). Do not edit; regenerate with\n\
-         ## `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.\n\
-         ## rssn {version}, api {api}\n\
-         module Units.Constants\n{body}",
-        version = registry.version,
-        api = registry.api_version,
-    )
-}
-
-/// Writes the generated sources back into `crates/aevia-std/stdlib/`.
-///
-/// This is the regeneration tool: generated files are checked in because the
-/// crate embeds them with `include_str!`, and the test below proves the
-/// checked-in bytes are the generated ones. Run it after editing the
-/// specification or after the kernel's manifest changes:
-///
-/// ```text
-/// cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate
-/// ```
-#[test]
-#[ignore = "regeneration tool; run explicitly with `--ignored regenerate`"]
-fn regenerate() {
-    let spec = std::fs::read_to_string(spec_stdlib_path()).expect("spec/08-stdlib.md");
-    let modules = stdlib::spec_module_sources(&spec);
-    let root = stdlib_root();
-    for (path, source) in &modules {
-        let file = root.join(format!("{path}.aev"));
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent).expect("a module directory");
-        }
-        std::fs::write(&file, source).expect("a generated module");
-    }
-    std::fs::write(root.join("Units/Constants.aev"), constants_module_source())
-        .expect("the generated constants module");
-    eprintln!(
-        "regenerated {} generated module(s) and Units/Constants",
-        modules.len()
-    );
-}
+#[path = "../../../tools/aevia-stdlib-gen/src/support.rs"]
+mod generator_support;
+use generator_support::constants_module_source;
 
 // ---------------------------------------------------------------------------
 // The tree itself
@@ -112,6 +55,16 @@ fn the_embedded_tree_is_the_module_tree() {
     }
 }
 
+/// The embedded Rust table is generated from the same catalog as every module.
+#[test]
+fn the_embedding_table_matches_the_catalog() {
+    assert_eq!(
+        include_str!("../src/stdlib_table.rs"),
+        aevia_stdlib_model::stdlib::embedding_table_source(),
+        "regenerate the standard library and its embedding table"
+    );
+}
+
 /// The generated modules are exactly what the specification generates.
 ///
 /// This is the anti-hand-edit assertion: the checked-in files must equal
@@ -134,7 +87,7 @@ fn the_generated_sources_are_the_specifications() {
     }
     assert!(
         drifted.is_empty(),
-        "generated module sources have drifted (run the `regenerate` test): {drifted:#?}"
+        "generated module sources have drifted (run `cargo run -p aevia-stdlib-gen -- --write`): {drifted:#?}"
     );
 }
 
@@ -145,19 +98,17 @@ fn units_constants_is_the_live_manifest() {
     assert_eq!(
         embedded,
         constants_module_source(),
-        "Units/Constants.aev is not the live manifest's constants (run `regenerate`)"
+        "Units/Constants.aev is not the live manifest's constants (run the stdlib generator with `--write`)"
     );
     let constants = &aevia_rssn::registry().constants;
     assert!(!constants.is_empty(), "the manifest carries no constants");
-    // One `let` per constant, plus the module-local `pi` the generator emits
-    // when a constant carries a power of it.
-    let needs_pi = constants.iter().any(|constant| constant.value.pi != 0);
+    // The kernel constants are the only bindings; `pi` is the exact builtin.
     let bindings = embedded
         .lines()
         .filter(|line| line.starts_with("let "))
         .count();
     assert_eq!(
-        bindings - usize::from(needs_pi),
+        bindings,
         constants.len(),
         "Units.Constants does not bind every manifest constant"
     );
@@ -204,40 +155,26 @@ fn every_module_checks_and_exports_its_names() {
     assert!(broken.is_empty(), "{}", broken.join("\n\n"));
 }
 
-/// The three call-form names are the *only* chapter-8 names a module cannot
-/// re-export, and the reason is a checker limitation, not a missing name. The
-/// test pins the current state so it fails when the language catches up.
+/// The generated sum types expose their constructors as well as their type names.
 #[test]
-fn call_form_names_are_the_only_missing_exports() {
-    let package = Package::with_stdlib("call-form");
+fn generated_solver_constructors_are_importable() {
+    let package = Package::with_stdlib("solver-constructors");
     let program = package.compile_program(
-        "call_form",
-        "module Probe\n\nimport LinearAlgebra { zeros, ones, fill }\n\nfn main(): IO Unit = do\n    print(\"\")\n",
+        "probe",
+        "module Probe\nimport Ode { OdeMethod, Rk4, Dopri5 }\nimport Sde { SdeStructure, Diagonal, General }\n\nlet ode: OdeMethod = Rk4\nlet ode2: OdeMethod = Dopri5\nlet diagonal: SdeStructure = Diagonal\nlet general: SdeStructure = General(1)\n\nfn main(): IO Unit = do\n    print(\"\")\n",
     );
-    let failures = errors(&program);
-    assert!(
-        !failures.is_empty(),
-        "`zeros`/`ones`/`fill` are importable now; delete them from stdlib::CALL_FORM_ONLY \
-         and re-export them from the LinearAlgebra module"
+    assert!(errors(&program).is_empty(), "{}", rendered(&program));
+}
+
+/// Variadic constructors are exported by both tensor and linear algebra modules.
+#[test]
+fn variadic_tensor_constructors_are_importable() {
+    let package = Package::with_stdlib("tensor-intrinsics");
+    let program = package.compile_program(
+        "probe",
+        "module Probe\nimport Tensor { zeros, ones, fill }\nlet a: Tensor<2, Int> = zeros<Int>(2, 3)\nlet b: Tensor<1, Float> = ones(4)\nlet c: Tensor<1, Int> = fill(7, 5)\nfn main(): IO Unit = println(\"\")\n",
     );
-    for name in stdlib::CALL_FORM_ONLY {
-        assert!(
-            failures.iter().any(|failure| failure.contains(name)),
-            "the failure must name `{name}`: {failures:?}"
-        );
-    }
-    // And an aliasing module cannot be checked either: the generated modules
-    // simply omit them, which is what makes them the only missing exports.
-    for module in stdlib::modules() {
-        let exports = stdlib::exports(&module.path.split('/').collect::<Vec<_>>());
-        for name in stdlib::CALL_FORM_ONLY {
-            assert!(
-                !exports.contains(name),
-                "`{}` exports the call form `{name}`",
-                module.path
-            );
-        }
-    }
+    assert!(errors(&program).is_empty(), "{}", rendered(&program));
 }
 
 /// Regression: the schemes for `on`, `odeint_with` and `solve_ivp` used to

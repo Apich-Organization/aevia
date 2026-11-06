@@ -18,9 +18,13 @@ use aevia_analysis::AnalysisCache;
 use aevia_analysis::Change;
 use aevia_analysis::Document;
 use aevia_analysis::DocumentStore;
+use aevia_analysis::SourceOverlays;
+use aevia_analysis::canonical_source_path as canonical_path;
 use serde_json::Value;
 use serde_json::json;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 /// What the caller should do after a message.
@@ -80,6 +84,9 @@ pub struct Server {
     /// row reuses its program instead of re-reading and re-checking the import
     /// graph; a changed file invalidates it (see [`AnalysisCache`]).
     cache: RefCell<AnalysisCache>,
+    /// Import candidates as well as read files, retained even after an LRU
+    /// program eviction so an edit refreshes all affected open documents.
+    dependencies: RefCell<BTreeMap<String, Vec<(PathBuf, PathBuf)>>>,
 }
 
 impl Server {
@@ -91,6 +98,7 @@ impl Server {
             state: State::Uninitialized,
             out,
             cache: RefCell::new(AnalysisCache::new()),
+            dependencies: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -309,7 +317,7 @@ impl Server {
                     .and_then(Value::as_str)
                     .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no `newName`"))?;
                 match analysis.rename(offset()?, new_name) {
-                    | Ok(edits) => crate::protocol::rename_json(&edits),
+                    | Ok(edits) => self.versioned_rename(&edits, document),
                     | Err(error) => return Err(RpcError::new(REQUEST_FAILED, error.message())),
                 }
             },
@@ -346,7 +354,25 @@ impl Server {
                 self.did_close(params);
                 Control::Continue
             },
-            // `$/cancelRequest`, `$/setTrace`, `textDocument/didSave` and
+            | "textDocument/didSave" => {
+                if let Some(uri) = text_document_uri(params) {
+                    self.publish_affected(uri);
+                }
+                Control::Continue
+            },
+            | "workspace/didChangeWatchedFiles" => {
+                if let Some(changes) = params.get("changes").and_then(Value::as_array) {
+                    let paths: std::collections::BTreeSet<&str> = changes
+                        .iter()
+                        .filter_map(|change| change.get("uri").and_then(Value::as_str))
+                        .collect();
+                    for uri in paths {
+                        self.publish_affected(uri);
+                    }
+                }
+                Control::Continue
+            },
+            // `$/cancelRequest`, `$/setTrace` and
             // anything a future client invents: ignored, never fatal.
             | _ => Control::Continue,
         }
@@ -366,7 +392,7 @@ impl Server {
         let version = item.get("version").and_then(Value::as_i64).unwrap_or(0);
         let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
         self.documents.open(Document::new(uri, version, text));
-        self.publish(uri);
+        self.publish_affected(uri);
     }
 
     /// `textDocument/didChange`, incremental or full.
@@ -385,23 +411,40 @@ impl Server {
         let Some(changes) = params.get("contentChanges").and_then(Value::as_array) else {
             return;
         };
-        let Some(document) = self.documents.get_mut(&uri) else {
+        let Some(document) = self.documents.get(&uri) else {
             return;
         };
+        if version <= document.version() {
+            return;
+        }
+        let mut edits = Vec::with_capacity(changes.len());
         for change in changes {
             let Some(text) = change.get("text").and_then(Value::as_str) else {
-                continue;
+                return;
             };
-            let edit = match change.get("range").and_then(crate::protocol::range) {
-                | Some(range) => Change::ranged(range, text),
+            let edit = match change.get("range") {
+                | Some(value) => {
+                    let Some(range) = crate::protocol::range(value) else {
+                        return;
+                    };
+                    Change::ranged(range, text)
+                },
                 | None => Change::full(text),
             };
-            // A refused edit leaves the document as it was; the client and the
-            // server then still agree on the text, which matters more than
-            // applying half an edit.
-            let _ = document.apply(&edit, version);
+            edits.push(edit);
         }
-        self.publish(&uri);
+        // Invalid batches retain both text and version; a later full
+        // replacement can resynchronize without exposing a half-applied source.
+        if self
+            .documents
+            .get_mut(&uri)
+            .unwrap()
+            .apply_batch(&edits, version)
+            .is_err()
+        {
+            return;
+        }
+        self.publish_affected(&uri);
     }
 
     /// `textDocument/didClose`.
@@ -413,12 +456,44 @@ impl Server {
             return;
         };
         self.documents.close(uri);
+        self.dependencies.borrow_mut().remove(uri);
         // Clearing the diagnostics is part of closing: a client that keeps
         // them shows errors for a file it no longer has.
         self.notify(
             "textDocument/publishDiagnostics",
             json!({ "uri": uri, "diagnostics": [] }),
         );
+        self.publish_affected(uri);
+    }
+
+    /// Refreshes readers of a changed buffer, including previously missing
+    /// imports and documents whose programs have left the bounded cache.
+    fn publish_affected(
+        &self,
+        changed: &str,
+    ) {
+        let path = crate::protocol::path_from_uri(changed).map(|path| canonical_path(&path));
+        let uris: Vec<String> = self
+            .documents
+            .iter()
+            .filter(|document| {
+                document.name() == changed
+                    || path.as_ref().is_some_and(|path| {
+                        self.dependencies
+                            .borrow()
+                            .get(document.name())
+                            .is_some_and(|inputs| {
+                                inputs.iter().any(|(logical, physical)| {
+                                    physical == path || canonical_path(logical) == *path
+                                })
+                            })
+                    })
+            })
+            .map(|document| document.name().to_owned())
+            .collect();
+        for uri in uris {
+            self.publish(&uri);
+        }
     }
 
     /// Compiles a document and sends its diagnostics.
@@ -515,6 +590,56 @@ impl Server {
         crate::protocol::workspace_symbols_json(&symbols)
     }
 
+    /// Edits refer to the exact unsaved snapshots used by analysis. Use open
+    /// document URIs and versions so clients can refuse stale workspace edits.
+    fn versioned_rename(
+        &self,
+        edits: &[aevia_analysis::FileEdit],
+        focused: &Document,
+    ) -> Value {
+        let mut result = crate::protocol::rename_json(edits);
+        if let Some(changes) = result
+            .get_mut("documentChanges")
+            .and_then(Value::as_array_mut)
+        {
+            for change in changes {
+                let Some(target) = change.get_mut("textDocument") else {
+                    continue;
+                };
+                if let Some(uri) = target.get("uri").and_then(Value::as_str)
+                    && let Some(document) = self.documents.get(uri)
+                {
+                    target["version"] = Value::from(document.version());
+                    continue;
+                }
+                let Some(path) = target
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .and_then(crate::protocol::path_from_uri)
+                else {
+                    continue;
+                };
+                let physical = canonical_path(&path);
+                let same_file = |document: &&Document| {
+                    crate::protocol::path_from_uri(document.name())
+                        .is_some_and(|path| canonical_path(&path) == physical)
+                };
+                let open = self.documents.iter().filter(same_file).last();
+                let focused_matches = crate::protocol::path_from_uri(focused.name())
+                    .is_some_and(|path| canonical_path(&path) == physical);
+                if let Some(document) = if focused_matches {
+                    Some(focused)
+                } else {
+                    open
+                } {
+                    target["uri"] = Value::String(document.name().to_owned());
+                    target["version"] = Value::from(document.version());
+                }
+            }
+        }
+        result
+    }
+
     /// Analyses a document: through the cached loader when it has a `file:`
     /// path that can bound a load, else the single-file path.
     ///
@@ -527,10 +652,32 @@ impl Server {
         let Some(path) = crate::protocol::path_from_uri(document.name()) else {
             return Analysis::new(document);
         };
-        let program = self
-            .cache
-            .borrow_mut()
-            .program_for_document(&path, document.text());
+        let mut overlays = SourceOverlays::new();
+        for open in self.documents.iter() {
+            if let Some(path) = crate::protocol::path_from_uri(open.name()) {
+                overlays.insert(&path, open.text());
+            }
+        }
+        let program = self.cache.borrow_mut().program_for_document_with_overlays(
+            &path,
+            document.text(),
+            &overlays,
+        );
+        if let Some(program) = &program {
+            self.dependencies.borrow_mut().insert(
+                document.name().to_owned(),
+                program
+                    .dependencies
+                    .iter()
+                    .map(|input| {
+                        (
+                            input.path().to_path_buf(),
+                            input.physical_path().to_path_buf(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
         match program {
             | Some(program) => Analysis::from_program(document, program),
             | None => Analysis::new(document),

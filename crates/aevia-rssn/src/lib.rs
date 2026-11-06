@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod bindings;
 pub mod codegen;
 pub mod error;
 pub mod kernel;
@@ -35,6 +36,7 @@ pub mod kernel;
 pub mod jit;
 pub mod registry;
 pub mod value;
+pub mod witness;
 
 pub use error::Failure;
 pub use error::KernelError;
@@ -62,7 +64,7 @@ pub use value::UnitVal;
 pub use value::Val;
 
 /// The dynamic ABI version this build understands.
-pub const SUPPORTED_API_VERSION: u32 = 1;
+pub const SUPPORTED_API_VERSION: u32 = 2;
 
 /// Checks that a manifest can be consumed by this compiler.
 ///
@@ -171,7 +173,7 @@ mod tests {
     #[test]
     fn the_manifest_is_reachable() {
         let registry = registry::registry();
-        assert_eq!(registry.api_version, 1);
+        assert_eq!(registry.api_version, SUPPORTED_API_VERSION);
         assert!(
             registry.ops().count() > 1000,
             "expected the full operator set"

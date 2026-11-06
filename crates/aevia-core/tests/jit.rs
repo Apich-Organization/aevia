@@ -1,7 +1,10 @@
 #![cfg(feature = "jit")]
 
-use aevia_core::value::{NumKind, Value};
-use aevia_core::{Interp, Mode, compile};
+use aevia_core::Interp;
+use aevia_core::Mode;
+use aevia_core::compile;
+use aevia_core::value::NumKind;
+use aevia_core::value::Value;
 
 fn result(
     source: &str,
@@ -109,10 +112,12 @@ let zero = identity(-0.0)
 
 #[test]
 fn tail_jump_respects_rebound_function() {
-    use aevia_core::value::ClosureEnv;
     let source = r#"@jit
 fn sum(n: Float, acc: Float): Float = if n <= 0.0 then acc else sum(n - 1.0, acc + n)
 fn replacement(n: Float, acc: Float): Float = 42.0
+let warmed = sum(3.0, 0.0)
+let original = sum
+let sum = replacement
 "#;
     let compilation = compile("rebind.aev", source);
     assert!(
@@ -123,20 +128,11 @@ fn replacement(n: Float, acc: Float): Float = 42.0
     let mut interp = Interp::new(&compilation.checked).with_mode(Mode::Ir);
     let diagnostics = interp.load(compilation.module.as_ref().unwrap());
     assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
-    let original = interp.eval_toplevel("sum").unwrap();
-    let replacement = interp.eval_toplevel("replacement").unwrap();
-    let Value::Closure(closure) = &original else {
-        panic!("closure expected")
-    };
-    let ClosureEnv::Ir(env) = &closure.env else {
-        panic!("IR closure expected")
-    };
-    env.scope
-        .as_ref()
-        .unwrap()
-        .vars
-        .borrow_mut()
-        .insert("sum".into(), replacement);
+    assert_eq!(
+        aevia_core::value::repr(&interp.eval_toplevel("warmed").unwrap()),
+        "6.0"
+    );
+    let original = interp.eval_toplevel("original").unwrap();
     let value = interp
         .apply(
             original,

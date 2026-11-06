@@ -21,7 +21,6 @@ mod tooling;
 
 use aevia_core::Interp;
 use aevia_core::Output;
-use aevia_core::compile;
 use aevia_core::driver::Program;
 use aevia_core::driver::{
     self,
@@ -493,6 +492,7 @@ fn manifest_failure(error: &aevia_core::manifest::ManifestError) -> Program {
     ));
     Program {
         sources: aevia_syntax::SourceMap::new(),
+        dependencies: Vec::new(),
         modules: Vec::new(),
         diagnostics,
     }
@@ -949,6 +949,7 @@ fn rssn_command(args: &[String]) -> ExitCode {
     let mut emit = false;
     let mut out: Option<String> = None;
     let mut audit = false;
+    let mut namespaces = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -972,6 +973,10 @@ fn rssn_command(args: &[String]) -> ExitCode {
                 };
                 out = Some(path.clone());
                 index += 2;
+            },
+            | "--namespaces" => {
+                namespaces = true;
+                index += 1;
             },
             | "--audit" => {
                 audit = true;
@@ -1030,14 +1035,45 @@ fn rssn_command(args: &[String]) -> ExitCode {
     );
 
     if audit {
-        for op in &ops {
-            if op.source == aevia_rssn::Source::None {
-                continue;
-            }
-            if op.signatures.is_empty() {
-                println!("{}:{} has no signature", op.rule_set, op.name);
-            }
+        use aevia_rssn::bindings::Coverage;
+        let catalog = aevia_rssn::bindings::catalog(registry);
+        let typed = catalog
+            .iter()
+            .filter(|row| matches!(row.coverage, Coverage::Typed))
+            .count();
+        let dynamic = catalog
+            .iter()
+            .filter(|row| matches!(row.coverage, Coverage::Dynamic(_)))
+            .count();
+        let unavailable = catalog.len() - typed - dynamic;
+        println!(
+            "bindings: {typed} exact typed, {dynamic} dynamic/approximate, {unavailable} unavailable"
+        );
+        for row in &catalog {
+            let (status, reasons): (&str, &[String]) = match &row.coverage {
+                | Coverage::Typed => ("typed", &[]),
+                | Coverage::Dynamic(reasons) => ("dynamic", reasons),
+                | Coverage::Unavailable(reasons) => ("unavailable", reasons),
+            };
+            println!(
+                "{}:{}[{}] -> {}: {}{}",
+                row.op.rule_set,
+                row.op.name,
+                row.overload
+                    .map_or_else(|| "unsigned".to_string(), |i| (i + 1).to_string()),
+                row.name,
+                status,
+                if reasons.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", reasons.join("; "))
+                }
+            );
         }
+    }
+    if namespaces && emit_directory.is_none() {
+        eprintln!("aevia rssn: --namespaces requires --emit --out DIR");
+        return ExitCode::from(2);
     }
 
     if let Some(directory) = emit_directory {
@@ -1045,7 +1081,11 @@ fn rssn_command(args: &[String]) -> ExitCode {
             eprintln!("aevia rssn: cannot create `{directory}`: {error}");
             return ExitCode::from(1);
         }
-        for (name, text) in aevia_rssn::codegen::files(registry) {
+        let mut files = aevia_rssn::codegen::files(registry);
+        if namespaces {
+            files.extend(aevia_rssn::codegen::namespace_files(registry));
+        }
+        for (name, text) in files {
             let path = std::path::Path::new(&directory).join(name);
             match std::fs::write(&path, text) {
                 | Ok(()) => println!("wrote {}", path.display()),
@@ -1071,6 +1111,14 @@ struct Session {
     loaded: usize,
     /// The options every interpreter in this session is built with.
     options: Options,
+    /// Stable across source revisions; distinct for independent/reset sessions.
+    identity: aevia_core::source::SourceIdentity,
+}
+
+fn repl_source_identity() -> aevia_core::source::SourceIdentity {
+    static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let session = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    aevia_core::source::SourceIdentity::virtual_source(format!("aevia-repl://{}/{session}/Repl", std::process::id()))
 }
 
 impl Session {
@@ -1080,6 +1128,7 @@ impl Session {
             interp: None,
             loaded: 0,
             options,
+            identity: repl_source_identity(),
         }
     }
 
@@ -1087,6 +1136,11 @@ impl Session {
         self.declarations.clear();
         self.interp = None;
         self.loaded = 0;
+        self.identity = repl_source_identity();
+    }
+
+    fn compile(&self, source: &str) -> aevia_core::Compilation {
+        aevia_core::compile_with_source_identity("<repl>", source, &self.identity)
     }
 
     /// Brings the interpreter in line with `compilation`, evaluating only the
@@ -1115,14 +1169,8 @@ impl Session {
             apply_options(&mut interp, self.options);
             interp
         });
-        // A later line may declare a unit or a dimension.
-        interp.units = compilation.checked.units.clone();
-        interp.dims = compilation.checked.dims.clone();
-        // A later line may also call `Rssn.<op>`; its pinned key belongs to
-        // that compilation (PLAN D1).
-        for call in &compilation.checked.rssn_calls {
-            interp.rssn_calls.insert(call.span, call.key.clone());
-        }
+        let already_loaded = self.loaded.min(module.decls.len());
+        interp.prepare_incremental_module(&compilation.checked, &module.decls[..already_loaded]);
         let limit = limit.min(module.decls.len());
         while self.loaded < limit {
             let decl = &module.decls[self.loaded];
@@ -1201,7 +1249,7 @@ fn repl(options: Options) -> ExitCode {
         }
         if starts_declaration(input.trim()) {
             let candidate = format!("{}{input}\n", session.declarations);
-            let compilation = compile("<repl>", &candidate);
+            let compilation = session.compile(&candidate);
             if compilation.diagnostics.has_errors() {
                 eprint!("{}", compilation.diagnostics.render(&compilation.sources));
             } else if let Err(message) = session.sync(&compilation) {
@@ -1212,7 +1260,7 @@ fn repl(options: Options) -> ExitCode {
             }
         } else {
             let candidate = format!("{}let __repl = {input}\n", session.declarations);
-            let compilation = compile("<repl>", &candidate);
+            let compilation = session.compile(&candidate);
             if compilation.diagnostics.has_errors() {
                 eprint!("{}", compilation.diagnostics.render(&compilation.sources));
                 continue;
@@ -1314,7 +1362,7 @@ fn handle_repl_command(
                 return ReplControl::Continue;
             }
             let candidate = format!("{}let __repl_type = {argument}\n", session.declarations);
-            let compilation = compile("<repl>", &candidate);
+            let compilation = session.compile(&candidate);
             if compilation.diagnostics.has_errors() {
                 eprint!("{}", compilation.diagnostics.render(&compilation.sources));
             } else if let Some(aevia_types::Export::Value { scheme, .. }) =
@@ -1353,7 +1401,7 @@ fn handle_repl_command(
             match std::fs::read_to_string(argument) {
                 | Ok(text) => {
                     let candidate = format!("{}{text}\n", session.declarations);
-                    let compilation = compile(argument, &candidate);
+                    let compilation = aevia_core::compile_with_source_identity(argument, &candidate, &session.identity);
                     if compilation.diagnostics.has_errors() {
                         eprint!("{}", compilation.diagnostics.render(&compilation.sources));
                     } else if let Err(message) = session.sync(&compilation) {
@@ -1430,10 +1478,14 @@ fn repl_core(
         .as_ref()
         .ok_or("the expression did not parse")?;
     let decl = module.decls.last().ok_or("the expression did not parse")?;
-    let lowered = aevia_ir::lower::lower_decl(
+    let lowered = aevia_ir::lower::lower_decl_with_runtime_evidence(
         decl,
         &compilation.checked.rssn_calls,
         &compilation.checked.dictionaries,
+        &compilation.checked.literal_reps,
+        &compilation.checked.method_refs,
+        &compilation.checked.constructor_refs,
+        &compilation.checked.expr_types,
     )
     .ok_or("this declaration has no Core IR")?;
     Ok(format!("{lowered:#?}"))
@@ -1496,7 +1548,7 @@ fn compile_repl_expression(
         "{}let __repl_{label} = {expression}\n",
         session.declarations
     );
-    let compilation = compile("<repl>", &candidate);
+    let compilation = session.compile(&candidate);
     if compilation.diagnostics.has_errors() {
         return Err(rendered(&compilation.diagnostics, &compilation.sources));
     }
@@ -1935,7 +1987,7 @@ mod tests {
         line: &str,
     ) {
         let candidate = format!("{}{line}\n", session.declarations);
-        let compilation = compile("<repl>", &candidate);
+        let compilation = session.compile(&candidate);
         assert!(
             !compilation.diagnostics.has_errors(),
             "compile errors: {:?}",
@@ -1956,7 +2008,7 @@ mod tests {
         line: &str,
     ) -> String {
         let candidate = format!("{}let __repl = {line}\n", session.declarations);
-        let compilation = compile("<repl>", &candidate);
+        let compilation = session.compile(&candidate);
         assert!(
             !compilation.diagnostics.has_errors(),
             "compile errors: {:?}",
@@ -2138,4 +2190,74 @@ mod tests {
         // A complete line followed by EOF is not continued.
         assert!(!continues_block("let a = 1", None));
     }
+    #[test]
+    fn repl_sessions_and_reset_have_distinct_stable_source_origins() {
+        let mut first = Session::new(Options::default());
+        let second = Session::new(Options::default());
+        let source = "type Token = | Token(Int)\n";
+        let a = first.compile(source);
+        let again = first.compile(&format!("{source}let other = 1\n"));
+        let b = second.compile(source);
+        let nominal = |checked: &aevia_types::CheckedModule| match checked.exports.get("Token").unwrap() {
+            aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. } => aevia_types::adt::key_of(*adt),
+            _ => panic!("type"),
+        };
+        assert_eq!(nominal(&a.checked), nominal(&again.checked));
+        assert_ne!(nominal(&a.checked), nominal(&b.checked));
+        first.reset();
+        assert_ne!(nominal(&a.checked), nominal(&first.compile(source).checked));
+    }
+
+    #[test]
+    fn repl_late_declarations_install_literal_dimension_and_constructor_evidence() {
+        let mut session = Session::new(Options::default());
+        declare(&mut session, "let original = symbol(\"session\")");
+        declare(&mut session, "type Box = | Wrap(Int)");
+        declare(&mut session, "fn get(): Box = Wrap(7)");
+        declare(&mut session, "let floating: Float = 1");
+        declare(&mut session, "let exact: Real = 1.25");
+        let interp = session.interp.as_ref().unwrap();
+        assert!(matches!(interp.globals.get("floating"), Some(aevia_core::value::Value::Num(aevia_core::value::NumVal { kind: aevia_core::value::NumKind::Float(_), .. }))));
+        assert!(matches!(interp.globals.get("exact"), Some(aevia_core::value::Value::Num(aevia_core::value::NumVal { kind: aevia_core::value::NumKind::Exact(_), .. }))));
+        assert_eq!(evaluate(&mut session, "get()"), "Wrap(7)");
+        declare(&mut session, "fn reject_time(): Bool = match check<L>(dyn(2.0 s)) with\n    | Ok(_) -> false\n    | Err(_) -> true");
+        assert_eq!(evaluate(&mut session, "reject_time()"), "true");
+        assert_eq!(evaluate(&mut session, "repr(original)"), "\"session\"");
+    }
+
+    #[test]
+    fn repl_appended_instances_keep_their_own_implementation_cursor() {
+        let mut session = Session::new(Options::default());
+        declare(&mut session, "class Pretty a where\n    pretty(x: a): String");
+        declare(&mut session, "instance Pretty for Int where\n    pretty(x) = \"integer\"");
+        declare(&mut session, "instance Pretty for Bool where\n    pretty(x) = \"boolean\"");
+        assert_eq!(evaluate(&mut session, "pretty(1)"), "\"integer\"");
+        assert_eq!(evaluate(&mut session, "pretty(true)"), "\"boolean\"");
+    }
+
+    #[test]
+    fn repl_private_and_public_instances_are_bound_by_source_site_after_append() {
+        let mut session = Session::new(Options::default());
+        declare(&mut session, "private class Hidden a where\n    hidden(x: a): String");
+        declare(&mut session, "class Visible a where\n    visible(x: a): String");
+        declare(&mut session, "instance Hidden for Int where\n    hidden(x) = \"private\"");
+        declare(&mut session, "instance Visible for Bool where\n    visible(x) = \"public\"");
+        declare(&mut session, "let first_class = hidden");
+        assert_eq!(evaluate(&mut session, "hidden(1)"), "\"private\"");
+        assert_eq!(evaluate(&mut session, "visible(true)"), "\"public\"");
+        assert_eq!(evaluate(&mut session, "first_class(1)"), "\"private\"");
+    }
+
+    #[test]
+    fn repl_core_inspection_uses_the_same_literal_and_method_identity_evidence_as_execution() {
+        let mut session = Session::new(Options::default());
+        declare(&mut session, "private class Hidden a where\n    hidden(x: a): String");
+        declare(&mut session, "instance Hidden for Int where\n    hidden(x) = \"private\"");
+        let method = repl_core(&session, "hidden").expect("method IR");
+        assert!(method.contains("ClassMethodRef"), "{method}");
+        assert!(method.contains("Hidden"), "{method}");
+        let scalar = repl_core(&session, "(1 : Float)").expect("typed literal IR");
+        assert!(scalar.contains("Float("), "{scalar}");
+    }
+
 }

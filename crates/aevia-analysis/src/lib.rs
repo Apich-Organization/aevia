@@ -24,11 +24,11 @@
 //! loads a file **and its import graph** through `aevia_core::driver`, so an
 //! imported qualified name (`Math.sqrt`), an `open`ed name, or a field of an
 //! imported record resolves instead of being reported as unbound. An unsaved
-//! edit is loaded as an entry **overlay**: the buffer's text is the entry
-//! module, the imports still come from disk. [`Analysis::from_program`] answers
-//! from a program a caller already has, and [`AnalysisCache`] is the small
-//! content-hash/mtime-keyed cache that makes repeated editor requests cheap
-//! without ever serving a stale dependency.
+//! edit can be loaded with an entry overlay, or [`SourceOverlays`] can supply
+//! every unsaved physical source in one snapshot. [`Analysis::from_program`]
+//! answers from a program a caller already has. [`AnalysisCache`] compares the
+//! exact source reads and import candidates observed by the loader, without
+//! walking unrelated package files or relying on timestamps.
 //!
 //! [`Analysis::workspace_symbols`] returns declarations from every module of the
 //! loaded program, each with its own file and range — the analysis half of a
@@ -85,6 +85,10 @@ mod tokens;
 pub mod types;
 mod walk;
 
+pub use aevia_core::source::SourceOverlays;
+pub use aevia_core::source::canonical_path as canonical_source_path;
+pub use aevia_core::source::file_uri_path as physical_source_path_from_uri;
+pub use aevia_core::source::has_uri_scheme as is_source_uri;
 pub use analysis::Analysis;
 pub use cache::AnalysisCache;
 pub use diagnostic::Diagnostic;

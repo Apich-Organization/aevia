@@ -29,12 +29,7 @@ fn tensor(
     shape: Vec<usize>,
     values: Vec<f64>,
 ) -> Value {
-    Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData {
-        shape,
-        storage: Storage::Dense(std::rc::Rc::new(values)),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }))
+    Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(shape, Storage::Dense(std::rc::Rc::new(values)), aevia_dim::Dim::one(), None)))
 }
 
 fn exact(values: Vec<i64>) -> Value {

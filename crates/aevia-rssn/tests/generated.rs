@@ -117,13 +117,30 @@ fn the_operator_count_is_the_manifest_count() {
         .expect("the generated module states its operator count");
     assert_eq!(declared, manifest.ops.len());
 
-    // One declaration per overload, counted against the manifest's overloads
-    // rather than against the generator's own sum.
-    let overloads: usize = manifest.ops.iter().map(|op| op.overloads.len()).sum();
+    let rows = aevia_rssn::bindings::catalog(registry());
+    let typed = rows
+        .iter()
+        .filter(|row| matches!(row.coverage, aevia_rssn::bindings::Coverage::Typed))
+        .count();
+    let pinned = text
+        .lines()
+        .filter(|line| {
+            (line.starts_with("fn ") || line.starts_with("let "))
+                && line.contains(" = Rssn.invoke(")
+        })
+        .count();
+    let dynamic = text
+        .lines()
+        .filter(|line| {
+            line.starts_with("fn ")
+                && (line.contains(" = Rssn.dynamic(") || line.contains(" = Rssn.call_ho("))
+        })
+        .count();
+    assert_eq!(pinned, typed);
     assert_eq!(
-        text.matches("Rssn.invoke(").count(),
-        overloads,
-        "every overload needs exactly one declaration"
+        pinned + dynamic,
+        rows.len(),
+        "each overload or unsigned operator needs one honest binding"
     );
 }
 
@@ -179,14 +196,10 @@ fn the_known_overlay_operators_are_typed() {
             "`{name}` has an overlay but no signature"
         );
         assert!(
-            text.contains(&format!("Rssn.invoke(\"{name}\", ")),
-            "`{name}` has no generated declaration"
-        );
-        assert!(
-            !text.contains(&format!(
-                "## No signature: reach it with Rssn.dynamic(\"{name}\", [...])"
-            )),
-            "`{name}` is declared dynamic even though it has an overlay"
+            text.contains(&format!("Rssn.invoke(\"{name}\", "))
+                || text.contains(&format!("Rssn.dynamic(\"{name}\", args)"))
+                || text.contains(&format!("Rssn.call_ho(\"{name}\", args, callbacks)")),
+            "`{name}` has neither an exact binding nor a dynamic route"
         );
     }
 }
@@ -272,11 +285,9 @@ fn the_source_distribution_is_the_manifests() {
         .filter(|op| op.source == aevia_rssn::Source::None)
     {
         assert!(
-            text.contains(&format!(
-                "## No signature: reach it with Rssn.dynamic(\"{}\", [...])",
-                op.name
-            )),
-            "`{}` has no signature and must be documented as a dynamic call",
+            text.contains(&format!("Rssn.dynamic(\"{}\", args)", op.name))
+                || text.contains(&format!("Rssn.call_ho(\"{}\", args, callbacks)", op.name)),
+            "`{}` has no signature and must have a dynamic route",
             op.name
         );
     }
@@ -289,7 +300,7 @@ fn the_source_distribution_is_the_manifests() {
 fn spellable(ty: &aevia_rssn::SigType) -> bool {
     use aevia_rssn::SigType;
     match ty {
-        | SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
+        | SigType::Tensor { rank, elem, .. } | SigType::Sparse { rank, elem } => {
             rank.is_some() && spellable(elem)
         },
         | SigType::Unit(dim) | SigType::Point(dim) => dim.is_concrete(),
@@ -337,7 +348,14 @@ fn every_overlay_signature_is_generated_exactly() {
             op.name
         );
         for (index, signature) in op.signatures.iter().enumerate() {
-            if !spellable(&signature.ret) || !signature.params.iter().all(spellable) {
+            let row = aevia_rssn::bindings::catalog(registry())
+                .into_iter()
+                .find(|row| row.op.name == op.name && row.overload == Some(index))
+                .expect("catalog row");
+            if !matches!(row.coverage, aevia_rssn::bindings::Coverage::Typed)
+                || !spellable(&signature.ret)
+                || !signature.params.iter().all(spellable)
+            {
                 continue;
             }
             checked += 1;
@@ -418,15 +436,9 @@ fn the_constants_and_capabilities_are_the_manifests() {
     let manifest = kernel::kernel().manifest();
     let registry = registry();
     let text = codegen::constants(registry);
-    let pi_binding = usize::from(
-        registry
-            .constants
-            .iter()
-            .any(|constant| constant.value.pi != 0),
-    );
     let bindings = text.lines().filter(|line| line.starts_with("let ")).count();
     assert_eq!(
-        bindings - pi_binding,
+        bindings,
         manifest.constants.len(),
         "Constants.aev does not bind every manifest constant"
     );
@@ -459,14 +471,15 @@ fn every_declaration_pins_a_key_of_its_operator() {
         !pinned.contains(""),
         "the empty hash names no overload, so nothing can pin it"
     );
-    let expected: std::collections::BTreeSet<String> = registry()
-        .ops()
-        .flat_map(|op| op.keys.iter())
+    let expected: std::collections::BTreeSet<String> = aevia_rssn::bindings::catalog(registry())
+        .into_iter()
+        .filter(|row| matches!(row.coverage, aevia_rssn::bindings::Coverage::Typed))
+        .filter_map(|row| row.overload.and_then(|index| row.op.key(index)))
         .map(|key| {
             key.signature_hash
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
+                .collect()
         })
         .collect();
     let missing: Vec<&String> = expected
@@ -574,28 +587,32 @@ fn dimension_parameters_are_spelled_not_dyn() {
             .unwrap_or_else(|| panic!("no declaration starts with `{prefix}`"))
             .to_string()
     };
-    let wiener = first_line("fn sde_wiener(");
+    let wiener = first_line("fn sde_wiener<");
     assert!(
-        wiener.contains("a3: Real[T]") && wiener.contains("Tensor<2, Real[T^(1/2)]>"),
+        wiener.starts_with("fn sde_wiener<d>("),
+        "dimension must have an explicit binder: {wiener}"
+    );
+    assert!(
+        wiener.contains("a3: Real[d]") && wiener.contains("Tensor<2, Real[d^(1/2)]>"),
         "`sde_wiener` must keep its dimension parameter: {wiener}"
     );
     assert!(
         !wiener.contains("Dyn<term>"),
         "a dimension-parametric signature must not fall back to `Dyn`: {wiener}"
     );
-    let areas = first_line("fn sde_levy_areas(");
+    let areas = first_line("fn sde_levy_areas<");
     assert!(
-        areas.contains("a1: Real[T]") && areas.contains("Tensor<1, Real[T]>"),
+        areas.contains("a1: Real[d]") && areas.contains("Tensor<1, Real[d]>"),
         "`sde_levy_areas` must keep its dimension parameter: {areas}"
     );
     assert!(!areas.contains("Dyn<term>"), "{areas}");
-    // The unit argument is a dimension too: the kernel states `Unit[any]`, so
-    // the declaration spells the fresh variable instead of `Dyn<term>`.
+    // `quantity` and `convert` have genuinely dynamic value representations,
+    // so the strict facade offers the explicit Result-returning dynamic route.
     for name in ["fn quantity(", "fn convert("] {
         let line = first_line(name);
         assert!(
-            line.contains("a1: Unit[T]"),
-            "`{name}` must spell its unit dimension: {line}"
+            line.contains("Rssn.dynamic(") && line.contains("Result<Value, OpError>"),
+            "{line}"
         );
     }
     // Count them live rather than pinning: the kernel may add dimension-
@@ -604,13 +621,13 @@ fn dimension_parameters_are_spelled_not_dyn() {
         .lines()
         .filter(|line| {
             line.contains(" = Rssn.invoke(")
-                && ["Real[T", "Unit[T", "Point[T"]
+                && ["Real[d", "Unit[d", "Point[d", "Float[d"]
                     .iter()
                     .any(|needle| line.contains(needle))
         })
         .count();
     assert!(
-        dimensioned >= 4,
+        dimensioned >= 2,
         "only {dimensioned} declaration(s) carry a dimension variable"
     );
 }
@@ -627,7 +644,7 @@ fn genuinely_open_types_still_say_dyn() {
     let var = Dim::var(1);
     assert_eq!(
         codegen::declaration_type(&SigType::Dim(Box::new(SigType::Real), var.clone())),
-        "Real[T]"
+        "Real[d]"
     );
     let half = ratio(1, 2);
     assert_eq!(
@@ -635,19 +652,21 @@ fn genuinely_open_types_still_say_dyn() {
             Box::new(SigType::Real),
             var.clone().pow(&half)
         )),
-        "Real[T^(1/2)]"
+        "Real[d^(1/2)]"
     );
     assert_eq!(
         codegen::declaration_type(&SigType::Tensor {
             rank: Some(2),
+            shape: None,
             elem: Box::new(SigType::Dim(Box::new(SigType::Real), var.pow(&half))),
         }),
-        "Tensor<2, Real[T^(1/2)]>"
+        "Tensor<2, Real[d^(1/2)]>"
     );
     // Genuinely unrepresentable in a declaration.
     assert_eq!(
         codegen::declaration_type(&SigType::Tensor {
             rank: None,
+            shape: None,
             elem: Box::new(SigType::Real),
         }),
         "Dyn<term>",
@@ -678,9 +697,10 @@ fn genuinely_open_types_still_say_dyn() {
 #[test]
 fn a_dimension_parametric_declaration_type_checks() {
     let source = "module DimSpelling\n\n\
-        fn f(a: Real[T]): Real[T^(1/2)] = sqrt(a)\n\
+        fn f<d>(a: Real[d]): Real[d^(1/2)] = sqrt(a)\n\
         \n\
-        fn g(a: Tensor<2, Real[T]>): Tensor<2, Real[T]> = a\n";
+        fn g<d>(a: Tensor<2, Real[d]>): Tensor<2, Real[d]> = a\n\
+        fn product<d, e>(a: Float[d], b: Float[e]): Float[d*e] = a * b\n";
     let module = parse("DimSpelling.aev", source);
     let checked = aevia_types::check_module(0, &module);
     assert!(

@@ -29,25 +29,51 @@ use std::fmt;
 
 /// A module path, `[]` for the prelude/builtin scope, `["A", "B"]` for `A.B`.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
-pub struct ModulePath(pub Vec<String>);
+pub struct ModulePath(pub Vec<String>, Option<ModuleOrigin>);
+
+/// The source identity of a module in a path package. Lookup aliases and
+/// declared names are deliberately absent: neither may merge nominal types.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ModuleOrigin {
+    /// Canonical package directory, including its declared name and version.
+    pub package: String,
+    /// Canonical source file relative to the package directory.
+    pub source: String,
+}
 
 impl ModulePath {
     /// The prelude/builtin module.
     #[must_use]
     pub fn prelude() -> Self {
-        Self(Vec::new())
+        Self(Vec::new(), None)
     }
 
     /// A module from its dotted segments.
     #[must_use]
     pub fn new(segments: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self(segments.into_iter().map(Into::into).collect())
+        Self(segments.into_iter().map(Into::into).collect(), None)
+    }
+
+    /// A visible module path with an independent nominal source identity.
+    #[must_use]
+    pub fn with_origin(
+        mut self,
+        origin: ModuleOrigin,
+    ) -> Self {
+        self.1 = Some(origin);
+        self
+    }
+
+    /// The package source identity, when supplied by a package-aware driver.
+    #[must_use]
+    pub fn origin(&self) -> Option<&ModuleOrigin> {
+        self.1.as_ref()
     }
 
     /// Whether this is the prelude scope.
     #[must_use]
     pub fn is_prelude(&self) -> bool {
-        self.0.is_empty()
+        self.0.is_empty() && self.1.is_none()
     }
 
     /// The dotted spelling, `"<prelude>"` for the prelude.
@@ -73,6 +99,8 @@ impl fmt::Display for ModulePath {
 /// `(defining module, type name)` — the nominal identity of a type.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AdtKey {
+    /// The complete declaration schema, when this is a finalized source type.
+    pub schema: Option<crate::DeclarationSchemaKey>,
     /// The module that declares the type.
     pub module: ModulePath,
     /// The declared name.
@@ -87,6 +115,7 @@ impl AdtKey {
         name: impl Into<String>,
     ) -> Self {
         Self {
+            schema: None,
             module,
             name: name.into(),
         }
@@ -388,8 +417,11 @@ pub fn head_key(ty: &Type) -> HeadKey {
             }
         },
         | Type::Record(row) => {
-            let mut fields: Vec<_> = row.fields().into_iter()
-                .map(|(label, ty)| (label, head_key(&ty))).collect();
+            let mut fields: Vec<_> = row
+                .fields()
+                .into_iter()
+                .map(|(label, ty)| (label, head_key(&ty)))
+                .collect();
             fields.sort_by(|a, b| a.0.cmp(&b.0));
             if row.tail_var().is_some() {
                 fields.push(("...".to_string(), HeadKey::Wildcard));
@@ -406,7 +438,11 @@ pub fn head_key(ty: &Type) -> HeadKey {
                 | None => HeadKey::Wildcard,
             }
         },
-        | Type::Fn(..) => HeadKey::Fn,
+        | Type::Fn(..)
+        | Type::TensorIntrinsic(_)
+        | Type::TypeRepIntrinsic(_)
+        | Type::FromValueIntrinsic(_)
+        | Type::ToCallbackIntrinsic => HeadKey::Fn,
         | Type::Var(_) | Type::Param(_) | Type::Error => HeadKey::Wildcard,
     }
 }
@@ -473,7 +509,9 @@ impl InstanceKey {
     /// `(module, class, head)` and stable within a process.
     #[must_use]
     pub fn mangle(&self) -> String {
-        format!("{}::{}", self.module.dotted(), self)
+        // Display deliberately omits nominal source origins. Runtime globals
+        // must include them, including origins nested in the head/class key.
+        format!("instance::{self:?}")
     }
 }
 
@@ -591,6 +629,10 @@ pub fn witness_of(ty: &Type) -> Option<Witness> {
         // Functions, `Dyn`, `Point`, `Unit` values, `IO` and open variables have
         // no witness the dispatcher can read.
         | Type::Fn(..)
+        | Type::TensorIntrinsic(_)
+        | Type::TypeRepIntrinsic(_)
+        | Type::FromValueIntrinsic(_)
+        | Type::ToCallbackIntrinsic
         | Type::Dyn(_)
         | Type::Point(_)
         | Type::UnitOf(_)

@@ -283,6 +283,7 @@ sym_ne
 take
 tan
 tanh
+to_callback
 to_dense
 to_device
 to_dynamic

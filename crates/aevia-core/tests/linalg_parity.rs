@@ -187,12 +187,7 @@ fn diagonal(
             }
         }
     }
-    Value::Tensor(std::rc::Rc::new(TensorData {
-        shape: vec![size, size],
-        storage: Storage::Dense(std::rc::Rc::new(data)),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }))
+    Value::Tensor(std::rc::Rc::new(TensorData::new(vec![size, size], Storage::Dense(std::rc::Rc::new(data)), aevia_dim::Dim::one(), None)))
 }
 
 /// `det`, `inv` and `linsolve` on the `f64` branch.
@@ -207,12 +202,7 @@ fn the_float_factorisations_agree_on_a_large_matrix() {
     let size = 65;
     // 2^64 on the diagonal, halved once: the determinant is exactly 2^63.
     let a = diagonal(size, &[(size - 1, 0.5)]);
-    let b = Value::Tensor(std::rc::Rc::new(TensorData {
-        shape: vec![size],
-        storage: Storage::Dense(std::rc::Rc::new(vec![1.0; size])),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+    let b = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![size], Storage::Dense(std::rc::Rc::new(vec![1.0; size])), aevia_dim::Dim::one(), None)));
 
     let determinant = call("det", vec![a.clone()]);
     let Value::Num(determinant) = determinant else {
@@ -236,12 +226,7 @@ fn the_float_factorisations_agree_on_a_large_matrix() {
 #[test]
 fn a_large_singular_matrix_still_reports_singular() {
     let a = diagonal(65, &[(0, 0.0)]);
-    let b = Value::Tensor(std::rc::Rc::new(TensorData {
-        shape: vec![65],
-        storage: Storage::Dense(std::rc::Rc::new(vec![1.0; 65])),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+    let b = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![65], Storage::Dense(std::rc::Rc::new(vec![1.0; 65])), aevia_dim::Dim::one(), None)));
     for (name, args) in [("inv", vec![a.clone()]), ("linsolve", vec![a, b])] {
         let Value::Variant(result) = call(name, args) else {
             panic!("{name}: expected a Result");
@@ -263,8 +248,9 @@ fn an_exact_operand_still_produces_an_exact_result() {
                   let d = det([[1, 2], [3, 4]])\n\
                   let i = inv([[1, 2], [3, 4]])\n";
     let product = tensor(source, "p");
-    // The boxed `@` accumulates rationals, so these are `Exact`, not `Int`.
-    assert_eq!(phases(&product), vec!["Exact"; 4]);
+    // Integer matrix multiplication stays exact and retains the Int element
+    // representation promised by its checked type.
+    assert_eq!(phases(&product), vec!["Int"; 4]);
     assert_eq!(
         (0..4)
             .map(|index| repr(&product.get_flat(index).expect("element")))

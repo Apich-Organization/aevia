@@ -67,6 +67,7 @@ enum Flow {
         closure: Rc<Closure>,
         args: Vec<Value>,
         span: Span,
+        instance: Option<Rc<crate::generics::FunctionProof>>,
     },
 }
 
@@ -84,7 +85,7 @@ pub fn module_closure(
         slots: RefCell::new(Vec::new()),
         scope: Some(scope.clone()),
     });
-    build_closure(function, &[], &env)
+    build_closure(function, &[], &env, scope.types.as_ref())
 }
 
 /// Evaluates a top-level `let`'s value.
@@ -102,13 +103,15 @@ pub fn eval_top(
     nslots: u32,
     scope: &Rc<Scope>,
 ) -> Result<Value, EvalError> {
+    let previous = interp.enter_scope(scope)?;
     let env = Rc::new(IrEnv {
         slots: RefCell::new(Vec::new()),
         scope: Some(scope.clone()),
     });
     let mut frame = vec![Value::Unit; usize::try_from(nslots).unwrap_or(0)];
-    let flow = eval_block(interp, block, &mut frame, &env)?;
-    force(interp, flow)
+    let result = eval_block(interp, block, &mut frame, &env).and_then(|flow| force(interp, flow));
+    interp.restore_context(previous);
+    result
 }
 
 /// Runs an IR closure to completion, trampolining its tail calls.
@@ -122,6 +125,7 @@ pub(crate) fn run_closure(
     closure: &Rc<Closure>,
     args: Vec<Value>,
     span: Span,
+    instance: Option<Rc<crate::generics::FunctionProof>>,
 ) -> Result<Value, EvalError> {
     let (ClosureBody::Ir(first), ClosureEnv::Ir(first_env)) = (&closure.body, &closure.env) else {
         return Err(EvalError::new("E0809", "not an IR closure").at(span));
@@ -131,6 +135,8 @@ pub(crate) fn run_closure(
     #[cfg(feature = "jit")]
     let mut current_closure = closure.clone();
     let mut args = args;
+    let mut current_instance = instance;
+    let mut bindings = interp.bindings.clone();
     if function.params.len() != args.len() {
         return Err(EvalError::new(
             "E0315",
@@ -153,25 +159,123 @@ pub(crate) fn run_closure(
     // a million allocations.
     let mut frame: Vec<Value> = Vec::new();
     let outcome = 'run: loop {
+        if let Some(scope) = &env.scope {
+            if let Err(error) = interp.enter_scope(scope) {
+                break 'run Err(error);
+            }
+        }
+        interp.bindings = bindings.clone();
         #[cfg(feature = "jit")]
         let compiled_flow = {
             let remaining = interp.max_tail_calls.saturating_sub(tail_calls);
-            let outcome = crate::jit::run(&function, &args, remaining, || {
-                // Native code may loop only while this name still points to the
-                // same closure. Pure compiled steps cannot mutate that binding.
-                matches!(
-                    eval_atom(interp, &Atom::Global(function.name.to_string()), &mut frame, &env, function.span),
-                    Ok(Value::Closure(target)) if Rc::ptr_eq(&target, &current_closure)
-                )
+            // Host calls can pass values that differ from a source signature.
+            // Native specialization is permitted only by an authenticated,
+            // fully concrete activation whose parameter/result kinds agree.
+            let expected = current_instance
+                .as_ref()
+                .filter(|proof| proof.verified)
+                .and_then(|proof| {
+                    let aevia_types::Type::Fn(parameters, result) = &proof.signature else {
+                        return None;
+                    };
+                    if parameters.len() != args.len()
+                        || aevia_types::class::has_variables(&proof.signature)
+                    {
+                        return None;
+                    }
+                    let kind = |ty: &aevia_types::Type| {
+                        match ty {
+                            | aevia_types::Type::Bool => Some(crate::jit::Kind::Bool),
+                            | aevia_types::Type::Scalar(aevia_types::Rep::Float, dim)
+                                if dim.is_one() =>
+                            {
+                                Some(crate::jit::Kind::Float)
+                            },
+                            | _ => None,
+                        }
+                    };
+                    for (parameter, value) in parameters.iter().zip(&args) {
+                        match (kind(parameter), value) {
+                            | (Some(crate::jit::Kind::Bool), Value::Bool(_)) => {},
+                            | (
+                                Some(crate::jit::Kind::Float),
+                                Value::Num(crate::value::NumVal {
+                                    kind: crate::value::NumKind::Float(_),
+                                    dim,
+                                    display: None,
+                                }),
+                            ) if dim.is_one() => {},
+                            | _ => return None,
+                        }
+                    }
+                    kind(result)
+                });
+            let literals = crate::jit::specialization(&function, |number, span| {
+                let number = match number {
+                    | aevia_syntax::ast::NumberLit::Int(value) => {
+                        interp.integer_literal(value, span)
+                    },
+                    | aevia_syntax::ast::NumberLit::Decimal(value) => {
+                        interp.float_literal(value, span)
+                    },
+                }
+                .ok()?;
+                match number {
+                    | crate::value::NumVal {
+                        kind: crate::value::NumKind::Float(value),
+                        dim,
+                        display: None,
+                    } if dim == aevia_dim::Dim::one() => Some(value),
+                    | _ => None,
+                }
             });
+            let outcome = expected
+                .zip(literals.as_deref())
+                .and_then(|(expected, literals)| {
+                    crate::jit::run(
+                        &function,
+                        &args,
+                        remaining,
+                        literals,
+                        expected,
+                        |callee_span| {
+                            // Native code may loop only while this name still points to the
+                            // same canonical closure and the actual recursive source call
+                            // preserves every selected generic binding.
+                            let Ok(target) = eval_atom(
+                                interp,
+                                &Atom::Global(function.name.to_string()),
+                                &mut frame,
+                                &env,
+                                function.span,
+                            ) else {
+                                return false;
+                            };
+                            interp.self_specialization_matches(
+                                &current_closure,
+                                current_instance.as_ref(),
+                                &target,
+                                callee_span,
+                                &args,
+                            )
+                        },
+                    )
+                });
             match outcome {
                 | Some(crate::jit::Outcome::Value(value)) => Some(Flow::Value(value)),
                 | Some(crate::jit::Outcome::Tail { args, span, consumed }) => {
                     tail_calls += consumed;
                     if consumed > 0 {
-                        if let Some(current) = interp.frames.last_mut() { current.span = span; }
+                        if let Some(current) = interp.frames.last_mut() {
+                            current.span = span;
+                        }
                     }
-                    Some(Flow::Tail { closure: current_closure.clone(), args, span })
+                    Some(Flow::Tail {
+                        closure: current_closure.clone(),
+                        args,
+                        span,
+                        instance: current_instance.clone(),
+                    })
                 },
                 | None => None,
             }
@@ -190,7 +294,8 @@ pub(crate) fn run_closure(
                         break 'run Err(EvalError::new(
                             "E0308",
                             format!("pattern does not match value {}", value::show(argument)),
-                        ).at(function.span));
+                        )
+                        .at(function.span));
                     }
                 }
                 match eval_block(interp, &function.body, &mut frame, &env) {
@@ -199,9 +304,14 @@ pub(crate) fn run_closure(
                 }
             },
         };
-        let (next, next_args, next_span) = match flow {
+        let (next, mut next_args, next_span, next_instance) = match flow {
             | Flow::Value(value) => break 'run Ok(value),
-            | Flow::Tail { closure, args, span } => (closure, args, span),
+            | Flow::Tail {
+                closure,
+                args,
+                span,
+                instance,
+            } => (closure, args, span, instance),
         };
         if tail_calls >= interp.max_tail_calls {
             // Not a stack overflow: a tail call reuses the frame, so the stack
@@ -225,7 +335,12 @@ pub(crate) fn run_closure(
         tail_calls += 1;
         let (ClosureBody::Ir(next_function), ClosureEnv::Ir(next_env)) = (&next.body, &next.env)
         else {
-            break 'run interp.apply(Value::Closure(next), next_args, next_span);
+            break 'run interp.apply_instantiated(
+                Value::Closure(next),
+                next_args,
+                next_span,
+                next_instance,
+            );
         };
         if next_function.params.len() != next_args.len() {
             break 'run Err(EvalError::new(
@@ -240,8 +355,27 @@ pub(crate) fn run_closure(
         }
         function = next_function.clone();
         env = next_env.clone();
+        current_instance = match next_instance {
+            | Some(instance) => Some(instance),
+            | None => {
+                match interp.prepare_function_call(
+                    &Value::Closure(next.clone()),
+                    &mut next_args,
+                    None,
+                ) {
+                    | Ok(instance) => instance,
+                    | Err(error) => break 'run Err(error),
+                }
+            },
+        };
+        bindings = current_instance
+            .as_ref()
+            .map(|instance| instance.bindings())
+            .or_else(|| next.captured_bindings.clone());
         #[cfg(feature = "jit")]
-        { current_closure = next.clone(); }
+        {
+            current_closure = next.clone();
+        }
         args = next_args;
         if let Some(current) = interp.frames.last_mut() {
             // A self tail call keeps the name, and cloning it per iteration was
@@ -283,7 +417,12 @@ fn force(
 ) -> Result<Value, EvalError> {
     match flow {
         | Flow::Value(value) => Ok(value),
-        | Flow::Tail { closure, args, span } => interp.apply(Value::Closure(closure), args, span),
+        | Flow::Tail {
+            closure,
+            args,
+            span,
+            instance,
+        } => interp.apply_instantiated(Value::Closure(closure), args, span, instance),
     }
 }
 
@@ -298,6 +437,7 @@ fn eval_block(
             | Stmt::Let(item) => {
                 let value = eval_rhs(interp, &item.rhs, frame, env, item.span)?;
                 let value = interp.attach_checked_type(value, item.span);
+                let value = interp.bind_source_function(value, item.span);
                 set(frame, item.slot, value);
             },
             | Stmt::Bind { pattern, atom, span } => {
@@ -324,7 +464,8 @@ fn eval_tail(
     match tail {
         | Tail::Return { atom, span } => {
             let value = eval_atom(interp, atom, frame, env, *span)?;
-            Ok(Flow::Value(interp.attach_checked_type(value, *span)))
+            let value = interp.attach_checked_type(value, *span);
+            Ok(Flow::Value(interp.bind_source_function(value, *span)))
         },
         | Tail::Call(call) => eval_call(interp, call, frame, env, true),
         | Tail::If {
@@ -389,11 +530,37 @@ fn eval_call(
     tail: bool,
 ) -> Result<Flow, EvalError> {
     match &call.kind {
-        | CallKind::Typed { name, types } => {
-            let values = eval_call_args(interp, call, frame, env)?;
-            Ok(Flow::Value(crate::builtins::call_typed(
-                interp, name, types, values, call.span,
-            )?))
+        | CallKind::Typed { types } => {
+            let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
+            let mut values = eval_call_args(interp, call, frame, env)?;
+            let function = interp.type_apply_value(function, types, call.callee_span);
+            let instance =
+                interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
+            if tail {
+                if let Value::Closure(closure) = &function {
+                    if matches!(closure.body, ClosureBody::Ir(_)) {
+                        return Ok(Flow::Tail {
+                            closure: closure.clone(),
+                            args: values,
+                            span: call.span,
+                            instance,
+                        });
+                    }
+                }
+            }
+            if instance.is_some() {
+                Ok(Flow::Value(interp.apply_instantiated(
+                    function, values, call.span, instance,
+                )?))
+            } else {
+                Ok(Flow::Value(interp.apply_source_call(
+                    function,
+                    values,
+                    call.span,
+                    call.callee_span,
+                    &call.arg_spans,
+                )?))
+            }
         },
         | CallKind::Rssn { name } => {
             let values = eval_call_args(interp, call, frame, env)?;
@@ -411,6 +578,12 @@ fn eval_call(
                         interp.resolve_dictionary(&use_site, method, &values, call.span)?;
                     match dispatch {
                         | crate::eval::Dispatch::Instance(body) => {
+                            let mut values = values;
+                            let instance = interp.prepare_function_call(
+                                &body,
+                                &mut values,
+                                Some(call.callee_span),
+                            )?;
                             if tail {
                                 if let Value::Closure(closure) = &body {
                                     if matches!(closure.body, ClosureBody::Ir(_)) {
@@ -418,11 +591,14 @@ fn eval_call(
                                             closure: closure.clone(),
                                             args: values,
                                             span: call.span,
+                                            instance,
                                         });
                                     }
                                 }
                             }
-                            Ok(Flow::Value(interp.apply(body, values, call.span)?))
+                            Ok(Flow::Value(
+                                interp.apply_instantiated(body, values, call.span, instance)?,
+                            ))
                         },
                         | crate::eval::Dispatch::Builtin => {
                             Ok(Flow::Value(interp.call_named(method, values, call.span)?))
@@ -436,8 +612,10 @@ fn eval_call(
             }
         },
         | CallKind::Normal => {
-            let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
-            let values = eval_call_args(interp, call, frame, env)?;
+            let function = eval_atom(interp, &call.callee, frame, env, call.callee_span)?;
+            let mut values = eval_call_args(interp, call, frame, env)?;
+            let instance =
+                interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
             if tail {
                 if let Value::Closure(closure) = &function {
                     if matches!(closure.body, ClosureBody::Ir(_)) {
@@ -445,11 +623,24 @@ fn eval_call(
                             closure: closure.clone(),
                             args: values,
                             span: call.span,
+                            instance,
                         });
                     }
                 }
             }
-            Ok(Flow::Value(interp.apply(function, values, call.span)?))
+            if instance.is_some() {
+                Ok(Flow::Value(interp.apply_instantiated(
+                    function, values, call.span, instance,
+                )?))
+            } else {
+                Ok(Flow::Value(interp.apply_source_call(
+                    function,
+                    values,
+                    call.span,
+                    call.callee_span,
+                    &call.arg_spans,
+                )?))
+            }
         },
     }
 }
@@ -555,6 +746,7 @@ fn build_closure(
     function: &Rc<Function>,
     frame: &[Value],
     env: &Rc<IrEnv>,
+    bindings: Option<&Rc<crate::generics::CallBindings>>,
 ) -> Value {
     let mut slots = Vec::with_capacity(function.captures.len());
     for capture in &function.captures {
@@ -570,6 +762,7 @@ fn build_closure(
         });
     }
     Value::Closure(Rc::new(Closure {
+        canonical_origin: std::rc::Weak::new(),
         params: Vec::new(),
         body: ClosureBody::Ir(function.clone()),
         env: ClosureEnv::Ir(Rc::new(IrEnv {
@@ -577,6 +770,12 @@ fn build_closure(
             scope: env.scope.clone(),
         })),
         name: Some(function.name.clone()),
+        proof: env.scope.as_ref().and_then(|scope| {
+            scope.context.as_ref().and_then(|context| {
+                crate::generics::FunctionProof::at(context, function.span, bindings)
+            })
+        }),
+        captured_bindings: bindings.cloned(),
     }))
 }
 
@@ -589,6 +788,17 @@ fn eval_rhs(
 ) -> Result<Value, EvalError> {
     match rhs {
         | Rhs::Atom(atom) => eval_atom(interp, atom, frame, env, span),
+        | Rhs::ClassMethodRef { class, method } => {
+            Ok(Interp::class_method_value(
+                class.clone(),
+                method.clone(),
+                env.scope.clone().unwrap_or_else(|| interp.root()),
+            ))
+        },
+        | Rhs::TypeApply { callee, types } => {
+            let function = eval_atom(interp, callee, frame, env, span)?;
+            Ok(interp.type_apply_value(function, types, span))
+        },
         | Rhs::Error { code, message } => Err(EvalError::new(code, message.clone()).at(span)),
         | Rhs::Unary { op, operand } => {
             let value = eval_atom(interp, operand, frame, env, span)?;
@@ -619,12 +829,19 @@ fn eval_rhs(
                 | Flow::Tail { .. } => unreachable!("a value-position call is not trampolined"),
             }
         },
-        | Rhs::Closure(function) => Ok(build_closure(function, frame, env)),
+        | Rhs::Closure(function) => {
+            Ok(build_closure(
+                function,
+                frame,
+                env,
+                interp.bindings.as_ref(),
+            ))
+        },
         | Rhs::RecClosure {
             function,
             self_capture,
         } => {
-            let closure = build_closure(function, frame, env);
+            let closure = build_closure(function, frame, env, interp.bindings.as_ref());
             if let (Some(index), Value::Closure(inner)) = (self_capture, &closure) {
                 if let ClosureEnv::Ir(ir_env) = &inner.env {
                     let mut slots = ir_env.slots.borrow_mut();
@@ -666,6 +883,16 @@ fn eval_rhs(
                     .at(span))
                 },
             }
+        },
+        | Rhs::NumericLiteral(number) => {
+            Ok(Value::Num(match number {
+                | aevia_syntax::ast::NumberLit::Int(value) => {
+                    interp.integer_literal(value, span)?
+                },
+                | aevia_syntax::ast::NumberLit::Decimal(text) => {
+                    interp.float_literal(text, span)?
+                },
+            }))
         },
         | Rhs::RssnMember { name } => Ok(crate::rssn_module::member(name)),
         | Rhs::Record { base, fields } => {
@@ -879,7 +1106,7 @@ fn build_do(
     match &plan.terminal {
         | DoTerminal::End => {},
         | DoTerminal::Let { thunk } => {
-            match build_closure(thunk, frame, env) {
+            match build_closure(thunk, frame, env, interp.bindings.as_ref()) {
                 | Value::Closure(closure) => actions.push(Rc::new(IoAction::Defer(closure))),
                 | _ => unreachable!("a thunk is a closure"),
             }
@@ -897,7 +1124,7 @@ fn build_do(
                     );
                 },
             };
-            let func = build_closure(continuation, frame, env);
+            let func = build_closure(continuation, frame, env, interp.bindings.as_ref());
             actions.push(Rc::new(IoAction::Bind { action, func }));
         },
     }

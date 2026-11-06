@@ -1199,3 +1199,76 @@ fn bench_baselines_gate_regressions() {
         stderr(&output)
     );
 }
+
+#[test]
+fn add_validates_the_entire_proposed_graph_before_changing_package_files() {
+    let scratch = Scratch::new("add-transaction-graph");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    let demo = scratch.path().join("demo");
+    scratch.write("broken/aevia.toml", "[package]\nname = \"broken\"\nversion = \"0.1.0\"\n[dependencies]\nMissing = { path = \"../missing\" }\n");
+    let manifest = std::fs::read(demo.join("aevia.toml")).unwrap();
+    let lock = std::fs::read(demo.join("aevia.lock")).unwrap();
+    let output = aevia(&demo, &["add", "../broken"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(stderr(&output).contains("E0607"), "{}", stderr(&output));
+    assert_eq!(std::fs::read(demo.join("aevia.toml")).unwrap(), manifest);
+    assert_eq!(std::fs::read(demo.join("aevia.lock")).unwrap(), lock);
+    assert!(!stdout(&output).contains("added"));
+}
+
+#[test]
+fn add_restores_the_original_manifest_if_installing_the_lock_fails() {
+    let scratch = Scratch::new("add-transaction-io");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "dep"])), 0);
+    let demo = scratch.path().join("demo");
+    let manifest_path = demo.join("aevia.toml");
+    let manifest = std::fs::read(&manifest_path).unwrap();
+    std::fs::remove_file(demo.join("aevia.lock")).unwrap();
+    std::fs::create_dir(demo.join("aevia.lock")).unwrap();
+    scratch.write(
+        "demo/aevia.lock/keep",
+        "lock destination is an existing directory",
+    );
+    let output = aevia(&demo, &["add", "../dep"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot install"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(std::fs::read(manifest_path).unwrap(), manifest);
+    assert!(demo.join("aevia.lock/keep").is_file());
+    assert!(std::fs::read_dir(&demo).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".aevia-add-")
+    }));
+}
+
+#[test]
+fn locked_detects_dependency_manifest_changes_even_when_sources_are_unchanged() {
+    let scratch = Scratch::new("locked-manifest");
+    assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
+    assert_eq!(code(&aevia(scratch.path(), &["init", "dep"])), 0);
+    let demo = scratch.path().join("demo");
+    assert_eq!(code(&aevia(&demo, &["add", "../dep"])), 0);
+    let lock = std::fs::read(demo.join("aevia.lock")).unwrap();
+    let dependency_manifest = scratch.path().join("dep/aevia.toml");
+    let text = std::fs::read_to_string(&dependency_manifest).unwrap();
+    std::fs::write(
+        dependency_manifest,
+        text.replace("src/main.aev", "src/api.aev"),
+    )
+    .unwrap();
+    let output = aevia(&demo, &["--locked", "check"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("out of date"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(std::fs::read(demo.join("aevia.lock")).unwrap(), lock);
+}

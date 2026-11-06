@@ -1,0 +1,17 @@
+[package]
+name = "aevia-stdlib-gen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+jit = ["aevia-rssn/jit"]
+
+[dependencies]
+aevia-stdlib-model = { path = "../../crates/aevia-stdlib-model" }
+aevia-rssn.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

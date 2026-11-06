@@ -1,14 +1,8 @@
-## The `Units.Natural` module of §8.20.
+## The `Units/Natural` module of §8.20.
 ##
-## §5.3.4 describes `Units.Natural` as "a system of units in which `c = 1` and
-## `hbar = 1`", not as a set of constants with changed values. This build does
-## not ship that system: a natural-unit table would be a *second* unit table
-## beside the kernel manifest, which §5.4 rules out, and the kernel has no
-## natural-unit registry to project. The module exists so `import Units.Natural`
-## resolves (§8.20 requires the tree), and exports nothing.
-##
-## What works today: the physical constants are values, not units, so `c` and
-## `hbar` belong to `Units.Constants` (generated from `manifest.constants`) and
-## to `Rssn.Constants`; `GeV` is `eV` with the `G` prefix. A real natural-unit
-## system needs a kernel registry (reported as a remaining gap).
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Units.Natural
+
+## A natural-unit system requires a kernel registry and is not provided yet.
+## This module declares no bindings.

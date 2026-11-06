@@ -336,3 +336,213 @@ fn clearing_forgets_everything() {
     let _ = cache.program(&path);
     assert_eq!(cache.loads(), 2);
 }
+
+#[test]
+fn a_manifest_only_nominal_origin_change_invalidates_the_cached_program() {
+    let (package, _) = imported_package("manifest-origin");
+    let path = package.path("src/B.aev");
+    let mut cache = AnalysisCache::new();
+    let first = cache.program(&path);
+    let unchanged = cache.program(&path);
+    assert!(std::rc::Rc::ptr_eq(&first, &unchanged));
+    let manifest_path = package.path("aevia.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(manifest_path, manifest.replace("0.1.0", "0.2.0")).unwrap();
+    let revised = cache.program(&path);
+    assert_eq!(cache.loads(), 2);
+    assert!(!std::rc::Rc::ptr_eq(&first, &revised));
+    assert_ne!(
+        first.entry().unwrap().checked.module_path(),
+        revised.entry().unwrap().checked.module_path()
+    );
+}
+
+
+#[test]
+fn unsaved_imports_share_one_source_snapshot_and_close_restores_disk() {
+    let (package, source) = imported_package("all-overlays");
+    let entry = package.path("src/B.aev");
+    let imported = package.path("src/A.aev");
+    let mut overlays = aevia_analysis::SourceOverlays::new();
+    overlays.insert(&entry, source.clone());
+    overlays.insert(&imported, "module A\n\nfn value(): Float = 2.0\n");
+    let document = document(&source);
+    let mut cache = AnalysisCache::new();
+    let program = cache.program_with_overlays(&entry, &overlays);
+    assert!(
+        program.diagnostics.items.is_empty(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    let after = hover(
+        &Analysis::from_program(&document, program.clone()),
+        &source,
+        "value",
+    );
+    assert!(after.contains("Float"), "{after}");
+    assert!(std::rc::Rc::ptr_eq(
+        &program,
+        &cache.program_with_overlays(&entry, &overlays)
+    ));
+    overlays.remove(&imported);
+    let after = hover(
+        &Analysis::from_program(&document, cache.program_with_overlays(&entry, &overlays)),
+        &source,
+        "value",
+    );
+    assert!(after.contains("Int"), "{after}");
+    assert_eq!(cache.loads(), 2);
+}
+
+#[test]
+fn an_unsaved_import_can_be_created_without_a_disk_file() {
+    let package = Package::new("new-overlay-import");
+    let source = "module B\n\nimport A\n\nlet got = A.value()\n";
+    let entry = package.write("src/B.aev", source);
+    let mut overlays = aevia_analysis::SourceOverlays::new();
+    overlays.insert(&entry, source);
+    let mut cache = AnalysisCache::new();
+    assert!(
+        cache
+            .program_with_overlays(&entry, &overlays)
+            .diagnostics
+            .has_errors()
+    );
+    overlays.insert(
+        &package.path("src/A.aev"),
+        "module A\n\nfn value(): Int = 7\n",
+    );
+    let program = cache.program_with_overlays(&entry, &overlays);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    assert_eq!(cache.loads(), 2);
+    assert!(!package.path("src/A.aev").exists());
+    overlays.remove(&package.path("src/A.aev"));
+    assert!(
+        cache
+            .program_with_overlays(&entry, &overlays)
+            .diagnostics
+            .has_errors()
+    );
+    assert_eq!(cache.loads(), 3);
+}
+
+#[test]
+fn unrelated_disk_and_open_module_edits_do_not_reload_the_entry() {
+    let (package, _) = imported_package("unrelated-in-root");
+    let path = package.path("src/B.aev");
+    let mut cache = AnalysisCache::new();
+    let first = cache.program(&path);
+    let unrelated = package.write("src/Unused.aev", "module Unused\nlet value = 1\n");
+    let mut overlays = aevia_analysis::SourceOverlays::new();
+    overlays.insert(&unrelated, "module Unused\nlet value = true\n");
+    let second = cache.program_with_overlays(&path, &overlays);
+    assert!(std::rc::Rc::ptr_eq(&first, &second));
+    assert_eq!(cache.loads(), 1);
+}
+
+#[test]
+fn imported_content_changes_even_when_length_and_mtime_are_restored() {
+    let (package, _) = imported_package("restored-stamp");
+    let path = package.path("src/B.aev");
+    let imported = package.path("src/A.aev");
+    let metadata = std::fs::metadata(&imported).unwrap();
+    let mut cache = AnalysisCache::new();
+    let before = cache.program(&path);
+    let changed = "module A\n\nfn value(): Int = 2\n";
+    std::fs::write(&imported, changed).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&imported)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+        .unwrap();
+    assert_eq!(std::fs::metadata(&imported).unwrap().len(), metadata.len());
+    assert_eq!(
+        std::fs::metadata(&imported).unwrap().modified().unwrap(),
+        metadata.modified().unwrap()
+    );
+    let after = cache.program(&path);
+    assert!(!std::rc::Rc::ptr_eq(&before, &after));
+    assert_eq!(cache.loads(), 2);
+    let module = after
+        .modules
+        .iter()
+        .find(|module| module.path == ["A"])
+        .unwrap();
+    assert_eq!(after.sources.file(module.file).unwrap().text, changed);
+}
+
+#[test]
+fn an_unsaved_higher_priority_candidate_changes_resolution() {
+    let package = Package::new("overlay-precedence");
+    std::fs::create_dir_all(package.path("dependency/src")).unwrap();
+    package.write(
+        "dependency/aevia.toml",
+        "[package]\nname = \"dependency\"\nversion = \"0.1.0\"\nentry = \"src/A.aev\"\n",
+    );
+    package.write("dependency/src/A.aev", "module A\n\nfn value(): Int = 1\n");
+    package.write("aevia.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nentry = \"src/B.aev\"\n[dependencies]\nA = { path = \"dependency\" }\n");
+    let source = "module B\n\nimport A\n\nlet got = A.value()\n";
+    let entry = package.write("src/B.aev", source);
+    let document = document(source);
+    let mut cache = AnalysisCache::new();
+    let first = cache.program(&entry);
+    assert!(
+        !first.diagnostics.has_errors(),
+        "{:?}",
+        first.diagnostics.items
+    );
+    let mut overlays = aevia_analysis::SourceOverlays::new();
+    overlays.insert(
+        &package.path("src/A.aev"),
+        "module A\n\nfn value(): Float = 1.0\n",
+    );
+    let second = cache.program_with_overlays(&entry, &overlays);
+    let text = hover(&Analysis::from_program(&document, second), source, "value");
+    assert!(text.contains("Float"), "{text}");
+    assert_eq!(cache.loads(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_source_overlay_follows_physical_symlink_identity() {
+    let (package, source) = imported_package("overlay-symlink");
+    let alias = package.path("src/Alias.aev");
+    std::os::unix::fs::symlink(package.path("src/A.aev"), &alias).unwrap();
+    let mut overlays = aevia_analysis::SourceOverlays::new();
+    overlays.insert(&alias, "module A\n\nfn value(): Float = 3.0\n");
+    assert_eq!(overlays.len(), 1);
+    let mut cache = AnalysisCache::new();
+    let program = cache.program_with_overlays(&package.path("src/B.aev"), &overlays);
+    let document = document(&source);
+    let text = hover(
+        &Analysis::from_program(&document, program),
+        &source,
+        "value",
+    );
+    assert!(text.contains("Float"), "{text}");
+}
+
+#[test]
+fn a_new_standalone_buffer_uses_adjacent_imports_without_scanning_a_tree() {
+    let dir = std::env::temp_dir().join(format!("aevia-standalone-overlay-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("A.aev"), "module A\nfn value(): Int = 7\n").unwrap();
+    let entry = dir.join("New.aev");
+    let mut cache = AnalysisCache::new();
+    let program = cache
+        .program_for_document(&entry, "import A\nlet got = A.value()\n")
+        .expect("bounded adjacent lookup");
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    assert!(!entry.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

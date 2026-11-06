@@ -344,3 +344,434 @@ fn a_dependency_with_a_custom_entry_is_found_by_its_name() {
     );
     assert_eq!(run(&entry), "custom\n");
 }
+
+fn manifest(
+    name: &str,
+    entry: &str,
+    dependencies: &str,
+) -> String {
+    format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nentry = \"{entry}\"\n\n[dependencies]\n{dependencies}"
+    )
+}
+
+#[test]
+fn library_local_imports_capture_the_librarys_own_module_in_both_evaluators() {
+    let scratch = Scratch::new("local-scopes");
+    scratch.write("lib/aevia.toml", &manifest("lib", "src/entry.aev", ""));
+    scratch.write("lib/src/Helper.aev", "module Helper\nfn value(): Int = 7\n");
+    scratch.write(
+        "lib/src/entry.aev",
+        "module Lib\nimport Helper\nfn value(): Int = Helper.value()\n",
+    );
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest("pkg", "src/main.aev", "Renamed = { path = \"../lib\" }\n"),
+    );
+    scratch.write(
+        "pkg/src/Helper.aev",
+        "module Helper\nfn value(): Int = 11\n",
+    );
+    let entry = scratch.write("pkg/src/main.aev", "import Helper\nimport Renamed\nfn main(): IO Unit = println(\"{Helper.value()} {Renamed.value()}\")\n");
+    let program = load(&entry);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
+        let mut interp = aevia_core::Interp::new(&program.entry().unwrap().checked)
+            .with_buffer()
+            .with_mode(mode);
+        assert!(!driver::run_modules(&mut interp, &program).has_errors());
+        interp.run_main().expect("runs");
+        assert_eq!(interp.captured(), "11 7\n", "{mode:?}");
+    }
+}
+
+#[test]
+fn dependency_aliases_share_one_module_but_are_all_locked() {
+    let scratch = Scratch::new("aliases");
+    scratch.write("lib/aevia.toml", &manifest("lib", "src/lib.aev", ""));
+    scratch.write("lib/src/lib.aev", "module Lib\nfn value(): Int = 4\n");
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest(
+            "pkg",
+            "src/main.aev",
+            "First = { path = \"../lib\" }\nSecond = { path = \"../lib/.\" }\n",
+        ),
+    );
+    let entry = scratch.write("pkg/src/main.aev", "import First\nimport Second\nfn main(): IO Unit = println(\"{First.value() + Second.value()}\")\n");
+    assert_eq!(run(&entry), "8\n");
+    let program = load(&entry);
+    assert_eq!(program.modules.len(), 2, "one physical library parsed once");
+    let package = Package::owning(&entry).unwrap().unwrap();
+    let lock = package.resolve().unwrap();
+    assert_eq!(lock.packages.len(), 3);
+    assert_eq!(lock.packages[1].import, "First");
+    assert_eq!(lock.packages[2].import, "Second");
+    assert_eq!(lock.packages[1].hash, lock.packages[2].hash);
+    assert_eq!(lock.packages[1].source, "path+../lib");
+    assert_eq!(lock.packages[1].source, lock.packages[2].source);
+}
+
+#[test]
+fn a_package_qualified_module_declaration_survives_a_dependency_rename() {
+    let scratch = Scratch::new("qualified-name");
+    scratch.write("lib/aevia.toml", &manifest("library", "src/lib.aev", ""));
+    scratch.write(
+        "lib/src/Numbers.aev",
+        "module Library.Numbers\nfn value(): Int = 42\n",
+    );
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest("pkg", "src/main.aev", "Renamed = { path = \"../lib\" }\n"),
+    );
+    let entry = scratch.write(
+        "pkg/src/main.aev",
+        "import Renamed.Numbers\nfn main(): IO Unit = println(\"{Renamed.Numbers.value()}\")\n",
+    );
+    assert_eq!(run(&entry), "42\n");
+}
+
+#[test]
+fn lock_resolution_rejects_the_same_alias_conflicts_as_module_resolution() {
+    let scratch = Scratch::new("lock-conflict");
+    for name in ["one", "two", "base1", "base2"] {
+        let dependencies = match name {
+            | "one" => "Shared = { path = \"../base1\" }\n",
+            | "two" => "Shared = { path = \"../base2\" }\n",
+            | _ => "",
+        };
+        scratch.write(
+            &format!("{name}/aevia.toml"),
+            &manifest(name, "src/main.aev", dependencies),
+        );
+    }
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest(
+            "pkg",
+            "src/main.aev",
+            "One = { path = \"../one\" }\nTwo = { path = \"../two\" }\n",
+        ),
+    );
+    let entry = scratch.write("pkg/src/main.aev", "let x = 1\n");
+    let package = Package::owning(&entry).unwrap().unwrap();
+    assert_eq!(package.roots().unwrap_err().code, "E0606");
+    assert_eq!(package.resolve().unwrap_err().code, "E0606");
+}
+
+#[test]
+fn lock_hash_covers_manifest_resolution_and_an_entry_outside_src() {
+    let scratch = Scratch::new("entry-hash");
+    let manifest_path = scratch.write("lib/aevia.toml", &manifest("lib", "api/lib.aev", ""));
+    let library = scratch.write("lib/api/lib.aev", "fn value(): Int = 1\n");
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest("pkg", "src/main.aev", "Lib = { path = \"../lib\" }\n"),
+    );
+    let entry = scratch.write("pkg/src/main.aev", "let x = 1\n");
+    let package = Package::owning(&entry).unwrap().unwrap();
+    let before = package.resolve().unwrap();
+    std::fs::write(library, "fn value(): Int = 2\n").unwrap();
+    let changed_source = package.resolve().unwrap();
+    assert_ne!(before.packages[1].hash, changed_source.packages[1].hash);
+    std::fs::write(manifest_path, manifest("lib", "api/other.aev", "")).unwrap();
+    let changed_entry = package.resolve().unwrap();
+    assert_ne!(
+        changed_source.packages[1].hash,
+        changed_entry.packages[1].hash
+    );
+}
+
+#[test]
+fn resolving_an_in_memory_manifest_uses_the_proposed_dependencies() {
+    let scratch = Scratch::new("proposed-manifest");
+    scratch.write("pkg/aevia.toml", &manifest("pkg", "src/main.aev", ""));
+    scratch.write("lib/aevia.toml", &manifest("lib", "src/main.aev", ""));
+    let entry = scratch.write("pkg/src/main.aev", "let x = 1\n");
+    let mut package = Package::owning(&entry).unwrap().unwrap();
+    package.manifest.dependencies.insert(
+        "Lib".into(),
+        aevia_core::manifest::Dependency::Path {
+            path: "../lib".into(),
+        },
+    );
+    assert_eq!(package.resolve().unwrap().packages.len(), 2);
+    assert!(package.roots().unwrap().packages.contains_key("Lib"));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_aliases_have_one_package_identity_and_source_cycles_are_diagnosed() {
+    use std::os::unix::fs::symlink;
+    let scratch = Scratch::new("symlinks");
+    scratch.write("lib/aevia.toml", &manifest("lib", "src/main.aev", ""));
+    scratch.write("lib/src/Numbers.aev", "fn value(): Int = 1\n");
+    symlink(scratch.path().join("lib"), scratch.path().join("linked")).unwrap();
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest(
+            "pkg",
+            "src/main.aev",
+            "First = { path = \"../lib\" }\nSecond = { path = \"../linked\" }\n",
+        ),
+    );
+    let entry = scratch.write("pkg/src/main.aev", "import First.Numbers\nimport Second.Numbers\nfn main(): IO Unit = println(\"{First.Numbers.value() + Second.Numbers.value()}\")\n");
+    assert_eq!(run(&entry), "2\n");
+    assert_eq!(load(&entry).modules.len(), 2);
+    let package = Package::owning(&entry).unwrap().unwrap();
+    let lock = package.resolve().unwrap();
+    assert_eq!(lock.packages[1].source, lock.packages[2].source);
+    symlink(
+        scratch.path().join("lib/src"),
+        scratch.path().join("lib/src/Loop"),
+    )
+    .unwrap();
+    let error = package.resolve().unwrap_err();
+    assert_eq!(error.code, "E0607");
+    assert!(error.message.contains("cycle"), "{}", error.message);
+}
+
+#[test]
+fn same_named_modules_in_distinct_packages_keep_nominal_types_and_instances_separate() {
+    let scratch = Scratch::new("nominal-packages");
+    for (directory, label) in [("one", "first"), ("two", "second")] {
+        // Identical manifest names and module declarations are intentional:
+        // package source identity, rather than either spelling, distinguishes them.
+        scratch.write(
+            &format!("{directory}/aevia.toml"),
+            &manifest("library", "src/Model.aev", ""),
+        );
+        scratch.write(&format!("{directory}/src/Model.aev"), &format!("module Model\ntype Token = | Token(Int)\nclass Pretty a where\n    pretty(x: a): String\ninstance Pretty for Token where\n    pretty(x) = \"{label}\"\nfn make(): Token = Token(1)\nfn label(): String = pretty(make())\n"));
+    }
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest(
+            "pkg",
+            "src/main.aev",
+            "A = { path = \"../one\" }\nB = { path = \"../two\" }\n",
+        ),
+    );
+    let entry = scratch.write(
+        "pkg/src/main.aev",
+        "import A\nimport B\nfn main(): IO Unit = println(\"{A.label()} {B.label()}\")\n",
+    );
+    let program = load(&entry);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    let keys: Vec<_> = program
+        .modules
+        .iter()
+        .filter_map(|module| match module.checked.exports.get("Token") {
+            | Some(
+                aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. },
+            ) => Some(aevia_types::adt::key_of(*adt)),
+            | _ => None,
+        })
+        .collect();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(keys[0], keys[1]);
+    assert_eq!(keys[0].module.dotted(), keys[1].module.dotted());
+    for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
+        let mut interp = aevia_core::Interp::new(&program.entry().unwrap().checked)
+            .with_buffer()
+            .with_mode(mode);
+        let diagnostics = driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        interp.run_main().unwrap();
+        assert_eq!(interp.captured(), "first second\n", "{mode:?}");
+    }
+}
+
+#[test]
+fn qualified_alias_types_follow_the_direct_import_binding() {
+    let scratch = Scratch::new("alias-type-binding");
+    scratch.write("lib/aevia.toml", &manifest("library", "src/Model.aev", ""));
+    scratch.write(
+        "lib/src/Model.aev",
+        "module Model\ntype Pair = { x: Int, y: Int }\nfn make(): Pair = { x = 1, y = 2 }\n",
+    );
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest("pkg", "src/main.aev", "Renamed = { path = \"../lib\" }\n"),
+    );
+    let entry = scratch.write("pkg/src/main.aev", "import Renamed as R\nlet value: R.Pair = R.make()\nfn main(): IO Unit = println(\"{value.x + value.y}\")\n");
+    assert_eq!(run(&entry), "3\n");
+}
+
+#[test]
+fn selecting_a_type_imports_its_public_constructor_values() {
+    let scratch = Scratch::new("selected-constructors");
+    scratch.write("lib/aevia.toml", &manifest("lib", "src/Model.aev", ""));
+    scratch.write(
+        "lib/src/Model.aev",
+        "module Model\ntype Choice = | First | Second\n",
+    );
+    scratch.write(
+        "pkg/aevia.toml",
+        &manifest("pkg", "src/main.aev", "Lib = { path = \"../lib\" }\n"),
+    );
+    let entry = scratch.write("pkg/src/main.aev", "import Lib { Choice }\nlet choice: Choice = First\nfn label(): String = match choice with\n    | First -> \"first\"\n    | Second -> \"second\"\nfn main(): IO Unit = println(label())\n");
+    assert_eq!(run(&entry), "first\n");
+}
+
+#[test]
+fn kernel_rule_set_namespaces_are_virtual_imports_with_physical_override() {
+    let scratch = Scratch::new("virtual-kernel");
+    let entry = scratch.write("main.aev", "import Rssn_numerical_vector as V\nfn main(): IO Unit = println(\"{V.num_dot([1.0, 2.0], [3.0, 4.0])}\")\n");
+    assert_eq!(run(&entry), "11\n");
+    let program = load(&entry);
+    assert!(program.modules.iter().any(|module| {
+        program
+            .sources
+            .file(module.file)
+            .is_some_and(|source| source.name.starts_with("rssn://"))
+    }));
+    scratch.write("Rssn_numerical_vector.aev", "module Rssn_numerical_vector\nfn num_dot(a: Tensor<1, Float>, b: Tensor<1, Float>): Float = 99.0\n");
+    assert_eq!(run(&entry), "99\n");
+}
+
+#[test]
+fn imported_modules_keep_numeric_and_dynamic_dimension_evidence_in_both_evaluators() {
+    let scratch = Scratch::new("module-evidence");
+    scratch.write("A.aev", "module A\nfn value(): Float = 1\nfn checked(): String = match check<L>(dyn(2.0 s)) with\n    | Ok(_) -> \"wrong\"\n    | Err(_) -> \"rejected\"\n");
+    // The literals deliberately have identical byte offsets in distinct files.
+    scratch.write("B.aev", "module B\nfn value(): Real  = 1\n");
+    let entry = scratch.write("main.aev", "import A\nimport B\nlet float_value = A.value()\nlet exact_value = B.value()\nlet checked = A.checked()\nfn main(): IO Unit = println(checked)\n");
+    let program = load(&entry);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
+        let mut interp = aevia_core::Interp::new(&program.entry().unwrap().checked)
+            .with_buffer()
+            .with_mode(mode);
+        let diagnostics = driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        assert!(matches!(
+            interp.eval_toplevel("float_value").unwrap(),
+            aevia_core::value::Value::Num(aevia_core::value::NumVal {
+                kind: aevia_core::value::NumKind::Float(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            interp.eval_toplevel("exact_value").unwrap(),
+            aevia_core::value::Value::Num(aevia_core::value::NumVal {
+                kind: aevia_core::value::NumKind::Exact(_),
+                ..
+            })
+        ));
+        interp.run_main().unwrap();
+        assert_eq!(interp.captured(), "rejected\n");
+        let dictionary_count = interp.dictionary_sites.len();
+        let rssn_count = interp.rssn_call_sites.len();
+        interp.prepare_module(&program.entry().unwrap().checked);
+        assert_eq!(
+            interp.dictionary_sites.len(),
+            dictionary_count,
+            "preparing twice is idempotent"
+        );
+        assert_eq!(interp.rssn_call_sites.len(), rssn_count);
+    }
+}
+
+#[test]
+fn same_named_private_units_resolve_in_the_defining_source_file() {
+    let scratch = Scratch::new("module-units");
+    scratch.write(
+        "A.aev",
+        "module A\nprivate unit hop : Length = 2 m\nfn value(): Float[L] = 1.0 hop\n",
+    );
+    scratch.write(
+        "B.aev",
+        "module B\nprivate unit hop : Length = 3 m\nfn value(): Float[L] = 1.0 hop\n",
+    );
+    let entry = scratch.write(
+        "main.aev",
+        "import A\nimport B\nlet a = A.value()\nlet b = B.value()\nfn main(): IO Unit = println(\"\")\n",
+    );
+    let program = load(&entry);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
+        let mut interp = aevia_core::Interp::new(&program.entry().unwrap().checked).with_mode(mode);
+        let diagnostics = driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        assert_eq!(interp.eval_toplevel("a").unwrap().as_f64(), Some(2.0));
+        assert_eq!(interp.eval_toplevel("b").unwrap().as_f64(), Some(3.0));
+    }
+}
+
+#[test]
+fn checked_value_lists_preserve_nested_tensor_argument_boundaries() {
+    let source = "let values = [to_value([1.0, 2.0]), to_value([3.0])]\n";
+    let compiled = aevia_core::compile("boxed-values.aev", source);
+    assert!(
+        !compiled.diagnostics.has_errors(),
+        "{:?}",
+        compiled.diagnostics.items
+    );
+    for mode in [aevia_core::Mode::Ast, aevia_core::Mode::Ir] {
+        let mut interp = aevia_core::Interp::new(&compiled.checked).with_mode(mode);
+        let diagnostics = interp.load(compiled.module.as_ref().unwrap());
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        let aevia_core::value::Value::Tensor(tensor) = interp.eval_toplevel("values").unwrap()
+        else {
+            panic!("list")
+        };
+        assert_eq!(tensor.shape, vec![2]);
+        assert!(matches!(
+            tensor.storage,
+            aevia_core::value::Storage::Boxed(_)
+        ));
+        for (index, expected) in [(0, vec![1.0_f64, 2.0]), (1, vec![3.0_f64])] {
+            let Some(aevia_core::value::Value::KernelValue(argument)) = tensor.get_flat(index) else {
+                panic!("opaque tensor argument {index}")
+            };
+            let aevia_rssn::Val::Tensor { shape, data } = &argument.payload else {
+                panic!("kernel tensor payload {index}")
+            };
+            assert_eq!(shape, &[expected.len()]);
+            assert_eq!(data.len(), expected.len());
+            for (actual, expected) in data.iter().zip(expected) {
+                let aevia_rssn::Val::Num(aevia_rssn::Num::Float(actual)) = actual else {
+                    panic!("Float tensor element")
+                };
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+            let aevia_rssn::witness::DimensionWitness::Tensor { dimension, element_repr, .. } = &argument.witness else {
+                panic!("tensor dimension witness")
+            };
+            assert_eq!(dimension, &Some(aevia_dim::Dim::one()));
+            assert_eq!(element_repr, &Some(aevia_rssn::SigType::Float));
+        }
+    }
+}

@@ -30,6 +30,358 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// A scoped host function using the neutral bridge value model.
+/// Implementations may carry only thread-safe handles; interpreter state stays
+/// in its owning thread and may not be borrowed across this boundary.
+pub trait BridgeCallback: Send + Sync {
+    /// A concrete, immutable signature captured at registration.
+    fn signature(&self) -> crate::Sig;
+    /// Invoke with explicit runtime dimension witnesses.
+    fn call(
+        &self,
+        args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError>;
+}
+
+struct CallbackAdapter {
+    callback: Arc<dyn BridgeCallback>,
+    signature: crate::Sig,
+    session: SessionId,
+}
+
+/// Public callback implementations supply their own schema. Validate it
+/// before conversion to RSSN TypeExpr: malformed or unsupported metadata must
+/// never be silently weakened into a rank-only or opaque signature.
+fn supported_callback_schema(ty: &crate::SigType) -> bool {
+    use crate::SigType as S;
+    match ty {
+        | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
+        | S::Dim(inner, dim) => {
+            dim.is_concrete() && matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex)
+        },
+        | S::Tensor {
+            rank: Some(rank),
+            shape,
+            elem,
+        } => {
+            u64::try_from(*rank).is_ok()
+                && shape.as_ref().is_none_or(|shape| {
+                    shape.len() == *rank
+                        && shape.iter().all(|extent| u64::try_from(*extent).is_ok())
+                })
+                && supported_callback_schema(elem)
+        },
+        | S::Record(fields) => {
+            fields.iter().enumerate().all(|(index, (name, ty))| {
+                !fields[..index].iter().any(|(other, _)| other == name)
+                    && supported_callback_schema(ty)
+            })
+        },
+        | _ => false,
+    }
+}
+impl rssn::kernel::plugin::HostCallback for CallbackAdapter {
+    fn signature(&self) -> Signature {
+        Signature::new(
+            self.signature
+                .params
+                .iter()
+                .map(crate::registry::to_type_expr)
+                .collect(),
+            crate::registry::to_type_expr(&self.signature.ret),
+        )
+    }
+
+    fn call(
+        &self,
+        args: &[Value],
+    ) -> Result<Value, OpError> {
+        let map_error = |error: KernelError| {
+            OpError::HostDiagnostic {
+                code: error.code,
+                message: error.message,
+            }
+        };
+        let values = args
+            .iter()
+            .map(|v| Val::from_rssn(v, self.session))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_error)?;
+        let witnesses: Vec<_> = args
+            .iter()
+            .map(|v| crate::witness::extract(v, true))
+            .collect();
+        let (value, witness) = self.callback.call(&values, &witnesses).map_err(map_error)?;
+        validate_callback_result(&value, &witness, &self.signature.ret).map_err(map_error)?;
+        let mut value = value.to_rssn(self.session).map_err(map_error)?;
+        crate::witness::attach(&mut value, &witness, &self.signature.ret).map_err(map_error)?;
+        apply_callback_schema(&mut value, &self.signature.ret);
+        Ok(value)
+    }
+}
+
+// All payloads were independently checked before this point. Restore nested
+// tensor metadata from the concrete callback schema after attaching witnesses;
+// deriving it from a pre-attachment first element would erase dimensions.
+fn apply_callback_schema(
+    value: &mut Value,
+    sig: &crate::SigType,
+) {
+    match (value, sig) {
+        | (Value::Tensor(tensor), crate::SigType::Tensor { elem, .. }) => {
+            for value in &mut tensor.data {
+                apply_callback_schema(value, elem);
+            }
+            tensor.elem = crate::registry::to_type_expr(elem);
+        },
+        | (Value::Record(record), crate::SigType::Record(fields)) => {
+            for (name, value) in &mut record.fields {
+                if let Some((_, sig)) = fields.iter().find(|(n, _)| n == name) {
+                    apply_callback_schema(value, sig);
+                }
+            }
+        },
+        | _ => {},
+    }
+}
+
+// RSSN's ordinary Float payload is also a valid dimensionless value. The
+// bridge may claim that only when the host supplied an independent witness;
+// an omitted witness must never silently acquire dimension 1.
+// A schema on an empty container is evidence only if each representation,
+// rank, named field and numeric dimension is recursively established.
+fn callback_schema_proves(
+    expected: &crate::SigType,
+    actual: &crate::SigType,
+    witness: &crate::witness::DimensionWitness,
+) -> bool {
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    match (expected, actual, witness) {
+        | (S::Dim(inner, dim), repr, W::Scalar(actual_dim)) => {
+            dim.is_concrete()
+                && dim == actual_dim
+                && callback_schema_proves(inner, repr, &W::Scalar(aevia_dim::Dim::one()))
+        },
+        | (S::Int, S::Int, W::Scalar(dim))
+        | (S::Real, S::Int | S::Real, W::Scalar(dim))
+        | (S::Float, S::Float, W::Scalar(dim))
+        | (S::Complex, S::Complex, W::Scalar(dim)) => dim.is_one(),
+        | (S::Bool, S::Bool, _) | (S::Str, S::Str, _) => true,
+        | (
+            S::Tensor {
+                rank: Some(expected_rank),
+                shape: expected_shape,
+                elem,
+            },
+            S::Tensor {
+                rank: Some(actual_rank),
+                shape: actual_shape,
+                elem: actual_elem,
+            },
+            W::Tensor {
+                element: Some(element),
+                element_repr: Some(repr),
+                ..
+            },
+        ) => {
+            expected_rank == actual_rank
+                && actual_shape
+                    .as_ref()
+                    .is_none_or(|shape| shape.len() == *actual_rank)
+                && expected_shape
+                    .as_ref()
+                    .is_none_or(|shape| actual_shape.as_ref() == Some(shape))
+                && actual_elem.as_ref() == repr
+                && callback_schema_proves(elem, actual_elem, element)
+        },
+        | (S::Record(expected), S::Record(actual), W::Record(witnesses)) => {
+            expected.len() == actual.len()
+                && expected.len() == witnesses.len()
+                && expected
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == expected.len()
+                && expected.iter().all(|(name, field)| {
+                    let mut fields = actual.iter().filter(|(n, _)| n == name);
+                    let mut proof = witnesses.iter().filter(|(n, _)| n == name);
+                    match (fields.next(), fields.next(), proof.next(), proof.next()) {
+                        | (Some((_, repr)), None, Some((_, witness)), None) => {
+                            callback_schema_proves(field, repr, witness)
+                        },
+                        | _ => false,
+                    }
+                })
+        },
+        | _ => false,
+    }
+}
+
+fn validate_callback_result(
+    value: &Val,
+    witness: &crate::witness::DimensionWitness,
+    sig: &crate::SigType,
+) -> Result<(), KernelError> {
+    use crate::Num;
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    fn scalar(
+        value: &Val,
+        sig: &S,
+    ) -> bool {
+        matches!(
+            (value, sig),
+            (Val::Num(Num::Int(_)), S::Int | S::Real)
+                | (Val::Num(Num::Rat(_)), S::Real)
+                | (Val::Num(Num::Float(_)), S::Float)
+                | (Val::Complex { .. }, S::Complex)
+        )
+    }
+    fn is_numeric(sig: &S) -> bool {
+        matches!(sig, S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _))
+    }
+    let mismatch = || {
+        KernelError::new(
+            "E1003",
+            "callback result does not match its concrete type and dimension witness",
+        )
+    };
+    match (value, sig) {
+        | (_, S::Dim(inner, dim))
+            if dim.is_concrete()
+                && scalar(value, inner)
+                && matches!(witness, W::Scalar(actual) if actual == dim) =>
+        {
+            Ok(())
+        },
+        | (_, S::Int | S::Real | S::Float | S::Complex)
+            if scalar(value, sig) && matches!(witness, W::Scalar(actual) if actual.is_one()) =>
+        {
+            Ok(())
+        },
+        | (Val::Bool(_), S::Bool) | (Val::Str(_), S::Str) => Ok(()),
+        | (
+            Val::Tensor { shape, data },
+            S::Tensor {
+                rank: Some(rank),
+                shape: expected_shape,
+                elem,
+            },
+        ) => {
+            if shape.len() != *rank
+                || expected_shape
+                    .as_ref()
+                    .is_some_and(|expected| expected != shape)
+                || shape
+                    .iter()
+                    .try_fold(1usize, |n, extent| n.checked_mul(*extent))
+                    != Some(data.len())
+            {
+                return Err(mismatch());
+            }
+            let W::Tensor {
+                dimension,
+                element,
+                element_repr,
+                elements,
+            } = witness
+            else {
+                return Err(mismatch());
+            };
+            if data.is_empty() {
+                let actual = element_repr.as_ref().ok_or_else(mismatch)?;
+                let fallback = dimension
+                    .as_ref()
+                    .map_or(W::Unknown, |dim| W::Scalar(dim.clone()));
+                let element = element.as_deref().unwrap_or(&fallback);
+                if !callback_schema_proves(elem, actual, element) {
+                    return Err(mismatch());
+                }
+                return Ok(());
+            }
+            if is_numeric(elem) {
+                let dim = match elem.as_ref() {
+                    | S::Dim(_, dim) if dim.is_concrete() => dim.clone(),
+                    | S::Dim(_, _) => return Err(mismatch()),
+                    | _ => aevia_dim::Dim::one(),
+                };
+                if dimension.as_ref() != Some(&dim)
+                    || elements
+                        .iter()
+                        .any(|w| !matches!(w, W::Scalar(actual) if *actual == dim))
+                {
+                    return Err(mismatch());
+                }
+                let scalar = W::Scalar(dim);
+                for item in data {
+                    validate_callback_result(item, &scalar, elem)?;
+                }
+            } else {
+                if !elements.is_empty() && elements.len() != data.len() {
+                    return Err(mismatch());
+                }
+                for (i, item) in data.iter().enumerate() {
+                    let w = elements
+                        .get(i)
+                        .or(element.as_deref())
+                        .unwrap_or(&W::Unknown);
+                    validate_callback_result(item, w, elem)?;
+                }
+            }
+            Ok(())
+        },
+        | (Val::Record(fields), S::Record(schema)) => {
+            let W::Record(witnesses) = witness else {
+                return Err(mismatch());
+            };
+            if fields.len() != schema.len()
+                || witnesses.len() != schema.len()
+                || schema
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != schema.len()
+            {
+                return Err(mismatch());
+            }
+            for (name, field) in schema {
+                if fields.iter().filter(|(n, _)| n == name).count() != 1
+                    || witnesses.iter().filter(|(n, _)| n == name).count() != 1
+                {
+                    return Err(mismatch());
+                }
+                let (_, value) = fields
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .ok_or_else(mismatch)?;
+                let (_, witness) = witnesses
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .ok_or_else(mismatch)?;
+                validate_callback_result(value, witness, field)?;
+            }
+            Ok(())
+        },
+        | (
+            _,
+            S::Tensor { .. }
+            | S::Record(_)
+            | S::Dim(_, _)
+            | S::Int
+            | S::Real
+            | S::Float
+            | S::Complex
+            | S::Bool
+            | S::Str,
+        ) => Err(mismatch()),
+        | _ => Err(KernelError::capability("core.callback.result_schema")),
+    }
+}
+
 thread_local! {
     /// The session of the current thread.
     static KERNEL: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
@@ -231,6 +583,141 @@ impl Kernel {
         Val::from_rssn(&value, self.id)
     }
 
+    /// Calls the dynamic ABI while preserving explicit input and output witnesses.
+    pub fn call_with_witnesses(
+        &self,
+        name: &str,
+        args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        if args.len() != witnesses.len() {
+            return Err(KernelError::new(
+                "E0899",
+                "kernel argument witness count differs from argument count",
+            ));
+        }
+        let registry = crate::registry::registry();
+        registry.capabilities.require("core.dynamic_call")?;
+        let entry = registry
+            .op(name)
+            .ok_or_else(|| KernelError::new("E1003", format!("rssn has no operator `{name}`")))?;
+        registry.capabilities.require_op(entry)?;
+        let mut converted = self.convert(name, args)?;
+        if entry.source.is_exact() && entry.signatures.len() == 1 {
+            let signature = &entry.signatures[0];
+            for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
+                if let Some(param) = signature
+                    .params
+                    .get(index)
+                    .or_else(|| signature.variadic.as_ref().map(|(_, _, ty)| ty))
+                {
+                    fn known(
+                        sig: &crate::SigType,
+                        witness: &crate::witness::DimensionWitness,
+                    ) -> bool {
+                        use crate::witness::DimensionWitness as W;
+                        match (sig, witness) {
+                            | (
+                                crate::SigType::Dim(_, _)
+                                | crate::SigType::Int
+                                | crate::SigType::Real
+                                | crate::SigType::Float
+                                | crate::SigType::Complex,
+                                W::Scalar(d),
+                            ) => d.is_concrete(),
+                            | (
+                                crate::SigType::Dim(_, _)
+                                | crate::SigType::Int
+                                | crate::SigType::Real
+                                | crate::SigType::Float
+                                | crate::SigType::Complex,
+                                _,
+                            ) => false,
+                            | (
+                                crate::SigType::Tensor { elem, .. }
+                                | crate::SigType::Sparse { elem, .. },
+                                W::Tensor {
+                                    dimension: Some(d), ..
+                                },
+                            ) if matches!(
+                                elem.as_ref(),
+                                crate::SigType::Dim(_, _)
+                                    | crate::SigType::Int
+                                    | crate::SigType::Real
+                                    | crate::SigType::Float
+                                    | crate::SigType::Complex
+                            ) =>
+                            {
+                                d.is_concrete()
+                            },
+                            | (
+                                crate::SigType::Tensor { elem, .. }
+                                | crate::SigType::Sparse { elem, .. },
+                                W::Tensor {
+                                    element, elements, ..
+                                },
+                            ) => {
+                                if elements.is_empty() {
+                                    element.as_deref().is_some_and(|w| known(elem, w))
+                                } else {
+                                    elements.iter().all(|w| known(elem, w))
+                                }
+                            },
+                            | (crate::SigType::Record(fields), W::Record(values)) => {
+                                fields.iter().all(|(name, ty)| {
+                                    values
+                                        .iter()
+                                        .find(|(n, _)| n == name)
+                                        .is_some_and(|(_, w)| known(ty, w))
+                                })
+                            },
+                            | (
+                                crate::SigType::Tensor { .. }
+                                | crate::SigType::Sparse { .. }
+                                | crate::SigType::Record(_),
+                                _,
+                            ) => false,
+                            | _ => true,
+                        }
+                    }
+                    if !known(param, witness) {
+                        return Err(KernelError::capability("dim.dynamic_input_witness"));
+                    }
+                    crate::witness::attach(value, witness, param)?;
+                }
+            }
+        } else {
+            fn dimensionless(w: &crate::witness::DimensionWitness) -> bool {
+                use crate::witness::DimensionWitness as W;
+                match w {
+                    | W::Unknown => true,
+                    | W::Scalar(d) => d.is_one(),
+                    | W::Tensor {
+                        dimension,
+                        element,
+                        elements,
+                        ..
+                    } => {
+                        dimension.as_ref().is_none_or(aevia_dim::Dim::is_one)
+                            && element.as_ref().is_none_or(|w| dimensionless(w))
+                            && elements.iter().all(dimensionless)
+                    },
+                    | W::Record(fields) => fields.iter().all(|(_, w)| dimensionless(w)),
+                }
+            }
+            if !witnesses.iter().all(dimensionless) {
+                return Err(KernelError::capability("dim.dynamic_input_witness"));
+            }
+        }
+        let raw = self
+            .session
+            .call_value(name, &converted, &CallCtx::new())
+            .map_err(|error| from_op_error(&error).at_operator(name))?;
+        let witness =
+            crate::witness::extract(&raw, entry.source.is_exact() && entry.is_value_native());
+        Ok((Val::from_rssn(&raw, self.id)?, witness))
+    }
+
     /// Calls exactly the overload `key` names.
     ///
     /// This is the execution entry point of PLAN D1: the key was chosen
@@ -260,21 +747,59 @@ impl Kernel {
         Val::from_rssn(&value, self.id)
     }
 
+    /// Calls a value-native overload while carrying explicit argument and result
+    /// dimension witnesses across the kernel ABI.
+    ///
+    /// # Errors
+    /// Reports an unknown key, malformed witness list, conversion failure, or
+    /// the kernel's error without replacing it with another overload.
+    pub fn call_key_with_witnesses(
+        &self,
+        key: &OpKey,
+        args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        if args.len() != witnesses.len() {
+            return Err(KernelError::new(
+                "E0899",
+                "kernel argument witness count differs from argument count",
+            ));
+        }
+        let entry = crate::registry::registry().op(&key.name).ok_or_else(|| {
+            KernelError::new("E1003", format!("rssn has no operator `{}`", key.name))
+        })?;
+        crate::registry::registry().capabilities.require_op(entry)?;
+        let index = entry
+            .key_index(key)
+            .ok_or_else(|| KernelError::new("E1005", "kernel overload key is not registered"))?;
+        let signature = entry
+            .signatures
+            .get(index)
+            .ok_or_else(|| KernelError::new("E0899", "kernel signature is missing"))?;
+        let mut converted = self.convert(&key.name, args)?;
+        for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
+            if let Some(param) = signature
+                .params
+                .get(index)
+                .or_else(|| signature.variadic.as_ref().map(|(_, _, ty)| ty))
+            {
+                crate::witness::attach(value, witness, param)?;
+            }
+        }
+        let raw = self
+            .session
+            .call_key(key, &converted, &CallCtx::new())
+            .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
+        let witness = crate::witness::extract(&raw, entry.source.is_exact());
+        Ok((Val::from_rssn(&raw, self.id)?, witness))
+    }
+
     /// Calls a higher-order operator with **no host callbacks**.
     ///
-    /// §8.19's `Rssn.call_ho` names a `Tensor<1, Callback>`. This build cannot
-    /// produce such a value: the kernel's
-    /// [`HostCallback`](rssn::kernel::plugin::HostCallback) is `Send + Sync`,
-    /// while Aevia's evaluator is a single-threaded `Rc` graph, so an Aevia
-    /// closure cannot cross as one. `core.callback` is therefore off, and the
-    /// runtime reports `E1001` naming it when a non-empty callback list
-    /// reaches the boundary.
-    ///
-    /// With an empty list the kernel's `call_ho` *is* the ordinary dynamic
-    /// call, so this method is the honest half that can be supported: it
-    /// forwards to `Session::call_ho(name, args, &[], ctx)`. A caller can
-    /// compare it with [`Kernel::call`] and must get the same answer; the test
-    /// `the_callback_free_call_ho_is_the_dynamic_call` does exactly that.
+    /// This convenience method supplies an empty callback list and therefore
+    /// follows the ordinary dynamic path. For non-empty callbacks use
+    /// [`Kernel::call_ho_scoped`], which registers immutable signatures and
+    /// passes thread-safe handles for the duration of the call.
     ///
     /// # Errors
     ///
@@ -296,6 +821,80 @@ impl Kernel {
             .call_ho(name, &converted, &[], &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(name))?;
         Val::from_rssn(&value, self.id)
+    }
+
+    /// Calls a higher-order operator with explicitly scoped callbacks and
+    /// physical input/output witnesses. Callback registrations live only for
+    /// this call and each bank entry snapshots its concrete signature.
+    pub fn call_ho_scoped(
+        &self,
+        name: &str,
+        args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        if args.len() != witnesses.len() {
+            return Err(KernelError::new(
+                "E0899",
+                "kernel argument witness count differs from argument count",
+            ));
+        }
+        let registry = crate::registry::registry();
+        registry.capabilities.require("core.dynamic_call")?;
+        let entry = registry
+            .op(name)
+            .ok_or_else(|| KernelError::new("E1003", format!("rssn has no operator `{name}`")))?;
+        if !entry.higher_order || !entry.source.is_exact() || entry.signatures.len() != 1 {
+            return Err(KernelError::capability("core.callback.signature"));
+        }
+        let signature = &entry.signatures[0];
+        let mut converted = self.convert(name, args)?;
+        for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
+            let param = signature
+                .params
+                .get(index)
+                .ok_or_else(|| KernelError::new("E1003", "too many callback operator arguments"))?;
+            if matches!(
+                param,
+                crate::SigType::Dim(_, _)
+                    | crate::SigType::Int
+                    | crate::SigType::Real
+                    | crate::SigType::Float
+                    | crate::SigType::Complex
+            ) && !matches!(witness, crate::witness::DimensionWitness::Scalar(dim) if dim.is_concrete())
+            {
+                return Err(KernelError::capability("dim.callback_input_witness"));
+            }
+            crate::witness::attach(value, witness, param)?;
+        }
+        let mut ctx = CallCtx::new();
+        let mut handles = Vec::with_capacity(callbacks.len());
+        for callback in callbacks {
+            let sig = callback.signature();
+            if sig.variadic.is_some() {
+                return Err(KernelError::capability("core.callback.variadic"));
+            }
+            if !sig.params.iter().all(supported_callback_schema)
+                || !supported_callback_schema(&sig.ret)
+            {
+                return Err(KernelError::capability("core.callback.signature"));
+            }
+            let adapter = CallbackAdapter {
+                callback: Arc::clone(callback),
+                signature: sig,
+                session: self.id,
+            };
+            handles.push(
+                ctx.add_callback(Arc::new(adapter))
+                    .map_err(|e| from_op_error(&e))?,
+            );
+        }
+        let raw = self
+            .session
+            .call_ho(name, &converted, &handles, &ctx)
+            .map_err(|e| from_op_error(&e).at_operator(name))?;
+        let witness = crate::witness::extract(&raw, true);
+        Ok((Val::from_rssn(&raw, self.id)?, witness))
     }
 
     /// The solver's structured answer for `equation = 0`, as §8.6's record.
@@ -818,4 +1417,182 @@ pub fn rational(
     denom: i64,
 ) -> Num {
     Num::Rat(BigRational::new(BigInt::from(numer), BigInt::from(denom)))
+}
+
+#[cfg(test)]
+mod recursive_callback_witness_tests {
+    use super::*;
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    use rssn::kernel::plugin::HostCallback;
+    struct Mock {
+        value: Val,
+        witness: W,
+        result: S,
+    }
+    impl BridgeCallback for Mock {
+        fn signature(&self) -> crate::Sig {
+            crate::Sig {
+                params: vec![],
+                ret: self.result.clone(),
+                variadic: None,
+            }
+        }
+
+        fn call(
+            &self,
+            _: &[Val],
+            _: &[W],
+        ) -> Result<(Val, W), KernelError> {
+            Ok((self.value.clone(), self.witness.clone()))
+        }
+    }
+    #[test]
+    fn nested_record_and_tensor_results_preserve_independent_witnesses() {
+        let length = aevia_dim::Dim::base("Length");
+        let time = aevia_dim::Dim::base("Time");
+        let dim_float = |dim| S::Dim(Box::new(S::Float), dim);
+        let result = S::Record(vec![
+            ("length".into(), dim_float(length.clone())),
+            (
+                "samples".into(),
+                S::Tensor {
+                    rank: Some(1),
+                    shape: None,
+                    elem: Box::new(dim_float(time.clone())),
+                },
+            ),
+            ("ok".into(), S::Bool),
+        ]);
+        let value = Val::Record(vec![
+            ("length".into(), Val::Num(Num::Float(2.0))),
+            (
+                "samples".into(),
+                Val::Tensor {
+                    shape: vec![2],
+                    data: vec![Val::Num(Num::Float(1.0)), Val::Num(Num::Float(3.0))],
+                },
+            ),
+            ("ok".into(), Val::Bool(true)),
+        ]);
+        let tensor_witness = |dim| {
+            W::Tensor {
+                dimension: Some(dim),
+                element: None,
+                element_repr: Some(S::Float),
+                elements: vec![],
+            }
+        };
+        let witness = W::Record(vec![
+            ("length".into(), W::Scalar(length)),
+            ("samples".into(), tensor_witness(time.clone())),
+            ("ok".into(), W::Unknown),
+        ]);
+        let mock = Arc::new(Mock {
+            value: value.clone(),
+            witness: witness.clone(),
+            result: result.clone(),
+        });
+        let adapter = CallbackAdapter {
+            callback: mock,
+            signature: crate::Sig {
+                params: vec![],
+                ret: result.clone(),
+                variadic: None,
+            },
+            session: SessionId(0),
+        };
+        let raw = adapter.call(&[]).expect("validated record");
+        let Value::Record(record) = raw else {
+            panic!("record")
+        };
+        let Value::Tensor(samples) = &record
+            .fields
+            .iter()
+            .find(|(name, _)| name == "samples")
+            .unwrap()
+            .1
+        else {
+            panic!("tensor")
+        };
+        assert_eq!(
+            samples.elem,
+            crate::registry::to_type_expr(&dim_float(time.clone()))
+        );
+        let bad = W::Record(vec![
+            ("length".into(), W::Unknown),
+            ("samples".into(), tensor_witness(time)),
+            ("ok".into(), W::Unknown),
+        ]);
+        assert!(validate_callback_result(&value, &bad, &result).is_err());
+    }
+    #[test]
+    fn empty_structured_tensors_need_explicit_schema_evidence() {
+        let result = S::Tensor {
+            rank: Some(1),
+            shape: None,
+            elem: Box::new(S::Record(vec![("x".into(), S::Float)])),
+        };
+        let value = Val::Tensor {
+            shape: vec![0],
+            data: vec![],
+        };
+        let witness = W::Tensor {
+            dimension: None,
+            element: None,
+            element_repr: None,
+            elements: vec![],
+        };
+        assert!(validate_callback_result(&value, &witness, &result).is_err());
+        let proof = W::Tensor {
+            dimension: None,
+            element: Some(Box::new(W::Record(vec![(
+                "x".into(),
+                W::Scalar(aevia_dim::Dim::one()),
+            )]))),
+            element_repr: Some(S::Record(vec![("x".into(), S::Float)])),
+            elements: vec![],
+        };
+        assert!(validate_callback_result(&value, &proof, &result).is_ok());
+        let wrong = W::Tensor {
+            dimension: None,
+            element: Some(Box::new(W::Record(vec![("x".into(), W::Unknown)]))),
+            element_repr: Some(S::Record(vec![("x".into(), S::Float)])),
+            elements: vec![],
+        };
+        assert!(validate_callback_result(&value, &wrong, &result).is_err());
+    }
+
+    #[test]
+    fn refined_callback_extents_are_checked_for_values_and_empty_nested_schemas() {
+        let inner = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(S::Float),
+        };
+        let witness = W::Tensor {
+            dimension: Some(aevia_dim::Dim::one()),
+            element: Some(Box::new(W::Scalar(aevia_dim::Dim::one()))),
+            element_repr: Some(S::Float),
+            elements: vec![],
+        };
+        assert!(callback_schema_proves(&inner, &inner, &witness));
+        let wrong = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![3]),
+            elem: Box::new(S::Float),
+        };
+        assert!(!callback_schema_proves(&inner, &wrong, &witness));
+        let rank_only = S::Tensor {
+            rank: Some(1),
+            shape: None,
+            elem: Box::new(S::Float),
+        };
+        assert!(!callback_schema_proves(&inner, &rank_only, &witness));
+        let payload = Val::Tensor {
+            shape: vec![3],
+            data: vec![Val::Num(Num::Float(0.0)); 3],
+        };
+        assert!(validate_callback_result(&payload, &witness, &inner).is_err());
+    }
 }

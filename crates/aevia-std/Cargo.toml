@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aevia-stdlib-model = { path = "../aevia-stdlib-model" }
 num-bigint.workspace = true
 num-rational.workspace = true
 num-traits.workspace = true

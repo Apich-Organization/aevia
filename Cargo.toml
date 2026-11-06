@@ -8,17 +8,20 @@ members = [
     "crates/aevia-core",
     "crates/aevia-rssn",
     "crates/aevia-std",
+    "crates/aevia-stdlib-model",
     "crates/aevia-fmt",
     "crates/aevia-doc",
     "crates/aevia-analysis",
     "crates/aevia-lsp",
     "crates/aevia-cli",
+    "tools/aevia-stdlib-gen",
+    "tools/rssn-api-audit",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.97"
 license = "Apache-2.0"
 repository = "https://github.com/Apich-Organization/aevia"
 
@@ -51,3 +54,10 @@ aevia-lsp = { path = "crates/aevia-lsp" }
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+# Keep source locations in test backtraces without copying full dependency
+# variable/type debug information into every integration-test executable.
+# RSSN links a large scientific kernel; full debug info multiplies disk and
+# linker memory costs across the workspace's independent test targets.
+[profile.test]
+debug = "line-tables-only"

@@ -408,12 +408,7 @@ fn a_matrix_returning_operator_returns_a_tensor_of_the_declared_rank() {
 /// A rank-1 tensor of values, for the variadic ABI.
 fn list_of(items: Vec<Value>) -> Value {
     let len = items.len();
-    Value::Tensor(Rc::new(TensorData {
-        shape: vec![len],
-        storage: Storage::Boxed(items),
-        dim: Dim::one(),
-        display: None,
-    }))
+    Value::Tensor(Rc::new(TensorData::new(vec![len], Storage::Boxed(items), Dim::one(), None)))
 }
 
 /// §8.19's variadic ABI: a variadic operator is typed `[α] -> R` and the list

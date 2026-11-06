@@ -49,20 +49,30 @@ cargo run -p aevia-cli -- check examples/units.aev
 cargo run -p aevia-cli -- run examples/symbolic.aev
 cargo run -p aevia-cli -- run examples/calculus.aev
 cargo run -p aevia-cli -- repl
-cargo run -p aevia-cli -- rssn --emit generated/
+cargo run -p aevia-cli -- rssn --audit
+cargo run -p aevia-cli -- rssn --emit generated/ --namespaces
 ```
 
-The only requirements are a Rust toolchain (edition 2024) and the `rssn` kernel
-(`3.0.0-rc.1`, `api_version = 1`) checked out next to this repository.
+The test profile keeps source line tables for backtraces while omitting full
+variable and type debug data. This bounds disk and linker-memory costs when
+many integration tests link the RSSN kernel. For debugger inspection of a
+particular test, use `CARGO_PROFILE_TEST_DEBUG=2 cargo test -p <crate> --test <name>`.
+Use a shared `CARGO_TARGET_DIR` and run Cargo jobs in sequence when working on
+both repositories; separate feature combinations can rebuild the kernel.
+
+The requirements are Rust 1.97 or newer (edition 2024) and the `rssn` kernel
+(`3.0.0-rc.1`, `api_version = 2`) checked out next to this repository.
 `aevia-rssn` links it directly, so the operator set, the unit table and the
 physical constants all come from rssn's Kernel Manifest — there is no second
 list to keep in step. `cargo run -p aevia-cli -- rssn` prints the live version,
 API version, manifest hash, operator/signature-source counts and unit/constant
-counts; the kernel's `signature-audit` adds the rule-set count. Those numbers
-move with the kernel, so the manifest is the source of truth. At the time of
-writing the measurements are **1382 operators** (7 declared + 25 overlay +
-1350 derived, 32 rule sets), **82 units**, **30 constants** (18 exact) and
-`manifest_hash = 8d2c3764…`.
+counts. `rssn --audit` classifies each overload as an exact typed binding,
+a dynamic/approximate signature, or unavailable and explains the limits.
+`--emit DIR --namespaces` additionally generates modules grouped by kernel
+rule set: exact signatures use pinned keys; other entries use the dynamic
+value-list ABI and return its `Result` error channel. The manifest only covers
+registered operators, and callback-based Rust kernels still require a host
+callback bridge.
 
 The kernel-facing contract (what the manifest carries, which API is stable, and
 which gaps remain) is [RSSN-INTEGRATION-REQUIREMENTS.md](RSSN-INTEGRATION-REQUIREMENTS.md).

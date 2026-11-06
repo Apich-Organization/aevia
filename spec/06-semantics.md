@@ -98,8 +98,8 @@ Exact(a) op Exact(b)：
 Sym(_) op _ 或 _ op Sym(_)：
     -> Sym(build(op, ...))，除非能立即折叠
 
-F64(a) op F64(b)：
-    -> F64(IEEE op)
+F64(a) op F64(b)，或 F64 与 Int：
+    -> 将 Int 提升为 F64，再计算 F64(IEEE op)
 
 F64(_) 与 Exact(_) 或 Sym(_)：
     -> Real，先把 F64 精确转换成有理数，再走 Real 的规则
@@ -107,8 +107,12 @@ F64(_) 与 Exact(_) 或 Sym(_)：
 
 - `Real + Float` 的结果是 `Real`：`Float` 被精确转换成有理数，符号信息
   保留。不会因为符号而运行时失败。
-- 要留在浮点路径，写 `to_float(x)` 或让所有操作数都是 `Float`。
-- `Int / Int` 产生 `Exact` 有理数，不产生 `Float`。
+- `Int` 有独立的整数表示；这里的 `Exact` 表示 `Real` 有理数，即使分母是 1
+  也不等同于 `Int`。`Int` 与 `Float` 运算得到 `Float`，`Real` 与 `Float`
+  运算仍得到精确的 `Real`，与 §3.4.1 的算术 `join` 一致。
+- `Int / Int` 和整数的负次幂产生 `Exact` 有理数，即使结果恰好为整数。
+  源码 `1.0 + 2` 的无标注混合字面量默认规则仍把两者读成 `Real`；
+  它和已物化的 `Int` 值参与浮点运算是不同的读取场景。
 - `0 / 0`、`1 / 0` 在精确相位是错误 `E0801`；在浮点相位是 NaN/Inf
   （IEEE）。
 - `sqrt(-1)` 在 `Real` 相位构造符号项 `sqrt(-1)`；`Real` 的符号函数是

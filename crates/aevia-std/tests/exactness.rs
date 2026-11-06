@@ -125,12 +125,11 @@ fn an_exact_matmul_is_still_exact() {
     );
 
     // Integers in, exact values out — the product of two exact matrices is
-    // not a place an `f64` kernel may appear. The runtime answers rationals
-    // here rather than narrowing to `Int`, which is the behaviour it has always
-    // had; what matters is that no element is a `Float`.
+    // not a place an `f64` kernel may appear. Int multiplication also keeps
+    // the element representation promised by its checked type.
     let p = interp.eval_toplevel("p").expect("p");
     assert!(
-        phases(&p).iter().all(|phase| *phase == "Exact"),
+        phases(&p).iter().all(|phase| *phase == "Int"),
         "an exact matmul produced {:?}",
         phases(&p)
     );

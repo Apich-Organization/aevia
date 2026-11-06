@@ -201,6 +201,23 @@ pub struct Arm {
 pub enum Rhs {
     /// Copy an atom.
     Atom(Atom),
+    /// A source numeric literal whose representation is chosen by its generic
+    /// activation. The containing statement retains the literal's source span.
+    NumericLiteral(NumberLit),
+    /// A first-class method reference, retaining the resolved class identity.
+    ClassMethodRef {
+        /// Full nominal identity of the defining class.
+        class: aevia_types::keys::ClassKey,
+        /// The selected method.
+        method: String,
+    },
+    /// A type-applied value, retaining its selected representation.
+    TypeApply {
+        /// The evaluated callee.
+        callee: Atom,
+        /// Type arguments as written.
+        types: Vec<Ty>,
+    },
     /// A failure the lowering can already see (`_` outside a call).
     Error {
         /// The diagnostic code.
@@ -342,9 +359,10 @@ pub enum Slice {
 /// A call, with the resolution the checker already performed.
 #[derive(Debug)]
 pub struct Call {
-    /// The callee. Unused for a [`CallKind::Typed`] call, which names its
-    /// builtin outright.
+    /// The evaluated callee, including for explicit type applications.
     pub callee: Atom,
+    /// The actual source callee expression, distinct from the outer call span.
+    pub callee_span: Span,
     /// The arguments, already evaluated to atoms.
     pub args: Vec<Atom>,
     /// Source spans of arguments, for preserving their checked runtime types.
@@ -377,10 +395,8 @@ pub enum CallKind {
         /// from a mangled global guessed at run time.
         target: Option<aevia_types::check::DictTarget>,
     },
-    /// A builtin that reads an explicit type argument (`zeros<Int>(3)`).
+    /// Apply explicit type arguments to the evaluated callee value.
     Typed {
-        /// The builtin name.
-        name: String,
         /// The type arguments, as written.
         types: Vec<Ty>,
     },
@@ -503,6 +519,8 @@ pub struct MethodDecl {
 /// One `instance` declaration.
 #[derive(Debug)]
 pub struct InstanceDecl {
+    /// The exact source declaration site for checked runtime metadata.
+    pub span: Span,
     /// The class.
     pub class: String,
     /// The head, as written.

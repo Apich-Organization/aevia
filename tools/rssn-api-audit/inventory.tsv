@@ -1,0 +1,1248 @@
+# RSSN public kernel and backend source inventory v1
+# source syntax only; cfg is not evaluated; macros are not expanded; exported is not a runtime capability claim
+# path	classification	abi names	cfg	signature
+crate::backend::<macro:646abbf90a797bb7>	unexpanded-macro			thread_local (unexpanded)
+crate::backend::Backend::compile	trait-method			fn compile (& self , graph : & Graph , root : NodeId , inputs : & [SymbolId] ,) -> Result < Box < dyn Compiled > , BackendError >
+crate::backend::Backend::compile_multi	trait-method			fn compile_multi (& self , graph : & Graph , roots : & [NodeId] , inputs : & [SymbolId] , params : & [SymbolId] ,) -> Result < Box < dyn CompiledMulti > , BackendError >
+crate::backend::Backend::name	trait-method			fn name (& self) -> & 'static str
+crate::backend::Compiled::arity	trait-method			fn arity (& self) -> usize
+crate::backend::Compiled::call	trait-method			fn call (& self , args : & [f64] ,) -> f64
+crate::backend::Compiled::call_batch	trait-method			fn call_batch (& self , columns : & [& [f64]] , out : & mut [f64] ,)
+crate::backend::CompiledMulti::eval	trait-method			fn eval (& self , inputs : & [f64] , params : & [f64] , out : & mut [f64] ,)
+crate::backend::CompiledMulti::eval_batch	trait-method			fn eval_batch (& self , columns : & [& [f64]] , params : & [f64] , out : & mut [& mut [f64]] ,)
+crate::backend::CompiledMulti::inputs	trait-method			fn inputs (& self) -> usize
+crate::backend::CompiledMulti::outputs	trait-method			fn outputs (& self) -> usize
+crate::backend::CompiledMulti::params	trait-method			fn params (& self) -> usize
+crate::backend::TapeFunction::tape	associated-method			const fn tape (& self) -> & tape :: Tape
+crate::backend::call_batch_par	no-declared-adapter			fn call_batch_par (f : & dyn Compiled , columns : & [& [f64]] , out : & mut [f64] ,)
+crate::backend::compile	opaque			fn compile (graph : & Graph , root : NodeId , inputs : & [SymbolId] ,) -> Result < Box < dyn Compiled > , BackendError >
+crate::backend::current	opaque			fn current () -> Shared
+crate::backend::jit::<macro:67043903bf047136>	unexpanded-macro		# [cfg (feature = "jit")]	math_shims (unexpanded)
+crate::backend::jit::<macro:bc4318b0df9a591e>	unexpanded-macro		# [cfg (feature = "jit")]	macro_rules (unexpanded)
+crate::backend::jit::CraneliftBackend::cache_key	associated-method		# [cfg (feature = "jit")]	fn cache_key (& self , tape : & Tape ,) -> u64
+crate::backend::jit::CraneliftBackend::cached	associated-method		# [cfg (feature = "jit")]	fn cached (& self) -> usize
+crate::backend::jit::CraneliftBackend::compile_tape	associated-method		# [cfg (feature = "jit")]	fn compile_tape (& self , tape : & Tape ,) -> Result < Arc < JitFunction > , BackendError >
+crate::backend::jit::CraneliftBackend::key_extra	associated-method		# [cfg (feature = "jit")]	const fn key_extra (& self) -> u64
+crate::backend::jit::CraneliftBackend::new	associated-method		# [cfg (feature = "jit")]	fn new () -> Self
+crate::backend::jit::CraneliftBackend::set_key_extra	associated-method		# [cfg (feature = "jit")]	fn set_key_extra (& mut self , key_extra : u64 ,)
+crate::backend::jit::CraneliftBackend::with_key	associated-method		# [cfg (feature = "jit")]	fn with_key (key_extra : u64) -> Self
+crate::backend::jit::JitFunction::compile	associated-method		# [cfg (feature = "jit")]	fn compile (tape : & Tape) -> Result < Self , BackendError >
+crate::backend::jit::TailLoop::compile	associated-method		# [cfg (feature = "jit")]	fn compile (tape : & Tape) -> Result < Self , BackendError >
+crate::backend::jit::TailLoop::run	associated-method		# [cfg (feature = "jit")]	fn run (& self , inputs : & [f64] , fuel : u64 ,) -> Option < TailLoopResult >
+crate::backend::jit::is_compiled	no-declared-adapter		# [cfg (feature = "jit")]	fn is_compiled (f : & dyn std :: any :: Any) -> bool
+crate::backend::jit::target_key	no-declared-adapter		# [cfg (feature = "jit")]	fn target_key () -> u64
+crate::backend::set_default	opaque			fn set_default (backend : Option < Shared >)
+crate::backend::tape::FromExtern::from_extern1	trait-method			fn from_extern1 (f : extern "C" fn (f64) -> f64 , a : Self ,) -> Self
+crate::backend::tape::FromExtern::from_extern2	trait-method			fn from_extern2 (f : extern "C" fn (f64 , f64) -> f64 , a : Self , b : Self ,) -> Self
+crate::backend::tape::HyperDual::first	associated-method			const fn first (self) -> f64
+crate::backend::tape::HyperDual::mixed	associated-method			const fn mixed (self) -> f64
+crate::backend::tape::HyperDual::new	associated-method			const fn new (v : f64 , d1 : f64 , d2 : f64 , d12 : f64 ,) -> Self
+crate::backend::tape::HyperDual::second	associated-method			const fn second (self) -> f64
+crate::backend::tape::HyperDual::value	associated-method			const fn value (self) -> f64
+crate::backend::tape::Interval::contains	associated-method			fn contains (& self , x : f64 ,) -> bool
+crate::backend::tape::Interval::is_point	associated-method			fn is_point (& self) -> bool
+crate::backend::tape::Interval::point	associated-method			const fn point (x : f64) -> Self
+crate::backend::tape::Intrinsic::apply	associated-method			fn apply (self , x : f64 ,) -> f64
+crate::backend::tape::Intrinsic::derivative	associated-method			fn derivative (self , x : f64 ,) -> f64
+crate::backend::tape::Intrinsic::second_derivative	associated-method			fn second_derivative (self , x : f64 ,) -> f64
+crate::backend::tape::Scalar::add	trait-method			fn add (self , b : Self ,) -> Self
+crate::backend::tape::Scalar::atan2	trait-method			fn atan2 (self , x : Self ,) -> Self
+crate::backend::tape::Scalar::call	trait-method			fn call (f : EvalFn , args : & [Self] ,) -> Self
+crate::backend::tape::Scalar::compare	trait-method			fn compare (self , c : Cmp , b : Self ,) -> Self
+crate::backend::tape::Scalar::constant	trait-method			fn constant (c : f64) -> Self
+crate::backend::tape::Scalar::div	trait-method			fn div (self , b : Self ,) -> Self
+crate::backend::tape::Scalar::mul	trait-method			fn mul (self , b : Self ,) -> Self
+crate::backend::tape::Scalar::nan	trait-method			fn nan () -> Self
+crate::backend::tape::Scalar::neg	trait-method			fn neg (self) -> Self
+crate::backend::tape::Scalar::powf	trait-method			fn powf (self , b : Self ,) -> Self
+crate::backend::tape::Scalar::powi	trait-method			fn powi (self , n : i32 ,) -> Self
+crate::backend::tape::Scalar::select	trait-method			fn select (self , a : Self , b : Self ,) -> Self
+crate::backend::tape::Scalar::sub	trait-method			fn sub (self , b : Self ,) -> Self
+crate::backend::tape::Scalar::to_f64	trait-method			fn to_f64 (self) -> f64
+crate::backend::tape::Scalar::unary	trait-method			fn unary (self , f : Intrinsic ,) -> Self
+crate::backend::tape::Tape::enclose	associated-method			fn enclose (& self , inputs : & [Interval] , params : & [Interval] ,) -> Vec < Interval >
+crate::backend::tape::Tape::eval	associated-method			fn eval (& self , inputs : & [f64] , params : & [f64] , out : & mut [f64] ,)
+crate::backend::tape::Tape::gradient	associated-method			fn gradient (& self , k : usize , inputs : & [f64] , params : & [f64] ,) -> Vec < f64 >
+crate::backend::tape::Tape::gradient_reverse	associated-method			fn gradient_reverse (& self , k : usize , inputs : & [f64] , params : & [f64] ,) -> Vec < f64 >
+crate::backend::tape::Tape::hessian	associated-method			fn hessian (& self , k : usize , inputs : & [f64] , params : & [f64] ,) -> Vec < f64 >
+crate::backend::tape::Tape::hessian_vector_product	associated-method			fn hessian_vector_product (& self , k : usize , inputs : & [f64] , params : & [f64] , direction : & [f64] ,) -> Vec < f64 >
+crate::backend::tape::Tape::optimise	associated-method			fn optimise (& self) -> Self
+crate::backend::tape::Tape::run	generic			fn run < T : Scalar > (& self , inputs : & [T] , params : & [T] , values : & mut Vec < T > , out : & mut [T] ,)
+crate::backend::tape::Tape::structural_hash	associated-method			fn structural_hash (& self) -> u64
+crate::backend::tape::Tape::validate	associated-method			fn validate (& self) -> Result < () , BackendError >
+crate::backend::tape::Tape::vjp	associated-method			fn vjp (& self , inputs : & [f64] , params : & [f64] , weights : & [f64] ,) -> Vec < f64 >
+crate::backend::tape::int_pow	no-declared-adapter			fn int_pow (x : f64 , n : i32 ,) -> f64
+crate::backend::tape::lower	opaque			fn lower (graph : & Graph , roots : & [NodeId] , inputs : & [SymbolId] , params : & [SymbolId] ,) -> Result < Tape , BackendError >
+crate::backend::with_backend	callback			fn with_backend < R > (backend : Shared , f : impl FnOnce () -> R ,) -> R
+crate::kernels::<reexport:27ded7171b61b3a9>	unresolved-reexport			sde :: SdeError
+crate::kernels::amg_general::AmgGeneral::build	associated-method			fn build (a : & Csr , opts : & AmgGeneralOptions ,) -> Result < Self , AmgError >
+crate::kernels::amg_general::AmgGeneral::num_levels	associated-method			const fn num_levels (& self) -> usize
+crate::kernels::amg_general::AmgGeneral::operator_complexity	associated-method			fn operator_complexity (& self) -> f64
+crate::kernels::amg_general::AmgGeneral::precondition	associated-method			fn precondition (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::amg_general::AmgGeneral::solve	associated-method			fn solve (& self , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_cycles : usize ,) -> MgResult
+crate::kernels::amg_general::AmgGeneral::vcycle	associated-method			fn vcycle (& self , b : & [f64] , x : & mut [f64] ,)
+crate::kernels::approx::Aaa::degree	associated-method			const fn degree (& self) -> usize
+crate::kernels::approx::Aaa::eval	associated-method			fn eval (& self , x : f64 ,) -> f64
+crate::kernels::approx::ChebSeries::adaptive	callback			fn adaptive < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , tol : f64 , max_degree : usize ,) -> Self
+crate::kernels::approx::ChebSeries::definite_integral	associated-method			fn definite_integral (& self) -> f64
+crate::kernels::approx::ChebSeries::degree	associated-method			const fn degree (& self) -> usize
+crate::kernels::approx::ChebSeries::derivative	associated-method			fn derivative (& self) -> Self
+crate::kernels::approx::ChebSeries::eval	associated-method			fn eval (& self , x : f64 ,) -> f64
+crate::kernels::approx::ChebSeries::from_fn	callback			fn from_fn < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , n : usize ,) -> Self
+crate::kernels::approx::ChebSeries::integral	associated-method			fn integral (& self) -> Self
+crate::kernels::approx::ChebSeries::roots	associated-method			fn roots (& self) -> Result < Vec < f64 > , ApproxError >
+crate::kernels::approx::CubicSpline::derivative	associated-method			fn derivative (& self , x : f64 , order : u8 ,) -> f64
+crate::kernels::approx::CubicSpline::eval	associated-method			fn eval (& self , x : f64 ,) -> f64
+crate::kernels::approx::CubicSpline::integrate	associated-method			fn integrate (& self , lo : f64 , hi : f64 ,) -> f64
+crate::kernels::approx::CubicSpline::new	associated-method			fn new (x : & [f64] , y : & [f64] , bc : SplineBc ,) -> Result < Self , ApproxError >
+crate::kernels::approx::Pchip::derivative	associated-method			fn derivative (& self , x : f64 ,) -> f64
+crate::kernels::approx::Pchip::eval	associated-method			fn eval (& self , x : f64 ,) -> f64
+crate::kernels::approx::Pchip::new	associated-method			fn new (x : & [f64] , y : & [f64] ,) -> Result < Self , ApproxError >
+crate::kernels::approx::aaa	opaque			fn aaa (z : & [f64] , f : & [f64] , tol : f64 , max_terms : usize ,) -> Result < Aaa , ApproxError >
+crate::kernels::approx::bspline_basis	no-declared-adapter			fn bspline_basis (knots : & [f64] , degree : usize , i : usize , x : f64 ,) -> f64
+crate::kernels::approx::bspline_eval	no-declared-adapter			fn bspline_eval (knots : & [f64] , coeffs : & [f64] , degree : usize , x : f64 ,) -> f64
+crate::kernels::approx::bspline_interpolate	opaque			fn bspline_interpolate (x : & [f64] , y : & [f64] , degree : usize ,) -> Result < (Vec < f64 > , Vec < f64 >) , ApproxError >
+crate::kernels::approx::chebyshev_points	no-declared-adapter			fn chebyshev_points (n : usize , a : f64 , b : f64 ,) -> Vec < f64 >
+crate::kernels::approx::clenshaw	no-declared-adapter			fn clenshaw (c : & [f64] , t : f64 ,) -> f64
+crate::kernels::approx::horner	no-declared-adapter			fn horner (c : & [f64] , x : f64 ,) -> f64
+crate::kernels::approx::pade	opaque			fn pade (c : & [f64] , m : usize , n : usize ,) -> Result < (Vec < f64 > , Vec < f64 >) , ApproxError >
+crate::kernels::ball::CTerm::real	associated-method			const fn real (coef : f64 , exps : Vec < u32 > ,) -> Self
+crate::kernels::ball::Cball::centre	associated-method			fn centre (& self) -> Cx
+crate::kernels::ball::Cball::contains	associated-method			fn contains (& self , z : Cx ,) -> bool
+crate::kernels::ball::Cball::div	associated-method			fn div (& self , other : & Self ,) -> Option < Self >
+crate::kernels::ball::Cball::half_width	associated-method			fn half_width (& self) -> f64
+crate::kernels::ball::Cball::inside_strictly	associated-method			fn inside_strictly (& self , outer : & Self ,) -> bool
+crate::kernels::ball::Cball::intersect	associated-method			fn intersect (& self , other : & Self ,) -> Option < Self >
+crate::kernels::ball::Cball::is_finite	associated-method			const fn is_finite (& self) -> bool
+crate::kernels::ball::Cball::modulus_lower	associated-method			fn modulus_lower (& self) -> f64
+crate::kernels::ball::Cball::modulus_upper	associated-method			fn modulus_upper (& self) -> f64
+crate::kernels::ball::Cball::of	associated-method			const fn of (value : Cx) -> Self
+crate::kernels::ball::Cball::one	associated-method			const fn one () -> Self
+crate::kernels::ball::Cball::point	associated-method			const fn point (re : f64 , im : f64 ,) -> Self
+crate::kernels::ball::Cball::powi	associated-method			fn powi (& self , n : u32 ,) -> Self
+crate::kernels::ball::Cball::rectangle	associated-method			const fn rectangle (re : (f64 , f64) , im : (f64 , f64) ,) -> Self
+crate::kernels::ball::Cball::square	associated-method			fn square (re : f64 , im : f64 , radius : f64 ,) -> Self
+crate::kernels::ball::Cball::zero	associated-method			const fn zero () -> Self
+crate::kernels::ball::eval_jacobian	opaque			fn eval_jacobian (system : & [Vec < PolyTerm >] , x : & [Cball] ,) -> Vec < Vec < Cball > >
+crate::kernels::ball::eval_jacobian_terms	opaque			fn eval_jacobian_terms (system : & [Vec < CTerm >] , x : & [Cball] ,) -> Vec < Vec < Cball > >
+crate::kernels::ball::eval_polys	opaque			fn eval_polys (system : & [Vec < PolyTerm >] , x : & [Cball] ,) -> Vec < Cball >
+crate::kernels::ball::eval_terms	opaque			fn eval_terms (system : & [Vec < CTerm >] , x : & [Cball] ,) -> Vec < Cball >
+crate::kernels::ball::jacobian_at	opaque			fn jacobian_at (system : & [Vec < PolyTerm >] , x : & [Cx] ,) -> Vec < Vec < Cx > >
+crate::kernels::ball::jacobian_at_terms	opaque			fn jacobian_at_terms (system : & [Vec < CTerm >] , x : & [Cx] ,) -> Vec < Vec < Cx > >
+crate::kernels::ball::real_terms	opaque			fn real_terms (system : & [Vec < PolyTerm >]) -> Vec < Vec < CTerm > >
+crate::kernels::ball::values_at	opaque			fn values_at (system : & [Vec < PolyTerm >] , x : & [Cx] ,) -> Vec < Cx >
+crate::kernels::ball::values_at_terms	opaque			fn values_at_terms (system : & [Vec < CTerm >] , x : & [Cx] ,) -> Vec < Cx >
+crate::kernels::calculus::derivative	callback			fn derivative (f : impl Fn (f64) -> f64 , x : f64 ,) -> f64
+crate::kernels::calculus::gradient	callback			fn gradient (f : impl Fn (& [f64]) -> f64 , point : & [f64] ,) -> Vec < f64 >
+crate::kernels::calculus::hessian	callback			fn hessian (f : impl Fn (& [f64]) -> f64 , point : & [f64] ,) -> Vec < f64 >
+crate::kernels::calculus::jacobian	callback			fn jacobian (f : impl Fn (& [f64] , & mut [f64]) , point : & [f64] , m : usize ,) -> Vec < f64 >
+crate::kernels::calculus::partial_derivative	callback			fn partial_derivative (f : impl Fn (& [f64]) -> f64 , point : & [f64] , index : usize ,) -> f64
+crate::kernels::combinatorics::bell	no-declared-adapter			fn bell (n : u64) -> f64
+crate::kernels::combinatorics::catalan	no-declared-adapter			fn catalan (n : u64) -> f64
+crate::kernels::combinatorics::combinations	no-declared-adapter			fn combinations (n : u64 , k : u64 ,) -> f64
+crate::kernels::combinatorics::factorial	no-declared-adapter			fn factorial (n : u64) -> f64
+crate::kernels::combinatorics::falling_factorial	no-declared-adapter			fn falling_factorial (x : f64 , n : u64 ,) -> f64
+crate::kernels::combinatorics::permutations	no-declared-adapter			fn permutations (n : u64 , k : u64 ,) -> f64
+crate::kernels::combinatorics::rising_factorial	no-declared-adapter			fn rising_factorial (x : f64 , n : u64 ,) -> f64
+crate::kernels::combinatorics::solve_recurrence_numerical	no-declared-adapter			fn solve_recurrence_numerical (coeffs : & [f64] , initial_conditions : & [f64] , target_n : usize ,) -> Result < f64 , String >
+crate::kernels::combinatorics::stirling_second	no-declared-adapter			fn stirling_second (n : u64 , k : u64 ,) -> f64
+crate::kernels::complex::Mobius::apply	associated-method			fn apply (& self , z : Complex64 ,) -> Complex64
+crate::kernels::complex::Mobius::compose	associated-method			fn compose (& self , other : & Self ,) -> Self
+crate::kernels::complex::Mobius::identity	associated-method			const fn identity () -> Self
+crate::kernels::complex::Mobius::inverse	associated-method			fn inverse (& self) -> Self
+crate::kernels::complex::Mobius::new	associated-method			const fn new (a : Complex64 , b : Complex64 , c : Complex64 , d : Complex64 ,) -> Self
+crate::kernels::complex::cauchy_derivative	callback			fn cauchy_derivative < F > (f : F , z : Complex64 , order : u32 , radius : f64 , n : usize ,) -> Complex64 where F : Fn (Complex64) -> Complex64 ,
+crate::kernels::complex::circle_integral	callback			fn circle_integral < F > (f : F , center : Complex64 , radius : f64 , n : usize ,) -> Complex64 where F : Fn (Complex64) -> Complex64 ,
+crate::kernels::complex::complex_derivative	callback			fn complex_derivative < F > (f : & F , z : Complex64 ,) -> Complex64 where F : Fn (Complex64) -> Complex64 ,
+crate::kernels::complex::contour_integral	callback			fn contour_integral < F > (f : F , path : & [Complex64] , per_segment : usize ,) -> Complex64 where F : Fn (Complex64) -> Complex64 ,
+crate::kernels::complex::count_zeros_poles	callback			fn count_zeros_poles < F > (f : F , center : Complex64 , radius : f64 , n : usize ,) -> Option < i64 > where F : Fn (Complex64) -> Complex64 ,
+crate::kernels::complex::newton	callback			fn newton < F , D > (f : F , df : D , z0 : Complex64 , tolerance : f64 , max_iterations : usize ,) -> Option < Complex64 > where F : Fn (Complex64) -> Complex64 , D : Fn (Complex64) -> Complex64 ,
+crate::kernels::complex::residue	callback			fn residue < F > (f : F , z0 : Complex64 , radius : f64 , n : usize ,) -> Complex64 where F : Fn (Complex64) -> Complex64 ,
+crate::kernels::computer_graphics::Color::clamp	associated-method			const fn clamp (& self) -> Self
+crate::kernels::computer_graphics::Color::lerp	associated-method			fn lerp (& self , other : & Self , t : f64 ,) -> Self
+crate::kernels::computer_graphics::Color::new	associated-method			const fn new (r : f64 , g : f64 , b : f64 , a : f64 ,) -> Self
+crate::kernels::computer_graphics::Color::rgb	associated-method			const fn rgb (r : f64 , g : f64 , b : f64 ,) -> Self
+crate::kernels::computer_graphics::Plane::new	associated-method			const fn new (point : Point3D , normal : Vector3D ,) -> Self
+crate::kernels::computer_graphics::Point2D::distance_to	associated-method			fn distance_to (& self , other : & Self ,) -> f64
+crate::kernels::computer_graphics::Point2D::new	associated-method			const fn new (x : f64 , y : f64 ,) -> Self
+crate::kernels::computer_graphics::Point3D::distance_to	associated-method			fn distance_to (& self , other : & Self ,) -> f64
+crate::kernels::computer_graphics::Point3D::new	associated-method			const fn new (x : f64 , y : f64 , z : f64 ,) -> Self
+crate::kernels::computer_graphics::Point3D::to_vector	associated-method			const fn to_vector (& self) -> Vector3D
+crate::kernels::computer_graphics::Quaternion::conjugate	associated-method			const fn conjugate (& self) -> Self
+crate::kernels::computer_graphics::Quaternion::from_axis_angle	associated-method			fn from_axis_angle (axis : & Vector3D , angle : f64 ,) -> Self
+crate::kernels::computer_graphics::Quaternion::from_euler	associated-method			fn from_euler (roll : f64 , pitch : f64 , yaw : f64 ,) -> Self
+crate::kernels::computer_graphics::Quaternion::identity	associated-method			const fn identity () -> Self
+crate::kernels::computer_graphics::Quaternion::inverse	associated-method			fn inverse (& self) -> Self
+crate::kernels::computer_graphics::Quaternion::magnitude	associated-method			fn magnitude (& self) -> f64
+crate::kernels::computer_graphics::Quaternion::multiply	associated-method			fn multiply (& self , other : & Self ,) -> Self
+crate::kernels::computer_graphics::Quaternion::new	associated-method			const fn new (w : f64 , x : f64 , y : f64 , z : f64 ,) -> Self
+crate::kernels::computer_graphics::Quaternion::normalize	associated-method			fn normalize (& self) -> Self
+crate::kernels::computer_graphics::Quaternion::rotate_vector	associated-method			fn rotate_vector (& self , v : & Vector3D ,) -> Vector3D
+crate::kernels::computer_graphics::Quaternion::slerp	associated-method			fn slerp (& self , other : & Self , t : f64 ,) -> Self
+crate::kernels::computer_graphics::Quaternion::to_matrix	associated-method			fn to_matrix (& self) -> Matrix < f64 >
+crate::kernels::computer_graphics::Ray::at	associated-method			const fn at (& self , t : f64 ,) -> Point3D
+crate::kernels::computer_graphics::Ray::new	associated-method			const fn new (origin : Point3D , direction : Vector3D ,) -> Self
+crate::kernels::computer_graphics::Sphere::new	associated-method			const fn new (center : Point3D , radius : f64 ,) -> Self
+crate::kernels::computer_graphics::Vector2D::magnitude	associated-method			fn magnitude (& self) -> f64
+crate::kernels::computer_graphics::Vector2D::new	associated-method			const fn new (x : f64 , y : f64 ,) -> Self
+crate::kernels::computer_graphics::Vector2D::normalize	associated-method			fn normalize (& self) -> Self
+crate::kernels::computer_graphics::Vector2D::perpendicular	associated-method			const fn perpendicular (& self) -> Self
+crate::kernels::computer_graphics::Vector2D::rotate	associated-method			fn rotate (& self , angle : f64 ,) -> Self
+crate::kernels::computer_graphics::Vector3D::magnitude	associated-method			fn magnitude (& self) -> f64
+crate::kernels::computer_graphics::Vector3D::magnitude_squared	associated-method			fn magnitude_squared (& self) -> f64
+crate::kernels::computer_graphics::Vector3D::new	associated-method			const fn new (x : f64 , y : f64 , z : f64 ,) -> Self
+crate::kernels::computer_graphics::Vector3D::normalize	associated-method			fn normalize (& self) -> Self
+crate::kernels::computer_graphics::angle_between	opaque			fn angle_between (v1 : & Vector3D , v2 : & Vector3D ,) -> f64
+crate::kernels::computer_graphics::barycentric_coordinates	opaque			fn barycentric_coordinates (point : & Point3D , v0 : & Point3D , v1 : & Point3D , v2 : & Point3D ,) -> (f64 , f64 , f64)
+crate::kernels::computer_graphics::bezier_cubic	opaque			fn bezier_cubic (p0 : & Point3D , p1 : & Point3D , p2 : & Point3D , p3 : & Point3D , t : f64 ,) -> Point3D
+crate::kernels::computer_graphics::bezier_quadratic	opaque			fn bezier_quadratic (p0 : & Point3D , p1 : & Point3D , p2 : & Point3D , t : f64 ,) -> Point3D
+crate::kernels::computer_graphics::catmull_rom	opaque			fn catmull_rom (p0 : & Point3D , p1 : & Point3D , p2 : & Point3D , p3 : & Point3D , t : f64 ,) -> Point3D
+crate::kernels::computer_graphics::cross_product	opaque			fn cross_product (v1 : & Vector3D , v2 : & Vector3D ,) -> Vector3D
+crate::kernels::computer_graphics::degrees_to_radians	no-declared-adapter			const fn degrees_to_radians (degrees : f64) -> f64
+crate::kernels::computer_graphics::dot_product	opaque			fn dot_product (v1 : & Vector3D , v2 : & Vector3D ,) -> f64
+crate::kernels::computer_graphics::dot_product_2d	opaque			fn dot_product_2d (v1 : & Vector2D , v2 : & Vector2D ,) -> f64
+crate::kernels::computer_graphics::identity_matrix	opaque			fn identity_matrix () -> Matrix < f64 >
+crate::kernels::computer_graphics::lerp	opaque			fn lerp (v1 : & Vector3D , v2 : & Vector3D , t : f64 ,) -> Vector3D
+crate::kernels::computer_graphics::look_at_matrix	opaque			fn look_at_matrix (eye : & Vector3D , center : & Vector3D , up : & Vector3D ,) -> Matrix < f64 >
+crate::kernels::computer_graphics::orthographic_matrix	opaque			fn orthographic_matrix (left : f64 , right : f64 , bottom : f64 , top : f64 , near : f64 , far : f64 ,) -> Matrix < f64 >
+crate::kernels::computer_graphics::perspective_matrix	opaque			fn perspective_matrix (fov_y : f64 , aspect : f64 , near : f64 , far : f64 ,) -> Matrix < f64 >
+crate::kernels::computer_graphics::project	opaque			fn project (a : & Vector3D , b : & Vector3D ,) -> Vector3D
+crate::kernels::computer_graphics::radians_to_degrees	no-declared-adapter			const fn radians_to_degrees (radians : f64) -> f64
+crate::kernels::computer_graphics::ray_plane_intersection	opaque			fn ray_plane_intersection (ray : & Ray , plane : & Plane ,) -> Option < Intersection >
+crate::kernels::computer_graphics::ray_sphere_intersection	opaque			fn ray_sphere_intersection (ray : & Ray , sphere : & Sphere ,) -> Option < Intersection >
+crate::kernels::computer_graphics::ray_triangle_intersection	opaque			fn ray_triangle_intersection (ray : & Ray , v0 : & Point3D , v1 : & Point3D , v2 : & Point3D ,) -> Option < Intersection >
+crate::kernels::computer_graphics::reflect	opaque			fn reflect (incident : & Vector3D , normal : & Vector3D ,) -> Vector3D
+crate::kernels::computer_graphics::refract	opaque			fn refract (incident : & Vector3D , normal : & Vector3D , eta : f64 ,) -> Option < Vector3D >
+crate::kernels::computer_graphics::rotation_matrix_axis	opaque			fn rotation_matrix_axis (axis : & Vector3D , angle_rad : f64 ,) -> Matrix < f64 >
+crate::kernels::computer_graphics::rotation_matrix_x	opaque			fn rotation_matrix_x (angle_rad : f64) -> Matrix < f64 >
+crate::kernels::computer_graphics::rotation_matrix_y	opaque			fn rotation_matrix_y (angle_rad : f64) -> Matrix < f64 >
+crate::kernels::computer_graphics::rotation_matrix_z	opaque			fn rotation_matrix_z (angle_rad : f64) -> Matrix < f64 >
+crate::kernels::computer_graphics::scaling_matrix	opaque			fn scaling_matrix (sx : f64 , sy : f64 , sz : f64 ,) -> Matrix < f64 >
+crate::kernels::computer_graphics::shearing_matrix	opaque			fn shearing_matrix (xy : f64 , xz : f64 , yx : f64 , yz : f64 , zx : f64 , zy : f64 ,) -> Matrix < f64 >
+crate::kernels::computer_graphics::slerp	opaque			fn slerp (v1 : & Vector3D , v2 : & Vector3D , t : f64 ,) -> Vector3D
+crate::kernels::computer_graphics::transform_point	opaque			fn transform_point (matrix : & Matrix < f64 > , point : & Point3D ,) -> Point3D
+crate::kernels::computer_graphics::transform_vector	opaque			fn transform_vector (matrix : & Matrix < f64 > , vector : & Vector3D ,) -> Vector3D
+crate::kernels::computer_graphics::translation_matrix	opaque			fn translation_matrix (dx : f64 , dy : f64 , dz : f64 ,) -> Matrix < f64 >
+crate::kernels::computer_graphics::uniform_scaling_matrix	opaque			fn uniform_scaling_matrix (scale : f64) -> Matrix < f64 >
+crate::kernels::convergence::aitken_acceleration	no-declared-adapter			fn aitken_acceleration (sequence : & [f64]) -> Vec < f64 >
+crate::kernels::convergence::find_sequence_limit	callback			fn find_sequence_limit (term : impl Fn (f64) -> f64 , max_terms : usize , tolerance : f64 ,) -> Result < f64 , String >
+crate::kernels::convergence::levin_condition_number	opaque			fn levin_condition_number (terms : & [f64] , variant : LevinVariant , beta : f64 ,) -> f64
+crate::kernels::convergence::levin_sum	callback			fn levin_sum (term : impl Fn (usize) -> f64 , n_terms : usize , variant : LevinVariant ,) -> Result < (f64 , f64) , String >
+crate::kernels::convergence::levin_sum_lazy	opaque			fn levin_sum_lazy (terms : impl Iterator < Item = f64 > , max_terms : usize , variant : LevinVariant , beta : f64 ,) -> Result < (f64 , f64) , String >
+crate::kernels::convergence::levin_transform	opaque			fn levin_transform (partial_sums : & [f64] , variant : LevinVariant , beta : f64 ,) -> Vec < f64 >
+crate::kernels::convergence::levin_transform_terms	opaque			fn levin_transform_terms (terms : & [f64] , variant : LevinVariant , beta : f64 ,) -> Vec < f64 >
+crate::kernels::convergence::richardson_extrapolation	no-declared-adapter			fn richardson_extrapolation (sequence : & [f64]) -> Vec < f64 >
+crate::kernels::convergence::richardson_extrapolation_with	no-declared-adapter			fn richardson_extrapolation_with (sequence : & [f64] , growth : f64 ,) -> Vec < f64 >
+crate::kernels::convergence::sum_series_numerical	callback			fn sum_series_numerical (term : impl Fn (f64) -> f64 , start : usize , max_terms : usize , tolerance : f64 ,) -> f64
+crate::kernels::convergence::wynn_epsilon	no-declared-adapter			fn wynn_epsilon (sequence : & [f64]) -> Vec < f64 >
+crate::kernels::coordinates::from_cartesian	opaque			fn from_cartesian (point : & [f64] , to : CoordinateSystem ,) -> Result < Vec < f64 > , String >
+crate::kernels::coordinates::from_cartesian_pure	opaque			fn from_cartesian_pure (point : & [f64] , to : CoordinateSystem ,) -> Vec < f64 >
+crate::kernels::coordinates::jacobian_determinant	opaque			fn jacobian_determinant (from : CoordinateSystem , to : CoordinateSystem , at_point : & [f64] ,) -> Result < f64 , String >
+crate::kernels::coordinates::numerical_jacobian	opaque			fn numerical_jacobian (from : CoordinateSystem , to : CoordinateSystem , at_point : & [f64] ,) -> Result < Vec < Vec < f64 > > , String >
+crate::kernels::coordinates::to_cartesian	opaque			fn to_cartesian (point : & [f64] , from : CoordinateSystem ,) -> Result < Vec < f64 > , String >
+crate::kernels::coordinates::to_cartesian_pure	opaque			fn to_cartesian_pure (point : & [f64] , from : CoordinateSystem ,) -> Vec < f64 >
+crate::kernels::coordinates::transform_point	opaque			fn transform_point (point : & [f64] , from : CoordinateSystem , to : CoordinateSystem ,) -> Result < Vec < f64 > , String >
+crate::kernels::coordinates::transform_point_pure	opaque			fn transform_point_pure (point : & [f64] , from : CoordinateSystem , to : CoordinateSystem ,) -> Vec < f64 >
+crate::kernels::dd::Cdd::new	associated-method			const fn new (re : f64 , im : f64 ,) -> Self
+crate::kernels::dd::Cdd::norm	associated-method			fn norm (self) -> f64
+crate::kernels::dd::Dd::abs	associated-method			fn abs (self) -> Self
+crate::kernels::dd::Dd::from_f64	associated-method			const fn from_f64 (x : f64) -> Self
+crate::kernels::dd::Dd::from_parts	associated-method			fn from_parts (hi : f64 , lo : f64 ,) -> Self
+crate::kernels::dd::Dd::is_finite	associated-method			const fn is_finite (self) -> bool
+crate::kernels::dd::Dd::sqrt	associated-method			fn sqrt (self) -> Self
+crate::kernels::dd::Dd::to_f64	associated-method			const fn to_f64 (self) -> f64
+crate::kernels::dense::Lu::det	associated-method			fn det (& self) -> f64
+crate::kernels::dense::Lu::inverse	associated-method			fn inverse (& self) -> Mat
+crate::kernels::dense::Lu::solve	associated-method			fn solve (& self , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::dense::Mat::at	associated-method			fn at (& self , i : usize , j : usize ,) -> f64
+crate::kernels::dense::Mat::from_rows	associated-method			fn from_rows (rows : & [Vec < f64 >]) -> Result < Self , DenseError >
+crate::kernels::dense::Mat::identity	associated-method			fn identity (n : usize) -> Self
+crate::kernels::dense::Mat::matmul	declared	num_matmul		fn matmul (& self , other : & Self ,) -> Result < Self , DenseError >
+crate::kernels::dense::Mat::matvec	associated-method			fn matvec (& self , x : & [f64] ,) -> Vec < f64 >
+crate::kernels::dense::Mat::norm_fro	associated-method			fn norm_fro (& self) -> f64
+crate::kernels::dense::Mat::set	associated-method			fn set (& mut self , i : usize , j : usize , v : f64 ,)
+crate::kernels::dense::Mat::transpose	declared	num_transpose		fn transpose (& self) -> Self
+crate::kernels::dense::Mat::zeros	associated-method			fn zeros (rows : usize , cols : usize ,) -> Self
+crate::kernels::dense::cholesky	declared	num_cholesky		fn cholesky (a : & Mat) -> Result < Mat , DenseError >
+crate::kernels::dense::cholesky_solve	opaque			fn cholesky_solve (a : & Mat , b : & [f64] ,) -> Result < Vec < f64 > , DenseError >
+crate::kernels::dense::cond	declared	num_cond		fn cond (a : & Mat) -> Result < f64 , DenseError >
+crate::kernels::dense::eigen	opaque			fn eigen (a : & Mat) -> Result < Eigen , DenseError >
+crate::kernels::dense::eigen_generalized_symmetric	opaque			fn eigen_generalized_symmetric (a : & Mat , b : & Mat ,) -> Result < GeneralizedEigen , DenseError >
+crate::kernels::dense::eigen_symmetric	declared	num_eigen_symmetric		fn eigen_symmetric (a : & Mat) -> Result < (Vec < f64 > , Mat) , DenseError >
+crate::kernels::dense::eigenvalues	opaque			fn eigenvalues (a : & Mat) -> Result < Vec < (f64 , f64) > , DenseError >
+crate::kernels::dense::lstsq	declared	num_lstsq		fn lstsq (a : & Mat , b : & [f64] ,) -> Result < Vec < f64 > , DenseError >
+crate::kernels::dense::lstsq_svd	opaque			fn lstsq_svd (a : & Mat , b : & [f64] ,) -> Result < Vec < f64 > , DenseError >
+crate::kernels::dense::lu_factor	opaque			fn lu_factor (a : & Mat) -> Result < Lu , DenseError >
+crate::kernels::dense::pinv	declared	num_pinv		fn pinv (a : & Mat) -> Result < Mat , DenseError >
+crate::kernels::dense::qr	declared	num_qr		fn qr (a : & Mat) -> (Mat , Mat)
+crate::kernels::dense::rank	declared	num_rank_tol		fn rank (a : & Mat , tol : Option < f64 > ,) -> Result < usize , DenseError >
+crate::kernels::dense::solve	opaque			fn solve (a : & Mat , b : & [f64] ,) -> Result < Vec < f64 > , DenseError >
+crate::kernels::dense::spectral_radius	declared	num_spectral_radius		fn spectral_radius (a : & Mat) -> Result < f64 , DenseError >
+crate::kernels::dense::svd	declared	num_svd		fn svd (a : & Mat) -> Result < Svd , DenseError >
+crate::kernels::differential_geometry::christoffel_symbols	callback			fn christoffel_symbols (g : impl Fn (& [f64]) -> Vec < Vec < f64 > > , point : & [f64] ,) -> Result < Vec < Vec < Vec < f64 > > > , String >
+crate::kernels::differential_geometry::metric_tensor_at_point	callback			fn metric_tensor_at_point (g : impl Fn (& [f64]) -> Vec < Vec < f64 > > , point : & [f64] ,) -> Result < Vec < Vec < f64 > > , String >
+crate::kernels::differential_geometry::ricci_scalar	callback			fn ricci_scalar (g : impl Fn (& [f64]) -> Vec < Vec < f64 > > , point : & [f64] ,) -> Result < f64 , String >
+crate::kernels::differential_geometry::ricci_tensor	callback			fn ricci_tensor (g : impl Fn (& [f64]) -> Vec < Vec < f64 > > , point : & [f64] ,) -> Result < Vec < Vec < f64 > > , String >
+crate::kernels::differential_geometry::riemann_tensor	callback			fn riemann_tensor (g : impl Fn (& [f64]) -> Vec < Vec < f64 > > , point : & [f64] ,) -> Result < Vec < Vec < Vec < Vec < f64 > > > > , String >
+crate::kernels::eigs::arnoldi	callback			fn arnoldi < A : Fn (& [f64] , & mut [f64]) > (apply : A , v0 : & [f64] , m : usize ,) -> (Vec < Vec < f64 > > , Mat , f64)
+crate::kernels::eigs::eigs	callback			fn eigs < A : Fn (& [f64] , & mut [f64]) > (apply : A , n : usize , k : usize , which : Which , opts : & EigsOptions ,) -> Result < EigsResult , EigsError >
+crate::kernels::eigs::eigs_shift_invert	callback			fn eigs_shift_invert < S : Fn (& [f64] , & mut [f64]) > (solve : S , n : usize , k : usize , sigma : f64 , opts : & EigsOptions ,) -> Result < EigsResult , EigsError >
+crate::kernels::eigs::eigs_sym	callback			fn eigs_sym < A : Fn (& [f64] , & mut [f64]) > (apply : A , n : usize , k : usize , which : Which , opts : & EigsOptions ,) -> Result < EigsResult , EigsError >
+crate::kernels::eigs::eigs_sym_shift_invert	callback			fn eigs_sym_shift_invert < S : Fn (& [f64] , & mut [f64]) > (solve : S , n : usize , k : usize , sigma : f64 , opts : & EigsOptions ,) -> Result < EigsResult , EigsError >
+crate::kernels::eigs_ext::b_is_positive_definite	callback			fn b_is_positive_definite < B : Fn (& [f64] , & mut [f64]) > (apply_b : & B , n : usize , opts : & EigsOptions ,) -> bool
+crate::kernels::eigs_ext::complex_schur	opaque			fn complex_schur (a : & [Vec < C >]) -> Option < Schur >
+crate::kernels::eigs_ext::eigs_gen_shift_invert	callback			fn eigs_gen_shift_invert < A , B , S > (apply_a : A , apply_b : B , solve : S , n : usize , k : usize , opts : & GenEigsOptions ,) -> Result < EigsResult , EigsError > where A : Fn (& [f64] , & mut [f64]) , B : Fn (& [f64] , & mut [f64]) , S : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::eigs_ext::eigs_gen_sym_shift_invert	callback			fn eigs_gen_sym_shift_invert < A , B , S > (apply_a : A , apply_b : B , solve : S , n : usize , k : usize , opts : & GenEigsOptions ,) -> Result < EigsResult , EigsError > where A : Fn (& [f64] , & mut [f64]) , B : Fn (& [f64] , & mut [f64]) , S : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::eigs_ext::eigs_jd	callback			fn eigs_jd < A > (apply : A , n : usize , k : usize , target : (f64 , f64) , opts : & JdOptions , precond : Option < & OpFn < '_ > > ,) -> Result < EigsResult , EigsError > where A : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::eigs_ext::eigs_jd_sym	callback			fn eigs_jd_sym < A > (apply : A , n : usize , k : usize , target : f64 , opts : & JdOptions , precond : Option < & OpFn < '_ > > ,) -> Result < EigsResult , EigsError > where A : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::eigs_ext::eigs_jd_two_sided	callback			fn eigs_jd_two_sided < A , AT > (apply : A , apply_t : AT , n : usize , k : usize , target : (f64 , f64) , opts : & JdOptions ,) -> Result < TwoSidedResult , EigsError > where A : Fn (& [f64] , & mut [f64]) , AT : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::eigs_ext::eigs_krylov_schur	callback			fn eigs_krylov_schur < A : Fn (& [f64] , & mut [f64]) > (apply : A , n : usize , k : usize , which : Which , opts : & EigsOptions ,) -> Result < EigsResult , EigsError >
+crate::kernels::eigs_ext::eigs_sym_block	callback			fn eigs_sym_block < A : Fn (& [f64] , & mut [f64]) > (apply : A , n : usize , k : usize , which : Which , block : usize , opts : & EigsOptions ,) -> Result < EigsResult , EigsError >
+crate::kernels::eigs_ext::reorder_schur	callback			fn reorder_schur (t : & mut [Vec < C >] , q : & mut [Vec < C >] , count : usize , key : & dyn Fn (C) -> f64 ,)
+crate::kernels::error_correction::Bch::correct	associated-method			fn correct (& self , word : & [u8] ,) -> Result < (Vec < u8 > , usize) , String >
+crate::kernels::error_correction::Bch::decode	associated-method			fn decode (& self , word : & [u8] ,) -> Result < Vec < u8 > , String >
+crate::kernels::error_correction::Bch::encode	associated-method			fn encode (& self , data : & [u8] ,) -> Result < Vec < u8 > , String >
+crate::kernels::error_correction::Bch::for_data_len	associated-method			fn for_data_len (data_bits : usize , t : usize ,) -> Result < Self , String >
+crate::kernels::error_correction::Bch::generator	associated-method			fn generator (& self) -> & [u8]
+crate::kernels::error_correction::Bch::is_codeword	associated-method			fn is_codeword (& self , word : & [u8] ,) -> bool
+crate::kernels::error_correction::Bch::k	associated-method			const fn k (& self) -> usize
+crate::kernels::error_correction::Bch::m	associated-method			const fn m (& self) -> usize
+crate::kernels::error_correction::Bch::n	associated-method			const fn n (& self) -> usize
+crate::kernels::error_correction::Bch::new	associated-method			fn new (m : usize , t : usize ,) -> Result < Self , String >
+crate::kernels::error_correction::Bch::parity_len	associated-method			const fn parity_len (& self) -> usize
+crate::kernels::error_correction::Bch::t	associated-method			const fn t (& self) -> usize
+crate::kernels::error_correction::PolyGF256::degree	associated-method			const fn degree (& self) -> usize
+crate::kernels::error_correction::PolyGF256::derivative	associated-method			fn derivative (& self) -> Self
+crate::kernels::error_correction::PolyGF256::eval	associated-method			fn eval (& self , x : u8 ,) -> u8
+crate::kernels::error_correction::PolyGF256::new	associated-method			const fn new (coeffs : Vec < u8 >) -> Self
+crate::kernels::error_correction::PolyGF256::normalize	associated-method			fn normalize (& self) -> Self
+crate::kernels::error_correction::PolyGF256::poly_add	associated-method			fn poly_add (& self , other : & Self ,) -> Self
+crate::kernels::error_correction::PolyGF256::poly_div	associated-method			fn poly_div (& self , divisor : & Self ,) -> Result < (Self , Self) , String >
+crate::kernels::error_correction::PolyGF256::poly_mul	associated-method			fn poly_mul (& self , other : & Self ,) -> Self
+crate::kernels::error_correction::PolyGF256::poly_sub	associated-method			fn poly_sub (& self , other : & Self ,) -> Self
+crate::kernels::error_correction::PolyGF256::scale	associated-method			fn scale (& self , c : u8 ,) -> Self
+crate::kernels::error_correction::bch_decode	no-declared-adapter			fn bch_decode (codeword : & [u8] , t : usize ,) -> Result < Vec < u8 > , String >
+crate::kernels::error_correction::bch_encode	no-declared-adapter			fn bch_encode (data : & [u8] , t : usize ,) -> Vec < u8 >
+crate::kernels::error_correction::calculate_syndromes	no-declared-adapter			fn calculate_syndromes (codeword : & [u8] , n_parity : usize ,) -> Vec < u8 >
+crate::kernels::error_correction::chien_search	opaque			fn chien_search (sigma : & PolyGF256) -> Result < Vec < u8 > , String >
+crate::kernels::error_correction::code_rate	no-declared-adapter			fn code_rate (k : usize , n : usize ,) -> f64
+crate::kernels::error_correction::convolutional_encode	no-declared-adapter			fn convolutional_encode (data : & [u8]) -> Vec < u8 >
+crate::kernels::error_correction::crc16_compute	no-declared-adapter			fn crc16_compute (data : & [u8]) -> u16
+crate::kernels::error_correction::crc32_compute_numerical	no-declared-adapter			fn crc32_compute_numerical (data : & [u8]) -> u32
+crate::kernels::error_correction::crc32_finalize_numerical	no-declared-adapter			const fn crc32_finalize_numerical (crc : u32) -> u32
+crate::kernels::error_correction::crc32_update_numerical	no-declared-adapter			fn crc32_update_numerical (crc : u32 , data : & [u8] ,) -> u32
+crate::kernels::error_correction::crc32_verify_numerical	no-declared-adapter			fn crc32_verify_numerical (data : & [u8] , expected_crc : u32 ,) -> bool
+crate::kernels::error_correction::crc8_compute	no-declared-adapter			fn crc8_compute (data : & [u8]) -> u8
+crate::kernels::error_correction::deinterleave	no-declared-adapter			fn deinterleave (data : & [u8] , depth : usize ,) -> Vec < u8 >
+crate::kernels::error_correction::error_correction_capability	no-declared-adapter			const fn error_correction_capability (min_distance : usize) -> usize
+crate::kernels::error_correction::error_detection_capability	no-declared-adapter			const fn error_detection_capability (min_distance : usize) -> usize
+crate::kernels::error_correction::forney_algorithm	opaque			fn forney_algorithm (omega : & PolyGF256 , sigma : & PolyGF256 , error_locs : & [u8] ,) -> Result < Vec < u8 > , String >
+crate::kernels::error_correction::hamming_check_numerical	no-declared-adapter			const fn hamming_check_numerical (codeword : & [u8]) -> bool
+crate::kernels::error_correction::hamming_decode_numerical	no-declared-adapter			fn hamming_decode_numerical (codeword : & [u8]) -> Result < (Vec < u8 > , Option < usize >) , String >
+crate::kernels::error_correction::hamming_distance_numerical	no-declared-adapter			fn hamming_distance_numerical (a : & [u8] , b : & [u8] ,) -> Option < usize >
+crate::kernels::error_correction::hamming_encode_numerical	no-declared-adapter			fn hamming_encode_numerical (data : & [u8]) -> Option < Vec < u8 > >
+crate::kernels::error_correction::hamming_weight_numerical	no-declared-adapter			fn hamming_weight_numerical (data : & [u8]) -> usize
+crate::kernels::error_correction::interleave	no-declared-adapter			fn interleave (data : & [u8] , depth : usize ,) -> Vec < u8 >
+crate::kernels::error_correction::minimum_distance	no-declared-adapter			fn minimum_distance (codewords : & [Vec < u8 >]) -> Option < usize >
+crate::kernels::error_correction::reed_solomon_check	no-declared-adapter			fn reed_solomon_check (codeword : & [u8] , n_parity : usize ,) -> bool
+crate::kernels::error_correction::reed_solomon_decode	no-declared-adapter			fn reed_solomon_decode (codeword : & mut [u8] , n_parity : usize ,) -> Result < () , String >
+crate::kernels::error_correction::reed_solomon_encode	no-declared-adapter			fn reed_solomon_encode (message : & [u8] , n_parity : usize ,) -> Result < Vec < u8 > , String >
+crate::kernels::fftconv::circular_convolve	no-declared-adapter			fn circular_convolve (a : & [f64] , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::fftconv::convolve	no-declared-adapter			fn convolve (a : & [f64] , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::fftconv::correlate	no-declared-adapter			fn correlate (a : & [f64] , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::fftconv::fft	opaque			fn fft (x : & [Complex] , inverse : bool ,) -> Vec < Complex >
+crate::kernels::fftconv::poly_mul_i64	no-declared-adapter			fn poly_mul_i64 (a : & [i64] , b : & [i64] ,) -> Vec < i64 >
+crate::kernels::finite_field::PrimeFieldElement::inverse	associated-method			fn inverse (& self) -> Option < Self >
+crate::kernels::finite_field::PrimeFieldElement::is_agnostic	associated-method			const fn is_agnostic (& self) -> bool
+crate::kernels::finite_field::PrimeFieldElement::new	associated-method			const fn new (value : u64 , modulus : u64 ,) -> Self
+crate::kernels::finite_field::PrimeFieldElement::pow	associated-method			fn pow (& self , mut exp : u64 ,) -> Self
+crate::kernels::finite_field::gf256_add	no-declared-adapter			const fn gf256_add (a : u8 , b : u8 ,) -> u8
+crate::kernels::finite_field::gf256_div	no-declared-adapter			fn gf256_div (a : u8 , b : u8 ,) -> Result < u8 , String >
+crate::kernels::finite_field::gf256_inv	no-declared-adapter			fn gf256_inv (a : u8) -> Result < u8 , String >
+crate::kernels::finite_field::gf256_mul	no-declared-adapter			fn gf256_mul (a : u8 , b : u8 ,) -> u8
+crate::kernels::finite_field::gf256_pow	no-declared-adapter			fn gf256_pow (a : u8 , exp : u64 ,) -> u8
+crate::kernels::fractal_geometry_and_chaos::AffineTransform2D::apply	associated-method			fn apply (& self , point : (f64 , f64) ,) -> (f64 , f64)
+crate::kernels::fractal_geometry_and_chaos::AffineTransform2D::new	associated-method			const fn new (a : f64 , b : f64 , c : f64 , d : f64 , e : f64 , f : f64 ,) -> Self
+crate::kernels::fractal_geometry_and_chaos::FractalData::get	associated-method			fn get (& self , x : usize , y : usize ,) -> Option < u32 >
+crate::kernels::fractal_geometry_and_chaos::FractalData::new	associated-method			fn new (width : usize , height : usize , max_iter : u32 ,) -> Self
+crate::kernels::fractal_geometry_and_chaos::FractalData::set	associated-method			fn set (& mut self , x : usize , y : usize , value : u32 ,)
+crate::kernels::fractal_geometry_and_chaos::barnsley_fern_ifs	opaque			fn barnsley_fern_ifs () -> (Vec < AffineTransform2D > , Vec < f64 >)
+crate::kernels::fractal_geometry_and_chaos::box_counting_dimension	no-declared-adapter			fn box_counting_dimension (points : & [(f64 , f64)] , num_scales : usize ,) -> f64
+crate::kernels::fractal_geometry_and_chaos::correlation_dimension	no-declared-adapter			fn correlation_dimension (points : & [(f64 , f64)] , num_radii : usize ,) -> f64
+crate::kernels::fractal_geometry_and_chaos::generate_burning_ship	no-declared-adapter			fn generate_burning_ship (width : usize , height : usize , x_range : (f64 , f64) , y_range : (f64 , f64) , max_iter : u32 ,) -> Vec < Vec < u32 > >
+crate::kernels::fractal_geometry_and_chaos::generate_henon_map	no-declared-adapter			fn generate_henon_map (start_point : (f64 , f64) , num_steps : usize , a : f64 , b : f64 ,) -> Vec < (f64 , f64) >
+crate::kernels::fractal_geometry_and_chaos::generate_ifs_fractal	opaque			fn generate_ifs_fractal (transforms : & [AffineTransform2D] , probabilities : & [f64] , start_point : (f64 , f64) , num_points : usize , skip : usize ,) -> Vec < (f64 , f64) >
+crate::kernels::fractal_geometry_and_chaos::generate_julia_set	no-declared-adapter			fn generate_julia_set (width : usize , height : usize , x_range : (f64 , f64) , y_range : (f64 , f64) , c : (f64 , f64) , max_iter : u32 ,) -> Vec < Vec < u32 > >
+crate::kernels::fractal_geometry_and_chaos::generate_lorenz_attractor	no-declared-adapter			fn generate_lorenz_attractor (start_point : (f64 , f64 , f64) , dt : f64 , num_steps : usize ,) -> Vec < (f64 , f64 , f64) >
+crate::kernels::fractal_geometry_and_chaos::generate_lorenz_attractor_custom	no-declared-adapter			fn generate_lorenz_attractor_custom (start_point : (f64 , f64 , f64) , dt : f64 , num_steps : usize , sigma : f64 , rho : f64 , beta : f64 ,) -> Vec < (f64 , f64 , f64) >
+crate::kernels::fractal_geometry_and_chaos::generate_mandelbrot_set	no-declared-adapter			fn generate_mandelbrot_set (width : usize , height : usize , x_range : (f64 , f64) , y_range : (f64 , f64) , max_iter : u32 ,) -> Vec < Vec < u32 > >
+crate::kernels::fractal_geometry_and_chaos::generate_multibrot	no-declared-adapter			fn generate_multibrot (width : usize , height : usize , x_range : (f64 , f64) , y_range : (f64 , f64) , d : f64 , max_iter : u32 ,) -> Vec < Vec < u32 > >
+crate::kernels::fractal_geometry_and_chaos::generate_newton_fractal	no-declared-adapter			fn generate_newton_fractal (width : usize , height : usize , x_range : (f64 , f64) , y_range : (f64 , f64) , max_iter : u32 , tolerance : f64 ,) -> Vec < Vec < u32 > >
+crate::kernels::fractal_geometry_and_chaos::generate_rossler_attractor	no-declared-adapter			fn generate_rossler_attractor (start_point : (f64 , f64 , f64) , dt : f64 , num_steps : usize , a : f64 , b : f64 , c : f64 ,) -> Vec < (f64 , f64 , f64) >
+crate::kernels::fractal_geometry_and_chaos::generate_tinkerbell_map	no-declared-adapter			fn generate_tinkerbell_map (start_point : (f64 , f64) , num_steps : usize , a : f64 , b : f64 , c : f64 , d : f64 ,) -> Vec < (f64 , f64) >
+crate::kernels::fractal_geometry_and_chaos::julia_escape_time	no-declared-adapter			fn julia_escape_time (z_real : f64 , z_imag : f64 , c_real : f64 , c_imag : f64 , max_iter : u32 ,) -> u32
+crate::kernels::fractal_geometry_and_chaos::logistic_bifurcation	no-declared-adapter			fn logistic_bifurcation (r_range : (f64 , f64) , num_r_values : usize , transient : usize , num_points : usize , x0 : f64 ,) -> Vec < (f64 , f64) >
+crate::kernels::fractal_geometry_and_chaos::logistic_map_iterate	no-declared-adapter			fn logistic_map_iterate (x0 : f64 , r : f64 , num_steps : usize ,) -> Vec < f64 >
+crate::kernels::fractal_geometry_and_chaos::lyapunov_exponent_logistic	no-declared-adapter			fn lyapunov_exponent_logistic (r : f64 , x0 : f64 , transient : usize , num_iterations : usize ,) -> f64
+crate::kernels::fractal_geometry_and_chaos::lyapunov_exponent_lorenz	no-declared-adapter			fn lyapunov_exponent_lorenz (start_point : (f64 , f64 , f64) , dt : f64 , num_steps : usize , sigma : f64 , rho : f64 , beta : f64 ,) -> f64
+crate::kernels::fractal_geometry_and_chaos::mandelbrot_escape_time	no-declared-adapter			fn mandelbrot_escape_time (c_real : f64 , c_imag : f64 , max_iter : u32 ,) -> u32
+crate::kernels::fractal_geometry_and_chaos::orbit_density	no-declared-adapter			fn orbit_density (points : & [(f64 , f64)] , x_bins : usize , y_bins : usize , x_range : (f64 , f64) , y_range : (f64 , f64) ,) -> Vec < Vec < usize > >
+crate::kernels::fractal_geometry_and_chaos::orbit_entropy	no-declared-adapter			fn orbit_entropy (density : & [Vec < usize >]) -> f64
+crate::kernels::fractal_geometry_and_chaos::sierpinski_triangle_ifs	opaque			fn sierpinski_triangle_ifs () -> (Vec < AffineTransform2D > , Vec < f64 >)
+crate::kernels::functional_analysis::gram_schmidt	no-declared-adapter			fn gram_schmidt (basis : & [Vec < (f64 , f64) >]) -> Result < Vec < Vec < (f64 , f64) > > , String >
+crate::kernels::functional_analysis::gram_schmidt_orthonormal	no-declared-adapter			fn gram_schmidt_orthonormal (basis : & [Vec < (f64 , f64) >]) -> Result < Vec < Vec < (f64 , f64) > > , String >
+crate::kernels::functional_analysis::infinity_norm	no-declared-adapter			fn infinity_norm (points : & [(f64 , f64)]) -> f64
+crate::kernels::functional_analysis::inner_product	no-declared-adapter			fn inner_product (f_points : & [(f64 , f64)] , g_points : & [(f64 , f64)] ,) -> Result < f64 , String >
+crate::kernels::functional_analysis::l1_norm	no-declared-adapter			fn l1_norm (points : & [(f64 , f64)]) -> f64
+crate::kernels::functional_analysis::l2_norm	no-declared-adapter			fn l2_norm (points : & [(f64 , f64)]) -> f64
+crate::kernels::functional_analysis::normalize	no-declared-adapter			fn normalize (points : & [(f64 , f64)]) -> Vec < (f64 , f64) >
+crate::kernels::functional_analysis::project	no-declared-adapter			fn project (f_points : & [(f64 , f64)] , g_points : & [(f64 , f64)] ,) -> Result < Vec < (f64 , f64) > , String >
+crate::kernels::geometric_algebra::Multivector3D::conjugate	associated-method			fn conjugate (self) -> Self
+crate::kernels::geometric_algebra::Multivector3D::dot	associated-method			fn dot (self , rhs : Self ,) -> Self
+crate::kernels::geometric_algebra::Multivector3D::inv	associated-method			fn inv (self) -> Option < Self >
+crate::kernels::geometric_algebra::Multivector3D::new	associated-method			const fn new (s : f64 , v1 : f64 , v2 : f64 , v3 : f64 , b12 : f64 , b23 : f64 , b31 : f64 , pss : f64 ,) -> Self
+crate::kernels::geometric_algebra::Multivector3D::norm	associated-method			fn norm (self) -> f64
+crate::kernels::geometric_algebra::Multivector3D::norm_sq	associated-method			fn norm_sq (self) -> f64
+crate::kernels::geometric_algebra::Multivector3D::reverse	associated-method			fn reverse (self) -> Self
+crate::kernels::geometric_algebra::Multivector3D::wedge	associated-method			fn wedge (self , rhs : Self ,) -> Self
+crate::kernels::graph::CanonicalLabelling::code	associated-method			fn code (& self) -> & [u32]
+crate::kernels::graph::CanonicalLabelling::generators	associated-method			fn generators (& self) -> & [Permutation]
+crate::kernels::graph::CanonicalLabelling::group_order	associated-method			const fn group_order (& self) -> & BigInt
+crate::kernels::graph::CanonicalLabelling::is_exact	associated-method			const fn is_exact (& self) -> bool
+crate::kernels::graph::CanonicalLabelling::matrix	associated-method			fn matrix (& self) -> Vec < Vec < u32 > >
+crate::kernels::graph::CanonicalLabelling::num_nodes	associated-method			const fn num_nodes (& self) -> usize
+crate::kernels::graph::CanonicalLabelling::num_nodes_visited	associated-method			const fn num_nodes_visited (& self) -> usize
+crate::kernels::graph::CanonicalLabelling::orbits	associated-method			fn orbits (& self) -> & [Vec < usize >]
+crate::kernels::graph::CanonicalLabelling::order	associated-method			fn order (& self) -> & [usize]
+crate::kernels::graph::CanonicalLabelling::position	associated-method			fn position (& self , v : usize ,) -> Option < usize >
+crate::kernels::graph::CellCertificate::colour	associated-method			const fn colour (& self) -> u32
+crate::kernels::graph::CellCertificate::in_counts	associated-method			fn in_counts (& self) -> & [(usize , u32 , usize)]
+crate::kernels::graph::CellCertificate::out_counts	associated-method			fn out_counts (& self) -> & [(usize , u32 , usize)]
+crate::kernels::graph::CellCertificate::size	associated-method			const fn size (& self) -> usize
+crate::kernels::graph::ColourGraph::colours	associated-method			fn colours (& self) -> & [u32]
+crate::kernels::graph::ColourGraph::degree	associated-method			fn degree (& self , v : usize ,) -> usize
+crate::kernels::graph::ColourGraph::edge_label	associated-method			fn edge_label (& self , u : usize , v : usize ,) -> u32
+crate::kernels::graph::ColourGraph::has_edge	associated-method			fn has_edge (& self , u : usize , v : usize ,) -> bool
+crate::kernels::graph::ColourGraph::in_arcs	associated-method			fn in_arcs (& self , v : usize ,) -> & [(usize , u32)]
+crate::kernels::graph::ColourGraph::is_directed	associated-method			const fn is_directed (& self) -> bool
+crate::kernels::graph::ColourGraph::matrix	associated-method			fn matrix (& self) -> & [Vec < u32 >]
+crate::kernels::graph::ColourGraph::new	associated-method			fn new (n : usize , directed : bool ,) -> Self
+crate::kernels::graph::ColourGraph::num_nodes	associated-method			const fn num_nodes (& self) -> usize
+crate::kernels::graph::ColourGraph::out_arcs	associated-method			fn out_arcs (& self , v : usize ,) -> & [(usize , u32)]
+crate::kernels::graph::ColourGraph::set_colours	associated-method			fn set_colours (& mut self , colours : & [u32] ,) -> bool
+crate::kernels::graph::ColourGraph::set_edge	associated-method			fn set_edge (& mut self , u : usize , v : usize , label : u32 ,) -> bool
+crate::kernels::graph::ColourGraph::with_colours	associated-method			fn with_colours (n : usize , directed : bool , colours : & [u32] ,) -> Option < Self >
+crate::kernels::graph::Graph::add_edge	associated-method			fn add_edge (& mut self , u : usize , v : usize , weight : f64 ,)
+crate::kernels::graph::Graph::adj	associated-method			fn adj (& self , u : usize ,) -> & [(usize , f64)]
+crate::kernels::graph::Graph::new	associated-method			fn new (num_nodes : usize) -> Self
+crate::kernels::graph::Graph::num_nodes	associated-method			const fn num_nodes (& self) -> usize
+crate::kernels::graph::Permutation::apply	associated-method			fn apply (& self , v : usize ,) -> Option < usize >
+crate::kernels::graph::Permutation::compose	associated-method			fn compose (& self , other : & Self ,) -> Option < Self >
+crate::kernels::graph::Permutation::cycles	associated-method			fn cycles (& self) -> Vec < Vec < usize > >
+crate::kernels::graph::Permutation::from_images	associated-method			fn from_images (image : Vec < usize >) -> Option < Self >
+crate::kernels::graph::Permutation::identity	associated-method			fn identity (n : usize) -> Self
+crate::kernels::graph::Permutation::image	associated-method			fn image (& self) -> & [usize]
+crate::kernels::graph::Permutation::inverse	associated-method			fn inverse (& self) -> Self
+crate::kernels::graph::Permutation::is_empty	associated-method			const fn is_empty (& self) -> bool
+crate::kernels::graph::Permutation::is_identity	associated-method			fn is_identity (& self) -> bool
+crate::kernels::graph::Permutation::len	associated-method			const fn len (& self) -> usize
+crate::kernels::graph::Refinement::cell_of	associated-method			fn cell_of (& self) -> & [usize]
+crate::kernels::graph::Refinement::cell_sizes	associated-method			fn cell_sizes (& self) -> Vec < usize >
+crate::kernels::graph::Refinement::cells	associated-method			fn cells (& self) -> & [Vec < usize >]
+crate::kernels::graph::Refinement::certificate	associated-method			const fn certificate (& self) -> & RefinementCertificate
+crate::kernels::graph::Refinement::is_directed	associated-method			const fn is_directed (& self) -> bool
+crate::kernels::graph::Refinement::is_discrete	associated-method			fn is_discrete (& self) -> bool
+crate::kernels::graph::Refinement::num_cells	associated-method			const fn num_cells (& self) -> usize
+crate::kernels::graph::Refinement::rounds	associated-method			const fn rounds (& self) -> usize
+crate::kernels::graph::Refinement::verify	associated-method			fn verify (& self , graph : & ColourGraph ,) -> bool
+crate::kernels::graph::RefinementCertificate::cell_sizes	associated-method			fn cell_sizes (& self) -> Vec < usize >
+crate::kernels::graph::RefinementCertificate::cells	associated-method			fn cells (& self) -> & [CellCertificate]
+crate::kernels::graph::RefinementCertificate::is_directed	associated-method			const fn is_directed (& self) -> bool
+crate::kernels::graph::RefinementCertificate::is_discrete	associated-method			fn is_discrete (& self) -> bool
+crate::kernels::graph::RefinementCertificate::num_cells	associated-method			const fn num_cells (& self) -> usize
+crate::kernels::graph::RefinementCertificate::num_nodes	associated-method			const fn num_nodes (& self) -> usize
+crate::kernels::graph::SearchBudget::for_size	associated-method			const fn for_size (n : usize) -> Self
+crate::kernels::graph::SearchBudget::max_nodes	associated-method			const fn max_nodes (& self) -> usize
+crate::kernels::graph::SearchBudget::nodes	associated-method			const fn nodes (max_nodes : usize) -> Self
+crate::kernels::graph::bfs	opaque			fn bfs (graph : & Graph , start_node : usize ,) -> Vec < usize >
+crate::kernels::graph::canonical_labelling	opaque			fn canonical_labelling (graph : & ColourGraph , budget : SearchBudget ,) -> CanonicalLabelling
+crate::kernels::graph::connected_components	opaque			fn connected_components (graph : & Graph) -> Vec < usize >
+crate::kernels::graph::dijkstra	opaque			fn dijkstra (graph : & Graph , start_node : usize ,) -> (Vec < f64 > , Vec < Option < usize > >)
+crate::kernels::graph::floyd_warshall	opaque			fn floyd_warshall (graph : & Graph) -> Vec < f64 >
+crate::kernels::graph::isomorphic	opaque			fn isomorphic (a : & ColourGraph , b : & ColourGraph , budget : SearchBudget ,) -> Option < bool >
+crate::kernels::graph::minimum_spanning_tree	opaque			fn minimum_spanning_tree (graph : & Graph) -> Graph
+crate::kernels::graph::page_rank	opaque			fn page_rank (graph : & Graph , damping_factor : f64 , tolerance : f64 , max_iter : usize ,) -> Vec < f64 >
+crate::kernels::graph::refine	opaque			fn refine (graph : & ColourGraph) -> Refinement
+crate::kernels::graph::wl_equivalent	opaque			fn wl_equivalent (a : & ColourGraph , b : & ColourGraph ,) -> bool
+crate::kernels::homology::ChainComplex::cohomology	associated-method			fn cohomology (& self , k : usize ,) -> Group
+crate::kernels::homology::ChainComplex::homology	associated-method			fn homology (& self , k : usize ,) -> Group
+crate::kernels::homology::ChainComplex::homology_mod_p	associated-method			fn homology_mod_p (& self , k : usize , p : u64 ,) -> usize
+crate::kernels::homology::ChainComplex::top_degree	associated-method			fn top_degree (& self) -> Option < usize >
+crate::kernels::homology::abelianization	opaque			fn abelianization (p : & Presentation) -> Group
+crate::kernels::homology::betti_list	opaque			fn betti_list (complex : & [Simplex]) -> Vec < usize >
+crate::kernels::homology::bottleneck_distance	no-declared-adapter			fn bottleneck_distance (a : & [(f64 , f64)] , b : & [(f64 , f64)] ,) -> f64
+crate::kernels::homology::chain_complex	opaque			fn chain_complex (basis : & [Vec < Simplex >]) -> ChainComplex
+crate::kernels::homology::complex_chains	opaque			fn complex_chains (complex : & [Simplex]) -> ChainComplex
+crate::kernels::homology::cone	opaque			fn cone (complex : & [Simplex]) -> Vec < Simplex >
+crate::kernels::homology::cubical_betti	no-declared-adapter			fn cubical_betti (image : & [Vec < bool >] , eight : bool ,) -> (usize , usize)
+crate::kernels::homology::cubical_chains	opaque			fn cubical_chains (image : & [Vec < bool >] , eight : bool ,) -> ChainComplex
+crate::kernels::homology::distance_matrix	no-declared-adapter			fn distance_matrix (points : & [Vec < f64 >]) -> Vec < Vec < f64 > >
+crate::kernels::homology::dunce_cap	opaque			fn dunce_cap (k : usize) -> Vec < Simplex >
+crate::kernels::homology::full_simplex	opaque			fn full_simplex (n : usize) -> Vec < Simplex >
+crate::kernels::homology::induced_chain_map	generic			fn induced_chain_map < S : std :: hash :: BuildHasher > (k : & [Simplex] , l : & [Simplex] , f : & HashMap < usize , usize , S > , dim : usize ,) -> Option < Vec < Vec < i64 > > >
+crate::kernels::homology::induced_homology	generic			fn induced_homology < S : std :: hash :: BuildHasher > (k : & [Simplex] , l : & [Simplex] , f : & HashMap < usize , usize , S > , dim : usize ,) -> Option < ql :: QMat >
+crate::kernels::homology::intersection	opaque			fn intersection (a : & [Simplex] , b : & [Simplex] ,) -> Vec < Simplex >
+crate::kernels::homology::is_prime	no-declared-adapter			fn is_prime (n : u64) -> bool
+crate::kernels::homology::is_simplicial_map	generic			fn is_simplicial_map < S : std :: hash :: BuildHasher > (k : & [Simplex] , l : & [Simplex] , f : & HashMap < usize , usize , S > ,) -> bool
+crate::kernels::homology::is_subcomplex	opaque			fn is_subcomplex (sub : & [Simplex] , complex : & [Simplex] ,) -> bool
+crate::kernels::homology::join	opaque			fn join (k : & [Simplex] , l : & [Simplex] ,) -> Vec < Simplex >
+crate::kernels::homology::klein_bottle	opaque			fn klein_bottle (m : usize , n : usize ,) -> Vec < Simplex >
+crate::kernels::homology::matrix_rank	opaque			fn matrix_rank (m : & [Vec < Q >]) -> usize
+crate::kernels::homology::mayer_vietoris	opaque			fn mayer_vietoris (a : & [Simplex] , b : & [Simplex] ,) -> Option < Vec < usize > >
+crate::kernels::homology::persistence_bars	opaque			fn persistence_bars (filtration : & [(f64 , Simplex)] , max_dim : usize ,) -> Option < Vec < Bar > >
+crate::kernels::homology::pi1_presentation	opaque			fn pi1_presentation (complex : & [Simplex]) -> Option < Presentation >
+crate::kernels::homology::product	opaque			fn product (k : & [Simplex] , l : & [Simplex] , limit : usize ,) -> Option < Vec < Simplex > >
+crate::kernels::homology::projective_plane	opaque			fn projective_plane (k : usize) -> Vec < Simplex >
+crate::kernels::homology::rank_mod_p	no-declared-adapter			fn rank_mod_p (m : & [Vec < i64 >] , p : u64 ,) -> usize
+crate::kernels::homology::reduced_homology	opaque			fn reduced_homology (cc : & ChainComplex , k : usize ,) -> Group
+crate::kernels::homology::relative_chains	opaque			fn relative_chains (complex : & [Simplex] , sub : & [Simplex] ,) -> ChainComplex
+crate::kernels::homology::rips_filtration	opaque			fn rips_filtration (dist : & [Vec < f64 >] , max_eps : f64 , max_simplex_dim : usize , limit : usize ,) -> Option < Vec < (f64 , Simplex) > >
+crate::kernels::homology::simplify_presentation	opaque			fn simplify_presentation (p : & Presentation) -> Presentation
+crate::kernels::homology::smith_invariants	opaque			fn smith_invariants (m : & [Vec < i64 >]) -> Vec < BigInt >
+crate::kernels::homology::sphere	opaque			fn sphere (n : usize) -> Vec < Simplex >
+crate::kernels::homology::suspension	opaque			fn suspension (complex : & [Simplex]) -> Vec < Simplex >
+crate::kernels::homology::union	opaque			fn union (a : & [Simplex] , b : & [Simplex] ,) -> Vec < Simplex >
+crate::kernels::homology::wedge	opaque			fn wedge (k : & [Simplex] , l : & [Simplex] , vk : usize , vl : usize ,) -> Vec < Simplex >
+crate::kernels::homotopy::homotopy_solve	opaque			fn homotopy_solve (system : & [Vec < PolyTerm >] , opts : & HomotopyOptions ,) -> Result < Vec < PathEnd > , RootError >
+crate::kernels::homotopy_cert::RigorousBall::contains	associated-method			fn contains (& self , re : f64 , im : f64 ,) -> bool
+crate::kernels::homotopy_cert::RigorousBall::distance	associated-method			fn distance (& self , re : f64 , im : f64 ,) -> f64
+crate::kernels::homotopy_cert::certify_endpoints	opaque			fn certify_endpoints (system : & [Vec < PolyTerm >] , ends : & [PathEnd] , safety : f64 ,) -> CertificationReport
+crate::kernels::homotopy_cert::certify_endpoints_rigorous	opaque			fn certify_endpoints_rigorous (system : & [Vec < PolyTerm >] , ends : & [PathEnd] ,) -> RigorousReport
+crate::kernels::homotopy_cert::certify_homotopy_node	opaque			fn certify_homotopy_node (homogenised : & [Vec < PolyTerm >] , degrees : & [u32] , gamma : Cx , patch : & [Cx] , x : & [(f64 , f64)] , t : (f64 , f64) ,) -> Option < RigorousBall >
+crate::kernels::homotopy_cert::certify_zero	opaque			fn certify_zero (system : & [Vec < PolyTerm >] , guess : & [(f64 , f64)] ,) -> Option < RigorousBall >
+crate::kernels::homotopy_cert::certify_zero_terms	opaque			fn certify_zero_terms (system : & [Vec < CTerm >] , guess : & [(f64 , f64)] ,) -> Option < RigorousBall >
+crate::kernels::homotopy_cert::disjoint	opaque			fn disjoint (a : & RigorousBall , b : & RigorousBall ,) -> bool
+crate::kernels::homotopy_cert::homotopy_node_terms	opaque			fn homotopy_node_terms (homogenised : & [Vec < PolyTerm >] , degrees : & [u32] , gamma : Cx , patch : & [Cx] , t : Cx ,) -> Option < Vec < Vec < CTerm > > >
+crate::kernels::homotopy_cert::homotopy_solve_certified	opaque			fn homotopy_solve_certified (system : & [Vec < PolyTerm >] , opts : & HomotopyOptions ,) -> Result < CertifiedSolve , RootError >
+crate::kernels::homotopy_cert::homotopy_solve_verified	opaque			fn homotopy_solve_verified (system : & [Vec < PolyTerm >] , opts : & HomotopyOptions ,) -> Result < VerifiedSolve , RootError >
+crate::kernels::homotopy_cert::smale_alpha	opaque			fn smale_alpha (system : & [Vec < PolyTerm >] , x : & [(f64 , f64)] ,) -> Option < Certificate >
+crate::kernels::homotopy_cert::verify_zero	opaque			fn verify_zero (system : & [Vec < PolyTerm >] , guess : & [(f64 , f64)] , relative : f64 ,) -> Option < RigorousBall >
+crate::kernels::homotopy_cert::verify_zero_terms	opaque			fn verify_zero_terms (system : & [Vec < CTerm >] , guess : & [(f64 , f64)] , relative : f64 ,) -> Option < RigorousBall >
+crate::kernels::hypergeometric::gamma_c	opaque			fn gamma_c (z : C) -> C
+crate::kernels::hypergeometric::hyp1f1_cplx	opaque			fn hyp1f1_cplx (a : C , b : C , z : C ,) -> C
+crate::kernels::hypergeometric::hyp2f1_cplx	opaque			fn hyp2f1_cplx (a : C , b : C , c : C , z : C ,) -> C
+crate::kernels::hypergeometric::hyp_pfq	opaque			fn hyp_pfq (a : & [C] , b : & [C] , z : C ,) -> C
+crate::kernels::hypergeometric::hyp_pfq_checked	opaque			fn hyp_pfq_checked (a : & [C] , b : & [C] , z : C ,) -> Result < C , HypError >
+crate::kernels::hypergeometric::hyp_u_cplx	opaque			fn hyp_u_cplx (a : C , b : C , z : C ,) -> C
+crate::kernels::hypergeometric::ln_gamma_c	opaque			fn ln_gamma_c (z : C) -> C
+crate::kernels::indefinite_sum::indefinite_product	callback			fn indefinite_product (f : impl Fn (f64) -> f64 , x : f64 , config : & IndefiniteSumConfig ,) -> Result < f64 , String >
+crate::kernels::indefinite_sum::indefinite_sum	callback			fn indefinite_sum (f : impl Fn (f64) -> f64 , x : f64 , config : & IndefiniteSumConfig ,) -> Result < f64 , String >
+crate::kernels::indefinite_sum::numeric_taylor_coefficients	callback			fn numeric_taylor_coefficients (f : impl Fn (f64) -> f64 , center : f64 , radius : f64 , terms : usize ,) -> Vec < f64 >
+crate::kernels::indefinite_sum::series_antidiff	no-declared-adapter			fn series_antidiff (coefficients : & [f64] , center : f64 , x : f64 ,) -> f64
+crate::kernels::integrate::adaptive_quadrature	callback			fn adaptive_quadrature < F > (f : F , range : (f64 , f64) , tolerance : f64 ,) -> f64 where F : Fn (f64) -> f64 ,
+crate::kernels::integrate::gauss_kronrod	callback			fn gauss_kronrod (f : impl Fn (f64) -> f64 , a : f64 , b : f64 , tolerance : f64 , max_panels : usize ,) -> Quadrature
+crate::kernels::integrate::gauss_kronrod_any	callback			fn gauss_kronrod_any (f : impl Fn (f64) -> f64 , a : f64 , b : f64 , tolerance : f64 , max_panels : usize ,) -> Quadrature
+crate::kernels::integrate::gauss_legendre_quadrature	callback			fn gauss_legendre_quadrature < F > (f : F , range : (f64 , f64) ,) -> f64 where F : Fn (f64) -> f64 ,
+crate::kernels::integrate::romberg_integration	callback			fn romberg_integration < F > (f : F , range : (f64 , f64) , max_steps : usize ,) -> f64 where F : Fn (f64) -> f64 ,
+crate::kernels::integrate::simpson_rule	callback			fn simpson_rule < F > (f : F , range : (f64 , f64) , n_steps : usize ,) -> Result < f64 , String > where F : Fn (f64) -> f64 ,
+crate::kernels::integrate::trapezoidal_rule	callback			fn trapezoidal_rule < F > (f : F , range : (f64 , f64) , n_steps : usize ,) -> f64 where F : Fn (f64) -> f64 ,
+crate::kernels::interpolate::b_spline	no-declared-adapter			fn b_spline (control_points : & [Vec < f64 >] , degree : usize , knots : & [f64] , t : f64 ,) -> Option < Vec < f64 > >
+crate::kernels::interpolate::bezier_curve	no-declared-adapter			fn bezier_curve (control_points : & [Vec < f64 >] , t : f64 ,) -> Vec < f64 >
+crate::kernels::interpolate::cubic_spline_interpolation	callback			fn cubic_spline_interpolation (points : & [(f64 , f64)]) -> Result < Arc < dyn Fn (f64) -> f64 > , String >
+crate::kernels::interpolate::cubic_spline_with	callback			fn cubic_spline_with (points : & [(f64 , f64)] , ends : SplineEnd ,) -> Result < Arc < dyn Fn (f64) -> f64 > , String >
+crate::kernels::interpolate::lagrange_interpolation	opaque			fn lagrange_interpolation (points : & [(f64 , f64)]) -> Result < Polynomial , String >
+crate::kernels::interpolate::linear_interpolation	callback			fn linear_interpolation (points : & [(f64 , f64)]) -> Result < Arc < dyn Fn (f64) -> f64 > , String >
+crate::kernels::interpolate::pchip_interpolation	callback			fn pchip_interpolation (points : & [(f64 , f64)]) -> Result < Arc < dyn Fn (f64) -> f64 > , String >
+crate::kernels::jacobian::BandLu::factor	associated-method			fn factor (n : usize , kl : usize , ku : usize , trip : & [(usize , usize , f64)] ,) -> Option < Self >
+crate::kernels::jacobian::BandLu::solve	associated-method			fn solve (& self , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::jacobian::Factor::from_triplets	associated-method			fn from_triplets (n : usize , stages : usize , trip : & [(usize , usize , f64)] , kind : SolverKind , band : (usize , usize) ,) -> Option < Self >
+crate::kernels::jacobian::Factor::solve	associated-method			fn solve (& self , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::jacobian::FdMode<F>::parallel	generic			fn parallel () -> Self
+crate::kernels::jacobian::FdMode<F>::serial	generic			fn serial () -> Self
+crate::kernels::jacobian::Jac::for_each	callback			fn for_each (& self , mut g : impl FnMut (usize , usize , f64) ,)
+crate::kernels::jacobian::JacobianProvider<'a>::eval	callback			fn eval < F : Fn (f64 , & [f64] , & mut [f64]) > (& self , f : & F , t : f64 , y : & [f64] , f0 : & [f64] , nfev : & mut usize ,) -> Jac
+crate::kernels::jacobian::JacobianProvider<'a>::eval_with	callback			fn eval_with < F : Fn (f64 , & [f64] , & mut [f64]) > (& self , f : & F , t : f64 , y : & [f64] , f0 : & [f64] , nfev : & mut usize , fd : & FdMode < F > ,) -> Jac
+crate::kernels::jacobian::JacobianProvider<'a>::new	generic			fn new (n : usize , structure : JacStructure < 'a > , dense : Option < & 'a JacobianFn < 'a > > , sparse : Option < & 'a SparseJacobianFn < 'a > > ,) -> Option < Self >
+crate::kernels::jacobian::Mass<'_>::band	associated-method			fn band (& self) -> (usize , usize)
+crate::kernels::jacobian::Mass<'_>::cols	associated-method			const fn cols (& self) -> usize
+crate::kernels::jacobian::Mass<'_>::for_each	callback			fn for_each (& self , mut g : impl FnMut (usize , usize , f64) ,)
+crate::kernels::jacobian::Mass<'_>::matvec	associated-method			fn matvec (& self , x : & [f64] ,) -> Vec < f64 >
+crate::kernels::jacobian::Mass<'_>::rows	associated-method			const fn rows (& self) -> usize
+crate::kernels::jacobian::band_pattern	opaque			fn band_pattern (n : usize , kl : usize , ku : usize ,) -> Csr
+crate::kernels::jacobian::block_triplets	callback			fn block_triplets (n : usize , stages : usize , cm : & dyn Fn (usize , usize) -> f64 , cj : & dyn Fn (usize , usize) -> f64 , mass : Option < Mass < '_ > > , jac : & Jac ,) -> Vec < (usize , usize , f64) >
+crate::kernels::jacobian::color_columns	opaque			fn color_columns (pattern : & Csr) -> (Vec < usize > , usize)
+crate::kernels::jacobian::fd_jacobian_colored	callback			fn fd_jacobian_colored < F : Fn (f64 , & [f64] , & mut [f64]) > (f : & F , t : f64 , y : & [f64] , f0 : & [f64] , pattern : & Csr , colors : & (Vec < usize > , usize) , nfev : & mut usize ,) -> Csr
+crate::kernels::jacobian::fd_jacobian_colored_par	callback			fn fd_jacobian_colored_par < F : Fn (f64 , & [f64] , & mut [f64]) + Sync > (f : & F , t : f64 , y : & [f64] , f0 : & [f64] , pattern : & Csr , colors : & (Vec < usize > , usize) , nfev : & mut usize ,) -> Csr
+crate::kernels::jacobian::fd_jacobian_dense	callback			fn fd_jacobian_dense < F : Fn (f64 , & [f64] , & mut [f64]) > (f : & F , t : f64 , y : & [f64] , f0 : & [f64] ,) -> Mat
+crate::kernels::jacobian::fd_jacobian_dense_par	callback			fn fd_jacobian_dense_par < F : Fn (f64 , & [f64] , & mut [f64]) + Sync > (f : & F , t : f64 , y : & [f64] , f0 : & [f64] ,) -> Mat
+crate::kernels::krylov::AutoPreconditioner::apply	associated-method			fn apply (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::krylov::AutoPreconditioner::as_preconditioner	associated-method			fn as_preconditioner (& self) -> Preconditioner < '_ >
+crate::kernels::krylov::AutoPreconditioner::kind	associated-method			const fn kind (& self) -> AutoPreconditionerKind
+crate::kernels::krylov::AutoPreconditioner::new	associated-method			fn new (a : & Csr) -> Self
+crate::kernels::krylov::Csr::amd_ordering	associated-method			fn amd_ordering (& self) -> Vec < usize >
+crate::kernels::krylov::Csr::bandwidth	associated-method			fn bandwidth (& self) -> usize
+crate::kernels::krylov::Csr::diagonal	associated-method			fn diagonal (& self) -> Vec < f64 >
+crate::kernels::krylov::Csr::from_triplets	associated-method			fn from_triplets (rows : usize , cols : usize , trip : & [(usize , usize , f64)] ,) -> Self
+crate::kernels::krylov::Csr::ic0	associated-method			fn ic0 (& self) -> Option < Ic0 >
+crate::kernels::krylov::Csr::ilu0	associated-method			fn ilu0 (& self) -> Option < Ilu0 >
+crate::kernels::krylov::Csr::jacobi_inverse	associated-method			fn jacobi_inverse (& self) -> Vec < f64 >
+crate::kernels::krylov::Csr::matvec	associated-method			fn matvec (& self , x : & [f64] , y : & mut [f64] ,)
+crate::kernels::krylov::Csr::min_degree_ordering	associated-method			fn min_degree_ordering (& self) -> Vec < usize >
+crate::kernels::krylov::Csr::nested_dissection_ordering	associated-method			fn nested_dissection_ordering (& self) -> Vec < usize >
+crate::kernels::krylov::Csr::permute_symmetric	associated-method			fn permute_symmetric (& self , perm : & [usize] ,) -> Self
+crate::kernels::krylov::Csr::rcm_ordering	associated-method			fn rcm_ordering (& self) -> Vec < usize >
+crate::kernels::krylov::Csr::sparse_lu	associated-method			fn sparse_lu (& self , ordering : SparseOrdering ,) -> Result < SparseLu , SparseLuError >
+crate::kernels::krylov::Csr::sparse_lu_with	associated-method			fn sparse_lu_with (& self , ordering : SparseOrdering , threshold : f64 ,) -> Result < SparseLu , SparseLuError >
+crate::kernels::krylov::Ic0::apply	associated-method			fn apply (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::krylov::Ilu0::apply	associated-method			fn apply (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::krylov::Preconditioner<'_>::apply	associated-method			fn apply (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::krylov::SparseLu::dim	associated-method			const fn dim (& self) -> usize
+crate::kernels::krylov::SparseLu::nnz	associated-method			const fn nnz (& self) -> usize
+crate::kernels::krylov::SparseLu::permutation	associated-method			fn permutation (& self) -> & [usize]
+crate::kernels::krylov::SparseLu::solve	associated-method			fn solve (& self , b : & [f64] ,) -> Vec < f64 >
+crate::kernels::krylov::auto_preconditioner	opaque			fn auto_preconditioner (a : & Csr) -> AutoPreconditioner
+crate::kernels::krylov::bicgstab	declared	num_csr_bicgstab		fn bicgstab < A , M > (apply : A , precond : M , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov::bicgstab_with	callback			fn bicgstab_with < A > (apply : A , precond : & Preconditioner < '_ > , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov::cg	declared	num_csr_cg		fn cg < A , M > (apply : A , precond : M , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov::cg_with	callback			fn cg_with < A > (apply : A , precond : & Preconditioner < '_ > , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov::gmres	declared	num_csr_gmres		fn gmres < A , M > (apply : A , precond : M , b : & [f64] , x0 : Option < & [f64] > , restart : usize , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov::gmres_with	callback			fn gmres_with < A > (apply : A , precond : & Preconditioner < '_ > , b : & [f64] , x0 : Option < & [f64] > , restart : usize , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov::identity_precond	no-declared-adapter			const fn identity_precond (r : & [f64] , z : & mut [f64] ,)
+crate::kernels::krylov_ext::bicgstab_l	callback			fn bicgstab_l < A , M > (apply : A , precond : M , l : usize , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov_ext::fgmres	callback			fn fgmres < A , M > (apply : A , precond : M , b : & [f64] , x0 : Option < & [f64] > , restart : usize , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov_ext::idr_s	callback			fn idr_s < A , M > (apply : A , precond : M , s : usize , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_iter : usize , seed : u64 ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov_ext::idr_s_with	callback			fn idr_s_with < A , M > (apply : A , precond : M , b : & [f64] , x0 : Option < & [f64] > , opts : & IdrOptions ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::krylov_ext::minres	callback			fn minres < A , M > (apply : A , precond : M , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_iter : usize ,) -> IterResult where A : Fn (& [f64] , & mut [f64]) , M : Fn (& [f64] , & mut [f64]) ,
+crate::kernels::lie_structure::Lie::ad	associated-method			fn ad (& self , x : & [Q] ,) -> QMat
+crate::kernels::lie_structure::Lie::bracket	associated-method			fn bracket (& self , x : & [Q] , y : & [Q] ,) -> Vec < Q >
+crate::kernels::lie_structure::Lie::bracket_spaces	associated-method			fn bracket_spaces (& self , a : & [Vec < Q >] , b : & [Vec < Q >] ,) -> QMat
+crate::kernels::lie_structure::Lie::cartan_solvable_test	associated-method			fn cartan_solvable_test (& self) -> bool
+crate::kernels::lie_structure::Lie::cartan_subalgebra	associated-method			fn cartan_subalgebra (& self) -> QMat
+crate::kernels::lie_structure::Lie::casimir	associated-method			fn casimir (& self , rho : & [QMat] ,) -> Option < QMat >
+crate::kernels::lie_structure::Lie::center	associated-method			fn center (& self) -> QMat
+crate::kernels::lie_structure::Lie::derived_series	associated-method			fn derived_series (& self) -> Vec < QMat >
+crate::kernels::lie_structure::Lie::from_constants	associated-method			fn from_constants (c : Vec < Vec < Vec < Q > > >) -> Option < Self >
+crate::kernels::lie_structure::Lie::from_matrices	associated-method			fn from_matrices (basis : & [QMat]) -> Option < Self >
+crate::kernels::lie_structure::Lie::is_nilpotent	associated-method			fn is_nilpotent (& self) -> bool
+crate::kernels::lie_structure::Lie::is_semisimple	associated-method			fn is_semisimple (& self) -> bool
+crate::kernels::lie_structure::Lie::is_solvable	associated-method			fn is_solvable (& self) -> bool
+crate::kernels::lie_structure::Lie::is_subalgebra	associated-method			fn is_subalgebra (& self , vectors : & [Vec < Q >] ,) -> bool
+crate::kernels::lie_structure::Lie::killing	associated-method			fn killing (& self) -> QMat
+crate::kernels::lie_structure::Lie::levi	associated-method			fn levi (& self) -> Option < (QMat , QMat) >
+crate::kernels::lie_structure::Lie::lower_central_series	associated-method			fn lower_central_series (& self) -> Vec < QMat >
+crate::kernels::lie_structure::Lie::radical	associated-method			fn radical (& self) -> QMat
+crate::kernels::lie_structure::Lie::root_decomposition	associated-method			fn root_decomposition (& self , h : & [Vec < Q >] ,) -> Option < (Vec < RootSpace > , usize) >
+crate::kernels::lie_structure::Lie::upper_central_series	associated-method			fn upper_central_series (& self) -> Vec < QMat >
+crate::kernels::lie_structure::RootSystem::all_weights	associated-method			fn all_weights (& self , top : & [i64] , cap : usize ,) -> Option < BTreeMap < Vec < i64 > , BigInt > >
+crate::kernels::lie_structure::RootSystem::casimir	associated-method			fn casimir (& self , labels : & [i64] ,) -> Option < Q >
+crate::kernels::lie_structure::RootSystem::coxeter_number	associated-method			fn coxeter_number (& self) -> Option < usize >
+crate::kernels::lie_structure::RootSystem::dimension	associated-method			const fn dimension (& self) -> usize
+crate::kernels::lie_structure::RootSystem::dominant_multiplicities	associated-method			fn dominant_multiplicities (& self , top : & [i64] , cap : usize ,) -> Option < BTreeMap < Vec < i64 > , BigInt > >
+crate::kernels::lie_structure::RootSystem::dual_coxeter_number	associated-method			fn dual_coxeter_number (& self) -> Option < Q >
+crate::kernels::lie_structure::RootSystem::dynkin_index	associated-method			fn dynkin_index (& self , labels : & [i64] ,) -> Option < Q >
+crate::kernels::lie_structure::RootSystem::exponents	associated-method			fn exponents (& self) -> Vec < usize >
+crate::kernels::lie_structure::RootSystem::fundamental_weights	associated-method			const fn fundamental_weights (& self) -> & QMat
+crate::kernels::lie_structure::RootSystem::gram	associated-method			fn gram (& self) -> QMat
+crate::kernels::lie_structure::RootSystem::highest_root	associated-method			fn highest_root (& self) -> Option < Vec < i64 > >
+crate::kernels::lie_structure::RootSystem::inner	associated-method			fn inner (& self , a : & [i64] , b : & [i64] ,) -> Q
+crate::kernels::lie_structure::RootSystem::is_irreducible	associated-method			fn is_irreducible (& self) -> bool
+crate::kernels::lie_structure::RootSystem::new	associated-method			fn new (cartan : Cartan) -> Option < Self >
+crate::kernels::lie_structure::RootSystem::num_positive	associated-method			const fn num_positive (& self) -> usize
+crate::kernels::lie_structure::RootSystem::tensor	associated-method			fn tensor (& self , a : & [i64] , b : & [i64] ,) -> Option < Vec < (Vec < i64 > , BigInt) > >
+crate::kernels::lie_structure::RootSystem::weight_multiplicity	associated-method			fn weight_multiplicity (& self , top : & [i64] , w : & [i64] ,) -> Option < BigInt >
+crate::kernels::lie_structure::RootSystem::weyl_dim	associated-method			fn weyl_dim (& self , labels : & [i64] ,) -> Option < BigInt >
+crate::kernels::lie_structure::RootSystem::weyl_order	associated-method			fn weyl_order (& self) -> BigInt
+crate::kernels::lie_structure::cartan_matrix	opaque			fn cartan_matrix (letter : char , n : usize ,) -> Option < Cartan >
+crate::kernels::lie_structure::charpoly	opaque			fn charpoly (m : & [Vec < Q >]) -> Vec < Q >
+crate::kernels::lie_structure::components	opaque			fn components (a : & Cartan) -> Vec < Vec < usize > >
+crate::kernels::lie_structure::euclidean_simple_roots	opaque			fn euclidean_simple_roots (letter : char , n : usize ,) -> Option < Vec < Vec < Q > > >
+crate::kernels::lie_structure::parse_type	opaque			fn parse_type (name : & str) -> Option < Cartan >
+crate::kernels::lie_structure::positive_roots	opaque			fn positive_roots (a : & Cartan) -> Vec < Vec < i64 > >
+crate::kernels::lie_structure::rational_roots	opaque			fn rational_roots (p : & [Q]) -> Option < Vec < Q > >
+crate::kernels::lie_structure::recognize	opaque			fn recognize (a : & Cartan) -> Option < Vec < (char , usize) > >
+crate::kernels::lie_structure::standard_basis	opaque			fn standard_basis (family : Family , n : usize ,) -> Option < Vec < GMat > >
+crate::kernels::matfun::csr_norm1	opaque			fn csr_norm1 (a : & Csr) -> f64
+crate::kernels::matfun::expm	opaque			fn expm (a : & Mat) -> Result < Mat , DenseError >
+crate::kernels::matfun::expm_krylov	callback			fn expm_krylov < A : Fn (& [f64] , & mut [f64]) > (apply : A , v : & [f64] , t : f64 , m : usize , tol : f64 ,) -> Option < Vec < f64 > >
+crate::kernels::matfun::expm_multiply	opaque			fn expm_multiply (a : & Csr , v : & [f64] , t : f64 ,) -> Vec < f64 >
+crate::kernels::matfun::logm	opaque			fn logm (a : & Mat) -> Result < Mat , DenseError >
+crate::kernels::matfun::norm1	opaque			fn norm1 (a : & Mat) -> f64
+crate::kernels::matfun::phi_matrices	opaque			fn phi_matrices (a : & Mat , p : usize ,) -> Result < Vec < Mat > , DenseError >
+crate::kernels::matfun::sqrtm	opaque			fn sqrtm (a : & Mat) -> Result < Mat , DenseError >
+crate::kernels::matrix::Field::faer_decompose	trait-method			fn faer_decompose (& self , _matrix : & Matrix < Self > , _kind : FaerDecompositionType ,) -> Option < FaerDecompositionResult < Self > >
+crate::kernels::matrix::Field::faer_inverse	trait-method			fn faer_inverse (_matrix : & Matrix < Self >) -> Option < Matrix < Self > >
+crate::kernels::matrix::Field::faer_mul	trait-method			fn faer_mul (_lhs : & Matrix < Self > , _rhs : & Matrix < Self > ,) -> Option < Matrix < Self > >
+crate::kernels::matrix::Field::faer_solve	trait-method			fn faer_solve (_a : & Matrix < Self > , _b : & Matrix < Self > ,) -> Option < Matrix < Self > >
+crate::kernels::matrix::Field::inverse	trait-method			fn inverse (& self) -> Result < Self , String >
+crate::kernels::matrix::Field::is_invertible	trait-method			fn is_invertible (& self) -> bool
+crate::kernels::matrix::Field::magnitude	trait-method			fn magnitude (& self) -> f64
+crate::kernels::matrix::Matrix<T>::cols	generic			const fn cols (& self) -> usize
+crate::kernels::matrix::Matrix<T>::data	generic			const fn data (& self) -> & Vec < T >
+crate::kernels::matrix::Matrix<T>::decompose	generic			fn decompose (& self , kind : FaerDecompositionType ,) -> Option < FaerDecompositionResult < T > >
+crate::kernels::matrix::Matrix<T>::determinant	generic			fn determinant (& self) -> Result < T , String >
+crate::kernels::matrix::Matrix<T>::determinant_block	generic			fn determinant_block (& self) -> Result < T , String >
+crate::kernels::matrix::Matrix<T>::determinant_lu	generic			fn determinant_lu (& self) -> Result < T , String >
+crate::kernels::matrix::Matrix<T>::frobenius_norm	generic			fn frobenius_norm (& self) -> f64 where T : ToPrimitive ,
+crate::kernels::matrix::Matrix<T>::get	generic			fn get (& self , row : usize , col : usize ,) -> & T
+crate::kernels::matrix::Matrix<T>::get_cols	generic			fn get_cols (& self) -> Vec < Vec < T > >
+crate::kernels::matrix::Matrix<T>::get_mut	generic			fn get_mut (& mut self , row : usize , col : usize ,) -> & mut T
+crate::kernels::matrix::Matrix<T>::identity	generic			fn identity (size : usize) -> Self
+crate::kernels::matrix::Matrix<T>::into_data	generic			fn into_data (self) -> Vec < T >
+crate::kernels::matrix::Matrix<T>::inverse	generic			fn inverse (& self) -> Option < Self >
+crate::kernels::matrix::Matrix<T>::is_diagonal	generic			fn is_diagonal (& self) -> bool
+crate::kernels::matrix::Matrix<T>::is_identity	generic			fn is_identity (& self , epsilon : f64 ,) -> bool where T : ToPrimitive ,
+crate::kernels::matrix::Matrix<T>::is_orthogonal	generic			fn is_orthogonal (& self , epsilon : f64 ,) -> bool where T : ToPrimitive ,
+crate::kernels::matrix::Matrix<T>::is_symmetric	generic			fn is_symmetric (& self) -> bool
+crate::kernels::matrix::Matrix<T>::l1_norm	generic			fn l1_norm (& self) -> f64 where T : ToPrimitive ,
+crate::kernels::matrix::Matrix<T>::linf_norm	generic			fn linf_norm (& self) -> f64 where T : ToPrimitive ,
+crate::kernels::matrix::Matrix<T>::lu_decomposition	generic			fn lu_decomposition (& self) -> Result < (Self , usize) , String >
+crate::kernels::matrix::Matrix<T>::mul_strassen	generic			fn mul_strassen (& self , other : & Self ,) -> Result < Self , String >
+crate::kernels::matrix::Matrix<T>::new	generic			fn new (rows : usize , cols : usize , data : Vec < T > ,) -> Self
+crate::kernels::matrix::Matrix<T>::null_space	generic			fn null_space (& self) -> Result < Self , String >
+crate::kernels::matrix::Matrix<T>::rank	generic			fn rank (& self) -> Result < usize , String >
+crate::kernels::matrix::Matrix<T>::rows	generic			const fn rows (& self) -> usize
+crate::kernels::matrix::Matrix<T>::rref	generic			fn rref (& mut self) -> Result < usize , String >
+crate::kernels::matrix::Matrix<T>::set_backend	generic			const fn set_backend (& mut self , backend : Backend ,)
+crate::kernels::matrix::Matrix<T>::trace	generic			fn trace (& self) -> Result < T , String >
+crate::kernels::matrix::Matrix<T>::transpose	generic			fn transpose (& self) -> Self
+crate::kernels::matrix::Matrix<T>::with_backend	generic			const fn with_backend (mut self , backend : Backend ,) -> Self
+crate::kernels::matrix::Matrix<T>::zeros	generic			fn zeros (rows : usize , cols : usize ,) -> Self
+crate::kernels::matrix::Matrix<f64>::jacobi_eigen_decomposition	associated-method			fn jacobi_eigen_decomposition (& self , max_sweeps : usize , tolerance : f64 ,) -> Result < (Vec < f64 > , Self) , String >
+crate::kernels::meijer::meijer_g	opaque			fn meijer_g (m : usize , n : usize , a : & [C] , b : & [C] , z : C ,) -> Option < C >
+crate::kernels::meijer::meijer_g_real	no-declared-adapter			fn meijer_g_real (m : usize , n : usize , a : & [f64] , b : & [f64] , z : f64 ,) -> Option < f64 >
+crate::kernels::multigrid::Amg::build	associated-method			fn build (a : & Csr , opts : & AmgOptions ,) -> Result < Self , AmgError >
+crate::kernels::multigrid::Amg::num_levels	associated-method			const fn num_levels (& self) -> usize
+crate::kernels::multigrid::Amg::operator_complexity	associated-method			fn operator_complexity (& self) -> f64
+crate::kernels::multigrid::Amg::precondition	associated-method			fn precondition (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::multigrid::Amg::solve	associated-method			fn solve (& self , b : & [f64] , x0 : Option < & [f64] > , tol : f64 , max_cycles : usize ,) -> MgResult
+crate::kernels::multigrid::Amg::vcycle	associated-method			fn vcycle (& self , b : & [f64] , x : & mut [f64] ,)
+crate::kernels::multigrid::GeometricMg::apply	associated-method			fn apply (& self , level : usize , u : & [f64] , out : & mut [f64] ,)
+crate::kernels::multigrid::GeometricMg::cycle_once	associated-method			fn cycle_once (& self , u : & mut [f64] , f : & [f64] , opts : & MgOptions ,)
+crate::kernels::multigrid::GeometricMg::fmg	associated-method			fn fmg (& self , f : & [f64] , cycles : usize , opts : & MgOptions ,) -> MgResult
+crate::kernels::multigrid::GeometricMg::levels	associated-method			const fn levels (& self) -> usize
+crate::kernels::multigrid::GeometricMg::new	associated-method			fn new (dim : usize , n : usize , shift : f64 ,) -> Option < Self >
+crate::kernels::multigrid::GeometricMg::residual_norm	associated-method			fn residual_norm (& self , u : & [f64] , f : & [f64] ,) -> f64
+crate::kernels::multigrid::GeometricMg::size	associated-method			const fn size (& self) -> usize
+crate::kernels::multigrid::GeometricMg::solve	associated-method			fn solve (& self , f : & [f64] , x0 : Option < & [f64] > , opts : & MgOptions ,) -> MgResult
+crate::kernels::multigrid::MgResult::mean_factor	associated-method			fn mean_factor (& self) -> f64
+crate::kernels::newton_cg::minimize	callback			fn minimize < F , G , H > (mut objective : F , mut gradient : G , mut hessian_vector : H , initial : & [f64] , options : & NewtonCgOptions ,) -> Result < NewtonCgResult , NewtonCgError > where F : FnMut (& [f64]) -> f64 , G : FnMut (& [f64] , & mut [f64]) , H : FnMut (& [f64] , & [f64] , & mut [f64]) ,
+crate::kernels::newton_cg::minimize_tape	opaque			fn minimize_tape (tape : & Tape , output : usize , initial : & [f64] , params : & [f64] , options : & NewtonCgOptions ,) -> Result < NewtonCgResult , NewtonCgError >
+crate::kernels::number_theory::factorize	no-declared-adapter			fn factorize (mut n : u64) -> Vec < u64 >
+crate::kernels::number_theory::gcd	no-declared-adapter			fn gcd (a : u64 , b : u64 ,) -> u64
+crate::kernels::number_theory::is_prime_miller_rabin	no-declared-adapter			fn is_prime_miller_rabin (n : u64) -> bool
+crate::kernels::number_theory::lcm	no-declared-adapter			fn lcm (a : u64 , b : u64 ,) -> u64
+crate::kernels::number_theory::mod_inverse	no-declared-adapter			fn mod_inverse (a : i64 , m : i64 ,) -> Option < i64 >
+crate::kernels::number_theory::mod_pow	no-declared-adapter			fn mod_pow (mut base : u128 , mut exp : u64 , modulus : u64 ,) -> u64
+crate::kernels::number_theory::phi	no-declared-adapter			const fn phi (mut n : u64) -> u64
+crate::kernels::number_theory::primes_sieve	no-declared-adapter			fn primes_sieve (limit : usize) -> Vec < usize >
+crate::kernels::ode::Trajectory::last	associated-method			fn last (& self) -> & [f64]
+crate::kernels::ode::solve_adaptive	callback			fn solve_adaptive (f : impl Fn (f64 , & [f64] , & mut [f64]) , y0 : & [f64] , t_span : (f64 , f64) , rtol : f64 , atol : f64 , max_steps : usize ,) -> Result < Trajectory , String >
+crate::kernels::ode::solve_fixed	callback			fn solve_fixed (f : impl Fn (f64 , & [f64] , & mut [f64]) , y0 : & [f64] , t_span : (f64 , f64) , steps : usize , method : OdeSolverMethod ,) -> Result < Trajectory , String >
+crate::kernels::ode::solve_fixed_events	callback			fn solve_fixed_events < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , y0 : & [f64] , t_span : (f64 , f64) , steps : usize , method : OdeSolverMethod , events : & [Event < '_ >] ,) -> Result < (Trajectory , Vec < FixedEvent >) , String >
+crate::kernels::ode_adaptive::OdeSolution::eval	associated-method			fn eval (& self , t : f64 ,) -> Option < Vec < f64 > >
+crate::kernels::ode_adaptive::OdeSolution::view	associated-method			fn view (& self , components : & [& str] ,) -> crate :: kernel :: result :: OdeSolutionView
+crate::kernels::ode_adaptive::bvp_fd	callback			fn bvp_fd < F : Fn (f64 , f64 , f64) -> f64 , G : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , ya : f64 , yb : f64 , n : usize , guess : G ,) -> Result < (Vec < f64 > , Vec < f64 >) , OdeError >
+crate::kernels::ode_adaptive::dae_index1	callback			fn dae_index1 < F , G > (f : F , g : G , y0 : & [f64] , z0 : & [f64] , t0 : f64 , h : f64 , steps : usize ,) -> Result < Vec < Vec < f64 > > , OdeError > where F : Fn (f64 , & [f64] , & [f64]) -> Vec < f64 > , G : Fn (f64 , & [f64] , & [f64]) -> Vec < f64 > ,
+crate::kernels::ode_adaptive::dde_rk4	callback			fn dde_rk4 < F , H > (f : F , hist : H , tau : f64 , t0 : f64 , t1 : f64 , h : f64 ,) -> Result < (Vec < f64 > , Vec < Vec < f64 > >) , OdeError > where F : Fn (f64 , & [f64] , & [f64]) -> Vec < f64 > , H : Fn (f64) -> Vec < f64 > ,
+crate::kernels::ode_adaptive::dopri5	declared	num_ode_dopri5		fn dopri5 < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , events : & [Event < '_ >] ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_adaptive::leapfrog	callback			fn leapfrog < A : Fn (& [f64]) -> Vec < f64 > > (acc : A , q0 : & [f64] , p0 : & [f64] , dt : f64 , steps : usize ,) -> (Vec < f64 > , Vec < f64 >)
+crate::kernels::ode_adaptive::rosenbrock23	declared	num_ode_rosenbrock23		fn rosenbrock23 < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_adaptive::rosenbrock23_events	callback			fn rosenbrock23_events < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , events : & [Event < '_ >] ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_adaptive::shooting	callback			fn shooting < F , I , R > (f : F , t0 : f64 , t1 : f64 , init : I , residual : R , p0 : & [f64] , opts : & OdeOptions ,) -> Result < Vec < f64 > , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , I : Fn (& [f64]) -> Vec < f64 > , R : Fn (& [f64]) -> Vec < f64 > ,
+crate::kernels::ode_adaptive::yoshida4	callback			fn yoshida4 < A : Fn (& [f64]) -> Vec < f64 > > (acc : A , q0 : & [f64] , p0 : & [f64] , dt : f64 , steps : usize ,) -> (Vec < f64 > , Vec < f64 >)
+crate::kernels::ode_ext::etdrk4	callback			fn etdrk4 < N : Fn (f64 , & [f64] , & mut [f64]) > (l : & Mat , nl : N , t0 : f64 , t1 : f64 , u0 : & [f64] , steps : usize ,) -> Result < Vec < Vec < f64 > > , OdeError >
+crate::kernels::ode_ext::etdrk4_diag	callback			fn etdrk4_diag < N : Fn (f64 , & [f64] , & mut [f64]) > (lambda : & [f64] , nl : N , t0 : f64 , t1 : f64 , u0 : & [f64] , steps : usize ,) -> Result < Vec < Vec < f64 > > , OdeError >
+crate::kernels::ode_ext::exp_matrix	opaque			fn exp_matrix (a : & Mat) -> Result < Mat , OdeError >
+crate::kernels::ode_ext::exprb32	callback			fn exprb32 < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , jac : Option < & JacobianFn < '_ > > , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_ext::imex_rk	callback			fn imex_rk < E , I > (f_ex : E , f_im : I , jac_im : Option < & JacobianFn < '_ > > , t0 : f64 , t1 : f64 , y0 : & [f64] , steps : usize , scheme : ImexScheme ,) -> Result < Vec < Vec < f64 > > , OdeError > where E : Fn (f64 , & [f64] , & mut [f64]) , I : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::ode_ext::imex_rk_with	callback			fn imex_rk_with < E , I > (f_ex : E , f_im : I , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & ImexOptions < '_ > ,) -> Result < Vec < Vec < f64 > > , OdeError > where E : Fn (f64 , & [f64] , & mut [f64]) , I : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::ode_ext::symplectic_split	callback			fn symplectic_split < A : Fn (& [f64]) -> Vec < f64 > > (accel : A , q0 : & [f64] , p0 : & [f64] , t0 : f64 , t1 : f64 , steps : usize , method : SplitMethod ,) -> Result < (Vec < f64 > , Vec < f64 >) , OdeError >
+crate::kernels::ode_ext::variational_lobatto	callback			fn variational_lobatto < G : Fn (& [f64]) -> Vec < f64 > > (mass : & Mat , grad_v : G , q0 : & [f64] , p0 : & [f64] , t0 : f64 , t1 : f64 , steps : usize , stages : usize ,) -> Result < (Vec < f64 > , Vec < f64 >) , OdeError >
+crate::kernels::ode_ext::variational_lobatto_with	callback			fn variational_lobatto_with < G : Fn (& [f64]) -> Vec < f64 > > (mass : & Mat , grad_v : G , q0 : & [f64] , p0 : & [f64] , t0 : f64 , t1 : f64 , opts : & VariationalOptions ,) -> Result < (Vec < f64 > , Vec < f64 >) , OdeError >
+crate::kernels::ode_sdirk::SdirkSolution::eval	associated-method			fn eval (& self , t : f64 ,) -> Option < Vec < f64 > >
+crate::kernels::ode_sdirk::sdirk3	callback			fn sdirk3 < F , J > (f : F , jac : J , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdirkOptions ,) -> Result < SdirkSolution , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , J : Fn (f64 , & [f64]) -> Mat ,
+crate::kernels::ode_sdirk::sdirk3_events	callback			fn sdirk3_events < F , J > (f : F , jac : J , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdirkOptions , events : & [Event < '_ >] ,) -> Result < OdeSolution , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , J : Fn (f64 , & [f64]) -> Mat ,
+crate::kernels::ode_sdirk::sdirk3_fd	callback			fn sdirk3_fd < F > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdirkOptions ,) -> Result < SdirkSolution , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::ode_sdirk::sdirk3_fixed	callback			fn sdirk3_fixed < F , J > (f : F , jac : J , t0 : f64 , t1 : f64 , y0 : & [f64] , steps : usize ,) -> Result < Vec < f64 > , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , J : Fn (f64 , & [f64]) -> Mat ,
+crate::kernels::ode_sdirk::sdirk3_fixed_events	callback			fn sdirk3_fixed_events < F , J > (f : F , jac : J , t0 : f64 , t1 : f64 , y0 : & [f64] , steps : usize , events : & [Event < '_ >] ,) -> Result < OdeSolution , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , J : Fn (f64 , & [f64]) -> Mat ,
+crate::kernels::ode_stiff::bdf	declared	num_ode_bdf		fn bdf < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , max_order : usize ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::bdf_events	callback			fn bdf_events < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , max_order : usize , events : & [Event < '_ >] ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::bdf_ex	callback			fn bdf_ex < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , jac : Option < & JacobianFn < '_ > > , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , max_order : usize , events : & [Event < '_ >] ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::bdf_jac	callback			fn bdf_jac < F , J > (f : F , jac : J , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , max_order : usize ,) -> Result < OdeSolution , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , J : Fn (f64 , & [f64]) -> Mat ,
+crate::kernels::ode_stiff::bdf_with	callback			fn bdf_with < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , bo : & BdfOptions < '_ > ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::bdf_with_par	callback			fn bdf_with_par < F : Fn (f64 , & [f64] , & mut [f64]) + Sync > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , bo : & BdfOptions < '_ > ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::radau	callback			fn radau < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , jac : Option < & JacobianFn < '_ > > , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , events : & [Event < '_ >] , cfg : & RadauConfig < '_ > ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::radau5	declared	num_ode_radau5		fn radau5 < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::radau5_events	callback			fn radau5_events < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , events : & [Event < '_ >] ,) -> Result < OdeSolution , OdeError >
+crate::kernels::ode_stiff::radau5_fixed	callback			fn radau5_fixed < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , n_steps : usize ,) -> Result < Vec < f64 > , OdeError >
+crate::kernels::ode_stiff::radau5_jac	callback			fn radau5_jac < F , J > (f : F , jac : J , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions ,) -> Result < OdeSolution , OdeError > where F : Fn (f64 , & [f64] , & mut [f64]) , J : Fn (f64 , & [f64]) -> Mat ,
+crate::kernels::ode_stiff::radau_fixed	callback			fn radau_fixed < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , n_steps : usize , stages : usize ,) -> Result < Vec < f64 > , OdeError >
+crate::kernels::ode_stiff::radau_with	callback			fn radau_with < F : Fn (f64 , & [f64] , & mut [f64]) > (f : F , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & OdeOptions , ro : & RadauOptions < '_ > ,) -> Result < OdeSolution , OdeError >
+crate::kernels::online_stats::OnlineCovariance::count	associated-method			const fn count (& self) -> u64
+crate::kernels::online_stats::OnlineCovariance::dimension	associated-method			const fn dimension (& self) -> usize
+crate::kernels::online_stats::OnlineCovariance::mean	associated-method			fn mean (& self) -> Option < & [f64] >
+crate::kernels::online_stats::OnlineCovariance::merge	associated-method			fn merge (& mut self , other : & Self ,) -> Result < () , OnlineStatsError >
+crate::kernels::online_stats::OnlineCovariance::new	associated-method			fn new (dimension : usize) -> Result < Self , OnlineStatsError >
+crate::kernels::online_stats::OnlineCovariance::population_covariance	associated-method			fn population_covariance (& self) -> Option < Vec < f64 > >
+crate::kernels::online_stats::OnlineCovariance::push	associated-method			fn push (& mut self , observation : & [f64] ,) -> Result < () , OnlineStatsError >
+crate::kernels::online_stats::OnlineCovariance::sample_covariance	associated-method			fn sample_covariance (& self) -> Option < Vec < f64 > >
+crate::kernels::optim::augmented_lagrangian	callback			fn augmented_lagrangian < F , H , G > (f : F , eq : H , ineq : G , x0 : & [f64] , tol : f64 , max_outer : usize ,) -> OptResult where F : Fn (& [f64]) -> f64 , H : Fn (& [f64]) -> Vec < f64 > , G : Fn (& [f64]) -> Vec < f64 > ,
+crate::kernels::optim::bfgs	callback			fn bfgs < F : Fn (& [f64]) -> f64 , G : Fn (& [f64]) -> Vec < f64 > > (f : F , grad : Option < & G > , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> OptResult
+crate::kernels::optim::differential_evolution	callback			fn differential_evolution < F : Fn (& [f64]) -> f64 > (f : F , bounds : & [(f64 , f64)] , pop_size : usize , generations : usize , seed : u64 ,) -> OptResult
+crate::kernels::optim::kkt_residual	no-declared-adapter			fn kkt_residual (gf : & [f64] , jh : & [Vec < f64 >] , jg : & [Vec < f64 >] , lambda : & [f64] , mu : & [f64] ,) -> f64
+crate::kernels::optim::lbfgs	callback			fn lbfgs < F : Fn (& [f64]) -> f64 , G : Fn (& [f64]) -> Vec < f64 > > (f : F , grad : Option < & G > , x0 : & [f64] , m : usize , tol : f64 , max_iter : usize ,) -> OptResult
+crate::kernels::optim::nelder_mead	callback			fn nelder_mead < F : Fn (& [f64]) -> f64 > (f : F , x0 : & [f64] , step : f64 , tol : f64 , max_iter : usize ,) -> OptResult
+crate::kernels::optim::numerical_gradient	callback			fn numerical_gradient < F : Fn (& [f64]) -> f64 > (f : & F , x : & [f64] ,) -> Vec < f64 >
+crate::kernels::optim::qp_active_set	opaque			fn qp_active_set (hess : & Mat , grad : & [f64] , a_eq : & [Vec < f64 >] , b_eq : & [f64] , a_ineq : & [Vec < f64 >] , b_ineq : & [f64] ,) -> Option < QpSolution >
+crate::kernels::optim::second_order_check	callback			fn second_order_check < F , H , K > (f : F , eq : H , ineq : K , x : & [f64] , lambda : & [f64] , mu : & [f64] ,) -> SecondOrderStatus where F : Fn (& [f64]) -> f64 , H : Fn (& [f64]) -> Vec < f64 > , K : Fn (& [f64]) -> Vec < f64 > ,
+crate::kernels::optim::simplex	opaque			fn simplex (c : & [f64] , a : & [Vec < f64 >] , rel : & [Relation] , b : & [f64] ,) -> LpStatus
+crate::kernels::optim::simplex_with	opaque			fn simplex_with (c : & [f64] , a : & [Vec < f64 >] , rel : & [Relation] , b : & [f64] , pricing : Pricing ,) -> LpResult
+crate::kernels::optim::simulated_annealing	callback			fn simulated_annealing < F : Fn (& [f64]) -> f64 > (f : F , x0 : & [f64] , step : f64 , t0 : f64 , cooling : f64 , iterations : usize , seed : u64 ,) -> OptResult
+crate::kernels::optim::sqp	callback			fn sqp < F , G , H , K > (f : F , grad : Option < & G > , eq : H , ineq : K , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> ConstrainedResult where F : Fn (& [f64]) -> f64 , G : Fn (& [f64]) -> Vec < f64 > , H : Fn (& [f64]) -> Vec < f64 > , K : Fn (& [f64]) -> Vec < f64 > ,
+crate::kernels::optim::trust_region	callback			fn trust_region < F , G , H > (f : F , grad : G , hess : Option < & H > , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> OptResult where F : Fn (& [f64]) -> f64 , G : Fn (& [f64]) -> Vec < f64 > , H : Fn (& [f64]) -> Mat ,
+crate::kernels::optimize::EquationOptimizer::auto_solve	callback			fn auto_solve < C , S , I , Cfg > (problem : C , solver : S , configure : Cfg ,) -> Result < OptimizationResult < C , S , I > , Error > where S : Solver < C , I > , I : State , Cfg : FnOnce (I) -> I ,
+crate::kernels::optimize::EquationOptimizer::auto_solve_conjugate_gradient	generic			fn auto_solve_conjugate_gradient < C > (cost_function : C , init_param : P , options : & OptimizationConfig ,) -> AutoSolveResult < C , P , G , F , Error > where C : CostFunction < Param = P , Output = F > + Gradient < Param = P , Gradient = G > , P : ArgminDot < P , F > + ArgminScaledAdd < P , F , P > + ArgminSub < P , P > + ArgminConj + ArgminMul < F , P > + Clone + std :: fmt :: Debug , G : ArgminL2Norm < F > , F : ArgminFloat + ArgminL2Norm < F > ,
+crate::kernels::optimize::EquationOptimizer::solve_with_bfgs	generic			fn solve_with_bfgs < C > (cost_function : C , initial_param : Array1 < f64 > , config : & OptimizationConfig ,) -> BFGSSolveResult < C , Error > where C : CostFunction < Param = Array1 < f64 > , Output = f64 > + Gradient < Param = Array1 < f64 > , Gradient = Array1 < f64 > > ,
+crate::kernels::optimize::EquationOptimizer::solve_with_gradient_descent	generic			fn solve_with_gradient_descent < C > (cost_function : C , initial_param : Array1 < f64 > , config : & OptimizationConfig ,) -> SolveResult < C , Error > where C : CostFunction < Param = Array1 < f64 > , Output = f64 > + Gradient < Param = Array1 < f64 > , Gradient = Array1 < f64 > > ,
+crate::kernels::optimize::EquationOptimizer::solve_with_pso	generic			fn solve_with_pso < C > (cost_function : C , bounds : (Array1 < f64 > , Array1 < f64 >) , config : & OptimizationConfig ,) -> PsoSolveResult < C , Error > where C : CostFunction < Param = Array1 < f64 > , Output = f64 > ,
+crate::kernels::optimize::LinearRegression::new	associated-method			fn new (x : Array2 < f64 > , y : Array1 < f64 > ,) -> Result < Self , Error >
+crate::kernels::optimize::ResultAnalyzer::analyze_convergence	generic			fn analyze_convergence < S : State < Float = f64 > > (state : & S) -> String
+crate::kernels::optimize::ResultAnalyzer::print_optimization_result	generic			fn print_optimization_result < S : State < Param = Array1 < f64 > , Float = f64 > > (state : & S)
+crate::kernels::ordering::amd_order	no-declared-adapter			fn amd_order (adj : & [Vec < usize >]) -> Vec < usize >
+crate::kernels::ordering::cholesky_fill	no-declared-adapter			fn cholesky_fill (adj : & [Vec < usize >] , perm : & [usize] ,) -> usize
+crate::kernels::ordering::nested_dissection_order	no-declared-adapter			fn nested_dissection_order (adj : & [Vec < usize >]) -> Vec < usize >
+crate::kernels::ordering_ml::hybrid_nested_dissection_order	no-declared-adapter			fn hybrid_nested_dissection_order (adj : & [Vec < usize >]) -> Vec < usize >
+crate::kernels::ordering_ml::multilevel_nested_dissection_order	no-declared-adapter			fn multilevel_nested_dissection_order (adj : & [Vec < usize >]) -> Vec < usize >
+crate::kernels::ordering_ml::multilevel_nested_dissection_with	opaque			fn multilevel_nested_dissection_with (adj : & [Vec < usize >] , opts : & NdOptions ,) -> Vec < usize >
+crate::kernels::ordering_ml::vertex_separator_bisection	opaque			fn vertex_separator_bisection (adj : & [Vec < usize >] , opts : & NdOptions ,) -> (Vec < usize > , Vec < usize > , Vec < usize >)
+crate::kernels::par::for_chunks_mut	callback			fn for_chunks_mut < T , F > (data : & mut [T] , chunk : usize , grain : usize , f : F ,) where T : Send , F : Fn (usize , & mut [T]) + Sync + Send ,
+crate::kernels::par::for_each_mut	callback			fn for_each_mut < T , F > (items : & mut [T] , grain : usize , f : F ,) where T : Send , F : Fn (usize , & mut T) + Sync + Send ,
+crate::kernels::par::map_indexed	callback			fn map_indexed < T , F > (n : usize , grain : usize , f : F ,) -> Vec < T > where T : Send , F : Fn (usize) -> T + Sync + Send ,
+crate::kernels::par::map_slice	callback			fn map_slice < A , T , F > (items : & [A] , grain : usize , f : F ,) -> Vec < T > where A : Sync , T : Send , F : Fn (& A) -> T + Sync + Send ,
+crate::kernels::par::sum_fixed	callback			fn sum_fixed < F > (n : usize , block : usize , grain : usize , f : F ,) -> f64 where F : Fn (usize) -> f64 + Sync + Send ,
+crate::kernels::pde::Boundary::dirichlet	callback			fn dirichlet (g : impl Fn (f64 , f64) -> f64 + Send + Sync + 'static) -> Self
+crate::kernels::pde::Boundary::dirichlet_const	associated-method			fn dirichlet_const (v : f64) -> Self
+crate::kernels::pde::Boundary::neumann	callback			fn neumann (g : impl Fn (f64 , f64) -> f64 + Send + Sync + 'static) -> Self
+crate::kernels::pde::Boundary::neumann_const	associated-method			fn neumann_const (v : f64) -> Self
+crate::kernels::pde::Field1D::max_error	callback			fn max_error (& self , exact : impl Fn (f64) -> f64 ,) -> f64
+crate::kernels::pde::Field2D::at	associated-method			fn at (& self , i : usize , j : usize ,) -> f64
+crate::kernels::pde::Field2D::max_error	callback			fn max_error (& self , exact : impl Fn (f64 , f64) -> f64 ,) -> f64
+crate::kernels::pde::Field2D::point	associated-method			fn point (& self , i : usize , j : usize ,) -> (f64 , f64)
+crate::kernels::pde::Grid1D::dx	associated-method			fn dx (& self) -> f64
+crate::kernels::pde::Grid1D::nodes	associated-method			fn nodes (& self) -> Vec < f64 >
+crate::kernels::pde::Grid2D::dx	associated-method			fn dx (& self) -> f64
+crate::kernels::pde::Grid2D::dy	associated-method			fn dy (& self) -> f64
+crate::kernels::pde::Grid2D::unit_square	associated-method			const fn unit_square (n : usize) -> Self
+crate::kernels::pde::advection_1d	callback			fn advection_1d (a : f64 , grid : & Grid1D , scheme : AdvectionScheme , u0 : & dyn Fn (f64) -> f64 , t_end : f64 , steps : usize ,) -> Result < Field1D , PdeError >
+crate::kernels::pde::heat_1d	callback			fn heat_1d (alpha : f64 , grid : & Grid1D , bc : & [Boundary ; 2] , u0 : & dyn Fn (f64) -> f64 , t_end : f64 , steps : usize ,) -> Result < Field1D , PdeError >
+crate::kernels::pde::heat_2d	callback			fn heat_2d (alpha : f64 , grid : & Grid2D , bc : & [Boundary ; 4] , u0 : & dyn Fn (f64 , f64) -> f64 , t_end : f64 , steps : usize ,) -> Result < Field2D , PdeError >
+crate::kernels::pde::laplace_2d	opaque			fn laplace_2d (grid : & Grid2D , bc : & [Boundary ; 4] , solver : PoissonSolver ,) -> Result < Field2D , PdeError >
+crate::kernels::pde::method_of_lines_1d	callback			fn method_of_lines_1d (f : & dyn Fn (f64 , f64 , f64 , f64 , f64) -> f64 , grid : & Grid1D , bc : & [Boundary ; 2] , u0 : & dyn Fn (f64) -> f64 , t_end : f64 , method : StiffMethod , opts : & OdeOptions ,) -> Result < MolSolution , PdeError >
+crate::kernels::pde::pde_solver	opaque			fn pde_solver (problem : & PdeProblem < '_ >) -> Result < PdeSolution , PdeError >
+crate::kernels::pde::poisson_2d	callback			fn poisson_2d (grid : & Grid2D , bc : & [Boundary ; 4] , f : & dyn Fn (f64 , f64) -> f64 , solver : PoissonSolver ,) -> Result < Field2D , PdeError >
+crate::kernels::pde::wave_1d	callback			fn wave_1d (c : f64 , grid : & Grid1D , bc : & [Boundary ; 2] , u0 : & dyn Fn (f64) -> f64 , v0 : & dyn Fn (f64) -> f64 , t_end : f64 , steps : usize ,) -> Result < Field1D , PdeError >
+crate::kernels::pde::wave_2d	callback			fn wave_2d (c : f64 , grid : & Grid2D , bc : & [Boundary ; 4] , u0 : & dyn Fn (f64 , f64) -> f64 , v0 : & dyn Fn (f64 , f64) -> f64 , t_end : f64 , steps : usize ,) -> Result < Field2D , PdeError >
+crate::kernels::polynomial::Polynomial::degree	associated-method			const fn degree (& self) -> usize
+crate::kernels::polynomial::Polynomial::derivative	associated-method			fn derivative (& self) -> Self
+crate::kernels::polynomial::Polynomial::div_scalar	associated-method			fn div_scalar (self , rhs : f64 ,) -> Result < Self , String >
+crate::kernels::polynomial::Polynomial::eval	associated-method			fn eval (& self , x : f64 ,) -> f64
+crate::kernels::polynomial::Polynomial::find_roots	associated-method			fn find_roots (& self) -> Result < Vec < f64 > , String >
+crate::kernels::polynomial::Polynomial::integral	associated-method			fn integral (& self) -> Self
+crate::kernels::polynomial::Polynomial::is_zero	associated-method			fn is_zero (& self , epsilon : f64 ,) -> bool
+crate::kernels::polynomial::Polynomial::long_division	associated-method			fn long_division (mut self , divisor : & Self ,) -> (Self , Self)
+crate::kernels::polynomial::Polynomial::new	associated-method			const fn new (coeffs : Vec < f64 >) -> Self
+crate::kernels::qlinalg::det	opaque			fn det (m : & [Vec < Q >]) -> Q
+crate::kernels::qlinalg::identity	opaque			fn identity (n : usize) -> QMat
+crate::kernels::qlinalg::inverse	opaque			fn inverse (m : & [Vec < Q >]) -> Option < QMat >
+crate::kernels::qlinalg::is_zero_vec	opaque			fn is_zero_vec (v : & [Q]) -> bool
+crate::kernels::qlinalg::matmul	opaque			fn matmul (a : & [Vec < Q >] , b : & [Vec < Q >] ,) -> QMat
+crate::kernels::qlinalg::matvec	opaque			fn matvec (a : & [Vec < Q >] , v : & [Q] ,) -> Vec < Q >
+crate::kernels::qlinalg::nullspace	opaque			fn nullspace (m : & [Vec < Q >] , cols : usize ,) -> QMat
+crate::kernels::qlinalg::q	opaque			fn q (n : i64) -> Q
+crate::kernels::qlinalg::rank	opaque			fn rank (m : & [Vec < Q >] , cols : usize ,) -> usize
+crate::kernels::qlinalg::reduce_mod	opaque			fn reduce_mod (v : & [Q] , basis : & [Vec < Q >] , pivots : & [usize] ,) -> Vec < Q >
+crate::kernels::qlinalg::rref	opaque			fn rref (m : & mut QMat , cols : usize ,) -> Vec < usize >
+crate::kernels::qlinalg::solve	opaque			fn solve (m : & [Vec < Q >] , cols : usize , b : & [Q] ,) -> Option < Vec < Q > >
+crate::kernels::qlinalg::span_basis	opaque			fn span_basis (vectors : & [Vec < Q >] , dim : usize ,) -> QMat
+crate::kernels::qlinalg::transpose	opaque			fn transpose (a : & [Vec < Q >] , cols : usize ,) -> QMat
+crate::kernels::qlinalg::zeros	opaque			fn zeros (n : usize) -> Vec < Q >
+crate::kernels::quadratic_sieve::QsLimits::for_digits	associated-method			fn for_digits (digits : u32) -> Self
+crate::kernels::quadratic_sieve::is_probable_prime	opaque			fn is_probable_prime (n : & BigInt) -> bool
+crate::kernels::quadratic_sieve::qs_factor	opaque			fn qs_factor (n : & BigInt , limits : QsLimits ,) -> Option < BigInt >
+crate::kernels::quadratic_sieve::qs_factor_with	opaque			fn qs_factor_with (n : & BigInt , config : QsConfig , stats : & mut QsStats ,) -> Option < BigInt >
+crate::kernels::quadrature::<reexport:a40301ab01e55735>	unresolved-reexport			crate :: kernels :: simplex_quadrature :: integrate_simplex
+crate::kernels::quadrature::<reexport:bccc5ea5d1a1e119>	unresolved-reexport			crate :: kernels :: simplex_quadrature :: SimplexError
+crate::kernels::quadrature::Gaussian::new	associated-method			const fn new (mean : f64 , sd : f64 ,) -> Self
+crate::kernels::quadrature::Gaussian::pdf	associated-method			fn pdf (self , x : f64 ,) -> f64
+crate::kernels::quadrature::Gaussian::sample	associated-method			fn sample (self , rng : & mut Rng ,) -> f64
+crate::kernels::quadrature::Gaussian::weight	associated-method			fn weight (self , proposal : Self , x : f64 ,) -> f64
+crate::kernels::quadrature::Sobol::new	associated-method			fn new (dim : usize) -> Self
+crate::kernels::quadrature::Sobol::next_point	associated-method			fn next_point (& mut self) -> Vec < f64 >
+crate::kernels::quadrature::clenshaw_curtis	callback			fn clenshaw_curtis < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , n : usize ,) -> f64
+crate::kernels::quadrature::clenshaw_curtis_rule	no-declared-adapter			fn clenshaw_curtis_rule (n : usize) -> (Vec < f64 > , Vec < f64 >)
+crate::kernels::quadrature::cubature_genz_malik	callback			fn cubature_genz_malik < F : Fn (& [f64]) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , abs_tol : f64 , rel_tol : f64 , max_evals : usize ,) -> Integral
+crate::kernels::quadrature::cubature_nested	callback			fn cubature_nested < F : Fn (& [f64]) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , tol : f64 ,) -> Integral
+crate::kernels::quadrature::cubature_nested_par	callback			fn cubature_nested_par < F : Fn (& [f64]) -> f64 + Sync > (f : F , lo : & [f64] , hi : & [f64] , tol : f64 ,) -> Integral
+crate::kernels::quadrature::exp_sinh	callback			fn exp_sinh < F : Fn (f64) -> f64 > (f : F , a : f64 , tol : f64 ,) -> Integral
+crate::kernels::quadrature::filon	callback			fn filon < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , omega : f64 , cosine : bool , panels : usize ,) -> f64
+crate::kernels::quadrature::filon2d	callback			fn filon2d < F : Fn (f64 , f64) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , omega : f64 , phase : & [f64] , cosine : bool , tol : f64 ,) -> Integral
+crate::kernels::quadrature::filon2d_complex	callback			fn filon2d_complex < F : Fn (f64 , f64) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , omega : f64 , phase : & [f64] , tol : f64 ,) -> OscillatoryIntegral
+crate::kernels::quadrature::gk_panel	callback			fn gk_panel < F : Fn (f64) -> f64 > (f : & F , a : f64 , b : f64 , rule : GkRule ,) -> (f64 , f64 , usize)
+crate::kernels::quadrature::gk_panel_par	callback			fn gk_panel_par < F : Fn (f64) -> f64 + Sync > (f : & F , a : f64 , b : f64 , rule : GkRule ,) -> (f64 , f64 , usize)
+crate::kernels::quadrature::halton_point	no-declared-adapter			fn halton_point (index : u64 , dim : usize ,) -> Vec < f64 >
+crate::kernels::quadrature::importance_sampling_gaussian	callback			fn importance_sampling_gaussian < F : Fn (f64) -> f64 > (f : F , target : Gaussian , proposal : Gaussian , n : usize , seed : u64 ,) -> ImportanceSample
+crate::kernels::quadrature::integrate	callback			fn integrate < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , tol : f64 ,) -> Integral
+crate::kernels::quadrature::integrate_gk	declared	num_integrate		fn integrate_gk < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , rule : GkRule , abs_tol : f64 , rel_tol : f64 , max_panels : usize ,) -> Integral
+crate::kernels::quadrature::integrate_gk_par	callback			fn integrate_gk_par < F : Fn (f64) -> f64 + Sync > (f : F , a : f64 , b : f64 , rule : GkRule , abs_tol : f64 , rel_tol : f64 , max_panels : usize ,) -> Integral
+crate::kernels::quadrature::integrate_infinite	callback			fn integrate_infinite < F : Fn (f64) -> f64 > (f : F , tol : f64 ,) -> Integral
+crate::kernels::quadrature::integrate_semi_infinite	callback			fn integrate_semi_infinite < F : Fn (f64) -> f64 > (f : F , a : f64 , tol : f64 ,) -> Integral
+crate::kernels::quadrature::integrate_triangle	callback			fn integrate_triangle < F : Fn (f64 , f64) -> f64 > (f : & F , vertices : [[f64 ; 2] ; 3] , abs_tol : f64 , rel_tol : f64 , max_evals : usize ,) -> Integral
+crate::kernels::quadrature::monte_carlo	callback			fn monte_carlo < F : Fn (& [f64]) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , n : usize , seed : u64 ,) -> Integral
+crate::kernels::quadrature::monte_carlo_antithetic	callback			fn monte_carlo_antithetic < F : Fn (& [f64]) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , pairs : usize , seed : u64 ,) -> Integral
+crate::kernels::quadrature::monte_carlo_par	callback			fn monte_carlo_par < F : Fn (& [f64]) -> f64 + Sync > (f : F , lo : & [f64] , hi : & [f64] , n : usize , seed : u64 ,) -> Integral
+crate::kernels::quadrature::monte_carlo_stratified	callback			fn monte_carlo_stratified < F : Fn (& [f64]) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , strata_per_axis : usize , per_stratum : usize , seed : u64 ,) -> Integral
+crate::kernels::quadrature::oscillatory2d	callback			fn oscillatory2d < F , P > (f : F , phase : P , lo : & [f64] , hi : & [f64] , omega : f64 , tol : f64 ,) -> OscillatoryIntegral where F : Fn (f64 , f64) -> f64 , P : Fn (f64 , f64) -> f64 ,
+crate::kernels::quadrature::quasi_monte_carlo	callback			fn quasi_monte_carlo < F : Fn (& [f64]) -> f64 > (f : F , lo : & [f64] , hi : & [f64] , n : usize , seq : LowDiscrepancy ,) -> Integral
+crate::kernels::quadrature::quasi_monte_carlo_par	callback			fn quasi_monte_carlo_par < F : Fn (& [f64]) -> f64 + Sync > (f : F , lo : & [f64] , hi : & [f64] , n : usize , seq : LowDiscrepancy ,) -> Integral
+crate::kernels::quadrature::romberg	callback			fn romberg < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , tol : f64 , max_levels : usize ,) -> Integral
+crate::kernels::quadrature::sinh_sinh	callback			fn sinh_sinh < F : Fn (f64) -> f64 > (f : F , tol : f64 ,) -> Integral
+crate::kernels::quadrature::tanh_sinh	callback			fn tanh_sinh < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , tol : f64 ,) -> Integral
+crate::kernels::random::Rng::below	associated-method			const fn below (& mut self , n : u64 ,) -> u64
+crate::kernels::random::Rng::beta	associated-method			fn beta (& mut self , a : f64 , b : f64 ,) -> f64
+crate::kernels::random::Rng::binomial	associated-method			fn binomial (& mut self , n : u64 , p : f64 ,) -> u64
+crate::kernels::random::Rng::exponential	associated-method			fn exponential (& mut self , rate : f64 ,) -> f64
+crate::kernels::random::Rng::fill_normal	associated-method			fn fill_normal (& mut self , out : & mut [f64] ,)
+crate::kernels::random::Rng::gamma	associated-method			fn gamma (& mut self , k : f64 , theta : f64 ,) -> f64
+crate::kernels::random::Rng::new	associated-method			const fn new (seed : u64) -> Self
+crate::kernels::random::Rng::next_u64	associated-method			const fn next_u64 (& mut self) -> u64
+crate::kernels::random::Rng::normal	associated-method			fn normal (& mut self) -> f64
+crate::kernels::random::Rng::normal_with	associated-method			fn normal_with (& mut self , mean : f64 , sd : f64 ,) -> f64
+crate::kernels::random::Rng::poisson	associated-method			fn poisson (& mut self , lambda : f64 ,) -> u64
+crate::kernels::random::Rng::shuffle	generic			fn shuffle < T > (& mut self , v : & mut [T] ,)
+crate::kernels::random::Rng::uniform	associated-method			fn uniform (& mut self) -> f64
+crate::kernels::random::Rng::uniform_range	associated-method			fn uniform_range (& mut self , a : f64 , b : f64 ,) -> f64
+crate::kernels::real_roots::find_roots	opaque			fn find_roots (poly : & Polynomial , tolerance : f64 ,) -> Result < Vec < f64 > , String >
+crate::kernels::real_roots::isolate_real_roots	opaque			fn isolate_real_roots (poly : & Polynomial , precision : f64 ,) -> Result < Vec < (f64 , f64) > , String >
+crate::kernels::real_roots::refine_root_bisection	opaque			fn refine_root_bisection (poly : & Polynomial , interval : (f64 , f64) , tolerance : f64 ,) -> f64
+crate::kernels::real_roots::sturm_sequence	opaque			fn sturm_sequence (poly : & Polynomial) -> Vec < Polynomial >
+crate::kernels::robust::bandwidth_scott	no-declared-adapter			fn bandwidth_scott (data : & [f64]) -> f64
+crate::kernels::robust::bandwidth_silverman	no-declared-adapter			fn bandwidth_silverman (data : & [f64]) -> f64
+crate::kernels::robust::biweight_location	no-declared-adapter			fn biweight_location (data : & [f64] , c : f64 ,) -> f64
+crate::kernels::robust::bootstrap_ci	callback			fn bootstrap_ci < S : Fn (& [f64]) -> f64 > (data : & [f64] , statistic : S , resamples : usize , alpha : f64 , seed : u64 ,) -> (f64 , f64)
+crate::kernels::robust::ecdf	no-declared-adapter			fn ecdf (data : & [f64] , x : f64 ,) -> f64
+crate::kernels::robust::huber_location	no-declared-adapter			fn huber_location (data : & [f64] , k : f64 ,) -> f64
+crate::kernels::robust::iqr	no-declared-adapter			fn iqr (data : & [f64]) -> f64
+crate::kernels::robust::kde	opaque			fn kde (data : & [f64] , x : f64 , h : f64 , kernel : Kernel ,) -> f64
+crate::kernels::robust::mad	no-declared-adapter			fn mad (data : & [f64] , normal : bool ,) -> f64
+crate::kernels::robust::median	no-declared-adapter			fn median (data : & [f64]) -> f64
+crate::kernels::robust::quantile	no-declared-adapter			fn quantile (data : & [f64] , p : f64 , kind : u8 ,) -> f64
+crate::kernels::robust::trimmed_mean	no-declared-adapter			fn trimmed_mean (data : & [f64] , trim : f64 ,) -> f64
+crate::kernels::robust::winsorized_mean	no-declared-adapter			fn winsorized_mean (data : & [f64] , trim : f64 ,) -> f64
+crate::kernels::rootfind::brent	declared	num_brent		fn brent < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , tol : f64 , max_iter : usize ,) -> Result < f64 , RootError >
+crate::kernels::rootfind::broyden	callback			fn broyden < F : Fn (& [f64]) -> Vec < f64 > > (f : F , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> Result < SystemSolution , RootError >
+crate::kernels::rootfind::halley	callback			fn halley < F , D , E > (f : F , df : D , d2f : E , x0 : f64 , tol : f64 , max_iter : usize ,) -> Result < f64 , RootError > where F : Fn (f64) -> f64 , D : Fn (f64) -> f64 , E : Fn (f64) -> f64 ,
+crate::kernels::rootfind::homotopy_system	opaque			fn homotopy_system (system : & [Vec < PolyTerm >]) -> Result < Vec < PathResult > , RootError >
+crate::kernels::rootfind::homotopy_system_with_gamma	opaque			fn homotopy_system_with_gamma (system : & [Vec < PolyTerm >] , gamma : (f64 , f64) ,) -> Result < Vec < PathResult > , RootError >
+crate::kernels::rootfind::homotopy_univariate	opaque			fn homotopy_univariate (coeffs : & [f64]) -> Result < Vec < (f64 , f64) > , RootError >
+crate::kernels::rootfind::levenberg_marquardt	callback			fn levenberg_marquardt < F : Fn (& [f64]) -> Vec < f64 > > (f : F , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> Result < SystemSolution , RootError >
+crate::kernels::rootfind::newton_bracketed	callback			fn newton_bracketed < F : Fn (f64) -> f64 , D : Fn (f64) -> f64 > (f : F , df : D , a : f64 , b : f64 , tol : f64 , max_iter : usize ,) -> Result < f64 , RootError >
+crate::kernels::rootfind::newton_system	callback			fn newton_system < F , J > (f : F , jac : Option < & J > , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> Result < SystemSolution , RootError > where F : Fn (& [f64]) -> Vec < f64 > , J : Fn (& [f64]) -> Mat ,
+crate::kernels::rootfind::numerical_jacobian	callback			fn numerical_jacobian < F : Fn (& [f64]) -> Vec < f64 > > (f : & F , x : & [f64] , fx : & [f64] ,) -> Mat
+crate::kernels::rootfind::poly_eval_complex	no-declared-adapter			fn poly_eval_complex (coeffs : & [f64] , z : (f64 , f64) ,) -> ((f64 , f64) , (f64 , f64))
+crate::kernels::rootfind::polynomial_roots_aberth	opaque			fn polynomial_roots_aberth (coeffs : & [f64]) -> Result < Vec < (f64 , f64) > , RootError >
+crate::kernels::rootfind::polynomial_roots_companion	opaque			fn polynomial_roots_companion (coeffs : & [f64]) -> Result < Vec < (f64 , f64) > , RootError >
+crate::kernels::rootfind::polynomial_roots_jenkins_traub	opaque			fn polynomial_roots_jenkins_traub (coeffs : & [f64]) -> Result < Vec < (f64 , f64) > , RootError >
+crate::kernels::rootfind::polynomial_roots_jenkins_traub_complex	opaque			fn polynomial_roots_jenkins_traub_complex (coeffs : & [(f64 , f64)]) -> Result < Vec < (f64 , f64) > , RootError >
+crate::kernels::sde::aggregate_noise	opaque			fn aggregate_noise (sample : & NoiseSample , group : usize , m : usize ,) -> NoiseSample
+crate::kernels::sde::brownian_increments	opaque			fn brownian_increments (rng : & mut Rng , m : usize , steps : usize , h : f64 ,) -> Vec < Vec < f64 > >
+crate::kernels::sde::ensemble_seed	no-declared-adapter			const fn ensemble_seed (seed : u64 , index : usize ,) -> u64
+crate::kernels::sde::euler_maruyama	callback			fn euler_maruyama < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::heun_stratonovich	callback			fn heun_stratonovich < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::levy_areas	opaque			fn levy_areas (rng : & mut Rng , m : usize , h : f64 , dw : & [f64] , terms : usize ,) -> Vec < f64 >
+crate::kernels::sde::milstein	callback			fn milstein < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::milstein_noncommutative	callback			fn milstein_noncommutative < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , noise : & NoiseSample ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::milstein_stratonovich	callback			fn milstein_stratonovich < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::noncommutative_noise_grid	opaque			fn noncommutative_noise_grid (m : usize , t0 : f64 , t1 : f64 , opts : & SdeNoncommutativeOptions ,) -> NoiseSample
+crate::kernels::sde::sample_noise	opaque			fn sample_noise (rng : & mut Rng , m : usize , steps : usize , h : f64 , terms : usize ,) -> NoiseSample
+crate::kernels::sde::sde_adaptive	callback			fn sde_adaptive < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , rtol : f64 , atol : f64 , seed : u64 , max_steps : usize ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::sde_adaptive_noncommutative_with	callback			fn sde_adaptive_noncommutative_with < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdeNoncommutativeOptions ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::sde_adaptive_with	callback			fn sde_adaptive_with < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdeAdaptiveOptions ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::sde_ensemble	callback			fn sde_ensemble < A , G > (drift : A , diff : G , m : usize , (t0 , h , steps) : (f64 , f64 , usize) , y0 : & [f64] , paths : usize , seed : u64 , scheme : EnsembleScheme ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) + Sync , G : Fn (f64 , & [f64] , & mut [f64]) + Sync ,
+crate::kernels::sde::srk_platen	callback			fn srk_platen < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::series::evaluate_power_series	no-declared-adapter			fn evaluate_power_series (coefficients : & [f64] , center : f64 , x : f64 ,) -> f64
+crate::kernels::series::sum_range	callback			fn sum_range (term : impl Fn (f64) -> f64 , from : i64 , to : i64 ,) -> f64
+crate::kernels::series::sum_to_infinity	callback			fn sum_to_infinity (term : impl Fn (f64) -> f64 , from : i64 , tolerance : f64 , max_terms : usize ,) -> SeriesSum
+crate::kernels::signal::blackman_window	no-declared-adapter			fn blackman_window (n : usize) -> Vec < f64 >
+crate::kernels::signal::convolve	no-declared-adapter			fn convolve (a : & [f64] , v : & [f64] ,) -> Vec < f64 >
+crate::kernels::signal::cross_correlation	no-declared-adapter			fn cross_correlation (a : & [f64] , v : & [f64] ,) -> Vec < f64 >
+crate::kernels::signal::fft	opaque			fn fft (input : & mut [Complex < f64 >]) -> Vec < Complex < f64 > >
+crate::kernels::signal::hamming_window	no-declared-adapter			fn hamming_window (n : usize) -> Vec < f64 >
+crate::kernels::signal::hann_window	no-declared-adapter			fn hann_window (n : usize) -> Vec < f64 >
+crate::kernels::signal::ifft	opaque			fn ifft (input : & mut [Complex < f64 >]) -> Vec < Complex < f64 > >
+crate::kernels::simplex_quadrature::integrate_simplex	callback			fn integrate_simplex < F : Fn (& [f64]) -> f64 > (f : F , vertices : & [Vec < f64 >] , abs_tol : f64 , rel_tol : f64 , max_evals : usize ,) -> Result < Integral , SimplexError >
+crate::kernels::solve::solve_linear_system	opaque			fn solve_linear_system (a : & Matrix < f64 > , b : & [f64] ,) -> Result < LinearSolution , String >
+crate::kernels::solve::solve_nonlinear_system	callback			fn solve_nonlinear_system (f : impl Fn (& [f64] , & mut [f64]) , start : & [f64] , tolerance : f64 , max_iter : usize ,) -> Result < Vec < f64 > , String >
+crate::kernels::solve::solve_root	callback			fn solve_root (f : impl Fn (f64) -> f64 , guess : f64 , tolerance : f64 , max_iter : usize ,) -> Result < f64 , String >
+crate::kernels::solve::solve_root_bisection	callback			fn solve_root_bisection (f : impl Fn (f64) -> f64 , interval : (f64 , f64) , tolerance : f64 , max_iter : usize ,) -> Result < f64 , String >
+crate::kernels::solve::solve_root_newton	callback			fn solve_root_newton (f : impl Fn (f64) -> f64 , df : impl Fn (f64) -> f64 , start : f64 , tolerance : f64 , max_iter : usize ,) -> Result < f64 , String >
+crate::kernels::sparse::SparseMatrixData::to_csmat	associated-method			fn to_csmat (& self) -> SparseMat
+crate::kernels::sparse::csr_from_triplets	opaque			fn csr_from_triplets (rows : usize , cols : usize , triplets : & [(usize , usize , f64)] ,) -> SparseMat
+crate::kernels::sparse::frobenius_norm	opaque			fn frobenius_norm (matrix : & SparseMat) -> f64
+crate::kernels::sparse::is_diagonal	opaque			fn is_diagonal (matrix : & SparseMat) -> bool
+crate::kernels::sparse::is_symmetric	opaque			fn is_symmetric (matrix : & SparseMat , epsilon : f64 ,) -> bool
+crate::kernels::sparse::l1_norm	opaque			fn l1_norm (matrix : & SparseMat) -> f64
+crate::kernels::sparse::linf_norm	opaque			fn linf_norm (matrix : & SparseMat) -> f64
+crate::kernels::sparse::rank	opaque			fn rank (matrix : & SparseMat) -> usize
+crate::kernels::sparse::solve_conjugate_gradient	opaque			fn solve_conjugate_gradient (a : & SparseMat , b : & Array1 < f64 > , x0 : Option < & Array1 < f64 > > , max_iter : usize , tolerance : f64 ,) -> Result < Array1 < f64 > , String >
+crate::kernels::sparse::sp_mat_vec_mul	opaque			fn sp_mat_vec_mul (matrix : & SparseMat , vector : & [f64] ,) -> Result < Vec < f64 > , String >
+crate::kernels::sparse::to_csr	opaque			fn to_csr (arr : & Array) -> SparseMat
+crate::kernels::sparse::to_dense	opaque			fn to_dense (matrix : & SparseMat) -> Array2 < f64 >
+crate::kernels::sparse::trace	opaque			fn trace (matrix : & SparseMat) -> Result < f64 , String >
+crate::kernels::sparse::transpose	opaque			fn transpose (matrix : & SparseMat) -> SparseMat
+crate::kernels::special::airy_ai	declared	num_airy_ai		fn airy_ai (x : f64) -> f64
+crate::kernels::special::airy_ai_prime	declared	num_airy_ai_prime		fn airy_ai_prime (x : f64) -> f64
+crate::kernels::special::airy_bi	declared	num_airy_bi		fn airy_bi (x : f64) -> f64
+crate::kernels::special::airy_bi_prime	declared	num_airy_bi_prime		fn airy_bi_prime (x : f64) -> f64
+crate::kernels::special::bernoulli_number	no-declared-adapter			fn bernoulli_number (n : u32) -> f64
+crate::kernels::special::bernoulli_poly	no-declared-adapter			fn bernoulli_poly (n : u32 , x : f64 ,) -> f64
+crate::kernels::special::bessel_i	no-declared-adapter			fn bessel_i (nu : f64 , x : f64 ,) -> f64
+crate::kernels::special::bessel_i0	declared	num_bessel_i0		fn bessel_i0 (x : f64) -> f64
+crate::kernels::special::bessel_i1	declared	num_bessel_i1		fn bessel_i1 (x : f64) -> f64
+crate::kernels::special::bessel_j	no-declared-adapter			fn bessel_j (nu : f64 , x : f64 ,) -> f64
+crate::kernels::special::bessel_j0	declared	num_bessel_j0		fn bessel_j0 (x : f64) -> f64
+crate::kernels::special::bessel_j1	declared	num_bessel_j1		fn bessel_j1 (x : f64) -> f64
+crate::kernels::special::bessel_k	no-declared-adapter			fn bessel_k (nu : f64 , x : f64 ,) -> f64
+crate::kernels::special::bessel_k0	declared	num_bessel_k0		fn bessel_k0 (x : f64) -> f64
+crate::kernels::special::bessel_k1	declared	num_bessel_k1		fn bessel_k1 (x : f64) -> f64
+crate::kernels::special::bessel_y	no-declared-adapter			fn bessel_y (nu : f64 , x : f64 ,) -> f64
+crate::kernels::special::bessel_y0	declared	num_bessel_y0		fn bessel_y0 (x : f64) -> f64
+crate::kernels::special::bessel_y1	declared	num_bessel_y1		fn bessel_y1 (x : f64) -> f64
+crate::kernels::special::beta_numerical	no-declared-adapter			fn beta_numerical (a : f64 , b : f64 ,) -> f64
+crate::kernels::special::binomial	declared	num_binomial		fn binomial (n : u64 , k : u64 ,) -> f64
+crate::kernels::special::chebyshev_t	no-declared-adapter			fn chebyshev_t (n : u32 , x : f64 ,) -> f64
+crate::kernels::special::chebyshev_u	no-declared-adapter			fn chebyshev_u (n : u32 , x : f64 ,) -> f64
+crate::kernels::special::cosh_integral	declared	num_cosh_integral		fn cosh_integral (x : f64) -> f64
+crate::kernels::special::cosine_integral	declared	num_cosine_integral		fn cosine_integral (x : f64) -> f64
+crate::kernels::special::digamma_numerical	declared	num_digamma		fn digamma_numerical (x : f64) -> f64
+crate::kernels::special::double_factorial	no-declared-adapter			fn double_factorial (n : u64) -> f64
+crate::kernels::special::erf_numerical	declared	num_erf		fn erf_numerical (x : f64) -> f64
+crate::kernels::special::erfc_numerical	declared	num_erfc		fn erfc_numerical (x : f64) -> f64
+crate::kernels::special::erfi	declared	num_erfi		fn erfi (x : f64) -> f64
+crate::kernels::special::exp_integral_e1	declared	num_exp_integral_e1		fn exp_integral_e1 (x : f64) -> f64
+crate::kernels::special::exp_integral_ei	declared	num_exp_integral_ei		fn exp_integral_ei (x : f64) -> f64
+crate::kernels::special::factorial	declared	num_factorial		fn factorial (n : u64) -> f64
+crate::kernels::special::gamma_numerical	declared	num_gamma		fn gamma_numerical (x : f64) -> f64
+crate::kernels::special::generalized_laguerre	no-declared-adapter			fn generalized_laguerre (n : u32 , alpha : f64 , x : f64 ,) -> f64
+crate::kernels::special::hermite_h	no-declared-adapter			fn hermite_h (n : u32 , x : f64 ,) -> f64
+crate::kernels::special::hurwitz_zeta	no-declared-adapter			fn hurwitz_zeta (s : f64 , q : f64 ,) -> f64
+crate::kernels::special::incomplete_beta	no-declared-adapter			fn incomplete_beta (x : f64 , a : f64 , b : f64 ,) -> f64
+crate::kernels::special::inverse_erf_numerical	declared	num_inverse_erf		fn inverse_erf_numerical (x : f64) -> f64
+crate::kernels::special::inverse_erfc	declared	num_inverse_erfc		fn inverse_erfc (p : f64) -> f64
+crate::kernels::special::laguerre_l	no-declared-adapter			fn laguerre_l (n : u32 , x : f64 ,) -> f64
+crate::kernels::special::lambert_w	no-declared-adapter			fn lambert_w (x : f64 , upper : bool ,) -> f64
+crate::kernels::special::legendre_p	no-declared-adapter			fn legendre_p (n : u32 , x : f64 ,) -> f64
+crate::kernels::special::ln_beta_numerical	no-declared-adapter			fn ln_beta_numerical (a : f64 , b : f64 ,) -> f64
+crate::kernels::special::ln_factorial	declared	num_ln_factorial		fn ln_factorial (n : f64) -> f64
+crate::kernels::special::ln_gamma_numerical	declared	num_log_gamma		fn ln_gamma_numerical (x : f64) -> f64
+crate::kernels::special::log_integral	declared	num_log_integral		fn log_integral (x : f64) -> f64
+crate::kernels::special::logit	declared	num_logit		fn logit (p : f64) -> f64
+crate::kernels::special::lower_incomplete_gamma	no-declared-adapter			fn lower_incomplete_gamma (s : f64 , x : f64 ,) -> f64
+crate::kernels::special::polygamma_numerical	no-declared-adapter			fn polygamma_numerical (n : u32 , z : f64 ,) -> f64
+crate::kernels::special::regularized_beta	no-declared-adapter			fn regularized_beta (x : f64 , a : f64 , b : f64 ,) -> f64
+crate::kernels::special::regularized_lower_gamma	no-declared-adapter			fn regularized_lower_gamma (s : f64 , x : f64 ,) -> f64
+crate::kernels::special::regularized_upper_gamma	no-declared-adapter			fn regularized_upper_gamma (s : f64 , x : f64 ,) -> f64
+crate::kernels::special::riemann_zeta	declared	num_riemann_zeta		fn riemann_zeta (s : f64) -> f64
+crate::kernels::special::sigmoid	declared	num_sigmoid		fn sigmoid (x : f64) -> f64
+crate::kernels::special::sinc	declared	num_sinc		fn sinc (x : f64) -> f64
+crate::kernels::special::sine_integral	declared	num_sine_integral		fn sine_integral (x : f64) -> f64
+crate::kernels::special::sinh_integral	declared	num_sinh_integral		fn sinh_integral (x : f64) -> f64
+crate::kernels::special::softplus	declared	num_softplus		fn softplus (x : f64) -> f64
+crate::kernels::special::upper_incomplete_gamma	no-declared-adapter			fn upper_incomplete_gamma (s : f64 , x : f64 ,) -> f64
+crate::kernels::special_ext::anger_j	no-declared-adapter			fn anger_j (nu : f64 , x : f64 ,) -> f64
+crate::kernels::special_ext::appell_f1	no-declared-adapter			fn appell_f1 (a : f64 , b1 : f64 , b2 : f64 , c : f64 , x : f64 , y : f64 ,) -> f64
+crate::kernels::special_ext::bessel_in	no-declared-adapter			fn bessel_in (n : i32 , x : f64 ,) -> f64
+crate::kernels::special_ext::bessel_in_scaled	no-declared-adapter			fn bessel_in_scaled (n : i32 , x : f64 ,) -> f64
+crate::kernels::special_ext::bessel_jn	no-declared-adapter			fn bessel_jn (n : i32 , x : f64 ,) -> f64
+crate::kernels::special_ext::carlson_rd	no-declared-adapter			fn carlson_rd (x : f64 , y : f64 , z : f64 ,) -> f64
+crate::kernels::special_ext::carlson_rf	no-declared-adapter			fn carlson_rf (x : f64 , y : f64 , z : f64 ,) -> f64
+crate::kernels::special_ext::coulomb_c	no-declared-adapter			fn coulomb_c (eta : f64 , l : usize ,) -> f64
+crate::kernels::special_ext::coulomb_f	no-declared-adapter			fn coulomb_f (eta : f64 , l : usize , rho : f64 ,) -> Option < f64 >
+crate::kernels::special_ext::coulomb_f_prime	no-declared-adapter			fn coulomb_f_prime (eta : f64 , l : usize , rho : f64 ,) -> Option < f64 >
+crate::kernels::special_ext::coulomb_fg	no-declared-adapter			fn coulomb_fg (eta : f64 , l : usize , rho : f64 ,) -> Option < (f64 , f64 , f64 , f64) >
+crate::kernels::special_ext::coulomb_g	no-declared-adapter			fn coulomb_g (eta : f64 , l : usize , rho : f64 ,) -> Option < f64 >
+crate::kernels::special_ext::coulomb_g_from_u	no-declared-adapter			fn coulomb_g_from_u (eta : f64 , l : usize , rho : f64 ,) -> Option < (f64 , f64) >
+crate::kernels::special_ext::coulomb_g_prime	no-declared-adapter			fn coulomb_g_prime (eta : f64 , l : usize , rho : f64 ,) -> Option < f64 >
+crate::kernels::special_ext::coulomb_sigma	no-declared-adapter			fn coulomb_sigma (eta : f64 , l : usize ,) -> f64
+crate::kernels::special_ext::elliptic_e	no-declared-adapter			fn elliptic_e (m : f64) -> f64
+crate::kernels::special_ext::elliptic_e_inc	no-declared-adapter			fn elliptic_e_inc (phi : f64 , m : f64 ,) -> f64
+crate::kernels::special_ext::elliptic_f	no-declared-adapter			fn elliptic_f (phi : f64 , m : f64 ,) -> f64
+crate::kernels::special_ext::elliptic_k	no-declared-adapter			fn elliptic_k (m : f64) -> f64
+crate::kernels::special_ext::hyp1f1	no-declared-adapter			fn hyp1f1 (a : f64 , b : f64 , x : f64 ,) -> f64
+crate::kernels::special_ext::hyp2f1	no-declared-adapter			fn hyp2f1 (a : f64 , b : f64 , c : f64 , z : f64 ,) -> f64
+crate::kernels::special_ext::hyp2f1_complex	opaque			fn hyp2f1_complex (a : f64 , b : f64 , c : f64 , z : Complex64 ,) -> Complex64
+crate::kernels::special_ext::jacobi_elliptic	no-declared-adapter			fn jacobi_elliptic (u : f64 , m : f64 ,) -> (f64 , f64 , f64)
+crate::kernels::special_ext::kelvin_bei	no-declared-adapter			fn kelvin_bei (nu : usize , x : f64 ,) -> f64
+crate::kernels::special_ext::kelvin_ber	no-declared-adapter			fn kelvin_ber (nu : usize , x : f64 ,) -> f64
+crate::kernels::special_ext::kelvin_kei	no-declared-adapter			fn kelvin_kei (nu : usize , x : f64 ,) -> f64
+crate::kernels::special_ext::kelvin_ker	no-declared-adapter			fn kelvin_ker (nu : usize , x : f64 ,) -> f64
+crate::kernels::special_ext::lerch	no-declared-adapter			fn lerch (z : f64 , s : f64 , a : f64 ,) -> f64
+crate::kernels::special_ext::polylog	no-declared-adapter			fn polylog (s : f64 , z : f64 ,) -> f64
+crate::kernels::special_ext::polylog_complex	opaque			fn polylog_complex (s : Complex64 , z : Complex64 ,) -> Complex64
+crate::kernels::special_ext::weber_e	no-declared-adapter			fn weber_e (nu : f64 , x : f64 ,) -> f64
+crate::kernels::stats::<reexport:936e55a4d76b0329>	unresolved-reexport			crate :: kernels :: online_stats :: OnlineStatsError
+crate::kernels::stats::<reexport:f8b293f8fda51353>	unresolved-reexport			crate :: kernels :: online_stats :: OnlineCovariance
+crate::kernels::stats::BinomialDist::cdf	associated-method			fn cdf (& self , k : u64 ,) -> f64
+crate::kernels::stats::BinomialDist::new	associated-method			fn new (n : u64 , p : f64 ,) -> Result < Self , String >
+crate::kernels::stats::BinomialDist::pmf	associated-method			fn pmf (& self , k : u64 ,) -> f64
+crate::kernels::stats::ExponentialDist::cdf	associated-method			fn cdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::ExponentialDist::inverse_cdf	associated-method			fn inverse_cdf (& self , p : f64 ,) -> f64
+crate::kernels::stats::ExponentialDist::new	associated-method			fn new (rate : f64) -> Result < Self , String >
+crate::kernels::stats::ExponentialDist::pdf	associated-method			fn pdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::GammaDist::cdf	associated-method			fn cdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::GammaDist::inverse_cdf	associated-method			fn inverse_cdf (& self , p : f64 ,) -> f64
+crate::kernels::stats::GammaDist::new	associated-method			fn new (shape : f64 , rate : f64 ,) -> Result < Self , String >
+crate::kernels::stats::GammaDist::pdf	associated-method			fn pdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::NormalDist::cdf	associated-method			fn cdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::NormalDist::inverse_cdf	associated-method			fn inverse_cdf (& self , p : f64 ,) -> f64
+crate::kernels::stats::NormalDist::new	associated-method			fn new (mean : f64 , std_dev : f64 ,) -> Result < Self , String >
+crate::kernels::stats::NormalDist::pdf	associated-method			fn pdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::PoissonDist::cdf	associated-method			fn cdf (& self , k : u64 ,) -> f64
+crate::kernels::stats::PoissonDist::new	associated-method			fn new (rate : f64) -> Result < Self , String >
+crate::kernels::stats::PoissonDist::pmf	associated-method			fn pmf (& self , k : u64 ,) -> f64
+crate::kernels::stats::UniformDist::cdf	associated-method			fn cdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::UniformDist::inverse_cdf	associated-method			fn inverse_cdf (& self , p : f64 ,) -> f64
+crate::kernels::stats::UniformDist::new	associated-method			fn new (min : f64 , max : f64 ,) -> Result < Self , String >
+crate::kernels::stats::UniformDist::pdf	associated-method			fn pdf (& self , x : f64 ,) -> f64
+crate::kernels::stats::chi_squared_test	no-declared-adapter			fn chi_squared_test (observed : & [f64] , expected : & [f64] ,) -> (f64 , f64)
+crate::kernels::stats::coefficient_of_variation	declared	num_cv		fn coefficient_of_variation (data : & [f64]) -> f64
+crate::kernels::stats::correlation	declared	num_correlation		fn correlation (data1 : & [f64] , data2 : & [f64] ,) -> f64
+crate::kernels::stats::covariance	declared	num_covariance		fn covariance (data1 : & [f64] , data2 : & [f64] ,) -> f64
+crate::kernels::stats::geometric_mean	declared	num_geometric_mean		fn geometric_mean (data : & [f64]) -> f64
+crate::kernels::stats::harmonic_mean	declared	num_harmonic_mean		fn harmonic_mean (data : & [f64]) -> f64
+crate::kernels::stats::iqr	declared	num_iqr		fn iqr (data : & mut [f64]) -> f64
+crate::kernels::stats::kurtosis	declared	num_kurtosis		fn kurtosis (data : & mut [f64]) -> f64
+crate::kernels::stats::max	declared	num_max		fn max (data : & mut [f64]) -> f64
+crate::kernels::stats::mean	declared	num_mean		fn mean (data : & [f64]) -> f64
+crate::kernels::stats::median	declared	num_median		fn median (data : & mut [f64]) -> f64
+crate::kernels::stats::min	declared	num_min		fn min (data : & mut [f64]) -> f64
+crate::kernels::stats::mode	no-declared-adapter			fn mode (data : & [f64] , decimal_places : u32 ,) -> Option < f64 >
+crate::kernels::stats::one_way_anova	no-declared-adapter			fn one_way_anova (groups : & mut [& mut [f64]]) -> (f64 , f64)
+crate::kernels::stats::percentile	no-declared-adapter			fn percentile (data : & mut [f64] , p : f64 ,) -> f64
+crate::kernels::stats::range	declared	num_range		fn range (data : & [f64]) -> f64
+crate::kernels::stats::shannon_entropy	declared	num_entropy		fn shannon_entropy (probabilities : & [f64]) -> f64
+crate::kernels::stats::simple_linear_regression	no-declared-adapter			fn simple_linear_regression (data : & [(f64 , f64)]) -> (f64 , f64)
+crate::kernels::stats::skewness	declared	num_skewness		fn skewness (data : & mut [f64]) -> f64
+crate::kernels::stats::standard_error	declared	num_standard_error		fn standard_error (data : & [f64]) -> f64
+crate::kernels::stats::std_dev	declared	num_std_dev		fn std_dev (data : & [f64]) -> f64
+crate::kernels::stats::two_sample_t_test	no-declared-adapter			fn two_sample_t_test (sample1 : & [f64] , sample2 : & [f64] ,) -> (f64 , f64)
+crate::kernels::stats::variance	declared	num_variance		fn variance (data : & [f64]) -> f64
+crate::kernels::stats::variance_with_type	opaque			fn variance_with_type (data : & [f64] , var_type : VarianceType ,) -> Option < f64 >
+crate::kernels::stats::welch_t_test	no-declared-adapter			fn welch_t_test (sample1 : & [f64] , sample2 : & [f64] ,) -> (f64 , f64)
+crate::kernels::stats::z_scores	declared	num_z_scores		fn z_scores (data : & [f64]) -> Vec < f64 >
+crate::kernels::tensor::CpOptions::new	associated-method			const fn new (rank : usize) -> Self
+crate::kernels::tensor::Hosvd::reconstruct	associated-method			fn reconstruct (& self) -> Result < ArrayD < f64 > , String >
+crate::kernels::tensor::TensorData::to_arrayd	associated-method			fn to_arrayd (& self) -> Result < ArrayD < f64 > , String >
+crate::kernels::tensor::Tucker::reconstruct	associated-method			fn reconstruct (& self) -> Result < ArrayD < f64 > , String >
+crate::kernels::tensor::contract	opaque			fn contract (a : & ArrayD < f64 > , axis1 : usize , axis2 : usize ,) -> Result < ArrayD < f64 > , String >
+crate::kernels::tensor::cp_als	opaque			fn cp_als (tensor : & ArrayD < f64 > , options : & CpOptions ,) -> Result < CpDecomposition , String >
+crate::kernels::tensor::hooi	opaque			fn hooi (tensor : & ArrayD < f64 > , ranks : & [usize] , max_sweeps : usize , tolerance : f64 ,) -> Result < Tucker , String >
+crate::kernels::tensor::hosvd	opaque			fn hosvd (tensor : & ArrayD < f64 > , ranks : Option < & [usize] > ,) -> Result < Hosvd , String >
+crate::kernels::tensor::inner_product	opaque			fn inner_product (a : & ArrayD < f64 > , b : & ArrayD < f64 > ,) -> Result < f64 , String >
+crate::kernels::tensor::norm	opaque			fn norm (a : & ArrayD < f64 >) -> f64
+crate::kernels::tensor::outer_product	opaque			fn outer_product (a : & ArrayD < f64 > , b : & ArrayD < f64 > ,) -> Result < ArrayD < f64 > , String >
+crate::kernels::tensor::tensor_vec_mul	opaque			fn tensor_vec_mul (tensor : & ArrayD < f64 > , vector : & [f64] ,) -> Result < ArrayD < f64 > , String >
+crate::kernels::tensor::tensordot	opaque			fn tensordot (a : & ArrayD < f64 > , b : & ArrayD < f64 > , axes_a : & [usize] , axes_b : & [usize] ,) -> Result < ArrayD < f64 > , String >
+crate::kernels::tensor_train::TensorTrain::add	associated-method			fn add (& self , other : & Self ,) -> Result < Self , TrainError >
+crate::kernels::tensor_train::TensorTrain::cores	associated-method			fn cores (& self) -> & [TrainCore]
+crate::kernels::tensor_train::TensorTrain::entry	associated-method			fn entry (& self , indices : & [usize] ,) -> Result < f64 , TrainError >
+crate::kernels::tensor_train::TensorTrain::frobenius_norm	associated-method			fn frobenius_norm (& self) -> f64
+crate::kernels::tensor_train::TensorTrain::from_cores	associated-method			fn from_cores (cores : Vec < TrainCore >) -> Result < Self , TrainError >
+crate::kernels::tensor_train::TensorTrain::hadamard	associated-method			fn hadamard (& self , other : & Self ,) -> Result < Self , TrainError >
+crate::kernels::tensor_train::TensorTrain::inner	associated-method			fn inner (& self , other : & Self ,) -> Result < f64 , TrainError >
+crate::kernels::tensor_train::TensorTrain::round	associated-method			fn round (& self , relative_tolerance : f64 , max_rank : Option < usize > ,) -> Result < Self , TrainError >
+crate::kernels::tensor_train::TensorTrain::shape	associated-method			fn shape (& self) -> & [usize]
+crate::kernels::tensor_train::TensorTrain::storage_len	associated-method			fn storage_len (& self) -> usize
+crate::kernels::tensor_train::TensorTrain::to_dense	associated-method			fn to_dense (& self) -> Result < Vec < f64 > , TrainError >
+crate::kernels::tensor_train::TensorTrain::to_dense_with_limit	associated-method			fn to_dense_with_limit (& self , max_elements : usize ,) -> Result < Vec < f64 > , TrainError >
+crate::kernels::tensor_train::TensorTrain::tolerance_met	associated-method			const fn tolerance_met (& self) -> bool
+crate::kernels::tensor_train::TensorTrain::truncation_error	associated-method			const fn truncation_error (& self) -> f64
+crate::kernels::tensor_train::TrainCore::data	associated-method			fn data (& self) -> & [f64]
+crate::kernels::tensor_train::TrainCore::new	associated-method			fn new (shape : [usize ; 3] , data : Vec < f64 > ,) -> Result < Self , TrainError >
+crate::kernels::tensor_train::TrainCore::shape	associated-method			const fn shape (& self) -> [usize ; 3]
+crate::kernels::tensor_train::tt_svd	declared	num_tt_svd		fn tt_svd (data : & [f64] , shape : & [usize] , relative_tolerance : f64 , max_rank : Option < usize > ,) -> Result < TensorTrain , TrainError >
+crate::kernels::topology::betti_number	opaque			fn betti_number (complex : & [Simplex] , k : usize ,) -> usize
+crate::kernels::topology::betti_numbers_at_radius	no-declared-adapter			fn betti_numbers_at_radius (points : & [Vec < f64 >] , epsilon : f64 , max_dim : usize ,) -> Vec < usize >
+crate::kernels::topology::boundary_matrix	opaque			fn boundary_matrix (rows : & [Simplex] , cols : & [Simplex] ,) -> Vec < Vec < i64 > >
+crate::kernels::topology::close_complex	opaque			fn close_complex (simplices : & [Simplex]) -> Vec < Simplex >
+crate::kernels::topology::cohomology_betti_number	opaque			fn cohomology_betti_number (complex : & [Simplex] , k : usize ,) -> usize
+crate::kernels::topology::complex_dimension	opaque			fn complex_dimension (complex : & [Simplex]) -> Option < usize >
+crate::kernels::topology::compute_persistence	opaque			fn compute_persistence (points : & [Vec < f64 >] , max_epsilon : f64 , _steps : usize , max_dim : usize ,) -> Vec < PersistenceDiagram >
+crate::kernels::topology::euclidean_distance	no-declared-adapter			fn euclidean_distance (p1 : & [f64] , p2 : & [f64] ,) -> f64
+crate::kernels::topology::euler_characteristic	opaque			fn euler_characteristic (complex : & [Simplex]) -> i64
+crate::kernels::topology::find_connected_components	no-declared-adapter			fn find_connected_components (adj : & [Vec < usize >]) -> Vec < Vec < usize > >
+crate::kernels::topology::grid_complex	opaque			fn grid_complex (width : usize , height : usize ,) -> Vec < Simplex >
+crate::kernels::topology::int_matmul	no-declared-adapter			fn int_matmul (a : & [Vec < i64 >] , b : & [Vec < i64 >] ,) -> Vec < Vec < i64 > >
+crate::kernels::topology::integer_rank	no-declared-adapter			fn integer_rank (m : & [Vec < i64 >]) -> usize
+crate::kernels::topology::persistent_homology	opaque			fn persistent_homology (filtration : & [(f64 , Simplex)] , max_dim : usize ,) -> Result < Vec < PersistenceDiagram > , PersistenceError >
+crate::kernels::topology::persistent_homology_rips	opaque			fn persistent_homology_rips (points : & [Vec < f64 >] , max_epsilon : f64 , max_dim : usize , simplex_limit : usize ,) -> Result < Vec < PersistenceDiagram > , PersistenceError >
+crate::kernels::topology::simplex_boundary	opaque			fn simplex_boundary (simplex : & [usize]) -> Vec < (i64 , Simplex) >
+crate::kernels::topology::simplices_of_dim	opaque			fn simplices_of_dim (complex : & [Simplex] , k : usize ,) -> Vec < Simplex >
+crate::kernels::topology::torus_complex	opaque			fn torus_complex (m : usize , n : usize ,) -> Vec < Simplex >
+crate::kernels::topology::transpose	no-declared-adapter			fn transpose (m : & [Vec < i64 >] , cols : usize ,) -> Vec < Vec < i64 > >
+crate::kernels::topology::verify_boundary_property	opaque			fn verify_boundary_property (complex : & [Simplex]) -> bool
+crate::kernels::topology::verify_coboundary_property	opaque			fn verify_coboundary_property (complex : & [Simplex]) -> bool
+crate::kernels::topology::vietoris_rips_complex	opaque			fn vietoris_rips_complex (points : & [Vec < f64 >] , epsilon : f64 , max_dim : usize ,) -> Vec < Simplex >
+crate::kernels::topology::vietoris_rips_filtration	opaque			fn vietoris_rips_filtration (points : & [Vec < f64 >] , max_epsilon : f64 , steps : usize ,) -> Vec < (f64 , Vec < Simplex >) >
+crate::kernels::transforms::fft	opaque			fn fft (data : & mut [Complex < f64 >])
+crate::kernels::transforms::fft_many_par	opaque			fn fft_many_par (rows : & [Vec < Complex < f64 > >] , grain : usize ,) -> Vec < Vec < Complex < f64 > > >
+crate::kernels::transforms::fft_slice	opaque			fn fft_slice (data : & mut [Complex < f64 >])
+crate::kernels::transforms::ifft	opaque			fn ifft (data : & mut [Complex < f64 >])
+crate::kernels::transforms::ifft_many_par	opaque			fn ifft_many_par (rows : & [Vec < Complex < f64 > >] , grain : usize ,) -> Vec < Vec < Complex < f64 > > >
+crate::kernels::transforms::ifft_slice	opaque			fn ifft_slice (data : & mut [Complex < f64 >])
+crate::kernels::transforms::irfft	opaque			fn irfft (spectrum : & [Complex64] , n : usize ,) -> Vec < f64 >
+crate::kernels::transforms::rfft	opaque			fn rfft (x : & [f64]) -> Vec < Complex64 >
+crate::kernels::vector::angle	declared	num_angle		fn angle (v1 : & [f64] , v2 : & [f64] ,) -> Result < f64 , String >
+crate::kernels::vector::cosine_similarity	declared	num_cosine_similarity		fn cosine_similarity (v1 : & [f64] , v2 : & [f64] ,) -> Result < f64 , String >
+crate::kernels::vector::cross_product	declared	num_cross_product		fn cross_product (v1 : & [f64] , v2 : & [f64] ,) -> Result < Vec < f64 > , String >
+crate::kernels::vector::distance	declared	num_distance		fn distance (v1 : & [f64] , v2 : & [f64] ,) -> Result < f64 , String >
+crate::kernels::vector::dot_product	declared	num_dot		fn dot_product (v1 : & [f64] , v2 : & [f64] ,) -> Result < f64 , String >
+crate::kernels::vector::is_orthogonal	no-declared-adapter			fn is_orthogonal (v1 : & [f64] , v2 : & [f64] , epsilon : f64 ,) -> Result < bool , String >
+crate::kernels::vector::is_parallel	no-declared-adapter			fn is_parallel (v1 : & [f64] , v2 : & [f64] , epsilon : f64 ,) -> Result < bool , String >
+crate::kernels::vector::l1_norm	declared	num_l1_norm		fn l1_norm (v : & [f64]) -> f64
+crate::kernels::vector::lerp	no-declared-adapter			fn lerp (v1 : & [f64] , v2 : & [f64] , t : f64 ,) -> Result < Vec < f64 > , String >
+crate::kernels::vector::linf_norm	declared	num_linf_norm		fn linf_norm (v : & [f64]) -> f64
+crate::kernels::vector::lp_norm	declared	num_lp_norm		fn lp_norm (v : & [f64] , p : f64 ,) -> f64
+crate::kernels::vector::norm	declared	num_norm		fn norm (v : & [f64]) -> f64
+crate::kernels::vector::normalize	declared	num_normalize		fn normalize (v : & [f64]) -> Result < Vec < f64 > , String >
+crate::kernels::vector::project	declared	num_project		fn project (v1 : & [f64] , v2 : & [f64] ,) -> Result < Vec < f64 > , String >
+crate::kernels::vector::reflect	declared	num_reflect		fn reflect (v : & [f64] , n : & [f64] ,) -> Result < Vec < f64 > , String >
+crate::kernels::vector::scalar_mul	declared	num_scalar_mul		fn scalar_mul (v : & [f64] , s : f64 ,) -> Vec < f64 >
+crate::kernels::vector::vec_add	declared	num_vector_add		fn vec_add (v1 : & [f64] , v2 : & [f64] ,) -> Result < Vec < f64 > , String >
+crate::kernels::vector::vec_sub	declared	num_vector_sub		fn vec_sub (v1 : & [f64] , v2 : & [f64] ,) -> Result < Vec < f64 > , String >
+crate::kernels::wavelets::Wavelet::analysis_high	associated-method			fn analysis_high (self) -> Vec < f64 >
+crate::kernels::wavelets::Wavelet::analysis_low	associated-method			fn analysis_low (self) -> Vec < f64 >
+crate::kernels::wavelets::Wavelet::coeff_len	associated-method			fn coeff_len (self , n : usize , b : Boundary ,) -> usize
+crate::kernels::wavelets::Wavelet::high_pass	associated-method			fn high_pass (self) -> Vec < f64 >
+crate::kernels::wavelets::Wavelet::is_orthogonal	associated-method			const fn is_orthogonal (self) -> bool
+crate::kernels::wavelets::Wavelet::low_pass	associated-method			fn low_pass (self) -> Vec < f64 >
+crate::kernels::wavelets::Wavelet::synthesis_high	associated-method			fn synthesis_high (self) -> Vec < f64 >
+crate::kernels::wavelets::Wavelet::synthesis_low	associated-method			fn synthesis_low (self) -> Vec < f64 >
+crate::kernels::wavelets::Wavelet::taps	associated-method			fn taps (self) -> usize
+crate::kernels::wavelets::Wavelet::vanishing_moments	associated-method			const fn vanishing_moments (self) -> (usize , usize)
+crate::kernels::wavelets::dwt	opaque			fn dwt (x : & [f64] , w : Wavelet ,) -> Result < (Vec < f64 > , Vec < f64 >) , WaveletError >
+crate::kernels::wavelets::dwt2	opaque			fn dwt2 (x : & [f64] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::dwt_with	opaque			fn dwt_with (x : & [f64] , w : Wavelet , b : Boundary ,) -> Result < (Vec < f64 > , Vec < f64 >) , WaveletError >
+crate::kernels::wavelets::extend	opaque			fn extend (x : & [f64] , i : isize , b : Boundary ,) -> f64
+crate::kernels::wavelets::frft	opaque			fn frft (x : & [Complex64] , a : f64 ,) -> Result < Vec < Complex64 > , String >
+crate::kernels::wavelets::frft_matrix	opaque			fn frft_matrix (n : usize , a : f64 ,) -> Result < Vec < Complex64 > , String >
+crate::kernels::wavelets::idwt	opaque			fn idwt (a : & [f64] , d : & [f64] , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::idwt2	opaque			fn idwt2 (c : & [f64] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::idwt_with	opaque			fn idwt_with (a : & [f64] , d : & [f64] , w : Wavelet , b : Boundary , n : usize ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::wavedec	opaque			fn wavedec (x : & [f64] , w : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
+crate::kernels::wavelets::wavedec2	opaque			fn wavedec2 (x : & [f64] , rows : usize , cols : usize , w : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
+crate::kernels::wavelets::wavedec2_with	opaque			fn wavedec2_with (x : & [f64] , rows : usize , cols : usize , w : Wavelet , levels : usize , b : Boundary ,) -> Result < Vec < Vec < f64 > > , WaveletError >
+crate::kernels::wavelets::wavedec_with	opaque			fn wavedec_with (x : & [f64] , w : Wavelet , levels : usize , b : Boundary ,) -> Result < Vec < Vec < f64 > > , WaveletError >
+crate::kernels::wavelets::waverec	opaque			fn waverec (coeffs : & [Vec < f64 >] , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::waverec2	opaque			fn waverec2 (coeffs : & [Vec < f64 >] , rows : usize , cols : usize , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::waverec2_with	opaque			fn waverec2_with (coeffs : & [Vec < f64 >] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::waverec_with	opaque			fn waverec_with (coeffs : & [Vec < f64 >] , w : Wavelet , b : Boundary , n : usize ,) -> Result < Vec < f64 > , WaveletError >

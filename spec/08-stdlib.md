@@ -323,8 +323,13 @@ std      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 ```
 
 `zeros<Float>(3, 4)` 的 `n=2`；`zeros<Int>` 显式指定元素类型。`zeros`/
-`ones`/`fill` 是**内建可变参数**：`n` 由 `Int` 实参的个数决定，不是用户
-可声明的函数；类型检查器特殊处理。`reshape<[n1, ..., nk]>(a)` 的目标形状
+`ones`/`fill` 是**内建可变参数**：`n` 由 `Int` 实参的个数决定。它们可从
+`Tensor` 或 `LinearAlgebra` 导入并通过值别名再导出；类型参数可在调用前
+或调用时给出（`let z = zeros<Int>; z(2, 3)`）。局部同名定义照常遮蔽内建；
+构造器经泛型恒等函数传递时保留身份。相同类型特化的 `zeros` 与 `ones`
+可作为同一条件表达式的分支；运行时按实际值选择操作。`fill` 属于另一
+签名族，不同特化也不能混合。需要固定函数签名的高阶参数不能直接接受可变
+参数构造器，应写固定参数的 lambda，例如 `fn (n) => zeros(n)`。`reshape<[n1, ..., nk]>(a)` 的目标形状
 显式给出；元素数在编译期（形状已知时）或运行时检查。`reshape_dyn(a,
 shape)` 用运行时形状向量，返回 `Result`。
 
@@ -1088,6 +1093,7 @@ Rssn.overloads     : String -> Tensor<1, String>
 to_value           : a -> Value
 from_value         : Value -> Result<a, OpError>
 type_rep<a>()      : TypeRep
+to_callback        : 已检查的具体函数 -> Callback   # 编译器 intrinsic，函数参数个数不限
 Rssn.call_ho       : (String, Tensor<1, Value>, Tensor<1, Callback>)
                    -> Result<Value, OpError>
 Rssn.register        : Plugin -> Result<PluginId, PluginError>
@@ -1136,18 +1142,25 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 
 固定入口的可达性与限制：
 
-- `Rssn.typed` 可用：它执行动态调用并接受一个 `TypeRep`。当前 `type_rep()`
-  产出的 `TypeRep` 只有名字（`kind = "opaque"`），所以运行时只能校验第三个
-  参数确实是 `TypeRep`，不能按它逐字段校验返回值；静态保证来自类型检查器。
-- `Rssn.call_ho` 的类型正确，但**非空**回调列表不可构造：Aevia 闭包不满足
-  kernel `HostCallback` 的 `Send + Sync`，因此运行时报
-  `E1001("core.callback")`。空列表等价于一次动态调用，会正常执行。
+- `type_rep<T>()` 从具体的检查后类型生成不可伪造的 `TypeRep`；未解析的泛型
+  不能在没有运行时类型字典时反射。`Rssn.typed` 执行动态调用，并用该见证检查
+  返回值；不匹配或证据不足返回 `Err(OpError)`，成功结果仍为不透明 `Value`，
+  需用 `from_value<T>` 验证并转换。可变参数构造的类型见证也可通过别名传递。
+- `to_callback(f)` 对当前 evaluator 会话中的已检查源码闭包验证具体函数类型，
+  构造不透明的 `Callback`。别名和已具体化的泛型函数保留此证据；内建函数或
+  其他 native 函数可先包装在源码 lambda 中。回调桥支持具体数值、`Bool`、
+  `String`，以及由它们递归组成的张量和闭合记录；具体量纲、秩和完整已知形状
+  都会校验。空结构张量需要独立的元素类型及量纲证据，名义类型不能只凭标签推断。
+  各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
+  调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及
+  回调错误均返回错误。空回调列表等价于动态调用。
 - `Rssn.register`/`Rssn.register_plugin` 的类型正确，但 Aevia 源码无法构造
   `Plugin` 值：源码级 `@op` 打包（§13.5.2）未实现，因此运行时报
   `E1001("core.plugin.source")`。Rust host 插件仍可经嵌入 API
   （`Session::register`）注册。
-- 上述两个名字是 capability 表里的行、`enabled = false`；缺的是 Aevia 侧
-  的值构造，不是 kernel 接口。
+- `core.callback` 标记上述受限的回调桥可用；`core.plugin.source` 仍为
+  `enabled = false`。生成的高阶绑定使用显式 `(values, callbacks)` 动态接口；
+  泛型参数与结果见证未完整具体化前，不生成钉住签名的泛型包装。
 
 `Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、
 实验性入口都走它。多注册时 RSSN 在运行时按
@@ -1174,6 +1187,7 @@ Units
   CGS
   Natural
   Constants
+Tensor
 LinearAlgebra
   Sparse
 Calculus
@@ -1210,7 +1224,7 @@ Physics
 只引入 `sqrt`，`open Units.SI` 把 `Units.SI` 的导出名放进当前作用域。
 
 > **实现状态（2026-11-04）**：标准库**模块树已落地**。
-> （`crates/aevia-std/stdlib/**.aev`，**37** 个模块，含 §8.9.1 的 `Sde`；
+> （`crates/aevia-std/stdlib/**.aev`，**38** 个模块，含 §8.9.1 的 `Sde`；
 > 经 `include_str!` 嵌入；`aevia_std::stdlib` 暴露
 > `source`/`is_module_name`/`module_paths`。）
 > 加载器在普通根目录解析不到模块时回退到嵌入模块，因此 `import Math {
@@ -1222,7 +1236,7 @@ Physics
 > 的语义，因此不导出（§5.3.4）。`Sde` 模块 re-export §8.9.1 的五个入口
 > （`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed`）
 > 并声明选项 ADT（`SdeMethod`/`SdeStructure`/`SdeFixedOpts`/
-> `SdeAdaptiveOpts`/`SdeOpts`/`SdePath`）；`Physics.Ising`/`Physics.Geodesic`
+> `SdeAdaptiveOpts`/`SdeOpts`）；`SdePath` 的结果字段由推断访问；`Physics.Ising`/`Physics.Geodesic`
 > 提供 §8.17 的类型化包装器。`spec/11` 的九个完整程序**全部**通过
 > （11.1/11.2/11.3/11.4/11.5/11.6/11.7/11.8/11.10；11.2 的
 > `RateOf<State>` 记录统一与 11.4 的 refined/rank-only shape 统一已在本轮
@@ -1248,9 +1262,9 @@ Physics
 > （7 declared + 25 overlay + 1350 derived，其中 `sde_scheme_info` 是本轮
 > 新增的 manifest-only 元数据算子）、32 个 rule set、82 单位、30 常数、
 > overload 1568 条、`manifest_hash = 8d2c3764…`**。嵌入的
-> `crates/aevia-std/stdlib/Units/Constants.aev` 头注释记录了生成时的
-> manifest hash；manifest 变化后必须用
-> `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`
+> `crates/aevia-std/stdlib/Units/Constants.aev` 来自 live manifest；
+> manifest 变化后必须用
+> `cargo run -p aevia-stdlib-gen -- --write`
 > 重新生成，否则 `units_constants_is_the_live_manifest` 会失败（这是
 > 生成视图与 live manifest 的诚实校验）。
 

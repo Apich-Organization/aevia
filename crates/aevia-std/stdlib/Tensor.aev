@@ -1,0 +1,9 @@
+## The `Tensor` module of §8.20.
+##
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+module Tensor
+
+let fill = fill
+let ones = ones
+let zeros = zeros

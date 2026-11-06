@@ -89,6 +89,10 @@ pub enum SigType {
     Tensor {
         /// Rank, when the signature fixes it.
         rank: Option<usize>,
+        /// Fully concrete extents, when the signature proves every extent.
+        /// Partially unknown shapes remain rank-only rather than fabricating
+        /// an extent or a type-level variable identity.
+        shape: Option<Vec<usize>>,
         /// Element type.
         elem: Box<Self>,
     },
@@ -165,6 +169,14 @@ pub struct OpEntry {
     pub raw: Vec<Signature>,
     /// Where the signatures came from.
     pub source: Source,
+    /// Kernel dimensional rule, when declared independently of signatures.
+    pub dim_rule: Option<rssn::kernel::signature::DimRuleInfo>,
+    /// Why the kernel omitted a signature, if it supplied a reason.
+    pub dynamic_reason: Option<String>,
+    /// Kernel evaluation route, distinguishing value-native and graph calls.
+    pub eval_kind: rssn::kernel::signature::EvalKind,
+    /// Backend availability stated by the kernel.
+    pub backend_support: rssn::kernel::signature::BackendSupport,
     /// How settled the operator is.
     pub stability: Stability,
     /// Documentation.
@@ -176,6 +188,16 @@ pub struct OpEntry {
 }
 
 impl OpEntry {
+    /// Whether calls use the value-native ABI rather than the dimensionless graph.
+    #[must_use]
+    pub fn is_value_native(&self) -> bool {
+        matches!(
+            self.eval_kind,
+            rssn::kernel::signature::EvalKind::Dynamic
+                | rssn::kernel::signature::EvalKind::HostCallback
+        )
+    }
+
     /// The primary signature, when there is one.
     #[must_use]
     pub fn primary(&self) -> Option<&Sig> {
@@ -393,22 +415,15 @@ impl Capabilities {
             // they need Aevia closures. A host gates its SDE surface on this
             // row, exactly as it gates ODE on `core.higher_order`-style flags.
             row("core.sde", "sde", self.sde),
-            // Host-bridge capabilities. They are rows even though the kernel
-            // lists no `Features` field for them, because the table is the one
-            // place a capability may be named: `Rssn.call_ho` and
-            // `Rssn.register` report `E1001` with these names, and a future
-            // bridge that lands the conversion flips the row instead of
-            // hunting for the message that hard-coded it.
-            //
-            // Both are genuinely false in this build:
-            // * `core.callback` — the kernel's `HostCallback` is `Send + Sync`
-            //   and Aevia's evaluator is single-threaded, so an Aevia closure
-            //   cannot cross as a callback (§8.19);
-            // * `core.plugin.source` — no Aevia source expression can produce
-            //   a `Plugin` value: Rust host plugins register through
-            //   `Session::register` (§13.5.1) and source-level `@op` packaging
-            //   (§13.5.2) is not implemented.
-            row("core.callback", "callback", false),
+            // Callback support is scoped to synchronous, thread-affine
+            // interpreter calls. Individual signatures remain subject to the
+            // binding catalog's Float-only, trailing callback restrictions.
+            row(
+                "core.callback",
+                "callback",
+                self.dynamic_call && self.higher_order,
+            ),
+            // Source-level plugin construction is not implemented.
             row("core.plugin.source", "plugin_source", false),
             row(
                 "core.structured_results",
@@ -627,6 +642,10 @@ impl Registry {
                     | rssn::kernel::manifest::SignatureSource::Derived => Source::Derived,
                     | rssn::kernel::manifest::SignatureSource::None => Source::None,
                 },
+                dim_rule: op.dim_rule.clone(),
+                dynamic_reason: op.dynamic_reason.clone(),
+                eval_kind: op.eval,
+                backend_support: op.backend_support,
                 stability: op.stability,
                 doc: op.doc.clone(),
                 arity: (usize::from(op.arity.min), op.arity.max.map(usize::from)),
@@ -877,9 +896,23 @@ fn convert_type_with(
                 convert_dim_with(dim, dims),
             )
         },
-        | TypeExpr::Tensor { rank, elem, .. } => {
+        | TypeExpr::Tensor { rank, shape, elem } => {
             SigType::Tensor {
                 rank: convert_rank(rank),
+                shape: shape
+                    .as_ref()
+                    .and_then(|extents| {
+                        extents
+                            .iter()
+                            .map(|extent| {
+                                match extent {
+                                    | NatExpr::Lit(n) => usize::try_from(*n).ok(),
+                                    | _ => None,
+                                }
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .filter(|extents| convert_rank(rank).is_none_or(|r| r == extents.len())),
                 elem: Box::new(convert_type_with(elem, dims)),
             }
         },
@@ -959,17 +992,37 @@ pub fn to_type_expr(ty: &SigType) -> TypeExpr {
         | SigType::Dim(inner, dim) => {
             TypeExpr::Dim(Box::new(to_type_expr(inner)), to_dim_expr(dim))
         },
-        | SigType::Tensor { rank, elem } => {
+        | SigType::Tensor { rank, shape, elem } => {
+            if rank.is_some_and(|rank| u64::try_from(rank).is_err())
+                || shape.as_ref().is_some_and(|extents| {
+                    !rank.is_some_and(|rank| rank == extents.len())
+                        || extents.iter().any(|extent| u64::try_from(*extent).is_err())
+                })
+            {
+                return TypeExpr::Never;
+            }
             TypeExpr::Tensor {
-                rank: NatExpr::Lit(u64::try_from(rank.unwrap_or(1)).unwrap_or(1)),
-                shape: None,
+                rank: rank
+                    .and_then(|rank| u64::try_from(rank).ok())
+                    .map_or_else(|| NatExpr::Var("unknown_rank".to_string()), NatExpr::Lit),
+                shape: shape
+                    .as_ref()
+                    .filter(|extents| rank.is_some_and(|rank| rank == extents.len()))
+                    .and_then(|extents| {
+                        extents
+                            .iter()
+                            .map(|extent| u64::try_from(*extent).ok().map(NatExpr::Lit))
+                            .collect()
+                    }),
                 elem: Box::new(to_type_expr(elem)),
             }
         },
         | SigType::Sparse { rank, elem } => {
             TypeExpr::Sparse {
                 format: String::new(),
-                rank: NatExpr::Lit(u64::try_from(rank.unwrap_or(1)).unwrap_or(1)),
+                rank: rank
+                    .and_then(|rank| u64::try_from(rank).ok())
+                    .map_or_else(|| NatExpr::Var("unknown_rank".to_string()), NatExpr::Lit),
                 elem: Box::new(to_type_expr(elem)),
             }
         },
@@ -1030,10 +1083,10 @@ pub fn to_type_expr(ty: &SigType) -> TypeExpr {
 /// is the one thing the kernel does *not* promise. Two `Any`s in one signature
 /// are independent variables.
 ///
-/// A symbolic exponent still has no static mirror (the language rejects
-/// `L^n`, §4.12.3), so that one keeps falling back to `1`; see
-/// `.workbuddy-ai/audit/bridge-fixed.md` for the requirement it places on the
-/// checker.
+/// A symbolic exponent, non-metric value or container has no scalar dimension
+/// mirror. They receive fresh unknown dimensions instead of the false claim
+/// `1`; [`signature_has_unrepresentable_dimensions`] lets static callers
+/// decline signatures whose relationships cannot be expressed.
 #[must_use]
 pub fn convert_dim(dim: &DimExpr) -> Dim {
     convert_dim_with(dim, &mut SignatureDims::default())
@@ -1057,18 +1110,17 @@ fn convert_dim_with(
             };
             convert_dim_with(base, dims).pow(&exponent)
         },
-        | DimExpr::Pow(_, Exp::Symbol(_)) => Dim::one(),
+        | DimExpr::Pow(_, Exp::Symbol(_)) => Dim::var(fresh_dim()),
         | DimExpr::Inverse(base) => {
             convert_dim_with(base, dims).pow(&num_rational::BigRational::from_integer(
                 num_bigint::BigInt::from(-1),
             ))
         },
         | DimExpr::Dimless => Dim::one(),
-        // `NonMetric` says "not a scalar at all" and `Container` "a structured
-        // container"; neither is a dimension, and neither is `1`. They cannot
-        // be stated in the dimension algebra, so they stay dimensionless and
-        // the kernel checks them at run time.
-        | DimExpr::NonMetric | DimExpr::Container => Dim::one(),
+        // Neither non-metric nor container is a dimension. Preserve the fact
+        // that it is unknown; callers must consult the raw signature before
+        // making a static promise about it.
+        | DimExpr::NonMetric | DimExpr::Container => Dim::var(fresh_dim()),
         | DimExpr::Var(name) => dims.var(name),
         | DimExpr::Any => Dim::var(fresh_dim()),
     }
@@ -1099,6 +1151,40 @@ fn convert_exponent(exponent: &Rational) -> Option<num_rational::BigRational> {
         num_bigint::BigInt::from(exponent.numer),
         num_bigint::BigInt::from(exponent.denom),
     ))
+}
+
+/// Whether any part of a kernel signature uses dimensional semantics that
+/// Aevia's scalar dimension algebra cannot express. Such signatures may still
+/// be called dynamically, but must not be presented as exact static types.
+#[must_use]
+pub fn signature_has_unrepresentable_dimensions(signature: &Signature) -> bool {
+    fn dim(d: &DimExpr) -> bool {
+        match d {
+            | DimExpr::NonMetric | DimExpr::Container | DimExpr::Pow(_, Exp::Symbol(_)) => true,
+            | DimExpr::Pow(base, _) | DimExpr::Inverse(base) => dim(base),
+            | DimExpr::Mul(parts) => parts.iter().any(dim),
+            | _ => false,
+        }
+    }
+    fn ty(t: &TypeExpr) -> bool {
+        match t {
+            | TypeExpr::Unit(d) | TypeExpr::Point(d) => dim(d),
+            | TypeExpr::Dim(inner, d) => dim(d) || ty(inner),
+            | TypeExpr::Tensor { elem, .. } | TypeExpr::Sparse { elem, .. } => ty(elem),
+            | TypeExpr::Record(fields) => fields.iter().any(|(_, t)| ty(t)),
+            | TypeExpr::Variant(cases) => cases.iter().any(|(_, fields)| fields.iter().any(ty)),
+            | TypeExpr::Function(args, ret) => args.iter().any(ty) || ty(ret),
+            | TypeExpr::Table(row) => row.columns.iter().any(|(_, t)| ty(t)),
+            | TypeExpr::Dyn(rep) => rep.dim.as_ref().is_some_and(dim),
+            | _ => false,
+        }
+    }
+    signature
+        .params
+        .iter()
+        .chain(std::iter::once(&signature.ret))
+        .chain(signature.variadic.iter().map(|v| &v.elem))
+        .any(ty)
 }
 
 /// Converts Aevia's dimension to a signature dimension.
@@ -1195,7 +1281,21 @@ pub fn render_type(ty: &SigType) -> String {
         | SigType::Unit(dim) => format!("Unit[{}]", render_dim(dim)),
         | SigType::Point(dim) => format!("Point[{}]", render_dim(dim)),
         | SigType::Dim(inner, dim) => format!("{}[{}]", render_type(inner), render_dim(dim)),
-        | SigType::Tensor { rank, elem } => {
+        | SigType::Tensor { rank, shape, elem } => {
+            if let Some(shape) = shape
+                .as_ref()
+                .filter(|shape| rank.is_some_and(|rank| rank == shape.len()))
+            {
+                return format!(
+                    "Tensor<[{}], {}>",
+                    shape
+                        .iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    render_type(elem)
+                );
+            }
             match rank {
                 | Some(rank) => format!("Tensor<{rank}, {}>", render_type(elem)),
                 | None => format!("Tensor<_, {}>", render_type(elem)),

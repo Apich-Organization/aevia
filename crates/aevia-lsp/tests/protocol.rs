@@ -131,7 +131,7 @@ fn a_full_session_speaks_the_protocol() {
     assert_eq!(initialize["jsonrpc"], "2.0");
     assert_eq!(capabilities["textDocumentSync"]["openClose"], true);
     assert_eq!(capabilities["textDocumentSync"]["change"], 2);
-    assert_eq!(capabilities["textDocumentSync"]["save"], false);
+    assert_eq!(capabilities["textDocumentSync"]["save"], true);
     assert_eq!(capabilities["hoverProvider"], true);
     assert_eq!(capabilities["completionProvider"]["resolveProvider"], false);
     assert_eq!(capabilities["definitionProvider"], true);
@@ -1085,4 +1085,441 @@ fn signature_help_uses_an_imported_declarations_docs() {
         help["result"]["signatures"][0]["documentation"]["value"],
         "Magnitude of x."
     );
+}
+
+#[test]
+fn changing_and_closing_an_unsaved_import_republishes_its_open_importer() {
+    let package = TempPackage::new("dirty-import-graph");
+    let a_source = "module A\n\nfn value(): Int = 1\n";
+    let b_source = "module B\n\nimport A\n\nlet got: Int = A.value()\n";
+    let a_uri = aevia_lsp::protocol::uri_from_path(&package.write("src/A.aev", a_source));
+    let b_uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", b_source));
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":b_uri,"version":3,"text":b_source}}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":a_uri,"version":7,"text":a_source}}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":a_uri,"version":8},"contentChanges":[{"text":"module A\n\nfn value(): Bool = true\n"}]}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":b_uri},"position":position_of(b_source,"value",1)}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":a_uri}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":b_uri},"position":position_of(b_source,"value",1)}}),
+        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    let diagnostics = published(&replies, &b_uri);
+    assert!(
+        diagnostics.len() >= 4,
+        "dependent buffer was not republished: {replies:#?}"
+    );
+    assert!(
+        diagnostics.first().unwrap()["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        diagnostics.iter().any(|event| {
+            !event["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        }),
+        "dirty import was ignored: {replies:#?}"
+    );
+    assert!(
+        diagnostics.last().unwrap()["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "closing import did not restore disk: {replies:#?}"
+    );
+    assert!(
+        reply(&replies, 2)["result"].to_string().contains("Bool"),
+        "{replies:#?}"
+    );
+    assert!(
+        reply(&replies, 3)["result"].to_string().contains("Int"),
+        "{replies:#?}"
+    );
+    assert_eq!(diagnostics.last().unwrap()["params"]["version"], 3);
+}
+
+#[test]
+fn opening_a_new_unsaved_module_resolves_an_existing_open_importer() {
+    let package = TempPackage::new("new-import-buffer");
+    let b_source = "module B\n\nimport A\n\nlet got = A.value()\n";
+    let b_uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", b_source));
+    let a_uri = aevia_lsp::protocol::uri_from_path(&package.path("src/A.aev"));
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":b_uri,"version":1,"text":b_source}}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":a_uri,"version":1,"text":"module A\n\nfn value(): Int = 7\n"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":b_uri},"position":position_of(b_source,"value",1)}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":a_uri}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    let diagnostics = published(&replies, &b_uri);
+    assert_eq!(diagnostics.len(), 3, "{replies:#?}");
+    assert!(
+        !diagnostics[0]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        diagnostics[1]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "unsaved import was not resolved: {replies:#?}"
+    );
+    assert!(
+        !diagnostics[2]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(reply(&replies, 2)["result"]["uri"], a_uri);
+    assert!(!package.path("src/A.aev").exists());
+}
+
+#[test]
+fn rename_uses_unsaved_import_ranges_and_open_document_versions() {
+    let package = TempPackage::new("dirty-rename-versions");
+    let saved_a = "module A\n\nfn value(): Int = 1\n";
+    let dirty_a = "module A\n\n## Unsaved declaration moves down.\n\nfn value(): Int = 2\n";
+    let b_source = "module B\n\nimport A\n\nlet got = A.value()\n";
+    let a_uri = aevia_lsp::protocol::uri_from_path(&package.write("src/A.aev", saved_a));
+    let b_uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", b_source));
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":a_uri,"version":8,"text":dirty_a}}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":b_uri,"version":5,"text":b_source}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":b_uri},"position":position_of(b_source,"value",1),"newName":"renamed"}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    let result = reply(&replies, 2);
+    let edits = result["result"]["documentChanges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{result:#?}"));
+    let a = edits
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == a_uri)
+        .unwrap();
+    let b = edits
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == b_uri)
+        .unwrap();
+    assert_eq!(a["textDocument"]["version"], 8);
+    assert_eq!(b["textDocument"]["version"], 5);
+    let new_a = apply_changes(dirty_a, a["edits"].as_array().unwrap());
+    assert!(new_a.contains("fn renamed(): Int = 2"), "{new_a}");
+    assert!(!new_a.contains("fn value"));
+    let new_b = apply_changes(b_source, b["edits"].as_array().unwrap());
+    assert!(new_b.contains("A.renamed()"), "{new_b}");
+}
+
+#[test]
+fn module_queries_follow_exact_owner_edges_and_rename_the_correct_dependency() {
+    let package = TempPackage::new("owner-import-edges");
+    for (name, source) in [
+        ("one", "module Helper\n\nfn value(): Int = 1\n"),
+        (
+            "two",
+            "module Helper\n\n## A different owner and return type.\n\nfn value(): Bool = true\n",
+        ),
+    ] {
+        std::fs::create_dir_all(package.path(&format!("{name}/src"))).unwrap();
+        package.write(
+            &format!("{name}/aevia.toml"),
+            &format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nentry = \"src/Helper.aev\"\n"
+            ),
+        );
+        package.write(&format!("{name}/src/Helper.aev"), source);
+    }
+    package.write("aevia.toml", "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nentry = \"src/Main.aev\"\n[dependencies]\nA = { path = \"one\" }\nB = { path = \"two\" }\n");
+    let source = "import A\nimport B\nlet left = A.value()\nlet right = B.value()\n";
+    let uri = aevia_lsp::protocol::uri_from_path(&package.write("src/Main.aev", source));
+    let one = aevia_lsp::protocol::uri_from_path(&package.path("one/src/Helper.aev"));
+    let two = aevia_lsp::protocol::uri_from_path(&package.path("two/src/Helper.aev"));
+    let position = position_of(source, "B.value", 3);
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":source}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":uri},"position":position}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{"textDocument":{"uri":uri},"position":position,"context":{"includeDeclaration":true}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position,"newName":"renamed"}}),
+        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"textDocument/completion","params":{"textDocument":{"uri":uri},"position":{"line":4,"character":0}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":6,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    assert_eq!(reply(&replies, 2)["result"]["uri"], two, "{replies:#?}");
+    assert_eq!(reply(&replies, 2)["result"]["range"]["start"]["line"], 4);
+    let references = reply(&replies, 3)["result"].as_array().unwrap();
+    assert_eq!(references.len(), 2);
+    assert!(!references.iter().any(|location| location["uri"] == one));
+    let edits = reply(&replies, 4)["result"]["documentChanges"]
+        .as_array()
+        .unwrap();
+    assert_eq!(edits.len(), 2);
+    assert!(!edits.iter().any(|edit| edit["textDocument"]["uri"] == one));
+    let main_edit = edits
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == uri)
+        .unwrap();
+    let changed = apply_changes(source, main_edit["edits"].as_array().unwrap());
+    assert!(changed.contains("A.value()"));
+    assert!(changed.contains("B.renamed()"));
+    let completions = reply(&replies, 5)["result"].as_array().unwrap();
+    assert!(completions.iter().any(|item| item["label"] == "B.value"));
+    assert!(
+        !completions
+            .iter()
+            .any(|item| item["label"] == "Helper.value")
+    );
+}
+
+#[test]
+fn completion_does_not_leak_transitive_aliases_or_unselected_imports() {
+    let package = TempPackage::new("selected-completion");
+    package.write("src/Hidden.aev", "module Hidden\nlet secret = 1\n");
+    package.write(
+        "src/A.aev",
+        "module A\nimport Hidden as Leaked\nlet only = 1\nlet excluded = 2\n",
+    );
+    let source = "module B\nimport A { only }\nlet got = only\n";
+    let uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", source));
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":source}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":uri},"position":{"line":3,"character":0}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    let items = reply(&replies, 2)["result"].as_array().unwrap();
+    let labels: Vec<&str> = items
+        .iter()
+        .filter_map(|item| item["label"].as_str())
+        .collect();
+    assert!(labels.contains(&"only"), "{labels:?}");
+    for unwanted in [
+        "excluded",
+        "A.excluded",
+        "Hidden.secret",
+        "Leaked.secret",
+        "secret",
+    ] {
+        assert!(!labels.contains(&unwanted), "{labels:?}");
+    }
+}
+
+#[test]
+fn malformed_or_partial_edit_batches_keep_the_previous_buffer_and_version() {
+    let source = "let value = 1\n";
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":URI,"version":1,"text":source}}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":URI,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":0}},"text":"let value = true\n"}]}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":URI,"version":2},"contentChanges":[{"text":"let value = true\n"},{"range":{"start":{"line":99,"character":0},"end":{"line":99,"character":1}},"text":"bad"}]}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":URI,"version":0},"contentChanges":[{"text":"let value = \"stale\"\n"}]}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":URI},"position":{"line":0,"character":5}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":URI},"position":{"line":0,"character":5},"newName":"renamed"}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":URI,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":12},"end":{"line":0,"character":13}},"text":"true"},{"range":{"start":{"line":0,"character":4},"end":{"line":0,"character":9}},"text":"ready"}]}}),
+        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":URI},"position":{"line":0,"character":5}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    assert!(
+        reply(&replies, 2)["result"].to_string().contains("Int"),
+        "{replies:#?}"
+    );
+    assert_eq!(
+        reply(&replies, 3)["result"]["documentChanges"][0]["textDocument"]["version"],
+        1
+    );
+    assert!(
+        reply(&replies, 4)["result"].to_string().contains("Bool"),
+        "{replies:#?}"
+    );
+    let events = published(&replies, URI);
+    assert_eq!(
+        events.len(),
+        2,
+        "invalid notifications must not commit: {replies:#?}"
+    );
+    assert_eq!(events.last().unwrap()["params"]["version"], 2);
+}
+
+#[test]
+fn filesystem_notifications_refresh_closed_dependencies_without_a_hover_request() {
+    let package = TempPackage::new("watched-dependencies");
+    let a = package.write("src/A.aev", "module A\nfn value(): Int = 1\n");
+    let source = "import A\nlet got: Int = A.value()\n";
+    let uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", source));
+    let a_uri = aevia_lsp::protocol::uri_from_path(&a);
+    let (out, messages) = std::sync::mpsc::channel();
+    let mut server = aevia_lsp::Server::new(out);
+    server.handle(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":source}}}));
+    let initial: Vec<Value> = messages.try_iter().collect();
+    assert!(
+        published(&initial, &uri)[0]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::write(&a, "module A\nfn value(): Bool = true\n").unwrap();
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":a_uri,"type":2}]}}));
+    let changed: Vec<Value> = messages.try_iter().collect();
+    assert!(
+        !published(&changed, &uri)[0]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{changed:#?}"
+    );
+    std::fs::write(&a, "module A\nfn value(): Int = 2\n").unwrap();
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didSave","params":{"textDocument":{"uri":uri}}}));
+    let saved: Vec<Value> = messages.try_iter().collect();
+    assert!(
+        published(&saved, &uri)[0]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{saved:#?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retargeted_symlink_dependencies_refresh_when_the_new_target_changes() {
+    let package = TempPackage::new("retargeted-dependency");
+    let one = package.write("src/One.aev", "module A\nfn value(): Int = 1\n");
+    let two = package.write("src/Two.aev", "module A\nfn value(): Bool = true\n");
+    let alias = package.path("src/A.aev");
+    std::os::unix::fs::symlink(&one, &alias).unwrap();
+    let source = "import A\nlet got: Int = A.value()\n";
+    let uri = aevia_lsp::protocol::uri_from_path(&package.write("src/B.aev", source));
+    let (out, messages) = std::sync::mpsc::channel();
+    let mut server = aevia_lsp::Server::new(out);
+    server.handle(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":source}}}));
+    let initial: Vec<Value> = messages.try_iter().collect();
+    assert!(
+        published(&initial, &uri)[0]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{initial:#?}"
+    );
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&two, &alias).unwrap();
+    server.handle(serde_json::json!({"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":aevia_lsp::protocol::uri_from_path(&two),"type":2}]}}));
+    let changed: Vec<Value> = messages.try_iter().collect();
+    assert!(
+        !published(&changed, &uri)[0]["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{changed:#?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_physical_declarations_rename_all_owners_but_ambiguous_shared_uses_refuse() {
+    let package = TempPackage::new("shared-physical-rename");
+    std::fs::create_dir_all(package.path("shared")).unwrap();
+    let shared_source = "module Api\nimport Helper\nfn value(): Int = Helper.value()\n";
+    let shared = package.write("shared/Api.aev", shared_source);
+    for (owner, result) in [("one", 1), ("two", 2)] {
+        std::fs::create_dir_all(package.path(&format!("{owner}/src"))).unwrap();
+        package.write(
+            &format!("{owner}/aevia.toml"),
+            &format!(
+                "[package]\nname = \"{owner}\"\nversion = \"0.1.0\"\nentry = \"src/Api.aev\"\n"
+            ),
+        );
+        package.write(
+            &format!("{owner}/src/Helper.aev"),
+            &format!("module Helper\nfn value(): Int = {result}\n"),
+        );
+        std::os::unix::fs::symlink(&shared, package.path(&format!("{owner}/src/Api.aev"))).unwrap();
+    }
+    package.write("aevia.toml","[package]\nname = \"demo\"\nversion = \"0.1.0\"\nentry = \"src/Main.aev\"\n[dependencies]\nA = { path = \"one\" }\nB = { path = \"two\" }\n");
+    let source = "import A\nimport B\nimport A.Helper as HA\nlet left = A.value()\nlet right = B.value()\nlet helper = HA.value()\n";
+    let uri = aevia_lsp::protocol::uri_from_path(&package.write("src/Main.aev", source));
+    let shared_uri = aevia_lsp::protocol::uri_from_path(&shared);
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":1,"text":source}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position_of(source,"A.value",3),"newName":"read"}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position_of(source,"HA.value",4),"newName":"read"}}),
+        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    let edits = reply(&replies, 2)["result"]["documentChanges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{replies:#?}"));
+    assert_eq!(edits.len(), 2, "{edits:#?}");
+    let main = edits
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == uri)
+        .unwrap();
+    let main = apply_changes(source, main["edits"].as_array().unwrap());
+    assert!(
+        main.contains("A.read()") && main.contains("B.read()"),
+        "{main}"
+    );
+    assert!(main.contains("HA.value()"), "{main}");
+    let shared = edits
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == shared_uri)
+        .unwrap();
+    assert_eq!(shared["edits"].as_array().unwrap().len(), 1);
+    let changed = apply_changes(shared_source, shared["edits"].as_array().unwrap());
+    assert!(
+        changed.contains("fn read()") && changed.contains("Helper.value()"),
+        "{changed}"
+    );
+    assert!(
+        reply(&replies, 3)["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("different package owners")),
+        "{replies:#?}"
+    );
+}
+
+#[test]
+fn virtual_buffers_get_versioned_rename_edits_and_callback_signature_help() {
+    let uri = "untitled:callback-editor.aev";
+    let source = "fn square(x: Float): Float = x * x\nlet callback = to_callback(square)\n";
+    let (_exit, replies) = run_json(vec![
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"version":6,"text":source}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":uri},"position":position_of(source,"(square)",2)}}),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position_of(source,"square(x",1),"newName":"squared"}}),
+        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":uri},"position":{"line":2,"character":0}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","method":"exit"}),
+    ]);
+    assert!(
+        reply(&replies, 2)["result"]["signatures"][0]["label"]
+            .as_str()
+            .is_some_and(|label| label.starts_with("to_callback:")),
+        "{replies:#?}"
+    );
+    assert_eq!(
+        reply(&replies, 3)["result"]["documentChanges"][0]["textDocument"]["version"],
+        6,
+        "{replies:#?}"
+    );
+    let items = reply(&replies, 4)["result"].as_array().unwrap();
+    let callback = items
+        .iter()
+        .find(|item| item["label"] == "to_callback")
+        .unwrap();
+    assert_eq!(callback["kind"], 3, "function completion kind");
 }

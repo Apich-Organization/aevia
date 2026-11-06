@@ -1,7 +1,8 @@
-## The `Units.CGS` module of §8.20.
+## The `Units/CGS` module of §8.20.
 ##
-## The CGS units are ambient `Unit[d]` values from the kernel's unit table
-## (§5.1); see `Units.SI`'s header for why no binding is declared here. The
-## table itself: `dyn`, `erg`, `Gal`, `P`, `St`, `G` (gauss, `1/10000 T`),
-## `Mx`, `Ba`, `Oe` (its scale carries `pi^-1`, §5.3.3).
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Units.CGS
+
+## CGS unit names are ambient Unit values from the kernel registry.
+## This module declares no bindings.

@@ -462,10 +462,9 @@ impl ClassTable {
         let class_key = definition.key.clone();
         let key = InstanceKey::new(module.clone(), class_key, head_key(&head));
         let instances = self.instances.entry(class.to_string()).or_default();
-        if let Some(existing) = instances
-            .iter()
-            .find(|existing| heads_overlap(&existing.head, &head))
-        {
+        if let Some(existing) = instances.iter().find(|existing| {
+            existing.key.class == key.class && heads_overlap(&existing.head, &head)
+        }) {
             return Err(InstanceError::Overlapping {
                 incoming: key,
                 existing: existing.key.clone(),
@@ -473,10 +472,9 @@ impl ClassTable {
         }
         // Statically distinct heads can still be indistinguishable at runtime.
         // Reject such pairs instead of choosing an arbitrary instance.
-        if let Some(existing) = instances
-            .iter()
-            .find(|existing| runtime_heads_overlap(&existing.head, &head))
-        {
+        if let Some(existing) = instances.iter().find(|existing| {
+            existing.key.class == key.class && runtime_heads_overlap(&existing.head, &head)
+        }) {
             return Err(InstanceError::WitnessCollision {
                 incoming: key,
                 existing: existing.key.clone(),
@@ -504,6 +502,13 @@ impl ClassTable {
         };
         let mut found = None;
         for (index, instance) in instances.iter().enumerate() {
+            if self
+                .classes
+                .get(class)
+                .is_some_and(|definition| definition.key != instance.key.class)
+            {
+                continue;
+            }
             if matches_head(&instance.head, ty) {
                 if found.is_some() {
                     // Coherence is enforced at registration, so this can only
@@ -569,7 +574,16 @@ impl ClassTable {
     ) -> Vec<&Instance> {
         self.instances
             .get(class)
-            .map(|instances| instances.iter().collect())
+            .map(|instances| {
+                instances
+                    .iter()
+                    .filter(|instance| {
+                        self.classes
+                            .get(class)
+                            .is_some_and(|definition| definition.key == instance.key.class)
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -680,19 +694,18 @@ impl ClassTable {
             let class_key = instance.key.class.clone();
             let key = InstanceKey::new(module.clone(), class_key, instance.key.head.clone());
             let entries = self.instances.entry(instance.class.clone()).or_default();
-            if let Some(existing) = entries
-                .iter()
-                .find(|existing| heads_overlap(&existing.head, &instance.head))
-            {
+            if let Some(existing) = entries.iter().find(|existing| {
+                existing.key.class == key.class && heads_overlap(&existing.head, &instance.head)
+            }) {
                 return Err(InstanceError::Overlapping {
                     incoming: key,
                     existing: existing.key.clone(),
                 });
             }
-            if let Some(existing) = entries
-                .iter()
-                .find(|existing| runtime_heads_overlap(&existing.head, &instance.head))
-            {
+            if let Some(existing) = entries.iter().find(|existing| {
+                existing.key.class == key.class
+                    && runtime_heads_overlap(&existing.head, &instance.head)
+            }) {
                 return Err(InstanceError::WitnessCollision {
                     incoming: key,
                     existing: existing.key.clone(),
@@ -845,7 +858,10 @@ pub fn heads_overlap(
 
 /// Whether runtime-observable values could satisfy both disjoint heads.
 /// This is deliberately conservative for erased or unsupported types.
-fn runtime_heads_overlap(left: &Type, right: &Type) -> bool {
+fn runtime_heads_overlap(
+    left: &Type,
+    right: &Type,
+) -> bool {
     match (left, right) {
         | (Type::Tensor { shape: a, elem: ea }, Type::Tensor { shape: b, elem: eb }) => {
             if !shape_heads_overlap(a, b) {
@@ -873,7 +889,11 @@ fn runtime_heads_overlap(left: &Type, right: &Type) -> bool {
                     | _ => {},
                 }
             }
-            if a.tail_var().is_none() && bf.iter().any(|(name, _)| !af.iter().any(|(n, _)| n == name)) {
+            if a.tail_var().is_none()
+                && bf
+                    .iter()
+                    .any(|(name, _)| !af.iter().any(|(n, _)| n == name))
+            {
                 return false;
             }
             true
@@ -883,9 +903,11 @@ fn runtime_heads_overlap(left: &Type, right: &Type) -> bool {
                 && aa.len() == ab.len()
                 && aa.iter().zip(ab).all(|(a, b)| runtime_heads_overlap(a, b))
         },
-        | _ => match (witness_of(left), witness_of(right)) {
-            | (Some(a), Some(b)) => a == b,
-            | _ => heads_overlap(left, right),
+        | _ => {
+            match (witness_of(left), witness_of(right)) {
+                | (Some(a), Some(b)) => a == b,
+                | _ => heads_overlap(left, right),
+            }
         },
     }
 }
@@ -912,6 +934,10 @@ pub fn is_structural_show_head(ty: &Type) -> bool {
         | Type::Adt(..)
         | Type::Point(_)
         | Type::Fn(..)
+        | Type::TensorIntrinsic(_)
+        | Type::TypeRepIntrinsic(_)
+        | Type::FromValueIntrinsic(_)
+        | Type::ToCallbackIntrinsic
         | Type::Var(_)
         | Type::Param(_)
         | Type::Error => false,
@@ -930,9 +956,11 @@ fn shape_heads_overlap(
         | (Shape::Refined(a), Shape::Refined(b)) => {
             a.iter().zip(b.iter()).all(|(left, right)| {
                 match (left, right) {
-                    | (Some(left), Some(right)) => match (left.as_const(), right.as_const()) {
-                        | (Some(left), Some(right)) => left == right,
-                        | _ => true,
+                    | (Some(left), Some(right)) => {
+                        match (left.as_const(), right.as_const()) {
+                            | (Some(left), Some(right)) => left == right,
+                            | _ => true,
+                        }
                     },
                     | _ => true,
                 }
@@ -957,9 +985,11 @@ fn shape_head_matches(
                 .zip(concrete.iter())
                 .all(|(pattern, concrete)| {
                     match (pattern, concrete) {
-                        | (Some(pattern), Some(concrete)) => match (pattern.as_const(), concrete.as_const()) {
-                            | (Some(pattern), Some(concrete)) => pattern == concrete,
-                            | _ => pattern == concrete,
+                        | (Some(pattern), Some(concrete)) => {
+                            match (pattern.as_const(), concrete.as_const()) {
+                                | (Some(pattern), Some(concrete)) => pattern == concrete,
+                                | _ => pattern == concrete,
+                            }
                         },
                         | (Some(_), None) => false,
                         | (None, _) => true,
@@ -1067,7 +1097,9 @@ fn matches_head_with_bindings(
             let pattern_fields = pattern.fields();
             let concrete_fields = concrete.fields();
             let pattern_open = pattern.tail_var().is_some();
-            if !pattern_open && (pattern_fields.len() != concrete_fields.len() || concrete.tail_var().is_some()) {
+            if !pattern_open
+                && (pattern_fields.len() != concrete_fields.len() || concrete.tail_var().is_some())
+            {
                 return false;
             }
             // Every field the head states must be present in the concrete type
@@ -1104,9 +1136,20 @@ pub fn has_variables(ty: &Type) -> bool {
         | Type::Record(row) => row_has_variables(row),
         | Type::Adt(_, args) => args.iter().any(has_variables),
         | Type::Io(inner) => has_variables(inner),
+        | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
+            has_variables(inner)
+        },
+        | Type::TypeRepIntrinsic(None)
+        | Type::FromValueIntrinsic(None)
+        | Type::ToCallbackIntrinsic => false,
         | Type::Point(dim) | Type::UnitOf(dim) => !dim.vars().is_empty(),
         | Type::Dyn(rep) => matches!(rep, Rep::Var(_)),
-        | Type::Bool | Type::Prop | Type::Str | Type::Unit | Type::Error => false,
+        | Type::Bool
+        | Type::Prop
+        | Type::Str
+        | Type::Unit
+        | Type::TensorIntrinsic(_)
+        | Type::Error => false,
     }
 }
 
@@ -1143,6 +1186,8 @@ pub fn method_scheme(
             class,
             (0..count).map(Type::Var).collect(),
         )],
+        numeric: Vec::new(),
+        materializations: Vec::new(),
         ty: quantified,
     }
 }

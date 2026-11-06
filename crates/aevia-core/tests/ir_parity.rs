@@ -161,11 +161,23 @@ fn run_file(
     })
 }
 
+fn trace_parity(message: std::fmt::Arguments<'_>) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var_os("AEVIA_PARITY_TRACE").is_some()) {
+        // Direct stderr survives a process abort; the test harness's captured
+        // buffer cannot identify a worker that overflows before returning.
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr().lock(), "parity: {message}");
+    }
+}
+
 fn compare(run: impl Fn(Mode) -> Result<Outcome, String>) -> Comparison {
+    trace_parity(format_args!("AST first"));
     let first = match run(Mode::Ast) {
         | Ok(outcome) => outcome,
         | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
     };
+    trace_parity(format_args!("AST repeat"));
     let second = match run(Mode::Ast) {
         | Ok(outcome) => outcome,
         | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
@@ -173,6 +185,7 @@ fn compare(run: impl Fn(Mode) -> Result<Outcome, String>) -> Comparison {
     if first != second {
         return Comparison::Skip(Skipped::Nondeterministic);
     }
+    trace_parity(format_args!("IR first"));
     let ir = match run(Mode::Ir) {
         | Ok(outcome) => outcome,
         | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
@@ -180,6 +193,7 @@ fn compare(run: impl Fn(Mode) -> Result<Outcome, String>) -> Comparison {
     // The IR is run twice as well: a nondeterministic IR (an iteration order
     // leaking into `repr`, say) would otherwise be invisible, because only the
     // AST side was ever checked for stability.
+    trace_parity(format_args!("IR repeat"));
     let ir_again = match run(Mode::Ir) {
         | Ok(outcome) => outcome,
         | Err(codes) => return Comparison::Skip(Skipped::Compile(codes)),
@@ -505,6 +519,7 @@ fn compare_corpus() {
     files.sort();
     for path in &files {
         programs += 1;
+        trace_parity(format_args!("file {}", path.display()));
         match compare(|mode| run_file(path, mode)) {
             | Comparison::Agree => agreed += 1,
             | Comparison::Skip(reason) => {
@@ -531,16 +546,30 @@ fn compare_corpus() {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("ir_"));
         if path.extension().is_some_and(|ext| ext == "rs") && !excluded {
-            sources.extend(raw_strings(&path));
+            sources.extend(
+                raw_strings(&path)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, source)| (path.clone(), index, source)),
+            );
         }
     }
-    for source in &sources {
+    sources.sort_by(|left, right| (&left.0, left.1).cmp(&(&right.0, right.1)));
+    for (path, index, source) in &sources {
         programs += 1;
+        trace_parity(format_args!(
+            "source {} #{index}: {:?}",
+            path.display(),
+            source.lines().next().unwrap_or("")
+        ));
         match compare(|mode| run_source(source, mode)) {
             | Comparison::Agree => agreed += 1,
             | Comparison::Skip(reason) => {
                 skipped.push((
-                    format!("<test source {}>", &source[..source.len().min(40)]),
+                    format!(
+                        "<test source {}>",
+                        source.chars().take(40).collect::<String>()
+                    ),
                     reason,
                 ));
             },
@@ -553,6 +582,10 @@ fn compare_corpus() {
     // The curated corpus.
     for source in CURATED {
         programs += 1;
+        trace_parity(format_args!(
+            "curated {:?}",
+            source.lines().next().unwrap_or("")
+        ));
         match compare(|mode| run_source(source, mode)) {
             | Comparison::Agree => agreed += 1,
             | Comparison::Skip(reason) => skipped.push(((*source).to_string(), reason)),

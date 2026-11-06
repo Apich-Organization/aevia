@@ -22,12 +22,7 @@ fn tensor(
     shape: Vec<usize>,
     values: Vec<f64>,
 ) -> TensorData {
-    TensorData {
-        shape,
-        storage: Storage::Dense(Rc::new(values)),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }
+    TensorData::new(shape, Storage::Dense(Rc::new(values)), aevia_dim::Dim::one(), None)
 }
 
 fn dense(tensor: &TensorData) -> Vec<f64> {
@@ -41,17 +36,12 @@ fn exact_tensor(
     shape: Vec<usize>,
     values: Vec<i64>,
 ) -> TensorData {
-    TensorData {
-        shape,
-        storage: Storage::Exact(
+    TensorData::new(shape, Storage::Exact(
             values
                 .into_iter()
                 .map(|value| BigRational::from_integer(BigInt::from(value)))
                 .collect(),
-        ),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }
+        ), aevia_dim::Dim::one(), None)
 }
 
 /// A `.npy` file with `header` (no padding) and `data`, padded the way NumPy

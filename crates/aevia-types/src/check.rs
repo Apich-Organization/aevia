@@ -178,6 +178,200 @@ pub struct DictionaryUse {
     pub target: DictTarget,
 }
 
+/// A method used as a value, resolved at its defining source reference.
+#[derive(Clone, Debug)]
+pub struct ClassMethodRef {
+    /// Full nominal class identity, independent of its visible spelling.
+    pub class: ClassKey,
+    /// The method declared by that class.
+    pub method: String,
+}
+
+/// One explicitly ordered generic binder on a source function.
+#[derive(Clone, Debug)]
+pub enum GenericBinder {
+    Type(Type),
+    Representation(Rep),
+    Dimension(Dim),
+    Natural(Nat),
+    Row(Row),
+}
+
+impl GenericBinder {
+    pub fn as_type(&self) -> Type {
+        match self {
+            | Self::Type(ty) => ty.clone(),
+            | Self::Representation(rep) => Type::Scalar(*rep, Dim::one()),
+            | Self::Dimension(dim) => Type::UnitOf(dim.clone()),
+            | Self::Natural(nat) => {
+                Type::tensor(Shape::Refined(vec![Some(nat.clone())]), Type::Unit)
+            },
+            | Self::Row(row) => Type::Record(row.clone()),
+        }
+    }
+
+    pub fn substituted(
+        &self,
+        bindings: &crate::TypeSubstitution,
+    ) -> Self {
+        match self {
+            | Self::Type(ty) => Self::Type(bindings.apply(ty)),
+            | Self::Representation(rep) => Self::Representation(bindings.rep(*rep)),
+            | Self::Dimension(dim) => Self::Dimension(bindings.dim(dim)),
+            | Self::Natural(nat) => Self::Natural(nat.substitute(&bindings.naturals)),
+            | Self::Row(row) => Self::Row(bindings.row(row)),
+        }
+    }
+
+    pub fn resolved(
+        &self,
+        infer: &Infer,
+    ) -> Self {
+        match self {
+            | Self::Type(ty) => Self::Type(infer.resolve(ty)),
+            | Self::Representation(rep) => Self::Representation(infer.resolve_rep(*rep)),
+            | Self::Dimension(dim) => Self::Dimension(infer.resolve_dim(dim)),
+            | Self::Natural(nat) => Self::Natural(infer.resolve_nat(nat)),
+            | Self::Row(row) => Self::Row(infer.resolve_row(row)),
+        }
+    }
+}
+
+/// The checked signature that belongs to the actual source function body.
+#[derive(Clone, Debug)]
+pub struct FunctionEvidence {
+    pub scheme: Scheme,
+    pub binders: Vec<GenericBinder>,
+    pub reifications: Vec<Type>,
+    /// Creation-site numeric constraints that must hold for a concrete activation.
+    pub numeric_literals: Vec<(Span, LiteralKind, Type)>,
+}
+
+fn quantify_binders(
+    scheme: &mut Scheme,
+    binders: &[GenericBinder],
+    infer: &Infer,
+) {
+    let mut variables = crate::TypeSubstitution::default();
+    let mut fresh = Infer::new();
+    for binder in binders {
+        variables.freshen(&binder.as_type(), &mut fresh);
+    }
+    fn append(
+        target: &mut Vec<u32>,
+        keys: impl Iterator<Item = u32>,
+    ) {
+        let mut keys: Vec<_> = keys.collect();
+        keys.sort_unstable();
+        keys.dedup();
+        for id in keys {
+            if !target.contains(&id) {
+                target.push(id);
+            }
+        }
+    }
+    append(
+        &mut scheme.vars,
+        variables
+            .types
+            .keys()
+            .chain(variables.representations.keys())
+            .copied(),
+    );
+    append(&mut scheme.dims, variables.dimensions.keys().copied());
+    append(&mut scheme.rows, variables.rows.keys().copied());
+    append(&mut scheme.nats, variables.naturals.keys().copied());
+    infer.attach_numeric_scheme(scheme);
+}
+
+fn inferred_binders(scheme: &Scheme) -> Vec<GenericBinder> {
+    let mut variables = crate::TypeSubstitution::default();
+    variables.freshen(&scheme.ty, &mut Infer::new());
+    let mut inputs = crate::TypeSubstitution::default();
+    if let Type::Fn(args, _) = &scheme.ty {
+        for arg in args {
+            inputs.freshen(arg, &mut Infer::new());
+        }
+    }
+    let computed: HashSet<u32> = scheme
+        .numeric
+        .iter()
+        .filter_map(|constraint| {
+            match constraint {
+                | crate::NumericConstraint::Relation(
+                    crate::RepRelation::Join {
+                        result: Rep::Var(id), ..
+                    }
+                    | crate::RepRelation::Divide {
+                        result: Rep::Var(id), ..
+                    },
+                ) => Some(*id),
+                | crate::NumericConstraint::DefaultLiteral {
+                    ty: Type::Scalar(Rep::Var(id), _),
+                    ..
+                } => Some(*id),
+                | _ => None,
+            }
+        })
+        .collect();
+    scheme
+        .vars
+        .iter()
+        .filter(|id| {
+            (variables.types.contains_key(id) || variables.representations.contains_key(id))
+                && (!computed.contains(id) || inputs.representations.contains_key(id))
+        })
+        .map(|id| {
+            if variables.representations.contains_key(id) {
+                GenericBinder::Representation(Rep::Var(*id))
+            } else {
+                GenericBinder::Type(Type::Var(*id))
+            }
+        })
+        .chain(
+            scheme
+                .dims
+                .iter()
+                .map(|id| GenericBinder::Dimension(Dim::var(*id))),
+        )
+        .chain(
+            scheme
+                .nats
+                .iter()
+                .map(|id| GenericBinder::Natural(Nat::Var(*id))),
+        )
+        .chain(
+            scheme
+                .rows
+                .iter()
+                .map(|id| GenericBinder::Row(Row::Var(*id))),
+        )
+        .collect()
+}
+
+fn constructor_binders(scheme: &Scheme) -> Vec<GenericBinder> {
+    let result = match &scheme.ty {
+        | Type::Fn(_, result) => result.as_ref(),
+        | ty => ty,
+    };
+    let Type::Adt(id, args) = result else {
+        return inferred_binders(scheme);
+    };
+    adt::param_kinds_of(*id)
+        .iter()
+        .zip(args)
+        .filter_map(|(kind, arg)| {
+            match (kind, arg) {
+                | (adt::ParamKind::Type, _) => Some(GenericBinder::Type(arg.clone())),
+                | (adt::ParamKind::Dim(_), Type::UnitOf(dim)) => {
+                    Some(GenericBinder::Dimension(dim.clone()))
+                },
+                | _ => None,
+            }
+        })
+        .collect()
+}
+
 /// One class exported with a module's interface (§7.1.3/§7.4).
 #[derive(Clone, Debug)]
 pub struct ClassExport {
@@ -249,6 +443,8 @@ pub struct ModuleInterface {
     pub instances: Vec<InstanceExport>,
     /// Aliases declared by the module, with their definitions.
     pub aliases: IndexMap<String, AliasExport>,
+    /// Ordered function binders, in the corresponding exported scheme's universe.
+    pub function_headers: IndexMap<String, Vec<GenericBinder>>,
 }
 
 /// The interface of a checked module.
@@ -323,6 +519,18 @@ pub struct HostRegistration {
 pub struct CheckedModule {
     /// The module path, when declared.
     pub name: Option<Vec<String>>,
+    /// Nominal identity supplied by the module loader; visible names remain in
+    /// `name`, while source origin distinguishes same-named package modules.
+    pub identity: Option<ModulePath>,
+    /// Every locally declared constructor, including private types. Runtime
+    /// initialization pins the exact registry witness from this compilation.
+    pub constructors: IndexMap<String, (adt::AdtId, usize)>,
+    /// Actual source constructor references, excluding aliases and shadowing.
+    pub constructor_refs: HashMap<Span, (adt::AdtId, usize)>,
+    /// Function signatures by declaration/lambda site, retaining body variables.
+    pub functions: HashMap<Span, FunctionEvidence>,
+    pub function_headers: IndexMap<String, Vec<GenericBinder>>,
+    pub generic_refs: HashMap<Span, Vec<GenericBinder>>,
     /// The file this module came from, used to build a deterministic module
     /// path when there is no `module` declaration (`<fileN>`).
     pub anonymous_file: FileId,
@@ -347,6 +555,12 @@ pub struct CheckedModule {
     pub dictionaries: Vec<DictionaryUse>,
     /// Classes this module declares and exports (§7.1.3/§7.4).
     pub classes: IndexMap<ClassKey, ClassExport>,
+    /// All classes declared locally, including private runtime declarations.
+    pub local_classes: IndexMap<ClassKey, ClassExport>,
+    /// Exact runtime instance declarations keyed by their source site.
+    pub instance_sites: HashMap<Span, InstanceExport>,
+    /// First-class method references with their resolved nominal identity.
+    pub method_refs: HashMap<Span, ClassMethodRef>,
     /// Instances this module declares, with the registry identity the runtime
     /// needs (round-2 decision 1b).
     pub instances: Vec<InstanceExport>,
@@ -403,6 +617,7 @@ impl CheckedModule {
             classes: self.classes.clone(),
             instances: self.instances.clone(),
             aliases: self.alias_defs.clone(),
+            function_headers: self.function_headers.clone(),
         }
     }
 
@@ -410,6 +625,9 @@ impl CheckedModule {
     /// `module` declaration.
     #[must_use]
     pub fn module_path(&self) -> ModulePath {
+        if let Some(identity) = &self.identity {
+            return identity.clone();
+        }
         match &self.name {
             | Some(path) => ModulePath::new(path.iter().cloned()),
             | None => ModulePath::new([format!("<file{}>", self.anonymous_file)]),
@@ -563,10 +781,45 @@ pub fn check_module_with_interfaces(
     interfaces: &[ModuleInterface],
     options: &CheckOptions,
 ) -> CheckResult {
+    check_module_with_identity(file, module, imports, interfaces, options, None, &[])
+}
+
+/// The visible binding of one direct imported interface. Nominal identities
+/// remain on its types and keys; `prefix` is only a source lookup name.
+pub struct InterfaceBinding {
+    pub module: ModulePath,
+    pub prefix: String,
+    pub names: Option<Vec<String>>,
+}
+
+/// Checks a module under a loader-supplied nominal source identity. A package
+/// alias changes visible names without changing ADT, class or instance keys.
+pub fn check_module_with_identity(
+    file: FileId,
+    module: &Module,
+    imports: &[Import],
+    interfaces: &[ModuleInterface],
+    options: &CheckOptions,
+    identity: Option<ModulePath>,
+    bindings: &[InterfaceBinding],
+) -> CheckResult {
     let mut checker = Checker::new(file, options.clone());
+    checker.checked.identity = identity;
     checker.add_imports(imports);
     for interface in interfaces {
-        checker.merge_interface(interface);
+        let explicit_bindings = !bindings.is_empty();
+        let direct = bindings
+            .iter()
+            .any(|binding| binding.module == interface.name);
+        checker.merge_interface(interface, !explicit_bindings, !explicit_bindings || direct);
+    }
+    for binding in bindings {
+        if let Some(interface) = interfaces
+            .iter()
+            .find(|interface| interface.name == binding.module)
+        {
+            checker.bind_interface(interface, binding);
+        }
     }
     checker.run(module);
     checker.checked.aliases = checker
@@ -613,6 +866,7 @@ struct FnGenerics {
     dims: Vec<(String, Dim)>,
     nats: Vec<(String, Nat)>,
     rows: Vec<(String, Row)>,
+    binders: Vec<GenericBinder>,
 }
 
 /// The names a declaration body uses in each kind position (§2 kind inference).
@@ -776,6 +1030,13 @@ fn bare_type_name(ty: &Ty) -> Option<&String> {
 /// invent one.
 const PATTERN_DEPTH_BOUND: u32 = 24;
 
+#[derive(Clone, Copy, Debug, Default)]
+struct LiteralClass {
+    tree: bool,
+    homogeneous: Option<LiteralKind>,
+    atomic: bool,
+}
+
 struct Checker {
     file: FileId,
     /// The module path, used to qualify nominal keys (§A decision 4).
@@ -791,6 +1052,9 @@ struct Checker {
     /// Classes declared `private` in this module (§7.1.3): usable locally,
     /// absent from the exported interface.
     private_classes: HashSet<String>,
+    instance_declarations: HashMap<Span, InstanceKey>,
+    method_bindings: HashMap<String, ClassMethodRef>,
+    constructor_bindings: HashMap<String, (adt::AdtId, usize)>,
     infer: Infer,
     globals: HashMap<String, Scheme>,
     fn_signatures: HashMap<String, Type>,
@@ -799,6 +1063,12 @@ struct Checker {
     /// §3.5.1). The signature's params are restored at the end of pass B, so
     /// the body pass needs them from here.
     fn_generics: HashMap<String, FnGenerics>,
+    function_stack: Vec<Span>,
+    function_inputs: HashMap<Span, Vec<Type>>,
+    function_reifications: HashMap<Span, Vec<Type>>,
+    call_materializations: HashMap<Span, Vec<Type>>,
+    generic_bindings: HashMap<String, Vec<GenericBinder>>,
+    local_headers: HashMap<(usize, String), Vec<GenericBinder>>,
     scopes: Vec<HashMap<String, Scheme>>,
     units: UnitTable,
     dims: DimEnv,
@@ -834,6 +1104,11 @@ struct Checker {
     declaring_alias: Option<String>,
     /// Set when a `Real`/`Float` mix forced the exact path (`W0302`).
     mixed_rep: bool,
+    /// Concrete expectation for a literal-only arithmetic source tree. It is
+    /// scoped to that expression and never crosses a function call boundary.
+    literal_context: Option<Rep>,
+    literal_classes: HashMap<Span, LiteralClass>,
+    literal_region: Option<(LiteralKind, Rep)>,
     /// Top-level names that some body actually read, for `W0303`.
     referenced: HashSet<String>,
     /// `check` call sites whose `d` is only known after the whole module has
@@ -847,6 +1122,11 @@ struct Checker {
     /// Spans of numeric literals, so their instantiated representation can be
     /// exported in [`CheckedModule::literal_reps`].
     literal_spans: Vec<Span>,
+    literal_owners: HashMap<Span, (Option<Span>, LiteralKind)>,
+    function_literal_sites: HashMap<Span, Vec<(Span, LiteralKind)>>,
+    expression_indices: HashMap<Span, Vec<usize>>,
+    #[cfg(test)]
+    literal_owner_visits: std::cell::Cell<usize>,
     /// `(span, type)` for every expression and binder, in the order the
     /// checker visited them.
     ///
@@ -889,10 +1169,19 @@ impl Checker {
             stability: IndexMap::new(),
             registrations: Vec::new(),
             private_classes: HashSet::new(),
+            instance_declarations: HashMap::new(),
+            method_bindings: HashMap::new(),
+            constructor_bindings: HashMap::new(),
             infer: Infer::new(),
             globals: HashMap::new(),
             fn_signatures: HashMap::new(),
             fn_generics: HashMap::new(),
+            function_stack: Vec::new(),
+            function_inputs: HashMap::new(),
+            function_reifications: HashMap::new(),
+            call_materializations: HashMap::new(),
+            generic_bindings: HashMap::new(),
+            local_headers: HashMap::new(),
             scopes: Vec::new(),
             units: aevia_rssn::unit_table(),
             dims: DimEnv::si(),
@@ -911,11 +1200,19 @@ impl Checker {
             implicit_params: false,
             declaring_alias: None,
             mixed_rep: false,
+            literal_context: None,
+            literal_classes: HashMap::new(),
+            literal_region: None,
             referenced: HashSet::new(),
             pending_checks: Vec::new(),
             local_binders: Vec::new(),
             used_locals: HashSet::new(),
             literal_spans: Vec::new(),
+            literal_owners: HashMap::new(),
+            function_literal_sites: HashMap::new(),
+            expression_indices: HashMap::new(),
+            #[cfg(test)]
+            literal_owner_visits: std::cell::Cell::new(0),
             expr_types: Vec::with_capacity(256),
             diagnostics: Diagnostics::new(),
             checked: CheckedModule::default(),
@@ -977,6 +1274,14 @@ impl Checker {
                 } else {
                     format!("{prefix}.{name}")
                 };
+                self.method_bindings.remove(&key);
+                self.constructor_bindings.remove(&key);
+                if let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
+                    export
+                {
+                    self.constructor_bindings
+                        .insert(key.clone(), (*adt, *index));
+                }
                 match export {
                     | Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
                         self.note_opened(&mut opened, prefix, &key, scheme);
@@ -1030,17 +1335,21 @@ impl Checker {
     fn merge_interface(
         &mut self,
         interface: &ModuleInterface,
+        visible_names: bool,
+        publish_methods: bool,
     ) {
         let module = interface.name.clone();
         // Qualified alias definitions: a source reference `A.Vec2` expands.
-        for (name, alias) in &interface.aliases {
-            let qualified = if module.is_prelude() {
-                name.clone()
-            } else {
-                format!("{}.{}", module.dotted(), name)
-            };
-            let def = self.imported_alias_def(alias);
-            self.aliases.entry(qualified).or_insert(def);
+        if visible_names {
+            for (name, alias) in &interface.aliases {
+                let qualified = if module.is_prelude() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", module.dotted(), name)
+                };
+                let def = self.imported_alias_def(alias);
+                self.aliases.entry(qualified).or_insert(def);
+            }
         }
         // Classes and instances.
         let classes: Vec<(ClassKey, ClassDef)> = interface
@@ -1091,11 +1400,41 @@ impl Checker {
             );
         }
         // Imported class methods are callable by their plain name.
-        for class in interface.classes.values() {
-            for (method, ty) in &class.methods {
-                self.globals
-                    .entry(method.clone())
-                    .or_insert_with(|| method_scheme(&class.key.name, 1, ty.clone()));
+        if publish_methods {
+            for class in interface.classes.values() {
+                for (method, ty) in &class.methods {
+                    if !self.globals.contains_key(method) {
+                        self.globals.insert(
+                            method.clone(),
+                            method_scheme(&class.key.name, 1, ty.clone()),
+                        );
+                        self.method_bindings.insert(
+                            method.clone(),
+                            ClassMethodRef {
+                                class: class.key.clone(),
+                                method: method.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        if !visible_names {
+            return;
+        }
+        for (name, headers) in &interface.function_headers {
+            let qualified = if module.is_prelude() {
+                name.clone()
+            } else {
+                format!("{}.{}", module.dotted(), name)
+            };
+            self.generic_bindings
+                .entry(qualified)
+                .or_insert_with(|| headers.clone());
+            if self.requested_unqualified.contains(name) {
+                self.generic_bindings
+                    .entry(name.clone())
+                    .or_insert_with(|| headers.clone());
             }
         }
         // §7.2.1/§7.2.2: the module's types and their constructors are
@@ -1109,6 +1448,14 @@ impl Checker {
             } else {
                 format!("{}.{}", module.dotted(), name)
             };
+            if !self.globals.contains_key(&qualified) {
+                if let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
+                    export
+                {
+                    self.constructor_bindings
+                        .insert(qualified.clone(), (*adt, *index));
+                }
+            }
             match export {
                 | Export::Type { adt } => {
                     self.adts.entry(qualified).or_insert(*adt);
@@ -1192,6 +1539,72 @@ impl Checker {
         }
     }
 
+    fn bind_interface(
+        &mut self,
+        interface: &ModuleInterface,
+        binding: &InterfaceBinding,
+    ) {
+        for (name, headers) in &interface.function_headers {
+            if binding
+                .names
+                .as_ref()
+                .is_some_and(|names| !names.contains(name))
+            {
+                continue;
+            }
+            let key = if binding.prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{name}", binding.prefix)
+            };
+            self.generic_bindings.insert(key, headers.clone());
+        }
+        for (name, alias) in &interface.aliases {
+            if binding
+                .names
+                .as_ref()
+                .is_some_and(|names| !names.contains(name))
+            {
+                continue;
+            }
+            let key = if binding.prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{name}", binding.prefix)
+            };
+            let def = self.imported_alias_def(alias);
+            self.aliases.insert(key, def);
+        }
+        // Selecting a type imports its public constructors as specified by
+        // §7.1. The same expansion is used by the runtime import binding.
+        if let Some(names) = &binding.names {
+            let selected: Vec<_> = names
+                .iter()
+                .filter_map(|name| {
+                    match interface.exports.get(name) {
+                        | Some(Export::Type { adt } | Export::TypeCtor { adt, .. }) => Some(*adt),
+                        | _ => None,
+                    }
+                })
+                .collect();
+            for (name, export) in &interface.exports {
+                match export {
+                    | Export::Ctor {
+                        adt, index, scheme, ..
+                    }
+                    | Export::TypeCtor {
+                        adt, index, scheme, ..
+                    } if selected.contains(adt) => {
+                        self.globals.insert(name.clone(), scheme.clone());
+                        self.constructor_bindings
+                            .insert(name.clone(), (*adt, *index));
+                    },
+                    | _ => {},
+                }
+            }
+        }
+    }
+
     fn register_prelude(&mut self) {
         // Unit values are visible unqualified, mirroring `open Units.SI`.
         for unit in self.units.list().to_vec() {
@@ -1207,6 +1620,8 @@ impl Checker {
         // exporting them would make two `open`s look like a name clash.
         for name in ["None", "Some", "Ok", "Err", "Less", "Equal", "Greater"] {
             if let Some((adt, index, _)) = adt::find_prelude_ctor(name) {
+                self.constructor_bindings
+                    .insert(name.to_string(), (adt, index));
                 self.globals
                     .insert(name.to_string(), ctor_scheme(adt, index));
             }
@@ -1216,6 +1631,13 @@ impl Checker {
         for (class, method, ty) in prelude_class_methods() {
             let scheme = crate::class::method_scheme(class, 1, ty);
             self.globals.insert(method.to_string(), scheme);
+            self.method_bindings.insert(
+                method.to_string(),
+                ClassMethodRef {
+                    class: ClassKey::prelude(class),
+                    method: method.to_string(),
+                },
+            );
         }
     }
 
@@ -1403,9 +1825,7 @@ impl Checker {
     ) {
         self.checked.name = module.name.clone();
         self.checked.anonymous_file = self.file;
-        if let Some(path) = &module.name {
-            self.module_path = ModulePath::new(path.iter().cloned());
-        }
+        self.module_path = self.checked.module_path();
         self.check_attributes(module);
 
         // Pass A: types, dimensions and units.
@@ -1452,6 +1872,8 @@ impl Checker {
                         );
                     }
                     let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
+                    self.generic_bindings
+                        .insert(name.clone(), generics.binders.clone());
                     self.fn_generics.insert(name.clone(), generics);
                     self.fn_signatures.insert(name.clone(), ty.clone());
                     let scheme = Scheme::mono(ty);
@@ -1501,7 +1923,9 @@ impl Checker {
         // Pass C: bodies.
         for decl in &module.decls {
             match &decl.kind {
-                | DeclKind::Fn { name, args, body, .. } => self.check_fn_body(name, args, body),
+                | DeclKind::Fn { name, args, body, .. } => {
+                    self.check_fn_body(name, args, body, decl.span)
+                },
                 | DeclKind::Let {
                     pattern,
                     ty,
@@ -1685,8 +2109,8 @@ impl Checker {
         // fixed by the surrounding expression, so it is resolved here, after
         // generalisation and defaulting. A `check` whose `d` is still a variable
         // is generic code, which the spec says must use `check_with`.
-        let pending = std::mem::take(&mut self.pending_checks);
-        for (span, dim) in pending {
+        let pending_checks = std::mem::take(&mut self.pending_checks);
+        for (span, dim) in pending_checks {
             let resolved = self.infer.resolve_dim(&dim);
             if resolved.is_concrete() {
                 self.checked.dyn_calls.push(DynCall {
@@ -1713,8 +2137,9 @@ impl Checker {
             // The head is recorded when the call is checked; a structural
             // match may already have found the instance, so its literal
             // arguments are only defaulted here.
-            let (defaulted, _) = self.infer.default_type(&dictionary.head);
-            dictionary.head = self.infer.resolve(&defaulted);
+            let protected = self.infer.generalize(&dictionary.head);
+            let (defaulted, _) = self.infer.default_scheme(&protected);
+            dictionary.head = self.infer.resolve(&defaulted.ty);
         }
         // §9.2.3/round-2 decision 1c: the *resolved* instance is only known
         // now — at check time the head may still have been a literal variable
@@ -1725,12 +2150,177 @@ impl Checker {
                 self.dict_target(&dictionary.class, &dictionary.method, &dictionary.head);
         }
         self.checked.dictionaries = dictionaries;
+        // Finalize each actual body independently of the module's current
+        // name binding: a later declaration may shadow that name. Protect
+        // generalizable lexical free variables as well as the function's own
+        // binders, so a nested closure never defaults its parent's parameters.
+        let lexical_types: HashSet<u32> = self
+            .checked
+            .functions
+            .values()
+            .flat_map(|function| function.scheme.vars.iter().copied())
+            .collect();
+        let lexical_dims: HashSet<u32> = self
+            .checked
+            .functions
+            .values()
+            .flat_map(|function| function.scheme.dims.iter().copied())
+            .collect();
+        let lexical_rows: HashSet<u32> = self
+            .checked
+            .functions
+            .values()
+            .flat_map(|function| function.scheme.rows.iter().copied())
+            .collect();
+        let lexical_nats: HashSet<u32> = self
+            .checked
+            .functions
+            .values()
+            .flat_map(|function| function.scheme.nats.iter().copied())
+            .collect();
+        // Call instances outside a definition have no activation dictionary.
+        // Default their transported literal domains too (including clauses
+        // whose original literal lives in another compilation unit).
+        if let Err(error) = self.infer.default_unprotected_numeric(&lexical_types) {
+            self.report_unify(error, Span::new(self.file, 0, 0));
+        }
+        fn protect_lexical(
+            target: &mut Vec<u32>,
+            relevant: impl Iterator<Item = u32>,
+            quantified: &HashSet<u32>,
+        ) {
+            for id in relevant {
+                if quantified.contains(&id) && !target.contains(&id) {
+                    target.push(id);
+                }
+            }
+        }
+        for function in self.checked.functions.values_mut() {
+            let protected = self.infer.generalize(&function.scheme.ty);
+            let mut defaulting = function.scheme.clone();
+            for (target, free) in [
+                (&mut defaulting.vars, &protected.vars),
+                (&mut defaulting.dims, &protected.dims),
+                (&mut defaulting.rows, &protected.rows),
+                (&mut defaulting.nats, &protected.nats),
+            ] {
+                for id in free {
+                    if !target.contains(id) {
+                        target.push(*id);
+                    }
+                }
+            }
+            // Protect only lexical variables this temporary defaulting walk
+            // can reach; ordered/vacuous binders and body requirements remain
+            // unchanged on the actual FunctionEvidence.
+            let mut relevant = crate::TypeSubstitution::default();
+            let mut names = Infer::new();
+            relevant.freshen(&function.scheme.ty, &mut names);
+            for constraint in &function.scheme.constraints {
+                for ty in &constraint.args {
+                    relevant.freshen(ty, &mut names);
+                }
+            }
+            protect_lexical(
+                &mut defaulting.vars,
+                relevant
+                    .types
+                    .keys()
+                    .chain(relevant.representations.keys())
+                    .copied(),
+                &lexical_types,
+            );
+            protect_lexical(
+                &mut defaulting.dims,
+                relevant.dimensions.keys().copied(),
+                &lexical_dims,
+            );
+            protect_lexical(
+                &mut defaulting.rows,
+                relevant.rows.keys().copied(),
+                &lexical_rows,
+            );
+            protect_lexical(
+                &mut defaulting.nats,
+                relevant.naturals.keys().copied(),
+                &lexical_nats,
+            );
+            let (defaulted, _) = self.infer.default_scheme(&defaulting);
+            function.scheme.ty = defaulted.ty;
+            function.scheme.constraints = defaulted.constraints;
+            function.scheme.numeric = defaulted.numeric;
+            function.scheme.materializations = defaulted.materializations;
+        }
         // The per-expression table is resolved *last*, after every unification
         // and every defaulting step: an entry recorded while checking holds
         // unification variables, and this is the only point at which their
         // final bindings are known. Resolving earlier would freeze the
         // instantiation a call happened to have at the moment it was checked.
-        let recorded = std::mem::take(&mut self.expr_types);
+        let recorded: HashMap<Span, Type> =
+            std::mem::take(&mut self.expr_types).into_iter().collect();
+        self.expression_indices.clear();
+        // A body's internal literal variable is not a universal parameter.
+        // Resolve its normal literal reading before freezing expression types;
+        // only actual lexical quantifiers need activation-time materialization.
+        let mut literal_default_errors = Vec::new();
+        for span in &self.literal_spans {
+            let Some(ty) = recorded.get(span).map(|ty| self.infer.resolve(ty)) else {
+                continue;
+            };
+            let mut free = crate::TypeSubstitution::default();
+            free.freshen(&ty, &mut Infer::new());
+            let generic = free
+                .types
+                .keys()
+                .chain(free.representations.keys())
+                .any(|id| lexical_types.contains(id))
+                || free.dimensions.keys().any(|id| lexical_dims.contains(id))
+                || free.rows.keys().any(|id| lexical_rows.contains(id))
+                || free.naturals.keys().any(|id| lexical_nats.contains(id));
+            let owner = self.literal_owners.get(span).and_then(|(owner, _)| *owner);
+            if generic && owner.is_some() {
+                continue;
+            }
+            let Some((_, kind)) = self.literal_owners.get(span) else {
+                continue;
+            };
+            let reading = match &ty {
+                | Type::Var(_) => {
+                    Some(Type::Scalar(
+                        Rep::default_for_literal(self.infer.literal_kind(&ty).unwrap_or(*kind)),
+                        Dim::one(),
+                    ))
+                },
+                | Type::Scalar(rep @ Rep::Var(_), dim) => {
+                    let bounds = self.infer.rep_bounds(*rep);
+                    let preferred = self
+                        .infer
+                        .literal_representation(*rep)
+                        .unwrap_or_else(|| Rep::default_for_literal(*kind));
+                    let constrained_kind = self.infer.rep_literal_kind(*rep);
+                    let chosen = [preferred, Rep::Int, Rep::Float, Rep::Real, Rep::Complex]
+                        .into_iter()
+                        .find(|candidate| {
+                            kind.accepts_rep(*candidate)
+                                && constrained_kind.is_none_or(|kind| kind.accepts_rep(*candidate))
+                                && bounds.iter().all(|bound| {
+                                    let bound = self.infer.resolve_rep(*bound);
+                                    matches!(bound, Rep::Var(_)) || candidate.at_least(bound)
+                                })
+                        });
+                    chosen.map(|rep| Type::Scalar(rep, dim.clone()))
+                },
+                | _ => None,
+            };
+            if let Some(reading) = reading {
+                if let Err(error) = self.infer.unify(&ty, &reading) {
+                    literal_default_errors.push((error, *span));
+                }
+            }
+        }
+        for (error, span) in literal_default_errors {
+            self.report_unify(error, span);
+        }
         let resolved_expr_types: HashMap<Span, Type> = recorded
             .into_iter()
             .map(|(span, ty)| (span, self.infer.resolve(&ty)))
@@ -1740,6 +2330,20 @@ impl Checker {
         // representation instead of its default one — without this a value the
         // checker typed `Float` can hold an exact `Real` at run time.
         for span in std::mem::take(&mut self.literal_spans) {
+            if let Some(ty) = resolved_expr_types
+                .get(&span)
+                .filter(|ty| crate::class::has_variables(ty))
+            {
+                if let Some((Some(owner), kind)) = self.literal_owners.get(&span) {
+                    if let Some(function) = self.checked.functions.get_mut(owner) {
+                        function.numeric_literals.push((span, *kind, ty.clone()));
+                    }
+                }
+                if let Type::Scalar(rep, _) = ty {
+                    self.checked.literal_reps.insert(span, *rep);
+                }
+                continue;
+            }
             if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span) {
                 if let Some(rep) = self.infer.literal_representation(*rep) {
                     self.checked.literal_reps.insert(span, rep);
@@ -1747,40 +2351,101 @@ impl Checker {
             }
         }
         self.checked.expr_types = resolved_expr_types;
+        for function in self.checked.functions.values_mut() {
+            function.scheme = self.infer.resolve_scheme(&function.scheme);
+            for constraint in &mut function.scheme.constraints {
+                for arg in &mut constraint.args {
+                    *arg = self.infer.resolve(arg);
+                }
+            }
+            function.binders = function
+                .binders
+                .iter()
+                .map(|binder| binder.resolved(&self.infer))
+                .collect();
+            function.reifications = function
+                .reifications
+                .iter()
+                .map(|ty| self.infer.resolve(ty))
+                .collect();
+        }
+        for (name, _) in &pending {
+            if let Some(scheme) = self.globals.get(name).cloned() {
+                let normalized = self.infer.resolve_scheme(&scheme);
+                self.globals.insert(name.clone(), normalized.clone());
+                if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
+                    *scheme = normalized;
+                }
+            }
+        }
+        for message in self.infer.take_numeric_errors() {
+            self.error("E0302", message, Span::new(self.file, 0, 0));
+        }
+        for headers in self.checked.generic_refs.values_mut() {
+            *headers = headers
+                .iter()
+                .map(|header| header.resolved(&self.infer))
+                .collect();
+        }
+        for (name, export) in &self.checked.exports {
+            if let Export::Value { scheme, .. } = export {
+                if matches!(scheme.ty, Type::Fn(..)) {
+                    let headers = self
+                        .generic_bindings
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| inferred_binders(scheme));
+                    self.checked.function_headers.insert(
+                        name.clone(),
+                        headers
+                            .iter()
+                            .map(|header| header.resolved(&self.infer))
+                            .collect(),
+                    );
+                }
+            }
+        }
         // §7.1.3/§7.4, round-2 decision 1b: classes, instances and alias
         // definitions travel with the interface. Only what *this* module
         // declares is exported — a prelude instance or an imported one is not
         // re-exported (imports are not transitive).
         for class in self.classes.classes_declared_in(&self.module_path) {
-            if self.private_classes.contains(&class.key.name) {
-                continue;
+            let exported = ClassExport {
+                key: class.key.clone(),
+                params: class.params,
+                methods: class.methods.clone(),
+            };
+            self.checked
+                .local_classes
+                .insert(class.key.clone(), exported.clone());
+            if !self.private_classes.contains(&class.key.name) {
+                self.checked.classes.insert(class.key.clone(), exported);
             }
-            self.checked.classes.insert(
-                class.key.clone(),
-                ClassExport {
-                    key: class.key.clone(),
-                    params: class.params,
-                    methods: class.methods.clone(),
-                },
-            );
         }
         for instance in self.classes.instances_declared_in(&self.module_path) {
-            // An instance of a private class cannot be used by an importer
-            // (the class is not exported), so it is not part of the interface.
-            if self.private_classes.contains(&instance.class) {
-                continue;
-            }
-            self.checked.instances.push(InstanceExport {
+            let exported = InstanceExport {
                 key: instance.key.clone(),
                 head: instance.head.clone(),
                 methods: instance.methods.clone(),
                 derived: instance.origin == Origin::Derived,
-            });
+            };
+            for (span, key) in &self.instance_declarations {
+                if key == &instance.key {
+                    self.checked.instance_sites.insert(*span, exported.clone());
+                }
+            }
+            if !self.private_classes.contains(&instance.class) {
+                self.checked.instances.push(exported);
+            }
         }
+        // Alias bodies are already resolved templates: public aliases may
+        // refer to private helpers without exporting those helper names.
         for (name, alias) in &self.aliases {
-            self.checked
-                .alias_defs
-                .insert(name.clone(), self.canonical_alias_export(alias));
+            if matches!(self.checked.exports.get(name), Some(Export::Alias { .. })) {
+                self.checked
+                    .alias_defs
+                    .insert(name.clone(), self.canonical_alias_export(alias));
+            }
         }
         // §13.8.1: stability markers travel with the interface, so the editor
         // can show them and a consumer can avoid a deprecated name.
@@ -1796,11 +2461,11 @@ impl Checker {
     /// invented, and `Error` is the checker's "inference already failed" — an
     /// entry for either would look like information without being any.
     ///
-    /// `check` records the type it checked a node against right after `synth`
-    /// recorded the type it produced for the same node (they have just been
-    /// unified, so either is the answer). Replacing the previous entry instead
-    /// of pushing a second one keeps the table one entry per span and saves a
-    /// clone on every checked expression.
+    /// Records are append-only until a speculative suffix is rolled back.
+    /// Even adjacent visits to the same span keep separate versions, so a
+    /// failed overload cannot overwrite evidence preceding its checkpoint.
+    /// The per-span index gives O(1) access to the latest surviving version;
+    /// module finalization collapses those records to one public entry.
     fn note_type(
         &mut self,
         span: Span,
@@ -1809,13 +2474,73 @@ impl Checker {
         if span.start >= span.end || matches!(ty, Type::Error) {
             return;
         }
-        if let Some((last, recorded)) = self.expr_types.last_mut() {
-            if *last == span {
-                *recorded = ty.clone();
-                return;
+        self.expression_indices
+            .entry(span)
+            .or_default()
+            .push(self.expr_types.len());
+        self.expr_types.push((span, ty.clone()));
+    }
+
+    fn truncate_expr_types(
+        &mut self,
+        len: usize,
+    ) {
+        for (span, _) in self.expr_types.drain(len..) {
+            if let Some(indices) = self.expression_indices.get_mut(&span) {
+                indices.pop();
+                if indices.is_empty() {
+                    self.expression_indices.remove(&span);
+                }
             }
         }
-        self.expr_types.push((span, ty.clone()));
+    }
+
+    fn latest_expr_type(
+        &self,
+        span: Span,
+    ) -> Option<&Type> {
+        let index = *self.expression_indices.get(&span)?.last()?;
+        self.expr_types.get(index).map(|(_, ty)| ty)
+    }
+
+    fn record_literal(
+        &mut self,
+        span: Span,
+        kind: LiteralKind,
+    ) {
+        self.literal_spans.push(span);
+        let owner = self.function_stack.last().copied();
+        let previous = self.literal_owners.insert(span, (owner, kind));
+        if previous != Some((owner, kind)) {
+            if let Some(owner) = owner {
+                self.function_literal_sites
+                    .entry(owner)
+                    .or_default()
+                    .push((span, kind));
+            }
+        }
+    }
+
+    fn owned_literal_sites(
+        &self,
+        site: Span,
+    ) -> Vec<(Span, LiteralKind)> {
+        let mut sites = self
+            .function_literal_sites
+            .get(&site)
+            .cloned()
+            .unwrap_or_default();
+        #[cfg(test)]
+        self.literal_owner_visits
+            .set(self.literal_owner_visits.get() + sites.len());
+        sites.retain(|(span, _)| {
+            self.literal_owners
+                .get(span)
+                .is_some_and(|(owner, _)| *owner == Some(site))
+        });
+        sites.sort_by_key(|(span, _)| (span.file, span.start, span.end));
+        sites.dedup_by_key(|(span, _)| *span);
+        sites
     }
 
     /// Generalises a scheme, keeping the class constraints of the declaration
@@ -1824,8 +2549,24 @@ impl Checker {
         &mut self,
         scheme: &Scheme,
     ) -> Scheme {
-        self.infer
-            .generalize_with(&scheme.ty, scheme.constraints.clone())
+        let mut generalised = self
+            .infer
+            .generalize_with(&scheme.ty, scheme.constraints.clone());
+        for (target, original) in [
+            (&mut generalised.vars, &scheme.vars),
+            (&mut generalised.dims, &scheme.dims),
+            (&mut generalised.rows, &scheme.rows),
+            (&mut generalised.nats, &scheme.nats),
+        ] {
+            for id in original {
+                if !target.contains(id) {
+                    target.push(*id);
+                }
+            }
+        }
+        generalised.materializations = scheme.materializations.clone();
+        self.infer.attach_numeric_scheme(&mut generalised);
+        generalised
     }
 
     // ----- declarations --------------------------------------------------
@@ -2360,7 +3101,12 @@ impl Checker {
             | _ => None,
         };
         if let Some(name) = name {
-            if let Some((_, dim)) = self.dim_params.iter().find(|(param, _)| *param == name) {
+            if let Some((_, dim)) = self
+                .dim_params
+                .iter()
+                .rev()
+                .find(|(param, _)| *param == name)
+            {
                 return dim.clone();
             }
             if let Some(dim) = self.dims.lookup(&name) {
@@ -2398,7 +3144,12 @@ impl Checker {
     ) -> Nat {
         match bare_type_name(ty) {
             | Some(name) => {
-                if let Some((_, nat)) = self.nat_params.iter().find(|(param, _)| param == name) {
+                if let Some((_, nat)) = self
+                    .nat_params
+                    .iter()
+                    .rev()
+                    .find(|(param, _)| param == name)
+                {
                     return nat.clone();
                 }
                 self.error_help(
@@ -2485,9 +3236,11 @@ impl Checker {
                         row_vars,
                     },
                 );
-                self.checked
-                    .exports
-                    .insert(name.to_string(), Export::Alias { params: params.len() });
+                if !private {
+                    self.checked
+                        .exports
+                        .insert(name.to_string(), Export::Alias { params: params.len() });
+                }
             },
             | TypeBody::Variants(ctors) => {
                 // Allocate the id *before* converting the fields, so a field
@@ -2556,7 +3309,15 @@ impl Checker {
                 if let Some(registered) = adt::get(id) {
                     for (index, ctor) in registered.ctors.iter().enumerate() {
                         let scheme = ctor_scheme(id, index);
+                        self.checked
+                            .constructors
+                            .insert(ctor.name.clone(), (id, index));
+                        self.constructor_bindings
+                            .insert(ctor.name.clone(), (id, index));
                         self.globals.insert(ctor.name.clone(), scheme.clone());
+                        if private {
+                            continue;
+                        }
                         // `type P2 = | P2(...)` names the type and the
                         // constructor the same; keep both, or one of the two
                         // meanings disappears for importers.
@@ -2595,6 +3356,7 @@ impl Checker {
                     params.iter().map(|p| p.name.clone()).collect(),
                 );
                 adt::set_param_kinds(id, vec![adt::ParamKind::Type; params.len()]);
+                adt::set_ctors(id, Vec::new());
                 self.adts.insert(name.to_string(), id);
                 self.local_adts.insert(id);
                 if !private {
@@ -2696,6 +3458,13 @@ impl Checker {
             converted.push((method.clone(), method_ty.clone()));
             let scheme = crate::class::method_scheme(name, params.len().max(1), method_ty);
             self.globals.insert(method.clone(), scheme);
+            self.method_bindings.insert(
+                method.clone(),
+                ClassMethodRef {
+                    class: ClassKey::new(self.module_path.clone(), name),
+                    method: method.clone(),
+                },
+            );
         }
         self.type_params = saved_types;
         self.dim_params = saved_dims;
@@ -2833,12 +3602,34 @@ impl Checker {
                 self.bind_pattern(&param.pattern, &ty);
                 params.push(ty);
             }
+            self.function_inputs
+                .insert(instance_method.span, params.clone());
+            self.function_stack.push(instance_method.span);
             let body_ty = self.synth(&instance_method.body);
             if let Err(error) = self.infer.unify(&body_ty, &expected_ret) {
                 self.report_unify(error, instance_method.span);
             }
+            self.commit_function_literals(instance_method.span);
+            self.function_stack.pop();
             self.scopes.pop();
-            let method_ty = Type::func(params, (*expected_ret).clone());
+            let method_ty = Type::func(params.clone(), (*expected_ret).clone());
+            let mut scheme = self.infer.generalize_at(0, &method_ty, Vec::new());
+            scheme.materializations = self.function_materializations(instance_method.span);
+            self.infer.attach_numeric_scheme(&mut scheme);
+            self.infer.quantify_numeric_inputs(&mut scheme, &params, 0);
+            self.infer.quantify_numeric_existentials(&mut scheme, 0);
+            self.checked.functions.insert(
+                instance_method.span,
+                FunctionEvidence {
+                    numeric_literals: Vec::new(),
+                    scheme,
+                    binders: Vec::new(),
+                    reifications: self
+                        .function_reifications
+                        .remove(&instance_method.span)
+                        .unwrap_or_default(),
+                },
+            );
             specialised.insert(method.clone(), method_ty);
         }
         // §3.8.1: a user class requires every method. A prelude class is a
@@ -2870,6 +3661,7 @@ impl Checker {
             class_is_local,
         ) {
             Ok(key) => {
+                self.instance_declarations.insert(decl.span, key.clone());
                 // The body is reachable under a name no program can write, so
                 // it cannot shadow the class method. The name is derived from
                 // the *symbolic* instance key, so two primitive-head instances
@@ -3251,12 +4043,235 @@ impl Checker {
         }
     }
 
+    fn lexical_numeric_variables(&self) -> crate::TypeSubstitution {
+        let mut free = crate::TypeSubstitution::default();
+        let mut names = Infer::new();
+        for (_, ty) in &self.type_params {
+            free.freshen(&self.infer.resolve(ty), &mut names);
+        }
+        for (_, dim) in &self.dim_params {
+            free.freshen(&Type::UnitOf(self.infer.resolve_dim(dim)), &mut names);
+        }
+        for (_, nat) in &self.nat_params {
+            free.freshen(
+                &Type::tensor(
+                    Shape::Refined(vec![Some(self.infer.resolve_nat(nat))]),
+                    Type::Unit,
+                ),
+                &mut names,
+            );
+        }
+        for (_, row) in &self.row_params {
+            free.freshen(&Type::Record(self.infer.resolve_row(row)), &mut names);
+        }
+        for site in &self.function_stack {
+            if let Some(inputs) = self.function_inputs.get(site) {
+                for ty in inputs {
+                    free.freshen(&self.infer.resolve(ty), &mut names);
+                }
+            }
+        }
+        free
+    }
+
+    /// Commit a body's private literal readings before its scheme is
+    /// published. A candidate may not silently specialize an input or an
+    /// enclosing universal parameter; such literals stay dependent instead.
+    fn commit_function_literals(
+        &mut self,
+        site: Span,
+    ) {
+        let protected = self.lexical_numeric_variables();
+        let protected_domains: Vec<_> = protected
+            .representations
+            .keys()
+            .filter_map(|id| {
+                self.infer
+                    .representation_domain(Rep::Var(*id))
+                    .ok()
+                    .map(|domain| (*id, domain))
+            })
+            .collect();
+        let sites = self.owned_literal_sites(site);
+        for (span, kind) in sites {
+            let Some(ty) = self.latest_expr_type(span).map(|ty| self.infer.resolve(ty)) else {
+                continue;
+            };
+            let mut free = crate::TypeSubstitution::default();
+            free.freshen(&ty, &mut Infer::new());
+            if free.types.keys().any(|id| protected.types.contains_key(id))
+                || free
+                    .representations
+                    .keys()
+                    .any(|id| protected.representations.contains_key(id))
+            {
+                continue;
+            }
+            let mut contract = Scheme::mono(ty.clone());
+            self.infer.attach_numeric_scheme(&mut contract);
+            let mut connected = crate::TypeSubstitution::default();
+            for constraint in &contract.numeric {
+                for ty in constraint.types() {
+                    connected.freshen(&ty, &mut Infer::new());
+                }
+            }
+            let mut inputs: Vec<_> = connected
+                .representations
+                .keys()
+                .filter(|id| protected.representations.contains_key(id))
+                .copied()
+                .collect();
+            inputs.sort_unstable();
+            if !inputs.is_empty() {
+                if let Err(error) =
+                    self.infer
+                        .add_numeric_constraint(crate::NumericConstraint::DefaultLiteral {
+                            ty: ty.clone(),
+                            kind,
+                            inputs: inputs.into_iter().map(Rep::Var).collect(),
+                        })
+                {
+                    self.report_unify(error, span);
+                }
+                continue;
+            }
+            let preferred = match &ty {
+                | Type::Scalar(rep, _) => self.infer.rep_literal_kind(*rep).unwrap_or(kind),
+                | _ => self.infer.literal_kind(&ty).unwrap_or(kind),
+            };
+            for candidate in [
+                Rep::default_for_literal(preferred),
+                Rep::Int,
+                Rep::Float,
+                Rep::Real,
+                Rep::Complex,
+            ] {
+                if !kind.accepts_rep(candidate) || !preferred.accepts_rep(candidate) {
+                    continue;
+                }
+                let reading = match &ty {
+                    | Type::Var(_) => Type::Scalar(candidate, Dim::one()),
+                    | Type::Scalar(Rep::Var(_), dim) => Type::Scalar(candidate, dim.clone()),
+                    | _ => break,
+                };
+                // Probe only this connected numeric component. Cloning the
+                // entire module's inference state for every `fn f_i() = 1`
+                // made otherwise independent declarations quadratic.
+                let mut trial = Infer::new();
+                let mut projection = crate::TypeSubstitution::default();
+                projection.freshen(&ty, &mut trial);
+                for clause in &contract.numeric {
+                    for ty in clause.types() {
+                        projection.freshen(&ty, &mut trial);
+                    }
+                }
+                let valid = contract.numeric.iter().all(|clause| {
+                    trial
+                        .add_numeric_constraint(clause.substitute(&projection))
+                        .is_ok()
+                });
+                if !valid
+                    || trial
+                        .unify(&projection.apply(&ty), &projection.apply(&reading))
+                        .is_err()
+                {
+                    continue;
+                }
+                if protected_domains.iter().any(|(id, old)| {
+                    projection.representations.get(id).is_some_and(|rep| {
+                        trial
+                            .representation_domain(*rep)
+                            .is_ok_and(|domain| domain != *old)
+                    })
+                }) {
+                    continue;
+                }
+                if let Err(error) = self.infer.unify(&ty, &reading) {
+                    self.report_unify(error, span);
+                }
+                break;
+            }
+        }
+    }
+
+    fn value_materializations(
+        &self,
+        site: Span,
+    ) -> Vec<Type> {
+        self.call_materializations
+            .get(&site)
+            .cloned()
+            .or_else(|| {
+                self.checked
+                    .functions
+                    .get(&site)
+                    .map(|function| function.scheme.materializations.clone())
+            })
+            .unwrap_or_default()
+    }
+
+    fn function_materializations(
+        &self,
+        site: Span,
+    ) -> Vec<Type> {
+        let mut result = self
+            .function_reifications
+            .get(&site)
+            .cloned()
+            .unwrap_or_default();
+        for (span, _) in self.owned_literal_sites(site) {
+            if let Some(ty) = self.latest_expr_type(span) {
+                result.push(self.infer.resolve(ty));
+            }
+        }
+        result
+    }
+
+    fn weaken_data_argument(
+        &mut self,
+        ty: &Type,
+    ) {
+        let ty = self.infer.resolve(ty);
+        // Callable values transport schemes; eagerly stored numeric data
+        // transport a single representation. Recurse only through data.
+        match &ty {
+            | Type::Fn(..) => {},
+            | Type::Tensor { elem, .. } | Type::Io(elem) => self.weaken_data_argument(elem),
+            | Type::Record(row) => {
+                for (_, field) in row.fields() {
+                    self.weaken_data_argument(&field);
+                }
+            },
+            | Type::Adt(_, args) => {
+                for arg in args {
+                    self.weaken_data_argument(arg);
+                }
+            },
+            | Type::Scalar(..) | Type::Var(_)
+                if self.infer.literal_kind(&ty).is_some() || matches!(ty, Type::Scalar(..)) =>
+            {
+                let protected = self.lexical_numeric_variables();
+                self.infer.weaken_materialized(&ty, &protected);
+            },
+            | _ => {},
+        }
+    }
+
     fn fn_signature(
         &mut self,
         params: &[TypeParam],
         args: &[Param],
         ret: Option<&Ty>,
     ) -> (Type, FnGenerics) {
+        let mut usage = ParamUsage::default();
+        for arg in args {
+            if let Some(ty) = &arg.ty {
+                usage.scan(ty);
+            }
+        }
+        if let Some(ty) = ret {
+            usage.scan(ty);
+        }
         let saved_types = self.type_params.clone();
         let saved_dims = self.dim_params.clone();
         let saved_nats = self.nat_params.clone();
@@ -3277,6 +4292,11 @@ impl Checker {
                 | Some(Kind::Row) => {
                     let row = self.infer.fresh_row();
                     self.row_params.push((param.name.clone(), row));
+                },
+                | Some(Kind::Rep) => {
+                    let rep = self.infer.fresh_rep();
+                    self.type_params
+                        .push((param.name.clone(), Type::Scalar(rep, Dim::one())));
                 },
                 | Some(Kind::Type) | None => {
                     let ty = self.infer.fresh_type();
@@ -3302,6 +4322,67 @@ impl Checker {
             dims: self.dim_params.clone(),
             nats: self.nat_params.clone(),
             rows: self.row_params.clone(),
+            binders: params
+                .iter()
+                .filter_map(|param| {
+                    let kind = param.kind.unwrap_or_else(|| {
+                        if usage.dims.contains(&param.name) {
+                            Kind::Dim
+                        } else if usage.nats.contains(&param.name) {
+                            Kind::Nat
+                        } else if usage.rows.contains(&param.name) {
+                            Kind::Row
+                        } else {
+                            Kind::Type
+                        }
+                    });
+                    match kind {
+                        | Kind::Type => {
+                            self.type_params
+                                .iter()
+                                .rev()
+                                .find(|(name, _)| name == &param.name)
+                                .map(|(_, ty)| GenericBinder::Type(ty.clone()))
+                        },
+                        | Kind::Rep => {
+                            self.type_params
+                                .iter()
+                                .rev()
+                                .find(|(name, _)| name == &param.name)
+                                .and_then(|(_, ty)| {
+                                    match ty {
+                                        | Type::Scalar(rep, _) => {
+                                            Some(GenericBinder::Representation(*rep))
+                                        },
+                                        | _ => None,
+                                    }
+                                })
+                        },
+                        | Kind::Dim => {
+                            self.dim_params
+                                .iter()
+                                .rev()
+                                .find(|(name, _)| name == &param.name)
+                                .map(|(_, dim)| GenericBinder::Dimension(dim.clone()))
+                        },
+                        | Kind::Nat => {
+                            self.nat_params
+                                .iter()
+                                .rev()
+                                .find(|(name, _)| name == &param.name)
+                                .map(|(_, nat)| GenericBinder::Natural(nat.clone()))
+                        },
+                        | Kind::Row => {
+                            self.row_params
+                                .iter()
+                                .rev()
+                                .find(|(name, _)| name == &param.name)
+                                .map(|(_, row)| GenericBinder::Row(row.clone()))
+                        },
+                        | _ => None,
+                    }
+                })
+                .collect(),
         };
         let mut arg_types = Vec::new();
         for arg in args {
@@ -3327,6 +4408,7 @@ impl Checker {
         name: &str,
         args: &[Param],
         body: &Expr,
+        site: Span,
     ) {
         let Some(signature) = self.fn_signatures.get(name).cloned() else {
             return;
@@ -3338,7 +4420,7 @@ impl Checker {
         for (arg, param) in args.iter().zip(params.iter()) {
             self.bind_pattern(&arg.pattern, param);
         }
-        self.return_type = Some((*ret).clone());
+        let saved_return = self.return_type.replace((*ret).clone());
         // §3.5.1: the body may name the function's `<...>` binders in an
         // annotation (`fn f<n>(...) = zeros_of<[n]>()`), so install them while
         // the body is checked. Pass B restored the outer environment.
@@ -3352,22 +4434,64 @@ impl Checker {
             self.nat_params = generics.nats;
             self.row_params = generics.rows;
         }
+        self.function_inputs.insert(site, params.clone());
+        self.function_stack.push(site);
         self.check(body, &ret);
+        self.commit_function_literals(site);
+        self.function_stack.pop();
         self.type_params = saved_types;
         self.dim_params = saved_dims;
         self.nat_params = saved_nats;
         self.row_params = saved_rows;
-        self.return_type = None;
+        self.return_type = saved_return;
         self.scopes.pop();
         // Generalise as soon as the body is checked, for the same reason the
         // `let` path does: a later declaration must see the polymorphic type.
         // Waiting for the end of the module is too late — a call site in
         // between has already unified the shared variable, so `fn ident(x) = x`
         // came out monomorphic and `ident("s")` after `ident(1)` was an error.
-        let generalised =
-            self.infer
-                .generalize_at(0, &Type::func(params, (*ret).clone()), Vec::new());
+        let mut generalised = self.infer.generalize_at(
+            self.infer.current_level().saturating_sub(1),
+            &Type::func(params.clone(), (*ret).clone()),
+            Vec::new(),
+        );
+        generalised.materializations = self.function_materializations(site);
+        self.infer.attach_numeric_scheme(&mut generalised);
+        self.infer.quantify_numeric_inputs(
+            &mut generalised,
+            &params,
+            self.infer.current_level().saturating_sub(1),
+        );
+        self.infer.quantify_numeric_existentials(
+            &mut generalised,
+            self.infer.current_level().saturating_sub(1),
+        );
+        let mut binders = self
+            .fn_generics
+            .get(name)
+            .map_or_else(Vec::new, |generics| {
+                generics
+                    .binders
+                    .iter()
+                    .map(|binder| binder.resolved(&self.infer))
+                    .collect()
+            });
+        if binders.is_empty() {
+            binders = inferred_binders(&generalised);
+        }
+        quantify_binders(&mut generalised, &binders, &self.infer);
+        self.generic_bindings
+            .insert(name.to_string(), binders.clone());
         self.globals.insert(name.to_string(), generalised.clone());
+        self.checked.functions.insert(
+            site,
+            FunctionEvidence {
+                numeric_literals: Vec::new(),
+                scheme: generalised.clone(),
+                binders,
+                reifications: self.function_reifications.remove(&site).unwrap_or_default(),
+            },
+        );
         if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
             *scheme = generalised;
         }
@@ -3418,7 +4542,15 @@ impl Checker {
         // Generalise as soon as the body is checked, so a *later* declaration
         // that uses this one sees the polymorphic type. Defaulting still waits
         // for the end of the module (PLAN D4).
-        let scheme = self.infer.generalize_at(0, &target, Vec::new());
+        let mut scheme = self.infer.generalize_at(0, &target, Vec::new());
+        scheme.materializations = self.value_materializations(value.span);
+        self.infer.attach_numeric_scheme(&mut scheme);
+        if let Some(binders) = self.checked.generic_refs.get(&value.span).cloned() {
+            quantify_binders(&mut scheme, &binders, &self.infer);
+            self.generic_bindings.insert(name.clone(), binders);
+        } else {
+            self.generic_bindings.remove(name);
+        }
         self.globals.insert(name.clone(), scheme.clone());
         if let Some(Export::Value {
             scheme: export_scheme,
@@ -3457,8 +4589,11 @@ impl Checker {
         self.check(value, &target);
         self.infer.leave_level();
         self.note_type(pattern.span, &target);
-        let scheme = self.infer.generalize(&target);
-        let (scheme, warnings) = self.infer.default_scheme(&scheme);
+        let mut scheme = self.infer.generalize(&target);
+        scheme.materializations = self.value_materializations(value.span);
+        self.infer.attach_numeric_scheme(&mut scheme);
+        let lexical = self.lexical_numeric_variables();
+        let (scheme, warnings) = self.infer.default_scheme_preserving(&scheme, &lexical);
         for _ in warnings {
             self.warn("W0301", "unresolved dimension defaulted to 1", span);
         }
@@ -3482,14 +4617,29 @@ impl Checker {
         pattern: &Pat,
         value_ty: &Type,
         span: Span,
+        value_span: Span,
     ) {
         self.note_type(pattern.span, value_ty);
-        let scheme = self.infer.generalize(value_ty);
-        let (scheme, warnings) = self.infer.default_scheme(&scheme);
+        let mut scheme = self.infer.generalize(value_ty);
+        scheme.materializations = self.value_materializations(value_span);
+        if let Some(headers) = self.checked.generic_refs.get(&value_span) {
+            quantify_binders(&mut scheme, headers, &self.infer);
+        }
+        self.infer.attach_numeric_scheme(&mut scheme);
+        let lexical = self.lexical_numeric_variables();
+        let (mut scheme, warnings) = self.infer.default_scheme_preserving(&scheme, &lexical);
         for _ in warnings {
             self.warn("W0301", "unresolved dimension defaulted to 1", span);
         }
         if let PatKind::Var(name) = &pattern.kind {
+            if let Some(headers) = self.checked.generic_refs.get(&value_span).cloned() {
+                quantify_binders(&mut scheme, &headers, &self.infer);
+                self.local_headers
+                    .insert((self.scopes.len(), name.clone()), headers);
+            } else {
+                self.local_headers
+                    .remove(&(self.scopes.len(), name.clone()));
+            }
             self.scopes
                 .last_mut()
                 .expect("a local binding has a scope")
@@ -3505,9 +4655,196 @@ impl Checker {
         &mut self,
         expr: &Expr,
     ) -> Type {
+        if self.literal_region.is_none()
+            && matches!(expr.kind, ExprKind::Unary { .. } | ExprKind::Binary { .. })
+        {
+            let class = self.literal_class(expr);
+            if class.tree {
+                return self.synth_literal_region(expr, class.homogeneous);
+            }
+        }
         let ty = self.synth_inner(expr);
         self.note_type(expr.span, &ty);
         ty
+    }
+
+    fn literal_class(
+        &mut self,
+        root: &Expr,
+    ) -> LiteralClass {
+        let mut pending = vec![(root, false)];
+        while let Some((expr, ready)) = pending.pop() {
+            if self.literal_classes.contains_key(&expr.span) {
+                continue;
+            }
+            let kind = match &expr.kind {
+                | ExprKind::Int(_) => Some(LiteralKind::Int),
+                | ExprKind::Float(_) => Some(LiteralKind::Decimal),
+                | ExprKind::Quantity { value, .. } => {
+                    Some(if value.is_decimal() {
+                        LiteralKind::QuantityDecimal
+                    } else {
+                        LiteralKind::QuantityInt
+                    })
+                },
+                | _ => None,
+            };
+            if let Some(kind) = kind {
+                self.literal_classes.insert(
+                    expr.span,
+                    LiteralClass {
+                        tree: true,
+                        homogeneous: Some(kind),
+                        atomic: true,
+                    },
+                );
+                continue;
+            }
+            match &expr.kind {
+                | ExprKind::Unary {
+                    op: UnOp::Pos | UnOp::Neg,
+                    operand,
+                } => {
+                    if ready {
+                        let class = self.literal_classes[&operand.span];
+                        self.literal_classes.insert(expr.span, class);
+                    } else {
+                        pending.push((expr, true));
+                        pending.push((operand, false));
+                    }
+                },
+                | ExprKind::Binary {
+                    op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div,
+                    left,
+                    right,
+                } => {
+                    if ready {
+                        let left = self.literal_classes[&left.span];
+                        let right = self.literal_classes[&right.span];
+                        self.literal_classes.insert(
+                            expr.span,
+                            LiteralClass {
+                                tree: left.tree && right.tree,
+                                atomic: false,
+                                homogeneous: if left.tree
+                                    && right.tree
+                                    && left.homogeneous == right.homogeneous
+                                {
+                                    left.homogeneous
+                                } else {
+                                    None
+                                },
+                            },
+                        );
+                    } else {
+                        pending.push((expr, true));
+                        pending.push((right, false));
+                        pending.push((left, false));
+                    }
+                },
+                | _ => {
+                    self.literal_classes
+                        .insert(expr.span, LiteralClass::default());
+                },
+            }
+        }
+        self.literal_classes[&root.span]
+    }
+
+    /// A closed homogeneous literal component may use one reading variable:
+    /// all leaves have the same domain and no independently supplied value can
+    /// distinguish their choices. Keep individual dimensions and source spans.
+    fn synth_literal_region(
+        &mut self,
+        root: &Expr,
+        kind: Option<LiteralKind>,
+    ) -> Type {
+        let reading = kind.map(|kind| (kind, self.infer.fresh_rep()));
+        let previous = std::mem::replace(&mut self.literal_region, reading);
+        // A heterogeneous tree keeps separate domains. Repeated atomic
+        // operands on one evaluation spine may share their kind's reading;
+        // a right-hand arithmetic subtree starts an independent context.
+        let mut contexts: Vec<Vec<(LiteralKind, Rep)>> = vec![Vec::new()];
+        let mut pending = vec![(root, false, 0usize)];
+        let mut types = HashMap::<Span, Type>::new();
+        while let Some((expr, ready, context)) = pending.pop() {
+            if !ready {
+                let class = self.literal_class(expr);
+                if kind.is_none() && expr.span != root.span && !class.atomic {
+                    if let Some(kind) = class.homogeneous {
+                        let ty = self.synth_literal_region(expr, Some(kind));
+                        types.insert(expr.span, ty);
+                        continue;
+                    }
+                }
+                match &expr.kind {
+                    | ExprKind::Unary { operand, .. } => {
+                        pending.push((expr, true, context));
+                        pending.push((operand, false, context));
+                        continue;
+                    },
+                    | ExprKind::Binary { left, right, .. } => {
+                        let right_context = if kind.is_none() && !self.literal_class(right).atomic {
+                            contexts.push(Vec::new());
+                            contexts.len() - 1
+                        } else {
+                            context
+                        };
+                        pending.push((expr, true, context));
+                        pending.push((right, false, right_context));
+                        pending.push((left, false, context));
+                        continue;
+                    },
+                    | _ => {},
+                }
+            }
+            let ty = match &expr.kind {
+                | ExprKind::Unary { op, operand } => {
+                    self.unary_type(*op, &types[&operand.span], expr.span)
+                },
+                | ExprKind::Binary { op, left, right } => {
+                    self.binary_type(
+                        *op,
+                        &types[&left.span],
+                        &types[&right.span],
+                        left,
+                        right,
+                        expr.span,
+                    )
+                },
+                | _ => {
+                    if kind.is_none() {
+                        if let Some(leaf_kind) = self.literal_class(expr).homogeneous {
+                            let rep = if let Some((_, rep)) = contexts[context]
+                                .iter()
+                                .find(|(kind, _)| *kind == leaf_kind)
+                            {
+                                *rep
+                            } else {
+                                let rep = self.infer.fresh_rep();
+                                contexts[context].push((leaf_kind, rep));
+                                rep
+                            };
+                            self.literal_region = Some((leaf_kind, rep));
+                        }
+                    }
+                    let ty = self.synth_inner(expr);
+                    if kind.is_none() {
+                        self.literal_region = previous;
+                    }
+                    ty
+                },
+            };
+            self.note_type(expr.span, &ty);
+            types.insert(expr.span, ty);
+        }
+        self.literal_region = previous;
+        if !self.literal_class(root).atomic {
+            if let Some((_, rep)) = reading {
+                self.infer.finish_literal_expression(rep);
+            }
+        }
+        types.remove(&root.span).unwrap_or(Type::Error)
     }
 
     fn synth_inner(
@@ -3521,14 +4858,36 @@ impl Checker {
             | ExprKind::UnitLit => Type::Unit,
             | ExprKind::Bool(_) => Type::Bool,
             | ExprKind::Int(_) => {
-                self.literal_spans.push(expr.span);
-                let ty = self.infer.fresh_type();
+                self.record_literal(expr.span, LiteralKind::Int);
+                let reading = self
+                    .literal_context
+                    .filter(|rep| LiteralKind::Int.accepts_rep(*rep))
+                    .or_else(|| {
+                        self.literal_region
+                            .filter(|(kind, _)| *kind == LiteralKind::Int)
+                            .map(|(_, rep)| rep)
+                    });
+                let ty = reading.map_or_else(
+                    || self.infer.fresh_type(),
+                    |rep| Type::Scalar(rep, Dim::one()),
+                );
                 self.infer.mark_literal(&ty, LiteralKind::Int);
                 ty
             },
             | ExprKind::Float(_) => {
-                self.literal_spans.push(expr.span);
-                let ty = self.infer.fresh_type();
+                self.record_literal(expr.span, LiteralKind::Decimal);
+                let reading = self
+                    .literal_context
+                    .filter(|rep| LiteralKind::Decimal.accepts_rep(*rep))
+                    .or_else(|| {
+                        self.literal_region
+                            .filter(|(kind, _)| *kind == LiteralKind::Decimal)
+                            .map(|(_, rep)| rep)
+                    });
+                let ty = reading.map_or_else(
+                    || self.infer.fresh_type(),
+                    |rep| Type::Scalar(rep, Dim::one()),
+                );
                 self.infer.mark_literal(&ty, LiteralKind::Decimal);
                 ty
             },
@@ -3541,7 +4900,14 @@ impl Checker {
                 Type::string()
             },
             | ExprKind::Quantity { value, unit } => {
-                self.literal_spans.push(expr.span);
+                self.record_literal(
+                    expr.span,
+                    if value.is_decimal() {
+                        LiteralKind::QuantityDecimal
+                    } else {
+                        LiteralKind::QuantityInt
+                    },
+                );
                 self.quantity_type(value, unit, expr.span)
             },
             | ExprKind::Var(name) => self.lookup_value(name, expr.span),
@@ -3575,10 +4941,39 @@ impl Checker {
                     | Some(ty) => self.convert_type(ty),
                     | None => self.infer.fresh_type(),
                 };
+                let saved_return = self.return_type.replace(ret_ty.clone());
+                self.function_inputs.insert(expr.span, arg_types.clone());
+                self.function_stack.push(expr.span);
                 self.check(body, &ret_ty);
+                self.commit_function_literals(expr.span);
+                self.function_stack.pop();
+                self.return_type = saved_return;
                 self.scopes.pop();
                 self.infer.leave_level();
-                Type::func(arg_types, ret_ty)
+                let ty = Type::func(arg_types.clone(), ret_ty);
+                let mut scheme = self.infer.generalize(&ty);
+                scheme.materializations = self.function_materializations(expr.span);
+                self.infer.attach_numeric_scheme(&mut scheme);
+                self.infer.quantify_numeric_inputs(
+                    &mut scheme,
+                    &arg_types,
+                    self.infer.current_level(),
+                );
+                self.infer
+                    .quantify_numeric_existentials(&mut scheme, self.infer.current_level());
+                self.checked.functions.insert(
+                    expr.span,
+                    FunctionEvidence {
+                        numeric_literals: Vec::new(),
+                        scheme,
+                        binders: Vec::new(),
+                        reifications: self
+                            .function_reifications
+                            .remove(&expr.span)
+                            .unwrap_or_default(),
+                    },
+                );
+                ty
             },
             | ExprKind::If {
                 cond,
@@ -3642,69 +5037,14 @@ impl Checker {
                 };
                 self.infer.leave_level();
                 self.scopes.push(HashMap::new());
-                self.bind_local(pattern, &value_ty, expr.span);
+                self.bind_local(pattern, &value_ty, expr.span, value.span);
                 let body_ty = self.synth(body);
                 self.scopes.pop();
                 body_ty
             },
             | ExprKind::Block { stmts, tail } => {
                 self.scopes.push(HashMap::new());
-                for stmt in stmts {
-                    match stmt {
-                        | BlockStmt::Let {
-                            pattern,
-                            ty,
-                            value,
-                            rec,
-                            span,
-                        } => {
-                            self.infer.enter_level();
-                            let target = self.infer.fresh_type();
-                            if let (PatKind::Var(name), true) = (&pattern.kind, *rec) {
-                                self.scopes
-                                    .last_mut()
-                                    .expect("scope")
-                                    .insert(name.clone(), Scheme::mono(target.clone()));
-                            }
-                            let value_ty = match ty {
-                                | Some(annotation) => {
-                                    let annotated = self.convert_type(annotation);
-                                    if let Err(error) = self.infer.unify(&target, &annotated) {
-                                        self.report_unify(error, annotation.span);
-                                    }
-                                    self.check(value, &annotated);
-                                    annotated
-                                },
-                                | None => {
-                                    self.check(value, &target);
-                                    target
-                                },
-                            };
-                            self.infer.leave_level();
-                            self.bind_local(pattern, &value_ty, *span);
-                        },
-                        | BlockStmt::Fn(decl) => {
-                            if let DeclKind::Fn {
-                                name,
-                                params,
-                                args,
-                                ret,
-                                body,
-                                ..
-                            } = &decl.kind
-                            {
-                                let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
-                                self.fn_generics.insert(name.clone(), generics);
-                                self.fn_signatures.insert(name.clone(), ty.clone());
-                                self.scopes
-                                    .last_mut()
-                                    .expect("scope")
-                                    .insert(name.clone(), Scheme::mono(ty));
-                                self.check_fn_body(name, args, body);
-                            }
-                        },
-                    }
-                }
+                self.check_block_statements(stmts);
                 let tail_ty = match tail {
                     | Some(tail) => self.synth(tail),
                     | None => {
@@ -3792,12 +5132,141 @@ impl Checker {
         self.note_type(expr.span, expected);
     }
 
+    fn check_block_statements(
+        &mut self,
+        stmts: &[BlockStmt],
+    ) {
+        for stmt in stmts {
+            match stmt {
+                | BlockStmt::Let {
+                    pattern,
+                    ty,
+                    value,
+                    rec,
+                    span,
+                } => {
+                    self.infer.enter_level();
+                    let target = self.infer.fresh_type();
+                    if let (PatKind::Var(name), true) = (&pattern.kind, *rec) {
+                        self.scopes
+                            .last_mut()
+                            .expect("scope")
+                            .insert(name.clone(), Scheme::mono(target.clone()));
+                    }
+                    let value_ty = match ty {
+                        | Some(annotation) => {
+                            let annotated = self.convert_type(annotation);
+                            if let Err(error) = self.infer.unify(&target, &annotated) {
+                                self.report_unify(error, annotation.span);
+                            }
+                            self.check(value, &annotated);
+                            annotated
+                        },
+                        | None => {
+                            self.check(value, &target);
+                            target
+                        },
+                    };
+                    self.infer.leave_level();
+                    self.bind_local(pattern, &value_ty, *span, value.span);
+                },
+                | BlockStmt::Fn(decl) => {
+                    if let DeclKind::Fn {
+                        name,
+                        params,
+                        args,
+                        ret,
+                        body,
+                        ..
+                    } = &decl.kind
+                    {
+                        self.infer.enter_level();
+                        let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
+                        self.local_headers
+                            .insert((self.scopes.len(), name.clone()), generics.binders.clone());
+                        let saved_generics = self.fn_generics.insert(name.clone(), generics);
+                        let saved_signature = self.fn_signatures.insert(name.clone(), ty.clone());
+                        let saved_global = self.globals.get(name).cloned();
+                        let saved_header = self.generic_bindings.get(name).cloned();
+                        self.scopes
+                            .last_mut()
+                            .expect("scope")
+                            .insert(name.clone(), Scheme::mono(ty));
+                        self.check_fn_body(name, args, body, decl.span);
+                        let scheme = self
+                            .globals
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| Scheme::mono(Type::Error));
+                        let headers = self.generic_bindings.get(name).cloned().unwrap_or_default();
+                        self.infer.leave_level();
+                        self.scopes
+                            .last_mut()
+                            .expect("scope")
+                            .insert(name.clone(), scheme);
+                        self.local_headers
+                            .insert((self.scopes.len(), name.clone()), headers);
+                        match saved_generics {
+                            | Some(value) => {
+                                self.fn_generics.insert(name.clone(), value);
+                            },
+                            | None => {
+                                self.fn_generics.remove(name);
+                            },
+                        }
+                        match saved_signature {
+                            | Some(value) => {
+                                self.fn_signatures.insert(name.clone(), value);
+                            },
+                            | None => {
+                                self.fn_signatures.remove(name);
+                            },
+                        }
+                        match saved_global {
+                            | Some(value) => {
+                                self.globals.insert(name.clone(), value);
+                            },
+                            | None => {
+                                self.globals.remove(name);
+                            },
+                        }
+                        match saved_header {
+                            | Some(value) => {
+                                self.generic_bindings.insert(name.clone(), value);
+                            },
+                            | None => {
+                                self.generic_bindings.remove(name);
+                            },
+                        }
+                    }
+                },
+            }
+        }
+    }
+
     fn check_inner(
         &mut self,
         expr: &Expr,
         expected: &Type,
     ) {
         let resolved_expected = self.infer.resolve(expected);
+        // A literal expression may be read directly in its concrete source
+        // context, including exact decimals inside arithmetic. Published
+        // callable signatures and expressions containing variables/calls never
+        // enter this branch: their numeric transfers remain authoritative.
+        if self.literal_class(expr).tree {
+            if let Type::Scalar(rep, _) = &resolved_expected {
+                if !matches!(rep, Rep::Var(_)) {
+                    let previous = self.literal_context.replace(*rep);
+                    let actual = self.synth(expr);
+                    self.literal_context = previous;
+                    if let Err(error) = self.infer.unify(&actual, expected) {
+                        self.report_unify(error, expr.span);
+                    }
+                    return;
+                }
+            }
+        }
         // An empty list has no element to learn its type from; the context
         // supplies it, which is what `let e: Tensor<1, Float> = []` means.
         if matches!(&expr.kind, ExprKind::Tensor(items) if items.is_empty())
@@ -3826,9 +5295,38 @@ impl Checker {
                         self.report_unify(error, annotation_span(annotation));
                     }
                 }
+                let saved_return = self.return_type.replace((**expected_ret).clone());
+                self.function_inputs
+                    .insert(expr.span, expected_params.clone());
+                self.function_stack.push(expr.span);
                 self.check(body, expected_ret);
+                self.commit_function_literals(expr.span);
+                self.function_stack.pop();
+                self.return_type = saved_return;
                 self.scopes.pop();
                 self.infer.leave_level();
+                let mut scheme = self.infer.generalize(&resolved_expected);
+                scheme.materializations = self.function_materializations(expr.span);
+                self.infer.attach_numeric_scheme(&mut scheme);
+                self.infer.quantify_numeric_inputs(
+                    &mut scheme,
+                    expected_params,
+                    self.infer.current_level(),
+                );
+                self.infer
+                    .quantify_numeric_existentials(&mut scheme, self.infer.current_level());
+                self.checked.functions.insert(
+                    expr.span,
+                    FunctionEvidence {
+                        numeric_literals: Vec::new(),
+                        scheme,
+                        binders: Vec::new(),
+                        reifications: self
+                            .function_reifications
+                            .remove(&expr.span)
+                            .unwrap_or_default(),
+                    },
+                );
                 return;
             },
             | (
@@ -3853,22 +5351,7 @@ impl Checker {
                 _,
             ) => {
                 self.scopes.push(HashMap::new());
-                for stmt in stmts {
-                    if let BlockStmt::Let {
-                        pattern, ty, value, ..
-                    } = stmt
-                    {
-                        let value_ty = match ty {
-                            | Some(ty) => {
-                                let ty = self.convert_type(ty);
-                                self.check(value, &ty);
-                                ty
-                            },
-                            | None => self.synth(value),
-                        };
-                        self.bind_pattern(pattern, &value_ty);
-                    }
-                }
+                self.check_block_statements(stmts);
                 self.check(tail, expected);
                 self.scopes.pop();
                 return;
@@ -3952,6 +5435,15 @@ impl Checker {
         span: Span,
     ) -> Type {
         let ty = self.synth(operand);
+        self.unary_type(op, &ty, span)
+    }
+
+    fn unary_type(
+        &mut self,
+        op: UnOp,
+        ty: &Type,
+        span: Span,
+    ) -> Type {
         let resolved = match op {
             | UnOp::Neg | UnOp::Pos => self.force_scalar(&ty),
             | _ => self.infer.resolve(&ty),
@@ -4644,22 +6136,12 @@ impl Checker {
         &mut self,
         rep: Rep,
     ) -> Rep {
-        match self.infer.resolve_rep(rep) {
-            | Rep::Int => Rep::Real,
-            | Rep::Var(id) => {
-                match self.infer.rep_literal_kind(Rep::Var(id)) {
-                    | Some(LiteralKind::Int | LiteralKind::QuantityInt) => {
-                        self.constrain_or_report(Rep::Var(id), Rep::Real);
-                        Rep::Real
-                    },
-                    | Some(LiteralKind::Decimal | LiteralKind::QuantityDecimal) => {
-                        self.constrain_or_report(Rep::Var(id), Rep::Float);
-                        Rep::Float
-                    },
-                    | None => Rep::Var(id),
-                }
+        match self.infer.divide_representation(rep) {
+            | Ok(rep) => rep,
+            | Err(error) => {
+                self.report_unify(error, Span::new(self.file, 0, 0));
+                Rep::Real
             },
-            | other => other,
         }
     }
 
@@ -4893,125 +6375,55 @@ impl Checker {
     /// so `fn f(x) = x + 1` is polymorphic rather than `Int -> Int`.
     fn join_rep(
         &mut self,
-        left: Rep,
-        right: Rep,
+        a: Rep,
+        b: Rep,
     ) -> Rep {
-        let left = self.infer.resolve_rep(left);
-        let right = self.infer.resolve_rep(right);
-        if left == right {
-            return left;
-        }
-        match (left, right) {
-            | (Rep::Var(a), Rep::Var(b)) => {
-                // The result must be above both. Keep one variable and record
-                // the other as its lower bound, preferring the non-literal
-                // side: a literal only says what its *default* is.
-                let a_kind = self.infer.rep_literal_kind(Rep::Var(a));
-                let b_kind = self.infer.rep_literal_kind(Rep::Var(b));
-                let a_literal = a_kind.is_some();
-                let b_literal = b_kind.is_some();
-                let is_decimal = |kind: LiteralKind| {
-                    matches!(kind, LiteralKind::Decimal | LiteralKind::QuantityDecimal)
-                };
-                // `1 m + 1.0 m`: an exact literal and a decimal literal.
-                let mixed = match (a_kind, b_kind) {
-                    | (Some(a_kind), Some(b_kind)) => is_decimal(a_kind) != is_decimal(b_kind),
-                    | _ => false,
-                };
-                if mixed {
-                    self.mixed_rep = true;
-                }
-                if a_literal && b_literal {
-                    // §6.3.2: an exact operand and a decimal one meet on the
-                    // exact `Real` path, whichever side each is written on.
-                    // Keeping the *right* operand's literal kind — the old
-                    // behaviour — typed `1.5 + 1` as `Int` and `1 + 1.5` as
-                    // `Float`: the same sum typed two ways, one of which
-                    // cannot hold the value. The result is the decimal side's
-                    // variable, forced to `Real`, so the literal itself
-                    // resolves through it.
-                    if mixed {
-                        let exact_path = if a_kind.is_some_and(is_decimal) {
-                            Rep::Var(a)
-                        } else {
-                            Rep::Var(b)
-                        };
-                        // Mark the result as an *exact quantity*: that is the
-                        // literal kind whose default is `Real`, and the one
-                        // `div_rep` keeps on the exact path. Forcing `Rep::Real`
-                        // outright would make `1.0 / 2` a `Float` again — the
-                        // decimal literal's own kind wins in `div_rep`.
-                        self.infer.mark_literal(
-                            &Type::Scalar(exact_path, Dim::one()),
-                            LiteralKind::QuantityInt,
-                        );
-                        self.constrain_or_report(exact_path, Rep::Var(a));
-                        self.constrain_or_report(exact_path, Rep::Var(b));
-                        return exact_path;
-                    }
-                    // `1 + 2`: the sum of two literals is still a literal, so
-                    // it defaults rather than generalising.
-                    //
-                    // The joined kind must be the *stricter* of the two, not
-                    // the right-hand one. `Int` is the only kind that admits
-                    // an `Int` reading, so a value that came from an exact or
-                    // decimal literal must not be re-marked `Int` when it meets
-                    // one: `let x = 1.0 + 2` then `x * 3` used to narrow `x`
-                    // to `Int`, which cannot hold the sum.
-                    let joined_kind = match (a_kind, b_kind) {
-                        | (Some(LiteralKind::Int), Some(kind)) => kind,
-                        | (Some(kind), Some(LiteralKind::Int)) => kind,
-                        | (Some(kind), _) => kind,
-                        | (_, Some(kind)) => kind,
-                        | (None, None) => LiteralKind::Int,
-                    };
-                    self.infer
-                        .mark_literal(&Type::Scalar(Rep::Var(a), Dim::one()), joined_kind);
-                    self.constrain_or_report(Rep::Var(a), Rep::Var(b));
-                    Rep::Var(a)
-                } else if a_literal {
-                    self.constrain_or_report(Rep::Var(b), Rep::Var(a));
-                    Rep::Var(b)
-                } else {
-                    self.constrain_or_report(Rep::Var(a), Rep::Var(b));
-                    Rep::Var(a)
-                }
-            },
-            | (Rep::Var(variable), concrete) | (concrete, Rep::Var(variable)) => {
-                if let Some(kind) = self.infer.rep_literal_kind(Rep::Var(variable)) {
-                    // A literal has a finite set of readings: pick the least
-                    // one that is above `concrete`. This is the *static* answer
-                    // §3.10.1/§3.10.3 give; the runtime must materialise the
-                    // literal at exactly this representation, or a `Float`-typed
-                    // value would hold an exact `Real` (see
-                    // `CheckedModule::literal_reps`).
-                    if let Some(chosen) = literal_reading_above(kind, concrete) {
-                        self.constrain_or_report(Rep::Var(variable), concrete);
-                        return chosen;
+        let mut a = self.infer.resolve_rep(a);
+        let mut b = self.infer.resolve_rep(b);
+        let protected = self.lexical_numeric_variables();
+        let a_kind = self.infer.direct_literal_kind(a);
+        let b_kind = self.infer.direct_literal_kind(b);
+        let unprotected =
+            |rep: Rep| !matches!(rep,Rep::Var(id) if protected.representations.contains_key(&id));
+        let decimal =
+            |kind: LiteralKind| matches!(kind, LiteralKind::Decimal | LiteralKind::QuantityDecimal);
+        if let (Some(ak), Some(bk)) = (a_kind, b_kind) {
+            if unprotected(a) && unprotected(b) && decimal(ak) != decimal(bk) {
+                self.mixed_rep = true;
+                for rep in [a, b] {
+                    if let Err(error) = self.infer.unify_rep(rep, Rep::Real) {
+                        self.report_unify(error, Span::new(self.file, 0, 0));
                     }
                 }
-                self.constrain_or_report(Rep::Var(variable), concrete);
-                Rep::Var(variable)
-            },
-            | (a, b) => {
-                if matches!((a, b), (Rep::Real, Rep::Float) | (Rep::Float, Rep::Real)) {
-                    // §3.4.1: the exact path wins; `W0302` is the performance
-                    // hint the appendix documents.
-                    self.mixed_rep = true;
-                }
-                a.join_concrete(b).unwrap_or(Rep::Real)
-            },
+                a = self.infer.resolve_rep(a);
+                b = self.infer.resolve_rep(b);
+            }
         }
-    }
-
-    /// Records a lower bound, reporting the failure instead of dropping it.
-    fn constrain_or_report(
-        &mut self,
-        variable: Rep,
-        lower: Rep,
-    ) {
-        if let Err(error) = self.infer.constrain_rep(variable, lower) {
-            self.report_unify(error, Span::new(self.file, 0, 0));
+        for (variable, concrete, kind) in [(a, b, a_kind), (b, a, b_kind)] {
+            if matches!(variable, Rep::Var(_))
+                && !matches!(concrete, Rep::Var(_))
+                && unprotected(variable)
+            {
+                if let Some(kind) = kind {
+                    if let Some(reading) = literal_reading_above(kind, concrete) {
+                        if let Err(error) = self.infer.unify_rep(variable, reading) {
+                            self.report_unify(error, Span::new(self.file, 0, 0));
+                        }
+                    }
+                }
+            }
+        }
+        a = self.infer.resolve_rep(a);
+        b = self.infer.resolve_rep(b);
+        if matches!((a, b), (Rep::Real, Rep::Float) | (Rep::Float, Rep::Real)) {
+            self.mixed_rep = true;
+        }
+        match self.infer.join_representation(a, b) {
+            | Ok(rep) => rep,
+            | Err(error) => {
+                self.report_unify(error, Span::new(self.file, 0, 0));
+                Rep::Real
+            },
         }
     }
 
@@ -5045,6 +6457,30 @@ impl Checker {
     }
 
     fn synth_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        let ty = self.synth_call_inner(callee, args, span);
+        if !args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
+        {
+            let materializations = self
+                .call_materializations
+                .get(&callee.span)
+                .cloned()
+                .unwrap_or_default();
+            let protected = self.lexical_numeric_variables();
+            for ty in materializations {
+                self.infer.weaken_materialized(&ty, &protected);
+            }
+        }
+        ty
+    }
+
+    fn synth_call_inner(
         &mut self,
         callee: &Expr,
         args: &[Expr],
@@ -5099,7 +6535,7 @@ impl Checker {
         // arguments are checked, so the constraint sees the argument's type.
         if let ExprKind::Var(name) = &callee.kind {
             if let Some(scheme) = self.globals.get(name).cloned() {
-                if !scheme.constraints.is_empty() {
+                if self.method_bindings.contains_key(name) && !self.is_locally_defined(name) {
                     return self.class_method_call(name, &scheme, args, span);
                 }
             }
@@ -5111,9 +6547,6 @@ impl Checker {
         } = &callee.kind
         {
             if let ExprKind::Var(name) = &inner.kind {
-                if matches!(name.as_str(), "zeros" | "ones" | "fill") {
-                    return self.tensor_constructor(name, type_args, args, span);
-                }
                 // §3.5.1: `reshape<[3, 2]>(a)`, `zeros_of<[3, 4]>()` and
                 // `ones_of<[3, 4]>()` name their target in a *shape* type
                 // argument, so the result has the refined shape.
@@ -5126,8 +6559,100 @@ impl Checker {
                     return self.check_call(args, type_args.first(), span);
                 }
             }
+            let inner_ty = self.synth(inner);
+            if let Type::TensorIntrinsic(intrinsic) = self.infer.resolve(&inner_ty) {
+                return self.tensor_constructor(intrinsic, type_args, args, span);
+            }
+            if let Type::FromValueIntrinsic(specialization) = self.infer.resolve(&inner_ty) {
+                if specialization.is_some() || type_args.len() != 1 {
+                    self.error(
+                        "E0315",
+                        "`from_value` requires one type argument when specialized",
+                        span,
+                    );
+                    return Type::Error;
+                }
+                let Some(ty) = self.reify_type_argument(&type_args[0]) else {
+                    return Type::Error;
+                };
+                return self.from_value_call(Some(ty), args, span);
+            }
+            if let Type::TypeRepIntrinsic(specialization) = self.infer.resolve(&inner_ty) {
+                if specialization.is_some() || type_args.len() != 1 {
+                    self.error(
+                        "E0315",
+                        "`type_rep` requires exactly one type argument",
+                        span,
+                    );
+                    return Type::Error;
+                }
+                if self.reify_type_argument(&type_args[0]).is_none() {
+                    return Type::Error;
+                }
+                return self.type_rep_call(args, span);
+            }
+            // User functions must apply their ordered binders here as well as
+            // in a standalone `f<T>` expression. Otherwise calls silently
+            // ignore explicit arguments and omit their runtime evidence.
+            let applied = self.apply_type_arguments(inner, type_args, callee.span, inner_ty);
+            self.note_type(callee.span, &applied);
+            return self.call_with_type(applied, args, span);
         }
         if let ExprKind::Var(name) = &callee.kind {
+            // Resolve a lexical binding before falling back to an ambient intrinsic.
+            let bound = self
+                .scopes
+                .iter()
+                .rev()
+                .find_map(|scope| scope.get(name))
+                .or_else(|| self.globals.get(name))
+                .map(|scheme| self.infer.resolve(&scheme.ty));
+            if let Some(Type::FromValueIntrinsic(specialization)) = &bound {
+                self.synth(callee);
+                return self.from_value_call(specialization.as_deref().cloned(), args, span);
+            }
+            if bound.is_none() && name == "from_value" {
+                self.synth(callee);
+                return self.from_value_call(None, args, span);
+            }
+            if matches!(&bound, Some(Type::ToCallbackIntrinsic))
+                || (bound.is_none() && name == "to_callback")
+            {
+                self.synth(callee);
+                return self.to_callback_call(args, span);
+            }
+            if let Some(Type::TypeRepIntrinsic(specialization)) = &bound {
+                self.synth(callee);
+                if specialization.is_none() {
+                    self.error(
+                        "E0315",
+                        "`type_rep` requires an explicit type argument",
+                        span,
+                    );
+                    return Type::Error;
+                }
+                return self.type_rep_call(args, span);
+            }
+            if bound.is_none() && name == "type_rep" {
+                self.error(
+                    "E0315",
+                    "`type_rep` requires an explicit type argument",
+                    span,
+                );
+                return Type::Error;
+            }
+            let intrinsic = match bound {
+                | Some(Type::TensorIntrinsic(intrinsic)) => Some(intrinsic),
+                | Some(_) => None,
+                | None => {
+                    crate::ty::TensorIntrinsic::from_name(name)
+                        .map(|kind| crate::ty::TensorIntrinsicType { kind, element: None })
+                },
+            };
+            if let Some(intrinsic) = intrinsic {
+                self.synth(callee);
+                return self.tensor_constructor(intrinsic, &[], args, span);
+            }
             // A *local* declaration shadows a built-in entry point (so
             // `let odeint = …` wins); an import does not — the module tree
             // re-exports `odeint`, `sdeint_diag`, … with their loose HM
@@ -5389,7 +6914,7 @@ impl Checker {
                     }
                 }
             }
-            if builtins::is_special(name) {
+            if builtins::is_special(name) && !matches!(name.as_str(), "zeros" | "ones" | "fill") {
                 return self.special_call(name, args, span);
             }
             // §5.4.1: an affine unit displays a `Point`, never a temperature
@@ -5430,7 +6955,7 @@ impl Checker {
                 // The probe was speculative: its substitutions were thrown
                 // away, so the types it recorded would name variables nobody
                 // can resolve. Drop them with the substitutions.
-                self.expr_types.truncate(types_before);
+                self.truncate_expr_types(types_before);
             }
             // §3.8.4: `sort` needs a total order.
             if name == "sort" {
@@ -5449,6 +6974,25 @@ impl Checker {
             }
         }
         let callee_ty = self.synth(callee);
+        match self.infer.resolve(&callee_ty) {
+            | Type::TensorIntrinsic(intrinsic) => {
+                return self.tensor_constructor(intrinsic, &[], args, span);
+            },
+            | Type::FromValueIntrinsic(specialization) => {
+                return self.from_value_call(specialization.map(|ty| *ty), args, span);
+            },
+            | Type::ToCallbackIntrinsic => return self.to_callback_call(args, span),
+            | Type::TypeRepIntrinsic(Some(_)) => return self.type_rep_call(args, span),
+            | Type::TypeRepIntrinsic(None) => {
+                self.error(
+                    "E0315",
+                    "`type_rep` requires an explicit type argument",
+                    span,
+                );
+                return Type::Error;
+            },
+            | _ => {},
+        }
         let ty = self.call_with_type(callee_ty, args, span);
         // §8.1/§8.4/§8.7: `mean`/`var`/`std`/`cov`/`corr`/`inv`/`linsolve`/
         // `lstsq` divide, so the spec's result representation is `div_rep(ρ)`
@@ -5537,11 +7081,15 @@ impl Checker {
                 }
                 for (arg, param) in args.iter().zip(params.iter()) {
                     self.check(arg, param);
+                    self.weaken_data_argument(param);
                 }
                 *ret
             },
             | Type::Var(_) => {
                 let params: Vec<Type> = args.iter().map(|arg| self.synth(arg)).collect();
+                for param in &params {
+                    self.weaken_data_argument(param);
+                }
                 let ret = self.infer.fresh_type();
                 let function = Type::func(params, ret.clone());
                 // §3.12 E0303: `x(x)` gives the callee a type containing
@@ -5593,38 +7141,243 @@ impl Checker {
         let body_ty = self.synth_call(callee, &call_args, span);
         self.scopes.pop();
         let _ = params;
-        Type::func(param_types, body_ty)
+        let ty = Type::func(param_types, body_ty);
+        self.checked.functions.insert(
+            span,
+            FunctionEvidence {
+                numeric_literals: Vec::new(),
+                scheme: self.infer.generalize(&ty),
+                binders: Vec::new(),
+                reifications: Vec::new(),
+            },
+        );
+        ty
+    }
+
+    /// Resolve and record a concrete type argument for runtime reification.
+    /// A generic argument cannot be reified without a runtime type dictionary.
+    fn reify_type_argument(
+        &mut self,
+        argument: &Ty,
+    ) -> Option<Type> {
+        let ty = self.convert_type(argument);
+        let resolved = self.infer.resolve(&ty);
+        let generic = crate::class::has_variables(&resolved);
+        if matches!(resolved, Type::Error) || (generic && !self.declared_generic_type(&resolved)) {
+            self.error(
+                "E0304",
+                "cannot reify an unresolved type; supply a concrete type argument",
+                argument.span,
+            );
+            return None;
+        }
+        if generic {
+            if let Some(site) = self.function_stack.last() {
+                self.function_reifications
+                    .entry(*site)
+                    .or_default()
+                    .push(resolved.clone());
+            }
+        }
+        self.note_type(argument.span, &resolved);
+        Some(resolved)
+    }
+
+    fn declared_generic_type(
+        &self,
+        ty: &Type,
+    ) -> bool {
+        if self.function_stack.is_empty() {
+            return false;
+        }
+        let mut allowed = crate::TypeSubstitution::default();
+        let mut infer = Infer::new();
+        for (_, ty) in &self.type_params {
+            allowed.freshen(&self.infer.resolve(ty), &mut infer);
+        }
+        for (_, dim) in &self.dim_params {
+            allowed.freshen(&Type::UnitOf(self.infer.resolve_dim(dim)), &mut infer);
+        }
+        for (_, nat) in &self.nat_params {
+            allowed.freshen(
+                &Type::tensor(
+                    Shape::Refined(vec![Some(self.infer.resolve_nat(nat))]),
+                    Type::Unit,
+                ),
+                &mut infer,
+            );
+        }
+        for (_, row) in &self.row_params {
+            allowed.freshen(&Type::Record(self.infer.resolve_row(row)), &mut infer);
+        }
+        let mut used = crate::TypeSubstitution::default();
+        used.freshen(ty, &mut infer);
+        used.types.keys().all(|id| allowed.types.contains_key(id))
+            && used
+                .representations
+                .keys()
+                .all(|id| allowed.representations.contains_key(id))
+            && used
+                .dimensions
+                .keys()
+                .all(|id| allowed.dimensions.contains_key(id))
+            && used.rows.keys().all(|id| allowed.rows.contains_key(id))
+            && used
+                .naturals
+                .keys()
+                .all(|id| allowed.naturals.contains_key(id))
+    }
+
+    fn to_callback_call(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        if args.len() != 1 {
+            self.error(
+                "E0315",
+                format!("`to_callback` takes one function, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        let argument = self.synth(&args[0]);
+        let function = self.infer.resolve(&argument);
+        if !matches!(function, Type::Fn(..)) {
+            self.error("E0302", "`to_callback` requires a function", args[0].span);
+            return Type::Error;
+        }
+        opaque_type("Callback")
+    }
+
+    fn from_value_call(
+        &mut self,
+        specialization: Option<Type>,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        if args.len() != 1 {
+            self.error(
+                "E0315",
+                format!(
+                    "`from_value` takes one value argument, found {}",
+                    args.len()
+                ),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        self.check(&args[0], &dynamic_value_type());
+        let ty = specialization.unwrap_or_else(|| self.infer.fresh_type());
+        Type::result(ty, crate::builtins::op_error_type())
+    }
+
+    fn type_rep_call(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        if !args.is_empty() {
+            self.error(
+                "E0315",
+                format!("`type_rep` takes no value arguments, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        opaque_type("TypeRep")
     }
 
     fn tensor_constructor(
         &mut self,
-        name: &str,
+        intrinsic: crate::ty::TensorIntrinsicType,
         type_args: &[Ty],
         args: &[Expr],
-        _span: Span,
+        span: Span,
     ) -> Type {
-        let elem = type_args
-            .first()
-            .map_or_else(|| Type::float(Dim::one()), |ty| self.convert_type(ty));
-        let (rank, value_args): (u32, &[Expr]) = if name == "fill" {
-            (
-                u32::try_from(args.len().saturating_sub(1)).unwrap_or(0),
-                &args[1..],
-            )
-        } else {
-            (u32::try_from(args.len()).unwrap_or(0), args)
-        };
-        for arg in value_args {
-            let ty = self.synth(arg);
-            let _ = self.infer.unify(&ty, &Type::int());
+        let name = intrinsic.kind.name();
+        if type_args.len() > 1
+            || (name == "fill" && !type_args.is_empty())
+            || (intrinsic.element.is_some() && !type_args.is_empty())
+        {
+            self.error(
+                "E0315",
+                format!(
+                    "`{name}` accepts {} type argument(s)",
+                    if name == "fill" {
+                        "no"
+                    } else {
+                        "at most one"
+                    }
+                ),
+                span,
+            );
+            return Type::Error;
         }
-        if name == "fill" {
-            if let Some(first) = args.first() {
-                let ty = self.synth(first);
-                return Type::tensor(Shape::Rank(rank), ty);
+        if name == "fill" && args.is_empty() {
+            self.error("E0315", "`fill` needs a value", span);
+            return Type::Error;
+        }
+        let elem = if name == "fill" {
+            let value = self.synth(&args[0]);
+            let scalar = Type::Scalar(self.infer.fresh_rep(), self.infer.fresh_dim());
+            if let Err(error) = self.infer.unify(&value, &scalar) {
+                self.report_unify(error, args[0].span);
             }
+            value
+        } else if let Some(rep) = intrinsic.element {
+            Type::Scalar(rep, Dim::one())
+        } else if let Some(ty) = type_args.first() {
+            let Some(rep) = self.tensor_element_rep(name, ty) else {
+                return Type::Error;
+            };
+            Type::Scalar(rep, Dim::one())
+        } else {
+            Type::float(Dim::one())
+        };
+        let dimensions = if name == "fill" {
+            &args[1..]
+        } else {
+            args
+        };
+        for arg in dimensions {
+            self.check(arg, &Type::int());
         }
-        Type::tensor(Shape::Rank(rank), elem)
+        Type::tensor(
+            Shape::Rank(u32::try_from(dimensions.len()).unwrap_or(0)),
+            elem,
+        )
+    }
+
+    fn tensor_element_rep(
+        &mut self,
+        name: &str,
+        ty: &Ty,
+    ) -> Option<crate::ty::Rep> {
+        let elem = self.convert_type(ty);
+        match self.infer.resolve(&elem) {
+            | Type::Scalar(
+                rep @ (crate::ty::Rep::Int | crate::ty::Rep::Real | crate::ty::Rep::Float),
+                dim,
+            ) if dim.is_one() => Some(rep),
+            | _ => {
+                self.error(
+                    "E0302",
+                    format!("`{name}` requires Int, Real or dimensionless Float elements"),
+                    ty.span,
+                );
+                None
+            },
+        }
     }
 
     /// §3.5.1: the shape-naming constructors, whose target is a type-level
@@ -6157,7 +7910,12 @@ impl Checker {
     ) -> Option<Dim> {
         match &ty.kind {
             | TyKind::Var(name) => {
-                if let Some((_, dim)) = self.dim_params.iter().find(|(param, _)| param == name) {
+                if let Some((_, dim)) = self
+                    .dim_params
+                    .iter()
+                    .rev()
+                    .find(|(param, _)| param == name)
+                {
                     return Some(dim.clone());
                 }
                 self.dims.lookup(name).or_else(|| {
@@ -6208,7 +7966,7 @@ impl Checker {
             self.diagnostics.items.truncate(diagnostics_before);
             // Each candidate is a guess that was rolled back; its recorded
             // types were rolled back with it.
-            self.expr_types.truncate(types_before);
+            self.truncate_expr_types(types_before);
             let callee = self.infer.instantiate(candidate);
             let Type::Fn(params, ret) = self.infer.resolve(&callee) else {
                 continue;
@@ -6230,7 +7988,7 @@ impl Checker {
             }
         }
         self.infer.restore(&saved);
-        self.expr_types.truncate(types_before);
+        self.truncate_expr_types(types_before);
         for arg in args {
             self.synth(arg);
         }
@@ -6302,8 +8060,122 @@ impl Checker {
         args: &[Ty],
         span: Span,
     ) -> Type {
-        let _ = (args, span);
-        self.synth(callee)
+        let ty = self.synth(callee);
+        self.apply_type_arguments(callee, args, span, ty)
+    }
+
+    fn apply_type_arguments(
+        &mut self,
+        callee: &Expr,
+        args: &[Ty],
+        span: Span,
+        ty: Type,
+    ) -> Type {
+        if let Some(materializations) = self.call_materializations.get(&callee.span).cloned() {
+            self.call_materializations.insert(span, materializations);
+        }
+        if matches!(self.infer.resolve(&ty), Type::Fn(..) | Type::Adt(..))
+            && self.checked.generic_refs.contains_key(&callee.span)
+        {
+            if let Some(headers) = self
+                .checked
+                .generic_refs
+                .get(&callee.span)
+                .cloned()
+                .filter(|headers| !headers.is_empty())
+            {
+                if headers.len() != args.len() {
+                    self.error(
+                        "E0315",
+                        format!(
+                            "this function takes {} generic argument(s), found {}",
+                            headers.len(),
+                            args.len()
+                        ),
+                        span,
+                    );
+                    return Type::Error;
+                }
+                for (header, arg) in headers.iter().zip(args) {
+                    let argument = match header {
+                        | GenericBinder::Type(_) | GenericBinder::Representation(_) => {
+                            self.convert_type(arg)
+                        },
+                        | GenericBinder::Dimension(_) => {
+                            Type::UnitOf(self.convert_type_as_dim(arg))
+                        },
+                        | GenericBinder::Natural(_) => {
+                            Type::tensor(
+                                Shape::Refined(vec![Some(self.convert_type_as_nat(arg))]),
+                                Type::Unit,
+                            )
+                        },
+                        | GenericBinder::Row(_) => Type::Record(self.convert_type_as_row(arg)),
+                    };
+                    self.note_type(arg.span, &argument);
+                    if crate::class::has_variables(&argument) {
+                        if let Some(site) = self.function_stack.last() {
+                            self.function_reifications
+                                .entry(*site)
+                                .or_default()
+                                .push(argument.clone());
+                        }
+                    }
+                    if let Err(error) = self.infer.unify(&header.as_type(), &argument) {
+                        self.report_unify(error, arg.span);
+                    }
+                }
+                self.checked.generic_refs.insert(span, headers);
+            }
+            return self.infer.resolve(&ty);
+        }
+        if let Type::FromValueIntrinsic(specialization) = self.infer.resolve(&ty) {
+            if specialization.is_some() || args.len() != 1 {
+                self.error(
+                    "E0315",
+                    "`from_value` requires one type argument when specialized",
+                    span,
+                );
+                return Type::Error;
+            }
+            return self
+                .reify_type_argument(&args[0])
+                .map_or(Type::Error, |ty| {
+                    Type::FromValueIntrinsic(Some(Box::new(ty)))
+                });
+        }
+        if let Type::TypeRepIntrinsic(specialization) = self.infer.resolve(&ty) {
+            if specialization.is_some() || args.len() != 1 {
+                self.error(
+                    "E0315",
+                    "`type_rep` requires exactly one type argument",
+                    span,
+                );
+                return Type::Error;
+            }
+            return self
+                .reify_type_argument(&args[0])
+                .map_or(Type::Error, |ty| Type::TypeRepIntrinsic(Some(Box::new(ty))));
+        }
+        let Type::TensorIntrinsic(mut intrinsic) = self.infer.resolve(&ty) else {
+            return ty;
+        };
+        if args.len() != 1
+            || intrinsic.kind == crate::ty::TensorIntrinsic::Fill
+            || intrinsic.element.is_some()
+        {
+            self.error(
+                "E0315",
+                "this tensor constructor cannot take those type arguments",
+                span,
+            );
+            return Type::Error;
+        }
+        let Some(rep) = self.tensor_element_rep(intrinsic.kind.name(), &args[0]) else {
+            return Type::Error;
+        };
+        intrinsic.element = Some(rep);
+        Type::TensorIntrinsic(intrinsic)
     }
 
     fn synth_record(
@@ -6805,12 +8677,20 @@ impl Checker {
         if resolved.affine {
             return Type::Point(resolved.dim);
         }
-        let rep = self.infer.fresh_rep();
         let kind = if value.is_decimal() {
             LiteralKind::QuantityDecimal
         } else {
             LiteralKind::QuantityInt
         };
+        let rep = self
+            .literal_context
+            .filter(|rep| kind.accepts_rep(*rep))
+            .or_else(|| {
+                self.literal_region
+                    .filter(|(other, _)| *other == kind)
+                    .map(|(_, rep)| rep)
+            })
+            .unwrap_or_else(|| self.infer.fresh_rep());
         self.infer
             .mark_literal(&Type::Scalar(rep, resolved.dim.clone()), kind);
         Type::Scalar(rep, resolved.dim)
@@ -7142,6 +9022,8 @@ impl Checker {
             | PatKind::Error => {},
             | PatKind::Wildcard => {},
             | PatKind::Var(name) => {
+                self.local_headers
+                    .remove(&(self.scopes.len(), name.clone()));
                 // The binder is a place the editor asks about, and this is the
                 // type its uses get. Recorded at the pattern's own span, so it
                 // never competes with an expression that happens to share it.
@@ -7461,7 +9343,11 @@ impl Checker {
                     // or a fresh variable that absorbs whatever the caller
                     // passes.
                     collected.sort_by(|a, b| a.0.cmp(&b.0));
-                    let mut row = match self.row_params.iter().find(|(param, _)| param == rest_name)
+                    let mut row = match self
+                        .row_params
+                        .iter()
+                        .rev()
+                        .find(|(param, _)| param == rest_name)
                     {
                         | Some((_, row)) => row.clone(),
                         | None => self.infer.fresh_row(),
@@ -7491,6 +9377,15 @@ impl Checker {
             },
             | TyKind::Named { path, args } => {
                 let name = path.join(".");
+                if args.is_empty() {
+                    if let Some((_, parameter)) = params
+                        .iter()
+                        .rev()
+                        .find(|(parameter, _)| parameter == &name)
+                    {
+                        return parameter.clone();
+                    }
+                }
                 if self.declaring_alias.as_deref() == Some(name.as_str()) {
                     self.error_help(
                         "E0312",
@@ -7547,13 +9442,18 @@ impl Checker {
                 Type::Error
             },
             | TyKind::Var(name) => {
-                if let Some((_, ty)) = params.iter().find(|(param, _)| param == name) {
+                if let Some((_, ty)) = params.iter().rev().find(|(param, _)| param == name) {
                     return ty.clone();
                 }
                 if self.implicit_params {
                     // The parameter snapshot predates this traversal. Reuse a
                     // variable first seen in an earlier part of the same head.
-                    if let Some((_, ty)) = self.type_params.iter().find(|(param, _)| param == name) {
+                    if let Some((_, ty)) = self
+                        .type_params
+                        .iter()
+                        .rev()
+                        .find(|(param, _)| param == name)
+                    {
                         return ty.clone();
                     }
                     // §3.8.1: a variable in an instance head is implicitly
@@ -7784,7 +9684,12 @@ impl Checker {
         match nat {
             | NatAst::Lit(value) => Nat::Lit(*value),
             | NatAst::Var(name) => {
-                if let Some((_, nat)) = self.nat_params.iter().find(|(param, _)| param == name) {
+                if let Some((_, nat)) = self
+                    .nat_params
+                    .iter()
+                    .rev()
+                    .find(|(param, _)| param == name)
+                {
                     return nat.clone();
                 }
                 if self.implicit_params {
@@ -7825,7 +9730,12 @@ impl Checker {
         match dim {
             | DimAst::One => Dim::one(),
             | DimAst::Name(name) => {
-                if let Some((_, dim)) = self.dim_params.iter().find(|(param, _)| param == name) {
+                if let Some((_, dim)) = self
+                    .dim_params
+                    .iter()
+                    .rev()
+                    .find(|(param, _)| param == name)
+                {
                     return dim.clone();
                 }
                 match self.dims.lookup(name) {
@@ -7869,19 +9779,54 @@ impl Checker {
         if let Some(message) = self.deprecated.get(name).cloned() {
             self.warn("W0602", format!("`{name}` is deprecated: {message}"), span);
         }
-        for scope in self.scopes.iter().rev() {
+        for (index, scope) in self.scopes.iter().enumerate().rev() {
             if let Some(scheme) = scope.get(name) {
                 // §B.12: this local is read, so `W0101` stays quiet for it.
                 self.used_locals.insert(name.to_string());
                 let scheme = scheme.clone();
-                return self.instantiate_value(&scheme, span);
+                let headers = self
+                    .local_headers
+                    .get(&(index + 1, name.to_string()))
+                    .cloned()
+                    .unwrap_or_else(|| inferred_binders(&scheme));
+                return self.instantiate_with_headers(&scheme, &headers, span);
             }
         }
         if let Some(scheme) = self.globals.get(name).cloned() {
-            return self.instantiate_value(&scheme, span);
+            if !self.is_locally_defined(name) {
+                if let Some(reference) = self.constructor_bindings.get(name) {
+                    self.checked.constructor_refs.insert(span, *reference);
+                }
+                if let Some(reference) = self.method_bindings.get(name) {
+                    self.checked.method_refs.insert(span, reference.clone());
+                }
+            }
+            let headers = self.generic_bindings.get(name).cloned().unwrap_or_else(|| {
+                if self.constructor_bindings.contains_key(name) {
+                    constructor_binders(&scheme)
+                } else {
+                    inferred_binders(&scheme)
+                }
+            });
+            return self.instantiate_with_headers(&scheme, &headers, span);
         }
         if let Some(unit) = self.units.lookup(name) {
             return Type::UnitOf(unit.dim);
+        }
+        if name == "from_value" {
+            return Type::FromValueIntrinsic(None);
+        }
+        if name == "to_callback" {
+            return Type::ToCallbackIntrinsic;
+        }
+        if name == "type_rep" {
+            return Type::TypeRepIntrinsic(None);
+        }
+        if let Some(intrinsic) = crate::ty::TensorIntrinsic::from_name(name) {
+            return Type::TensorIntrinsic(crate::ty::TensorIntrinsicType {
+                kind: intrinsic,
+                element: None,
+            });
         }
         if let Some(candidates) = builtins::schemes(name) {
             return self.infer.instantiate(&candidates[0]);
@@ -7894,13 +9839,30 @@ impl Checker {
         Type::Error
     }
 
-    /// Instantiates a scheme, solving whatever class constraints come with it.
-    fn instantiate_value(
+    fn instantiate_with_headers(
         &mut self,
         scheme: &Scheme,
+        headers: &[GenericBinder],
         span: Span,
     ) -> Type {
-        let (ty, constraints) = self.infer.instantiate_scheme(scheme);
+        let (ty, constraints, bindings) = self.infer.instantiate_scheme_with_bindings(scheme);
+        self.call_materializations.insert(
+            span,
+            scheme
+                .materializations
+                .iter()
+                .map(|ty| bindings.apply(ty))
+                .collect(),
+        );
+        if !headers.is_empty() {
+            self.checked.generic_refs.insert(
+                span,
+                headers
+                    .iter()
+                    .map(|header| header.substituted(&bindings))
+                    .collect(),
+            );
+        }
         for constraint in &constraints {
             self.solve_constraint(constraint, span);
         }
@@ -7949,10 +9911,16 @@ impl Checker {
                 );
             },
             | UnifyError::Mismatch { left, right } => {
-                self.diagnostics.push(
-                    Diagnostic::error("E0302", "type mismatch", span)
-                        .with_primary_label(format!("expected {right}, found {left}")),
-                );
+                let mut diagnostic = Diagnostic::error("E0302", "type mismatch", span)
+                    .with_primary_label(format!("expected {right}, found {left}"));
+                if matches!(
+                    (&left, &right),
+                    (Type::TensorIntrinsic(_), Type::Fn(..))
+                        | (Type::Fn(..), Type::TensorIntrinsic(_))
+                ) {
+                    diagnostic = diagnostic.with_help("a variadic tensor constructor cannot satisfy a fixed function type; wrap it in a lambda with the required arguments, for example `fn (n) => zeros(n)`");
+                }
+                self.diagnostics.push(diagnostic);
             },
             | UnifyError::LiteralMismatch { kind, requested } => {
                 let label = match kind {
@@ -8243,12 +10211,22 @@ fn ctor_scheme(
         rows: Vec::new(),
         nats: Vec::new(),
         constraints: Vec::new(),
+        numeric: Vec::new(),
+        materializations: Vec::new(),
         ty,
     }
 }
 
 #[must_use]
 fn builtin_type(name: &str) -> Option<Type> {
+    // ABI names must resolve to the shared prelude types, rather than fresh
+    // abstract declarations in each generated kernel facade.
+    if name == "Value" {
+        return Some(dynamic_value_type());
+    }
+    if name == "Symbol" {
+        return Some(Type::Dyn(Rep::Real));
+    }
     const OPAQUE: [&str; 20] = [
         "EvalError",
         "MathError",
@@ -8551,8 +10529,17 @@ fn rssn_type(sig: &aevia_rssn::SigType) -> Type {
                 | _ => Type::Scalar(Rep::Real, dim.clone()),
             }
         },
-        | S::Tensor { rank, elem } => {
-            let shape = Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1)));
+        | S::Tensor { rank, shape, elem } => {
+            if shape
+                .as_ref()
+                .is_some_and(|shape| rank.is_some_and(|rank| rank != shape.len()))
+            {
+                return Type::Error;
+            }
+            let shape = shape.as_ref().map_or_else(
+                || Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1))),
+                |shape| Shape::refined(shape.iter().copied().map(Some)),
+            );
             Type::tensor(shape, rssn_type(elem))
         },
         | S::Sparse { rank, elem } => {
@@ -8730,7 +10717,37 @@ impl Checker {
                 let Some(signature) = entry.signatures.get(index) else {
                     return Type::Error;
                 };
-                let ret = rssn_type(&signature.ret);
+                let ret = if entry.source.is_exact() {
+                    if entry
+                        .raw
+                        .get(index)
+                        .is_some_and(aevia_rssn::registry::signature_has_unrepresentable_dimensions)
+                    {
+                        self.error_help(
+                            "E1001",
+                            format!("`Rssn.{name}` has dimensions this checker cannot represent"),
+                            span,
+                            "use `Rssn.dynamic` and inspect the kernel result",
+                        );
+                        return Type::Error;
+                    }
+                    match crate::rssn_resolve::instantiate_dimensions(
+                        signature,
+                        &arg_types,
+                        &mut self.infer,
+                    ) {
+                        | Ok(Some(ret)) => ret,
+                        | Ok(None) => Type::Dyn(Rep::Real),
+                        | Err(error) => {
+                            self.report_unify(error, span);
+                            return Type::Error;
+                        },
+                    }
+                } else {
+                    // A derived signature identifies a dispatch form, not the
+                    // dimensional relation of the actual kernel result.
+                    Type::Dyn(Rep::Real)
+                };
                 if let Some(key) = entry.key(index) {
                     self.checked.rssn_calls.push(RssnCall {
                         span,
@@ -8895,5 +10912,179 @@ fn shape_items(shape: &Shape) -> Vec<Option<Nat>> {
     match shape {
         | Shape::Rank(rank) => vec![None; usize::try_from(*rank).unwrap_or(0)],
         | Shape::Refined(items) => items.clone(),
+    }
+}
+
+#[cfg(test)]
+mod literal_region_tests {
+    use super::*;
+
+    #[test]
+    fn a_speculative_record_at_the_same_span_restores_previous_evidence() {
+        let mut checker = Checker::new(0, CheckOptions::default());
+        let span = Span::new(0, 1, 2);
+        checker.note_type(span, &Type::Bool);
+        let checkpoint = checker.expr_types.len();
+        checker.note_type(span, &Type::int());
+        assert_eq!(checker.latest_expr_type(span), Some(&Type::int()));
+        checker.truncate_expr_types(checkpoint);
+        assert_eq!(checker.latest_expr_type(span), Some(&Type::Bool));
+    }
+
+    #[test]
+    fn composite_literal_domains_do_not_generalize_constructed_data() {
+        let source = "let value = 1 + 2\nlet first: Int = value\nlet invalid: Float = value\n";
+        let lexed = aevia_syntax::lex(0, source).unwrap();
+        let (module, diagnostics) = aevia_syntax::parse_module(0, source, &lexed);
+        assert!(!diagnostics.has_errors());
+        let result = check_module(0, &module);
+        assert!(
+            result
+                .diagnostics
+                .items
+                .iter()
+                .any(|diagnostic| diagnostic.code == "E0302")
+        );
+    }
+
+    #[test]
+    fn literal_chains_keep_bounded_constraints_and_check_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                for count in [64, 512, 4096] {
+                    for (first, expected) in [("1", Type::int()), ("1 / 3", Type::real(Dim::one()))]
+                    {
+                        let source = format!("let result = {first}{}\n", " + 1".repeat(count));
+                        let lexed = aevia_syntax::lex(0, &source).unwrap();
+                        let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
+                        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+                        let mut checker = Checker::new(0, CheckOptions::default());
+                        checker.run(&module);
+                        assert!(
+                            !checker.diagnostics.has_errors(),
+                            "{:?}",
+                            checker.diagnostics.items
+                        );
+                        assert!(
+                            checker.infer.numeric_constraint_count() <= 4,
+                            "{count} literals generated {} numeric constraints",
+                            checker.infer.numeric_constraint_count()
+                        );
+                        assert!(checker.infer.numeric_constraint_peak() <= 4);
+                        assert!(checker.literal_classes.len() <= 2 * count + 6);
+                        let Some(Export::Value { scheme, .. }) =
+                            checker.checked.exports.get("result")
+                        else {
+                            panic!("missing result")
+                        };
+                        assert_eq!(scheme.ty, expected);
+                        assert!(checker.checked.expr_types.len() >= count);
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+    #[test]
+    fn mixed_literal_spines_are_iterative_and_keep_separate_domains() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                for count in [64, 512, 4096] {
+                    for first in ["1 + 1.0", "(1.0 + 2.0)"] {
+                        let source = format!("let result = {first}{}\n", " + 1".repeat(count));
+                        let lexed = aevia_syntax::lex(0, &source).unwrap();
+                        let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
+                        assert!(!diagnostics.has_errors());
+                        let mut checker = Checker::new(0, CheckOptions::default());
+                        checker.run(&module);
+                        assert!(
+                            !checker.diagnostics.has_errors(),
+                            "{:?}",
+                            checker.diagnostics.items
+                        );
+                        assert!(
+                            checker.infer.numeric_constraint_peak() <= 6,
+                            "mixed {count}: peak {}",
+                            checker.infer.numeric_constraint_peak()
+                        );
+                        let Some(Export::Value { scheme, .. }) =
+                            checker.checked.exports.get("result")
+                        else {
+                            panic!("missing result")
+                        };
+                        assert_eq!(
+                            scheme.ty,
+                            if first.starts_with('(') {
+                                Type::float(Dim::one())
+                            } else {
+                                Type::real(Dim::one())
+                            }
+                        );
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn independent_declarations_visit_only_their_own_literal_records() {
+        for count in [64, 512, 2048] {
+            let source = (0..count)
+                .map(|index| format!("fn f{index}() = 1\n"))
+                .collect::<String>();
+            let lexed = aevia_syntax::lex(0, &source).unwrap();
+            let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
+            assert!(!diagnostics.has_errors());
+            let mut checker = Checker::new(0, CheckOptions::default());
+            checker.run(&module);
+            assert!(
+                !checker.diagnostics.has_errors(),
+                "{:?}",
+                checker.diagnostics.items
+            );
+            assert_eq!(checker.checked.functions.len(), count);
+            assert!(checker.literal_owner_visits.get() <= 4 * count);
+            assert!(checker.infer.numeric_constraint_peak() <= 2);
+        }
+    }
+    #[test]
+    fn independent_generic_declarations_project_only_their_numeric_components() {
+        for body in ["x + 1", "x + 1.0"] {
+            for count in [16, 32, 64, 128] {
+                let source = (0..count)
+                    .map(|index| format!("fn f{index}(x) = {body}\n"))
+                    .collect::<String>();
+                let tokens = aevia_syntax::lex(0, &source).unwrap();
+                let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &tokens);
+                assert!(!diagnostics.has_errors());
+                let mut checker = Checker::new(0, CheckOptions::default());
+                let started = std::time::Instant::now();
+                checker.run(&module);
+                assert!(
+                    !checker.diagnostics.has_errors(),
+                    "{:?}",
+                    checker.diagnostics.items
+                );
+                let work = checker.infer.numeric_constraint_work();
+                eprintln!(
+                    "generic scaling body={body:?} count={count} facts={} component_visits={work} elapsed={:?}",
+                    checker.infer.numeric_constraint_count(),
+                    started.elapsed()
+                );
+                assert_eq!(checker.checked.functions.len(), count);
+                assert!(
+                    work <= 256 * count,
+                    "{count} declarations revisited {work} facts"
+                );
+                for function in checker.checked.functions.values() {
+                    assert_eq!(function.scheme.numeric.len(), 3);
+                }
+            }
+        }
     }
 }

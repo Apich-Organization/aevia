@@ -198,7 +198,7 @@ impl<'a> Analysis<'a> {
                 declarations(&module.module, text)
             })
             .collect();
-        let prefixes = prefixes(&program);
+        let prefixes = prefixes(&program, file);
         Self {
             document,
             source: Source::Program(program),
@@ -313,10 +313,24 @@ impl<'a> Analysis<'a> {
         name: &str,
     ) -> Option<(usize, &Export)> {
         let program = self.program()?;
-        for (index, module) in program.modules.iter().enumerate() {
-            if !module.aliases.iter().any(|alias| alias.is_empty()) {
+        let entry = program
+            .modules
+            .iter()
+            .find(|module| module.file == self.file)?;
+        for edge in entry.imports.iter().rev() {
+            if !edge.prefix.is_empty()
+                || edge
+                    .names
+                    .as_ref()
+                    .is_some_and(|names| !names.iter().any(|selected| selected == name))
+            {
                 continue;
             }
+            let (index, module) = program
+                .modules
+                .iter()
+                .enumerate()
+                .find(|(_, module)| module.file == edge.file)?;
             if let Some(export) = module.checked.exports.get(name) {
                 return Some((index, export));
             }
@@ -458,53 +472,48 @@ impl<'a> Analysis<'a> {
         }
         // Imported names: `A.f` for a module import, and the bare name for an
         // `open`. A module name shadows the prelude like any declared name.
-        if let Some(program) = self.program() {
-            let entry = program.modules.len().saturating_sub(1);
-            for (index, module) in program.modules.iter().enumerate() {
-                if index == entry {
-                    // The document's own module was handled above.
-                    continue;
-                }
-                let mut prefixes: Vec<String> = module
-                    .aliases
+        if let Some(program) = self.program()
+            && let Some(entry) = program
+                .modules
+                .iter()
+                .find(|module| module.file == self.file)
+        {
+            for edge in &entry.imports {
+                let Some(module) = program
+                    .modules
                     .iter()
-                    .filter(|prefix| !prefix.is_empty())
-                    .cloned()
-                    .collect();
-                let own = module.path.join(".");
-                if !own.is_empty() && !prefixes.contains(&own) {
-                    prefixes.push(own);
-                }
-                let opened = module.aliases.iter().any(|alias| alias.is_empty());
-                for prefix in &prefixes {
-                    if declared.insert(prefix.clone()) {
-                        items.push(Completion {
-                            label: prefix.clone(),
-                            kind: CompletionKind::Type,
-                            detail: Some(format!("module `{prefix}`")),
-                            origin: Origin::Imported,
-                        });
-                    }
+                    .find(|module| module.file == edge.file)
+                else {
+                    continue;
+                };
+                if !edge.prefix.is_empty() && declared.insert(edge.prefix.clone()) {
+                    items.push(Completion {
+                        label: edge.prefix.clone(),
+                        kind: CompletionKind::Type,
+                        detail: Some(format!("module `{}`", edge.prefix)),
+                        origin: Origin::Imported,
+                    });
                 }
                 for (name, export) in &module.checked.exports {
-                    if opened && declared.insert(name.clone()) {
+                    if edge
+                        .names
+                        .as_ref()
+                        .is_some_and(|names| !names.contains(name))
+                    {
+                        continue;
+                    }
+                    let label = if edge.prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{name}", edge.prefix)
+                    };
+                    if declared.insert(label.clone()) {
                         items.push(Completion {
-                            label: name.clone(),
+                            label,
                             kind: completion_kind(export),
                             detail: export_detail(export),
                             origin: Origin::Imported,
                         });
-                    }
-                    for prefix in &prefixes {
-                        let label = format!("{prefix}.{name}");
-                        if declared.insert(label.clone()) {
-                            items.push(Completion {
-                                label,
-                                kind: completion_kind(export),
-                                detail: export_detail(export),
-                                origin: Origin::Imported,
-                            });
-                        }
                     }
                 }
             }
@@ -518,6 +527,11 @@ impl<'a> Analysis<'a> {
                 label: name.to_string(),
                 kind: match &scheme {
                     | Some(scheme) if matches!(scheme.ty, aevia_types::Type::Fn(_, _)) => {
+                        CompletionKind::Function
+                    },
+                    | _ if builtins::is_special(name)
+                        || matches!(name, "type_rep" | "from_value") =>
+                    {
                         CompletionKind::Function
                     },
                     | _ => CompletionKind::Value,
@@ -830,6 +844,16 @@ impl<'a> Analysis<'a> {
                 return Some((vec![signature], 0));
             }
         }
+        if matches!(
+            view.checked.expr_types.get(&callee.span),
+            Some(aevia_types::Type::ToCallbackIntrinsic)
+        ) {
+            return Some((vec![SignatureInfo {
+                label: format!("{}: ((…) -> …) -> Callback", callee_text(view.text, callee)),
+                parameters: vec!["function with a concrete checked signature".to_owned()],
+                documentation: Some("Captures a callable with its concrete argument, result and dimension schema for a synchronous kernel call.".to_owned()),
+            }], 0));
+        }
         if let Some(parts) = callee_path(callee) {
             if parts.first().map(String::as_str) == Some("Rssn") && parts.len() > 1 {
                 if let Some(signatures) = rssn_signatures(view, &parts[1..], call_span) {
@@ -907,6 +931,7 @@ impl<'a> Analysis<'a> {
         let (views, entry) = self.views();
         if let Some(target) = resolve_target(&views, entry, offset) {
             check_renamable(&target)?;
+            check_physical_rename(&views, &target, &target.name)?;
             let view = views.get(entry).ok_or_else(|| {
                 RenameError::NotRenamable("the document has no module to rename in".to_string())
             })?;
@@ -949,7 +974,7 @@ impl<'a> Analysis<'a> {
         if let Some(target) = resolve_target(&views, entry, offset) {
             check_renamable(&target)?;
             validate_new_name(&target.name, new_name)?;
-            check_collision(&views, &target, new_name)?;
+            check_physical_rename(&views, &target, new_name)?;
             return Ok(file_edits(
                 collect_references(&views, &target, true),
                 new_name,
@@ -986,11 +1011,6 @@ impl<'a> Analysis<'a> {
                 (vec![view], 0)
             },
             | Source::Program(program) => {
-                let paths: Vec<Vec<String>> = program
-                    .modules
-                    .iter()
-                    .map(|module| module.path.clone())
-                    .collect();
                 let mut views = Vec::new();
                 for (index, module) in program.modules.iter().enumerate() {
                     let Some(source) = program.sources.file(module.file) else {
@@ -1008,7 +1028,7 @@ impl<'a> Analysis<'a> {
                         checked: &module.checked,
                         definitions,
                         occurrences: occurrence::collect(&module.module, &source.text),
-                        imports: module_imports(&paths, &module.module),
+                        imports: module_imports(program, module),
                     });
                 }
                 let entry = views
@@ -1609,15 +1629,29 @@ fn flatten(
 ///
 /// A module path is always a prefix; an `import … as A` adds `A`; an `open`
 /// adds the empty prefix, which is how a bare name is found.
-fn prefixes(program: &Program) -> HashMap<String, usize> {
-    let mut map: HashMap<String, usize> = HashMap::new();
-    for (index, module) in program.modules.iter().enumerate() {
-        let own = module.path.join(".");
-        if !own.is_empty() {
-            map.entry(own).or_insert(index);
+fn prefixes(
+    program: &Program,
+    file: FileId,
+) -> HashMap<String, usize> {
+    let mut map = HashMap::new();
+    if let Some((index, module)) = program
+        .modules
+        .iter()
+        .enumerate()
+        .find(|(_, module)| module.file == file)
+    {
+        if !module.path.is_empty() {
+            map.insert(module.path.join("."), index);
         }
-        for alias in &module.aliases {
-            map.entry(alias.clone()).or_insert(index);
+        for edge in &module.imports {
+            if !edge.prefix.is_empty()
+                && let Some(target) = program
+                    .modules
+                    .iter()
+                    .position(|target| target.file == edge.file)
+            {
+                map.insert(edge.prefix.clone(), target);
+            }
         }
     }
     map
@@ -1862,7 +1896,7 @@ struct ModuleView<'a> {
     definitions: &'a HashMap<String, Span>,
     occurrences: Vec<Occurrence>,
     /// The prefixes this module's imports bring other modules in under.
-    imports: Vec<(String, usize)>,
+    imports: Vec<(String, usize, Option<Vec<String>>)>,
 }
 
 fn view_of<'v, 'a>(
@@ -1881,60 +1915,20 @@ fn view_of_file<'v, 'a>(
 
 /// The prefixes `module`'s imports bring other modules in under.
 fn module_imports(
-    paths: &[Vec<String>],
-    module: &Module,
-) -> Vec<(String, usize)> {
-    let mut imports = Vec::new();
-    for decl in &module.decls {
-        let DeclKind::Import {
-            path,
-            alias,
-            names,
-            open,
-        } = &decl.kind
-        else {
-            continue;
-        };
-        let prefix = if *open || names.is_some() {
-            String::new()
-        } else {
-            alias.clone().unwrap_or_else(|| path.join("."))
-        };
-        if let Some(target) = module_target(paths, path) {
-            imports.push((prefix, target));
-        }
-    }
-    imports
-}
-
-/// The module an `import` path reaches, matching the loader's own rule.
-fn module_target(
-    paths: &[Vec<String>],
-    import: &[String],
-) -> Option<usize> {
-    if let Some(index) = paths.iter().position(|path| path == import) {
-        return Some(index);
-    }
-    // `import Dep.A` reaches a module whose declared path is `A` inside the
-    // dependency: the dependency's name is not part of the module's own path.
-    if import.len() > 1 {
-        if let Some(index) = paths
-            .iter()
-            .position(|path| path.as_slice() == &import[1..])
-        {
-            return Some(index);
-        }
-    }
-    let matches: Vec<usize> = paths
+    program: &Program,
+    module: &LoadedModule,
+) -> Vec<(String, usize, Option<Vec<String>>)> {
+    module
+        .imports
         .iter()
-        .enumerate()
-        .filter(|(_, path)| path.last() == import.last())
-        .map(|(index, _)| index)
-        .collect();
-    match matches.as_slice() {
-        | [index] => Some(*index),
-        | _ => None,
-    }
+        .filter_map(|edge| {
+            let index = program
+                .modules
+                .iter()
+                .position(|target| target.file == edge.file)?;
+            Some((edge.prefix.clone(), index, edge.names.clone()))
+        })
+        .collect()
 }
 
 /// The name a role carries, when it names a declaration or use.
@@ -2027,8 +2021,12 @@ fn resolve_unqualified_in(
     if let Some(kind) = view.checked.exports.get(name).map(export_kind) {
         return Some((view.index, kind));
     }
-    for (prefix, target) in &view.imports {
-        if !prefix.is_empty() {
+    for (prefix, target, names) in view.imports.iter().rev() {
+        if !prefix.is_empty()
+            || names
+                .as_ref()
+                .is_some_and(|names| !names.iter().any(|selected| selected == name))
+        {
             continue;
         }
         if let Some(kind) = resolve_export(views, *target, name) {
@@ -2046,7 +2044,12 @@ fn resolve_qualified_in(
     let (member, prefix) = path.split_last()?;
     for length in (1..=prefix.len()).rev() {
         let key = prefix[..length].join(".");
-        if let Some((_, target)) = view.imports.iter().rev().find(|(import, _)| *import == key) {
+        if let Some((_, target, _)) = view
+            .imports
+            .iter()
+            .rev()
+            .find(|(import, _, _)| *import == key)
+        {
             if let Some(kind) = resolve_export(views, *target, member) {
                 return Some((*target, kind));
             }
@@ -2156,6 +2159,95 @@ fn resolve_target(
     })
 }
 
+/// Dispatch identities remain owner-specific; an edit names one physical text
+/// declaration even when it was checked under several package owners.
+fn physical_declaration<'v>(
+    views: &'v [ModuleView<'_>],
+    file: FileId,
+    span: Span,
+) -> Option<(&'v str, u32, u32)> {
+    Some((view_of_file(views, file)?.document, span.start, span.end))
+}
+
+fn check_physical_rename(
+    views: &[ModuleView<'_>],
+    target: &Target,
+    new_name: &str,
+) -> Result<(), RenameError> {
+    let target_key = physical_declaration(views, target.file, target.span).ok_or_else(|| {
+        RenameError::NotRenamable("the declaring source is not loaded".to_owned())
+    })?;
+    if target_key.0.starts_with("stdlib://") || target_key.0.starts_with("rssn://") {
+        return Err(RenameError::NotRenamable(
+            "generated library sources cannot be renamed by a workspace edit".to_owned(),
+        ));
+    }
+    check_collision(views, target, new_name)?;
+    let mut edited = std::collections::HashSet::new();
+    for view in views {
+        for occurrence in &view.occurrences {
+            let Some(name) = occurrence_name(&occurrence.role) else {
+                continue;
+            };
+            let Some((file, span)) = canonical_decl_of(views, view, occurrence) else {
+                continue;
+            };
+            if physical_declaration(views, file, span) != Some(target_key) {
+                continue;
+            }
+            let occurrence_span = occurrence_edit_span(view.text, occurrence, name);
+            edited.insert((view.document, occurrence_span.start, occurrence_span.end));
+            // Check every owner's scope of the shared declaration.
+            if view.document == target_key.0
+                && occurrence_span.start == target_key.1
+                && occurrence_span.end == target_key.2
+            {
+                let reach = match &target.reach {
+                    | Reach::Local => Reach::Local,
+                    | Reach::Module { kind, .. } => {
+                        Reach::Module {
+                            module: view.index,
+                            kind: *kind,
+                        }
+                    },
+                };
+                check_collision(
+                    views,
+                    &Target {
+                        file: view.file,
+                        span: occurrence_span,
+                        name: target.name.clone(),
+                        reach,
+                    },
+                    new_name,
+                )?;
+            }
+        }
+    }
+    // The same bytes can be interpreted differently by another owner. Editing
+    // that use for one interpretation would silently break the other one.
+    for view in views {
+        for occurrence in &view.occurrences {
+            let Some(name) = occurrence_name(&occurrence.role) else {
+                continue;
+            };
+            let span = occurrence_edit_span(view.text, occurrence, name);
+            if !edited.contains(&(view.document, span.start, span.end)) {
+                continue;
+            }
+            let key = canonical_decl_of(views, view, occurrence)
+                .and_then(|(file, span)| physical_declaration(views, file, span));
+            if key != Some(target_key) {
+                return Err(RenameError::NotRenamable(format!(
+                    "shared source `{}` resolves this use to different declarations under different package owners",
+                    view.document
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Every location whose declaration is `target`'s.
 fn collect_references(
     views: &[ModuleView<'_>],
@@ -2172,11 +2264,16 @@ fn collect_references(
             let Some(canonical) = canonical_decl_of(views, view, occurrence) else {
                 continue;
             };
-            if canonical != (target.file, target.span) {
+            if physical_declaration(&views, canonical.0, canonical.1)
+                != physical_declaration(&views, target.file, target.span)
+            {
                 continue;
             }
             let span = occurrence_edit_span(view.text, occurrence, name);
-            if !include_declaration && view.file == target.file && span == target.span {
+            if !include_declaration
+                && physical_declaration(&views, view.file, span)
+                    == physical_declaration(&views, target.file, target.span)
+            {
                 continue;
             }
             if !seen.insert((view.document.to_string(), span.start, span.end)) {

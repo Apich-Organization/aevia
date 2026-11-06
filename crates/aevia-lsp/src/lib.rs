@@ -32,17 +32,19 @@
 //!
 //! A `file:` URI is analysed through the real loader —
 //! `aevia_analysis::Analysis::from_path` — so its imports resolve. An unsaved
-//! buffer is loaded as an **entry overlay** (`driver::load_with_roots_and_source`
-//! through the analysis crate): the entry text is the editor's, the imports
-//! still come from disk. Only a document with no path to load from
+//! buffer is loaded against one snapshot of **all open physical buffers**,
+//! including imported modules and imports that do not exist on disk yet.
+//! Only a document with no path to load from
 //! (`untitled:`, a scratch buffer) uses single-file analysis; the `initialize`
 //! result states this under `experimental.multiModuleAnalysis`.
 //!
 //! Loaded programs are kept in a per-server [`AnalysisCache`]: a request for the
-//! same file reuses the program while the entry's content hash and the
-//! mtime/length of every file under the package roots are unchanged, and a
-//! changed dependency reloads. `didOpen`/`didChange` are enough to see a
-//! package's current files — no polling. `workspace/symbol` answers from all
+//! same file reuses the program while observed source contents, import
+//! candidates and package resolution are unchanged. It scans no unrelated
+//! directories and notices same-size edits even with restored mtimes.
+//! Opening, editing or closing an imported buffer republishes diagnostics for
+//! its open dependents. Rename edits carry open buffer versions and positions
+//! from the same unsaved snapshot. `workspace/symbol` answers from all
 //! open documents' loaded modules, with each declaration's own file and range.
 //!
 //! # Navigation beyond a single name

@@ -103,12 +103,7 @@ fn dense(
     shape: Vec<usize>,
     values: Vec<f64>,
 ) -> Value {
-    Value::Tensor(std::rc::Rc::new(TensorData {
-        shape,
-        storage: Storage::Dense(std::rc::Rc::new(values)),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }))
+    Value::Tensor(std::rc::Rc::new(TensorData::new(shape, Storage::Dense(std::rc::Rc::new(values)), aevia_dim::Dim::one(), None)))
 }
 
 #[test]
@@ -187,12 +182,7 @@ fn rank_one_and_rank_zero_axes() {
     // `Int`, so it cannot see the value), and a non-tensor operand keeps
     // `E0302`.
     let mut interp = interpreter();
-    let vector = Value::Tensor(std::rc::Rc::new(TensorData {
-        shape: vec![3],
-        storage: Storage::Dense(std::rc::Rc::new(vec![1.0, 2.0, 3.0])),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+    let vector = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![3], Storage::Dense(std::rc::Rc::new(vec![1.0, 2.0, 3.0])), aevia_dim::Dim::one(), None)));
     let error = interp
         .call_named("sum", vec![vector, Value::int(1)], Span::default())
         .expect_err("axis 1 on a rank-1 tensor is E0802");
@@ -211,12 +201,7 @@ fn rank_one_and_rank_zero_axes() {
         .call_named(
             "sum",
             vec![
-                Value::Tensor(std::rc::Rc::new(TensorData {
-                    shape: Vec::new(),
-                    storage: Storage::Dense(std::rc::Rc::new(vec![1.0])),
-                    dim: aevia_dim::Dim::one(),
-                    display: None,
-                })),
+                Value::Tensor(std::rc::Rc::new(TensorData::new(Vec::new(), Storage::Dense(std::rc::Rc::new(vec![1.0])), aevia_dim::Dim::one(), None))),
                 Value::int(0),
             ],
             Span::default(),
@@ -243,12 +228,7 @@ fn empty_extents_take_the_element_phase() {
 
     // An exact empty axis answers the exact `0`, not a Float one.
     let mut interp = interpreter();
-    let exact_empty = Value::Tensor(std::rc::Rc::new(TensorData {
-        shape: vec![0],
-        storage: Storage::Exact(Vec::new()),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+    let exact_empty = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![0], Storage::Exact(Vec::new()), aevia_dim::Dim::one(), None)));
     let sum = call(&mut interp, "sum", vec![exact_empty, Value::int(0)]);
     let tensor = tensor_of(&sum);
     assert_eq!(tensor.shape, vec![1]);
@@ -280,12 +260,7 @@ fn dense_and_boxed_float_classes_agree_bit_for_bit() {
     // compensated sum differ, so this pins that the classes use the same fold.
     let values = vec![0.1, 0.2, 0.3, 0.4, 0.1, 0.2, 0.3, 0.4];
     let dense_tensor = dense(vec![2, 4], values.clone());
-    let boxed_tensor = Value::Tensor(std::rc::Rc::new(TensorData {
-        shape: vec![2, 4],
-        storage: Storage::Boxed(values.into_iter().map(Value::float).collect()),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+    let boxed_tensor = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![2, 4], Storage::Boxed(values.into_iter().map(Value::float).collect()), aevia_dim::Dim::one(), None)));
     let mut interp = interpreter();
     for axis in [0, 1] {
         let dense_sum = call(
@@ -336,12 +311,7 @@ fn the_dense_axis_path_does_not_box_per_element() {
     // (the element-wise path, which this fast path replaces for `f64`).
     let flat = vec![0.5f64; 512 * 512];
     let dense_tensor = dense(vec![512, 512], flat.clone());
-    let boxed_tensor = Value::Tensor(std::rc::Rc::new(TensorData {
-        shape: vec![512, 512],
-        storage: Storage::Boxed(flat.into_iter().map(Value::float).collect()),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+    let boxed_tensor = Value::Tensor(std::rc::Rc::new(TensorData::new(vec![512, 512], Storage::Boxed(flat.into_iter().map(Value::float).collect()), aevia_dim::Dim::one(), None)));
     for (label, tensor) in [("dense", dense_tensor), ("boxed", boxed_tensor)] {
         let start = std::time::Instant::now();
         for _ in 0..3 {

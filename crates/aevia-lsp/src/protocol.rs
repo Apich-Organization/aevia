@@ -212,7 +212,7 @@ pub fn workspace_symbols_json(symbols: &[aevia_analysis::WorkspaceSymbol]) -> Va
 /// A file identity as a URI: a path becomes a `file:` URI, a URI passes
 /// through.
 fn document_uri(document: &str) -> String {
-    if document.contains("://") {
+    if aevia_analysis::is_source_uri(document) {
         document.to_string()
     } else {
         uri_from_path(std::path::Path::new(document))
@@ -308,58 +308,45 @@ pub fn rename_json(edits: &[FileEdit]) -> Value {
 /// document (`untitled:`, a URL) keeps the single-file analysis.
 #[must_use]
 pub fn path_from_uri(uri: &str) -> Option<std::path::PathBuf> {
-    let rest = uri.strip_prefix("file://")?;
-    let path = percent_decode(rest);
-    // `file:///C:/x` leaves `/C:/x`; a drive letter is not a directory.
-    let path = match path.strip_prefix('/') {
-        | Some(rest)
-            if rest.len() >= 2
-                && rest.as_bytes()[0].is_ascii_alphabetic()
-                && rest.as_bytes()[1] == b':' =>
-        {
-            rest.to_string()
-        },
-        | _ => path,
-    };
-    Some(std::path::PathBuf::from(path))
+    aevia_analysis::physical_source_path_from_uri(uri)
 }
 
-/// The `file:` URI of a path, for a location in another module.
+/// The `file:` URI of a path, escaping bytes that would otherwise change its
+/// identity (spaces, percent signs, fragments, queries and non-ASCII names).
 #[must_use]
 pub fn uri_from_path(path: &std::path::Path) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
-    let absolute = text.strip_prefix('/').unwrap_or(&text);
-    let is_drive = absolute.len() >= 2
-        && absolute.as_bytes()[0].is_ascii_alphabetic()
-        && absolute.as_bytes()[1] == b':';
-    if is_drive {
-        format!("file:///{absolute}")
-    } else if text.starts_with('/') {
-        format!("file://{text}")
+    let original = path.to_string_lossy();
+    let is_drive = original.len() >= 2
+        && original.as_bytes()[0].is_ascii_alphabetic()
+        && original.as_bytes()[1] == b':';
+    let text = if is_drive || cfg!(windows) {
+        original.replace('\\', "/")
     } else {
-        format!("file:///{text}")
-    }
-}
-
-/// Decodes `%XX` escapes in a URI path; an invalid escape is kept literally.
-fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let high = (bytes[index + 1] as char).to_digit(16);
-            let low = (bytes[index + 2] as char).to_digit(16);
-            if let (Some(high), Some(low)) = (high, low) {
-                out.push(u8::try_from(high * 16 + low).unwrap_or(b'?'));
-                index += 3;
-                continue;
-            }
+        original.into_owned()
+    };
+    let text = if !is_drive && !text.starts_with('/') {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&text).to_string_lossy().into_owned())
+            .unwrap_or(text)
+    } else {
+        text
+    };
+    let mut encoded = String::with_capacity(text.len());
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/' | b':') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 15)]));
         }
-        out.push(bytes[index]);
-        index += 1;
     }
-    String::from_utf8_lossy(&out).to_string()
+    if is_drive {
+        format!("file:///{encoded}")
+    } else {
+        format!("file://{encoded}")
+    }
 }
 
 /// Writes a document outline.
@@ -487,8 +474,8 @@ pub fn semantic_tokens_json(tokens: &[SemanticToken]) -> Value {
 ///
 /// Advertised from what the code does, not from what a client is: every field
 /// here is backed by a handler in [`crate::server`], and nothing else is
-/// claimed. `change: 2` is incremental sync; `save: false` says honestly that
-/// no `didSave` handler exists.
+/// claimed. `change: 2` is incremental sync; `save: true` enables dependency
+/// refresh when a client reports a saved document.
 #[must_use]
 pub fn capabilities() -> Value {
     json!({
@@ -496,7 +483,7 @@ pub fn capabilities() -> Value {
         "textDocumentSync": {
             "openClose": true,
             "change": 2,
-            "save": false,
+            "save": true,
         },
         "hoverProvider": true,
         "completionProvider": { "resolveProvider": false },
@@ -526,10 +513,10 @@ pub fn capabilities() -> Value {
         "experimental": {
             "multiModuleAnalysis": {
                 "savedFiles": true,
-                "unsavedBuffers": "entry-overlay, imports resolved from disk",
+                "unsavedBuffers": "snapshot overlays for all open physical buffers",
             },
             "analysisCache": {
-                "strategy": "entry content hash + file mtime/length",
+                "strategy": "observed source contents + import candidates + package resolution",
                 "capacity": aevia_analysis::cache::CAPACITY,
             },
         },
@@ -600,6 +587,43 @@ mod tests {
     }
 
     #[test]
+    fn local_uri_paths_round_trip_reserved_and_unicode_names() {
+        let path = std::path::Path::new("/tmp/a b%#?λ.aev");
+        let uri = uri_from_path(path);
+        assert_eq!(uri, "file:///tmp/a%20b%25%23%3F%CE%BB.aev");
+        assert_eq!(path_from_uri(&uri).as_deref(), Some(path));
+        assert_eq!(
+            path_from_uri("file://localhost/tmp/a%20b.aev"),
+            Some(std::path::PathBuf::from("/tmp/a b.aev"))
+        );
+        assert_eq!(
+            path_from_uri("FILE:/tmp/a%20b.aev"),
+            Some(std::path::PathBuf::from("/tmp/a b.aev"))
+        );
+        for invalid in [
+            "file://remote/tmp/a.aev",
+            "file:///tmp/a%GG.aev",
+            "file:///tmp/a%FF.aev",
+            "file:///tmp/a%00.aev",
+            "file:///tmp/a.aev#fragment",
+        ] {
+            assert!(path_from_uri(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn nonhierarchical_document_uris_keep_their_client_identity() {
+        for uri in [
+            "untitled:Untitled-1",
+            "urn:aevia:buffer:1",
+            "memory+editor:one.aev",
+        ] {
+            assert_eq!(document_uri(uri), uri);
+        }
+        assert_eq!(document_uri("C:/aevia/A.aev"), "file:///C:/aevia/A.aev");
+    }
+
+    #[test]
     fn a_location_in_another_module_is_reported_as_a_uri() {
         let range = Range::new(Position::new(1, 0), Position::new(1, 4));
         let from_path = location_json(&Location {
@@ -619,7 +643,7 @@ mod tests {
     fn capabilities_claim_only_what_is_implemented() {
         let capabilities = capabilities();
         assert_eq!(capabilities["textDocumentSync"]["change"], 2);
-        assert_eq!(capabilities["textDocumentSync"]["save"], false);
+        assert_eq!(capabilities["textDocumentSync"]["save"], true);
         assert_eq!(capabilities["positionEncoding"], "utf-16");
         assert_eq!(capabilities["completionProvider"]["resolveProvider"], false);
         assert_eq!(capabilities["codeActionProvider"], true);
@@ -649,7 +673,7 @@ mod tests {
         );
         assert_eq!(
             capabilities["experimental"]["multiModuleAnalysis"]["unsavedBuffers"],
-            "entry-overlay, imports resolved from disk"
+            "snapshot overlays for all open physical buffers"
         );
         assert_eq!(
             capabilities["experimental"]["analysisCache"]["capacity"],

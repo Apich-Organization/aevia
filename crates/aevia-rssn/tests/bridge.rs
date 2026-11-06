@@ -47,6 +47,7 @@ fn an_ambiguous_overload_is_e1002() {
     let det = registry().op("det").expect("det is registered");
     let types = [SigType::Tensor {
         rank: Some(2),
+        shape: None,
         elem: Box::new(SigType::Dyn),
     }];
     let error = aevia_rssn::resolve_key("det", &types).expect_err("two overloads tie");
@@ -91,7 +92,7 @@ fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
         wiener.signatures.len(),
         "one key per overload"
     );
-    let SigType::Tensor { rank: Some(2), elem } = &wiener.signatures[0].ret else {
+    let SigType::Tensor { rank: Some(2), elem, .. } = &wiener.signatures[0].ret else {
         panic!(
             "`sde_wiener` must return a rank-2 tensor: {:?}",
             wiener.signatures[0]
@@ -122,7 +123,7 @@ fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
     assert_eq!(areas.source, aevia_rssn::Source::Overlay);
     assert_eq!(areas.signatures.len(), 1);
     assert_eq!(areas.keys.len(), areas.signatures.len());
-    let SigType::Tensor { rank: Some(1), elem } = &areas.signatures[0].ret else {
+    let SigType::Tensor { rank: Some(1), elem, .. } = &areas.signatures[0].ret else {
         panic!(
             "`sde_levy_areas` must return a rank-1 tensor: {:?}",
             areas.signatures[0]
@@ -170,6 +171,7 @@ fn sde_scheme_info_is_a_typed_overlay_operator() {
         signature.ret,
         SigType::Tensor {
             rank: Some(1),
+            shape: None,
             elem: Box::new(SigType::Real),
         },
         "the flags are a rank-1 tensor of exact reals"
@@ -721,6 +723,10 @@ fn a_structured_result_needs_its_capability() {
         }],
         raw: Vec::new(),
         source: aevia_rssn::Source::Derived,
+        dim_rule: None,
+        dynamic_reason: None,
+        eval_kind: rssn::kernel::signature::EvalKind::None,
+        backend_support: rssn::kernel::signature::BackendSupport::default(),
         stability: rssn::kernel::signature::Stability::Stable,
         doc: String::new(),
         arity: (0, Some(0)),
@@ -772,16 +778,12 @@ fn the_capability_table_is_the_single_source() {
     }
 }
 
-/// The two host-bridge capabilities are rows of the one table and are
-/// genuinely disabled. `core.callback` says an Aevia closure cannot cross as a
-/// kernel host callback; `core.plugin.source` says no Aevia expression can
-/// construct a `Plugin` for `Rssn.register`. `core.plugin` itself stays
-/// enabled: in-process Rust host plugins exist, and claiming otherwise would
-/// be false.
+/// Scoped callbacks are available; source-level plugin construction is not.
 #[test]
-fn the_host_bridge_capabilities_are_disabled_rows() {
+fn callback_and_source_plugin_capabilities_are_distinct() {
     let capabilities = &registry().capabilities;
-    for name in ["core.callback", "core.plugin.source"] {
+    assert!(capabilities.has("core.callback"));
+    for name in ["core.plugin.source"] {
         let row = capabilities
             .table()
             .into_iter()
@@ -1029,6 +1031,7 @@ fn a_rank_mismatch_resolves_to_the_dynamic_overload() {
         "det",
         &[SigType::Tensor {
             rank: Some(1),
+            shape: None,
             elem: Box::new(SigType::Real),
         }],
     )

@@ -1,6 +1,7 @@
 ## The `Ode` module of §8.20.
 ##
-## The method constructors and option record are source-level declarations.
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Ode
 
 type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23

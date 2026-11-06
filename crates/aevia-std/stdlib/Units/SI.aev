@@ -1,14 +1,8 @@
-## The `Units.SI` module of §8.20.
+## The `Units/SI` module of §8.20.
 ##
-## Unit names are **ambient**: every unit of the kernel's registry is already a
-## value of type `Unit[d]` in the checker (`lookup_value` falls back to the
-## unit table), so `open Units.SI` resolves and `to(m, x)`, `point(300.0, K)`,
-## `r / ohm` and every unit literal work without a binding declared here.
-##
-## This module therefore exports no names on purpose. Exporting each unit as a
-## quantity binding (`let m: Real[L] = 1.0 m`) would shadow the `Unit[d]`
-## fallback for importers and change `Tensor / Unit` from a dimension division
-## into a scalar multiplication — the exact opposite of §5.3.4's promise that
-## the unit modules export *units*. The live unit list is `Rssn.Units`; the
-## human-readable table is §5.3.
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Units.SI
+
+## SI unit names are ambient Unit values from the kernel registry.
+## This module declares no bindings.

@@ -54,6 +54,7 @@ pub fn error(failure: &KernelError) -> EvalError {
 /// reported as `E1003`.
 pub fn to_val(value: &Value) -> Result<Val, EvalError> {
     Ok(match value {
+        | Value::KernelValue(value) => value.payload.clone(),
         | Value::Unit => {
             Val::Variant {
                 tag: "Unit".to_string(),
@@ -133,7 +134,13 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
                 "a poisoned value reached the kernel after an earlier error",
             ));
         },
-        | Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => {
+        | Value::Closure(_)
+        | Value::Native(_)
+        | Value::Ctor { .. }
+        | Value::Io(_)
+        | Value::TypeRep(_)
+        | Value::KernelError(_)
+        | Value::Callback(_) => {
             return Err(EvalError::new(
                 "E1003",
                 "a function cannot be passed to the kernel",
@@ -319,6 +326,7 @@ pub fn from_val(
                 .map(|item| from_val(item, dim.clone()))
                 .collect();
             Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape: shape.clone(),
                 storage: Storage::Boxed(storage),
                 dim,
@@ -347,6 +355,8 @@ pub fn from_val(
                         name: tag.clone(),
                         fields: items,
                         type_args: None,
+                        verified_type: None,
+                        constructor_origin: false,
                     }))
                 },
                 | None => {

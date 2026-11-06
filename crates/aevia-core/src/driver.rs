@@ -7,7 +7,10 @@
 //! Loading is a post-order walk, so a module is always checked after the
 //! modules it imports, and a cycle is reported rather than followed.
 
+use crate::manifest::ResolvedModule;
 use crate::manifest::Roots;
+use crate::source::SourceDependency;
+use crate::source::SourceOverlays;
 use aevia_syntax::Diagnostic;
 use aevia_syntax::Diagnostics;
 use aevia_syntax::FileId;
@@ -20,8 +23,10 @@ use aevia_syntax::parse_module;
 use aevia_types::check::CheckOptions;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::Import;
+use aevia_types::check::InterfaceBinding;
 use aevia_types::check::ModuleInterface;
-use aevia_types::check::check_module_with_interfaces;
+use aevia_types::check::check_module_with_identity;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -32,6 +37,8 @@ pub struct LoadedModule {
     pub path: Vec<String>,
     /// Where it came from.
     pub file: FileId,
+    /// Logical source path and the package owner that selected this instance.
+    pub source: ResolvedModule,
     /// The parsed module.
     pub module: Module,
     /// Its checked interface.
@@ -39,6 +46,18 @@ pub struct LoadedModule {
     /// Every other prefix its names are reachable under: an alias, or the
     /// empty string for an `open` or a name list.
     pub aliases: Vec<String>,
+    /// Exact resolved import edges, independent of declared-name aliases.
+    pub imports: Vec<ResolvedImport>,
+}
+
+/// A checked import edge retained by the loader for runtime and editor queries.
+pub struct ResolvedImport {
+    /// Target source instance, including its package owner.
+    pub file: FileId,
+    /// Prefix introduced by this import, empty for open/selective imports.
+    pub prefix: String,
+    /// Selected export names, or every exported name when absent.
+    pub names: Option<Vec<String>>,
 }
 
 /// A whole program.
@@ -49,6 +68,9 @@ pub struct Program {
     pub modules: Vec<LoadedModule>,
     /// Every diagnostic from every module.
     pub diagnostics: Diagnostics,
+    /// Physical source reads and import candidates observed by this load.
+    /// Includes absent candidates whose creation can change resolution.
+    pub dependencies: Vec<SourceDependency>,
 }
 
 impl Program {
@@ -80,7 +102,7 @@ impl Program {
 pub struct LoadStats {
     /// How many entry files were asked for.
     pub entries: usize,
-    /// How many distinct files were parsed (entries plus every import).
+    /// How many distinct source/owner pairs were parsed (entries plus imports).
     pub files: usize,
     /// How many modules were checked.
     pub modules: usize,
@@ -117,11 +139,15 @@ pub fn load_all_with_roots(
         options: options.clone(),
         ..Loader::default()
     };
+    let mut root = None;
     for entry in entries {
-        loader.load_file(entry, &[]);
+        let loaded = loader.load_entry(entry);
+        if root.is_none() {
+            root = loaded;
+        }
     }
     let files = loader.parsed.len();
-    let (modules, sources, mut diagnostics) = loader.finish(entries.first().cloned());
+    let (modules, sources, mut diagnostics, dependencies) = loader.finish(root);
     dedupe_diagnostics(&mut diagnostics);
     let stats = LoadStats {
         entries: entries.len(),
@@ -135,6 +161,7 @@ pub fn load_all_with_roots(
             sources,
             modules,
             diagnostics,
+            dependencies,
         },
         stats,
     )
@@ -184,12 +211,13 @@ pub fn load_with_roots(
         roots: Some(roots),
         ..Loader::default()
     };
-    let root = loader.load_file(entry, &[]);
-    let (modules, sources, diagnostics) = loader.finish(root);
+    let root = loader.load_entry(entry);
+    let (modules, sources, diagnostics, dependencies) = loader.finish(root);
     Program {
         sources,
         modules,
         diagnostics,
+        dependencies,
     }
 }
 
@@ -205,6 +233,22 @@ pub fn load_with_roots_and_source(
     source: &str,
     options: &CheckOptions,
 ) -> Program {
+    let mut overlays = SourceOverlays::new();
+    overlays.insert(entry, source);
+    load_with_roots_and_overlays(entry, roots, &overlays, options)
+}
+
+/// Loads an entry and all its imports against one snapshot of unsaved buffers.
+/// Physical buffers can be reached through aliases and multiple package owners;
+/// source identity is shared while nominal ownership/import context is retained.
+/// An overlaid import need not exist on disk yet.
+#[must_use]
+pub fn load_with_roots_and_overlays(
+    entry: &Path,
+    roots: Roots,
+    overlays: &SourceOverlays,
+    options: &CheckOptions,
+) -> Program {
     let roots = match entry.parent() {
         | Some(dir) => roots.with_local(dir),
         | None => roots,
@@ -212,17 +256,16 @@ pub fn load_with_roots_and_source(
     let mut loader = Loader {
         roots: Some(roots),
         options: options.clone(),
+        overlay: overlays.clone(),
         ..Loader::default()
     };
-    loader
-        .overlay
-        .insert(entry.to_path_buf(), source.to_string());
-    let root = loader.load_file(entry, &[]);
-    let (modules, sources, diagnostics) = loader.finish(root);
+    let root = loader.load_entry(entry);
+    let (modules, sources, diagnostics, dependencies) = loader.finish(root);
     Program {
         sources,
         modules,
         diagnostics,
+        dependencies,
     }
 }
 
@@ -247,16 +290,19 @@ struct Loader {
     roots: Option<Roots>,
     sources: SourceMap,
     diagnostics: Diagnostics,
-    /// Parsed modules by canonical path, in post-order.
-    order: Vec<PathBuf>,
-    parsed: HashMap<PathBuf, Parsed>,
+    /// Parsed modules by owning package and canonical source, in post-order.
+    order: Vec<ModuleKey>,
+    parsed: HashMap<ModuleKey, Parsed>,
     /// The import stack, for cycle detection.
-    stack: Vec<PathBuf>,
+    stack: Vec<ModuleKey>,
     /// The capabilities the checker gates static gaps on.
     options: CheckOptions,
-    /// Entry sources supplied by the caller (an unsaved editor buffer), keyed by
-    /// the entry path they stand in for. Imports still resolve from disk.
-    overlay: HashMap<PathBuf, String>,
+    /// Unsaved source buffers by canonical physical file. All owning instances
+    /// see the same buffer contents while retaining their own import context.
+    overlay: SourceOverlays,
+    dependencies: BTreeMap<PathBuf, SourceDependency>,
+    /// One source text per physical file, shared by all owning instantiations.
+    physical_sources: HashMap<PathBuf, String>,
     /// Standard-library imports: synthetic path key → module components.
     ///
     /// The embedded stdlib (§8.20) is not on disk, so an `import Math` that no
@@ -264,14 +310,17 @@ struct Loader {
     /// from [`aevia_std::stdlib::source`]; post-order, cycle detection and
     /// `run_modules` then treat it exactly like a file module.
     stdlib: HashMap<PathBuf, Vec<String>>,
+    /// RSSN namespaces generated lazily from the live kernel manifest.
+    kernel_modules: HashMap<PathBuf, (String, String)>,
 }
 
 struct Parsed {
+    context: ResolvedModule,
     file: FileId,
     module: Module,
     path: Vec<String>,
     imports: Vec<(
-        PathBuf,
+        ModuleKey,
         Vec<String>,
         Option<String>,
         bool,
@@ -279,26 +328,117 @@ struct Parsed {
     )>,
 }
 
+// A physical file can be instantiated by distinct owning packages. Dependency
+// aliases of the same owner share this key; a package boundary never vanishes
+// merely because src/ or one module is a symlink to shared external sources.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ModuleKey {
+    path: PathBuf,
+    owner: Option<PathBuf>,
+}
+impl ModuleKey {
+    fn physical(context: &ResolvedModule) -> Self {
+        Self {
+            path: crate::source::canonical_path(&context.path),
+            owner: context.owner.clone(),
+        }
+    }
+
+    fn label(&self) -> String {
+        match &self.owner {
+            | Some(owner) => format!("{} [package {}]", self.path.display(), owner.display()),
+            | None => self.path.display().to_string(),
+        }
+    }
+}
+impl std::ops::Deref for ModuleKey {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+impl AsRef<Path> for ModuleKey {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
 impl Loader {
-    fn load_file(
+    fn watch(
         &mut self,
         path: &Path,
+    ) -> bool {
+        self.dependencies
+            .entry(path.to_path_buf())
+            .or_insert_with(|| SourceDependency::observe(path, &self.overlay))
+            .available()
+    }
+
+    fn entry_context(
+        &self,
+        path: &Path,
+    ) -> ResolvedModule {
+        self.roots.as_ref().map_or_else(
+            || {
+                ResolvedModule {
+                    path: path.to_path_buf(),
+                    owner: None,
+                }
+            },
+            |roots| roots.entry_module(path),
+        )
+    }
+
+    fn load_entry(
+        &mut self,
+        path: &Path,
+    ) -> Option<ModuleKey> {
+        self.watch(path);
+        self.load_file(&self.entry_context(path), &[])
+    }
+
+    fn load_file(
+        &mut self,
+        context: &ResolvedModule,
         expected: &[String],
-    ) -> Option<PathBuf> {
-        let canonical = path.to_path_buf();
+    ) -> Option<ModuleKey> {
+        let canonical = if self.stdlib.contains_key(&context.path)
+            || self.kernel_modules.contains_key(&context.path)
+        {
+            ModuleKey {
+                path: context.path.clone(),
+                owner: None,
+            }
+        } else {
+            ModuleKey::physical(context)
+        };
         if self.roots.is_none() {
             self.roots = Some(Roots::adjacent(&canonical));
         }
-        if self.parsed.contains_key(&canonical) {
+        if let Some(parsed) = self.parsed.get(&canonical) {
+            if !expected.is_empty()
+                && parsed.module.name.is_some()
+                && self.roots.as_ref().is_some_and(|roots| {
+                    !roots.resolved_name_matches(context, &parsed.path, expected)
+                })
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    "E0601",
+                    format!(
+                        "module `{}` declares name `{}` but is imported as `{}`",
+                        canonical.display(),
+                        parsed.path.join("."),
+                        expected.join(".")
+                    ),
+                    Span::default(),
+                ));
+            }
             return Some(canonical);
         }
         if self.stack.contains(&canonical) {
-            let mut cycle: Vec<String> = self
-                .stack
-                .iter()
-                .map(|item| item.display().to_string())
-                .collect();
-            cycle.push(canonical.display().to_string());
+            let mut cycle: Vec<String> = self.stack.iter().map(ModuleKey::label).collect();
+            cycle.push(canonical.label());
             self.diagnostics.push(
                 Diagnostic::error(
                     "E0602",
@@ -309,34 +449,65 @@ impl Loader {
             );
             return None;
         }
-        let embedded = self.stdlib.get(&canonical).cloned().and_then(|components| {
-            let path: Vec<&str> = components.iter().map(String::as_str).collect();
-            aevia_std::stdlib::source(&path).map(|source| (components, source))
-        });
-        // A dirty editor buffer for the entry file wins over disk; imports still
-        // resolve through the loader.
-        let overlaid = self.overlay.get(&canonical).cloned();
+        let kernel = self.kernel_modules.get(&canonical.path).cloned();
+        let embedded = self
+            .stdlib
+            .get(&canonical.path)
+            .cloned()
+            .and_then(|components| {
+                let path: Vec<&str> = components.iter().map(String::as_str).collect();
+                aevia_std::stdlib::source(&path).map(|source| (components, source))
+            });
+        // One immutable overlay snapshot applies to entry and imported sources.
+        let physical = embedded.is_none() && kernel.is_none();
+        let overlaid = physical
+            .then(|| self.overlay.get(&canonical.path))
+            .flatten()
+            .map(str::to_owned);
+        if physical {
+            self.watch(&context.path);
+        }
         let source = match (&overlaid, &embedded) {
             | (Some(source), _) => source.clone(),
             | (None, Some((_, source))) => source.to_string(),
+            | (None, None) if kernel.is_some() => kernel.as_ref().unwrap().1.clone(),
             | (None, None) => {
-                match std::fs::read_to_string(&canonical) {
-                    | Ok(source) => source,
-                    | Err(error) => {
-                        self.diagnostics.push(Diagnostic::error(
-                            "E0607",
-                            format!("cannot read `{}`: {error}", canonical.display()),
-                            Span::default(),
-                        ));
-                        return None;
-                    },
+                if let Some(source) = self.physical_sources.get(&canonical.path) {
+                    source.clone()
+                } else {
+                    match std::fs::read_to_string(&canonical) {
+                        | Ok(source) => {
+                            self.physical_sources
+                                .insert(canonical.path.clone(), source.clone());
+                            source
+                        },
+                        | Err(error) => {
+                            if let Some(input) = self.dependencies.get_mut(&context.path) {
+                                input.failed(&error);
+                            }
+                            self.diagnostics.push(Diagnostic::error(
+                                "E0607",
+                                format!("cannot read `{}`: {error}", canonical.display()),
+                                Span::default(),
+                            ));
+                            return None;
+                        },
+                    }
                 }
             },
         };
+        if physical && let Some(input) = self.dependencies.get_mut(&context.path) {
+            input.loaded(&source);
+        }
         let display = match (&overlaid, &embedded) {
             | (Some(_), _) => canonical.display().to_string(),
             | (None, Some((components, _))) => format!("stdlib://{}.aev", components.join("/")),
-            | (None, None) => canonical.display().to_string(),
+            | (None, None) => {
+                kernel
+                    .as_ref()
+                    .map(|(name, _)| format!("rssn://{name}.aev"))
+                    .unwrap_or_else(|| canonical.display().to_string())
+            },
         };
         let file = self.sources.add(display, &source);
         let lexed = match lex(file, &source) {
@@ -348,6 +519,7 @@ impl Loader {
                 self.parsed.insert(
                     canonical.clone(),
                     Parsed {
+                        context: context.clone(),
                         file,
                         module: Module {
                             name: None,
@@ -372,7 +544,10 @@ impl Loader {
         // §2.2.5 / appendix B: a module's declared name must match the path it
         // is imported by, or `import A.B` would name a module called `C`. The
         // entry file is exempt because it is not imported by a path.
-        if !expected.is_empty() && module.name.is_some() && path != expected {
+        let declared_matches = self.roots.as_ref().map_or(path == expected, |roots| {
+            roots.resolved_name_matches(context, &path, expected)
+        });
+        if !expected.is_empty() && module.name.is_some() && !declared_matches {
             self.diagnostics.push(
                 Diagnostic::error(
                     "E0601",
@@ -390,9 +565,9 @@ impl Loader {
         self.stack.push(canonical.clone());
 
         let mut imports = Vec::new();
-        // A module path is absolute within the program: `import A.B` means
-        // `<package src>/A/B.aev` from every file, not relative to the
-        // importer, and `import Dep.A.B` means the dependency's copy.
+        // A source module inherits the owner that selected it. `import A.B`
+        // uses that owner's src tree; a dependency import switches to the
+        // dependency owner before its source is canonicalized.
         for decl in &module.decls {
             let DeclKind::Import {
                 path: import_path,
@@ -403,10 +578,12 @@ impl Loader {
             else {
                 continue;
             };
-            let resolved = self
-                .roots
-                .as_ref()
-                .and_then(|roots| roots.resolve(import_path));
+            let candidates = self.roots.as_ref().map_or_else(Vec::new, |roots| {
+                roots.module_candidates(context, import_path)
+            });
+            let resolved = candidates
+                .into_iter()
+                .find(|candidate| self.watch(&candidate.path));
             let target = match resolved {
                 | Some(target) => target,
                 | None => {
@@ -423,16 +600,39 @@ impl Loader {
                         }
                         key.set_extension("aev");
                         self.stdlib.insert(key.clone(), import_path.clone());
-                        key
+                        ResolvedModule {
+                            path: key,
+                            owner: None,
+                        }
+                    } else if import_path.len() == 1 && import_path[0].starts_with("Rssn_") {
+                        let name = &import_path[0];
+                        let Some(source) =
+                            aevia_rssn::codegen::namespace_source(aevia_rssn::registry(), name)
+                        else {
+                            self.diagnostics.push(Diagnostic::error(
+                                "E0607",
+                                format!("cannot find kernel namespace `{name}`"),
+                                decl.span,
+                            ));
+                            continue;
+                        };
+                        let key = PathBuf::from("rssn").join(format!("{name}.aev"));
+                        self.kernel_modules
+                            .entry(key.clone())
+                            .or_insert_with(|| (name.clone(), source));
+                        ResolvedModule {
+                            path: key,
+                            owner: None,
+                        }
                     } else {
                         let candidates = self
                             .roots
                             .as_ref()
-                            .map(|roots| roots.candidates(import_path))
+                            .map(|roots| roots.module_candidates(context, import_path))
                             .unwrap_or_default();
                         let expected = candidates
                             .iter()
-                            .map(|candidate| format!("`{}`", candidate.display()))
+                            .map(|candidate| format!("`{}`", candidate.path.display()))
                             .collect::<Vec<_>>()
                             .join(" or ");
                         self.diagnostics.push(
@@ -465,6 +665,7 @@ impl Loader {
         self.parsed.insert(
             canonical.clone(),
             Parsed {
+                context: context.clone(),
                 file,
                 module,
                 path,
@@ -477,14 +678,22 @@ impl Loader {
 
     fn finish(
         mut self,
-        root: Option<PathBuf>,
-    ) -> (Vec<LoadedModule>, SourceMap, Diagnostics) {
+        root: Option<ModuleKey>,
+    ) -> (
+        Vec<LoadedModule>,
+        SourceMap,
+        Diagnostics,
+        Vec<SourceDependency>,
+    ) {
+        let dependencies = std::mem::take(&mut self.dependencies)
+            .into_values()
+            .collect();
         let sources = self.sources.clone();
         let Some(root) = root else {
-            return (Vec::new(), sources, self.diagnostics);
+            return (Vec::new(), sources, self.diagnostics, dependencies);
         };
         // Every prefix each module is imported under, across all importers.
-        let mut prefixes: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let mut prefixes: HashMap<ModuleKey, Vec<String>> = HashMap::new();
         for parsed in self.parsed.values() {
             for (target, import_path, alias, open, names) in &parsed.imports {
                 let prefix = if *open || names.is_some() {
@@ -503,7 +712,6 @@ impl Loader {
         // order (§7.4). They carry classes, instances and alias definitions, so
         // an importer can use a class it did not declare and expand an imported
         // alias instead of treating it as opaque.
-        let mut interfaces: Vec<ModuleInterface> = Vec::new();
         for path in self.order.clone() {
             let Some(parsed) = self.parsed.remove(&path) else {
                 continue;
@@ -512,6 +720,8 @@ impl Loader {
             // per resolved module, with the prefix its names are reachable
             // under.
             let mut imports: Vec<Import> = Vec::new();
+            let mut runtime_imports = Vec::new();
+            let mut bindings = Vec::new();
             for (target, import_path, alias, open, names) in &parsed.imports {
                 let Some(other) = self
                     .order
@@ -558,16 +768,63 @@ impl Loader {
                     }
                     exports.retain(|name, _| selected.contains(name));
                 }
+                bindings.push(InterfaceBinding {
+                    module: other.checked.module_path(),
+                    prefix: prefix.clone(),
+                    names: names.clone(),
+                });
+                let runtime_names = names.as_ref().map(|names| {
+                    let selected: Vec<_> = names.iter().filter_map(|name| match other.checked.exports.get(name) {
+                        Some(aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. }) => Some(*adt),
+                        _ => None,
+                    }).collect();
+                    let mut expanded = names.clone();
+                    for (name, export) in &other.checked.exports {
+                        if matches!(export, aevia_types::Export::Ctor { adt, .. } | aevia_types::Export::TypeCtor { adt, .. } if selected.contains(adt)) && !expanded.contains(name) { expanded.push(name.clone()); }
+                    }
+                    expanded
+                });
+                runtime_imports.push(ResolvedImport {
+                    file: other.file,
+                    prefix: prefix.clone(),
+                    names: runtime_names,
+                });
                 imports.push((prefix, exports));
             }
-            let checked = check_module_with_interfaces(
+            // A module sees its dependency closure, never unrelated modules
+            // merely checked earlier in the package traversal.
+            let mut reachable = std::collections::HashSet::new();
+            let mut pending: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
+            while let Some(file) = pending.pop() {
+                if reachable.insert(file) {
+                    if let Some(module) = modules.iter().find(|module| module.file == file) {
+                        pending.extend(module.imports.iter().map(|import| import.file));
+                    }
+                }
+            }
+            let interfaces: Vec<ModuleInterface> = modules
+                .iter()
+                .filter(|module| reachable.contains(&module.file))
+                .map(|module| module.checked.interface())
+                .collect();
+            let identity = if self.stdlib.contains_key(&path.path)
+                || self.kernel_modules.contains_key(&path.path)
+            {
+                None
+            } else {
+                self.roots
+                    .as_ref()
+                    .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
+            };
+            let checked = check_module_with_identity(
                 parsed.file,
                 &parsed.module,
                 &imports,
                 &interfaces,
                 &self.options,
+                identity,
+                &bindings,
             );
-            interfaces.push(checked.module.interface());
             self.diagnostics.extend(checked.diagnostics.clone());
             let aliases = prefixes
                 .get(&path)
@@ -581,15 +838,17 @@ impl Loader {
             modules.push(LoadedModule {
                 path: parsed.path,
                 file: parsed.file,
+                source: parsed.context,
                 module: parsed.module,
                 checked: checked.module,
                 aliases,
+                imports: runtime_imports,
             });
         }
         // The entry file is last in dependency order, which is what `entry`
         // relies on; the walk already guarantees it.
         let _ = root;
-        (modules, sources, self.diagnostics)
+        (modules, sources, self.diagnostics, dependencies)
     }
 }
 
@@ -599,36 +858,24 @@ impl Loader {
 /// type, not from whichever same-named type the process registry finds first.
 fn publish_constructors(
     interp: &mut crate::Interp,
-    module: &Module,
-    path: &aevia_types::keys::ModulePath,
-    aliases: &[String],
+    module: &LoadedModule,
 ) {
-    for decl in &module.decls {
-        let DeclKind::Type {
-            body: aevia_syntax::ast::TypeBody::Variants(ctors),
-            ..
-        } = &decl.kind
-        else {
+    for (name, &(adt, index)) in &module.checked.constructors {
+        if !module.checked.exports.contains_key(name) {
+            continue;
+        }
+        let Some(value) = crate::eval::source_ctor_value_at(adt, index) else {
             continue;
         };
-        for ctor in ctors {
-            let Some(value) = crate::eval::ctor_value(path, &ctor.name) else {
-                continue;
-            };
-            let qualified = if path.is_prelude() {
-                ctor.name.clone()
+        let qualified = format!("{}.{name}", module.path.join("."));
+        interp.globals.insert(qualified, value.clone());
+        for alias in &module.aliases {
+            let key = if alias.is_empty() {
+                name.clone()
             } else {
-                format!("{}.{}", path.dotted(), ctor.name)
+                format!("{alias}.{name}")
             };
-            interp.globals.insert(qualified, value.clone());
-            for alias in aliases {
-                let key = if alias.is_empty() {
-                    ctor.name.clone()
-                } else {
-                    format!("{alias}.{}", ctor.name)
-                };
-                interp.globals.insert(key, value.clone());
-            }
+            interp.globals.insert(key, value.clone());
         }
     }
 }
@@ -666,6 +913,8 @@ pub fn run_modules(
 ) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
     let last = program.modules.len().saturating_sub(1);
+    let mut exports: HashMap<FileId, HashMap<String, crate::Value>> = HashMap::new();
+    let mut scopes = HashMap::new();
     for (index, module) in program.modules.iter().enumerate() {
         // A module's own `unit` declarations (and the ones it imported) are in
         // its checked table; the runtime needs them to fold literals.
@@ -674,27 +923,65 @@ pub fn run_modules(
                 let _ = interp.units.insert(unit.clone());
             }
         }
-        // Every module's pinned `Rssn.<op>` keys, not just the entry module's:
-        // an operator call in an imported module has a span in *that* file, and
-        // without its key the evaluator would have to resolve again (PLAN D1).
-        interp.add_rssn_calls(&module.checked.rssn_calls);
-        // The same for the class instances the checker proved: a class-method
-        // call in an imported module has a span in that module's file.
-        interp.add_dictionaries(&module.checked.dictionaries);
         // The interface names this module's instances (`InstanceKey::mangle()`)
         // and makes its classes/aliases visible to the modules loaded after it.
         interp.prepare_module(&module.checked);
-        // The entry module keeps its names unqualified: `main` is `main`.
+        // Capture each import's actual values in the module's lexical scope.
+        // Global aliases are a convenience for REPL inspection, not a binding
+        // environment: two packages may both import their own `Helper`.
+        let imported_scopes = module
+            .imports
+            .iter()
+            .filter_map(|import| scopes.get(&import.file).cloned())
+            .collect();
+        let scope = interp.module_scope(imported_scopes);
+        for import in &module.imports {
+            if let Some(values) = exports.get(&import.file) {
+                for (name, value) in values {
+                    if import
+                        .names
+                        .as_ref()
+                        .is_some_and(|names| !names.contains(name))
+                    {
+                        continue;
+                    }
+                    let key = if import.prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{name}", import.prefix)
+                    };
+                    scope.vars.borrow_mut().insert(key, value.clone());
+                }
+            }
+        }
+        diagnostics.extend(interp.publish_registrations());
+        diagnostics.extend(interp.load_into(&module.module, &scope));
+        let names = crate::top_level_names(&module.module);
+        let mut values = HashMap::new();
+        for name in module.checked.exports.keys() {
+            if let Some(value) = scope.lookup(name) {
+                values.insert(name.clone(), value);
+            }
+        }
+        for name in &names {
+            if let Some(value) = scope.lookup(name) {
+                let key = if index == last {
+                    name.clone()
+                } else {
+                    format!("{}.{name}", module.path.join("."))
+                };
+                interp.globals.insert(key, value);
+            }
+        }
+        exports.insert(module.file, values);
+        scopes.insert(module.file, scope);
         if index == last {
-            diagnostics.extend(interp.load(&module.module));
             continue;
         }
-        diagnostics.extend(interp.load_qualified(&module.module, &module.path));
         // A qualified constructor (`A.Red`) is a value the importer names, and
         // its identity is A's type, not whichever same-named type was checked
         // first (D6).
-        let module_path = aevia_types::keys::ModulePath::new(module.path.iter().cloned());
-        publish_constructors(interp, &module.module, &module_path, &module.aliases);
+        publish_constructors(interp, module);
         // The checker resolved `G.f` and the bare `f` of an `open`; the
         // runtime has to publish the same keys or the two disagree.
         let qualified = module.path.join(".");

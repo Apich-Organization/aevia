@@ -1,0 +1,19 @@
+[package]
+name = "rssn-api-audit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+jit = ["rssn/jit"]
+
+[dependencies]
+rssn-api-model = { path = "../../../rssn/tools/rssn-api-model" }
+rssn = { path = "../../../rssn", default-features = false }
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+
+[lints.rust]
+unsafe_code = "forbid"

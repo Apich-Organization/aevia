@@ -636,6 +636,49 @@ impl fmt::Display for Row {
     }
 }
 
+/// A rank-polymorphic tensor constructor, preserved across value aliases.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TensorIntrinsic {
+    /// Construct a tensor of zeros.
+    Zeros,
+    /// Construct a tensor of ones.
+    Ones,
+    /// Construct a tensor filled with one scalar.
+    Fill,
+}
+
+impl TensorIntrinsic {
+    /// The name used by the runtime builtin dispatcher.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            | Self::Zeros => "zeros",
+            | Self::Ones => "ones",
+            | Self::Fill => "fill",
+        }
+    }
+
+    /// Look up an ambient constructor.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            | "zeros" => Some(Self::Zeros),
+            | "ones" => Some(Self::Ones),
+            | "fill" => Some(Self::Fill),
+            | _ => None,
+        }
+    }
+}
+
+/// The callable identity and optional explicitly selected element representation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct TensorIntrinsicType {
+    /// The constructor's operation.
+    pub kind: TensorIntrinsic,
+    /// An explicit, dimensionless numeric element representation, if selected.
+    pub element: Option<Rep>,
+}
+
 /// A type.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Type {
@@ -660,6 +703,14 @@ pub enum Type {
     Point(Dim),
     /// `Unit[d]`: a unit value.
     UnitOf(Dim),
+    /// A variadic tensor constructor; its result rank depends on its call.
+    TensorIntrinsic(TensorIntrinsicType),
+    /// A type reflection constructor, optionally specialized to a concrete type.
+    TypeRepIntrinsic(Option<Box<Type>>),
+    /// A checked opaque-value conversion, optionally specialized to its result type.
+    FromValueIntrinsic(Option<Box<Type>>),
+    /// A checked conversion of a concrete function into an opaque callback.
+    ToCallbackIntrinsic,
     /// `(τ1, ..., τn) -> τ`.
     Fn(Vec<Type>, Box<Type>),
     /// A record with a row.
@@ -827,6 +878,12 @@ impl Type {
                     elem: Box::new(elem.substitute_params(args)),
                 }
             },
+            | Self::TypeRepIntrinsic(ty) => {
+                Self::TypeRepIntrinsic(ty.as_ref().map(|ty| Box::new(ty.substitute_params(args))))
+            },
+            | Self::FromValueIntrinsic(ty) => {
+                Self::FromValueIntrinsic(ty.as_ref().map(|ty| Box::new(ty.substitute_params(args))))
+            },
             | Self::Fn(params, ret) => {
                 Self::Fn(
                     params.iter().map(|p| p.substitute_params(args)).collect(),
@@ -976,6 +1033,20 @@ impl fmt::Display for Type {
             | Self::Tensor { shape, elem } => write!(f, "Tensor<{shape}, {elem}>"),
             | Self::Point(dim) => write!(f, "Point[{dim}]"),
             | Self::UnitOf(dim) => write!(f, "Unit[{dim}]"),
+            | Self::TensorIntrinsic(intrinsic) => {
+                if intrinsic.kind == TensorIntrinsic::Fill {
+                    f.write_str("variadic fill constructor")
+                } else if let Some(rep) = intrinsic.element {
+                    write!(f, "variadic tensor constructor<{rep}>")
+                } else {
+                    f.write_str("variadic tensor constructor")
+                }
+            },
+            | Self::TypeRepIntrinsic(Some(ty)) => write!(f, "type_rep<{ty}>"),
+            | Self::TypeRepIntrinsic(None) => f.write_str("type_rep constructor"),
+            | Self::FromValueIntrinsic(Some(ty)) => write!(f, "from_value<{ty}>"),
+            | Self::FromValueIntrinsic(None) => f.write_str("from_value converter"),
+            | Self::ToCallbackIntrinsic => f.write_str("to_callback converter"),
             | Self::Fn(params, ret) => {
                 if params.len() == 1 {
                     write!(f, "{} -> {ret}", params[0])
@@ -1152,6 +1223,10 @@ pub struct Scheme {
     pub nats: Vec<u32>,
     /// Class constraints, quantified with the variables they mention.
     pub constraints: Vec<Constraint>,
+    /// Numeric literal domains and representation transfers.
+    pub numeric: Vec<crate::representation::NumericConstraint>,
+    /// Types materialized while applying the function, not in a deferred value.
+    pub materializations: Vec<Type>,
     /// The body.
     pub ty: Type,
 }
@@ -1166,6 +1241,8 @@ impl Scheme {
             rows: Vec::new(),
             nats: Vec::new(),
             constraints: Vec::new(),
+            numeric: Vec::new(),
+            materializations: Vec::new(),
             ty,
         }
     }
@@ -1182,6 +1259,8 @@ impl Scheme {
             rows: Vec::new(),
             nats: Vec::new(),
             constraints: Vec::new(),
+            numeric: Vec::new(),
+            materializations: Vec::new(),
             ty,
         }
     }
@@ -1205,6 +1284,7 @@ impl Scheme {
             && self.rows.is_empty()
             && self.nats.is_empty()
             && self.constraints.is_empty()
+            && self.numeric.is_empty()
     }
 }
 

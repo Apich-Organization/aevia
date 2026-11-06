@@ -1,21 +1,36 @@
-//! Conservative lowering of pure scalar Core IR to RSSN's machine-code tape.
+//! Conservative lowering of pure Float/Bool Core IR to RSSN's machine-code tape.
 //!
 //! The current backend has straight-line SSA plus select, but no jumps or
 //! function calls. Pure branches can be selected eagerly, and a single
 //! self-tail-call site becomes a machine-code loop with a bounded back edge.
 //! Other calls, effects, captures, exact numbers, units, and tensors fall back.
-use crate::value::{NumKind, NumVal, Value};
+use crate::value::NumKind;
+use crate::value::NumVal;
+use crate::value::Value;
 use aevia_dim::Dim;
-use aevia_ir::{Atom, Block, CallKind, Function, Pattern, Rhs, Stmt, Tail};
-use aevia_rssn::jit::{Cmp, Inst, LoopProgram, Program, Reg};
+use aevia_ir::Atom;
+use aevia_ir::Block;
+use aevia_ir::CallKind;
+use aevia_ir::Function;
+use aevia_ir::Pattern;
+use aevia_ir::Rhs;
+use aevia_ir::Stmt;
+use aevia_ir::Tail;
+use aevia_rssn::jit::Cmp;
+use aevia_rssn::jit::Inst;
+use aevia_rssn::jit::LoopProgram;
+use aevia_rssn::jit::Program;
+use aevia_rssn::jit::Reg;
 use aevia_syntax::Span;
-use aevia_syntax::ast::{BinOp, UnOp};
+use aevia_syntax::ast::BinOp;
+use aevia_syntax::ast::UnOp;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::rc::Weak;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Kind {
     Float,
     Bool,
 }
@@ -24,11 +39,12 @@ struct Operand {
     reg: Reg,
     kind: Kind,
 }
-struct Builder {
+struct Builder<'a> {
     insts: Vec<Inst>,
+    literals: &'a [(Span, u64)],
 }
 
-impl Builder {
+impl Builder<'_> {
     fn emit(
         &mut self,
         inst: Inst,
@@ -38,6 +54,7 @@ impl Builder {
         self.insts.push(inst);
         Some(Operand { reg, kind })
     }
+
     fn atom(
         &mut self,
         atom: &Atom,
@@ -50,6 +67,7 @@ impl Builder {
             | _ => None,
         }
     }
+
     fn statements(
         &mut self,
         block: &Block,
@@ -60,21 +78,31 @@ impl Builder {
                 | Stmt::Let(item) => {
                     let value = match &item.rhs {
                         | Rhs::Atom(atom) => self.atom(atom, slots)?,
+                        | Rhs::NumericLiteral(_) => {
+                            let (_, bits) =
+                                self.literals.iter().find(|(span, _)| *span == item.span)?;
+                            self.emit(Inst::Const(f64::from_bits(*bits)), Kind::Float)?
+                        },
                         | Rhs::Unary { op, operand } => {
                             let a = self.atom(operand, slots)?;
-                            if a.kind != Kind::Float {
-                                return None;
-                            }
-                            match op {
-                                | UnOp::Pos => a,
-                                | UnOp::Neg => self.emit(Inst::Neg(a.reg), Kind::Float)?,
+                            match (op, a.kind) {
+                                | (UnOp::Pos, Kind::Float) => a,
+                                | (UnOp::Neg, Kind::Float) => {
+                                    self.emit(Inst::Neg(a.reg), Kind::Float)?
+                                },
+                                | (UnOp::Not, Kind::Bool) => {
+                                    let zero = self.emit(Inst::Const(0.0), Kind::Bool)?;
+                                    self.emit(Inst::Cmp(Cmp::Eq, a.reg, zero.reg), Kind::Bool)?
+                                },
                                 | _ => return None,
                             }
                         },
                         | Rhs::Binary { op, left, right } => {
                             let a = self.atom(left, slots)?;
                             let b = self.atom(right, slots)?;
-                            if a.kind != Kind::Float || b.kind != Kind::Float {
+                            if a.kind != b.kind
+                                || (a.kind == Kind::Bool && !matches!(op, BinOp::Eq | BinOp::Ne))
+                            {
                                 return None;
                             }
                             let (inst, kind) = match op {
@@ -91,6 +119,33 @@ impl Builder {
                                 | _ => return None,
                             };
                             self.emit(inst, kind)?
+                        },
+                        | Rhs::AndOr { op, left, right } if matches!(op, BinOp::And | BinOp::Or) =>
+                        {
+                            let left = self.atom(left, slots)?;
+                            if left.kind != Kind::Bool {
+                                return None;
+                            }
+                            // Only a fully pure compiled RHS may be evaluated
+                            // eagerly; calls, errors and effects reject compilation.
+                            let right = self.block(right, &mut slots.to_vec())?;
+                            if right.kind != Kind::Bool {
+                                return None;
+                            }
+                            let constant = self.emit(
+                                Inst::Const(if matches!(op, BinOp::And) {
+                                    0.0
+                                } else {
+                                    1.0
+                                }),
+                                Kind::Bool,
+                            )?;
+                            let (yes, no) = if matches!(op, BinOp::And) {
+                                (right.reg, constant.reg)
+                            } else {
+                                (constant.reg, right.reg)
+                            };
+                            self.emit(Inst::Select(left.reg, yes, no), Kind::Bool)?
                         },
                         | Rhs::Block(block) => self.block(block, &mut slots.to_vec())?,
                         | _ => return None,
@@ -110,6 +165,7 @@ impl Builder {
         }
         Some(())
     }
+
     fn block(
         &mut self,
         block: &Block,
@@ -141,7 +197,7 @@ impl Builder {
 
     // A tail-recursive iteration is compiled into a multi-output step. The
     // existing interpreter trampoline performs the jump and enforces fuel.
-    // Each branch remains pure Float arithmetic; the unselected branch can
+    // Each branch remains pure Float/Bool computation; the unselected branch can
     // therefore be evaluated without changing observable behaviour.
     fn step_block(
         &mut self,
@@ -149,15 +205,18 @@ impl Builder {
         slots: &mut [Option<Operand>],
         name: &str,
         arity: usize,
-        tail_span: &mut Option<Span>,
+        tail_span: &mut Option<(Span, Span)>,
+        parameters: &[Kind],
+        result_kind: &mut Option<Kind>,
     ) -> Option<Vec<Operand>> {
         self.statements(block, slots)?;
         match &block.tail {
             | Tail::Return { atom, .. } => {
                 let result = self.atom(atom, slots)?;
-                if result.kind != Kind::Float {
+                if result_kind.is_some_and(|previous| previous != result.kind) {
                     return None;
                 }
+                *result_kind = Some(result.kind);
                 let zero = self.emit(Inst::Const(0.0), Kind::Float)?;
                 let mut outputs = vec![zero, result];
                 outputs.resize(2 + arity, zero);
@@ -172,13 +231,13 @@ impl Builder {
                 if tail_span.is_some() {
                     return None;
                 }
-                *tail_span = Some(call.span);
+                *tail_span = Some((call.span, call.callee_span));
                 let one = self.emit(Inst::Const(1.0), Kind::Float)?;
                 let zero = self.emit(Inst::Const(0.0), Kind::Float)?;
                 let mut outputs = vec![one, zero];
-                for atom in &call.args {
+                for (atom, expected) in call.args.iter().zip(parameters) {
                     let value = self.atom(atom, slots)?;
-                    if value.kind != Kind::Float {
+                    if value.kind != *expected {
                         return None;
                     }
                     outputs.push(value);
@@ -195,8 +254,24 @@ impl Builder {
                 if condition.kind != Kind::Bool {
                     return None;
                 }
-                let a = self.step_block(then_block, &mut slots.to_vec(), name, arity, tail_span)?;
-                let b = self.step_block(else_block, &mut slots.to_vec(), name, arity, tail_span)?;
+                let a = self.step_block(
+                    then_block,
+                    &mut slots.to_vec(),
+                    name,
+                    arity,
+                    tail_span,
+                    parameters,
+                    result_kind,
+                )?;
+                let b = self.step_block(
+                    else_block,
+                    &mut slots.to_vec(),
+                    name,
+                    arity,
+                    tail_span,
+                    parameters,
+                    result_kind,
+                )?;
                 a.into_iter()
                     .zip(b)
                     .map(|(a, b)| self.emit(Inst::Select(condition.reg, a.reg, b.reg), Kind::Float))
@@ -215,30 +290,46 @@ enum Compiled {
     Loop {
         program: LoopProgram,
         tail_span: Span,
+        callee_span: Span,
+        result: Kind,
     },
 }
-fn compile(function: &Function) -> Option<Compiled> {
-    if !function.jit || !function.captures.is_empty() {
+fn compile(
+    function: &Function,
+    literals: &[(Span, u64)],
+    parameters: &[Kind],
+    expected_result: Kind,
+) -> Option<Compiled> {
+    if !function.jit || !function.captures.is_empty() || parameters.len() != function.params.len() {
         return None;
     }
-    let mut builder = Builder { insts: Vec::new() };
+    let mut builder = Builder {
+        insts: Vec::new(),
+        literals,
+    };
     let mut slots = vec![None; function.nslots as usize];
     for (index, pattern) in function.params.iter().enumerate() {
         let Pattern::Bind { slot, inner: None } = pattern else {
             return None;
         };
-        let value = builder.emit(Inst::Input(u32::try_from(index).ok()?), Kind::Float)?;
+        let value = builder.emit(Inst::Input(u32::try_from(index).ok()?), parameters[index])?;
         *slots.get_mut(*slot as usize)? = Some(value);
     }
     let mut tail_span = None;
+    let mut result_kind = None;
     if let Some(outputs) = builder.step_block(
         &function.body,
         &mut slots.clone(),
         &function.name,
         function.params.len(),
         &mut tail_span,
+        parameters,
+        &mut result_kind,
     ) {
-        if let Some(span) = tail_span {
+        if let Some((span, callee_span)) = tail_span {
+            if result_kind != Some(expected_result) {
+                return None;
+            }
             let program = LoopProgram::compile(
                 builder.insts,
                 function.params.len(),
@@ -247,20 +338,28 @@ fn compile(function: &Function) -> Option<Compiled> {
             return Some(Compiled::Loop {
                 program,
                 tail_span: span,
+                callee_span,
+                result: result_kind?,
             });
         }
     }
     // Start again: the speculative step lowering can have emitted operations.
-    let mut builder = Builder { insts: Vec::new() };
+    let mut builder = Builder {
+        insts: Vec::new(),
+        literals,
+    };
     let mut slots = vec![None; function.nslots as usize];
     for (index, pattern) in function.params.iter().enumerate() {
         let Pattern::Bind { slot, inner: None } = pattern else {
             return None;
         };
-        let value = builder.emit(Inst::Input(u32::try_from(index).ok()?), Kind::Float)?;
+        let value = builder.emit(Inst::Input(u32::try_from(index).ok()?), parameters[index])?;
         *slots.get_mut(*slot as usize)? = Some(value);
     }
     let result = builder.block(&function.body, &mut slots)?;
+    if result.kind != expected_result {
+        return None;
+    }
     let program = Program::compile(builder.insts, function.params.len(), vec![result.reg])?;
     Some(Compiled::Scalar {
         program,
@@ -268,10 +367,59 @@ fn compile(function: &Function) -> Option<Compiled> {
     })
 }
 
-// The weak reference guards against pointer reuse; sweeping dead entries bounds
-// the cache across REPL reloads. Machine code is never shared across threads.
+// The weak reference guards against pointer reuse. All live and dead entries
+// count toward the hard cap; machine code is never shared across threads.
 type Entry = (Weak<Function>, Option<Compiled>);
-thread_local! { static CACHE: RefCell<HashMap<usize, Entry>> = RefCell::new(HashMap::new()); }
+type CacheKey = (usize, Vec<Kind>, Kind, Vec<(Span, u64)>);
+thread_local! { static CACHE: RefCell<HashMap<CacheKey, Entry>> = RefCell::new(HashMap::new()); }
+#[cfg(test)]
+thread_local! { static NATIVE_LOOPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+thread_local! { static NATIVE_SCALARS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// Resolve numeric literals under the actual activation before consulting the
+/// machine-code cache. Failure is a normal interpreter fallback and never
+/// inserts a negative cache entry for a different specialization.
+pub(crate) fn specialization(
+    function: &Function,
+    mut resolve: impl FnMut(&aevia_syntax::ast::NumberLit, Span) -> Option<f64>,
+) -> Option<Vec<(Span, u64)>> {
+    if !function.jit || !function.captures.is_empty() {
+        return None;
+    }
+    fn visit(
+        block: &Block,
+        out: &mut Vec<(Span, u64)>,
+        resolve: &mut impl FnMut(&aevia_syntax::ast::NumberLit, Span) -> Option<f64>,
+    ) -> Option<()> {
+        for stmt in &block.stmts {
+            if let Stmt::Let(item) = stmt {
+                match &item.rhs {
+                    | Rhs::NumericLiteral(number) => {
+                        out.push((item.span, resolve(number, item.span)?.to_bits()))
+                    },
+                    | Rhs::Block(inner) | Rhs::AndOr { right: inner, .. } => {
+                        visit(inner, out, resolve)?
+                    },
+                    | _ => {},
+                }
+            }
+        }
+        if let Tail::If {
+            then_block,
+            else_block,
+            ..
+        } = &block.tail
+        {
+            visit(then_block, out, resolve)?;
+            visit(else_block, out, resolve)?;
+        }
+        Some(())
+    }
+    let mut literals = Vec::new();
+    visit(&function.body, &mut literals, &mut resolve)?;
+    Some(literals)
+}
 
 pub(crate) enum Outcome {
     Value(Value),
@@ -286,60 +434,101 @@ pub(crate) fn run(
     function: &Rc<Function>,
     args: &[Value],
     fuel: usize,
-    is_self: impl FnOnce() -> bool,
+    literals: &[(Span, u64)],
+    expected_result: Kind,
+    is_self: impl FnOnce(Span) -> bool,
 ) -> Option<Outcome> {
     if !function.jit || args.len() != function.params.len() {
         return None;
     }
-    let values: Option<Vec<f64>> = args
+    let values: Option<Vec<(Kind, f64)>> = args
         .iter()
-        .map(|value| match value {
-            | Value::Num(NumVal {
-                kind: NumKind::Float(x),
-                dim,
-                display: None,
-            }) if *dim == Dim::one() => Some(*x),
-            | _ => None,
+        .map(|value| {
+            match value {
+                | Value::Num(NumVal {
+                    kind: NumKind::Float(x),
+                    dim,
+                    display: None,
+                }) if *dim == Dim::one() => Some((Kind::Float, *x)),
+                | Value::Bool(value) => Some((Kind::Bool, if *value { 1.0 } else { 0.0 })),
+                | _ => None,
+            }
         })
         .collect();
     let values = values?;
+    let kinds: Vec<Kind> = values.iter().map(|(kind, _)| *kind).collect();
+    let values: Vec<f64> = values.into_iter().map(|(_, value)| value).collect();
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let key = Rc::as_ptr(function) as usize;
+        let key = (
+            Rc::as_ptr(function) as usize,
+            kinds.clone(),
+            expected_result,
+            literals.to_vec(),
+        );
         if cache.len() >= 256 {
             cache.retain(|_, (function, _)| function.strong_count() > 0);
         }
-        let entry = cache
-            .entry(key)
-            .or_insert_with(|| (Rc::downgrade(function), compile(function)));
+        if !cache.contains_key(&key) && cache.len() >= 256 {
+            if let Some(evicted) = cache.keys().next().cloned() {
+                cache.remove(&evicted);
+            }
+        }
+        let entry = cache.entry(key).or_insert_with(|| {
+            (
+                Rc::downgrade(function),
+                compile(function, literals, &kinds, expected_result),
+            )
+        });
         if !entry.0.ptr_eq(&Rc::downgrade(function)) {
-            *entry = (Rc::downgrade(function), compile(function));
+            *entry = (
+                Rc::downgrade(function),
+                compile(function, literals, &kinds, expected_result),
+            );
         }
         match entry.1.as_ref()? {
-            | Compiled::Loop { program, tail_span } => {
+            | Compiled::Loop {
+                program,
+                tail_span,
+                callee_span,
+                result: result_kind,
+            } => {
                 // The pure loop cannot mutate the binding, so one check before
                 // entering native code is enough even in a mutable REPL scope.
-                if !is_self() {
+                if !is_self(*callee_span) {
                     return None;
                 }
                 let limit = u64::try_from(fuel).ok()?;
                 let result = program.run(&values, limit)?;
+                #[cfg(test)]
+                NATIVE_LOOPS.with(|count| count.set(count.get() + 1));
                 if result.outputs[0] != 0.0 {
                     let consumed = usize::try_from(limit.checked_sub(result.remaining)?).ok()?;
                     Some(Outcome::Tail {
                         args: result.outputs[2..]
                             .iter()
-                            .map(|value| Value::float(*value))
+                            .zip(&kinds)
+                            .map(|(value, kind)| {
+                                match kind {
+                                    | Kind::Float => Value::float(*value),
+                                    | Kind::Bool => Value::Bool(*value != 0.0),
+                                }
+                            })
                             .collect(),
                         span: *tail_span,
                         consumed,
                     })
                 } else {
-                    Some(Outcome::Value(Value::float(result.outputs[1])))
+                    Some(Outcome::Value(match result_kind {
+                        | Kind::Float => Value::float(result.outputs[1]),
+                        | Kind::Bool => Value::Bool(result.outputs[1] != 0.0),
+                    }))
                 }
             },
             | Compiled::Scalar { program, result } => {
                 let result_value = program.call(&values)?[0];
+                #[cfg(test)]
+                NATIVE_SCALARS.with(|count| count.set(count.get() + 1));
                 Some(Outcome::Value(match result {
                     | Kind::Float => Value::Num(NumVal::float(result_value, Dim::one())),
                     | Kind::Bool => Value::Bool(result_value != 0.0),
@@ -370,6 +559,355 @@ mod tests {
             &checked.literal_reps,
         );
         module.fns[0].function.clone()
+    }
+
+    fn dynamic_literal_function() -> Rc<Function> {
+        let span = Span::default();
+        Rc::new(Function {
+            name: Rc::from("dynamic_literal"),
+            jit: true,
+            params: vec![Pattern::Bind { slot: 0, inner: None }],
+            body: Rc::new(Block {
+                stmts: vec![
+                    Stmt::Let(aevia_ir::Let {
+                        slot: 1,
+                        rhs: Rhs::NumericLiteral(aevia_syntax::ast::NumberLit::Int(1.into())),
+                        span,
+                    }),
+                    Stmt::Let(aevia_ir::Let {
+                        slot: 2,
+                        rhs: Rhs::Binary {
+                            op: BinOp::Add,
+                            left: Atom::Local(0),
+                            right: Atom::Local(1),
+                        },
+                        span,
+                    }),
+                ],
+                tail: Tail::Return {
+                    atom: Atom::Local(2),
+                    span,
+                },
+            }),
+            captures: Vec::new(),
+            nslots: 3,
+            span,
+        })
+    }
+
+    #[test]
+    fn dynamic_float_literals_compile_and_cache_by_exact_bits() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        let function = dynamic_literal_function();
+        assert!(specialization(&function, |_, _| None).is_none());
+        assert_eq!(CACHE.with(|cache| cache.borrow().len()), 0);
+        for (literal, expected) in [(1.0_f64, 3.0_f64), (2.0, 4.0), (-0.0, 2.0), (0.0, 2.0)] {
+            let constants = specialization(&function, |_, _| Some(literal)).unwrap();
+            let Some(Outcome::Value(Value::Num(result))) = run(
+                &function,
+                &[Value::float(2.0)],
+                0,
+                &constants,
+                Kind::Float,
+                |_| true,
+            ) else {
+                panic!("Float specialization must execute machine code")
+            };
+            let NumKind::Float(result) = result.kind else {
+                panic!("expected Float")
+            };
+            assert_eq!(result.to_bits(), expected.to_bits());
+        }
+        assert_eq!(CACHE.with(|cache| cache.borrow().len()), 4);
+    }
+
+    #[test]
+    fn specialized_constant_preserves_negative_zero_bits() {
+        let span = Span::default();
+        let function = Rc::new(Function {
+            name: Rc::from("signed_zero"),
+            jit: true,
+            params: vec![],
+            body: Rc::new(Block {
+                stmts: vec![Stmt::Let(aevia_ir::Let {
+                    slot: 0,
+                    rhs: Rhs::NumericLiteral(aevia_syntax::ast::NumberLit::Decimal("0.0".into())),
+                    span,
+                })],
+                tail: Tail::Return {
+                    atom: Atom::Local(0),
+                    span,
+                },
+            }),
+            captures: vec![],
+            nslots: 1,
+            span,
+        });
+        let constants = specialization(&function, |_, _| Some(-0.0)).unwrap();
+        let Some(Outcome::Value(Value::Num(value))) =
+            run(&function, &[], 0, &constants, Kind::Float, |_| true)
+        else {
+            panic!("expected machine-code constant")
+        };
+        let NumKind::Float(value) = value.kind else {
+            panic!("expected Float")
+        };
+        assert_eq!(value.to_bits(), (-0.0_f64).to_bits());
+    }
+
+    #[test]
+    fn cache_is_bounded_even_when_all_functions_are_live() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        let functions: Vec<_> = (0..270).map(|_| dynamic_literal_function()).collect();
+        for function in &functions {
+            // An unsupported literal-free specialization still occupies a
+            // negative entry, and must not bypass the live-entry limit.
+            assert!(
+                run(function, &[Value::float(1.0)], 0, &[], Kind::Float, |_| {
+                    true
+                })
+                .is_none()
+            );
+        }
+        assert_eq!(CACHE.with(|cache| cache.borrow().len()), 256);
+    }
+
+    #[test]
+    fn source_generic_float_is_compiled_after_exact_calls_without_cache_poisoning() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        let source = "@jit\nfn number<r: Rep>(): r = 1\nlet integer = number<Int>()\nlet real = number<Real>()\nlet float = number<Float>()\n";
+        let compilation = compile_source("generic-jit.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        assert!(matches!(
+            interp
+                .eval_toplevel("integer")
+                .unwrap()
+                .as_num()
+                .unwrap()
+                .kind,
+            NumKind::Int(_)
+        ));
+        assert!(matches!(
+            interp.eval_toplevel("real").unwrap().as_num().unwrap().kind,
+            NumKind::Exact(_)
+        ));
+        assert!(
+            matches!(interp.eval_toplevel("float").unwrap().as_num().unwrap().kind, NumKind::Float(value) if value == 1.0)
+        );
+        CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert_eq!(cache.len(), 1, "exact calls must not enter the Float cache");
+            assert!(
+                cache.values().any(|(_, compiled)| compiled.is_some()),
+                "Float activation must compile machine code"
+            );
+            assert!(cache.keys().any(|(_, _, _, literals)| {
+                literals.iter().any(|(_, bits)| *bits == 1.0_f64.to_bits())
+            }));
+        });
+    }
+
+    #[test]
+    fn source_generic_self_tail_uses_native_loop_only_with_matching_proof() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let source = "@jit\nfn sum<r: Rep>(n: Float, acc: r): r = if n <= 0.0 then acc else sum(n - 1.0, acc + 1)\nlet result = sum<Float>(10.0, 0.0)\n";
+        let compilation = compile_source("generic-tail-jit.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        assert_eq!(interp.eval_toplevel("result").unwrap().as_f64(), Some(10.0));
+        assert!(
+            NATIVE_LOOPS.with(|count| count.get()) > 0,
+            "generic same-proof tail recursion must execute native loop"
+        );
+    }
+
+    #[test]
+    fn generic_bool_and_float_activations_compile_separately() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        NATIVE_SCALARS.with(|count| count.set(0));
+        let source = "@jit\nfn identity<a>(x: a): a = x\nlet integer = identity<Int>(1)\nlet boolean = identity<Bool>(true)\nlet floating = identity<Float>(2.0)\n";
+        let compilation = compile_source("bool-jit-cache.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        assert!(matches!(
+            interp.eval_toplevel("boolean").unwrap(),
+            Value::Bool(true)
+        ));
+        assert_eq!(
+            interp.eval_toplevel("floating").unwrap().as_f64(),
+            Some(2.0)
+        );
+        assert_eq!(NATIVE_SCALARS.with(|count| count.get()), 2);
+        CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert!(
+                cache
+                    .keys()
+                    .any(|(_, inputs, result, _)| inputs == &[Kind::Bool] && *result == Kind::Bool)
+            );
+            assert!(cache.keys().any(|(_, inputs, result, _)| {
+                inputs == &[Kind::Float] && *result == Kind::Float
+            }));
+        });
+    }
+
+    #[test]
+    fn boolean_tail_state_and_result_execute_natively() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let source = "@jit\nfn flip(n: Float, flag: Bool): Bool = if n <= 0.0 then flag else flip(n - 1.0, !flag)\nlet result = flip(3.0, false)\n";
+        let compilation = compile_source("bool-jit-loop.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        assert!(matches!(
+            interp.eval_toplevel("result").unwrap(),
+            Value::Bool(true)
+        ));
+        assert!(NATIVE_LOOPS.with(|count| count.get()) > 0);
+    }
+
+    #[test]
+    fn boolean_short_circuit_compiles_only_a_pure_rhs() {
+        let pure = function("@jit\nfn both(a: Bool, b: Bool): Bool = a && !b\n");
+        let compiled = compile(&pure, &[], &[Kind::Bool, Kind::Bool], Kind::Bool);
+        assert!(compiled.is_some(), "pure boolean rhs should compile");
+        let Some(Outcome::Value(Value::Bool(value))) = run(
+            &pure,
+            &[Value::Bool(true), Value::Bool(false)],
+            0,
+            &[],
+            Kind::Bool,
+            |_| true,
+        ) else {
+            panic!("expected Bool")
+        };
+        assert!(value);
+        let effectful =
+            function("@jit\nfn both(a: Bool): Bool = a && effect()\nfn effect(): Bool = true\n");
+        assert!(compile(&effectful, &[], &[Kind::Bool], Kind::Bool).is_none());
+    }
+
+    #[test]
+    fn boolean_tail_resume_preserves_argument_kinds_and_values() {
+        let bool_function = function(
+            "@jit\nfn flip(n: Float, flag: Bool): Bool = if n <= 0.0 then flag else flip(n - 1.0, !flag)\n",
+        );
+        let Some(Outcome::Tail { args, consumed, .. }) = run(
+            &bool_function,
+            &[Value::float(3.0), Value::Bool(false)],
+            2,
+            &[],
+            Kind::Bool,
+            |_| true,
+        ) else {
+            panic!("expected fuel-limited native tail step")
+        };
+        assert_eq!(consumed, 2);
+        // The final body is evaluated after the two permitted backedges;
+        // the returned arguments belong to its pending third tail dispatch.
+        assert_eq!(args[0].as_f64(), Some(0.0));
+        assert!(matches!(args[1], Value::Bool(true)));
+        let Some(Outcome::Value(Value::Bool(value))) =
+            run(&bool_function, &args, 0, &[], Kind::Bool, |_| true)
+        else {
+            panic!("expected resumed boolean result")
+        };
+        assert!(value);
+
+        // The established Float loop uses exactly the same pending-dispatch
+        // protocol and exposes the same state at the same budget boundary.
+        let float_function = function(
+            "@jit\nfn flip_float(n: Float, flag: Float): Float = if n <= 0.0 then flag else flip_float(n - 1.0, 1.0 - flag)\n",
+        );
+        let Some(Outcome::Tail { args, consumed, .. }) = run(
+            &float_function,
+            &[Value::float(3.0), Value::float(0.0)],
+            2,
+            &[],
+            Kind::Float,
+            |_| true,
+        ) else {
+            panic!("expected fuel-limited Float tail step")
+        };
+        assert_eq!(consumed, 2);
+        assert_eq!(args[0].as_f64(), Some(0.0));
+        assert_eq!(args[1].as_f64(), Some(1.0));
+        let Some(Outcome::Value(value)) =
+            run(&float_function, &args, 0, &[], Kind::Float, |_| true)
+        else {
+            panic!("expected resumed Float result")
+        };
+        assert_eq!(value.as_f64(), Some(1.0));
+    }
+
+    #[test]
+    fn mismatched_host_argument_never_enters_a_native_boolean_specialization() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        NATIVE_SCALARS.with(|count| count.set(0));
+        let compilation = compile_source(
+            "bool-jit-forged.aev",
+            "@jit\nfn identity(flag: Bool): Bool = flag\n",
+        );
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        let function = interp.eval_toplevel("identity").unwrap();
+        let _ = interp.apply(function, vec![Value::float(1.0)], Span::default());
+        assert_eq!(NATIVE_SCALARS.with(|count| count.get()), 0);
+        assert!(CACHE.with(|cache| cache.borrow().is_empty()));
+    }
+
+    #[test]
+    fn rebound_specialized_clone_of_same_origin_stays_on_trampoline() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let source = "@jit\nfn sum<r: Rep>(n: Float, acc: r): r = if n <= 0.0 then acc else sum(n - 1.0, acc + 1)\nlet original = sum<Float>\nlet sum = original\nlet result = original(3.0, 0.0)\n";
+        let compilation = compile_source("generic-rebound-jit.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        assert_eq!(interp.eval_toplevel("result").unwrap().as_f64(), Some(3.0));
+        assert_eq!(
+            NATIVE_LOOPS.with(|count| count.get()),
+            0,
+            "a rebound selected clone must not take the native self loop"
+        );
     }
 
     #[test]
@@ -424,13 +962,19 @@ mod tests {
     fn scalar_branches_really_compile_and_execute() {
         let function =
             function("@jit\nfn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x\n");
-        let compiled = compile(&function).expect("scalar branch compiles to machine code");
+        let compiled = compile(&function, &[], &[Kind::Float], Kind::Float)
+            .expect("scalar branch compiles to machine code");
         let Compiled::Scalar { program, .. } = compiled else {
             panic!("expected scalar");
         };
         assert_eq!(program.call(&[3.0]), Some(vec![6.0]));
         assert_eq!(program.call(&[-3.0]), Some(vec![3.0]));
-        assert!(run(&function, &[Value::float(3.0)], 0, || true).is_some());
+        assert!(
+            run(&function, &[Value::float(3.0)], 0, &[], Kind::Float, |_| {
+                true
+            })
+            .is_some()
+        );
     }
 
     #[test]
@@ -438,7 +982,8 @@ mod tests {
         let function = function(
             "@jit\nfn sum(n: Float, acc: Float): Float = if n <= 0.0 then acc else sum(n - 1.0, acc + n)\n",
         );
-        let compiled = compile(&function).expect("tail loop compiles to machine code");
+        let compiled = compile(&function, &[], &[Kind::Float, Kind::Float], Kind::Float)
+            .expect("tail loop compiles to machine code");
         let Compiled::Loop { program, .. } = compiled else {
             panic!("expected native loop");
         };
@@ -453,7 +998,9 @@ mod tests {
                 &function,
                 &[Value::float(3.0), Value::float(0.0)],
                 2,
-                || true
+                &[],
+                Kind::Float,
+                |_| true
             ),
             Some(Outcome::Tail { consumed: 2, .. })
         ));
@@ -462,7 +1009,9 @@ mod tests {
                 &function,
                 &[Value::float(3.0), Value::float(0.0)],
                 2,
-                || false
+                &[],
+                Kind::Float,
+                |_| false
             )
             .is_none()
         );
@@ -471,6 +1020,17 @@ mod tests {
     #[test]
     fn calls_are_never_speculated_in_branches() {
         let function = function("@jit\nfn f(x: Float): Float = if x > 0.0 then x else sqrt(x)\n");
-        assert!(compile(&function).is_none());
+        assert!(compile(&function, &[], &[Kind::Float], Kind::Float).is_none());
+    }
+
+    #[test]
+    fn explicitly_specialized_tail_calls_stay_on_the_interpreter_trampoline() {
+        let function = function(
+            "@jit\nfn f<r: Rep>(n: Float, x: r): r = if n <= 0.0 then x else f<r>(n - 1.0, x)\n",
+        );
+        assert!(
+            compile(&function, &[], &[Kind::Float, Kind::Float], Kind::Float).is_none(),
+            "typed self calls need full selected-binder proof"
+        );
     }
 }

@@ -45,6 +45,8 @@ fn scheme(
         rows: (0..rows).collect(),
         nats: Vec::new(),
         constraints: Vec::new(),
+        numeric: Vec::new(),
+        materializations: Vec::new(),
         ty,
     };
     #[cfg(test)]
@@ -96,6 +98,10 @@ fn assert_fully_quantified(scheme: &Scheme) {
             | Type::Prop
             | Type::Str
             | Type::Unit
+            | Type::TensorIntrinsic(_)
+            | Type::TypeRepIntrinsic(_)
+            | Type::FromValueIntrinsic(_)
+            | Type::ToCallbackIntrinsic
             | Type::Dyn(_)
             | Type::Param(_)
             | Type::Error => {},
@@ -1144,6 +1150,8 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 rows: Vec::new(),
                 nats: Vec::new(),
                 constraints: vec![Constraint::new("Parallel", vec![var(0)])],
+                numeric: Vec::new(),
+                materializations: Vec::new(),
                 ty: func(vec![func(vec![var(0)], var(1)), list(var(0))], list(var(1))),
             }]
         },
@@ -3193,7 +3201,10 @@ pub fn is_builtin(name: &str) -> bool {
 /// directly instead of instantiating a scheme.
 #[must_use]
 pub fn is_special(name: &str) -> bool {
-    matches!(name, "zeros" | "ones" | "fill" | "symbol" | "symfun")
+    matches!(
+        name,
+        "zeros" | "ones" | "fill" | "symbol" | "symfun" | "to_callback"
+    )
 }
 
 /// Built-ins that read an explicit type argument written before the call.

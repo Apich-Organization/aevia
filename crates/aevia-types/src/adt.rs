@@ -43,14 +43,74 @@ pub fn key_of(id: AdtId) -> AdtKey {
         .ok()
         .and_then(|table| table.get(&id).cloned())
         .unwrap_or_default();
-    AdtKey::new(module, name_of(id))
+    let mut key = AdtKey::new(module, name_of(id));
+    if !key.module.is_prelude() {
+        key.schema = schema_of(id);
+    }
+    key
 }
 
-/// Records the module that declares an allocated type.
+
+/// The stable lexical origin of an allocated declaration.
+#[must_use]
+pub fn module_of(id: AdtId) -> ModulePath {
+    modules()
+        .read()
+        .ok()
+        .and_then(|table| table.get(&id).cloned())
+        .unwrap_or_default()
+}
+fn completed() -> &'static RwLock<std::collections::HashSet<AdtId>> {
+    static COMPLETE: OnceLock<RwLock<std::collections::HashSet<AdtId>>> = OnceLock::new();
+    COMPLETE.get_or_init(|| RwLock::new(std::collections::HashSet::new()))
+}
+fn schemas() -> &'static RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>> {
+    static SCHEMAS: OnceLock<RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>>> = OnceLock::new();
+    SCHEMAS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+pub(crate) fn is_complete(id: AdtId) -> bool {
+    completed().read().is_ok_and(|table| table.contains(&id))
+}
+/// A collision-free declaration identity; incomplete declarations have no schema.
+#[must_use]
+pub fn schema_of(id: AdtId) -> Option<crate::DeclarationSchemaKey> {
+    if let Some(schema) = schemas()
+        .read()
+        .ok()
+        .and_then(|table| table.get(&id).cloned())
+    {
+        return Some(schema);
+    }
+    let schema = crate::declaration_schema::build(id)?;
+    if let Ok(mut table) = schemas().write() {
+        table.insert(id, schema.clone());
+    }
+    Some(schema)
+}
+/// Nominal equality across independent checks of an unchanged declaration.
+/// Incomplete declarations and host types retain their exact allocated witness.
+#[must_use]
+pub fn same_type(
+    left: AdtId,
+    right: AdtId,
+) -> bool {
+    if left == right {
+        return true;
+    }
+    let left = key_of(left);
+    let right = key_of(right);
+    left.schema.is_some() && right.schema.is_some() && left == right
+}
+
+/// Records the module that declares an allocated type before finalization.
+/// Finalized declarations are immutable; later writes are ignored.
 pub fn set_module(
     id: AdtId,
     module: ModulePath,
 ) {
+    if is_complete(id) {
+        return;
+    }
     if let Ok(mut table) = modules().write() {
         table.insert(id, module);
     }
@@ -71,11 +131,15 @@ fn param_kinds() -> &'static RwLock<HashMap<AdtId, Vec<ParamKind>>> {
     KINDS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-/// Records the parameter kinds of a variant type.
+/// Records the parameter kinds of an unfinished variant type.
+/// Finalized declarations are immutable; later writes are ignored.
 pub fn set_param_kinds(
     id: AdtId,
     kinds: Vec<ParamKind>,
 ) {
+    if is_complete(id) {
+        return;
+    }
     if let Ok(mut table) = param_kinds().write() {
         table.insert(id, kinds);
     }
@@ -182,7 +246,19 @@ fn registry() -> &'static RwLock<Vec<Adt>> {
 #[must_use]
 pub fn intern(adt: Adt) -> AdtId {
     let mut guard = registry().write().expect("adt registry is not poisoned");
-    if let Some(index) = guard.iter().position(|existing| existing.name == adt.name) {
+    // Interning is reserved for shared prelude/host types. A source module
+    // may declare `Value`, `OpError` or any other same-named nominal type;
+    // such a declaration must never become the ABI type by winning a race.
+    let identities = modules()
+        .read()
+        .expect("adt module registry is not poisoned");
+    if let Some(index) = guard.iter().enumerate().position(|(index, existing)| {
+        existing.name == adt.name
+            && u32::try_from(index)
+                .ok()
+                .and_then(|id| identities.get(&id))
+                .is_none_or(ModulePath::is_prelude)
+    }) {
         return u32::try_from(index).unwrap_or(0);
     }
     let id = u32::try_from(guard.len()).unwrap_or(u32::MAX);
@@ -235,16 +311,24 @@ pub fn allocate_in(
 ///
 /// Declaring a recursive type requires the name to exist before its fields are
 /// converted (§3.6.4), which is why allocation and construction are two steps.
+/// This finalizes the declaration, including an abstract type with no
+/// constructors. Repeated calls cannot mutate a previously issued witness.
 pub fn set_ctors(
     id: AdtId,
     ctors: Vec<Ctor>,
 ) {
+    if is_complete(id) {
+        return;
+    }
     if let Ok(mut guard) = registry().write() {
         if let Some(entry) = usize::try_from(id)
             .ok()
             .and_then(|index| guard.get_mut(index))
         {
             entry.ctors = ctors;
+            if let Ok(mut table) = completed().write() {
+                table.insert(id);
+            }
         }
     }
 }
@@ -309,6 +393,12 @@ pub fn count() -> usize {
 
 /// Resets the registry to the prelude types. Used by tests.
 pub fn reset() {
+    if let Ok(mut table) = schemas().write() {
+        table.clear();
+    }
+    if let Ok(mut table) = completed().write() {
+        table.clear();
+    }
     if let Ok(mut guard) = registry().write() {
         guard.truncate(3);
     }
@@ -345,6 +435,20 @@ mod tests {
         let first = intern(adt.clone());
         let second = intern(adt);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn host_interning_cannot_capture_a_same_named_source_declaration() {
+        let name = "HostInternNominalIsolation";
+        let source = allocate_in(ModulePath::new(["User"]), name, Vec::new());
+        let host = intern(Adt {
+            name: name.to_string(),
+            params: Vec::new(),
+            ctors: Vec::new(),
+        });
+        assert_ne!(source, host);
+        assert_eq!(key_of(source).module, ModulePath::new(["User"]));
+        assert!(key_of(host).module.is_prelude());
     }
 
     #[test]

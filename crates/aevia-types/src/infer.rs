@@ -11,6 +11,9 @@
 //! binding sits at a level lower than `l`. This is the standard efficient
 //! formulation and keeps `let` inference linear in practice.
 
+use crate::representation::NumericConstraint;
+use crate::representation::RepDomain;
+use crate::representation::RepRelation;
 use crate::ty::Constraint;
 use crate::ty::LiteralKind;
 use crate::ty::Nat;
@@ -66,6 +69,8 @@ pub enum UnifyError {
         /// The requested type.
         requested: Type,
     },
+    /// Numeric representation domains or operation transfers conflict.
+    Numeric(String),
     /// Two type-level `Nat` terms are inconsistent (§3.5.1): their difference
     /// has no non-negative integer solution.
     NatMismatch {
@@ -99,6 +104,7 @@ impl std::fmt::Display for UnifyError {
                     mismatch.left.to_plain_string()
                 )
             },
+            | Self::Numeric(message) => f.write_str(message),
             | Self::Occurs(id) => write!(f, "infinite type: t{id} occurs in its own definition"),
             | Self::MissingField { field, row } => {
                 write!(f, "the record {{ {row} }} has no field `{field}`")
@@ -221,6 +227,16 @@ pub struct Infer {
     weak: HashSet<u32>,
     /// `ρ ⊒ σ` lower bounds recorded by `join` (§3.4.1, PLAN D4).
     rep_lower: HashMap<u32, Vec<Rep>>,
+    numeric: crate::numeric_index::NumericIndex<NumericConstraint>,
+    division_inputs: HashMap<u32, Rep>,
+    join_inputs: HashMap<u32, (Rep, Rep)>,
+    #[cfg(test)]
+    numeric_peak: usize,
+    #[cfg(test)]
+    numeric_work: std::cell::Cell<usize>,
+    composite_literals: HashSet<u32>,
+    numeric_universals: HashSet<u32>,
+    numeric_errors: Vec<String>,
     /// `ρ lacks l` side conditions on row variables (§3.6.1, PLAN D5).
     lacks: HashMap<u32, Vec<String>>,
     /// Type-level natural-number substitution (§3.5.1).
@@ -258,6 +274,16 @@ impl Infer {
             rep_literals: HashMap::new(),
             weak: HashSet::new(),
             rep_lower: HashMap::new(),
+            numeric: crate::numeric_index::NumericIndex::default(),
+            division_inputs: HashMap::new(),
+            join_inputs: HashMap::new(),
+            #[cfg(test)]
+            numeric_peak: 0,
+            #[cfg(test)]
+            numeric_work: std::cell::Cell::new(0),
+            composite_literals: HashSet::new(),
+            numeric_universals: HashSet::new(),
+            numeric_errors: Vec::new(),
             lacks: HashMap::new(),
             nat_subst: HashMap::new(),
             nat_levels: HashMap::new(),
@@ -282,6 +308,11 @@ impl Infer {
     /// Enters a nested binding level.
     pub fn enter_level(&mut self) {
         self.level += 1;
+    }
+
+    #[must_use]
+    pub fn current_level(&self) -> u32 {
+        self.level
     }
 
     /// Leaves a binding level.
@@ -348,6 +379,37 @@ impl Infer {
         row
     }
 
+    /// A materialized value keeps one schema across all later uses. The
+    /// caller supplies lexical universals that remain activation parameters.
+    pub fn weaken_materialized(
+        &mut self,
+        ty: &Type,
+        protected: &crate::TypeSubstitution,
+    ) {
+        let mut free = crate::TypeSubstitution::default();
+        free.freshen(&self.resolve(ty), &mut Infer::new());
+        for id in free.types.keys().chain(free.representations.keys()) {
+            if !protected.types.contains_key(id) && !protected.representations.contains_key(id) {
+                self.weak.insert(*id);
+            }
+        }
+        for id in free.dimensions.keys() {
+            if !protected.dimensions.contains_key(id) {
+                self.weak.insert(*id);
+            }
+        }
+        for id in free.rows.keys() {
+            if !protected.rows.contains_key(id) {
+                self.weak.insert(*id);
+            }
+        }
+        for id in free.naturals.keys() {
+            if !protected.naturals.contains_key(id) {
+                self.weak.insert(*id);
+            }
+        }
+    }
+
     /// Whether a variable is weak.
     #[must_use]
     pub fn is_weak(
@@ -372,12 +434,114 @@ impl Infer {
             .any(|weak| self.dims.resolve(&Dim::var(*weak)).contains_var(id))
     }
 
+    fn contains_numeric(
+        &self,
+        constraint: &NumericConstraint,
+    ) -> bool {
+        let constraint = self.resolve_numeric(constraint);
+        let mut dependencies: Vec<_> = Self::numeric_variables(&constraint).into_iter().collect();
+        dependencies.sort_unstable();
+        self.numeric.equivalent(&dependencies, |existing| {
+            let existing = self.resolve_numeric(existing);
+            match (&existing, &constraint) {
+                | (
+                    NumericConstraint::Literal {
+                        ty: Type::Scalar(a, _),
+                        kind: ak,
+                    },
+                    NumericConstraint::Literal {
+                        ty: Type::Scalar(b, _),
+                        kind: bk,
+                    },
+                ) if ak.is_quantity() && ak == bk => a == b,
+                | _ => existing == constraint,
+            }
+        })
+    }
+
+    fn cache_numeric_transfer(
+        &mut self,
+        constraint: &NumericConstraint,
+    ) {
+        match constraint {
+            | NumericConstraint::Relation(RepRelation::Divide {
+                input,
+                result: Rep::Var(id),
+            }) => {
+                self.division_inputs.insert(*id, *input);
+            },
+            | NumericConstraint::Relation(RepRelation::Join {
+                left,
+                right,
+                result: Rep::Var(id),
+            }) => {
+                self.join_inputs.insert(*id, (*left, *right));
+            },
+            | _ => {},
+        }
+    }
+
+    fn push_numeric(
+        &mut self,
+        constraint: NumericConstraint,
+    ) {
+        let constraint = self.resolve_numeric(&constraint);
+        let dependencies = Self::numeric_variables(&constraint).into_iter().collect();
+        self.cache_numeric_transfer(&constraint);
+        self.numeric.insert(constraint, dependencies);
+        #[cfg(test)]
+        {
+            self.numeric_peak = self.numeric_peak.max(self.numeric.len());
+        }
+    }
+
+    fn numeric_changed(
+        &mut self,
+        variable: u32,
+    ) {
+        let affected = self.numeric.affected(variable);
+        for id in affected {
+            let Some(constraint) = self.numeric.get(id).cloned() else {
+                continue;
+            };
+            let constraint = self.resolve_numeric(&constraint);
+            let dependencies = Self::numeric_variables(&constraint).into_iter().collect();
+            self.cache_numeric_transfer(&constraint);
+            self.numeric.replace(id, constraint, dependencies);
+        }
+    }
+
+    fn numeric_component(
+        &self,
+        roots: impl IntoIterator<Item = u32>,
+    ) -> Vec<NumericConstraint> {
+        let component = self.numeric.project(roots);
+        #[cfg(test)]
+        self.numeric_work
+            .set(self.numeric_work.get() + component.len());
+        component
+            .into_iter()
+            .filter_map(|id| self.numeric.get(id))
+            .map(|constraint| self.resolve_numeric(constraint))
+            .collect()
+    }
+
     /// Records that a type variable came from a literal.
     pub fn mark_literal(
         &mut self,
         ty: &Type,
         kind: LiteralKind,
     ) {
+        // Satisfied concrete facts cannot constrain any future variable.
+        // Keeping one per visited literal made long concrete arithmetic scan
+        // the entire already-checked prefix at every next operation.
+        let satisfied = matches!(self.resolve(ty),Type::Scalar(rep,dim) if !matches!(rep,Rep::Var(_)) && kind.accepts_rep(rep) && (kind.is_quantity() || dim.is_one()));
+        if !satisfied {
+            let constraint = NumericConstraint::Literal { ty: ty.clone(), kind };
+            if !self.contains_numeric(&constraint) {
+                self.push_numeric(constraint);
+            }
+        }
         match ty {
             | Type::Var(id) => {
                 self.literals.insert(*id, kind);
@@ -412,6 +576,588 @@ impl Infer {
             | Type::Scalar(Rep::Var(id), _) => self.rep_literals.get(id).copied(),
             | _ => None,
         }
+    }
+
+    /// Register transported numeric semantics in this inference universe.
+    pub fn add_numeric_constraint(
+        &mut self,
+        constraint: NumericConstraint,
+    ) -> Result<(), UnifyError> {
+        if let NumericConstraint::Relation(RepRelation::Divide {
+            input,
+            result: Rep::Var(id),
+        }) = &constraint
+        {
+            self.division_inputs.insert(*id, *input);
+        }
+        if let NumericConstraint::Relation(RepRelation::Join {
+            left,
+            right,
+            result: Rep::Var(id),
+        }) = &constraint
+        {
+            self.join_inputs.insert(*id, (*left, *right));
+        }
+        if let NumericConstraint::Literal { ty, kind } = &constraint {
+            self.mark_literal(ty, *kind);
+            if let Type::Scalar(_, dim) = self.resolve(ty) {
+                if !kind.is_quantity() {
+                    self.unify_dim(&dim, &Dim::one())?;
+                }
+            }
+        } else if !self.contains_numeric(&constraint) {
+            self.push_numeric(constraint);
+        }
+        self.propagate_numeric()
+    }
+
+    #[must_use]
+    pub fn resolve_numeric(
+        &self,
+        constraint: &NumericConstraint,
+    ) -> NumericConstraint {
+        match constraint {
+            | NumericConstraint::Literal { ty, kind } => {
+                NumericConstraint::Literal {
+                    ty: self.resolve(ty),
+                    kind: *kind,
+                }
+            },
+            | NumericConstraint::Relation(relation) => {
+                NumericConstraint::Relation(relation.map(|rep| self.resolve_rep(rep)))
+            },
+            | NumericConstraint::DefaultLiteral { ty, kind, inputs } => {
+                NumericConstraint::DefaultLiteral {
+                    ty: self.resolve(ty),
+                    kind: *kind,
+                    inputs: inputs.iter().map(|rep| self.resolve_rep(*rep)).collect(),
+                }
+            },
+        }
+    }
+
+    fn numeric_relations(
+        &self,
+        constraints: &[NumericConstraint],
+    ) -> Result<Vec<RepRelation>, UnifyError> {
+        let mut relations = Vec::new();
+        for constraint in constraints {
+            match self.resolve_numeric(constraint) {
+                | NumericConstraint::Relation(relation) => relations.push(relation),
+                | NumericConstraint::DefaultLiteral { .. } => {},
+                | NumericConstraint::Literal { ty, kind } => {
+                    match &ty {
+                        | Type::Var(_) | Type::Error => {},
+                        | Type::Scalar(rep, dim) if kind.is_quantity() || dim.is_one() => {
+                            if !matches!(rep, Rep::Var(_)) && !kind.accepts_rep(*rep) {
+                                return Err(UnifyError::LiteralMismatch { kind, requested: ty });
+                            }
+                            if matches!(rep, Rep::Var(_)) {
+                                relations.push(RepRelation::Domain {
+                                    rep: *rep,
+                                    allowed: RepDomain::from_reps(
+                                        RepDomain::CONCRETE
+                                            .into_iter()
+                                            .filter(|rep| kind.accepts_rep(*rep)),
+                                    ),
+                                });
+                            }
+                        },
+                        | Type::Point(_) if kind.is_quantity() => {},
+                        | _ => {
+                            return Err(UnifyError::LiteralMismatch { kind, requested: ty });
+                        },
+                    }
+                },
+            }
+        }
+        Ok(relations)
+    }
+
+    pub fn propagate_numeric(&mut self) -> Result<(), UnifyError> {
+        while let Some(component) = self.numeric.take_dirty_component() {
+            #[cfg(test)]
+            self.numeric_work
+                .set(self.numeric_work.get() + component.len());
+            let constraints: Vec<_> = component
+                .iter()
+                .filter_map(|id| self.numeric.get(*id))
+                .cloned()
+                .collect();
+            let outcome = (|| {
+                let relations = self.numeric_relations(&constraints)?;
+                let domains =
+                    crate::representation::propagate(&relations, |rep| self.resolve_rep(rep))
+                        .map_err(|error| UnifyError::Numeric(error.to_string()))?;
+                let mut changed = false;
+                for (id, domain) in domains.variables() {
+                    if let Some(rep) = domain.unique() {
+                        if matches!(self.resolve_rep(Rep::Var(id)), Rep::Var(_)) {
+                            self.rep_subst.insert(id, rep);
+                            self.numeric_changed(id);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    return Ok(());
+                }
+                for constraint in &constraints {
+                    let NumericConstraint::DefaultLiteral { ty, kind, inputs } =
+                        self.resolve_numeric(constraint)
+                    else {
+                        continue;
+                    };
+                    if inputs.iter().any(|rep| matches!(rep, Rep::Var(_))) {
+                        continue;
+                    }
+                    let Type::Scalar(Rep::Var(id), _) = ty else {
+                        continue;
+                    };
+                    let preferred = self.rep_literal_kind(Rep::Var(id)).unwrap_or(kind);
+                    let contextual = inputs
+                        .iter()
+                        .copied()
+                        .reduce(|a, b| a.join_concrete(b).unwrap_or(Rep::Complex));
+                    let mut selected = None;
+                    for candidate in contextual.into_iter().chain([
+                        Rep::default_for_literal(preferred),
+                        Rep::Int,
+                        Rep::Float,
+                        Rep::Real,
+                        Rep::Complex,
+                    ]) {
+                        if !kind.accepts_rep(candidate) || !preferred.accepts_rep(candidate) {
+                            continue;
+                        }
+                        let mut trial = relations.clone();
+                        trial.push(RepRelation::Domain {
+                            rep: Rep::Var(id),
+                            allowed: RepDomain::singleton(candidate),
+                        });
+                        if crate::representation::propagate(&trial, |rep| self.resolve_rep(rep))
+                            .is_ok()
+                        {
+                            selected = Some(candidate);
+                            break;
+                        }
+                    }
+                    let Some(rep) = selected else {
+                        return Err(UnifyError::Numeric(
+                            "no representation can materialize the dependent numeric literal"
+                                .to_string(),
+                        ));
+                    };
+                    self.rep_subst.insert(id, rep);
+                    self.numeric_changed(id);
+                    break;
+                }
+                Ok(())
+            })();
+            if let Err(error) = outcome {
+                self.numeric.retry(&component);
+                return Err(error);
+            }
+            for id in component {
+                if self.numeric.get(id).is_some_and(|constraint| {
+                    Self::numeric_variables(&self.resolve_numeric(constraint)).is_empty()
+                }) {
+                    self.numeric.retire(id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn representation_domain(
+        &self,
+        rep: Rep,
+    ) -> Result<RepDomain, UnifyError> {
+        let rep = self.resolve_rep(rep);
+        if !matches!(rep, Rep::Var(_)) {
+            return Ok(RepDomain::singleton(rep));
+        }
+        let roots = match rep {
+            | Rep::Var(id) => vec![id],
+            | _ => Vec::new(),
+        };
+        let constraints = self.numeric_component(roots);
+        let relations = self.numeric_relations(&constraints)?;
+        let domains = crate::representation::propagate(&relations, |rep| self.resolve_rep(rep))
+            .map_err(|error| UnifyError::Numeric(error.to_string()))?;
+        Ok(domains.domain(self.resolve_rep(rep)))
+    }
+
+    pub fn join_representation(
+        &mut self,
+        left: Rep,
+        right: Rep,
+    ) -> Result<Rep, UnifyError> {
+        let left = self.resolve_rep(left);
+        let right = self.resolve_rep(right);
+        if left == right {
+            return Ok(left);
+        }
+        // On all four representations join(divide(r), r) = divide(r).
+        // Keep long literal-only arithmetic compact without equating a
+        // general computed Join with either of its independent inputs.
+        if self.is_join_with(left, right) {
+            return Ok(left);
+        }
+        if self.is_join_with(right, left) {
+            return Ok(right);
+        }
+        if self.is_division_of(left, right) {
+            return Ok(left);
+        }
+        if self.is_division_of(right, left) {
+            return Ok(right);
+        }
+        if !matches!(left, Rep::Var(_)) && !matches!(right, Rep::Var(_)) {
+            return Ok(left.join_concrete(right).unwrap_or(Rep::Real));
+        }
+        let result = self.fresh_rep();
+        self.add_numeric_constraint(NumericConstraint::Relation(RepRelation::Join {
+            left,
+            right,
+            result,
+        }))?;
+        Ok(self.resolve_rep(result))
+    }
+
+    fn is_join_with(
+        &self,
+        result: Rep,
+        input: Rep,
+    ) -> bool {
+        matches!(result,Rep::Var(id) if self.join_inputs.get(&id).is_some_and(|(left,right)| self.resolve_rep(*left) == input || self.resolve_rep(*right) == input))
+    }
+
+    fn is_division_of(
+        &self,
+        result: Rep,
+        input: Rep,
+    ) -> bool {
+        matches!(result,Rep::Var(id) if self.division_inputs.get(&id).is_some_and(|original| self.resolve_rep(*original) == input))
+    }
+
+    /// Composite arithmetic retains literal domains, but it is no longer a
+    /// direct source literal when a surrounding operation chooses readings.
+    pub fn finish_literal_expression(
+        &mut self,
+        rep: Rep,
+    ) {
+        if let Rep::Var(id) = rep {
+            self.composite_literals.insert(id);
+        }
+        if let Rep::Var(id) = self.resolve_rep(rep) {
+            self.composite_literals.insert(id);
+        }
+    }
+
+    /// Reading heuristics distinguish a literal leaf from an expression that
+    /// retained the same domain. Generalization still sees the actual literal
+    /// constraint, so a constructed arithmetic value is never generalized.
+    #[must_use]
+    pub fn direct_literal_kind(
+        &self,
+        rep: Rep,
+    ) -> Option<LiteralKind> {
+        match self.resolve_rep(rep) {
+            | Rep::Var(id) if !self.composite_literals.contains(&id) => {
+                self.rep_literals.get(&id).copied()
+            },
+            | _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn numeric_constraint_count(&self) -> usize {
+        self.numeric.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn numeric_constraint_peak(&self) -> usize {
+        self.numeric_peak
+    }
+
+    #[cfg(test)]
+    pub(crate) fn numeric_constraint_work(&self) -> usize {
+        self.numeric_work.get()
+    }
+
+    pub fn divide_representation(
+        &mut self,
+        input: Rep,
+    ) -> Result<Rep, UnifyError> {
+        let input = self.resolve_rep(input);
+        // Divide is idempotent: its result can never be Int again.
+        if matches!(input,Rep::Var(id) if self.division_inputs.contains_key(&id)) {
+            return Ok(input);
+        }
+        if !matches!(input, Rep::Var(_)) {
+            return Ok(input.div_rep());
+        }
+        let result = self.fresh_rep();
+        self.add_numeric_constraint(NumericConstraint::Relation(RepRelation::Divide {
+            input,
+            result,
+        }))?;
+        Ok(self.resolve_rep(result))
+    }
+
+    /// Input-constrained numeric variables are universal even when they also
+    /// carry a literal domain (e.g. a branch returning its argument or zero).
+    pub fn quantify_numeric_inputs(
+        &self,
+        scheme: &mut Scheme,
+        inputs: &[Type],
+        level: u32,
+    ) {
+        let mut free = crate::TypeSubstitution::default();
+        let mut names = Infer::new();
+        for ty in inputs {
+            free.freshen(&self.resolve(ty), &mut names);
+        }
+        for id in free.types.keys() {
+            if !self.weak.contains(id)
+                && self.levels.get(id).copied().unwrap_or(0) > level
+                && !scheme.vars.contains(id)
+            {
+                scheme.vars.push(*id);
+            }
+        }
+        for id in free.representations.keys() {
+            if !self.weak.contains(id)
+                && self.rep_levels.get(id).copied().unwrap_or(0) > level
+                && !scheme.vars.contains(id)
+            {
+                scheme.vars.push(*id);
+            }
+        }
+        self.attach_numeric_scheme(scheme);
+    }
+
+    pub fn quantify_numeric_existentials(
+        &self,
+        scheme: &mut Scheme,
+        level: u32,
+    ) {
+        let mut free = crate::TypeSubstitution::default();
+        let mut names = Infer::new();
+        for constraint in &scheme.numeric {
+            // Private defaulted literal variables are existential, rather
+            // than selectable parameters, but each activation needs a fresh
+            // copy of them. Other intermediates generalize normally.
+            if let NumericConstraint::DefaultLiteral { ty, .. } = constraint {
+                free.freshen(ty, &mut names);
+            }
+        }
+        for id in free.representations.keys() {
+            if !self.weak.contains(id)
+                && self.rep_levels.get(id).copied().unwrap_or(0) > level
+                && !scheme.vars.contains(id)
+            {
+                scheme.vars.push(*id);
+            }
+        }
+    }
+
+    pub fn default_unprotected_numeric(
+        &mut self,
+        protected: &HashSet<u32>,
+    ) -> Result<(), UnifyError> {
+        let constraints: Vec<_> = self.numeric.iter().cloned().collect();
+        self.default_numeric_literals(&constraints, protected)?;
+        self.propagate_numeric()
+    }
+
+    pub fn take_numeric_errors(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.numeric_errors)
+    }
+
+    pub fn default_numeric_literals(
+        &mut self,
+        constraints: &[NumericConstraint],
+        protected: &HashSet<u32>,
+    ) -> Result<bool, UnifyError> {
+        self.propagate_numeric()?;
+        let mut changed = false;
+        let defaults: HashSet<u32> = constraints
+            .iter()
+            .filter_map(|constraint| {
+                match self.resolve_numeric(constraint) {
+                    | NumericConstraint::DefaultLiteral { ty, .. } => {
+                        Some(Self::numeric_variables(&NumericConstraint::Literal {
+                            ty,
+                            kind: LiteralKind::Int,
+                        }))
+                    },
+                    | _ => None,
+                }
+            })
+            .flatten()
+            .collect();
+        let computed: HashSet<u32> = constraints
+            .iter()
+            .filter_map(|constraint| {
+                match self.resolve_numeric(constraint) {
+                    | NumericConstraint::Relation(
+                        RepRelation::Join {
+                            result: Rep::Var(id), ..
+                        }
+                        | RepRelation::Divide {
+                            result: Rep::Var(id), ..
+                        },
+                    ) => Some(id),
+                    | _ => None,
+                }
+            })
+            .collect();
+        for constraint in constraints {
+            let NumericConstraint::Literal { ty, kind } = constraint else {
+                continue;
+            };
+            let ty = self.resolve(ty);
+            let free = Self::numeric_variables(&NumericConstraint::Literal {
+                ty: ty.clone(),
+                kind: *kind,
+            });
+            if free.is_empty()
+                || free.iter().any(|id| {
+                    protected.contains(id) || defaults.contains(id) || computed.contains(id)
+                })
+            {
+                continue;
+            }
+            let preferred = self.literal_kind(&ty).unwrap_or(*kind);
+            for rep in [
+                Rep::default_for_literal(preferred),
+                Rep::Int,
+                Rep::Float,
+                Rep::Real,
+                Rep::Complex,
+            ] {
+                if !kind.accepts_rep(rep) || !preferred.accepts_rep(rep) {
+                    continue;
+                }
+                let reading = match &ty {
+                    | Type::Var(_) if !kind.is_quantity() => Type::Scalar(rep, Dim::one()),
+                    | Type::Scalar(Rep::Var(_), dim) => Type::Scalar(rep, dim.clone()),
+                    | _ => break,
+                };
+                if self.probe_numeric_reading(&ty, &reading).is_ok() {
+                    self.unify(&ty, &reading)?;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        self.propagate_numeric()?;
+        Ok(changed)
+    }
+
+    fn numeric_variables(constraint: &NumericConstraint) -> HashSet<u32> {
+        let mut free = crate::TypeSubstitution::default();
+        let mut names = Infer::new();
+        for ty in constraint.types() {
+            free.freshen(&ty, &mut names);
+        }
+        free.types
+            .keys()
+            .chain(free.representations.keys())
+            .copied()
+            .collect()
+    }
+
+    /// Keep precisely the connected numeric contract, including existential
+    /// operation results that are not written in the function's argument list.
+    pub fn attach_numeric_scheme(
+        &self,
+        scheme: &mut Scheme,
+    ) {
+        let mut roots = HashSet::new();
+        for ty in std::iter::once(&scheme.ty)
+            .chain(scheme.materializations.iter())
+            .chain(
+                scheme
+                    .constraints
+                    .iter()
+                    .flat_map(|constraint| constraint.args.iter()),
+            )
+        {
+            roots.extend(Self::numeric_variables(&NumericConstraint::Literal {
+                ty: self.resolve(ty),
+                kind: LiteralKind::Int,
+            }));
+        }
+        // Inference allocates all kinds from one identity space, but only
+        // type/representation variables connect numeric decisions. Dimensions,
+        // extents and rows still travel in each clause's complete type schema.
+        for id in &scheme.vars {
+            roots.extend(Self::numeric_variables(&NumericConstraint::Literal {
+                ty: self.resolve(&Type::Var(*id)),
+                kind: LiteralKind::Int,
+            }));
+            if let Rep::Var(id) = self.resolve_rep(Rep::Var(*id)) {
+                roots.insert(id);
+            }
+        }
+        if roots.is_empty() {
+            scheme.numeric.clear();
+            return;
+        }
+        scheme.numeric = self.numeric_component(roots);
+    }
+
+    /// Validate a literal choice in its complete numeric component without
+    /// cloning unrelated module signatures, levels and substitutions.
+    fn probe_numeric_reading(
+        &self,
+        ty: &Type,
+        reading: &Type,
+    ) -> Result<(), UnifyError> {
+        let mut contract = Scheme::mono(self.resolve(ty));
+        self.attach_numeric_scheme(&mut contract);
+        let mut trial = Infer::new();
+        let mut projection = crate::TypeSubstitution::default();
+        projection.freshen(&contract.ty, &mut trial);
+        for constraint in &contract.numeric {
+            for ty in constraint.types() {
+                projection.freshen(&ty, &mut trial);
+            }
+        }
+        for constraint in &contract.numeric {
+            trial.add_numeric_constraint(constraint.substitute(&projection))?;
+        }
+        trial.unify(&projection.apply(&contract.ty), &projection.apply(reading))
+    }
+
+    /// Normalize an interface without choosing new defaults or changing its
+    /// ordered quantifier identities.
+    #[must_use]
+    pub fn resolve_scheme(
+        &self,
+        scheme: &Scheme,
+    ) -> Scheme {
+        let mut result = scheme.clone();
+        result.ty = self.resolve(&scheme.ty);
+        for constraint in &mut result.constraints {
+            for ty in &mut constraint.args {
+                *ty = self.resolve(ty);
+            }
+        }
+        result.numeric = scheme
+            .numeric
+            .iter()
+            .map(|clause| self.resolve_numeric(clause))
+            .collect();
+        result.materializations = scheme
+            .materializations
+            .iter()
+            .map(|ty| self.resolve(ty))
+            .collect();
+        result
     }
 
     /// Resolves a type through all substitutions.
@@ -467,6 +1213,29 @@ impl Infer {
             },
             | Type::Io(inner) => Type::Io(Box::new(self.resolve_depth(inner, depth + 1))),
             | Type::Dyn(rep) => Type::Dyn(self.resolve_rep_depth(*rep, depth)),
+            | Type::Point(dim) => Type::Point(self.dims.resolve(dim)),
+            | Type::UnitOf(dim) => Type::UnitOf(self.dims.resolve(dim)),
+            | Type::TypeRepIntrinsic(inner) => {
+                Type::TypeRepIntrinsic(
+                    inner
+                        .as_ref()
+                        .map(|ty| Box::new(self.resolve_depth(ty, depth + 1))),
+                )
+            },
+            | Type::FromValueIntrinsic(inner) => {
+                Type::FromValueIntrinsic(
+                    inner
+                        .as_ref()
+                        .map(|ty| Box::new(self.resolve_depth(ty, depth + 1))),
+                )
+            },
+            | Type::TensorIntrinsic(intrinsic) => {
+                let mut intrinsic = *intrinsic;
+                intrinsic.element = intrinsic
+                    .element
+                    .map(|rep| self.resolve_rep_depth(rep, depth + 1));
+                Type::TensorIntrinsic(intrinsic)
+            },
             | _ => ty.clone(),
         }
     }
@@ -850,6 +1619,15 @@ impl Infer {
         left: &Type,
         right: &Type,
     ) -> Result<(), UnifyError> {
+        self.unify_inner(left, right)?;
+        self.propagate_numeric()
+    }
+
+    fn unify_inner(
+        &mut self,
+        left: &Type,
+        right: &Type,
+    ) -> Result<(), UnifyError> {
         let left = self.resolve(left);
         let right = self.resolve(right);
         if left == right {
@@ -868,6 +1646,25 @@ impl Infer {
                 self.unify_shape(sa, sb)?;
                 self.unify(ea, eb)
             },
+            | (Type::TensorIntrinsic(a), Type::TensorIntrinsic(b))
+                if a.kind != crate::ty::TensorIntrinsic::Fill
+                    && b.kind != crate::ty::TensorIntrinsic::Fill =>
+            {
+                match (a.element, b.element) {
+                    | (Some(left), Some(right)) => self.unify_rep(left, right),
+                    | (None, None) => Ok(()),
+                    | _ => {
+                        Err(UnifyError::Mismatch {
+                            left: left.clone(),
+                            right: right.clone(),
+                        })
+                    },
+                }
+            },
+            | (Type::TypeRepIntrinsic(Some(a)), Type::TypeRepIntrinsic(Some(b)))
+            | (Type::FromValueIntrinsic(Some(a)), Type::FromValueIntrinsic(Some(b))) => {
+                self.unify(a, b)
+            },
             | (Type::Fn(pa, ra), Type::Fn(pb, rb)) => {
                 if pa.len() != pb.len() {
                     return Err(UnifyError::Mismatch {
@@ -882,7 +1679,7 @@ impl Infer {
             },
             | (Type::Record(ra), Type::Record(rb)) => self.unify_row(ra, rb),
             | (Type::Adt(ia, aa), Type::Adt(ib, ab)) => {
-                if ia != ib || aa.len() != ab.len() {
+                if !crate::adt::same_type(*ia, *ib) || aa.len() != ab.len() {
                     return Err(UnifyError::Mismatch {
                         left: left.clone(),
                         right: right.clone(),
@@ -976,6 +1773,22 @@ impl Infer {
         variable: Rep,
         other: Rep,
     ) -> Result<(), UnifyError> {
+        self.constrain_rep_inner(variable, other)?;
+        let constraint = NumericConstraint::Relation(RepRelation::AtLeast {
+            upper: variable,
+            lower: other,
+        });
+        if !self.contains_numeric(&constraint) {
+            self.push_numeric(constraint);
+        }
+        self.propagate_numeric()
+    }
+
+    fn constrain_rep_inner(
+        &mut self,
+        variable: Rep,
+        other: Rep,
+    ) -> Result<(), UnifyError> {
         let variable = self.resolve_rep(variable);
         let other = self.resolve_rep(other);
         if variable == other {
@@ -1026,6 +1839,15 @@ impl Infer {
     }
 
     pub fn unify_rep(
+        &mut self,
+        left: Rep,
+        right: Rep,
+    ) -> Result<(), UnifyError> {
+        self.unify_rep_inner(left, right)?;
+        self.propagate_numeric()
+    }
+
+    fn unify_rep_inner(
         &mut self,
         left: Rep,
         right: Rep,
@@ -1083,8 +1905,12 @@ impl Infer {
             if self.weak.contains(&id) {
                 self.weak.insert(other);
             }
+            if self.composite_literals.contains(&id) {
+                self.composite_literals.insert(other);
+            }
             let level = self.rep_levels.get(&id).copied().unwrap_or(0);
             self.rep_subst.insert(id, Rep::Var(other));
+            self.numeric_changed(id);
             self.rep_levels.insert(
                 other,
                 level.min(self.rep_levels.get(&other).copied().unwrap_or(u32::MAX)),
@@ -1115,6 +1941,7 @@ impl Infer {
         }
         let level = self.rep_levels.get(&id).copied().unwrap_or(0);
         self.rep_subst.insert(id, value);
+        self.numeric_changed(id);
         self.lower_rep_levels(value, level);
         Ok(())
     }
@@ -1136,6 +1963,7 @@ impl Infer {
                 self.weak.insert(other);
             }
             self.subst.insert(id, Type::Var(other));
+            self.numeric_changed(id);
             return Ok(());
         }
         if self.occurs(id, &ty) {
@@ -1174,7 +2002,9 @@ impl Infer {
         }
         let level = self.levels.get(&id).copied().unwrap_or(0);
         self.lower_levels(&ty, level);
+        self.lower_numeric_levels(&ty, level);
         self.subst.insert(id, ty);
+        self.numeric_changed(id);
         Ok(())
     }
 
@@ -1193,6 +2023,9 @@ impl Infer {
             | Type::Record(row) => self.occurs_row(id, &row),
             | Type::Adt(_, args) => args.iter().any(|arg| self.occurs(id, arg)),
             | Type::Io(inner) => self.occurs(id, &inner),
+            | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
+                self.occurs(id, &inner)
+            },
             | Type::Point(dim) | Type::UnitOf(dim) => dim.contains_var(id),
             | _ => false,
         }
@@ -1230,7 +2063,17 @@ impl Infer {
                     *entry = (*entry).min(level);
                 }
             },
-            | Type::Tensor { elem, .. } => self.lower_levels(elem, level),
+            | Type::Tensor { shape, elem } => {
+                if let Shape::Refined(extents) = shape {
+                    for extent in extents.iter().flatten() {
+                        for id in extent.vars() {
+                            let entry = self.nat_levels.entry(id).or_insert(level);
+                            *entry = (*entry).min(level);
+                        }
+                    }
+                }
+                self.lower_levels(elem, level);
+            },
             | Type::Fn(params, ret) => {
                 for param in params {
                     self.lower_levels(param, level);
@@ -1244,6 +2087,15 @@ impl Infer {
                 }
             },
             | Type::Io(inner) => self.lower_levels(inner, level),
+            | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
+                self.lower_levels(inner, level)
+            },
+            | Type::TensorIntrinsic(intrinsic) => {
+                if let Some(rep) = intrinsic.element {
+                    self.lower_rep_levels(rep, level);
+                }
+            },
+            | Type::Dyn(rep) => self.lower_rep_levels(*rep, level),
             | Type::Point(dim) | Type::UnitOf(dim) => {
                 for id in dim.vars() {
                     let entry = self.dim_levels.entry(id).or_insert(level);
@@ -1269,6 +2121,20 @@ impl Infer {
                 self.lower_levels(ty, level);
                 self.lower_row_levels(tail, level);
             },
+        }
+    }
+
+    fn lower_numeric_levels(
+        &mut self,
+        ty: &Type,
+        level: u32,
+    ) {
+        let mut schema = Scheme::mono(ty.clone());
+        self.attach_numeric_scheme(&mut schema);
+        for constraint in schema.numeric {
+            for ty in constraint.types() {
+                self.lower_levels(&ty, level);
+            }
         }
     }
 
@@ -1411,6 +2277,7 @@ impl Infer {
                 }
                 self.bind_row(a, Row::Var(b))
             },
+            | (Some(tail), None) | (None, Some(tail)) => self.bind_row(tail, Row::Empty),
             | _ => Ok(()),
         }
     }
@@ -1541,13 +2408,31 @@ impl Infer {
         &mut self,
         scheme: &Scheme,
     ) -> (Type, Vec<Constraint>) {
+        let (ty, constraints, _) = self.instantiate_scheme_with_bindings(scheme);
+        (ty, constraints)
+    }
+
+    /// Instantiates a signature and exposes its ordered variable correspondence.
+    pub fn instantiate_scheme_with_bindings(
+        &mut self,
+        scheme: &Scheme,
+    ) -> (Type, Vec<Constraint>, crate::TypeSubstitution) {
         if scheme.is_closed() {
-            return (scheme.ty.clone(), Vec::new());
+            return (
+                scheme.ty.clone(),
+                Vec::new(),
+                crate::TypeSubstitution::default(),
+            );
         }
         let mut type_map = HashMap::new();
         for id in &scheme.vars {
             let fresh = self.fresh_id();
             self.levels.insert(fresh, self.level);
+            // A scheme's shared variable list also quantifies representation
+            // variables. Keep their level so a first-class alias can be
+            // generalized again instead of silently defaulting its Rep.
+            self.rep_levels.insert(fresh, self.level);
+            self.numeric_universals.insert(fresh);
             type_map.insert(*id, fresh);
         }
         let mut dim_map = HashMap::new();
@@ -1568,7 +2453,26 @@ impl Infer {
             self.nat_levels.insert(fresh, self.level);
             nat_map.insert(*id, Nat::Var(fresh));
         }
-        let ty = substitute(&scheme.ty, &type_map, &dim_map, &row_map, &nat_map);
+        let bindings = crate::TypeSubstitution {
+            types: type_map
+                .iter()
+                .map(|(id, fresh)| (*id, Type::Var(*fresh)))
+                .collect(),
+            representations: type_map
+                .iter()
+                .map(|(id, fresh)| (*id, Rep::Var(*fresh)))
+                .collect(),
+            dimensions: dim_map
+                .iter()
+                .map(|(id, fresh)| (*id, Dim::var(*fresh)))
+                .collect(),
+            rows: row_map
+                .iter()
+                .map(|(id, fresh)| (*id, Row::Var(*fresh)))
+                .collect(),
+            naturals: nat_map,
+        };
+        let ty = bindings.apply(&scheme.ty);
         let constraints = scheme
             .constraints
             .iter()
@@ -1578,12 +2482,17 @@ impl Infer {
                     args: constraint
                         .args
                         .iter()
-                        .map(|arg| substitute(arg, &type_map, &dim_map, &row_map, &nat_map))
+                        .map(|arg| bindings.apply(arg))
                         .collect(),
                 }
             })
             .collect();
-        (ty, constraints)
+        for constraint in &scheme.numeric {
+            if let Err(error) = self.add_numeric_constraint(constraint.substitute(&bindings)) {
+                self.numeric_errors.push(error.to_string());
+            }
+        }
+        (ty, constraints, bindings)
     }
 
     /// Generalises a type over the variables introduced above the current
@@ -1638,14 +2547,36 @@ impl Infer {
         // Representation variables are quantified through the type-variable
         // list as well: they are created from the same counter, so a scheme
         // that quantifies `ρ` must quantify its id.
-        Scheme {
+        let mut scheme = Scheme {
             vars,
             dims,
             rows,
             nats,
             constraints,
+            numeric: Vec::new(),
+            materializations: Vec::new(),
             ty: self.resolve(ty),
+        };
+        if let Type::Fn(inputs, _) = self.resolve(ty) {
+            self.quantify_numeric_inputs(&mut scheme, &inputs, level);
         }
+        self.attach_numeric_scheme(&mut scheme);
+        if matches!(scheme.ty, Type::Fn(..)) {
+            self.quantify_numeric_existentials(&mut scheme, level);
+        }
+        for constraint in &scheme.numeric {
+            for ty in constraint.types() {
+                self.collect_generalizable(
+                    &ty,
+                    level,
+                    &mut scheme.vars,
+                    &mut scheme.dims,
+                    &mut scheme.rows,
+                    &mut scheme.nats,
+                );
+            }
+        }
+        scheme
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1660,18 +2591,20 @@ impl Infer {
     ) {
         let type_var = |id: u32| {
             !self.weak.contains(&id)
-                && !self.literals.contains_key(&id)
+                && (!self.literals.contains_key(&id) || self.numeric_universals.contains(&id))
                 && self.levels.get(&id).copied().unwrap_or(0) > level
         };
         let rep_var = |id: u32| {
             !self.weak.contains(&id)
-                && !self.rep_literals.contains_key(&id)
+                && (!self.rep_literals.contains_key(&id) || self.numeric_universals.contains(&id))
                 && self.rep_levels.get(&id).copied().unwrap_or(0) > level
         };
         let dim_var = |id: u32| {
             !self.is_weak_dim(id) && self.dim_levels.get(&id).copied().unwrap_or(0) > level
         };
-        let nat_var = |id: u32| self.nat_levels.get(&id).copied().unwrap_or(0) > level;
+        let nat_var = |id: u32| {
+            !self.weak.contains(&id) && self.nat_levels.get(&id).copied().unwrap_or(0) > level
+        };
         match ty {
             | Type::Var(id) => {
                 if type_var(*id) && !vars.contains(id) {
@@ -1726,6 +2659,16 @@ impl Infer {
             | Type::Io(inner) => {
                 self.collect_generalizable(inner, level, vars, dims, rows, nats);
             },
+            | Type::TypeRepIntrinsic(Some(inner)) | Type::FromValueIntrinsic(Some(inner)) => {
+                self.collect_generalizable(inner, level, vars, dims, rows, nats);
+            },
+            | Type::TensorIntrinsic(intrinsic) => {
+                if let Some(Rep::Var(id)) = intrinsic.element {
+                    if rep_var(id) && !vars.contains(&id) {
+                        vars.push(id);
+                    }
+                }
+            },
             | Type::Point(dim) | Type::UnitOf(dim) => {
                 for id in dim.vars() {
                     if dim_var(id) && !dims.contains(&id) {
@@ -1777,9 +2720,10 @@ impl Infer {
         &mut self,
         ty: &Type,
     ) -> (Type, Vec<u32>) {
-        let mut warnings = Vec::new();
-        let defaulted = self.default_inner(ty, &Scheme::mono(ty.clone()), &mut warnings, 0);
-        (defaulted, warnings)
+        let mut scheme = Scheme::mono(ty.clone());
+        self.attach_numeric_scheme(&mut scheme);
+        let (defaulted, warnings) = self.default_scheme(&scheme);
+        (defaulted.ty, warnings)
     }
 
     /// Defaults the variables a scheme did *not* quantify (§3.10.2).
@@ -1791,8 +2735,48 @@ impl Infer {
         &mut self,
         scheme: &Scheme,
     ) -> (Scheme, Vec<u32>) {
+        self.default_scheme_preserving(scheme, &crate::TypeSubstitution::default())
+    }
+
+    pub fn default_scheme_preserving(
+        &mut self,
+        scheme: &Scheme,
+        lexical: &crate::TypeSubstitution,
+    ) -> (Scheme, Vec<u32>) {
+        let mut protection = scheme.clone();
+        for id in lexical.types.keys().chain(lexical.representations.keys()) {
+            if !protection.vars.contains(id) {
+                protection.vars.push(*id);
+            }
+        }
+        for id in lexical.dimensions.keys() {
+            if !protection.dims.contains(id) {
+                protection.dims.push(*id);
+            }
+        }
+        for id in lexical.rows.keys() {
+            if !protection.rows.contains(id) {
+                protection.rows.push(*id);
+            }
+        }
+        for id in lexical.naturals.keys() {
+            if !protection.nats.contains(id) {
+                protection.nats.push(*id);
+            }
+        }
+        let protected: HashSet<_> = protection
+            .vars
+            .iter()
+            .chain(&protection.dims)
+            .chain(&protection.rows)
+            .chain(&protection.nats)
+            .copied()
+            .collect();
+        if let Err(error) = self.default_numeric_literals(&scheme.numeric, &protected) {
+            self.numeric_errors.push(error.to_string());
+        }
         let mut warnings = Vec::new();
-        let ty = self.default_inner(&scheme.ty, scheme, &mut warnings, 0);
+        let ty = self.default_inner(&scheme.ty, &protection, &mut warnings, 0);
         let constraints = scheme
             .constraints
             .iter()
@@ -1802,22 +2786,34 @@ impl Infer {
                     args: constraint
                         .args
                         .iter()
-                        .map(|arg| self.default_inner(arg, scheme, &mut warnings, 0))
+                        .map(|arg| self.default_inner(arg, &protection, &mut warnings, 0))
                         .collect(),
                 }
             })
             .collect();
-        (
-            Scheme {
-                vars: scheme.vars.clone(),
-                dims: scheme.dims.clone(),
-                rows: scheme.rows.clone(),
-                nats: scheme.nats.clone(),
-                constraints,
-                ty,
-            },
-            warnings,
-        )
+        if let Err(error) = self.propagate_numeric() {
+            self.numeric_errors.push(error.to_string());
+        }
+        let mut result = Scheme {
+            vars: scheme.vars.clone(),
+            dims: scheme.dims.clone(),
+            rows: scheme.rows.clone(),
+            nats: scheme.nats.clone(),
+            constraints,
+            numeric: scheme
+                .numeric
+                .iter()
+                .map(|constraint| self.resolve_numeric(constraint))
+                .collect(),
+            materializations: scheme
+                .materializations
+                .iter()
+                .map(|ty| self.resolve(ty))
+                .collect(),
+            ty: self.resolve(&ty),
+        };
+        self.attach_numeric_scheme(&mut result);
+        (result, warnings)
     }
 
     fn default_inner(
@@ -1844,6 +2840,7 @@ impl Infer {
                         // constraint recorded this variable, and it must see
                         // the defaulted type too.
                         self.subst.insert(id, defaulted.clone());
+                        self.numeric_changed(id);
                         defaulted
                     },
                     // A type variable with no literal constraint cannot be
@@ -1906,6 +2903,33 @@ impl Infer {
                     | other => Type::Dyn(other),
                 }
             },
+            | Type::TypeRepIntrinsic(inner) => {
+                Type::TypeRepIntrinsic(
+                    inner
+                        .as_ref()
+                        .map(|ty| Box::new(self.default_inner(ty, scheme, warnings, depth + 1))),
+                )
+            },
+            | Type::FromValueIntrinsic(inner) => {
+                Type::FromValueIntrinsic(
+                    inner
+                        .as_ref()
+                        .map(|ty| Box::new(self.default_inner(ty, scheme, warnings, depth + 1))),
+                )
+            },
+            | Type::TensorIntrinsic(mut intrinsic) => {
+                if let Some(rep) = intrinsic.element {
+                    if let Type::Scalar(rep, _) = self.default_inner(
+                        &Type::Scalar(rep, Dim::one()),
+                        scheme,
+                        warnings,
+                        depth + 1,
+                    ) {
+                        intrinsic.element = Some(rep);
+                    }
+                }
+                Type::TensorIntrinsic(intrinsic)
+            },
             | other => other,
         }
     }
@@ -1922,79 +2946,45 @@ impl Infer {
         &mut self,
         rep: Rep,
     ) -> Option<Rep> {
-        match self.resolve_rep(rep) {
-            | Rep::Var(id) => {
-                let kind = self.rep_literals.get(&id).copied()?;
-                let mut lower: Vec<Rep> = Vec::new();
-                for bound in self.rep_lower.get(&id).cloned().unwrap_or_default() {
-                    self.collect_rep_bounds(bound, &mut lower, 0);
-                }
-                let floor = lower.iter().copied().fold(Rep::Int, |acc, bound| {
-                    acc.join_concrete(bound).unwrap_or(Rep::Complex)
-                });
-                let chosen = Rep::upper_candidates(floor)
-                    .iter()
-                    .copied()
-                    .find(|candidate| kind.accepts_rep(*candidate))?;
-                let _ = self.rep_subst.insert(id, chosen);
-                Some(chosen)
-            },
-            | concrete => Some(concrete),
-        }
+        let rep = self.resolve_rep(rep);
+        let Rep::Var(id) = rep else {
+            return Some(rep);
+        };
+        let kind = self.rep_literals.get(&id).copied()?;
+        self.choose_representation(id, Some(kind))
     }
 
-    /// The representation a variable defaults to, honouring its lower bounds.
+    fn choose_representation(
+        &mut self,
+        id: u32,
+        literal: Option<LiteralKind>,
+    ) -> Option<Rep> {
+        let preferred = literal.map_or(Rep::Real, Rep::default_for_literal);
+        for candidate in [preferred, Rep::Int, Rep::Float, Rep::Real, Rep::Complex] {
+            if literal.is_some_and(|kind| !kind.accepts_rep(candidate)) {
+                continue;
+            }
+            let ty = Type::Scalar(Rep::Var(id), Dim::one());
+            let reading = Type::Scalar(candidate, Dim::one());
+            if self.probe_numeric_reading(&ty, &reading).is_ok()
+                && self.unify_rep(Rep::Var(id), candidate).is_ok()
+            {
+                return Some(candidate);
+            }
+        }
+        self.numeric_errors
+            .push("no numeric representation satisfies the inferred constraints".to_string());
+        None
+    }
+
+    /// Default through the same relation graph used by explicit calls.
     fn default_rep(
         &mut self,
         id: u32,
     ) -> Rep {
-        let mut lower: Vec<Rep> = Vec::new();
-        for bound in self.rep_lower.get(&id).cloned().unwrap_or_default() {
-            self.collect_rep_bounds(bound, &mut lower, 0);
-        }
-        let kind = self.rep_literals.get(&id).copied();
-        let preferred = kind.map_or(Rep::Real, Rep::default_for_literal);
-        // The default must be above every bound; when it is not, climb the
-        // lattice to the least representation that is (§3.4.1).
-        let mut chosen = if lower.iter().all(|bound| preferred.at_least(*bound)) {
-            preferred
-        } else {
-            *Rep::upper_candidates(lower.iter().copied().fold(Rep::Int, |acc, bound| {
-                acc.join_concrete(bound).unwrap_or(Rep::Complex)
-            }))
-            .last()
-            .unwrap_or(&Rep::Real)
-        };
-        if let Some(kind) = kind {
-            if !kind.accepts_rep(chosen) {
-                chosen = Rep::Real;
-            }
-        }
-        let _ = self.rep_subst.insert(id, chosen);
-        chosen
-    }
-
-    fn collect_rep_bounds(
-        &self,
-        rep: Rep,
-        out: &mut Vec<Rep>,
-        depth: u32,
-    ) {
-        if depth > 16 {
-            return;
-        }
-        match self.resolve_rep(rep) {
-            | Rep::Var(id) => {
-                for bound in self.rep_lower.get(&id).cloned().unwrap_or_default() {
-                    self.collect_rep_bounds(bound, out, depth + 1);
-                }
-            },
-            | concrete => {
-                if !out.contains(&concrete) {
-                    out.push(concrete);
-                }
-            },
-        }
+        let literal = self.rep_literals.get(&id).copied();
+        self.choose_representation(id, literal)
+            .unwrap_or_else(|| literal.map_or(Rep::Real, Rep::default_for_literal))
     }
 
     fn default_dim(
@@ -2118,112 +3108,6 @@ impl Infer {
     }
 }
 
-fn substitute(
-    ty: &Type,
-    types: &HashMap<u32, u32>,
-    dims: &HashMap<u32, u32>,
-    rows: &HashMap<u32, u32>,
-    nats: &HashMap<u32, Nat>,
-) -> Type {
-    let substitute_shape = |shape: &Shape| {
-        match shape {
-            | Shape::Rank(rank) => Shape::Rank(*rank),
-            | Shape::Refined(items) => {
-                Shape::Refined(
-                    items
-                        .iter()
-                        .map(|item| item.as_ref().map(|nat| nat.substitute(nats)))
-                        .collect(),
-                )
-            },
-        }
-    };
-    match ty {
-        | Type::Var(id) => {
-            match types.get(id) {
-                | Some(fresh) => Type::Var(*fresh),
-                | None => ty.clone(),
-            }
-        },
-        | Type::Scalar(rep, dim) => {
-            let rep = match rep {
-                | Rep::Var(id) => {
-                    match types.get(id) {
-                        | Some(fresh) => Rep::Var(*fresh),
-                        | None => *rep,
-                    }
-                },
-                | other => *other,
-            };
-            let dim = dim.substitute(|id| dims.get(&id).map(|fresh| Dim::var(*fresh)));
-            Type::Scalar(rep, dim)
-        },
-        | Type::Tensor { shape, elem } => {
-            Type::Tensor {
-                shape: substitute_shape(shape),
-                elem: Box::new(substitute(elem, types, dims, rows, nats)),
-            }
-        },
-        | Type::Fn(params, ret) => {
-            Type::Fn(
-                params
-                    .iter()
-                    .map(|param| substitute(param, types, dims, rows, nats))
-                    .collect(),
-                Box::new(substitute(ret, types, dims, rows, nats)),
-            )
-        },
-        | Type::Record(row) => Type::Record(substitute_row(row, types, dims, rows, nats)),
-        | Type::Adt(id, args) => {
-            Type::Adt(
-                *id,
-                args.iter()
-                    .map(|arg| substitute(arg, types, dims, rows, nats))
-                    .collect(),
-            )
-        },
-        | Type::Io(inner) => Type::Io(Box::new(substitute(inner, types, dims, rows, nats))),
-        | Type::Dyn(Rep::Var(id)) => {
-            match types.get(id) {
-                | Some(fresh) => Type::Dyn(Rep::Var(*fresh)),
-                | None => ty.clone(),
-            }
-        },
-        | Type::Point(dim) => {
-            Type::Point(dim.substitute(|id| dims.get(&id).map(|fresh| Dim::var(*fresh))))
-        },
-        | Type::UnitOf(dim) => {
-            Type::UnitOf(dim.substitute(|id| dims.get(&id).map(|fresh| Dim::var(*fresh))))
-        },
-        | other => other.clone(),
-    }
-}
-
-fn substitute_row(
-    row: &Row,
-    types: &HashMap<u32, u32>,
-    dims: &HashMap<u32, u32>,
-    rows: &HashMap<u32, u32>,
-    nats: &HashMap<u32, Nat>,
-) -> Row {
-    match row {
-        | Row::Empty => Row::Empty,
-        | Row::Var(id) => {
-            match rows.get(id) {
-                | Some(fresh) => Row::Var(*fresh),
-                | None => Row::Var(*id),
-            }
-        },
-        | Row::Extend { label, ty, tail } => {
-            Row::Extend {
-                label: label.clone(),
-                ty: Box::new(substitute(ty, types, dims, rows, nats)),
-                tail: Box::new(substitute_row(tail, types, dims, rows, nats)),
-            }
-        },
-    }
-}
-
 fn row_id(row: &Row) -> Option<u32> {
     match row {
         | Row::Var(id) => Some(*id),
@@ -2234,6 +3118,123 @@ fn row_id(row: &Row) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn specialized_intrinsic_schemas_resolve_every_nested_kind() {
+        let mut infer = Infer::new();
+        infer.enter_level();
+        let ty = infer.fresh_type();
+        let rep = infer.fresh_rep();
+        let dim = infer.fresh_dim();
+        let nat = infer.fresh_nat();
+        let row = infer.fresh_row();
+        let intrinsic = |rep| {
+            Type::TensorIntrinsic(crate::ty::TensorIntrinsicType {
+                kind: crate::ty::TensorIntrinsic::Zeros,
+                element: Some(rep),
+            })
+        };
+        let source = Type::TypeRepIntrinsic(Some(Box::new(Type::func(
+            vec![
+                Type::Point(dim.clone()),
+                Type::UnitOf(dim),
+                intrinsic(rep),
+                Type::tensor(Shape::Refined(vec![Some(nat)]), Type::Record(row)),
+            ],
+            Type::FromValueIntrinsic(Some(Box::new(ty))),
+        ))));
+        let length = Dim::base("Length");
+        let target = Type::TypeRepIntrinsic(Some(Box::new(Type::func(
+            vec![
+                Type::Point(length.clone()),
+                Type::UnitOf(length),
+                intrinsic(Rep::Float),
+                Type::tensor(
+                    Shape::refined([Some(4)]),
+                    Type::record([("x".to_string(), Type::Bool)]),
+                ),
+            ],
+            Type::FromValueIntrinsic(Some(Box::new(Type::Str))),
+        ))));
+        let scheme = infer.generalize_at(0, &source, Vec::new());
+        assert_eq!(
+            (
+                scheme.vars.len(),
+                scheme.dims.len(),
+                scheme.nats.len(),
+                scheme.rows.len()
+            ),
+            (2, 1, 1, 1)
+        );
+        infer.unify(&source, &target).unwrap();
+        assert_eq!(infer.resolve(&source), target);
+    }
+
+    #[test]
+    fn specialized_intrinsic_schemas_reject_recursive_types() {
+        for type_rep in [false, true] {
+            let mut infer = Infer::new();
+            let variable = infer.fresh_type();
+            let wrapper = if type_rep {
+                Type::TypeRepIntrinsic(Some(Box::new(variable.clone())))
+            } else {
+                Type::FromValueIntrinsic(Some(Box::new(variable.clone())))
+            };
+            assert!(matches!(
+                infer.unify(&variable, &wrapper),
+                Err(UnifyError::Occurs(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_specialized_intrinsic_defaults_its_unquantified_weak_dimension() {
+        let mut infer = Infer::new();
+        infer.enter_level();
+        let dim = infer.fresh_weak_dim();
+        let ty = Type::FromValueIntrinsic(Some(Box::new(Type::UnitOf(dim))));
+        infer.leave_level();
+        let (defaulted, warnings) = infer.default_scheme(&Scheme::mono(ty.clone()));
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            defaulted.ty,
+            Type::FromValueIntrinsic(Some(Box::new(Type::UnitOf(Dim::one()))))
+        );
+        assert_eq!(infer.resolve(&ty), defaulted.ty);
+    }
+
+    #[test]
+    fn an_escaping_intrinsic_schema_keeps_its_monomorphic_variables() {
+        let mut infer = Infer::new();
+        let outer = infer.fresh_type();
+        infer.enter_level();
+        let rep = infer.fresh_rep();
+        let dim = infer.fresh_dim();
+        let nat = infer.fresh_nat();
+        let row = infer.fresh_row();
+        let ty = infer.fresh_type();
+        let inner = Type::TypeRepIntrinsic(Some(Box::new(Type::func(
+            vec![
+                Type::Point(dim),
+                Type::TensorIntrinsic(crate::ty::TensorIntrinsicType {
+                    kind: crate::ty::TensorIntrinsic::Zeros,
+                    element: Some(rep),
+                }),
+                Type::tensor(Shape::Refined(vec![Some(nat)]), Type::Record(row)),
+            ],
+            Type::FromValueIntrinsic(Some(Box::new(ty))),
+        ))));
+        infer.unify(&outer, &inner).unwrap();
+        infer.leave_level();
+        let scheme = infer.generalize(&inner);
+        assert!(
+            scheme.vars.is_empty()
+                && scheme.dims.is_empty()
+                && scheme.nats.is_empty()
+                && scheme.rows.is_empty(),
+            "escaping monomorphic variables were generalized: {scheme:?}"
+        );
+    }
 
     #[test]
     fn unifies_dimension_variables() {
@@ -2349,8 +3350,37 @@ mod tests {
             panic!("fresh_row is a variable");
         };
         let resolved = infer.resolve_row(&Row::Var(id));
-        let fresh = resolved.tail_var().expect("the row stays open");
-        assert!(infer.lacks_of(fresh).contains(&"y".to_string()));
+        assert_eq!(
+            resolved.tail_var(),
+            None,
+            "equality with a closed row closes its tail"
+        );
+        assert!(
+            infer
+                .lacks
+                .values()
+                .any(|labels| labels.contains(&"y".to_string())),
+            "the consumed field still records its lacks condition"
+        );
+    }
+
+    #[test]
+    fn a_row_unified_with_a_closed_record_cannot_acquire_another_field() {
+        let mut infer = Infer::new();
+        let open = Type::Record(infer.fresh_row());
+        infer
+            .unify(&open, &Type::record([("x".to_string(), Type::int())]))
+            .unwrap();
+        let error = infer
+            .unify(
+                &open,
+                &Type::record([
+                    ("x".to_string(), Type::int()),
+                    ("y".to_string(), Type::Bool),
+                ]),
+            )
+            .unwrap_err();
+        assert!(matches!(error, UnifyError::MissingField { .. }));
     }
 
     #[test]
@@ -2388,5 +3418,140 @@ mod tests {
             .unify_rep(rep, Rep::Int)
             .expect_err("Int is below Real");
         assert!(matches!(error, UnifyError::Mismatch { .. }));
+    }
+    #[test]
+    fn computed_results_do_not_choose_the_reading_of_their_inputs() {
+        let mut infer = Infer::new();
+        infer.enter_level();
+        let input = infer.fresh_rep();
+        infer.mark_literal(&Type::Scalar(input, Dim::one()), LiteralKind::Int);
+        let output = infer.divide_representation(input).unwrap();
+        // The array zero shares the quotient's element type, but must not
+        // choose Float for the quotient before 1 and 3 default to Int.
+        infer.mark_literal(&Type::Scalar(output, Dim::one()), LiteralKind::Int);
+        let mut scheme = Scheme::mono(Type::Scalar(output, Dim::one()));
+        infer.attach_numeric_scheme(&mut scheme);
+        scheme.numeric.reverse();
+        let (defaulted, _) = infer.default_scheme(&scheme);
+        assert_eq!(infer.resolve_rep(input), Rep::Int);
+        assert_eq!(defaulted.ty, Type::real(Dim::one()));
+    }
+
+    #[test]
+    fn divide_absorption_keeps_one_truthful_transfer() {
+        let mut infer = Infer::new();
+        let input = infer.fresh_rep();
+        let divided = infer.divide_representation(input).unwrap();
+        assert_eq!(infer.divide_representation(divided).unwrap(), divided);
+        assert_eq!(infer.join_representation(input, divided).unwrap(), divided);
+        assert_eq!(infer.join_representation(divided, input).unwrap(), divided);
+        for selected in [Rep::Int, Rep::Float, Rep::Real, Rep::Complex] {
+            let mut trial = infer.clone();
+            trial.unify_rep(input, selected).unwrap();
+            assert_eq!(trial.resolve_rep(divided), selected.div_rep());
+        }
+    }
+    #[test]
+    fn repeated_join_operands_keep_the_existing_transfer() {
+        let mut infer = Infer::new();
+        let left = infer.fresh_rep();
+        let right = infer.fresh_rep();
+        let result = infer.join_representation(left, right).unwrap();
+        for operand in [left, right] {
+            assert_eq!(infer.join_representation(result, operand).unwrap(), result);
+            assert_eq!(infer.join_representation(operand, result).unwrap(), result);
+        }
+        for a in [Rep::Int, Rep::Float, Rep::Real, Rep::Complex] {
+            for b in [Rep::Int, Rep::Float, Rep::Real, Rep::Complex] {
+                let mut trial = infer.clone();
+                trial.unify_rep(left, a).unwrap();
+                trial.unify_rep(right, b).unwrap();
+                assert_eq!(trial.resolve_rep(result), a.join_concrete(b).unwrap());
+            }
+        }
+    }
+    #[test]
+    fn alias_bindings_wake_all_connected_numeric_transfers() {
+        let mut infer = Infer::new();
+        let left = infer.fresh_rep();
+        let right = infer.fresh_rep();
+        let first = infer.divide_representation(left).unwrap();
+        let second = infer.divide_representation(right).unwrap();
+        infer.unify_rep(left, right).unwrap();
+        let mut projected = Scheme::mono(Type::Scalar(left, Dim::one()));
+        infer.attach_numeric_scheme(&mut projected);
+        assert_eq!(
+            projected.numeric.len(),
+            2,
+            "an old alias still projects both transfers"
+        );
+        infer.unify_rep(right, Rep::Float).unwrap();
+        assert_eq!(infer.resolve_rep(first), Rep::Float);
+        assert_eq!(infer.resolve_rep(second), Rep::Float);
+        assert_eq!(infer.numeric_constraint_count(), 0);
+    }
+
+    #[test]
+    fn type_alias_to_a_scalar_reindexes_the_literal_domain() {
+        let mut infer = Infer::new();
+        let literal = infer.fresh_type();
+        let alias = infer.fresh_type();
+        let rep = infer.fresh_rep();
+        infer.mark_literal(&literal, LiteralKind::Decimal);
+        infer.unify(&literal, &alias).unwrap();
+        infer.unify(&alias, &Type::Scalar(rep, Dim::one())).unwrap();
+        assert!(!infer.representation_domain(rep).unwrap().contains(Rep::Int));
+        assert!(infer.unify_rep(rep, Rep::Int).is_err());
+    }
+
+    #[test]
+    fn shared_dimensions_preserve_schema_without_connecting_reading_decisions() {
+        let mut infer = Infer::new();
+        infer.enter_level();
+        let dimension = infer.fresh_dim();
+        let left = infer.fresh_rep();
+        let right = infer.fresh_rep();
+        let output = infer.divide_representation(left).unwrap();
+        infer.mark_literal(
+            &Type::Scalar(left, dimension.clone()),
+            LiteralKind::QuantityInt,
+        );
+        infer.mark_literal(
+            &Type::Scalar(right, dimension.clone()),
+            LiteralKind::QuantityDecimal,
+        );
+        infer.leave_level();
+        let scheme = infer.generalize(&Type::func(
+            vec![Type::Scalar(left, dimension.clone())],
+            Type::Scalar(output, dimension.clone()),
+        ));
+        assert!(!scheme.dims.is_empty());
+        assert_eq!(scheme.numeric.len(), 2);
+        assert!(scheme.numeric.iter().all(|fact| {
+            !Infer::numeric_variables(fact).contains(&match right {
+                | Rep::Var(id) => id,
+                | _ => unreachable!(),
+            })
+        }));
+        let mut bindings = crate::TypeSubstitution::default();
+        let mut target = Infer::new();
+        bindings.freshen(&scheme.ty, &mut target);
+        let instantiated = bindings.apply(&scheme.ty);
+        for clause in &scheme.numeric {
+            for ty in clause.types() {
+                bindings.freshen(&ty, &mut target);
+            }
+            target
+                .add_numeric_constraint(clause.substitute(&bindings))
+                .unwrap();
+        }
+        let Type::Fn(params, ret) = instantiated else {
+            panic!("function")
+        };
+        target
+            .unify(&params[0], &Type::float(Dim::base("Length")))
+            .unwrap();
+        assert_eq!(target.resolve(&ret), Type::float(Dim::base("Length")));
+        assert!(matches!(infer.resolve_rep(right), Rep::Var(_)));
     }
 }

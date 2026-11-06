@@ -1,7 +1,8 @@
-## The `Units.Astronomy` module of §8.20.
+## The `Units/Astronomy` module of §8.20.
 ##
-## The astronomy units are ambient `Unit[d]` values from the kernel's unit
-## table (§5.1); see `Units.SI`'s header for why no binding is declared here.
-## The table itself: `au` (exact), `ly`, `pc` (prefixable, so `Mpc` works),
-## `Rsun`, `Msun`, `Mearth`, `jup`.
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Units.Astronomy
+
+## Astronomy unit names are ambient Unit values from the kernel registry.
+## This module declares no bindings.

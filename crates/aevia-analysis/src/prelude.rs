@@ -164,6 +164,7 @@ pub const NAMES: &[&str] = &[
     "subst",
     "to_value",
     "from_value",
+    "to_callback",
     "decide",
     "assuming",
     "by_cases",
@@ -339,7 +340,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     NAMES
         .iter()
         .copied()
-        .filter(|name| builtins::is_builtin(name))
+        .filter(|name| builtins::is_builtin(name) || *name == "to_callback")
 }
 
 #[cfg(test)]
@@ -351,7 +352,7 @@ mod tests {
         let stale: Vec<&str> = NAMES
             .iter()
             .copied()
-            .filter(|name| !builtins::is_builtin(name))
+            .filter(|name| !builtins::is_builtin(name) && *name != "to_callback")
             .collect();
         assert!(
             stale.is_empty(),
@@ -372,7 +373,7 @@ mod tests {
     fn a_scheme_is_available_for_every_name() {
         for name in names() {
             assert!(
-                builtins::schemes(name).is_some(),
+                builtins::schemes(name).is_some() || name == "to_callback",
                 "`{name}` is listed but has no scheme"
             );
         }

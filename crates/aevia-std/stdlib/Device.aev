@@ -1,7 +1,7 @@
 ## The `Device` module of §8.20.
 ##
-## Generated from `spec/08-stdlib.md`; do not edit.
-## Regenerate with `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Device
 
 let device_of = device_of

@@ -79,9 +79,8 @@ const EXTRA_NAMES: &[&str] = &[
 ///   declare that the manifest has no feature for (`io.binary`, `core.gpu`,
 ///   `core.distributed`);
 /// * a **host-bridge** capability — `core.callback` and `core.plugin.source`
-///   are rows of the same table with `enabled = false`: the kernel offers
-///   `call_ho` and in-process plugins, but no Aevia value can satisfy their
-///   ABI (§8.19/§13.5).
+///   have separate rows: scoped Float callbacks are supported, while Aevia
+///   source-level plugin construction remains unavailable (§8.19/§13.5).
 ///
 /// Reading the enabled rows from the live manifest instead of typing the list
 /// is what keeps this test honest when the kernel gains a capability.

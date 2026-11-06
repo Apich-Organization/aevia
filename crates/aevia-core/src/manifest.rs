@@ -327,7 +327,8 @@ impl Package {
         let file = normalise(file);
         let owns = ["src", "tests", "examples"]
             .iter()
-            .any(|tree| file.starts_with(normalise(&package.dir.join(tree))));
+            .any(|tree| file.starts_with(normalise(&package.dir.join(tree))))
+            || file == normalise(&package.entry_path());
         if owns {
             Ok(Some(package))
         } else {
@@ -361,62 +362,54 @@ impl Package {
     /// or a dependency without a manifest, `E0605` for a dependency whose
     /// manifest does not parse.
     pub fn roots(&self) -> Result<Roots, ManifestError> {
+        let graph = PackageGraph::resolve(self)?;
         let mut roots = Roots {
             source: self.source_dir(),
             local: None,
             packages: BTreeMap::new(),
             entries: BTreeMap::new(),
+            scopes: BTreeMap::new(),
+            root_owner: Some(graph.root.clone()),
+            package_owners: graph.aliases.clone(),
         };
-        let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
-        seen.insert(normalise(&self.dir));
-        let mut queue: Vec<PathBuf> = vec![self.dir.clone()];
-        while let Some(dir) = queue.pop() {
-            let manifest = Manifest::load(&dir.join("aevia.toml"))?;
-            for (key, dependency) in &manifest.dependencies {
-                let Dependency::Path { path } = dependency;
-                let dependency_dir = normalise(&dir.join(path));
-                let source = dependency_dir.join("src");
-                if let Some(existing) = roots.packages.get(key) {
-                    if normalise(existing) != normalise(&source) {
-                        return Err(ManifestError::new(
-                            "E0606",
-                            format!(
-                                "`{key}` is claimed by both `{}` and `{}`",
-                                existing.display(),
-                                source.display()
-                            ),
-                        ));
-                    }
-                    continue;
-                }
-                if !dependency_dir.join("aevia.toml").is_file() {
-                    return Err(ManifestError::new(
-                        "E0607",
-                        format!(
-                            "`{key}`: `{}` has no `aevia.toml`",
-                            dependency_dir.display()
-                        ),
-                    ));
-                }
-                roots
-                    .entries
-                    .insert(key.clone(), dependency_dir.join(&manifest.entry));
-                roots.packages.insert(key.clone(), source);
-                if seen.insert(dependency_dir.clone()) {
-                    queue.push(dependency_dir);
-                }
-            }
+        for (alias, identity) in &graph.aliases {
+            let package = &graph.packages[identity];
+            roots.packages.insert(alias.clone(), package.source_dir());
+            roots.entries.insert(alias.clone(), package.entry_path());
+        }
+        for (identity, package) in &graph.packages {
+            roots.scopes.insert(
+                identity.clone(),
+                PackageScope {
+                    source: package.source_dir(),
+                    logical_entry: package.entry_path(),
+                    entry: std::fs::canonicalize(package.entry_path())
+                        .unwrap_or_else(|_| package.entry_path()),
+                    name: import_root(&package.manifest.name),
+                    directory: identity.clone(),
+                    package: format!(
+                        "{}@{}:{}",
+                        package.manifest.name,
+                        package.manifest.version,
+                        identity.display()
+                    ),
+                },
+            );
         }
         Ok(roots)
     }
 
-    /// Resolves the lock file for this package.
+    /// Resolves the same validated package graph used by the module loader.
+    ///
+    /// Every import alias is recorded, including multiple aliases of one
+    /// package. A dependency digest covers its manifest, source tree and entry
+    /// file, so changing module resolution invalidates `--locked` too.
     ///
     /// # Errors
     ///
-    /// The same failures as [`Package::roots`], plus `E0607` for an unreadable
-    /// dependency source tree.
+    /// The same failures as [`Package::roots`], plus unreadable source trees.
     pub fn resolve(&self) -> Result<Lock, ManifestError> {
+        let graph = PackageGraph::resolve(self)?;
         let root = LockedPackage {
             name: self.manifest.name.clone(),
             version: self.manifest.version.clone(),
@@ -424,43 +417,126 @@ impl Package {
             source: "root".to_string(),
             hash: None,
         };
-        let mut packages: Vec<LockedPackage> = Vec::new();
-        let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
-        seen.insert(normalise(&self.dir));
-        let mut queue: Vec<PathBuf> = vec![self.dir.clone()];
-        while let Some(dir) = queue.pop() {
-            let manifest = Manifest::load(&dir.join("aevia.toml"))?;
-            for (key, dependency) in &manifest.dependencies {
-                let Dependency::Path { path } = dependency;
-                let dependency_dir = normalise(&dir.join(path));
-                if !seen.insert(dependency_dir.clone()) {
-                    continue;
-                }
-                let dependency_manifest = Manifest::load(&dependency_dir.join("aevia.toml"))?;
-                let hash = hash_sources(&dependency_dir.join("src"))?;
-                packages.push(LockedPackage {
-                    name: dependency_manifest.name,
-                    version: dependency_manifest.version,
-                    import: key.clone(),
-                    // The path is written relative to the *root* package, so
-                    // the lock is the same on another checkout of the same
-                    // tree rather than naming an absolute directory.
-                    source: format!("path+{}", relative_to(&self.dir, &dir.join(path))),
-                    hash: Some(hash),
-                });
-                queue.push(dependency_dir);
-            }
+        let mut hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
+        let mut packages = Vec::new();
+        for (alias, identity) in &graph.aliases {
+            let package = &graph.packages[identity];
+            let hash = match hashes.get(identity) {
+                | Some(hash) => hash.clone(),
+                | None => {
+                    let hash = hash_package(package)?;
+                    hashes.insert(identity.clone(), hash.clone());
+                    hash
+                },
+            };
+            packages.push(LockedPackage {
+                name: package.manifest.name.clone(),
+                version: package.manifest.version.clone(),
+                import: alias.clone(),
+                source: format!("path+{}", relative_to(&graph.root, identity)),
+                hash: Some(hash),
+            });
         }
         packages.sort_by(|left, right| {
             left.source
                 .cmp(&right.source)
                 .then_with(|| left.import.cmp(&right.import))
         });
-        // The root package is first and the dependencies follow in a fixed
-        // order, so the file reads top-down and re-resolving cannot reorder it.
         packages.insert(0, root);
         Ok(Lock { packages })
     }
+}
+
+/// Package identity is a canonical directory; import names belong to edges,
+/// not nodes. Keep this graph shared by lock generation and source resolution.
+struct PackageGraph {
+    root: PathBuf,
+    packages: BTreeMap<PathBuf, Package>,
+    aliases: BTreeMap<String, PathBuf>,
+}
+
+impl PackageGraph {
+    fn resolve(root: &Package) -> Result<Self, ManifestError> {
+        let identity = package_identity(&root.dir)?;
+        let mut graph = Self {
+            root: identity.clone(),
+            packages: BTreeMap::new(),
+            aliases: BTreeMap::new(),
+        };
+        // Use the supplied manifest, which may be an in-memory proposal from
+        // `aevia add`. Never silently reload the old manifest from disk.
+        graph.packages.insert(
+            identity.clone(),
+            Package {
+                dir: identity.clone(),
+                manifest: root.manifest.clone(),
+            },
+        );
+        let mut queue = vec![identity];
+        while let Some(identity) = queue.pop() {
+            let package = &graph.packages[&identity];
+            let dependencies = package.manifest.dependencies.clone();
+            for (alias, dependency) in dependencies {
+                let Dependency::Path { path } = dependency;
+                let dependency_dir = package_identity(&identity.join(path))?;
+                if let Some(existing) = graph.aliases.get(&alias) {
+                    if existing != &dependency_dir {
+                        return Err(ManifestError::new(
+                            "E0606",
+                            format!(
+                                "`{alias}` is claimed by both `{}` and `{}`",
+                                existing.display(),
+                                dependency_dir.display()
+                            ),
+                        ));
+                    }
+                }
+                graph.aliases.insert(alias, dependency_dir.clone());
+                if !graph.packages.contains_key(&dependency_dir) {
+                    let manifest = Manifest::load(&dependency_dir.join("aevia.toml"))?;
+                    graph.packages.insert(
+                        dependency_dir.clone(),
+                        Package {
+                            dir: dependency_dir.clone(),
+                            manifest,
+                        },
+                    );
+                    queue.push(dependency_dir);
+                }
+            }
+        }
+        Ok(graph)
+    }
+}
+
+fn package_identity(dir: &Path) -> Result<PathBuf, ManifestError> {
+    std::fs::canonicalize(dir).map_err(|error| {
+        ManifestError::new(
+            "E0607",
+            format!("cannot resolve package `{}`: {error}", dir.display()),
+        )
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PackageScope {
+    source: PathBuf,
+    entry: PathBuf,
+    logical_entry: PathBuf,
+    name: String,
+    directory: PathBuf,
+    package: String,
+}
+
+/// A source path together with the package context that selected it.
+/// The path retains its logical spelling for declaration checks and neighbour
+/// resolution. Canonical physical identity alone cannot recover this owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedModule {
+    /// Source file (or an embedded module's synthetic key).
+    pub path: PathBuf,
+    /// Canonical package directory; absent for standalone/embedded sources.
+    pub owner: Option<PathBuf>,
 }
 
 /// Where module paths resolve: the package's `src/`, plus every dependency's.
@@ -478,6 +554,9 @@ pub struct Roots {
     /// Import root to that package's entry file, for `import <Key>` with no
     /// sub-path: the package itself is its entry, not `src.aev`.
     pub entries: BTreeMap<String, PathBuf>,
+    scopes: BTreeMap<PathBuf, PackageScope>,
+    root_owner: Option<PathBuf>,
+    package_owners: BTreeMap<String, PathBuf>,
 }
 
 impl Roots {
@@ -495,7 +574,96 @@ impl Roots {
             local: None,
             packages: BTreeMap::new(),
             entries: BTreeMap::new(),
+            scopes: BTreeMap::new(),
+            root_owner: None,
+            package_owners: BTreeMap::new(),
         }
+    }
+
+    /// The entry source under the root package context explicitly supplied by
+    /// the caller. This remains authoritative through symlinked source trees.
+    #[must_use]
+    pub fn entry_module(&self, path: &Path) -> ResolvedModule {
+        ResolvedModule { path: path.to_path_buf(), owner: self.root_owner.clone() }
+    }
+
+    /// Resolves an import under its explicit owning package. Dependencies
+    /// switch owner at the import edge; local imports retain the current owner.
+    #[must_use]
+    pub fn resolve_module(&self, importer: &ResolvedModule, path: &[String]) -> Option<ResolvedModule> {
+        self.module_candidates(importer, path).into_iter().find(|module| module.path.is_file())
+    }
+
+    /// All candidates with their original owner, for loading and diagnostics.
+    #[must_use]
+    pub fn module_candidates(&self, importer: &ResolvedModule, path: &[String]) -> Vec<ResolvedModule> {
+        if path.is_empty() { return Vec::new(); }
+        let scope = importer.owner.as_ref().and_then(|owner| self.scopes.get(owner));
+        let source = scope.map_or(self.source.as_path(), |scope| scope.source.as_path());
+        let local = if let Some(scope) = scope {
+            // Use logical paths first: a single src file may link outside the
+            // package while still importing the package's own source modules.
+            let file = crate::source::canonical_path(&importer.path);
+            let in_source = normalise(&absolute(&importer.path)).starts_with(normalise(&absolute(&scope.source)))
+                || file.starts_with(crate::source::canonical_path(&scope.source))
+                || (file == scope.entry && normalise(&scope.logical_entry).starts_with(normalise(&scope.source)));
+            if in_source { None }
+            else if file == scope.entry { scope.logical_entry.parent().map(Path::to_path_buf) }
+            else { file.parent().map(Path::to_path_buf) }
+        } else { self.local.clone() };
+        let mut out = Vec::new();
+        for base in std::iter::once(source).chain(local.as_deref()) {
+            let mut file = base.to_path_buf();
+            for segment in path { file.push(segment); }
+            file.set_extension("aev");
+            out.push(ResolvedModule { path: file, owner: importer.owner.clone() });
+        }
+        if let Some((first, rest)) = path.split_first() {
+            if let Some(base) = self.packages.get(first) {
+                let owner = self.package_owners.get(first).cloned();
+                if rest.is_empty() {
+                    if let Some(entry) = self.entries.get(first) {
+                        out.push(ResolvedModule { path: entry.clone(), owner: owner.clone() });
+                    }
+                    out.push(ResolvedModule { path: base.join(format!("{first}.aev")), owner });
+                } else {
+                    let mut file = base.clone();
+                    for segment in rest { file.push(segment); }
+                    file.set_extension("aev");
+                    out.push(ResolvedModule { path: file, owner });
+                }
+            }
+        }
+        out
+    }
+
+    /// Nominal identity in the owner that selected this module, including a
+    /// source that lives physically outside that package's canonical prefix.
+    #[must_use]
+    pub fn resolved_module_identity(&self, module: &ResolvedModule, visible: &[String]) -> aevia_types::keys::ModulePath {
+        if let Some(scope) = module.owner.as_ref().and_then(|owner| self.scopes.get(owner)) {
+            crate::source::SourceIdentity::for_owner(scope.package.clone(), &scope.directory, &module.path).module_path(Some(visible))
+        } else { crate::source::SourceIdentity::for_path(&module.path).module_path(Some(visible)) }
+    }
+
+    pub(crate) fn resolved_name_matches(&self, module: &ResolvedModule, declared: &[String], expected: &[String]) -> bool {
+        if declared == expected { return true; }
+        let Some(scope) = module.owner.as_ref().and_then(|owner| self.scopes.get(owner)) else {
+            return self.declared_name_matches(&module.path, declared, expected);
+        };
+        let physical = crate::source::canonical_path(&module.path);
+        if physical == scope.entry && expected.len() == 1 && declared == [scope.name.clone()] { return true; }
+        let source = normalise(&absolute(&scope.source));
+        let supplied = normalise(&absolute(&module.path));
+        let logical = if physical == scope.entry && !supplied.starts_with(&source) {
+            normalise(&scope.logical_entry)
+        } else { supplied };
+        let physical_source = crate::source::canonical_path(&scope.source);
+        let relative = logical.strip_prefix(&source).or_else(|_| physical.strip_prefix(&physical_source));
+        let Ok(relative) = relative else { return false; };
+        let relative = relative.with_extension("");
+        let parts: Vec<String> = relative.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
+        declared == parts || declared == std::iter::once(scope.name.clone()).chain(parts).collect::<Vec<_>>()
     }
 
     /// Also tries `dir` after the package's `src/`.
@@ -534,9 +702,121 @@ impl Roots {
         &self,
         path: &[String],
     ) -> Vec<PathBuf> {
+        self.candidates_in(&self.source, self.local.as_deref(), path)
+    }
+
+    /// Import candidates in the package that owns the importing file. This
+    /// prevents a dependency's `import Helper` from capturing the application's
+    /// `Helper.aev` and permits libraries to use their own source modules.
+    #[must_use]
+    pub fn candidates_from(
+        &self,
+        importer: &Path,
+        path: &[String],
+    ) -> Vec<PathBuf> {
+        match self.scope_for(importer) {
+            | Some(scope) if normalise(&absolute(&self.source)) != scope.source => {
+                self.candidates_in(&scope.source, None, path)
+            },
+            | Some(_) => self.candidates(path),
+            | None => self.candidates(path),
+        }
+    }
+
+    /// Resolves an import in its importing package's source scope.
+    #[must_use]
+    pub fn resolve_from(
+        &self,
+        importer: &Path,
+        path: &[String],
+    ) -> Option<PathBuf> {
+        self.candidates_from(importer, path)
+            .into_iter()
+            .find(|path| path.is_file())
+    }
+
+    fn scope_for(
+        &self,
+        file: &Path,
+    ) -> Option<&PackageScope> {
+        let file = std::fs::canonicalize(file).unwrap_or_else(|_| normalise(&absolute(file)));
+        self.scopes
+            .iter()
+            .filter(|(dir, _)| file.starts_with(dir))
+            .max_by_key(|(dir, _)| dir.components().count())
+            .map(|(_, scope)| scope)
+    }
+
+    /// Visible module names and package source origins travel separately through
+    /// checking and runtime dispatch. Canonical package directories distinguish
+    /// two local packages with the same name/version; file paths are relative
+    /// to their owning package and independent of import aliases.
+    #[must_use]
+    pub fn module_identity(
+        &self,
+        file: &Path,
+        visible: &[String],
+    ) -> Option<aevia_types::keys::ModulePath> {
+        let Some(scope) = self.scope_for(file) else {
+            return Some(crate::source::SourceIdentity::for_path(file).module_path(Some(visible)));
+        };
+        let file = std::fs::canonicalize(file).unwrap_or_else(|_| normalise(&absolute(file)));
+        Some(
+            aevia_types::keys::ModulePath::new(visible.iter().cloned()).with_origin(
+                aevia_types::keys::ModuleOrigin {
+                    package: scope.package.clone(),
+                    source: relative_to(&scope.directory, &file),
+                },
+            ),
+        )
+    }
+
+    /// Package aliases affect lookup, not the declared identity of a library.
+    /// Accept names relative to its source tree or rooted at its own package
+    /// name as well as the exact import path.
+    pub(crate) fn declared_name_matches(
+        &self,
+        file: &Path,
+        declared: &[String],
+        expected: &[String],
+    ) -> bool {
+        if declared == expected {
+            return true;
+        }
+        let Some(scope) = self.scope_for(file) else {
+            return false;
+        };
+        let file = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+        if file == scope.entry && declared == [scope.name.clone()] {
+            return true;
+        }
+        let Ok(relative) = file.strip_prefix(&scope.source) else {
+            return false;
+        };
+        let relative = relative.with_extension("");
+        let parts: Vec<String> = relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        declared == parts
+            || declared
+                == std::iter::once(scope.name.clone())
+                    .chain(parts)
+                    .collect::<Vec<_>>()
+    }
+
+    fn candidates_in(
+        &self,
+        source: &Path,
+        local: Option<&Path>,
+        path: &[String],
+    ) -> Vec<PathBuf> {
+        if path.is_empty() {
+            return Vec::new();
+        }
         let mut out = Vec::new();
-        for base in std::iter::once(&self.source).chain(self.local.iter()) {
-            let mut candidate = base.clone();
+        for base in std::iter::once(source).chain(local) {
+            let mut candidate = base.to_path_buf();
             for segment in path {
                 candidate.push(segment);
             }
@@ -587,8 +867,8 @@ pub struct LockedPackage {
     /// `root` for the package itself, `path+<as written>` for a path
     /// dependency.
     pub source: String,
-    /// `fnv1a64:<hex>` over the dependency's `src/**/*.aev`, absent for the
-    /// root package (its own sources are the thing being built).
+    /// `fnv1a64:<hex>` over the dependency's canonical manifest, source tree
+    /// and entry file; absent for the root package.
     pub hash: Option<String>,
 }
 
@@ -877,12 +1157,10 @@ fn parse_dependency(
     }
     match path {
         | Some(path) => Ok(Dependency::Path { path }),
-        | None => {
-            Err(ManifestError::new(
-                "E0605",
-                format!("{origin}:{number}: a dependency needs a `path`"),
-            ))
-        },
+        | None => Err(ManifestError::new(
+            "E0605",
+            format!("{origin}:{number}: a dependency needs a `path`"),
+        )),
     }
 }
 
@@ -896,7 +1174,9 @@ fn normalise(path: &Path) -> PathBuf {
         match component {
             | std::path::Component::CurDir => {},
             | std::path::Component::ParentDir => {
-                if !out.pop() {
+                if out.file_name().is_some_and(|name| name != "..") {
+                    out.pop();
+                } else if !out.has_root() {
                     out.push("..");
                 }
             },
@@ -907,7 +1187,7 @@ fn normalise(path: &Path) -> PathBuf {
 }
 
 /// `target` as a path relative to `root`, with `/` separators.
-fn relative_to(
+pub(crate) fn relative_to(
     root: &Path,
     target: &Path,
 ) -> String {
@@ -951,6 +1231,53 @@ fn absolute(path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// The package's resolution contract is part of its content: source-only
+/// hashes miss entry changes and dependency-edge changes in the manifest.
+fn hash_package(package: &Package) -> Result<String, ManifestError> {
+    let mut files = Vec::new();
+    collect(&package.source_dir(), &mut files)?;
+    let entry = package.entry_path();
+    if entry.is_file() && !files.contains(&entry) {
+        files.push(entry);
+    }
+    files.sort();
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    hash_frame(
+        &mut hash,
+        "aevia.toml",
+        package.manifest.render().as_bytes(),
+    );
+    for file in files {
+        let bytes = std::fs::read(&file).map_err(|error| {
+            ManifestError::new(
+                "E0607",
+                format!("cannot read `{}`: {error}", file.display()),
+            )
+        })?;
+        hash_frame(&mut hash, &relative_to(&package.dir, &file), &bytes);
+    }
+    Ok(format!("fnv1a64:{hash:016x}"))
+}
+
+fn hash_frame(
+    hash: &mut u64,
+    name: &str,
+    bytes: &[u8],
+) {
+    // Length framing prevents one file's contents from impersonating the next
+    // file's name and contents when files are added or removed.
+    for byte in (name.len() as u64)
+        .to_le_bytes()
+        .iter()
+        .chain(name.as_bytes())
+        .chain((bytes.len() as u64).to_le_bytes().iter())
+        .chain(bytes)
+    {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
 /// `fnv1a64:<hex>` over every `.aev` file under `src`, sorted by path.
 ///
 /// A stable, dependency-free digest: `std`'s hasher is explicitly not stable
@@ -986,6 +1313,32 @@ fn collect(
     dir: &Path,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), ManifestError> {
+    collect_acyclic(dir, out, &mut BTreeSet::new())
+}
+
+fn collect_acyclic(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    active: &mut BTreeSet<PathBuf>,
+) -> Result<(), ManifestError> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    let identity = std::fs::canonicalize(dir).map_err(|error| {
+        ManifestError::new(
+            "E0607",
+            format!(
+                "cannot resolve source directory `{}`: {error}",
+                dir.display()
+            ),
+        )
+    })?;
+    if !active.insert(identity.clone()) {
+        return Err(ManifestError::new(
+            "E0607",
+            format!("source directory cycle at `{}`", dir.display()),
+        ));
+    }
     let entries = match std::fs::read_dir(dir) {
         | Ok(entries) => entries,
         // A dependency with no `src/` is empty, not broken: the lock still
@@ -1004,11 +1357,12 @@ fn collect(
         })?;
         let path = entry.path();
         if path.is_dir() {
-            collect(&path, out)?;
+            collect_acyclic(&path, out, active)?;
         } else if path.extension().is_some_and(|extension| extension == "aev") {
             out.push(path);
         }
     }
+    active.remove(&identity);
     Ok(())
 }
 

@@ -85,14 +85,21 @@ pub fn call_typed(
             let one = name == "ones";
             let storage = match element.as_str() {
                 | "Int" | "Real" => {
-                    Storage::TypedExact(vec![
-                        if one {
-                            BigRational::one()
+                    Storage::TypedExact(
+                        vec![
+                            if one {
+                                BigRational::one()
+                            } else {
+                                BigRational::zero()
+                            };
+                            count
+                        ],
+                        if element == "Int" {
+                            ExactRep::Int
                         } else {
-                            BigRational::zero()
-                        };
-                        count
-                    ], if element == "Int" { ExactRep::Int } else { ExactRep::Real })
+                            ExactRep::Real
+                        },
+                    )
                 },
                 | "Float" => Storage::Dense(Rc::new(vec![if one { 1.0 } else { 0.0 }; count])),
                 | other => {
@@ -106,6 +113,7 @@ pub fn call_typed(
                 },
             };
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape,
                 storage,
                 dim: Dim::one(),
@@ -127,6 +135,7 @@ pub fn call_typed(
                 0.0
             };
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape,
                 storage: Storage::Dense(Rc::new(vec![fill; count])),
                 dim: Dim::one(),
@@ -156,12 +165,16 @@ pub fn call_typed(
                     "this tensor's elements cannot be reshaped".to_string(),
                 )));
             };
-            Ok(ok(Value::Tensor(Rc::new(TensorData {
+            let result = Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape,
                 storage,
                 dim: tensor.dim.clone(),
                 display: tensor.display.clone(),
-            }))))
+            }));
+            Ok(ok(crate::host_witness::preserve_tensor_schema(
+                result, &tensor,
+            )))
         },
         | _ => call(interp, name, args, span),
     }
@@ -506,6 +519,7 @@ pub fn call(
             // `call_typed`, which builds exact storage instead (§8.4).
             let fill = if name == "ones" { 1.0 } else { 0.0 };
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape,
                 storage: Storage::Dense(Rc::new(vec![fill; count])),
                 dim: Dim::one(),
@@ -541,6 +555,7 @@ pub fn call(
                     .collect()
             };
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape: vec![count],
                 storage: Storage::Dense(Rc::new(values)),
                 dim: start.dim,
@@ -566,6 +581,7 @@ pub fn call(
             }
             let len = values.len();
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape: vec![len],
                 storage: Storage::TypedExact(values, ExactRep::Int),
                 dim: Dim::one(),
@@ -594,6 +610,7 @@ pub fn call(
                 .collect();
             let len = shape.len();
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape: vec![len],
                 storage: Storage::TypedExact(shape, ExactRep::Int),
                 dim: Dim::one(),
@@ -889,11 +906,8 @@ pub fn call(
                     );
                 }
             }
-            Ok(build_tensor(
-                elements,
-                vec![columns, rows],
-                tensor.dim.clone(),
-            ))
+            let result = build_tensor(elements, vec![columns, rows], tensor.dim.clone());
+            Ok(crate::host_witness::preserve_tensor_schema(result, &tensor))
         },
         | "trace" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
@@ -923,6 +937,7 @@ pub fn call(
                 values[index * n + index] = 1.0;
             }
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape: vec![n, n],
                 storage: Storage::Dense(Rc::new(values)),
                 dim: Dim::one(),
@@ -941,6 +956,7 @@ pub fn call(
                         .unwrap_or(0.0);
                 }
                 Ok(Value::Tensor(Rc::new(TensorData {
+                    verified_element: None,
                     shape: vec![n, n],
                     storage: Storage::Dense(Rc::new(values)),
                     dim: tensor.dim.clone(),
@@ -957,6 +973,7 @@ pub fn call(
                     })
                     .collect();
                 Ok(Value::Tensor(Rc::new(TensorData {
+                    verified_element: None,
                     shape: vec![size],
                     storage: Storage::Dense(Rc::new(values)),
                     dim: tensor.dim.clone(),
@@ -968,7 +985,8 @@ pub fn call(
             let tensor = expect_tensor(&args, 0, name, span)?;
             let elements = tensor.elements();
             let len = elements.len();
-            Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
+            let result = build_tensor(elements, vec![len], tensor.dim.clone());
+            Ok(crate::host_witness::preserve_tensor_schema(result, &tensor))
         },
         | "at" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
@@ -1002,11 +1020,8 @@ pub fn call(
                         elements.push(element);
                     }
                 }
-                Ok(build_tensor(
-                    elements,
-                    remaining.to_vec(),
-                    tensor.dim.clone(),
-                ))
+                let result = build_tensor(elements, remaining.to_vec(), tensor.dim.clone());
+                Ok(crate::host_witness::preserve_tensor_schema(result, &tensor))
             }
         },
         // §6.10 / §3.8.4: explicit parallelism, gated by the checker's
@@ -1694,8 +1709,43 @@ pub fn call(
             }
             Ok(Value::Num(NumVal::symbolic(substituted, dim)))
         },
-        | "to_value" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
-        | "from_value" => Ok(ok(args.first().cloned().unwrap_or(Value::Unit))),
+        | "to_value" => {
+            let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
+            let payload = bridge::to_val(value)?;
+            let witness = crate::rssn_module::host_dimension_witness(value);
+            let host_witness = match value {
+                | Value::KernelValue(existing) => existing.host_witness.clone(),
+                | _ => {
+                    crate::host_witness::runtime_schema(value)
+                        .and_then(|schema| crate::host_witness::capture(value, &schema, false))
+                        .map(Rc::new)
+                },
+            };
+            Ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
+                payload,
+                witness,
+                host_witness,
+            })))
+        },
+        | "to_callback" => {
+            if args.len() != 1 {
+                return Err(arity(name, 1, args.len(), span));
+            }
+            let schema = interp.concrete_callable_type(&args[0]).ok_or_else(|| {
+                EvalError::new("E0304", "`to_callback` requires an authenticated concrete function signature").at(span)
+            })?;
+            let function = interp.reify_callable(&args[0], &schema)?;
+            Ok(Value::Callback(Rc::new(crate::value::CallbackValue { function, schema })))
+        },
+        | "from_value" => {
+            // Plain host or higher-order application carries no authenticated source call evidence.
+            let result: Result<Value, String> =
+                Err("missing concrete result type evidence".to_string());
+            Ok(match result {
+                | Ok(value) => ok(value),
+                | Err(reason) => err(crate::rssn_module::value_error("TypeMismatch", reason)),
+            })
+        },
         | "decide" => Ok(decide(&args, span)),
         | "assuming" | "by_cases" => branch_on(interp, name, &args, span),
 
@@ -2360,6 +2410,7 @@ pub fn call(
             let values = aevia_std::number::primes(limit);
             let len = values.len();
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape: vec![len],
                 storage: Storage::TypedExact(
                     values
@@ -2608,6 +2659,7 @@ pub fn call(
                 )));
             };
             Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape,
                 storage,
                 dim: tensor.dim.clone(),
@@ -2727,7 +2779,7 @@ pub fn call(
             // it by span. Compare it with the dimension the value carries; a
             // mismatch is the appendix-B `E0412` class, carried as the
             // recoverable `Err(DimError)` the signature promises.
-            if let Some(expected) = interp.dyn_calls.get(&span) {
+            if let Some(expected) = interp.context.evidence.dyn_calls.get(&span) {
                 if dynamic.dim != *expected {
                     return Ok(err(dim_error(expected, &dynamic.dim)));
                 }
@@ -3489,8 +3541,14 @@ pub fn call(
             } else {
                 aevia_std::ode::Options::default()
             };
-            let event = if name == "odeint_with" { ode_event(&args, 3, span)? } else { None };
-            let (grid, states) = run_ode(interp, function, &initial, &grid, &times.dim, options, event, name, span)?;
+            let event = if name == "odeint_with" {
+                ode_event(&args, 3, span)?
+            } else {
+                None
+            };
+            let (grid, states) = run_ode(
+                interp, function, &initial, &grid, &times.dim, options, event, name, span,
+            )?;
             let (shape, _) = flatten_state(&initial)?;
             let elements: Vec<Value> = states
                 .iter()
@@ -3542,7 +3600,9 @@ pub fn call(
                 .map(|index| start + (end - start) * index as f64 / (samples - 1) as f64)
                 .collect();
             let event = ode_event(&args, 3, span)?;
-            let (grid, states) = run_ode(interp, function, &initial, &grid, &time_dim, options, event, name, span)?;
+            let (grid, states) = run_ode(
+                interp, function, &initial, &grid, &time_dim, options, event, name, span,
+            )?;
             let (shape, _) = flatten_state(&initial)?;
             let elements: Vec<Value> = states
                 .iter()
@@ -4227,10 +4287,7 @@ pub fn call(
 
         // ----- §8.19 dynamic boundary -------------------------------------
         | "type_rep" => {
-            Ok(record_of(vec![
-                ("name", Value::string("TypeRep")),
-                ("kind", Value::string("opaque")),
-            ]))
+            Err(EvalError::new("E0304", "type_rep requires concrete type evidence").at(span))
         },
         | _ => {
             Err(EvalError::new(
@@ -6095,7 +6152,13 @@ fn ode_rates(
         span: Span,
         out: &mut Vec<f64>,
     ) -> Result<(), EvalError> {
-        let shape_error = || EvalError::new("E0302", "the ODE right-hand side must match the state structure and tensor shapes (§8.9)").at(span);
+        let shape_error = || {
+            EvalError::new(
+                "E0302",
+                "the ODE right-hand side must match the state structure and tensor shapes (§8.9)",
+            )
+            .at(span)
+        };
         let check_dim = |actual: &Dim, state: &Dim| {
             if *actual == state.div(time_dim) {
                 Ok(())
@@ -6108,11 +6171,15 @@ fn ode_rates(
                 check_dim(&num.dim, dim)?;
                 out.push(num.to_f64().ok_or_else(shape_error)?);
             },
-            | (StateShape::Tensor(expected, dim), Value::Tensor(tensor)) if tensor.shape == *expected => {
+            | (StateShape::Tensor(expected, dim), Value::Tensor(tensor))
+                if tensor.shape == *expected =>
+            {
                 check_dim(&tensor.dim, dim)?;
                 out.extend(tensor_values(tensor)?);
             },
-            | (StateShape::Record(fields), Value::Record(record)) if fields.len() == record.fields.len() => {
+            | (StateShape::Record(fields), Value::Record(record))
+                if fields.len() == record.fields.len() =>
+            {
                 for (name, field_shape) in fields {
                     let field = record.fields.get(name).ok_or_else(shape_error)?;
                     collect_rate(field, field_shape, time_dim, span, out)?;
@@ -6155,39 +6222,69 @@ fn run_ode(
     let failure = std::cell::RefCell::new(None);
     let interp = std::cell::RefCell::new(interp);
     let mut rhs = |t: f64, state: &[f64]| {
-        let args = vec![Value::Num(NumVal::float(t, time_dim.clone())), rebuild_state(&shape, state)];
+        let args = vec![
+            Value::Num(NumVal::float(t, time_dim.clone())),
+            rebuild_state(&shape, state),
+        ];
         match interp.borrow_mut().apply(function.clone(), args, span) {
-            | Ok(value) => ode_rates(&value, &shape, time_dim, state.len(), span, &mut failure.borrow_mut()),
+            | Ok(value) => {
+                ode_rates(
+                    &value,
+                    &shape,
+                    time_dim,
+                    state.len(),
+                    span,
+                    &mut failure.borrow_mut(),
+                )
+            },
             | Err(error) => {
-                if failure.borrow().is_none() { *failure.borrow_mut() = Some(error); }
+                if failure.borrow().is_none() {
+                    *failure.borrow_mut() = Some(error);
+                }
                 vec![0.0; state.len()]
             },
         }
     };
     let solution = if let Some(event) = event {
         let mut event_fn = |t: f64, state: &[f64]| {
-            let args = vec![Value::Num(NumVal::float(t, time_dim.clone())), rebuild_state(&shape, state)];
+            let args = vec![
+                Value::Num(NumVal::float(t, time_dim.clone())),
+                rebuild_state(&shape, state),
+            ];
             match interp.borrow_mut().apply(event.clone(), args, span) {
-                | Ok(value) => match value.as_f64() {
-                    | Some(number) if crate::value::value_dim(&value) == Dim::one() => number,
-                    | _ => {
-                        if failure.borrow().is_none() {
-                            *failure.borrow_mut() = Some(EvalError::new("E0302", "the ODE event must return a dimensionless number").at(span));
-                        }
-                        f64::NAN
-                    },
+                | Ok(value) => {
+                    match value.as_f64() {
+                        | Some(number) if crate::value::value_dim(&value) == Dim::one() => number,
+                        | _ => {
+                            if failure.borrow().is_none() {
+                                *failure.borrow_mut() = Some(
+                                    EvalError::new(
+                                        "E0302",
+                                        "the ODE event must return a dimensionless number",
+                                    )
+                                    .at(span),
+                                );
+                            }
+                            f64::NAN
+                        },
+                    }
                 },
                 | Err(error) => {
-                    if failure.borrow().is_none() { *failure.borrow_mut() = Some(error); }
+                    if failure.borrow().is_none() {
+                        *failure.borrow_mut() = Some(error);
+                    }
                     f64::NAN
                 },
             }
         };
         aevia_std::ode::integrate_until_event(&mut rhs, &flat, grid, options, &mut event_fn)
     } else {
-        aevia_std::ode::integrate(&mut rhs, &flat, grid, options).map(|states| (grid.to_vec(), states))
+        aevia_std::ode::integrate(&mut rhs, &flat, grid, options)
+            .map(|states| (grid.to_vec(), states))
     };
-    if let Some(error) = failure.into_inner() { return Err(error); }
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
     solution.map_err(|error| numeric_error(name, error, span))
 }
 
@@ -6342,6 +6439,7 @@ pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
         values.push(value);
     }
     Ok(crate::value::TensorData {
+        verified_element: None,
         shape,
         storage: crate::value::Storage::Dense(std::rc::Rc::new(values)),
         dim: aevia_dim::Dim::one(),
@@ -6863,13 +6961,31 @@ fn ode_options(
     }
     if let Some(value) = record.fields.get("steps") {
         let steps = match value {
-            | Value::Variant(option) if option.adt == adt::OPTION_ID && option.name == "None" => None,
-            | Value::Variant(option) if option.adt == adt::OPTION_ID && option.name == "Some" && option.fields.len() == 1 => Some(option.fields[0].as_f64().ok_or_else(|| EvalError::new("E0302", "`steps` must be a positive integer").at(span))?),
+            | Value::Variant(option) if option.adt == adt::OPTION_ID && option.name == "None" => {
+                None
+            },
+            | Value::Variant(option)
+                if option.adt == adt::OPTION_ID
+                    && option.name == "Some"
+                    && option.fields.len() == 1 =>
+            {
+                Some(option.fields[0].as_f64().ok_or_else(|| {
+                    EvalError::new("E0302", "`steps` must be a positive integer").at(span)
+                })?)
+            },
             | Value::Unit => None,
-            | other => Some(other.as_f64().ok_or_else(|| EvalError::new("E0302", "`steps` must be an optional positive integer").at(span))?),
+            | other => {
+                Some(other.as_f64().ok_or_else(|| {
+                    EvalError::new("E0302", "`steps` must be an optional positive integer").at(span)
+                })?)
+            },
         };
         if let Some(steps) = steps {
-            if !steps.is_finite() || steps < 1.0 || steps.fract() != 0.0 || steps >= usize::MAX as f64 {
+            if !steps.is_finite()
+                || steps < 1.0
+                || steps.fract() != 0.0
+                || steps >= usize::MAX as f64
+            {
                 return Err(EvalError::new("E0302", "`steps` must be a positive integer").at(span));
             }
             options.steps = steps as usize;
@@ -6904,13 +7020,33 @@ fn ode_options(
     Ok(options)
 }
 
-fn ode_event(args: &[Value], index: usize, span: Span) -> Result<Option<Value>, EvalError> {
-    let Some(Value::Record(record)) = args.get(index) else { return Ok(None) };
+fn ode_event(
+    args: &[Value],
+    index: usize,
+    span: Span,
+) -> Result<Option<Value>, EvalError> {
+    let Some(Value::Record(record)) = args.get(index) else {
+        return Ok(None);
+    };
     match record.fields.get("events") {
         | None | Some(Value::Unit) => Ok(None),
-        | Some(Value::Variant(option)) if option.adt == adt::OPTION_ID && option.name == "None" => Ok(None),
-        | Some(Value::Variant(option)) if option.adt == adt::OPTION_ID && option.name == "Some" && option.fields.len() == 1 => Ok(Some(option.fields[0].clone())),
-        | _ => Err(EvalError::new("E0302", "`events` must be `Option<(Float[T], s) -> Float[1]>").at(span)),
+        | Some(Value::Variant(option)) if option.adt == adt::OPTION_ID && option.name == "None" => {
+            Ok(None)
+        },
+        | Some(Value::Variant(option))
+            if option.adt == adt::OPTION_ID
+                && option.name == "Some"
+                && option.fields.len() == 1 =>
+        {
+            Ok(Some(option.fields[0].clone()))
+        },
+        | _ => {
+            Err(EvalError::new(
+                "E0302",
+                "`events` must be `Option<(Float[T], s) -> Float[1]>",
+            )
+            .at(span))
+        },
     }
 }
 
@@ -7369,6 +7505,10 @@ fn hash_into(
         | Value::Native(_)
         | Value::Ctor { .. }
         | Value::Io(_)
+        | Value::TypeRep(_)
+        | Value::Callback(_)
+        | Value::KernelValue(_)
+        | Value::KernelError(_)
         | Value::Error => {
             return None;
         },
@@ -7537,6 +7677,7 @@ fn float_tensor(
     dim: Dim,
 ) -> Value {
     Value::Tensor(Rc::new(TensorData {
+        verified_element: None,
         shape,
         storage: Storage::Dense(Rc::new(data)),
         dim,
@@ -7670,8 +7811,16 @@ fn zero_like(tensor: &TensorData) -> Value {
         | Storage::Dense(_) | Storage::View(_) => {
             Value::Num(NumVal::float(0.0, tensor.dim.clone()))
         },
-        | Storage::Exact(_) | Storage::TypedExact(_, ExactRep::Real) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
-        | Storage::TypedExact(_, ExactRep::Int) => Value::Num(NumVal { kind: NumKind::Int(BigInt::zero()), dim: tensor.dim.clone(), display: None }),
+        | Storage::Exact(_) | Storage::TypedExact(_, ExactRep::Real) => {
+            Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone()))
+        },
+        | Storage::TypedExact(_, ExactRep::Int) => {
+            Value::Num(NumVal {
+                kind: NumKind::Int(BigInt::zero()),
+                dim: tensor.dim.clone(),
+                display: None,
+            })
+        },
         | Storage::Bool(_) => Value::Bool(false),
         | Storage::Boxed(_) => Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone())),
     }

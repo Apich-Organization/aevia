@@ -148,27 +148,116 @@ pub fn add(
     let dependency = Dependency::Path {
         path: path.replace('\\', "/"),
     };
-    if let Some(existing) = package.manifest.dependencies.get(&key) {
+    let already_present = if let Some(existing) = package.manifest.dependencies.get(&key) {
         if *existing != dependency {
             eprintln!("aevia add: E0606: `{key}` is already a dependency with a different path");
             return ExitCode::from(1);
         }
-        println!("`{key}` is already a dependency");
+        true
     } else {
         package
             .manifest
             .dependencies
             .insert(key.clone(), dependency);
-        if let Err(error) = package.manifest.save(&package.dir.join("aevia.toml")) {
+        false
+    };
+    // Resolve the complete proposed graph before touching either input file.
+    // Missing transitive packages, alias conflicts and unreadable source trees
+    // must leave the original manifest and lock byte-for-byte intact.
+    let lock = match package.resolve() {
+        | Ok(lock) => lock,
+        | Err(error) => {
             eprintln!("aevia add: {}", error.render());
             return ExitCode::from(1);
-        }
+        },
+    };
+    if let Err(error) = commit_package(&package, &lock.render(), !already_present) {
+        eprintln!("aevia add: {error}");
+        return ExitCode::from(1);
+    }
+    if already_present {
+        println!("`{key}` is already a dependency");
+    } else {
         println!(
             "added `{key}` ({} {}) from `{path}`",
             dependency_manifest.name, dependency_manifest.version
         );
     }
-    write_lock(&package, false, false)
+    println!(
+        "wrote {} ({} packages)",
+        package.dir.join(LOCK).display(),
+        lock.packages.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Stage both outputs before replacing either. If installing the lock fails,
+/// restore the original manifest. This is an ordinary I/O failure transaction;
+/// it does not promise cross-file atomicity across process or machine crashes.
+fn commit_package(
+    package: &Package,
+    lock: &str,
+    change_manifest: bool,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    let manifest_path = package.dir.join("aevia.toml");
+    let lock_path = package.dir.join(LOCK);
+    let old_manifest = std::fs::read(&manifest_path).map_err(|error| error.to_string())?;
+    let suffix = format!(".aevia-add-{}", std::process::id());
+    let manifest_stage = package.dir.join(format!("{suffix}.toml"));
+    let lock_stage = package.dir.join(format!("{suffix}.lock"));
+    let backup_stage = package.dir.join(format!("{suffix}.backup"));
+    let mut owned_stages = Vec::new();
+    let result = (|| {
+        let mut stage = |path: &Path, bytes: &[u8]| -> Result<(), String> {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|error| format!("cannot stage `{}`: {error}", path.display()))?;
+            owned_stages.push(path.to_path_buf());
+            file.write_all(bytes)
+                .and_then(|()| file.sync_all())
+                .map_err(|error| format!("cannot stage `{}`: {error}", path.display()))
+        };
+        if change_manifest {
+            stage(&manifest_stage, package.manifest.render().as_bytes())?;
+            stage(&backup_stage, &old_manifest)?;
+            // Preserve permissions when a manifest is installed or restored.
+            let permissions = std::fs::metadata(&manifest_path)
+                .map_err(|error| error.to_string())?
+                .permissions();
+            std::fs::set_permissions(&manifest_stage, permissions.clone())
+                .map_err(|error| error.to_string())?;
+            std::fs::set_permissions(&backup_stage, permissions)
+                .map_err(|error| error.to_string())?;
+        }
+        stage(&lock_stage, lock.as_bytes())?;
+        if change_manifest {
+            std::fs::rename(&manifest_stage, &manifest_path).map_err(|error| {
+                format!("cannot install `{}`: {error}", manifest_path.display())
+            })?;
+        }
+        if let Err(error) = std::fs::rename(&lock_stage, &lock_path) {
+            if change_manifest {
+                if let Err(restore) = std::fs::rename(&backup_stage, &manifest_path) {
+                    // Keep the backup available if restoration itself fails.
+                    owned_stages.retain(|path| path != &backup_stage);
+                    return Err(format!(
+                        "cannot install `{}`: {error}; cannot restore manifest: {restore}; original saved at `{}`",
+                        lock_path.display(),
+                        backup_stage.display()
+                    ));
+                }
+            }
+            return Err(format!("cannot install `{}`: {error}", lock_path.display()));
+        }
+        Ok(())
+    })();
+    for path in owned_stages {
+        let _ = std::fs::remove_file(path);
+    }
+    result
 }
 
 /// `aevia update` — with `--locked`, a change is an error rather than a write.

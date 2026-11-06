@@ -754,8 +754,8 @@ fn a_rssn_call_is_resolved_and_pinned() {
     assert_eq!(call.key.signature_hash, expected.signature_hash);
     assert_eq!(
         scheme_of(&module, "a").ty,
-        Type::real(aevia_dim::Dim::one()),
-        "`sin(0.5)` picks the numeric overload"
+        Type::Dyn(Rep::Real),
+        "a derived overload pins dispatch but does not claim an exact result dimension"
     );
 }
 
@@ -944,7 +944,7 @@ fn a_recorded_type_is_the_resolved_one_not_the_variable_it_started_as() {
 
 #[test]
 fn a_polymorphic_call_records_its_own_instantiation() {
-    let source = "fn f(x) = x + 1.0\nlet a = f(1)\nlet b = f(2.0)\n";
+    let source = "fn f(x) = x + 1\nlet a = f(1)\nlet b = f(2.0)\n";
     let module = expect_ok(source);
     // Each call site is its own span, so the second must not report the first's
     // instantiation.
@@ -955,7 +955,7 @@ fn a_polymorphic_call_records_its_own_instantiation() {
     );
     // The body is checked once and stays polymorphic: it is not frozen at the
     // first instantiation either.
-    let body = expr_type(&module, source, "x + 1.0", 1);
+    let body = expr_type(&module, source, "x + 1", 1);
     assert!(
         aevia_types::class::has_variables(&body),
         "the body must stay polymorphic, found {body}"
@@ -2563,4 +2563,15 @@ fn min_all_and_max_all_reduce_tensors_of_any_rank() {
     expect_ok(
         "fn f(a: Real[L], b: Real[L]): Real[L] = min(a, b)\nfn g(a: Float, b: Float): Float = max(a, b)\n",
     );
+}
+
+#[test]
+fn decimal_body_arithmetic_promotes_an_int_input_without_changing_literal_domain() {
+    let source = "fn f(x) = x + 1.0\nlet result = f(1)\n";
+    let module = expect_ok(source);
+    assert_eq!(
+        expr_type(&module, source, "f(1)", 1),
+        Type::float(aevia_dim::Dim::one())
+    );
+    expect_error("fn f(x) = x + 1.0\nlet impossible: Int = f(1)\n", "E0302");
 }

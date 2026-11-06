@@ -198,12 +198,7 @@ fn pow_dyn_multiplies_the_exponent() {
 fn det_unit_answers_with_a_dyn() {
     // A 2×2 matrix of lengths: its determinant is an area, and the order is
     // only known at run time, which is why the result is a `Dyn`.
-    let matrix = Value::Tensor(Rc::new(TensorData {
-        shape: vec![2, 2],
-        storage: Storage::Dense(Rc::new(vec![2.0, 0.0, 0.0, 3.0])),
-        dim: length(),
-        display: None,
-    }));
+    let matrix = Value::Tensor(Rc::new(TensorData::new(vec![2, 2], Storage::Dense(Rc::new(vec![2.0, 0.0, 0.0, 3.0])), length(), None)));
     let determinant = dynamic(call("det_unit", vec![matrix, metre()]));
     assert_eq!(payload(&determinant), 6.0);
     assert_eq!(

@@ -1,11 +1,11 @@
 //! The interpreter: values in, values out.
 //!
-//! Evaluation is strict and left-to-right (§6.1). The interpreter walks the
-//! typed AST directly; the Core IR of §9.2.2 is not materialised yet, which is
-//! recorded in `STATUS.md`. What matters for behaviour is preserved: closures
-//! capture lexical scope, `do` builds IO actions instead of running them,
-//! pattern matching is first-match, and arithmetic promotes `Int < Real <
-//! Float < Complex` while keeping exactness when it can.
+//! Evaluation is strict and left-to-right (§6.1). The AST evaluator is the
+//! semantic reference for the Core IR path. Closures retain lexical evidence;
+//! `do` builds IO actions and pattern matching is first-match. Recursive AST
+//! paths enter small dispatch functions before the residual expression and
+//! constructor dispatchers, so the language's call-depth guard is reached
+//! before the CLI worker exhausts its native stack.
 
 use crate::value::Closure;
 use crate::value::ClosureBody;
@@ -57,6 +57,7 @@ use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
+use num_traits::Signed;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
 use std::cell::RefCell;
@@ -360,6 +361,11 @@ pub enum Mode {
 
 /// The interpreter state for one program.
 pub struct Interp {
+    pub(crate) session: Rc<()>,
+    pub(crate) context: Rc<crate::evidence::ModuleContext>,
+    pub(crate) active_scope: Option<Rc<Scope>>,
+    pub(crate) module_scopes: HashMap<keys::ModulePath, Rc<Scope>>,
+    pub(crate) bindings: Option<Rc<crate::generics::CallBindings>>,
     /// Top-level bindings.
     pub globals: HashMap<String, Value>,
     /// The unit registry.
@@ -460,6 +466,9 @@ pub struct Interp {
     /// had a `Float`), which is the measured static/runtime disagreement. The
     /// IR lowering reads the same table, so both evaluators agree.
     pub literal_reps: HashMap<Span, Rep>,
+    /// A literal or unit value uses the defining source file's unit namespace,
+    /// even when called after another package installed a same-named unit.
+    pub(crate) module_units: HashMap<aevia_syntax::FileId, UnitTable>,
     /// Resolved source-expression types, including imported modules.
     pub(crate) expr_types: HashMap<Span, aevia_types::Type>,
     /// The non-derived `instance` exports of the module being loaded, in
@@ -467,6 +476,10 @@ pub struct Interp {
     /// them so a body can be bound under the same `InstanceKey::mangle()` name
     /// the checker derived (round-2 decision 1a).
     pub instance_exports: Vec<InstanceExport>,
+    /// All checked local instance bodies, including private classes, by site.
+    pub(crate) instance_sites: HashMap<Span, InstanceExport>,
+    /// Nominal identities of methods used as first-class values.
+    pub(crate) method_refs: HashMap<Span, aevia_types::check::ClassMethodRef>,
     /// How many `instance` declarations of the current module have been bound.
     pub(crate) next_instance_export: usize,
     /// `ClassKey` by source name, for user classes declared in a loaded module
@@ -478,6 +491,8 @@ pub struct Interp {
     /// different constructors; name-only lookup would pick whichever module was
     /// checked first.
     pub current_module: keys::ModulePath,
+    /// Constructors pinned by this exact check, including private declarations.
+    pub(crate) current_constructors: indexmap::IndexMap<String, (adt::AdtId, usize)>,
     /// Instance bodies, by `Class::method`, in declaration order.
     pub(crate) instance_methods: HashMap<String, Vec<InstanceEntry>>,
     /// The class that declares each instance method, so a method used as a
@@ -533,7 +548,14 @@ impl Interp {
     /// Creates an interpreter from a checked module.
     #[must_use]
     pub fn new(checked: &CheckedModule) -> Self {
+        let session = Rc::new(());
+        let context = crate::evidence::ModuleContext::new(checked, &session);
         Self {
+            session,
+            context,
+            active_scope: None,
+            module_scopes: HashMap::new(),
+            bindings: None,
             globals: HashMap::new(),
             units: checked.units.clone(),
             dims: checked.dims.clone(),
@@ -571,6 +593,9 @@ impl Interp {
                 .collect(),
             registrations: checked.registrations.clone(),
             literal_reps: checked.literal_reps.clone(),
+            module_units: [(checked.anonymous_file, checked.units.clone())]
+                .into_iter()
+                .collect(),
             expr_types: checked.expr_types.clone(),
             instance_exports: checked
                 .instances
@@ -578,13 +603,16 @@ impl Interp {
                 .filter(|export| !export.derived)
                 .cloned()
                 .collect(),
+            instance_sites: checked.instance_sites.clone(),
+            method_refs: checked.method_refs.clone(),
             next_instance_export: 0,
             class_keys: checked
-                .classes
+                .local_classes
                 .keys()
                 .map(|key| (key.name.clone(), key.clone()))
                 .collect(),
             current_module: checked.module_path(),
+            current_constructors: checked.constructors.clone(),
             instance_methods: HashMap::new(),
             method_classes: HashMap::new(),
             prelude_classes: ClassTable::prelude(),
@@ -688,8 +716,43 @@ impl Interp {
         &mut self,
         checked: &CheckedModule,
     ) {
+        self.context = crate::evidence::ModuleContext::new(checked, &self.session);
+        self.active_scope = None;
+        self.bindings = None;
+        // Span includes FileId: equal byte offsets in separate modules must
+        // remain separate evidence. Reinstalling one checked module replaces
+        // its records, so the entry's initial metadata is not appended twice.
+        let file = checked.anonymous_file;
+        self.expr_types.retain(|span, _| span.file != file);
         self.expr_types.extend(checked.expr_types.clone());
+        self.literal_reps.retain(|span, _| span.file != file);
+        self.literal_reps.extend(checked.literal_reps.clone());
+        self.dyn_calls.retain(|span, _| span.file != file);
+        self.dyn_calls.extend(
+            checked
+                .dyn_calls
+                .iter()
+                .map(|call| (call.span, call.dim.clone())),
+        );
+        self.rssn_calls.retain(|span, _| span.file != file);
+        self.rssn_call_sites.retain(|call| call.span.file != file);
+        self.add_rssn_calls(&checked.rssn_calls);
+        self.dictionaries.retain(|span, _| span.file != file);
+        self.dictionary_sites.retain(|call| call.span.file != file);
+        self.add_dictionaries(&checked.dictionaries);
+        self.method_refs.retain(|span, _| span.file != file);
+        self.method_refs.extend(checked.method_refs.clone());
+        self.instance_sites = checked.instance_sites.clone();
+        self.class_keys.extend(
+            checked
+                .local_classes
+                .keys()
+                .map(|key| (key.name.clone(), key.clone())),
+        );
+        self.module_units.insert(file, checked.units.clone());
+        self.registrations = checked.registrations.clone();
         self.current_module = checked.module_path();
+        self.current_constructors = checked.constructors.clone();
         self.instance_exports = checked
             .instances
             .iter()
@@ -729,6 +792,20 @@ impl Interp {
             self.next_instance_export += 1;
         }
         export
+    }
+
+    /// A checked instance body is bound by its declaration site, never by the
+    /// traversal order of a class registry. Default unchecked interpreters keep
+    /// the legacy ordered API for compatibility.
+    pub(crate) fn instance_export_at(
+        &mut self,
+        span: Span,
+    ) -> Option<InstanceExport> {
+        if self.instance_sites.is_empty() {
+            self.take_instance_export()
+        } else {
+            self.instance_sites.get(&span).cloned()
+        }
     }
 
     /// The global name of one instance method body.
@@ -771,7 +848,7 @@ impl Interp {
                 )
             },
         };
-        let closure = Value::Closure(Rc::new(Closure::ast(
+        let closure = self.checked_ast_closure(
             method
                 .params
                 .iter()
@@ -780,7 +857,36 @@ impl Interp {
             method.body.clone(),
             env.clone(),
             Some(name.clone()),
-        )));
+            method.span,
+        );
+        let entry = InstanceEntry {
+            key: key.clone(),
+            checked_head: export.map(|export| export.head.clone()),
+            shape: head_shape(head, &self.aliases),
+            global: name.clone(),
+        };
+        self.context
+            .instances
+            .borrow_mut()
+            .push(crate::evidence::InstanceTemplate {
+                entry,
+                method: method.name.clone(),
+                scope: Rc::downgrade(env),
+                cached: Rc::new(RefCell::new(match &closure {
+                    | Value::Closure(closure) => Rc::downgrade(closure),
+                    | _ => unreachable!(),
+                })),
+                code: Rc::new(crate::evidence::MethodCode::Ast {
+                    site: method.span,
+                    params: method
+                        .params
+                        .iter()
+                        .map(|param| param.pattern.clone())
+                        .collect(),
+                    body: method.body.clone(),
+                    name: name.clone(),
+                }),
+            });
         self.globals.insert(name.clone(), closure);
         self.method_classes
             .insert(method.name.clone(), class.to_string());
@@ -801,7 +907,9 @@ impl Interp {
         span: Span,
         method: &str,
     ) -> Option<DictionaryUse> {
-        self.dictionaries
+        self.context
+            .evidence
+            .dictionaries
             .get(&span)?
             .iter()
             .find(|use_site| use_site.method == method)
@@ -834,9 +942,7 @@ impl Interp {
         method: &str,
         args: &[Value],
     ) -> Option<Dispatch> {
-        let entries = self
-            .instance_methods
-            .get(&format!("{}::{method}", use_site.class));
+        let templates = self.instance_templates();
         // The checker pinned the target (round-2 decision 1c); this is the
         // authority. A concrete instance runs by its symbolic key (so two
         // primitive heads never share a global), a quantified site dispatches
@@ -845,8 +951,17 @@ impl Interp {
         match &use_site.target {
             | DictTarget::Instance(key) => {
                 let global = Self::instance_global(key, method);
-                if let Some(body) = self.globals.get(&global).cloned() {
+                if let Some(body) = templates
+                    .iter()
+                    .find(|template| template.entry.global == global)
+                    .and_then(crate::evidence::InstanceTemplate::instantiate)
+                {
                     return Some(Dispatch::Instance(body));
+                }
+                if self.active_scope.is_none() {
+                    if let Some(body) = self.globals.get(&global).cloned() {
+                        return Some(Dispatch::Instance(body));
+                    }
                 }
                 // The checked key is authoritative. A missing user body is
                 // an error; selecting another instance would be unsound.
@@ -860,16 +975,21 @@ impl Interp {
                 return Some(Dispatch::Builtin);
             },
             | DictTarget::Witness { candidates } => {
-                if let (Some(pool), Some(first)) = (entries, args.first()) {
-                    let mut matched = pool.iter().filter(|entry| {
-                        entry.key.as_ref().is_some_and(|key| candidates.contains(key))
+                if let Some(first) = args.first() {
+                    let mut matched = templates.iter().filter(|template| {
+                        let entry = &template.entry;
+                        template.method == method
+                            && entry
+                                .key
+                                .as_ref()
+                                .is_some_and(|key| candidates.contains(key))
                             && entry.checked_head.as_ref().is_some_and(|head| {
                                 runtime_head_matches(head, first, &mut HashMap::new())
                             })
                     });
                     if let Some(entry) = matched.next() {
                         if matched.next().is_none() {
-                            if let Some(body) = self.globals.get(&entry.global).cloned() {
+                            if let Some(body) = entry.instantiate() {
                                 return Some(Dispatch::Instance(body));
                             }
                         }
@@ -878,10 +998,14 @@ impl Interp {
                 // A checked candidate must be proved by the runtime value;
                 // never fall back to labels or a sole unrelated instance.
                 if let Some(first) = args.first() {
-                    let builtin = self.prelude_classes.instances_of(&use_site.class)
+                    let builtin = self
+                        .prelude_classes
+                        .instances_of(&use_site.class)
                         .into_iter()
-                        .any(|instance| candidates.contains(&instance.key)
-                            && runtime_head_matches(&instance.head, first, &mut HashMap::new()));
+                        .any(|instance| {
+                            candidates.contains(&instance.key)
+                                && runtime_head_matches(&instance.head, first, &mut HashMap::new())
+                        });
                     if builtin || (use_site.class == "Show" && runtime_structural_show(first)) {
                         return Some(Dispatch::Builtin);
                     }
@@ -889,7 +1013,6 @@ impl Interp {
                 return None;
             },
         }
-
     }
 
     /// Runs a class method that reached the evaluator as a *value*.
@@ -914,9 +1037,11 @@ impl Interp {
             .get(&format!("{class}::{method}"))
             .and_then(|entries| {
                 let first = args.first()?;
-                let mut matched = entries.iter().filter(|entry| match &entry.checked_head {
-                    | Some(head) => runtime_head_matches(head, first, &mut HashMap::new()),
-                    | None => entry.shape.accepts(first),
+                let mut matched = entries.iter().filter(|entry| {
+                    match &entry.checked_head {
+                        | Some(head) => runtime_head_matches(head, first, &mut HashMap::new()),
+                        | None => entry.shape.accepts(first),
+                    }
                 });
                 let entry = matched.next()?;
                 if matched.next().is_some() {
@@ -928,6 +1053,58 @@ impl Interp {
             return self.apply(body, args, span);
         }
         if self.prelude_classes.has_class(class) {
+            return self.call_named(method, args, span);
+        }
+        Err(EvalError::new(
+            "E0310",
+            format!("no `{class}` instance accepts this argument"),
+        )
+        .at(span))
+    }
+
+    /// A method value retains the class identity selected by the checker.
+    pub(crate) fn class_method_value(
+        class: ClassKey,
+        method: String,
+        scope: Rc<Scope>,
+    ) -> Value {
+        Value::Native(Rc::new(NativeFn(Box::new(move |interp, args, span| {
+            let previous = interp.enter_scope(&scope)?;
+            let result = interp.call_class_method_key(&class, &method, args, span);
+            interp.restore_context(previous);
+            result
+        }))))
+    }
+
+    fn call_class_method_key(
+        &mut self,
+        class: &ClassKey,
+        method: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let templates = self.instance_templates();
+        let selected = (|| {
+            let first = args.first()?;
+            let mut matched = templates.iter().filter(|template| {
+                let entry = &template.entry;
+                template.method == method
+                    && entry.key.as_ref().is_some_and(|key| &key.class == class)
+                    && entry
+                        .checked_head
+                        .as_ref()
+                        .is_some_and(|head| runtime_head_matches(head, first, &mut HashMap::new()))
+            });
+            let entry = matched.next()?;
+            if matched.next().is_some() {
+                return None;
+            }
+            entry.instantiate()
+        })();
+        if let Some(body) = selected {
+            return self.apply(body, args, span);
+        }
+        if class.module.is_prelude() && self.prelude_classes.has_class(&class.name) {
             return self.call_named(method, args, span);
         }
         Err(EvalError::new(
@@ -999,7 +1176,20 @@ impl Interp {
     /// The root scope.
     #[must_use]
     pub fn root(&self) -> Rc<Scope> {
-        Scope::root()
+        let mut imports = self.module_scopes.iter().collect::<Vec<_>>();
+        imports.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let scope = Scope::module(
+            self.context.clone(),
+            imports
+                .into_iter()
+                .map(|(_, scope)| scope.clone())
+                .collect(),
+        );
+        // REPL closures capture the bindings already checked at their lexical
+        // definition, including implementation globals. Later revisions may
+        // replace the public inspection table without changing old closures.
+        scope.vars.borrow_mut().extend(self.globals.clone());
+        scope
     }
 
     // ----- evaluation -----------------------------------------------------
@@ -1015,51 +1205,373 @@ impl Interp {
         expr: &Expr,
         env: &Rc<Scope>,
     ) -> Result<Value, EvalError> {
+        self.eval_expression(expr, env, true)
+    }
+
+    fn eval_callee(
+        &mut self,
+        expr: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        self.eval_expression(expr, env, false)
+    }
+
+    fn eval_expression(
+        &mut self,
+        expr: &Expr,
+        env: &Rc<Scope>,
+        escaping: bool,
+    ) -> Result<Value, EvalError> {
+        let previous = self.enter_scope(env)?;
         self.nodes += 1;
         if self.nodes > self.max_nodes {
             self.nodes -= 1;
+            self.restore_context(previous);
             return Err(EvalError::new("E0805", "expression is nested too deeply")
                 .at(expr.span)
                 .with_stack(self.frames.clone()));
         }
-        let result = self.eval_inner(expr, env);
+        // These paths may remain live across a source-language call. Enter
+        // their small frames directly rather than retaining eval_inner's
+        // stack slots for every unrelated expression variant at each depth.
+        let result = match &expr.kind {
+            | ExprKind::Unary { op, operand } => self.eval_unary_expression(expr, op, operand, env),
+            | ExprKind::Binary { op, left, right } => {
+                self.eval_binary_expression(expr, op, left, right, env)
+            },
+            | ExprKind::Call { callee, args } => self.eval_call_expression(expr, callee, args, env),
+            | ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => self.eval_if_expression(cond, then_branch, else_branch, env),
+            | ExprKind::Match { scrutinee, arms } => {
+                self.eval_match_expression(expr, scrutinee, arms, env)
+            },
+            | ExprKind::LetIn {
+                pattern, value, body, ..
+            } => self.eval_let_expression(pattern, value, body, env),
+            | ExprKind::Block { stmts, tail } => {
+                self.eval_block_expression(stmts, tail.as_deref(), env)
+            },
+            | ExprKind::Annot { expr: inner, .. } => self.eval(inner, env),
+            | _ => self.eval_inner(expr, env),
+        }
+        .map(|value| self.attach_checked_type(value, expr.span))
+        .map(|value| {
+            if escaping {
+                self.bind_source_function(value, expr.span)
+            } else {
+                value
+            }
+        });
         self.nodes -= 1;
-        result.map(|value| self.attach_checked_type(value, expr.span))
+        self.restore_context(previous);
+        result
     }
 
     /// Preserve only fully concrete checked type information.
-    pub(crate) fn attach_checked_type(&self, mut value: Value, span: Span) -> Value {
-        let Some(ty) = self.expr_types.get(&span) else { return value; };
-        if aevia_types::class::has_variables(ty) { return value; }
-        match (ty, &mut value) {
-            | (aevia_types::Type::Adt(id, args), Value::Variant(variant)) => {
-                if adt::key_of(*id) == adt::key_of(variant.adt)
-                    && args.len() == adt::param_kinds_of(variant.adt).len()
-                {
-                    Rc::make_mut(variant).type_args = Some(args.clone());
-                }
+    pub(crate) fn attach_checked_type(
+        &self,
+        mut value: Value,
+        span: Span,
+    ) -> Value {
+        // Only actual checked constructor references may specialize a value.
+        // Ordinary variable reads must not acquire proof from an annotation.
+        let Some(source_constructor) = self.context.evidence.constructor_refs.get(&span).copied()
+        else {
+            return value;
+        };
+        let Some(ty) = self.resolved_expr_type(span) else {
+            return value;
+        };
+        let source_constructor = Some(source_constructor);
+        if let (
+            aevia_types::Type::Fn(_, result),
+            Value::Ctor {
+                adt,
+                index,
+                name,
+                origin: Some(token),
+                ..
             },
-            | (aevia_types::Type::Tensor { shape, elem }, Value::Tensor(tensor))
-                if tensor.storage.is_empty() && matches!(tensor.storage, Storage::Boxed(_)) => {
-                if usize::try_from(shape.rank()).ok() != Some(tensor.shape.len())
-                    || tensor.shape.iter().enumerate().any(|(i, n)| shape.extent(i).is_some_and(|e| e != *n))
+        ) = (&ty, &mut value)
+        {
+            if let aevia_types::Type::Adt(result_id, _) = result.as_ref() {
+                let authentic = source_constructor.is_some_and(|(declared, declared_index)| {
+                    declared_index == *index && adt::same_type(declared, *adt)
+                });
+                if authentic
+                    && token.adt == *adt
+                    && token.index == *index
+                    && token.name == *name
+                    && adt::same_type(*result_id, *adt)
+                    && !aevia_types::class::has_variables(result)
+                    && token.selected_result.is_none()
                 {
-                    return value;
+                    token.selected_result = Some((**result).clone());
                 }
-                let (storage, dim) = match &**elem {
-                    | aevia_types::Type::Scalar(Rep::Int, dim) => (Storage::TypedExact(Vec::new(), value::ExactRep::Int), dim.clone()),
-                    | aevia_types::Type::Scalar(Rep::Real, dim) => (Storage::TypedExact(Vec::new(), value::ExactRep::Real), dim.clone()),
-                    | aevia_types::Type::Scalar(Rep::Float, dim) => (Storage::Dense(Rc::new(Vec::new())), dim.clone()),
-                    | aevia_types::Type::Bool => (Storage::Bool(Vec::new()), Dim::one()),
-                    | _ => return value,
-                };
-                let tensor = Rc::make_mut(tensor);
-                tensor.storage = storage;
-                tensor.dim = dim;
-            },
-            | _ => {},
+            }
+        }
+        if aevia_types::class::has_variables(&ty) {
+            return value;
+        }
+        if let (aevia_types::Type::Adt(id, args), Value::Variant(variant)) = (&ty, &value) {
+            let authentic = source_constructor.is_some_and(|(declared, index)| {
+                index == variant.index && adt::same_type(declared, variant.adt)
+            });
+            if authentic
+                && variant.constructor_origin
+                && variant.verified_type.is_none()
+                && variant.type_args.is_none()
+                && adt::same_type(*id, variant.adt)
+                && crate::host_witness::capture(&value, &ty, true).is_some()
+            {
+                if let Value::Variant(variant) = &mut value {
+                    let variant = Rc::make_mut(variant);
+                    variant.verified_type = Some(ty.clone());
+                    variant.type_args = Some(args.clone());
+                }
+            }
         }
         value
+    }
+
+    #[inline(never)]
+    fn eval_unary_expression(
+        &mut self,
+        expr: &Expr,
+        op: &UnOp,
+        operand: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        let value = self.eval(operand, env)?;
+        self.unary(*op, value, expr.span)
+    }
+
+    #[inline(never)]
+    fn eval_binary_expression(
+        &mut self,
+        expr: &Expr,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            let left_value = self.eval(left, env)?;
+            let short_circuit = match (op, &left_value) {
+                | (BinOp::And, Value::Bool(false)) => Some(false),
+                | (BinOp::Or, Value::Bool(true)) => Some(true),
+                | _ => None,
+            };
+            if let Some(value) = short_circuit {
+                return Ok(Value::Bool(value));
+            }
+            let right_value = self.eval(right, env)?;
+            return self.binary(*op, left_value, right_value, expr.span);
+        }
+        let left_value = self.eval(left, env)?;
+        let right_value = self.eval(right, env)?;
+        self.binary(*op, left_value, right_value, expr.span)
+    }
+
+    #[inline(never)]
+    fn eval_call_expression(
+        &mut self,
+        expr: &Expr,
+        callee: &Expr,
+        args: &[Expr],
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
+        {
+            // `f(_, x)` is a lambda over the placeholders (§2.3.6).
+            let mut params = Vec::new();
+            let mut call_args = Vec::new();
+            for (index, arg) in args.iter().enumerate() {
+                if matches!(arg.kind, ExprKind::Placeholder) {
+                    let name = aevia_syntax::ast::placeholder_param_name(index);
+                    params.push(Pat::new(PatKind::Var(name.clone()), arg.span));
+                    call_args.push(Expr::new(ExprKind::Var(name), arg.span));
+                } else {
+                    call_args.push(arg.clone());
+                }
+            }
+            let body = Expr::new(
+                ExprKind::Call {
+                    callee: Box::new(callee.clone()),
+                    args: call_args,
+                },
+                expr.span,
+            );
+            return Ok(self.checked_ast_closure(params, body, env.clone(), None, expr.span));
+        }
+        // Type arguments belong to the actual value, not its spelling:
+        // aliases and qualified imports retain builtin identity, while a
+        // user function with the same name still shadows the builtin.
+        if let ExprKind::TypeApp {
+            callee: inner,
+            args: type_args,
+        } = &callee.kind
+        {
+            let function = self.eval_callee(inner, env)?;
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push(self.eval(arg, env)?);
+            }
+            let function = self.type_apply_value(function, type_args, callee.span);
+            let arg_spans: Vec<_> = args.iter().map(|arg| arg.span).collect();
+            return self.apply_source_call(function, values, expr.span, callee.span, &arg_spans);
+        }
+        // `Rssn.<op>(…)`: execute the overload the checker pinned at
+        // this call site (PLAN D1). There is no fallback — resolving
+        // again here would let the executed overload differ from the
+        // typed one, which is the unsoundness the pin exists to
+        // remove. An unknown key is `E1005`, never a re-resolution.
+        if let Some(op) = rssn_operator_name(callee) {
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push(self.eval(arg, env)?);
+            }
+            return self.call_rssn(&op, expr.span, values);
+        }
+        // §3.8.1: a call the checker resolved to a class instance
+        // runs that instance's body. Without this the body is
+        // unreachable — it lives under a mangled global that no
+        // program can name — and the call would run the global of the
+        // method name instead.
+        if let ExprKind::Var(name) = &callee.kind {
+            if let Some(use_site) = self.dictionary_use(expr.span, name) {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval(arg, env)?);
+                }
+                return self.run_dictionary(&use_site, name, values, expr.span);
+            }
+        }
+        let function = self.eval_callee(callee, env)?;
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.eval(arg, env)?);
+        }
+        let arg_spans: Vec<_> = args.iter().map(|arg| arg.span).collect();
+        self.apply_source_call(function, values, expr.span, callee.span, &arg_spans)
+    }
+
+    #[inline(never)]
+    fn eval_if_expression(
+        &mut self,
+        cond: &Expr,
+        then_branch: &Expr,
+        else_branch: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        match self.eval(cond, env)? {
+            | Value::Bool(true) => self.eval(then_branch, env),
+            | Value::Bool(false) => self.eval(else_branch, env),
+            | other => {
+                Err(EvalError::new(
+                    "E0302",
+                    format!("`if` expects a Bool condition, found {}", other.type_name()),
+                )
+                .at(cond.span))
+            },
+        }
+    }
+
+    #[inline(never)]
+    fn eval_match_expression(
+        &mut self,
+        expr: &Expr,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        let subject = self.eval(scrutinee, env)?;
+        for arm in arms {
+            let scope = Scope::child(env);
+            if self.match_pattern(&arm.pattern, &subject, &scope)? {
+                if let Some(guard) = &arm.guard {
+                    match self.eval(guard, &scope)? {
+                        | Value::Bool(true) => {},
+                        | Value::Bool(false) => continue,
+                        | other => {
+                            return Err(EvalError::new(
+                                "E0308",
+                                format!("a match guard must be Bool, found {}", other.type_name()),
+                            )
+                            .at(guard.span));
+                        },
+                    }
+                }
+                return self.eval(&arm.body, &scope);
+            }
+        }
+        Err(EvalError::new(
+            "E0309",
+            format!("no match arm accepted {}", value::show(&subject)),
+        )
+        .at(expr.span))
+    }
+
+    #[inline(never)]
+    fn eval_let_expression(
+        &mut self,
+        pattern: &Pat,
+        value: &Expr,
+        body: &Expr,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        let bound = self.eval(value, env)?;
+        let scope = Scope::child(env);
+        self.bind_pattern(pattern, &bound, &scope)?;
+        self.eval(body, &scope)
+    }
+
+    #[inline(never)]
+    fn eval_block_expression(
+        &mut self,
+        stmts: &[BlockStmt],
+        tail: Option<&Expr>,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        // One scope per *binding*, not one per block. A block-wide
+        // scope is mutated by every `let`, so a closure created before
+        // a later `let x = …` in the same block would read the later
+        // value — a cell, not a value, and not what the lexical scope
+        // says. Extending the chain keeps every captured scope frozen.
+        let mut scope = Scope::child(env);
+        for stmt in stmts {
+            match stmt {
+                | BlockStmt::Let { pattern, value, .. } => {
+                    let bound = self.eval(value, &scope)?;
+                    let next = Scope::child(&scope);
+                    self.bind_pattern(pattern, &bound, &next)?;
+                    scope = next;
+                },
+                | BlockStmt::Fn(decl) => {
+                    if let DeclKind::Fn { name, args, body, .. } = &decl.kind {
+                        let next = Scope::child(&scope);
+                        let closure = self.checked_ast_closure(
+                            args.iter().map(|arg| arg.pattern.clone()).collect(),
+                            body.clone(),
+                            next.clone(),
+                            Some(name.clone()),
+                            decl.span,
+                        );
+                        next.vars.borrow_mut().insert(name.clone(), closure);
+                        scope = next;
+                    }
+                },
+            }
+        }
+        match tail {
+            | Some(tail) => self.eval(tail, &scope),
+            | None => Ok(Value::Unit),
+        }
     }
 
     fn eval_inner(
@@ -1075,8 +1587,8 @@ impl Interp {
             // §3.10.1 / §6.3.2: the checker's instantiated representation is
             // the runtime's, so a literal in a `Float` context is an f64 and one
             // in a `Real` context is exact.
-            | ExprKind::Int(value) => Ok(Value::Num(self.integer_literal(value, expr.span))),
-            | ExprKind::Float(text) => Ok(Value::Num(self.float_literal(text, expr.span))),
+            | ExprKind::Int(value) => Ok(Value::Num(self.integer_literal(value, expr.span)?)),
+            | ExprKind::Float(text) => Ok(Value::Num(self.float_literal(text, expr.span)?)),
             | ExprKind::Str(pieces) => {
                 let mut out = String::new();
                 for piece in pieces {
@@ -1101,212 +1613,37 @@ impl Interp {
                 }
                 self.lookup(&path.join("."), env, expr.span)
             },
-            | ExprKind::Unary { op, operand } => {
-                let value = self.eval(operand, env)?;
-                self.unary(*op, value, expr.span)
-            },
+            | ExprKind::Unary { op, operand } => self.eval_unary_expression(expr, op, operand, env),
             | ExprKind::Binary { op, left, right } => {
-                if matches!(op, BinOp::And | BinOp::Or) {
-                    let left_value = self.eval(left, env)?;
-                    let short_circuit = match (op, &left_value) {
-                        | (BinOp::And, Value::Bool(false)) => Some(false),
-                        | (BinOp::Or, Value::Bool(true)) => Some(true),
-                        | _ => None,
-                    };
-                    if let Some(value) = short_circuit {
-                        return Ok(Value::Bool(value));
-                    }
-                    let right_value = self.eval(right, env)?;
-                    return self.binary(*op, left_value, right_value, expr.span);
-                }
-                let left_value = self.eval(left, env)?;
-                let right_value = self.eval(right, env)?;
-                self.binary(*op, left_value, right_value, expr.span)
+                self.eval_binary_expression(expr, op, left, right, env)
             },
-            | ExprKind::Call { callee, args } => {
-                if args
-                    .iter()
-                    .any(|arg| matches!(arg.kind, ExprKind::Placeholder))
-                {
-                    // `f(_, x)` is a lambda over the placeholders (§2.3.6).
-                    let mut params = Vec::new();
-                    let mut call_args = Vec::new();
-                    for (index, arg) in args.iter().enumerate() {
-                        if matches!(arg.kind, ExprKind::Placeholder) {
-                            let name = aevia_syntax::ast::placeholder_param_name(index);
-                            params.push(Pat::new(PatKind::Var(name.clone()), arg.span));
-                            call_args.push(Expr::new(ExprKind::Var(name), arg.span));
-                        } else {
-                            call_args.push(arg.clone());
-                        }
-                    }
-                    let body = Expr::new(
-                        ExprKind::Call {
-                            callee: callee.clone(),
-                            args: call_args,
-                        },
-                        expr.span,
-                    );
-                    return Ok(Value::Closure(Rc::new(Closure::ast(
-                        params,
-                        body,
-                        env.clone(),
-                        None,
-                    ))));
-                }
-                // `zeros<Int>(3)` names the element type the result must have,
-                // and `reshape<[3,2]>` names its target shape. Every other
-                // path drops the type argument, which is why `zeros<Int>`
-                // silently produced `f64` storage (§8.4) and why `reshape`
-                // could not know what to reshape to.
-                if let ExprKind::TypeApp {
-                    callee: inner,
-                    args: type_args,
-                } = &callee.kind
-                {
-                    if let ExprKind::Var(name) = &inner.kind {
-                        if crate::builtins::takes_type_argument(name) {
-                            let mut values = Vec::with_capacity(args.len());
-                            for arg in args {
-                                values.push(self.eval(arg, env)?);
-                            }
-                            return crate::builtins::call_typed(
-                                self, name, type_args, values, expr.span,
-                            );
-                        }
-                    }
-                }
-                // `Rssn.<op>(…)`: execute the overload the checker pinned at
-                // this call site (PLAN D1). There is no fallback — resolving
-                // again here would let the executed overload differ from the
-                // typed one, which is the unsoundness the pin exists to
-                // remove. An unknown key is `E1005`, never a re-resolution.
-                if let Some(op) = rssn_operator_name(callee) {
-                    let mut values = Vec::with_capacity(args.len());
-                    for arg in args {
-                        values.push(self.eval(arg, env)?);
-                    }
-                    return self.call_rssn(&op, expr.span, values);
-                }
-                // §3.8.1: a call the checker resolved to a class instance
-                // runs that instance's body. Without this the body is
-                // unreachable — it lives under a mangled global that no
-                // program can name — and the call would run the global of the
-                // method name instead.
-                if let ExprKind::Var(name) = &callee.kind {
-                    if let Some(use_site) = self.dictionary_use(expr.span, name) {
-                        let mut values = Vec::with_capacity(args.len());
-                        for arg in args {
-                            values.push(self.eval(arg, env)?);
-                        }
-                        return self.run_dictionary(&use_site, name, values, expr.span);
-                    }
-                }
-                let function = self.eval(callee, env)?;
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval(arg, env)?);
-                }
-                self.apply(function, values, expr.span)
+            | ExprKind::Call { callee, args } => self.eval_call_expression(expr, callee, args, env),
+            | ExprKind::TypeApp { callee, args } => {
+                let function = self.eval_callee(callee, env)?;
+                Ok(self.type_apply_value(function, args, expr.span))
             },
-            | ExprKind::TypeApp { callee, .. } => self.eval(callee, env),
             | ExprKind::Lambda { params, body, .. } => {
-                Ok(Value::Closure(Rc::new(Closure::ast(
+                Ok(self.checked_ast_closure(
                     params.iter().map(|param| param.pattern.clone()).collect(),
                     (**body).clone(),
                     env.clone(),
                     None,
-                ))))
+                    expr.span,
+                ))
             },
             | ExprKind::If {
                 cond,
                 then_branch,
                 else_branch,
-            } => {
-                match self.eval(cond, env)? {
-                    | Value::Bool(true) => self.eval(then_branch, env),
-                    | Value::Bool(false) => self.eval(else_branch, env),
-                    | other => {
-                        Err(EvalError::new(
-                            "E0302",
-                            format!("`if` expects a Bool condition, found {}", other.type_name()),
-                        )
-                        .at(cond.span))
-                    },
-                }
-            },
+            } => self.eval_if_expression(cond, then_branch, else_branch, env),
             | ExprKind::Match { scrutinee, arms } => {
-                let subject = self.eval(scrutinee, env)?;
-                for arm in arms {
-                    let scope = Scope::child(env);
-                    if self.match_pattern(&arm.pattern, &subject, &scope)? {
-                        if let Some(guard) = &arm.guard {
-                            match self.eval(guard, &scope)? {
-                                | Value::Bool(true) => {},
-                                | Value::Bool(false) => continue,
-                                | other => {
-                                    return Err(EvalError::new(
-                                        "E0308",
-                                        format!(
-                                            "a match guard must be Bool, found {}",
-                                            other.type_name()
-                                        ),
-                                    )
-                                    .at(guard.span));
-                                },
-                            }
-                        }
-                        return self.eval(&arm.body, &scope);
-                    }
-                }
-                Err(EvalError::new(
-                    "E0309",
-                    format!("no match arm accepted {}", value::show(&subject)),
-                )
-                .at(expr.span))
+                self.eval_match_expression(expr, scrutinee, arms, env)
             },
             | ExprKind::LetIn {
                 pattern, value, body, ..
-            } => {
-                let bound = self.eval(value, env)?;
-                let scope = Scope::child(env);
-                self.bind_pattern(pattern, &bound, &scope)?;
-                self.eval(body, &scope)
-            },
+            } => self.eval_let_expression(pattern, value, body, env),
             | ExprKind::Block { stmts, tail } => {
-                // One scope per *binding*, not one per block. A block-wide
-                // scope is mutated by every `let`, so a closure created before
-                // a later `let x = …` in the same block would read the later
-                // value — a cell, not a value, and not what the lexical scope
-                // says. Extending the chain keeps every captured scope frozen.
-                let mut scope = Scope::child(env);
-                for stmt in stmts {
-                    match stmt {
-                        | BlockStmt::Let { pattern, value, .. } => {
-                            let bound = self.eval(value, &scope)?;
-                            let next = Scope::child(&scope);
-                            self.bind_pattern(pattern, &bound, &next)?;
-                            scope = next;
-                        },
-                        | BlockStmt::Fn(decl) => {
-                            if let DeclKind::Fn { name, args, body, .. } = &decl.kind {
-                                let closure = Value::Closure(Rc::new(Closure::ast(
-                                    args.iter().map(|arg| arg.pattern.clone()).collect(),
-                                    body.clone(),
-                                    scope.clone(),
-                                    Some(name.clone()),
-                                )));
-                                let next = Scope::child(&scope);
-                                next.vars.borrow_mut().insert(name.clone(), closure);
-                                scope = next;
-                            }
-                        },
-                    }
-                }
-                match tail {
-                    | Some(tail) => self.eval(tail, &scope),
-                    | None => Ok(Value::Unit),
-                }
+                self.eval_block_expression(stmts, tail.as_deref(), env)
             },
             | ExprKind::Do { stmts } => self.eval_do(stmts, env),
             | ExprKind::Record { base, fields } => {
@@ -1452,7 +1789,7 @@ impl Interp {
         if let Some(value) = env.lookup(name) {
             return Ok(value);
         }
-        self.lookup_global(name, None, span)
+        self.lookup_global(name, Some(env), span)
     }
 
     /// Resolves a name that is not a slot of the current frame.
@@ -1477,6 +1814,22 @@ impl Interp {
             if let Some(value) = scope.lookup(name) {
                 return Ok(value);
             }
+        }
+        if let Some(reference) = self
+            .context
+            .evidence
+            .method_refs
+            .get(&span)
+            .filter(|reference| reference.method == name)
+        {
+            return Ok(Self::class_method_value(
+                reference.class.clone(),
+                reference.method.clone(),
+                scope
+                    .cloned()
+                    .or_else(|| self.active_scope.clone())
+                    .unwrap_or_else(|| self.root()),
+            ));
         }
         if let Some(value) = self.globals.get(name) {
             return Ok(value.clone());
@@ -1505,30 +1858,22 @@ impl Interp {
                 name: name.to_string(),
                 arity: usize::MAX,
                 args: Vec::new(),
+                origin: Some(value::SourceCtorToken {
+                    adt: u32::MAX,
+                    index: usize::MAX,
+                    name: name.to_string(),
+                    selected_result: None,
+                }),
             });
         }
-        if let Some(unit) = self.units.lookup(name) {
+        let source_units = &self.context.evidence.units;
+        if let Some(unit) = source_units.lookup(name) {
             return Ok(Value::UnitOf(Rc::new(unit)));
         }
-        if let Some((adt, index, registered)) = adt::find_ctor(name) {
-            let arity = registered
-                .ctors
-                .get(index)
-                .map_or(0, |ctor| ctor.fields.len());
-            // A nullary constructor referenced as a value *is* its variant
-            // (§3.6.2): `let x: M = A` stores `A`, not a zero-argument
-            // constructor waiting to be applied. Only a constructor with fields
-            // stays applicable.
-            if arity == 0 {
-                return Ok(make_variant(adt, index, name, Vec::new()));
+        if let Some((adt, index, _)) = adt::find_prelude_ctor(name) {
+            if let Some(value) = source_ctor_value_at(adt, index) {
+                return Ok(value);
             }
-            return Ok(Value::Ctor {
-                adt,
-                index,
-                name: name.to_string(),
-                arity,
-                args: Vec::new(),
-            });
         }
         Err(EvalError::new("E0301", format!("unbound name `{name}`")).at(span))
     }
@@ -1538,66 +1883,152 @@ impl Interp {
         &self,
         span: Span,
     ) -> Option<Rep> {
-        self.literal_reps.get(&span).copied()
+        let rep = self.context.evidence.literal_reps.get(&span).copied()?;
+        Some(
+            self.bindings
+                .as_ref()
+                .filter(|bindings| {
+                    bindings
+                        .context
+                        .upgrade()
+                        .is_some_and(|context| Rc::ptr_eq(&context, &self.context))
+                })
+                .map_or(rep, |bindings| bindings.values.rep(rep)),
+        )
+    }
+
+    fn checked_literal_rep(
+        &self,
+        kind: aevia_types::LiteralKind,
+        span: Span,
+    ) -> Result<Option<Rep>, EvalError> {
+        // A concrete creation-site reading is independent of the activation's
+        // generic parameters, including body-only literal variables defaulted
+        // by the checker. Never reinterpret it through another expression.
+        if let Some(rep) = self
+            .context
+            .evidence
+            .literal_reps
+            .get(&span)
+            .copied()
+            .filter(|rep| !matches!(rep, Rep::Var(_)))
+        {
+            if kind.accepts_rep(rep) {
+                return Ok(Some(rep));
+            }
+            return Err(EvalError::new(
+                "E0302",
+                "the selected representation cannot represent this numeric literal",
+            )
+            .at(span));
+        }
+        if let Some(ty) = self.resolved_expr_type(span) {
+            if aevia_types::class::has_variables(&ty) {
+                return Err(EvalError::new(
+                    "E0304",
+                    "a numeric literal requires concrete runtime type arguments",
+                )
+                .at(span));
+            }
+            match ty {
+                | aevia_types::Type::Scalar(rep, dim)
+                    if kind.accepts_rep(rep) && (kind.is_quantity() || dim.is_one()) =>
+                {
+                    return Ok(Some(rep));
+                },
+                | aevia_types::Type::Point(_) if kind.is_quantity() => return Ok(Some(Rep::Float)),
+                | _ => {
+                    return Err(EvalError::new(
+                        "E0302",
+                        format!("the selected type {ty} cannot represent this numeric literal"),
+                    )
+                    .at(span));
+                },
+            }
+        }
+        let rep = self.literal_rep(span);
+        if matches!(rep, Some(Rep::Var(_)))
+            || self
+                .expr_type(span)
+                .is_some_and(aevia_types::class::has_variables)
+        {
+            return Err(EvalError::new(
+                "E0304",
+                "a numeric literal requires verified concrete runtime type arguments",
+            )
+            .at(span));
+        }
+        if rep.is_some_and(|rep| !kind.accepts_rep(rep)) {
+            return Err(EvalError::new(
+                "E0302",
+                "the selected representation cannot represent this numeric literal",
+            )
+            .at(span));
+        }
+        Ok(rep)
     }
 
     /// An integer literal in the representation its context chose (§3.10.1).
-    fn integer_literal(
+    pub(crate) fn integer_literal(
         &self,
         value: &BigInt,
         span: Span,
-    ) -> NumVal {
-        match self.literal_rep(span) {
-            | Some(Rep::Float) => {
-                NumVal::float(
-                    num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
-                    Dim::one(),
-                )
-            },
-            | Some(Rep::Real) => {
-                NumVal::exact(BigRational::from_integer(value.clone()), Dim::one())
-            },
-            | Some(Rep::Complex) => {
-                NumVal {
-                    kind: NumKind::Complex(
+    ) -> Result<NumVal, EvalError> {
+        Ok(
+            match self.checked_literal_rep(aevia_types::LiteralKind::Int, span)? {
+                | Some(Rep::Float) => {
+                    NumVal::float(
                         num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
-                        0.0,
-                    ),
-                    dim: Dim::one(),
-                    display: None,
-                }
+                        Dim::one(),
+                    )
+                },
+                | Some(Rep::Real) => {
+                    NumVal::exact(BigRational::from_integer(value.clone()), Dim::one())
+                },
+                | Some(Rep::Complex) => {
+                    NumVal {
+                        kind: NumKind::Complex(
+                            num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+                            0.0,
+                        ),
+                        dim: Dim::one(),
+                        display: None,
+                    }
+                },
+                | _ => NumVal::int(value.clone()),
             },
-            | _ => NumVal::int(value.clone()),
-        }
+        )
     }
 
     /// A decimal literal in the representation its context chose.
     ///
     /// A `Real` context keeps the exact rational the decimal text denotes
     /// (§6.3.2); a `Float` context uses the nearest `f64`.
-    fn float_literal(
+    pub(crate) fn float_literal(
         &self,
         text: &str,
         span: Span,
-    ) -> NumVal {
+    ) -> Result<NumVal, EvalError> {
         let cleaned = text.replace('_', "");
         let as_float = || cleaned.parse::<f64>().unwrap_or(f64::NAN);
-        match self.literal_rep(span) {
-            | Some(Rep::Real) => {
-                aevia_dim::parse_decimal(&cleaned).map_or_else(
-                    || NumVal::float(as_float(), Dim::one()),
-                    |value| NumVal::exact(value, Dim::one()),
-                )
+        Ok(
+            match self.checked_literal_rep(aevia_types::LiteralKind::Decimal, span)? {
+                | Some(Rep::Real) => {
+                    aevia_dim::parse_decimal(&cleaned).map_or_else(
+                        || NumVal::float(as_float(), Dim::one()),
+                        |value| NumVal::exact(value, Dim::one()),
+                    )
+                },
+                | Some(Rep::Complex) => {
+                    NumVal {
+                        kind: NumKind::Complex(as_float(), 0.0),
+                        dim: Dim::one(),
+                        display: None,
+                    }
+                },
+                | _ => NumVal::float(as_float(), Dim::one()),
             },
-            | Some(Rep::Complex) => {
-                NumVal {
-                    kind: NumKind::Complex(as_float(), 0.0),
-                    dim: Dim::one(),
-                    display: None,
-                }
-            },
-            | _ => NumVal::float(as_float(), Dim::one()),
-        }
+        )
     }
 
     pub(crate) fn quantity(
@@ -1607,7 +2038,16 @@ impl Interp {
         span: Span,
         as_float: bool,
     ) -> Result<Value, EvalError> {
+        let kind = if value.is_decimal() {
+            aevia_types::LiteralKind::QuantityDecimal
+        } else {
+            aevia_types::LiteralKind::QuantityInt
+        };
+        let representation = self.checked_literal_rep(kind, span)?;
+        let as_float = representation.map_or(as_float, |rep| rep == Rep::Float);
         let resolved = self
+            .context
+            .evidence
             .units
             .resolve(unit)
             .map_err(|error| EvalError::new("E0501", error.to_string()).at(span))?;
@@ -1629,6 +2069,14 @@ impl Interp {
             let mut num = NumVal::float(coherent, resolved.dim);
             num.display = Some(display);
             return Ok(Value::Num(num));
+        }
+        if representation == Some(Rep::Complex) {
+            let coherent = value.as_f64() * resolved.scale.to_f64();
+            return Ok(Value::Num(NumVal {
+                kind: NumKind::Complex(coherent, 0.0),
+                dim: resolved.dim,
+                display: Some(display),
+            }));
         }
         // §3.10.1: the literal's context chose `Float`, so its value is an f64
         // — including a unit literal such as `2.0 m` in a `Float[L]` slot.
@@ -2220,14 +2668,17 @@ impl Interp {
                 display: None,
             });
         }
-        // §6.3.2: `F64 op F64` stays in the floating phase, and nothing else
-        // does. A `Float` mixed with an exact value is first converted to the
-        // rational it denotes, so `1.0 + 2` is the exact `3` and
-        // `1/3 + 0.5` is exactly `5/6` — the language's central claim, and the
-        // reason `Float ⊗ Exact -> Real` is a rule and not an aspiration.
-        let both_float =
-            matches!(left.kind, NumKind::Float(_)) && matches!(right.kind, NumKind::Float(_));
-        if both_float {
+        // §3.4.1 / §6.3.2: Int is below Float in the representation
+        // lattice. A materialized integer therefore promotes on this path.
+        // Real (Exact or Sym) remains distinct: mixing it with Float takes
+        // the exact Real path below. Literal-only `1.0 + 2` still reads both
+        // literals as Real under its default source arithmetic rule.
+        let float_operation = matches!(
+            (&left.kind, &right.kind),
+            (NumKind::Float(_), NumKind::Float(_) | NumKind::Int(_))
+                | (NumKind::Int(_), NumKind::Float(_))
+        );
+        if float_operation {
             let a = left.to_f64().unwrap_or(f64::NAN);
             let b = right.to_f64().unwrap_or(f64::NAN);
             let value = match op {
@@ -2282,10 +2733,14 @@ impl Interp {
             | _ => None,
         };
         if let Some(value) = value {
-            // Integer arithmetic stays `Int` when the result is an integer:
-            // the narrowest representation is the honest one, and it keeps
-            // `repr` agreeing with the checker's `Int`.
-            if both_int && value.denom().is_one() {
+            // Non-dividing integer arithmetic stays Int. Division and
+            // negative powers promise Real even when this particular exact
+            // result happens to have denominator one.
+            if both_int
+                && op != BinOp::Div
+                && !(op == BinOp::Pow && b.is_negative())
+                && value.denom().is_one()
+            {
                 return Ok(NumVal {
                     kind: NumKind::Int(value.numer().clone()),
                     dim,
@@ -2343,6 +2798,7 @@ impl Interp {
             None
         };
         Ok(Value::Tensor(Rc::new(TensorData {
+            verified_element: None,
             shape: tensor.shape.clone(),
             storage: tensor.storage.clone(),
             dim,
@@ -2491,15 +2947,25 @@ impl Interp {
         })?;
         let count = TensorData::element_count(&shape);
         if count == 0 && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
-            if let (Storage::TypedExact(_, a), Storage::TypedExact(_, b)) = (&left.storage, &right.storage) {
+            if let (Storage::TypedExact(_, a), Storage::TypedExact(_, b)) =
+                (&left.storage, &right.storage)
+            {
                 let rep = if *a == value::ExactRep::Int && *b == value::ExactRep::Int {
                     value::ExactRep::Int
                 } else {
                     value::ExactRep::Real
                 };
-                let dim = if op == BinOp::Mul { left.dim.mul(&right.dim) } else { left.dim.clone() };
+                let dim = if op == BinOp::Mul {
+                    left.dim.mul(&right.dim)
+                } else {
+                    left.dim.clone()
+                };
                 return Ok(Value::Tensor(Rc::new(TensorData {
-                    shape, storage: Storage::TypedExact(Vec::new(), rep), dim, display: None,
+                    verified_element: None,
+                    shape,
+                    storage: Storage::TypedExact(Vec::new(), rep),
+                    dim,
+                    display: None,
                 })));
             }
         }
@@ -2770,6 +3236,378 @@ impl Interp {
 
     // ----- calls ----------------------------------------------------------
 
+    /// Preserve an explicitly selected builtin representation in a value.
+    pub(crate) fn type_apply_value(
+        &self,
+        function: Value,
+        types: &[aevia_syntax::ast::Ty],
+        span: Span,
+    ) -> Value {
+        if let Value::Closure(closure) = &function {
+            if let Some(proof) = &closure.proof {
+                if !proof.definition.binders.is_empty() {
+                    let selected = types
+                        .iter()
+                        .map(|argument| {
+                            self.reified_type(argument).ok_or_else(|| {
+                                EvalError::new("E0304", "missing checked function type argument")
+                                    .at(argument.span)
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .and_then(|arguments| {
+                            let selected = proof.explicit(&arguments);
+                            if let Some(expected @ aevia_types::Type::Fn(..)) =
+                                self.resolved_expr_type(span)
+                            {
+                                selected
+                                    .and_then(|selected| selected.specialize(&expected))
+                                    .or_else(|_| proof.specialize(&expected))
+                            } else {
+                                selected
+                            }
+                        });
+                    return match selected {
+                        | Ok(proof) => {
+                            Value::Closure(crate::generics::specialize_closure(closure, proof))
+                        },
+                        | Err(error) => {
+                            Value::Native(Rc::new(NativeFn(Box::new(move |_, _, _| {
+                                Err(error.clone())
+                            }))))
+                        },
+                    };
+                }
+            }
+        }
+        if let Some(expected) = self.resolved_expr_type(span) {
+            let result = match &expected {
+                | aevia_types::Type::Fn(_, result) => result.as_ref(),
+                | ty => ty,
+            };
+            if let aevia_types::Type::Adt(expected_id, _) = result {
+                if !aevia_types::class::has_variables(result) {
+                    match &function {
+                        | Value::Ctor {
+                            adt,
+                            index,
+                            name,
+                            origin: Some(origin),
+                            ..
+                        } if origin.adt == *adt
+                            && origin.index == *index
+                            && origin.name == *name
+                            && adt::same_type(*adt, *expected_id) =>
+                        {
+                            if origin.selected_result.as_ref().is_none_or(|old| {
+                                crate::host_witness::strict_schema_equal(old, result)
+                            }) {
+                                let mut selected = function.clone();
+                                if let Value::Ctor {
+                                    origin: Some(origin), ..
+                                } = &mut selected
+                                {
+                                    origin.selected_result = Some(result.clone());
+                                }
+                                return selected;
+                            }
+                        },
+                        | Value::Variant(variant)
+                            if variant.constructor_origin
+                                && adt::same_type(variant.adt, *expected_id) =>
+                        {
+                            if variant.verified_type.as_ref().is_some_and(|old| {
+                                crate::host_witness::strict_schema_equal(old, result)
+                            }) {
+                                return function;
+                            }
+                            if variant.verified_type.is_none()
+                                && variant.type_args.is_none()
+                                && crate::host_witness::capture(&function, result, true).is_some()
+                            {
+                                let mut selected = function.clone();
+                                if let Value::Variant(variant) = &mut selected {
+                                    let variant = Rc::make_mut(variant);
+                                    variant.verified_type = Some(result.clone());
+                                    if let aevia_types::Type::Adt(_, args) = result {
+                                        variant.type_args = Some(args.clone());
+                                    }
+                                }
+                                return selected;
+                            }
+                        },
+                        | _ => {},
+                    }
+                }
+            }
+        }
+        if let Value::Ctor { adt, index, name, .. } = &function {
+            if *adt == u32::MAX && *index == usize::MAX && name == "from_value" {
+                let evidence = types
+                    .first()
+                    .and_then(|argument| self.reified_type(argument));
+                return Value::Native(Rc::new(NativeFn(Box::new(move |_interp, args, span| {
+                    if args.len() != 1 {
+                        return Err(EvalError::new(
+                            "E0315",
+                            "`from_value` takes one value argument",
+                        )
+                        .at(span));
+                    }
+                    let witness = evidence.as_ref().ok_or_else(|| {
+                        EvalError::new("E0304", "missing concrete type evidence for `from_value`")
+                            .at(span)
+                    })?;
+                    Ok(
+                        match crate::rssn_module::from_kernel_value(&args[0], witness) {
+                            | Ok(value) => {
+                                make_variant(aevia_types::adt::RESULT_ID, 0, "Ok", vec![value])
+                            },
+                            | Err(reason) => {
+                                make_variant(
+                                    aevia_types::adt::RESULT_ID,
+                                    1,
+                                    "Err",
+                                    vec![crate::rssn_module::value_error("TypeMismatch", reason)],
+                                )
+                            },
+                        },
+                    )
+                }))));
+            }
+            if *adt == u32::MAX && *index == usize::MAX && name == "type_rep" {
+                let evidence = types
+                    .first()
+                    .and_then(|argument| self.reified_type(argument));
+                return Value::Native(Rc::new(NativeFn(Box::new(move |_interp, args, span| {
+                    if !args.is_empty() {
+                        return Err(
+                            EvalError::new("E0315", "`type_rep` takes no value arguments").at(span),
+                        );
+                    }
+                    let witness = evidence.clone().ok_or_else(|| {
+                        EvalError::new("E0304", "missing concrete type evidence for `type_rep`")
+                            .at(span)
+                    })?;
+                    Ok(Value::TypeRep(Rc::new(witness)))
+                }))));
+            }
+            if *adt == u32::MAX
+                && *index == usize::MAX
+                && crate::builtins::takes_type_argument(name)
+            {
+                let name = name.clone();
+                let types = self.canonical_tensor_types(&name, types, span);
+                return Value::Native(Rc::new(NativeFn(Box::new(move |interp, args, span| {
+                    crate::builtins::call_typed(interp, &name, &types, args, span)
+                }))));
+            }
+        }
+        function
+    }
+
+    /// Apply at an actual checked source call. Unlike `apply`, this path may
+    /// use lexical call/argument evidence; host higher-order callbacks never
+    /// enter it merely by reusing an outer span.
+    pub(crate) fn apply_source_call(
+        &mut self,
+        function: Value,
+        mut args: Vec<Value>,
+        span: Span,
+        callee_span: Span,
+        argument_spans: &[Span],
+    ) -> Result<Value, EvalError> {
+        let instance = self.prepare_function_call(&function, &mut args, Some(callee_span))?;
+        if instance.is_some() {
+            return self.apply_instantiated(function, args, span, instance);
+        }
+        let source_ctor = match &function {
+            | Value::Ctor {
+                adt,
+                index,
+                name,
+                origin: Some(origin),
+                ..
+            } if *adt != u32::MAX
+                && *adt == origin.adt
+                && *index == origin.index
+                && *name == origin.name =>
+            {
+                Some(origin.selected_result.clone())
+            },
+            | _ => None,
+        };
+        let builtin = match &function {
+            | Value::Ctor {
+                adt,
+                index,
+                name,
+                arity,
+                args,
+                origin: Some(origin),
+            } if *adt == u32::MAX
+                && *index == usize::MAX
+                && *arity == usize::MAX
+                && args.is_empty()
+                && origin.adt == *adt
+                && origin.index == *index
+                && origin.name == *name =>
+            {
+                Some(name.clone())
+            },
+            | _ => None,
+        };
+        let to_value = builtin.as_deref() == Some("to_value");
+        let result_type = source_ctor.and_then(|selected| {
+            self.resolved_expr_type(span).filter(|ty| {
+                selected
+                    .as_ref()
+                    .is_none_or(|selected| crate::host_witness::strict_schema_equal(selected, ty))
+            })
+        });
+        let input = if to_value && args.len() == 1 && argument_spans.len() == 1 {
+            self.resolved_expr_type(argument_spans[0])
+                .map(|ty| (args[0].clone(), ty))
+        } else {
+            None
+        };
+        let builtin_result = builtin
+            .as_deref()
+            .and_then(|name| builtin_result_schema(name, &args));
+        if builtin.as_deref() == Some("to_callback") {
+            if args.len() != 1 || argument_spans.len() != 1 {
+                return Err(
+                    EvalError::new("E0315", "`to_callback` requires one function").at(span),
+                );
+            }
+            let expected = self.resolved_expr_type(argument_spans[0]).ok_or_else(|| {
+                EvalError::new(
+                    "E0304",
+                    "`to_callback` requires a concrete function signature",
+                )
+                .at(span)
+            })?;
+            let function = self.reify_callable(&args[0], &expected)?;
+            let schema = self
+                .concrete_callable_type(&function)
+                .filter(|schema| crate::host_witness::strict_schema_equal(schema, &expected))
+                .ok_or_else(|| {
+                    EvalError::new("E0302", "callback signature does not match its callable")
+                        .at(span)
+                })?;
+            return Ok(Value::Callback(Rc::new(value::CallbackValue {
+                function,
+                schema,
+            })));
+        }
+        if builtin.as_deref() == Some("from_value") {
+            let expected = self.resolved_expr_type(span).and_then(|ty| {
+                match ty {
+                    | aevia_types::Type::Adt(id, args) if id == adt::RESULT_ID => {
+                        args.first().cloned()
+                    },
+                    | _ => None,
+                }
+            });
+            let converted = expected
+                .ok_or_else(|| "missing concrete result type evidence".to_string())
+                .and_then(|ty| {
+                    args.first()
+                        .ok_or_else(|| "missing kernel value".to_string())
+                        .and_then(|value| crate::rssn_module::from_kernel_value(value, &ty))
+                });
+            return Ok(match converted {
+                | Ok(value) => make_variant(adt::RESULT_ID, 0, "Ok", vec![value]),
+                | Err(error) => {
+                    make_variant(
+                        adt::RESULT_ID,
+                        1,
+                        "Err",
+                        vec![crate::rssn_module::value_error("TypeMismatch", error)],
+                    )
+                },
+            });
+        }
+        let mut result = self.apply(function, args, span)?;
+        if let Some(ty) = builtin_result.filter(|ty| {
+            self.resolved_expr_type(span)
+                .is_some_and(|expected| crate::host_witness::strict_schema_equal(ty, &expected))
+        }) {
+            if let Value::Variant(variant) = &mut result {
+                Rc::make_mut(variant).constructor_origin = true;
+            }
+            if crate::host_witness::capture(&result, &ty, true).is_some() {
+                if let Value::Variant(variant) = &mut result {
+                    let variant = Rc::make_mut(variant);
+                    variant.verified_type = Some(ty.clone());
+                    if let aevia_types::Type::Adt(_, args) = ty {
+                        variant.type_args = Some(args);
+                    }
+                }
+            } else if let Value::Variant(variant) = &mut result {
+                Rc::make_mut(variant).constructor_origin = false;
+            }
+        }
+        if let Some(ty) = result_type {
+            if crate::host_witness::capture(&result, &ty, true).is_some() {
+                if let Value::Variant(variant) = &mut result {
+                    let variant = Rc::make_mut(variant);
+                    variant.verified_type = Some(ty.clone());
+                    if let aevia_types::Type::Adt(_, args) = ty {
+                        variant.type_args = Some(args);
+                    }
+                }
+            }
+        }
+        if let Some((value, ty)) = input {
+            if let Some(witness) = crate::host_witness::capture(&value, &ty, false) {
+                if let Value::KernelValue(kernel) = &mut result {
+                    Rc::make_mut(kernel).host_witness = Some(Rc::new(witness));
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Retrieve the concrete type recorded by the checker for an explicit
+    /// type argument in this source module. Missing evidence is never guessed.
+    pub(crate) fn reified_type(
+        &self,
+        argument: &Ty,
+    ) -> Option<aevia_types::Type> {
+        self.resolved_expr_type(argument.span)
+    }
+
+    /// Use the checker's resolved element representation, including through
+    /// transparent type aliases, rather than reinterpreting its source spelling.
+    fn canonical_tensor_types(
+        &self,
+        name: &str,
+        types: &[Ty],
+        span: Span,
+    ) -> Vec<Ty> {
+        if !matches!(name, "zeros" | "ones") || types.len() != 1 {
+            return types.to_vec();
+        }
+        let rep = match self.resolved_expr_type(span) {
+            | Some(aevia_types::Type::Tensor { elem, .. }) => {
+                match elem.as_ref() {
+                    | aevia_types::Type::Scalar(rep, _) => Some(*rep),
+                    | _ => None,
+                }
+            },
+            | Some(aevia_types::Type::TensorIntrinsic(intrinsic)) => intrinsic.element,
+            | _ => None,
+        };
+        let kind = match rep {
+            | Some(Rep::Int) => Some(TyKind::Int),
+            | Some(Rep::Real) => Some(TyKind::Real(DimAst::One)),
+            | Some(Rep::Float) => Some(TyKind::Float(DimAst::One)),
+            | _ => None,
+        };
+        kind.map_or_else(|| types.to_vec(), |kind| vec![Ty::new(kind, types[0].span)])
+    }
+
     /// Applies a function value to arguments.
     ///
     /// # Errors
@@ -2781,6 +3619,16 @@ impl Interp {
         args: Vec<Value>,
         span: Span,
     ) -> Result<Value, EvalError> {
+        self.apply_instantiated(function, args, span, None)
+    }
+
+    pub(crate) fn apply_instantiated(
+        &mut self,
+        function: Value,
+        args: Vec<Value>,
+        span: Span,
+        instance: Option<Rc<crate::generics::FunctionProof>>,
+    ) -> Result<Value, EvalError> {
         // §9.3.2: the depth limit counts *calls*, not AST nodes. Counting nodes
         // rejected a legal flat `a + a + …` chain of 2100 terms while letting
         // an unbounded call chain through, which is the opposite of the rule.
@@ -2791,7 +3639,7 @@ impl Interp {
                 .at(span)
                 .with_stack(self.frames.clone()));
         }
-        let result = self.apply_inner(function, args, span);
+        let result = self.apply_inner(function, args, span, instance);
         self.depth -= 1;
         match result {
             | Ok(value) => Ok(value),
@@ -2802,69 +3650,122 @@ impl Interp {
     fn apply_inner(
         &mut self,
         function: Value,
+        mut args: Vec<Value>,
+        span: Span,
+        instance: Option<Rc<crate::generics::FunctionProof>>,
+    ) -> Result<Value, EvalError> {
+        let instance = match instance {
+            | Some(instance) => Some(instance),
+            | None => self.prepare_function_call(&function, &mut args, None)?,
+        };
+        let prior_bindings = self.bindings.clone();
+        let scope = match &function {
+            | Value::Closure(closure) => {
+                match &closure.env {
+                    | ClosureEnv::Ast(scope) => Some(scope.clone()),
+                    | ClosureEnv::Ir(env) => env.scope.clone(),
+                }
+            },
+            | _ => None,
+        };
+        let previous = if let Some(scope) = scope {
+            self.enter_scope(&scope)?
+        } else {
+            None
+        };
+        if let Some(instance) = &instance {
+            self.bindings = Some(instance.bindings());
+        } else if let Value::Closure(closure) = &function {
+            self.bindings = closure
+                .captured_bindings
+                .clone()
+                .or_else(|| self.bindings.clone());
+        }
+        let result = match function {
+            | Value::Closure(closure) => self.apply_user_closure(closure, args, span, instance),
+            | Value::Native(function) => (function.0)(self, args, span),
+            | other => self.apply_in_context(other, args, span, instance),
+        };
+        self.restore_context(previous);
+        self.bindings = prior_bindings;
+        result
+    }
+
+    #[inline(never)]
+    fn apply_user_closure(
+        &mut self,
+        closure: Rc<Closure>,
         args: Vec<Value>,
         span: Span,
+        instance: Option<Rc<crate::generics::FunctionProof>>,
+    ) -> Result<Value, EvalError> {
+        // §9.2.2: a closure lowered to the Core IR runs on the IR
+        // interpreter, which trampolines its tail calls. Everything
+        // else about applying a function — the depth guard, the stack
+        // frame, the `?` payload — is shared.
+        if matches!(closure.body, ClosureBody::Ir(_)) {
+            return crate::eval_ir::run_closure(self, &closure, args, span, instance);
+        }
+        let ClosureBody::Ast(body) = &closure.body else {
+            unreachable!("the IR branch returned above")
+        };
+        let ClosureEnv::Ast(captured) = &closure.env else {
+            unreachable!("an AST body has an AST environment")
+        };
+        if closure.params.len() != args.len() {
+            return Err(EvalError::new(
+                "E0315",
+                format!(
+                    "this function takes {} argument(s) but {} were given",
+                    closure.params.len(),
+                    args.len()
+                ),
+            )
+            .at(span));
+        }
+        let scope = Scope::child_with_types(captured, self.bindings.clone());
+        for (param, arg) in closure.params.iter().zip(args.iter()) {
+            self.bind_pattern(param, arg, &scope)?;
+        }
+        self.frames.push(Frame {
+            function: closure
+                .name
+                .clone()
+                .unwrap_or_else(|| self.lambda_name.clone()),
+            span,
+        });
+        // §9.3.4: the trace must name the function that failed, so the
+        // error is given the call stack while its own frame is still
+        // on it — popping first dropped the innermost frame.
+        let outcome = self
+            .eval(body, &scope)
+            .map_err(|error| error.with_stack(self.frames.clone()));
+        self.frames.pop();
+        match outcome {
+            // `?` returns from the enclosing function by unwinding to
+            // its call, which is where the `Err` value belongs.
+            | Err(error) if error.payload.is_some() => Ok(error.payload.expect("checked above")),
+            | other => other,
+        }
+    }
+
+    fn apply_in_context(
+        &mut self,
+        function: Value,
+        args: Vec<Value>,
+        span: Span,
+        instance: Option<Rc<crate::generics::FunctionProof>>,
     ) -> Result<Value, EvalError> {
         match function {
             | Value::Native(function) => (function.0)(self, args, span),
-            | Value::Closure(closure) => {
-                // §9.2.2: a closure lowered to the Core IR runs on the IR
-                // interpreter, which trampolines its tail calls. Everything
-                // else about applying a function — the depth guard, the stack
-                // frame, the `?` payload — is shared.
-                if matches!(closure.body, ClosureBody::Ir(_)) {
-                    return crate::eval_ir::run_closure(self, &closure, args, span);
-                }
-                let ClosureBody::Ast(body) = &closure.body else {
-                    unreachable!("the IR branch returned above")
-                };
-                let ClosureEnv::Ast(captured) = &closure.env else {
-                    unreachable!("an AST body has an AST environment")
-                };
-                if closure.params.len() != args.len() {
-                    return Err(EvalError::new(
-                        "E0315",
-                        format!(
-                            "this function takes {} argument(s) but {} were given",
-                            closure.params.len(),
-                            args.len()
-                        ),
-                    )
-                    .at(span));
-                }
-                let scope = Scope::child(captured);
-                for (param, arg) in closure.params.iter().zip(args.iter()) {
-                    self.bind_pattern(param, arg, &scope)?;
-                }
-                self.frames.push(Frame {
-                    function: closure
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| self.lambda_name.clone()),
-                    span,
-                });
-                // §9.3.4: the trace must name the function that failed, so the
-                // error is given the call stack while its own frame is still
-                // on it — popping first dropped the innermost frame.
-                let outcome = self
-                    .eval(body, &scope)
-                    .map_err(|error| error.with_stack(self.frames.clone()));
-                self.frames.pop();
-                match outcome {
-                    // `?` returns from the enclosing function by unwinding to
-                    // its call, which is where the `Err` value belongs.
-                    | Err(error) if error.payload.is_some() => {
-                        Ok(error.payload.expect("checked above"))
-                    },
-                    | other => other,
-                }
-            },
+            | Value::Closure(closure) => self.apply_user_closure(closure, args, span, instance),
             | Value::Ctor {
                 adt,
                 index,
                 name,
                 arity,
                 args: collected,
+                origin,
             } => {
                 if arity == usize::MAX {
                     // A builtin referenced as a value: merge any arguments it
@@ -2882,6 +3783,7 @@ impl Interp {
                         name,
                         arity,
                         args: all,
+                        origin,
                     });
                 }
                 if all.len() > arity {
@@ -2891,7 +3793,11 @@ impl Interp {
                     )
                     .at(span));
                 }
-                Ok(make_variant(adt, index, &name, all))
+                let mut result = make_variant(adt, index, &name, all);
+                if let Some(origin) = &origin {
+                    value::mark_ctor_result(&mut result, origin);
+                }
+                Ok(result)
             },
             | other => {
                 Err(
@@ -2981,7 +3887,7 @@ impl Interp {
         span: Span,
         values: Vec<Value>,
     ) -> Result<Value, EvalError> {
-        let Some(key) = self.rssn_calls.get(&span).cloned() else {
+        let Some(key) = self.context.evidence.rssn_calls.get(&span).cloned() else {
             return Err(EvalError::new(
                 "E1005",
                 format!("no pinned overload for `Rssn.{op}` at this call site"),
@@ -2989,7 +3895,8 @@ impl Interp {
             .at(span)
             .with_note("the checked module did not record this call; re-check the module"));
         };
-        crate::rssn_module::call_operator(&key, values, span)
+        let expected = self.resolved_expr_type(span);
+        crate::rssn_module::call_operator_with_evidence(&key, values, span, expected.as_ref())
     }
 
     /// Runs a class-method call site through the instance the checker proved.
@@ -3206,10 +4113,106 @@ impl Interp {
         values: Vec<Value>,
         span: Span,
     ) -> Result<Value, EvalError> {
+        let mut value = self.tensor_from_values_unverified(values, span)?;
+        // This function is called only for an actual AST/IR tensor literal,
+        // never for a variable read or a host higher-order apply.
+        if let Some(aevia_types::Type::Tensor { shape, elem }) = self.resolved_expr_type(span) {
+            if let Value::Tensor(tensor) = &mut value {
+                // Empty literal storage has no elements from which to learn a
+                // representation. Its own checked literal type may supply it;
+                // unlike a variable read, this is a genuine creation site.
+                if tensor.storage.is_empty()
+                    && matches!(tensor.storage, Storage::Boxed(_))
+                    && tensor.shape.len() == shape.rank() as usize
+                    && tensor
+                        .shape
+                        .iter()
+                        .enumerate()
+                        .all(|(i, n)| shape.extent(i).is_none_or(|e| e == *n))
+                {
+                    let choice = match elem.as_ref() {
+                        | aevia_types::Type::Scalar(Rep::Int, dim) => {
+                            Some((
+                                Storage::TypedExact(Vec::new(), value::ExactRep::Int),
+                                dim.clone(),
+                            ))
+                        },
+                        | aevia_types::Type::Scalar(Rep::Real, dim) => {
+                            Some((
+                                Storage::TypedExact(Vec::new(), value::ExactRep::Real),
+                                dim.clone(),
+                            ))
+                        },
+                        | aevia_types::Type::Scalar(Rep::Float, dim) => {
+                            Some((Storage::Dense(Rc::new(Vec::new())), dim.clone()))
+                        },
+                        | aevia_types::Type::Bool => Some((Storage::Bool(Vec::new()), Dim::one())),
+                        | _ => None,
+                    };
+                    if let Some((storage, dim)) = choice {
+                        let tensor = Rc::make_mut(tensor);
+                        tensor.storage = storage;
+                        tensor.dim = dim;
+                    }
+                }
+                let checked_shape = tensor.shape.len() == shape.rank() as usize
+                    && tensor.shape.iter().enumerate().all(|(axis, extent)| {
+                        shape
+                            .extent(axis)
+                            .is_none_or(|expected| expected == *extent)
+                    })
+                    && tensor
+                        .shape
+                        .iter()
+                        .try_fold(1usize, |count, extent| count.checked_mul(*extent))
+                        == Some(tensor.storage.len());
+                // Opaque callable values have their own private proof. They
+                // cannot pass through the numerical host witness validator.
+                let checked_elements = !aevia_types::class::has_variables(&elem)
+                    && checked_shape
+                    && (0..tensor.storage.len()).all(|index| {
+                        tensor
+                            .get_flat(index)
+                            .is_some_and(|value| self.runtime_input_matches(&value, &elem))
+                    });
+                if checked_elements
+                    || crate::host_witness::tensor_witnesses(tensor, &shape, &elem, true).is_some()
+                {
+                    Rc::make_mut(tensor).verified_element = Some(Rc::new(*elem));
+                }
+            }
+        }
+        Ok(value)
+    }
+
+    fn tensor_from_values_unverified(
+        &mut self,
+        values: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, EvalError> {
         if values.is_empty() {
             return Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape: vec![0],
                 storage: Storage::Boxed(Vec::new()),
+                dim: Dim::one(),
+                display: None,
+            })));
+        }
+        // `Value` is an opaque ABI element. A checked list of values may
+        // contain tensors, including differently shaped ones, without becoming
+        // a stacked numeric tensor. Preserve argument boundaries for dynamic
+        // kernel calls in both evaluators.
+        if self.resolved_expr_type(span).is_some_and(|ty| {
+            matches!(ty,
+                aevia_types::Type::Tensor { shape, elem }
+                    if shape.rank() == 1 && *elem == aevia_types::builtins::dynamic_value_type()
+            )
+        }) {
+            return Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
+                shape: vec![values.len()],
+                storage: Storage::Boxed(values),
                 dim: Dim::one(),
                 display: None,
             })));
@@ -3358,7 +4361,10 @@ impl Interp {
                 if count == 0 {
                     return Ok(empty_tensor_like(&tensor, remaining.to_vec()));
                 }
-                return Ok(build_tensor(elements, remaining.to_vec(), tensor.dim.clone()));
+                return Ok(crate::host_witness::preserve_tensor_schema(
+                    build_tensor(elements, remaining.to_vec(), tensor.dim.clone()),
+                    &tensor,
+                ));
             }
         }
         // Slicing: one range per axis, producing a new tensor.
@@ -3433,8 +4439,13 @@ impl Interp {
                     elements.push(element);
                 }
             }
-            if count == 0 { return Ok(empty_tensor_like(&tensor, new_shape)); }
-            return Ok(build_tensor(elements, new_shape, tensor.dim.clone()));
+            if count == 0 {
+                return Ok(empty_tensor_like(&tensor, new_shape));
+            }
+            return Ok(crate::host_witness::preserve_tensor_schema(
+                build_tensor(elements, new_shape, tensor.dim.clone()),
+                &tensor,
+            ));
         }
         while ranges.len() < tensor.rank() {
             let extent = tensor.shape[ranges.len()];
@@ -3461,8 +4472,13 @@ impl Interp {
                 elements.push(element);
             }
         }
-        if count == 0 { return Ok(empty_tensor_like(&tensor, new_shape)); }
-        Ok(build_tensor(elements, new_shape, tensor.dim.clone()))
+        if count == 0 {
+            return Ok(empty_tensor_like(&tensor, new_shape));
+        }
+        Ok(crate::host_witness::preserve_tensor_schema(
+            build_tensor(elements, new_shape, tensor.dim.clone()),
+            &tensor,
+        ))
     }
 
     // ----- IO -------------------------------------------------------------
@@ -4128,7 +5144,10 @@ fn element_at_broadcast(
 }
 
 /// Preserve a tensor's element representation when a slice has no elements.
-fn empty_tensor_like(tensor: &TensorData, shape: Vec<usize>) -> Value {
+fn empty_tensor_like(
+    tensor: &TensorData,
+    shape: Vec<usize>,
+) -> Value {
     let storage = match &tensor.storage {
         | Storage::Dense(_) | Storage::View(_) => Storage::Dense(Rc::new(Vec::new())),
         | Storage::Exact(_) => Storage::Exact(Vec::new()),
@@ -4136,9 +5155,14 @@ fn empty_tensor_like(tensor: &TensorData, shape: Vec<usize>) -> Value {
         | Storage::Bool(_) => Storage::Bool(Vec::new()),
         | Storage::Boxed(_) => Storage::Boxed(Vec::new()),
     };
-    Value::Tensor(Rc::new(TensorData {
-        shape, storage, dim: tensor.dim.clone(), display: tensor.display.clone(),
-    }))
+    let result = Value::Tensor(Rc::new(TensorData {
+        verified_element: None,
+        shape,
+        storage,
+        dim: tensor.dim.clone(),
+        display: tensor.display.clone(),
+    }));
+    crate::host_witness::preserve_tensor_schema(result, tensor)
 }
 
 /// Builds a tensor from elements, choosing the narrowest storage.
@@ -4150,6 +5174,7 @@ pub fn build_tensor(
 ) -> Value {
     if elements.is_empty() {
         return Value::Tensor(Rc::new(TensorData {
+            verified_element: None,
             shape,
             storage: Storage::Boxed(Vec::new()),
             dim,
@@ -4176,6 +5201,7 @@ pub fn build_tensor(
             }
         }
         return Value::Tensor(Rc::new(TensorData {
+            verified_element: None,
             shape,
             storage: Storage::Dense(Rc::new(values)),
             dim,
@@ -4223,6 +5249,7 @@ pub fn build_tensor(
         }
         if converted {
             return Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
                 shape,
                 storage: Storage::Dense(Rc::new(values)),
                 dim,
@@ -4250,13 +5277,20 @@ pub fn build_tensor(
             }
         }
         let rep = if elements.iter().all(|element| {
-            matches!(element, Value::Num(NumVal { kind: NumKind::Int(_), .. }))
+            matches!(
+                element,
+                Value::Num(NumVal {
+                    kind: NumKind::Int(_),
+                    ..
+                })
+            )
         }) {
             value::ExactRep::Int
         } else {
             value::ExactRep::Real
         };
         return Value::Tensor(Rc::new(TensorData {
+            verified_element: None,
             shape,
             storage: Storage::TypedExact(values, rep),
             dim,
@@ -4274,6 +5308,7 @@ pub fn build_tensor(
             }
         }
         return Value::Tensor(Rc::new(TensorData {
+            verified_element: None,
             shape,
             storage: Storage::Bool(values),
             dim,
@@ -4281,6 +5316,7 @@ pub fn build_tensor(
         }));
     }
     Value::Tensor(Rc::new(TensorData {
+        verified_element: None,
         shape,
         storage: Storage::Boxed(elements),
         dim,
@@ -4317,7 +5353,9 @@ enum ObservableType {
 fn observable_type(value: &Value) -> Option<ObservableType> {
     match value {
         | Value::Num(num) => {
-            if !num.dim.vars().is_empty() { return None; }
+            if !num.dim.vars().is_empty() {
+                return None;
+            }
             let rep = match num.kind {
                 | NumKind::Int(_) => RepKind::Int,
                 | NumKind::Exact(_) | NumKind::Sym(_) => RepKind::Real,
@@ -4327,7 +5365,9 @@ fn observable_type(value: &Value) -> Option<ObservableType> {
             Some(ObservableType::Num(rep, num.dim.clone()))
         },
         | Value::Tensor(tensor) => {
-            if !tensor.dim.vars().is_empty() { return None; }
+            if !tensor.dim.vars().is_empty() {
+                return None;
+            }
             let rep = match &tensor.storage {
                 | Storage::Dense(_) | Storage::View(_) => RepKind::Float,
                 // Exact storage loses the Int/Real distinction, even if all
@@ -4338,12 +5378,18 @@ fn observable_type(value: &Value) -> Option<ObservableType> {
                 | Storage::Bool(_) => return None,
                 | Storage::Boxed(_) => return None,
             };
-            Some(ObservableType::Tensor(tensor.shape.clone(), rep, tensor.dim.clone()))
+            Some(ObservableType::Tensor(
+                tensor.shape.clone(),
+                rep,
+                tensor.dim.clone(),
+            ))
         },
         | Value::Record(record) => {
-            let mut fields = record.fields.iter().map(|(name, value)| {
-                Some((name.clone(), observable_type(value)?))
-            }).collect::<Option<Vec<_>>>()?;
+            let mut fields = record
+                .fields
+                .iter()
+                .map(|(name, value)| Some((name.clone(), observable_type(value)?)))
+                .collect::<Option<Vec<_>>>()?;
             fields.sort_by(|a, b| a.0.cmp(&b.0));
             Some(ObservableType::Record(fields))
         },
@@ -4351,8 +5397,13 @@ fn observable_type(value: &Value) -> Option<ObservableType> {
             let args = if adt::param_kinds_of(variant.adt).is_empty() {
                 Vec::new()
             } else if let Some(types) = &variant.type_args {
-                if !variant_type_args_valid(variant, types) { return None; }
-                types.iter().map(observable_type_from_type).collect::<Option<Vec<_>>>()?
+                if !variant_type_args_valid(variant, types) {
+                    return None;
+                }
+                types
+                    .iter()
+                    .map(observable_type_from_type)
+                    .collect::<Option<Vec<_>>>()?
             } else {
                 inferred_variant_args(variant)?
             };
@@ -4372,23 +5423,35 @@ fn observable_type_from_type(ty: &aevia_types::Type) -> Option<ObservableType> {
         | Type::Scalar(rep, dim) if dim.vars().is_empty() => {
             Some(ObservableType::Num(RepKind::of(*rep)?, dim.clone()))
         },
-        | Type::Tensor { shape, elem } => match &**elem {
-            | Type::Scalar(rep, dim) if dim.vars().is_empty() => {
-                Some(ObservableType::Tensor(shape.extents()?, RepKind::of(*rep)?, dim.clone()))
-            },
-            | _ => None,
+        | Type::Tensor { shape, elem } => {
+            match &**elem {
+                | Type::Scalar(rep, dim) if dim.vars().is_empty() => {
+                    Some(ObservableType::Tensor(
+                        shape.extents()?,
+                        RepKind::of(*rep)?,
+                        dim.clone(),
+                    ))
+                },
+                | _ => None,
+            }
         },
         | Type::Record(row) if row.tail_var().is_none() => {
-            let mut fields = row.fields().into_iter().map(|(name, ty)| {
-                Some((name, observable_type_from_type(&ty)?))
-            }).collect::<Option<Vec<_>>>()?;
+            let mut fields = row
+                .fields()
+                .into_iter()
+                .map(|(name, ty)| Some((name, observable_type_from_type(&ty)?)))
+                .collect::<Option<Vec<_>>>()?;
             fields.sort_by(|a, b| a.0.cmp(&b.0));
             Some(ObservableType::Record(fields))
         },
-        | Type::Adt(id, args) => Some(ObservableType::Adt(
-            adt::key_of(*id),
-            args.iter().map(observable_type_from_type).collect::<Option<Vec<_>>>()?,
-        )),
+        | Type::Adt(id, args) => {
+            Some(ObservableType::Adt(
+                adt::key_of(*id),
+                args.iter()
+                    .map(observable_type_from_type)
+                    .collect::<Option<Vec<_>>>()?,
+            ))
+        },
         | Type::Bool => Some(ObservableType::Bool),
         | Type::Str => Some(ObservableType::Str),
         | Type::Unit => Some(ObservableType::Unit),
@@ -4405,7 +5468,10 @@ fn bind_runtime_type(
     match bindings.get(&key) {
         | Some(Some(previous)) => actual.as_ref() == Some(previous),
         | Some(None) => false,
-        | None => { bindings.insert(key, actual); true },
+        | None => {
+            bindings.insert(key, actual);
+            true
+        },
     }
 }
 
@@ -4417,21 +5483,33 @@ fn runtime_type_matches(
     use aevia_types::Type;
     match (pattern, actual) {
         | (Type::Var(id), _) | (Type::Param(id), _) => {
-            bind_runtime_type((matches!(pattern, Type::Param(_)), *id), observable_type_from_type(actual), bindings)
+            bind_runtime_type(
+                (matches!(pattern, Type::Param(_)), *id),
+                observable_type_from_type(actual),
+                bindings,
+            )
         },
         | (Type::Adt(a, pa), Type::Adt(b, aa)) => {
-            adt::key_of(*a) == adt::key_of(*b) && pa.len() == aa.len()
-                && pa.iter().zip(aa).all(|(p, a)| runtime_type_matches(p, a, bindings))
+            adt::key_of(*a) == adt::key_of(*b)
+                && pa.len() == aa.len()
+                && pa
+                    .iter()
+                    .zip(aa)
+                    .all(|(p, a)| runtime_type_matches(p, a, bindings))
         },
         | (Type::Tensor { elem: p, .. }, Type::Tensor { elem: a, .. }) => {
-            aevia_types::class::matches_head(pattern, actual) && runtime_type_matches(p, a, bindings)
+            aevia_types::class::matches_head(pattern, actual)
+                && runtime_type_matches(p, a, bindings)
         },
         | (Type::Record(p), Type::Record(a)) => {
             let pf = p.fields();
             let af = a.fields();
             (p.tail_var().is_some() || (a.tail_var().is_none() && pf.len() == af.len()))
-                && pf.iter().all(|(name, ty)| af.iter().find(|(n, _)| n == name)
-                    .is_some_and(|(_, other)| runtime_type_matches(ty, other, bindings)))
+                && pf.iter().all(|(name, ty)| {
+                    af.iter()
+                        .find(|(n, _)| n == name)
+                        .is_some_and(|(_, other)| runtime_type_matches(ty, other, bindings))
+                })
         },
         | _ => aevia_types::class::matches_head(pattern, actual),
     }
@@ -4440,12 +5518,20 @@ fn runtime_type_matches(
 /// Check public type metadata against the constructor before trusting it.
 /// A nullary constructor is valid with explicit arguments even though none can
 /// be recovered from its payload.
-fn variant_type_args_valid(variant: &value::VariantValue, args: &[aevia_types::Type]) -> bool {
+fn variant_type_args_valid(
+    variant: &value::VariantValue,
+    args: &[aevia_types::Type],
+) -> bool {
     use aevia_types::Type;
-    let Some(definition) = adt::get(variant.adt) else { return false; };
-    let Some(constructor) = definition.ctors.get(variant.index) else { return false; };
+    let Some(definition) = adt::get(variant.adt) else {
+        return false;
+    };
+    let Some(constructor) = definition.ctors.get(variant.index) else {
+        return false;
+    };
     let kinds = adt::param_kinds_of(variant.adt);
-    if args.len() != kinds.len() || constructor.fields.len() != variant.fields.len()
+    if args.len() != kinds.len()
+        || constructor.fields.len() != variant.fields.len()
         || args.iter().any(aevia_types::class::has_variables)
     {
         return false;
@@ -4455,7 +5541,9 @@ fn variant_type_args_valid(variant: &value::VariantValue, args: &[aevia_types::T
     for (index, (kind, arg)) in kinds.iter().zip(args).enumerate() {
         match (kind, arg) {
             | (adt::ParamKind::Type, ty) => types[index] = Some(ty.clone()),
-            | (adt::ParamKind::Dim(id), Type::UnitOf(dim)) => { dims.insert(*id, dim.clone()); },
+            | (adt::ParamKind::Dim(id), Type::UnitOf(dim)) => {
+                dims.insert(*id, dim.clone());
+            },
             | _ => return false,
         }
     }
@@ -4477,7 +5565,9 @@ fn variant_type_args_valid(variant: &value::VariantValue, args: &[aevia_types::T
 fn inferred_variant_args(variant: &value::VariantValue) -> Option<Vec<ObservableType>> {
     let definition = adt::get(variant.adt)?;
     let constructor = definition.ctors.get(variant.index)?;
-    if constructor.fields.len() != variant.fields.len() { return None; }
+    if constructor.fields.len() != variant.fields.len() {
+        return None;
+    }
     let mut bindings = HashMap::new();
     let mut dimensions = aevia_dim::DimUnifier::new();
     for (field, value) in constructor.fields.iter().zip(&variant.fields) {
@@ -4487,9 +5577,14 @@ fn inferred_variant_args(variant: &value::VariantValue) -> Option<Vec<Observable
             return None;
         }
     }
-    (0..definition.params.len()).map(|id| {
-        bindings.get(&(true, u32::try_from(id).ok()?)).cloned().flatten()
-    }).collect()
+    (0..definition.params.len())
+        .map(|id| {
+            bindings
+                .get(&(true, u32::try_from(id).ok()?))
+                .cloned()
+                .flatten()
+        })
+        .collect()
 }
 
 /// Constructor declarations carry dimensional requirements even though
@@ -4504,21 +5599,35 @@ fn constructor_field_dimensions(
         | (Type::Scalar(_, expected), Value::Num(num)) => {
             num.dim.vars().is_empty() && dimensions.unify(expected, &num.dim).is_ok()
         },
-        | (Type::Tensor { elem, .. }, Value::Tensor(tensor)) => match &**elem {
-            | Type::Scalar(_, expected) => tensor.dim.vars().is_empty()
-                && dimensions.unify(expected, &tensor.dim).is_ok(),
-            | _ => true,
+        | (Type::Tensor { elem, .. }, Value::Tensor(tensor)) => {
+            match &**elem {
+                | Type::Scalar(_, expected) => {
+                    tensor.dim.vars().is_empty() && dimensions.unify(expected, &tensor.dim).is_ok()
+                },
+                | _ => true,
+            }
         },
-        | (Type::Record(row), Value::Record(record)) => row.fields().iter().all(|(name, field)| {
-            record.fields.get(name).is_some_and(|value| constructor_field_dimensions(field, value, dimensions))
-        }),
+        | (Type::Record(row), Value::Record(record)) => {
+            row.fields().iter().all(|(name, field)| {
+                record
+                    .fields
+                    .get(name)
+                    .is_some_and(|value| constructor_field_dimensions(field, value, dimensions))
+            })
+        },
         | (Type::Adt(_, args), Value::Variant(variant)) if !args.is_empty() => {
             if let Some(actual) = &variant.type_args {
-                args.len() == actual.len() && args.iter().zip(actual)
-                    .all(|(p, a)| constructor_type_dimensions(p, a, dimensions))
+                args.len() == actual.len()
+                    && args
+                        .iter()
+                        .zip(actual)
+                        .all(|(p, a)| constructor_type_dimensions(p, a, dimensions))
             } else if let Some(actual) = inferred_variant_args(variant) {
-                args.len() == actual.len() && args.iter().zip(&actual)
-                    .all(|(p, a)| constructor_observable_dimensions(p, a, dimensions))
+                args.len() == actual.len()
+                    && args
+                        .iter()
+                        .zip(&actual)
+                        .all(|(p, a)| constructor_observable_dimensions(p, a, dimensions))
             } else {
                 false
             }
@@ -4535,13 +5644,25 @@ fn constructor_type_dimensions(
     use aevia_types::Type;
     match (pattern, actual) {
         | (Type::Scalar(_, p), Type::Scalar(_, a))
-        | (Type::Point(p), Type::Point(a)) | (Type::UnitOf(p), Type::UnitOf(a)) => dimensions.unify(p, a).is_ok(),
-        | (Type::Tensor { elem: p, .. }, Type::Tensor { elem: a, .. }) => constructor_type_dimensions(p, a, dimensions),
-        | (Type::Adt(_, p), Type::Adt(_, a)) => p.len() == a.len() && p.iter().zip(a).all(|(p, a)| constructor_type_dimensions(p, a, dimensions)),
+        | (Type::Point(p), Type::Point(a))
+        | (Type::UnitOf(p), Type::UnitOf(a)) => dimensions.unify(p, a).is_ok(),
+        | (Type::Tensor { elem: p, .. }, Type::Tensor { elem: a, .. }) => {
+            constructor_type_dimensions(p, a, dimensions)
+        },
+        | (Type::Adt(_, p), Type::Adt(_, a)) => {
+            p.len() == a.len()
+                && p.iter()
+                    .zip(a)
+                    .all(|(p, a)| constructor_type_dimensions(p, a, dimensions))
+        },
         | (Type::Record(p), Type::Record(a)) => {
             let fields = a.fields();
-            p.fields().iter().all(|(name, ty)| fields.iter().find(|(n, _)| n == name)
-                .is_some_and(|(_, actual)| constructor_type_dimensions(ty, actual, dimensions)))
+            p.fields().iter().all(|(name, ty)| {
+                fields
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .is_some_and(|(_, actual)| constructor_type_dimensions(ty, actual, dimensions))
+            })
         },
         | _ => true,
     }
@@ -4556,11 +5677,27 @@ fn constructor_observable_dimensions(
     match (pattern, actual) {
         | (Type::Scalar(_, p), ObservableType::Num(_, a)) => dimensions.unify(p, a).is_ok(),
         | (Type::Tensor { elem, .. }, ObservableType::Tensor(_, rep, dim)) => {
-            constructor_observable_dimensions(elem, &ObservableType::Num(*rep, dim.clone()), dimensions)
+            constructor_observable_dimensions(
+                elem,
+                &ObservableType::Num(*rep, dim.clone()),
+                dimensions,
+            )
         },
-        | (Type::Adt(_, p), ObservableType::Adt(_, a)) => p.len() == a.len() && p.iter().zip(a).all(|(p, a)| constructor_observable_dimensions(p, a, dimensions)),
-        | (Type::Record(p), ObservableType::Record(a)) => p.fields().iter().all(|(name, ty)| a.iter().find(|(n, _)| n == name)
-            .is_some_and(|(_, actual)| constructor_observable_dimensions(ty, actual, dimensions))),
+        | (Type::Adt(_, p), ObservableType::Adt(_, a)) => {
+            p.len() == a.len()
+                && p.iter()
+                    .zip(a)
+                    .all(|(p, a)| constructor_observable_dimensions(p, a, dimensions))
+        },
+        | (Type::Record(p), ObservableType::Record(a)) => {
+            p.fields().iter().all(|(name, ty)| {
+                a.iter()
+                    .find(|(n, _)| n == name)
+                    .is_some_and(|(_, actual)| {
+                        constructor_observable_dimensions(ty, actual, dimensions)
+                    })
+            })
+        },
         | _ => true,
     }
 }
@@ -4573,39 +5710,70 @@ fn runtime_observable_matches(
     use aevia_types::Type;
     match (pattern, actual) {
         | (Type::Var(id), _) | (Type::Param(id), _) => {
-            bind_runtime_type((matches!(pattern, Type::Param(_)), *id), Some(actual.clone()), bindings)
+            bind_runtime_type(
+                (matches!(pattern, Type::Param(_)), *id),
+                Some(actual.clone()),
+                bindings,
+            )
         },
         | (Type::Scalar(rep, _), ObservableType::Num(actual, _)) => {
             matches!(rep, Rep::Var(_)) || RepKind::of(*rep) == Some(*actual)
         },
         | (Type::Adt(id, args), ObservableType::Adt(key, actual)) => {
-            adt::key_of(*id) == *key && args.len() == actual.len()
-                && args.iter().zip(actual).all(|(p, a)| runtime_observable_matches(p, a, bindings))
+            adt::key_of(*id) == *key
+                && args.len() == actual.len()
+                && args
+                    .iter()
+                    .zip(actual)
+                    .all(|(p, a)| runtime_observable_matches(p, a, bindings))
         },
         | (Type::Tensor { shape, elem }, ObservableType::Tensor(extents, rep, dim)) => {
             usize::try_from(shape.rank()).ok() == Some(extents.len())
-                && extents.iter().enumerate().all(|(i, n)| shape.extent(i).is_none_or(|e| e == *n))
-                && runtime_observable_matches(elem, &ObservableType::Num(*rep, dim.clone()), bindings)
+                && extents
+                    .iter()
+                    .enumerate()
+                    .all(|(i, n)| shape.extent(i).is_none_or(|e| e == *n))
+                && runtime_observable_matches(
+                    elem,
+                    &ObservableType::Num(*rep, dim.clone()),
+                    bindings,
+                )
         },
         | (Type::Record(row), ObservableType::Record(fields)) => {
             let pattern_fields = row.fields();
             (row.tail_var().is_some() || pattern_fields.len() == fields.len())
-                && pattern_fields.iter().all(|(name, ty)| fields.iter().find(|(n, _)| n == name)
-                    .is_some_and(|(_, actual)| runtime_observable_matches(ty, actual, bindings)))
+                && pattern_fields.iter().all(|(name, ty)| {
+                    fields
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .is_some_and(|(_, actual)| runtime_observable_matches(ty, actual, bindings))
+                })
         },
-        | (Type::Bool, ObservableType::Bool) | (Type::Str, ObservableType::Str)
-        | (Type::Unit, ObservableType::Unit) | (Type::Prop, ObservableType::Prop) => true,
+        | (Type::Bool, ObservableType::Bool)
+        | (Type::Str, ObservableType::Str)
+        | (Type::Unit, ObservableType::Unit)
+        | (Type::Prop, ObservableType::Prop) => true,
         | _ => false,
     }
 }
 
 fn runtime_structural_show(value: &Value) -> bool {
     match value {
-        | Value::Num(_) | Value::Bool(_) | Value::Prop(_) | Value::Str(_) | Value::Unit
-        | Value::Dyn(_) | Value::UnitOf(_) | Value::Io(_) => true,
-        | Value::Tensor(tensor) => match &tensor.storage {
-            | Storage::Boxed(items) => !items.is_empty() && items.iter().all(runtime_structural_show),
-            | _ => true,
+        | Value::Num(_)
+        | Value::Bool(_)
+        | Value::Prop(_)
+        | Value::Str(_)
+        | Value::Unit
+        | Value::Dyn(_)
+        | Value::UnitOf(_)
+        | Value::Io(_) => true,
+        | Value::Tensor(tensor) => {
+            match &tensor.storage {
+                | Storage::Boxed(items) => {
+                    !items.is_empty() && items.iter().all(runtime_structural_show)
+                },
+                | _ => true,
+            }
         },
         | Value::Record(record) => record.fields.values().all(runtime_structural_show),
         | _ => false,
@@ -4622,37 +5790,60 @@ fn runtime_head_matches(
     use aevia_types::Type;
     match (head, value) {
         | (Type::Var(id), _) | (Type::Param(id), _) => {
-            bind_runtime_type((matches!(head, Type::Param(_)), *id), observable_type(value), bindings)
+            bind_runtime_type(
+                (matches!(head, Type::Param(_)), *id),
+                observable_type(value),
+                bindings,
+            )
         },
-        | (Type::Scalar(rep, _), Value::Num(num)) => match (rep, &num.kind) {
-            | (Rep::Var(_), _) => true,
-            | (Rep::Int, NumKind::Int(_)) => true,
-            | (Rep::Real, NumKind::Exact(_) | NumKind::Sym(_)) => true,
-            | (Rep::Float, NumKind::Float(_)) => true,
-            | (Rep::Complex, NumKind::Complex(..)) => true,
-            | _ => false,
+        | (Type::Scalar(rep, _), Value::Num(num)) => {
+            match (rep, &num.kind) {
+                | (Rep::Var(_), _) => true,
+                | (Rep::Int, NumKind::Int(_)) => true,
+                | (Rep::Real, NumKind::Exact(_) | NumKind::Sym(_)) => true,
+                | (Rep::Float, NumKind::Float(_)) => true,
+                | (Rep::Complex, NumKind::Complex(..)) => true,
+                | _ => false,
+            }
         },
         | (Type::Tensor { shape, elem }, Value::Tensor(tensor)) => {
             if usize::try_from(shape.rank()).ok() != Some(tensor.shape.len()) {
                 return false;
             }
-            if tensor.shape.iter().enumerate().any(|(i, actual)| shape.extent(i).is_some_and(|n| n != *actual)) {
+            if tensor
+                .shape
+                .iter()
+                .enumerate()
+                .any(|(i, actual)| shape.extent(i).is_some_and(|n| n != *actual))
+            {
                 return false;
             }
             match (&**elem, &tensor.storage) {
                 | (Type::Var(id) | Type::Param(id), storage) => {
-                    let actual = if !tensor.dim.vars().is_empty() { None } else { match storage {
-                        | Storage::Dense(_) | Storage::View(_) => Some(ObservableType::Num(RepKind::Float, tensor.dim.clone())),
-                        | Storage::TypedExact(_, value::ExactRep::Int) => Some(ObservableType::Num(RepKind::Int, tensor.dim.clone())),
-                        | Storage::TypedExact(_, value::ExactRep::Real) => Some(ObservableType::Num(RepKind::Real, tensor.dim.clone())),
-                        | Storage::Bool(_) => Some(ObservableType::Bool),
-                        | Storage::Exact(_) | Storage::Boxed(_) => None,
-                    }};
+                    let actual = if !tensor.dim.vars().is_empty() {
+                        None
+                    } else {
+                        match storage {
+                            | Storage::Dense(_) | Storage::View(_) => {
+                                Some(ObservableType::Num(RepKind::Float, tensor.dim.clone()))
+                            },
+                            | Storage::TypedExact(_, value::ExactRep::Int) => {
+                                Some(ObservableType::Num(RepKind::Int, tensor.dim.clone()))
+                            },
+                            | Storage::TypedExact(_, value::ExactRep::Real) => {
+                                Some(ObservableType::Num(RepKind::Real, tensor.dim.clone()))
+                            },
+                            | Storage::Bool(_) => Some(ObservableType::Bool),
+                            | Storage::Exact(_) | Storage::Boxed(_) => None,
+                        }
+                    };
                     bind_runtime_type((matches!(&**elem, Type::Param(_)), *id), actual, bindings)
                 },
                 | (Type::Scalar(Rep::Float, _), Storage::Dense(_) | Storage::View(_)) => true,
                 | (Type::Scalar(Rep::Int, _), Storage::TypedExact(_, value::ExactRep::Int)) => true,
-                | (Type::Scalar(Rep::Real, _), Storage::TypedExact(_, value::ExactRep::Real)) => true,
+                | (Type::Scalar(Rep::Real, _), Storage::TypedExact(_, value::ExactRep::Real)) => {
+                    true
+                },
                 | (Type::Bool, Storage::Bool(_)) => true,
                 // Neither Int nor Real can be proved from exact storage.
                 | _ => false,
@@ -4660,25 +5851,43 @@ fn runtime_head_matches(
         },
         | (Type::Record(row), Value::Record(record)) => {
             let fields = row.fields();
-            if row.tail_var().is_none() && fields.len() != record.fields.len() { return false; }
-            fields.iter().all(|(name, ty)| record.fields.get(name).is_some_and(|value| runtime_head_matches(ty, value, bindings)))
+            if row.tail_var().is_none() && fields.len() != record.fields.len() {
+                return false;
+            }
+            fields.iter().all(|(name, ty)| {
+                record
+                    .fields
+                    .get(name)
+                    .is_some_and(|value| runtime_head_matches(ty, value, bindings))
+            })
         },
         | (Type::Adt(id, args), Value::Variant(variant)) => {
-            if adt::key_of(*id) != adt::key_of(variant.adt) { return false; }
-            if args.is_empty() { return true; }
+            if adt::key_of(*id) != adt::key_of(variant.adt) {
+                return false;
+            }
+            if args.is_empty() {
+                return true;
+            }
             if let Some(actual) = &variant.type_args {
                 variant_type_args_valid(variant, actual)
-                    && args.len() == actual.len() && args.iter().zip(actual)
-                    .all(|(pattern, actual)| runtime_type_matches(pattern, actual, bindings))
+                    && args.len() == actual.len()
+                    && args
+                        .iter()
+                        .zip(actual)
+                        .all(|(pattern, actual)| runtime_type_matches(pattern, actual, bindings))
             } else if let Some(actual) = inferred_variant_args(variant) {
-                args.len() == actual.len() && args.iter().zip(&actual)
-                    .all(|(pattern, actual)| runtime_observable_matches(pattern, actual, bindings))
+                args.len() == actual.len()
+                    && args.iter().zip(&actual).all(|(pattern, actual)| {
+                        runtime_observable_matches(pattern, actual, bindings)
+                    })
             } else {
                 false
             }
         },
-        | (Type::Bool, Value::Bool(_)) | (Type::Str, Value::Str(_))
-        | (Type::Unit, Value::Unit) | (Type::Prop, Value::Prop(_)) => true,
+        | (Type::Bool, Value::Bool(_))
+        | (Type::Str, Value::Str(_))
+        | (Type::Unit, Value::Unit)
+        | (Type::Prop, Value::Prop(_)) => true,
         | _ => false,
     }
 }
@@ -4747,7 +5956,13 @@ pub fn witness_of_value(value: &Value) -> Option<Witness> {
         | Value::Unit => Some(Witness::Unit),
         | Value::Prop(_) => Some(Witness::Prop),
         | Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => None,
-        | Value::Dyn(_) | Value::UnitOf(_) | Value::Error => None,
+        | Value::Dyn(_)
+        | Value::UnitOf(_)
+        | Value::TypeRep(_)
+        | Value::Callback(_)
+        | Value::KernelValue(_)
+        | Value::KernelError(_)
+        | Value::Error => None,
     }
 }
 
@@ -4773,16 +5988,93 @@ pub fn ctor_in_module(
     })
 }
 
+fn builtin_result_schema(
+    name: &str,
+    args: &[Value],
+) -> Option<aevia_types::Type> {
+    use aevia_types::Type;
+    // Only implementations that construct the result themselves can mint
+    // provenance; a builtin that forwards a callback result cannot.
+    if !matches!(name, "find" | "parse_int" | "parse_float") {
+        return None;
+    }
+    let mut derived: Option<Type> = None;
+    for scheme in aevia_types::builtins::schemes(name)? {
+        if !scheme.constraints.is_empty() {
+            continue;
+        }
+        let mut infer = aevia_types::infer::Infer::new();
+        let Type::Fn(params, ret) = infer.instantiate(&scheme) else {
+            continue;
+        };
+        if params.len() != args.len() {
+            continue;
+        }
+        let mut inputs = Vec::new();
+        let mut valid = true;
+        for (param, arg) in params.iter().zip(args) {
+            if matches!(param, Type::Fn(..)) {
+                if !matches!(
+                    arg,
+                    Value::Ctor { .. } | Value::Closure(_) | Value::Native(_)
+                ) {
+                    valid = false;
+                    break;
+                }
+                continue;
+            }
+            let Some(schema) = crate::host_witness::runtime_schema(arg) else {
+                valid = false;
+                break;
+            };
+            if crate::host_witness::capture(arg, &schema, false).is_none()
+                || infer.unify(param, &schema).is_err()
+            {
+                valid = false;
+                break;
+            }
+            inputs.push((param, schema));
+        }
+        if !valid
+            || inputs.iter().any(|(param, schema)| {
+                !crate::host_witness::strict_schema_equal(&infer.resolve(param), schema)
+            })
+        {
+            continue;
+        }
+        let result = infer.resolve(&ret);
+        if aevia_types::class::has_variables(&result) || !matches!(result, Type::Adt(..)) {
+            continue;
+        }
+        if derived
+            .as_ref()
+            .is_some_and(|previous| !crate::host_witness::strict_schema_equal(previous, &result))
+        {
+            return None;
+        }
+        derived = Some(result);
+    }
+    derived
+}
+
 /// A constructor value of one module's type, ready to apply.
-///
-/// A constructor with no fields is already its variant; only a constructor with
-/// fields is a value that still needs arguments (§3.6.2).
 #[must_use]
 pub fn ctor_value(
     module: &keys::ModulePath,
     name: &str,
 ) -> Option<Value> {
-    let (adt, index, registered) = ctor_in_module(module, name)?;
+    let (adt, index, _) = ctor_in_module(module, name)?;
+    ctor_value_at(adt, index)
+}
+
+/// Materializes the constructor witness chosen by one exact compilation.
+#[must_use]
+pub fn ctor_value_at(
+    adt: adt::AdtId,
+    index: usize,
+) -> Option<Value> {
+    let registered = adt::get(adt)?;
+    let name = &registered.ctors.get(index)?.name;
     let arity = registered
         .ctors
         .get(index)
@@ -4796,7 +6088,17 @@ pub fn ctor_value(
         name: name.to_string(),
         arity,
         args: Vec::new(),
+        origin: None,
     })
+}
+
+pub(crate) fn source_ctor_value_at(
+    adt: adt::AdtId,
+    index: usize,
+) -> Option<Value> {
+    let mut value = ctor_value_at(adt, index)?;
+    crate::value::mark_source_ctor(&mut value);
+    Some(value)
 }
 
 /// Constructor name lookup, re-exported for the runtime's pattern matching.
@@ -4865,7 +6167,10 @@ mod runtime_type_dispatch_tests {
     use super::*;
     use aevia_types::Type;
 
-    fn record(first: Value, second: Value) -> Value {
+    fn record(
+        first: Value,
+        second: Value,
+    ) -> Value {
         let fields = [("first".to_string(), first), ("second".to_string(), second)]
             .into_iter()
             .collect();
@@ -4879,40 +6184,68 @@ mod runtime_type_dispatch_tests {
             "Pair",
             vec!["a".to_string()],
         );
-        adt::set_ctors(id, vec![adt::Ctor {
-            name: "Pair".to_string(),
-            fields: vec![Type::Param(0), Type::Param(0)],
-        }]);
+        adt::set_ctors(
+            id,
+            vec![adt::Ctor {
+                name: "Pair".to_string(),
+                fields: vec![Type::Param(0), Type::Param(0)],
+            }],
+        );
         let head = Type::Adt(id, vec![Type::int()]);
         let pair = make_variant(id, 0, "Pair", vec![Value::int(1), Value::int(2)]);
         assert!(runtime_head_matches(&head, &pair, &mut HashMap::new()));
         let contradiction = make_variant(id, 0, "Pair", vec![Value::int(1), Value::string("x")]);
-        assert!(!runtime_head_matches(&head, &contradiction, &mut HashMap::new()));
+        assert!(!runtime_head_matches(
+            &head,
+            &contradiction,
+            &mut HashMap::new()
+        ));
         let incomplete = make_variant(id, 0, "Pair", vec![Value::int(1)]);
-        assert!(!runtime_head_matches(&head, &incomplete, &mut HashMap::new()));
+        assert!(!runtime_head_matches(
+            &head,
+            &incomplete,
+            &mut HashMap::new()
+        ));
 
         let nested_field = adt::allocate_in(
             keys::ModulePath::new(["DispatchEvidenceTest"]),
             "NestedField",
             vec!["a".to_string()],
         );
-        adt::set_ctors(nested_field, vec![adt::Ctor {
-            name: "NestedField".into(),
-            fields: vec![Type::option(Type::Param(0)), Type::Param(0)],
-        }]);
-        let consistent = make_variant(nested_field, 0, "NestedField", vec![
-            make_variant(adt::OPTION_ID, 1, "Some", vec![Value::int(1)]),
-            Value::int(1),
-        ]);
+        adt::set_ctors(
+            nested_field,
+            vec![adt::Ctor {
+                name: "NestedField".into(),
+                fields: vec![Type::option(Type::Param(0)), Type::Param(0)],
+            }],
+        );
+        let consistent = make_variant(
+            nested_field,
+            0,
+            "NestedField",
+            vec![
+                make_variant(adt::OPTION_ID, 1, "Some", vec![Value::int(1)]),
+                Value::int(1),
+            ],
+        );
         assert!(runtime_head_matches(
-            &Type::Adt(nested_field, vec![Type::int()]), &consistent, &mut HashMap::new(),
+            &Type::Adt(nested_field, vec![Type::int()]),
+            &consistent,
+            &mut HashMap::new(),
         ));
-        let inconsistent = make_variant(nested_field, 0, "NestedField", vec![
-            make_variant(adt::OPTION_ID, 1, "Some", vec![Value::string("x")]),
-            Value::int(1),
-        ]);
+        let inconsistent = make_variant(
+            nested_field,
+            0,
+            "NestedField",
+            vec![
+                make_variant(adt::OPTION_ID, 1, "Some", vec![Value::string("x")]),
+                Value::int(1),
+            ],
+        );
         assert!(!runtime_head_matches(
-            &Type::Adt(nested_field, vec![Type::int()]), &inconsistent, &mut HashMap::new(),
+            &Type::Adt(nested_field, vec![Type::int()]),
+            &inconsistent,
+            &mut HashMap::new(),
         ));
 
         let phantom = adt::allocate_in(
@@ -4920,30 +6253,55 @@ mod runtime_type_dispatch_tests {
             "Phantom",
             vec!["a".to_string()],
         );
-        adt::set_ctors(phantom, vec![adt::Ctor { name: "Empty".into(), fields: vec![] }]);
+        adt::set_ctors(
+            phantom,
+            vec![adt::Ctor {
+                name: "Empty".into(),
+                fields: vec![],
+            }],
+        );
         let value = make_variant(phantom, 0, "Empty", vec![]);
         assert!(!runtime_head_matches(
-            &Type::Adt(phantom, vec![Type::int()]), &value, &mut HashMap::new(),
+            &Type::Adt(phantom, vec![Type::int()]),
+            &value,
+            &mut HashMap::new(),
         ));
 
-        let nested = make_variant(adt::OPTION_ID, 1, "Some", vec![
-            make_variant(adt::OPTION_ID, 1, "Some", vec![Value::int(1)])
-        ]);
+        let nested = make_variant(
+            adt::OPTION_ID,
+            1,
+            "Some",
+            vec![make_variant(adt::OPTION_ID, 1, "Some", vec![Value::int(1)])],
+        );
         assert!(runtime_head_matches(
-            &Type::option(Type::option(Type::int())), &nested, &mut HashMap::new(),
+            &Type::option(Type::option(Type::int())),
+            &nested,
+            &mut HashMap::new(),
         ));
         let absent = make_variant(adt::OPTION_ID, 0, "None", vec![]);
-        assert!(!runtime_head_matches(&Type::option(Type::int()), &absent, &mut HashMap::new()));
+        assert!(!runtime_head_matches(
+            &Type::option(Type::int()),
+            &absent,
+            &mut HashMap::new()
+        ));
         let mut typed_absent = absent;
         if let Value::Variant(variant) = &mut typed_absent {
             Rc::make_mut(variant).type_args = Some(vec![Type::int()]);
         }
-        assert!(runtime_head_matches(&Type::option(Type::int()), &typed_absent, &mut HashMap::new()));
+        assert!(runtime_head_matches(
+            &Type::option(Type::int()),
+            &typed_absent,
+            &mut HashMap::new()
+        ));
         let mut forged = make_variant(adt::OPTION_ID, 1, "Some", vec![Value::string("x")]);
         if let Value::Variant(variant) = &mut forged {
             Rc::make_mut(variant).type_args = Some(vec![Type::int()]);
         }
-        assert!(!runtime_head_matches(&Type::option(Type::int()), &forged, &mut HashMap::new()));
+        assert!(!runtime_head_matches(
+            &Type::option(Type::int()),
+            &forged,
+            &mut HashMap::new()
+        ));
     }
 
     #[test]
@@ -4954,56 +6312,104 @@ mod runtime_type_dispatch_tests {
             vec!["a".to_string()],
         );
         let dimension = Dim::var(7_001);
-        adt::set_ctors(id, vec![adt::Ctor {
-            name: "Measured".into(),
-            fields: vec![Type::float(dimension.clone()), Type::float(dimension), Type::Param(0)],
-        }]);
+        adt::set_ctors(
+            id,
+            vec![adt::Ctor {
+                name: "Measured".into(),
+                fields: vec![
+                    Type::float(dimension.clone()),
+                    Type::float(dimension),
+                    Type::Param(0),
+                ],
+            }],
+        );
         let scalar = |dim| Value::Num(NumVal::float(1.0, dim));
-        let consistent = make_variant(id, 0, "Measured", vec![
-            scalar(Dim::base("L")), scalar(Dim::base("L")), Value::int(1),
-        ]);
-        let contradictory = make_variant(id, 0, "Measured", vec![
-            scalar(Dim::base("L")), scalar(Dim::base("T")), Value::int(1),
-        ]);
+        let consistent = make_variant(
+            id,
+            0,
+            "Measured",
+            vec![
+                scalar(Dim::base("L")),
+                scalar(Dim::base("L")),
+                Value::int(1),
+            ],
+        );
+        let contradictory = make_variant(
+            id,
+            0,
+            "Measured",
+            vec![
+                scalar(Dim::base("L")),
+                scalar(Dim::base("T")),
+                Value::int(1),
+            ],
+        );
         let head = Type::Adt(id, vec![Type::int()]);
-        assert!(runtime_head_matches(&head, &consistent, &mut HashMap::new()));
-        assert!(!runtime_head_matches(&head, &contradictory, &mut HashMap::new()));
+        assert!(runtime_head_matches(
+            &head,
+            &consistent,
+            &mut HashMap::new()
+        ));
+        assert!(!runtime_head_matches(
+            &head,
+            &contradictory,
+            &mut HashMap::new()
+        ));
 
         let fixed = adt::allocate_in(
             keys::ModulePath::new(["DispatchEvidenceTest"]),
             "FixedDimension",
             vec!["a".to_string()],
         );
-        adt::set_ctors(fixed, vec![adt::Ctor {
-            name: "FixedDimension".into(),
-            fields: vec![Type::float(Dim::base("L")), Type::Param(0)],
-        }]);
-        let bad = make_variant(fixed, 0, "FixedDimension", vec![
-            scalar(Dim::base("T")), Value::int(1),
-        ]);
+        adt::set_ctors(
+            fixed,
+            vec![adt::Ctor {
+                name: "FixedDimension".into(),
+                fields: vec![Type::float(Dim::base("L")), Type::Param(0)],
+            }],
+        );
+        let bad = make_variant(
+            fixed,
+            0,
+            "FixedDimension",
+            vec![scalar(Dim::base("T")), Value::int(1)],
+        );
         assert!(!runtime_head_matches(
-            &Type::Adt(fixed, vec![Type::int()]), &bad, &mut HashMap::new(),
+            &Type::Adt(fixed, vec![Type::int()]),
+            &bad,
+            &mut HashMap::new(),
         ));
     }
 
     #[test]
     fn erased_exact_tensors_are_not_guessed_equal() {
-        let tensor = || Value::Tensor(Rc::new(TensorData {
-            shape: vec![0],
-            storage: Storage::Exact(Vec::new()),
-            dim: Dim::one(),
-            display: None,
-        }));
+        let tensor = || {
+            Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
+                shape: vec![0],
+                storage: Storage::Exact(Vec::new()),
+                dim: Dim::one(),
+                display: None,
+            }))
+        };
         let head = Type::record(vec![
             ("first".into(), Type::Var(9)),
             ("second".into(), Type::Var(9)),
         ]);
-        assert!(!runtime_head_matches(&head, &record(tensor(), tensor()), &mut HashMap::new()));
+        assert!(!runtime_head_matches(
+            &head,
+            &record(tensor(), tensor()),
+            &mut HashMap::new()
+        ));
         let one_wildcard = Type::record(vec![
             ("first".into(), Type::Var(9)),
             ("second".into(), Type::Var(10)),
         ]);
-        assert!(runtime_head_matches(&one_wildcard, &record(tensor(), tensor()), &mut HashMap::new()));
+        assert!(runtime_head_matches(
+            &one_wildcard,
+            &record(tensor(), tensor()),
+            &mut HashMap::new()
+        ));
     }
 
     #[test]
@@ -5013,7 +6419,11 @@ mod runtime_type_dispatch_tests {
             ("second".into(), Type::Var(9)),
         ]);
         let int = || Value::int(1);
-        assert!(runtime_head_matches(&head, &record(int(), int()), &mut HashMap::new()));
+        assert!(runtime_head_matches(
+            &head,
+            &record(int(), int()),
+            &mut HashMap::new()
+        ));
         assert!(!runtime_head_matches(
             &head,
             &record(int(), Value::string("different")),
@@ -5030,6 +6440,33 @@ mod runtime_type_dispatch_tests {
             &mut HashMap::new(),
         ));
         let unknown = || Value::Num(NumVal::float(1.0, Dim::var(8_001)));
-        assert!(!runtime_head_matches(&head, &record(unknown(), unknown()), &mut HashMap::new()));
+        assert!(!runtime_head_matches(
+            &head,
+            &record(unknown(), unknown()),
+            &mut HashMap::new()
+        ));
+    }
+}
+
+#[cfg(test)]
+mod ast_stack_budget_tests {
+    #[test]
+    fn ast_reaches_the_default_call_guard_and_restores_lexical_state() {
+        std::thread::Builder::new().stack_size(256*1024*1024).spawn(|| {
+            let source = "fn down(n: Int): Int = 1 + down(n + 1)\nfn main(): IO Unit = do\n    println(show(down(0)))\n";
+            let compilation = crate::compile("ast-call-budget.aev",source);
+            assert!(!compilation.diagnostics.has_errors(),"{:?}",compilation.diagnostics.items);
+            let mut interp = super::Interp::new(&compilation.checked).with_mode(crate::Mode::Ast).with_buffer();
+            assert_eq!(interp.max_depth,2048,"preserve the language's existing default guard");
+            let loaded = interp.load(compilation.module.as_ref().unwrap());
+            assert!(!loaded.has_errors(),"{:?}",loaded.items);
+            let failure = interp.run_main().unwrap_err();
+            assert_eq!(failure.code,"E0805");
+            assert!(failure.stack.iter().any(|frame| frame.function.as_ref() == "down"));
+            assert_eq!(interp.depth,0);
+            assert_eq!(interp.nodes,0);
+            assert!(interp.frames.is_empty());
+            assert!(interp.bindings.is_none());
+        }).unwrap().join().unwrap();
     }
 }

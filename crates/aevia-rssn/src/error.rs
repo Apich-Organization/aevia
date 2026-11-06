@@ -139,6 +139,8 @@ impl KernelError {
                 | OpError::UnknownOp(_) => "UnknownOp",
                 | OpError::Arity { .. } => "Arity",
                 | OpError::Type { .. } => "Type",
+                | OpError::CallbackType { .. } => "CallbackType",
+                | OpError::HostDiagnostic { .. } => "HostDiagnostic",
                 | OpError::Ambiguous { .. } => "Ambiguous",
                 | OpError::Dimension(_) => "Dimension",
                 | OpError::NotNumeric(_) => "NotNumeric",
@@ -266,6 +268,8 @@ fn classify(error: &OpError) -> KernelError {
                 format!("argument {arg} is {got:?}, expected {expected:?}"),
             )
         },
+        | OpError::CallbackType { .. } => KernelError::of("E1003", Failure::Type, error.to_string()),
+        | OpError::HostDiagnostic { code, message } => KernelError::of(code, Failure::Other, message.clone()),
         | OpError::Ambiguous { name, count } => {
             KernelError::of(
                 "E1002",
@@ -383,5 +387,24 @@ pub fn from_compute_error(error: &rssn::api::ComputeError) -> KernelError {
             )
         },
         | other => KernelError::of("E0899", Failure::Other, format!("rssn: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod callback_error_tests {
+    use super::*;
+    use rssn::kernel::signature::TypeExpr;
+    use rssn::kernel::value::CallbackRef;
+
+    #[test]
+    fn callback_failures_preserve_type_and_host_diagnostic_identity() {
+        let error = from_op_error(&OpError::CallbackType { callback: CallbackRef(2), argument: None, expected: Box::new(TypeExpr::Float), got: Box::new(TypeExpr::Bool) });
+        assert_eq!(error.code, "E1003");
+        assert_eq!(error.variant(), Some("CallbackType"));
+        assert_eq!(error.kind, Failure::Type);
+        let error = from_op_error(&OpError::HostDiagnostic { code: "E0805", message: "callback recursion".into() });
+        assert_eq!(error.code, "E0805");
+        assert_eq!(error.message, "callback recursion");
+        assert_eq!(error.variant(), Some("HostDiagnostic"));
     }
 }

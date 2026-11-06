@@ -1,31 +1,11 @@
-//! Generates the `Rssn` modules from the Kernel Manifest.
+//! Generates the `Rssn` modules from the live kernel manifest.
 //!
-//! Aevia has no operator table. This module turns `manifest.ops`,
-//! `manifest.units` and `manifest.constants` into Aevia source, one typed
-//! declaration per overload, each pinning the `OpKey` it was generated from so
-//! that the static choice and the executed operator cannot disagree.
-//!
-//! Three files come out, because one file is one module: `Rssn.aev` for the
-//! operators and capabilities, `Units.aev` and `Constants.aev` for the two
-//! tables.
-//!
-//! # Dimension parameters in declarations
-//!
-//! A manifest signature can be dimension-parametric (`sde_wiener` takes
-//! `Real[T]` and returns `Tensor<2, Real[T^(1/2)]>`); the emitted declaration
-//! spells that with Aevia dimension variables (`T`, `T2`, …) rather than
-//! `Dyn<term>`, and the names are shared across the parameters and the result
-//! of one declaration. `Dyn<term>` is now only for genuinely unrepresentable
-//! types: a kernel signature that itself says `Dyn(rep, dim = any)` (the
-//! manifest deliberately leaves the representation and dimension open, e.g.
-//! `quantity`/`convert` values), a **rank-variable** tensor (`Tensor<n, τ>` — a
-//! declaration needs a concrete rank; the checker answers `E0304`, and the
-//! refined-shape spelling `Tensor<[n], τ>` fixes the rank instead), a type
-//! parameter, a table row, a device handle, a variant, a host opaque type, or
-//! `Never`. The generated module is a typed façade: each `Rssn.invoke` result
-//! is dynamically typed by the checker, so the module is checked with that one
-//! documented gap (see `tests/generated.rs::is_the_invoke_typing_gap`), while
-//! `Units.aev` and `Constants.aev` type-check cleanly.
+//! Exact, source-representable signatures use typed declarations pinned to
+//! their manifest keys. Derived, dynamically represented or unavailable
+//! signatures use a value-list dynamic route with an explicit `Result` and
+//! a coverage explanation. `namespace_files` and the flat facade consume the
+//! same binding catalog; no approximate signature is presented as exact.
+//! Units and constants are generated from the same manifest.
 
 use crate::registry::OpEntry;
 use crate::registry::Registry;
@@ -74,7 +54,7 @@ pub fn operators(registry: &Registry) -> String {
         &mut out,
         registry,
         "Rssn",
-        "The rssn kernel: every operator, typed by its manifest signature.",
+        "The rssn kernel: exact typed bindings and explicit dynamic fallbacks.",
     );
     // The count is stated so that a reader (and the conformance test) can
     // check the module against `manifest.ops.len()` instead of against the
@@ -83,10 +63,7 @@ pub fn operators(registry: &Registry) -> String {
 
     let _ = writeln!(
         out,
-        "# --- opaque kernel types ---\n\
-         ## The dynamic ABI's own types. They have no constructors here: a\n\
-         ## value of one is created by `to_value` or returned by a call.\n\
-         type Value\ntype Symbol\ntype OpError\n"
+        "## Value, Symbol and OpError are the shared ABI types.\n"
     );
 
     let _ = writeln!(out, "# --- version and capabilities ---");
@@ -109,17 +86,144 @@ pub fn operators(registry: &Registry) -> String {
     let _ = writeln!(out, "# --- operators ---");
     let _ = writeln!(
         out,
-        "## One declaration per overload, one operator per block. Aliases are not\n\
-         ## declared: `Rssn.<alias>` resolves by name, and a second declaration\n\
-         ## would be a second `fn` for one operator."
+        "## Exact overloads pin their keys; other bindings use the dynamic ABI.\n\
+         ## Aliases resolve by name and are not declared a second time."
     );
+    let catalog = crate::bindings::catalog(registry);
     let mut current = String::new();
     for op in registry.ops() {
         if op.rule_set != current {
             let _ = writeln!(out, "\n# {}.", op.rule_set);
             current.clone_from(&op.rule_set);
         }
-        let _ = writeln!(out, "{}", declaration(op));
+        let rows: Vec<_> = catalog
+            .iter()
+            .filter(|row| std::ptr::eq(row.op, op))
+            .collect();
+        let _ = writeln!(out, "{}", declaration(op, &rows));
+    }
+    out
+}
+
+/// Optional modules grouped by the registering kernel rule set. They use the
+/// same identifiers as the flat facade and can be regenerated as the kernel
+/// adds operators. Exact, representable signatures pin their keys; everything
+/// else uses the signature-free dynamic ABI with an explicit error result.
+#[must_use]
+pub fn namespace_files(registry: &Registry) -> Vec<(String, String)> {
+    let catalog = crate::bindings::catalog(registry);
+    namespace_names(registry)
+        .into_iter()
+        .map(|(module, group)| {
+            let source = namespace_render(registry, &catalog, &module, &group);
+            (format!("{module}.aev"), source)
+        })
+        .collect()
+}
+
+/// Generate a single virtual rule-set module by its module name, if present.
+/// This avoids rendering unrelated namespaces while resolving an import.
+#[must_use]
+pub fn namespace_source(
+    registry: &Registry,
+    name: &str,
+) -> Option<String> {
+    let (_, group) = namespace_names(registry)
+        .into_iter()
+        .find(|(module, _)| module == name)?;
+    Some(namespace_render(
+        registry,
+        &crate::bindings::catalog(registry),
+        name,
+        &group,
+    ))
+}
+
+fn namespace_names(registry: &Registry) -> Vec<(String, String)> {
+    namespace_names_for(registry.ops().map(|op| op.rule_set.as_str()))
+}
+
+/// Deterministically assign module names to rule-set names. When sanitisation
+/// collides, every member gets a stable hash suffix instead of depending on
+/// registration order. A hash collision is resolved by appending the original
+/// bytes, so distinct names never share a module.
+#[must_use]
+pub fn namespace_names_for<'a>(groups: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)> {
+    let unique: std::collections::BTreeSet<&str> = groups.into_iter().collect();
+    let mut buckets: std::collections::BTreeMap<String, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for group in unique {
+        buckets
+            .entry(format!("Rssn_{}", sanitise(group)))
+            .or_default()
+            .push(group);
+    }
+    let mut names = Vec::new();
+    for (base, bucket) in buckets {
+        if bucket.len() == 1 {
+            names.push((base, bucket[0].to_string()));
+            continue;
+        }
+        let mut hashes: std::collections::BTreeMap<u64, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for group in bucket {
+            let hash = group.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+            });
+            hashes.entry(hash).or_default().push(group);
+        }
+        for (hash, collisions) in hashes {
+            let duplicate = collisions.len() > 1;
+            for group in collisions {
+                let suffix = if duplicate {
+                    format!("_{hash:016x}_{}", hex(group.as_bytes()))
+                } else {
+                    format!("_{hash:016x}")
+                };
+                names.push((format!("{base}{suffix}"), group.to_string()));
+            }
+        }
+    }
+    // A hashed collision name can itself equal another group's ordinary
+    // spelling. Resolve such cross-bucket collisions too, without making the
+    // result depend on iteration order.
+    loop {
+        let mut counts = std::collections::BTreeMap::new();
+        for (name, _) in &names {
+            *counts.entry(name.clone()).or_insert(0usize) += 1;
+        }
+        if counts.values().all(|count| *count == 1) {
+            break;
+        }
+        for (name, group) in &mut names {
+            if counts[name] > 1 {
+                name.push_str(&format!("_x{}", hex(group.as_bytes())));
+            }
+        }
+    }
+    names.sort_by(|a, b| a.1.cmp(&b.1));
+    names
+}
+
+fn namespace_render(
+    registry: &Registry,
+    catalog: &[crate::bindings::Binding<'_>],
+    module: &str,
+    group: &str,
+) -> String {
+    let mut out = String::new();
+    header(
+        &mut out,
+        registry,
+        module,
+        &format!("Kernel rule set: {group}."),
+    );
+    for op in registry.ops().filter(|op| op.rule_set == group) {
+        let rows: Vec<_> = catalog
+            .iter()
+            .filter(|row| std::ptr::eq(row.op, op))
+            .collect();
+        let _ = writeln!(out, "{}", declaration(op, &rows));
     }
     out
 }
@@ -190,21 +294,8 @@ pub fn constants(registry: &Registry) -> String {
     // define one name twice. The second keeps its symbol with a numeric
     // suffix, in symbol order, so the output stays deterministic.
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let needs_pi = registry
-        .constants
-        .iter()
-        .any(|constant| constant.value.pi != 0);
-    if needs_pi {
-        let _ = writeln!(
-            out,
-            "## π, for the constants the kernel states as a multiple of it. The\n\
-             ## prelude will own this once `Math` exists; a module that needs it\n\
-             ## cannot borrow it yet, and a wrong value here would be worse than\n\
-             ## the nearest double.\n\
-             let pi: Real = {:.17}\n",
-            std::f64::consts::PI
-        );
-    }
+    // `pi` is the exact symbolic prelude constant. Rounding it to a decimal
+    // here would change every constant whose manifest scale includes pi.
     for constant in &registry.constants {
         let dim = constant.dim.to_plain_string();
         let ty = if dim.is_empty() || dim == "1" {
@@ -325,7 +416,10 @@ fn capability_flags(registry: &Registry) -> Vec<(String, bool)> {
 }
 
 /// Renders one operator's typed declarations.
-fn declaration(op: &OpEntry) -> String {
+fn declaration(
+    op: &OpEntry,
+    rows: &[&crate::bindings::Binding<'_>],
+) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
@@ -347,23 +441,59 @@ fn declaration(op: &OpEntry) -> String {
         }
     }
     if op.signatures.is_empty() {
-        // A registration with no signature has no type to declare. Emitting
-        // `Rssn.invoke(name, "", [])` produced a value that could never be
-        // produced (`E1005`: no key has an empty hash), so the module says how
-        // to reach it instead of pretending to bind it.
+        let row = rows[0];
         let _ = writeln!(
             out,
-            "## No signature: reach it with Rssn.dynamic(\"{}\", [...])",
-            escape(&op.name)
+            "## No exact signature; errors are returned by the dynamic ABI."
         );
+        if op.higher_order {
+            let _ = writeln!(
+                out,
+                "fn {}(args: Tensor<1, Value>, callbacks: Tensor<1, Callback>): Result<Value, OpError> = Rssn.call_ho(\"{}\", args, callbacks)",
+                row.name,
+                escape(&op.name)
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "fn {}(args: Tensor<1, Value>): Result<Value, OpError> = Rssn.dynamic(\"{}\", args)",
+                row.name,
+                escape(&op.name)
+            );
+        }
         return out;
     }
     for (index, signature) in op.signatures.iter().enumerate() {
-        let name = if index == 0 {
-            sanitise(&op.name)
-        } else {
-            format!("{}_{}", sanitise(&op.name), index + 1)
-        };
+        let name = &rows[index].name;
+        match &rows[index].coverage {
+            | crate::bindings::Coverage::Typed => {},
+            | crate::bindings::Coverage::Dynamic(reasons) => {
+                let _ = writeln!(
+                    out,
+                    "## Dynamic/approximate signature: {}",
+                    reasons.join("; ")
+                );
+            },
+            | crate::bindings::Coverage::Unavailable(reasons) => {
+                let _ = writeln!(out, "## Bridge limitation: {}", reasons.join("; "));
+            },
+        }
+        if !matches!(rows[index].coverage, crate::bindings::Coverage::Typed) {
+            if op.higher_order {
+                let _ = writeln!(
+                    out,
+                    "fn {name}(args: Tensor<1, Value>, callbacks: Tensor<1, Callback>): Result<Value, OpError> = Rssn.call_ho(\"{}\", args, callbacks)",
+                    escape(&op.name)
+                );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "fn {name}(args: Tensor<1, Value>): Result<Value, OpError> = Rssn.dynamic(\"{}\", args)",
+                    escape(&op.name)
+                );
+            }
+            continue;
+        }
         // A declaration pins its `OpKey`; an overload the manifest gives no
         // key for cannot be pinned, and emitting `""` produced a hash no
         // `Rssn.invoke` can find (`E1005` on every call). Say so instead of
@@ -386,7 +516,7 @@ fn declaration(op: &OpEntry) -> String {
             let _ = writeln!(
                 out,
                 "let {name}: {ret} = Rssn.invoke(\"{op_name}\", \"{hash}\", [])",
-                name = value_name(&name),
+                name = name,
                 ret = render_with(&mut dims, &signature.ret),
                 op_name = escape(&op.name),
             );
@@ -417,11 +547,18 @@ fn declaration(op: &OpEntry) -> String {
                 format!("concat([{}], rest)", fixed.join(", "))
             },
         };
+        let ret = render_with(&mut dims, &signature.ret);
+        let generics = if dims.names.is_empty() {
+            String::new()
+        } else {
+            let mut names: Vec<_> = dims.names.values().cloned().collect();
+            names.sort();
+            format!("<{}>", names.join(", "))
+        };
         let _ = writeln!(
             out,
-            "fn {name}({params}): {ret} = Rssn.invoke(\"{op_name}\", \"{hash}\", {args})",
+            "fn {name}{generics}({params}): {ret} = Rssn.invoke(\"{op_name}\", \"{hash}\", {args})",
             params = params.join(", "),
-            ret = render_with(&mut dims, &signature.ret),
             op_name = escape(&op.name),
             args = arguments,
         );
@@ -467,7 +604,7 @@ pub fn declaration_type(ty: &SigType) -> String {
     render(ty)
 }
 
-/// Names for the dimension variables of one declaration (`T`, `T2`, …).
+/// Names for the explicitly bound dimension variables of one declaration (`d`, `d2`, …).
 #[derive(Default)]
 struct DimNames {
     names: std::collections::BTreeMap<u32, String>,
@@ -483,9 +620,9 @@ impl DimNames {
             return name.clone();
         }
         let name = if self.next == 0 {
-            "T".to_string()
+            "d".to_string()
         } else {
-            format!("T{}", self.next + 1)
+            format!("d{}", self.next + 1)
         };
         self.next += 1;
         self.names.insert(id, name.clone());
@@ -501,7 +638,23 @@ fn render_with(
         | SigType::Tensor { rank: None, .. } | SigType::Sparse { rank: None, .. } => {
             "Dyn<term>".to_string()
         },
-        | SigType::Tensor { rank, elem } | SigType::Sparse { rank, elem } => {
+        | SigType::Tensor {
+            rank: Some(rank),
+            shape: Some(shape),
+            elem,
+        } if *rank == shape.len() => {
+            format!(
+                "Tensor<[{}], {}>",
+                shape
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                render_with(dims, elem)
+            )
+        },
+        | SigType::Tensor { shape: Some(_), .. } => "Dyn<term>".to_string(),
+        | SigType::Tensor { rank, elem, .. } | SigType::Sparse { rank, elem } => {
             format!("Tensor<{}, {}>", rank.unwrap_or(1), render_with(dims, elem))
         },
         | SigType::Var(_) | SigType::Table | SigType::Device | SigType::Never => {
@@ -647,6 +800,25 @@ fn value_name(name: &str) -> String {
     match chars.next() {
         | Some(first) => format!("{}{}", first.to_lowercase(), chars.as_str()),
         | None => sanitised,
+    }
+}
+
+/// Preferred source identifier for an overload before collision disambiguation.
+#[must_use]
+pub fn binding_base_name(
+    name: &str,
+    index: usize,
+    nullary: bool,
+) -> String {
+    let base = if index == 0 {
+        sanitise(name)
+    } else {
+        format!("{}_{}", sanitise(name), index + 1)
+    };
+    if nullary {
+        value_name(&base)
+    } else {
+        base
     }
 }
 

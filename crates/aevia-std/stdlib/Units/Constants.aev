@@ -2,15 +2,9 @@
 ##
 ## Generated from the rssn Kernel Manifest: one quantity per physical
 ## constant of `manifest.constants` (§13.6.5). Do not edit; regenerate with
-## `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`.
-## rssn 3.0.0-rc.1, api 1
+## `cargo run -p aevia-stdlib-gen -- --write`.
+## rssn 3.0.0-rc.1, api 2
 module Units.Constants
-
-## π, for the constants the kernel states as a multiple of it. The
-## prelude will own this once `Math` exists; a module that needs it
-## cannot borrow it yet, and a wrong value here would be worse than
-## the nearest double.
-let pi: Real = 3.14159265358979312
 
 ## Faraday constant (SI 2019 definition, exact)
 let f: Real[Current*Time/Amount] = 96485.3321233100184 mol^-1*A*s

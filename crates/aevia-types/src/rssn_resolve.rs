@@ -184,10 +184,73 @@ pub fn score_type(
                 inner
             }
         },
-        | (S::Tensor { rank: a, elem: ea }, S::Tensor { rank: b, elem: eb })
-        | (S::Sparse { rank: a, elem: ea }, S::Sparse { rank: b, elem: eb })
-        | (S::Tensor { rank: a, elem: ea }, S::Sparse { rank: b, elem: eb })
-        | (S::Sparse { rank: a, elem: ea }, S::Tensor { rank: b, elem: eb }) => {
+        | (
+            S::Tensor {
+                rank: a,
+                shape: sa,
+                elem: ea,
+            },
+            S::Tensor {
+                rank: b,
+                shape: sb,
+                elem: eb,
+            },
+        ) => {
+            if a.is_some() && b.is_some() && a != b
+                || sa.as_ref().zip(sb.as_ref()).is_some_and(|(a, b)| a != b)
+                || sa.as_ref().is_some_and(|s| *a != Some(s.len()))
+                || sb.as_ref().is_some_and(|s| *b != Some(s.len()))
+            {
+                return Score::No;
+            }
+            let inner = score_type(ea, eb);
+            if !inner.accepted() {
+                Score::No
+            } else if a.is_none() || b.is_none() || sa != sb || inner != Score::Exact {
+                Score::Shaped
+            } else {
+                Score::Exact
+            }
+        },
+        | (
+            S::Tensor {
+                rank: a,
+                shape: sa,
+                elem: ea,
+            },
+            S::Sparse { rank: b, elem: eb },
+        ) => {
+            if (a.is_some() && b.is_some() && a != b)
+                || sa.as_ref().is_some_and(|shape| *a != Some(shape.len()))
+            {
+                return Score::No;
+            }
+            if score_type(ea, eb).accepted() {
+                Score::Shaped
+            } else {
+                Score::No
+            }
+        },
+        | (
+            S::Sparse { rank: a, elem: ea },
+            S::Tensor {
+                rank: b,
+                shape: sb,
+                elem: eb,
+            },
+        ) => {
+            if (a.is_some() && b.is_some() && a != b)
+                || sb.as_ref().is_some_and(|shape| *b != Some(shape.len()))
+            {
+                return Score::No;
+            }
+            if score_type(ea, eb).accepted() {
+                Score::Shaped
+            } else {
+                Score::No
+            }
+        },
+        | (S::Sparse { rank: a, elem: ea }, S::Sparse { rank: b, elem: eb }) => {
             if a.is_some() && b.is_some() && a != b {
                 return Score::No;
             }
@@ -244,9 +307,21 @@ pub fn score_type(
             if pa.len() != pb.len() {
                 return Score::No;
             }
+            // An actual callback must accept every value the operator may
+            // supply, and its result must prove everything the operator needs.
+            // Pointwise matching alone is symmetric for unknown shapes, so it
+            // cannot establish these directional function promises.
+            if !pa
+                .iter()
+                .zip(pb)
+                .all(|(expected, actual)| schema_subtype(expected, actual))
+                || !schema_subtype(rb, ra)
+            {
+                return Score::No;
+            }
             let mut worst = Score::Exact;
             for (x, y) in pa.iter().zip(pb.iter()) {
-                let score = score_type(x, y);
+                let score = score_type(y, x);
                 if !score.accepted() {
                     return Score::No;
                 }
@@ -273,6 +348,87 @@ pub fn score_type(
         | (S::Float, S::Int) => Score::Widened,
         | (S::Complex, S::Real | S::Float) => Score::Widened,
         | _ => Score::No,
+    }
+}
+
+/// Whether every value described by `actual` is accepted by `expected`.
+/// Unlike ordinary argument scoring, this must prove shape promises before
+/// a callback is invoked; a rank-only result cannot promise fixed extents.
+fn schema_subtype(
+    actual: &aevia_rssn::SigType,
+    expected: &aevia_rssn::SigType,
+) -> bool {
+    use aevia_rssn::SigType as S;
+    match (actual, expected) {
+        | (_, S::Dyn) => true,
+        | (S::Var(a), S::Var(b)) if a == b => true,
+        | (S::Dyn | S::Var(_), _) => false,
+        | (_, S::Var(_)) => true,
+        | (S::Int | S::Real | S::Float | S::Complex, S::Int | S::Real | S::Float | S::Complex) => {
+            actual == expected
+        },
+        | (
+            S::Tensor {
+                rank: actual_rank,
+                shape: actual_shape,
+                elem: actual_elem,
+            },
+            S::Tensor {
+                rank: expected_rank,
+                shape: expected_shape,
+                elem: expected_elem,
+            },
+        ) => {
+            expected_rank.is_none_or(|rank| *actual_rank == Some(rank))
+                && expected_shape
+                    .as_ref()
+                    .is_none_or(|shape| actual_shape.as_ref() == Some(shape))
+                && actual_shape
+                    .as_ref()
+                    .is_none_or(|shape| *actual_rank == Some(shape.len()))
+                && expected_shape
+                    .as_ref()
+                    .is_none_or(|shape| *expected_rank == Some(shape.len()))
+                && schema_subtype(actual_elem, expected_elem)
+        },
+        | (S::Dim(actual_base, actual_dim), S::Dim(expected_base, expected_dim)) => {
+            (!expected_dim.is_concrete() || actual_dim == expected_dim)
+                && schema_subtype(actual_base, expected_base)
+        },
+        | (S::Dim(actual_base, actual_dim), expected) => {
+            actual_dim.is_one() && schema_subtype(actual_base, expected)
+        },
+        | (actual, S::Dim(expected_base, expected_dim)) => {
+            (!expected_dim.is_concrete() || expected_dim.is_one())
+                && schema_subtype(actual, expected_base)
+        },
+        | (S::Record(actual_fields), S::Record(expected_fields)) => {
+            actual_fields.len() == expected_fields.len()
+                && expected_fields.iter().all(|(name, _)| {
+                    expected_fields
+                        .iter()
+                        .filter(|(other, _)| other == name)
+                        .count()
+                        == 1
+                })
+                && expected_fields.iter().all(|(name, expected)| {
+                    let mut matches = actual_fields.iter().filter(|(field, _)| field == name);
+                    matches
+                        .next()
+                        .is_some_and(|(_, actual)| schema_subtype(actual, expected))
+                        && matches.next().is_none()
+                })
+        },
+        | (S::Sparse { .. }, S::Tensor { .. }) | (S::Tensor { .. }, S::Sparse { .. }) => false,
+        | (S::Func(actual_params, actual_result), S::Func(expected_params, expected_result)) => {
+            actual_params.len() == expected_params.len()
+                && expected_params
+                    .iter()
+                    .zip(actual_params)
+                    .all(|(expected, actual)| schema_subtype(expected, actual))
+                && schema_subtype(actual_result, expected_result)
+        },
+        | _ => score_type(expected, actual).accepted(),
     }
 }
 
@@ -315,6 +471,15 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
         | Type::Tensor { shape, elem } => {
             S::Tensor {
                 rank: Some(usize::try_from(shape.rank()).unwrap_or(0)),
+                shape: match shape {
+                    | Shape::Rank(_) => None,
+                    | Shape::Refined(extents) => {
+                        extents
+                            .iter()
+                            .map(|extent| extent.as_ref().and_then(|extent| extent.as_const()))
+                            .collect()
+                    },
+                },
                 elem: Box::new(classify(elem)),
             }
         },
@@ -344,7 +509,13 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
         },
         | Type::Io(inner) => S::Opaque(format!("IO {}", classify(inner).render_hint())),
         | Type::Dyn(_) => S::Dyn,
-        | Type::Var(_) | Type::Param(_) | Type::Error => S::Dyn,
+        | Type::Var(_)
+        | Type::Param(_)
+        | Type::TensorIntrinsic(_)
+        | Type::TypeRepIntrinsic(_)
+        | Type::FromValueIntrinsic(_)
+        | Type::ToCallbackIntrinsic
+        | Type::Error => S::Dyn,
     }
 }
 
@@ -460,6 +631,66 @@ pub fn invoke_result(
     sig_type_to_type(&signature.ret, infer, &mut dims)
 }
 
+/// Instantiates an exact signature once and solves its parameter dimension
+/// equations against the actual argument types. Representation widening was
+/// already decided by the kernel lattice, so this deliberately unifies only
+/// dimensions rather than rejecting a legal Int/Float-to-Real widening.
+pub fn instantiate_dimensions(
+    signature: &aevia_rssn::Sig,
+    actual: &[Type],
+    infer: &mut crate::infer::Infer,
+) -> Result<Option<Type>, crate::infer::UnifyError> {
+    let mut dims = std::collections::HashMap::new();
+    fn constrain(
+        sig: &aevia_rssn::SigType,
+        actual: &Type,
+        infer: &mut crate::infer::Infer,
+        dims: &mut std::collections::HashMap<u32, Dim>,
+    ) -> Result<(), crate::infer::UnifyError> {
+        use aevia_rssn::SigType as S;
+        let actual = infer.resolve(actual);
+        match (sig, &actual) {
+            | (S::Dim(_, expected), Type::Scalar(_, got))
+            | (S::Unit(expected), Type::UnitOf(got))
+            | (S::Point(expected), Type::Point(got)) => {
+                let expected = map_dim(expected, infer, dims);
+                infer.unify_dim(&expected, got)
+            },
+            | (S::Int | S::Real | S::Float | S::Complex, Type::Scalar(_, got)) => {
+                infer.unify_dim(&Dim::one(), got)
+            },
+            | (S::Tensor { elem, .. } | S::Sparse { elem, .. }, Type::Tensor { elem: got, .. }) => {
+                constrain(elem, got, infer, dims)
+            },
+            | (S::Record(fields), Type::Record(row)) => {
+                for (name, field) in fields {
+                    if let Some(got) = row.field(name) {
+                        constrain(field, got, infer, dims)?;
+                    }
+                }
+                Ok(())
+            },
+            | (S::Func(params, ret), Type::Fn(got_params, got_ret)) => {
+                for (param, got) in params.iter().zip(got_params) {
+                    constrain(param, got, infer, dims)?;
+                }
+                constrain(ret, got_ret, infer, dims)
+            },
+            | (_, Type::Var(_)) => {
+                if let Some(param) = sig_type_to_type(sig, infer, dims) {
+                    infer.unify(&param, &actual)?;
+                }
+                Ok(())
+            },
+            | _ => Ok(()),
+        }
+    }
+    for (param, got) in signature.params.iter().zip(actual) {
+        constrain(param, got, infer, &mut dims)?;
+    }
+    Ok(sig_type_to_type(&signature.ret, infer, &mut dims).map(|ret| infer.resolve(&ret)))
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -504,7 +735,7 @@ fn sig_type_to_type(
         | S::Complex => Type::complex(Dim::one()),
         | S::Bool => Type::Bool,
         | S::Str => Type::string(),
-        | S::Symbol => return None,
+        | S::Symbol => Type::Dyn(Rep::Real),
         | S::Unit(dim) => Type::UnitOf(map_dim(dim, infer, dims)),
         | S::Point(dim) => Type::Point(map_dim(dim, infer, dims)),
         | S::Dim(inner, dim) => {
@@ -518,8 +749,20 @@ fn sig_type_to_type(
         },
         | S::Tensor {
             rank: Some(rank),
+            shape,
             elem,
-        }
+        } => {
+            if shape.as_ref().is_some_and(|shape| shape.len() != *rank) {
+                return None;
+            }
+            Type::tensor(
+                shape.as_ref().map_or_else(
+                    || Shape::Rank(u32::try_from(*rank).unwrap_or(1)),
+                    |extents| Shape::refined(extents.iter().copied().map(Some)),
+                ),
+                sig_type_to_type(elem, infer, dims)?,
+            )
+        },
         | S::Sparse {
             rank: Some(rank),
             elem,

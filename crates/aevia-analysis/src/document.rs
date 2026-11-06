@@ -52,6 +52,8 @@ impl Change {
 pub enum EditError {
     /// The range names a line the document does not have.
     UnknownLine(u32),
+    /// The column lies beyond its line or inside a UTF-16 surrogate pair.
+    InvalidPosition(Position),
     /// The range ends before it starts.
     Reversed,
 }
@@ -64,6 +66,14 @@ impl std::fmt::Display for EditError {
         match self {
             | Self::UnknownLine(line) => {
                 write!(f, "the edit names line {}, which does not exist", line + 1)
+            },
+            | Self::InvalidPosition(position) => {
+                write!(
+                    f,
+                    "the edit is not on a character boundary at {}:{}",
+                    position.line.saturating_add(1),
+                    position.column
+                )
             },
             | Self::Reversed => f.write_str("the edit ends before it starts"),
         }
@@ -219,6 +229,12 @@ impl Document {
                     .index
                     .offset(&self.text, range.end)
                     .ok_or(EditError::UnknownLine(range.end.line))?;
+                if self.index.position(&self.text, start) != range.start {
+                    return Err(EditError::InvalidPosition(range.start));
+                }
+                if self.index.position(&self.text, end) != range.end {
+                    return Err(EditError::InvalidPosition(range.end));
+                }
                 let start = usize::try_from(start.min(end)).unwrap_or(0);
                 let end = usize::try_from(end).unwrap_or(self.text.len()).max(start);
                 let mut text = String::with_capacity(self.text.len() + change.text.len());
@@ -229,6 +245,23 @@ impl Document {
                 Ok(())
             },
         }
+    }
+
+    /// Applies one revision's ordered changes atomically. Ranges are measured
+    /// against the preceding change's result; any invalid edit rolls back text,
+    /// line index and version for the entire batch.
+    pub fn apply_batch(
+        &mut self,
+        changes: &[Change],
+        version: i64,
+    ) -> Result<(), EditError> {
+        let mut next = self.clone();
+        for change in changes {
+            next.apply(change, version)?;
+        }
+        next.version = version;
+        *self = next;
+        Ok(())
     }
 }
 
@@ -362,6 +395,44 @@ mod tests {
         assert_eq!(error, EditError::UnknownLine(5));
         assert_eq!(doc.text(), "let x = 1\n");
         assert_eq!(doc.version(), 1);
+    }
+
+    #[test]
+    fn batches_preserve_text_and_revision_when_a_later_edit_is_invalid() {
+        let mut doc = Document::new("a.aev", 3, "let x = 1\n");
+        let changes = [
+            Change::full("let x = true\n"),
+            Change::ranged(Range::new(Position::new(9, 0), Position::new(9, 1)), "bad"),
+        ];
+        assert!(doc.apply_batch(&changes, 4).is_err());
+        assert_eq!(doc.text(), "let x = 1\n");
+        assert_eq!(doc.version(), 3);
+        let valid = [
+            Change::full("let x = 2\n"),
+            Change::ranged(Range::new(Position::new(0, 8), Position::new(0, 9)), "3"),
+        ];
+        doc.apply_batch(&valid, 5).unwrap();
+        assert_eq!(doc.text(), "let x = 3\n");
+        assert_eq!(doc.version(), 5);
+    }
+
+    #[test]
+    fn edits_require_exact_utf16_boundaries_and_columns() {
+        let mut doc = Document::new("a.aev", 1, "😀x\n");
+        for position in [Position::new(0, 1), Position::new(0, 8)] {
+            assert_eq!(
+                doc.apply(&Change::ranged(Range::new(position, position), "bad"), 2),
+                Err(EditError::InvalidPosition(position))
+            );
+            assert_eq!(doc.text(), "😀x\n");
+            assert_eq!(doc.version(), 1);
+        }
+        doc.apply(
+            &Change::ranged(Range::new(Position::new(0, 0), Position::new(0, 2)), "👍"),
+            3,
+        )
+        .unwrap();
+        assert_eq!(doc.text(), "👍x\n");
     }
 
     #[test]

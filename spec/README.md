@@ -65,7 +65,7 @@ audits plus the extensibility/backend-integration redesign, the live-kernel
 alignment with **`rssn 3.0.0-rc.1`** (now **1381 operators, 32 rule sets, 24
 overlays, 82 units**, with `features.sde`; see appendix C), and the second
 implementation round: symbolic instance keys and module-exported classes/
-instances/aliases, the §8.20 standard-library module tree (37 modules with the
+instances/aliases, the §8.20 standard-library module tree (38 generated modules with the
 loader fallback), typed SDE surface (§8.9.1) over the kernel's §SDE operators,
 type-level `Nat` linear unification, and the tooling completion (doctests, bench
 baselines, multi-module editor analysis). Revision 9 states the dispatch/extension

@@ -237,14 +237,9 @@ fn the_hot_paths_allocate_within_their_budget() {
 
     // The old axis path (still the one a non-`f64` class takes) boxes a `Value`
     // per input element: measure it on the same 512×512 data as the "before".
-    let boxed = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData {
-        shape: vec![512, 512],
-        storage: aevia_core::value::Storage::Boxed(
+    let boxed = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(vec![512, 512], aevia_core::value::Storage::Boxed(
             (0..512 * 512).map(|_| Value::float(0.5)).collect(),
-        ),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+        ), aevia_dim::Dim::one(), None)));
     let (boxed_allocations, _) = allocations(|| {
         grid_interp
             .call_named("sum", vec![boxed, Value::int(0)], Span::default())
@@ -271,14 +266,9 @@ fn the_hot_paths_allocate_within_their_budget() {
         min_allocations <= 2,
         "a dense min_all is O(1) allocations, found {min_allocations}"
     );
-    let boxed_min = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData {
-        shape: vec![512, 512],
-        storage: aevia_core::value::Storage::Boxed(
+    let boxed_min = Value::Tensor(std::rc::Rc::new(aevia_core::value::TensorData::new(vec![512, 512], aevia_core::value::Storage::Boxed(
             (0..512 * 512).map(|_| Value::float(0.5)).collect(),
-        ),
-        dim: aevia_dim::Dim::one(),
-        display: None,
-    }));
+        ), aevia_dim::Dim::one(), None)));
     let (boxed_min_allocations, _) = allocations(|| {
         grid_interp
             .call_named("min_all", vec![boxed_min], Span::default())

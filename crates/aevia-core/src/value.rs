@@ -424,6 +424,8 @@ pub struct TensorData {
     pub dim: Dim,
     /// A display unit applied to every element.
     pub display: Option<Rc<UnitDef>>,
+    /// Immutable element-schema provenance, set only at a verified creation.
+    pub(crate) verified_element: Option<Rc<aevia_types::Type>>,
 }
 
 /// The row-major strides of a shape: `strides[last] = 1`, and each earlier
@@ -467,6 +469,51 @@ pub fn kahan_sum(data: &[f64]) -> f64 {
 }
 
 impl TensorData {
+    /// Build an unverified tensor from host data. No element schema is inferred
+    /// for empty boxed storage; use the checked constructor for explicit proof.
+    #[must_use]
+    pub fn new(
+        shape: Vec<usize>,
+        storage: Storage,
+        dim: Dim,
+        display: Option<Rc<UnitDef>>,
+    ) -> Self {
+        Self {
+            shape,
+            storage,
+            dim,
+            display,
+            verified_element: None,
+        }
+    }
+
+    /// Construct a host tensor with an explicitly declared element schema.
+    /// Shape, dimensions, storage and every present element are checked;
+    /// an empty boxed tensor obtains its element schema only from this explicit
+    /// declaration, never from a later variable annotation.
+    ///
+    /// # Errors
+    /// Returns an error if the shape, contents or element schema disagree.
+    pub fn checked(
+        shape: Vec<usize>,
+        storage: Storage,
+        dim: Dim,
+        display: Option<Rc<UnitDef>>,
+        element: aevia_types::Type,
+    ) -> Result<Self, String> {
+        let mut tensor = Self::new(shape, storage, dim, display);
+        let rank = u32::try_from(tensor.shape.len()).map_err(|_| "tensor rank is too large")?;
+        crate::host_witness::tensor_witnesses(
+            &tensor,
+            &aevia_types::Shape::Rank(rank),
+            &element,
+            true,
+        )
+        .ok_or_else(|| "tensor contents do not prove the declared element schema".to_string())?;
+        tensor.verified_element = Some(Rc::new(element));
+        Ok(tensor)
+    }
+
     /// The number of elements implied by the shape.
     #[must_use]
     pub fn element_count(shape: &[usize]) -> usize {
@@ -506,7 +553,9 @@ impl TensorData {
             },
             | Storage::TypedExact(items, ExactRep::Int) => {
                 let value = items.get(index)?;
-                if !value.is_integer() { return None; }
+                if !value.is_integer() {
+                    return None;
+                }
                 Some(Value::Num(NumVal {
                     kind: NumKind::Int(value.to_integer()),
                     dim: self.dim.clone(),
@@ -698,6 +747,7 @@ impl TensorData {
         display: Option<Rc<UnitDef>>,
     ) -> Value {
         Value::Tensor(Rc::new(Self {
+            verified_element: None,
             shape: self.shape.clone(),
             storage: Storage::Dense(Rc::new(data)),
             dim,
@@ -798,9 +848,9 @@ impl TensorData {
 
     /// Elementwise `op` between an `f64` tensor and a `Float` scalar.
     ///
-    /// `flipped` means the scalar was on the left (`2.0 - xs`). Only a
-    /// `Float` scalar takes this path: a `Float ⊗ Int` operation promotes to
-    /// `Real` (§6.3.2), which is exact arithmetic and stays boxed.
+    /// `flipped` means the scalar was on the left (`2.0 - xs`). This fast
+    /// path handles a `Float` scalar. Integer scalars use the generic path,
+    /// whose elementwise arithmetic applies the same Int/Float promotion.
     ///
     /// `scalar ^ tensor` is excluded: its dimension depends on every
     /// exponent, so no single result dimension exists.
@@ -922,6 +972,7 @@ impl TensorData {
                 // The result is `m × n`, which is not `self.shape` unless
                 // `k == n`: `dense_with` would keep the left operand's shape.
                 Some(Value::Tensor(Rc::new(Self {
+                    verified_element: None,
                     shape: vec![m, n],
                     storage: Storage::Dense(Rc::new(data)),
                     dim: self.dim.mul(&right.dim),
@@ -942,6 +993,7 @@ impl TensorData {
                     data[row] = total;
                 }
                 Some(Value::Tensor(Rc::new(Self {
+                    verified_element: None,
                     shape: vec![m],
                     storage: Storage::Dense(Rc::new(data)),
                     dim: self.dim.mul(&right.dim),
@@ -963,6 +1015,7 @@ impl TensorData {
                     data[column] = total;
                 }
                 Some(Value::Tensor(Rc::new(Self {
+                    verified_element: None,
                     shape: vec![n],
                     storage: Storage::Dense(Rc::new(data)),
                     dim: self.dim.mul(&right.dim),
@@ -1060,6 +1113,7 @@ impl TensorData {
             return None;
         }
         Some(Self {
+            verified_element: self.verified_element.clone(),
             shape,
             storage: Storage::View(View {
                 data,
@@ -1121,6 +1175,7 @@ impl TensorData {
             return None;
         }
         Some(Self {
+            verified_element: self.verified_element.clone(),
             shape,
             storage: Storage::View(View {
                 data,
@@ -1177,6 +1232,7 @@ impl TensorData {
             return None;
         }
         Some(Self {
+            verified_element: self.verified_element.clone(),
             shape,
             storage: Storage::View(View {
                 data,
@@ -1214,6 +1270,7 @@ impl TensorData {
             return None;
         }
         Some(Self {
+            verified_element: self.verified_element.clone(),
             shape,
             storage: Storage::View(View {
                 data,
@@ -1266,6 +1323,7 @@ impl TensorData {
             return None;
         }
         Some(Self {
+            verified_element: self.verified_element.clone(),
             shape: self.shape.clone(),
             storage: Storage::View(View {
                 data,
@@ -1288,6 +1346,7 @@ impl TensorData {
     pub fn to_dense(&self) -> Option<Self> {
         let data = self.dense_flat()?.into_owned();
         Some(Self {
+            verified_element: self.verified_element.clone(),
             shape: self.shape.clone(),
             storage: Storage::Dense(Rc::new(data)),
             dim: self.dim.clone(),
@@ -1384,6 +1443,11 @@ pub struct VariantValue {
     pub fields: Vec<Value>,
     /// Concrete type arguments supplied by a checked expression, if known.
     pub type_args: Option<Vec<aevia_types::Type>>,
+    /// A concrete type established at an authenticated source constructor.
+    /// Unlike `type_args`, this is never inferred from a variable's annotation.
+    pub(crate) verified_type: Option<aevia_types::Type>,
+    /// The value originated at an interpreter-resolved source constructor.
+    pub(crate) constructor_origin: bool,
 }
 
 impl Drop for VariantValue {
@@ -1463,6 +1527,12 @@ pub struct Scope {
     pub parent: Option<Rc<Scope>>,
     /// Bindings introduced here.
     pub vars: RefCell<HashMap<String, Value>>,
+    /// Exact checked revision used by this lexical environment.
+    pub(crate) context: Option<Rc<crate::evidence::ModuleContext>>,
+    /// Imported module environments retain their own implementation revision.
+    /// Module imports are acyclic, so these edges create no ownership cycle.
+    pub(crate) imports: Vec<Rc<Scope>>,
+    pub(crate) types: Option<Rc<crate::generics::CallBindings>>,
 }
 
 impl Scope {
@@ -1478,6 +1548,35 @@ impl Scope {
         Rc::new(Self {
             parent: Some(parent.clone()),
             vars: RefCell::new(HashMap::new()),
+            context: parent.context.clone(),
+            imports: Vec::new(),
+            types: parent.types.clone(),
+        })
+    }
+
+    pub(crate) fn module(
+        context: Rc<crate::evidence::ModuleContext>,
+        imports: Vec<Rc<Scope>>,
+    ) -> Rc<Self> {
+        Rc::new(Self {
+            parent: None,
+            vars: RefCell::new(HashMap::new()),
+            context: Some(context),
+            imports,
+            types: None,
+        })
+    }
+
+    pub(crate) fn child_with_types(
+        parent: &Rc<Self>,
+        types: Option<Rc<crate::generics::CallBindings>>,
+    ) -> Rc<Self> {
+        Rc::new(Self {
+            parent: Some(parent.clone()),
+            vars: RefCell::new(HashMap::new()),
+            context: parent.context.clone(),
+            imports: Vec::new(),
+            types,
         })
     }
 
@@ -1503,16 +1602,16 @@ impl Scope {
 /// Both forms are `Value::Closure`, so everything that consumes a function —
 /// `map`, `diff`, `run_io` — keeps working unchanged; only `apply` needs to
 /// know which interpreter to call.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ClosureBody {
     /// A body interpreted from the typed AST.
-    Ast(Expr),
+    Ast(Rc<Expr>),
     /// A body lowered to the Core IR.
     Ir(Rc<aevia_ir::Function>),
 }
 
 /// The environment a closure captured.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ClosureEnv {
     /// A persistent chain of scopes (the AST path).
     Ast(Rc<Scope>),
@@ -1536,20 +1635,25 @@ pub struct IrEnv {
 }
 
 /// A user function together with its captured environment.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Closure {
     /// The parameters, as patterns. Empty for an IR closure, whose parameters
     /// live on the lowered [`aevia_ir::Function`].
-    pub params: Vec<Pat>,
+    pub(crate) params: Vec<Pat>,
     /// The body.
-    pub body: ClosureBody,
+    pub(crate) body: ClosureBody,
     /// The captured environment.
-    pub env: ClosureEnv,
+    pub(crate) env: ClosureEnv,
     /// The name, for diagnostics.
     ///
     /// `Rc<str>`: the stack frame clones the name on every call, and cloning a
     /// `String` made every call allocate.
-    pub name: Option<Rc<str>>,
+    pub(crate) name: Option<Rc<str>>,
+    pub(crate) proof: Option<Rc<crate::generics::FunctionProof>>,
+    pub(crate) captured_bindings: Option<Rc<crate::generics::CallBindings>>,
+    /// Proof specialization copies preserve the original callable allocation.
+    /// Weak pointer identity remains valid after its strong value is dropped.
+    pub(crate) canonical_origin: std::rc::Weak<Closure>,
 }
 
 impl Closure {
@@ -1561,12 +1665,27 @@ impl Closure {
         env: Rc<Scope>,
         name: Option<String>,
     ) -> Self {
+        let captured_bindings = env.types.clone();
         Self {
             params,
-            body: ClosureBody::Ast(body),
+            body: ClosureBody::Ast(Rc::new(body)),
             env: ClosureEnv::Ast(env),
             name: name.map(Rc::from),
+            proof: None,
+            captured_bindings,
+            canonical_origin: std::rc::Weak::new(),
         }
+    }
+
+    pub(crate) fn origin(closure:&Rc<Self>) -> std::rc::Weak<Self> {
+        if std::rc::Weak::ptr_eq(&closure.canonical_origin,&std::rc::Weak::new()) {
+            Rc::downgrade(closure)
+        } else { closure.canonical_origin.clone() }
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn same_origin(left:&Rc<Self>, right:&Rc<Self>) -> bool {
+        std::rc::Weak::ptr_eq(&Self::origin(left),&Self::origin(right))
     }
 
     /// How many parameters the closure takes.
@@ -1590,6 +1709,13 @@ pub struct NativeFn(
         ) -> Result<Value, crate::eval::EvalError>,
     >,
 );
+
+/// An evaluator-local callback with an authenticated, immutable function schema.
+#[derive(Debug)]
+pub struct CallbackValue {
+    pub(crate) function: Value,
+    pub(crate) schema: aevia_types::Type,
+}
 
 impl fmt::Debug for NativeFn {
     fn fmt(
@@ -1700,6 +1826,53 @@ pub struct Comparison {
     pub right: Value,
 }
 
+/// A kernel value retains the payload and independently established dimension evidence.
+#[derive(Clone, Debug)]
+pub struct KernelValue {
+    pub payload: aevia_rssn::Val,
+    pub witness: aevia_rssn::witness::DimensionWitness,
+    /// Aevia-side evidence exists only for a verified host-origin value.
+    pub(crate) host_witness: Option<Rc<HostWitness>>,
+}
+
+/// Provenance issued only when the interpreter resolves a source constructor.
+/// Its fields are private so host code cannot create an arbitrary proof.
+#[derive(Clone, Debug)]
+pub struct SourceCtorToken {
+    pub(crate) adt: AdtId,
+    pub(crate) index: usize,
+    pub(crate) name: String,
+    pub(crate) selected_result: Option<aevia_types::Type>,
+}
+
+/// A checked, host-origin schema with recursively authenticated variants.
+/// This evidence is never attached to an arbitrary kernel result.
+#[derive(Clone, Debug)]
+pub(crate) struct HostWitness {
+    pub(crate) schema: aevia_types::Type,
+    pub(crate) node: HostWitnessNode,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum HostWitnessNode {
+    Scalar,
+    Variant {
+        adt: AdtId,
+        index: usize,
+        tag: String,
+        fields: Vec<HostWitness>,
+    },
+    Record(Vec<(String, HostWitness)>),
+    Tensor(Vec<HostWitness>),
+}
+
+/// A value-level kernel error, retaining its original code and message.
+#[derive(Clone, Debug)]
+pub struct KernelErrorValue {
+    pub code: String,
+    pub message: String,
+}
+
 /// A runtime value.
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -1733,6 +1906,8 @@ pub enum Value {
         arity: usize,
         /// Fields collected so far.
         args: Vec<Value>,
+        /// Provenance for constructors resolved from checked source.
+        origin: Option<SourceCtorToken>,
     },
     /// A unit value such as `m`.
     UnitOf(Rc<UnitDef>),
@@ -1742,6 +1917,14 @@ pub enum Value {
     Prop(Rc<PropValue>),
     /// A value with a run-time dimension (§3.11).
     Dyn(Rc<DynValue>),
+    /// A kernel ABI value and its separately tracked dimensional evidence.
+    KernelValue(Rc<KernelValue>),
+    /// A structured error returned through the kernel ABI.
+    KernelError(Rc<KernelErrorValue>),
+    /// Opaque resolved type evidence produced by `type_rep<T>()`.
+    TypeRep(Rc<aevia_types::Type>),
+    /// A checked evaluator-local callback for the kernel callback ABI.
+    Callback(Rc<CallbackValue>),
     /// A poisoned value produced after an error.
     Error,
 }
@@ -1803,6 +1986,10 @@ impl Value {
             | Self::Io(_) => "IO",
             | Self::Prop(_) => "Prop",
             | Self::Dyn(_) => "Dyn",
+            | Self::KernelValue(_) => "Value",
+            | Self::KernelError(_) => "OpError",
+            | Self::TypeRep(_) => "TypeRep",
+            | Self::Callback(_) => "Callback",
             | Self::Error => "<error>",
         }
     }
@@ -2131,6 +2318,10 @@ fn render_at(
                 format_scalar(&scalar)
             }
         },
+        | Value::KernelValue(_) => "<Value>".to_string(),
+        | Value::KernelError(error) => format!("{}: {}", error.code, error.message),
+        | Value::TypeRep(_) => "<TypeRep>".to_string(),
+        | Value::Callback(_) => "<Callback>".to_string(),
         | Value::Error => "<error>".to_string(),
     }
 }
@@ -2272,6 +2463,10 @@ pub fn to_math(
         | Value::Io(_) => Err("an IO action has no mathematical form".to_string()),
         | Value::Prop(prop) => Ok(prop.text.clone()),
         | Value::Dyn(dynamic) => Ok(math_scalar(&dynamic.as_scalar(), syntax)),
+        | Value::KernelValue(_)
+        | Value::KernelError(_)
+        | Value::TypeRep(_)
+        | Value::Callback(_) => Err("an opaque kernel value has no mathematical form".to_string()),
         | Value::Error => Err("an error value has no mathematical form".to_string()),
     }
 }
@@ -2505,7 +2700,65 @@ pub fn make_variant(
         name: name.to_string(),
         fields,
         type_args: None,
+        verified_type: None,
+        constructor_origin: false,
     }))
+}
+
+/// Mark only a constructor freshly resolved from a checked source interface.
+/// Public host-created variants and `make_variant` never receive this proof.
+pub(crate) fn mark_source_ctor(value: &mut Value) {
+    match value {
+        | Value::Ctor {
+            adt,
+            index,
+            name,
+            arity,
+            args,
+            origin,
+        } => {
+            let valid = args.is_empty()
+                && aevia_types::adt::get(*adt)
+                    .and_then(|entry| entry.ctors.get(*index).cloned())
+                    .is_some_and(|ctor| ctor.name == *name && ctor.fields.len() == *arity);
+            if valid {
+                *origin = Some(SourceCtorToken {
+                    adt: *adt,
+                    index: *index,
+                    name: name.clone(),
+                    selected_result: None,
+                });
+            }
+        },
+        | Value::Variant(variant) if variant.fields.is_empty() => {
+            let valid = aevia_types::adt::get(variant.adt)
+                .and_then(|entry| entry.ctors.get(variant.index).cloned())
+                .is_some_and(|ctor| ctor.name == variant.name && ctor.fields.is_empty());
+            if valid {
+                Rc::make_mut(variant).constructor_origin = true;
+            }
+        },
+        | _ => {},
+    }
+}
+
+/// Retain constructor provenance after applying a source-resolved constructor.
+pub(crate) fn mark_ctor_result(
+    value: &mut Value,
+    origin: &SourceCtorToken,
+) {
+    if let Value::Variant(variant) = value {
+        if variant.adt == origin.adt && variant.index == origin.index {
+            let valid = aevia_types::adt::get(variant.adt)
+                .and_then(|entry| entry.ctors.get(variant.index).cloned())
+                .is_some_and(|ctor| {
+                    ctor.name == variant.name && ctor.fields.len() == variant.fields.len()
+                });
+            if valid {
+                Rc::make_mut(variant).constructor_origin = true;
+            }
+        }
+    }
 }
 
 /// The constructor name for an id/index pair.
@@ -2563,6 +2816,7 @@ mod tests {
     #[test]
     fn tensors_print_nested() {
         let tensor = TensorData {
+            verified_element: None,
             shape: vec![2, 2],
             storage: Storage::Dense(Rc::new(vec![1.0, 2.0, 3.0, 4.0])),
             dim: Dim::one(),
@@ -2576,6 +2830,7 @@ mod tests {
         values: Vec<f64>,
     ) -> Value {
         Value::Tensor(Rc::new(TensorData {
+            verified_element: None,
             shape,
             storage: Storage::Dense(Rc::new(values)),
             dim: Dim::one(),

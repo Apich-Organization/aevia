@@ -288,20 +288,22 @@ Rssn.Units           : Tensor<1, String>     # 单位名；单位值在生成的
 - 没有签名（`SignatureSource::None`）的算子、插件算子、实验性入口走
   `dynamic`。标准集当前没有 `None`，所以 `dynamic` 在标准集上只是插件
   通道。
-- `Rssn.typed` **可达且可用**：它执行动态调用并接受一个 `TypeRep`。当前
-  `type_rep()` 产出的 `TypeRep` 只有名字（`{ name = "TypeRep", kind =
-  "opaque" }`），所以运行时只能校验第三个参数确实是 `TypeRep`，不能按它
-  逐字段校验返回值；类型/量纲保证仍来自 Aevia 类型检查器。它不会把
-  kernel 错误变成诊断，错误仍是 `Err(OpError)`。
-- 高阶算子用 `Rssn.call_ho(name, args, fns)`；类型正确，但**非空** `fns`
-  在当前构建不可构造（Aevia 闭包不满足 kernel `HostCallback` 的
-  `Send + Sync`）：运行时报 `E1001("core.callback")`。空列表就是一次
-  动态调用。
+- `type_rep<T>()` 保存检查器解析出的具体类型；它是不透明值，普通记录不能
+  伪造。`Rssn.typed` 执行动态调用后按该见证检查表示、形状及量纲；不匹配或
+  缺少证据返回 `Err(OpError)`。成功结果仍是 `Value`，通过 `from_value<T>`
+  验证并转换；未经运行时类型字典具体化的泛型不能生成 `TypeRep`。
+- 高阶算子用 `Rssn.call_ho(name, args, fns)`；`to_callback` 从当前会话的
+  已检查源码闭包和具体函数类型生成不透明回调。当前桥支持具体数值、`Bool`、
+  `String` 及递归张量和闭合记录，并检查已知形状、量纲及空容器的独立元素证据；
+  当前数值求解器的回调仅用 `Float` 标量与向量。内建或其他 native 函数需先包装
+  成源码 lambda。
+  回调在原线程同步执行，外层调用结束即失效；跨线程调用和同作用域重入被拒绝，
+  回调错误经 `OpError` 传回。空列表就是一次动态调用。
 - `Rssn.register`/`Rssn.register_plugin` 类型正确，但 Aevia 源码无法构造
   `Plugin` 值（源码级 `@op` 打包未实现）：运行时报
   `E1001("core.plugin.source")`；Rust host 插件仍经嵌入 API 注册
-  （§13.5.1）。这两个名字是 capability 表里 `enabled = false` 的行，缺的是
-  Aevia 侧的值构造。
+  （§13.5.1）。`core.plugin.source` 是 capability 表里 `enabled = false`
+  的行；`core.callback` 表示上述受限回调桥可用。
 
 ### 13.3.3 错误
 
@@ -740,7 +742,7 @@ core.parallel_symbolic
 core.higher_order
 core.structured_results
 core.sde                   # 由 features.sde 派生；SDE 噪声原语可用
-core.callback              # false：Aevia 闭包不是 Send + Sync
+core.callback              # true：同线程作用域回调，支持具体结构化签名
 core.plugin.source         # false：源码级 @op 打包未实现
 core.plugin
 core.plugin.in-process

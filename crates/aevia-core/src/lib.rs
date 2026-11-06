@@ -26,7 +26,11 @@
 )]
 
 pub mod builtins;
+mod callback;
 pub mod driver;
+mod evidence;
+mod generics;
+mod host_witness;
 pub mod eval;
 pub mod eval_ir;
 pub mod kernel;
@@ -34,6 +38,7 @@ pub mod kernel;
 mod jit;
 pub mod manifest;
 pub mod rssn_module;
+pub mod source;
 pub mod sym;
 pub mod value;
 
@@ -44,9 +49,8 @@ use aevia_syntax::SourceMap;
 use aevia_syntax::lex;
 use aevia_syntax::parse_module;
 use aevia_types::CheckedModule;
-use aevia_types::check::check_module;
+use aevia_types::check::check_module_with_identity;
 use std::rc::Rc;
-use value::Closure;
 use value::Scope;
 use value::Value;
 
@@ -74,6 +78,13 @@ pub fn compile(
     name: &str,
     source: &str,
 ) -> Compilation {
+    compile_with_source_identity(name, source, &source::SourceIdentity::from_name(name))
+}
+
+/// Compiles a revision of a host-owned source while retaining its stable
+/// nominal identity. `name` remains the display name in diagnostics.
+#[must_use]
+pub fn compile_with_source_identity(name: &str, source: &str, identity: &source::SourceIdentity) -> Compilation {
     let mut sources = SourceMap::new();
     let file = sources.add(name, source);
     let mut diagnostics = Diagnostics::new();
@@ -98,7 +109,10 @@ pub fn compile(
             sources,
         };
     }
-    let checked = check_module(file, &module);
+    let checked = check_module_with_identity(
+        file, &module, &[], &[], &aevia_types::check::CheckOptions::default(),
+        Some(identity.module_path(module.name.as_deref())), &[],
+    );
     diagnostics.extend(checked.diagnostics.clone());
     Compilation {
         module: Some(module),
@@ -146,7 +160,7 @@ impl Interp {
         module: &Module,
     ) -> Diagnostics {
         let mut diagnostics = self.publish_registrations();
-        let root = Scope::root();
+        let root = self.module_scope(Vec::new());
         diagnostics.extend(self.load_into(module, &root));
         // A single-file program keeps its names unqualified, which is what
         // `eval_toplevel` and the REPL expect.
@@ -168,7 +182,7 @@ impl Interp {
         path: &[String],
     ) -> Diagnostics {
         let mut diagnostics = self.publish_registrations();
-        let scope = Scope::child(&Scope::root());
+        let scope = self.module_scope(Vec::new());
         diagnostics.extend(self.load_into(module, &scope));
         let names = top_level_names(module);
         if path.is_empty() {
@@ -212,12 +226,13 @@ impl Interp {
         // top-level name of their module.
         for decl in &module.decls {
             if let aevia_syntax::DeclKind::Fn { name, args, body, .. } = &decl.kind {
-                let closure = Value::Closure(Rc::new(Closure::ast(
+                let closure = self.checked_ast_closure(
                     args.iter().map(|arg| arg.pattern.clone()).collect(),
                     body.clone(),
                     root.clone(),
                     Some(name.clone()),
-                )));
+                    decl.span,
+                );
                 root.vars.borrow_mut().insert(name.clone(), closure);
             }
         }
@@ -226,7 +241,7 @@ impl Interp {
         // mangled global the checker names them with (§3.8.1).
         for decl in &module.decls {
             if let aevia_syntax::DeclKind::Instance { class, ty, methods } = &decl.kind {
-                let export = self.take_instance_export();
+                let export = self.instance_export_at(decl.span);
                 for method in methods {
                     self.register_instance(class, ty, export.as_ref(), method, &root);
                 }
@@ -298,11 +313,14 @@ impl Interp {
         root: &Rc<Scope>,
     ) -> Diagnostics {
         let mut diagnostics = Diagnostics::new();
-        let lowered = aevia_ir::lower::lower_module_with_literals(
+        let lowered = aevia_ir::lower::lower_module_with_runtime_evidence(
             module,
             &self.rssn_call_sites,
             &self.dictionary_sites,
             &self.literal_reps,
+            &self.method_refs,
+            &self.context.evidence.constructor_refs,
+            &self.context.evidence.expr_types,
         );
         let root = root.clone();
         for decl in &lowered.fns {
@@ -310,7 +328,7 @@ impl Interp {
             root.vars.borrow_mut().insert(decl.name.clone(), closure);
         }
         for instance in &lowered.instances {
-            let export = self.take_instance_export();
+            let export = self.instance_export_at(instance.span);
             for method in &instance.methods {
                 self.register_instance_function(
                     &instance.class,
@@ -382,6 +400,15 @@ impl Interp {
             | None => format!("{class}@{}::{method}", spelled.as_deref().unwrap_or("?")),
         };
         let closure = crate::eval_ir::module_closure(function, env);
+        self.context.instances.borrow_mut().push(crate::evidence::InstanceTemplate {
+            entry: crate::eval::InstanceEntry {
+                key: key.clone(), checked_head: export.map(|export| export.head.clone()),
+                shape: crate::eval::head_shape(head, &self.aliases), global: name.clone(),
+            },
+            method: method.to_string(), code: Rc::new(crate::evidence::MethodCode::Ir(function.clone())),
+            cached: Rc::new(std::cell::RefCell::new(match &closure { Value::Closure(closure) => Rc::downgrade(closure), _ => unreachable!() })),
+            scope: Rc::downgrade(env),
+        });
         self.globals.insert(name.clone(), closure);
         self.method_classes
             .insert(method.to_string(), class.to_string());
@@ -411,6 +438,18 @@ impl Interp {
             .ok_or_else(|| EvalError::new("E0301", format!("unbound name `{name}`")))
     }
 
+    /// Installs checked evidence for an append-only module revision while
+    /// retaining the declaration cursor of already initialized instances.
+    pub fn prepare_incremental_module(&mut self, checked: &CheckedModule, loaded: &[aevia_syntax::Decl]) {
+        self.prepare_module(checked);
+        if self.instance_sites.is_empty() {
+            self.next_instance_export = loaded.iter().filter(|decl| matches!(decl.kind, aevia_syntax::DeclKind::Instance { .. })).count()
+                .min(self.instance_exports.len());
+        }
+        self.units = checked.units.clone();
+        self.dims = checked.dims.clone();
+    }
+
     /// Adds one top-level declaration to a running session (§9.8).
     ///
     /// The REPL appends declarations instead of re-evaluating the session: a
@@ -427,25 +466,41 @@ impl Interp {
     ) -> Result<(), EvalError> {
         use aevia_syntax::DeclKind;
         use aevia_syntax::PatKind;
+        if let DeclKind::Type { body: aevia_syntax::ast::TypeBody::Variants(ctors), .. } = &decl.kind {
+            for ctor in ctors {
+                if let Some(&(adt, index)) = self.current_constructors.get(&ctor.name) {
+                    if let Some(value) = crate::eval::source_ctor_value_at(adt, index) {
+                        self.globals.insert(ctor.name.clone(), value);
+                    }
+                }
+            }
+            return Ok(());
+        }
         if self.mode == Mode::Ir {
-            if let Some(lowered) = aevia_ir::lower::lower_decl_with_literals(
+            if let Some(lowered) = aevia_ir::lower::lower_decl_with_runtime_evidence(
                 decl,
                 &self.rssn_call_sites,
                 &self.dictionary_sites,
                 &self.literal_reps,
+                &self.method_refs,
+                &self.context.evidence.constructor_refs,
+                &self.context.evidence.expr_types,
             ) {
                 return self.load_lowered(lowered);
             }
         }
         let root = self.root();
+        self.remember_scope(&root);
         match &decl.kind {
             | DeclKind::Fn { name, args, body, .. } => {
-                let closure = Value::Closure(Rc::new(Closure::ast(
+                let closure = self.checked_ast_closure(
                     args.iter().map(|arg| arg.pattern.clone()).collect(),
                     body.clone(),
-                    root,
+                    root.clone(),
                     Some(name.clone()),
-                )));
+                    decl.span,
+                );
+                root.vars.borrow_mut().insert(name.clone(),closure.clone());
                 self.globals.insert(name.clone(), closure);
                 Ok(())
             },
@@ -462,7 +517,7 @@ impl Interp {
                 Ok(())
             },
             | DeclKind::Instance { class, ty, methods } => {
-                let export = self.take_instance_export();
+                let export = self.instance_export_at(decl.span);
                 for method in methods {
                     self.register_instance(class, ty, export.as_ref(), method, &root);
                 }
@@ -479,9 +534,11 @@ impl Interp {
     ) -> Result<(), EvalError> {
         use aevia_syntax::PatKind;
         let root = self.root();
+        self.remember_scope(&root);
         match decl {
             | aevia_ir::lower::LoweredDecl::Fn(decl) => {
                 let closure = crate::eval_ir::module_closure(&decl.function, &root);
+                root.vars.borrow_mut().insert(decl.name.clone(),closure.clone());
                 self.globals.insert(decl.name, closure);
                 Ok(())
             },
@@ -498,7 +555,7 @@ impl Interp {
                 Ok(())
             },
             | aevia_ir::lower::LoweredDecl::Instance(instance) => {
-                let export = self.take_instance_export();
+                let export = self.instance_export_at(instance.span);
                 for method in &instance.methods {
                     self.register_instance_function(
                         &instance.class,
@@ -581,8 +638,10 @@ fn bind_module_constructors(
             continue;
         };
         for ctor in ctors {
-            if let Some(value) = crate::eval::ctor_value(&interp.current_module, &ctor.name) {
-                root.vars.borrow_mut().insert(ctor.name.clone(), value);
+            if let Some(&(adt, index)) = interp.current_constructors.get(&ctor.name) {
+                if let Some(value) = crate::eval::source_ctor_value_at(adt, index) {
+                    root.vars.borrow_mut().insert(ctor.name.clone(), value);
+                }
             }
         }
     }

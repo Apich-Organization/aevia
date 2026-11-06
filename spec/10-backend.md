@@ -470,9 +470,11 @@ cdylib 未实现、单位表缺 §5.3.3 的七项，均已关闭）。
     场景需要新增包装模块。
 13. **预算/中断。** rssn 的预算在 `compute` 内；Aevia 外层超时/取消是
     协作式的，不能强杀。
-14. **版本漂移。** `api_version=1`、`rssn 3.0.0-rc.1`；Aevia 必须 pin
-    `api_version` + `manifest_hash`，并跑 conformance。rc 周期内 manifest
-    仍可能变化，所以文档数字是测量而不是常量。
+14. **版本漂移。** 当前集成为 `api_version=2`、`rssn 3.0.0-rc.1`；Aevia 必须 pin
+    `api_version` + `manifest_hash`，并跑 conformance。版本 2 的 manifest 增加 Rust
+    源路径元数据，二进制布局与版本 1 不兼容；当前二进制格式没有解码前版本协商，
+    宿主须事先知道生产者版本。迁移可使用自描述 JSON 或 CBOR，并重新核验 manifest
+    哈希。rc 周期内 manifest 仍可能变化，所以文档数字是测量而不是常量。
 15. **`manifest_hash` 是 bincode BLAKE3，有两种取法。**
     `hash_hex()` 是 64 个 hex 字符（本轮测量 `8d2c37640f409249…`），宿主
     应该 pin 它；`hash_u64()` 是前 8 字节按**小端**读出的 u64
@@ -488,12 +490,13 @@ cdylib 未实现、单位表缺 §5.3.3 的七项，均已关闭）。
     （17 个变体中 10 个可入图、7 个不可），要过边界用
     `quantity(value, unit)`。稀疏运算必须走 `eval_dyn` 或 Aevia 本地布局
     内核。生成器不要硬编码这张表。
-18. **两个 Aevia 侧 bridge capability 缺口。** `core.callback`：Aevia 闭包
-    不满足 kernel `HostCallback` 的 `Send + Sync`，`Rssn.call_ho` 的非空
-    回调列表报 `E1001`；`core.plugin.source`：Aevia 源码 `@op` 打包未实现，
-    `Rssn.register`/`register_plugin` 报 `E1001`（Rust host 插件仍经嵌入 API
-    注册）。两者是 capability 表里的行，`enabled = false`；缺的是 Aevia 侧
-    的值构造，不是 kernel 接口。
+18. **Aevia 回调与插件桥。** `core.callback` 经同线程作用域句柄调用已检查
+    源码闭包，不把 evaluator 的 `Rc` 图传给其他线程；具体数值、`Bool`、
+    `String` 及其张量和闭合记录按完整可用的形状、量纲证据递归校验，空结构
+    不凭空推断。数值求解器另限 `Float` 标量与向量。句柄在外层调用返回后失效。
+    `core.plugin.source`
+    仍不可用：源码 `@op` 打包未实现，`Rssn.register`/`register_plugin` 报
+    `E1001`（Rust host 插件仍经嵌入 API 注册）。
 19. **单位属于 session。** `Session::register_unit` 注册的单位只出现在该
     session 的 manifest（`KernelManifest::build_with_units`）；进程级
     `KernelManifest::build` 给出不同的单位表与 hash。插件注册的单位只属于

@@ -1,7 +1,9 @@
 # 附录 C — 修订记录
 
 本附录记录规范的每一次审计和实质性修改。修订号与 `README.md` 的
-“Design Draft”状态对应。
+“Design Draft”状态对应。下列审计版本保留当时测量的 API 版本与计数；
+当前集成使用 RSSN `api_version = 2`。版本 2 增加 manifest 源路径元数据，
+二进制布局按 API 版本区分；迁移可使用自描述 JSON 或 CBOR。
 
 ## Revision 0 — 初始设计（2026-10-31）
 

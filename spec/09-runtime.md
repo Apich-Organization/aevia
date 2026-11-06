@@ -92,6 +92,26 @@ Core IR 是 ANF：每个中间结果绑定到名字，便于闭包转换、JIT �
 类型擦除让 `mean<L>` 和 `mean<T>` 共享代码；运行时见证只用于显示、`Dyn`
 和 FFI 检查。
 
+> **增量会话（2026-11-05）**：REPL 复检累计源码后安装完整 checked evidence，
+> 保持已执行声明的游标，实例体按其声明源位置绑定，只初始化新增声明。
+> 新增类型的构造器使用
+> 该次检查的确切见证，后续数值字面量、量纲检查与实例调用也使用新证据。
+> 已检查的闭包经词法作用域保留该次 `ModuleEvidence`：表达式类型、字面量
+> 表示、量纲检查、RSSN 调用键、字典、构造器引用和单位表。相同 source 的
+> 后续检查不会改写旧闭包的证据；AST 与 IR 尾调用均按目标闭包切换并恢复
+> 上下文。第一类方法值同样捕获词法作用域，实例实现使用本 revision 的代码
+> 模板和弱环境引用；导入作用域沿无环模块图保留对应依赖的环境。
+> 不同解释器会话（含 reset）的已检查闭包以 `E0809` 拒绝执行。普通变量读取
+> 不能从当前注解改写既有 ADT 参数证据或为空张量制造元素 schema；源码构造
+> 路径与宿主显式检查 API 才能建立相应证明。这不是任意未检查宿主值的热替换
+> 协议，也不声称进程级 ADT 注册表已实现垃圾回收。
+
+> **动态 ABI 容器（2026-11-05）**：检查后的 `Tensor<1, Value>` 保持一维
+> boxed 元素，不因元素恰好是张量而堆叠为高阶张量。
+> `[to_value(a), to_value(b)]` 始终携带两个 ABI 参数，即使 `a`、`b` 是同形或
+> 异形张量；普通数值嵌套字面量仍使用高阶张量规则。AST 与 IR 读取同一份
+> 源位置类型证据作此决定，动态调用不再丢失张量参数边界。
+
 **见证表。** 类型类分派只读取下列见证。没有见证的类型不能用于量化的运行时
 分派（检查期拒绝，§3.8.4/§7.4）：
 
@@ -438,15 +458,19 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时；`check` 模式即
 文件已保存时，分析通过 `aevia_core::driver` 加载其导入图（包根沿用
 `aevia.toml`），诊断/悬停/补全/跳转按当前文件的 `LoadedModule` 回答，跨
 模块跳转返回定义模块的文件 URI；未保存缓冲区也保留导入图（
-`driver::load_with_roots_and_source` 覆盖入口源码），无法解析/虚拟文档才
-回退为单文件分析。分析结果按入口内容哈希 + 依赖文件 `(len, mtime)` 做有界
-LRU 缓存（默认 4 个程序），任何被导入文件的变化都会失效对应条目。
+`driver::load_with_roots_and_overlays` 对所有打开的物理缓冲区使用同一快照），
+尚未保存到磁盘的导入模块也可参与解析；虚拟/无包根文档才回退为单文件分析。
+加载器记录实际读取的源码及查找导入时观察的候选路径（含不存在的高优先级候选）。
+有界 LRU 缓存（默认 4 个程序）比较这些源码的精确内容、候选存在性/物理身份及
+包解析上下文，不扫描无关目录，也不依赖 `(len, mtime)`，因此同长度且恢复时间戳
+的修改仍会失效。导入缓冲区打开、修改或关闭时，应重新发布受影响的已打开
+导入者的诊断；重命名编辑使用同一未保存快照的范围，并携带打开文档的版本。
 `initialize` 返回的**精确能力列表**（`aevia-lsp` 的 `capabilities()`）：
 
 ```json
 {
   "positionEncoding": "utf-16",
-  "textDocumentSync": { "openClose": true, "change": 2, "save": false },
+  "textDocumentSync": { "openClose": true, "change": 2, "save": true },
   "hoverProvider": true,
   "completionProvider": { "resolveProvider": false },
   "definitionProvider": true,
@@ -472,10 +496,10 @@ LRU 缓存（默认 4 个程序），任何被导入文件的变化都会失效�
   "experimental": {
     "multiModuleAnalysis": {
       "savedFiles": true,
-      "unsavedBuffers": "entry-overlay, imports resolved from disk"
+      "unsavedBuffers": "snapshot overlays for all open physical buffers"
     },
     "analysisCache": {
-      "strategy": "entry content hash + file mtime/length",
+      "strategy": "observed source contents + import candidates + package resolution",
       "capacity": 4
     }
   }

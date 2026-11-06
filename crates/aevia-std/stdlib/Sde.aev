@@ -1,18 +1,7 @@
-## `Sde` of §8.9.1/§8.20: the stochastic differential-equation surface.
+## The `Sde` module of §8.20.
 ##
-## The chapter's names (`sdeint_diag`, `sdeint_general`, `wiener`, `sde_order`,
-## `sde_ensemble_seed`) are global builtins; this module re-exports them so
-## `import Sde { sdeint_diag }` resolves, and it declares the §8.9.1 option
-## ADTs a program constructs (`SdeMethod`, `SdeStructure`, the two policy
-## records and `SdeOpts`).
-##
-## Hand-written, not generated: the alias-only generator cannot emit an ADT,
-## and these constructors are the part of the surface a program must be able to
-## *write*. Every field is explicit (a seed and a step are not guessable); the
-## runtime validates the record and answers `E0802`/`E1001` for a malformed or
-## unavailable combination rather than filling anything in. The result type
-## `SdePath<s>` is not declared here: a program reads its fields by inference,
-## and its time dimension is the one of `t0`.
+## Generated standard library; do not edit.
+## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Sde
 
 type SdeMethod =
@@ -32,9 +21,7 @@ type SdeFixedOpts<T> = {
     structure: SdeStructure,
     method: SdeMethod,
     seed: Int,
-    t0: Float[T],
-    dt: Float[T],
-    steps: Int,
+    t0: Float[T], dt: Float[T], steps: Int,
     terms: Int,
 }
 
@@ -42,21 +29,17 @@ type SdeAdaptiveOpts<T> = {
     structure: SdeStructure,
     method: SdeMethod,
     seed: Int,
-    t0: Float[T],
-    t1: Float[T],
-    rtol: Float[1],
-    atol: Float[1],
+    t0: Float[T], t1: Float[T],
+    rtol: Float[1], atol: Float[1],
     max_steps: Int,
     cells: Int,
     terms: Int,
 }
 
-type SdeOpts<T> =
-    | Fixed(SdeFixedOpts<T>)
-    | Adaptive(SdeAdaptiveOpts<T>)
+type SdeOpts<T> = | Fixed(SdeFixedOpts<T>) | Adaptive(SdeAdaptiveOpts<T>)
 
+let sde_ensemble_seed = sde_ensemble_seed
+let sde_order = sde_order
 let sdeint_diag = sdeint_diag
 let sdeint_general = sdeint_general
 let wiener = wiener
-let sde_order = sde_order
-let sde_ensemble_seed = sde_ensemble_seed

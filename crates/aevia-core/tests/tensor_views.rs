@@ -83,12 +83,7 @@ fn materialised(value: &Value) -> Value {
 /// The same elements in boxed storage, for the class-independence checks.
 fn boxed(value: &Value) -> Value {
     let tensor = tensor_of(value);
-    Value::Tensor(Rc::new(TensorData {
-        shape: tensor.shape.clone(),
-        storage: Storage::Boxed(tensor.elements()),
-        dim: tensor.dim.clone(),
-        display: tensor.display.clone(),
-    }))
+    Value::Tensor(Rc::new(TensorData::new(tensor.shape.clone(), Storage::Boxed(tensor.elements()), tensor.dim.clone(), tensor.display.clone())))
 }
 
 /// A tensor's elements as `f64`, in the tensor's own row-major order.
@@ -575,12 +570,7 @@ fn a_view_keeps_the_element_dimension_and_display_unit() {
             .lookup("m")
             .expect("the metre is in the SI table"),
     );
-    let whole = TensorData {
-        shape: vec![4],
-        storage: Storage::Dense(Rc::new(vec![1.0, 2.0, 3.0, 4.0])),
-        dim: metre.dim.clone(),
-        display: Some(metre.clone()),
-    };
+    let whole = TensorData::new(vec![4], Storage::Dense(Rc::new(vec![1.0, 2.0, 3.0, 4.0])), metre.dim.clone(), Some(metre.clone()));
     let view = whole.slice_view(&[(1, 3)]).expect("a view");
     assert!(view.is_view(), "the slice is a view");
     assert_eq!(view.dim, whole.dim, "the view keeps the element dimension");
