@@ -315,7 +315,13 @@ pub fn path_from_uri(uri: &str) -> Option<std::path::PathBuf> {
 /// identity (spaces, percent signs, fragments, queries and non-ASCII names).
 #[must_use]
 pub fn uri_from_path(path: &std::path::Path) -> String {
-    let original = path.to_string_lossy();
+    let lossy = path.to_string_lossy();
+    // `canonicalize` yields a Windows verbatim path (`\\?\C:\...`); that
+    // prefix is not part of the document's name.
+    let original = match lossy.strip_prefix(r"\\?\") {
+        | Some(rest) if rest.as_bytes().get(1) == Some(&b':') => std::borrow::Cow::Borrowed(rest),
+        | _ => lossy,
+    };
     let is_drive = original.len() >= 2
         && original.as_bytes()[0].is_ascii_alphabetic()
         && original.as_bytes()[1] == b':';

@@ -142,9 +142,10 @@ fn a_function_name_must_be_lowercase() {
 }
 
 #[test]
-fn a_capitalised_lambda_parameter_is_a_constructor_pattern() {
+fn a_capitalised_lambda_parameter_binds_a_variable() {
     // `fn Foo => ...` is not a declaration; the name form of `fn_expr` is
-    // `IDENT`, so this stays a (rejected) pattern, not a silent declaration.
+    // `IDENT`. A lambda parameter is a binding position, where a bare
+    // capitalised name binds a variable (§2.4, revision 11).
     let module = parse("let f = fn (Foo) => Foo\n").module;
     let DeclKind::Let { value, .. } = &module.decls[0].kind else {
         panic!("expected a let");
@@ -153,7 +154,7 @@ fn a_capitalised_lambda_parameter_is_a_constructor_pattern() {
         panic!("expected a lambda, got {:?}", value.kind);
     };
     let Param { pattern, .. } = &params[0];
-    assert!(matches!(pattern.kind, PatKind::Ctor { .. }));
+    assert!(matches!(&pattern.kind, PatKind::Var(name) if name == "Foo"));
 }
 
 #[test]
@@ -222,4 +223,25 @@ fn an_invalid_pattern_is_e0204() {
         support::expect_error("let x = match 1 with\n    | 1.5 -> 0\n", "E0204",).code,
         "E0204"
     );
+}
+
+#[test]
+fn a_capitalised_parameter_with_arguments_is_still_a_constructor_pattern() {
+    let module = parse("let f = fn (Some(x)) => x\n").module;
+    let DeclKind::Let { value, .. } = &module.decls[0].kind else {
+        panic!("expected a let");
+    };
+    let ExprKind::Lambda { params, .. } = &value.kind else {
+        panic!("expected a lambda, got {:?}", value.kind);
+    };
+    assert!(matches!(params[0].pattern.kind, PatKind::Ctor { .. }));
+}
+
+#[test]
+fn a_capitalised_let_binds_a_variable() {
+    let module = parse("let M = 3\n").module;
+    let DeclKind::Let { pattern, .. } = &module.decls[0].kind else {
+        panic!("expected a let");
+    };
+    assert!(matches!(&pattern.kind, PatKind::Var(name) if name == "M"));
 }

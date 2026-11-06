@@ -214,16 +214,17 @@ fn a_dynamic_call_crosses_the_boundary() {
         panic!("`Rssn.dynamic` must return a Result");
     };
     assert_eq!(result.index, 0, "the dynamic call failed");
+    // §8.19: the success value of `Rssn.dynamic` is the opaque `Value`; it
+    // becomes a number only through `from_value<T>`, which demands proof.
     match result.fields.first() {
-        | Some(Value::Num(number)) => {
+        | Some(Value::KernelValue(opaque)) => {
             assert!(
-                matches!(number.kind, NumKind::Float(_)),
-                "sin(0.0) is a Float, found {}",
-                number.kind.type_name()
+                matches!(&opaque.payload, aevia_rssn::Val::Num(aevia_rssn::Num::Float(x)) if *x == 0.0),
+                "sin(0.0) is the Float 0 (exactly), found {:?}",
+                opaque.payload
             );
-            assert_eq!(number.to_f64(), Some(0.0), "sin(0) is exactly 0");
         },
-        | other => panic!("expected a number, found {other:?}"),
+        | other => panic!("expected an opaque kernel value, found {other:?}"),
     }
 }
 
@@ -356,7 +357,9 @@ fn a_call_site_executes_the_overload_the_checker_pinned() {
     let determinant = interp.eval_toplevel("a").expect("evaluates");
     assert_eq!(
         aevia_core::value::repr(&determinant),
-        "-2.0",
+        // `Tensor<2, Real>` is the pinned parameter, so the decimal literals
+        // are exact (§3.10.1) and so is the determinant.
+        "-2",
         "the pinned overload must be the one that ran"
     );
 }
@@ -526,13 +529,18 @@ fn a_quantity_crosses_the_dynamic_boundary_as_a_quantity() {
         panic!("`Rssn.dynamic` must return a Result");
     };
     assert_eq!(result.index, 0, "`quantity(3.0, m)` failed");
-    let Some(Value::Num(number)) = result.fields.first() else {
-        panic!("a quantity must come back as a number, not as text");
+    // §8.19: the success value is the opaque `Value`; the kernel payload is
+    // still the quantity, unit included.
+    let Some(Value::KernelValue(opaque)) = result.fields.first() else {
+        panic!("a quantity must come back as an opaque kernel value");
     };
-    assert_eq!(number.dim, Dim::base("Length"), "the dimension survived");
-    assert_eq!(
-        number.display.as_ref().map(|unit| unit.name.as_str()),
-        Some("m"),
-        "the display unit survived"
+    let aevia_rssn::Val::Quantity { value, unit } = &opaque.payload else {
+        panic!("a quantity stays a quantity: {:?}", opaque.payload);
+    };
+    assert!(
+        matches!(&**value, aevia_rssn::Val::Num(aevia_rssn::Num::Float(x)) if *x == 3.0),
+        "the magnitude survived: {value:?}"
     );
+    assert_eq!(unit.name, "m", "the display unit survived");
+    assert_eq!(unit.dim, Dim::base("Length"), "the dimension survived");
 }

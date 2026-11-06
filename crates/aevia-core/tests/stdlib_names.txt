@@ -9,6 +9,7 @@ Rssn.ValueKinds
 Rssn.Version
 Rssn.call
 Rssn.call_ho
+Rssn.call_ho_key
 Rssn.call_key
 Rssn.dynamic
 Rssn.overloads

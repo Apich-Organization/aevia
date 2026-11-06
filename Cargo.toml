@@ -61,3 +61,13 @@ codegen-units = 1
 # linker memory costs across the workspace's independent test targets.
 [profile.test]
 debug = "line-tables-only"
+
+# Optimised but quick to rebuild: for measuring the interpreter while working
+# on it (`cargo build --profile profiling -p aevia-cli`). Release numbers are
+# still the ones to quote.
+[profile.profiling]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+debug = "line-tables-only"

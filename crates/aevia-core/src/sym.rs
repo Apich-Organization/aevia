@@ -92,7 +92,43 @@ fn flatten_add_owned(
                 flatten_add_owned(item, flat);
             }
         },
+        // `c * (a + b)` with a numeric `c` is distributed inside a sum so that
+        // `(x + 1) - (x + 1)` cancels and `a - (x + 1)` collects with `x`.
+        | Term::Mul(items)
+            if items.len() == 2
+                && matches!(items[0], Term::Num(_))
+                && matches!(items[1], Term::Add(_)) =>
+        {
+            let mut items = items.into_iter();
+            let (Some(Term::Num(coefficient)), Some(Term::Add(terms))) =
+                (items.next(), items.next())
+            else {
+                unreachable!("shape checked above")
+            };
+            for item in terms {
+                flatten_add_owned(Term::mul(Term::Num(coefficient.clone()), item), flat);
+            }
+        },
         | other => flat.push(other),
+    }
+}
+
+/// Splits a summand into its rational coefficient and the rest:
+/// `3*x*y` is `(3, x*y)`, `x` is `(1, x)`.
+fn split_coefficient(term: Term) -> (BigRational, Term) {
+    match term {
+        | Term::Mul(mut items) if matches!(items.first(), Some(Term::Num(_))) => {
+            let Term::Num(coefficient) = items.remove(0) else {
+                unreachable!("checked above")
+            };
+            let rest = if items.len() == 1 {
+                items.remove(0)
+            } else {
+                Term::Mul(items)
+            };
+            (coefficient, rest)
+        },
+        | other => (BigRational::one(), other),
     }
 }
 
@@ -331,30 +367,41 @@ impl Term {
         flatten_add_owned(left, &mut flat);
         flatten_add_owned(right, &mut flat);
         let mut constant = BigRational::zero();
-        // `(hash, term, count)` in first-occurrence order: a structural hash
-        // replaces the old `format!("{term:?}")` key (see [`term_hash`]), so
-        // the printed order and the like-term merge are unchanged.
+        // `(hash, rest, coefficient)` in first-occurrence order: a structural
+        // hash replaces the old `format!("{term:?}")` key (see [`term_hash`]).
+        // Each summand is split into a rational coefficient and a monomial
+        // rest, so `2*x + 3*x` is `5*x` and `x - x` is `0`.
         let mut groups: Vec<(u64, Term, BigRational)> = Vec::new();
         for term in flat {
             if let Term::Num(value) = &term {
                 constant += value;
                 continue;
             }
-            let hash = term_hash(&term);
+            let (coefficient, rest) = split_coefficient(term);
+            let hash = term_hash(&rest);
             match groups
                 .iter_mut()
-                .find(|(existing_hash, existing, _)| *existing_hash == hash && *existing == term)
+                .find(|(existing_hash, existing, _)| *existing_hash == hash && *existing == rest)
             {
-                | Some((_, _, count)) => *count += BigRational::one(),
-                | None => groups.push((hash, term, BigRational::one())),
+                | Some((_, _, total)) => *total += coefficient,
+                | None => groups.push((hash, rest, coefficient)),
             }
         }
         let mut items = Vec::with_capacity(groups.len() + 1);
-        for (_, term, count) in groups {
-            if count.is_one() {
-                items.push(term);
+        for (_, rest, coefficient) in groups {
+            if coefficient.is_zero() {
+                continue;
+            }
+            if coefficient.is_one() {
+                items.push(rest);
             } else {
-                items.push(Term::Mul(vec![rational(count), term]));
+                match rest {
+                    | Term::Mul(mut factors) => {
+                        factors.insert(0, rational(coefficient));
+                        items.push(Term::Mul(factors));
+                    },
+                    | rest => items.push(Term::Mul(vec![rational(coefficient), rest])),
+                }
             }
         }
         // The constant goes last so that `x^3 - 3x + 1` reads in the usual
@@ -406,16 +453,26 @@ impl Term {
         if constant.is_zero() {
             return zero();
         }
-        let mut items = Vec::new();
-        if !constant.is_one() {
-            items.push(rational(constant));
-        }
+        // A merged power can itself be a number (`sqrt(2)*sqrt(2)`); it belongs
+        // in the coefficient, not beside it.
+        let mut powers = Vec::new();
         for (_, base, exponent) in factors {
             if exponent.is_zero() {
                 continue;
             }
-            items.push(Term::pow(base, exponent));
+            match Term::pow(base, exponent) {
+                | Term::Num(value) => constant *= value,
+                | other => powers.push(other),
+            }
         }
+        if constant.is_zero() {
+            return zero();
+        }
+        let mut items = Vec::new();
+        if !constant.is_one() {
+            items.push(rational(constant));
+        }
+        items.extend(powers);
         match items.len() {
             | 0 => one(),
             | 1 => items.remove(0),
@@ -487,6 +544,16 @@ impl Term {
                 }
             }
         }
+        // `(a*b)^n = a^n * b^n` for a positive integer `n`: keeps `sqrt(8)^2`
+        // (`(2*sqrt(2))^2`) exact and `(2*x)^2` as `4*x^2`.
+        if let Term::Mul(factors) = &base {
+            if exponent.denom().is_one() && exponent.is_positive() {
+                return factors
+                    .iter()
+                    .map(|factor| Term::pow(factor.clone(), exponent.clone()))
+                    .fold(one(), Term::mul);
+            }
+        }
         if let Term::Pow(inner, inner_exponent) = &base {
             // (x^a)^b = x^(ab) only when b is an integer; with a fractional
             // outer exponent the result is a magnitude, not the base.
@@ -540,6 +607,14 @@ impl Term {
                 if let Some(result) = exact_function(function, value) {
                     return rational(result);
                 }
+                if let Fun::Sqrt = function {
+                    if let Some(result) = extract_square_factor(value) {
+                        return result;
+                    }
+                }
+            }
+            if let Some(result) = exact_special(function, &args[0]) {
+                return result;
             }
         }
         Term::Fun(function, args)
@@ -819,22 +894,213 @@ fn perfect_root(
     // An even root of a negative number is not real; an odd root keeps the
     // sign, so `(-8)^(1/3) = -2` (§6.3.4 leaves only negative *even* roots
     // formal).
+    if degree == 0 {
+        return None;
+    }
     let negative = value.is_negative();
     if negative && degree % 2 == 0 {
         return None;
     }
-    let approximate = value.to_f64()?;
-    let root = approximate.abs().powf(1.0 / f64::from(degree));
-    let candidate = BigInt::from(root.round() as i64);
-    let candidate = if negative {
-        -candidate
-    } else {
-        candidate
-    };
+    // Exact integer root: no `f64` round trip, so integers above 2^53 are
+    // decided correctly.
+    let root = value.abs().nth_root(degree);
+    let candidate = if negative { -root } else { root };
     if candidate.pow(degree) == *value {
         Some(candidate)
     } else {
         None
+    }
+}
+
+/// The largest `s` with `s^2 | n` (found by trial division with a bounded
+/// divisor, plus a whole-cofactor square test) and the cofactor `n / s^2`.
+fn split_square(n: &BigInt) -> (BigInt, BigInt) {
+    let mut square = BigInt::one();
+    let mut rest = n.clone();
+    let mut divisor = BigInt::from(2);
+    let bound = BigInt::from(10_000);
+    while divisor <= bound && &divisor * &divisor <= rest {
+        let squared = &divisor * &divisor;
+        while (&rest % &squared).is_zero() {
+            rest /= &squared;
+            square *= &divisor;
+        }
+        divisor += 1;
+    }
+    let root = rest.sqrt();
+    if &root * &root == rest {
+        square *= root;
+        rest = BigInt::one();
+    }
+    (square, rest)
+}
+
+/// `sqrt(n/d)` for a positive rational that is not a perfect square, with the
+/// square factor pulled out: `sqrt(8) = 2*sqrt(2)`, `sqrt(1/8) = 1/4*sqrt(2)`.
+fn extract_square_factor(value: &BigRational) -> Option<Term> {
+    if !value.is_positive() {
+        return None;
+    }
+    // sqrt(n/d) = sqrt(n*d) / d
+    let product = value.numer() * value.denom();
+    let (square, rest) = split_square(&product);
+    if rest.is_one() {
+        // A perfect square; `exact_function` owns that case.
+        return None;
+    }
+    let coefficient = BigRational::new(square, value.denom().clone());
+    let root = Term::Fun(Fun::Sqrt, vec![Term::Num(BigRational::from_integer(rest))]);
+    if coefficient.is_one() {
+        Some(root)
+    } else {
+        Some(Term::Mul(vec![Term::Num(coefficient), root]))
+    }
+}
+
+/// Whether a term is the constant `pi`: the prelude binds it to a kernel
+/// handle whose rendering is `pi`, and terms built in this module use
+/// `Sym("pi")`.
+fn is_pi(term: &Term) -> bool {
+    match term {
+        | Term::Sym(name) => name == "pi",
+        | Term::Foreign { text, .. } => text.as_ref() == "pi",
+        | _ => false,
+    }
+}
+
+/// `c` when `term` is `c*pi` (`pi` itself is `c = 1`).
+fn pi_multiple(term: &Term) -> Option<BigRational> {
+    if is_pi(term) {
+        return Some(BigRational::one());
+    }
+    match term {
+        | Term::Mul(items) => {
+            match items.as_slice() {
+                | [Term::Num(coefficient), pi] if is_pi(pi) => Some(coefficient.clone()),
+                | _ => None,
+            }
+        },
+        | _ => None,
+    }
+}
+
+/// `sin`, `cos`, `tan` at a multiple of `pi` with denominator 1, 2, 3, 4 or 6,
+/// and the inverse pairs `exp(ln u)`, `ln(exp u)` (symbols are real).
+fn exact_special(
+    function: Fun,
+    arg: &Term,
+) -> Option<Term> {
+    match function {
+        | Fun::Sin | Fun::Cos | Fun::Tan => {
+            if let Term::Num(value) = arg {
+                if value.is_zero() {
+                    return Some(match function {
+                        | Fun::Cos => one(),
+                        | _ => zero(),
+                    });
+                }
+                return None;
+            }
+            let multiple = pi_multiple(arg)?;
+            if !matches!(multiple.denom().to_u32(), Some(1 | 2 | 3 | 4 | 6)) {
+                return None;
+            }
+            // `c*pi` is `180*c` degrees, an integer for these denominators.
+            let degrees = (multiple * BigRational::from_integer(BigInt::from(180))).to_integer();
+            exact_trig(function, &degrees)
+        },
+        | Fun::Exp => {
+            match arg {
+                | Term::Fun(Fun::Ln, inner) if inner.len() == 1 => Some(inner[0].clone()),
+                | _ => None,
+            }
+        },
+        | Fun::Ln => {
+            match arg {
+                | Term::Fun(Fun::Exp, inner) if inner.len() == 1 => Some(inner[0].clone()),
+                | _ => None,
+            }
+        },
+        | _ => None,
+    }
+}
+
+/// `degrees mod modulus`, in `0..modulus`.
+fn degrees_mod(
+    degrees: &BigInt,
+    modulus: i64,
+) -> i64 {
+    let modulus = BigInt::from(modulus);
+    (((degrees % &modulus) + &modulus) % &modulus)
+        .to_i64()
+        .expect("remainder is below the modulus")
+}
+
+fn exact_trig(
+    function: Fun,
+    degrees: &BigInt,
+) -> Option<Term> {
+    let radical = |coefficient: BigRational, root: i64| -> Term {
+        Term::Mul(vec![
+            rational(coefficient),
+            Term::Fun(Fun::Sqrt, vec![Term::int(root)]),
+        ])
+    };
+    let ratio = |numerator: i64, denominator: i64| {
+        BigRational::new(BigInt::from(numerator), BigInt::from(denominator))
+    };
+    let signed = |negative: bool, value: Term| {
+        if negative {
+            Term::mul(Term::int(-1), value)
+        } else {
+            value
+        }
+    };
+    // sin of a first-quadrant reference angle in degrees.
+    let sin_ref = |angle: i64| -> Option<Term> {
+        Some(match angle {
+            | 0 => zero(),
+            | 30 => rational(ratio(1, 2)),
+            | 45 => radical(ratio(1, 2), 2),
+            | 60 => radical(ratio(1, 2), 3),
+            | 90 => one(),
+            | _ => return None,
+        })
+    };
+    let sine = |deg: &BigInt| -> Option<Term> {
+        let full = degrees_mod(deg, 360);
+        let (negative, within) = if full >= 180 {
+            (true, full - 180)
+        } else {
+            (false, full)
+        };
+        let reference = within.min(180 - within);
+        Some(signed(negative, sin_ref(reference)?))
+    };
+    match function {
+        | Fun::Sin => sine(degrees),
+        | Fun::Cos => sine(&(degrees + BigInt::from(90))),
+        | Fun::Tan => {
+            let full = degrees_mod(degrees, 180);
+            if full == 90 {
+                // Undefined: stay unevaluated rather than invent a value.
+                return None;
+            }
+            let (negative, reference) = if full > 90 {
+                (true, 180 - full)
+            } else {
+                (false, full)
+            };
+            let value = match reference {
+                | 0 => zero(),
+                | 30 => radical(ratio(1, 3), 3),
+                | 45 => one(),
+                | 60 => Term::Fun(Fun::Sqrt, vec![Term::int(3)]),
+                | _ => return None,
+            };
+            Some(signed(negative, value))
+        },
+        | _ => None,
     }
 }
 
@@ -892,7 +1158,10 @@ impl fmt::Display for Term {
         &self,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
-        self.render(f, false)
+        match self {
+            | Self::Num(value) => f.write_str(&format_rational_decimal(value)),
+            | _ => self.render(f, false),
+        }
     }
 }
 
@@ -916,13 +1185,11 @@ impl Term {
         repr: bool,
     ) -> fmt::Result {
         match self {
-            | Self::Num(value) => {
-                if repr {
-                    f.write_str(&aevia_dim::rat::format_rational(value))
-                } else {
-                    f.write_str(&format_rational_decimal(value))
-                }
-            },
+            // Inside a compound term a rational is always a fraction, so an
+            // exact `1/4` coefficient never reads as the decimal `0.25`; a bare
+            // number follows the value layer's display convention (see the
+            // `Display` impl).
+            | Self::Num(value) => f.write_str(&aevia_dim::rat::format_rational(value)),
             // `symbol("x")` allocates `x`, `x#2`, ... so that two calls are
             // different symbols (§6.3.6); only that numeric suffix is hidden.
             // A user's `symbol("a#b")` keeps its name.
@@ -979,6 +1246,25 @@ impl Term {
                         return Ok(());
                     }
                 }
+                // A leading `-1` reads as a sign: `-x`, `-sqrt(3)`, `-(a + b)`.
+                if let [Self::Num(coefficient), rest @ ..] = items.as_slice() {
+                    if coefficient == &BigRational::from_integer(BigInt::from(-1))
+                        && !rest.is_empty()
+                    {
+                        f.write_str("-")?;
+                        let tail = if rest.len() == 1 {
+                            rest[0].clone()
+                        } else {
+                            Self::Mul(rest.to_vec())
+                        };
+                        if matches!(tail, Self::Add(_)) {
+                            f.write_str("(")?;
+                            tail.render(f, repr)?;
+                            return f.write_str(")");
+                        }
+                        return tail.render(f, repr);
+                    }
+                }
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
                         f.write_str("*")?;
@@ -998,7 +1284,7 @@ impl Term {
                 // A negative base needs parentheses: `-8^(1/3)` would read as
                 // the negation of `8^(1/3)`, not as `(-8)^(1/3)`.
                 let needs_parens = matches!(**base, Self::Add(_) | Self::Mul(_))
-                    || matches!(&**base, Self::Num(value) if value.is_negative());
+                    || matches!(&**base, Self::Num(value) if value.is_negative() || !value.denom().is_one());
                 if needs_parens {
                     f.write_str("(")?;
                     base.render(f, repr)?;
@@ -1199,6 +1485,12 @@ fn absolute(term: &Term) -> Term {
             if let Some(Term::Num(value)) = factors.first_mut() {
                 *value = value.abs();
             }
+            // `|-1|*x` is just `x`: a unit coefficient is not printed.
+            if matches!(factors.first(), Some(Term::Num(value)) if value.is_one())
+                && factors.len() > 1
+            {
+                factors.remove(0);
+            }
             if factors.len() == 1 {
                 factors.remove(0)
             } else {
@@ -1264,5 +1556,144 @@ mod tests {
         assert_eq!(term.eval(&bindings), Err("x".to_string()));
         bindings.insert("x".to_string(), 2.0);
         assert_eq!(term.eval(&bindings), Ok(3.0));
+    }
+
+    fn sym(name: &str) -> Term {
+        Term::Sym(name.to_string())
+    }
+
+    fn pi_times(
+        numerator: i64,
+        denominator: i64,
+    ) -> Term {
+        Term::mul(
+            Term::Num(BigRational::new(
+                BigInt::from(numerator),
+                BigInt::from(denominator),
+            )),
+            sym("pi"),
+        )
+    }
+
+    fn half() -> Term {
+        Term::Num(BigRational::new(BigInt::from(1), BigInt::from(2)))
+    }
+
+    #[test]
+    fn coefficients_are_collected() {
+        assert_eq!(Term::sub(x(), x()), zero());
+        assert_eq!(
+            Term::add(Term::mul(Term::int(2), x()), Term::mul(Term::int(3), x())),
+            Term::mul(Term::int(5), x())
+        );
+        let sum = Term::add(
+            Term::add(x(), Term::mul(Term::int(2), x())),
+            Term::neg(Term::mul(Term::int(3), x())),
+        );
+        assert_eq!(sum, zero());
+        let shifted = Term::add(x(), Term::int(1));
+        assert_eq!(Term::sub(shifted.clone(), shifted), zero());
+        // Monomials with several factors collect too.
+        let xy = Term::mul(x(), sym("y"));
+        assert_eq!(
+            Term::sub(Term::mul(Term::int(2), xy.clone()), xy.clone()),
+            xy
+        );
+    }
+
+    #[test]
+    fn trigonometric_values_are_exact() {
+        let sin = |t: Term| Term::fun(Fun::Sin, vec![t]);
+        let cos = |t: Term| Term::fun(Fun::Cos, vec![t]);
+        let tan = |t: Term| Term::fun(Fun::Tan, vec![t]);
+        assert_eq!(sin(pi_times(1, 6)), half());
+        assert_eq!(cos(pi_times(1, 3)), half());
+        assert_eq!(sin(sym("pi")), zero());
+        assert_eq!(cos(Term::int(0)), one());
+        assert_eq!(tan(pi_times(1, 4)), one());
+        assert_eq!(tan(pi_times(5, 4)), one());
+        assert_eq!(cos(sym("pi")), Term::int(-1));
+        assert_eq!(sin(pi_times(-1, 2)), Term::int(-1));
+        assert_eq!(sin(pi_times(5, 6)), half());
+        assert_eq!(sin(pi_times(-5, 6)), Term::neg(half()));
+        // tan(pi/2) stays a term.
+        assert!(matches!(tan(pi_times(1, 2)), Term::Fun(Fun::Tan, _)));
+        // The radical values square back to rationals.
+        let s = sin(pi_times(1, 4));
+        assert_eq!(Term::mul(s.clone(), s), half());
+        let t = tan(pi_times(1, 3));
+        assert_eq!(Term::mul(t.clone(), t), Term::int(3));
+        // Unsupported denominators and symbolic arguments are untouched.
+        assert!(matches!(sin(pi_times(1, 5)), Term::Fun(Fun::Sin, _)));
+        assert!(matches!(sin(x()), Term::Fun(Fun::Sin, _)));
+    }
+
+    #[test]
+    fn exp_and_ln_cancel() {
+        let exp = |t: Term| Term::fun(Fun::Exp, vec![t]);
+        let ln = |t: Term| Term::fun(Fun::Ln, vec![t]);
+        assert_eq!(ln(exp(Term::int(2))), Term::int(2));
+        assert_eq!(exp(ln(x())), x());
+        assert_eq!(ln(exp(x())), x());
+    }
+
+    #[test]
+    fn square_roots_pull_out_square_factors() {
+        let sqrt = |n: i64, d: i64| {
+            Term::fun(
+                Fun::Sqrt,
+                vec![Term::Num(BigRational::new(
+                    BigInt::from(n),
+                    BigInt::from(d),
+                ))],
+            )
+        };
+        let root2 = Term::Fun(Fun::Sqrt, vec![Term::int(2)]);
+        assert_eq!(sqrt(8, 1), Term::mul(Term::int(2), root2.clone()));
+        assert_eq!(
+            sqrt(1, 8),
+            Term::mul(
+                Term::Num(BigRational::new(BigInt::from(1), BigInt::from(4))),
+                root2.clone()
+            )
+        );
+        assert_eq!(sqrt(1, 4), half());
+        assert_eq!(sqrt(2, 1), root2);
+        assert_eq!(sqrt(12, 1).to_string(), "2*sqrt(3)");
+        assert_eq!(sqrt(-8, 1).to_string(), "sqrt(-8)");
+    }
+
+    #[test]
+    fn perfect_roots_are_exact_above_2_pow_53() {
+        let n: BigInt = "9007199254740993".parse().unwrap();
+        assert_eq!(perfect_root(&(&n * &n), 2), Some(n.clone()));
+        assert_eq!(perfect_root(&(&n * &n + 1), 2), None);
+        assert_eq!(perfect_root(&(-(&n * &n * &n)), 3), Some(-n));
+        assert_eq!(perfect_root(&BigInt::from(-4), 2), None);
+    }
+
+    #[test]
+    fn rationals_display_as_fractions_inside_terms() {
+        assert_eq!(pi_times(1, 4).to_string(), "1/4*pi");
+        assert_eq!(
+            Term::Num(BigRational::new(BigInt::from(1), BigInt::from(4))).to_string(),
+            "0.25"
+        );
+    }
+
+    #[test]
+    fn differentiation_and_substitution_stay_simplified() {
+        let term = Term::sub(
+            Term::pow(x(), BigRational::from_integer(BigInt::from(2))),
+            x(),
+        );
+        assert_eq!(
+            term.diff("x").expect("differentiates").to_string(),
+            "2*x - 1"
+        );
+        assert_eq!(
+            term.substitute("x", &Term::int(3)).expect("substitutes"),
+            Term::int(6)
+        );
     }
 }

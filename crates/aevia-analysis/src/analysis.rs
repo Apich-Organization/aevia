@@ -1053,7 +1053,13 @@ impl<'a> Analysis<'a> {
                     views.push(ModuleView {
                         index,
                         file: module.file,
-                        document: source.name.as_str(),
+                        // The open buffer keeps the name its client gave it
+                        // (the loader names a physical file canonically).
+                        document: if module.file == self.file {
+                            self.document.name()
+                        } else {
+                            source.name.as_str()
+                        },
                         text: source.text.as_str(),
                         module: &module.module,
                         checked: &module.checked,

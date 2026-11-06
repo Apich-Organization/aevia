@@ -86,6 +86,9 @@ struct Parser<'a> {
     pos: usize,
     depth: usize,
     diagnostics: Diagnostics,
+    /// Whether the pattern being parsed is in a binding position (`let`,
+    /// parameters, `<-`), where a bare capitalised name binds a variable.
+    binding_pattern: bool,
 }
 
 const MAX_DEPTH: usize = 96;
@@ -106,6 +109,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             depth: 0,
             diagnostics: Diagnostics::new(),
+            binding_pattern: false,
         }
     }
 
@@ -1138,7 +1142,7 @@ impl<'a> Parser<'a> {
         }
         while !self.at_punct(Punct::RParen) && !self.at_eof() {
             let start = self.span();
-            let pattern = self.pattern();
+            let pattern = self.binding_pattern();
             let ty = if self.eat_punct(Punct::Colon) {
                 Some(self.ty())
             } else {
@@ -1160,7 +1164,7 @@ impl<'a> Parser<'a> {
     fn let_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let rec = self.eat_kw(Keyword::Rec);
-        let pattern = self.pattern();
+        let pattern = self.binding_pattern();
         let ty = if self.eat_punct(Punct::Colon) {
             Some(self.ty())
         } else {
@@ -1324,7 +1328,7 @@ impl<'a> Parser<'a> {
         let start = self.span();
         self.bump(); // let
         let rec = self.eat_kw(Keyword::Rec);
-        let pattern = self.pattern();
+        let pattern = self.binding_pattern();
         let ty = if self.eat_punct(Punct::Colon) {
             Some(self.ty())
         } else {
@@ -1345,7 +1349,7 @@ impl<'a> Parser<'a> {
     fn let_expr(&mut self) -> Expr {
         let start = self.span();
         self.bump();
-        let pattern = self.pattern();
+        let pattern = self.binding_pattern();
         let ty = if self.eat_punct(Punct::Colon) {
             Some(self.ty())
         } else {
@@ -1455,7 +1459,7 @@ impl<'a> Parser<'a> {
             self.param_list()
         } else {
             let span = self.span();
-            let pattern = self.pattern();
+            let pattern = self.binding_pattern();
             vec![Param {
                 pattern,
                 ty: None,
@@ -1497,7 +1501,7 @@ impl<'a> Parser<'a> {
             let stmt_start = self.span();
             if self.at_kw(Keyword::Let) {
                 self.bump();
-                let pattern = self.pattern();
+                let pattern = self.binding_pattern();
                 let ty = if self.eat_punct(Punct::Colon) {
                     Some(self.ty())
                 } else {
@@ -1530,7 +1534,7 @@ impl<'a> Parser<'a> {
         let saved_pos = self.pos;
         let saved_diagnostics = self.diagnostics.items.len();
         let start = self.span();
-        let pattern = self.pattern();
+        let pattern = self.binding_pattern();
         if self.at_punct(Punct::LArrow) {
             self.bump();
             let value = self.expr();
@@ -2373,6 +2377,20 @@ impl<'a> Parser<'a> {
 
     // ----- patterns ------------------------------------------------------
 
+    /// A pattern in a binding position.
+    ///
+    /// Scientific code names matrices and constants with capitals (`let A =
+    /// …`, `fn step(M: Tensor<2, Float>)`), so in `let`, parameters and `<-`
+    /// a bare `UIDENT` binds a variable. A constructor pattern there needs its
+    /// argument list; a nullary constructor is matched with `match`, where a
+    /// bare `UIDENT` keeps meaning the constructor (§2.4).
+    fn binding_pattern(&mut self) -> Pat {
+        let outer = std::mem::replace(&mut self.binding_pattern, true);
+        let pattern = self.pattern();
+        self.binding_pattern = outer;
+        pattern
+    }
+
     fn pattern(&mut self) -> Pat {
         let pat = self.pattern_atom();
         self.pattern_as(pat)
@@ -2415,6 +2433,12 @@ impl<'a> Parser<'a> {
                 } else {
                     Pat::new(PatKind::Var(name), start)
                 }
+            },
+            | TokenKind::UpperIdent(name)
+                if self.binding_pattern && !self.punct_at(1, Punct::LParen) =>
+            {
+                self.bump();
+                Pat::new(PatKind::Var(name), start)
             },
             | TokenKind::UpperIdent(name) => {
                 self.bump();

@@ -39,7 +39,28 @@ pub(crate) struct FunctionProof {
     pub(crate) projection: TypeSubstitution,
     pub(crate) signature: Type,
     pub(crate) verified: bool,
+    /// The activation bindings this proof induces, computed once.
+    ///
+    /// Every call of a proved function installs `bindings()` as the active
+    /// substitution. Building it resolves the whole projection, and a fresh
+    /// `Rc` per call also defeated [`CallProofCache`] (whose key includes the
+    /// active bindings' identity), so a recursive loop never hit the cache.
+    pub(crate) bindings_memo: BindingsMemo,
 }
+
+/// A per-proof memo that a clone does not inherit.
+///
+/// A cloned proof is about to be refined (`specialize`, call-site selection),
+/// so the original's bindings would be stale for it.
+#[derive(Debug, Default)]
+pub(crate) struct BindingsMemo(std::cell::OnceCell<Rc<CallBindings>>);
+
+impl Clone for BindingsMemo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
 impl FunctionProof {
     pub(crate) fn at(
         context: &Rc<ModuleContext>,
@@ -123,6 +144,7 @@ impl FunctionProof {
             projection,
             signature,
             verified,
+            bindings_memo: BindingsMemo::default(),
         }))
     }
 
@@ -190,11 +212,16 @@ impl FunctionProof {
     }
 
     pub(crate) fn bindings(&self) -> Rc<CallBindings> {
-        Rc::new(CallBindings {
-            context: Rc::downgrade(&self.context),
-            values: self.projection.resolved(&self.infer),
-            verified: self.verified,
-        })
+        self.bindings_memo
+            .0
+            .get_or_init(|| {
+                Rc::new(CallBindings {
+                    context: Rc::downgrade(&self.context),
+                    values: self.projection.resolved(&self.infer),
+                    verified: self.verified,
+                })
+            })
+            .clone()
     }
 
     pub(crate) fn check_reifications(&self) -> Result<(), EvalError> {
@@ -397,6 +424,40 @@ impl Interp {
         let Some(original) = &closure.proof else {
             return Ok(None);
         };
+        // The selection below is a pure function of the proof, the call site,
+        // the active bindings and the arguments' runtime schemas; for scalar
+        // arguments the schema is all `runtime_input_matches` looks at. A
+        // recursive numeric loop asks the same question every iteration, and
+        // answering it by re-unification was ~90% of the cost of a call.
+        let key = CallProofKey::new(self, original, callee, args);
+        if let Some(key) = &key {
+            if let Some(hit) = self.call_proofs.get(key, args) {
+                return Ok(Some(hit));
+            }
+        }
+        let result = self.prepare_function_call_uncached(original, args, callee)?;
+        let result = result.map(|proof| self.call_proofs.canonical(original, proof));
+        if let (Some(key), Some(proof)) = (key, &result) {
+            self.call_proofs.insert(
+                key,
+                args,
+                proof.clone(),
+                (
+                    original.clone(),
+                    self.bindings.clone(),
+                    self.context.clone(),
+                ),
+            );
+        }
+        Ok(result)
+    }
+
+    fn prepare_function_call_uncached(
+        &self,
+        original: &Rc<FunctionProof>,
+        args: &mut [Value],
+        callee: Option<Span>,
+    ) -> Result<Option<Rc<FunctionProof>>, EvalError> {
         let expected = callee.and_then(|span| self.resolved_expr_type(span));
         let selected = if let Some(span) = callee {
             self.checked_callable_selection(original, span, false)?
@@ -563,10 +624,15 @@ impl Interp {
         value: Value,
         span: Span,
     ) -> Value {
-        let Some(expected @ Type::Fn(..)) = self.resolved_expr_type(span) else {
+        // Cheap rejections first: this runs on every `let` and return, and
+        // resolving the checked type allocates.
+        let Value::Closure(closure) = &value else {
             return value;
         };
-        let Value::Closure(closure) = &value else {
+        if closure.proof.is_none() || !matches!(self.expr_type(span), Some(Type::Fn(..))) {
+            return value;
+        }
+        let Some(expected @ Type::Fn(..)) = self.resolved_expr_type(span) else {
             return value;
         };
         let Some(original) = &closure.proof else {
@@ -726,6 +792,241 @@ impl Interp {
 // Primitive input proofs retain only Weak identities. A live Weak prevents
 // Rc::get_mut; Rc::make_mut either detaches it or clones to a different identity.
 // No proof survives such a change, and no proof keeps the payload alive.
+/// The identity of one call-site proof question; see
+/// [`Interp::prepare_function_call`].
+///
+/// The arguments enter only as a digest of their scalar schemas (tag and
+/// dimension), so a lookup allocates nothing: the tail-call allocation gate
+/// counts every allocation a loop step makes. Entries under one key are told
+/// apart by [`ArgumentSchema`]s, compared in place against the values.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct CallProofKey {
+    proof: usize,
+    callee: Option<Span>,
+    bindings: usize,
+    context: usize,
+    digest: u64,
+}
+
+/// A scalar argument's schema: its representation tag and, for a number,
+/// its dimension. Equal schemas make `runtime_input_matches` answer equally.
+#[derive(Clone, PartialEq, Debug)]
+struct ArgumentSchema {
+    tag: u8,
+    dim: Option<aevia_dim::Dim>,
+}
+
+fn argument_tag(value: &Value) -> Option<(u8, Option<&aevia_dim::Dim>)> {
+    Some(match value {
+        | Value::Num(number) => {
+            let tag = match number.kind {
+                | crate::value::NumKind::Int(_) => 0,
+                | crate::value::NumKind::Exact(_) => 1,
+                | crate::value::NumKind::Sym(_) => 2,
+                | crate::value::NumKind::Float(_) => 3,
+                | crate::value::NumKind::Complex(..) => 4,
+            };
+            (tag, Some(&number.dim))
+        },
+        | Value::Bool(_) => (5, None),
+        | Value::Str(_) => (6, None),
+        | Value::Unit => (7, None),
+        // Anything else is validated by content or rewritten in place
+        // (closures are specialized), so it is not memoizable here.
+        | _ => return None,
+    })
+}
+
+fn schemas_match(
+    schemas: &[ArgumentSchema],
+    args: &[Value],
+) -> bool {
+    schemas.len() == args.len()
+        && schemas.iter().zip(args).all(|(schema, value)| {
+            argument_tag(value)
+                .is_some_and(|(tag, dim)| tag == schema.tag && dim == schema.dim.as_ref())
+        })
+}
+
+impl CallProofKey {
+    fn new(
+        interp: &Interp,
+        proof: &Rc<FunctionProof>,
+        callee: Option<Span>,
+        args: &[Value],
+    ) -> Option<Self> {
+        use std::hash::Hash;
+        use std::hash::Hasher;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for value in args {
+            let (tag, dim) = argument_tag(value)?;
+            tag.hash(&mut hasher);
+            dim.hash(&mut hasher);
+        }
+        Some(Self {
+            proof: Rc::as_ptr(proof) as usize,
+            callee,
+            bindings: interp
+                .bindings
+                .as_ref()
+                .map_or(0, |bindings| Rc::as_ptr(bindings) as usize),
+            context: Rc::as_ptr(&interp.context) as usize,
+            digest: hasher.finish(),
+        })
+    }
+}
+
+/// Memoized call-site proofs.
+///
+/// Each entry keeps the proof, bindings and context whose addresses its key
+/// names alive, so an address in a key can never be reused by a different
+/// object while the entry exists.
+#[derive(Default)]
+pub(crate) struct CallProofCache {
+    entries: std::cell::RefCell<std::collections::HashMap<CallProofKey, Vec<CallProofEntry>>>,
+    /// Concrete results already handed out, per original proof.
+    ///
+    /// Each activation installs its proof's bindings, and the next call's key
+    /// names those bindings by identity. Without this, a recursive call made
+    /// a new (equal) proof every iteration, so its key never repeated.
+    canonical: std::cell::RefCell<
+        std::collections::HashMap<usize, (Rc<FunctionProof>, Vec<Rc<FunctionProof>>)>,
+    >,
+}
+
+struct CallProofEntry {
+    arguments: Vec<ArgumentSchema>,
+    result: Rc<FunctionProof>,
+    _pins: (
+        Rc<FunctionProof>,
+        Option<Rc<CallBindings>>,
+        Rc<ModuleContext>,
+    ),
+}
+
+impl CallProofCache {
+    const CAPACITY: usize = 4096;
+    const PER_PROOF: usize = 8;
+
+    /// An already-issued result equal to `proof`, or `proof` itself.
+    ///
+    /// Only fully concrete proofs are merged: for them, equal signatures,
+    /// verification and resolved bindings mean every later use (selection,
+    /// specialization, reification checks) answers identically.
+    fn canonical(
+        &self,
+        original: &Rc<FunctionProof>,
+        proof: Rc<FunctionProof>,
+    ) -> Rc<FunctionProof> {
+        if aevia_types::class::has_variables(&proof.signature) {
+            return proof;
+        }
+        let bindings = proof.bindings();
+        if bindings
+            .values
+            .types
+            .values()
+            .any(aevia_types::class::has_variables)
+            || bindings
+                .values
+                .representations
+                .values()
+                .any(|rep| matches!(rep, aevia_types::Rep::Var(_)))
+            || !bindings
+                .values
+                .dimensions
+                .values()
+                .all(aevia_dim::Dim::is_concrete)
+            || bindings
+                .values
+                .rows
+                .values()
+                .any(|row| aevia_types::class::has_variables(&Type::Record(row.clone())))
+            || bindings
+                .values
+                .naturals
+                .values()
+                .any(|nat| !nat.vars().is_empty())
+        {
+            return proof;
+        }
+        let mut canonical = self.canonical.borrow_mut();
+        if canonical.len() >= Self::CAPACITY {
+            canonical.clear();
+        }
+        let (_, issued) = canonical
+            .entry(Rc::as_ptr(original) as usize)
+            .or_insert_with(|| (original.clone(), Vec::new()));
+        for existing in issued.iter() {
+            let other = existing.bindings();
+            if existing.verified == proof.verified
+                && existing.signature == proof.signature
+                && Rc::ptr_eq(&existing.context, &proof.context)
+                && other.values.types == bindings.values.types
+                && other.values.representations == bindings.values.representations
+                && other.values.dimensions == bindings.values.dimensions
+                && other.values.rows == bindings.values.rows
+                && other.values.naturals == bindings.values.naturals
+            {
+                return existing.clone();
+            }
+        }
+        if issued.len() < Self::PER_PROOF {
+            issued.push(proof.clone());
+        }
+        proof
+    }
+
+    fn get(
+        &self,
+        key: &CallProofKey,
+        args: &[Value],
+    ) -> Option<Rc<FunctionProof>> {
+        self.entries.borrow().get(key).and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| schemas_match(&entry.arguments, args))
+                .map(|entry| entry.result.clone())
+        })
+    }
+
+    fn insert(
+        &self,
+        key: CallProofKey,
+        args: &[Value],
+        result: Rc<FunctionProof>,
+        pins: (
+            Rc<FunctionProof>,
+            Option<Rc<CallBindings>>,
+            Rc<ModuleContext>,
+        ),
+    ) {
+        let Some(arguments) = args
+            .iter()
+            .map(|value| {
+                argument_tag(value).map(|(tag, dim)| {
+                    ArgumentSchema {
+                        tag,
+                        dim: dim.cloned(),
+                    }
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let mut entries = self.entries.borrow_mut();
+        if entries.len() >= Self::CAPACITY {
+            entries.clear();
+        }
+        entries.entry(key).or_default().push(CallProofEntry {
+            arguments,
+            result,
+            _pins: pins,
+        });
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct TensorInputCache {
     entries: std::cell::RefCell<

@@ -34,6 +34,24 @@ impl Drop for Scratch {
     }
 }
 
+/// A well-formed file URI for a physical path on any platform: a Windows drive
+/// path gains the leading slash and forward separators that RFC 8089 requires.
+fn file_uri(
+    authority: &str,
+    path: &Path,
+) -> String {
+    let text = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace(' ', "%20");
+    let text = if text.starts_with('/') {
+        text
+    } else {
+        format!("/{text}")
+    };
+    format!("file://{authority}{text}")
+}
+
 fn key(checked: &aevia_types::CheckedModule) -> AdtKey {
     match checked.exports.get("Token").unwrap() {
         | Export::Type { adt } | Export::TypeCtor { adt, .. } => aevia_types::adt::key_of(*adt),
@@ -69,17 +87,14 @@ fn saving_a_new_file_and_switching_from_compile_to_driver_preserves_identity() {
 fn file_uri_and_path_names_share_one_identity_including_percent_encoded_spaces() {
     let scratch = Scratch::new("file-uri");
     let path = scratch.write("space name.aev", SOURCE);
-    let uri = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
+    let uri = file_uri("", &path);
     assert_eq!(
         SourceIdentity::for_path(&path),
         SourceIdentity::from_name(&uri)
     );
     assert_eq!(
         SourceIdentity::for_path(&path),
-        SourceIdentity::from_name(&format!(
-            "file:{}",
-            path.to_string_lossy().replace(' ', "%20")
-        ))
+        SourceIdentity::from_name(&format!("file:{}", &file_uri("", &path)["file://".len()..]))
     );
 }
 
@@ -181,10 +196,7 @@ fn virtual_uri_schemes_without_double_slashes_remain_virtual_sources() {
 fn localhost_file_uri_uses_the_same_source_identity_as_the_editor_path() {
     let scratch = Scratch::new("localhost-uri");
     let path = scratch.write("space name.aev", SOURCE);
-    let uri = format!(
-        "file://localhost{}",
-        path.to_string_lossy().replace(' ', "%20")
-    );
+    let uri = file_uri("localhost", &path);
     assert_eq!(
         SourceIdentity::for_path(&path),
         SourceIdentity::from_name(&uri)

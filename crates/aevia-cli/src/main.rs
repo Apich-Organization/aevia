@@ -76,7 +76,7 @@ impl Default for Options {
         // The interpreter is recursive, so a deep but legal program needs more
         // stack than the 1 MiB a main thread gets on Windows.
         Self {
-            max_stack_mb: 256,
+            max_stack_mb: 1024,
             budget: None,
             color: ColorChoice::Auto,
             release: false,
@@ -194,7 +194,10 @@ fn main() -> ExitCode {
     let worker = std::thread::Builder::new()
         .name("aevia".to_string())
         .stack_size(stack)
-        .spawn(move || run_cli(options, args));
+        .spawn(move || {
+            aevia_core::install_stack_budget(stack);
+            run_cli(options, args)
+        });
     match worker {
         | Ok(handle) => handle.join().unwrap_or_else(|_| ExitCode::from(101)),
         | Err(error) => {
@@ -228,6 +231,11 @@ fn apply_options(
         interp.max_tail_calls = budget;
         interp.max_io_steps = budget;
     }
+    // The CLI thread declared its stack (`install_stack_budget`), so non-tail
+    // recursion is bounded by the stack that is actually left; the fixed
+    // call count stays only as a runaway guard.
+    interp.max_depth = interp.max_depth.max(10_000_000);
+    interp.max_io_depth = interp.max_io_depth.max(1_000_000);
 }
 
 fn run_cli(
@@ -377,7 +385,7 @@ usage:
   aevia --version           print the version
 
 options (anywhere on the command line):
-  --max-stack <MiB>         stack the interpreter runs on (default 256)
+  --max-stack <MiB>         stack the interpreter runs on (default 1024)
   --budget <steps>          trampoline/IO steps before `E0805`
   --color <when>            auto, always, or never (default auto)
   --locked                  fail instead of rewriting an out-of-date aevia.lock
@@ -791,8 +799,9 @@ fn check_all(
     // and checked once, not once per entry.
     let (program, stats) =
         driver::load_all_with_roots(&paths, roots, &aevia_types::check::CheckOptions::default());
-    // The loader names each source by the path it was asked for, so each entry
-    // maps to the file id its diagnostics carry.
+    // The loader names each physical source by its canonical path (on Windows
+    // a verbatim UNC-style path), so each entry maps through that same
+    // canonical spelling to the file id its diagnostics carry.
     let mut ids: std::collections::HashMap<String, aevia_syntax::FileId> =
         std::collections::HashMap::new();
     let mut file: aevia_syntax::FileId = 0;
@@ -804,7 +813,11 @@ fn check_all(
     let mut shown: std::collections::HashSet<aevia_syntax::FileId> =
         std::collections::HashSet::new();
     for path in &paths {
-        let Some(&id) = ids.get(&path.display().to_string()) else {
+        let Some(&id) = ids.get(
+            &aevia_core::source::canonical_path(path)
+                .display()
+                .to_string(),
+        ) else {
             eprintln!("aevia check: `{}` could not be loaded", path.display());
             failed += 1;
             continue;

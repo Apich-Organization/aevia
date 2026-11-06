@@ -548,6 +548,22 @@ impl Dim {
         }
     }
 
+    /// Renders for value display, preferring a named SI derived unit.
+    ///
+    /// §5.4.3: a value without a display unit prints in the "best unit" —
+    /// an SI derived unit (`N`, `J`, `Pa`, `V`, …) when the dimension is
+    /// exactly one, otherwise the base-symbol product of
+    /// [`Dim::to_si_symbol_string`]. Only exact matches are named: `1/T` is
+    /// left as `1/s` (hertz and becquerel share it, and angular frequency is
+    /// not `Hz`), and a product such as `N*m` is not guessed.
+    #[must_use]
+    pub fn to_display_si_string(&self) -> String {
+        if let Some(symbol) = derived_si_symbol(self) {
+            return symbol.to_string();
+        }
+        self.to_si_symbol_string()
+    }
+
     /// Collision-free dimension text for opaque runtime metadata and hashing.
     /// SI spellings are unchanged; custom/nominal generators and variables are
     /// explicitly encoded. Display hints never enter this representation.
@@ -1326,6 +1342,22 @@ mod tests {
             .mul(&Dim::base("Length").pow(&ratio(2, 1)))
             .div(&time.pow(&ratio(2, 1)));
         assert_eq!(energy.to_si_symbol_string(), "m^2*kg/s^2");
+        // §5.4.3: display prefers the named derived unit when it is exact.
+        assert_eq!(energy.to_display_si_string(), "J");
+        let current = Dim::base("Current");
+        let voltage = energy.div(&time).div(&current);
+        assert_eq!(voltage.to_display_si_string(), "V");
+        assert_eq!(voltage.div(&current).to_display_si_string(), "Ω");
+        let force = energy.div(&Dim::base("Length"));
+        assert_eq!(force.to_display_si_string(), "N");
+        // Not guessed: frequency, a product with a base unit, or a fraction.
+        assert_eq!(time.inverse().to_display_si_string(), "1/s");
+        assert_eq!(
+            energy.mul(&Dim::base("Length")).to_display_si_string(),
+            energy.mul(&Dim::base("Length")).to_si_symbol_string()
+        );
+        assert_eq!(acceleration.to_display_si_string(), "m/s^2");
+        assert_eq!(time.pow(&half).to_display_si_string(), "s^(1/2)");
         assert_eq!(Dim::one().to_si_symbol_string(), "");
         // A dimension variable has no SI symbol; the display keeps it opaque.
         assert_eq!(Dim::var(7).to_si_symbol_string(), "d7");
@@ -1335,4 +1367,46 @@ mod tests {
         assert_eq!(plain, "Time^(1/2)");
         assert_eq!(Dim::parse_plain(&plain).unwrap(), time.pow(&half));
     }
+}
+
+/// The SI derived unit whose dimension is exactly `dim`, if any.
+fn derived_si_symbol(dim: &Dim) -> Option<&'static str> {
+    if !dim.is_concrete() || dim.is_one() {
+        return None;
+    }
+    // (symbol, [M, L, T, I] exponents)
+    const TABLE: [(&str, [i64; 4]); 11] = [
+        ("N", [1, 1, -2, 0]),
+        ("J", [1, 2, -2, 0]),
+        ("W", [1, 2, -3, 0]),
+        ("Pa", [1, -1, -2, 0]),
+        ("C", [0, 0, 1, 1]),
+        ("V", [1, 2, -3, -1]),
+        ("Ω", [1, 2, -3, -2]),
+        ("F", [-1, -2, 4, 2]),
+        ("H", [1, 2, -2, -2]),
+        ("Wb", [1, 2, -2, -1]),
+        ("T", [1, 0, -2, -1]),
+    ];
+    let mut exponents = [0i64; 4];
+    for (atom, exponent) in dim.factors() {
+        let Atom::Base(name) = atom else {
+            return None;
+        };
+        let slot = match name.as_ref() {
+            | "Mass" => 0,
+            | "Length" => 1,
+            | "Time" => 2,
+            | "Current" => 3,
+            | _ => return None,
+        };
+        if !exponent.is_integer() {
+            return None;
+        }
+        exponents[slot] = i64::try_from(exponent.numer()).ok()?;
+    }
+    TABLE
+        .iter()
+        .find(|(_, row)| *row == exponents)
+        .map(|(symbol, _)| *symbol)
 }

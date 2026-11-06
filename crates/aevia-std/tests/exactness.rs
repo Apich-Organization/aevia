@@ -120,10 +120,15 @@ fn an_exact_matmul_is_still_exact() {
         "let a = [[1, 2], [3, 4]]\n\
          let b = [[5, 6], [7, 8]]\n\
          let p = a @ b\n\
+         let c = [[1, 2], [3, 4]]\n\
          let h = [[0.5, 0], [0, 0.5]]\n\
-         let q = a @ h\n",
+         let q = c @ h\n",
     );
 
+    // `a` and `b` meet only integers, so they stay `Int` tensors. (A top-level
+    // literal is monomorphic until the module ends: had `a` also been
+    // multiplied by the `Real` matrix `h` it would be a `Real` tensor and its
+    // product would correctly be `Exact`, not `Int`; `c` plays that role.)
     // Integers in, exact values out — the product of two exact matrices is
     // not a place an `f64` kernel may appear. Int multiplication also keeps
     // the element representation promised by its checked type.

@@ -1353,6 +1353,10 @@ struct Checker {
     /// Local binders (parameters, `let`/match patterns) and their spans, for
     /// `W0101`; a name in `used_locals` was read somewhere (§B.12).
     local_binders: Vec<(String, Span)>,
+    /// Whether the pattern being bound may legitimately fail to match: a
+    /// `match` arm falls through to the next arm, while a `let` or parameter
+    /// pattern must always match.
+    refutable_pattern: bool,
     /// Local names that a body actually read.
     used_locals: HashSet<String>,
     /// Spans of numeric literals, so their instantiated representation can be
@@ -1446,6 +1450,7 @@ impl Checker {
             referenced: HashSet::new(),
             pending_checks: Vec::new(),
             local_binders: Vec::new(),
+            refutable_pattern: false,
             used_locals: HashSet::new(),
             literal_spans: Vec::new(),
             literal_owners: HashMap::new(),
@@ -5512,7 +5517,9 @@ impl Checker {
                 let mut unguarded: Vec<Pat> = Vec::new();
                 for arm in arms {
                     self.scopes.push(HashMap::new());
+                    let outer = std::mem::replace(&mut self.refutable_pattern, true);
                     self.bind_pattern(&arm.pattern, &subject);
+                    self.refutable_pattern = outer;
                     // An arm is unreachable when the unguarded arms before it
                     // already cover every value it could match.
                     let subject_resolved = self.infer.resolve(&subject);
@@ -5553,6 +5560,9 @@ impl Checker {
                     | None => self.synth(value),
                 };
                 self.infer.leave_level();
+                if let PatKind::Var(name) = &pattern.kind {
+                    self.warn_if_shadowing(name, pattern.span);
+                }
                 self.scopes.push(HashMap::new());
                 self.bind_local(pattern, &value_ty, expr.span, value.span);
                 let body_ty = self.synth(body);
@@ -5664,6 +5674,9 @@ impl Checker {
                     rec,
                     span,
                 } => {
+                    if let PatKind::Var(name) = &pattern.kind {
+                        self.warn_if_shadowing(name, pattern.span);
+                    }
                     self.infer.enter_level();
                     let target = self.infer.fresh_type();
                     if let (PatKind::Var(name), true) = (&pattern.kind, *rec) {
@@ -6024,8 +6037,20 @@ impl Checker {
                 match resolved {
                     // §4.9.3: unary `-` and `+` preserve `Dyn<ρ>`.
                     | Type::Scalar(..) | Type::Tensor { .. } | Type::Dyn(_) => resolved,
+                    | Type::Error => Type::Error,
                     | other => {
-                        self.error("E0302", format!("`-` is not defined for {other}"), span);
+                        let symbol = if op == UnOp::Neg { "-" } else { "+" };
+                        let message = format!("unary `{symbol}` is not defined for {other}");
+                        if matches!(other, Type::Str) {
+                            self.error_help(
+                                "E0302",
+                                message,
+                                span,
+ "strings are joined with `concat(a, b)` or interpolation `\"{a}{b}\"`; there is no `++` operator",
+                            );
+                        } else {
+                            self.error("E0302", message, span);
+                        }
                         Type::Error
                     },
                 }
@@ -6186,6 +6211,37 @@ impl Checker {
         }
     }
 
+    /// The name of an operand that is a local value spelled like a unit,
+    /// when the other operand is a unit: `m/s` with a `let s = …` in scope.
+    fn shadowed_unit_operand(
+        &self,
+        left: &Type,
+        right: &Type,
+        left_expr: &Expr,
+        right_expr: &Expr,
+    ) -> Option<String> {
+        let candidate = |ty: &Type, expr: &Expr, other: &Type| {
+            let ExprKind::Var(name) = &expr.kind else {
+                return None;
+            };
+            // Only a value no unit can scale is a mistake: `t / s` with a
+            // numeric `t` (the tonne's spelling) is ordinary arithmetic.
+            (matches!(other, Type::UnitOf(_))
+                && !matches!(
+                    ty,
+                    Type::UnitOf(_)
+                        | Type::Scalar(..)
+                        | Type::Tensor { .. }
+                        | Type::Var(_)
+                        | Type::Dyn(_)
+                        | Type::Error
+                )
+                && self.units.lookup(name).is_some())
+            .then(|| name.clone())
+        };
+        candidate(right, right_expr, left).or_else(|| candidate(left, left_expr, right))
+    }
+
     fn synth_binary(
         &mut self,
         op: BinOp,
@@ -6271,6 +6327,32 @@ impl Checker {
         match op {
             | BinOp::Add | BinOp::Sub => {
                 self.add_type(op, &left_resolved, &right_resolved, left, right, span)
+            },
+            | BinOp::Mul | BinOp::Div
+                if matches!(left_resolved, Type::Error)
+                    || matches!(right_resolved, Type::Error) =>
+            {
+                // An operand that failed was reported where it failed.
+                Type::Error
+            },
+            | BinOp::Mul | BinOp::Div
+                if self
+                    .shadowed_unit_operand(&left_resolved, &right_resolved, left, right)
+                    .is_some() =>
+            {
+                let name = self
+                    .shadowed_unit_operand(&left_resolved, &right_resolved, left, right)
+                    .unwrap_or_default();
+                self.error_help(
+                    "E0302",
+                    format!(
+                        "`{}` is not defined for {left_resolved} and {right_resolved}",
+                        op.as_str()
+                    ),
+                    span,
+                    &shadowed_unit_help(&name),
+                );
+                Type::Error
             },
             | BinOp::Mul => self.mul_type(&left_resolved, &right_resolved, span),
             | BinOp::Div => self.div_type(&left_resolved, &right_resolved, span),
@@ -6473,6 +6555,26 @@ impl Checker {
                         format!("`{}` cannot mix `Dyn` with {left} and {right}", op.as_str()),
                         span,
                         "`Dyn` does not convert implicitly; `check` it first",
+                    );
+                } else if matches!(left, Type::Error) || matches!(right, Type::Error) {
+                    // An operand that failed was reported where it failed.
+                } else if let Some(name) =
+                    self.shadowed_unit_operand(&left, &right, left_expr, right_expr)
+                {
+                    self.error_help(
+                        "E0302",
+                        format!("`{}` is not defined for {left} and {right}", op.as_str()),
+                        span,
+                        &shadowed_unit_help(&name),
+                    );
+                } else if op == BinOp::Add
+                    && (matches!(left, Type::Str) || matches!(right, Type::Str))
+                {
+                    self.error_help(
+                        "E0302",
+                        format!("`+` is not defined for {left} and {right}"),
+                        span,
+                        "strings are joined with `concat(a, b)` or interpolation `\"{a}{b}\"`",
                     );
                 } else {
                     self.error(
@@ -7641,7 +7743,11 @@ impl Checker {
                 ret
             },
             | other => {
-                self.error("E0305", format!("{other} is not a function"), span);
+                // A callee that already failed to check was reported where it
+                // failed; "<error> is not a function" only repeats that.
+                if !matches!(other, Type::Error) {
+                    self.error("E0305", format!("{other} is not a function"), span);
+                }
                 for arg in args {
                     self.synth(arg);
                 }
@@ -9332,7 +9438,24 @@ impl Checker {
         self.scopes.pop();
         self.do_returns.pop();
         if let Err(error) = self.infer.unify(&destination, &last_ty) {
-            self.report_unify(error, span);
+            // A `?` in this block returns from it with a `Result`/`Option`
+            // (§6.8.2): when the block's own value is not that container the
+            // `?` cannot escape the `IO` block, which is `E0702`.
+            let escapes = self
+                .checked
+                .try_targets
+                .values()
+                .any(|target| matches!(target.boundary, TryBoundary::Do(site) if site == span));
+            if escapes {
+                self.error_help(
+                    "E0702",
+                    format!("`?` does not match its enclosing `IO` block: {error}"),
+                    span,
+                    "end the block with a value of the same Option/Result family, or handle it with `match`",
+                );
+            } else {
+                self.report_unify(error, span);
+            }
         }
         Type::io(last_ty)
     }
@@ -9673,6 +9796,30 @@ impl Checker {
         }
     }
 
+    /// §B.12 `W0103`: a local binder that rebinds a name already visible in an
+    /// enclosing local scope shadows it. A unit or builtin name is *not*
+    /// shadowed: §1.8.2 keeps those namespaces separate, and every `let x`
+    /// would warn.
+    fn warn_if_shadowing(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) {
+        let shadows = !name.starts_with('_')
+            && self
+                .scopes
+                .iter()
+                .rev()
+                .any(|enclosing| enclosing.contains_key(name));
+        if shadows {
+            self.warn(
+                "W0103",
+                format!("`{name}` shadows an enclosing binding"),
+                span,
+            );
+        }
+    }
+
     fn bind_pattern_inner(
         &mut self,
         pattern: &Pat,
@@ -9695,23 +9842,7 @@ impl Checker {
                     self.globals.insert(name.clone(), Scheme::mono(ty.clone()));
                     return;
                 }
-                // §B.12 `W0103`: a local rebinding a name that is already
-                // visible in an enclosing local scope shadows it. A unit or
-                // builtin name is *not* shadowed: §1.8.2 keeps those
-                // namespaces separate, and every `let x` would warn.
-                let shadows = !name.starts_with('_')
-                    && self
-                        .scopes
-                        .iter()
-                        .rev()
-                        .any(|enclosing| enclosing.contains_key(name));
-                if shadows {
-                    self.warn(
-                        "W0103",
-                        format!("`{name}` shadows an enclosing binding"),
-                        pattern.span,
-                    );
-                }
+                self.warn_if_shadowing(name, pattern.span);
                 // §B.12 `W0101`: remembered until the module ends so an unread
                 // local can be reported once.
                 if !name.starts_with('_') {
@@ -9870,7 +10001,14 @@ impl Checker {
                     );
                     return;
                 };
-                if shape.rank() != 1 {
+                // §6.5: a tensor pattern matches only rank 1. In a `match` arm
+                // a scrutinee of another rank is not an error: the arm simply
+                // never matches and evaluation falls through to the next arm,
+                // so its binders are still typed (rank-1 slices of the element
+                // type). A `let` or parameter pattern must match, so there the
+                // mismatch is rejected.
+                let matches_rank = shape.rank() == 1;
+                if !matches_rank && !self.refutable_pattern {
                     self.error("E0308", "a tensor pattern requires rank one", pattern.span);
                     return;
                 }
@@ -9882,10 +10020,14 @@ impl Checker {
                         scope.insert(
                             name.clone(),
                             Scheme::mono(Type::tensor(
-                                shape
-                                    .extent(0)
-                                    .and_then(|n| n.checked_sub(items.len()))
-                                    .map_or(Shape::Rank(1), |n| Shape::refined(vec![Some(n)])),
+                                if matches_rank {
+                                    shape
+                                        .extent(0)
+                                        .and_then(|n| n.checked_sub(items.len()))
+                                        .map_or(Shape::Rank(1), |n| Shape::refined(vec![Some(n)]))
+                                } else {
+                                    Shape::Rank(1)
+                                },
                                 (*elem).clone(),
                             )),
                         );
@@ -11855,4 +11997,11 @@ pub(crate) fn instantiate_pattern_field(
         }
     }
     field.substitute_kinded(&types, &dims, &HashMap::new(), &HashMap::new())
+}
+
+/// Help for an operand that is a local value spelled like a unit (§5.1.3).
+fn shadowed_unit_help(name: &str) -> String {
+    format!(
+        "`{name}` here is the local binding in scope, not the unit: in an expression a value shadows a unit name (§5.1.3). Rename the binding, or write the unit in a literal (`1.0 {name}`), where unit names are never shadowed"
+    )
 }

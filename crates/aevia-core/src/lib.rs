@@ -13,8 +13,9 @@
 //! interp.load(module);
 //! let value = interp.eval_toplevel("t").expect("evaluates");
 //! // `h` and `g` are exact, so the square root has no exact value and stays
-//! // symbolic (§6.3.1); `approx` is the explicit step to a number.
-//! assert!(aevia_core::value::repr(&value).starts_with("sqrt("));
+//! // symbolic (§6.3.1), its square factor pulled out; `approx` is the
+//! // explicit step to a number.
+//! assert!(aevia_core::value::repr(&value).contains("sqrt("));
 //! ```
 
 #![forbid(unsafe_code)]
@@ -61,6 +62,7 @@ pub use eval::EvalError;
 pub use eval::Interp;
 pub use eval::Mode;
 pub use eval::Output;
+pub use eval::install_stack_budget;
 pub use value::show;
 
 /// The result of compiling one file.

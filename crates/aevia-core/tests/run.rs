@@ -139,8 +139,8 @@ fn main(): IO Unit = do
     let lines: Vec<&str> = output.lines().collect();
     assert_eq!(lines.len(), 2, "unexpected output: {output}");
     assert!(
-        lines[0].starts_with("fall time from 20 m = sqrt("),
-        "the exact answer must stay a root: {output}"
+        lines[0].starts_with("fall time from 20 m = ") && lines[0].contains("sqrt("),
+        "the exact answer must stay a root (square factors are pulled out,          so the radical may carry a rational coefficient): {output}"
     );
     assert!(
         lines[0].ends_with(" s"),

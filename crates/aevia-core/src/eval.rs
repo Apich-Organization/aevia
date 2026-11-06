@@ -320,9 +320,31 @@ impl EvalError {
     /// The call stack rendered as notes, outermost call first.
     #[must_use]
     pub fn trace(&self) -> Vec<String> {
-        let mut notes = Vec::with_capacity(self.stack.len());
-        for (depth, frame) in self.stack.iter().enumerate() {
-            notes.push(format!("{} in `{}`", depth + 1, frame.function.as_ref()));
+        // A deep recursion is thousands of identical frames; print a run of
+        // the same function once with its extent instead of one line each.
+        let mut notes = Vec::new();
+        let mut depth = 0;
+        while depth < self.stack.len() {
+            let name = self.stack[depth].function.as_ref();
+            let run = self.stack[depth..]
+                .iter()
+                .take_while(|frame| frame.function.as_ref() == name)
+                .count();
+            if run > 3 {
+                notes.push(format!("{} in `{}`", depth + 1, name));
+                notes.push(format!(
+                    "{}..{} in `{}` ({} more recursive frames)",
+                    depth + 2,
+                    depth + run,
+                    name,
+                    run - 1
+                ));
+            } else {
+                for offset in 0..run {
+                    notes.push(format!("{} in `{}`", depth + offset + 1, name));
+                }
+            }
+            depth += run;
         }
         notes
     }
@@ -363,9 +385,71 @@ pub enum Mode {
     Ir,
 }
 
+/// `E0802` naming the first coordinate outside the shape.
+///
+/// "index out of range" alone sent the reader looking for which of several
+/// indices, and by how much; the static check already says both.
+fn index_out_of_range(
+    coordinates: &[isize],
+    shape: &[usize],
+) -> EvalError {
+    for (axis, (coordinate, extent)) in coordinates.iter().zip(shape).enumerate() {
+        let extent = *extent as isize;
+        if *coordinate >= extent || *coordinate < -extent {
+            let axis_text = if shape.len() == 1 {
+                String::new()
+            } else {
+                format!(" on axis {axis}")
+            };
+            return EvalError::new(
+                "E0802",
+                format!(
+                    "index {coordinate} is out of bounds{axis_text} for extent {extent} (valid: {} to {})",
+                    -extent,
+                    extent - 1
+                ),
+            );
+        }
+    }
+    EvalError::new("E0802", "index out of range")
+}
+
+thread_local! {
+    /// `(base address, usable bytes)` of the current thread's stack, when the
+    /// host declared one with [`install_stack_budget`].
+    static STACK_BUDGET: std::cell::Cell<Option<(usize, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Declares that the calling thread has `total` bytes of stack.
+///
+/// Call it near the top of a thread created with that stack size. From then
+/// on non-tail recursion in that thread is bounded by the stack actually
+/// left rather than only by [`Interp::max_depth`]: an interpreter call's
+/// native frame differs by an order of magnitude between debug and release
+/// builds, so a fixed call count is either far too small or unsafe. A margin
+/// (1/8 of the stack, at least 8 MiB, at most 64 MiB) is kept for builtins
+/// and kernel calls made from the deepest frame.
+pub fn install_stack_budget(total: usize) {
+    let marker = 0u8;
+    let base = std::ptr::addr_of!(marker) as usize;
+    let margin = (total / 8).clamp(8 << 20, 64 << 20);
+    STACK_BUDGET.with(|cell| cell.set(Some((base, total.saturating_sub(margin)))));
+}
+
+/// The declared budget, when the current stack position is past it.
+#[inline]
+fn stack_budget_exhausted() -> Option<usize> {
+    let (base, usable) = STACK_BUDGET.with(std::cell::Cell::get)?;
+    let marker = 0u8;
+    let here = std::ptr::addr_of!(marker) as usize;
+    (base.abs_diff(here) > usable).then_some(usable)
+}
+
 /// The interpreter state for one program.
 pub struct Interp {
     pub(crate) tensor_inputs: crate::generics::TensorInputCache,
+    pub(crate) call_proofs: crate::generics::CallProofCache,
     pub(crate) session: Rc<()>,
     pub(crate) context: Rc<crate::evidence::ModuleContext>,
     pub(crate) active_scope: Option<Rc<Scope>>,
@@ -578,6 +662,7 @@ impl Interp {
             max_depth: 2048,
             max_tail_calls: 100_000_000,
             tensor_inputs: crate::generics::TensorInputCache::default(),
+            call_proofs: crate::generics::CallProofCache::default(),
             max_io_steps: 100_000_000,
             max_io_depth: 2048,
             max_nodes: 16_384,
@@ -3623,6 +3708,21 @@ impl Interp {
             self.depth -= 1;
             return Err(EvalError::new("E0805", "stack overflow")
                 .at(span)
+                .with_note(format!(
+                    "the call depth limit is {} nested calls; tail calls do not count",
+                    self.max_depth
+                ))
+                .with_stack(self.frames.clone()));
+        }
+        if let Some(budget) = stack_budget_exhausted() {
+            self.depth -= 1;
+            return Err(EvalError::new("E0805", "stack overflow")
+                .at(span)
+                .with_note(format!(
+                    "the interpreter's {} MiB stack is exhausted after {} nested calls; tail calls do not count, and `--max-stack <MiB>` raises the budget",
+                    budget / (1024 * 1024),
+                    self.depth
+                ))
                 .with_stack(self.frames.clone()));
         }
         let result = self.apply_inner(function, args, span, instance);
@@ -4206,7 +4306,7 @@ impl Interp {
             if coordinates.len() == tensor.rank() {
                 return tensor
                     .get(&coordinates)
-                    .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span));
+                    .ok_or_else(|| index_out_of_range(&coordinates, &tensor.shape).at(span));
             }
             if coordinates.len() < tensor.rank() {
                 let fixed = coordinates.len();
@@ -4223,7 +4323,7 @@ impl Interp {
                         *coordinate
                     };
                     if normalized < 0 || normalized >= extent {
-                        return Err(EvalError::new("E0802", "index out of range").at(span));
+                        return Err(index_out_of_range(&coordinates, &tensor.shape).at(span));
                     }
                     pinned.push(normalized as usize);
                 }
@@ -4265,8 +4365,15 @@ impl Interp {
             match index {
                 | SliceValue::Index(value) => {
                     let coordinate = value.unwrap_or(0.0) as isize;
-                    let normalized = normalize_index(coordinate, extent)
-                        .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
+                    let normalized = normalize_index(coordinate, extent).ok_or_else(|| {
+                        EvalError::new(
+                            "E0802",
+                            format!(
+ "index {coordinate} is out of bounds for axis {axis} of extent {extent}"
+                            ),
+                        )
+                        .at(span)
+                    })?;
                     ranges.push((normalized, normalized + 1));
                     walks.push((normalized, 1, 1));
                 },

@@ -2221,7 +2221,7 @@ pub fn format_float_repr(value: f64) -> String {
 /// agree: a Brownian increment's `s^(1/2)` must not render as `s^1` (§8.9.1).
 #[must_use]
 pub fn si_unit_text(dim: &Dim) -> String {
-    dim.to_si_symbol_string()
+    dim.to_display_si_string()
 }
 
 /// Renders a scalar with its display unit or dimension.
@@ -2403,6 +2403,19 @@ pub fn repr(value: &Value) -> String {
 /// answer for a value no program prints by hand.
 const MAX_RENDER_DEPTH: usize = 1_024;
 
+/// Whether record labels are exactly `0, 1, …, n-1` in order with `n ≥ 2`:
+/// the labels a tuple expression produces.
+fn is_tuple_labels<'a>(labels: impl Iterator<Item = &'a str>) -> bool {
+    let mut count = 0usize;
+    for (index, label) in labels.enumerate() {
+        if label != index.to_string() {
+            return false;
+        }
+        count += 1;
+    }
+    count >= 2
+}
+
 fn render(
     value: &Value,
     repr: bool,
@@ -2438,6 +2451,19 @@ fn render_at(
         },
         | Value::Tensor(tensor) => show_tensor_in(tensor, repr),
         | Value::Record(record) => {
+            // Tuples are records labelled `0, 1, …` (deviation 5); they are
+            // written `(a, b)`, so they print that way too.
+            if is_tuple_labels(record.fields.keys().map(String::as_str)) {
+                let mut out = String::from("(");
+                for (index, value) in record.fields.values().enumerate() {
+                    if index > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&render_at(value, repr, depth + 1));
+                }
+                out.push(')');
+                return out;
+            }
             let mut out = String::from("{ ");
             for (index, (name, value)) in record.fields.iter().enumerate() {
                 if index > 0 {

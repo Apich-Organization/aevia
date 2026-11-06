@@ -522,95 +522,112 @@ fn eval_call(
     env: &Rc<IrEnv>,
     tail: bool,
 ) -> Result<Flow, EvalError> {
+    // Each kind has its own function so that a call's native frame is the
+    // frame of the kind it is, not of all four at once (see [`eval_rhs`]).
     match &call.kind {
-        | CallKind::Typed { types } => {
-            let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
-            let mut values = eval_call_args(interp, call, frame, env)?;
-            let function = interp.type_apply_value(function, types, call.callee_span);
-            let instance =
-                interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
-            if tail {
-                if let Value::Closure(closure) = &function {
-                    if matches!(closure.body, ClosureBody::Ir(_)) {
-                        return Ok(Flow::Tail {
-                            closure: closure.clone(),
-                            args: values,
-                            span: call.span,
-                            instance,
-                        });
-                    }
-                }
-            }
-            if instance.is_some() {
-                Ok(Flow::Value(interp.apply_instantiated(
-                    function, values, call.span, instance,
-                )?))
-            } else {
-                Ok(Flow::Value(interp.apply_source_call(
-                    function,
-                    values,
-                    call.span,
-                    call.callee_span,
-                    &call.arg_spans,
-                )?))
-            }
-        },
+        | CallKind::Normal => eval_normal_call(interp, call, frame, env, tail),
+        | CallKind::Typed { types } => eval_typed_call(interp, call, types, frame, env, tail),
         | CallKind::Rssn { name } => {
             let values = eval_call_args(interp, call, frame, env)?;
             Ok(Flow::Value(interp.call_rssn(name, call.span, values)?))
         },
-        | CallKind::Dictionary { method, target: _ } => {
-            let values = eval_call_args(interp, call, frame, env)?;
-            match interp.dictionary_use(call.span, method) {
-                | Some(use_site) => {
-                    // A dictionary call in tail position is a tail call like any
-                    // other. Applying the instance body here would spend Rust
-                    // stack on every step of a recursive instance method, which
-                    // is exactly what the trampoline exists to avoid.
-                    let dispatch =
-                        interp.resolve_dictionary(&use_site, method, &values, call.span)?;
-                    match dispatch {
-                        | crate::eval::Dispatch::Instance(body) => {
-                            let mut values = values;
-                            let instance = interp.prepare_function_call(
-                                &body,
-                                &mut values,
-                                Some(call.callee_span),
-                            )?;
-                            if tail {
-                                if let Value::Closure(closure) = &body {
-                                    if matches!(closure.body, ClosureBody::Ir(_)) {
-                                        return Ok(Flow::Tail {
-                                            closure: closure.clone(),
-                                            args: values,
-                                            span: call.span,
-                                            instance,
-                                        });
-                                    }
-                                }
-                            }
-                            Ok(Flow::Value(
-                                interp.apply_instantiated(body, values, call.span, instance)?,
-                            ))
-                        },
-                        | crate::eval::Dispatch::Builtin => {
-                            Ok(Flow::Value(interp.call_named(method, values, call.span)?))
-                        },
-                    }
-                },
-                | None => {
-                    let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
-                    Ok(Flow::Value(interp.apply(function, values, call.span)?))
-                },
-            }
+        | CallKind::Dictionary { method, .. } => {
+            eval_dictionary_call(interp, call, method, frame, env, tail)
         },
-        | CallKind::Normal => {
-            let function = eval_atom(interp, &call.callee, frame, env, call.callee_span)?;
-            let mut values = eval_call_args(interp, call, frame, env)?;
+    }
+}
+
+/// A source call's last step: a jump when it is in tail position and the
+/// callee is an IR closure, an application otherwise.
+fn finish_source_call(
+    interp: &mut Interp,
+    call: &Call,
+    function: Value,
+    values: Vec<Value>,
+    instance: Option<Rc<crate::generics::FunctionProof>>,
+    tail: bool,
+) -> Result<Flow, EvalError> {
+    if tail {
+        if let Value::Closure(closure) = &function {
+            if matches!(closure.body, ClosureBody::Ir(_)) {
+                return Ok(Flow::Tail {
+                    closure: closure.clone(),
+                    args: values,
+                    span: call.span,
+                    instance,
+                });
+            }
+        }
+    }
+    if instance.is_some() {
+        Ok(Flow::Value(interp.apply_instantiated(
+            function, values, call.span, instance,
+        )?))
+    } else {
+        Ok(Flow::Value(interp.apply_source_call(
+            function,
+            values,
+            call.span,
+            call.callee_span,
+            &call.arg_spans,
+        )?))
+    }
+}
+
+fn eval_normal_call(
+    interp: &mut Interp,
+    call: &Call,
+    frame: &mut Vec<Value>,
+    env: &Rc<IrEnv>,
+    tail: bool,
+) -> Result<Flow, EvalError> {
+    let function = eval_atom(interp, &call.callee, frame, env, call.callee_span)?;
+    let mut values = eval_call_args(interp, call, frame, env)?;
+    let instance = interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
+    finish_source_call(interp, call, function, values, instance, tail)
+}
+
+#[inline(never)]
+fn eval_typed_call(
+    interp: &mut Interp,
+    call: &Call,
+    types: &[aevia_syntax::ast::Ty],
+    frame: &mut Vec<Value>,
+    env: &Rc<IrEnv>,
+    tail: bool,
+) -> Result<Flow, EvalError> {
+    let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
+    let mut values = eval_call_args(interp, call, frame, env)?;
+    let function = interp.type_apply_value(function, types, call.callee_span);
+    let instance = interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
+    finish_source_call(interp, call, function, values, instance, tail)
+}
+
+#[inline(never)]
+fn eval_dictionary_call(
+    interp: &mut Interp,
+    call: &Call,
+    method: &str,
+    frame: &mut Vec<Value>,
+    env: &Rc<IrEnv>,
+    tail: bool,
+) -> Result<Flow, EvalError> {
+    let values = eval_call_args(interp, call, frame, env)?;
+    let Some(use_site) = interp.dictionary_use(call.span, method) else {
+        let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
+        return Ok(Flow::Value(interp.apply(function, values, call.span)?));
+    };
+    // A dictionary call in tail position is a tail call like any other.
+    // Applying the instance body here would spend Rust stack on every step of
+    // a recursive instance method, which is exactly what the trampoline exists
+    // to avoid.
+    match interp.resolve_dictionary(&use_site, method, &values, call.span)? {
+        | crate::eval::Dispatch::Instance(body) => {
+            let mut values = values;
             let instance =
-                interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
+                interp.prepare_function_call(&body, &mut values, Some(call.callee_span))?;
             if tail {
-                if let Value::Closure(closure) = &function {
+                if let Value::Closure(closure) = &body {
                     if matches!(closure.body, ClosureBody::Ir(_)) {
                         return Ok(Flow::Tail {
                             closure: closure.clone(),
@@ -621,19 +638,12 @@ fn eval_call(
                     }
                 }
             }
-            if instance.is_some() {
-                Ok(Flow::Value(interp.apply_instantiated(
-                    function, values, call.span, instance,
-                )?))
-            } else {
-                Ok(Flow::Value(interp.apply_source_call(
-                    function,
-                    values,
-                    call.span,
-                    call.callee_span,
-                    &call.arg_spans,
-                )?))
-            }
+            Ok(Flow::Value(
+                interp.apply_instantiated(body, values, call.span, instance)?,
+            ))
+        },
+        | crate::eval::Dispatch::Builtin => {
+            Ok(Flow::Value(interp.call_named(method, values, call.span)?))
         },
     }
 }
@@ -772,7 +782,43 @@ fn build_closure(
     }))
 }
 
+/// Evaluates a statement's right-hand side.
+///
+/// The arms on a recursion's path (atoms, arithmetic, calls, blocks) are
+/// here; everything else is in [`eval_rhs_rest`]. One `match` over every form
+/// had a ~47 KB native frame in a debug build — every arm's temporaries get
+/// their own slots — and that frame is paid once per *nested source call*,
+/// so it, not memory, decided how deep a non-tail recursion could go.
 fn eval_rhs(
+    interp: &mut Interp,
+    rhs: &Rhs,
+    frame: &mut Vec<Value>,
+    env: &Rc<IrEnv>,
+    span: Span,
+) -> Result<Value, EvalError> {
+    match rhs {
+        | Rhs::Atom(atom) => eval_atom(interp, atom, frame, env, span),
+        | Rhs::Binary { op, left, right } => {
+            let left = eval_atom(interp, left, frame, env, span)?;
+            let right = eval_atom(interp, right, frame, env, span)?;
+            interp.binary(*op, left, right, span)
+        },
+        | Rhs::Call(call) => {
+            match eval_call(interp, call, frame, env, false)? {
+                | Flow::Value(value) => Ok(value),
+                | Flow::Tail { .. } => unreachable!("a value-position call is not trampolined"),
+            }
+        },
+        | Rhs::Block(block) => {
+            let produced = eval_block(interp, block, frame, env)?;
+            force(interp, produced)
+        },
+        | _ => eval_rhs_rest(interp, rhs, frame, env, span),
+    }
+}
+
+#[inline(never)]
+fn eval_rhs_rest(
     interp: &mut Interp,
     rhs: &Rhs,
     frame: &mut Vec<Value>,
