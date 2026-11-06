@@ -33,6 +33,8 @@ pub struct Binding<'a> {
     pub name: String,
     /// Coverage and explanations, ordered deterministically.
     pub coverage: Coverage,
+    /// Optional typed, key-pinned callback facade; the existing dynamic name remains available.
+    pub typed_callback_name: Option<String>,
 }
 
 /// Build a complete, deterministic catalog directly from the live manifest.
@@ -62,10 +64,107 @@ pub fn catalog(registry: &Registry) -> Vec<Binding<'_>> {
                 overload,
                 name,
                 coverage: classify(registry, op, overload),
+                typed_callback_name: None,
             });
         }
     }
+    // Reserve other generated and implicit names as well as all operator
+    // bindings, so new aliases cannot shadow a unit, constant or capability.
+    used.extend(
+        ["version", "api_version", "manifest_hash"]
+            .into_iter()
+            .map(str::to_owned),
+    );
+    used.extend(
+        registry
+            .capabilities
+            .table()
+            .into_iter()
+            .map(|capability| capability.binding),
+    );
+    for unit in &registry.units {
+        used.insert(crate::codegen::value_name(&unit.name));
+        for alias in &unit.aliases {
+            used.insert(crate::codegen::value_name(alias));
+        }
+    }
+    for constant in &registry.constants {
+        used.insert(crate::codegen::value_name(&constant.symbol));
+        used.insert(crate::codegen::value_name(&constant.name));
+    }
+    // Allocate typed aliases only after all established names, so adding an
+    // exact facade cannot displace an existing dynamic binding.
+    for row in &mut result {
+        if typed_callback_eligible(row) {
+            let base = format!("{}_typed", row.name);
+            let mut name = base.clone();
+            if used.contains(&name) {
+                let key = row
+                    .op
+                    .key(row.overload.expect("typed callback overload"))
+                    .expect("typed callback key");
+                let hash: String = key
+                    .signature_hash
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                name = format!("{base}_{hash}");
+                let mut suffix = 2;
+                while used.contains(&name) {
+                    name = format!("{base}_{hash}_{suffix}");
+                    suffix += 1;
+                }
+            }
+            used.insert(name.clone());
+            row.typed_callback_name = Some(name);
+        }
+    }
     result
+}
+
+fn typed_callback_eligible(row: &Binding<'_>) -> bool {
+    let Coverage::Dynamic(reasons) = &row.coverage else {
+        return false;
+    };
+    if !row.op.higher_order
+        || !row.op.source.is_exact()
+        || row.op.signatures.len() != 1
+        || row.overload != Some(0)
+        || row.op.key(0).is_none()
+    {
+        return false;
+    }
+    let signature = &row.op.signatures[0];
+    let raw = &row.op.raw[0];
+    if !callback_nats_anchored(raw) {
+        return false;
+    }
+    if !raw
+        .params
+        .iter()
+        .all(|ty| callback_raw_source_schema(ty, true))
+        || !callback_raw_source_schema(&raw.ret, false)
+    {
+        return false;
+    }
+    if !callback_source_schema_supported(&signature.ret)
+        || signature.params.iter().any(|ty| {
+            match ty {
+                | crate::registry::SigType::Func(args, ret) => {
+                    !args.iter().all(callback_source_schema_supported)
+                        || !callback_source_schema_supported(ret)
+                },
+                | other => !callback_source_schema_supported(other),
+            }
+        })
+    {
+        return false;
+    }
+    // Only the two callback-specific dynamic reasons are admissible. Any
+    // other reason identifies a fact the source signature cannot prove.
+    reasons.iter().all(|reason| reason == "higher-order calls use the checked value-list callback ABI"
+        || reason == "callbacks use the checked value-list callback ABI; typed generic wrappers require reification"
+        || reason == "tensor extents are not fully concrete in the source facade")
 }
 
 fn classify(
@@ -203,6 +302,149 @@ fn classify(
         Coverage::Dynamic(dynamic.into_iter().collect())
     } else {
         Coverage::Typed
+    }
+}
+
+// Symbolic extents must be declared Nat variables and recoverable from an
+// ordinary input shape before callback construction or result validation.
+fn callback_nats_anchored(signature: &rssn::kernel::signature::Signature) -> bool {
+    fn collect<'a>(
+        ty: &'a TypeExpr,
+        out: &mut BTreeSet<&'a str>,
+    ) {
+        match ty {
+            | TypeExpr::Tensor { shape, elem, .. } => {
+                if let Some(shape) = shape {
+                    for extent in shape {
+                        if let NatExpr::Var(name) = extent {
+                            out.insert(name);
+                        }
+                    }
+                }
+                collect(elem, out);
+            },
+            | TypeExpr::Dim(inner, _) => collect(inner, out),
+            | TypeExpr::Record(fields) => {
+                for (_, value) in fields {
+                    collect(value, out);
+                }
+            },
+            | TypeExpr::Function(args, ret) => {
+                for arg in args {
+                    collect(arg, out);
+                }
+                collect(ret, out);
+            },
+            | _ => {},
+        }
+    }
+    let mut anchored = BTreeSet::new();
+    let mut all = BTreeSet::new();
+    for param in &signature.params {
+        collect(param, &mut all);
+        if !matches!(param, TypeExpr::Function(..)) {
+            collect(param, &mut anchored);
+        }
+    }
+    collect(&signature.ret, &mut all);
+    let declared: BTreeSet<_> = signature
+        .type_params
+        .iter()
+        .filter_map(|param| {
+            (param.kind == rssn::kernel::signature::TypeParamKind::Nat)
+                .then_some(param.name.as_str())
+        })
+        .collect();
+    all.is_subset(&anchored) && all.is_subset(&declared)
+}
+
+// The mirrored type intentionally cannot retain every RSSN expression. Do
+// not emit a typed alias unless its raw contract is fully representable too.
+fn callback_raw_source_schema(
+    ty: &TypeExpr,
+    allow_function: bool,
+) -> bool {
+    fn dimension(dim: &DimExpr) -> bool {
+        match dim {
+            | DimExpr::Dimless | DimExpr::Base(_) | DimExpr::Var(_) => true,
+            | DimExpr::Mul(items) => items.iter().all(dimension),
+            | DimExpr::Inverse(inner) => dimension(inner),
+            | DimExpr::Pow(inner, Exp::Rat(power)) => power.denom != 0 && dimension(inner),
+            | _ => false,
+        }
+    }
+    match ty {
+        | TypeExpr::Int
+        | TypeExpr::Real
+        | TypeExpr::Float
+        | TypeExpr::Complex
+        | TypeExpr::Bool
+        | TypeExpr::String => true,
+        | TypeExpr::Dim(inner, dim) => {
+            matches!(
+                inner.as_ref(),
+                TypeExpr::Int | TypeExpr::Real | TypeExpr::Float | TypeExpr::Complex
+            ) && dimension(dim)
+        },
+        | TypeExpr::Tensor {
+            rank: NatExpr::Lit(rank),
+            shape,
+            elem,
+        } => {
+            usize::try_from(*rank).ok().is_some_and(|rank| {
+                shape.as_ref().is_none_or(|shape| {
+                    shape.len() == rank
+                        && shape.iter().all(|extent| {
+                            matches!(extent, NatExpr::Var(_))
+                                || matches!(extent, NatExpr::Lit(n) if usize::try_from(*n).is_ok())
+                        })
+                })
+            }) && callback_raw_source_schema(elem, false)
+        },
+        | TypeExpr::Record(fields) => {
+            let mut names = BTreeSet::new();
+            fields
+                .iter()
+                .all(|(name, ty)| names.insert(name) && callback_raw_source_schema(ty, false))
+        },
+        | TypeExpr::Function(args, ret) if allow_function => {
+            args.iter()
+                .all(|arg| callback_raw_source_schema(arg, false))
+                && callback_raw_source_schema(ret, false)
+        },
+        | _ => false,
+    }
+}
+
+// Only schemas the callback bridge and from_value can both authenticate,
+// with record field spellings that can be emitted as source declarations.
+fn callback_source_schema_supported(ty: &crate::registry::SigType) -> bool {
+    use crate::registry::SigType as S;
+    match ty {
+        | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
+        | S::Dim(inner, _) => matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex),
+        | S::Tensor {
+            rank: Some(rank),
+            shape,
+            elem,
+        } => {
+            shape.as_ref().is_none_or(|extents| extents.len() == *rank)
+                && callback_source_schema_supported(elem)
+        },
+        | S::Record(fields) => {
+            let mut names = BTreeSet::new();
+            fields.iter().all(|(name, ty)| {
+                let mut chars = name.chars();
+                chars
+                    .next()
+                    .is_some_and(|c| c == '_' || c.is_ascii_lowercase())
+                    && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+                    && !crate::codegen::is_keyword(name)
+                    && names.insert(name)
+                    && callback_source_schema_supported(ty)
+            })
+        },
+        | _ => false,
     }
 }
 
@@ -510,6 +752,84 @@ mod callback_strategy_tests {
             Box::new(record)
         )]));
         assert!(!callback_parameters_supported(&[S::Float]));
+    }
+    #[test]
+    fn typed_callback_source_rejects_erased_raw_promises() {
+        use super::callback_raw_source_schema as supported;
+        use rssn::kernel::signature::DimExpr;
+        use rssn::kernel::signature::NatExpr;
+        use rssn::kernel::signature::TypeExpr as T;
+        assert!(supported(
+            &T::Float.with_dim(DimExpr::Var("D".into())),
+            false
+        ));
+        assert!(!supported(&T::Float.with_dim(DimExpr::Any), false));
+        assert!(supported(
+            &T::Tensor {
+                rank: NatExpr::Lit(1),
+                shape: Some(vec![NatExpr::Var("N".into())]),
+                elem: Box::new(T::Float)
+            },
+            false
+        ));
+        assert!(!supported(
+            &T::Function(vec![T::Float], Box::new(T::Float)),
+            false
+        ));
+    }
+    #[test]
+    fn callback_extent_variables_must_be_declared_and_input_anchored() {
+        use super::callback_nats_anchored;
+        use rssn::kernel::signature::NatExpr;
+        use rssn::kernel::signature::Signature;
+        use rssn::kernel::signature::TypeExpr as T;
+        use rssn::kernel::signature::TypeParam;
+        use rssn::kernel::signature::TypeParamKind;
+        let vector = T::Tensor {
+            rank: NatExpr::Lit(1),
+            shape: Some(vec![NatExpr::Var("N".into())]),
+            elem: Box::new(T::Float),
+        };
+        let callback = T::Function(vec![vector.clone()], Box::new(T::Float));
+        let mut signature = Signature::new(vec![vector, callback.clone()], T::Float);
+        assert!(!callback_nats_anchored(&signature), "undeclared N");
+        signature.type_params.push(TypeParam {
+            name: "N".into(),
+            kind: TypeParamKind::Nat,
+            bounds: vec![],
+        });
+        assert!(callback_nats_anchored(&signature));
+        signature.params = vec![callback];
+        assert!(
+            !callback_nats_anchored(&signature),
+            "callback alone cannot anchor N"
+        );
+    }
+    #[test]
+    fn typed_callback_result_schema_rejects_unprovable_values_and_fields() {
+        use super::callback_source_schema_supported as supported;
+        assert!(supported(&S::Record(vec![
+            (
+                "states".into(),
+                S::Tensor {
+                    rank: Some(2),
+                    shape: None,
+                    elem: Box::new(S::Float)
+                }
+            ),
+            ("iterations".into(), S::Int),
+        ])));
+        assert!(!supported(&S::Symbol));
+        assert!(!supported(&S::Record(vec![
+            ("x".into(), S::Float),
+            ("x".into(), S::Float)
+        ])));
+        assert!(!supported(&S::Record(vec![("match".into(), S::Float)])));
+        assert!(!supported(&S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![1, 2]),
+            elem: Box::new(S::Float)
+        }));
     }
     #[test]
     fn raw_callback_schema_rejects_unknown_and_malformed_promises() {

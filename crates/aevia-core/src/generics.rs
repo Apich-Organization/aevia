@@ -138,33 +138,52 @@ impl FunctionProof {
         Ok(Rc::new(next))
     }
 
-    pub(crate) fn explicit(
+    fn checked_selection(
         &self,
-        arguments: &[Type],
+        projection: &aevia_types::CallableProjection,
+        values: &TypeSubstitution,
     ) -> Result<Rc<Self>, EvalError> {
-        if self.definition.binders.is_empty() {
-            return Ok(Rc::new(self.clone()));
-        }
-        if arguments.len() != self.definition.binders.len() {
-            return Err(EvalError::new(
-                "E0315",
-                format!(
-                    "this function takes {} generic argument(s), found {}",
-                    self.definition.binders.len(),
-                    arguments.len()
-                ),
-            ));
-        }
-        let mut next = self.clone();
-        for (binder, argument) in self.definition.binders.iter().zip(arguments) {
-            if aevia_types::class::has_variables(argument) {
+        if projection.origin != self.definition.identity {
+            if projection.selected {
                 return Err(EvalError::new(
-                    "E0304",
-                    "a function type application needs concrete runtime type arguments",
+                    "E0302",
+                    "generic selection belongs to a different checked callable",
                 ));
             }
-            let variable = self.projection.apply(&binder.as_type());
-            next.infer.unify(&variable,argument).map_err(|error| EvalError::new("E0302",format!("function specialization conflicts with its selected type arguments: {error:?}")))?;
+            // A host may replace a non-selected ordinary binding. Its own
+            // function proof stays authoritative; no foreign phantom choices
+            // are copied merely because its Fn shape is compatible.
+            return Ok(Rc::new(self.clone()));
+        }
+        if projection.arguments.len() != self.definition.binders.len() {
+            if projection.selected {
+                return Err(EvalError::new(
+                    "E0304",
+                    "incomplete checked generic binder projection",
+                ));
+            }
+            return Ok(Rc::new(self.clone()));
+        }
+        let mut next = self.clone();
+        let mut names = TypeSubstitution::default();
+        for (binder, argument) in self.definition.binders.iter().zip(&projection.arguments) {
+            if std::mem::discriminant(binder) != std::mem::discriminant(argument) {
+                return Err(EvalError::new(
+                    "E0302",
+                    "checked generic binder kind does not match the actual declaration",
+                ));
+            }
+            let requested = values.apply(&argument.as_type());
+            let requested = names.freshen(&requested, &mut next.infer);
+            let own = self.projection.apply(&binder.as_type());
+            next.infer.unify(&own, &requested).map_err(|error| {
+                EvalError::new(
+                    "E0302",
+                    format!(
+                        "checked generic selection conflicts with the actual callable: {error}"
+                    ),
+                )
+            })?;
         }
         next.signature = next.infer.resolve(&next.signature);
         Ok(Rc::new(next))
@@ -259,26 +278,42 @@ impl Interp {
         }
     }
 
-    pub(crate) fn resolved_generic_arguments(
+    pub(crate) fn checked_callable_selection(
         &self,
+        proof: &Rc<FunctionProof>,
         span: Span,
-    ) -> Option<Vec<Type>> {
-        let headers = self.context.evidence.generic_refs.get(&span)?;
+        required: bool,
+    ) -> Result<Rc<FunctionProof>, EvalError> {
+        let Some(projection) = self.context.evidence.callable_refs.get(&span) else {
+            return if required {
+                Err(EvalError::new(
+                    "E0304",
+                    "function type application has no checked binder identity",
+                )
+                .at(span))
+            } else {
+                Ok(proof.clone())
+            };
+        };
+        if required && projection.origin != proof.definition.identity {
+            return Err(EvalError::new(
+                "E0302",
+                "function type application belongs to a different checked callable",
+            )
+            .at(span));
+        }
         let values = self.bindings.as_ref().filter(|bindings| {
             bindings.verified
                 && bindings
                     .context
                     .upgrade()
-                    .is_some_and(|owner| Rc::ptr_eq(&owner, &self.context))
+                    .is_some_and(|context| Rc::ptr_eq(&context, &self.context))
         });
-        let args: Vec<_> = headers
-            .iter()
-            .map(|header| {
-                let ty = header.as_type();
-                values.map_or(ty.clone(), |values| values.values.apply(&ty))
-            })
-            .collect();
-        (!args.iter().any(aevia_types::class::has_variables)).then_some(args)
+        let empty = TypeSubstitution::default();
+        proof.checked_selection(
+            projection,
+            values.map_or(&empty, |bindings| &bindings.values),
+        )
     }
 
     /// Authenticate and specialize the actual function, never a claimed host type.
@@ -363,20 +398,15 @@ impl Interp {
             return Ok(None);
         };
         let expected = callee.and_then(|span| self.resolved_expr_type(span));
-        let requested = callee.and_then(|span| self.resolved_generic_arguments(span));
-        // An alias may expose a subset or a different order of the actual
-        // definition's binders. Prefer its requested signature whenever the
-        // ordinal header mapping does not agree with that signature.
-        let ordinal = requested
-            .filter(|args| args.len() == original.definition.binders.len())
-            .and_then(|args| original.explicit(&args).ok());
-        let selected = if let Some(expected @ Type::Fn(..)) = &expected {
-            ordinal
-                .as_ref()
-                .and_then(|proof| proof.specialize(expected).ok())
-                .map_or_else(|| original.specialize(expected), Ok)?
+        let selected = if let Some(span) = callee {
+            self.checked_callable_selection(original, span, false)?
         } else {
-            ordinal.unwrap_or_else(|| original.clone())
+            original.clone()
+        };
+        let selected = if let Some(expected @ Type::Fn(..)) = &expected {
+            selected.specialize(expected)?
+        } else {
+            selected
         };
         let mut selected = (*selected).clone();
         let Type::Fn(params, _) = selected.signature.clone() else {
@@ -542,11 +572,14 @@ impl Interp {
         let Some(original) = &closure.proof else {
             return value;
         };
-        if original.signature == expected {
-            return value;
-        }
-        let Ok(proof) = original.specialize(&expected) else {
-            return value;
+        let selected = self.checked_callable_selection(original, span, false);
+        let proof = match selected.and_then(|proof| proof.specialize(&expected)) {
+            | Ok(proof) => proof,
+            | Err(error) => {
+                return Value::Native(Rc::new(crate::value::NativeFn(Box::new(move |_, _, _| {
+                    Err(error.clone())
+                }))));
+            },
         };
         Value::Closure(specialize_closure(closure, proof))
     }

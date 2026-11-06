@@ -36,14 +36,44 @@ fn catalog_covers_every_overload_and_unsigned_operator_once() {
             },
         }
     }
+    let mut typed_callbacks = 0;
+    for row in &rows {
+        if let Some(name) = &row.typed_callback_name {
+            typed_callbacks += 1;
+            assert!(names.insert(name), "typed alias collides: {name}");
+            assert!(row.op.higher_order && row.op.source.is_exact());
+            assert_eq!(row.op.signatures.len(), 1);
+            assert!(row.overload.and_then(|index| row.op.key(index)).is_some());
+        }
+    }
+    assert!(
+        typed_callbacks > 0,
+        "live callback contracts need typed aliases"
+    );
     let again = catalog(registry);
     assert_eq!(
         rows.iter()
-            .map(|r| (&r.op.name, r.overload, &r.name, &r.coverage))
+            .map(|r| {
+                (
+                    &r.op.name,
+                    r.overload,
+                    &r.name,
+                    &r.coverage,
+                    &r.typed_callback_name,
+                )
+            })
             .collect::<Vec<_>>(),
         again
             .iter()
-            .map(|r| (&r.op.name, r.overload, &r.name, &r.coverage))
+            .map(|r| {
+                (
+                    &r.op.name,
+                    r.overload,
+                    &r.name,
+                    &r.coverage,
+                    &r.typed_callback_name,
+                )
+            })
             .collect::<Vec<_>>()
     );
 }

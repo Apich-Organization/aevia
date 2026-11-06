@@ -476,6 +476,25 @@ fn lsp_serves_the_protocol_over_stdio() {
 }
 
 #[test]
+fn rssn_audit_reports_typed_callback_aliases() {
+    let scratch = Scratch::new("rssn-callback-audit");
+    let output = aevia(scratch.path(), &["rssn", "--audit"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("typed callback aliases:"), "{text}");
+    let rows = aevia_rssn::bindings::catalog(aevia_rssn::registry());
+    let alias = rows
+        .iter()
+        .find(|row| row.op.name == "num_brent")
+        .and_then(|row| row.typed_callback_name.as_deref())
+        .expect("typed Brent callback alias");
+    assert!(
+        text.contains(&format!("typed callback alias: {alias}")),
+        "{text}"
+    );
+}
+
+#[test]
 fn rssn_emit_writes_the_generated_module_into_out() {
     let scratch = Scratch::new("rssn-emit");
     let output = aevia(scratch.path(), &["rssn", "--emit", "--out", "gen"]);

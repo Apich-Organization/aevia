@@ -223,7 +223,7 @@ impl Builder<'_> {
                 Some(outputs)
             },
             | Tail::Call(call)
-                if matches!(call.kind, CallKind::Normal)
+                if matches!(call.kind, CallKind::Normal | CallKind::Typed { .. })
                     && matches!(&call.callee, Atom::Global(callee) if callee == name)
                     && call.args.len() == arity =>
             {
@@ -1024,13 +1024,95 @@ mod tests {
     }
 
     #[test]
-    fn explicitly_specialized_tail_calls_stay_on_the_interpreter_trampoline() {
+    fn explicitly_specialized_tail_calls_require_the_runtime_proof_guard() {
         let function = function(
             "@jit\nfn f<r: Rep>(n: Float, x: r): r = if n <= 0.0 then x else f<r>(n - 1.0, x)\n",
         );
         assert!(
-            compile(&function, &[], &[Kind::Float, Kind::Float], Kind::Float).is_none(),
-            "typed self calls need full selected-binder proof"
+            compile(&function, &[], &[Kind::Float, Kind::Float], Kind::Float).is_some(),
+            "a selected self callee can be lowered without becoming a numeric operand: {function:#?}"
         );
+        assert!(
+            run(
+                &function,
+                &[Value::float(3.0), Value::float(2.0)],
+                10,
+                &[],
+                Kind::Float,
+                |_| false
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn explicit_generic_self_tail_executes_only_with_the_same_selected_proof() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let compilation = compile_source(
+            "typed-tail.aev",
+            "@jit\nfn sum<r: Rep>(n: Float, acc: r): r = if n <= 0.0 then acc else sum<r>(n - 1.0, acc + 1)\nlet result = sum<Float>(10.0, 0.0)\n",
+        );
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        assert_eq!(interp.eval_toplevel("result").unwrap().as_f64(), Some(10.0));
+        assert!(NATIVE_LOOPS.with(|count| count.get()) > 0);
+    }
+
+    #[test]
+    fn explicit_tail_cannot_change_a_phantom_binding_inside_native_code() {
+        CACHE.with(|cache| cache.borrow_mut().clear());
+        NATIVE_LOOPS.with(|count| count.set(0));
+        let source = "@jit\nfn f<a>(n: Float): Float = if n <= 0.0 then n else f<a>(n - 1.0)\nlet selected = f<Int>\nlet other = f<Bool>\n";
+        let compilation = compile_source("phantom-tail.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let selection_span = |text: &str| {
+            *compilation
+                .checked
+                .callable_refs
+                .keys()
+                .find(|span| source.get(span.start as usize..span.end as usize) == Some(text))
+                .expect("checked callable selection")
+        };
+        let same = selection_span("f<Int>");
+        let changed = selection_span("f<Bool>");
+        let mut interp = crate::Interp::new(&compilation.checked).with_mode(crate::Mode::Ir);
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
+        let selected = interp.eval_toplevel("selected").unwrap();
+        let target = interp.eval_toplevel("f").unwrap();
+        let Value::Closure(current) = &selected else {
+            panic!("selected closure")
+        };
+        let mut args = vec![Value::float(3.0)];
+        let proof = interp
+            .prepare_function_call(&selected, &mut args, None)
+            .unwrap()
+            .unwrap();
+        assert!(interp.self_specialization_matches(current, Some(&proof), &target, same, &args));
+        assert!(
+            !interp.self_specialization_matches(current, Some(&proof), &target, changed, &args),
+            "equal Float signatures cannot authenticate a different phantom selection"
+        );
+        let crate::value::ClosureBody::Ir(function) = &current.body else {
+            panic!("IR closure")
+        };
+        assert!(
+            run(function, &args, 10, &[], Kind::Float, |_| {
+                interp.self_specialization_matches(current, Some(&proof), &target, changed, &args)
+            })
+            .is_none()
+        );
+        assert_eq!(NATIVE_LOOPS.with(|count| count.get()), 0);
     }
 }

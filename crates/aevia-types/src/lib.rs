@@ -31,7 +31,10 @@
 
 pub mod adt;
 pub mod builtins;
+pub mod callable;
 pub mod check;
+pub use callable::CallableId;
+pub use callable::CallableProjection;
 pub mod class;
 mod declaration_schema;
 pub mod diagnostic_bridge;

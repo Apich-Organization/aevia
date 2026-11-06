@@ -1046,9 +1046,14 @@ fn rssn_command(args: &[String]) -> ExitCode {
             .filter(|row| matches!(row.coverage, Coverage::Dynamic(_)))
             .count();
         let unavailable = catalog.len() - typed - dynamic;
+        let callback_aliases = catalog
+            .iter()
+            .filter(|row| row.typed_callback_name.is_some())
+            .count();
         println!(
             "bindings: {typed} exact typed, {dynamic} dynamic/approximate, {unavailable} unavailable"
         );
+        println!("typed callback aliases: {callback_aliases} (also counted in dynamic bindings)");
         for row in &catalog {
             let (status, reasons): (&str, &[String]) = match &row.coverage {
                 | Coverage::Typed => ("typed", &[]),
@@ -1056,7 +1061,7 @@ fn rssn_command(args: &[String]) -> ExitCode {
                 | Coverage::Unavailable(reasons) => ("unavailable", reasons),
             };
             println!(
-                "{}:{}[{}] -> {}: {}{}",
+                "{}:{}[{}] -> {}: {}{}{}",
                 row.op.rule_set,
                 row.op.name,
                 row.overload
@@ -1067,7 +1072,12 @@ fn rssn_command(args: &[String]) -> ExitCode {
                     String::new()
                 } else {
                     format!(" — {}", reasons.join("; "))
-                }
+                },
+                row.typed_callback_name
+                    .as_ref()
+                    .map_or_else(String::new, |name| {
+                        format!("; typed callback alias: {name}")
+                    })
             );
         }
     }

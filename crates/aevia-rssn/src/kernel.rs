@@ -220,6 +220,226 @@ fn callback_schema_proves(
     }
 }
 
+// Input signatures may contain dimension variables. A witness proves the
+// actual concrete dimension; RSSN's pinned signature check then enforces all
+// declared relationships between inputs and callback signatures.
+fn callback_input_dimension(
+    sig: &crate::SigType,
+    witness: &crate::witness::DimensionWitness,
+) -> bool {
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    match (sig, witness) {
+        | (S::Dim(_, expected), W::Scalar(actual)) => {
+            actual.is_concrete() && (!expected.is_concrete() || expected == actual)
+        },
+        | (S::Int | S::Real | S::Float | S::Complex, W::Scalar(actual)) => actual.is_one(),
+        | _ => false,
+    }
+}
+fn callback_input_schema_proves(
+    expected: &crate::SigType,
+    actual: &crate::SigType,
+    witness: &crate::witness::DimensionWitness,
+) -> bool {
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    match (expected, actual) {
+        | (S::Dim(inner, _), actual) => {
+            callback_input_dimension(expected, witness)
+                && callback_input_schema_proves(inner, actual, &W::Scalar(aevia_dim::Dim::one()))
+        },
+        | (S::Int, S::Int)
+        | (S::Real, S::Int | S::Real)
+        | (S::Float, S::Float)
+        | (S::Complex, S::Complex) => callback_input_dimension(expected, witness),
+        | (S::Bool, S::Bool) | (S::Str, S::Str) => true,
+        | (
+            S::Tensor {
+                rank: Some(er),
+                shape: es,
+                elem: ee,
+            },
+            S::Tensor {
+                rank: Some(ar),
+                shape: actual_shape,
+                elem: ae,
+            },
+        ) => {
+            let W::Tensor {
+                element: Some(element),
+                element_repr: Some(repr),
+                ..
+            } = witness
+            else {
+                return false;
+            };
+            er == ar
+                && actual_shape.as_ref().is_none_or(|shape| shape.len() == *ar)
+                && es
+                    .as_ref()
+                    .is_none_or(|shape| actual_shape.as_ref() == Some(shape))
+                && ae.as_ref() == repr
+                && callback_input_schema_proves(ee, ae, element)
+        },
+        | (S::Record(expected), S::Record(actual)) => {
+            let W::Record(witnesses) = witness else {
+                return false;
+            };
+            expected.len() == actual.len()
+                && expected.len() == witnesses.len()
+                && expected.iter().enumerate().all(|(index, (name, field))| {
+                    if expected[..index].iter().any(|(other, _)| other == name) {
+                        return false;
+                    }
+                    let mut fields = actual.iter().filter(|(n, _)| n == name);
+                    let mut proofs = witnesses.iter().filter(|(n, _)| n == name);
+                    match (fields.next(), fields.next(), proofs.next(), proofs.next()) {
+                        | (Some((_, repr)), None, Some((_, proof)), None) => {
+                            callback_input_schema_proves(field, repr, proof)
+                        },
+                        | _ => false,
+                    }
+                })
+        },
+        | _ => false,
+    }
+}
+fn validate_callback_input(
+    value: &Val,
+    witness: &crate::witness::DimensionWitness,
+    sig: &crate::SigType,
+) -> Result<(), KernelError> {
+    use crate::SigType as S;
+    use crate::witness::DimensionWitness as W;
+    let missing = || {
+        KernelError::new(
+            "E1001",
+            "callback input lacks matching type or dimension evidence",
+        )
+    };
+    let scalar_representation = |value: &Val, sig: &S| {
+        let sig = if let S::Dim(inner, _) = sig {
+            inner.as_ref()
+        } else {
+            sig
+        };
+        matches!(
+            (value, sig),
+            (Val::Num(Num::Int(_)), S::Int | S::Real)
+                | (Val::Num(Num::Rat(_)), S::Real)
+                | (Val::Num(Num::Float(_)), S::Float)
+                | (Val::Complex { .. }, S::Complex)
+        )
+    };
+    match (value, sig) {
+        | (Val::Bool(_), S::Bool) | (Val::Str(_), S::Str) => Ok(()),
+        | (
+            Val::Num(_) | Val::Complex { .. },
+            S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _),
+        ) if scalar_representation(value, sig) && callback_input_dimension(sig, witness) => Ok(()),
+        | (Val::Quantity { value, unit }, S::Dim(inner, _))
+            if matches!(witness, W::Scalar(dim) if dim == &unit.dim)
+                && callback_input_dimension(sig, witness) =>
+        {
+            validate_callback_input(value, &W::Scalar(aevia_dim::Dim::one()), inner)
+        },
+        | (
+            Val::Tensor { shape, data },
+            S::Tensor {
+                rank: Some(rank),
+                shape: expected_shape,
+                elem,
+            },
+        ) => {
+            let W::Tensor {
+                dimension,
+                element,
+                element_repr,
+                elements,
+            } = witness
+            else {
+                return Err(missing());
+            };
+            if shape.len() != *rank
+                || expected_shape
+                    .as_ref()
+                    .is_some_and(|expected| expected != shape)
+                || shape
+                    .iter()
+                    .try_fold(1usize, |n, extent| n.checked_mul(*extent))
+                    != Some(data.len())
+            {
+                return Err(missing());
+            }
+            if data.is_empty() {
+                let actual = element_repr.as_ref().ok_or_else(missing)?;
+                let fallback = dimension
+                    .as_ref()
+                    .map_or(W::Unknown, |dim| W::Scalar(dim.clone()));
+                let proof = element.as_deref().unwrap_or(&fallback);
+                if callback_input_schema_proves(elem, actual, proof) {
+                    return Ok(());
+                }
+                return Err(missing());
+            }
+            if matches!(
+                elem.as_ref(),
+                S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _)
+            ) {
+                let dim = dimension.as_ref().ok_or_else(missing)?;
+                let proof = W::Scalar(dim.clone());
+                if !callback_input_dimension(elem, &proof) {
+                    return Err(missing());
+                }
+                if !elements.is_empty()
+                    && (elements.len() != data.len() || elements.iter().any(|item| item != &proof))
+                {
+                    return Err(missing());
+                }
+                for item in data {
+                    validate_callback_input(item, &proof, elem)?;
+                }
+            } else {
+                if !elements.is_empty() && elements.len() != data.len() {
+                    return Err(missing());
+                }
+                for (index, item) in data.iter().enumerate() {
+                    let proof = elements
+                        .get(index)
+                        .or(element.as_deref())
+                        .unwrap_or(&W::Unknown);
+                    validate_callback_input(item, proof, elem)?;
+                }
+            }
+            Ok(())
+        },
+        | (Val::Record(fields), S::Record(schema)) => {
+            let W::Record(witnesses) = witness else {
+                return Err(missing());
+            };
+            if fields.len() != schema.len() || witnesses.len() != schema.len() {
+                return Err(missing());
+            }
+            for (index, (name, field)) in schema.iter().enumerate() {
+                if schema[..index].iter().any(|(other, _)| other == name) {
+                    return Err(missing());
+                }
+                let mut values = fields.iter().filter(|(n, _)| n == name);
+                let mut proofs = witnesses.iter().filter(|(n, _)| n == name);
+                match (values.next(), values.next(), proofs.next(), proofs.next()) {
+                    | (Some((_, value)), None, Some((_, proof)), None) => {
+                        validate_callback_input(value, proof, field)?
+                    },
+                    | _ => return Err(missing()),
+                }
+            }
+            Ok(())
+        },
+        | _ => Err(missing()),
+    }
+}
+
 fn validate_callback_result(
     value: &Val,
     witness: &crate::witness::DimensionWitness,
@@ -833,6 +1053,31 @@ impl Kernel {
         witnesses: &[crate::witness::DimensionWitness],
         callbacks: &[Arc<dyn BridgeCallback>],
     ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(name, None, args, witnesses, callbacks)
+    }
+
+    /// Calls exactly the manifest-pinned higher-order overload with scoped callbacks.
+    ///
+    /// # Errors
+    /// Returns a stale-key, witness, callback, or kernel execution error.
+    pub fn call_ho_scoped_key(
+        &self,
+        key: &OpKey,
+        args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
+        self.call_ho_scoped_inner(&key.name, Some(key), args, witnesses, callbacks)
+    }
+
+    fn call_ho_scoped_inner(
+        &self,
+        name: &str,
+        key: Option<&OpKey>,
+        args: &[Val],
+        witnesses: &[crate::witness::DimensionWitness],
+        callbacks: &[Arc<dyn BridgeCallback>],
+    ) -> Result<(Val, crate::witness::DimensionWitness), KernelError> {
         if args.len() != witnesses.len() {
             return Err(KernelError::new(
                 "E0899",
@@ -847,7 +1092,22 @@ impl Kernel {
         if !entry.higher_order || !entry.source.is_exact() || entry.signatures.len() != 1 {
             return Err(KernelError::capability("core.callback.signature"));
         }
+        if let Some(key) = key {
+            if entry.key_index(key) != Some(0) {
+                return Err(KernelError::new(
+                    "E1005",
+                    "kernel callback overload key is not registered",
+                ));
+            }
+        }
         let signature = &entry.signatures[0];
+        for (index, (value, witness)) in args.iter().zip(witnesses).enumerate() {
+            let param = signature
+                .params
+                .get(index)
+                .ok_or_else(|| KernelError::new("E1003", "too many callback operator arguments"))?;
+            validate_callback_input(value, witness, param)?;
+        }
         let mut converted = self.convert(name, args)?;
         for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
             let param = signature
@@ -889,10 +1149,12 @@ impl Kernel {
                     .map_err(|e| from_op_error(&e))?,
             );
         }
-        let raw = self
-            .session
-            .call_ho(name, &converted, &handles, &ctx)
-            .map_err(|e| from_op_error(&e).at_operator(name))?;
+        let raw = if let Some(key) = key {
+            rssn::kernel::call::Kernel::call_ho(&self.session, key, &converted, &handles, &ctx)
+        } else {
+            self.session.call_ho(name, &converted, &handles, &ctx)
+        }
+        .map_err(|e| from_op_error(&e).at_operator(name))?;
         let witness = crate::witness::extract(&raw, true);
         Ok((Val::from_rssn(&raw, self.id)?, witness))
     }
@@ -1446,6 +1708,90 @@ mod recursive_callback_witness_tests {
         ) -> Result<(Val, W), KernelError> {
             Ok((self.value.clone(), self.witness.clone()))
         }
+    }
+    #[test]
+    fn callback_input_evidence_is_recursive_and_allows_nonnumeric_unknowns() {
+        assert!(validate_callback_input(&Val::Bool(true), &W::Unknown, &S::Bool).is_ok());
+        assert!(validate_callback_input(&Val::Str("ok".into()), &W::Unknown, &S::Str).is_ok());
+        let length = aevia_dim::Dim::base("Length");
+        let schema = S::Record(vec![
+            ("flag".into(), S::Bool),
+            (
+                "nested".into(),
+                S::Record(vec![(
+                    "x".into(),
+                    S::Dim(Box::new(S::Float), length.clone()),
+                )]),
+            ),
+        ]);
+        let value = Val::Record(vec![
+            ("flag".into(), Val::Bool(true)),
+            (
+                "nested".into(),
+                Val::Record(vec![("x".into(), Val::Num(Num::Float(1.0)))]),
+            ),
+        ]);
+        let missing = W::Record(vec![
+            ("flag".into(), W::Unknown),
+            ("nested".into(), W::Record(vec![("x".into(), W::Unknown)])),
+        ]);
+        assert!(validate_callback_input(&value, &missing, &schema).is_err());
+        let proven = W::Record(vec![
+            ("flag".into(), W::Unknown),
+            (
+                "nested".into(),
+                W::Record(vec![("x".into(), W::Scalar(length))]),
+            ),
+        ]);
+        assert!(validate_callback_input(&value, &proven, &schema).is_ok());
+        let duplicate = W::Record(vec![
+            ("flag".into(), W::Unknown),
+            ("flag".into(), W::Unknown),
+        ]);
+        assert!(validate_callback_input(&value, &duplicate, &schema).is_err());
+    }
+    #[test]
+    fn callback_empty_tensor_needs_actual_recursive_schema() {
+        let element = S::Record(vec![("x".into(), S::Float), ("ok".into(), S::Bool)]);
+        let sig = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![0]),
+            elem: Box::new(element.clone()),
+        };
+        let value = Val::Tensor {
+            shape: vec![0],
+            data: vec![],
+        };
+        let unknown = W::Tensor {
+            dimension: None,
+            element: None,
+            element_repr: None,
+            elements: vec![],
+        };
+        assert!(validate_callback_input(&value, &unknown, &sig).is_err());
+        let proven = W::Tensor {
+            dimension: None,
+            element: Some(Box::new(W::Record(vec![
+                ("x".into(), W::Scalar(aevia_dim::Dim::one())),
+                ("ok".into(), W::Unknown),
+            ]))),
+            element_repr: Some(element),
+            elements: vec![],
+        };
+        assert!(validate_callback_input(&value, &proven, &sig).is_ok());
+        let wrong = W::Tensor {
+            dimension: None,
+            element: Some(Box::new(W::Record(vec![
+                ("x".into(), W::Unknown),
+                ("ok".into(), W::Unknown),
+            ]))),
+            element_repr: Some(S::Record(vec![
+                ("x".into(), S::Float),
+                ("ok".into(), S::Bool),
+            ])),
+            elements: vec![],
+        };
+        assert!(validate_callback_input(&value, &wrong, &sig).is_err());
     }
     #[test]
     fn nested_record_and_tensor_results_preserve_independent_witnesses() {

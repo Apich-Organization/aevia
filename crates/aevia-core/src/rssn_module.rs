@@ -85,6 +85,13 @@ pub fn call(
         | "call" | "dynamic" => dynamic_call(&args, span),
         | "typed" => typed_call(&args, span),
         | "call_ho" => call_ho(&args, span),
+        | "call_ho_key" => {
+            Err(EvalError::new(
+                "E1001",
+                "core.callback requires an interpreter-owned callback scope",
+            )
+            .at(span))
+        },
         | "register" | "register_plugin" => register(&args, span),
         | "call_key" => call_key(&args, span),
         | "invoke" => invoke(&args, span, None),
@@ -292,6 +299,7 @@ pub fn is_entry_point(name: &str) -> bool {
             | "dynamic"
             | "typed"
             | "call_ho"
+            | "call_ho_key"
             | "register"
             | "register_plugin"
             | "call_key"
@@ -1254,12 +1262,16 @@ fn call_ho_with_interp(
     interp: &mut crate::eval::Interp,
     args: &[Value],
     span: Span,
+    pinned: bool,
 ) -> Result<Value, EvalError> {
-    if args.len() != 3 {
-        return Err(EvalError::new("E0315", "Rssn.call_ho takes three arguments").at(span));
+    let expected = if pinned { 4 } else { 3 };
+    if args.len() != expected {
+        return Err(
+            EvalError::new("E0315", format!("callback call takes {expected} arguments")).at(span),
+        );
     }
-    let callbacks = dynamic_arguments(args.get(2), span)?;
-    if callbacks.is_empty() {
+    let callbacks = dynamic_arguments(args.get(expected - 1), span)?;
+    if callbacks.is_empty() && !pinned {
         return call_ho(args, span);
     }
     let callbacks: Vec<_> = callbacks
@@ -1278,7 +1290,22 @@ fn call_ho_with_interp(
         })
         .collect::<Result<_, _>>()?;
     let name = show(&args[0]);
-    let values = dynamic_arguments(args.get(1), span)?;
+    let key = if pinned {
+        let hash = show(&args[1]);
+        let Some(key) = registry()
+            .op(&name)
+            .and_then(|entry| pinned_key(entry, &hash))
+        else {
+            return Ok(err(value_error(
+                "E1005",
+                format!("no overload of `{name}` has signature {hash}"),
+            )));
+        };
+        Some(key)
+    } else {
+        None
+    };
+    let values = dynamic_arguments(args.get(if pinned { 2 } else { 1 }), span)?;
     let mut converted = Vec::with_capacity(values.len());
     for value in &values {
         match bridge::to_val(value) {
@@ -1287,17 +1314,12 @@ fn call_ho_with_interp(
         }
     }
     let witnesses: Vec<_> = values.iter().map(host_dimension_witness).collect();
-    if witnesses
-        .iter()
-        .any(|w| matches!(w, aevia_rssn::witness::DimensionWitness::Unknown))
-    {
-        return Ok(err(value_error(
-            "E1001",
-            "callback input lacks dimension evidence",
-        )));
-    }
     let result = crate::callback::with_scoped(interp, callbacks, |handles| {
-        aevia_rssn::kernel().call_ho_scoped(&name, &converted, &witnesses, handles)
+        if let Some(key) = &key {
+            aevia_rssn::kernel().call_ho_scoped_key(key, &converted, &witnesses, handles)
+        } else {
+            aevia_rssn::kernel().call_ho_scoped(&name, &converted, &witnesses, handles)
+        }
     })
     .and_then(|result| result);
     Ok(match result {
@@ -1653,8 +1675,8 @@ pub fn member(name: &str) -> Value {
         if owned == "invoke" {
             let expected = interp.resolved_expr_type(span);
             invoke(&args, span, expected.as_ref())
-        } else if owned == "call_ho" {
-            call_ho_with_interp(interp, &args, span)
+        } else if owned == "call_ho" || owned == "call_ho_key" {
+            call_ho_with_interp(interp, &args, span, owned == "call_ho_key")
         } else {
             call(&owned, args, span)
         }

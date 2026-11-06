@@ -44,6 +44,38 @@ fn every_manifest_binding_is_in_the_right_namespace_with_the_right_target() {
             .collect();
         assert_eq!(declarations.len(), 1, "{}: binding {}", path, row.name);
         let line = declarations[0];
+        if let Some(typed) = &row.typed_callback_name {
+            let key = row
+                .op
+                .key(row.overload.unwrap())
+                .expect("typed callback key");
+            let hash: String = key
+                .signature_hash
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            let marker = format!("fn {typed}");
+            let typed_line = source
+                .lines()
+                .find(|line| {
+                    line.strip_prefix(&marker)
+                        .is_some_and(|tail| tail.starts_with('(') || tail.starts_with('<'))
+                })
+                .expect("missing typed callback declaration");
+            let rest = source.split_once(typed_line).unwrap().1;
+            let body = rest.lines().take(4).collect::<Vec<_>>().join("\n");
+            assert!(
+                body.contains(&format!(
+                    "Rssn.call_ho_key(\"{}\", \"{}\"",
+                    row.op.name, hash
+                )),
+                "{path}: wrong callback key: {body}"
+            );
+            assert!(
+                body.contains("from_value<"),
+                "{path}: missing checked result conversion"
+            );
+        }
         match row.coverage {
             | Coverage::Typed => {
                 let key = row

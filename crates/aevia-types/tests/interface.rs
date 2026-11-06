@@ -265,6 +265,7 @@ fn an_imported_instance_overlaps_with_e0311_naming_both_modules() {
         }],
         aliases: IndexMap::new(),
         function_headers: Default::default(),
+        callable_exports: Default::default(),
     };
     let lexed = lex(0, "").expect("lexes");
     let (parsed_module, diagnostics) = parse_module(0, "", &lexed);

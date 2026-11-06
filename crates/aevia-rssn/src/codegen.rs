@@ -513,6 +513,9 @@ fn declaration(
                     escape(&op.name)
                 );
             }
+            if let Some(typed_name) = &rows[index].typed_callback_name {
+                callback_declaration(&mut out, op, signature, index, typed_name);
+            }
             continue;
         }
         // A declaration pins its `OpKey`; an overload the manifest gives no
@@ -585,6 +588,169 @@ fn declaration(
         );
     }
     out
+}
+
+/// Typed callback aliases retain the dynamic entry point and pin their exact
+/// manifest overload. The checker reifies each actual callback at the source
+/// call, and `from_value` validates the instantiated declared result.
+fn callback_declaration(
+    out: &mut String,
+    op: &OpEntry,
+    signature: &crate::registry::Sig,
+    index: usize,
+    name: &str,
+) {
+    use crate::registry::SigType;
+    let key = op.key(index).expect("typed callback requires pinned key");
+    let mut dims = DimNames::default();
+    let mut nats = CallbackNatNames::default();
+    let raw = &op.raw[index];
+    let params: Vec<_> = signature
+        .params
+        .iter()
+        .zip(&raw.params)
+        .enumerate()
+        .map(|(i, (ty, raw))| {
+            format!(
+                "a{i}: {}",
+                render_callback_type(&mut dims, &mut nats, ty, raw)
+            )
+        })
+        .collect();
+    let ret = render_callback_type(&mut dims, &mut nats, &signature.ret, &raw.ret);
+    let mut names: Vec<_> = dims.names.values().cloned().collect();
+    names.sort();
+    names.extend(nats.names.values().map(|name| format!("{name}: Nat")));
+    let generics = if names.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", names.join(", "))
+    };
+    let mut values = Vec::new();
+    let mut callbacks = Vec::new();
+    for (i, ty) in signature.params.iter().enumerate() {
+        if matches!(ty, SigType::Func(..)) {
+            callbacks.push(format!("to_callback(a{i})"));
+        } else {
+            values.push(format!("to_value(a{i})"));
+        }
+    }
+    let _ = writeln!(
+        out,
+        "## Exact callback facade pinned to its manifest overload."
+    );
+    let _ = writeln!(
+        out,
+        "fn {name}{generics}({}): Result<{ret}, OpError> =",
+        params.join(", ")
+    );
+    let _ = writeln!(
+        out,
+        "    match Rssn.call_ho_key(\"{}\", \"{}\", [{}], [{}]) with",
+        escape(&op.name),
+        hex(&key.signature_hash),
+        values.join(", "),
+        callbacks.join(", ")
+    );
+    let _ = writeln!(out, "    | Ok(value) -> from_value<{ret}>(value)");
+    let _ = writeln!(out, "    | Err(error) -> Err(error)");
+}
+
+#[derive(Default)]
+struct CallbackNatNames {
+    names: std::collections::BTreeMap<String, String>,
+    next: usize,
+}
+impl CallbackNatNames {
+    fn name(
+        &mut self,
+        original: &str,
+    ) -> String {
+        if let Some(name) = self.names.get(original) {
+            return name.clone();
+        }
+        self.next += 1;
+        let name = if self.next == 1 {
+            "n".to_owned()
+        } else {
+            format!("n{}", self.next)
+        };
+        self.names.insert(original.to_owned(), name.clone());
+        name
+    }
+}
+
+// Nat variables are rendered from the raw manifest because the general
+// SigType mirror intentionally only retains fully concrete tensor shapes.
+// Eligibility has already proved every symbolic extent is an input-anchored
+// declared Nat and rejected all other expression forms.
+fn render_callback_type(
+    dims: &mut DimNames,
+    nats: &mut CallbackNatNames,
+    ty: &SigType,
+    raw: &rssn::kernel::signature::TypeExpr,
+) -> String {
+    use rssn::kernel::signature::NatExpr;
+    use rssn::kernel::signature::TypeExpr;
+    match (ty, raw) {
+        | (
+            SigType::Tensor {
+                rank: Some(rank),
+                elem,
+                ..
+            },
+            TypeExpr::Tensor {
+                shape,
+                elem: raw_elem,
+                ..
+            },
+        ) => {
+            let element = render_callback_type(dims, nats, elem, raw_elem);
+            match shape {
+                | Some(extents) => {
+                    let extents: Vec<_> = extents
+                        .iter()
+                        .map(|extent| {
+                            match extent {
+                                | NatExpr::Lit(value) => value.to_string(),
+                                | NatExpr::Var(name) => nats.name(name),
+                                | _ => unreachable!("typed callback extent eligibility"),
+                            }
+                        })
+                        .collect();
+                    format!("Tensor<[{}], {element}>", extents.join(", "))
+                },
+                | None => format!("Tensor<{rank}, {element}>"),
+            }
+        },
+        | (SigType::Record(fields), TypeExpr::Record(raw_fields)) => {
+            let fields: Vec<_> = fields
+                .iter()
+                .map(|(name, field)| {
+                    let raw = &raw_fields
+                        .iter()
+                        .find(|(other, _)| other == name)
+                        .expect("mirror record field")
+                        .1;
+                    format!("{name}: {}", render_callback_type(dims, nats, field, raw))
+                })
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        },
+        | (SigType::Func(args, result), TypeExpr::Function(raw_args, raw_result)) => {
+            let args: Vec<_> = args
+                .iter()
+                .zip(raw_args)
+                .map(|(arg, raw)| render_callback_type(dims, nats, arg, raw))
+                .collect();
+            format!(
+                "({}) -> {}",
+                args.join(", "),
+                render_callback_type(dims, nats, result, raw_result)
+            )
+        },
+        | _ => render_with(dims, ty),
+    }
 }
 
 fn stability(value: rssn::kernel::signature::Stability) -> &'static str {
@@ -808,7 +974,7 @@ const KEYWORDS: [&str; 40] = [
     "proof",
 ];
 
-fn is_keyword(name: &str) -> bool {
+pub(crate) fn is_keyword(name: &str) -> bool {
     KEYWORDS.contains(&name)
 }
 
@@ -816,7 +982,7 @@ fn is_keyword(name: &str) -> bool {
 ///
 /// A capitalised name is a constructor pattern, not a binding, so a constant
 /// or a nullary operator is spelled with a lowercase first letter.
-fn value_name(name: &str) -> String {
+pub(crate) fn value_name(name: &str) -> String {
     let sanitised = sanitise(name);
     let mut chars = sanitised.chars();
     match chars.next() {

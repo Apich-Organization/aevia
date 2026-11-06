@@ -11,6 +11,8 @@
 //! it records which names are values, constructors, types or units, and their
 //! types after defaulting.
 
+use crate::CallableId;
+use crate::CallableProjection;
 use crate::adt::Adt;
 use crate::adt::Ctor;
 use crate::adt::{
@@ -191,7 +193,7 @@ pub struct ClassMethodRef {
 }
 
 /// One explicitly ordered generic binder on a source function.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GenericBinder {
     Type(Type),
     Representation(Rep),
@@ -243,6 +245,8 @@ impl GenericBinder {
 /// The checked signature that belongs to the actual source function body.
 #[derive(Clone, Debug)]
 pub struct FunctionEvidence {
+    /// Stable declaration syntax plus its resolved creation contract.
+    pub identity: CallableId,
     pub scheme: Scheme,
     pub binders: Vec<GenericBinder>,
     pub reifications: Vec<Type>,
@@ -448,6 +452,8 @@ pub struct ModuleInterface {
     pub aliases: IndexMap<String, AliasExport>,
     /// Ordered function binders, in the corresponding exported scheme's universe.
     pub function_headers: IndexMap<String, Vec<GenericBinder>>,
+    /// Exact source origins and binder projections for visible callable names.
+    pub callable_exports: IndexMap<String, CallableProjection>,
 }
 
 /// The interface of a checked module.
@@ -533,7 +539,11 @@ pub struct CheckedModule {
     /// Function signatures by declaration/lambda site, retaining body variables.
     pub functions: HashMap<Span, FunctionEvidence>,
     pub function_headers: IndexMap<String, Vec<GenericBinder>>,
+    /// Exact source origins and binder projections for visible callable names.
+    pub callable_exports: IndexMap<String, CallableProjection>,
     pub generic_refs: HashMap<Span, Vec<GenericBinder>>,
+    /// Source-authenticated selections in the actual declaration's order.
+    pub callable_refs: HashMap<Span, CallableProjection>,
     /// The file this module came from, used to build a deterministic module
     /// path when there is no `module` declaration (`<fileN>`).
     pub anonymous_file: FileId,
@@ -621,6 +631,7 @@ impl CheckedModule {
             instances: self.instances.clone(),
             aliases: self.alias_defs.clone(),
             function_headers: self.function_headers.clone(),
+            callable_exports: self.callable_exports.clone(),
         }
     }
 
@@ -909,6 +920,137 @@ fn import_dimension_display(
     mapped
 }
 
+// Prove identity forwarding from lexical binding structure, never a function
+// name or Fn signature. Unsupported computations deliberately have no summary.
+fn forwarded_parameter(
+    args: &[Param],
+    body: &Expr,
+) -> Option<usize> {
+    fn hide(
+        pattern: &Pat,
+        names: &mut HashMap<String, usize>,
+    ) {
+        let mut pending = vec![pattern];
+        while let Some(pattern) = pending.pop() {
+            match &pattern.kind {
+                | PatKind::Var(name) => {
+                    names.remove(name);
+                },
+                | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => pending.extend(args),
+                | PatKind::Record(fields) => {
+                    for (name, pattern) in fields {
+                        if let Some(pattern) = pattern {
+                            pending.push(pattern);
+                        } else {
+                            names.remove(name);
+                        }
+                    }
+                },
+                | PatKind::Tensor { items, rest } => {
+                    pending.extend(items);
+                    if let Some(name) = rest {
+                        names.remove(name);
+                    }
+                },
+                | PatKind::As { pattern, name } => {
+                    names.remove(name);
+                    pending.push(pattern);
+                },
+                | PatKind::Annot { pattern, .. } => pending.push(pattern),
+                | _ => {},
+            }
+        }
+    }
+    fn bind(
+        pattern: &Pat,
+        value: Option<usize>,
+        names: &mut HashMap<String, usize>,
+    ) {
+        hide(pattern, names);
+        if let (PatKind::Var(name), Some(index)) = (&pattern.kind, value) {
+            names.insert(name.clone(), index);
+        }
+    }
+    fn walk(
+        expr: &Expr,
+        names: &HashMap<String, usize>,
+        depth: usize,
+    ) -> Option<usize> {
+        if depth > 128 {
+            return None;
+        }
+        match &expr.kind {
+            | ExprKind::Var(name) => names.get(name).copied(),
+            | ExprKind::Annot { expr, .. } => walk(expr, names, depth + 1),
+            | ExprKind::LetIn {
+                pattern, value, body, ..
+            } => {
+                let value = walk(value, names, depth + 1);
+                let mut inner = names.clone();
+                bind(pattern, value, &mut inner);
+                walk(body, &inner, depth + 1)
+            },
+            | ExprKind::Block { stmts, tail } => {
+                let mut inner = names.clone();
+                for statement in stmts {
+                    match statement {
+                        | BlockStmt::Let {
+                            pattern, value, rec, ..
+                        } => {
+                            let value = if *rec {
+                                None
+                            } else {
+                                walk(value, &inner, depth + 1)
+                            };
+                            bind(pattern, value, &mut inner);
+                        },
+                        | BlockStmt::Fn(decl) => {
+                            if let DeclKind::Fn { name, .. } = &decl.kind {
+                                inner.remove(name);
+                            }
+                        },
+                    }
+                }
+                walk(tail.as_deref()?, &inner, depth + 1)
+            },
+            | ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let first = walk(then_branch, names, depth + 1)?;
+                (walk(else_branch, names, depth + 1) == Some(first)).then_some(first)
+            },
+            | ExprKind::Match { arms, .. } => {
+                let mut result = None;
+                for arm in arms {
+                    let mut inner = names.clone();
+                    hide(&arm.pattern, &mut inner);
+                    let current = walk(&arm.body, &inner, depth + 1)?;
+                    if result.is_some_and(|previous| previous != current) {
+                        return None;
+                    }
+                    result = Some(current);
+                }
+                result
+            },
+            | _ => None,
+        }
+    }
+    let names = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            if let PatKind::Var(name) = &arg.pattern.kind {
+                Some((name.clone(), index))
+            } else {
+                None
+            }
+        })
+        .collect();
+    walk(body, &names, 0)
+}
+
 /// Checks one module against an explicit capability set.
 ///
 /// This is the entry point a consumer that owns the manifest registry should
@@ -1144,6 +1286,9 @@ struct Checker {
     function_reifications: HashMap<Span, Vec<Type>>,
     call_materializations: HashMap<Span, Vec<Type>>,
     generic_bindings: HashMap<String, Vec<GenericBinder>>,
+    callable_ids: HashMap<Span, CallableId>,
+    global_callables: HashMap<String, CallableProjection>,
+    local_callables: HashMap<(usize, String), CallableProjection>,
     local_headers: HashMap<(usize, String), Vec<GenericBinder>>,
     scopes: Vec<HashMap<String, Scheme>>,
     units: UnitTable,
@@ -1257,6 +1402,9 @@ impl Checker {
             function_reifications: HashMap::new(),
             call_materializations: HashMap::new(),
             generic_bindings: HashMap::new(),
+            callable_ids: HashMap::new(),
+            global_callables: HashMap::new(),
+            local_callables: HashMap::new(),
             local_headers: HashMap::new(),
             scopes: Vec::new(),
             units: aevia_rssn::unit_table(),
@@ -1521,6 +1669,21 @@ impl Checker {
         if !visible_names {
             return;
         }
+        for (name, projection) in &interface.callable_exports {
+            let qualified = if module.is_prelude() {
+                name.clone()
+            } else {
+                format!("{}.{}", module.dotted(), name)
+            };
+            self.global_callables
+                .entry(qualified)
+                .or_insert_with(|| projection.clone());
+            if self.requested_unqualified.contains(name) {
+                self.global_callables
+                    .entry(name.clone())
+                    .or_insert_with(|| projection.clone());
+            }
+        }
         for (name, headers) in &interface.function_headers {
             let qualified = if module.is_prelude() {
                 name.clone()
@@ -1643,6 +1806,21 @@ impl Checker {
         interface: &ModuleInterface,
         binding: &InterfaceBinding,
     ) {
+        for (name, projection) in &interface.callable_exports {
+            if binding
+                .names
+                .as_ref()
+                .is_some_and(|names| !names.contains(name))
+            {
+                continue;
+            }
+            let key = if binding.prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{name}", binding.prefix)
+            };
+            self.global_callables.insert(key, projection.clone());
+        }
         for (name, headers) in &interface.function_headers {
             if binding
                 .names
@@ -1960,6 +2138,7 @@ impl Checker {
                     params,
                     args,
                     ret,
+                    body,
                     ..
                 } => {
                     if !seen_fns.insert(name.clone()) {
@@ -1970,7 +2149,28 @@ impl Checker {
                             "rename one of the two functions",
                         );
                     }
+                    self.callable_ids.insert(
+                        decl.span,
+                        CallableId::new(
+                            &self.module_path,
+                            decl.span,
+                            &aevia_syntax::fingerprint::declaration(decl),
+                        ),
+                    );
                     let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
+                    self.global_callables.insert(
+                        name.clone(),
+                        CallableProjection {
+                            origin: self
+                                .callable_ids
+                                .get(&decl.span)
+                                .expect("seeded callable identity")
+                                .clone(),
+                            arguments: generics.binders.clone(),
+                            selected: false,
+                            forwarded_parameter: forwarded_parameter(args, body),
+                        },
+                    );
                     self.generic_bindings
                         .insert(name.clone(), generics.binders.clone());
                     self.fn_generics.insert(name.clone(), generics);
@@ -2457,6 +2657,9 @@ impl Checker {
                     *arg = self.infer.resolve(arg);
                 }
             }
+            if function.binders.is_empty() {
+                function.binders = inferred_binders(&function.scheme);
+            }
             function.binders = function
                 .binders
                 .iter()
@@ -2480,6 +2683,27 @@ impl Checker {
         for message in self.infer.take_numeric_errors() {
             self.error("E0302", message, Span::new(self.file, 0, 0));
         }
+        let mut completed_origins = HashMap::new();
+        for function in self.checked.functions.values_mut() {
+            let completed = function
+                .identity
+                .with_contract(&crate::callable::contract(function));
+            completed_origins.insert(function.identity.clone(), completed.clone());
+            function.identity = completed;
+        }
+        for projection in self
+            .checked
+            .callable_refs
+            .values_mut()
+            .chain(self.global_callables.values_mut())
+        {
+            if let Some(completed) = completed_origins.get(&projection.origin) {
+                projection.origin = completed.clone();
+            }
+        }
+        for projection in self.checked.callable_refs.values_mut() {
+            *projection = projection.resolved(&self.infer);
+        }
         for headers in self.checked.generic_refs.values_mut() {
             *headers = headers
                 .iter()
@@ -2494,6 +2718,11 @@ impl Checker {
                         .get(name)
                         .cloned()
                         .unwrap_or_else(|| inferred_binders(scheme));
+                    if let Some(projection) = self.global_callables.get(name) {
+                        self.checked
+                            .callable_exports
+                            .insert(name.clone(), projection.resolved(&self.infer));
+                    }
                     self.checked.function_headers.insert(
                         name.clone(),
                         headers
@@ -3709,6 +3938,14 @@ impl Checker {
                 self.bind_pattern(&param.pattern, &ty);
                 params.push(ty);
             }
+            self.callable_ids.insert(
+                instance_method.span,
+                CallableId::new(
+                    &self.module_path,
+                    instance_method.span,
+                    &aevia_syntax::fingerprint::method(instance_method),
+                ),
+            );
             self.function_inputs
                 .insert(instance_method.span, params.clone());
             self.function_stack.push(instance_method.span);
@@ -3728,6 +3965,11 @@ impl Checker {
             self.checked.functions.insert(
                 instance_method.span,
                 FunctionEvidence {
+                    identity: self
+                        .callable_ids
+                        .get(&instance_method.span)
+                        .expect("seeded callable identity")
+                        .clone(),
                     numeric_literals: Vec::new(),
                     scheme,
                     binders: Vec::new(),
@@ -4587,12 +4829,34 @@ impl Checker {
             binders = inferred_binders(&generalised);
         }
         quantify_binders(&mut generalised, &binders, &self.infer);
+        let forwarded = self
+            .global_callables
+            .get(name)
+            .and_then(|value| value.forwarded_parameter);
+        self.global_callables.insert(
+            name.to_string(),
+            CallableProjection {
+                origin: self
+                    .callable_ids
+                    .get(&site)
+                    .expect("seeded callable identity")
+                    .clone(),
+                arguments: binders.clone(),
+                selected: false,
+                forwarded_parameter: forwarded,
+            },
+        );
         self.generic_bindings
             .insert(name.to_string(), binders.clone());
         self.globals.insert(name.to_string(), generalised.clone());
         self.checked.functions.insert(
             site,
             FunctionEvidence {
+                identity: self
+                    .callable_ids
+                    .get(&site)
+                    .expect("seeded callable identity")
+                    .clone(),
                 numeric_literals: Vec::new(),
                 scheme: generalised.clone(),
                 binders,
@@ -4655,8 +4919,14 @@ impl Checker {
         if let Some(binders) = self.checked.generic_refs.get(&value.span).cloned() {
             quantify_binders(&mut scheme, &binders, &self.infer);
             self.generic_bindings.insert(name.clone(), binders);
+            if let Some(projection) = self.checked.callable_refs.get(&value.span).cloned() {
+                self.global_callables.insert(name.clone(), projection);
+            } else {
+                self.global_callables.remove(name);
+            }
         } else {
             self.generic_bindings.remove(name);
+            self.global_callables.remove(name);
         }
         self.globals.insert(name.clone(), scheme.clone());
         if let Some(Export::Value {
@@ -4743,8 +5013,17 @@ impl Checker {
                 quantify_binders(&mut scheme, &headers, &self.infer);
                 self.local_headers
                     .insert((self.scopes.len(), name.clone()), headers);
+                if let Some(projection) = self.checked.callable_refs.get(&value_span).cloned() {
+                    self.local_callables
+                        .insert((self.scopes.len(), name.clone()), projection);
+                } else {
+                    self.local_callables
+                        .remove(&(self.scopes.len(), name.clone()));
+                }
             } else {
                 self.local_headers
+                    .remove(&(self.scopes.len(), name.clone()));
+                self.local_callables
                     .remove(&(self.scopes.len(), name.clone()));
             }
             self.scopes
@@ -4770,9 +5049,112 @@ impl Checker {
                 return self.synth_literal_region(expr, class.homogeneous);
             }
         }
+        self.seed_expression_callable(expr);
         let ty = self.synth_inner(expr);
         self.note_type(expr.span, &ty);
+        self.carry_callable(expr);
         ty
+    }
+
+    fn seed_expression_callable(
+        &mut self,
+        expr: &Expr,
+    ) {
+        if matches!(expr.kind, ExprKind::Lambda { .. })
+            || matches!(&expr.kind, ExprKind::Call { args, .. } if args.iter().any(|arg| matches!(arg.kind, ExprKind::Placeholder)))
+        {
+            self.callable_ids.entry(expr.span).or_insert_with(|| {
+                CallableId::new(
+                    &self.module_path,
+                    expr.span,
+                    &aevia_syntax::fingerprint::expression(expr),
+                )
+            });
+        }
+    }
+
+    fn carry_callable(
+        &mut self,
+        expr: &Expr,
+    ) {
+        let source = match &expr.kind {
+            | ExprKind::Annot { expr, .. } => Some(expr.span),
+            | ExprKind::TypeApp { .. } => return,
+            | ExprKind::Block { tail: Some(tail), .. } => Some(tail.span),
+            | ExprKind::LetIn { body, .. } => Some(body.span),
+            | ExprKind::Call { callee, args } => {
+                self.checked
+                    .callable_refs
+                    .get(&callee.span)
+                    .and_then(|projection| projection.forwarded_parameter)
+                    .and_then(|index| args.get(index))
+                    .map(|arg| arg.span)
+            },
+            | ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let first = self
+                    .checked
+                    .callable_refs
+                    .get(&then_branch.span)
+                    .map(|value| value.resolved(&self.infer));
+                let second = self
+                    .checked
+                    .callable_refs
+                    .get(&else_branch.span)
+                    .map(|value| value.resolved(&self.infer));
+                if first.is_some() && first == second {
+                    Some(then_branch.span)
+                } else {
+                    None
+                }
+            },
+            | ExprKind::Match { arms, .. } => {
+                let first = arms
+                    .first()
+                    .and_then(|arm| self.checked.callable_refs.get(&arm.body.span))
+                    .map(|value| value.resolved(&self.infer));
+                if first.is_some()
+                    && arms.iter().all(|arm| {
+                        self.checked
+                            .callable_refs
+                            .get(&arm.body.span)
+                            .map(|value| value.resolved(&self.infer))
+                            == first
+                    })
+                {
+                    arms.first().map(|arm| arm.body.span)
+                } else {
+                    None
+                }
+            },
+            | _ => None,
+        };
+        if let Some(source) = source {
+            if let Some(projection) = self.checked.callable_refs.get(&source).cloned() {
+                self.checked.callable_refs.insert(expr.span, projection);
+                if let Some(headers) = self.checked.generic_refs.get(&source).cloned() {
+                    self.checked.generic_refs.insert(expr.span, headers);
+                }
+            }
+        } else if let Some(function) = self.checked.functions.get(&expr.span) {
+            let arguments = if function.binders.is_empty() {
+                inferred_binders(&function.scheme)
+            } else {
+                function.binders.clone()
+            };
+            self.checked
+                .callable_refs
+                .entry(expr.span)
+                .or_insert(CallableProjection {
+                    origin: function.identity.clone(),
+                    arguments,
+                    selected: false,
+                    forwarded_parameter: None,
+                });
+        }
     }
 
     fn literal_class(
@@ -5071,6 +5453,11 @@ impl Checker {
                 self.checked.functions.insert(
                     expr.span,
                     FunctionEvidence {
+                        identity: self
+                            .callable_ids
+                            .get(&expr.span)
+                            .expect("seeded callable identity")
+                            .clone(),
                         numeric_literals: Vec::new(),
                         scheme,
                         binders: Vec::new(),
@@ -5231,12 +5618,14 @@ impl Checker {
         expr: &Expr,
         expected: &Type,
     ) {
+        self.seed_expression_callable(expr);
         self.check_inner(expr, expected);
         // Whatever path `check_inner` took — a direct comparison, or a
         // bidirectional rule that never synthesised the node — the type of the
         // expression is the type it was checked against. Recorded raw and
         // resolved at the end, like every other entry.
         self.note_type(expr.span, expected);
+        self.carry_callable(expr);
     }
 
     fn check_block_statements(
@@ -5288,9 +5677,30 @@ impl Checker {
                     } = &decl.kind
                     {
                         self.infer.enter_level();
+                        self.callable_ids.insert(
+                            decl.span,
+                            CallableId::new(
+                                &self.module_path,
+                                decl.span,
+                                &aevia_syntax::fingerprint::declaration(decl),
+                            ),
+                        );
                         let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
                         self.local_headers
                             .insert((self.scopes.len(), name.clone()), generics.binders.clone());
+                        let projection = CallableProjection {
+                            origin: self
+                                .callable_ids
+                                .get(&decl.span)
+                                .expect("seeded callable identity")
+                                .clone(),
+                            arguments: generics.binders.clone(),
+                            selected: false,
+                            forwarded_parameter: forwarded_parameter(args, body),
+                        };
+                        self.local_callables
+                            .insert((self.scopes.len(), name.clone()), projection.clone());
+                        let saved_callable = self.global_callables.insert(name.clone(), projection);
                         let saved_generics = self.fn_generics.insert(name.clone(), generics);
                         let saved_signature = self.fn_signatures.insert(name.clone(), ty.clone());
                         let saved_global = self.globals.get(name).cloned();
@@ -5306,6 +5716,18 @@ impl Checker {
                             .cloned()
                             .unwrap_or_else(|| Scheme::mono(Type::Error));
                         let headers = self.generic_bindings.get(name).cloned().unwrap_or_default();
+                        if let Some(projection) = self.global_callables.get(name).cloned() {
+                            self.local_callables
+                                .insert((self.scopes.len(), name.clone()), projection);
+                        }
+                        match saved_callable {
+                            | Some(value) => {
+                                self.global_callables.insert(name.clone(), value);
+                            },
+                            | None => {
+                                self.global_callables.remove(name);
+                            },
+                        }
                         self.infer.leave_level();
                         self.scopes
                             .last_mut()
@@ -5425,6 +5847,11 @@ impl Checker {
                 self.checked.functions.insert(
                     expr.span,
                     FunctionEvidence {
+                        identity: self
+                            .callable_ids
+                            .get(&expr.span)
+                            .expect("seeded callable identity")
+                            .clone(),
                         numeric_literals: Vec::new(),
                         scheme,
                         binders: Vec::new(),
@@ -7252,6 +7679,11 @@ impl Checker {
         self.checked.functions.insert(
             span,
             FunctionEvidence {
+                identity: self
+                    .callable_ids
+                    .get(&span)
+                    .expect("seeded callable identity")
+                    .clone(),
                 numeric_literals: Vec::new(),
                 scheme: self.infer.generalize(&ty),
                 binders: Vec::new(),
@@ -8178,6 +8610,10 @@ impl Checker {
         span: Span,
         ty: Type,
     ) -> Type {
+        if let Some(mut projection) = self.checked.callable_refs.get(&callee.span).cloned() {
+            projection.selected = true;
+            self.checked.callable_refs.insert(span, projection);
+        }
         if let Some(materializations) = self.call_materializations.get(&callee.span).cloned() {
             self.call_materializations.insert(span, materializations);
         }
@@ -9131,6 +9567,8 @@ impl Checker {
             | PatKind::Var(name) => {
                 self.local_headers
                     .remove(&(self.scopes.len(), name.clone()));
+                self.local_callables
+                    .remove(&(self.scopes.len(), name.clone()));
                 // The binder is a place the editor asks about, and this is the
                 // type its uses get. Recorded at the pattern's own span, so it
                 // never competes with an expression that happens to share it.
@@ -9896,7 +10334,11 @@ impl Checker {
                     .get(&(index + 1, name.to_string()))
                     .cloned()
                     .unwrap_or_else(|| inferred_binders(&scheme));
-                return self.instantiate_with_headers(&scheme, &headers, span);
+                let origin = self
+                    .local_callables
+                    .get(&(index + 1, name.to_string()))
+                    .cloned();
+                return self.instantiate_with_headers(&scheme, &headers, origin.as_ref(), span);
             }
         }
         if let Some(scheme) = self.globals.get(name).cloned() {
@@ -9915,7 +10357,8 @@ impl Checker {
                     inferred_binders(&scheme)
                 }
             });
-            return self.instantiate_with_headers(&scheme, &headers, span);
+            let origin = self.global_callables.get(name).cloned();
+            return self.instantiate_with_headers(&scheme, &headers, origin.as_ref(), span);
         }
         if let Some(unit) = self.units.lookup(name) {
             return Type::UnitOf(unit.dim);
@@ -9950,9 +10393,15 @@ impl Checker {
         &mut self,
         scheme: &Scheme,
         headers: &[GenericBinder],
+        origin: Option<&CallableProjection>,
         span: Span,
     ) -> Type {
         let (ty, constraints, bindings) = self.infer.instantiate_scheme_with_bindings(scheme);
+        if let Some(origin) = origin {
+            self.checked
+                .callable_refs
+                .insert(span, origin.substituted(&bindings));
+        }
         self.call_materializations.insert(
             span,
             scheme
@@ -10559,7 +11008,7 @@ fn is_rssn_member(
 /// The manifest's non-operator members (`Rssn.call`, `Rssn.Version`, …) are
 /// excluded: they have a fixed type and are not resolved against overloads.
 fn rssn_op_name(expr: &Expr) -> Option<String> {
-    const MEMBERS: [&str; 15] = [
+    const MEMBERS: [&str; 16] = [
         "Version",
         "ManifestHash",
         "Capabilities",
@@ -10573,6 +11022,7 @@ fn rssn_op_name(expr: &Expr) -> Option<String> {
         "resolve_overload",
         "typed",
         "call_ho",
+        "call_ho_key",
         "register",
         "register_plugin",
     ];
@@ -10736,6 +11186,17 @@ impl Checker {
                         adt::RESULT_ID,
                         vec![dynamic_value_type(), op_error_type()],
                     )),
+                );
+            },
+            | "call_ho_key" => {
+                return Type::func(
+                    vec![
+                        Type::Str,
+                        Type::Str,
+                        value_list_type(),
+                        Type::tensor(Shape::Rank(1), opaque_type("Callback")),
+                    ],
+                    Type::Adt(adt::RESULT_ID, vec![dynamic_value_type(), op_error_type()]),
                 );
             },
             | "call_ho" => {

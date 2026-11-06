@@ -3246,27 +3246,17 @@ impl Interp {
         if let Value::Closure(closure) = &function {
             if let Some(proof) = &closure.proof {
                 if !proof.definition.binders.is_empty() {
-                    let selected = types
-                        .iter()
-                        .map(|argument| {
-                            self.reified_type(argument).ok_or_else(|| {
-                                EvalError::new("E0304", "missing checked function type argument")
-                                    .at(argument.span)
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                        .and_then(|arguments| {
-                            let selected = proof.explicit(&arguments);
-                            if let Some(expected @ aevia_types::Type::Fn(..)) =
-                                self.resolved_expr_type(span)
-                            {
-                                selected
-                                    .and_then(|selected| selected.specialize(&expected))
-                                    .or_else(|_| proof.specialize(&expected))
-                            } else {
-                                selected
-                            }
-                        });
+                    let selected =
+                        self.checked_callable_selection(proof, span, true)
+                            .and_then(|selected| {
+                                if let Some(expected @ aevia_types::Type::Fn(..)) =
+                                    self.resolved_expr_type(span)
+                                {
+                                    selected.specialize(&expected)
+                                } else {
+                                    Ok(selected)
+                                }
+                            });
                     return match selected {
                         | Ok(proof) => {
                             Value::Closure(crate::generics::specialize_closure(closure, proof))

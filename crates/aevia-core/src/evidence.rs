@@ -31,7 +31,7 @@ pub(crate) struct ModuleEvidence {
     pub(crate) method_refs: HashMap<Span, aevia_types::check::ClassMethodRef>,
     pub(crate) constructor_refs: HashMap<Span, (aevia_types::adt::AdtId, usize)>,
     pub(crate) functions: HashMap<Span, aevia_types::check::FunctionEvidence>,
-    pub(crate) generic_refs: HashMap<Span, Vec<aevia_types::check::GenericBinder>>,
+    pub(crate) callable_refs: HashMap<Span, aevia_types::CallableProjection>,
     pub(crate) units: aevia_dim::UnitTable,
 }
 #[derive(Debug)]
@@ -70,7 +70,7 @@ impl ModuleContext {
                 method_refs: checked.method_refs.clone(),
                 constructor_refs: checked.constructor_refs.clone(),
                 functions: checked.functions.clone(),
-                generic_refs: checked.generic_refs.clone(),
+                callable_refs: checked.callable_refs.clone(),
                 units: checked.units.clone(),
             },
             session: Rc::downgrade(session),

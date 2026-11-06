@@ -1096,6 +1096,8 @@ type_rep<a>()      : TypeRep
 to_callback        : 已检查的具体函数 -> Callback   # 编译器 intrinsic，函数参数个数不限
 Rssn.call_ho       : (String, Tensor<1, Value>, Tensor<1, Callback>)
                    -> Result<Value, OpError>
+Rssn.call_ho_key   : (String, String, Tensor<1, Value>, Tensor<1, Callback>)
+                   -> Result<Value, OpError>
 Rssn.register        : Plugin -> Result<PluginId, PluginError>
 Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 ```
@@ -1159,8 +1161,10 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
   `E1001("core.plugin.source")`。Rust host 插件仍可经嵌入 API
   （`Session::register`）注册。
 - `core.callback` 标记上述受限的回调桥可用；`core.plugin.source` 仍为
-  `enabled = false`。生成的高阶绑定使用显式 `(values, callbacks)` 动态接口；
-  泛型参数与结果见证未完整具体化前，不生成钉住签名的泛型包装。
+  `enabled = false`。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；
+  对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed 别名。
+  别名在调用时认证回调的具体签名，并按实例化结果类型验证返回值；无法证明
+  类型或维度的签名仍只提供动态入口。
 
 `Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、
 实验性入口都走它。多注册时 RSSN 在运行时按
