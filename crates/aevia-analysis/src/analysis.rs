@@ -1399,9 +1399,8 @@ impl<'a> SymbolContext<'a> {
             },
             | Export::Type { .. } | Export::Alias { .. } => None,
             | Export::Unit { def } => Some(format!("unit: {}", def.dim.to_plain_string())),
-            | Export::Dimension { dim } => {
-                dim.as_ref()
-                    .map(|dim| format!("dimension: {}", dim.to_plain_string()))
+            | Export::Dimension { dim, .. } => {
+                Some(format!("dimension: {}", dim.to_plain_string()))
             },
         }
     }
@@ -1806,10 +1805,7 @@ fn export_detail(export: &Export) -> Option<String> {
         | Export::Type { adt } => Some(aevia_types::adt::name_of(*adt)),
         | Export::Alias { params } => Some(format!("{params} parameter(s)")),
         | Export::Unit { def } => Some(format!("unit: {}", def.dim.to_plain_string())),
-        | Export::Dimension { dim } => {
-            dim.as_ref()
-                .map(|dim| format!("dimension: {}", dim.to_plain_string()))
-        },
+        | Export::Dimension { dim, .. } => Some(format!("dimension: {}", dim.to_plain_string())),
     }
 }
 
@@ -1846,10 +1842,11 @@ fn describe_export(
                 def.dim.to_plain_string()
             )
         },
-        | Export::Dimension { dim } => {
-            match dim {
-                | Some(dim) => format!("**dimension** `{name}`\n\n= `{}`", dim.to_plain_string()),
-                | None => format!("**base dimension** `{name}`"),
+        | Export::Dimension { dim, is_base } => {
+            if *is_base {
+                format!("**base dimension** `{name}`")
+            } else {
+                format!("**dimension** `{name}`\n\n= `{}`", dim.to_plain_string())
             }
         },
     })

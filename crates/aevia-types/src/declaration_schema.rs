@@ -69,6 +69,7 @@ impl Encoder {
             let atom = match atom {
                 | aevia_dim::Atom::Base(name) => (0_u8, name.to_string()),
                 | aevia_dim::Atom::Var(id) => (1, self.dimensions.get(id)?.to_string()),
+                | aevia_dim::Atom::Nominal(base) => (2, base.transport_name()),
             };
             factors.insert(atom, power);
         }

@@ -372,6 +372,16 @@ fn inspect_dim(
     reasons: &mut BTreeSet<String>,
 ) {
     match dim {
+        | DimExpr::Base(name)
+            if matches!(
+                aevia_dim::Atom::from_transport_base(name),
+                aevia_dim::Atom::Nominal(_)
+            ) =>
+        {
+            reasons.insert(
+                "source-owned nominal dimension has no declaration in the generated facade".into(),
+            );
+        },
         | DimExpr::NonMetric | DimExpr::Container => {
             reasons
                 .insert("non-scalar dimension cannot be represented in a source signature".into());

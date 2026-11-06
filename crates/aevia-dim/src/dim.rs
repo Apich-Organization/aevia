@@ -23,20 +23,177 @@ use std::fmt;
 
 /// One generator of the dimension group.
 ///
-/// Base dimensions are identified by their canonical (long) name, as required
-/// by §4.1: the single-letter spellings are display aliases only. Dimension
-/// variables are identified by a numeric id allocated by the type checker.
+/// SI/host base dimensions use canonical names. Source declarations use a
+/// nominal owner and declaration name, independent of import/display aliases.
+/// Variables use a numeric id allocated by the type checker.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Atom {
-    /// A base dimension such as `Length` or a user-declared `Currency`.
+    /// An SI or host base dimension such as `Length` or a host-defined `Currency`.
     Base(Box<str>),
+    /// A source-owned base dimension. Its readable spelling is not its identity.
+    Nominal(NominalBase),
     /// A dimension variable introduced by `<d>` or by inference.
     Var(u32),
+}
+
+/// A base dimension declared in a particular source/module owner.
+///
+/// Ownership and declaration name determine equality, order and hashing. An
+/// import may change the display hint without creating a new generator.
+#[derive(Clone, Debug)]
+pub struct NominalBase {
+    owner: Box<str>,
+    name: Box<str>,
+    display: Box<str>,
+}
+impl NominalBase {
+    /// A canonical declaration owner plus its declared name.
+    #[must_use]
+    pub fn new(
+        owner: impl Into<Box<str>>,
+        name: impl Into<Box<str>>,
+    ) -> Self {
+        let name = name.into();
+        Self {
+            owner: owner.into(),
+            display: name.clone(),
+            name,
+        }
+    }
+
+    /// The canonical defining module/source identity.
+    #[must_use]
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    /// The declaration name, independent of import aliases.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The current readable hint, excluded from equality and hashing.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        &self.display
+    }
+
+    /// Clone this generator with a different readable hint.
+    #[must_use]
+    pub fn with_display(
+        &self,
+        display: impl Into<Box<str>>,
+    ) -> Self {
+        Self {
+            display: display.into(),
+            ..self.clone()
+        }
+    }
+
+    /// Versioned, owned transport spelling. Display aliases are excluded.
+    #[must_use]
+    pub fn transport_name(&self) -> String {
+        format!("{NOMINAL_PREFIX}{}_{}", hex(&self.owner), hex(&self.name))
+    }
+}
+impl PartialEq for NominalBase {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.owner == other.owner && self.name == other.name
+    }
+}
+impl Eq for NominalBase {}
+impl PartialOrd for NominalBase {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for NominalBase {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
+        (&self.owner, &self.name).cmp(&(&other.owner, &other.name))
+    }
+}
+impl std::hash::Hash for NominalBase {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.owner.hash(state);
+        self.name.hash(state);
+    }
+}
+const TRANSPORT_PREFIX: &str = "__aevia_dim_";
+const NOMINAL_PREFIX: &str = "__aevia_dim_n_v1_";
+const RAW_PREFIX: &str = "__aevia_dim_b_v1_";
+const VARIABLE_PREFIX: &str = "__aevia_dim_v_v1_";
+fn hex(text: &str) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(text.len() * 2);
+    for byte in text.bytes() {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    encoded
+}
+fn unhex(text: &str) -> Option<String> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = text
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let a = char::from(pair[0]).to_digit(16)?;
+            let b = char::from(pair[1]).to_digit(16)?;
+            Some((a * 16 + b) as u8)
+        })
+        .collect();
+    String::from_utf8(bytes?).ok()
 }
 
 impl Atom {
     fn base(name: &str) -> Self {
         Self::Base(name.into())
+    }
+
+    /// A kernel `DimExpr::Base` spelling, independent of display aliases.
+    /// Ordinary host base names keep their existing spelling. Reserved raw
+    /// names are escaped so they cannot be mistaken for a nominal generator.
+    #[must_use]
+    pub fn transport_name(&self) -> Option<String> {
+        match self {
+            | Self::Base(name) if name.starts_with(TRANSPORT_PREFIX) => {
+                Some(format!("{RAW_PREFIX}{}", hex(name)))
+            },
+            | Self::Base(name) => Some(name.to_string()),
+            | Self::Nominal(base) => Some(base.transport_name()),
+            | Self::Var(_) => None,
+        }
+    }
+
+    /// Decode an owned base spelling, preserving unrecognized host names.
+    #[must_use]
+    pub fn from_transport_base(name: &str) -> Self {
+        if let Some(encoded) = name.strip_prefix(NOMINAL_PREFIX) {
+            if let Some((owner, name)) = encoded.split_once('_') {
+                if let (Some(owner), Some(name)) = (unhex(owner), unhex(name)) {
+                    return Self::Nominal(NominalBase::new(owner, name));
+                }
+            }
+        }
+        if let Some(raw) = name.strip_prefix(RAW_PREFIX).and_then(unhex) {
+            return Self::Base(raw.into());
+        }
+        Self::base(name)
     }
 }
 
@@ -47,6 +204,7 @@ impl fmt::Display for Atom {
     ) -> fmt::Result {
         match self {
             | Self::Base(name) => f.write_str(name),
+            | Self::Nominal(base) => f.write_str(base.display_name()),
             | Self::Var(id) => write!(f, "d{id}"),
         }
     }
@@ -72,6 +230,65 @@ impl Dim {
     #[must_use]
     pub fn base(name: &str) -> Self {
         Self::from_factors([(Atom::base(name), BigRational::one())])
+    }
+
+    /// A base generator owned by a source/module identity.
+    #[must_use]
+    pub fn nominal_base(
+        owner: impl Into<Box<str>>,
+        name: impl Into<Box<str>>,
+    ) -> Self {
+        Self::from_factors([(
+            Atom::Nominal(NominalBase::new(owner, name)),
+            BigRational::one(),
+        )])
+    }
+
+    /// Decode a kernel base name. Only the versioned reserved representation
+    /// denotes a source-owned generator; `Base("Credit")` remains a host base.
+    #[must_use]
+    pub fn from_transport_base(name: &str) -> Self {
+        Self::from_factors([(Atom::from_transport_base(name), BigRational::one())])
+    }
+
+    /// Give a directly named nominal base an import-local display hint. Derived
+    /// products keep their individual generator names and exact exponents.
+    #[must_use]
+    pub fn with_display_name(
+        &self,
+        display: &str,
+    ) -> Self {
+        if self.factors.len() == 1 {
+            if let Some((Atom::Nominal(base), exponent)) = self.factors.first_key_value() {
+                if exponent.is_one() {
+                    return Self::from_factors([(
+                        Atom::Nominal(base.with_display(display)),
+                        exponent.clone(),
+                    )]);
+                }
+            }
+        }
+        self.clone()
+    }
+
+    /// Relabel selected nominal generators without changing their identity.
+    #[must_use]
+    pub fn with_display_names(
+        &self,
+        names: &HashMap<NominalBase, String>,
+    ) -> Self {
+        Self::from_factors(self.factors.iter().map(|(atom, power)| {
+            let atom = match atom {
+                | Atom::Nominal(base) => {
+                    names.get(base).map_or_else(
+                        || atom.clone(),
+                        |name| Atom::Nominal(base.with_display(name.as_str())),
+                    )
+                },
+                | _ => atom.clone(),
+            };
+            (atom, power.clone())
+        }))
     }
 
     /// A single dimension variable.
@@ -177,13 +394,14 @@ impl Dim {
             .filter_map(|atom| {
                 match atom {
                     | Atom::Var(id) => Some(*id),
-                    | Atom::Base(_) => None,
+                    | Atom::Base(_) | Atom::Nominal(_) => None,
                 }
             })
             .collect()
     }
 
-    /// All base dimensions with their exponents.
+    /// Readable base names with their exponents. These are display hints, not
+    /// semantic identities; use [`Self::factors`] for transport or comparison.
     #[must_use]
     pub fn base_factors(&self) -> Vec<(&str, &BigRational)> {
         self.factors
@@ -191,6 +409,7 @@ impl Dim {
             .filter_map(|(atom, exponent)| {
                 match atom {
                     | Atom::Base(name) => Some((&**name, exponent)),
+                    | Atom::Nominal(base) => Some((base.display_name(), exponent)),
                     | Atom::Var(_) => None,
                 }
             })
@@ -217,7 +436,7 @@ impl Dim {
         let mut result = Dim::one();
         for (atom, exponent) in &self.factors {
             match atom {
-                | Atom::Base(_) => {
+                | Atom::Base(_) | Atom::Nominal(_) => {
                     result = result.mul(&Dim::from_factors([(atom.clone(), exponent.clone())]));
                 },
                 | Atom::Var(id) => {
@@ -269,15 +488,15 @@ impl fmt::Display for Dim {
 }
 
 impl Dim {
-    /// Renders with canonical generator names (`Length/Time^2`).
-    ///
-    /// This is the form used in cross-boundary text such as manifests and
-    /// diagnostics notes, never single letters (§4.1).
+    /// Renders readable generator names (`Length/Time^2`) for diagnostics.
+    /// Nominal names are hints; use [`Self::to_transport_string`] when identity
+    /// must survive a text boundary.
     #[must_use]
     pub fn to_plain_string(&self) -> String {
         render(self, |atom| {
             match atom {
                 | Atom::Base(name) => name.to_string(),
+                | Atom::Nominal(base) => base.display_name().to_string(),
                 | Atom::Var(id) => format!("d{id}"),
             }
         })
@@ -301,6 +520,7 @@ impl Dim {
         for (atom, exponent) in &self.factors {
             let name = match atom {
                 | Atom::Base(name) => si_symbol(name).to_string(),
+                | Atom::Nominal(base) => base.display_name().to_string(),
                 | Atom::Var(id) => format!("d{id}"),
             };
             let (target, magnitude) = if exponent.is_negative() {
@@ -325,6 +545,37 @@ impl Dim {
             | 0 => numerator,
             | 1 => format!("{numerator}/{}", denominator[0]),
             | _ => format!("{numerator}/({})", denominator.join("*")),
+        }
+    }
+
+    /// Collision-free dimension text for opaque runtime metadata and hashing.
+    /// SI spellings are unchanged; custom/nominal generators and variables are
+    /// explicitly encoded. Display hints never enter this representation.
+    #[must_use]
+    pub fn to_transport_string(&self) -> String {
+        render(self, |atom| {
+            match atom {
+                | Atom::Nominal(base) => base.transport_name(),
+                | Atom::Base(name) if crate::SI_BASE_DIMENSIONS.contains(&name.as_ref()) => {
+                    name.to_string()
+                },
+                | Atom::Base(name) => format!("{RAW_PREFIX}{}", hex(name)),
+                | Atom::Var(id) => format!("{VARIABLE_PREFIX}{id}"),
+            }
+        })
+    }
+
+    /// Parse text emitted by [`Self::to_transport_string`]. This is deliberately
+    /// separate from parsing source names in a module's dimension environment.
+    pub fn parse_transport(text: &str) -> Result<Self, DimParseError> {
+        let mut parser = DimTextParser::new(text);
+        parser.transport = true;
+        let dim = parser.parse_dim()?;
+        parser.skip_space();
+        if parser.rest().is_empty() {
+            Ok(dim)
+        } else {
+            Err(DimParseError::Trailing(parser.rest().to_string()))
         }
     }
 
@@ -417,6 +668,7 @@ fn si_symbol(base: &str) -> &str {
 #[derive(Clone, Debug)]
 pub struct DimEnv {
     bases: Vec<String>,
+    base_values: IndexMap<String, Dim>,
     short: IndexMap<String, String>,
     aliases: IndexMap<String, Dim>,
 }
@@ -433,6 +685,7 @@ impl DimEnv {
     pub fn si() -> Self {
         let mut env = Self {
             bases: Vec::new(),
+            base_values: IndexMap::new(),
             short: IndexMap::new(),
             aliases: IndexMap::new(),
         };
@@ -446,6 +699,7 @@ impl DimEnv {
             ("Luminosity", "Lum"),
         ] {
             env.bases.push(name.to_string());
+            env.base_values.insert(name.to_string(), Dim::base(name));
             env.short.insert(name.to_string(), short.to_string());
         }
         for (alias, text) in [
@@ -489,6 +743,22 @@ impl DimEnv {
             return false;
         }
         self.bases.push(name.to_string());
+        self.base_values.insert(name.to_string(), Dim::base(name));
+        true
+    }
+
+    /// Adds a source base while retaining its canonical declaration owner.
+    pub fn define_nominal_base(
+        &mut self,
+        name: &str,
+        owner: &str,
+    ) -> bool {
+        if self.lookup(name).is_some() {
+            return false;
+        }
+        self.bases.push(name.to_string());
+        self.base_values
+            .insert(name.to_string(), Dim::nominal_base(owner, name));
         true
     }
 
@@ -519,8 +789,8 @@ impl DimEnv {
         &self,
         name: &str,
     ) -> Option<Dim> {
-        if let Some(index) = self.bases.iter().position(|base| base == name) {
-            return Some(Dim::base(&self.bases[index]));
+        if let Some(dim) = self.base_values.get(name) {
+            return Some(dim.clone());
         }
         for (canonical, short) in &self.short {
             if short == name {
@@ -588,6 +858,7 @@ impl DimEnv {
                         .cloned()
                         .unwrap_or_else(|| (*name).to_string())
                 },
+                | Atom::Nominal(base) => base.display_name().to_string(),
                 | Atom::Var(id) => format!("d{id}"),
             }
         })
@@ -626,11 +897,16 @@ impl std::error::Error for DimParseError {}
 struct DimTextParser<'a> {
     text: &'a str,
     pos: usize,
+    transport: bool,
 }
 
 impl<'a> DimTextParser<'a> {
     fn new(text: &'a str) -> Self {
-        Self { text, pos: 0 }
+        Self {
+            text,
+            pos: 0,
+            transport: false,
+        }
     }
 
     fn rest(&self) -> &'a str {
@@ -724,6 +1000,15 @@ impl<'a> DimTextParser<'a> {
                     }
                 }
                 let name = &self.text[start..self.pos];
+                if self.transport {
+                    if let Some(id) = name
+                        .strip_prefix(VARIABLE_PREFIX)
+                        .and_then(|id| id.parse().ok())
+                    {
+                        return Ok(Dim::var(id));
+                    }
+                    return Ok(Dim::from_transport_base(name));
+                }
                 env.lookup(name)
                     .ok_or_else(|| DimParseError::UnknownName(name.to_string()))
             },
@@ -887,7 +1172,7 @@ impl DimUnifier {
             let variable = quotient.factors().find_map(|(atom, exponent)| {
                 match atom {
                     | Atom::Var(id) => Some((*id, exponent.clone())),
-                    | Atom::Base(_) => None,
+                    | Atom::Base(_) | Atom::Nominal(_) => None,
                 }
             });
             let Some((id, exponent)) = variable else {

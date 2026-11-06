@@ -5045,11 +5045,15 @@ fn expect_dyn(
 /// The `DimValue` of a dimension (§4.9.2).
 ///
 /// `DimValue` is opaque to the checker, so the runtime picks the
-/// representation: a record holding the canonical text of the dimension
-/// (`L/T`, `L^2`). It round-trips through `Dim::parse_plain`, which is what
-/// makes `dyn_with` and `check_with` total.
+/// representation: a record holding lossless transport text of the dimension.
+/// SI spellings remain readable; nominal bases encode their owner rather than
+/// their current import alias. It round-trips through `Dim::parse_transport`.
+/// Display text is never used as evidence for `dyn_with` or `check_with`.
 fn dim_value(dim: &Dim) -> Value {
-    record_of(vec![("dimension", Value::string(dim.to_plain_string()))])
+    record_of(vec![(
+        "dimension",
+        Value::string(dim.to_transport_string()),
+    )])
 }
 
 fn as_dim_value(value: &Value) -> Option<Dim> {
@@ -5059,7 +5063,7 @@ fn as_dim_value(value: &Value) -> Option<Dim> {
     let Some(Value::Str(text)) = record.fields.get("dimension") else {
         return None;
     };
-    Dim::parse_plain(text).ok()
+    Dim::parse_transport(text).ok()
 }
 
 fn expect_dim_value(
@@ -7505,7 +7509,7 @@ fn hash_into(
         },
         | Value::Dyn(dynamic) => {
             mix(state, b"D");
-            mix(state, &dynamic.dim.to_plain_string().into_bytes());
+            mix(state, dynamic.dim.to_transport_string().as_bytes());
             hash_into(&Value::Num(dynamic.payload()), state)?;
         },
         | Value::Closure(_)

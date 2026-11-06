@@ -135,7 +135,10 @@ pub(crate) fn run_closure(
     #[cfg(feature = "jit")]
     let mut current_closure = closure.clone();
     let mut args = args;
+    #[cfg(feature = "jit")]
     let mut current_instance = instance;
+    #[cfg(not(feature = "jit"))]
+    let _ = instance;
     let mut bindings = interp.bindings.clone();
     if function.params.len() != args.len() {
         return Err(EvalError::new(
@@ -355,7 +358,7 @@ pub(crate) fn run_closure(
         }
         function = next_function.clone();
         env = next_env.clone();
-        current_instance = match next_instance {
+        let next_instance = match next_instance {
             | Some(instance) => Some(instance),
             | None => {
                 match interp.prepare_function_call(
@@ -368,12 +371,13 @@ pub(crate) fn run_closure(
                 }
             },
         };
-        bindings = current_instance
+        bindings = next_instance
             .as_ref()
             .map(|instance| instance.bindings())
             .or_else(|| next.captured_bindings.clone());
         #[cfg(feature = "jit")]
         {
+            current_instance = next_instance;
             current_closure = next.clone();
         }
         args = next_args;

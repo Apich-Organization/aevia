@@ -35,7 +35,7 @@ fn main(): IO Unit = do
 - `fn` / `let`；
 - `test`。
 
-`private` 可以加在 `type`、`unit`、`fn`、`let`、`class` 前，表示不导出。
+`private` 可以加在 `type`、`dimension`、`unit`、`fn`、`let`、`class` 前，表示不导出。
 默认全部导出。
 
 ## 2.2 声明

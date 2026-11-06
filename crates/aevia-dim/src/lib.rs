@@ -27,6 +27,7 @@ pub use dim::DimEnv;
 pub use dim::DimMismatch;
 pub use dim::DimParseError;
 pub use dim::DimUnifier;
+pub use dim::NominalBase;
 pub use rat::format_rational;
 pub use rat::format_rational_decimal;
 pub use rat::parse_decimal;

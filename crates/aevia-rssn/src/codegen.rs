@@ -239,12 +239,20 @@ pub fn units(registry: &Registry) -> String {
     // and the other keeps its category.
     let mut claimed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for unit in &registry.units {
-        if unit.name == value_name(&unit.name) {
+        if !has_owned_dimension(&unit.dim) && unit.name == value_name(&unit.name) {
             claimed.insert(unit.name.clone());
         }
     }
     let mut used: Vec<String> = Vec::new();
     for unit in &registry.units {
+        if has_owned_dimension(&unit.dim) {
+            let _ = writeln!(
+                out,
+                "## `{}` cannot be generated: source-owned dimension requires its defining source module",
+                unit.name
+            );
+            continue;
+        }
         let spelling = match spellable(&unit.name, &unit.aliases) {
             | Some(name) => name,
             | None => {
@@ -297,6 +305,14 @@ pub fn constants(registry: &Registry) -> String {
     // `pi` is the exact symbolic prelude constant. Rounding it to a decimal
     // here would change every constant whose manifest scale includes pi.
     for constant in &registry.constants {
+        if has_owned_dimension(&constant.dim) {
+            let _ = writeln!(
+                out,
+                "## `{}` cannot be generated: source-owned dimension requires its defining source module",
+                constant.symbol
+            );
+            continue;
+        }
         let dim = constant.dim.to_plain_string();
         let ty = if dim.is_empty() || dim == "1" {
             "Real".to_string()
@@ -330,6 +346,11 @@ pub fn constants(registry: &Registry) -> String {
         );
     }
     out
+}
+
+fn has_owned_dimension(dim: &aevia_dim::Dim) -> bool {
+    dim.factors()
+        .any(|(atom, _)| matches!(atom, aevia_dim::Atom::Nominal(_)))
 }
 
 /// A unit expression for a dimension, in source syntax.
@@ -701,6 +722,7 @@ fn render_dim(
     for (atom, exponent) in dim.factors() {
         let name = match atom {
             | aevia_dim::Atom::Base(name) => name.to_string(),
+            | aevia_dim::Atom::Nominal(base) => base.display_name().to_string(),
             | aevia_dim::Atom::Var(id) => dims.name(*id),
         };
         let (target, magnitude) = if exponent.is_negative() {

@@ -1118,6 +1118,7 @@ fn render_dim(dim: &Dim) -> String {
                     | other => other,
                 }
             },
+            | aevia_dim::Atom::Nominal(base) => base.display_name(),
             | aevia_dim::Atom::Var(id) => {
                 let symbol = format!("d{id}");
                 let magnitude = exponent.abs();

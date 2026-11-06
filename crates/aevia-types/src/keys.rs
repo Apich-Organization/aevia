@@ -70,6 +70,33 @@ impl ModulePath {
         self.1.as_ref()
     }
 
+    /// Canonical owner text for source-owned dimension generators. Every
+    /// component is length-framed; display/import aliases never participate.
+    #[must_use]
+    pub fn identity_key(&self) -> String {
+        fn part(
+            text: &mut String,
+            value: &str,
+        ) {
+            text.push_str(&value.len().to_string());
+            text.push(':');
+            text.push_str(value);
+        }
+        let mut text = "aevia-module-v1:".to_string();
+        part(&mut text, &self.0.len().to_string());
+        for component in &self.0 {
+            part(&mut text, component);
+        }
+        if let Some(origin) = self.origin() {
+            part(&mut text, "origin");
+            part(&mut text, &origin.package);
+            part(&mut text, &origin.source);
+        } else {
+            part(&mut text, "no-origin");
+        }
+        text
+    }
+
     /// Whether this is the prelude scope.
     #[must_use]
     pub fn is_prelude(&self) -> bool {

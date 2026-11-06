@@ -448,6 +448,7 @@ impl<'a> Parser<'a> {
             && !matches!(
                 &kind,
                 DeclKind::Type { .. }
+                    | DeclKind::Dimension { .. }
                     | DeclKind::Unit { .. }
                     | DeclKind::Fn { .. }
                     | DeclKind::Let { .. }
@@ -455,11 +456,11 @@ impl<'a> Parser<'a> {
             )
         {
             // §2.1: `private` marks a declaration as not exported, and only
-            // types, units, functions, values and classes are declarations in
+            // types, dimensions, units, functions, values and classes are declarations in
             // that sense.
             self.error(
                 "E0202",
-                "`private` is only allowed on a `type`, `unit`, `fn`, `let` or `class` declaration",
+                "`private` is only allowed on a `type`, `dimension`, `unit`, `fn`, `let` or `class` declaration",
                 private_span,
             );
         }

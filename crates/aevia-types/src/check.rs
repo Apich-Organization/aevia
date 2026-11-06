@@ -59,6 +59,7 @@ use aevia_syntax::ast::*;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
+use num_traits::One;
 use num_traits::Signed;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
@@ -114,8 +115,10 @@ pub enum Export {
     },
     /// A base dimension or alias.
     Dimension {
-        /// The dimension, when it is an alias.
-        dim: Option<Dim>,
+        /// The resolved dimension, including its defining owner for bases.
+        dim: Dim,
+        /// Whether this declaration introduces a base rather than an alias.
+        is_base: bool,
     },
 }
 
@@ -833,6 +836,79 @@ pub fn check_module_with_identity(
     }
 }
 
+// Import qualification is display metadata only. Keep every binder and every
+// numeric requirement in the original universe while giving concrete owned
+// generators readable local names in diagnostics.
+fn import_dimension_display(
+    scheme: &Scheme,
+    names: &HashMap<aevia_dim::NominalBase, String>,
+) -> Scheme {
+    fn row(
+        value: &Row,
+        names: &HashMap<aevia_dim::NominalBase, String>,
+    ) -> Row {
+        match value {
+            | Row::Extend { label, ty, tail } => {
+                Row::Extend {
+                    label: label.clone(),
+                    ty: Box::new(ty_map(ty, names)),
+                    tail: Box::new(row(tail, names)),
+                }
+            },
+            | _ => value.clone(),
+        }
+    }
+    fn ty_map(
+        value: &Type,
+        names: &HashMap<aevia_dim::NominalBase, String>,
+    ) -> Type {
+        match value {
+            | Type::Scalar(rep, dim) => Type::Scalar(*rep, dim.with_display_names(names)),
+            | Type::Point(dim) => Type::Point(dim.with_display_names(names)),
+            | Type::UnitOf(dim) => Type::UnitOf(dim.with_display_names(names)),
+            | Type::Tensor { shape, elem } => Type::tensor(shape.clone(), ty_map(elem, names)),
+            | Type::Fn(args, ret) => {
+                Type::func(
+                    args.iter().map(|arg| ty_map(arg, names)).collect(),
+                    ty_map(ret, names),
+                )
+            },
+            | Type::Record(value) => Type::Record(row(value, names)),
+            | Type::Adt(id, args) => {
+                Type::Adt(*id, args.iter().map(|arg| ty_map(arg, names)).collect())
+            },
+            | Type::Io(value) => Type::Io(Box::new(ty_map(value, names))),
+            | Type::TypeRepIntrinsic(value) => {
+                Type::TypeRepIntrinsic(value.as_ref().map(|ty| Box::new(ty_map(ty, names))))
+            },
+            | Type::FromValueIntrinsic(value) => {
+                Type::FromValueIntrinsic(value.as_ref().map(|ty| Box::new(ty_map(ty, names))))
+            },
+            | _ => value.clone(),
+        }
+    }
+    let mut mapped = scheme.clone();
+    mapped.ty = ty_map(&scheme.ty, names);
+    mapped.materializations = scheme
+        .materializations
+        .iter()
+        .map(|ty| ty_map(ty, names))
+        .collect();
+    for constraint in &mut mapped.constraints {
+        for argument in &mut constraint.args {
+            *argument = ty_map(argument, names);
+        }
+    }
+    for constraint in &mut mapped.numeric {
+        match constraint {
+            | crate::NumericConstraint::Literal { ty, .. }
+            | crate::NumericConstraint::DefaultLiteral { ty, .. } => *ty = ty_map(ty, names),
+            | crate::NumericConstraint::Relation(_) => {},
+        }
+    }
+    mapped
+}
+
 /// Checks one module against an explicit capability set.
 ///
 /// This is the entry point a consumer that owns the manifest registry should
@@ -1268,6 +1344,21 @@ impl Checker {
                     .push(exports.keys().cloned().collect());
                 self.requested_unqualified.extend(exports.keys().cloned());
             }
+            let mut dimension_names = HashMap::new();
+            for (name, export) in exports {
+                if let Export::Dimension { dim, .. } = export {
+                    if let Some((aevia_dim::Atom::Nominal(base), power)) = dim.factors().next() {
+                        if dim.factors().count() == 1 && power.is_one() {
+                            let display = if prefix.is_empty() {
+                                name.clone()
+                            } else {
+                                format!("{prefix}.{name}")
+                            };
+                            dimension_names.entry(base.clone()).or_insert(display);
+                        }
+                    }
+                }
+            }
             for (name, export) in exports {
                 let key = if prefix.is_empty() {
                     name.clone()
@@ -1285,11 +1376,17 @@ impl Checker {
                 match export {
                     | Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
                         self.note_opened(&mut opened, prefix, &key, scheme);
-                        self.globals.insert(key.clone(), scheme.clone());
+                        self.globals.insert(
+                            key.clone(),
+                            import_dimension_display(scheme, &dimension_names),
+                        );
                     },
                     | Export::TypeCtor { adt, scheme, .. } => {
                         self.note_opened(&mut opened, prefix, &key, scheme);
-                        self.globals.insert(key.clone(), scheme.clone());
+                        self.globals.insert(
+                            key.clone(),
+                            import_dimension_display(scheme, &dimension_names),
+                        );
                         self.adts.insert(key.clone(), *adt);
                     },
                     | Export::Unit { def } => {
@@ -1298,6 +1395,7 @@ impl Checker {
                         // (`V.Imp2.smoot`) is a unit *name*, so it has to be
                         // in the table, not just in the value namespace.
                         let mut definition = def.clone();
+                        definition.dim = definition.dim.with_display_names(&dimension_names);
                         if prefix.is_empty() {
                             if self.units.lookup(&definition.name).is_none() {
                                 let _ = self.units.insert(definition.clone());
@@ -1307,18 +1405,19 @@ impl Checker {
                             definition.aliases.clear();
                             let _ = self.units.insert(definition);
                         }
-                        self.globals
-                            .insert(key.clone(), Scheme::mono(Type::UnitOf(def.dim.clone())));
+                        self.globals.insert(
+                            key.clone(),
+                            Scheme::mono(Type::UnitOf(
+                                def.dim.with_display_names(&dimension_names),
+                            )),
+                        );
                     },
                     | Export::Type { adt } => {
                         self.adts.insert(key.clone(), *adt);
                     },
                     | Export::Alias { .. } => {},
-                    | Export::Dimension { dim: Some(dim) } => {
-                        self.dims.define_alias(&key, dim.clone());
-                    },
-                    | Export::Dimension { dim: None } => {
-                        let _ = self.dims.define_base(&key);
+                    | Export::Dimension { dim, .. } => {
+                        self.dims.define_alias(&key, dim.with_display_name(&key));
                     },
                 }
             }
@@ -1835,7 +1934,7 @@ impl Checker {
         for decl in &module.decls {
             match &decl.kind {
                 | DeclKind::Dimension { name, value } => {
-                    self.declare_dimension(name, value.as_ref(), decl.span);
+                    self.declare_dimension(name, value.as_ref(), decl.span, decl.private);
                 },
                 | DeclKind::Unit { .. } => self.declare_unit(decl),
                 | DeclKind::Type { name, params, body } => {
@@ -2576,17 +2675,19 @@ impl Checker {
         name: &str,
         value: Option<&DimAst>,
         span: Span,
+        private: bool,
     ) {
-        match value {
+        let (dim, is_base) = match value {
             | Some(ast) => {
                 let dim = self.convert_dim(ast, span);
                 self.dims.define_alias(name, dim.clone());
-                self.checked
-                    .exports
-                    .insert(name.to_string(), Export::Dimension { dim: Some(dim) });
+                (dim, false)
             },
             | None => {
-                if !self.dims.define_base(name) {
+                if !self
+                    .dims
+                    .define_nominal_base(name, &self.module_path.identity_key())
+                {
                     self.error(
                         "E0316",
                         format!("dimension `{name}` is already defined"),
@@ -2594,10 +2695,16 @@ impl Checker {
                     );
                     return;
                 }
-                self.checked
-                    .exports
-                    .insert(name.to_string(), Export::Dimension { dim: None });
+                (
+                    self.dims.lookup(name).expect("just declared dimension"),
+                    true,
+                )
             },
+        };
+        if !private {
+            self.checked
+                .exports
+                .insert(name.to_string(), Export::Dimension { dim, is_base });
         }
     }
 

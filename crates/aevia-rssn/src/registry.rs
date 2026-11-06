@@ -1098,7 +1098,7 @@ fn convert_dim_with(
     dims: &mut SignatureDims,
 ) -> Dim {
     match dim {
-        | DimExpr::Base(name) => Dim::base(name),
+        | DimExpr::Base(name) => Dim::from_transport_base(name),
         | DimExpr::Mul(factors) => {
             factors.iter().fold(Dim::one(), |acc, factor| {
                 acc.mul(&convert_dim_with(factor, dims))
@@ -1205,7 +1205,9 @@ pub fn to_dim_expr(dim: &Dim) -> DimExpr {
             return DimExpr::Any;
         };
         let base = match atom {
-            | aevia_dim::Atom::Base(name) => DimExpr::Base(name.to_string()),
+            | aevia_dim::Atom::Base(_) | aevia_dim::Atom::Nominal(_) => {
+                DimExpr::Base(atom.transport_name().expect("base atom"))
+            },
             | aevia_dim::Atom::Var(id) => DimExpr::Var(format!("d{id}")),
         };
         factors.push(base.pow(Exp::Rat(Rational::new(numer, denom))));
