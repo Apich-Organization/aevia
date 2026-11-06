@@ -840,39 +840,25 @@ type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 并集；冲突字段报 `E0208`）。
 
 `read_npy` 的秩无法从文件静态推断，必须写 `read_npy<2>(path)`；省略是
-`E0314`。
+`E0314`。类型参数目前必须是具体自然数；文件的实际秩不一致时，IO 动作
+返回 `Err(DataError)`，不会把错误秩的张量交给程序。
 
 CSV 表头可以带单位：`time [s]`、`velocity [m/s]`。`read_csv<ρ>` 解析
 表头单位；`column(t, "time")` 在编译期用 `ρ` 的字段类型检查，运行时再做
 一次防御性校验。没有表头单位时，列被当作无量纲；显式 `ρ` 可以覆盖，
 但运行时校验失败报 `DataError.DimensionMismatch`。
 
-> **实现状态（2026-11-05，第 8 章 323/323 已闭合）**：
-> `read_csv`/`write_csv`/`read_json`/`write_json` 与
-> Table/column/select/filter/join 已实现；**NPY 也在本地实现**（不再依赖
-> kernel 的 `io.binary`）：`read_npy`/`write_npy` 有本地 NPY 编解码与执行
-> runner，实测写读往返为 `write=Ok(())`、`read=Ok([[1, 2], [3, 4]])`。
-> NPY 细节：写 version 1.0；读 1.0/2.0/3.0 头，dtype `'<f8'`（写）与
-> `'<f8'`/`'<f4'`/`'|f8'`/`'|f4'`/`'=f8'`/`'=f4'`（读；f4 提升为 Float），
-> rank 0/1/2（含空数组），只支持 C order。错误按附录 B：`E0901` 文件不存在、
-> `E0902` 非法参数（非 dense/rank 不对的写入）、`E0903` 数据损坏/截断或头
-> 10 KiB、`E0904` 不支持的格式（Fortran order、大端/非浮点 dtype、错误
-> 扩展名、不支持的版本）、`E0905` 绘图。**类型层面 v1 的精确边界**：
-> `read_npy` 固定返回 `Tensor<2, Float>`（rank-variable shape 未实现；
-> `read_npy<1>` 不改变结果秩，省略 `<n>` 也不报 `E0314`）；`write_npy`
-> 接受任何 tensor（checker 只要求是 tensor；rank 0/1/2 由运行时处理，
-> 不支持的存储/格式是 `E0904`）。因此第 8 章的声明名**没有**
-> capability gap（coverage 的 `chapter_eight_has_no_capability_gaps` 通过；
-> 共 **323/323** 个名字——`args` 计入后由 322 变 323）。
-> **IO 错误分类 E0901–E0905 已落地**（本节的读者/写者与 §8.12 的绘图动作
-> 都遵守）：`E0901` 文件不存在、`E0902` 权限拒绝或非法参数、`E0903` 数据
-> 文件解析失败（CSV/JSON 格式错误、NPY 损坏/截断）、`E0904` 不支持的
-> 格式/扩展名（例如 `read_csv("data.npy")`、`read_json("data.csv")`、或
-> `read_npy`/`write_npy` 给错扩展名，在真正读文件之前就返回）、`E0905`
-> 绘图渲染/保存失败。这些分类作为 `Result` 的 `Err` 文本（`E090x: …`）或
-> 致命 IO 动作诊断出现，由 `aevia-core/tests/io_taxonomy.rs` 断言
-> （`E0901`/`E0903`/`E0904`/`E0905` 有直接用例；`E0902` 由
-> `NotFound`/`PermissionDenied` 映射）。
+> **实现状态**：`read_csv`/`write_csv`/`read_json`/`write_json` 与
+> Table/column/select/filter/join 已实现。NPY 使用共享本地编解码；
+> `read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 Float
+> 张量。支持 NPY 1.0/2.0/3.0、小端和大端 float32/float64、C 和 Fortran
+> 排列；Fortran 输入转换为 Aevia 的行优先存储，写出使用小端 float64、
+> C 排列。类型参数当前必须为具体自然数，未具体化的泛型秩报 `E0304`。
+> NPY 文件不存在为 `E0901`，非法参数为 `E0902`，损坏、截断、秩不匹配
+> 或大小溢出为 `E0903`，不支持的格式、dtype 或扩展名为 `E0904`；
+> NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
+> IO 错误分类也覆盖本节其他读写入口与 §8.12 绘图（`E0905`）；
+> `aevia-core/tests/io_taxonomy.rs` 断言对应分类。
 
 ## 8.12 Plot
 

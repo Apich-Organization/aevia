@@ -479,132 +479,36 @@ fn format_json_number(value: f64) -> String {
     }
 }
 
-/// Reads a NumPy `.npy` array of `float64` or `float32` in C order.
+/// Read a NumPy Float array in C or Fortran order, preserving its rank.
 ///
 /// # Errors
-///
-/// [`NumericError::Domain`] when the header is not a v1.0 NumPy header, names
-/// another dtype, or describes a Fortran-ordered array.
+/// Returns a domain error for unsupported or malformed data.
 pub fn read_npy(bytes: &[u8]) -> Result<(Vec<usize>, Vec<f64>), NumericError> {
-    if bytes.len() < 10 || &bytes[0..6] != b"\x93NUMPY" {
-        return Err(NumericError::Domain("not a `.npy` file".to_string()));
-    }
-    let major = bytes[6];
-    if major != 1 {
-        return Err(NumericError::Domain(format!(
-            "`.npy` version {major}.{} is not supported",
-            bytes[7]
-        )));
-    }
-    let header_len = usize::from(bytes[8]) | (usize::from(bytes[9]) << 8);
-    let start = 10;
-    let end = start + header_len;
-    if bytes.len() < end {
-        return Err(NumericError::Domain("truncated `.npy` header".to_string()));
-    }
-    let header = std::str::from_utf8(&bytes[start..end])
-        .map_err(|_| NumericError::Domain("the `.npy` header is not UTF-8".to_string()))?;
-    if header.contains("'fortran_order': True") {
-        return Err(NumericError::Domain(
-            "a Fortran-ordered `.npy` array is not supported".to_string(),
-        ));
-    }
-    let float32 = if header.contains("'<f8'") || header.contains("'|f8'") {
-        false
-    } else if header.contains("'<f4'") || header.contains("'|f4'") {
-        true
-    } else {
-        return Err(NumericError::Domain(
-            "only `float64` and `float32` arrays are supported".to_string(),
-        ));
-    };
-    let shape = parse_npy_shape(header)?;
-    let count: usize = shape.iter().product();
-    let width = if float32 { 4 } else { 8 };
-    let body = &bytes[end..];
-    if body.len() < count * width {
-        return Err(NumericError::Domain(format!(
-            "the `.npy` body holds {} byte(s), {count} values need {}",
-            body.len(),
-            count * width
-        )));
-    }
-    let mut values = Vec::with_capacity(count);
-    for index in 0..count {
-        let chunk = &body[index * width..(index + 1) * width];
-        let value = if float32 {
-            f64::from(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        } else {
-            f64::from_le_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-            ])
-        };
-        values.push(value);
-    }
-    Ok((shape, values))
+    crate::npy::decode(bytes).map_err(NumericError::Domain)
 }
 
-fn parse_npy_shape(header: &str) -> Result<Vec<usize>, NumericError> {
-    let open = header
-        .find("'shape':")
-        .map(|at| at + "'shape':".len())
-        .ok_or_else(|| NumericError::Domain("the `.npy` header has no shape".to_string()))?;
-    let rest = &header[open..];
-    let start = rest
-        .find('(')
-        .ok_or_else(|| NumericError::Domain("malformed `.npy` shape".to_string()))?;
-    let stop = rest
-        .find(')')
-        .ok_or_else(|| NumericError::Domain("malformed `.npy` shape".to_string()))?;
-    let inner = &rest[start + 1..stop];
-    let mut shape = Vec::new();
-    for part in inner.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let value: usize = part
-            .parse()
-            .map_err(|_| NumericError::Domain(format!("bad `.npy` extent `{part}`")))?;
-        shape.push(value);
-    }
-    if shape.is_empty() {
-        shape.push(1);
-    }
-    Ok(shape)
+/// Encode a NumPy Float array after validating shape and storage.
+///
+/// # Errors
+/// Returns a domain error if shape and data are inconsistent or unrepresentable.
+pub fn try_write_npy(
+    shape: &[usize],
+    values: &[f64],
+) -> Result<Vec<u8>, NumericError> {
+    crate::npy::encode(shape, values).map_err(NumericError::Domain)
 }
 
-/// Writes a NumPy v1.0 `.npy` array of `float64` in C order.
+/// Encode a valid NumPy Float array.
+///
+/// # Panics
+/// Panics if the shape and data do not agree; use [`try_write_npy`] for
+/// untrusted input and a recoverable error.
 #[must_use]
 pub fn write_npy(
     shape: &[usize],
     values: &[f64],
 ) -> Vec<u8> {
-    let shape_text = if shape.len() == 1 {
-        format!("({},)", shape[0])
-    } else {
-        let parts: Vec<String> = shape.iter().map(usize::to_string).collect();
-        format!("({})", parts.join(", "))
-    };
-    let mut header = format!("{{'descr': '<f8', 'fortran_order': False, 'shape': {shape_text}, }}");
-    // The header plus the 10-byte prologue must be a multiple of 64 bytes and
-    // end with a newline.
-    let padding = 64 - ((10 + header.len() + 1) % 64);
-    for _ in 0..padding {
-        header.push(' ');
-    }
-    header.push('\n');
-    let mut out = Vec::with_capacity(10 + header.len() + values.len() * 8);
-    out.extend_from_slice(b"\x93NUMPY");
-    out.push(1);
-    out.push(0);
-    let length = u16::try_from(header.len()).unwrap_or(u16::MAX);
-    out.extend_from_slice(&length.to_le_bytes());
-    out.extend_from_slice(header.as_bytes());
-    for value in values {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out
+    try_write_npy(shape, values).expect("NPY shape and values must agree")
 }
 
 #[cfg(test)]

@@ -4344,6 +4344,20 @@ s < 0:  len = ceil((a - b) / |s|)    满足 a ≥ i > b
 3. 执行动作；`print` 写标准输出，`read_file` 读文件，`plot` 写 HTML。
 4. 动作返回 `()`；未捕获的 `panic` 终止并打印调用栈。
 
+`do` 构造时保存程序及其词法环境，不执行块内的纯表达式。执行时按源码
+顺序求值每条语句：一个 IO 动作完成后，才求值下一条语句，包括后面的
+`let`、动作参数及字符串插值。插入一个未使用的 `let` 不改变效果发生的顺序。
+同一个动作可以重放；每次运行都有独立的绑定及执行位置，闭包仍捕获其定义
+时可见的绑定。最后一条动作的结果是块的结果；最后一条是 `let` 或 `<-`
+绑定时，块返回 `Unit`。
+
+`?` 只能用于 `Result<T,E>` 或 `Option<T>`。纯函数中的失败返回该实际函数；
+`do` 内的失败返回当前 IO 程序的结果，而非已经完成动作构造的外层纯函数。
+嵌套函数有自己的返回边界。目标必须是同一容器家族，`Result` 的错误类型
+必须相同；没有隐式错误转换。未标注的函数返回类型也受到此约束。
+因此 `IO (Result<U,E>)` 的 `do` 可以传播 `Result<T,E>`，而 `IO Unit`
+不能传播它。提前返回跳过块内剩余语句，但外层 IO 仍可绑定并处理这个失败值。
+
 ### 6.8.2 常用动作
 
 ```
@@ -5187,8 +5201,13 @@ std      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 ```
 
 `zeros<Float>(3, 4)` 的 `n=2`；`zeros<Int>` 显式指定元素类型。`zeros`/
-`ones`/`fill` 是**内建可变参数**：`n` 由 `Int` 实参的个数决定，不是用户
-可声明的函数；类型检查器特殊处理。`reshape<[n1, ..., nk]>(a)` 的目标形状
+`ones`/`fill` 是**内建可变参数**：`n` 由 `Int` 实参的个数决定。它们可从
+`Tensor` 或 `LinearAlgebra` 导入并通过值别名再导出；类型参数可在调用前
+或调用时给出（`let z = zeros<Int>; z(2, 3)`）。局部同名定义照常遮蔽内建；
+构造器经泛型恒等函数传递时保留身份。相同类型特化的 `zeros` 与 `ones`
+可作为同一条件表达式的分支；运行时按实际值选择操作。`fill` 属于另一
+签名族，不同特化也不能混合。需要固定函数签名的高阶参数不能直接接受可变
+参数构造器，应写固定参数的 lambda，例如 `fn (n) => zeros(n)`。`reshape<[n1, ..., nk]>(a)` 的目标形状
 显式给出；元素数在编译期（形状已知时）或运行时检查。`reshape_dyn(a,
 shape)` 用运行时形状向量，返回 `Result`。
 
@@ -5699,39 +5718,25 @@ type ColumnInfo = { name: String, dtype: String, unit: Option<String> }
 并集；冲突字段报 `E0208`）。
 
 `read_npy` 的秩无法从文件静态推断，必须写 `read_npy<2>(path)`；省略是
-`E0314`。
+`E0314`。类型参数目前必须是具体自然数；文件的实际秩不一致时，IO 动作
+返回 `Err(DataError)`，不会把错误秩的张量交给程序。
 
 CSV 表头可以带单位：`time [s]`、`velocity [m/s]`。`read_csv<ρ>` 解析
 表头单位；`column(t, "time")` 在编译期用 `ρ` 的字段类型检查，运行时再做
 一次防御性校验。没有表头单位时，列被当作无量纲；显式 `ρ` 可以覆盖，
 但运行时校验失败报 `DataError.DimensionMismatch`。
 
-> **实现状态（2026-11-05，第 8 章 323/323 已闭合）**：
-> `read_csv`/`write_csv`/`read_json`/`write_json` 与
-> Table/column/select/filter/join 已实现；**NPY 也在本地实现**（不再依赖
-> kernel 的 `io.binary`）：`read_npy`/`write_npy` 有本地 NPY 编解码与执行
-> runner，实测写读往返为 `write=Ok(())`、`read=Ok([[1, 2], [3, 4]])`。
-> NPY 细节：写 version 1.0；读 1.0/2.0/3.0 头，dtype `'<f8'`（写）与
-> `'<f8'`/`'<f4'`/`'|f8'`/`'|f4'`/`'=f8'`/`'=f4'`（读；f4 提升为 Float），
-> rank 0/1/2（含空数组），只支持 C order。错误按附录 B：`E0901` 文件不存在、
-> `E0902` 非法参数（非 dense/rank 不对的写入）、`E0903` 数据损坏/截断或头
-> 10 KiB、`E0904` 不支持的格式（Fortran order、大端/非浮点 dtype、错误
-> 扩展名、不支持的版本）、`E0905` 绘图。**类型层面 v1 的精确边界**：
-> `read_npy` 固定返回 `Tensor<2, Float>`（rank-variable shape 未实现；
-> `read_npy<1>` 不改变结果秩，省略 `<n>` 也不报 `E0314`）；`write_npy`
-> 接受任何 tensor（checker 只要求是 tensor；rank 0/1/2 由运行时处理，
-> 不支持的存储/格式是 `E0904`）。因此第 8 章的声明名**没有**
-> capability gap（coverage 的 `chapter_eight_has_no_capability_gaps` 通过；
-> 共 **323/323** 个名字——`args` 计入后由 322 变 323）。
-> **IO 错误分类 E0901–E0905 已落地**（本节的读者/写者与 §8.12 的绘图动作
-> 都遵守）：`E0901` 文件不存在、`E0902` 权限拒绝或非法参数、`E0903` 数据
-> 文件解析失败（CSV/JSON 格式错误、NPY 损坏/截断）、`E0904` 不支持的
-> 格式/扩展名（例如 `read_csv("data.npy")`、`read_json("data.csv")`、或
-> `read_npy`/`write_npy` 给错扩展名，在真正读文件之前就返回）、`E0905`
-> 绘图渲染/保存失败。这些分类作为 `Result` 的 `Err` 文本（`E090x: …`）或
-> 致命 IO 动作诊断出现，由 `aevia-core/tests/io_taxonomy.rs` 断言
-> （`E0901`/`E0903`/`E0904`/`E0905` 有直接用例；`E0902` 由
-> `NotFound`/`PermissionDenied` 映射）。
+> **实现状态**：`read_csv`/`write_csv`/`read_json`/`write_json` 与
+> Table/column/select/filter/join 已实现。NPY 使用共享本地编解码；
+> `read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 Float
+> 张量。支持 NPY 1.0/2.0/3.0、小端和大端 float32/float64、C 和 Fortran
+> 排列；Fortran 输入转换为 Aevia 的行优先存储，写出使用小端 float64、
+> C 排列。类型参数当前必须为具体自然数，未具体化的泛型秩报 `E0304`。
+> NPY 文件不存在为 `E0901`，非法参数为 `E0902`，损坏、截断、秩不匹配
+> 或大小溢出为 `E0903`，不支持的格式、dtype 或扩展名为 `E0904`；
+> NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
+> IO 错误分类也覆盖本节其他读写入口与 §8.12 绘图（`E0905`）；
+> `aevia-core/tests/io_taxonomy.rs` 断言对应分类。
 
 ## 8.12 Plot
 
@@ -5952,7 +5957,10 @@ Rssn.overloads     : String -> Tensor<1, String>
 to_value           : a -> Value
 from_value         : Value -> Result<a, OpError>
 type_rep<a>()      : TypeRep
+to_callback        : 已检查的具体函数 -> Callback   # 编译器 intrinsic，函数参数个数不限
 Rssn.call_ho       : (String, Tensor<1, Value>, Tensor<1, Callback>)
+                   -> Result<Value, OpError>
+Rssn.call_ho_key   : (String, String, Tensor<1, Value>, Tensor<1, Callback>)
                    -> Result<Value, OpError>
 Rssn.register        : Plugin -> Result<PluginId, PluginError>
 Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
@@ -6000,18 +6008,27 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 
 固定入口的可达性与限制：
 
-- `Rssn.typed` 可用：它执行动态调用并接受一个 `TypeRep`。当前 `type_rep()`
-  产出的 `TypeRep` 只有名字（`kind = "opaque"`），所以运行时只能校验第三个
-  参数确实是 `TypeRep`，不能按它逐字段校验返回值；静态保证来自类型检查器。
-- `Rssn.call_ho` 的类型正确，但**非空**回调列表不可构造：Aevia 闭包不满足
-  kernel `HostCallback` 的 `Send + Sync`，因此运行时报
-  `E1001("core.callback")`。空列表等价于一次动态调用，会正常执行。
+- `type_rep<T>()` 从具体的检查后类型生成不可伪造的 `TypeRep`；未解析的泛型
+  不能在没有运行时类型字典时反射。`Rssn.typed` 执行动态调用，并用该见证检查
+  返回值；不匹配或证据不足返回 `Err(OpError)`，成功结果仍为不透明 `Value`，
+  需用 `from_value<T>` 验证并转换。可变参数构造的类型见证也可通过别名传递。
+- `to_callback(f)` 对当前 evaluator 会话中的已检查源码闭包验证具体函数类型，
+  构造不透明的 `Callback`。别名和已具体化的泛型函数保留此证据；内建函数或
+  其他 native 函数可先包装在源码 lambda 中。回调桥支持具体数值、`Bool`、
+  `String`，以及由它们递归组成的张量和闭合记录；具体量纲、秩和完整已知形状
+  都会校验。空结构张量需要独立的元素类型及量纲证据，名义类型不能只凭标签推断。
+  各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
+  调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及
+  回调错误均返回错误。空回调列表等价于动态调用。
 - `Rssn.register`/`Rssn.register_plugin` 的类型正确，但 Aevia 源码无法构造
   `Plugin` 值：源码级 `@op` 打包（§13.5.2）未实现，因此运行时报
   `E1001("core.plugin.source")`。Rust host 插件仍可经嵌入 API
   （`Session::register`）注册。
-- 上述两个名字是 capability 表里的行、`enabled = false`；缺的是 Aevia 侧
-  的值构造，不是 kernel 接口。
+- `core.callback` 标记上述受限的回调桥可用；`core.plugin.source` 仍为
+  `enabled = false`。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；
+  对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed 别名。
+  别名在调用时认证回调的具体签名，并按实例化结果类型验证返回值；无法证明
+  类型或维度的签名仍只提供动态入口。
 
 `Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、
 实验性入口都走它。多注册时 RSSN 在运行时按
@@ -6038,6 +6055,7 @@ Units
   CGS
   Natural
   Constants
+Tensor
 LinearAlgebra
   Sparse
 Calculus
@@ -6074,7 +6092,7 @@ Physics
 只引入 `sqrt`，`open Units.SI` 把 `Units.SI` 的导出名放进当前作用域。
 
 > **实现状态（2026-11-04）**：标准库**模块树已落地**。
-> （`crates/aevia-std/stdlib/**.aev`，**37** 个模块，含 §8.9.1 的 `Sde`；
+> （`crates/aevia-std/stdlib/**.aev`，**38** 个模块，含 §8.9.1 的 `Sde`；
 > 经 `include_str!` 嵌入；`aevia_std::stdlib` 暴露
 > `source`/`is_module_name`/`module_paths`。）
 > 加载器在普通根目录解析不到模块时回退到嵌入模块，因此 `import Math {
@@ -6086,7 +6104,7 @@ Physics
 > 的语义，因此不导出（§5.3.4）。`Sde` 模块 re-export §8.9.1 的五个入口
 > （`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed`）
 > 并声明选项 ADT（`SdeMethod`/`SdeStructure`/`SdeFixedOpts`/
-> `SdeAdaptiveOpts`/`SdeOpts`/`SdePath`）；`Physics.Ising`/`Physics.Geodesic`
+> `SdeAdaptiveOpts`/`SdeOpts`）；`SdePath` 的结果字段由推断访问；`Physics.Ising`/`Physics.Geodesic`
 > 提供 §8.17 的类型化包装器。`spec/11` 的九个完整程序**全部**通过
 > （11.1/11.2/11.3/11.4/11.5/11.6/11.7/11.8/11.10；11.2 的
 > `RateOf<State>` 记录统一与 11.4 的 refined/rank-only shape 统一已在本轮
@@ -6112,9 +6130,9 @@ Physics
 > （7 declared + 25 overlay + 1350 derived，其中 `sde_scheme_info` 是本轮
 > 新增的 manifest-only 元数据算子）、32 个 rule set、82 单位、30 常数、
 > overload 1568 条、`manifest_hash = 8d2c3764…`**。嵌入的
-> `crates/aevia-std/stdlib/Units/Constants.aev` 头注释记录了生成时的
-> manifest hash；manifest 变化后必须用
-> `cargo test -p aevia-std --test stdlib_modules -- --ignored regenerate`
+> `crates/aevia-std/stdlib/Units/Constants.aev` 来自 live manifest；
+> manifest 变化后必须用
+> `cargo run -p aevia-stdlib-gen -- --write`
 > 重新生成，否则 `units_constants_is_the_live_manifest` 会失败（这是
 > 生成视图与 live manifest 的诚实校验）。
 
@@ -6292,8 +6310,8 @@ Core IR 是 ANF：每个中间结果绑定到名字，便于闭包转换、JIT �
 
 - 局部环境是持久映射（`im::HashMap` 或扁平 `Vec` + 名字索引）。
 - 闭包捕获环境帧；帧是 `Rc`，不可变。
-- 递归闭包用 `Rc<RefCell<Option<Closure>>>` 自引用，作用域退出时断开；
-  周期由会话级 cycle collector 回收。
+- 递归闭包经作用域绑定解析；当前使用 `Rc` 环境，没有会话级 cycle collector。
+  本轮的迭代释放仅覆盖独占 Scope parent 链，不承诺回收任意闭包循环。
 - 全局环境包含模块导出、Prelude、单位表、类实例字典。
 
 ### 9.3.2 调用
@@ -6303,6 +6321,23 @@ Core IR 是 ANF：每个中间结果绑定到名字，便于闭包转换、JIT �
   替换当前帧，不增长 Rust 栈。
 - 非尾调用递归受 `--max-stack` 限制；超过报 `E0805`。
 - 内建函数是 Rust 函数指针 + arity；用户函数是闭包。
+
+IO 调度使用显式 work 栈；Core IR 的 `do` 是一个共享槽帧及顺序步骤表，
+不通过为每段后缀创建实现闭包来执行。AST 路径同样使用重放局部游标。
+平坦语句序列及最后动作的 IO 尾递归不按语句数积累调度续延。
+`Interp::max_io_steps` 限制调度步骤，`max_io_depth` 限制尚待执行的续延；
+默认分别是 100,000,000 和 2048，超限报 `E0805`。每次 `run_io` 重置
+计数，失败不保留执行游标。CLI `--budget` 同时设置尾调用与 IO 步骤预算，
+不是时间或内存上限。AST 独占词法 Scope 的 parent 链迭代释放；这不表示
+任意 Value/Closure 共享图均采用迭代析构或已经具备循环回收器。
+
+`?` 的控制流标记带检查器认证的真实函数/IO 边界，并随词法证据保留。
+失败传播在目标成功类型下重新构造 `Err`/`None`，不沿用输入的 phantom
+成功类型。普通运行时错误即使带 payload，也不会被函数边界误当作成功返回。
+延迟动作保留其定义时的检查证据；跨会话或 reset 后执行旧动作报 `E0809`。
+旧版内建 `ParseError`、`IOError` 等有限组 Prelude 抽象错误仍使用文本 payload；
+`?` 保留其传播兼容性，但不赋予名义构造证明，因此这些失败值跨 opaque
+`Value` 往返会安全拒绝。源码同名 ADT 和具体错误类型不适用这项兼容。
 
 ### 9.3.3 模式匹配
 
@@ -6456,6 +6491,20 @@ rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策�
 - `Real` 的精确算术不进入 JIT；需要时先 `to_float`。
 - JIT 的结果与解释器 MUST 数值一致（同一 IEEE 语义）；不一致是 bug。
 
+
+### 可选 JIT 构建
+
+使用 `cargo build -p aevia-cli --features jit` 启用 RSSN 的 Cranelift
+后端。IR 解释器会在首次调用 `@jit` 函数时编译并缓存符合条件的函数。
+当前支持无捕获、参数为无量纲 `Float` 的纯标量算术、比较和条件分支；
+单个自尾递归调用点会编译为有预算限制的原生循环。
+调用参数不符合条件、或函数使用其他调用、张量、精确数、单位等其他
+形式时，保持原有解释执行。分支仅在两侧均可安全地作为纯算术执行时
+编译。RSSN 使用独立的 TailLoop 控制流封装纯数值 Tape；其他函数调用与
+递归继续解释。启用该特性
+需要 Rust 1.97 或更新版本（RSSN 的最低版本）。默认构建仍关闭 JIT；
+关闭时 `@jit` 报 `E1001`。
+
 ## 9.7 内存与并发
 
 ### 9.7.1 内存
@@ -6544,7 +6593,7 @@ aevia clean                        # 清理构建产物
 --release          优化模式（当前解释器实现无 JIT/构建缓存，接受并提示“无效果”）
 --jobs N           并行度（同上：当前实现单进程解释执行，接受并提示“无效果”）
 --max-stack MiB    解释器线程的栈上限（默认 256）
---budget CALLS     连续尾调用预算（默认 100,000,000；不是秒，见 §9.3.4）
+--budget STEPS     尾调用/IO 步骤预算（默认 100,000,000；不是秒，见 §9.3.4）
 --out PATH         输出路径（`rssn --emit`、`doc` 使用）
 --color auto|always|never
 --locked           拒绝修改 `aevia.lock`（`update`/`add`）
@@ -6595,15 +6644,19 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时；`check` 模式即
 文件已保存时，分析通过 `aevia_core::driver` 加载其导入图（包根沿用
 `aevia.toml`），诊断/悬停/补全/跳转按当前文件的 `LoadedModule` 回答，跨
 模块跳转返回定义模块的文件 URI；未保存缓冲区也保留导入图（
-`driver::load_with_roots_and_source` 覆盖入口源码），无法解析/虚拟文档才
-回退为单文件分析。分析结果按入口内容哈希 + 依赖文件 `(len, mtime)` 做有界
-LRU 缓存（默认 4 个程序），任何被导入文件的变化都会失效对应条目。
+`driver::load_with_roots_and_overlays` 对所有打开的物理缓冲区使用同一快照），
+尚未保存到磁盘的导入模块也可参与解析；虚拟/无包根文档才回退为单文件分析。
+加载器记录实际读取的源码及查找导入时观察的候选路径（含不存在的高优先级候选）。
+有界 LRU 缓存（默认 4 个程序）比较这些源码的精确内容、候选存在性/物理身份及
+包解析上下文，不扫描无关目录，也不依赖 `(len, mtime)`，因此同长度且恢复时间戳
+的修改仍会失效。导入缓冲区打开、修改或关闭时，应重新发布受影响的已打开
+导入者的诊断；重命名编辑使用同一未保存快照的范围，并携带打开文档的版本。
 `initialize` 返回的**精确能力列表**（`aevia-lsp` 的 `capabilities()`）：
 
 ```json
 {
   "positionEncoding": "utf-16",
-  "textDocumentSync": { "openClose": true, "change": 2, "save": false },
+  "textDocumentSync": { "openClose": true, "change": 2, "save": true },
   "hoverProvider": true,
   "completionProvider": { "resolveProvider": false },
   "definitionProvider": true,
@@ -6629,10 +6682,10 @@ LRU 缓存（默认 4 个程序），任何被导入文件的变化都会失效�
   "experimental": {
     "multiModuleAnalysis": {
       "savedFiles": true,
-      "unsavedBuffers": "entry-overlay, imports resolved from disk"
+      "unsavedBuffers": "snapshot overlays for all open physical buffers"
     },
     "analysisCache": {
-      "strategy": "entry content hash + file mtime/length",
+      "strategy": "observed source contents + import candidates + package resolution",
       "capacity": 4
     }
   }

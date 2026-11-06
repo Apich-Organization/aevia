@@ -156,7 +156,7 @@ impl Options {
                 | "--budget" => {
                     let raw = take("--budget", &mut index)?;
                     options.budget = Some(raw.parse().map_err(|_| {
-                        format!("`--budget` expects a number of tail calls, found `{raw}`")
+                        format!("`--budget` expects a number of execution steps, found `{raw}`")
                     })?);
                 },
                 | "--release" => options.release = true,
@@ -226,6 +226,7 @@ fn apply_options(
 ) {
     if let Some(budget) = options.budget {
         interp.max_tail_calls = budget;
+        interp.max_io_steps = budget;
     }
 }
 
@@ -372,7 +373,7 @@ usage:
 
 options (anywhere on the command line):
   --max-stack <MiB>         stack the interpreter runs on (default 256)
-  --budget <calls>          tail calls before a runaway loop is `E0805`
+  --budget <steps>          trampoline/IO steps before `E0805`
   --color <when>            auto, always, or never (default auto)
   --locked                  fail instead of rewriting an out-of-date aevia.lock
   --release                 accepted for §9.9; reported as having no effect

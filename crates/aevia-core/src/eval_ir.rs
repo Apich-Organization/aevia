@@ -31,14 +31,12 @@ use crate::value::Value;
 use crate::value::{
     self,
 };
-use aevia_ir::Action;
 use aevia_ir::Atom;
 use aevia_ir::Block;
 use aevia_ir::Call;
 use aevia_ir::CallKind;
 use aevia_ir::Capture;
 use aevia_ir::DoPlan;
-use aevia_ir::DoTerminal;
 use aevia_ir::Function;
 use aevia_ir::Pattern;
 use aevia_ir::Rhs;
@@ -49,7 +47,6 @@ use aevia_ir::Tail;
 use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
 use aevia_syntax::ast::PatLit;
-use aevia_types::adt;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -397,22 +394,17 @@ pub(crate) fn run_closure(
     // same stack on its way out.
     let needs_stack = matches!(
         &outcome,
-        Err(error) if error.payload.is_none() && error.stack.is_empty()
+        Err(error) if error.try_target.is_none() && error.stack.is_empty()
     );
     let stack = needs_stack.then(|| interp.frames.clone());
     interp.frames.pop();
-    match outcome {
-        // `?` returns from the enclosing function by unwinding to its call,
-        // which is where the `Err`/`None` payload belongs.
-        | Err(error) if error.payload.is_some() => Ok(error.payload.expect("checked above")),
-        | Err(error) => {
-            Err(match stack {
-                | Some(stack) => error.with_stack(stack),
-                | None => error,
-            })
-        },
-        | other => other,
-    }
+    let outcome = crate::try_control::finish_function(outcome, Some(function.span));
+    outcome.map_err(|error| {
+        match stack {
+            | Some(stack) => error.with_stack(stack),
+            | None => error,
+        }
+    })
 }
 
 fn force(
@@ -1022,41 +1014,7 @@ fn eval_rhs(
         },
         | Rhs::Try(atom) => {
             let value = eval_atom(interp, atom, frame, env, span)?;
-            match &value {
-                | Value::Variant(variant) if variant.adt == adt::RESULT_ID => {
-                    if variant.index == 0 {
-                        variant
-                            .fields
-                            .first()
-                            .cloned()
-                            .ok_or_else(|| EvalError::new("E0809", "malformed Ok"))
-                    } else {
-                        let mut error = EvalError::new("E0702", "propagated Err").at(span);
-                        error.payload = Some(value.clone());
-                        Err(error)
-                    }
-                },
-                | Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
-                    if variant.index == 1 {
-                        variant
-                            .fields
-                            .first()
-                            .cloned()
-                            .ok_or_else(|| EvalError::new("E0809", "malformed Some"))
-                    } else {
-                        let mut error = EvalError::new("E0702", "propagated None").at(span);
-                        error.payload = Some(value.clone());
-                        Err(error)
-                    }
-                },
-                | other => {
-                    Err(EvalError::new(
-                        "E0702",
-                        format!("`?` expects Result or Option, found {}", other.type_name()),
-                    )
-                    .at(span))
-                },
-            }
+            interp.try_value(value, span)
         },
         | Rhs::Factorial { value, double } => {
             let value = eval_atom(interp, value, frame, env, span)?;
@@ -1087,55 +1045,58 @@ fn eval_rhs(
 
 fn build_do(
     interp: &mut Interp,
-    plan: &DoPlan,
+    plan: &Rc<DoPlan>,
     frame: &mut Vec<Value>,
     env: &Rc<IrEnv>,
 ) -> Result<Value, EvalError> {
-    let mut actions: Vec<Rc<IoAction>> = Vec::with_capacity(plan.prefix.len() + 1);
-    for Action { atom, span } in &plan.prefix {
-        match eval_atom(interp, atom, frame, env, *span)? {
-            | Value::Io(action) => actions.push(action),
-            | other => {
-                return Err(EvalError::new(
-                    "E0701",
-                    format!(
-                        "a `do` statement must be an IO action, found {}",
-                        other.type_name()
-                    ),
-                )
-                .at(*span));
+    let mut slots = Vec::with_capacity(plan.captures.len());
+    for capture in &plan.captures {
+        slots.push(match capture {
+            | Capture::Local(slot) => frame.get(*slot as usize).cloned().unwrap_or(Value::Unit),
+            | Capture::Capture(index) => {
+                env.slots
+                    .borrow()
+                    .get(*index as usize)
+                    .cloned()
+                    .unwrap_or(Value::Unit)
             },
-        }
+        });
     }
-    match &plan.terminal {
-        | DoTerminal::End => {},
-        | DoTerminal::Let { thunk } => {
-            match build_closure(thunk, frame, env, interp.bindings.as_ref()) {
-                | Value::Closure(closure) => actions.push(Rc::new(IoAction::Defer(closure))),
-                | _ => unreachable!("a thunk is a closure"),
-            }
-        },
-        | DoTerminal::Bind {
-            action,
-            span: action_span,
-            continuation,
-        } => {
-            let action = match eval_atom(interp, action, frame, env, *action_span)? {
-                | Value::Io(action) => action,
-                | _ => {
-                    return Err(
-                        EvalError::new("E0701", "`<-` expects an IO action").at(*action_span)
-                    );
-                },
-            };
-            let func = build_closure(continuation, frame, env, interp.bindings.as_ref());
-            actions.push(Rc::new(IoAction::Bind { action, func }));
-        },
-    }
-    match actions.len() {
-        | 0 => Ok(Value::Io(Rc::new(IoAction::Pure(Value::Unit)))),
-        | 1 => Ok(Value::Io(actions.remove(0))),
-        | _ => Ok(Value::Io(Rc::new(IoAction::Seq(actions)))),
+    let parent = env.scope.clone().unwrap_or_else(|| interp.root());
+    let scope = Scope::child_with_types(&parent, interp.bindings.clone());
+    let env = Rc::new(IrEnv {
+        slots: RefCell::new(slots),
+        scope: Some(scope),
+    });
+    Ok(Value::Io(Rc::new(IoAction::Do(crate::io_do::DoBlock::ir(
+        interp,
+        plan.clone(),
+        env,
+    )))))
+}
+
+pub(crate) fn eval_do_expression(
+    interp: &mut Interp,
+    block: &Block,
+    frame: &mut Vec<Value>,
+    env: &Rc<IrEnv>,
+) -> Result<Value, EvalError> {
+    eval_block(interp, block, frame, env).and_then(|flow| force(interp, flow))
+}
+pub(crate) fn bind_do_pattern(
+    pattern: &Pattern,
+    value: &Value,
+    frame: &mut Vec<Value>,
+    span: Span,
+) -> Result<(), EvalError> {
+    if match_pattern(pattern, value, frame) {
+        Ok(())
+    } else {
+        Err(EvalError::new(
+            "E0308",
+            "IO binding pattern does not match the action result",
+        )
+        .at(span))
     }
 }
 

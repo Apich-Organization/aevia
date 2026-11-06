@@ -19,7 +19,6 @@
 use aevia_syntax::Span;
 use aevia_syntax::ast::*;
 use aevia_syntax::token::TokenKind;
-use unicode_ident::is_xid_continue;
 
 /// The role a name plays at its span.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +44,8 @@ pub(crate) enum Role {
 /// One name written in the module.
 #[derive(Clone, Debug)]
 pub(crate) struct Occurrence {
+    /// Index of the persistent lexical environment visible at this token.
+    scope: Option<usize>,
     /// Where the name is.
     pub span: Span,
     /// What it is.
@@ -63,6 +64,58 @@ pub(crate) struct Occurrence {
     pub binding: Option<Span>,
 }
 
+/// A persistent lexical snapshot uses arena indices rather than copying the
+/// enclosing bindings for every occurrence or recursively dropping an Rc chain.
+#[derive(Clone, Debug)]
+struct Binding {
+    parent: Option<usize>,
+    name: String,
+    span: Span,
+}
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Occurrences {
+    items: Vec<Occurrence>,
+    bindings: Vec<Binding>,
+}
+impl std::ops::Deref for Occurrences {
+    type Target = [Occurrence];
+
+    fn deref(&self) -> &Self::Target {
+        &self.items
+    }
+}
+impl<'a> IntoIterator for &'a Occurrences {
+    type IntoIter = std::slice::Iter<'a, Occurrence>;
+    type Item = &'a Occurrence;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+impl Occurrences {
+    pub(crate) fn lookup(
+        &self,
+        occurrence: &Occurrence,
+        name: &str,
+    ) -> Option<Span> {
+        lookup_binding(&self.bindings, occurrence.scope, name)
+    }
+}
+fn lookup_binding(
+    bindings: &[Binding],
+    mut head: Option<usize>,
+    name: &str,
+) -> Option<Span> {
+    while let Some(index) = head {
+        let binding = bindings.get(index)?;
+        if binding.name == name {
+            return Some(binding.span);
+        }
+        head = binding.parent;
+    }
+    None
+}
+
 /// Every name in `module`.
 ///
 /// The order is the walk's: source order, except that a `let`'s value is
@@ -73,16 +126,20 @@ pub(crate) struct Occurrence {
 pub(crate) fn collect(
     module: &Module,
     text: &str,
-) -> Vec<Occurrence> {
+) -> Occurrences {
     let mut collector = Collector {
         out: Vec::new(),
         text,
-        scopes: vec![Vec::new()],
+        scopes: vec![None],
+        bindings: Vec::new(),
     };
     for (index, decl) in module.decls.iter().enumerate() {
         collector.decl(decl, index);
     }
-    collector.out
+    Occurrences {
+        items: collector.out,
+        bindings: collector.bindings,
+    }
 }
 
 /// The innermost occurrence containing `offset`.
@@ -97,52 +154,81 @@ pub(crate) fn at(
         .min_by_key(|occurrence| occurrence.span.end.saturating_sub(occurrence.span.start))
 }
 
-/// The span of `name` written inside `within`, or `within` when it is not
-/// found.
-///
-/// The AST records a declaration's whole extent, not the extent of its name,
-/// so the name is located in the source the declaration came from. Searching
-/// for a whole identifier (not a substring) is enough: `fn fall_time` cannot
-/// contain an earlier standalone `fall_time`.
+/// The first identifier token named `name` inside `within`. Declaration
+/// attributes are excluded: their arguments may contain the same spelling as
+/// the declaration, and changing those strings is not a symbol rename.
 #[must_use]
 pub(crate) fn name_span(
     text: &str,
     within: Span,
     name: &str,
 ) -> Span {
-    let start = usize::try_from(within.start).unwrap_or(usize::MAX);
-    let end = usize::try_from(within.end)
-        .unwrap_or(usize::MAX)
-        .min(text.len());
-    let Some(slice) = text.get(start..end) else {
-        return within;
-    };
-    let mut from = 0;
-    while let Some(found) = slice[from..].find(name) {
-        let at = from + found;
-        let before_ok = at == 0
-            || !slice[..at]
-                .chars()
-                .next_back()
-                .is_some_and(is_identifier_continue);
-        let after = at + name.len();
-        let after_ok = after >= slice.len()
-            || !slice[after..]
-                .chars()
-                .next()
-                .is_some_and(is_identifier_continue);
-        if before_ok && after_ok {
-            return Span::new(within.file, start + at, start + after);
-        }
-        from = after.max(at + 1);
-    }
-    within
+    identifier_span(text, within, name, false).unwrap_or(within)
 }
 
-/// True for a character that may continue an identifier, as the lexer defines
-/// it.
-fn is_identifier_continue(character: char) -> bool {
-    is_xid_continue(character) || character == '\'' || ('₀'..='₉').contains(&character)
+/// Find an actual identifier token, never a substring in a string or comment.
+/// Qualified references use the last token; declarations use the first token
+/// after their attribute prefix. Token spans already retain the file offset.
+pub(crate) fn identifier_span(
+    text: &str,
+    within: Span,
+    name: &str,
+    last: bool,
+) -> Option<Span> {
+    use aevia_syntax::token::Keyword as K;
+    use aevia_syntax::token::Punct as P;
+    let start = usize::try_from(within.start).ok()?;
+    let end = usize::try_from(within.end).ok()?.min(text.len());
+    let slice = text.get(start..end)?;
+    let tokens = aevia_syntax::lexer::lex_inline(within.file, slice, start).tokens;
+    let has_attributes = tokens
+        .iter()
+        .find(|token| {
+            !matches!(
+                token.kind,
+                TokenKind::Newline | TokenKind::Keyword(K::Private)
+            )
+        })
+        .is_some_and(|token| token.kind == TokenKind::Punct(P::At));
+    let mut from = 0;
+    if has_attributes {
+        let mut depth = 0usize;
+        from = tokens.iter().position(|token| {
+            match token.kind {
+                | TokenKind::Punct(P::LParen | P::LBracket | P::LBrace) => depth += 1,
+                | TokenKind::Punct(P::RParen | P::RBracket | P::RBrace) => {
+                    depth = depth.saturating_sub(1)
+                },
+                | TokenKind::Keyword(
+                    K::Fn
+                    | K::Let
+                    | K::Type
+                    | K::Dimension
+                    | K::Unit
+                    | K::Class
+                    | K::Instance
+                    | K::Test
+                    | K::Import
+                    | K::Module,
+                ) if depth == 0 => return true,
+                | _ => {},
+            }
+            false
+        })?;
+    }
+    let mut candidates = tokens[from..].iter().filter_map(|token| {
+        match &token.kind {
+            | TokenKind::Ident(actual) | TokenKind::UpperIdent(actual) if actual == name => {
+                Some(token.span)
+            },
+            | _ => None,
+        }
+    });
+    if last {
+        candidates.next_back()
+    } else {
+        candidates.next()
+    }
 }
 
 /// The path a dotted name starts with, when `expr` is one.
@@ -169,7 +255,8 @@ struct Collector<'a> {
     out: Vec<Occurrence>,
     text: &'a str,
     /// The bindings in scope, innermost last.
-    scopes: Vec<Vec<(String, Span)>>,
+    scopes: Vec<Option<usize>>,
+    bindings: Vec<Binding>,
 }
 
 impl Collector<'_> {
@@ -180,6 +267,7 @@ impl Collector<'_> {
         call: Option<Span>,
     ) {
         self.out.push(Occurrence {
+            scope: self.scopes.last().copied().flatten(),
             span,
             role,
             call,
@@ -222,6 +310,7 @@ impl Collector<'_> {
         role: Role,
     ) {
         self.out.push(Occurrence {
+            scope: self.scopes.last().copied().flatten(),
             span,
             role,
             call: None,
@@ -238,6 +327,7 @@ impl Collector<'_> {
     ) {
         let binding = self.lookup(name);
         self.out.push(Occurrence {
+            scope: self.scopes.last().copied().flatten(),
             span,
             role: Role::Name(name.to_string()),
             call,
@@ -251,7 +341,13 @@ impl Collector<'_> {
         span: Span,
     ) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.push((name.to_string(), span));
+            let index = self.bindings.len();
+            self.bindings.push(Binding {
+                parent: *scope,
+                name: name.to_string(),
+                span,
+            });
+            *scope = Some(index);
         }
     }
 
@@ -287,16 +383,11 @@ impl Collector<'_> {
         &self,
         name: &str,
     ) -> Option<Span> {
-        self.scopes
-            .iter()
-            .rev()
-            .flat_map(|scope| scope.iter().rev())
-            .find(|(bound, _)| bound == name)
-            .map(|(_, span)| *span)
+        lookup_binding(&self.bindings, self.scopes.last().copied().flatten(), name)
     }
 
     fn enter(&mut self) {
-        self.scopes.push(Vec::new());
+        self.scopes.push(self.scopes.last().copied().flatten());
     }
 
     fn leave(&mut self) {
@@ -714,7 +805,7 @@ mod tests {
     use aevia_syntax::lex;
     use aevia_syntax::parse_module;
 
-    fn occurrences(source: &str) -> Vec<Occurrence> {
+    fn occurrences(source: &str) -> Occurrences {
         let lexed = lex(0, source).expect("lexes");
         let (module, diagnostics) = parse_module(0, source, &lexed);
         assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);

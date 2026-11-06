@@ -514,6 +514,8 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
         | Type::TensorIntrinsic(_)
         | Type::TypeRepIntrinsic(_)
         | Type::FromValueIntrinsic(_)
+        | Type::WriteNpyIntrinsic
+        | Type::ReadNpyIntrinsic(_)
         | Type::ToCallbackIntrinsic
         | Type::Error => S::Dyn,
     }

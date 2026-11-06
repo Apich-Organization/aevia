@@ -272,6 +272,9 @@ pub struct EvalError {
     /// For `?`: the `Err`/`None` value the enclosing function must return.
     /// Internal — it never reaches a user diagnostic.
     pub payload: Option<Value>,
+    /// Private source control-flow destination. A regular error payload never
+    /// becomes a successful function return.
+    pub(crate) try_target: Option<aevia_types::check::TryBoundary>,
 }
 
 impl EvalError {
@@ -288,6 +291,7 @@ impl EvalError {
             notes: Vec::new(),
             stack: Vec::new(),
             payload: None,
+            try_target: None,
         }
     }
 
@@ -399,6 +403,12 @@ pub struct Interp {
     /// legal 1.6 M iteration count). A caller that wants a tighter bound — the
     /// CLI's `--budget` — sets it explicitly.
     pub max_tail_calls: usize,
+    /// Maximum scheduler steps in one IO execution (including deferred source
+    /// steps). Exhaustion is E0805 before the next effect runs.
+    pub max_io_steps: usize,
+    /// Maximum pending IO continuations. Flat and tail IO programs use constant
+    /// space; recursive non-tail effect chains are stopped before heap exhaustion.
+    pub max_io_depth: usize,
     /// Maximum expression nesting before `E0805`.
     ///
     /// This is a safety net for the recursive walk, not the language's limit:
@@ -566,6 +576,8 @@ impl Interp {
             seed: 0x2545_f491_4f6c_dd1d,
             max_depth: 2048,
             max_tail_calls: 100_000_000,
+            max_io_steps: 100_000_000,
+            max_io_depth: 2048,
             max_nodes: 16_384,
             mode: if std::env::var("AEVIA_EVAL").as_deref() == Ok("ast") {
                 Mode::Ast
@@ -1645,7 +1657,7 @@ impl Interp {
             | ExprKind::Block { stmts, tail } => {
                 self.eval_block_expression(stmts, tail.as_deref(), env)
             },
-            | ExprKind::Do { stmts } => self.eval_do(stmts, env),
+            | ExprKind::Do { stmts } => self.eval_do(stmts, env, expr.span),
             | ExprKind::Record { base, fields } => {
                 let mut collected: IndexMap<String, Value> = IndexMap::new();
                 if let Some(base) = base {
@@ -1716,42 +1728,7 @@ impl Interp {
             },
             | ExprKind::Try(inner) => {
                 let value = self.eval(inner, env)?;
-                match &value {
-                    | Value::Variant(variant) if variant.adt == adt::RESULT_ID => {
-                        if variant.index == 0 {
-                            variant
-                                .fields
-                                .first()
-                                .cloned()
-                                .ok_or_else(|| EvalError::new("E0809", "malformed Ok"))
-                        } else {
-                            let mut error = EvalError::new("E0702", "propagated Err").at(expr.span);
-                            error.payload = Some(value.clone());
-                            Err(error)
-                        }
-                    },
-                    | Value::Variant(variant) if variant.adt == adt::OPTION_ID => {
-                        if variant.index == 1 {
-                            variant
-                                .fields
-                                .first()
-                                .cloned()
-                                .ok_or_else(|| EvalError::new("E0809", "malformed Some"))
-                        } else {
-                            let mut error =
-                                EvalError::new("E0702", "propagated None").at(expr.span);
-                            error.payload = Some(value.clone());
-                            Err(error)
-                        }
-                    },
-                    | other => {
-                        Err(EvalError::new(
-                            "E0702",
-                            format!("`?` expects Result or Option, found {}", other.type_name()),
-                        )
-                        .at(expr.span))
-                    },
-                }
+                self.try_value(value, expr.span)
             },
             | ExprKind::Factorial { expr: inner, double } => {
                 let value = self.eval(inner, env)?;
@@ -3332,6 +3309,23 @@ impl Interp {
             }
         }
         if let Value::Ctor { adt, index, name, .. } = &function {
+            if *adt == u32::MAX
+                && *index == usize::MAX
+                && name == "read_npy"
+                && matches!(&function, Value::Ctor { origin: Some(origin), .. } if origin.adt == *adt && origin.index == *index && origin.name == *name)
+            {
+                let rank = match self.resolved_expr_type(span) {
+                    | Some(aevia_types::Type::ReadNpyIntrinsic(Some(rank))) => Some(rank),
+                    | _ => None,
+                };
+                return Value::Native(Rc::new(NativeFn(Box::new(move |_, args, span| {
+                    let rank = rank.ok_or_else(|| {
+                        EvalError::new("E0304", "missing concrete rank evidence for `read_npy`")
+                            .at(span)
+                    })?;
+                    crate::builtins::read_npy_ranked(&args, rank, span)
+                }))));
+            }
             if *adt == u32::MAX && *index == usize::MAX && name == "from_value" {
                 let evidence = types
                     .first()
@@ -3731,12 +3725,10 @@ impl Interp {
             .eval(body, &scope)
             .map_err(|error| error.with_stack(self.frames.clone()));
         self.frames.pop();
-        match outcome {
-            // `?` returns from the enclosing function by unwinding to
-            // its call, which is where the `Err` value belongs.
-            | Err(error) if error.payload.is_some() => Ok(error.payload.expect("checked above")),
-            | other => other,
-        }
+        crate::try_control::finish_function(
+            outcome,
+            closure.proof.as_ref().map(|proof| proof.definition.site),
+        )
     }
 
     fn apply_in_context(
@@ -4473,86 +4465,17 @@ impl Interp {
 
     // ----- IO -------------------------------------------------------------
 
-    /// Builds the action a `do` block describes.
-    ///
-    /// Plain statements are collected in a loop, so a flat block of 100k
-    /// `println`s costs one frame rather than 100k (§9.3.2). A `let` or `<-`
-    /// turns the *rest* of the block into a [`IoAction::Defer`] / `Bind`, so
-    /// the statement runs when the action runs and not when it is built
-    /// (§6.8.1) — and `run_io` drives that chain iteratively, so the stack does
-    /// not grow with the number of bindings either.
+    /// Captures one immutable deferred program. A replay-local cursor evaluates
+    /// every statement in source order when the action executes.
     fn eval_do(
         &mut self,
         stmts: &[DoStmt],
         env: &Rc<Scope>,
+        span: Span,
     ) -> Result<Value, EvalError> {
-        let mut actions: Vec<Rc<IoAction>> = Vec::new();
-        for (index, stmt) in stmts.iter().enumerate() {
-            let rest = &stmts[index + 1..];
-            match stmt {
-                | DoStmt::Let {
-                    pattern, ty, value, ..
-                } => {
-                    // `do let x = e; rest` is `rest` evaluated in the scope
-                    // `x` creates — but only when the action runs.
-                    let body = Expr::new(
-                        ExprKind::LetIn {
-                            pattern: pattern.clone(),
-                            ty: ty.clone(),
-                            value: Box::new(value.clone()),
-                            body: Box::new(Expr::new(
-                                ExprKind::Do { stmts: rest.to_vec() },
-                                first_span(stmt),
-                            )),
-                        },
-                        first_span(stmt),
-                    );
-                    let thunk = Rc::new(Closure::ast(Vec::new(), body, env.clone(), None));
-                    actions.push(Rc::new(IoAction::Defer(thunk)));
-                    return Ok(Value::Io(Rc::new(IoAction::Seq(actions))));
-                },
-                | DoStmt::Bind { pattern, value, .. } => {
-                    let action = self.eval(value, env)?;
-                    let Value::Io(action) = action else {
-                        return Err(
-                            EvalError::new("E0701", "`<-` expects an IO action").at(value.span)
-                        );
-                    };
-                    let rest_expr =
-                        Expr::new(ExprKind::Do { stmts: rest.to_vec() }, first_span(stmt));
-                    let continuation = Value::Closure(Rc::new(Closure::ast(
-                        vec![pattern.clone()],
-                        rest_expr,
-                        env.clone(),
-                        None,
-                    )));
-                    actions.push(Rc::new(IoAction::Bind {
-                        action,
-                        func: continuation,
-                    }));
-                    return Ok(Value::Io(Rc::new(IoAction::Seq(actions))));
-                },
-                | DoStmt::Expr(expr) => {
-                    let action = self.eval(expr, env)?;
-                    let Value::Io(action) = action else {
-                        return Err(EvalError::new(
-                            "E0701",
-                            format!(
-                                "a `do` statement must be an IO action, found {}",
-                                action.type_name()
-                            ),
-                        )
-                        .at(expr.span));
-                    };
-                    actions.push(action);
-                },
-            }
-        }
-        match actions.len() {
-            | 0 => Ok(Value::Io(Rc::new(IoAction::Pure(Value::Unit)))),
-            | 1 => Ok(Value::Io(actions.remove(0))),
-            | _ => Ok(Value::Io(Rc::new(IoAction::Seq(actions)))),
-        }
+        Ok(Value::Io(Rc::new(IoAction::Do(
+            crate::io_do::DoBlock::ast(self, stmts, env, span),
+        ))))
     }
 
     /// Executes an IO action.
@@ -4563,42 +4486,151 @@ impl Interp {
     ///
     /// # Errors
     ///
-    /// Reports IO failures (`E0810`), failed assertions (`E0899`) and a `?`
-    /// that tries to leave an `IO` block (`E0702`).
+    /// Reports IO failures (`E0810`), failed assertions (`E0899`), invalid IO
+    /// values (`E0701`) and execution-step/continuation limits (`E0805`).
     pub fn run_io(
         &mut self,
         action: &Rc<IoAction>,
     ) -> Result<Value, EvalError> {
         enum Work {
-            Run(Rc<IoAction>),
-            Continue(Value),
+            Run(Rc<IoAction>, Span),
+            Continue(Value, Span),
+            Do(crate::io_do::DoCursor),
+            Sequence(Rc<IoAction>, usize, Span),
         }
-        let mut pending: Vec<Work> = vec![Work::Run(action.clone())];
+        impl Work {
+            fn span(&self) -> Span {
+                match self {
+                    | Self::Do(cursor) => cursor.span(),
+                    | Self::Run(action, span) => {
+                        match &**action {
+                            | IoAction::Do(block) => block.source_span(),
+                            | _ => *span,
+                        }
+                    },
+                    | Self::Continue(_, span) | Self::Sequence(_, _, span) => *span,
+                }
+            }
+
+            fn continuation(&self) -> bool {
+                !matches!(self, Self::Run(..))
+            }
+        }
+        fn push(
+            pending: &mut Vec<Work>,
+            continuations: &mut usize,
+            work: Work,
+            limit: usize,
+        ) -> Result<(), EvalError> {
+            if work.continuation() {
+                if *continuations >= limit {
+                    return Err(
+                        EvalError::new("E0805", "IO continuation depth exceeded").at(work.span())
+                    );
+                }
+                *continuations += 1;
+            }
+            pending.push(work);
+            Ok(())
+        }
+        let mut pending = vec![Work::Run(action.clone(), Span::default())];
+        let mut continuations = 0usize;
+        let mut steps = 0usize;
         let mut last = Value::Unit;
         while let Some(work) = pending.pop() {
+            if work.continuation() {
+                continuations -= 1;
+            }
+            if steps >= self.max_io_steps {
+                return Err(
+                    EvalError::new("E0805", "IO execution step budget exhausted")
+                        .at(work.span())
+                        .with_stack(self.frames.clone()),
+                );
+            }
+            steps += 1;
+            let span = work.span();
             let action = match work {
-                | Work::Continue(function) => {
-                    let value = last.clone();
-                    let next = self.apply(function, vec![value], Span::default())?;
-                    match next {
-                        | Value::Io(next) => {
-                            pending.push(Work::Run(next));
-                            continue;
+                | Work::Continue(function, _) => {
+                    let next = self.apply(function, vec![last.clone()], span)?;
+                    let Value::Io(next) = next else {
+                        return Err(EvalError::new(
+                            "E0701",
+                            "continuation did not produce an IO action",
+                        )
+                        .at(span));
+                    };
+                    push(
+                        &mut pending,
+                        &mut continuations,
+                        Work::Run(next, span),
+                        self.max_io_depth,
+                    )?;
+                    continue;
+                },
+                | Work::Do(mut cursor) => {
+                    match cursor.step(self, &last)? {
+                        | crate::io_do::Step::Continue => {
+                            last = Value::Unit;
+                            push(
+                                &mut pending,
+                                &mut continuations,
+                                Work::Do(cursor),
+                                self.max_io_depth,
+                            )?;
                         },
-                        | other => {
-                            return Err(EvalError::new(
-                                "E0701",
-                                format!(
-                                    "continuation did not produce an IO action, found {}",
-                                    other.type_name()
-                                ),
-                            ));
+                        | crate::io_do::Step::Complete(value) => last = value,
+                        | crate::io_do::Step::Action { action, resume, span } => {
+                            if resume {
+                                push(
+                                    &mut pending,
+                                    &mut continuations,
+                                    Work::Do(cursor),
+                                    self.max_io_depth,
+                                )?;
+                            }
+                            push(
+                                &mut pending,
+                                &mut continuations,
+                                Work::Run(action, span),
+                                self.max_io_depth,
+                            )?;
                         },
                     }
+                    continue;
                 },
-                | Work::Run(action) => action,
+                | Work::Sequence(sequence, index, span) => {
+                    let IoAction::Seq(actions) = &*sequence else {
+                        unreachable!()
+                    };
+                    let next = actions[index].clone();
+                    if index + 1 < actions.len() {
+                        push(
+                            &mut pending,
+                            &mut continuations,
+                            Work::Sequence(sequence.clone(), index + 1, span),
+                            self.max_io_depth,
+                        )?;
+                    }
+                    push(
+                        &mut pending,
+                        &mut continuations,
+                        Work::Run(next, span),
+                        self.max_io_depth,
+                    )?;
+                    continue;
+                },
+                | Work::Run(action, _) => action,
             };
             match &*action {
+                | IoAction::Do(block) => {
+                    push(
+                        &mut pending,
+                        &mut continuations,
+                        Work::Do(block.cursor()),
+                        self.max_io_depth,
+                    )?;
+                },
                 | IoAction::Pure(value) => last = value.clone(),
                 | IoAction::Print {
                     text,
@@ -4636,38 +4668,49 @@ impl Interp {
                         },
                     };
                 },
-                | IoAction::ReadNpy(path) => {
-                    let result = match std::fs::read(path) {
-                        | Ok(bytes) => {
-                            match crate::builtins::npy_decode(&bytes) {
-                                | Ok(tensor) => {
-                                    make_variant(
-                                        adt::RESULT_ID,
-                                        0,
-                                        "Ok",
-                                        vec![Value::Tensor(Rc::new(tensor))],
-                                    )
-                                },
-                                | Err(message) => {
-                                    make_variant(
-                                        adt::RESULT_ID,
-                                        1,
-                                        "Err",
-                                        vec![Value::string(message)],
-                                    )
-                                },
+                | IoAction::ReadNpy { path, rank } => {
+                    let extension = std::path::Path::new(path)
+                        .extension()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    let decoded = if extension != "npy" {
+                        Err(format!(
+                            "E0904: `read_npy` reads .npy files, not `{}`",
+                            if extension.is_empty() {
+                                "a file with no extension"
+                            } else {
+                                &extension
                             }
-                        },
-                        | Err(error) => {
+                        ))
+                    } else {
+                        std::fs::read(path)
+                            .map_err(|error| format!("{}: {error}", io_error_code(&error)))
+                            .and_then(|bytes| crate::builtins::npy_decode(&bytes))
+                            .and_then(|tensor| {
+                                if tensor.shape.len() == *rank as usize {
+                                    Ok(tensor)
+                                } else {
+                                    Err(format!(
+                                        "E0903: NPY file has rank {}, expected {rank}",
+                                        tensor.shape.len()
+                                    ))
+                                }
+                            })
+                    };
+                    last = match decoded {
+                        | Ok(tensor) => {
                             make_variant(
                                 adt::RESULT_ID,
-                                1,
-                                "Err",
-                                vec![Value::string(format!("{}: {error}", io_error_code(&error)))],
+                                0,
+                                "Ok",
+                                vec![Value::Tensor(Rc::new(tensor))],
                             )
                         },
+                        | Err(message) => {
+                            make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)])
+                        },
                     };
-                    last = result;
                 },
                 | IoAction::WriteNpy { path, bytes } => {
                     last = match std::fs::write(path, bytes) {
@@ -4690,12 +4733,29 @@ impl Interp {
                     last = Value::string(line.trim_end_matches(['\n', '\r']));
                 },
                 | IoAction::Bind { action, func } => {
-                    pending.push(Work::Continue(func.clone()));
-                    pending.push(Work::Run(action.clone()));
+                    push(
+                        &mut pending,
+                        &mut continuations,
+                        Work::Continue(func.clone(), span),
+                        self.max_io_depth,
+                    )?;
+                    push(
+                        &mut pending,
+                        &mut continuations,
+                        Work::Run(action.clone(), span),
+                        self.max_io_depth,
+                    )?;
                 },
                 | IoAction::Seq(actions) => {
-                    for action in actions.iter().rev() {
-                        pending.push(Work::Run(action.clone()));
+                    if actions.is_empty() {
+                        last = Value::Unit;
+                    } else {
+                        push(
+                            &mut pending,
+                            &mut continuations,
+                            Work::Sequence(action.clone(), 0, span),
+                            self.max_io_depth,
+                        )?;
                     }
                 },
                 | IoAction::Plot(html) => {
@@ -4709,10 +4769,16 @@ impl Interp {
                     last = Value::Unit;
                 },
                 | IoAction::Defer(thunk) => {
-                    let produced =
-                        self.apply(Value::Closure(thunk.clone()), Vec::new(), Span::default())?;
+                    let produced = self.apply(Value::Closure(thunk.clone()), Vec::new(), span)?;
                     match produced {
-                        | Value::Io(next) => pending.push(Work::Run(next)),
+                        | Value::Io(next) => {
+                            push(
+                                &mut pending,
+                                &mut continuations,
+                                Work::Run(next, span),
+                                self.max_io_depth,
+                            )?
+                        },
                         | other => {
                             return Err(EvalError::new(
                                 "E0702",
@@ -4798,12 +4864,6 @@ impl EvalError {
     }
 }
 
-fn first_span(stmt: &DoStmt) -> Span {
-    match stmt {
-        | DoStmt::Let { span, .. } | DoStmt::Bind { span, .. } => *span,
-        | DoStmt::Expr(expr) => expr.span,
-    }
-}
 
 fn to_complex(num: &NumVal) -> (f64, f64) {
     match &num.kind {

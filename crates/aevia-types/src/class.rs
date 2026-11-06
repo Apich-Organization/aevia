@@ -937,6 +937,8 @@ pub fn is_structural_show_head(ty: &Type) -> bool {
         | Type::TensorIntrinsic(_)
         | Type::TypeRepIntrinsic(_)
         | Type::FromValueIntrinsic(_)
+        | Type::WriteNpyIntrinsic
+        | Type::ReadNpyIntrinsic(_)
         | Type::ToCallbackIntrinsic
         | Type::Var(_)
         | Type::Param(_)
@@ -1141,6 +1143,8 @@ pub fn has_variables(ty: &Type) -> bool {
         },
         | Type::TypeRepIntrinsic(None)
         | Type::FromValueIntrinsic(None)
+        | Type::WriteNpyIntrinsic
+        | Type::ReadNpyIntrinsic(_)
         | Type::ToCallbackIntrinsic => false,
         | Type::Point(dim) | Type::UnitOf(dim) => !dim.vars().is_empty(),
         | Type::Dyn(rep) => matches!(rep, Rep::Var(_)),

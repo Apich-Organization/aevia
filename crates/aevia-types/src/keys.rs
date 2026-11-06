@@ -469,6 +469,8 @@ pub fn head_key(ty: &Type) -> HeadKey {
         | Type::TensorIntrinsic(_)
         | Type::TypeRepIntrinsic(_)
         | Type::FromValueIntrinsic(_)
+        | Type::WriteNpyIntrinsic
+        | Type::ReadNpyIntrinsic(_)
         | Type::ToCallbackIntrinsic => HeadKey::Fn,
         | Type::Var(_) | Type::Param(_) | Type::Error => HeadKey::Wildcard,
     }
@@ -659,6 +661,8 @@ pub fn witness_of(ty: &Type) -> Option<Witness> {
         | Type::TensorIntrinsic(_)
         | Type::TypeRepIntrinsic(_)
         | Type::FromValueIntrinsic(_)
+        | Type::WriteNpyIntrinsic
+        | Type::ReadNpyIntrinsic(_)
         | Type::ToCallbackIntrinsic
         | Type::Dyn(_)
         | Type::Point(_)

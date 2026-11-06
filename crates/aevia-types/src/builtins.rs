@@ -101,6 +101,8 @@ fn assert_fully_quantified(scheme: &Scheme) {
             | Type::TensorIntrinsic(_)
             | Type::TypeRepIntrinsic(_)
             | Type::FromValueIntrinsic(_)
+            | Type::WriteNpyIntrinsic
+            | Type::ReadNpyIntrinsic(_)
             | Type::ToCallbackIntrinsic
             | Type::Dyn(_)
             | Type::Param(_)
@@ -2802,31 +2804,8 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        | "read_npy" => {
-            vec![scheme(
-                1,
-                0,
-                0,
-                func(
-                    vec![Type::string()],
-                    io(Type::result(
-                        tensor(2, Type::float(one())),
-                        error_type("DataError"),
-                    )),
-                ),
-            )]
-        },
-        | "write_npy" => {
-            vec![scheme(
-                1,
-                0,
-                0,
-                func(
-                    vec![Type::string(), tensor(2, Type::float(one()))],
-                    io(Type::result(unit_ty(), error_type("DataError"))),
-                ),
-            )]
-        },
+        | "read_npy" => vec![Scheme::mono(Type::ReadNpyIntrinsic(None))],
+        | "write_npy" => vec![Scheme::mono(Type::WriteNpyIntrinsic)],
         // §8.17: the simulation boundary is `Json`. A typed wrapper encodes its
         // parameters with `to_json`, runs `simulate`, and decodes the answer
         // with `from_json` — a typed façade over a dynamic boundary rather than

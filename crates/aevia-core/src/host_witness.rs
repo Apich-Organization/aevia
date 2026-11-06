@@ -21,6 +21,8 @@ fn concrete(ty: &Type) -> bool {
             | Type::TensorIntrinsic(_)
             | Type::TypeRepIntrinsic(_)
             | Type::FromValueIntrinsic(_)
+            | Type::WriteNpyIntrinsic
+            | Type::ReadNpyIntrinsic(_)
             | Type::ToCallbackIntrinsic
     ) && !aevia_types::class::has_variables(ty)
 }

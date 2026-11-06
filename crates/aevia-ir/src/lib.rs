@@ -326,7 +326,7 @@ pub enum Rhs {
         double: bool,
     },
     /// A `do` block's action plan.
-    Do(DoPlan),
+    Do(Rc<DoPlan>),
 }
 
 /// One piece of an interpolated string.
@@ -402,43 +402,36 @@ pub enum CallKind {
     },
 }
 
-/// How a `do` block builds its action.
+/// An immutable, flat do program. Each expression is evaluated only when
+/// execution reaches that step, after all preceding IO effects complete.
 #[derive(Debug)]
 pub struct DoPlan {
-    /// Statements that are actions in their own right, in order.
-    pub prefix: Vec<Action>,
-    /// What the block does after them.
-    pub terminal: DoTerminal,
-}
-
-/// One eagerly evaluated `do` statement.
-#[derive(Debug)]
-pub struct Action {
-    /// The action.
-    pub atom: Atom,
-    /// Where it is written, for `E0701`.
+    /// Ordered let/action/bind instructions sharing one execution frame.
+    pub steps: Vec<DoStep>,
+    /// Values captured from the enclosing function at action creation.
+    pub captures: Vec<Capture>,
+    /// Slots for this do program, independent of the enclosing frame.
+    pub nslots: u32,
+    /// Source boundary for checked `?` exits.
     pub span: Span,
 }
-
-/// What ends a `do` block.
+/// One deferred instruction in a do program.
 #[derive(Debug)]
-pub enum DoTerminal {
-    /// The block ended.
-    End,
-    /// `do let p = e; rest` — a deferred thunk.
+pub enum DoStep {
+    /// Evaluate a pure value, then bind it locally.
     Let {
-        /// The thunk: bind the pattern, then build the rest of the action.
-        thunk: Rc<Function>,
-    },
-    /// `p <- action; rest` — a bind.
-    Bind {
-        /// The action, evaluated when the block is built.
-        action: Atom,
-        /// Where the action is written.
+        pattern: Pattern,
+        value: Rc<Block>,
         span: Span,
-        /// The continuation.
-        continuation: Rc<Function>,
     },
+    /// Evaluate an action, execute it, then bind its result locally.
+    Bind {
+        pattern: Pattern,
+        value: Rc<Block>,
+        span: Span,
+    },
+    /// Evaluate and execute an action in sequence.
+    Action { value: Rc<Block>, span: Span },
 }
 
 /// A pattern whose binders are slots of the current frame.

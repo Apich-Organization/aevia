@@ -407,6 +407,8 @@ fn declarations() -> Vec<Decl> {
 fn scheme_arity(scheme: &Scheme) -> usize {
     match &scheme.ty {
         | Type::Fn(params, _) => params.len(),
+        | Type::ReadNpyIntrinsic(_) => 1,
+        | Type::WriteNpyIntrinsic => 2,
         | _ => 0,
     }
 }
@@ -425,6 +427,7 @@ fn scheme_return_class(scheme: &Scheme) -> &'static str {
         }
     }
     match &scheme.ty {
+        | Type::ReadNpyIntrinsic(_) | Type::WriteNpyIntrinsic => "io",
         | Type::Fn(_, ret) => class(ret),
         | Type::Io(inner) => {
             match &**inner {
@@ -578,20 +581,6 @@ const MANUAL_FINDINGS: &[(&str, &str, &str, &str)] = &[
          representation in aevia-core this round, so this is a documented \
          capability gap (`storage.sparse`), not a silent omission",
         "runtime (`storage.sparse`, out of this round's scope) + frontend scheme",
-    ),
-    (
-        "8.11",
-        "read_npy",
-        "scheme fixes rank 2 (`Tensor<2, Float>`); §8.11 declares \
-         `Tensor<n, Float>` and the codec reads rank 0/1/2",
-        "frontend + runtime (widen the scheme)",
-    ),
-    (
-        "8.11",
-        "write_npy",
-        "scheme fixes rank 2 (`Tensor<2, Float>`); §8.11 declares \
-         `Tensor<n, Float>` and the codec writes rank 0/1/2",
-        "frontend + runtime (widen the scheme)",
     ),
     (
         "8.14",

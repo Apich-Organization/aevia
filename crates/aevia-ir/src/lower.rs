@@ -21,7 +21,6 @@
 //! records `Capture::Capture(index)`. A capture is added the first time the
 //! name is mentioned, so the environment order is deterministic and testable.
 
-use crate::Action;
 use crate::Arm;
 use crate::Atom;
 use crate::Block;
@@ -29,7 +28,7 @@ use crate::Call;
 use crate::CallKind;
 use crate::Capture;
 use crate::DoPlan;
-use crate::DoTerminal;
+use crate::DoStep;
 use crate::FnDecl;
 use crate::Function;
 use crate::InstanceDecl;
@@ -1073,8 +1072,8 @@ impl Lowerer {
                 self.emit(builder, Rhs::Block(Rc::new(block)), expr.span)
             },
             | ExprKind::Do { stmts } => {
-                let plan = self.do_plan(stmts, builder);
-                self.emit(builder, Rhs::Do(plan), expr.span)
+                let plan = self.do_plan(stmts, expr.span);
+                self.emit(builder, Rhs::Do(Rc::new(plan)), expr.span)
             },
             | ExprKind::Record { base, fields } => {
                 let base = base.as_ref().map(|base| self.value(base, builder));
@@ -1347,87 +1346,47 @@ impl Lowerer {
     fn do_plan(
         &mut self,
         stmts: &[DoStmt],
-        builder: &mut Builder,
+        span: Span,
     ) -> DoPlan {
-        let mut prefix = Vec::new();
-        for (index, stmt) in stmts.iter().enumerate() {
-            let rest = &stmts[index + 1..];
-            match stmt {
-                | DoStmt::Expr(expr) => {
-                    let atom = self.value(expr, builder);
-                    prefix.push(Action {
-                        atom,
-                        span: expr.span,
-                    });
+        self.fns.push(FnState::new("<do>".to_string(), span));
+        let mut steps = Vec::with_capacity(stmts.len());
+        for statement in stmts {
+            match statement {
+                | DoStmt::Expr(value) => {
+                    steps.push(DoStep::Action {
+                        value: Rc::new(self.block(value)),
+                        span: value.span,
+                    })
                 },
                 | DoStmt::Let {
                     pattern, value, span, ..
                 } => {
-                    let thunk = self.do_thunk(Some((pattern, value)), None, rest, *span);
-                    return DoPlan {
-                        prefix,
-                        terminal: DoTerminal::Let { thunk },
-                    };
+                    let value = Rc::new(self.block(value));
+                    let pattern = self.pattern(pattern);
+                    steps.push(DoStep::Let {
+                        pattern,
+                        value,
+                        span: *span,
+                    });
                 },
                 | DoStmt::Bind { pattern, value, span } => {
-                    let action = self.value(value, builder);
-                    let continuation = self.do_thunk(None, Some(pattern), rest, *span);
-                    return DoPlan {
-                        prefix,
-                        terminal: DoTerminal::Bind {
-                            action,
-                            span: value.span,
-                            continuation,
-                        },
-                    };
+                    let value = Rc::new(self.block(value));
+                    let pattern = self.pattern(pattern);
+                    steps.push(DoStep::Bind {
+                        pattern,
+                        value,
+                        span: *span,
+                    });
                 },
             }
         }
+        let state = self.fns.pop().expect("do state");
         DoPlan {
-            prefix,
-            terminal: DoTerminal::End,
-        }
-    }
-
-    /// Lowers the rest of a `do` block as a thunk.
-    ///
-    /// A `do let p = e; rest` thunk binds `p` from `e` when it runs; a `p <- a;
-    /// rest` continuation takes `p` as its parameter. In both cases the rest is
-    /// lowered with the binders already in scope, so it reads them as slots of
-    /// this frame rather than as globals.
-    fn do_thunk(
-        &mut self,
-        binding: Option<(&Pat, &Expr)>,
-        param: Option<&Pat>,
-        rest: &[DoStmt],
-        span: Span,
-    ) -> Rc<Function> {
-        self.fns.push(FnState::new("<do>".to_string(), span));
-        let mut params = Vec::new();
-        if let Some(param) = param {
-            params.push(self.pattern(param));
-        }
-        let mut builder = Builder::default();
-        if let Some((pattern, value)) = binding {
-            let atom = self.value(value, &mut builder);
-            self.bind_value(pattern, atom, &mut builder);
-        }
-        let plan = self.do_plan(rest, &mut builder);
-        let atom = self.emit(&mut builder, Rhs::Do(plan), span);
-        let block = Block {
-            stmts: builder.stmts,
-            tail: Tail::Return { atom, span },
-        };
-        let state = self.fns.pop().expect("the thunk state");
-        Rc::new(Function {
-            name: Rc::from(state.name),
-            jit: false,
-            params,
-            body: Rc::new(block),
+            steps,
             captures: state.captures,
             nslots: state.nslots,
             span,
-        })
+        }
     }
 }
 

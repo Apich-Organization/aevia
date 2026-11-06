@@ -420,7 +420,7 @@ let lt = a < b
 
 #[test]
 fn question_mark_returns_the_error_value() {
-    let output = run(r#"fn safe(p: String): Result<Int, String> =
+    let output = run(r#"fn safe(p: String): Result<Int, ParseError> =
     let x = parse_int(p)?
     Ok(x)
 

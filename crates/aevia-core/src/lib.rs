@@ -33,6 +33,7 @@ pub mod eval_ir;
 mod evidence;
 mod generics;
 mod host_witness;
+pub mod io_do;
 #[cfg(feature = "jit")]
 mod jit;
 pub mod kernel;
@@ -40,6 +41,7 @@ pub mod manifest;
 pub mod rssn_module;
 pub mod source;
 pub mod sym;
+mod try_control;
 pub mod value;
 
 use aevia_syntax::Diagnostic;

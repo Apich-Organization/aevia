@@ -709,6 +709,10 @@ pub enum Type {
     TypeRepIntrinsic(Option<Box<Type>>),
     /// A checked opaque-value conversion, optionally specialized to its result type.
     FromValueIntrinsic(Option<Box<Type>>),
+    /// An NPY reader specialized to a statically known tensor rank.
+    ReadNpyIntrinsic(Option<u32>),
+    /// An NPY writer accepting dimensionless Float tensors of any rank.
+    WriteNpyIntrinsic,
     /// A checked conversion of a concrete function into an opaque callback.
     ToCallbackIntrinsic,
     /// `(τ1, ..., τn) -> τ`.
@@ -1046,6 +1050,9 @@ impl fmt::Display for Type {
             | Self::TypeRepIntrinsic(None) => f.write_str("type_rep constructor"),
             | Self::FromValueIntrinsic(Some(ty)) => write!(f, "from_value<{ty}>"),
             | Self::FromValueIntrinsic(None) => f.write_str("from_value converter"),
+            | Self::ReadNpyIntrinsic(Some(rank)) => write!(f, "read_npy<{rank}>"),
+            | Self::ReadNpyIntrinsic(None) => f.write_str("read_npy reader"),
+            | Self::WriteNpyIntrinsic => f.write_str("write_npy writer"),
             | Self::ToCallbackIntrinsic => f.write_str("to_callback converter"),
             | Self::Fn(params, ret) => {
                 if params.len() == 1 {

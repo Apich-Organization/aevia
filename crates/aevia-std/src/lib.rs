@@ -33,6 +33,7 @@ pub mod fft;
 pub mod geom;
 pub mod interp;
 pub mod linalg;
+pub mod npy;
 pub mod number;
 pub mod ode;
 pub mod pde;

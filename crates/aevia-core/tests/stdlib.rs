@@ -476,24 +476,9 @@ fn a_shape_type_argument_is_read_when_it_is_present() {
         "{}",
         error.message
     );
-    // NPY is implemented (§8.11): `read_npy` builds the IO action, and only
-    // running it can fail (a missing file is the IO taxonomy's `E0901`).
-    assert!(
-        matches!(call("read_npy", vec![Value::string("x.npy")]), Value::Io(_)),
-        "`read_npy` builds an IO action"
-    );
-    // The extension check is the recoverable `Err(E0904)` value, not a panic.
-    let refused = call("read_npy", vec![Value::string("x.txt")]);
-    match &refused {
-        | Value::Variant(result) => {
-            assert_eq!(result.name, "Err");
-            let Value::Str(message) = &result.fields[0] else {
-                panic!("the byte payload is a message");
-            };
-            assert!(message.contains("E0904"), "{message}");
-        },
-        | other => panic!("expected a Result, found {}", other.type_name()),
-    }
+    // A host call without the type application's concrete rank is rejected.
+    let error = call_error("read_npy", vec![Value::string("x.npy")]);
+    assert_eq!(error.code, "E0314");
 }
 
 #[test]

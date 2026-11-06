@@ -32,6 +32,7 @@ pub(crate) struct ModuleEvidence {
     pub(crate) constructor_refs: HashMap<Span, (aevia_types::adt::AdtId, usize)>,
     pub(crate) functions: HashMap<Span, aevia_types::check::FunctionEvidence>,
     pub(crate) callable_refs: HashMap<Span, aevia_types::CallableProjection>,
+    pub(crate) try_targets: HashMap<Span, aevia_types::check::TryTarget>,
     pub(crate) units: aevia_dim::UnitTable,
 }
 #[derive(Debug)]
@@ -71,6 +72,7 @@ impl ModuleContext {
                 constructor_refs: checked.constructor_refs.clone(),
                 functions: checked.functions.clone(),
                 callable_refs: checked.callable_refs.clone(),
+                try_targets: checked.try_targets.clone(),
                 units: checked.units.clone(),
             },
             session: Rc::downgrade(session),

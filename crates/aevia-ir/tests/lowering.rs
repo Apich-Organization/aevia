@@ -541,18 +541,12 @@ fn collect_rhs_forms(
         },
         | Rhs::Do(plan) => {
             out.push("do");
-            for action in &plan.prefix {
-                collect_atom_form(&action.atom, out);
-            }
-            match &plan.terminal {
-                | aevia_ir::DoTerminal::End => {},
-                | aevia_ir::DoTerminal::Let { thunk } => collect_forms(&thunk.body, out),
-                | aevia_ir::DoTerminal::Bind {
-                    action, continuation, ..
-                } => {
-                    collect_atom_form(action, out);
-                    collect_forms(&continuation.body, out);
-                },
+            for step in &plan.steps {
+                match step {
+                    | aevia_ir::DoStep::Let { value, .. }
+                    | aevia_ir::DoStep::Bind { value, .. }
+                    | aevia_ir::DoStep::Action { value, .. } => collect_forms(value, out),
+                }
             }
         },
         | Rhs::RssnMember { .. } => out.push("var"),
@@ -576,35 +570,33 @@ fn collect_atom_form(
 }
 
 #[test]
-fn a_do_block_binds_its_pattern_inside_the_thunk() {
-    // The `let` is deferred: its value is lowered in the thunk, and the rest of
-    // the block reads the binding as a slot of that frame.
+fn a_do_block_has_one_flat_frame_and_defers_every_statement() {
     let module = lower("fn main(): IO Unit = do\n    let x = 1 + 2\n    println(\"{x}\")\n");
     let main = top_function(&module, "main");
+    assert_eq!(
+        main.body.stmts.len(),
+        1,
+        "all pure work stays inside the deferred program"
+    );
     let Stmt::Let(item) = &main.body.stmts[0] else {
-        panic!("expected the `do` plan");
+        panic!("do")
     };
     let Rhs::Do(plan) = &item.rhs else {
-        panic!("expected a `do` plan, found {:?}", item.rhs);
+        panic!("do")
     };
-    assert!(plan.prefix.is_empty());
-    let aevia_ir::DoTerminal::Let { thunk } = &plan.terminal else {
-        panic!("expected a deferred `let`");
+    assert_eq!(plan.steps.len(), 2);
+    assert!(plan.captures.is_empty());
+    let aevia_ir::DoStep::Let {
+        pattern: aevia_ir::Pattern::Bind { slot, inner: None },
+        value,
+        ..
+    } = &plan.steps[0]
+    else {
+        panic!("binding")
     };
-    assert!(thunk.params.is_empty());
-    assert!(thunk.nslots >= 1);
-    // The thunk's tail is the rest of the block, which mentions `x` as a slot.
-    let Tail::Return { atom, .. } = &thunk.body.tail else {
-        panic!("expected a return");
+    assert!(!value.stmts.is_empty());
+    let aevia_ir::DoStep::Action { value, .. } = &plan.steps[1] else {
+        panic!("action")
     };
-    let Atom::Local(slot) = atom else {
-        panic!("expected a slot, found {atom:?}");
-    };
-    assert!(
-        thunk
-            .body
-            .stmts
-            .iter()
-            .any(|stmt| matches!(stmt, Stmt::Let(item) if item.slot == *slot))
-    );
+    assert!(value.stmts.iter().any(|stmt| matches!(stmt, Stmt::Let(item) if matches!(&item.rhs, Rhs::Str(parts) if parts.iter().any(|part| matches!(part, aevia_ir::StrPart::Atom(Atom::Local(found)) if found == slot))))));
 }

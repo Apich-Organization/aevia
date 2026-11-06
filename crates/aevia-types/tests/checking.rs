@@ -2423,9 +2423,8 @@ fn decide_accepts_symbolic_propositions() {
 
 #[test]
 fn npy_io_accepts_every_tensor_rank_it_handles() {
-    // The codec handles rank 0/1/2; `write_npy` therefore accepts any tensor
-    // (the runtime rejects an unsupported storage with E0904), and
-    // `read_npy` keeps the rank-2 scheme until rank-variable shapes exist.
+    // The writer accepts dimensionless Float tensors of any concrete rank;
+    // the reader must name its rank explicitly.
     expect_ok("let r: IO (Result<(), DataError>) = write_npy(\"x.npy\", [1.0, 2.0])\n");
     expect_ok(
         "let r: IO (Result<(), DataError>) = write_npy(\"x.npy\", [[1.0, 2.0], [3.0, 4.0]])\n",
@@ -2434,9 +2433,9 @@ fn npy_io_accepts_every_tensor_rank_it_handles() {
         "let r: IO (Result<(), DataError>) = write_npy(\"x.npy\", 1.0)\n",
         "E0302",
     );
-    expect_ok("let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy(\"x.npy\")\n");
+    expect_ok("let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy<2>(\"x.npy\")\n");
     expect_error(
-        "let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy(1)\n",
+        "let r: IO (Result<Tensor<2, Float>, DataError>) = read_npy<2>(1)\n",
         "E0302",
     );
 }

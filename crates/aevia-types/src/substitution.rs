@@ -61,6 +61,8 @@ impl TypeSubstitution {
             | Type::Unit
             | Type::Param(_)
             | Type::Error
+            | Type::WriteNpyIntrinsic
+            | Type::ReadNpyIntrinsic(_)
             | Type::ToCallbackIntrinsic => ty.clone(),
         }
     }
@@ -156,6 +158,8 @@ impl TypeSubstitution {
             | Type::Unit
             | Type::Param(_)
             | Type::Error
+            | Type::WriteNpyIntrinsic
+            | Type::ReadNpyIntrinsic(_)
             | Type::ToCallbackIntrinsic => {},
         }
         self.apply(ty)

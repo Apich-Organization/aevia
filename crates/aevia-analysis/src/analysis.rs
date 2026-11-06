@@ -67,7 +67,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 use unicode_ident::is_xid_continue;
-use unicode_ident::is_xid_start;
 
 /// Where the answers come from.
 enum Source {
@@ -87,7 +86,7 @@ pub struct Analysis<'a> {
     /// The file the compiler gave this document. A diagnostic in any other
     /// file is not this document's to report.
     file: FileId,
-    occurrences: Vec<Occurrence>,
+    occurrences: occurrence::Occurrences,
     /// Where each name declared by the module is written.
     definitions: HashMap<String, Span>,
     /// In program mode, one declaration table per loaded module (in the
@@ -108,9 +107,12 @@ impl<'a> Analysis<'a> {
     pub fn new(document: &'a Document) -> Self {
         let compilation = compile(document.name(), document.text());
         let file = compilation.module.as_ref().map_or(0, |module| module.file);
-        let occurrences = compilation.module.as_ref().map_or_else(Vec::new, |module| {
-            occurrence::collect(module, document.text())
-        });
+        let occurrences = compilation
+            .module
+            .as_ref()
+            .map_or_else(occurrence::Occurrences::default, |module| {
+                occurrence::collect(module, document.text())
+            });
         let definitions = compilation
             .module
             .as_ref()
@@ -853,6 +855,35 @@ impl<'a> Analysis<'a> {
                 parameters: vec!["function with a concrete checked signature".to_owned()],
                 documentation: Some("Captures a callable with its concrete argument, result and dimension schema for a synchronous kernel call.".to_owned()),
             }], 0));
+        }
+        match view.checked.expr_types.get(&callee.span) {
+            | Some(aevia_types::Type::ReadNpyIntrinsic(rank)) => {
+                let tensor_rank = rank.map_or_else(|| "rank".to_string(), |rank| rank.to_string());
+                let documentation = if rank.is_some() {
+                    "Reads a dimensionless Float tensor. The file rank is checked when the IO action runs; decoding failures return DataError."
+                } else {
+                    "Select a concrete rank with read_npy<rank>(path) before calling. Decoding and rank failures return DataError."
+                };
+                return Some((
+                    vec![SignatureInfo {
+                        label: format!(
+                            "{}: Str -> IO<Result<Tensor<{tensor_rank}, Float>, DataError>>",
+                            callee_text(view.text, callee)
+                        ),
+                        parameters: vec!["path: Str".to_owned()],
+                        documentation: Some(documentation.to_owned()),
+                    }],
+                    0,
+                ));
+            },
+            | Some(aevia_types::Type::WriteNpyIntrinsic) => {
+                return Some((vec![SignatureInfo {
+                    label: format!("{}: (Str, Tensor<n, Float>) -> IO<Result<(), DataError>>", callee_text(view.text, callee)),
+                    parameters: vec!["path: Str".to_owned(), "data: Tensor<n, Float> (dimensionless)".to_owned()],
+                    documentation: Some("Writes a dimensionless Float tensor of any rank. Its storage must match its shape; encoding failures return DataError.".to_owned()),
+                }], 0));
+            },
+            | _ => {},
         }
         if let Some(parts) = callee_path(callee) {
             if parts.first().map(String::as_str) == Some("Rssn") && parts.len() > 1 {
@@ -1891,7 +1922,7 @@ struct ModuleView<'a> {
     module: &'a Module,
     checked: &'a CheckedModule,
     definitions: &'a HashMap<String, Span>,
-    occurrences: Vec<Occurrence>,
+    occurrences: occurrence::Occurrences,
     /// The prefixes this module's imports bring other modules in under.
     imports: Vec<(String, usize, Option<Vec<String>>)>,
 }
@@ -1958,30 +1989,8 @@ fn last_name_span(
     within: Span,
     name: &str,
 ) -> Span {
-    let start = usize::try_from(within.start).unwrap_or(usize::MAX);
-    let end = usize::try_from(within.end)
-        .unwrap_or(usize::MAX)
-        .min(text.len());
-    let Some(slice) = text.get(start..end) else {
-        return within;
-    };
-    for (at, _) in slice.rmatch_indices(name) {
-        let before_ok = at == 0
-            || !slice[..at]
-                .chars()
-                .next_back()
-                .is_some_and(identifier_continue);
-        let after = at + name.len();
-        let after_ok = after >= slice.len()
-            || !slice[after..]
-                .chars()
-                .next()
-                .is_some_and(identifier_continue);
-        if before_ok && after_ok {
-            return Span::new(within.file, start + at, start + after);
-        }
-    }
-    occurrence::name_span(text, within, name)
+    occurrence::identifier_span(text, within, name, true)
+        .unwrap_or_else(|| occurrence::name_span(text, within, name))
 }
 
 fn identifier_continue(character: char) -> bool {
@@ -2192,6 +2201,16 @@ fn check_physical_rename(
             if physical_declaration(views, file, span) != Some(target_key) {
                 continue;
             }
+            if new_name != target.name && matches!(occurrence.role, Role::Name(_)) {
+                if let Some(binding) = view.occurrences.lookup(occurrence, new_name) {
+                    if physical_declaration(views, view.file, binding) != Some(target_key) {
+                        return Err(RenameError::Collision(format!(
+                            "`{new_name}` would capture a reference in `{}`",
+                            view.document
+                        )));
+                    }
+                }
+            }
             let occurrence_span = occurrence_edit_span(view.text, occurrence, name);
             edited.insert((view.document, occurrence_span.start, occurrence_span.end));
             // Check every owner's scope of the shared declaration.
@@ -2218,6 +2237,30 @@ fn check_physical_rename(
                     },
                     new_name,
                 )?;
+            }
+        }
+    }
+    // Renaming a binding can also capture uses which are not edited: e.g. a
+    // parameter renamed to an opened function already used inside its body.
+    if new_name != target.name {
+        for view in views {
+            for occurrence in &view.occurrences {
+                if !matches!(&occurrence.role, Role::Name(name) if name == new_name)
+                    || view.occurrences.lookup(occurrence, new_name).is_some()
+                {
+                    continue;
+                }
+                let mut old_name = occurrence.clone();
+                old_name.role = Role::Name(target.name.clone());
+                old_name.binding = view.occurrences.lookup(occurrence, &target.name);
+                let reachable = canonical_decl_of(views, view, &old_name)
+                    .and_then(|(file, span)| physical_declaration(views, file, span));
+                if reachable == Some(target_key) {
+                    return Err(RenameError::Collision(format!(
+                        "renaming to `{new_name}` would capture an existing reference in `{}`",
+                        view.document
+                    )));
+                }
             }
         }
     }
@@ -2322,17 +2365,16 @@ fn validate_new_name(
     old: &str,
     new: &str,
 ) -> Result<(), RenameError> {
+    if aevia_syntax::token::Keyword::from_word(new).is_some() {
+        return Err(RenameError::InvalidName(format!("`{new}` is a keyword")));
+    }
     if new.is_empty() || !is_identifier(new) {
         return Err(RenameError::InvalidName(format!(
             "`{new}` is not an Aevia identifier"
         )));
     }
-    if aevia_syntax::token::Keyword::from_word(new).is_some() {
-        return Err(RenameError::InvalidName(format!("`{new}` is a keyword")));
-    }
     let upper = |text: &str| text.chars().next().is_some_and(char::is_uppercase);
-    let underscore = old.starts_with('_') || new.starts_with('_');
-    if !underscore && upper(old) != upper(new) {
+    if upper(old) != upper(new) {
         return Err(RenameError::InvalidName(
             "a type, constructor or module name keeps an upper-case initial; a value keeps a \
              lower-case one"
@@ -2343,12 +2385,14 @@ fn validate_new_name(
 }
 
 fn is_identifier(text: &str) -> bool {
-    let mut characters = text.chars();
-    let Some(first) = characters.next() else {
+    if text == "_" {
         return false;
-    };
-    (is_xid_start(first) || first == '_')
-        && characters.all(|character| is_xid_continue(character) || character == '_')
+    }
+    let lexed = aevia_syntax::lexer::lex_inline(0, text, 0);
+    matches!(lexed.tokens.as_slice(), [first, end]
+        if matches!(&first.kind, aevia_syntax::token::TokenKind::Ident(name)
+            | aevia_syntax::token::TokenKind::UpperIdent(name) if name == text)
+            && matches!(end.kind, aevia_syntax::token::TokenKind::Eof))
 }
 
 fn check_collision(

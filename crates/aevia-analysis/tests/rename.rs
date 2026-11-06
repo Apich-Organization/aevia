@@ -319,6 +319,51 @@ fn rename_refuses_a_name_already_exported() {
 }
 
 #[test]
+fn rename_rejects_capture_of_opened_names_in_both_directions() {
+    for (case, body, old_name, new_name) in [
+        (
+            "export",
+            "fn f(amount: Int): Int = value() + amount\n",
+            "value",
+            "amount",
+        ),
+        ("local", "fn f(x: Int): Int = x + value()\n", "x:", "value"),
+    ] {
+        let package = Package::new(&format!("capture-{case}"));
+        package.write("src/A.aev", "module A\nfn value(): Int = 1\n");
+        let source = format!("module B\nopen A\n{body}");
+        let path = package.write("src/B.aev", &source);
+        let document = Document::new(path.display().to_string(), 1, &source);
+        let analysis = Analysis::from_path(&document, &path);
+        assert!(
+            analysis.diagnostics().is_empty(),
+            "{:?}",
+            analysis.diagnostics()
+        );
+        assert!(matches!(
+            analysis.rename(offset_of(&source, old_name), new_name),
+            Err(aevia_analysis::RenameError::Collision(_))
+        ));
+    }
+}
+
+#[test]
+fn qualified_rename_does_not_capture_a_same_named_local() {
+    let package = Package::new("qualified-safe");
+    package.write("src/A.aev", "module A\nfn value(): Int = 1\n");
+    let source = "module B\nimport A\nfn f(amount: Int): Int = A.value() + amount\n";
+    let path = package.write("src/B.aev", source);
+    let document = Document::new(path.display().to_string(), 1, source);
+    let analysis = Analysis::from_path(&document, &path);
+    let edits = analysis
+        .rename(offset_of(source, "value"), "amount")
+        .unwrap();
+    let changed = apply(source, &edits, &path.display().to_string());
+    assert!(changed.contains("A.amount() + amount"));
+    assert_eq!(renames_in(&edits, "A.aev").len(), 1);
+}
+
+#[test]
 fn rename_refuses_invalid_names_and_the_wrong_case() {
     let package = imported("invalid");
     let (document, path) = package.open_b();

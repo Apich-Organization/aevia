@@ -3741,23 +3741,11 @@ pub fn call(
 
         // ----- §8.11 data -------------------------------------------------
         | "read_npy" => {
-            let path = expect_str(&args, 0, name, span)?;
-            let extension = std::path::Path::new(&path)
-                .extension()
-                .and_then(std::ffi::OsStr::to_str)
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if extension != "npy" {
-                return Ok(err(Value::string(format!(
-                    "E0904: `read_npy` reads .npy files, not `{}`",
-                    if extension.is_empty() {
-                        "a file with no extension"
-                    } else {
-                        &extension
-                    }
-                ))));
-            }
-            Ok(Value::Io(Rc::new(crate::value::IoAction::ReadNpy(path))))
+            Err(EvalError::new(
+                "E0314",
+                "`read_npy` requires an explicit rank, for example `read_npy<2>`",
+            )
+            .at(span))
         },
         | "write_npy" => {
             let path = expect_str(&args, 0, name, span)?;
@@ -3767,24 +3755,28 @@ pub fn call(
                 .unwrap_or_default()
                 .to_ascii_lowercase();
             if extension != "npy" {
-                return Ok(err(Value::string(format!(
-                    "E0904: `write_npy` writes .npy files, not `{}`",
-                    if extension.is_empty() {
-                        "a file with no extension"
-                    } else {
-                        &extension
-                    }
-                ))));
+                return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                    Value::string(format!(
+                        "E0904: `write_npy` writes .npy files, not `{}`",
+                        if extension.is_empty() {
+                            "a file with no extension"
+                        } else {
+                            &extension
+                        }
+                    )),
+                )))));
             }
             let value = args
                 .get(1)
                 .cloned()
                 .ok_or_else(|| arity(name, 2, 1, span))?;
             let Value::Tensor(tensor) = value else {
-                return Ok(err(Value::string(format!(
-                    "E0902: `write_npy` needs a tensor, found {}",
-                    value.type_name()
-                ))));
+                return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                    Value::string(format!(
+                        "E0902: `write_npy` needs a tensor, found {}",
+                        value.type_name()
+                    )),
+                )))));
             };
             match npy_encode(&tensor) {
                 | Ok(bytes) => {
@@ -3793,7 +3785,11 @@ pub fn call(
                         bytes,
                     })))
                 },
-                | Err(message) => Ok(err(Value::string(message))),
+                | Err(message) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                        Value::string(message),
+                    )))))
+                },
             }
         },
         | "read_csv" | "read_csv_dyn" => {
@@ -6303,152 +6299,70 @@ fn run_ode(
 
 use aevia_std::sde::SdeError;
 
-// ----- §8.11 NPY codec -----------------------------------------------------
-
-const NPY_MAGIC: &[u8] = b"\x93NUMPY";
-
-/// Encodes a rank-1/rank-2 float tensor as a NumPy `.npy` file (version 1.0,
-/// little-endian `float64`, C order).
-///
-/// The header is padded so the data starts on a 64-byte boundary, exactly as
-/// NumPy writes it; `write_npy`'s round trip and the byte-exact test both rely
-/// on this.
-pub fn npy_encode(tensor: &crate::value::TensorData) -> Result<Vec<u8>, String> {
-    if tensor.rank() > 2 {
-        return Err(format!(
-            "E0902: `write_npy` writes rank-1 or rank-2 tensors, not rank {}",
-            tensor.rank()
-        ));
+/// Construct an NPY read action with an authenticated concrete rank.
+pub(crate) fn read_npy_ranked(
+    args: &[Value],
+    rank: u32,
+    span: Span,
+) -> Result<Value, EvalError> {
+    if args.len() != 1 {
+        return Err(arity("read_npy", 1, args.len(), span));
     }
-    let Some(values) = tensor.dense_flat() else {
-        return Err("E0902: `write_npy` needs a dense float tensor".to_string());
-    };
-    let shape = if tensor.shape.is_empty() {
-        "()".to_string()
-    } else if tensor.shape.len() == 1 {
-        format!("({},)", tensor.shape[0])
-    } else {
-        format!("({}, {})", tensor.shape[0], tensor.shape[1])
-    };
-    let mut header = format!("{{'descr': '<f8', 'fortran_order': False, 'shape': {shape}, }}");
-    // magic(6) + version(2) + header length(2) + header must be a multiple of 64.
-    let padding = (64 - ((10 + header.len() + 1) % 64)) % 64;
-    header.push_str(&" ".repeat(padding));
-    header.push('\n');
-    let header_len = u16::try_from(header.len())
-        .map_err(|_| "E0903: the NPY header is too large".to_string())?;
-    let mut bytes = Vec::with_capacity(10 + header.len() + values.len() * 8);
-    bytes.extend_from_slice(NPY_MAGIC);
-    bytes.push(1); // major
-    bytes.push(0); // minor
-    bytes.extend_from_slice(&header_len.to_le_bytes());
-    bytes.extend_from_slice(header.as_bytes());
-    for value in values.iter() {
-        bytes.extend_from_slice(&value.to_le_bytes());
-    }
-    Ok(bytes)
+    let path = expect_str(args, 0, "read_npy", span)?;
+    Ok(Value::Io(Rc::new(crate::value::IoAction::ReadNpy {
+        path,
+        rank,
+    })))
 }
 
-/// Decodes a `.npy` file (§8.11).
+// ----- §8.11 NPY codec -----------------------------------------------------
+
+/// Encode a dimensionless Float tensor, preserving its shape.
 ///
 /// # Errors
-///
-/// `E0903` for malformed/truncated data, `E0904` for an unsupported dtype or
-/// Fortran order. The message carries the code, because the language-level
-/// result is `Result<Tensor<…>, DataError>`.
-pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
-    if bytes.len() < 10 || &bytes[..6] != NPY_MAGIC {
-        return Err("E0903: not a NumPy `.npy` file (bad magic)".to_string());
+/// Rejects dimensioned, malformed or non-Float storage.
+pub fn npy_encode(tensor: &crate::value::TensorData) -> Result<Vec<u8>, String> {
+    if !tensor.dim.is_one() {
+        return Err("E0902: NPY cannot store tensor physical dimensions".to_string());
     }
-    let major = bytes[6];
-    let header_len = match major {
-        | 1 => usize::from(u16::from_le_bytes([bytes[8], bytes[9]])),
-        | 2 | 3 => {
-            if bytes.len() < 12 {
-                return Err("E0903: truncated NPY header".to_string());
-            }
-            usize::try_from(u32::from_le_bytes([
-                bytes[8], bytes[9], bytes[10], bytes[11],
-            ]))
-            .unwrap_or(0)
-        },
-        | _ => {
-            return Err(format!(
-                "E0904: unsupported NPY version {major}.{}",
-                bytes[7]
-            ));
-        },
-    };
-    if header_len > 10 * 1024 {
-        return Err("E0903: the NPY header exceeds 10 KiB".to_string());
-    }
-    let start = if major == 1 { 10 } else { 12 };
-    if bytes.len() < start + header_len {
-        return Err("E0903: the NPY header is truncated".to_string());
-    }
-    let header = std::str::from_utf8(&bytes[start..start + header_len])
-        .map_err(|_| "E0903: the NPY header is not UTF-8".to_string())?;
-
-    let descr_start = header
-        .find("'descr': '")
-        .ok_or_else(|| "E0903: the NPY header has no `descr`".to_string())?
-        + "'descr': '".len();
-    let descr_end = header[descr_start..]
-        .find('\'')
-        .map(|offset| descr_start + offset)
-        .ok_or_else(|| "E0903: the NPY `descr` is unterminated".to_string())?;
-    let descr = &header[descr_start..descr_end];
-    let width = match descr {
-        | "<f8" | "|f8" | "=f8" => 8usize,
-        | "<f4" | "|f4" | "=f4" => 4usize,
-        | _ => {
-            return Err(format!(
-                "E0904: unsupported NPY dtype `{descr}` (only little-endian f4/f8)"
-            ));
-        },
-    };
-    if header.contains("'fortran_order': True") {
-        return Err("E0904: Fortran-ordered NPY is not supported".to_string());
-    }
-    let shape_text = header
-        .find("'shape': (")
-        .ok_or_else(|| "E0903: the NPY header has no `shape`".to_string())?
-        + "'shape': (".len();
-    let shape_end = header[shape_text..]
-        .find(')')
-        .map(|offset| shape_text + offset)
-        .ok_or_else(|| "E0903: the NPY `shape` is unterminated".to_string())?;
-    let mut shape = Vec::new();
-    for part in header[shape_text..shape_end].split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
+    aevia_std::npy::checked_element_count(&tensor.shape)
+        .ok_or_else(|| "E0902: NPY tensor shape or strides overflow".to_string())?;
+    let values = if let Storage::Boxed(items) = &tensor.storage {
+        if items.is_empty()
+            && !matches!(tensor.verified_element.as_deref(), Some(aevia_types::Type::Scalar(aevia_types::Rep::Float, dim)) if dim.is_one())
+        {
+            return Err("E0902: `write_npy` needs proven Float elements".to_string());
         }
-        let extent = part
-            .parse::<usize>()
-            .map_err(|_| format!("E0903: bad NPY shape entry `{part}`"))?;
-        shape.push(extent);
-    }
-    let count: usize = shape.iter().product();
-    let data = &bytes[start + header_len..];
-    let expected = count
-        .checked_mul(width)
-        .ok_or_else(|| "E0903: NPY shape overflows".to_string())?;
-    if data.len() != expected {
-        return Err(format!(
-            "E0903: NPY data is {} byte(s), the shape needs {expected}",
-            data.len()
-        ));
-    }
-    let mut values = Vec::with_capacity(count);
-    for chunk in data.chunks_exact(width) {
-        let value = if width == 8 {
-            f64::from_le_bytes(chunk.try_into().expect("eight bytes"))
-        } else {
-            f64::from(f32::from_le_bytes(chunk.try_into().expect("four bytes")))
-        };
-        values.push(value);
-    }
+        let values = items
+            .iter()
+            .map(|item| {
+                match item {
+                    | Value::Num(number) if number.dim.is_one() => {
+                        match &number.kind {
+                            | NumKind::Float(value) => Some(*value),
+                            | _ => None,
+                        }
+                    },
+                    | _ => None,
+                }
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| "E0902: `write_npy` needs Float elements".to_string())?;
+        std::borrow::Cow::Owned(values)
+    } else {
+        tensor
+            .dense_flat()
+            .ok_or_else(|| "E0902: `write_npy` needs Float elements".to_string())?
+    };
+    aevia_std::npy::encode(&tensor.shape, &values)
+}
+
+/// Decode an NPY array into row-major Float storage.
+///
+/// # Errors
+/// Returns the shared codec's E0903/E0904 errors.
+pub fn npy_decode(bytes: &[u8]) -> Result<crate::value::TensorData, String> {
+    let (shape, values) = aevia_std::npy::decode(bytes)?;
     Ok(crate::value::TensorData {
         verified_element: None,
         shape,

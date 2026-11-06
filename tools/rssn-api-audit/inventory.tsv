@@ -938,6 +938,12 @@ crate::kernels::robust::median	no-declared-adapter			fn median (data : & [f64]) 
 crate::kernels::robust::quantile	no-declared-adapter			fn quantile (data : & [f64] , p : f64 , kind : u8 ,) -> f64
 crate::kernels::robust::trimmed_mean	no-declared-adapter			fn trimmed_mean (data : & [f64] , trim : f64 ,) -> f64
 crate::kernels::robust::winsorized_mean	no-declared-adapter			fn winsorized_mean (data : & [f64] , trim : f64 ,) -> f64
+crate::kernels::rootfind::<reexport:289e7bb385459ca3>	unresolved-reexport			least_squares :: LeastSquaresResult
+crate::kernels::rootfind::<reexport:3e9496178c381d24>	unresolved-reexport			least_squares :: LeastSquaresStatus
+crate::kernels::rootfind::<reexport:546b429ad94060d4>	unresolved-reexport			least_squares :: LeastSquaresOptions
+crate::kernels::rootfind::<reexport:5a804d9dbf58b95d>	unresolved-reexport			least_squares :: least_squares
+crate::kernels::rootfind::<reexport:84c4730ff6684bfb>	unresolved-reexport			least_squares :: LeastSquaresJacobian
+crate::kernels::rootfind::<reexport:c26ed2ade37ae29c>	unresolved-reexport			least_squares :: LeastSquaresError
 crate::kernels::rootfind::brent	declared	num_brent		fn brent < F : Fn (f64) -> f64 > (f : F , a : f64 , b : f64 , tol : f64 , max_iter : usize ,) -> Result < f64 , RootError >
 crate::kernels::rootfind::broyden	callback			fn broyden < F : Fn (& [f64]) -> Vec < f64 > > (f : F , x0 : & [f64] , tol : f64 , max_iter : usize ,) -> Result < SystemSolution , RootError >
 crate::kernels::rootfind::halley	callback			fn halley < F , D , E > (f : F , df : D , d2f : E , x0 : f64 , tol : f64 , max_iter : usize ,) -> Result < f64 , RootError > where F : Fn (f64) -> f64 , D : Fn (f64) -> f64 , E : Fn (f64) -> f64 ,
@@ -953,6 +959,7 @@ crate::kernels::rootfind::polynomial_roots_aberth	opaque			fn polynomial_roots_a
 crate::kernels::rootfind::polynomial_roots_companion	opaque			fn polynomial_roots_companion (coeffs : & [f64]) -> Result < Vec < (f64 , f64) > , RootError >
 crate::kernels::rootfind::polynomial_roots_jenkins_traub	opaque			fn polynomial_roots_jenkins_traub (coeffs : & [f64]) -> Result < Vec < (f64 , f64) > , RootError >
 crate::kernels::rootfind::polynomial_roots_jenkins_traub_complex	opaque			fn polynomial_roots_jenkins_traub_complex (coeffs : & [(f64 , f64)]) -> Result < Vec < (f64 , f64) > , RootError >
+crate::kernels::rootfind::try_numerical_jacobian	callback			fn try_numerical_jacobian < F : Fn (& [f64]) -> Vec < f64 > > (f : & F , x : & [f64] , fx : & [f64] ,) -> Result < Mat , RootError >
 crate::kernels::sde::aggregate_noise	opaque			fn aggregate_noise (sample : & NoiseSample , group : usize , m : usize ,) -> NoiseSample
 crate::kernels::sde::brownian_increments	opaque			fn brownian_increments (rng : & mut Rng , m : usize , steps : usize , h : f64 ,) -> Vec < Vec < f64 > >
 crate::kernels::sde::ensemble_seed	no-declared-adapter			const fn ensemble_seed (seed : u64 , index : usize ,) -> u64

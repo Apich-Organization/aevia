@@ -1535,6 +1535,26 @@ pub struct Scope {
     pub(crate) types: Option<Rc<crate::generics::CallBindings>>,
 }
 
+// A flat do program can introduce many lexical scopes without nesting calls.
+// Release an exclusively owned parent spine iteratively; shared parents and
+// arbitrary value/closure ownership graphs retain normal Rc semantics.
+impl Drop for Scope {
+    fn drop(&mut self) {
+        let mut parent = self.parent.take();
+        while let Some(current) = parent {
+            match Rc::try_unwrap(current) {
+                | Ok(mut scope) => {
+                    parent = scope.parent.take();
+                    // Its parent has been detached, so this drop cannot recurse
+                    // down the same lexical spine.
+                    drop(scope);
+                },
+                | Err(_) => break,
+            }
+        }
+    }
+}
+
 impl Scope {
     /// An empty root scope.
     #[must_use]
@@ -1738,6 +1758,8 @@ impl fmt::Debug for NativeFn {
 /// never while the description is being built.
 #[derive(Debug)]
 pub enum IoAction {
+    /// A flat deferred source do program, replayed with fresh local bindings.
+    Do(Rc<crate::io_do::DoBlock>),
     /// Produces a value without doing anything.
     Pure(Value),
     /// Writes text to stdout or stderr.
@@ -1758,12 +1780,17 @@ pub enum IoAction {
         /// The contents.
         contents: String,
     },
-    /// Reads an NPY file into a rank-1/rank-2 float tensor (§8.11).
+    /// Reads an NPY file into a Float tensor with the requested rank (§8.11).
     ///
     /// NPY is binary, so it does not fit [`Self::ReadFile`]'s UTF-8 text; the
     /// decode happens when the action runs, and a malformed file becomes the
     /// typed `Err` the spec asks for.
-    ReadNpy(String),
+    ReadNpy {
+        /// File to decode.
+        path: String,
+        /// Statically selected rank; checked against the decoded file.
+        rank: u32,
+    },
     /// Writes pre-encoded NPY bytes (§8.11).
     WriteNpy {
         /// The path.

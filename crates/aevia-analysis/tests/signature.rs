@@ -6,6 +6,50 @@
 use aevia_analysis::Analysis;
 use aevia_analysis::Document;
 
+#[test]
+fn npy_signatures_follow_intrinsic_identity_including_aliases() {
+    for (source, needle, expected) in [
+        (
+            "let action = read_npy<3>(\"cube.npy\")\n",
+            "cube.npy",
+            "Tensor<3, Float>",
+        ),
+        (
+            "let reader = read_npy<0>\nlet action = reader(\"scalar.npy\")\n",
+            "scalar.npy",
+            "Tensor<0, Float>",
+        ),
+        (
+            "let writer = write_npy\nfn save(cube: Tensor<3, Float>) = writer(\"cube.npy\", cube)\n",
+            "cube.npy",
+            "Tensor<n, Float>",
+        ),
+    ] {
+        let document = Document::new("npy.aev", 1, source);
+        let analysis = Analysis::new(&document);
+        assert!(
+            analysis.diagnostics().is_empty(),
+            "{:?}",
+            analysis.diagnostics()
+        );
+        let help = analysis
+            .signature_help(source.find(needle).unwrap() as u32)
+            .unwrap();
+        let label = &help.signatures[0].label;
+        assert!(label.contains(expected), "{label}");
+        assert!(label.contains("IO<Result<"), "{label}");
+        assert!(label.contains("DataError"), "{label}");
+    }
+    let source = "fn read_npy(x: Int): Int = x\nlet result = read_npy(3)\n";
+    let document = Document::new("shadow.aev", 1, source);
+    let analysis = Analysis::new(&document);
+    let help = analysis
+        .signature_help(source.rfind('3').unwrap() as u32)
+        .unwrap();
+    assert!(help.signatures[0].label.contains("Int"));
+    assert!(!help.signatures[0].label.contains("DataError"));
+}
+
 /// A temporary package that removes itself.
 struct Package {
     root: std::path::PathBuf,

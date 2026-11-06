@@ -222,6 +222,16 @@ impl Encoder {
                     self.part("polymorphic");
                 }
             },
+            | Type::WriteNpyIntrinsic => self.part("write-npy"),
+            | Type::ReadNpyIntrinsic(rank) => {
+                self.part("read-npy");
+                if let Some(rank) = rank {
+                    self.part("rank");
+                    self.number(*rank);
+                } else {
+                    self.part("unspecialized");
+                }
+            },
             | Type::ToCallbackIntrinsic => self.part("to-callback"),
             | Type::TypeRepIntrinsic(inner) | Type::FromValueIntrinsic(inner) => {
                 self.part(if matches!(ty, Type::TypeRepIntrinsic(_)) {

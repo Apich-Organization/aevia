@@ -183,18 +183,8 @@ fn an_unsupported_version_is_e0904() {
 }
 
 #[test]
-fn fortran_order_and_unsupported_dtypes_are_e0904() {
+fn unsupported_dtypes_are_e0904() {
     let data = [0u8; 8];
-    let fortran = file_with(
-        "{'descr': '<f8', 'fortran_order': True, 'shape': (1, 1), }",
-        &data,
-    );
-    assert!(decode_error(&fortran).starts_with("E0904:"));
-    let big_endian = file_with(
-        "{'descr': '>f8', 'fortran_order': False, 'shape': (1, 1), }",
-        &data,
-    );
-    assert!(decode_error(&big_endian).starts_with("E0904:"));
     let integer = file_with(
         "{'descr': '<i8', 'fortran_order': False, 'shape': (1, 1), }",
         &data,
@@ -289,9 +279,10 @@ fn write_then_read_round_trips_through_the_io_actions() {
         Value::Variant(ref result) if result.name == "Ok"
     ));
 
-    let read = interp
-        .call_named("read_npy", vec![Value::string(path_text)], Span::default())
-        .expect("read_npy builds an action");
+    let read = Value::Io(Rc::new(IoAction::ReadNpy {
+        path: path_text,
+        rank: 2,
+    }));
     let tensor = ok_tensor(run_action(&mut interp, read));
     assert_eq!(tensor.shape, vec![2, 2]);
     assert_eq!(dense(&tensor), vec![1.0, 2.0, 3.0, 4.0]);
@@ -302,20 +293,18 @@ fn write_then_read_round_trips_through_the_io_actions() {
 fn a_missing_npy_file_is_e0901_and_a_wrong_extension_is_e0904() {
     let mut interp = interpreter();
     let missing = std::env::temp_dir().join(format!("aevia-missing-{}.npy", std::process::id()));
-    let read = interp
-        .call_named(
-            "read_npy",
-            vec![Value::string(missing.to_string_lossy().to_string())],
-            Span::default(),
-        )
-        .expect("read_npy builds an action");
+    let read = Value::Io(Rc::new(IoAction::ReadNpy {
+        path: missing.to_string_lossy().to_string(),
+        rank: 2,
+    }));
     let text = err_text(&run_action(&mut interp, read));
     assert!(text.starts_with("E0901:"), "found {text}");
 
-    let wrong = interp
-        .call_named("read_npy", vec![Value::string("data.csv")], Span::default())
-        .expect("read_npy builds a Result");
-    assert!(err_text(&wrong).starts_with("E0904:"));
+    let wrong = Value::Io(Rc::new(IoAction::ReadNpy {
+        path: "data.csv".into(),
+        rank: 2,
+    }));
+    assert!(err_text(&run_action(&mut interp, wrong)).starts_with("E0904:"));
     let wrong = interp
         .call_named(
             "write_npy",
@@ -326,18 +315,18 @@ fn a_missing_npy_file_is_e0901_and_a_wrong_extension_is_e0904() {
             Span::default(),
         )
         .expect("write_npy builds a Result");
-    assert!(err_text(&wrong).starts_with("E0904:"));
+    assert!(err_text(&run_action(&mut interp, wrong)).starts_with("E0904:"));
 }
 
 /// The `plot` action type is still reachable (guards the `Plot`/`Save` names).
 #[test]
 fn npy_actions_are_reachable() {
-    let mut interp = interpreter();
-    let action = interp
-        .call_named("read_npy", vec![Value::string("x.npy")], Span::default())
-        .expect("read_npy");
+    let action = Value::Io(Rc::new(IoAction::ReadNpy {
+        path: "x.npy".into(),
+        rank: 2,
+    }));
     match action {
-        | Value::Io(action) => assert!(matches!(*action, IoAction::ReadNpy(_))),
+        | Value::Io(action) => assert!(matches!(*action, IoAction::ReadNpy { rank: 2, .. })),
         | other => panic!("read_npy answers an IO action, found {}", other.type_name()),
     }
 }

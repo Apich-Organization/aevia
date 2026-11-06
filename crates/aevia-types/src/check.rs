@@ -242,9 +242,26 @@ impl GenericBinder {
     }
 }
 
+/// The lexical boundary exited by a source `?` operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TryBoundary {
+    /// A real source function/lambda (never an implementation thunk).
+    Function(Span),
+    /// An effectful do program whose result is Option/Result.
+    Do(Span),
+}
+/// The checked destination and result container of one source `?`.
+#[derive(Clone, Debug)]
+pub struct TryTarget {
+    pub boundary: TryBoundary,
+    pub result: Type,
+}
+
 /// The checked signature that belongs to the actual source function body.
 #[derive(Clone, Debug)]
 pub struct FunctionEvidence {
+    /// Source return boundary, retained independently of callable identity.
+    pub site: Span,
     /// Stable declaration syntax plus its resolved creation contract.
     pub identity: CallableId,
     pub scheme: Scheme,
@@ -544,6 +561,8 @@ pub struct CheckedModule {
     pub generic_refs: HashMap<Span, Vec<GenericBinder>>,
     /// Source-authenticated selections in the actual declaration's order.
     pub callable_refs: HashMap<Span, CallableProjection>,
+    /// Exact lexical destinations for `?`, including deferred IO boundaries.
+    pub try_targets: HashMap<Span, TryTarget>,
     /// The file this module came from, used to build a deterministic module
     /// path when there is no `module` declaration (`<fileN>`).
     pub anonymous_file: FileId,
@@ -1360,6 +1379,7 @@ struct Checker {
     diagnostics: Diagnostics,
     checked: CheckedModule,
     return_type: Option<Type>,
+    do_returns: Vec<(usize, Span, Type)>,
 }
 
 #[derive(Clone)]
@@ -1441,6 +1461,7 @@ impl Checker {
             diagnostics: Diagnostics::new(),
             checked: CheckedModule::default(),
             return_type: None,
+            do_returns: Vec::new(),
         };
         checker.register_prelude();
         checker
@@ -2700,6 +2721,9 @@ impl Checker {
             if let Some(completed) = completed_origins.get(&projection.origin) {
                 projection.origin = completed.clone();
             }
+        }
+        for target in self.checked.try_targets.values_mut() {
+            target.result = self.infer.resolve(&target.result);
         }
         for projection in self.checked.callable_refs.values_mut() {
             *projection = projection.resolved(&self.infer);
@@ -3965,6 +3989,7 @@ impl Checker {
             self.checked.functions.insert(
                 instance_method.span,
                 FunctionEvidence {
+                    site: instance_method.span,
                     identity: self
                         .callable_ids
                         .get(&instance_method.span)
@@ -4852,6 +4877,7 @@ impl Checker {
         self.checked.functions.insert(
             site,
             FunctionEvidence {
+                site,
                 identity: self
                     .callable_ids
                     .get(&site)
@@ -5453,6 +5479,7 @@ impl Checker {
                 self.checked.functions.insert(
                     expr.span,
                     FunctionEvidence {
+                        site: expr.span,
                         identity: self
                             .callable_ids
                             .get(&expr.span)
@@ -5554,7 +5581,7 @@ impl Checker {
                 self.scopes.pop();
                 tail_ty
             },
-            | ExprKind::Do { stmts } => self.synth_do(stmts),
+            | ExprKind::Do { stmts } => self.synth_do(stmts, expr.span),
             | ExprKind::Record { base, fields } => self.synth_record(base.as_deref(), fields),
             | ExprKind::Field { base, name } => {
                 if is_rssn_root(base) {
@@ -5847,6 +5874,7 @@ impl Checker {
                 self.checked.functions.insert(
                     expr.span,
                     FunctionEvidence {
+                        site: expr.span,
                         identity: self
                             .callable_ids
                             .get(&expr.span)
@@ -5894,6 +5922,19 @@ impl Checker {
         }
         let actual = self.synth(expr);
         let expected_resolved = self.infer.resolve(expected);
+        if matches!(
+            self.infer.resolve(&actual),
+            Type::ReadNpyIntrinsic(_) | Type::WriteNpyIntrinsic
+        ) && matches!(expected_resolved, Type::Fn(..))
+        {
+            self.error_help(
+                "E0302",
+                "an NPY intrinsic cannot yet satisfy an explicit function type",
+                expr.span,
+                "wrap the rank-selected call in a source function or lambda",
+            );
+            return;
+        }
         // §3.9.4: a pure context cannot run an action. Saying `E0313` instead
         // of a plain mismatch is what tells the user to return `IO`.
         if matches!(actual, Type::Io(_))
@@ -7130,6 +7171,9 @@ impl Checker {
             // ignore explicit arguments and omit their runtime evidence.
             let applied = self.apply_type_arguments(inner, type_args, callee.span, inner_ty);
             self.note_type(callee.span, &applied);
+            if let Type::ReadNpyIntrinsic(rank) = self.infer.resolve(&applied) {
+                return self.read_npy_call(rank, args, span);
+            }
             return self.call_with_type(applied, args, span);
         }
         if let ExprKind::Var(name) = &callee.kind {
@@ -7248,45 +7292,6 @@ impl Checker {
             }
             if name == "check" {
                 return self.check_call(args, None, span);
-            }
-            // §8.11: the NPY codec handles rank 0/1/2, but a scheme cannot
-            // quantify a tensor's rank. `write_npy` therefore accepts any
-            // tensor here (the runtime rejects an unsupported storage with
-            // E0904); `read_npy` keeps its rank-2 scheme until rank-variable
-            // shapes exist (reported as a known limit).
-            if name == "write_npy" {
-                if args.len() != 2 {
-                    self.error(
-                        "E0315",
-                        format!("`write_npy` takes 2 arguments, found {}", args.len()),
-                        span,
-                    );
-                    for arg in args {
-                        self.synth(arg);
-                    }
-                    return Type::Error;
-                }
-                let path_ty = self.synth(&args[0]);
-                if let Err(error) = self.infer.unify(&path_ty, &Type::string()) {
-                    self.report_unify(error, args[0].span);
-                }
-                let value_ty = self.synth(&args[1]);
-                let io_result = Type::Io(Box::new(Type::result(
-                    Type::Unit,
-                    builtin_type("DataError").unwrap_or(Type::Error),
-                )));
-                return match self.infer.resolve(&value_ty) {
-                    | Type::Tensor { .. } => io_result,
-                    | other => {
-                        self.error_help(
-                            "E0302",
-                            format!("`write_npy` expects a tensor, found {other}"),
-                            args[1].span,
-                            "write a `Tensor<n, Float>` value",
-                        );
-                        Type::Error
-                    },
-                };
             }
             // §8.1: `min_all`/`max_all` reduce a whole tensor of any rank to
             // its scalar element (`min`/`max` stay the binary scalar
@@ -7515,6 +7520,8 @@ impl Checker {
             | Type::FromValueIntrinsic(specialization) => {
                 return self.from_value_call(specialization.map(|ty| *ty), args, span);
             },
+            | Type::ReadNpyIntrinsic(rank) => return self.read_npy_call(rank, args, span),
+            | Type::WriteNpyIntrinsic => return self.write_npy_call(args, span),
             | Type::ToCallbackIntrinsic => return self.to_callback_call(args, span),
             | Type::TypeRepIntrinsic(Some(_)) => return self.type_rep_call(args, span),
             | Type::TypeRepIntrinsic(None) => {
@@ -7587,6 +7594,8 @@ impl Checker {
     ) -> Type {
         let callee_ty = self.infer.resolve(&callee_ty);
         match callee_ty {
+            | Type::ReadNpyIntrinsic(rank) => self.read_npy_call(rank, args, span),
+            | Type::WriteNpyIntrinsic => self.write_npy_call(args, span),
             | Type::Fn(params, ret) => {
                 // `() -> τ` and `f()`: a function taking unit can be written
                 // with the unit argument or without it, so `random()`,
@@ -7672,13 +7681,22 @@ impl Checker {
             }
         }
         self.scopes.push(scope);
+        let result_type = self.infer.fresh_type();
+        let saved_return = self.return_type.replace(result_type.clone());
+        self.function_stack.push(span);
         let body_ty = self.synth_call(callee, &call_args, span);
+        if let Err(error) = self.infer.unify(&result_type, &body_ty) {
+            self.report_unify(error, span);
+        }
+        self.function_stack.pop();
+        self.return_type = saved_return;
         self.scopes.pop();
         let _ = params;
         let ty = Type::func(param_types, body_ty);
         self.checked.functions.insert(
             span,
             FunctionEvidence {
+                site: span,
                 identity: self
                     .callable_ids
                     .get(&span)
@@ -7790,6 +7808,75 @@ impl Checker {
             return Type::Error;
         }
         opaque_type("Callback")
+    }
+
+    fn write_npy_call(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        if args.len() != 2 {
+            self.error(
+                "E0315",
+                format!("`write_npy` takes two arguments, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        self.check(&args[0], &Type::Str);
+        let value = self.synth(&args[1]);
+        let Type::Tensor { elem, .. } = self.infer.resolve(&value) else {
+            self.error(
+                "E0302",
+                format!("`write_npy` needs a Float tensor, found {value}"),
+                args[1].span,
+            );
+            return Type::Error;
+        };
+        if let Err(error) = self.infer.unify(&elem, &Type::float(Dim::one())) {
+            self.report_unify(error, args[1].span);
+            return Type::Error;
+        }
+        Type::Io(Box::new(Type::result(
+            Type::Unit,
+            builtin_type("DataError").unwrap_or(Type::Error),
+        )))
+    }
+
+    fn read_npy_call(
+        &mut self,
+        rank: Option<u32>,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        if args.len() != 1 {
+            self.error(
+                "E0315",
+                format!("`read_npy` takes one path argument, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        self.check(&args[0], &Type::Str);
+        let Some(rank) = rank else {
+            self.error_help(
+                "E0314",
+                "`read_npy` requires an explicit rank",
+                span,
+                "write `read_npy<2>(path)`",
+            );
+            return Type::Error;
+        };
+        Type::Io(Box::new(Type::result(
+            Type::tensor(Shape::Rank(rank), Type::float(Dim::one())),
+            builtin_type("DataError").unwrap_or(Type::Error),
+        )))
     }
 
     fn from_value_call(
@@ -8672,6 +8759,32 @@ impl Checker {
             }
             return self.infer.resolve(&ty);
         }
+        if matches!(self.infer.resolve(&ty), Type::WriteNpyIntrinsic) {
+            self.error("E0315", "`write_npy` does not accept type arguments", span);
+            return Type::Error;
+        }
+        if let Type::ReadNpyIntrinsic(specialization) = self.infer.resolve(&ty) {
+            if specialization.is_some() || args.len() != 1 {
+                self.error(
+                    "E0315",
+                    "`read_npy` requires exactly one rank argument",
+                    span,
+                );
+                return Type::Error;
+            }
+            let nat = self.convert_type_as_nat(&args[0]);
+            let Some(rank) = nat.as_const().and_then(|n| u32::try_from(n).ok()) else {
+                self.error_help(
+                    "E0304",
+                    "`read_npy` needs a concrete representable rank",
+                    args[0].span,
+                    "supply a literal rank such as `read_npy<2>`",
+                );
+                return Type::Error;
+            };
+            self.note_type(args[0].span, &Type::tensor(Shape::Rank(rank), Type::Unit));
+            return Type::ReadNpyIntrinsic(Some(rank));
+        }
         if let Type::FromValueIntrinsic(specialization) = self.infer.resolve(&ty) {
             if specialization.is_some() || args.len() != 1 {
                 self.error(
@@ -9101,39 +9214,53 @@ impl Checker {
             self.error("E0702", "`?` requires a `Result` or `Option` value", span);
             return Type::Error;
         };
-        // §3.9.3: `?` returns from the *enclosing function*, so that function
-        // must return the same container.
-        let expected = self.return_type.clone();
-        match expected.map(|ty| self.infer.resolve(&ty)) {
-            | Some(Type::Adt(id, args)) if id == adt::RESULT_ID && args.len() == 2 && arity == 2 =>
-            {
-                if let Type::Adt(_, inner_args) = &inner_ty {
-                    // The error types only need to agree when one of them is
-                    // still open. Two different concrete error types are a
-                    // *conversion* question the specification does not settle,
-                    // so the enclosing function's type wins.
-                    let left = self.infer.resolve(&inner_args[1]);
-                    let right = self.infer.resolve(&args[1]);
-                    if matches!(left, Type::Var(_)) || matches!(right, Type::Var(_)) {
-                        let _ = self.infer.unify(&inner_args[1], &args[1]);
-                    }
-                }
-            },
-            | Some(Type::Adt(id, args)) if id == adt::OPTION_ID && !args.is_empty() && arity == 1 =>
-                {},
-            // An unannotated function's return type is not known yet.
-            | Some(Type::Var(_) | Type::Error) => {},
-            | Some(other) => {
-                self.error_help(
-                    "E0702",
-                    format!("`?` needs the enclosing function to return `Result`, but it returns {other}"),
-                    span,
-                    "return `Result<T, E>`, or handle the error with `match`",
-                );
-                return Type::Error;
-            },
-            | None => {},
+        let destination = self
+            .do_returns
+            .last()
+            .filter(|(depth, _, _)| *depth == self.function_stack.len())
+            .map(|(_, site, ty)| (TryBoundary::Do(*site), ty.clone()))
+            .or_else(|| {
+                self.function_stack
+                    .last()
+                    .zip(self.return_type.as_ref())
+                    .map(|(site, ty)| (TryBoundary::Function(*site), ty.clone()))
+            });
+        let Some((boundary, target)) = destination else {
+            self.error(
+                "E0702",
+                "`?` requires an enclosing function or IO do boundary",
+                span,
+            );
+            return Type::Error;
+        };
+        let Type::Adt(container, input_args) = &inner_ty else {
+            unreachable!()
+        };
+        let success = self.infer.fresh_type();
+        let output_args = if arity == 2 {
+            vec![success, input_args[1].clone()]
+        } else {
+            vec![success]
+        };
+        let output = Type::Adt(*container, output_args);
+        // An inferred return is constrained immediately. Error conversion is
+        // never fabricated: concrete error types must agree as well.
+        if let Err(error) = self.infer.unify(&target, &output) {
+            self.error_help(
+                "E0702",
+                format!("`?` does not match its enclosing return container: {error}"),
+                span,
+                "return the same Option/Result family and error type, or handle it with `match`",
+            );
+            return Type::Error;
         }
+        self.checked.try_targets.insert(
+            span,
+            TryTarget {
+                boundary,
+                result: target,
+            },
+        );
         match inner_ty {
             | Type::Adt(_, args) => args[0].clone(),
             | other => other,
@@ -9143,7 +9270,11 @@ impl Checker {
     fn synth_do(
         &mut self,
         stmts: &[DoStmt],
+        span: Span,
     ) -> Type {
+        let destination = self.infer.fresh_type();
+        self.do_returns
+            .push((self.function_stack.len(), span, destination.clone()));
         self.scopes.push(HashMap::new());
         let mut last_ty = Type::Unit;
         for stmt in stmts {
@@ -9160,6 +9291,7 @@ impl Checker {
                         | None => self.synth(value),
                     };
                     self.bind_pattern(pattern, &value_ty);
+                    last_ty = Type::Unit;
                 },
                 | DoStmt::Bind { pattern, value, .. } => {
                     let value_ty = self.synth(value);
@@ -9175,6 +9307,7 @@ impl Checker {
                         },
                     };
                     self.bind_pattern(pattern, &inner);
+                    last_ty = Type::Unit;
                 },
                 | DoStmt::Expr(expr) => {
                     let ty = self.synth(expr);
@@ -9201,6 +9334,10 @@ impl Checker {
             }
         }
         self.scopes.pop();
+        self.do_returns.pop();
+        if let Err(error) = self.infer.unify(&destination, &last_ty) {
+            self.report_unify(error, span);
+        }
         Type::io(last_ty)
     }
 
@@ -10365,6 +10502,12 @@ impl Checker {
         }
         if name == "from_value" {
             return Type::FromValueIntrinsic(None);
+        }
+        if name == "read_npy" {
+            return Type::ReadNpyIntrinsic(None);
+        }
+        if name == "write_npy" {
+            return Type::WriteNpyIntrinsic;
         }
         if name == "to_callback" {
             return Type::ToCallbackIntrinsic;
