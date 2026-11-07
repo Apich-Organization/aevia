@@ -96,8 +96,8 @@ fn dense_min_max_answer_the_whole_tensor_scalar() {
                   let lo = min_all(v)\n\
                   let hi = max_all(v)\n";
     let rendered = evaluate_both(source, &["lo", "hi"]);
-    assert_eq!(rendered[0], "1");
-    assert_eq!(rendered[1], "3");
+    assert_eq!(rendered[0], "1.0");
+    assert_eq!(rendered[1], "3.0");
 
     let mut interp = interpreter();
     let tensor = dense(vec![3], vec![3.0, 1.0, 2.0]);
@@ -208,8 +208,8 @@ fn a_strided_view_answers_like_its_dense_copy() {
                   let lo = min_all(r)\n\
                   let hi = max_all(r)\n";
     let rendered = evaluate_both(source, &["lo", "hi"]);
-    assert_eq!(rendered[0], "1");
-    assert_eq!(rendered[1], "3");
+    assert_eq!(rendered[0], "1.0");
+    assert_eq!(rendered[1], "3.0");
 
     // A column-major (strided) 3×3 view over a row-major buffer: the logical
     // matrix is [[0,3,6],[1,4,7],[2,5,8]], so min is 0 and max is 8.

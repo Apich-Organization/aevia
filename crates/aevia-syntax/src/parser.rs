@@ -1513,11 +1513,36 @@ impl<'a> Parser<'a> {
         } else {
             let span = self.span();
             let pattern = self.binding_pattern();
-            vec![Param {
+            let mut params = vec![Param {
                 pattern,
                 ty: None,
                 span,
-            }]
+            }];
+            // `fn t, y => …` is the most common slip with a two-argument
+            // lambda (the ODE right-hand side). Say how to write it and
+            // recover with the parameters it reads as, instead of cascading
+            // into unrelated errors at the `,`.
+            if self.at_punct(Punct::Comma) {
+                let comma = self.span();
+                while self.eat_punct(Punct::Comma) {
+                    let span = self.span();
+                    let pattern = self.binding_pattern();
+                    params.push(Param {
+                        pattern,
+                        ty: None,
+                        span,
+                    });
+                }
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "E0202",
+                        "a lambda with several parameters needs parentheses",
+                        comma,
+                    )
+                    .with_help("write `fn (a, b) => …`"),
+                );
+            }
+            params
         };
         let ret = if self.eat_punct(Punct::Colon) {
             Some(self.ty())
@@ -3300,6 +3325,13 @@ impl<'a> Parser<'a> {
     fn unit_expr(&mut self) -> Option<UnitExpr> {
         let mut left = self.unit_factor()?;
         loop {
+            // §1.8.1: `*` and `/` continue a unit expression only when they
+            // are written tight, with no space on either side (`m/s^2`,
+            // `kg*m^2`). A spaced operator ends the literal and is ordinary
+            // arithmetic, so `9.81 m/s^2 * mass` is `(9.81 m/s^2) * mass`.
+            if !self.tight_unit_operator() {
+                return Some(left);
+            }
             if self.at_punct(Punct::Star) && self.starts_unit_atom_at(1) {
                 self.bump();
                 let right = self.unit_factor()?;
@@ -3312,6 +3344,15 @@ impl<'a> Parser<'a> {
                 return Some(left);
             }
         }
+    }
+
+    /// Whether the current token touches both its neighbours.
+    fn tight_unit_operator(&self) -> bool {
+        let current = self.span();
+        let Some(next) = self.tokens.get(self.pos + 1) else {
+            return false;
+        };
+        self.pos > 0 && self.previous_span().end == current.start && current.end == next.span.start
     }
 
     fn starts_unit_atom_at(
@@ -3523,13 +3564,93 @@ mod tests {
 
     #[test]
     fn multiplication_of_a_quantity_and_a_variable() {
+        // A spaced `*` ends the unit literal (§1.8.1): this is `(3 m) * x`.
         let expr = parse_expr_source("3 m * x");
-        // `m * x` is a unit expression by grammar; the unknown unit `x` is a
-        // name-resolution error, not a parse error.
-        let ExprKind::Quantity { unit, .. } = &expr.kind else {
-            panic!("expected quantity, got {:?}", expr.kind);
+        let ExprKind::Binary { op, left, right } = &expr.kind else {
+            panic!("expected multiplication, got {:?}", expr.kind);
         };
-        assert_eq!(unit.to_source(), "m*x");
+        assert_eq!(*op, BinOp::Mul);
+        let ExprKind::Quantity { unit, .. } = &left.kind else {
+            panic!("expected quantity, got {:?}", left.kind);
+        };
+        assert_eq!(unit.to_source(), "m");
+        assert!(matches!(&right.kind, ExprKind::Var(name) if name == "x"));
+    }
+
+    #[test]
+    fn a_comma_separated_lambda_head_is_one_diagnostic_with_a_fix() {
+        let lexed = lex(
+            0,
+            "let f = fn t, y => t + y
+",
+        )
+        .expect("lexes");
+        let (module, diagnostics) = parse_module(
+            0,
+            "let f = fn t, y => t + y
+",
+            &lexed,
+        );
+        let errors: Vec<_> = diagnostics.items.iter().collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code, "E0202");
+        assert!(
+            errors[0]
+                .helps
+                .iter()
+                .any(|help| help.contains("fn (a, b)"))
+        );
+        let DeclKind::Let { value, .. } = &module.decls[0].kind else {
+            panic!("expected a let");
+        };
+        let ExprKind::Lambda { params, .. } = &value.kind else {
+            panic!("expected a lambda, got {:?}", value.kind);
+        };
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn tight_unit_operators_continue_the_literal() {
+        for (source, unit) in [
+            ("3 m*x", "m*x"),
+            ("9.81 m/s^2", "m/s^2"),
+            ("1.5 kg*m^2/s^3", "kg*m^2/s^3"),
+            ("2 kg·m", "kg·m"),
+        ] {
+            let expr = parse_expr_source(source);
+            let ExprKind::Quantity { unit: parsed, .. } = &expr.kind else {
+                panic!("{source}: expected quantity, got {:?}", expr.kind);
+            };
+            assert_eq!(parsed.to_source(), unit, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_spaced_operator_after_a_unit_is_arithmetic() {
+        // The specification's own tour writes `70 kg * v^2 / 2` (§0.5).
+        let expr = parse_expr_source("70 kg * v^2 / 2");
+        let ExprKind::Binary {
+            op: BinOp::Div, left, ..
+        } = &expr.kind
+        else {
+            panic!("expected division, got {:?}", expr.kind);
+        };
+        let ExprKind::Binary {
+            op: BinOp::Mul, left, ..
+        } = &left.kind
+        else {
+            panic!("expected multiplication, got {:?}", left.kind);
+        };
+        assert!(matches!(left.kind, ExprKind::Quantity { .. }));
+        // Half-tight is not tight: `m /s` and `m/ s` end the literal too.
+        for source in ["3 m /s", "3 m/ s"] {
+            let expr = parse_expr_source(source);
+            assert!(
+                matches!(expr.kind, ExprKind::Binary { op: BinOp::Div, .. }),
+                "{source}: {:?}",
+                expr.kind
+            );
+        }
     }
 
     #[test]

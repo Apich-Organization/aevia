@@ -320,4 +320,59 @@ fn the_hot_paths_allocate_within_their_budget() {
         large <= small * 8,
         "symbolic construction allocations grew super-linearly: 100 terms {small}, 400 terms {large}"
     );
+
+    // --- checked constructors: a cons cell is O(1), not O(tail) ------------
+    //
+    // §9.2.3 trust boundary: a checked constructor application attaches its
+    // type witness without walking the payload. Re-proving the payload made
+    // `Cons(n, acc)` linear in `acc` — and allocating, since a witness tree was
+    // built per call — so building a list was quadratic.
+    let cons = |n: usize| -> usize {
+        let source = format!(
+            "type L = | Nil | Cons(Int, L)
+fn mk(n: Int, acc: L): L = if n == 0 then acc else mk(n - 1, Cons(n, acc))
+fn head(l: L): Int = match l with | Nil -> 0 | Cons(h, _) -> h
+fn main(): IO Unit = do
+    println(head(mk({n}, Nil)))
+"
+        );
+        let mut interp = interpreter(&source);
+        main_program(&mut interp);
+        let (allocs, _) = allocations(|| main_program(&mut interp));
+        allocs
+    };
+    let short_list = cons(500);
+    let long_list = cons(2000);
+    eprintln!("allocations: cons list 500={short_list} 2000={long_list}");
+    assert!(
+        long_list <= short_list * 6,
+        "building a list must be linear: 500 cells {short_list}, 2000 cells {long_list}"
+    );
+    let per_cell = long_list as f64 / 2000.0;
+    assert!(
+        per_cell < 8.0,
+        "a cons cell and its tail call should cost a few allocations (was {per_cell:.2})"
+    );
+
+    // --- a dimensioned record step: literals and dimensions are shared ------
+    //
+    // Units are compile-time scales (§0.4): `9.81 m/s^2` is resolved once per
+    // site, and a dimension is a shared value whose products are memoized.
+    let mut record = interpreter(
+        "type P = { pos: Float[L], vel: Float[L/T] }
+fn step(p: P, dt: Float[T]): P =
+    { p with pos = p.pos + p.vel * dt, vel = p.vel - 9.81 m/s^2 * dt }
+fn run(p: P, n: Int): P = if n == 0 then p else run(step(p, 0.001 s), n - 1)
+fn main(): IO Unit = do
+    println(run({ pos = 0.0 m, vel = 1.0 m/s }, 1000).pos)
+",
+    );
+    main_program(&mut record);
+    let (record_allocations, _) = allocations(|| main_program(&mut record));
+    let per_step = record_allocations as f64 / 1000.0;
+    eprintln!("allocations: dimensioned record step {per_step:.2}/step");
+    assert!(
+        per_step < 40.0,
+        "a dimensioned record step must not rebuild units or dimension maps (was {per_step:.2})"
+    );
 }

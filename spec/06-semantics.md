@@ -540,7 +540,11 @@ rssn 的 `compute` 接受 `Budget`（外层迭代、重写匹配上限、节点�
 - `show(x)`：人类可读，带显示单位。
 - `repr(x)`：可解析回同一值的文本；符号带内部 id。
 - `to_latex(x)`、`to_typst(x)`：数学排版。
-- 浮点用最短往返表示；`Real` 精确值用分数/根式；`Complex` 用 `a + b*i`。
+- 浮点用最短往返表示，并且**总是保留相位**：整数值的 `Float` 带小数点
+  （`10.0`、`0.0`、`-0.0`），大/小数量级用指数（`1e20`、`1e-9`）。精确的 `10`
+  与浮点的 `10.0` 是不同相位的不同值，`show` 不能让它们看起来一样（Revision 13
+  之前 `show(10.0)` 是 `10`，只有 `repr` 区分）。`Real` 精确值用分数/根式；
+  `Complex` 用 `a + b*i`，两个分量都按 `Float` 规则打印（`1.0 + 0.0*i`）。
 - IEEE 无穷打印为 `inf`/`-inf`，NaN 为 `nan`；`oo`/`-oo` 只表示 `Real` 相位的
   精确无穷（§6.3.4）。`repr` 把浮点无穷写成 `(1.0 / 0.0)`，可解析回同一相位。
 - 字符串单独 `show` 时是其文本；位于容器（记录、元组、变体、张量）内部时带
@@ -562,7 +566,7 @@ let x = symbol("x")
 let f = fn t => t^3 - 3*t + 1
 let df = diff(f)
 let a = df(2)          # 9，Exact
-let b = approx(a)      # Ok(9.0)，Float
+let b = approx(a)      # Ok(9.0)，Float；show 打印 Ok(9.0)
 ```
 
 求值步骤：

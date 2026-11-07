@@ -345,7 +345,7 @@ pub(crate) fn build(root: adt::AdtId) -> Option<DeclarationSchemaKey> {
             }
         }
         encoder.number(declaration.ctors.len());
-        for ctor in declaration.ctors {
+        for ctor in declaration.ctors.iter().cloned() {
             encoder.part(ctor.name);
             encoder.number(ctor.fields.len());
             for field in ctor.fields {

@@ -214,12 +214,122 @@ impl fmt::Display for Atom {
 ///
 /// The map never stores zero exponents, so the empty map is exactly the
 /// dimensionless dimension `1`.
-#[derive(Clone, PartialEq, Eq, Hash, Default)]
+///
+/// The representation is shared: a sorted slice of generator/exponent pairs
+/// behind an `Arc`, with `None` for `1`. Every scalar value at run time
+/// carries its dimension (§9.2.3), so cloning one must not copy a map, and
+/// `1` must not allocate. Products and quotients of the same two dimensions
+/// recur on every step of a numeric loop, so they are memoized per thread.
+#[derive(Clone, Default)]
 pub struct Dim {
-    factors: BTreeMap<Atom, BigRational>,
+    factors: Option<std::sync::Arc<[(Atom, BigRational)]>>,
 }
 
+impl PartialEq for Dim {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        match (&self.factors, &other.factors) {
+            | (None, None) => true,
+            | (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b) || a[..] == b[..],
+            | _ => false,
+        }
+    }
+}
+
+impl Eq for Dim {}
+
+impl std::hash::Hash for Dim {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.slice().hash(state);
+    }
+}
+
+/// Which memoized binary operation a cache entry answers.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum DimOp {
+    Mul,
+    Div,
+}
+
+type DimMemo = HashMap<(usize, usize, DimOp), (Dim, Dim, Dim)>;
+
+thread_local! {
+    /// Products and quotients of shared dimensions, keyed by the operands'
+    /// addresses. Each entry keeps both operands alive, so an address in a key
+    /// cannot be reused by a different dimension while the entry exists.
+    static DIM_MEMO: std::cell::RefCell<DimMemo> = std::cell::RefCell::new(HashMap::new());
+}
+
+const DIM_MEMO_CAPACITY: usize = 4096;
+
 impl Dim {
+    fn slice(&self) -> &[(Atom, BigRational)] {
+        self.factors.as_deref().unwrap_or(&[])
+    }
+
+    fn from_map(map: BTreeMap<Atom, BigRational>) -> Self {
+        if map.is_empty() {
+            return Self { factors: None };
+        }
+        Self {
+            factors: Some(map.into_iter().collect::<Vec<_>>().into()),
+        }
+    }
+
+    fn address(&self) -> usize {
+        self.factors
+            .as_ref()
+            .map_or(0, |factors| factors.as_ptr() as usize)
+    }
+
+    fn memoized(
+        &self,
+        other: &Self,
+        op: DimOp,
+        compute: impl FnOnce() -> Self,
+    ) -> Self {
+        let key = (self.address(), other.address(), op);
+        if let Some(hit) =
+            DIM_MEMO.with(|memo| memo.borrow().get(&key).map(|entry| entry.2.clone()))
+        {
+            return hit;
+        }
+        let result = compute();
+        DIM_MEMO.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            if memo.len() >= DIM_MEMO_CAPACITY {
+                memo.clear();
+            }
+            memo.insert(key, (self.clone(), other.clone(), result.clone()));
+        });
+        result
+    }
+
+    fn combine(
+        &self,
+        other: &Self,
+        sign: i8,
+    ) -> Self {
+        let mut factors: BTreeMap<Atom, BigRational> = self.slice().iter().cloned().collect();
+        for (atom, exponent) in other.slice() {
+            let entry = factors
+                .entry(atom.clone())
+                .or_insert_with(BigRational::zero);
+            if sign > 0 {
+                *entry += exponent;
+            } else {
+                *entry -= exponent;
+            }
+        }
+        factors.retain(|_, exponent| !exponent.is_zero());
+        Self::from_map(factors)
+    }
+
     /// The dimensionless dimension `1`.
     #[must_use]
     pub fn one() -> Self {
@@ -258,8 +368,8 @@ impl Dim {
         &self,
         display: &str,
     ) -> Self {
-        if self.factors.len() == 1 {
-            if let Some((Atom::Nominal(base), exponent)) = self.factors.first_key_value() {
+        if self.slice().len() == 1 {
+            if let Some((Atom::Nominal(base), exponent)) = self.slice().first() {
                 if exponent.is_one() {
                     return Self::from_factors([(
                         Atom::Nominal(base.with_display(display)),
@@ -277,7 +387,7 @@ impl Dim {
         &self,
         names: &HashMap<NominalBase, String>,
     ) -> Self {
-        Self::from_factors(self.factors.iter().map(|(atom, power)| {
+        Self::from_factors(self.slice().iter().map(|(atom, power)| {
             let atom = match atom {
                 | Atom::Nominal(base) => {
                     names.get(base).map_or_else(
@@ -312,13 +422,13 @@ impl Dim {
             *entry += exponent;
         }
         map.retain(|_, exponent| !exponent.is_zero());
-        Self { factors: map }
+        Self::from_map(map)
     }
 
     /// True when the dimension is `1`.
     #[must_use]
     pub fn is_one(&self) -> bool {
-        self.factors.is_empty()
+        self.factors.is_none()
     }
 
     /// Multiplies two dimensions (exponents add).
@@ -327,15 +437,13 @@ impl Dim {
         &self,
         other: &Self,
     ) -> Self {
-        let mut factors = self.factors.clone();
-        for (atom, exponent) in &other.factors {
-            let entry = factors
-                .entry(atom.clone())
-                .or_insert_with(BigRational::zero);
-            *entry += exponent;
+        if other.is_one() {
+            return self.clone();
         }
-        factors.retain(|_, exponent| !exponent.is_zero());
-        Self { factors }
+        if self.is_one() {
+            return other.clone();
+        }
+        self.memoized(other, DimOp::Mul, || self.combine(other, 1))
     }
 
     /// Divides two dimensions (exponents subtract).
@@ -344,15 +452,13 @@ impl Dim {
         &self,
         other: &Self,
     ) -> Self {
-        let mut factors = self.factors.clone();
-        for (atom, exponent) in &other.factors {
-            let entry = factors
-                .entry(atom.clone())
-                .or_insert_with(BigRational::zero);
-            *entry -= exponent;
+        if other.is_one() {
+            return self.clone();
         }
-        factors.retain(|_, exponent| !exponent.is_zero());
-        Self { factors }
+        if self == other {
+            return Self::one();
+        }
+        self.memoized(other, DimOp::Div, || self.combine(other, -1))
     }
 
     /// Raises the dimension to a rational power.
@@ -361,11 +467,14 @@ impl Dim {
         &self,
         exponent: &BigRational,
     ) -> Self {
-        if exponent.is_zero() {
+        if exponent.is_zero() || self.is_one() {
             return Self::one();
         }
+        if exponent.is_one() {
+            return self.clone();
+        }
         let factors = self
-            .factors
+            .slice()
             .iter()
             .map(|(atom, value)| (atom.clone(), value * exponent));
         Self::from_factors(factors)
@@ -383,14 +492,17 @@ impl Dim {
         &self,
         id: u32,
     ) -> bool {
-        self.factors.contains_key(&Atom::Var(id))
+        self.slice()
+            .iter()
+            .any(|(atom, _)| matches!(atom, Atom::Var(var) if *var == id))
     }
 
     /// All dimension variables occurring in the expression.
     #[must_use]
     pub fn vars(&self) -> Vec<u32> {
-        self.factors
-            .keys()
+        self.slice()
+            .iter()
+            .map(|(atom, _)| atom)
             .filter_map(|atom| {
                 match atom {
                     | Atom::Var(id) => Some(*id),
@@ -404,7 +516,7 @@ impl Dim {
     /// semantic identities; use [`Self::factors`] for transport or comparison.
     #[must_use]
     pub fn base_factors(&self) -> Vec<(&str, &BigRational)> {
-        self.factors
+        self.slice()
             .iter()
             .filter_map(|(atom, exponent)| {
                 match atom {
@@ -418,7 +530,7 @@ impl Dim {
 
     /// The raw generator map, in canonical order.
     pub fn factors(&self) -> impl Iterator<Item = (&Atom, &BigRational)> {
-        self.factors.iter()
+        self.slice().iter().map(|(atom, exponent)| (atom, exponent))
     }
 
     /// Replaces every dimension variable by its substitution, if one exists.
@@ -433,8 +545,11 @@ impl Dim {
     where
         F: FnMut(u32) -> Option<Dim>,
     {
+        if self.is_concrete() {
+            return self.clone();
+        }
         let mut result = Dim::one();
-        for (atom, exponent) in &self.factors {
+        for (atom, exponent) in self.slice() {
             match atom {
                 | Atom::Base(_) | Atom::Nominal(_) => {
                     result = result.mul(&Dim::from_factors([(atom.clone(), exponent.clone())]));
@@ -456,7 +571,10 @@ impl Dim {
     /// True when the dimension has no variables (a concrete dimension).
     #[must_use]
     pub fn is_concrete(&self) -> bool {
-        self.vars().is_empty()
+        !self
+            .slice()
+            .iter()
+            .any(|(atom, _)| matches!(atom, Atom::Var(_)))
     }
 
     /// The difference `self / other`, used in diagnostics.
@@ -517,7 +635,7 @@ impl Dim {
         }
         let mut numerator = Vec::new();
         let mut denominator = Vec::new();
-        for (atom, exponent) in &self.factors {
+        for (atom, exponent) in self.slice() {
             let name = match atom {
                 | Atom::Base(name) => si_symbol(name).to_string(),
                 | Atom::Nominal(base) => base.display_name().to_string(),
@@ -619,12 +737,12 @@ fn render<F>(
 where
     F: FnMut(&Atom) -> String,
 {
-    if dim.factors.is_empty() {
+    if dim.is_one() {
         return "1".to_string();
     }
     let mut numerator = Vec::new();
     let mut denominator = Vec::new();
-    for (atom, exponent) in &dim.factors {
+    for (atom, exponent) in dim.slice() {
         let name = name_of(atom);
         let (target, magnitude) = if exponent.is_negative() {
             (&mut denominator, -exponent.clone())

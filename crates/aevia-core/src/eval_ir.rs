@@ -1000,14 +1000,16 @@ fn eval_rhs_rest(
             }
         },
         | Rhs::NumericLiteral(number) => {
-            Ok(Value::Num(match number {
-                | aevia_syntax::ast::NumberLit::Int(value) => {
-                    interp.integer_literal(value, span)?
-                },
-                | aevia_syntax::ast::NumberLit::Decimal(text) => {
-                    interp.float_literal(text, span)?
-                },
-            }))
+            interp.memoized_literal(span, |interp| {
+                Ok(Value::Num(match number {
+                    | aevia_syntax::ast::NumberLit::Int(value) => {
+                        interp.integer_literal(value, span)?
+                    },
+                    | aevia_syntax::ast::NumberLit::Decimal(text) => {
+                        interp.float_literal(text, span)?
+                    },
+                }))
+            })
         },
         | Rhs::RssnMember { name } => Ok(crate::rssn_module::member(name)),
         | Rhs::Record { base, fields } => {
@@ -1036,6 +1038,18 @@ fn eval_rhs_rest(
                 collected.insert(name.clone(), value);
             }
             Ok(Value::Record(Rc::new(RecordValue { fields: collected })))
+        },
+        | Rhs::Construct {
+            adt,
+            index,
+            name,
+            args,
+        } => {
+            let mut fields = Vec::with_capacity(args.len());
+            for atom in args {
+                fields.push(eval_atom(interp, atom, frame, env, span)?);
+            }
+            Ok(interp.construct_checked(*adt, *index, name, fields, span))
         },
         | Rhs::Tuple(items) => {
             let mut fields = IndexMap::new();
@@ -1119,7 +1133,7 @@ fn eval_rhs_rest(
             value,
             unit,
             as_float,
-        } => interp.quantity(value, unit, span, *as_float),
+        } => interp.memoized_literal(span, |interp| interp.quantity(value, unit, span, *as_float)),
         | Rhs::Str(parts) => {
             let mut out = String::new();
             for part in parts {

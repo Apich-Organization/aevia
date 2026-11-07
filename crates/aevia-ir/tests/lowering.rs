@@ -491,6 +491,12 @@ fn collect_rhs_forms(
                 collect_atom_form(atom, out);
             }
         },
+        | Rhs::Construct { args, .. } => {
+            out.push("construct");
+            for atom in args {
+                collect_atom_form(atom, out);
+            }
+        },
         | Rhs::Tuple(items) | Rhs::Tensor(items) => {
             if matches!(rhs, Rhs::Tuple(_)) {
                 out.push("construct");

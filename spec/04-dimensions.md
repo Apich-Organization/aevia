@@ -272,6 +272,30 @@ fn map_quantity<d, e>(f: Real[d] -> Real[e], xs: Tensor<1, Real[d]>)
     : Tensor<1, Real[e]> = map(f, xs)
 ```
 
+**声明的量纲参数是刚性的（Revision 13）。** `fn f<d>` 声明 `f` 对*任意* `d`
+成立，函数体不能替调用者选定它。检查完函数体后，每个声明的量纲参数必须仍只由
+自由变量组成（不含 `L`、`T` 等基量纲），并且各声明参数的指数向量线性无关——
+也就是说它们仍可被独立选择。违反时报 `E0318`：
+
+```aevia
+fn h<d>(x: Real[d]): Real[d] = x + 1 m
+# error[E0318]: `h` is less generic than its declared type parameters
+#   = the body requires `d = L`
+
+fn g<d, e>(x: Real[d], y: Real[e]): Real[d] = x + y
+#   = the body determines `e` from `d`
+```
+
+统一器求解阿贝尔群方程时会把一个变量写成其他自由变量的积（§11.8 的
+`linear_fit` 中 `d` 被解为 `d26*d28*d30/(d25*d29)`），这仍然是泛型的：判定看的是
+独立性，不是“仍是裸变量”。此前这些程序被静默接受为单态函数——注解说泛型，程序
+却不是——这对以量纲安全为核心的语言是错误的默认。
+
+类型参数与形状参数不同：声明的类型参数可以被细化为表示多态的数值类型
+（`fn number<a>(): a = 1` 对 `Int`/`Real`/`Float`/`Complex` 都成立），只有当函数体
+把它固定为一个不含变量的类型时才报 `E0318`；声明的 `Nat` 参数按 §3.5.1 由线性
+方程求解，不受此限制。
+
 ### 4.4.2 弱变量
 
 `symbol`、`symfun` 和空张量引入弱变量，不泛化：

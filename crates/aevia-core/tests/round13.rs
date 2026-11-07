@@ -149,7 +149,7 @@ fn main_error(source: &str) -> String {
 fn a_runtime_value_times_a_scaled_unit_is_scaled() {
     let source = "open Units.SI\nlet a = 3\nlet x = to(m, a * km)\nlet y = to(m, sum([1.0, 2.5] * km))\nlet z = (0.02 / km) * 1000.0 m\n";
     assert_eq!(shown(source, "x"), "3000 m");
-    assert_eq!(shown(source, "y"), "3500 m");
+    assert_eq!(shown(source, "y"), "3500.0 m");
     assert_eq!(shown(source, "z"), "0.02");
 }
 
@@ -164,10 +164,10 @@ fn the_spec_projectile_drag_constant_divides_by_a_unit() {
 fn display_units_propagate_as_section_5_4_2_says() {
     let source = "open Units.SI\nlet a = to(km, 3.0 km) + to(km, 200.0 m)\nlet b = 2.0 * to(km, 3.0 km)\nlet c = to(km, 3.0 km) + to(m, 1.0 m)\nlet t1 = 25.0 °C\nlet t3 = t1 + 10.0 K\n";
     assert_eq!(shown(source, "a"), "3.2 km");
-    assert_eq!(shown(source, "b"), "6 km");
-    assert_eq!(shown(source, "c"), "3001 m");
+    assert_eq!(shown(source, "b"), "6.0 km");
+    assert_eq!(shown(source, "c"), "3001.0 m");
     // A point moved by a difference keeps the point's unit (§5.6.3, §11.5).
-    assert_eq!(shown(source, "t3"), "35 °C");
+    assert_eq!(shown(source, "t3"), "35.0 °C");
 }
 
 #[test]
@@ -208,7 +208,7 @@ fn linsolve_of_a_float_system_answers_floats() {
 #[test]
 fn an_even_root_of_a_negative_float_is_a_domain_error() {
     assert_eq!(failure("let r = sqrt(-1.0)\n"), "E0806");
-    assert_eq!(shown("let r = cbrt(-8.0)\n", "r"), "-2");
+    assert_eq!(shown("let r = cbrt(-8.0)\n", "r"), "-2.0");
     // The Real phase keeps the formal term (§6.3.4).
     assert_eq!(shown("let r = sqrt(-1)\n", "r"), "sqrt(-1)");
 }

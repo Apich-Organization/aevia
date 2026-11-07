@@ -220,7 +220,7 @@ fn show_names_the_quantity() {
             | Value::Str(text) => text.to_string(),
             | other => panic!("show answers with a String, found {}", other.type_name()),
         },
-        "3 m"
+        "3.0 m"
     );
 }
 

@@ -25,6 +25,7 @@ all
 and_then
 antiderivative
 any
+apart
 apply
 approx_eq
 approx_map
@@ -46,6 +47,7 @@ bessel_yn
 beta
 binomial
 by_cases
+cancel
 cbrt
 cdf
 ceil
@@ -55,6 +57,7 @@ chebyshev_t
 chebyshev_u
 cholesky
 clamp
+collect
 column
 column_dyn
 combine
@@ -79,12 +82,14 @@ curry
 decide
 default_plot_opts
 defint
+degree
 det
 det_unit
 device_of
 diag
 diff
 diff_at
+difference
 distance
 div
 divergence
@@ -93,6 +98,7 @@ drop
 e
 eig
 eigvals
+elements
 ends_with
 enumerate
 eprintln
@@ -101,6 +107,7 @@ erfc
 errorbar
 errorbar_with
 exp
+expand
 eye
 factor
 factorial
@@ -138,11 +145,13 @@ ifft
 im
 interp1
 interp2
+intersection
 inv
 irfft
 is_none
 is_prime
 is_some
+is_subset
 j1
 jacobian
 join
@@ -179,6 +188,7 @@ maximize
 mean
 measure
 median
+member
 min
 minimize
 minimize_f
@@ -252,6 +262,9 @@ sdeint_general
 select
 series
 set
+set_insert
+set_of
+set_remove
 shape
 show
 sign
@@ -296,6 +309,7 @@ to_real
 to_table
 to_typst
 to_value
+together
 total_compare
 trace
 transpose
@@ -306,6 +320,7 @@ trunc
 type_rep
 uncertainty
 uncurry
+union
 unwrap_or
 upper
 value

@@ -279,6 +279,41 @@ pub struct FunctionEvidence {
     pub numeric_literals: Vec<(Span, LiteralKind, Type)>,
 }
 
+/// Reduces `vector` against an echelon `basis` of exponent vectors; `None`
+/// when it is a rational combination of the basis (so not independent).
+fn reduce_against(
+    basis: &[(Vec<(u32, BigRational)>, String)],
+    mut vector: Vec<(u32, BigRational)>,
+) -> Option<Vec<(u32, BigRational)>> {
+    use num_traits::Zero;
+    for (row, _) in basis {
+        let Some((pivot, pivot_value)) = row.first() else {
+            continue;
+        };
+        let Some(own) = vector
+            .iter()
+            .find(|(id, _)| id == pivot)
+            .map(|(_, value)| value.clone())
+        else {
+            continue;
+        };
+        let factor = own / pivot_value;
+        for (id, value) in row {
+            match vector.iter_mut().find(|(other, _)| other == id) {
+                | Some((_, existing)) => *existing -= &factor * value,
+                | None => vector.push((*id, -(&factor * value))),
+            }
+        }
+        vector.retain(|(_, value)| !value.is_zero());
+    }
+    // Each row was reduced against every earlier row when it was inserted, so
+    // it contains none of their pivots; eliminating in insertion order never
+    // reintroduces a pivot already removed. A nonzero remainder is therefore
+    // independent of the span, and its smallest variable is its pivot.
+    vector.sort_by_key(|(id, _)| *id);
+    (!vector.is_empty()).then_some(vector)
+}
+
 fn quantify_binders(
     scheme: &mut Scheme,
     binders: &[GenericBinder],
@@ -4822,6 +4857,9 @@ impl Checker {
         self.check(body, &ret);
         self.commit_function_literals(site);
         self.function_stack.pop();
+        if let Some(generics) = self.fn_generics.get(name).cloned() {
+            self.check_rigid_binders(name, &generics, site);
+        }
         self.type_params = saved_types;
         self.dim_params = saved_dims;
         self.nat_params = saved_nats;
@@ -4901,6 +4939,102 @@ impl Checker {
         if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
             *scheme = generalised;
         }
+    }
+
+    /// A declared binder is universally quantified (§3.5, §4.4): the body
+    /// must work for every choice of it. Inference may not solve it.
+    ///
+    /// The checker has no rigid variables, so the property is verified after
+    /// the body. A declared dimension binder is rigid: it must still be a bare
+    /// variable, distinct from the other declared dimension binders, because
+    /// dimension polymorphism is the guarantee the annotation states (§4.4).
+    /// A declared type binder may be refined (representation polymorphism)
+    /// but must not become one fixed type. Extent binders are solvable by
+    /// design (§3.5.1). Before
+    /// this check `fn h<d>(x: Real[d]): Real[d] = x + 1 m` was accepted as
+    /// `Real[L] -> Real[L]` — the annotation said generic, the program was not.
+    fn check_rigid_binders(
+        &mut self,
+        name: &str,
+        generics: &FnGenerics,
+        site: Span,
+    ) {
+        let mut problems: Vec<String> = Vec::new();
+        // Abelian unification solves a variable as a product of others
+        // (`d = d26*d28/d25`), so a generic binder need not stay a bare
+        // variable. It is generic when it is a product of free variables only
+        // and the declared binders' exponent vectors are linearly
+        // independent: each can still be chosen freely.
+        let mut basis: Vec<(Vec<(u32, BigRational)>, String)> = Vec::new();
+        for (binder, dim) in &generics.dims {
+            let resolved = self.infer.resolve_dim(dim);
+            let fixed = resolved
+                .factors()
+                .any(|(atom, _)| !matches!(atom, aevia_dim::Atom::Var(_)));
+            if fixed || resolved.is_one() {
+                problems.push(format!(
+                    "the body requires `{binder} = {}`",
+                    self.dims.format(&resolved)
+                ));
+                continue;
+            }
+            let vector: Vec<(u32, BigRational)> = resolved
+                .factors()
+                .filter_map(|(atom, power)| {
+                    match atom {
+                        | aevia_dim::Atom::Var(id) => Some((*id, power.clone())),
+                        | _ => None,
+                    }
+                })
+                .collect();
+            if let Some(reduced) = reduce_against(&basis, vector) {
+                basis.push((reduced, binder.clone()));
+            } else {
+                let others: Vec<&str> = basis.iter().map(|(_, name)| name.as_str()).collect();
+                problems.push(format!(
+                    "the body determines `{binder}` from `{}`",
+                    others.join("`, `")
+                ));
+            }
+        }
+        // Extent binders are *solved* by linear equations by design
+        // (§3.5.1: `fn f<n>(a: Tensor<[n + 1], τ>): Tensor<[2], τ>` has
+        // `n = 1`), so they are not checked here.
+        let mut types_seen: HashMap<u32, String> = HashMap::new();
+        for (binder, ty) in &generics.types {
+            match self.infer.resolve(ty) {
+                | Type::Var(id) => {
+                    if let Some(other) = types_seen.insert(id, binder.clone()) {
+                        problems.push(format!("the body requires `{other} = {binder}`"));
+                    }
+                },
+                | Type::Error => {},
+                // A type binder may be refined to a representation-polymorphic
+                // numeric type (`fn number<a>(): a = 1` is generic over `Int`,
+                // `Real`, `Float`, `Complex`); only a body that makes it one
+                // fixed type is less generic than declared.
+                | resolved if !crate::class::has_variables(&resolved) => {
+                    problems.push(format!("the body requires `{binder} = {resolved}`"));
+                },
+                | _ => {},
+            }
+        }
+        if problems.is_empty() {
+            return;
+        }
+        let mut diagnostic = Diagnostic::error(
+            "E0318",
+            format!("`{name}` is less generic than its declared type parameters"),
+            site,
+        )
+        .with_primary_label("declared generic here");
+        for problem in problems {
+            diagnostic = diagnostic.with_note(problem);
+        }
+        diagnostic = diagnostic.with_help(
+            "make the body work for every choice of the parameter, or replace the parameter with the type the body needs",
+        );
+        self.diagnostics.push(diagnostic);
     }
 
     /// Checks the body of a top-level `let`.
@@ -7017,6 +7151,33 @@ impl Checker {
                 | Type::Scalar(rep, _) => Some(self.infer.resolve_rep(*rep)),
                 | _ => None,
             };
+            // §3.4.3: a runtime exponent needs a dimensionless base. When the
+            // base's dimension is still an unsolved variable (a lambda
+            // parameter such as `t` in `diff(fn t => t^t)`), that requirement
+            // is a constraint, not an error: the variable is solved to `1`.
+            // A dimension that is already known not to be `1` stays `E0404`.
+            let base = match base {
+                | Type::Scalar(rep, dim) if !dim.is_concrete() => {
+                    // Resolve again: checking the exponent may already have
+                    // solved the variable (`t^t` makes `t` dimensionless).
+                    let resolved = self.infer.resolve_dim(dim);
+                    let declared = self.dim_params.iter().any(|(_, binder)| {
+                        let binder = self.infer.resolve_dim(binder);
+                        binder.vars().iter().any(|id| resolved.contains_var(*id))
+                    });
+                    if resolved.is_one()
+                        || (!declared
+                            && !resolved.is_concrete()
+                            && self.infer.unify_dim(&resolved, &Dim::one()).is_ok())
+                    {
+                        Type::Scalar(*rep, Dim::one())
+                    } else {
+                        base.clone()
+                    }
+                },
+                | other => other.clone(),
+            };
+            let base = &base;
             return match base {
                 | Type::Scalar(rep, dim) if dim.is_one() => {
                     match exponent_rep {
@@ -7617,6 +7778,22 @@ impl Checker {
                 // away, so the types it recorded would name variables nobody
                 // can resolve. Drop them with the substitutions.
                 self.truncate_expr_types(types_before);
+            }
+            // §8.1.9: building a set orders its elements, so the element
+            // type needs a total order, exactly as `sort` does.
+            if name == "set_of" {
+                if let Some(arg) = args.first() {
+                    let ty = self.synth(arg);
+                    let elem = match self.infer.resolve(&ty) {
+                        | Type::Tensor { elem, .. } => Some(*elem),
+                        | _ => None,
+                    };
+                    if let Some(elem) = elem {
+                        self.require_instance("TotalOrd", &elem, span);
+                        return Type::Adt(adt::set_id(), vec![self.infer.resolve(&elem)]);
+                    }
+                    return Type::Adt(adt::set_id(), vec![self.infer.fresh_type()]);
+                }
             }
             // §3.8.4: `sort` needs a total order.
             if name == "sort" {
@@ -10208,14 +10385,7 @@ impl Checker {
                 // §3.8.4: `Set<a>` needs `TotalOrd a`; `Set<Float>` is not
                 // legal because `Float` has no total order (NaN).
                 self.require_instance("TotalOrd", &inner, ty.span);
-                Type::Adt(
-                    adt::intern(Adt {
-                        name: "Set".to_string(),
-                        params: vec!["a".to_string()],
-                        ctors: Vec::new(),
-                    }),
-                    vec![inner],
-                )
+                Type::Adt(adt::set_id(), vec![inner])
             },
             | TyKind::Table(inner) => {
                 Type::Adt(

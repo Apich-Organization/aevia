@@ -339,7 +339,7 @@ fn check_compares_the_materialised_dimension() {
     interpreter.run_main().expect("main runs");
     let output = interpreter.captured();
     assert_eq!(
-        output, "rejected\nvalue 2 m\n",
+        output, "rejected\nvalue 2.0 m\n",
         "check<L> rejects a Time Dyn and accepts a Length Dyn"
     );
 }

@@ -46,6 +46,33 @@ pub(crate) struct FunctionProof {
     /// `Rc` per call also defeated [`CallProofCache`] (whose key includes the
     /// active bindings' identity), so a recursive loop never hit the cache.
     pub(crate) bindings_memo: BindingsMemo,
+    /// Whether the activation is fully concrete; see [`FunctionProof::closed`].
+    pub(crate) closed_memo: ClosedMemo,
+}
+
+/// A per-proof memo of [`FunctionProof::closed`] that a clone does not inherit.
+#[derive(Debug, Default)]
+pub(crate) struct ClosedMemo(std::cell::OnceCell<bool>);
+
+impl Clone for ClosedMemo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+/// Whether every binder value in a substitution is free of variables.
+pub(crate) fn substitution_closed(values: &TypeSubstitution) -> bool {
+    !values.types.values().any(aevia_types::class::has_variables)
+        && !values
+            .representations
+            .values()
+            .any(|rep| matches!(rep, aevia_types::Rep::Var(_)))
+        && values.dimensions.values().all(aevia_dim::Dim::is_concrete)
+        && values
+            .rows
+            .values()
+            .all(|row| !aevia_types::class::has_variables(&Type::Record(row.clone())))
+        && values.naturals.values().all(|nat| nat.vars().is_empty())
 }
 
 /// A per-proof memo that a clone does not inherit.
@@ -145,6 +172,7 @@ impl FunctionProof {
             signature,
             verified,
             bindings_memo: BindingsMemo::default(),
+            closed_memo: ClosedMemo::default(),
         }))
     }
 
@@ -222,6 +250,23 @@ impl FunctionProof {
                 })
             })
             .clone()
+    }
+
+    /// Whether this activation is fully decided by static evidence.
+    ///
+    /// A closed proof is verified, its signature has no variables, and every
+    /// binder it projects (type, representation, dimension, row, extent) is
+    /// concrete. Nothing a runtime argument could tell it would change any
+    /// answer it gives, so a call of a closed proof is neither re-unified nor
+    /// re-validated against its arguments: the checker already proved the
+    /// call, and the runtime only executes that proof (§9.2.3).
+    pub(crate) fn closed(&self) -> bool {
+        *self.closed_memo.0.get_or_init(|| {
+            self.verified
+                && !aevia_types::class::has_variables(&self.signature)
+                && substitution_closed(&self.bindings().values)
+                && self.check_reifications().is_ok()
+        })
     }
 
     pub(crate) fn check_reifications(&self) -> Result<(), EvalError> {
@@ -424,6 +469,44 @@ impl Interp {
         let Some(original) = &closure.proof else {
             return Ok(None);
         };
+        // Static evidence first. At a checked source call site a closed proof
+        // is the whole answer: the activation's binders are all concrete, so
+        // neither the site nor the arguments can refine it, and the checker
+        // already proved the arguments. Only closure-valued arguments whose
+        // own proofs are still open are specialized to the parameter types.
+        //
+        // A host call (no checked site: an embedder, a builtin applying a
+        // callback, the kernel bridge) is the trust boundary, so its
+        // arguments are still validated below.
+        if callee.is_some() && original.closed() {
+            Self::specialize_closure_arguments(original, args);
+            return Ok(Some(original.clone()));
+        }
+        // A checked call site selects the callee's binders by substitution of
+        // the active bindings into the checker's projection. When that
+        // selection is closed it does not depend on the arguments, so it is
+        // memoized per (proof, site, bindings, module).
+        if let Some(span) = callee {
+            let key = StaticCallKey::new(self, original, span);
+            if let Some(hit) = self.call_proofs.get_static(&key) {
+                Self::specialize_closure_arguments(&hit, args);
+                return Ok(Some(hit));
+            }
+            if let Some(selected) = self.static_selection(original, span)? {
+                let selected = self.call_proofs.canonical(original, selected);
+                self.call_proofs.insert_static(
+                    key,
+                    selected.clone(),
+                    (
+                        original.clone(),
+                        self.bindings.clone(),
+                        self.context.clone(),
+                    ),
+                );
+                Self::specialize_closure_arguments(&selected, args);
+                return Ok(Some(selected));
+            }
+        }
         // The selection below is a pure function of the proof, the call site,
         // the active bindings and the arguments' runtime schemas; for scalar
         // arguments the schema is all `runtime_input_matches` looks at. A
@@ -450,6 +533,57 @@ impl Interp {
             );
         }
         Ok(result)
+    }
+
+    /// The checker's selection at a call site, when it alone closes the
+    /// activation; `None` when runtime data must solve an open binder.
+    fn static_selection(
+        &self,
+        original: &Rc<FunctionProof>,
+        span: Span,
+    ) -> Result<Option<Rc<FunctionProof>>, EvalError> {
+        let selected = self.checked_callable_selection(original, span, false)?;
+        if selected.closed() {
+            return Ok(Some(selected));
+        }
+        let Some(expected @ Type::Fn(..)) = self.resolved_expr_type(span) else {
+            return Ok(None);
+        };
+        if aevia_types::class::has_variables(&expected) {
+            return Ok(None);
+        }
+        let Ok(specialized) = selected.specialize(&expected) else {
+            return Ok(None);
+        };
+        Ok(specialized.closed().then_some(specialized))
+    }
+
+    /// Specialize closure-valued arguments whose proofs are still open to the
+    /// (closed) parameter types of the selected activation.
+    fn specialize_closure_arguments(
+        selected: &FunctionProof,
+        args: &mut [Value],
+    ) {
+        let Type::Fn(params, _) = &selected.signature else {
+            return;
+        };
+        if params.len() != args.len() {
+            return;
+        }
+        for (parameter, value) in params.iter().zip(args.iter_mut()) {
+            let Value::Closure(closure) = value else {
+                continue;
+            };
+            let Some(proof) = &closure.proof else {
+                continue;
+            };
+            if proof.closed() || !matches!(parameter, Type::Fn(..)) {
+                continue;
+            }
+            if let Ok(proof) = proof.specialize(parameter) {
+                *value = Value::Closure(specialize_closure(closure, proof));
+            }
+        }
     }
 
     fn prepare_function_call_uncached(
@@ -876,6 +1010,34 @@ impl CallProofKey {
     }
 }
 
+/// The identity of a call whose selection is decided by static evidence
+/// alone: the proof, the checked site, the active bindings and the module.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct StaticCallKey {
+    proof: usize,
+    callee: Span,
+    bindings: usize,
+    context: usize,
+}
+
+impl StaticCallKey {
+    fn new(
+        interp: &Interp,
+        proof: &Rc<FunctionProof>,
+        callee: Span,
+    ) -> Self {
+        Self {
+            proof: Rc::as_ptr(proof) as usize,
+            callee,
+            bindings: interp
+                .bindings
+                .as_ref()
+                .map_or(0, |bindings| Rc::as_ptr(bindings) as usize),
+            context: Rc::as_ptr(&interp.context) as usize,
+        }
+    }
+}
+
 /// Memoized call-site proofs.
 ///
 /// Each entry keeps the proof, bindings and context whose addresses its key
@@ -883,6 +1045,8 @@ impl CallProofKey {
 /// object while the entry exists.
 #[derive(Default)]
 pub(crate) struct CallProofCache {
+    /// Statically closed selections; see [`StaticCallKey`].
+    statics: std::cell::RefCell<crate::fxhash::FxHashMap<StaticCallKey, StaticCallEntry>>,
     entries: std::cell::RefCell<crate::fxhash::FxHashMap<CallProofKey, Vec<CallProofEntry>>>,
     /// Concrete results already handed out, per original proof.
     ///
@@ -892,6 +1056,15 @@ pub(crate) struct CallProofCache {
     canonical: std::cell::RefCell<
         crate::fxhash::FxHashMap<usize, (Rc<FunctionProof>, Vec<Rc<FunctionProof>>)>,
     >,
+}
+
+struct StaticCallEntry {
+    result: Rc<FunctionProof>,
+    _pins: (
+        Rc<FunctionProof>,
+        Option<Rc<CallBindings>>,
+        Rc<ModuleContext>,
+    ),
 }
 
 struct CallProofEntry {
@@ -975,6 +1148,33 @@ impl CallProofCache {
             issued.push(proof.clone());
         }
         proof
+    }
+
+    fn get_static(
+        &self,
+        key: &StaticCallKey,
+    ) -> Option<Rc<FunctionProof>> {
+        self.statics
+            .borrow()
+            .get(key)
+            .map(|entry| entry.result.clone())
+    }
+
+    fn insert_static(
+        &self,
+        key: StaticCallKey,
+        result: Rc<FunctionProof>,
+        pins: (
+            Rc<FunctionProof>,
+            Option<Rc<CallBindings>>,
+            Rc<ModuleContext>,
+        ),
+    ) {
+        let mut statics = self.statics.borrow_mut();
+        if statics.len() >= Self::CAPACITY {
+            statics.clear();
+        }
+        statics.insert(key, StaticCallEntry { result, _pins: pins });
     }
 
     fn get(

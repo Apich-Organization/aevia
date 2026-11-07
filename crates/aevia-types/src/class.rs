@@ -254,6 +254,10 @@ impl ClassTable {
             tensor.clone(),
             option.clone(),
             Type::Adt(crate::adt::ORDERING_ID, Vec::new()),
+            // §6.6: set equality is element equality, whatever the order of
+            // insertion — the representation is canonical (sorted, unique).
+            Type::Adt(crate::adt::set_id(), vec![Type::Param(0)]),
+            Type::result(Type::Param(0), Type::Param(1)),
         ] {
             table.add_prelude("Eq", head);
         }
@@ -287,6 +291,11 @@ impl ClassTable {
             point,
             tensor.clone(),
             option,
+            Type::Adt(crate::adt::set_id(), vec![Type::Param(0)]),
+            // `println(r)` already rendered a `Result`; `show`/`repr` of the
+            // same value must be accepted too.
+            Type::result(Type::Param(0), Type::Param(1)),
+            Type::Adt(crate::adt::ORDERING_ID, Vec::new()),
         ] {
             table.add_prelude("Show", head);
         }

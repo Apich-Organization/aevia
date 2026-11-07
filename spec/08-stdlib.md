@@ -159,6 +159,28 @@ rank     : Tensor<n, a> -> Int
 （§3.8.4/§6.10）。元素类型由调用点决定，所以约束在调用点检查，而不是一个
 全局实例。
 
+### 8.1.5.1 集合
+
+```
+set_of       : TotalOrd a => Tensor<1, a> -> Set<a>   # 去重，按 total_compare 排序
+elements     : Set<a> -> Tensor<1, a>                 # 升序
+length       : Set<a> -> Int                          # length 的第三个重载
+member       : (a, Set<a>) -> Bool                    # O(log n)
+set_insert   : (Set<a>, a) -> Set<a>
+set_remove   : (Set<a>, a) -> Set<a>
+union        : (Set<a>, Set<a>) -> Set<a>
+intersection : (Set<a>, Set<a>) -> Set<a>
+difference   : (Set<a>, Set<a>) -> Set<a>
+is_subset    : (Set<a>, Set<a>) -> Bool
+```
+
+`Set<a>`（§3.2、§6.6）是持久有序集合，要求 `TotalOrd a`（`Set<Float>` 是
+`E0310`）。表示是规范的——元素按 `total_compare` 升序且唯一——所以集合的 `==`
+就是集合相等，与插入顺序无关；`show` 打印为 `{1, 2, 3}`，`repr` 打印为
+`set_of([1, 2, 3])`。集合运算是线性归并，`member` 是二分查找。修改不在原处进行：
+`set_insert` 返回新集合，旧值不变（§0.4 原则三）。Revision 13 之前 `Set<τ>` 只有
+类型、没有任何值或操作。
+
 ### 8.1.6 Option / Result
 
 ```
@@ -425,6 +447,27 @@ laplacian     : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>)
 内核请求闭式（`sum(fn k => 1/k^2, 1, oo) = pi^2/6`、
 `sum(fn k => k, 1, n) = n^2/2 + n/2`、几何级数 `sum(fn k => 2^(-k), 0, oo) = 2`）；
 内核找不到闭式时报 `E0808`，不会返回未求值的 `sum(…)` 冒充答案。
+
+### 8.5.1 代数形式
+
+```
+expand   : Real[d] -> Real[d]
+factor   : Real[d] -> Real[d]            # 有理数域上的因式分解；Int 重载见 §8.16
+cancel   : Real[d] -> Real[d]            # 有理函数约去公因子：p/q，gcd(p, q) = 1
+together : Real[d] -> Real[d]            # 通分为单个分式
+apart    : (Real[d], Real[e]) -> Real[d] # 对变量做部分分式分解
+collect  : (Real[d], Real[e]) -> Real[d] # 按变量的幂合并同类项
+degree   : (Real[d], Real[e]) -> Int     # 关于变量的多项式次数
+```
+
+这些函数改变精确表达式的**形式**而不改变它的值，因此结果的量纲就是参数的
+量纲。它们是 `simplify` 的补充：`simplify` 让内核选“最好”的等价形式（通常是
+最短的），而用户需要的往往是某个特定形式——展开后读系数、分解后读根、部分
+分式后逐项积分。每个函数直接调用内核 `poly` 规则集的同名算子，而不是发出
+`simplify` 请求（后者会把 `factor(x^4 - 1)` 抽取回更短的 `x^4 - 1`）。内核
+没有给出该形式时报 `E0808`，不返回未求值的 `factor(…)`。`factor` 对 `Int`
+参数仍是 §8.16 的整数分解：`factor(360)` 是 `[(2, 3), (3, 2), (5, 1)]`，
+`factor(x^4 - 1)` 是 `(x - 1)*(x + 1)*(x^2 + 1)`。
 
 ## 8.6 Solve / Optimize
 

@@ -80,7 +80,7 @@ fn main(): IO Unit = do
     println("{sqrt(16.0)}")
 "#,
     );
-    assert_eq!(run(&entry), "4\n");
+    assert_eq!(run(&entry), "4.0\n");
 }
 
 /// A module that itself imports other stdlib modules (the real §8.20 shape)

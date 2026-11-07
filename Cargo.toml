@@ -16,6 +16,7 @@ members = [
     "crates/aevia-cli",
     "tools/aevia-stdlib-gen",
     "tools/rssn-api-audit",
+    "tools/aevia-prof",
 ]
 
 [workspace.package]

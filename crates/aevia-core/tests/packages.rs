@@ -631,7 +631,7 @@ fn selecting_a_type_imports_its_public_constructor_values() {
 fn kernel_rule_set_namespaces_are_virtual_imports_with_physical_override() {
     let scratch = Scratch::new("virtual-kernel");
     let entry = scratch.write("main.aev", "import Rssn_numerical_vector as V\nfn main(): IO Unit = println(\"{V.num_dot([1.0, 2.0], [3.0, 4.0])}\")\n");
-    assert_eq!(run(&entry), "11\n");
+    assert_eq!(run(&entry), "11.0\n");
     let program = load(&entry);
     assert!(program.modules.iter().any(|module| {
         program
@@ -640,7 +640,7 @@ fn kernel_rule_set_namespaces_are_virtual_imports_with_physical_override() {
             .is_some_and(|source| source.name.starts_with("rssn://"))
     }));
     scratch.write("Rssn_numerical_vector.aev", "module Rssn_numerical_vector\nfn num_dot(a: Tensor<1, Float>, b: Tensor<1, Float>): Float = 99.0\n");
-    assert_eq!(run(&entry), "99\n");
+    assert_eq!(run(&entry), "99.0\n");
 }
 
 #[test]

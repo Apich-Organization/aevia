@@ -290,6 +290,16 @@ pub enum Rhs {
     },
     /// A tuple, which is a record with numeric labels.
     Tuple(Vec<Atom>),
+    /// A saturated application of a checked constructor (or a nullary
+    /// constructor reference). The checker resolved the constructor's nominal
+    /// identity, so evaluation builds the variant directly: no name lookup,
+    /// no first-class constructor value, no re-validation of the payload.
+    Construct {
+        adt: aevia_types::adt::AdtId,
+        index: usize,
+        name: Rc<str>,
+        args: Vec<Atom>,
+    },
     /// A tensor literal.
     Tensor(Vec<Atom>),
     /// An index or slice.

@@ -1225,22 +1225,6 @@ impl Term {
                 Ok(())
             },
             | Self::Mul(items) => {
-                // `a * b^-1` reads as `a/b`; this is also how an unevaluated
-                // quotient such as `oo / oo` stays legible.
-                if let [numerator, Self::Pow(denominator, exponent)] = items.as_slice() {
-                    if exponent == &BigRational::from_integer(BigInt::from(-1)) {
-                        numerator.render(f, repr)?;
-                        f.write_str("/")?;
-                        if matches!(**denominator, Self::Add(_) | Self::Mul(_)) {
-                            f.write_str("(")?;
-                            denominator.render(f, repr)?;
-                            f.write_str(")")?;
-                        } else {
-                            denominator.render(f, repr)?;
-                        }
-                        return Ok(());
-                    }
-                }
                 // `-1 * oo` is the extended-real negative infinity and reads as
                 // `-oo`, not `-1*oo` (§6.3.4: `ln(0)` returns `-oo`).
                 if let [Self::Num(coefficient), rest] = items.as_slice() {
@@ -1270,6 +1254,56 @@ impl Term {
                         return tail.render(f, repr);
                     }
                 }
+                // Factors with a negative power form the denominator:
+                // `2*(x^2 + 1)^-1*x` reads as `2*x/(x^2 + 1)`, and an
+                // unevaluated `oo / oo` stays legible. The value is unchanged.
+                let (denominator, numerator): (Vec<&Term>, Vec<&Term>) = items.iter().partition(
+                    |item| matches!(item, Self::Pow(_, exponent) if exponent.is_negative()),
+                );
+                if !denominator.is_empty() {
+                    let inverted: Vec<Term> = denominator
+                        .iter()
+                        .map(|item| {
+                            match item {
+                                | Self::Pow(base, exponent) if exponent == &-BigRational::one() => {
+                                    (**base).clone()
+                                },
+                                | Self::Pow(base, exponent) => Self::Pow(base.clone(), -exponent),
+                                | other => (*other).clone(),
+                            }
+                        })
+                        .collect();
+                    let top = match numerator.as_slice() {
+                        | [] => Self::Num(BigRational::one()),
+                        | [single] => (*single).clone(),
+                        | many => Self::Mul(many.iter().map(|item| (*item).clone()).collect()),
+                    };
+                    let bottom = if inverted.len() == 1 {
+                        inverted
+                            .into_iter()
+                            .next()
+                            .unwrap_or(Self::Num(BigRational::one()))
+                    } else {
+                        Self::Mul(inverted)
+                    };
+                    if matches!(top, Self::Add(_)) {
+                        f.write_str("(")?;
+                        top.render(f, repr)?;
+                        f.write_str(")")?;
+                    } else {
+                        top.render(f, repr)?;
+                    }
+                    f.write_str("/")?;
+                    // `^` binds tighter than `/`, so `x/y^2` needs no brackets.
+                    let wrap = matches!(bottom, Self::Add(_) | Self::Mul(_))
+                        || matches!(&bottom, Self::Num(value) if !value.denom().is_one());
+                    if wrap {
+                        f.write_str("(")?;
+                        bottom.render(f, repr)?;
+                        return f.write_str(")");
+                    }
+                    return bottom.render(f, repr);
+                }
                 for (index, item) in items.iter().enumerate() {
                     if index > 0 {
                         f.write_str("*")?;
@@ -1297,6 +1331,21 @@ impl Term {
                 f.write_str("sqrt(")?;
                 base.render(f, repr)?;
                 f.write_str(")")
+            },
+            // `b^-n` is `1/b^n`, the form a reader writes.
+            | Self::Pow(base, exponent) if exponent.is_negative() => {
+                f.write_str("1/")?;
+                let positive = if exponent == &-BigRational::one() {
+                    (**base).clone()
+                } else {
+                    Self::Pow(base.clone(), -exponent)
+                };
+                if matches!(positive, Self::Add(_) | Self::Mul(_)) {
+                    f.write_str("(")?;
+                    positive.render(f, repr)?;
+                    return f.write_str(")");
+                }
+                positive.render(f, repr)
             },
             | Self::Pow(base, exponent) => {
                 // A negative base needs parentheses: `-8^(1/3)` would read as

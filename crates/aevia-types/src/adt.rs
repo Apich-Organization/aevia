@@ -10,6 +10,7 @@ use crate::keys::ModulePath;
 pub use crate::ty::AdtId;
 use crate::ty::Type;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 
@@ -178,58 +179,61 @@ pub struct Adt {
     pub ctors: Vec<Ctor>,
 }
 
-fn registry() -> &'static RwLock<Vec<Adt>> {
-    static REGISTRY: OnceLock<RwLock<Vec<Adt>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| {
-        RwLock::new(vec![
-            Adt {
-                name: "Option".to_string(),
-                params: vec!["a".to_string()],
-                ctors: vec![
-                    Ctor {
-                        name: "None".to_string(),
-                        fields: Vec::new(),
-                    },
-                    Ctor {
-                        name: "Some".to_string(),
-                        fields: vec![Type::Param(0)],
-                    },
-                ],
-            },
-            Adt {
-                name: "Result".to_string(),
-                params: vec!["a".to_string(), "e".to_string()],
-                ctors: vec![
-                    Ctor {
-                        name: "Ok".to_string(),
-                        fields: vec![Type::Param(0)],
-                    },
-                    Ctor {
-                        name: "Err".to_string(),
-                        fields: vec![Type::Param(1)],
-                    },
-                ],
-            },
-            Adt {
-                name: "Ordering".to_string(),
-                params: Vec::new(),
-                ctors: vec![
-                    Ctor {
-                        name: "Less".to_string(),
-                        fields: Vec::new(),
-                    },
-                    Ctor {
-                        name: "Equal".to_string(),
-                        fields: Vec::new(),
-                    },
-                    Ctor {
-                        name: "Greater".to_string(),
-                        fields: Vec::new(),
-                    },
-                ],
-            },
-        ])
-    })
+fn registry() -> &'static RwLock<Vec<Arc<Adt>>> {
+    static REGISTRY: OnceLock<RwLock<Vec<Arc<Adt>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| RwLock::new(prelude_adts().into_iter().map(Arc::new).collect()))
+}
+
+/// `Option`, `Result` and `Ordering`: the registry's first three entries.
+fn prelude_adts() -> [Adt; 3] {
+    [
+        Adt {
+            name: "Option".to_string(),
+            params: vec!["a".to_string()],
+            ctors: vec![
+                Ctor {
+                    name: "None".to_string(),
+                    fields: Vec::new(),
+                },
+                Ctor {
+                    name: "Some".to_string(),
+                    fields: vec![Type::Param(0)],
+                },
+            ],
+        },
+        Adt {
+            name: "Result".to_string(),
+            params: vec!["a".to_string(), "e".to_string()],
+            ctors: vec![
+                Ctor {
+                    name: "Ok".to_string(),
+                    fields: vec![Type::Param(0)],
+                },
+                Ctor {
+                    name: "Err".to_string(),
+                    fields: vec![Type::Param(1)],
+                },
+            ],
+        },
+        Adt {
+            name: "Ordering".to_string(),
+            params: Vec::new(),
+            ctors: vec![
+                Ctor {
+                    name: "Less".to_string(),
+                    fields: Vec::new(),
+                },
+                Ctor {
+                    name: "Equal".to_string(),
+                    fields: Vec::new(),
+                },
+                Ctor {
+                    name: "Greater".to_string(),
+                    fields: Vec::new(),
+                },
+            ],
+        },
+    ]
 }
 
 /// Interns a *built-in* type, keyed by name.
@@ -262,7 +266,7 @@ pub fn intern(adt: Adt) -> AdtId {
         return u32::try_from(index).unwrap_or(0);
     }
     let id = u32::try_from(guard.len()).unwrap_or(u32::MAX);
-    guard.push(adt);
+    guard.push(Arc::new(adt));
     id
 }
 
@@ -298,11 +302,11 @@ pub fn allocate_in(
 ) -> AdtId {
     let mut guard = registry().write().expect("adt registry is not poisoned");
     let id = u32::try_from(guard.len()).unwrap_or(u32::MAX);
-    guard.push(Adt {
+    guard.push(Arc::new(Adt {
         name: name.to_string(),
         params,
         ctors: Vec::new(),
-    });
+    }));
     set_module(id, module);
     id
 }
@@ -325,7 +329,7 @@ pub fn set_ctors(
             .ok()
             .and_then(|index| guard.get_mut(index))
         {
-            entry.ctors = ctors;
+            Arc::make_mut(entry).ctors = ctors;
             if let Ok(mut table) = completed().write() {
                 table.insert(id);
             }
@@ -333,9 +337,26 @@ pub fn set_ctors(
     }
 }
 
-/// Returns a copy of a registered type.
+/// The prelude's persistent ordered set, `Set<a>` (§6.6, §8.1.9).
+///
+/// It is opaque — no source constructor builds one — so it is interned by name
+/// like the other host types; every compilation unit sees the same id.
 #[must_use]
-pub fn get(id: AdtId) -> Option<Adt> {
+pub fn set_id() -> AdtId {
+    intern(Adt {
+        name: "Set".to_string(),
+        params: vec!["a".to_string()],
+        ctors: Vec::new(),
+    })
+}
+
+/// Returns a registered type.
+///
+/// The entry is shared: a type is immutable once its constructors are set, and
+/// this sits on the evaluator's constructor and pattern paths, where copying
+/// the definition (names and every field type) per use dominated.
+#[must_use]
+pub fn get(id: AdtId) -> Option<Arc<Adt>> {
     let guard = registry().read().ok()?;
     guard.get(usize::try_from(id).ok()?).cloned()
 }
@@ -343,7 +364,7 @@ pub fn get(id: AdtId) -> Option<Adt> {
 /// The name of a registered type, or `Adt#n` when the id is unknown.
 #[must_use]
 pub fn name_of(id: AdtId) -> String {
-    get(id).map_or_else(|| format!("Adt#{id}"), |adt| adt.name)
+    get(id).map_or_else(|| format!("Adt#{id}"), |adt| adt.name.clone())
 }
 
 /// The index of a constructor inside its type.
@@ -367,7 +388,7 @@ pub fn find_prelude_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
     for id in [OPTION_ID, RESULT_ID, ORDERING_ID] {
         let adt = guard.get(usize::try_from(id).ok()?)?;
         if let Some(position) = adt.ctors.iter().position(|ctor| ctor.name == name) {
-            return Some((id, position, adt.clone()));
+            return Some((id, position, (**adt).clone()));
         }
     }
     None
@@ -379,7 +400,7 @@ pub fn find_ctor(name: &str) -> Option<(AdtId, usize, Adt)> {
     let guard = registry().read().ok()?;
     for (index, adt) in guard.iter().enumerate() {
         if let Some(position) = adt.ctors.iter().position(|ctor| ctor.name == name) {
-            return Some((u32::try_from(index).ok()?, position, adt.clone()));
+            return Some((u32::try_from(index).ok()?, position, (**adt).clone()));
         }
     }
     None

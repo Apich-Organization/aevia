@@ -130,7 +130,7 @@ fn an_alias_import_resolves() {
         "main.aev",
         "import Math.Geometry as G\n\nfn main(): IO Unit = println(\"{G.twice}\")\n",
     );
-    assert_eq!(run(&entry), "2\n");
+    assert_eq!(run(&entry), "2.0\n");
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn a_name_list_imports_only_those_names() {
         "main.aev",
         "import Math.Geometry { two }\n\nfn main(): IO Unit = println(\"{two}\")\n",
     );
-    assert_eq!(run(&entry), "2\n");
+    assert_eq!(run(&entry), "2.0\n");
 }
 
 #[test]
@@ -288,7 +288,7 @@ fn a_type_and_its_constructor_may_share_a_name() {
         "main.aev",
         "import A.T\n\nfn mk2(a: Float, b: Float): A.T.P2 = A.T.mk(a, b)\n\nfn sum2(p: A.T.P2): Float =\n    match p with\n    | P2(a, b) -> a + b\n\nfn main(): IO Unit = println(\"{sum2(mk2(1.0, 2.0))}\")\n",
     );
-    assert_eq!(run(&entry), "3\n");
+    assert_eq!(run(&entry), "3.0\n");
 }
 
 #[test]

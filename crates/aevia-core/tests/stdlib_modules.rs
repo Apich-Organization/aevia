@@ -359,5 +359,5 @@ import Math.Special { alpha }
 fn main(): IO Unit = println("{alpha()}")
 "#,
     );
-    assert_eq!(run(&entry), "1\n");
+    assert_eq!(run(&entry), "1.0\n");
 }

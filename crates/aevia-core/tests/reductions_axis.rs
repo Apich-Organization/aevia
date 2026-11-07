@@ -117,8 +117,8 @@ fn dense_rank_two_reduces_each_axis_with_keepdims() {
                   let rows = sum(m, 1)\n\
                   let columns = sum(m, 0)\n";
     let rendered = evaluate_both(source, &["rows", "columns"]);
-    assert_eq!(rendered[0], "[[6], [15]]", "axis 1 keeps the rank");
-    assert_eq!(rendered[1], "[[5, 7, 9]]", "axis 0 keeps the rank");
+    assert_eq!(rendered[0], "[[6.0], [15.0]]", "axis 1 keeps the rank");
+    assert_eq!(rendered[1], "[[5.0, 7.0, 9.0]]", "axis 0 keeps the rank");
 
     let mut interp = interpreter();
     let compilation = compile("axis.aev", source);
@@ -149,7 +149,7 @@ fn a_strided_view_reduces_like_its_dense_copy() {
                   let dense_sum = sum(dense, 0)\n";
     let rendered = evaluate_both(source, &["view_sum", "dense_sum"]);
     assert_eq!(rendered[0], rendered[1], "a view reduces like its copy");
-    assert_eq!(rendered[0], "[[7, 9]]");
+    assert_eq!(rendered[0], "[[7.0, 9.0]]");
 
     let compilation = compile("axis.aev", source);
     let mut session = Interp::new(&compilation.checked).with_buffer();
@@ -166,14 +166,14 @@ fn a_strided_view_reduces_like_its_dense_copy() {
                   let b = sum(flat, 0)\n";
     let rendered = evaluate_both(source, &["a", "b"]);
     assert_eq!(rendered[0], rendered[1]);
-    assert_eq!(rendered[0], "[[6, 15]]");
+    assert_eq!(rendered[0], "[[6.0, 15.0]]");
 }
 
 #[test]
 fn rank_one_and_rank_zero_axes() {
     let source = "let v = [1.0, 2.0, 3.0]\nlet total = sum(v, 0)\n";
     let rendered = evaluate_both(source, &["total"]);
-    assert_eq!(rendered[0], "[6]");
+    assert_eq!(rendered[0], "[6.0]");
 
     let compilation = compile("axis.aev", source);
     let mut session = Interp::new(&compilation.checked).with_buffer();
@@ -231,7 +231,7 @@ fn empty_extents_take_the_element_phase() {
     // 0×3 tensor, so axis 0 reduces to one row of three zeros.
     let source = "let e = zeros(0, 3)\nlet s = sum(e, 0)\n";
     let rendered = evaluate_both(source, &["s"]);
-    assert_eq!(rendered[0], "[[0, 0, 0]]");
+    assert_eq!(rendered[0], "[[0.0, 0.0, 0.0]]");
 
     let compilation = compile("axis.aev", source);
     let mut session = Interp::new(&compilation.checked).with_buffer();

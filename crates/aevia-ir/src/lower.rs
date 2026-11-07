@@ -998,6 +998,17 @@ impl Lowerer {
                         },
                         expr.span,
                     )
+                } else if let Some((adt, index, name)) = self.saturated_constructor(expr, 0) {
+                    self.emit(
+                        builder,
+                        Rhs::Construct {
+                            adt,
+                            index,
+                            name,
+                            args: Vec::new(),
+                        },
+                        expr.span,
+                    )
                 } else {
                     let atom = self.resolve(name);
                     if self.constructor_refs.contains_key(&expr.span)
@@ -1025,6 +1036,17 @@ impl Lowerer {
                         builder,
                         Rhs::RssnMember {
                             name: path[1].clone(),
+                        },
+                        expr.span,
+                    )
+                } else if let Some((adt, index, name)) = self.saturated_constructor(expr, 0) {
+                    self.emit(
+                        builder,
+                        Rhs::Construct {
+                            adt,
+                            index,
+                            name,
+                            args: Vec::new(),
                         },
                         expr.span,
                     )
@@ -1307,6 +1329,15 @@ impl Lowerer {
                 });
             }
         }
+        if let Some((adt, index, name)) = self.saturated_constructor(callee, args.len()) {
+            let values = self.values(args, builder);
+            return Rhs::Construct {
+                adt,
+                index,
+                name,
+                args: values,
+            };
+        }
         let function = self.callee_value(callee, builder);
         let values = self.values(args, builder);
         Rhs::Call(Call {
@@ -1317,6 +1348,23 @@ impl Lowerer {
             kind: CallKind::Normal,
             span: expr.span,
         })
+    }
+
+    /// The checked constructor `expr` names, when it is applied to exactly
+    /// its arity. A partial application or a constructor used as a value keeps
+    /// the general call path.
+    fn saturated_constructor(
+        &self,
+        expr: &Expr,
+        arity: usize,
+    ) -> Option<(aevia_types::adt::AdtId, usize, Rc<str>)> {
+        if !matches!(expr.kind, ExprKind::Var(_) | ExprKind::QName(_)) {
+            return None;
+        }
+        let (adt, index) = *self.constructor_refs.get(&expr.span)?;
+        let registered = aevia_types::adt::get(adt)?;
+        let ctor = registered.ctors.get(index)?;
+        (ctor.fields.len() == arity).then(|| (adt, index, Rc::from(ctor.name.as_str())))
     }
 
     fn values(

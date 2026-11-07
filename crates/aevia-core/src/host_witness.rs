@@ -14,7 +14,7 @@ use aevia_types::Type;
 use aevia_types::adt;
 use std::collections::HashMap;
 
-fn concrete(ty: &Type) -> bool {
+pub(crate) fn concrete(ty: &Type) -> bool {
     !matches!(
         ty,
         Type::Error
@@ -152,6 +152,24 @@ pub(crate) fn capture(
         schema: schema.clone(),
         node,
     })
+}
+
+/// Whether a freshly built source constructor result may carry `schema` as
+/// its witness without walking its payload.
+///
+/// The checker proved the application, so the fields already have the field
+/// types `schema` implies; the only facts left to establish are the ones the
+/// runtime itself contributes: the schema is concrete, and the value is the
+/// checked constructor of that type. A deep [`capture`] here made building a
+/// list quadratic.
+pub(crate) fn checked_constructor_result(
+    value: &Value,
+    schema: &Type,
+) -> bool {
+    let (Value::Variant(variant), Type::Adt(expected, _)) = (value, schema) else {
+        return false;
+    };
+    concrete(schema) && variant.constructor_origin && adt::same_type(variant.adt, *expected)
 }
 
 /// Verify tensor contents before minting element-schema evidence. The caller

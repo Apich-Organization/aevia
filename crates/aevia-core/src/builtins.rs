@@ -602,6 +602,10 @@ pub fn call(
                         tensor.shape.first().copied().unwrap_or(0),
                     ))))
                 },
+                | Some(Value::Variant(variant)) if variant.adt == aevia_types::adt::set_id() => {
+                    let items = expect_set(&args, 0, name, span)?;
+                    Ok(Value::Num(NumVal::int(BigInt::from(items.len()))))
+                },
                 | _ => Err(arity(name, 1, args.len(), span)),
             }
         },
@@ -2426,6 +2430,115 @@ pub fn call(
         },
 
         // ----- §8.16 number theory, combinatorics, geometry ---------------
+        | "factor"
+            if args.first().is_some_and(|value| {
+                !matches!(
+                    value,
+                    Value::Num(NumVal {
+                        kind: NumKind::Int(_),
+                        ..
+                    })
+                )
+            }) =>
+        {
+            algebra("factor", &args, span)
+        },
+        | "expand" | "cancel" | "together" | "apart" | "collect" => algebra(name, &args, span),
+        | "set_of" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            Ok(make_set(tensor.elements()))
+        },
+        | "elements" => {
+            let items = expect_set(&args, 0, name, span)?;
+            let dim = items.first().map_or_else(Dim::one, crate::value::value_dim);
+            let len = items.len();
+            Ok(build_tensor(items.to_vec(), vec![len], dim))
+        },
+        | "member" => {
+            let needle = args.first().ok_or_else(|| arity(name, 2, 0, span))?;
+            let items = expect_set(&args, 1, name, span)?;
+            Ok(Value::Bool(
+                items
+                    .binary_search_by(|item| total_order(item, needle))
+                    .is_ok(),
+            ))
+        },
+        | "set_insert" | "set_remove" => {
+            let items = expect_set(&args, 0, name, span)?;
+            let item = args.get(1).ok_or_else(|| arity(name, 2, 1, span))?;
+            let mut next = items.to_vec();
+            match (
+                next.binary_search_by(|existing| total_order(existing, item)),
+                name,
+            ) {
+                | (Err(position), "set_insert") => next.insert(position, item.clone()),
+                | (Ok(position), "set_remove") => {
+                    next.remove(position);
+                },
+                | _ => return Ok(args[0].clone()),
+            }
+            Ok(set_value(next))
+        },
+        | "union" | "intersection" | "difference" | "is_subset" => {
+            let left = expect_set(&args, 0, name, span)?;
+            let right = expect_set(&args, 1, name, span)?;
+            let (mut i, mut j) = (0, 0);
+            let mut out = Vec::new();
+            while i < left.len() || j < right.len() {
+                let order = match (left.get(i), right.get(j)) {
+                    | (Some(a), Some(b)) => total_order(a, b),
+                    | (Some(_), None) => std::cmp::Ordering::Less,
+                    | (None, _) => std::cmp::Ordering::Greater,
+                };
+                match order {
+                    | std::cmp::Ordering::Less => {
+                        if matches!(name, "union" | "difference") {
+                            out.push(left[i].clone());
+                        }
+                        if name == "is_subset" {
+                            return Ok(Value::Bool(false));
+                        }
+                        i += 1;
+                    },
+                    | std::cmp::Ordering::Greater => {
+                        if name == "union" {
+                            out.push(right[j].clone());
+                        }
+                        j += 1;
+                    },
+                    | std::cmp::Ordering::Equal => {
+                        if matches!(name, "union" | "intersection") {
+                            out.push(left[i].clone());
+                        }
+                        i += 1;
+                        j += 1;
+                    },
+                }
+            }
+            if name == "is_subset" {
+                return Ok(Value::Bool(true));
+            }
+            Ok(set_value(out))
+        },
+        | "degree" => {
+            let value = algebra("degree", &args, span)?;
+            match value {
+                | Value::Num(NumVal {
+                    kind: NumKind::Int(_),
+                    ..
+                }) => Ok(value),
+                | other => {
+                    Err(EvalError::new(
+                        "E0808",
+                        format!(
+                            "`degree` needs a polynomial in the variable, got {}",
+                            crate::value::show(&other)
+                        ),
+                    )
+                    .at(span))
+                },
+            }
+        },
         | "factor" => {
             let n = expect_int(&args, 0, name, span)?;
             let factors = aevia_std::number::factor(n);
@@ -8417,4 +8530,115 @@ mod tests {
             "Some(x) encodes as x"
         );
     }
+}
+
+/// An algebraic normal form computed by the kernel's polynomial rule set
+/// (§8.5.1): `expand`, `factor`, `cancel`, `together`, `apart(e, x)`,
+/// `collect(e, x)` and `degree(e, x)`.
+///
+/// The rewrite keeps the value, so the result has the first argument's
+/// dimension. A form the kernel cannot produce leaves the request unevaluated,
+/// which is reported as `E0808` rather than returned as an answer.
+fn algebra(
+    name: &str,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    let expected = if matches!(name, "apart" | "collect" | "degree") {
+        2
+    } else {
+        1
+    };
+    if args.len() != expected {
+        return Err(EvalError::new(
+            "E0315",
+            format!("`{name}` takes {expected} argument(s), got {}", args.len()),
+        )
+        .at(span));
+    }
+    let dim = if name == "degree" {
+        Dim::one()
+    } else {
+        crate::value::value_dim(&args[0])
+    };
+    let mut terms = Vec::with_capacity(args.len());
+    for arg in args {
+        let term = value_to_term(arg)?;
+        terms.push(Value::Num(NumVal::symbolic(term, Dim::one())));
+    }
+    // A direct operator call, not a `compute` request: the forms are equal by
+    // construction, and the symbolic extractor would hand back the smallest
+    // equal term — `x^4 - 1` instead of its factorization.
+    let term = bridge::call_term(name, &terms, dim.clone()).map_err(|error| error.at(span))?;
+    if term.to_string().starts_with(&format!("{name}(")) {
+        return Err(EvalError::new(
+            "E0808",
+            format!("the kernel has no `{name}` form for this expression"),
+        )
+        .at(span));
+    }
+    Ok(bridge::fold(&term, dim.clone()).unwrap_or_else(|| Value::Num(NumVal::symbolic(term, dim))))
+}
+
+/// A set from arbitrary elements: sorted by `total_compare`, duplicates
+/// removed (§8.1.9). The canonical form is what makes structural equality of
+/// two sets their set equality.
+fn make_set(mut items: Vec<Value>) -> Value {
+    items.sort_by(total_order);
+    items.dedup_by(|a, b| total_order(a, b) == std::cmp::Ordering::Equal);
+    set_value(items)
+}
+
+/// A set from elements already in canonical order.
+fn set_value(items: Vec<Value>) -> Value {
+    let dim = items.first().map_or_else(Dim::one, crate::value::value_dim);
+    let len = items.len();
+    let elements = build_tensor(items, vec![len], dim);
+    crate::value::make_variant(aevia_types::adt::set_id(), 0, "Set", vec![elements])
+}
+
+/// The canonical elements of a set value.
+pub(crate) fn set_items(value: &Value) -> Option<&[Value]> {
+    let Value::Variant(variant) = value else {
+        return None;
+    };
+    if variant.adt != aevia_types::adt::set_id() {
+        return None;
+    }
+    match variant.fields.first() {
+        | Some(Value::Tensor(tensor)) => {
+            match &tensor.storage {
+                | Storage::Boxed(items) => Some(items.as_slice()),
+                | _ => None,
+            }
+        },
+        | _ => None,
+    }
+}
+
+fn expect_set<'a>(
+    args: &'a [Value],
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<std::borrow::Cow<'a, [Value]>, EvalError> {
+    let value = args
+        .get(index)
+        .ok_or_else(|| arity(name, index + 1, args.len(), span))?;
+    if let Some(items) = set_items(value) {
+        return Ok(std::borrow::Cow::Borrowed(items));
+    }
+    // A set whose elements were stored densely (all `Float`/`Int` scalars).
+    if let Value::Variant(variant) = value {
+        if variant.adt == aevia_types::adt::set_id() {
+            if let Some(Value::Tensor(tensor)) = variant.fields.first() {
+                return Ok(std::borrow::Cow::Owned(tensor.elements()));
+            }
+        }
+    }
+    Err(EvalError::new(
+        "E0302",
+        format!("`{name}` expects a set, found {}", value.type_name()),
+    )
+    .at(span))
 }

@@ -450,6 +450,30 @@ fn stack_budget_exhausted() -> Option<usize> {
 pub struct Interp {
     pub(crate) tensor_inputs: crate::generics::TensorInputCache,
     pub(crate) call_proofs: crate::generics::CallProofCache,
+    /// Literal values per (site, bindings, module); see
+    /// [`Interp::memoized_literal`].
+    pub(crate) literal_values: std::cell::RefCell<
+        crate::fxhash::FxHashMap<
+            (Span, usize, usize),
+            (
+                Value,
+                Option<Rc<crate::generics::CallBindings>>,
+                Rc<crate::evidence::ModuleContext>,
+            ),
+        >,
+    >,
+    /// Constructor type witnesses per (site, bindings, module); the entry
+    /// pins the bindings and module whose addresses its key names.
+    pub(crate) constructor_witnesses: std::cell::RefCell<
+        crate::fxhash::FxHashMap<
+            (Span, usize, usize),
+            (
+                Option<aevia_types::Type>,
+                Option<Rc<crate::generics::CallBindings>>,
+                Rc<crate::evidence::ModuleContext>,
+            ),
+        >,
+    >,
     /// Mangled instance globals by call site; see `cached_instance_global`.
     pub(crate) instance_globals:
         RefCell<crate::evidence::SpanMap<Vec<(aevia_types::InstanceKey, String, Rc<str>)>>>,
@@ -762,6 +786,8 @@ impl Interp {
             max_tail_calls: 100_000_000,
             tensor_inputs: crate::generics::TensorInputCache::default(),
             call_proofs: crate::generics::CallProofCache::default(),
+            constructor_witnesses: std::cell::RefCell::default(),
+            literal_values: std::cell::RefCell::default(),
             instance_globals: RefCell::default(),
             buffer_pool: RefCell::default(),
             max_io_steps: 100_000_000,
@@ -1532,7 +1558,7 @@ impl Interp {
                 && variant.verified_type.is_none()
                 && variant.type_args.is_none()
                 && adt::same_type(*id, variant.adt)
-                && crate::host_witness::capture(&value, &ty, true).is_some()
+                && crate::host_witness::checked_constructor_result(&value, &ty)
             {
                 if let Value::Variant(variant) = &mut value {
                     let variant = Rc::make_mut(variant);
@@ -3615,7 +3641,9 @@ impl Interp {
                             }
                             if variant.verified_type.is_none()
                                 && variant.type_args.is_none()
-                                && crate::host_witness::capture(&function, result, true).is_some()
+                                && crate::host_witness::checked_constructor_result(
+                                    &function, result,
+                                )
                             {
                                 let mut selected = function.clone();
                                 if let Value::Variant(variant) = &mut selected {
@@ -3858,7 +3886,12 @@ impl Interp {
             }
         }
         if let Some(ty) = result_type {
-            if crate::host_witness::capture(&result, &ty, true).is_some() {
+            // The checker proved this constructor application, so a closed
+            // result type is the variant's witness as it stands. Walking the
+            // value to re-prove it made every `Cons(x, acc)` linear in `acc`
+            // (and building a list quadratic). Only a type that still has
+            // variables is checked against the payload.
+            if crate::host_witness::checked_constructor_result(&result, &ty) {
                 if let Value::Variant(variant) = &mut result {
                     let variant = Rc::make_mut(variant);
                     variant.verified_type = Some(ty.clone());
@@ -3876,6 +3909,101 @@ impl Interp {
             }
         }
         Ok(result)
+    }
+
+    /// A literal's value at `span` under the active bindings.
+    ///
+    /// A numeric or unit literal is a constant once its representation is
+    /// chosen, and the representation is a function of the site and the
+    /// active bindings only. Units are compile-time scales (§0.4): resolving
+    /// `m/s^2` against the unit table, building its display unit and scaling
+    /// the coefficient on every evaluation made a unit literal in a loop the
+    /// most expensive thing the loop did.
+    pub(crate) fn memoized_literal(
+        &mut self,
+        span: Span,
+        compute: impl FnOnce(&mut Self) -> Result<Value, EvalError>,
+    ) -> Result<Value, EvalError> {
+        let key = (
+            span,
+            self.bindings
+                .as_ref()
+                .map_or(0, |bindings| Rc::as_ptr(bindings) as usize),
+            Rc::as_ptr(&self.context) as usize,
+        );
+        if let Some((value, _, _)) = self.literal_values.borrow().get(&key) {
+            return Ok(value.clone());
+        }
+        let value = compute(self)?;
+        let mut memo = self.literal_values.borrow_mut();
+        if memo.len() >= 8192 {
+            memo.clear();
+        }
+        memo.insert(
+            key,
+            (value.clone(), self.bindings.clone(), self.context.clone()),
+        );
+        Ok(value)
+    }
+
+    /// Builds the variant of a checked, saturated constructor application.
+    ///
+    /// The checker proved the application, so the payload is not re-validated;
+    /// the only runtime contribution is the variant's type witness, which is
+    /// the checker's concrete type at this site under the active bindings and
+    /// is memoized per (site, bindings, module).
+    pub(crate) fn construct_checked(
+        &self,
+        adt: adt::AdtId,
+        index: usize,
+        name: &str,
+        fields: Vec<Value>,
+        span: Span,
+    ) -> Value {
+        let witness = self.constructor_witness(adt, span);
+        let type_args = match &witness {
+            | Some(aevia_types::Type::Adt(_, args)) => Some(args.clone()),
+            | _ => None,
+        };
+        Value::Variant(Rc::new(value::VariantValue {
+            adt,
+            index,
+            name: name.to_string(),
+            fields,
+            type_args,
+            verified_type: witness,
+            constructor_origin: true,
+        }))
+    }
+
+    fn constructor_witness(
+        &self,
+        adt: adt::AdtId,
+        span: Span,
+    ) -> Option<aevia_types::Type> {
+        let key = (
+            span,
+            self.bindings
+                .as_ref()
+                .map_or(0, |bindings| Rc::as_ptr(bindings) as usize),
+            Rc::as_ptr(&self.context) as usize,
+        );
+        if let Some((witness, _, _)) = self.constructor_witnesses.borrow().get(&key) {
+            return witness.clone();
+        }
+        let witness = self.resolved_expr_type(span).filter(|ty| {
+            matches!(ty, aevia_types::Type::Adt(id, _) if adt::same_type(*id, adt))
+                && crate::host_witness::concrete(ty)
+        });
+        let mut memo = self.constructor_witnesses.borrow_mut();
+        if memo.len() >= 4096 {
+            memo.clear();
+        }
+        memo.insert(
+            key,
+            (witness.clone(), self.bindings.clone(), self.context.clone()),
+        );
+        witness
     }
 
     /// Retrieve the concrete type recorded by the checker for an explicit
@@ -6387,7 +6515,7 @@ pub fn ctor_in_module(
             return None;
         }
         let position = registered.ctors.iter().position(|ctor| ctor.name == name)?;
-        Some((id, position, registered))
+        Some((id, position, (*registered).clone()))
     })
 }
 

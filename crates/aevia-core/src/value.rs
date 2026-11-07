@@ -2251,9 +2251,9 @@ pub fn format_float(value: f64) -> String {
     }
     if value == 0.0 {
         return if value.is_sign_negative() {
-            "-0".to_string()
+            "-0.0".to_string()
         } else {
-            "0".to_string()
+            "0.0".to_string()
         };
     }
     let magnitude = value.abs();
@@ -2263,7 +2263,15 @@ pub fn format_float(value: f64) -> String {
         return format!("{value:e}");
     }
     // `Display` for `f64` is the shortest text that parses back to `value`.
-    format!("{value}")
+    // An integral `Float` keeps its decimal point (§6.12.3): `10.0` and the
+    // exact `10` are different values in different phases, and `show` must
+    // not make them look the same.
+    let text = format!("{value}");
+    if text.contains('.') {
+        text
+    } else {
+        format!("{text}.0")
+    }
 }
 
 /// Formats a float so that it reads back as a `Float` and not as an `Int`.
@@ -2592,6 +2600,22 @@ fn render_at(
             }
             out.push_str(" }");
             out
+        },
+        | Value::Variant(variant) if variant.adt == aevia_types::adt::set_id() => {
+            // §8.1.9: a set shows as `{a, b, c}` in its canonical order.
+            let items = match variant.fields.first() {
+                | Some(Value::Tensor(tensor)) => tensor.elements(),
+                | _ => Vec::new(),
+            };
+            let rendered: Vec<String> = items
+                .iter()
+                .map(|item| render_at(item, repr, depth + 1))
+                .collect();
+            if repr {
+                format!("set_of([{}])", rendered.join(", "))
+            } else {
+                format!("{{{}}}", rendered.join(", "))
+            }
         },
         | Value::Variant(variant) => {
             if variant.fields.is_empty() {
@@ -3112,7 +3136,9 @@ mod tests {
 
     #[test]
     fn floats_print_compactly() {
-        assert_eq!(format_float(2.0), "2");
+        assert_eq!(format_float(2.0), "2.0");
+        assert_eq!(format_float(-0.0), "-0.0");
+        assert_eq!(format_float(1e300), "1e300");
         assert_eq!(format_float(0.5), "0.5");
         assert_eq!(format_float(1e-9), "1e-9");
         assert_eq!(format_float(f64::INFINITY), "inf");
@@ -3137,7 +3163,7 @@ mod tests {
             dim: Dim::one(),
             display: None,
         };
-        assert_eq!(show_tensor_in(&tensor, false), "[[1, 2], [3, 4]]");
+        assert_eq!(show_tensor_in(&tensor, false), "[[1.0, 2.0], [3.0, 4.0]]");
     }
 
     fn tensor(

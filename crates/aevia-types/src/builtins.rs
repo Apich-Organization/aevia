@@ -192,6 +192,10 @@ fn tensor(
     Type::tensor(Shape::Rank(rank), elem)
 }
 
+fn set(elem: Type) -> Type {
+    Type::Adt(adt::set_id(), vec![elem])
+}
+
 fn list(elem: Type) -> Type {
     tensor(1, elem)
 }
@@ -731,7 +735,43 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             vec![
                 Scheme::mono(func(vec![Type::string()], Type::int())),
                 scheme(1, 0, 0, func(vec![tensor(1, var(0))], Type::int())),
+                scheme(1, 0, 0, func(vec![set(var(0))], Type::int())),
             ]
+        },
+        // ----- §8.1.9 sets -------------------------------------------------
+        | "set_of" => vec![scheme(1, 0, 0, func(vec![list(var(0))], set(var(0))))],
+        | "elements" => vec![scheme(1, 0, 0, func(vec![set(var(0))], list(var(0))))],
+        | "member" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(vec![var(0), set(var(0))], Type::bool()),
+            )]
+        },
+        | "set_insert" | "set_remove" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(vec![set(var(0)), var(0)], set(var(0))),
+            )]
+        },
+        | "union" | "intersection" | "difference" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(vec![set(var(0)), set(var(0))], set(var(0))),
+            )]
+        },
+        | "is_subset" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(vec![set(var(0)), set(var(0))], Type::bool()),
+            )]
         },
         | "shape" => vec![scheme(1, 0, 0, func(vec![var(0)], list(Type::int())))],
         | "rank" => vec![scheme(1, 0, 0, func(vec![var(0)], Type::int()))],
@@ -1551,6 +1591,39 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 1,
                 0,
                 func(vec![Type::real(dim_var(0))], Type::real(dim_var(0))),
+            )]
+        },
+        // ----- §8.5.1 algebraic normal forms -------------------------------
+        // Rewrites that change the *form* of an exact expression and keep its
+        // value, so the dimension is unchanged.
+        | "expand" | "cancel" | "together" => {
+            vec![scheme(
+                0,
+                1,
+                0,
+                func(vec![Type::real(dim_var(0))], Type::real(dim_var(0))),
+            )]
+        },
+        | "apart" | "collect" => {
+            vec![scheme(
+                0,
+                2,
+                0,
+                func(
+                    vec![Type::real(dim_var(0)), Type::real(dim_var(1))],
+                    Type::real(dim_var(0)),
+                ),
+            )]
+        },
+        | "degree" => {
+            vec![scheme(
+                0,
+                2,
+                0,
+                func(
+                    vec![Type::real(dim_var(0)), Type::real(dim_var(1))],
+                    Type::int(),
+                ),
             )]
         },
         | "approx" => {
@@ -3099,10 +3172,19 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
 
         // ----- §8.16 number theory, combinatorics, geometry ----------------
         | "factor" => {
-            vec![Scheme::mono(func(
-                vec![Type::int()],
-                list(tuple(vec![Type::int(), Type::int()])),
-            ))]
+            vec![
+                Scheme::mono(func(
+                    vec![Type::int()],
+                    list(tuple(vec![Type::int(), Type::int()])),
+                )),
+                // §8.5.1: an exact expression factors over the rationals.
+                scheme(
+                    0,
+                    1,
+                    0,
+                    func(vec![Type::real(dim_var(0))], Type::real(dim_var(0))),
+                ),
+            ]
         },
         | "is_prime" => vec![Scheme::mono(func(vec![Type::int()], Type::bool()))],
         | "primes" => vec![Scheme::mono(func(vec![Type::int()], list(Type::int())))],
@@ -3186,7 +3268,20 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
 /// True when the name is a built-in value or function.
 #[must_use]
 pub fn is_builtin(name: &str) -> bool {
-    schemes(name).is_some()
+    // Building the schemes only to test for their existence allocated every
+    // type in every overload; the evaluator asks this on each reference to a
+    // builtin (`map`, `println`, `mod`) inside a loop. The answer is a fixed
+    // property of the name, so it is computed once per name.
+    thread_local! {
+        static KNOWN: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(known) = KNOWN.with(|known| known.borrow().get(name).copied()) {
+        return known;
+    }
+    let answer = schemes(name).is_some();
+    KNOWN.with(|known| known.borrow_mut().insert(name.to_string(), answer));
+    answer
 }
 
 /// Built-ins whose type depends on the number of arguments (`zeros`, `ones`,
@@ -3237,7 +3332,8 @@ mod tests {
 
     #[test]
     fn overloading_is_visible() {
-        assert_eq!(schemes("length").expect("length").len(), 2);
+        // `length` of a string, a rank-1 tensor and a set (§8.1.5.1).
+        assert_eq!(schemes("length").expect("length").len(), 3);
         // §8.4 and §8.5 give `sum` the reduction, the keepdims axis form for
         // ranks 1 and 2, and the calculus summation `sum(f, a, b)`.
         assert_eq!(schemes("sum").expect("sum").len(), 4);
@@ -3394,6 +3490,21 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "nsolve",
     "eval",
     "simplify",
+    "set_of",
+    "elements",
+    "member",
+    "set_insert",
+    "set_remove",
+    "union",
+    "intersection",
+    "difference",
+    "is_subset",
+    "expand",
+    "cancel",
+    "together",
+    "apart",
+    "collect",
+    "degree",
     "approx",
     "subst",
     "to_value",

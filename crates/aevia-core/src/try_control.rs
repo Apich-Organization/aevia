@@ -68,6 +68,9 @@ impl Interp {
         if let Value::Variant(variant) = &mut propagated {
             Rc::make_mut(variant).constructor_origin = true;
         }
+        // The payload is not freshly built from checked source: it is whatever
+        // value reached `?`, possibly from a host. That is a trust boundary,
+        // so the payload is checked against the destination type in full.
         if crate::host_witness::capture(&propagated, &expected, true).is_some() {
             if let Value::Variant(variant) = &mut propagated {
                 let variant = Rc::make_mut(variant);

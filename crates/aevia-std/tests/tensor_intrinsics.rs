@@ -45,7 +45,7 @@ fn main(): IO Unit = println("{a[0, 0]} {b[0]} {c[0, 0]} {d[0]} {f[0]} {h[0]} {j
             diagnostics.items
         );
         interp.run_main().expect("main runs");
-        assert_eq!(interp.captured(), "0 1 7 0 1 0 1\n", "{mode:?}");
+        assert_eq!(interp.captured(), "0 1.0 7 0 1 0 1\n", "{mode:?}");
         let value = interp.eval_toplevel("d").expect("specialized tensor");
         let aevia_core::value::Value::Tensor(tensor) = value else {
             panic!("expected tensor")

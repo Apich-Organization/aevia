@@ -223,7 +223,10 @@ fn unit_literals_fold_to_coherent_values() {
 
 #[test]
 fn affine_temperatures_keep_their_display_unit() {
-    assert_eq!(aevia_core::show(&value("let t = 25.0 °C\n", "t")), "25 °C");
+    assert_eq!(
+        aevia_core::show(&value("let t = 25.0 °C\n", "t")),
+        "25.0 °C"
+    );
     assert_eq!(
         aevia_core::show(&value("let t = 25.0 °C\nlet k = value_in(K, t)\n", "k")),
         "298.15"
@@ -294,7 +297,7 @@ fn records_and_updates() {
 let q = { p with x = 3.0 m }
 let d = q.x
 "#;
-    assert_eq!(aevia_core::show(&value(source, "d")), "3 m");
+    assert_eq!(aevia_core::show(&value(source, "d")), "3.0 m");
 }
 
 #[test]
@@ -321,7 +324,7 @@ fn main(): IO Unit = do
     show_it(6.0, 3.0)
     show_it(1.0, 0.0)
 "#);
-    assert_eq!(output, "ok 2\nerr zero\n");
+    assert_eq!(output, "ok 2.0\nerr zero\n");
 }
 
 #[test]

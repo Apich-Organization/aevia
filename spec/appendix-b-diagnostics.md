@@ -83,6 +83,7 @@ help: did you mean `2 * h / g`?
 | `E0315` | wrong number of arguments | 补/删参数 |
 | `E0316` | duplicate definition | 改名/删除 |
 | `E0317` | cannot derive instance | 手写实例 |
+| `E0318` | function is less generic than its declared type parameters | 让函数体对任意选择成立，或把参数换成函数体需要的具体类型（Revision 13） |
 
 ## B.6 量纲错误（E04xx）
 
