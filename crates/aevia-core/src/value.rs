@@ -1664,7 +1664,7 @@ pub struct Scope {
     /// The enclosing scope.
     pub parent: Option<Rc<Scope>>,
     /// Bindings introduced here.
-    pub vars: RefCell<HashMap<String, Value>>,
+    pub vars: RefCell<crate::fxhash::FxHashMap<String, Value>>,
     /// Exact checked revision used by this lexical environment.
     pub(crate) context: Option<Rc<crate::evidence::ModuleContext>>,
     /// Imported module environments retain their own implementation revision.
@@ -1705,7 +1705,7 @@ impl Scope {
     pub fn child(parent: &Rc<Self>) -> Rc<Self> {
         Rc::new(Self {
             parent: Some(parent.clone()),
-            vars: RefCell::new(HashMap::new()),
+            vars: RefCell::default(),
             context: parent.context.clone(),
             imports: Vec::new(),
             types: parent.types.clone(),
@@ -1718,7 +1718,7 @@ impl Scope {
     ) -> Rc<Self> {
         Rc::new(Self {
             parent: None,
-            vars: RefCell::new(HashMap::new()),
+            vars: RefCell::default(),
             context: Some(context),
             imports,
             types: None,
@@ -1731,7 +1731,7 @@ impl Scope {
     ) -> Rc<Self> {
         Rc::new(Self {
             parent: Some(parent.clone()),
-            vars: RefCell::new(HashMap::new()),
+            vars: RefCell::default(),
             context: parent.context.clone(),
             imports: Vec::new(),
             types,
@@ -1744,14 +1744,15 @@ impl Scope {
         self: &Rc<Self>,
         name: &str,
     ) -> Option<Value> {
-        let mut current = Some(self.clone());
-        while let Some(scope) = current {
+        // Walk by reference: cloning the `Rc` at every level was a refcount
+        // round trip per scope for every global read.
+        let mut scope: &Scope = self;
+        loop {
             if let Some(value) = scope.vars.borrow().get(name) {
                 return Some(value.clone());
             }
-            current = scope.parent.clone();
+            scope = scope.parent.as_deref()?;
         }
-        None
     }
 }
 
@@ -1971,6 +1972,68 @@ pub enum IoAction {
     Random,
     /// Reads the wall clock and yields a `Float[T]`.
     TimeNow,
+    /// Runs an action with the session's capabilities narrowed to `allowed`
+    /// (§9.14, `with_cap`). The previous set is restored when it finishes.
+    WithCaps {
+        /// The capability bits that stay granted.
+        allowed: u8,
+        /// The sandboxed action.
+        action: Rc<IoAction>,
+    },
+}
+
+/// The runtime capabilities an `IO` action can need (§9.14, §13.9.6).
+pub mod caps {
+    /// Reading and writing files (including plots and data files).
+    pub const FS: u8 = 1;
+    /// Network access.
+    pub const NET: u8 = 2;
+    /// The process environment.
+    pub const ENV: u8 = 4;
+    /// The session random-number generator.
+    pub const RAND: u8 = 8;
+    /// Accelerator devices.
+    pub const GPU: u8 = 16;
+    /// Every capability: what a program has unless it is sandboxed.
+    pub const ALL: u8 = FS | NET | ENV | RAND | GPU;
+
+    /// The names, in the order they are documented.
+    pub const NAMES: &[(&str, u8)] = &[
+        ("fs", FS),
+        ("net", NET),
+        ("env", ENV),
+        ("rand", RAND),
+        ("gpu", GPU),
+    ];
+
+    /// Parses a comma-separated capability list (`"fs,rand"`; `""` is none).
+    ///
+    /// # Errors
+    ///
+    /// The first name that is not a capability.
+    pub fn parse(list: &str) -> Result<u8, String> {
+        let mut bits = 0;
+        for name in list
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let Some((_, bit)) = NAMES.iter().find(|(known, _)| *known == name) else {
+                return Err(name.to_string());
+            };
+            bits |= bit;
+        }
+        Ok(bits)
+    }
+
+    /// The name of one capability bit.
+    #[must_use]
+    pub fn name(bit: u8) -> &'static str {
+        NAMES
+            .iter()
+            .find(|(_, known)| *known == bit)
+            .map_or("?", |(name, _)| name)
+    }
 }
 
 /// A symbolic proposition, produced by comparing `Real` values.
@@ -2177,10 +2240,13 @@ pub fn format_float(value: f64) -> String {
         return "nan".to_string();
     }
     if value.is_infinite() {
+        // IEEE infinity is `inf` (§6.3.4, §8.1): `oo` names the *exact*
+        // infinity of the `Real` phase, and printing a `Float` that way made
+        // the two phases indistinguishable.
         return if value.is_sign_negative() {
-            "-oo".to_string()
+            "-inf".to_string()
         } else {
-            "oo".to_string()
+            "inf".to_string()
         };
     }
     if value == 0.0 {
@@ -2207,8 +2273,17 @@ pub fn format_float(value: f64) -> String {
 /// cannot be parsed back to the value it came from.
 #[must_use]
 pub fn format_float_repr(value: f64) -> String {
+    if value.is_infinite() {
+        // There is no `inf` constant; this is the shortest source text that
+        // evaluates to the same IEEE infinity in the `Float` phase.
+        return if value.is_sign_negative() {
+            "(-1.0 / 0.0)".to_string()
+        } else {
+            "(1.0 / 0.0)".to_string()
+        };
+    }
     let text = format_float(value);
-    if text == "nan" || text == "oo" || text == "-oo" || text.contains('.') || text.contains('e') {
+    if text == "nan" || text.contains('.') || text.contains('e') {
         text
     } else {
         format!("{text}.0")
@@ -2275,13 +2350,7 @@ fn format_scalar_in(
                 },
                 | NumKind::Exact(value) => display_exact(value, unit, repr),
                 | NumKind::Float(value) => {
-                    let offset = unit.offset.as_ref().map_or(0.0, aevia_dim::Scale::to_f64);
-                    let scale = unit.scale.to_f64();
-                    let shown = if scale == 0.0 {
-                        *value
-                    } else {
-                        (*value - offset) / scale
-                    };
+                    let shown = float_in_display_unit(*value, unit);
                     if repr {
                         format_float_repr(shown)
                     } else {
@@ -2340,6 +2409,45 @@ fn format_scalar_in(
     }
 }
 
+/// A coherent `Float` expressed in a display unit.
+///
+/// Two renderings are within an ulp of the true `(x - offset) / scale`: the
+/// IEEE evaluation (whose rounding of the offset cancels when `x` came from a
+/// literal in the same unit: `25.0 °C` stored as `298.15` reads back `25`),
+/// and the conversion on the exact rationals rounded once (which is right
+/// when it does not cancel: `point(300.0, K)` reads `26.85 °C`, not
+/// `26.850000000000023 °C`). The shorter text is shown. The value itself is
+/// unchanged; only its rendering is.
+fn float_in_display_unit(
+    value: f64,
+    unit: &UnitDef,
+) -> f64 {
+    let offset = unit.offset.as_ref().map_or(0.0, aevia_dim::Scale::to_f64);
+    let scale = unit.scale.to_f64();
+    let ieee = if scale == 0.0 {
+        value
+    } else {
+        (value - offset) / scale
+    };
+    let exact_scale = (unit.scale.pi == 0).then(|| unit.scale.rat.clone());
+    let exact_offset = match &unit.offset {
+        | None => Some(BigRational::zero()),
+        | Some(offset) if offset.pi == 0 => Some(offset.rat.clone()),
+        | Some(_) => None,
+    };
+    if let (Some(scale), Some(offset), Some(exact)) =
+        (exact_scale, exact_offset, BigRational::from_float(value))
+    {
+        if !scale.is_zero() {
+            let rounded = aevia_dim::rat::to_f64(&((exact - offset) / scale));
+            if format_float(rounded).len() < format_float(ieee).len() {
+                return rounded;
+            }
+        }
+    }
+    ieee
+}
+
 /// Converts a coherent exact value into a display unit without leaving the
 /// rationals, so `3.2 km` stays `3.2 km` instead of `3.2000000000000006 km`.
 fn display_exact(
@@ -2395,6 +2503,14 @@ pub fn repr(value: &Value) -> String {
     render(value, true)
 }
 
+/// Renders a value that sits inside a container (a tensor element).
+fn render_element(
+    value: &Value,
+    repr: bool,
+) -> String {
+    render_at(value, repr, 1)
+}
+
 /// The deepest nesting `show` will walk.
 ///
 /// A value nested deeper than this would recurse once per level in a path that
@@ -2442,8 +2558,11 @@ fn render_at(
                 format_scalar(num)
             }
         },
+        // A string on its own shows as its text; inside a container it is
+        // quoted, so `Err("not found")`, `["a", "b"]` and `{ name = "x" }`
+        // say where each string starts and ends (`["a, b"]` is one element).
         | Value::Str(text) => {
-            if repr {
+            if repr || depth > 0 {
                 quote(text)
             } else {
                 text.to_string()
@@ -2557,7 +2676,7 @@ fn show_tensor_in(
                 parts.push(
                     tensor
                         .get_flat(*offset)
-                        .map_or_else(|| "?".to_string(), |value| render(&value, repr)),
+                        .map_or_else(|| "?".to_string(), |value| render_element(&value, repr)),
                 );
                 *offset += 1;
             }
@@ -2996,7 +3115,7 @@ mod tests {
         assert_eq!(format_float(2.0), "2");
         assert_eq!(format_float(0.5), "0.5");
         assert_eq!(format_float(1e-9), "1e-9");
-        assert_eq!(format_float(f64::INFINITY), "oo");
+        assert_eq!(format_float(f64::INFINITY), "inf");
     }
 
     #[test]

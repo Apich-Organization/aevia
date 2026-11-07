@@ -466,7 +466,9 @@ let d = diff(g)(3)
 
 #[test]
 fn sqrt_of_a_negative_stays_formal() {
-    assert_eq!(repr("let a = sqrt(0.0 - 1.0)\n", "a"), "sqrt(-1)");
+    // §6.3.4's formal roots are the `Real` phase's; a `Float` stays a `Float`,
+    // so its even root of a negative is the domain error `ln(-1.0)` also is.
+    assert_eq!(repr("let a = sqrt(0 - 1)\n", "a"), "sqrt(-1)");
 }
 
 // --- item 3: structural equality -------------------------------------------
@@ -949,11 +951,16 @@ fn a_repeated_root_reports_its_multiplicity() {
 /// constructed record is classified.)
 #[test]
 fn a_list_answer_claims_completeness() {
-    let solutions = solutions_of("let s = solve(fn t => sin(t) - 1/2)\n", "s");
+    let solutions = solutions_of("let s = solve(fn t => t^3 - t)\n", "s");
     assert!(
         bool_field(&solutions, "complete"),
         "a list answer is the solver's exhaustive form"
     );
+    // A periodic equation has infinitely many roots: the principal ones are
+    // listed and the kernel says the list is not complete.
+    let periodic = solutions_of("let s = solve(fn t => sin(t) - 1/2)\n", "s");
+    assert!(!bool_field(&periodic, "complete"));
+    assert!(!field_elements(&periodic, "roots").is_empty());
     assert!(
         !field_elements(&solutions, "roots").is_empty(),
         "the exhaustive form carries the roots"

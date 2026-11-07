@@ -279,13 +279,20 @@ fn sign(x: Real[1]): Int =
 match_expr ::= "match" expr "with" match_body
 match_body ::= NEWLINE INDENT { match_arm } DEDENT
              | NEWLINE { match_arm }          # 分支与 match 同列
+             | inline_arm { inline_arm }      # 分支写在 `with` 同一行
 match_arm  ::= "|" pattern [ "if" expr ] "->" expr NEWLINE?
+inline_arm ::= "|" pattern [ "if" expr ] "->" expr
 ```
 
 - 分支按顺序尝试；`_` 是通配符。
 - 守卫 `if` 在模式匹配成功后求值，必须是 `Bool`。
 - 穷尽性由编译器检查；非穷尽是错误 `E0309`，冗余分支是警告 `W0201`。
 - 分支体可以是块。
+- **行内形式**：分支也可以与 `with` 写在同一行：
+  `match o with | Some(v) -> v | None -> 0`。括号内没有 `NEWLINE`（§1.4），
+  所以 `println(match o with | Some(v) -> v | None -> 0)` 只能用这种形式。
+  行内分支的体在下一个 `|` 或外层表达式结束处结束；嵌套的行内 `match` 会吞掉
+  后面的分支，必要时加括号。格式化器在表达式内部输出行内形式，在行尾输出块形式。
 
 ### 2.3.5 `fn` 表达式（lambda）
 

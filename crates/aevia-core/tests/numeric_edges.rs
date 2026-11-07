@@ -54,8 +54,9 @@ fn special_values_follow_the_spec() {
     // §6.3.4: "`ln(0)` 返回 `-oo`（`Real` 的无穷）；`ln(-1)` 构造符号项".
     assert_eq!(observe("let v = ln(0)\n", "v").unwrap(), "-oo");
     assert_eq!(observe("let v = log(0)\n", "v").unwrap(), "-oo");
-    // The Float phase is IEEE: `ln(0.0)` is `-Infinity`, spelled `-oo`.
-    assert_eq!(observe("let v = ln(0.0)\n", "v").unwrap(), "-oo");
+    // The Float phase is IEEE: `ln(0.0)` is `-Infinity`, spelled `-inf`
+    // (`-oo` is the exact phase's infinity).
+    assert_eq!(observe("let v = ln(0.0)\n", "v").unwrap(), "-inf");
     // The extended-real limits the numeric tables state.
     assert_eq!(observe("let v = exp(-oo)\n", "v").unwrap(), "0");
     assert_eq!(observe("let v = ln(oo)\n", "v").unwrap(), "oo");
@@ -73,10 +74,10 @@ fn special_values_follow_the_spec() {
 
 #[test]
 fn special_values_are_unchanged_by_phase_spelling() {
-    // A Float zero and an exact zero both give `-oo`; a program must not depend
-    // on which spelling reached the call.
+    // An exact zero gives the exact `-oo` however it was spelt; a Float zero
+    // gives the IEEE `-inf` however it was spelt.
     assert_eq!(observe("let v = ln(0 * 1)\n", "v").unwrap(), "-oo");
-    assert_eq!(observe("let v = ln(0.0 + 0.0)\n", "v").unwrap(), "-oo");
+    assert_eq!(observe("let v = ln(0.0 + 0.0)\n", "v").unwrap(), "-inf");
     assert_eq!(observe("let v = exp(-1 * oo)\n", "v").unwrap(), "0");
 }
 
@@ -163,8 +164,14 @@ fn float_phase_infinities_stay_ieee() {
         observe("let v = (1.0/0.0) - (1.0/0.0)\n", "v").unwrap(),
         "nan"
     );
-    assert_eq!(observe("let v = 1.0/0.0\n", "v").unwrap(), "oo");
-    assert_eq!(observe("let v = ln(0.0)\n", "v").unwrap(), "-oo");
+    assert_eq!(observe("let v = 1.0/0.0\n", "v").unwrap(), "inf");
+    assert_eq!(observe("let v = -1.0/0.0\n", "v").unwrap(), "-inf");
+    assert_eq!(observe("let v = ln(0.0)\n", "v").unwrap(), "-inf");
+    // `repr` keeps the phase: the text evaluates back to an IEEE infinity.
+    assert_eq!(
+        observe("let v = repr(1.0/0.0)\n", "v").unwrap(),
+        "(1.0 / 0.0)"
+    );
 }
 
 #[test]

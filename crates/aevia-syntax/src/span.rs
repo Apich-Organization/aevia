@@ -205,16 +205,65 @@ impl SourceMap {
         match self.file(span.file) {
             | Some(file) => {
                 let (line, column) = file.line_col(span.start);
-                format!("{}:{line}:{column}", file.name)
+                format!("{}:{line}:{column}", display_path(&file.name))
             },
             | None => "<unknown>".to_string(),
         }
     }
 }
 
+/// The spelling of a source path in a diagnostic.
+///
+/// Loaders canonicalise paths so that one file has one identity, and on
+/// Windows that produces the verbatim form `\\?\C:\dir\file.aev`. That prefix
+/// is an implementation detail of the identity, not something a user typed:
+/// it is dropped, and a path under the working directory is shown relative to
+/// it, the way the user named it on the command line.
+#[must_use]
+pub fn display_path(name: &str) -> String {
+    let plain = strip_verbatim(name);
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd = strip_verbatim(&cwd.to_string_lossy());
+        let cwd = cwd.trim_end_matches(['/', '\\']);
+        if !cwd.is_empty() && plain.len() > cwd.len() + 1 && plain.is_char_boundary(cwd.len()) {
+            let (head, rest) = plain.split_at(cwd.len());
+            let same = if cfg!(windows) {
+                head.eq_ignore_ascii_case(cwd)
+            } else {
+                head == cwd
+            };
+            if same && rest.starts_with(['/', '\\']) {
+                return rest[1..].to_string();
+            }
+        }
+    }
+    plain
+}
+
+fn strip_verbatim(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = name.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_prefixes_are_not_shown() {
+        assert_eq!(strip_verbatim(r"\\?\C:\a\b.aev"), r"C:\a\b.aev");
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\srv\share\b.aev"),
+            r"\\srv\share\b.aev"
+        );
+        assert_eq!(strip_verbatim("src/main.aev"), "src/main.aev");
+        assert_eq!(display_path("main.aev"), "main.aev");
+    }
 
     #[test]
     fn line_and_column_are_one_based() {

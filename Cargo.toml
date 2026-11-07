@@ -37,6 +37,7 @@ num-traits = "0.2"
 indexmap = "2"
 unicode-ident = "1"
 unicode-normalization = "0.1"
+unicode-segmentation = "1"
 serde_json = "1"
 
 aevia-dim = { path = "crates/aevia-dim" }
@@ -60,6 +61,12 @@ codegen-units = 1
 # RSSN links a large scientific kernel; full debug info multiplies disk and
 # linker memory costs across the workspace's independent test targets.
 [profile.test]
+debug = "line-tables-only"
+
+# The same reason applies to a debug `aevia` binary: full debug info for the
+# kernel and its numeric dependencies pushed the MSVC program database past
+# its limits (LNK1140/LNK1318). Workspace crates keep full debug info.
+[profile.dev.package."*"]
 debug = "line-tables-only"
 
 # Optimised but quick to rebuild: for measuring the interpreter while working

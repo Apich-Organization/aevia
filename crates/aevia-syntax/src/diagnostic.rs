@@ -220,7 +220,8 @@ impl Diagnostic {
                     let _ = writeln!(
                         out,
                         "{pad} = note: {} at {}:{label_line}:{label_column}",
-                        label.message, file.name
+                        label.message,
+                        crate::span::display_path(&file.name)
                     );
                     continue;
                 }

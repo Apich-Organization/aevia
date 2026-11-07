@@ -17,22 +17,24 @@ use aevia_types::CheckedModule;
 use aevia_types::DictionaryUse;
 use aevia_types::Type;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::rc::Weak;
 
+/// A span-keyed table on the per-call path (see [`crate::fxhash`]).
+pub(crate) type SpanMap<V> = crate::fxhash::FxHashMap<Span, V>;
+
 #[derive(Debug)]
 pub(crate) struct ModuleEvidence {
-    pub(crate) expr_types: HashMap<Span, Type>,
-    pub(crate) literal_reps: HashMap<Span, aevia_types::Rep>,
-    pub(crate) dyn_calls: HashMap<Span, aevia_dim::Dim>,
-    pub(crate) rssn_calls: HashMap<Span, aevia_rssn::OpKey>,
-    pub(crate) dictionaries: HashMap<Span, Vec<DictionaryUse>>,
-    pub(crate) method_refs: HashMap<Span, aevia_types::check::ClassMethodRef>,
-    pub(crate) constructor_refs: HashMap<Span, (aevia_types::adt::AdtId, usize)>,
-    pub(crate) functions: HashMap<Span, aevia_types::check::FunctionEvidence>,
-    pub(crate) callable_refs: HashMap<Span, aevia_types::CallableProjection>,
-    pub(crate) try_targets: HashMap<Span, aevia_types::check::TryTarget>,
+    pub(crate) expr_types: SpanMap<Type>,
+    pub(crate) literal_reps: SpanMap<aevia_types::Rep>,
+    pub(crate) dyn_calls: SpanMap<aevia_dim::Dim>,
+    pub(crate) rssn_calls: SpanMap<aevia_rssn::OpKey>,
+    pub(crate) dictionaries: SpanMap<Vec<DictionaryUse>>,
+    pub(crate) method_refs: SpanMap<aevia_types::check::ClassMethodRef>,
+    pub(crate) constructor_refs: SpanMap<(aevia_types::adt::AdtId, usize)>,
+    pub(crate) functions: SpanMap<aevia_types::check::FunctionEvidence>,
+    pub(crate) callable_refs: SpanMap<aevia_types::CallableProjection>,
+    pub(crate) try_targets: SpanMap<aevia_types::check::TryTarget>,
     pub(crate) units: aevia_dim::UnitTable,
 }
 #[derive(Debug)]
@@ -41,12 +43,19 @@ pub(crate) struct ModuleContext {
     pub(crate) session: Weak<()>,
     pub(crate) instances: RefCell<Vec<InstanceTemplate>>,
 }
+fn respan<V: Clone>(table: &std::collections::HashMap<Span, V>) -> SpanMap<V> {
+    table
+        .iter()
+        .map(|(span, value)| (*span, value.clone()))
+        .collect()
+}
+
 impl ModuleContext {
     pub(crate) fn new(
         checked: &CheckedModule,
         session: &Rc<()>,
     ) -> Rc<Self> {
-        let mut dictionaries: HashMap<Span, Vec<DictionaryUse>> = HashMap::new();
+        let mut dictionaries: SpanMap<Vec<DictionaryUse>> = SpanMap::default();
         for site in &checked.dictionaries {
             dictionaries
                 .entry(site.span)
@@ -55,8 +64,8 @@ impl ModuleContext {
         }
         Rc::new(Self {
             evidence: ModuleEvidence {
-                expr_types: checked.expr_types.clone(),
-                literal_reps: checked.literal_reps.clone(),
+                expr_types: respan(&checked.expr_types),
+                literal_reps: respan(&checked.literal_reps),
                 dyn_calls: checked
                     .dyn_calls
                     .iter()
@@ -68,11 +77,11 @@ impl ModuleContext {
                     .map(|site| (site.span, site.key.clone()))
                     .collect(),
                 dictionaries,
-                method_refs: checked.method_refs.clone(),
-                constructor_refs: checked.constructor_refs.clone(),
-                functions: checked.functions.clone(),
-                callable_refs: checked.callable_refs.clone(),
-                try_targets: checked.try_targets.clone(),
+                method_refs: respan(&checked.method_refs),
+                constructor_refs: respan(&checked.constructor_refs),
+                functions: respan(&checked.functions),
+                callable_refs: respan(&checked.callable_refs),
+                try_targets: respan(&checked.try_targets),
                 units: checked.units.clone(),
             },
             session: Rc::downgrade(session),
@@ -226,6 +235,120 @@ impl crate::Interp {
         let scope = Scope::module(self.context.clone(), imports);
         self.remember_scope(&scope);
         scope
+    }
+
+    /// The instantiated body of the first visible template whose global is
+    /// `global`, in the order [`Self::instance_templates`] lists them.
+    ///
+    /// `None` means no visible template has that global; `Some(None)` means one
+    /// does but its defining scope is gone. That is the answer
+    /// `instance_templates().find(..).and_then(instantiate)` gives, without
+    /// building (and cloning every template of) the list.
+    pub(crate) fn find_instance_template(
+        &self,
+        global: &str,
+    ) -> Option<Option<Value>> {
+        // The innermost context is searched first by the full walk below, so
+        // a hit there needs none of the walk's bookkeeping.
+        if let Some(context) = self
+            .active_scope
+            .as_ref()
+            .and_then(|scope| scope.context.as_ref())
+        {
+            if let Some(template) = context
+                .instances
+                .borrow()
+                .iter()
+                .rev()
+                .find(|template| template.entry.global == global)
+            {
+                return Some(template.instantiate());
+            }
+        }
+        let mut pending = self.active_scope.iter().cloned().collect::<Vec<_>>();
+        let mut scopes = std::collections::HashSet::new();
+        let mut contexts = std::collections::HashSet::new();
+        while let Some(scope) = pending.pop() {
+            if !scopes.insert(Rc::as_ptr(&scope)) {
+                continue;
+            }
+            if let Some(context) = &scope.context {
+                if contexts.insert(Rc::as_ptr(context)) {
+                    if let Some(template) = context
+                        .instances
+                        .borrow()
+                        .iter()
+                        .rev()
+                        .find(|template| template.entry.global == global)
+                    {
+                        return Some(template.instantiate());
+                    }
+                }
+            }
+            pending.extend(scope.imports.iter().rev().cloned());
+            if let Some(parent) = &scope.parent {
+                pending.push(parent.clone());
+            }
+        }
+        None
+    }
+
+    /// The mangled global of `key`'s `method`, formatted once per call site.
+    ///
+    /// Mangling renders the whole key through `Debug`, which was a large share
+    /// of every instance method call. The cache is keyed by the call's span and
+    /// verified against the key itself, so a re-checked module that reuses a
+    /// span for a different instance cannot be answered from a stale entry.
+    pub(crate) fn cached_instance_global(
+        &self,
+        span: Span,
+        key: &aevia_types::InstanceKey,
+        method: &str,
+    ) -> Rc<str> {
+        let mut cache = self.instance_globals.borrow_mut();
+        if cache.len() >= 4096 {
+            cache.clear();
+        }
+        let entries = cache.entry(span).or_default();
+        if let Some((_, _, global)) = entries
+            .iter()
+            .find(|(cached, name, _)| cached == key && name == method)
+        {
+            return global.clone();
+        }
+        let global: Rc<str> = Self::instance_global(key, method).into();
+        entries.push((key.clone(), method.to_string(), global.clone()));
+        global
+    }
+
+    /// An empty buffer with room for `capacity` values, reused when one is free.
+    ///
+    /// Every call builds an argument list and a frame; both are dropped when
+    /// the call ends, so a one-slot-per-call allocation pair is recycled
+    /// instead.
+    pub(crate) fn take_buffer(
+        &self,
+        capacity: usize,
+    ) -> Vec<Value> {
+        let mut buffer = self.buffer_pool.borrow_mut().pop().unwrap_or_default();
+        buffer.reserve(capacity);
+        buffer
+    }
+
+    /// Returns a buffer taken with [`Self::take_buffer`] (or any `Vec`) to the pool.
+    pub(crate) fn recycle_buffer(
+        &self,
+        mut buffer: Vec<Value>,
+    ) {
+        // Dropping the values may run arbitrary destructors, so it happens
+        // before the pool is borrowed.
+        buffer.clear();
+        if buffer.capacity() != 0 && buffer.capacity() <= 256 {
+            let mut pool = self.buffer_pool.borrow_mut();
+            if pool.len() < 64 {
+                pool.push(buffer);
+            }
+        }
     }
 
     pub(crate) fn instance_templates(&self) -> Vec<InstanceTemplate> {

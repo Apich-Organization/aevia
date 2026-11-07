@@ -879,6 +879,19 @@ impl<'a> Lexer<'a> {
         let source = unescape_source(&self.src[content_start..self.pos]);
         let span = Span::new(self.file, self.base + content_start, self.base + self.pos);
         self.bump(); // '}'
+        // `"{}"` is a placeholder in other languages; here it is an
+        // interpolation with nothing in it. Name the two ways out instead of
+        // the parser's "expected an expression".
+        if source.trim().is_empty() {
+            let span = Span::new(self.file, open, self.mark());
+            self.diagnostics.push(
+                Diagnostic::error("E0104", "empty interpolation `{}` in a string", span).with_help(
+                    "write an expression inside the braces, `\\{` for a literal brace, \
+                     or a raw string r\"…\" (no interpolation) for a `format` template",
+                ),
+            );
+            return Some(StringPart::Text(String::new()));
+        }
         Some(StringPart::Interpolation { source, span })
     }
 

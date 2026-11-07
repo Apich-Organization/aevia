@@ -4,6 +4,35 @@
 ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Stats.Distributions
 
+type Normal<d>      = { mu: Real[d], sigma: Real[d] }
+
+type Uniform<d>     = { lo: Real[d], hi: Real[d] }
+
+type Exponential<d> = { rate: Real[1/d] }
+
+type Gamma<d>       = { shape: Real[1], rate: Real[1/d] }
+
+type Beta           = { alpha: Real[1], beta: Real[1] }
+
+type ChiSquared     = { df: Real[1] }
+
+type StudentT       = { df: Real[1] }
+
+type Poisson        = { lambda: Real[1] }
+
+type Binomial       = { n: Int, p: Real[1] }
+
+type Distribution<d> =
+    | Normal(Normal<d>)
+    | Uniform(Uniform<d>)
+    | Exponential(Exponential<d>)
+    | Gamma(Gamma<d>)
+    | Beta(Beta)
+    | ChiSquared(ChiSquared)
+    | StudentT(StudentT)
+    | Poisson(Poisson)
+    | Binomial(Binomial)
+
 let cdf = cdf
 let pdf = pdf
 let sample = sample

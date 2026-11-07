@@ -1201,7 +1201,12 @@ impl Term {
                 }
             },
             | Self::Add(items) => {
-                for (index, item) in items.iter().enumerate() {
+                // Polynomial terms print by descending degree, the order a
+                // reader expects (`x^3 - 3*x + 1`); terms of equal degree keep
+                // their canonical order, and constants come last.
+                let mut ordered: Vec<&Term> = items.iter().collect();
+                ordered.sort_by(|a, b| display_degree(b).cmp(&display_degree(a)));
+                for (index, item) in ordered.into_iter().enumerate() {
                     if index > 0 {
                         // `… - oo` is the negative-infinity term, not `-1*oo`.
                         if infinity_sign_of(item) == Some(-1) {
@@ -1280,6 +1285,19 @@ impl Term {
                 }
                 Ok(())
             },
+            // `b^(1/2)` is `sqrt(b)` (§8.2) and reads that way; `b^(-1/2)` is
+            // `1/sqrt(b)`.
+            | Self::Pow(base, exponent)
+                if exponent.denom() == &BigInt::from(2)
+                    && exponent.numer().abs() == BigInt::one() =>
+            {
+                if exponent.is_negative() {
+                    f.write_str("1/")?;
+                }
+                f.write_str("sqrt(")?;
+                base.render(f, repr)?;
+                f.write_str(")")
+            },
             | Self::Pow(base, exponent) => {
                 // A negative base needs parentheses: `-8^(1/3)` would read as
                 // the negation of `8^(1/3)`, not as `(-8)^(1/3)`.
@@ -1313,6 +1331,20 @@ impl Term {
     }
 }
 
+/// The polynomial degree used to order a sum for display.
+///
+/// Symbols other than the constants `pi`/`e` have degree one, powers multiply
+/// it, products add it; anything else (numbers, functions, kernel terms) has
+/// degree zero. The key only orders display: it never changes the value.
+fn display_degree(term: &Term) -> BigRational {
+    match term {
+        | Term::Sym(name) if name != "pi" && name != "e" && name != "oo" => BigRational::one(),
+        | Term::Pow(base, exponent) => display_degree(base) * exponent,
+        | Term::Mul(items) => items.iter().map(display_degree).sum(),
+        | _ => BigRational::zero(),
+    }
+}
+
 /// A `fmt::Write` that appends to a `String`.
 struct ReprFormatter<'a>(&'a mut String);
 
@@ -1327,130 +1359,329 @@ impl fmt::Write for ReprFormatter<'_> {
 }
 
 /// Renders a term in LaTeX (`latex`) or Typst syntax.
+///
+/// The output follows mathematical typesetting rather than the source form:
+/// single-letter symbols are italic variables, Greek names become their
+/// letters, a product with negative powers is a fraction, `b^(1/2)` is a
+/// root, the elementary functions use their upright operator names, and sums
+/// print by descending degree like `show` does.
 #[must_use]
 pub fn term_to_math(
     term: &Term,
     latex: bool,
 ) -> String {
-    fn render(
-        term: &Term,
-        latex: bool,
-        parent_prec: u8,
-    ) -> String {
-        // 2 = sum, 1 = product, 0 = atom.
-        let (text, prec) = match term {
-            | Term::Num(value) => {
-                if value.denom().is_one() {
-                    (value.numer().to_string(), 0)
-                } else if latex {
-                    (
-                        format!("\\frac{{{}}}{{{}}}", value.numer(), value.denom()),
-                        0,
-                    )
-                } else {
-                    (format!("frac({}, {})", value.numer(), value.denom()), 0)
-                }
-            },
-            | Term::Sym(name) => {
-                let name = display_name(name);
-                if latex {
-                    (format!("\\mathrm{{{name}}}"), 0)
-                } else {
-                    (format!("italic({name})"), 0)
-                }
-            },
-            | Term::Add(items) => {
-                let mut out = String::new();
-                for (index, item) in items.iter().enumerate() {
-                    if index == 0 {
-                        out.push_str(&render(item, latex, 2));
-                    } else if is_negative(item) {
-                        out.push_str(" - ");
-                        out.push_str(&render(&absolute(item), latex, 2));
-                    } else {
-                        out.push_str(" + ");
-                        out.push_str(&render(item, latex, 2));
-                    }
-                }
-                (out, 2)
-            },
-            | Term::Mul(items) => {
-                let mut out = String::new();
-                for (index, item) in items.iter().enumerate() {
-                    if index > 0 {
-                        out.push_str(if latex { " \\cdot " } else { " dot " });
-                    }
-                    out.push_str(&render(item, latex, 1));
-                }
-                (out, 1)
-            },
-            | Term::Pow(base, exponent) => {
-                let base_text = render(base, latex, 0);
-                let exponent_text = if exponent.denom().is_one() {
-                    exponent.numer().to_string()
-                } else if latex {
-                    format!("\\frac{{{}}}{{{}}}", exponent.numer(), exponent.denom())
-                } else {
-                    format!("frac({}, {})", exponent.numer(), exponent.denom())
-                };
-                let body = if latex {
-                    format!("{base_text}^{{{exponent_text}}}")
-                } else {
-                    format!("{base_text}^({exponent_text})")
-                };
-                (body, 0)
-            },
-            | Term::Fun(function, args) => {
-                let rendered: Vec<String> = args.iter().map(|arg| render(arg, latex, 0)).collect();
-                let name = function.as_str();
-                match function {
-                    | Fun::Sqrt if args.len() == 1 => {
-                        let body = if latex {
-                            format!("\\sqrt{{{}}}", rendered[0])
-                        } else {
-                            format!("sqrt({})", rendered[0])
-                        };
-                        (body, 0)
-                    },
-                    | Fun::Ite if args.len() == 3 => {
-                        let body = if latex {
-                            format!(
-                                "\\begin{{cases}} {} & {} \\\\ {} & \\text{{otherwise}} \\end{{cases}}",
-                                rendered[1], rendered[0], rendered[2]
-                            )
-                        } else {
-                            format!(
-                                "cases({} & {}, {} & otherwise)",
-                                rendered[1], rendered[0], rendered[2]
-                            )
-                        };
-                        (body, 0)
-                    },
-                    | _ => {
-                        let call = format!("{name}({})", rendered.join(", "));
-                        if latex {
-                            (format!("\\operatorname{{{name}}}{call}"), 0)
-                        } else {
-                            (format!("{name}{call}"), 0)
-                        }
-                    },
-                }
-            },
-            | Term::Foreign { text, .. } => (text.to_string(), 0),
-        };
-        if prec > parent_prec {
-            if latex {
-                format!("\\left({text}\\right)")
-            } else {
-                format!("({text})")
-            }
+    // Precedences: 2 = sum, 1 = product, 0 = atom. A child whose precedence is
+    // above what its position accepts is bracketed.
+    render_math(term, latex, 2)
+}
+
+fn render_math(
+    term: &Term,
+    latex: bool,
+    parent_prec: u8,
+) -> String {
+    let (text, prec) = math_parts(term, latex);
+    if prec > parent_prec {
+        if latex {
+            format!(r"\left({text}\right)")
         } else {
-            text
+            format!("({text})")
+        }
+    } else {
+        text
+    }
+}
+
+fn math_fraction(
+    numerator: &str,
+    denominator: &str,
+    latex: bool,
+) -> String {
+    if latex {
+        format!(r"\frac{{{numerator}}}{{{denominator}}}")
+    } else {
+        format!("frac({numerator}, {denominator})")
+    }
+}
+
+/// The Greek letters a symbol name can spell.
+const GREEK: &[&str] = &[
+    "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa",
+    "lambda", "mu", "nu", "xi", "pi", "rho", "sigma", "tau", "upsilon", "phi", "chi", "psi",
+    "omega", "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi",
+    "Omega",
+];
+
+fn math_symbol(
+    name: &str,
+    latex: bool,
+) -> String {
+    let name = display_name(name);
+    // `x_1` is `x` with subscript `1`.
+    if let Some((base, sub)) = name.split_once('_') {
+        if !base.is_empty() && !sub.is_empty() {
+            let base = math_symbol(base, latex);
+            let sub = math_symbol(sub, latex);
+            return if latex {
+                format!("{base}_{{{sub}}}")
+            } else {
+                format!("{base}_({sub})")
+            };
         }
     }
-    // At the top level nothing needs parentheses: the loosest operator (a
-    // sum, precedence 2) is allowed.
-    render(term, latex, 2)
+    if GREEK.contains(&name) {
+        return if latex {
+            format!(r"\{name}")
+        } else {
+            name.to_string()
+        };
+    }
+    if name.chars().count() == 1 || name.chars().all(|c| c.is_ascii_digit()) {
+        return name.to_string();
+    }
+    if latex {
+        format!(r"\mathrm{{{name}}}")
+    } else {
+        format!("\"{name}\"")
+    }
+}
+
+fn math_parts(
+    term: &Term,
+    latex: bool,
+) -> (String, u8) {
+    match term {
+        | Term::Num(value) => {
+            if value.denom().is_one() {
+                let text = value.numer().to_string();
+                // A negative number is a sum-level form: `2 \cdot (-3)`.
+                let prec = u8::from(value.is_negative()) * 2;
+                (text, prec)
+            } else {
+                let fraction = math_fraction(
+                    &value.numer().abs().to_string(),
+                    &value.denom().to_string(),
+                    latex,
+                );
+                if value.is_negative() {
+                    (format!("-{fraction}"), 2)
+                } else {
+                    (fraction, 0)
+                }
+            }
+        },
+        | Term::Sym(name) => (math_symbol(name, latex), 0),
+        | Term::Add(items) => {
+            let mut ordered: Vec<&Term> = items.iter().collect();
+            ordered.sort_by(|a, b| display_degree(b).cmp(&display_degree(a)));
+            let mut out = String::new();
+            for (index, item) in ordered.into_iter().enumerate() {
+                if index == 0 {
+                    out.push_str(&render_math(item, latex, 2));
+                } else if is_negative(item) {
+                    out.push_str(" - ");
+                    out.push_str(&render_math(&absolute(item), latex, 1));
+                } else {
+                    out.push_str(" + ");
+                    out.push_str(&render_math(item, latex, 1));
+                }
+            }
+            (out, 2)
+        },
+        | Term::Mul(items) => math_product(items, latex),
+        | Term::Pow(base, exponent) => {
+            if exponent.is_negative() {
+                let positive = Term::pow((**base).clone(), -exponent.clone());
+                return (
+                    math_fraction("1", &render_math(&positive, latex, 2), latex),
+                    0,
+                );
+            }
+            if exponent.denom() == &BigInt::from(2) && exponent.numer().is_one() {
+                let inner = render_math(base, latex, 2);
+                return if latex {
+                    (format!(r"\sqrt{{{inner}}}"), 0)
+                } else {
+                    (format!("sqrt({inner})"), 0)
+                };
+            }
+            // A function or a power as a base is bracketed: `(x^2)^3`.
+            let base_text = match **base {
+                | Term::Pow(..) | Term::Fun(..) => {
+                    let inner = render_math(base, latex, 2);
+                    if latex {
+                        format!(r"\left({inner}\right)")
+                    } else {
+                        format!("({inner})")
+                    }
+                },
+                | _ => render_math(base, latex, 0),
+            };
+            let exponent_text = if exponent.denom().is_one() {
+                exponent.numer().to_string()
+            } else {
+                math_fraction(
+                    &exponent.numer().to_string(),
+                    &exponent.denom().to_string(),
+                    latex,
+                )
+            };
+            if latex {
+                (format!("{base_text}^{{{exponent_text}}}"), 0)
+            } else {
+                (format!("{base_text}^({exponent_text})"), 0)
+            }
+        },
+        | Term::Fun(function, args) => {
+            let rendered: Vec<String> = args.iter().map(|arg| render_math(arg, latex, 2)).collect();
+            let name = function.as_str();
+            let bracket = |inner: &str| {
+                if latex {
+                    format!(r"\left({inner}\right)")
+                } else {
+                    format!("({inner})")
+                }
+            };
+            match function {
+                | Fun::Sqrt if args.len() == 1 => {
+                    if latex {
+                        (format!(r"\sqrt{{{}}}", rendered[0]), 0)
+                    } else {
+                        (format!("sqrt({})", rendered[0]), 0)
+                    }
+                },
+                | Fun::Exp if args.len() == 1 => {
+                    if latex {
+                        (format!("e^{{{}}}", rendered[0]), 0)
+                    } else {
+                        (format!("e^({})", rendered[0]), 0)
+                    }
+                },
+                | Fun::Abs if args.len() == 1 => {
+                    if latex {
+                        (format!(r"\left|{}\right|", rendered[0]), 0)
+                    } else {
+                        (format!("abs({})", rendered[0]), 0)
+                    }
+                },
+                | Fun::Ite if args.len() == 3 => {
+                    let body = if latex {
+                        format!(
+                            r"\begin{{cases}} {} & {} \\ {} & \text{{otherwise}} \end{{cases}}",
+                            rendered[1], rendered[0], rendered[2]
+                        )
+                    } else {
+                        format!(
+                            "cases({} & {}, {} & \"otherwise\")",
+                            rendered[1], rendered[0], rendered[2]
+                        )
+                    };
+                    (body, 0)
+                },
+                | _ => {
+                    let arguments = bracket(&rendered.join(", "));
+                    let known = matches!(
+                        name,
+                        "sin"
+                            | "cos"
+                            | "tan"
+                            | "ln"
+                            | "log"
+                            | "sinh"
+                            | "cosh"
+                            | "tanh"
+                            | "exp"
+                            | "arcsin"
+                            | "arccos"
+                            | "arctan"
+                            | "cot"
+                            | "sec"
+                            | "csc"
+                    );
+                    if latex {
+                        if known {
+                            (format!(r"\{name}{arguments}"), 0)
+                        } else {
+                            (format!(r"\operatorname{{{name}}}{arguments}"), 0)
+                        }
+                    } else if known {
+                        (format!("{name}{arguments}"), 0)
+                    } else {
+                        (format!("op(\"{name}\"){arguments}"), 0)
+                    }
+                },
+            }
+        },
+        | Term::Foreign { text, .. } => (text.to_string(), 0),
+    }
+}
+
+/// A product as numerator over denominator, with the sign in front.
+fn math_product(
+    items: &[Term],
+    latex: bool,
+) -> (String, u8) {
+    let mut negative = false;
+    let mut coefficient_numerator = BigInt::one();
+    let mut coefficient_denominator = BigInt::one();
+    let mut numerator: Vec<Term> = Vec::new();
+    let mut denominator: Vec<Term> = Vec::new();
+    for item in items {
+        match item {
+            | Term::Num(value) => {
+                if value.is_negative() {
+                    negative = !negative;
+                }
+                coefficient_numerator *= value.numer().abs();
+                coefficient_denominator *= value.denom();
+            },
+            | Term::Pow(base, exponent) if exponent.is_negative() => {
+                denominator.push(Term::pow((**base).clone(), -exponent.clone()));
+            },
+            | other => numerator.push(other.clone()),
+        }
+    }
+    let join = |factors: &[Term], coefficient: &BigInt, in_fraction: bool| -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if !coefficient.is_one() || factors.is_empty() {
+            parts.push(coefficient.to_string());
+        }
+        // A lone factor fills its side of a fraction bar and needs no
+        // brackets: `\frac{x}{y + 1}`, not `\frac{x}{\left(y + 1\right)}`.
+        let alone = in_fraction && parts.is_empty() && factors.len() == 1;
+        for factor in factors {
+            parts.push(render_math(factor, latex, if alone { 2 } else { 1 }));
+        }
+        let mut out = String::new();
+        for (index, part) in parts.iter().enumerate() {
+            if index > 0 {
+                // Juxtaposition, except where two numbers would run together.
+                let digit_next = part.starts_with(|c: char| c.is_ascii_digit());
+                out.push_str(match (latex, digit_next) {
+                    | (true, true) => r" \cdot ",
+                    | (true, false) => r" ",
+                    | (false, true) => " dot ",
+                    | (false, false) => " ",
+                });
+            }
+            out.push_str(part);
+        }
+        out
+    };
+    let body = if denominator.is_empty() && coefficient_denominator.is_one() {
+        join(&numerator, &coefficient_numerator, false)
+    } else {
+        math_fraction(
+            &join(&numerator, &coefficient_numerator, true),
+            &join(&denominator, &coefficient_denominator, true),
+            latex,
+        )
+    };
+    if negative {
+        (format!("-{body}"), 2)
+    } else {
+        (body, 1)
+    }
 }
 
 /// The name a symbol prints as.
@@ -1670,6 +1901,72 @@ mod tests {
         assert_eq!(perfect_root(&(&n * &n + 1), 2), None);
         assert_eq!(perfect_root(&(-(&n * &n * &n)), 3), Some(-n));
         assert_eq!(perfect_root(&BigInt::from(-4), 2), None);
+    }
+
+    #[test]
+    fn sums_print_by_descending_degree_and_half_powers_as_roots() {
+        let x = || sym("x");
+        let r = |n: i64, d: i64| Term::Num(BigRational::new(BigInt::from(n), BigInt::from(d)));
+        let series = Term::Add(vec![
+            Term::mul(
+                r(1, 120),
+                Term::pow(x(), BigRational::from_integer(BigInt::from(5))),
+            ),
+            Term::mul(
+                r(-1, 5040),
+                Term::pow(x(), BigRational::from_integer(BigInt::from(7))),
+            ),
+            Term::mul(
+                r(-1, 6),
+                Term::pow(x(), BigRational::from_integer(BigInt::from(3))),
+            ),
+            x(),
+        ]);
+        assert_eq!(series.to_string(), "-1/5040*x^7 + 1/120*x^5 - 1/6*x^3 + x");
+        let root = Term::Pow(
+            Box::new(sym("pi")),
+            BigRational::new(BigInt::from(1), BigInt::from(2)),
+        );
+        assert_eq!(root.to_string(), "sqrt(pi)");
+        let inverse_root = Term::Pow(
+            Box::new(sym("y")),
+            BigRational::new(BigInt::from(-1), BigInt::from(2)),
+        );
+        assert_eq!(inverse_root.to_string(), "1/sqrt(y)");
+    }
+
+    #[test]
+    fn latex_typesets_fractions_variables_and_functions() {
+        let x = || sym("x");
+        let y = || sym("y");
+        let quotient = Term::mul(
+            Term::pow(x(), BigRational::from_integer(BigInt::from(2))),
+            Term::pow(
+                Term::add(y(), Term::int(1)),
+                BigRational::from_integer(BigInt::from(-1)),
+            ),
+        );
+        assert_eq!(term_to_math(&quotient, true), r"\frac{x^{2}}{y + 1}");
+        assert_eq!(term_to_math(&quotient, false), "frac(x^(2), y + 1)");
+        let mixed = Term::mul(Term::int(3), Term::fun(Fun::Sin, vec![sym("theta")]));
+        assert_eq!(term_to_math(&mixed, true), r"3 \sin\left(\theta\right)");
+        let half = Term::mul(
+            Term::Num(BigRational::new(BigInt::from(-1), BigInt::from(2))),
+            Term::pow(sym("velocity"), BigRational::from_integer(BigInt::from(2))),
+        );
+        assert_eq!(
+            term_to_math(&half, true),
+            r"-\frac{\mathrm{velocity}^{2}}{2}"
+        );
+        let subscript = sym("x_1");
+        assert_eq!(term_to_math(&subscript, true), "x_{1}");
+        let root = Term::Pow(
+            Box::new(x()),
+            BigRational::new(BigInt::from(1), BigInt::from(2)),
+        );
+        assert_eq!(term_to_math(&root, true), r"\sqrt{x}");
+        let growth = Term::fun(Fun::Exp, vec![Term::mul(Term::int(-2), sym("t"))]);
+        assert_eq!(term_to_math(&growth, true), "e^{-2 t}");
     }
 
     #[test]

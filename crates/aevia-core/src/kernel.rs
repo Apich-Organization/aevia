@@ -201,6 +201,113 @@ fn exponent_expr(value: &BigRational) -> Expr {
     }
 }
 
+/// The kernel's rendering of a term, spelt the way Aevia source spells it.
+///
+/// The kernel prints its own parseable grammar: Euler's number is `E` and a
+/// square root is `x^(1/2)`. Aevia's prelude constant is `e` and its root is
+/// `sqrt` (§8.2), and a value's display should read as the source that would
+/// produce it, so both are respelt; internal symbol suffixes are dropped.
+#[must_use]
+pub fn foreign_text(text: &str) -> String {
+    respell_square_roots(&respell_euler(&clean_internal_names(text)))
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '#'
+}
+
+/// `E` as a whole identifier becomes `e`.
+fn respell_euler(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (index, &c) in chars.iter().enumerate() {
+        let before = index.checked_sub(1).map(|i| chars[i]);
+        let after = chars.get(index + 1).copied();
+        if c == 'E'
+            && !before.is_some_and(|b| is_ident_char(b) || b == '.')
+            && !after.is_some_and(|a| is_ident_char(a) || a == '(')
+        {
+            out.push('e');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// `atom^(1/2)` becomes `sqrt(atom)`, where `atom` is an identifier, a number,
+/// a bracketed group or a call. Anything it cannot delimit is left alone.
+fn respell_square_roots(text: &str) -> String {
+    const HALF: &str = "^(1/2)";
+    let mut current = text.to_string();
+    // Each pass rewrites the leftmost occurrence; nested roots take one pass
+    // each, and the bound keeps a malformed text from looping.
+    for _ in 0..64 {
+        let Some(at) = current.find(HALF) else {
+            break;
+        };
+        let chars: Vec<char> = current[..at].chars().collect();
+        let mut start = chars.len();
+        if chars.last() == Some(&')') {
+            let mut depth = 0usize;
+            let mut found = None;
+            for index in (0..chars.len()).rev() {
+                match chars[index] {
+                    | ')' => depth += 1,
+                    | '(' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            found = Some(index);
+                            break;
+                        }
+                    },
+                    | _ => {},
+                }
+            }
+            let Some(open) = found else {
+                break;
+            };
+            start = open;
+            // A call keeps its function name: `f(x)^(1/2)`.
+            while start > 0 && is_ident_char(chars[start - 1]) {
+                start -= 1;
+            }
+        } else {
+            while start > 0 && (is_ident_char(chars[start - 1]) || chars[start - 1] == '.') {
+                start -= 1;
+            }
+        }
+        if start == chars.len() {
+            break;
+        }
+        let atom: String = chars[start..].iter().collect();
+        let inner = if atom.starts_with('(') && atom.ends_with(')') {
+            atom[1..atom.len() - 1].to_string()
+        } else {
+            atom
+        };
+        let prefix: String = chars[..start].iter().collect();
+        current = format!("{prefix}sqrt({inner}){}", &current[at + HALF.len()..]);
+    }
+    current
+}
+
+#[cfg(test)]
+mod spelling_tests {
+    use super::foreign_text;
+
+    #[test]
+    fn kernel_text_is_respelt_in_aevia_terms() {
+        assert_eq!(foreign_text("E"), "e");
+        assert_eq!(foreign_text("E^x + 1"), "e^x + 1");
+        assert_eq!(foreign_text("pi^(1/2)"), "sqrt(pi)");
+        assert_eq!(foreign_text("2*(x + 1)^(1/2)"), "2*sqrt(x + 1)");
+        assert_eq!(foreign_text("exp(x)^(1/2)/3"), "sqrt(exp(x))/3");
+        assert_eq!(foreign_text("Ei(x) + EE"), "Ei(x) + EE");
+        assert_eq!(foreign_text("x^(1/3)"), "x^(1/3)");
+    }
+}
+
 /// Removes the disambiguating suffix from internal symbol names.
 ///
 /// `symbol("x")` allocates `x`, `x#2`, ... so that two calls denote different
@@ -310,7 +417,7 @@ pub fn from_val(
         | Val::Symbol(name) => Value::Num(NumVal::symbolic(Term::Sym(name.clone()), dim)),
         | Val::Term(sym) => {
             let kernel = aevia_rssn::kernel();
-            let text = clean_internal_names(&kernel.text(*sym));
+            let text = foreign_text(&kernel.text(*sym));
             Value::Num(NumVal::symbolic(Term::foreign(*sym, text), dim))
         },
         | Val::Complex { re, im } => {
@@ -401,10 +508,7 @@ pub fn term_of(val: &Val) -> Option<Term> {
         | Val::Symbol(name) => Some(Term::Sym(name.clone())),
         | Val::Term(sym) => {
             let kernel = aevia_rssn::kernel();
-            Some(Term::foreign(
-                *sym,
-                clean_internal_names(&kernel.text(*sym)),
-            ))
+            Some(Term::foreign(*sym, foreign_text(&kernel.text(*sym))))
         },
         | _ => None,
     }

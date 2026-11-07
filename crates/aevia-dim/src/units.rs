@@ -762,8 +762,16 @@ impl UnitTable {
         &self,
         name: &str,
     ) -> Result<ResolvedUnit, UnitError> {
+        // §1.8.2: a unit may be written with its module path, `3 Units.SI.km`.
+        // The unit table is one namespace shared by every `Units.*` module,
+        // so the path selects nothing further; it must still name a units
+        // module, otherwise `3 p.x` would be a unit literal.
+        let local = match name.rsplit_once('.') {
+            | Some((module, unit)) if module == "Units" || module.starts_with("Units.") => unit,
+            | _ => name,
+        };
         let unit = self
-            .lookup(name)
+            .lookup(local)
             .ok_or_else(|| UnitError::Unknown(name.to_string()))?;
         Ok(ResolvedUnit {
             name: unit.display.clone(),
@@ -868,6 +876,22 @@ mod tests {
         assert_eq!(table.lookup("MHz").unwrap().scale.to_f64(), 1e6);
         assert!(table.lookup("kkm").is_none());
         assert!(table.lookup("nope").is_none());
+    }
+
+    #[test]
+    fn qualified_unit_names_resolve_through_a_units_module() {
+        // §1.8.2: `3 Units.SI.km` is legal; a path that is not a units module
+        // is not a unit.
+        let table = UnitTable::si();
+        let km = table.resolve_name("Units.SI.km").unwrap();
+        assert_eq!(km.scale.to_f64(), 1000.0);
+        assert_eq!(km.name, table.resolve_name("km").unwrap().name);
+        assert!(table.resolve_name("Units.CGS.s").is_ok());
+        assert!(matches!(
+            table.resolve_name("p.x"),
+            Err(UnitError::Unknown(name)) if name == "p.x"
+        ));
+        assert!(table.resolve_name("Physics.m").is_err());
     }
 
     #[test]

@@ -4,6 +4,10 @@
 ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module FFT
 
+type Norm = | Backward | Forward | Unitary
+
+type AxisScale = | Linear | Log
+
 let fft = fft
 let fft_norm = fft_norm
 let fftfreq = fftfreq

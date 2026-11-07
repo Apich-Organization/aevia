@@ -549,14 +549,17 @@ impl Printer {
         let (prec, open) = precedence(&expr.kind);
         let needs_brackets = prec < cx.prec || (open && !cx.tail && !cx.bracketed);
         if needs_brackets {
-            if matches!(
-                expr.kind,
-                ExprKind::Block { .. } | ExprKind::Do { .. } | ExprKind::Match { .. }
-            ) {
+            if matches!(expr.kind, ExprKind::Match { .. }) {
+                // The inline arm form fits inside brackets.
+                self.push("(");
+                self.expr(expr, Ctx::bracketed());
+                self.push(")");
+                return;
+            }
+            if matches!(expr.kind, ExprKind::Block { .. } | ExprKind::Do { .. }) {
                 let what = match expr.kind {
                     | ExprKind::Block { .. } => "a layout block",
-                    | ExprKind::Do { .. } => "a `do` block",
-                    | _ => "a `match`",
+                    | _ => "a `do` block",
                 };
                 self.fail(format!(
                     "{what} can only be printed where a line ends, not inside an expression"
@@ -669,6 +672,33 @@ impl Printer {
                 self.branch(then_branch);
                 self.push_after("else");
                 self.branch(else_branch);
+            },
+            | ExprKind::Match { scrutinee, arms } if !cx.tail => {
+                // Inside an expression (a call argument, a bracket) there is
+                // no line to end, so the arms use the inline form
+                // `match s with | p -> e | q -> f` (§A.3).
+                self.push("match ");
+                self.expr(scrutinee, Ctx::operand(TAIL));
+                self.push(" with");
+                let last = arms.len().saturating_sub(1);
+                for (index, arm) in arms.iter().enumerate() {
+                    let pattern = self.pattern_text(&arm.pattern);
+                    self.push(" | ");
+                    self.push(&pattern);
+                    if let Some(guard) = &arm.guard {
+                        self.push(" if ");
+                        self.expr(guard, Ctx::operand(TAIL));
+                    }
+                    self.push(" -> ");
+                    // A greedy body (a nested `match`) in an earlier arm would
+                    // capture the arms after it, so it is bracketed there.
+                    let body_cx = if index == last {
+                        cx
+                    } else {
+                        Ctx::operand(TAIL)
+                    };
+                    self.expr(&arm.body, body_cx);
+                }
             },
             | ExprKind::Match { scrutinee, arms } => {
                 self.push("match ");

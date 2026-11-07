@@ -32,6 +32,7 @@ pub mod driver;
 pub mod eval;
 pub mod eval_ir;
 mod evidence;
+pub mod fxhash;
 mod generics;
 mod host_witness;
 pub mod io_do;

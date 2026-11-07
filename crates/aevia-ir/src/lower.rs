@@ -128,18 +128,24 @@ pub fn lower_module_with_source_refs(
 
 /// Preserve source function-value sites used to retain generic specialization.
 #[must_use]
-pub fn lower_module_with_runtime_evidence(
+pub fn lower_module_with_runtime_evidence<
+    S1: std::hash::BuildHasher,
+    S2: std::hash::BuildHasher,
+>(
     module: &aevia_syntax::ast::Module,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
     literal_reps: &HashMap<Span, Rep>,
     method_refs: &HashMap<Span, ClassMethodRef>,
-    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize)>,
-    expr_types: &HashMap<Span, aevia_types::Type>,
+    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), S1>,
+    expr_types: &HashMap<Span, aevia_types::Type, S2>,
 ) -> Module {
     let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
     lowerer.method_refs = method_refs.clone();
-    lowerer.constructor_refs = constructor_refs.clone();
+    lowerer.constructor_refs = constructor_refs
+        .iter()
+        .map(|(span, reference)| (*span, *reference))
+        .collect();
     lowerer.function_values = expr_types
         .iter()
         .filter(|(_, ty)| matches!(ty, aevia_types::Type::Fn(..)))
@@ -297,18 +303,21 @@ pub fn lower_decl_with_source_refs(
 
 /// Incremental counterpart of [`lower_module_with_runtime_evidence`].
 #[must_use]
-pub fn lower_decl_with_runtime_evidence(
+pub fn lower_decl_with_runtime_evidence<S1: std::hash::BuildHasher, S2: std::hash::BuildHasher>(
     decl: &Decl,
     rssn_calls: &[RssnCall],
     dictionaries: &[DictionaryUse],
     literal_reps: &HashMap<Span, Rep>,
     method_refs: &HashMap<Span, ClassMethodRef>,
-    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize)>,
-    expr_types: &HashMap<Span, aevia_types::Type>,
+    constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), S1>,
+    expr_types: &HashMap<Span, aevia_types::Type, S2>,
 ) -> Option<LoweredDecl> {
     let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
     lowerer.method_refs = method_refs.clone();
-    lowerer.constructor_refs = constructor_refs.clone();
+    lowerer.constructor_refs = constructor_refs
+        .iter()
+        .map(|(span, reference)| (*span, *reference))
+        .collect();
     lowerer.function_values = expr_types
         .iter()
         .filter(|(_, ty)| matches!(ty, aevia_types::Type::Fn(..)))

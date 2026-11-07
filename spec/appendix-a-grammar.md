@@ -123,7 +123,9 @@ if_expr        ::= "if" expr "then" expr "else" expr
 match_expr     ::= "match" expr "with" match_body
 match_body     ::= NEWLINE INDENT { match_arm } DEDENT
                  | NEWLINE { match_arm }          # 分支与 match 同列
+                 | inline_arm { inline_arm }      # 分支写在 `with` 同一行（§2.3.4）
 match_arm      ::= "|" pattern [ "if" expr ] "->" expr NEWLINE?
+inline_arm     ::= "|" pattern [ "if" expr ] "->" expr
 
 fn_expr        ::= "fn" ( "(" [ params ] ")" | IDENT ) [ ":" type ] "=>" expr
 

@@ -635,17 +635,33 @@ impl Loader {
                             .map(|candidate| format!("`{}`", candidate.path.display()))
                             .collect::<Vec<_>>()
                             .join(" or ");
-                        self.diagnostics.push(
-                            Diagnostic::error(
-                                "E0607",
-                                format!(
-                                    "cannot find module `{}`: expected {expected}",
-                                    import_path.join(".")
-                                ),
-                                decl.span,
-                            )
-                            .with_note(format!("imported from `{}`", module_label(&path))),
-                        );
+                        let wanted = import_path.join(".");
+                        let dotted: Vec<String> = aevia_std::stdlib::module_paths()
+                            .map(|module| module.replace('/', "."))
+                            .collect();
+                        // Module names are case-sensitive (`FFT`, not `Fft`),
+                        // so a case-insensitive match is the first suggestion.
+                        let close = dotted
+                            .iter()
+                            .find(|module| module.eq_ignore_ascii_case(&wanted))
+                            .map(String::as_str)
+                            .or_else(|| {
+                                aevia_types::check::closest_name(
+                                    &wanted,
+                                    dotted.iter().map(String::as_str),
+                                )
+                            });
+                        let mut diagnostic = Diagnostic::error(
+                            "E0607",
+                            format!("cannot find module `{wanted}`: expected {expected}"),
+                            decl.span,
+                        )
+                        .with_note(format!("imported from `{}`", module_label(&path)));
+                        if let Some(close) = close {
+                            diagnostic = diagnostic
+                                .with_help(format!("the standard library has a module `{close}`"));
+                        }
+                        self.diagnostics.push(diagnostic);
                         continue;
                     }
                 },
@@ -753,6 +769,8 @@ impl Loader {
                     // a silent no-op.
                     for name in selected {
                         if !exports.contains_key(name) {
+                            let note =
+                                missing_export_note(name, exports.keys().map(String::as_str));
                             self.diagnostics.push(
                                 Diagnostic::error(
                                     "E0301",
@@ -762,7 +780,7 @@ impl Loader {
                                     ),
                                     span,
                                 )
-                                .with_note("check the spelling, or drop the name list"),
+                                .with_note(note),
                             );
                         }
                     }
@@ -1002,4 +1020,32 @@ pub fn run_modules(
         }
     }
     diagnostics
+}
+
+/// The help for `import M { name }` when `M` does not export `name`.
+///
+/// A misspelling gets the closest export; a correctly spelt name that lives in
+/// a different standard-library module (`normal` is in `Stats.Distributions`,
+/// not `Stats`) gets the modules that do export it.
+fn missing_export_note<'a>(
+    name: &str,
+    exports: impl IntoIterator<Item = &'a str>,
+) -> String {
+    if let Some(close) = aevia_types::check::closest_name(name, exports) {
+        return format!("did you mean `{close}`?");
+    }
+    let homes: Vec<String> = aevia_std::stdlib::module_paths()
+        .filter(|path| {
+            let components: Vec<&str> = path.split('/').collect();
+            aevia_std::stdlib::exports(&components).contains(&name)
+        })
+        .map(|path| path.replace('/', "."))
+        .take(3)
+        .collect();
+    if homes.is_empty() {
+        "check the spelling, or drop the name list".to_string()
+    } else {
+        let listed: Vec<String> = homes.iter().map(|home| format!("`{home}`")).collect();
+        format!("`{name}` is exported by {}", listed.join(", "))
+    }
 }

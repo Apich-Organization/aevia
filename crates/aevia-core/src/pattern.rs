@@ -3,7 +3,6 @@
 use crate::value::NumKind;
 use crate::value::TensorData;
 use crate::value::Value;
-use aevia_syntax::Span;
 use aevia_syntax::ast::Pat;
 use aevia_syntax::ast::PatKind;
 use aevia_syntax::ast::PatLit;
@@ -12,7 +11,6 @@ use aevia_types::adt::{
     self,
 };
 use num_rational::BigRational;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 #[derive(Clone, Copy)]
@@ -36,7 +34,7 @@ pub(crate) enum Binding {
 pub(crate) fn ast(
     pattern: &Pat,
     value: &Value,
-    constructors: &HashMap<Span, (AdtId, usize)>,
+    constructors: &crate::evidence::SpanMap<(AdtId, usize)>,
 ) -> Option<Vec<Binding>> {
     execute(Node::Ast(pattern), value, constructors)
 }
@@ -44,7 +42,7 @@ pub(crate) fn ir(
     pattern: &aevia_ir::Pattern,
     value: &Value,
 ) -> Option<Vec<Binding>> {
-    execute(Node::Ir(pattern), value, &HashMap::new())
+    execute(Node::Ir(pattern), value, &Default::default())
 }
 fn constructor(
     value: &Value,
@@ -105,7 +103,7 @@ fn tensor(
 fn execute<'a>(
     node: Node<'a>,
     value: &Value,
-    constructors: &HashMap<Span, (AdtId, usize)>,
+    constructors: &crate::evidence::SpanMap<(AdtId, usize)>,
 ) -> Option<Vec<Binding>> {
     let mut pending = vec![Work::Match(node, value.clone())];
     let mut bindings = Vec::new();

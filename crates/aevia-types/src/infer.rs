@@ -2189,6 +2189,15 @@ impl Infer {
                 }
                 for (x, y) in a.iter().zip(b.iter()) {
                     match (x, y) {
+                        // Two literal extents that differ are a shape error
+                        // the reader can see (`[2]` against `[3]`), not the
+                        // solver's normalised `0 = 1`.
+                        | (Some(Nat::Lit(p)), Some(Nat::Lit(q))) if p != q => {
+                            return Err(UnifyError::ShapeMismatch {
+                                left: left.clone(),
+                                right: right.clone(),
+                            });
+                        },
                         | (Some(x), Some(y)) => self.unify_nat(x, y)?,
                         // `?` stays compatible with any extent (§3.5.1).
                         | _ => {},

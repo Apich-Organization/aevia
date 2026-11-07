@@ -365,6 +365,26 @@ fn type_declarations(
 ) -> Vec<String> {
     let (section, wanted): (&str, &[&str]) = match path {
         | "Ode" => ("8.9", &["OdeMethod", "OdeOpts"]),
+        // §8.7.1: the nominal distribution type and its parameter records,
+        // so `Normal({ mu = 0.0 m, sigma = 0.1 m })` is a source value.
+        | "Stats/Distributions" => {
+            (
+                "8.7.1",
+                &[
+                    "Normal",
+                    "Uniform",
+                    "Exponential",
+                    "Gamma",
+                    "Beta",
+                    "ChiSquared",
+                    "StudentT",
+                    "Poisson",
+                    "Binomial",
+                    "Distribution",
+                ],
+            )
+        },
+        | "FFT" => ("8.8", &["Norm", "AxisScale"]),
         | "Sde" => {
             (
                 "8.9.1",

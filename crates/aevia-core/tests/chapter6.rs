@@ -1066,9 +1066,10 @@ fn the_error_classes_are_reachable() {
     assert_eq!(load_error("let x = zeros(2)[5]\n").0, "E0802");
     // `E0806` domain error in the `Float` phase.
     assert_eq!(load_error("let x = asin(2.0)\n").0, "E0806");
-    // `E0808` budget: the summation budget is 10^6 terms (§6.9.1).
+    // `E0808` budget: a range too long to sum term by term goes to the
+    // kernel, and a summand it has no closed form for is the budget error.
     assert_eq!(
-        load_error("let x = sum(fn k => k, 0, 2000000)\n").0,
+        load_error("let x = sum(fn k => sin(k^2), 1, oo)\n").0,
         "E0808"
     );
     // `E0805` an unbounded recursion.

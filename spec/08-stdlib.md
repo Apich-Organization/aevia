@@ -110,6 +110,14 @@ format      : (String, Tensor<1, String>) -> String
 ```
 
 字符串索引按 grapheme cluster 计；`chars(s)` 返回 `Tensor<1, String>`。
+`length(s)`、`chars(s)`、`s[i]`、`s[i..j]`/`s[i:j:k]` 都以 grapheme cluster 为
+单位（`"e\u{301}"` 是一个位置）；`s[i]` 与切片都是 `String`，负下标从末尾数，
+越界是 `E0802`。
+
+`format(template, args)` 的占位符是 `{0}`、`{1}`（按位置）与 `{}`（取下一个）；
+其他花括号内容和超出参数个数的占位符原样保留。普通字符串字面量里的 `{…}`
+是插值，所以模板通常写成原始字符串 `r"{} m"` 或从文件读入；空插值 `"{}"`
+是 `E0104`，提示这两种写法。
 
 ### 8.1.5 容器
 
@@ -412,6 +420,12 @@ laplacian     : ((Tensor<1, Real[d]> -> Real[e]), Tensor<1, Real[d]>)
 `sum` 的索引是无量纲的 `Real`，所以 `k` 可以是符号；`product` 只支持
 无量纲，带量纲用 `product_dyn` 返回 `Dyn<Real>`。
 
+`sum(f, a, b)`/`product(f, a, b)` 的两个界都是整数（精确非整数界是 `E0302`）。
+不超过 10^4 项的具体区间逐项精确求和；无穷界（`oo`）、符号界或更长的区间向
+内核请求闭式（`sum(fn k => 1/k^2, 1, oo) = pi^2/6`、
+`sum(fn k => k, 1, n) = n^2/2 + n/2`、几何级数 `sum(fn k => 2^(-k), 0, oo) = 2`）；
+内核找不到闭式时报 `E0808`，不会返回未求值的 `sum(…)` 冒充答案。
+
 ## 8.6 Solve / Optimize
 
 ```
@@ -514,6 +528,8 @@ type Poisson        = { lambda: Real[1] }
 type Binomial       = { n: Int, p: Real[1] }
 ```
 
+这些声明是 `Stats.Distributions` 模块的源码（`open Stats.Distributions` 后
+`Normal({ mu = 1.7 m, sigma = 0.1 m })` 是一个 `Distribution<L>` 值）。
 `pdf`、`cdf`、`sample`、`sample_n` 是对这个封闭 ADT 的**内建重载**：
 
 ```

@@ -155,6 +155,11 @@ pub enum DictTarget {
     Witness {
         /// The candidate instances, in registration order.
         candidates: Vec<InstanceKey>,
+        /// The heads of the candidates that are `derive`d. A derived instance
+        /// has no method bodies — the runtime's structural implementation is
+        /// the instance (§3.8.5) — so a witness that matches one of these
+        /// heads runs the builtin.
+        derived: Vec<(InstanceKey, Type)>,
     },
 }
 
@@ -163,6 +168,9 @@ pub enum DictTarget {
 pub enum BuiltinDispatch {
     /// The structural `Show` printer (records, `Dyn`, unit values, …).
     ShowStructural,
+    /// A `derive`d instance (§3.8.5): the structural builtin of the method's
+    /// name is its implementation.
+    Derived,
 }
 
 /// One statically resolved class-method call.
@@ -7001,8 +7009,24 @@ impl Checker {
         }
         let exponent_value = literal_exponent(exponent);
         let Some(exponent_value) = exponent_value else {
+            // A runtime exponent of a non-`Int` representation makes the
+            // power non-integral in general: `2^x` with `x : Real` is the
+            // `Real` term `2^x`, and with `x : Float` a `Float`. An `Int`
+            // exponent keeps the base's representation.
+            let exponent_rep = match &exponent_ty {
+                | Type::Scalar(rep, _) => Some(self.infer.resolve_rep(*rep)),
+                | _ => None,
+            };
             return match base {
-                | Type::Scalar(rep, dim) if dim.is_one() => Type::Scalar(*rep, Dim::one()),
+                | Type::Scalar(rep, dim) if dim.is_one() => {
+                    match exponent_rep {
+                        | Some(exponent_rep @ (Rep::Real | Rep::Float | Rep::Complex)) => {
+                            let base_rep = self.div_rep(*rep);
+                            Type::Scalar(self.join_rep(base_rep, exponent_rep), Dim::one())
+                        },
+                        | _ => Type::Scalar(*rep, Dim::one()),
+                    }
+                },
                 | Type::Scalar(_, _) => {
                     self.error_help(
                         "E0404",
@@ -9033,11 +9057,25 @@ impl Checker {
                                 field
                             },
                             | None => {
-                                self.error(
-                                    "E0306",
-                                    format!("the record {{ {row} }} has no field `{name}`"),
-                                    span,
-                                );
+                                let fields = row.fields();
+                                let close = closest_name(
+                                    name,
+                                    fields.iter().map(|(field, _)| field.as_str()),
+                                )
+                                .map(str::to_string);
+                                let message =
+                                    format!("the record {{ {row} }} has no field `{name}`");
+                                match close {
+                                    | Some(close) => {
+                                        self.error_help(
+                                            "E0306",
+                                            message,
+                                            span,
+                                            &format!("did you mean `{close}`?"),
+                                        )
+                                    },
+                                    | None => self.error("E0306", message, span),
+                                }
                                 Type::Error
                             },
                         }
@@ -9131,10 +9169,36 @@ impl Checker {
             let _ = self.infer.unify(&resolved, &tensor);
             resolved = self.infer.resolve(&tensor);
         }
+        // §8.1.4: a string is indexed by grapheme cluster. `s[i]` is the
+        // cluster at `i` and `s[i..j]` (or `s[i:j]`) a substring; both are
+        // `String`, and a string has exactly one axis.
+        if matches!(resolved, Type::Str) {
+            if indices.len() != 1 {
+                self.error(
+                    "E0302",
+                    format!("a string has one axis, found {} indices", indices.len()),
+                    span,
+                );
+                return Type::Error;
+            }
+            let parts: Vec<&Expr> = match &indices[0] {
+                | SliceAst::Index(expr) => vec![expr],
+                | SliceAst::Range { start, end, step, .. } => {
+                    [start, end, step].into_iter().flatten().collect()
+                },
+            };
+            for part in parts {
+                let ty = self.synth(part);
+                if let Err(error) = self.infer.unify(&ty, &Type::int()) {
+                    self.report_unify(error, part.span);
+                }
+            }
+            return Type::Str;
+        }
         let Type::Tensor { shape, elem } = resolved else {
             self.error(
                 "E0302",
-                format!("indexing expects a tensor, found {resolved}"),
+                format!("indexing expects a tensor or a string, found {resolved}"),
                 span,
             );
             return Type::Error;
@@ -10707,7 +10771,25 @@ impl Checker {
             let scheme = ctor_scheme(adt, index);
             return self.infer.instantiate(&scheme);
         }
-        self.error("E0301", format!("unbound name `{name}`"), span);
+        let suggestion = {
+            let locals = self.scopes.iter().flat_map(|scope| scope.keys());
+            let candidates = locals
+                .chain(self.globals.keys())
+                .map(String::as_str)
+                .chain(builtins::PRELUDE_NAMES.iter().copied());
+            closest_name(name, candidates).map(str::to_string)
+        };
+        match suggestion {
+            | Some(close) => {
+                self.error_help(
+                    "E0301",
+                    format!("unbound name `{name}`"),
+                    span,
+                    &format!("did you mean `{close}`?"),
+                );
+            },
+            | None => self.error("E0301", format!("unbound name `{name}`"), span),
+        }
         Type::Error
     }
 
@@ -10807,11 +10889,42 @@ impl Checker {
                     },
                     | _ => format!("this literal cannot have type {requested}"),
                 };
-                self.diagnostics.push(
-                    Diagnostic::error("E0302", "type mismatch", span)
-                        .with_primary_label(label)
-                        .with_help("write a unit, for example `1 m`"),
-                );
+                // The help depends on what was asked for: a dimension wants
+                // a unit, a `Complex` wants a constructor, and anything else
+                // (a `Bool`, a `String`) has no literal-level fix.
+                let requested_ty = self.infer.resolve(&requested);
+                let help = match &requested_ty {
+                    | Type::Scalar(Rep::Complex, _) => {
+                        Some(
+                            "a real literal is not a `Complex`; build one with `complex(re, im)` \
+                         (for real data, `rfft` takes a real tensor)",
+                        )
+                    },
+                    | Type::Scalar(_, dim) if !self.infer.resolve_dim(dim).is_one() => {
+                        Some("write a unit, for example `1 m`")
+                    },
+                    | _ => None,
+                };
+                let mut diagnostic =
+                    Diagnostic::error("E0302", "type mismatch", span).with_primary_label(label);
+                if let Some(help) = help {
+                    diagnostic = diagnostic.with_help(help);
+                }
+                self.diagnostics.push(diagnostic);
+            },
+            | UnifyError::ShapeMismatch { left, right } => {
+                let error = UnifyError::ShapeMismatch {
+                    left: left.clone(),
+                    right: right.clone(),
+                };
+                let mut diagnostic = Diagnostic::error(code(&error), error.to_string(), span);
+                if left.rank() != right.rank() {
+                    diagnostic = diagnostic.with_help(
+                        "tensors of different rank do not broadcast (§3.5.3); \
+                         build the larger shape explicitly, for example with `map` or `outer`",
+                    );
+                }
+                self.diagnostics.push(diagnostic);
             },
             | other => {
                 self.diagnostics
@@ -11782,19 +11895,26 @@ impl Checker {
         head: &Type,
     ) -> DictTarget {
         let _ = method;
-        if let Some(key) = self.classes.resolve_key(class, head) {
-            return DictTarget::Instance(key);
+        if let Some(instance) = self.classes.resolve_instance(class, head) {
+            if instance.origin == Origin::Derived {
+                return DictTarget::Builtin(BuiltinDispatch::Derived);
+            }
+            return DictTarget::Instance(instance.key.clone());
         }
         if is_structural_show(class, head) {
             return DictTarget::Builtin(BuiltinDispatch::ShowStructural);
         }
-        let candidates = self
-            .classes
-            .instances_of(class)
-            .into_iter()
+        let instances = self.classes.instances_of(class);
+        let candidates = instances
+            .iter()
             .map(|instance| instance.key.clone())
             .collect();
-        DictTarget::Witness { candidates }
+        let derived = instances
+            .iter()
+            .filter(|instance| instance.origin == Origin::Derived)
+            .map(|instance| (instance.key.clone(), instance.head.clone()))
+            .collect();
+        DictTarget::Witness { candidates, derived }
     }
 }
 
@@ -12004,4 +12124,104 @@ fn shadowed_unit_help(name: &str) -> String {
     format!(
         "`{name}` here is the local binding in scope, not the unit: in an expression a value shadows a unit name (§5.1.3). Rename the binding, or write the unit in a literal (`1.0 {name}`), where unit names are never shadowed"
     )
+}
+
+/// The candidate closest to a misspelt `name`, for a "did you mean" help.
+///
+/// Distance is optimal string alignment over characters (a transposition
+/// costs one), and the accepted distance grows with the name: one edit for
+/// names of up to three characters, two up to six, three beyond. Internal
+/// names (mangled instance globals, generated helpers) are never offered.
+/// Ties go to the lexicographically smallest candidate, so the help text is
+/// deterministic.
+#[must_use]
+pub fn closest_name<'a>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let target: Vec<char> = name.chars().collect();
+    let limit = match target.len() {
+        | 0 => return None,
+        | 1..=3 => 1,
+        | 4..=6 => 2,
+        | _ => 3,
+    };
+    let mut best: Option<(usize, &'a str)> = None;
+    for candidate in candidates {
+        if candidate == name
+            || candidate.is_empty()
+            || candidate.contains([':', '@', '$', '#'])
+            || candidate.starts_with("__")
+        {
+            continue;
+        }
+        let other: Vec<char> = candidate.chars().collect();
+        if other.len().abs_diff(target.len()) > limit {
+            continue;
+        }
+        let distance = osa_distance(&target, &other);
+        if distance > limit || distance >= other.len() {
+            continue;
+        }
+        // Beyond one edit the first letter must agree (ignoring case): a
+        // reader misspells the middle of a name, and `Normal` -> `format`
+        // is two edits away but no help at all.
+        if distance > 1 && !target[0].to_lowercase().eq(other[0].to_lowercase()) {
+            continue;
+        }
+        let better = match best {
+            | None => true,
+            | Some((d, current)) => distance < d || (distance == d && candidate < current),
+        };
+        if better {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, candidate)| candidate)
+}
+
+fn osa_distance(
+    a: &[char],
+    b: &[char],
+) -> usize {
+    let width = b.len() + 1;
+    let mut table = vec![0usize; (a.len() + 1) * width];
+    for (i, cell) in table.iter_mut().step_by(width).enumerate() {
+        *cell = i;
+    }
+    for (j, cell) in table.iter_mut().take(width).enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut value = (table[(i - 1) * width + j] + 1)
+                .min(table[i * width + j - 1] + 1)
+                .min(table[(i - 1) * width + j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                value = value.min(table[(i - 2) * width + j - 2] + 1);
+            }
+            table[i * width + j] = value;
+        }
+    }
+    table[a.len() * width + b.len()]
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::closest_name;
+
+    #[test]
+    fn close_names_are_suggested_and_far_ones_are_not() {
+        let names = ["println", "print", "length", "linspace", "sqrt"];
+        assert_eq!(closest_name("pritnln", names), Some("println"));
+        assert_eq!(closest_name("lenght", names), Some("length"));
+        assert_eq!(closest_name("sqtr", names), Some("sqrt"));
+        assert_eq!(closest_name("zzz", names), None);
+        assert_eq!(closest_name("x", ["y"]), None);
+        assert_eq!(
+            closest_name("value", ["valeu", "Show@Int::show"]),
+            Some("valeu")
+        );
+    }
 }

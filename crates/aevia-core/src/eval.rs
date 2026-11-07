@@ -450,6 +450,11 @@ fn stack_budget_exhausted() -> Option<usize> {
 pub struct Interp {
     pub(crate) tensor_inputs: crate::generics::TensorInputCache,
     pub(crate) call_proofs: crate::generics::CallProofCache,
+    /// Mangled instance globals by call site; see `cached_instance_global`.
+    pub(crate) instance_globals:
+        RefCell<crate::evidence::SpanMap<Vec<(aevia_types::InstanceKey, String, Rc<str>)>>>,
+    /// Spare frame and argument buffers; see `eval_ir::run_closure`.
+    pub(crate) buffer_pool: RefCell<Vec<Vec<Value>>>,
     pub(crate) session: Rc<()>,
     pub(crate) context: Rc<crate::evidence::ModuleContext>,
     pub(crate) active_scope: Option<Rc<Scope>>,
@@ -471,6 +476,10 @@ pub struct Interp {
     pub symbol_counts: HashMap<String, u32>,
     /// Deterministic RNG state.
     pub seed: u64,
+    /// The runtime capabilities `IO` actions may use (§9.14), as
+    /// [`crate::value::caps`] bits. Every capability is granted unless the
+    /// host (`aevia run --caps`) or a `with_cap` block narrows the set.
+    pub capabilities: u8,
     /// Maximum call depth before `E0805`.
     pub max_depth: usize,
     /// Maximum consecutive tail calls in one function activation before
@@ -611,6 +620,95 @@ pub struct Interp {
 /// record with exactly those two `Real[d]` fields. A record that merely has a
 /// field of that name is not a measurement (the checker's type is the real
 /// gate; the runtime only needs a safe, total recogniser).
+/// A plain dimensionless scalar, borrowed: what the fast arithmetic path needs
+/// to know about an operand, without cloning it into a `NumVal` first.
+#[derive(Clone, Copy)]
+pub(crate) enum Scalar<'a> {
+    Int(&'a BigInt),
+    Float(f64),
+}
+
+impl<'a> Scalar<'a> {
+    /// The view of a number, when it is a dimensionless `Int` or `Float`.
+    pub(crate) fn of(number: &'a NumVal) -> Option<Self> {
+        // A display unit (`50 %`) takes the general path, which applies the
+        // §5.4.2 display rules.
+        if !number.dim.is_one() || number.display.is_some() {
+            return None;
+        }
+        match &number.kind {
+            | NumKind::Int(value) => Some(Self::Int(value)),
+            | NumKind::Float(value) => Some(Self::Float(*value)),
+            | _ => None,
+        }
+    }
+
+    fn to_f64(self) -> f64 {
+        match self {
+            | Self::Int(value) => num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+            | Self::Float(value) => value,
+        }
+    }
+}
+
+/// The result of `op` on two plain scalars, when it is one of the cases whose
+/// answer is unambiguous: `Int` `+ - *`, `Float` (or `Float` with `Int`)
+/// `+ - * /`, and the six comparisons on two `Int`s or two `Float`s. Mirrors
+/// `scalar_arithmetic` / `compare` exactly for those, and answers `None` for
+/// everything else.
+pub(crate) fn plain_scalar_binary(
+    op: BinOp,
+    left: Scalar<'_>,
+    right: Scalar<'_>,
+) -> Option<Value> {
+    match (left, right) {
+        | (Scalar::Int(a), Scalar::Int(b)) => {
+            Some(match op {
+                | BinOp::Add => Value::Num(NumVal::int(a + b)),
+                | BinOp::Sub => Value::Num(NumVal::int(a - b)),
+                | BinOp::Mul => Value::Num(NumVal::int(a * b)),
+                | BinOp::Eq => Value::Bool(a == b),
+                | BinOp::Ne => Value::Bool(a != b),
+                | BinOp::Lt => Value::Bool(a < b),
+                | BinOp::Le => Value::Bool(a <= b),
+                | BinOp::Gt => Value::Bool(a > b),
+                | BinOp::Ge => Value::Bool(a >= b),
+                | _ => return None,
+            })
+        },
+        | (Scalar::Float(a), Scalar::Float(b)) => {
+            Some(match op {
+                | BinOp::Add => Value::Num(NumVal::float(a + b, Dim::one())),
+                | BinOp::Sub => Value::Num(NumVal::float(a - b, Dim::one())),
+                | BinOp::Mul => Value::Num(NumVal::float(a * b, Dim::one())),
+                | BinOp::Div => Value::Num(NumVal::float(a / b, Dim::one())),
+                | BinOp::Eq => Value::Bool(a == b),
+                | BinOp::Ne => Value::Bool(a != b),
+                | BinOp::Lt => Value::Bool(a < b),
+                | BinOp::Le => Value::Bool(a <= b),
+                | BinOp::Gt => Value::Bool(a > b),
+                | BinOp::Ge => Value::Bool(a >= b),
+                | _ => return None,
+            })
+        },
+        // `Int` promotes below `Float` on the arithmetic path; comparisons of
+        // mixed operands keep the general path's rules.
+        | (left, right) => {
+            let (a, b) = (left.to_f64(), right.to_f64());
+            Some(Value::Num(NumVal::float(
+                match op {
+                    | BinOp::Add => a + b,
+                    | BinOp::Sub => a - b,
+                    | BinOp::Mul => a * b,
+                    | BinOp::Div => a / b,
+                    | _ => return None,
+                },
+                Dim::one(),
+            )))
+        },
+    }
+}
+
 fn measurement_parts(value: &Value) -> Option<(NumVal, NumVal)> {
     let Value::Record(record) = value else {
         return None;
@@ -659,10 +757,13 @@ impl Interp {
             output: Output::Console,
             symbol_counts: HashMap::new(),
             seed: 0x2545_f491_4f6c_dd1d,
+            capabilities: crate::value::caps::ALL,
             max_depth: 2048,
             max_tail_calls: 100_000_000,
             tensor_inputs: crate::generics::TensorInputCache::default(),
             call_proofs: crate::generics::CallProofCache::default(),
+            instance_globals: RefCell::default(),
+            buffer_pool: RefCell::default(),
             max_io_steps: 100_000_000,
             max_io_depth: 2048,
             max_nodes: 16_384,
@@ -1041,7 +1142,6 @@ impl Interp {
         method: &str,
         args: &[Value],
     ) -> Option<Dispatch> {
-        let templates = self.instance_templates();
         // The checker pinned the target (round-2 decision 1c); this is the
         // authority. A concrete instance runs by its symbolic key (so two
         // primitive heads never share a global), a quantified site dispatches
@@ -1049,16 +1149,17 @@ impl Interp {
         // structural `Show` falls through to the builtin printer.
         match &use_site.target {
             | DictTarget::Instance(key) => {
-                let global = Self::instance_global(key, method);
-                if let Some(body) = templates
-                    .iter()
-                    .find(|template| template.entry.global == global)
-                    .and_then(crate::evidence::InstanceTemplate::instantiate)
-                {
+                // A concrete instance is one named template. Collecting every
+                // visible template (a scope-graph walk that clones each one)
+                // and formatting the mangled name for each call were most of
+                // an instance method call's cost; the name is formatted once
+                // per site and the template is looked up in place.
+                let global = self.cached_instance_global(use_site.span, key, method);
+                if let Some(Some(body)) = self.find_instance_template(&global) {
                     return Some(Dispatch::Instance(body));
                 }
                 if self.active_scope.is_none() {
-                    if let Some(body) = self.globals.get(&global).cloned() {
+                    if let Some(body) = self.globals.get(&*global).cloned() {
                         return Some(Dispatch::Instance(body));
                     }
                 }
@@ -1070,10 +1171,11 @@ impl Interp {
                     None
                 };
             },
-            | DictTarget::Builtin(BuiltinDispatch::ShowStructural) => {
+            | DictTarget::Builtin(BuiltinDispatch::ShowStructural | BuiltinDispatch::Derived) => {
                 return Some(Dispatch::Builtin);
             },
-            | DictTarget::Witness { candidates } => {
+            | DictTarget::Witness { candidates, derived } => {
+                let templates = self.instance_templates();
                 if let Some(first) = args.first() {
                     let mut matched = templates.iter().filter(|template| {
                         let entry = &template.entry;
@@ -1105,7 +1207,13 @@ impl Interp {
                             candidates.contains(&instance.key)
                                 && runtime_head_matches(&instance.head, first, &mut HashMap::new())
                         });
-                    if builtin || (use_site.class == "Show" && runtime_structural_show(first)) {
+                    let derived_match = derived
+                        .iter()
+                        .any(|(_, head)| runtime_head_matches(head, first, &mut HashMap::new()));
+                    if builtin
+                        || derived_match
+                        || (use_site.class == "Show" && runtime_structural_show(first))
+                    {
                         return Some(Dispatch::Builtin);
                     }
                 }
@@ -2290,6 +2398,19 @@ impl Interp {
         right: Value,
         span: Span,
     ) -> Result<Value, EvalError> {
+        // Plain `Int`/`Float` scalars are by far the commonest operands. The
+        // general path below turns every `Int` into a `BigRational` (two
+        // allocations and a gcd) just to add one to it; this answers the same
+        // question directly. It declines anything it is not certain about
+        // (dimensions, display units, other representations, division, powers)
+        // and leaves those to the general path.
+        if let (Value::Num(a), Value::Num(b)) = (&left, &right) {
+            if let (Some(a), Some(b)) = (Scalar::of(a), Scalar::of(b)) {
+                if let Some(result) = plain_scalar_binary(op, a, b) {
+                    return Ok(result);
+                }
+            }
+        }
         // §8.14: measurement arithmetic is the library type's own operator set,
         // with independent-error propagation. It is handled before the numeric
         // cases because both operands are records, not scalars.
@@ -2556,12 +2677,11 @@ impl Interp {
                 Ok(build_tensor(elements, tensor.shape.clone(), dim))
             },
             | (Value::Num(a), Value::Num(b)) => {
-                Ok(Value::Num(self.scalar_arithmetic(
-                    op,
-                    a.clone(),
-                    b.clone(),
-                    span,
-                )?))
+                let mut result = self.scalar_arithmetic(op, a.clone(), b.clone(), span)?;
+                if result.display.is_none() {
+                    result.display = propagated_display(op, a, b);
+                }
+                Ok(Value::Num(result))
             },
             | (Value::UnitOf(a), Value::UnitOf(b)) => {
                 match op {
@@ -2570,21 +2690,25 @@ impl Interp {
                     | _ => Err(EvalError::new("E0302", "units support `*` and `/`").at(span)),
                 }
             },
+            // A unit value is its scale times its dimension (§5.2): `3 * km`
+            // is 3000 coherent metres displayed in km, `0.02 / m` is 0.02 per
+            // metre, `km / 2` is 500 m. Only an affine unit has no product.
             | (Value::UnitOf(unit), Value::Num(num)) => {
-                let mut result = num.clone();
-                result.dim = match op {
-                    | BinOp::Mul => num.dim.mul(&unit.dim),
-                    | BinOp::Div => num.dim.div(&unit.dim),
-                    | _ => return Err(EvalError::new("E0302", "invalid unit arithmetic").at(span)),
-                };
-                result.display = Some(unit.clone());
-                Ok(Value::Num(result))
+                match op {
+                    | BinOp::Mul => self.scale_by_unit(num, unit, true, span),
+                    | BinOp::Div => {
+                        let scale = unit_scale_value(unit, matches!(num.kind, NumKind::Float(_)));
+                        let mut result =
+                            self.scalar_arithmetic(BinOp::Div, scale, num.clone(), span)?;
+                        result.dim = unit.dim.div(&num.dim);
+                        result.display = None;
+                        Ok(Value::Num(result))
+                    },
+                    | _ => Err(EvalError::new("E0302", "invalid unit arithmetic").at(span)),
+                }
             },
-            | (Value::Num(num), Value::UnitOf(unit)) if op == BinOp::Mul => {
-                let mut result = num.clone();
-                result.dim = num.dim.mul(&unit.dim);
-                result.display = Some(unit.clone());
-                Ok(Value::Num(result))
+            | (Value::Num(num), Value::UnitOf(unit)) if matches!(op, BinOp::Mul | BinOp::Div) => {
+                self.scale_by_unit(num, unit, op == BinOp::Mul, span)
             },
             // §3.5.3 / §4.5.2: a unit scales a tensor elementwise. The
             // coefficient of every element is unchanged — only the element
@@ -2617,6 +2741,56 @@ impl Interp {
         }
     }
 
+    /// `base ^ exponent` where the exponent is a symbolic term.
+    ///
+    /// The local term language only has rational exponents, so the power is
+    /// built as a kernel term; differentiation, substitution, display and
+    /// numeric evaluation of it then go through the kernel (`Term::Foreign`).
+    fn symbolic_power(
+        &mut self,
+        base: &NumVal,
+        exponent: &NumVal,
+        span: Span,
+    ) -> Result<NumVal, EvalError> {
+        if !base.dim.is_one() || !exponent.dim.is_one() {
+            return Err(EvalError::new(
+                "E0404",
+                "a symbolic exponent needs a dimensionless base and exponent",
+            )
+            .at(span)
+            .with_note("divide by a unit first, or use `pow_dyn` for a checked dynamic power"));
+        }
+        let a = self.num_to_term(base);
+        let b = self.num_to_term(exponent);
+        // §6.3.4: an infinite exponent (`0 ^ oo`, `oo ^ oo`) is not a power the
+        // exact phase defines; it needs a finite rational exponent.
+        if crate::sym::contains_infinity(&b) {
+            return Err(EvalError::new("E0402", "exponent must be finite").at(span));
+        }
+        // `1^x = 1` and `e^x = exp(x)`: the two identities the local layer can
+        // decide without the kernel, and the second keeps `diff` local.
+        if a == crate::sym::Term::Num(BigRational::one()) {
+            return Ok(NumVal::exact(BigRational::one(), Dim::one()));
+        }
+        if a == crate::sym::Term::Sym("e".to_string()) {
+            return Ok(NumVal::symbolic(
+                crate::sym::Term::fun(crate::sym::Fun::Exp, vec![b]),
+                Dim::one(),
+            ));
+        }
+        let request = aevia_rssn::Expr::App(
+            "pow".to_string(),
+            vec![crate::kernel::to_expr(&a), crate::kernel::to_expr(&b)],
+        );
+        let built = aevia_rssn::kernel()
+            .build(&request)
+            .map_err(|failure| crate::kernel::error(&failure).at(span))?;
+        let term = crate::kernel::term_of(&built).ok_or_else(|| {
+            EvalError::new("E1003", "the kernel built a power with no term form").at(span)
+        })?;
+        Ok(NumVal::symbolic(term, Dim::one()))
+    }
+
     pub(crate) fn scalar_arithmetic(
         &mut self,
         op: BinOp,
@@ -2624,6 +2798,13 @@ impl Interp {
         right: NumVal,
         span: Span,
     ) -> Result<NumVal, EvalError> {
+        // A symbolic exponent (`2^x`, `x^x`, `(1 + 1/x)^x`) has no rational
+        // value, so the result's dimension cannot be computed from it: it is
+        // only defined for a dimensionless base and exponent (§4.6), and the
+        // term is built by the kernel, which owns general powers.
+        if op == BinOp::Pow && right.is_symbolic() && right.to_rational().is_none() {
+            return self.symbolic_power(&left, &right, span);
+        }
         let dim = match op {
             | BinOp::Add | BinOp::Sub => left.dim.clone(),
             | BinOp::Mul => left.dim.mul(&right.dim),
@@ -2861,13 +3042,70 @@ impl Interp {
         } else {
             None
         };
-        Ok(Value::Tensor(Rc::new(TensorData {
-            verified_element: None,
-            shape: tensor.shape.clone(),
-            storage: tensor.storage.clone(),
-            dim,
-            display,
-        })))
+        // A unit of scale one (`m`, `ohm`, `A`) leaves every coefficient as
+        // it is, so the buffer is shared. Any other scale multiplies (or
+        // divides) each element, in the element's own phase.
+        if unit.affine || unit.scale.is_one() {
+            return Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
+                shape: tensor.shape.clone(),
+                storage: tensor.storage.clone(),
+                dim,
+                display,
+            })));
+        }
+        let float = tensor.storage.is_dense()
+            || tensor.elements().first().is_some_and(|element| {
+                matches!(
+                    element,
+                    Value::Num(NumVal {
+                        kind: NumKind::Float(_),
+                        ..
+                    })
+                )
+            });
+        let scale = Value::Num(unit_scale_value(unit, float));
+        let scaled = self.binary(op, Value::Tensor(tensor.clone()), scale, span)?;
+        let Value::Tensor(scaled) = scaled else {
+            return Err(
+                EvalError::new("E0809", "scaling a tensor by a unit gave a non-tensor").at(span),
+            );
+        };
+        let mut data = (*scaled).clone();
+        data.dim = dim;
+        data.display = display;
+        data.verified_element = None;
+        Ok(Value::Tensor(Rc::new(data)))
+    }
+
+    /// `num * unit` (`multiply`) or `num / unit`: the coefficient scales by the
+    /// unit's exact scale and the dimension combines with the unit's.
+    fn scale_by_unit(
+        &mut self,
+        num: &NumVal,
+        unit: &Rc<UnitDef>,
+        multiply: bool,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let mut result = if unit.affine || unit.scale.is_one() {
+            num.clone()
+        } else {
+            let scale = unit_scale_value(unit, matches!(num.kind, NumKind::Float(_)));
+            let op = if multiply {
+                BinOp::Mul
+            } else {
+                BinOp::Div
+            };
+            self.scalar_arithmetic(op, num.clone(), scale, span)?
+        };
+        if multiply {
+            result.dim = num.dim.mul(&unit.dim);
+            result.display = Some(unit.clone());
+        } else {
+            result.dim = num.dim.div(&unit.dim);
+            result.display = None;
+        }
+        Ok(Value::Num(result))
     }
 
     /// `Dyn ⊕ Dyn` for `+`, `-`, `*` and `/` (§4.9.3).
@@ -4235,8 +4473,8 @@ impl Interp {
     ) -> Result<Value, EvalError> {
         // The base is checked before any index is evaluated, so a bad base is
         // reported without running the indices.
-        if !matches!(base, Value::Tensor(_)) {
-            return Err(EvalError::new("E0302", "indexing expects a tensor").at(span));
+        if !matches!(base, Value::Tensor(_) | Value::Str(_)) {
+            return Err(EvalError::new("E0302", "indexing expects a tensor or a string").at(span));
         }
         let mut resolved = Vec::with_capacity(indices.len());
         for index in indices {
@@ -4287,6 +4525,9 @@ impl Interp {
         indices: &[SliceValue],
         span: Span,
     ) -> Result<Value, EvalError> {
+        if let Value::Str(text) = &base {
+            return index_string(text, indices, span);
+        }
         let Value::Tensor(tensor) = base else {
             return Err(EvalError::new("E0302", "indexing expects a tensor").at(span));
         };
@@ -4349,6 +4590,25 @@ impl Interp {
                 ));
             }
         }
+        // §6.6.4: an integer index removes its axis, a range keeps it, so
+        // `m[:, 1]` is the column as a rank-1 tensor (the static type says so)
+        // and not a `[n, 1]` matrix.
+        let dropped: Vec<bool> = indices
+            .iter()
+            .map(|index| matches!(index, SliceValue::Index(_)))
+            .collect();
+        let sliced = self.slice_axes(&tensor, indices, span)?;
+        Ok(drop_indexed_axes(sliced, &dropped))
+    }
+
+    /// Mixed index/range indexing with every axis kept (an integer index is a
+    /// one-element range here; [`Self::index_resolved`] removes those axes).
+    fn slice_axes(
+        &mut self,
+        tensor: &Rc<TensorData>,
+        indices: &[SliceValue],
+        span: Span,
+    ) -> Result<Value, EvalError> {
         // Slicing: one range per axis, producing a new tensor.
         //
         // A written step turns the axis into a *walk* — it may skip elements
@@ -4499,11 +4759,26 @@ impl Interp {
         &mut self,
         action: &Rc<IoAction>,
     ) -> Result<Value, EvalError> {
+        // A failure inside a `with_cap` block must not leave the session
+        // sandboxed (the REPL runs the next line in the same interpreter).
+        let saved_capabilities = self.capabilities;
+        let result = self.run_io_steps(action);
+        self.capabilities = saved_capabilities;
+        result
+    }
+
+    /// The step loop of [`Self::run_io`].
+    fn run_io_steps(
+        &mut self,
+        action: &Rc<IoAction>,
+    ) -> Result<Value, EvalError> {
         enum Work {
             Run(Rc<IoAction>, Span),
             Continue(Value, Span),
             Do(crate::io_do::DoCursor),
             Sequence(Rc<IoAction>, usize, Span),
+            /// Puts back the capability set a `with_cap` block narrowed.
+            RestoreCaps(u8, Span),
         }
         impl Work {
             fn span(&self) -> Span {
@@ -4515,7 +4790,9 @@ impl Interp {
                             | _ => *span,
                         }
                     },
-                    | Self::Continue(_, span) | Self::Sequence(_, _, span) => *span,
+                    | Self::Continue(_, span)
+                    | Self::Sequence(_, _, span)
+                    | Self::RestoreCaps(_, span) => *span,
                 }
             }
 
@@ -4627,9 +4904,70 @@ impl Interp {
                     )?;
                     continue;
                 },
+                | Work::RestoreCaps(previous, _) => {
+                    self.capabilities = previous;
+                    continue;
+                },
                 | Work::Run(action, _) => action,
             };
+            // §9.14: an action that needs a capability the session (or the
+            // enclosing `with_cap`) does not grant fails as `E0902`. Data
+            // actions answer with their typed `Err`; the others stop.
+            let needed = match &*action {
+                | IoAction::ReadFile(_)
+                | IoAction::WriteFile { .. }
+                | IoAction::ReadNpy { .. }
+                | IoAction::WriteNpy { .. }
+                | IoAction::Plot(_)
+                | IoAction::Save { .. } => crate::value::caps::FS,
+                | IoAction::Random => crate::value::caps::RAND,
+                | _ => 0,
+            };
+            if needed != 0 && self.capabilities & needed == 0 {
+                let message = format!(
+                    "E0902: permission denied: the `{}` capability is not granted here",
+                    crate::value::caps::name(needed)
+                );
+                match &*action {
+                    | IoAction::ReadFile(_)
+                    | IoAction::WriteFile { .. }
+                    | IoAction::ReadNpy { .. }
+                    | IoAction::WriteNpy { .. } => {
+                        last = make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)]);
+                        continue;
+                    },
+                    | _ => {
+                        return Err(EvalError::new(
+                            "E0902",
+                            format!(
+                                "permission denied: the `{}` capability is not granted here",
+                                crate::value::caps::name(needed)
+                            ),
+                        )
+                        .at(span)
+                        .with_note("grant it with `with_cap`, or run without `--caps`"));
+                    },
+                }
+            }
             match &*action {
+                | IoAction::WithCaps {
+                    allowed,
+                    action: inner,
+                } => {
+                    push(
+                        &mut pending,
+                        &mut continuations,
+                        Work::RestoreCaps(self.capabilities, span),
+                        self.max_io_depth,
+                    )?;
+                    self.capabilities &= *allowed;
+                    push(
+                        &mut pending,
+                        &mut continuations,
+                        Work::Run(inner.clone(), span),
+                        self.max_io_depth,
+                    )?;
+                },
                 | IoAction::Do(block) => {
                     push(
                         &mut pending,
@@ -6534,4 +6872,173 @@ mod ast_stack_budget_tests {
             assert!(interp.bindings.is_none());
         }).unwrap().join().unwrap();
     }
+}
+
+/// A unit's scale as a dimensionless number in the phase of the value it
+/// scales: an f64 for a `Float` (so `Float` stays `Float`), exact otherwise,
+/// with a factor of `pi` kept symbolic (`deg`).
+fn unit_scale_value(
+    unit: &UnitDef,
+    float: bool,
+) -> NumVal {
+    if float {
+        return NumVal::float(unit.scale.to_f64(), Dim::one());
+    }
+    if unit.scale.pi == 0 {
+        return NumVal::exact(unit.scale.rat.clone(), Dim::one());
+    }
+    let term = crate::sym::Term::mul(
+        crate::sym::Term::Num(unit.scale.rat.clone()),
+        crate::sym::Term::pow(
+            crate::sym::Term::Sym("pi".to_string()),
+            BigRational::from_integer(BigInt::from(unit.scale.pi)),
+        ),
+    );
+    NumVal::symbolic(term, Dim::one())
+}
+
+/// The display unit of `a op b` (§5.4.2).
+///
+/// * `+`/`-`: the same display unit on both sides is kept. A point and a
+///   difference (`25 °C + 10.0 K`, §5.6.3) keep the point's unit, because
+///   the result is that point moved; two points subtract to a difference,
+///   which has no display of its own.
+/// * `*`/`/`: when one side is dimensionless, the other side's display is
+///   kept (`2 * 3 km` is `6 km`), unless that display is affine — scaling a
+///   temperature point has no meaning in the display unit.
+/// * everything else drops the display and prints in SI.
+fn propagated_display(
+    op: BinOp,
+    a: &NumVal,
+    b: &NumVal,
+) -> Option<Rc<UnitDef>> {
+    let same = |x: &Rc<UnitDef>, y: &Rc<UnitDef>| x.display == y.display && x.dim == y.dim;
+    match op {
+        | BinOp::Add | BinOp::Sub => {
+            match (&a.display, &b.display) {
+                | (Some(x), Some(y)) if x.affine && y.affine => None,
+                | (Some(x), _) if x.affine => Some(x.clone()),
+                | (_, Some(y)) if y.affine && op == BinOp::Add => Some(y.clone()),
+                | (Some(x), Some(y)) if same(x, y) => Some(x.clone()),
+                | _ => None,
+            }
+        },
+        | BinOp::Mul => {
+            if b.dim.is_one() && b.display.is_none() {
+                a.display.clone().filter(|unit| !unit.affine)
+            } else if a.dim.is_one() && a.display.is_none() {
+                b.display.clone().filter(|unit| !unit.affine)
+            } else {
+                None
+            }
+        },
+        | BinOp::Div if b.dim.is_one() && b.display.is_none() => {
+            a.display.clone().filter(|unit| !unit.affine)
+        },
+        | _ => None,
+    }
+}
+
+/// `s[i]` and `s[i..j]` / `s[i:j:k]` on a string (§8.1.4): positions count
+/// grapheme clusters, so `"é"` written as `e` + combining acute is one
+/// position. Negative positions count from the end, as on tensors.
+fn index_string(
+    text: &str,
+    indices: &[SliceValue],
+    span: Span,
+) -> Result<Value, EvalError> {
+    use unicode_segmentation::UnicodeSegmentation as _;
+    let clusters: Vec<&str> = text.graphemes(true).collect();
+    let extent = clusters.len();
+    let [index] = indices else {
+        return Err(EvalError::new(
+            "E0302",
+            format!("a string has one axis, found {} indices", indices.len()),
+        )
+        .at(span));
+    };
+    match index {
+        | SliceValue::Index(value) => {
+            let coordinate = value
+                .ok_or_else(|| EvalError::new("E0802", "index must be an Int").at(span))?
+                as isize;
+            let position = normalize_index(coordinate, extent).ok_or_else(|| {
+                EvalError::new(
+                    "E0802",
+                    format!(
+                        "index {coordinate} is out of bounds for a string of {extent} characters"
+                    ),
+                )
+                .at(span)
+            })?;
+            Ok(Value::string(clusters[position]))
+        },
+        | SliceValue::Range {
+            start,
+            end,
+            inclusive,
+            step,
+        } => {
+            if let Some(step) = step {
+                let (first, count, stride) = walk_range(*start, *end, *step, extent, span)?;
+                let mut out = String::new();
+                for offset in 0..count {
+                    let position = first as isize + offset as isize * stride;
+                    if let Some(cluster) =
+                        usize::try_from(position).ok().and_then(|p| clusters.get(p))
+                    {
+                        out.push_str(cluster);
+                    }
+                }
+                return Ok(Value::string(out));
+            }
+            let start_value = start.map_or(0, |value| value as isize);
+            let end_value = end.map_or(extent as isize, |value| value as isize);
+            let first = normalize_bound(start_value, extent, false);
+            let last = normalize_bound(end_value, extent, *inclusive);
+            if first > last {
+                return Err(EvalError::new("E0802", "empty slice").at(span));
+            }
+            Ok(Value::string(clusters[first..last].concat()))
+        },
+    }
+}
+
+/// Removes the axes an integer index selected (§6.6.4).
+///
+/// The slice that produced `value` kept them with extent one; the storage is
+/// reshaped (a view stays a view when its elements are contiguous) rather than
+/// copied element by element.
+fn drop_indexed_axes(
+    value: Value,
+    dropped: &[bool],
+) -> Value {
+    let Value::Tensor(tensor) = &value else {
+        return value;
+    };
+    if !dropped.iter().any(|drop| *drop) {
+        return value;
+    }
+    let shape: Vec<usize> = tensor
+        .shape
+        .iter()
+        .enumerate()
+        .filter(|(axis, _)| !dropped.get(*axis).copied().unwrap_or(false))
+        .map(|(_, extent)| *extent)
+        .collect();
+    let mut data = (**tensor).clone();
+    match tensor.reshape_storage(&shape) {
+        | Some(storage) => data.storage = storage,
+        | None => {
+            let elements = tensor.elements();
+            let rebuilt = build_tensor(elements, shape.clone(), tensor.dim.clone());
+            let Value::Tensor(rebuilt) = rebuilt else {
+                return value;
+            };
+            data.storage = rebuilt.storage.clone();
+        },
+    }
+    data.shape = shape;
+    data.verified_element = None;
+    Value::Tensor(Rc::new(data))
 }

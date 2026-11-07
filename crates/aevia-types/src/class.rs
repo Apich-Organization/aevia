@@ -540,7 +540,20 @@ impl ClassTable {
         instance.methods.get(method).cloned()
     }
 
-    /// The symbolic key of the instance that matches `ty`, when one does.
+    /// The instance that matches `ty`, when one does.
+    #[must_use]
+    pub fn resolve_instance(
+        &self,
+        class: &str,
+        ty: &Type,
+    ) -> Option<&Instance> {
+        let Resolution::Found { index } = self.resolve(class, ty) else {
+            return None;
+        };
+        self.instances.get(class)?.get(index)
+    }
+
+    /// The key of the instance `resolve` finds for `class` at `ty`.
     #[must_use]
     pub fn resolve_key(
         &self,
@@ -792,6 +805,17 @@ impl ClassTable {
     ) -> bool {
         let resolved = match field {
             | Type::Param(_) => return true,
+            // §6.12.1/§6.12.2: records (and tuples, which are records with
+            // numeric labels) compare, order, hash and print structurally, so
+            // a record field supports the class exactly when each of its
+            // fields does. Resolving the record head itself finds no instance,
+            // which made `derive Eq for Shape` reject `Tri({ a: Float, … })`.
+            | Type::Record(row) => {
+                return row
+                    .fields()
+                    .iter()
+                    .all(|(_, ty)| self.instance_for_field(class, ty));
+            },
             | other => other.clone(),
         };
         // `Show`/`Eq` of a container needs the element instance, which a

@@ -114,11 +114,27 @@ fn private_on_a_let_type_or_function_is_accepted() {
 }
 
 #[test]
-fn match_arms_do_not_start_on_the_with_line() {
-    // §A.3: `match_body` always starts with `NEWLINE`.
-    let source = "let x = match 1 with | 0 -> 1\n";
-    let diagnostic = expect_error(source, "E0202");
-    assert_eq!(span_text(source, &diagnostic), "|");
+fn match_arms_can_share_the_with_line() {
+    // §A.3/§2.3.4: the inline form `with | p -> e | q -> f` keeps the arms on
+    // the `with` line; it is the only form that fits inside brackets.
+    let module = expect_clean("let x = f(match 1 with | 0 -> 1 | _ -> 2, 3)\n");
+    let DeclKind::Let { value, .. } = &module.decls[0].kind else {
+        panic!("expected a let");
+    };
+    let ExprKind::Call { args, .. } = &value.kind else {
+        panic!("expected a call, found {:?}", value.kind);
+    };
+    assert_eq!(args.len(), 2, "the inline arms end at the comma");
+    let ExprKind::Match { arms, .. } = &args[0].kind else {
+        panic!("expected a match");
+    };
+    assert_eq!(arms.len(), 2);
+    // Something other than `|` or a line end after `with` is still an error.
+    let source = "let x = match 1 with 0 -> 1\n";
+    let parsed = parse(source);
+    let first = parsed.diagnostics.items.first().expect("a diagnostic");
+    assert_eq!(first.code, "E0202");
+    assert_eq!(span_text(source, first), "0");
 }
 
 #[test]

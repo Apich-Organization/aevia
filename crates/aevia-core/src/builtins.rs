@@ -590,8 +590,12 @@ pub fn call(
         },
         | "length" => {
             match args.first() {
+                // §8.1.4: a string's length counts grapheme clusters.
                 | Some(Value::Str(text)) => {
-                    Ok(Value::Num(NumVal::int(BigInt::from(text.chars().count()))))
+                    use unicode_segmentation::UnicodeSegmentation as _;
+                    Ok(Value::Num(NumVal::int(BigInt::from(
+                        text.graphemes(true).count(),
+                    ))))
                 },
                 | Some(Value::Tensor(tensor)) => {
                     Ok(Value::Num(NumVal::int(BigInt::from(
@@ -1350,8 +1354,9 @@ pub fn call(
             }
         },
         | "chars" => {
+            use unicode_segmentation::UnicodeSegmentation as _;
             let text = expect_str(&args, 0, name, span)?;
-            let parts: Vec<Value> = text.chars().map(|c| Value::string(c.to_string())).collect();
+            let parts: Vec<Value> = text.graphemes(true).map(Value::string).collect();
             let len = parts.len();
             Ok(build_tensor(parts, vec![len], Dim::one()))
         },
@@ -1368,11 +1373,7 @@ pub fn call(
                     }
                 })
                 .collect();
-            let mut out = template;
-            for (index, part) in parts.iter().enumerate() {
-                out = out.replace(&format!("{{{index}}}"), part);
-            }
-            Ok(Value::string(out))
+            Ok(Value::string(fill_template(&template, &parts)))
         },
 
         // ----- Option / Result -------------------------------------------
@@ -1788,6 +1789,36 @@ pub fn call(
         // the RNG then too — building the description must not consume a value
         // from the sequence (§6.10).
         | "time_now" => Ok(Value::Io(Rc::new(crate::value::IoAction::TimeNow))),
+        // §9.14 / §13.9.6: `with_cap("fs,rand", thunk)` describes running the
+        // thunk's action with only those capabilities left; the narrowing
+        // happens when the action runs, and nested blocks intersect.
+        | "with_cap" => {
+            let list = expect_str(&args, 0, name, span)?;
+            let allowed = crate::value::caps::parse(&list).map_err(|unknown| {
+                EvalError::new(
+                    "E0302",
+                    format!("`{unknown}` is not a capability; the capabilities are fs, net, env, rand, gpu"),
+                )
+                .at(span)
+            })?;
+            let action = match args.get(1) {
+                | Some(Value::Closure(thunk)) => {
+                    Rc::new(crate::value::IoAction::Defer(thunk.clone()))
+                },
+                | Some(Value::Io(action)) => action.clone(),
+                | _ => {
+                    return Err(EvalError::new(
+                        "E0302",
+                        "`with_cap` expects a function `() -> IO a` as its second argument",
+                    )
+                    .at(span));
+                },
+            };
+            Ok(Value::Io(Rc::new(crate::value::IoAction::WithCaps {
+                allowed,
+                action,
+            })))
+        },
         | "random" => Ok(Value::Io(Rc::new(crate::value::IoAction::Random))),
         // §6.10: the pure, seeded generator. `rng(seed)` answers `() -> Float`,
         // a closure over its own LCG state, so the same seed always produces
@@ -3109,16 +3140,18 @@ pub fn call(
                 .ok_or_else(|| arity(name, 3, 0, span))?;
             let lower = expect_num(&args, 1, name, span)?;
             let upper = expect_num(&args, 2, name, span)?;
-            let (a, b) = match (lower.to_rational(), upper.to_rational()) {
-                | (Some(a), Some(b)) => (a, b),
-                | _ => {
-                    return Err(EvalError::new(
-                        "E1001",
-                        "`product` needs numeric bounds; a symbolic one needs the \
-                         `core.symbolic` capability",
-                    )
-                    .at(span));
+            let finite = match (lower.to_rational(), upper.to_rational()) {
+                | (Some(a), Some(b))
+                    if &b - &a <= BigRational::from_integer(BigInt::from(10_000)) =>
+                {
+                    Some((a, b))
                 },
+                | _ => None,
+            };
+            let Some((a, b)) = finite else {
+                // An infinite, symbolic or very long range is a closed-form
+                // request (§8.5): the kernel's `product(f(k), k, a, b)`.
+                return symbolic_range("product", interp, &args, &lower, &upper, span);
             };
             let mut index = a;
             let mut total = Value::Num(NumVal::int(BigInt::one()));
@@ -4764,21 +4797,93 @@ fn sum_range(
     span: Span,
 ) -> Result<Value, EvalError> {
     let function = args[0].clone();
-    let lower = expect_int(args, 1, "sum", span)?;
-    let upper = expect_int(args, 2, "sum", span)?;
-    if upper < lower {
-        return Ok(Value::Num(NumVal::int(BigInt::zero())));
-    }
-    let count = upper - lower + 1;
-    if count > 1_000_000 {
-        return Err(EvalError::new("E0808", "`sum` over more than 10^6 terms").at(span));
-    }
+    let lower_num = expect_num(args, 1, "sum", span)?;
+    let upper_num = expect_num(args, 2, "sum", span)?;
+    // Bounds are integers (§8.5); an exact non-integer bound is not silently
+    // truncated.
+    let integer = |num: &NumVal| {
+        num.to_rational()
+            .filter(|value| value.denom().is_one())
+            .and_then(|value| value.numer().to_i64())
+    };
+    let concrete = match (integer(&lower_num), integer(&upper_num)) {
+        | (Some(lower), Some(upper)) if upper < lower => {
+            return Ok(Value::Num(NumVal::int(BigInt::zero())));
+        },
+        | (Some(lower), Some(upper)) if upper - lower < 10_000 => Some((lower, upper)),
+        | _ => None,
+    };
+    let Some((lower, upper)) = concrete else {
+        for bound in [&lower_num, &upper_num] {
+            if let Some(value) = bound.to_rational()
+                && !value.denom().is_one()
+            {
+                return Err(EvalError::new(
+                    "E0302",
+                    format!(
+                        "`sum` bounds are integers, found {}",
+                        show(&Value::Num(bound.clone()))
+                    ),
+                )
+                .at(span));
+            }
+        }
+        // An infinite, symbolic or long range asks the kernel for the closed
+        // form (`sum(1/k^2, 1, oo) = pi^2/6`) instead of looping.
+        return symbolic_range("sum", interp, args, &lower_num, &upper_num, span);
+    };
     let mut total = Value::Num(NumVal::int(BigInt::zero()));
     for step in lower..=upper {
         let term = interp.apply(function.clone(), vec![Value::int(step)], span)?;
         total = interp.apply_binary("+", total, term, span)?;
     }
     Ok(total)
+}
+
+/// `sum`/`product` of `f(k)` for `k` from `lower` to `upper` by the kernel.
+///
+/// Used when the range cannot (infinite, symbolic) or should not (more than
+/// 10^4 terms) be looped over. A kernel answer that still contains the
+/// unevaluated `sum(…)`/`product(…)` is reported as `E0808` rather than
+/// passed off as a closed form.
+fn symbolic_range(
+    op: &str,
+    interp: &mut Interp,
+    args: &[Value],
+    lower: &NumVal,
+    upper: &NumVal,
+    span: Span,
+) -> Result<Value, EvalError> {
+    let (variable, applied) = apply_to_fresh(interp, op, args, span, lower.dim.clone())?;
+    let dim = crate::value::value_dim(&applied);
+    let symbol = symbolic_variable(&variable, lower.dim.clone());
+    let result = bridge::call(
+        op,
+        &[
+            applied,
+            symbol,
+            Value::Num(lower.clone()),
+            Value::Num(upper.clone()),
+        ],
+        dim,
+    )
+    .map_err(|error| error.at(span))?;
+    let unevaluated = match &result {
+        | Value::Num(NumVal {
+            kind: NumKind::Sym(term),
+            ..
+        }) => term.to_string().starts_with(&format!("{op}(")),
+        | _ => false,
+    };
+    if unevaluated {
+        return Err(EvalError::new(
+            "E0808",
+            format!("`{op}` has no closed form the kernel can find for this range"),
+        )
+        .at(span)
+        .with_note("give finite integer bounds (at most 10^4 terms are summed directly)"));
+    }
+    Ok(result)
 }
 
 /// `gamma(x)`: the Gamma function, not its logarithm (§8.2).
@@ -5226,16 +5331,19 @@ fn unary_math(
             let exponent = BigRational::new(BigInt::one(), BigInt::from(degree));
             let dim = num.dim.pow(&exponent);
             match &num.kind {
-                | NumKind::Float(value) if *value < 0.0 => {
-                    // §6.3.4: a negative radicand is a formal term, never NaN
-                    // and never an error — `Real`'s roots are formal.
-                    let rational = num
-                        .to_rational()
-                        .ok_or_else(|| domain_error(name, &num, span))?;
-                    Ok(Value::Num(NumVal::symbolic(
-                        Term::pow(Term::Num(rational), exponent),
+                | NumKind::Float(value) if *value < 0.0 && degree % 2 == 1 => {
+                    // An odd root of a negative float is real: cbrt(-8.0) = -2.0.
+                    Ok(Value::Num(NumVal::float(
+                        -(-value).powf(1.0 / f64::from(degree)),
                         dim,
                     )))
+                },
+                | NumKind::Float(value) if *value < 0.0 => {
+                    // §6.3.4's formal roots belong to the `Real` phase. A `Float`
+                    // stays a `Float` (the static type promised one), so an even
+                    // root of a negative float is the same domain error as
+                    // `ln(-1.0)` and `asin(2.0)`, not a symbolic term.
+                    Err(domain_error(name, &num, span))
                 },
                 | NumKind::Float(value) => {
                     let result = value.powf(1.0 / f64::from(degree));
@@ -5681,9 +5789,16 @@ fn flattened(matrix: &[Vec<f64>]) -> Vec<f64> {
 /// The bound keeps the O(n^3) exact elimination from dominating a session;
 /// above it the `f64` path answers, which is the documented trade-off of
 /// §6.6.5 (`faer` for the numeric path is a separate work item).
+/// The entries of a small square matrix as exact rationals, when the matrix
+/// is in the exact phase.
+///
+/// A `Float` entry makes the whole matrix `Float` (§6.6.5): every float *is*
+/// a rational, but solving in the exact phase would answer
+/// `225179981368525/2251799813685248` where the program's type promised the
+/// `Float` `0.1`.
 fn exact_matrix(tensor: &TensorData) -> Option<Vec<Vec<BigRational>>> {
     let n = tensor.shape[0];
-    if n > 64 {
+    if n > 64 || tensor.storage.is_dense() {
         return None;
     }
     let mut matrix = Vec::with_capacity(n);
@@ -5691,7 +5806,11 @@ fn exact_matrix(tensor: &TensorData) -> Option<Vec<Vec<BigRational>>> {
         let mut values = Vec::with_capacity(n);
         for column in 0..n {
             let element = tensor.get(&[row as isize, column as isize])?;
-            values.push(element.as_num()?.to_rational()?);
+            let num = element.as_num()?;
+            if matches!(num.kind, NumKind::Float(_) | NumKind::Complex(..)) {
+                return None;
+            }
+            values.push(num.to_rational()?);
         }
         matrix.push(values);
     }
@@ -5941,8 +6060,19 @@ fn linsolve(
         return Ok(err(linalg_error_value(&aevia_std::NumericError::NotSquare)));
     }
     let dim = vector.dim.div(&matrix.dim);
-    // §6.6.5: an exact system has an exact solution.
-    if let Some(rows) = exact_matrix(&matrix) {
+    // §6.6.5: an exact system has an exact solution; a `Float` right-hand
+    // side makes the system `Float`.
+    let exact_rhs = !vector.storage.is_dense()
+        && vector.elements().iter().all(|value| {
+            !matches!(
+                value,
+                Value::Num(NumVal {
+                    kind: NumKind::Float(_) | NumKind::Complex(..),
+                    ..
+                })
+            )
+        });
+    if let Some(rows) = exact_matrix(&matrix).filter(|_| exact_rhs) {
         let mut augmented: Vec<Vec<BigRational>> = (0..n)
             .map(|row| {
                 let mut values = Vec::with_capacity(n + 1);
@@ -7865,23 +7995,122 @@ fn apply_tensor_elements(
     }
 }
 
+/// `format`'s template filling (§8.1.4): `{0}`, `{1}`, … name an argument by
+/// position and `{}` takes the next one. Anything else in braces, and a
+/// placeholder past the last argument, is kept as written. The template
+/// usually comes from a raw string (`r"{} m"`) or a file, because `{…}` in an
+/// ordinary literal is an interpolation.
+fn fill_template(
+    template: &str,
+    parts: &[String],
+) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut next = 0usize;
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let inside = &after[..close];
+        let chosen = if inside.is_empty() {
+            let index = next;
+            next += 1;
+            parts.get(index)
+        } else {
+            inside
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| parts.get(index))
+        };
+        match chosen {
+            | Some(part) => out.push_str(part),
+            | None => {
+                out.push('{');
+                out.push_str(inside);
+                out.push('}');
+            },
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::fill_template;
+
+    #[test]
+    fn placeholders_are_positional_or_sequential() {
+        let parts = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(fill_template("{} + {}", &parts), "a + b");
+        assert_eq!(fill_template("{1}{0}{1}", &parts), "bab");
+        assert_eq!(fill_template("{x} {} {9}", &parts), "{x} a {9}");
+        assert_eq!(fill_template("open { brace", &parts), "open { brace");
+    }
+}
+
+/// The constructors of §8.7.1's `Distribution<d>`.
+const DISTRIBUTION_CTORS: &[&str] = &[
+    "Normal",
+    "Uniform",
+    "Exponential",
+    "Gamma",
+    "Beta",
+    "ChiSquared",
+    "StudentT",
+    "Poisson",
+    "Binomial",
+];
+
+/// The parameter record of a distribution argument, and the constructor that
+/// wrapped it.
+///
+/// §8.7.1's form is the nominal `Distribution<d>` (`Normal({ mu, sigma })`);
+/// a bare parameter record is still accepted, and then the field names decide.
+fn distribution_parts(
+    value: Option<&Value>
+) -> Option<(Rc<crate::value::RecordValue>, Option<&'static str>)> {
+    match value? {
+        | Value::Record(record) => Some((record.clone(), None)),
+        | Value::Variant(variant) if variant.fields.len() == 1 => {
+            let ctor = DISTRIBUTION_CTORS
+                .iter()
+                .copied()
+                .find(|ctor| *ctor == variant.name)?;
+            let Value::Record(record) = &variant.fields[0] else {
+                return None;
+            };
+            Some((record.clone(), Some(ctor)))
+        },
+        | _ => None,
+    }
+}
+
 /// The distribution a `pdf`/`cdf`/`sample` argument describes (§8.7.1).
 ///
-/// A distribution is a record, and its field names decide which one it is.
-/// `ChiSquared` and `StudentT` have the same single field `df`, so a record
-/// with only that field is ambiguous; §8.7.1's two types are structurally
-/// identical, and the tie is broken towards `ChiSquared` (the first the
-/// specification lists) unless a `kind` field says `"student_t"`.
+/// A `Distribution<d>` constructor names the distribution. A bare record is
+/// recognised by its field names; `ChiSquared` and `StudentT` have the same
+/// single field `df`, so a record with only that field is ambiguous and the
+/// tie is broken towards `ChiSquared` (the first the specification lists)
+/// unless a `kind` field says `"student_t"`.
 fn distribution_from(
     args: &[Value],
     name: &str,
     span: Span,
 ) -> Result<aevia_std::dist::Distribution, EvalError> {
     use aevia_std::dist::Distribution;
-    let Some(Value::Record(record)) = args.first() else {
-        return Err(
-            EvalError::new("E0302", format!("`{name}` expects a distribution record")).at(span),
-        );
+    let Some((record, ctor)) = distribution_parts(args.first()) else {
+        return Err(EvalError::new(
+            "E0302",
+            format!(
+                "`{name}` expects a distribution, such as `Normal({{ mu = 0.0, sigma = 1.0 }})`"
+            ),
+        )
+        .at(span));
     };
     let number = |field: &str| -> Result<f64, EvalError> {
         record
@@ -7897,10 +8126,37 @@ fn distribution_from(
             })
     };
     let has = |field: &str| record.fields.contains_key(field);
-    let kind = match record.fields.get("kind") {
-        | Some(Value::Str(text)) => Some(text.to_string()),
+    let kind = match (ctor, record.fields.get("kind")) {
+        | (Some("StudentT"), _) => Some("student_t".to_string()),
+        | (Some("ChiSquared"), _) => Some("chi_squared".to_string()),
+        | (_, Some(Value::Str(text))) => Some(text.to_string()),
         | _ => None,
     };
+    // A constructor fixes the distribution, so its fields must be the ones
+    // that distribution has; the field-name guess below is only for records.
+    let expected: Option<&[&str]> = match ctor {
+        | Some("Normal") => Some(&["mu", "sigma"]),
+        | Some("Uniform") => Some(&["lo", "hi"]),
+        | Some("Exponential") => Some(&["rate"]),
+        | Some("Gamma") => Some(&["shape", "rate"]),
+        | Some("Beta") => Some(&["alpha", "beta"]),
+        | Some("ChiSquared" | "StudentT") => Some(&["df"]),
+        | Some("Poisson") => Some(&["lambda"]),
+        | Some("Binomial") => Some(&["n", "p"]),
+        | _ => None,
+    };
+    if let (Some(ctor), Some(expected)) = (ctor, expected) {
+        if let Some(missing) = expected.iter().find(|field| !has(field)) {
+            return Err(
+                EvalError::new("E0306", format!("`{ctor}` needs a field `{missing}`")).at(span),
+            );
+        }
+        if ctor == "Exponential" {
+            return Ok(Distribution::Exponential {
+                rate: number("rate")?,
+            });
+        }
+    }
     if has("mu") && has("sigma") {
         return Ok(Distribution::Normal {
             mu: number("mu")?,
@@ -7966,8 +8222,8 @@ fn distribution_dim(
     args: &[Value],
     span: Span,
 ) -> Result<Dim, EvalError> {
-    let Some(Value::Record(record)) = args.first() else {
-        return Err(EvalError::new("E0302", "expected a distribution record").at(span));
+    let Some((record, _)) = distribution_parts(args.first()) else {
+        return Err(EvalError::new("E0302", "expected a distribution").at(span));
     };
     // `Normal<d>` carries `d` on `mu`; `Exponential<d>` carries `1/d` on `rate`.
     if let Some(Value::Num(mu)) = record.fields.get("mu") {

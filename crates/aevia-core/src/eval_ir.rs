@@ -16,7 +16,9 @@
 use crate::eval::EvalError;
 use crate::eval::Frame;
 use crate::eval::Interp;
+use crate::eval::Scalar;
 use crate::eval::SliceValue;
+use crate::eval::plain_scalar_binary;
 use crate::value::Closure;
 use crate::value::ClosureBody;
 use crate::value::ClosureEnv;
@@ -154,7 +156,7 @@ pub(crate) fn run_closure(
     // by definition, so allocating a fresh `Vec` per iteration made the
     // cheapest thing a loop does the most expensive: a million iterations were
     // a million allocations.
-    let mut frame: Vec<Value> = Vec::new();
+    let mut frame: Vec<Value> = interp.take_buffer(usize::try_from(function.nslots).unwrap_or(0));
     let outcome = 'run: loop {
         if let Some(scope) = &env.scope {
             if let Err(error) = interp.enter_scope(scope) {
@@ -295,7 +297,7 @@ pub(crate) fn run_closure(
                         .at(function.span));
                     }
                 }
-                match eval_block(interp, &function.body, &mut frame, &env) {
+                match eval_block_in(interp, &function.body, &mut frame, &env, true) {
                     | Ok(flow) => flow,
                     | Err(error) => break 'run Err(error),
                 }
@@ -374,7 +376,7 @@ pub(crate) fn run_closure(
             current_instance = next_instance;
             current_closure = next.clone();
         }
-        args = next_args;
+        interp.recycle_buffer(std::mem::replace(&mut args, next_args));
         if let Some(current) = interp.frames.last_mut() {
             // A self tail call keeps the name, and cloning it per iteration was
             // one allocation per loop step.
@@ -384,6 +386,8 @@ pub(crate) fn run_closure(
             current.span = next_span;
         }
     };
+    interp.recycle_buffer(frame);
+    interp.recycle_buffer(args);
     // §9.3.4: the failing function's own frame is part of the trace, so the
     // stack is taken before the frame is popped. It is taken *only* when the
     // error has no stack yet: cloning a `Vec<String>` on every return was the
@@ -425,6 +429,19 @@ fn eval_block(
     frame: &mut Vec<Value>,
     env: &Rc<IrEnv>,
 ) -> Result<Flow, EvalError> {
+    eval_block_in(interp, block, frame, env, false)
+}
+
+/// Evaluates a block; `exit` says the block's value leaves the function, so
+/// nothing reads `frame` once it is produced and slots may be moved out
+/// instead of cloned.
+fn eval_block_in(
+    interp: &mut Interp,
+    block: &Block,
+    frame: &mut Vec<Value>,
+    env: &Rc<IrEnv>,
+    exit: bool,
+) -> Result<Flow, EvalError> {
     for stmt in &block.stmts {
         match stmt {
             | Stmt::Let(item) => {
@@ -445,7 +462,7 @@ fn eval_block(
             },
         }
     }
-    eval_tail(interp, &block.tail, frame, env)
+    eval_tail(interp, &block.tail, frame, env, exit)
 }
 
 fn eval_tail(
@@ -453,14 +470,22 @@ fn eval_tail(
     tail: &Tail,
     frame: &mut Vec<Value>,
     env: &Rc<IrEnv>,
+    exit: bool,
 ) -> Result<Flow, EvalError> {
     match tail {
         | Tail::Return { atom, span } => {
-            let value = eval_atom(interp, atom, frame, env, *span)?;
+            let value = match atom {
+                // The function is returning this slot's value and the frame
+                // dies with it: move it out rather than clone it.
+                | Atom::Local(slot) if exit && (*slot as usize) < frame.len() => {
+                    std::mem::replace(&mut frame[*slot as usize], Value::Unit)
+                },
+                | _ => eval_atom(interp, atom, frame, env, *span)?,
+            };
             let value = interp.attach_checked_type(value, *span);
             Ok(Flow::Value(interp.bind_source_function(value, *span)))
         },
-        | Tail::Call(call) => eval_call(interp, call, frame, env, true),
+        | Tail::Call(call) => eval_call(interp, call, frame, env, true, exit),
         | Tail::If {
             cond,
             cond_span,
@@ -469,8 +494,8 @@ fn eval_tail(
             ..
         } => {
             match eval_atom(interp, cond, frame, env, *cond_span)? {
-                | Value::Bool(true) => eval_block(interp, then_block, frame, env),
-                | Value::Bool(false) => eval_block(interp, else_block, frame, env),
+                | Value::Bool(true) => eval_block_in(interp, then_block, frame, env, exit),
+                | Value::Bool(false) => eval_block_in(interp, else_block, frame, env, exit),
                 | other => {
                     Err(EvalError::new(
                         "E0302",
@@ -504,7 +529,7 @@ fn eval_tail(
                         },
                     }
                 }
-                return eval_block(interp, &arm.body, frame, env);
+                return eval_block_in(interp, &arm.body, frame, env, exit);
             }
             Err(EvalError::new(
                 "E0309",
@@ -521,14 +546,15 @@ fn eval_call(
     frame: &mut Vec<Value>,
     env: &Rc<IrEnv>,
     tail: bool,
+    exit: bool,
 ) -> Result<Flow, EvalError> {
     // Each kind has its own function so that a call's native frame is the
     // frame of the kind it is, not of all four at once (see [`eval_rhs`]).
     match &call.kind {
-        | CallKind::Normal => eval_normal_call(interp, call, frame, env, tail),
-        | CallKind::Typed { types } => eval_typed_call(interp, call, types, frame, env, tail),
+        | CallKind::Normal => eval_normal_call(interp, call, frame, env, tail, exit),
+        | CallKind::Typed { types } => eval_typed_call(interp, call, types, frame, env, tail, exit),
         | CallKind::Rssn { name } => {
-            let values = eval_call_args(interp, call, frame, env)?;
+            let values = eval_call_args(interp, call, frame, env, false)?;
             Ok(Flow::Value(interp.call_rssn(name, call.span, values)?))
         },
         | CallKind::Dictionary { method, .. } => {
@@ -580,9 +606,10 @@ fn eval_normal_call(
     frame: &mut Vec<Value>,
     env: &Rc<IrEnv>,
     tail: bool,
+    exit: bool,
 ) -> Result<Flow, EvalError> {
     let function = eval_atom(interp, &call.callee, frame, env, call.callee_span)?;
-    let mut values = eval_call_args(interp, call, frame, env)?;
+    let mut values = eval_call_args(interp, call, frame, env, tail && exit)?;
     let instance = interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
     finish_source_call(interp, call, function, values, instance, tail)
 }
@@ -595,9 +622,10 @@ fn eval_typed_call(
     frame: &mut Vec<Value>,
     env: &Rc<IrEnv>,
     tail: bool,
+    exit: bool,
 ) -> Result<Flow, EvalError> {
     let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
-    let mut values = eval_call_args(interp, call, frame, env)?;
+    let mut values = eval_call_args(interp, call, frame, env, tail && exit)?;
     let function = interp.type_apply_value(function, types, call.callee_span);
     let instance = interp.prepare_function_call(&function, &mut values, Some(call.callee_span))?;
     finish_source_call(interp, call, function, values, instance, tail)
@@ -612,8 +640,16 @@ fn eval_dictionary_call(
     env: &Rc<IrEnv>,
     tail: bool,
 ) -> Result<Flow, EvalError> {
-    let values = eval_call_args(interp, call, frame, env)?;
-    let Some(use_site) = interp.dictionary_use(call.span, method) else {
+    let values = eval_call_args(interp, call, frame, env, false)?;
+    // Borrow the checker's record in place: it was cloned (class, head and
+    // key strings included) on every call.
+    let context = interp.context.clone();
+    let Some(use_site) = context
+        .evidence
+        .dictionaries
+        .get(&call.span)
+        .and_then(|uses| uses.iter().find(|use_site| use_site.method == method))
+    else {
         let function = eval_atom(interp, &call.callee, frame, env, call.span)?;
         return Ok(Flow::Value(interp.apply(function, values, call.span)?));
     };
@@ -621,7 +657,7 @@ fn eval_dictionary_call(
     // Applying the instance body here would spend Rust stack on every step of
     // a recursive instance method, which is exactly what the trampoline exists
     // to avoid.
-    match interp.resolve_dictionary(&use_site, method, &values, call.span)? {
+    match interp.resolve_dictionary(use_site, method, &values, call.span)? {
         | crate::eval::Dispatch::Instance(body) => {
             let mut values = values;
             let instance =
@@ -648,16 +684,29 @@ fn eval_dictionary_call(
     }
 }
 
+/// Evaluates a call's arguments. `last_use` says the frame is dead once the
+/// arguments are read (a tail call leaving the function), so a slot passed
+/// once is moved into the argument list instead of cloned.
 fn eval_call_args(
     interp: &mut Interp,
     call: &Call,
     frame: &mut Vec<Value>,
     env: &Rc<IrEnv>,
+    last_use: bool,
 ) -> Result<Vec<Value>, EvalError> {
-    let mut values = Vec::with_capacity(call.args.len());
+    let mut values = interp.take_buffer(call.args.len());
     for (index, atom) in call.args.iter().enumerate() {
         let span = call.arg_spans.get(index).copied().unwrap_or(call.span);
-        let value = eval_atom(interp, atom, frame, env, span)?;
+        let value = match atom {
+            | Atom::Local(slot)
+                if last_use
+                    && (*slot as usize) < frame.len()
+                    && !call.args[index + 1..].contains(atom) =>
+            {
+                std::mem::replace(&mut frame[*slot as usize], Value::Unit)
+            },
+            | _ => eval_atom(interp, atom, frame, env, span)?,
+        };
         values.push(interp.attach_checked_type(value, span));
     }
     Ok(values)
@@ -675,6 +724,25 @@ fn eval_atoms(
         values.push(eval_atom(interp, atom, frame, env, span)?);
     }
     Ok(values)
+}
+
+/// A borrowed view of a plain scalar atom: a frame slot holding a
+/// dimensionless `Int`/`Float`, or a literal of one of those.
+fn scalar_view<'a>(
+    atom: &'a Atom,
+    frame: &'a [Value],
+) -> Option<Scalar<'a>> {
+    match atom {
+        | Atom::Local(slot) => {
+            match frame.get(*slot as usize)? {
+                | Value::Num(number) => Scalar::of(number),
+                | _ => None,
+            }
+        },
+        | Atom::Int(value) => Some(Scalar::Int(value)),
+        | Atom::Float(value) => Some(Scalar::Float(*value)),
+        | _ => None,
+    }
 }
 
 fn eval_atom(
@@ -799,12 +867,20 @@ fn eval_rhs(
     match rhs {
         | Rhs::Atom(atom) => eval_atom(interp, atom, frame, env, span),
         | Rhs::Binary { op, left, right } => {
+            // Operands that are frame slots or literals are read in place;
+            // cloning them (a `BigInt` allocation each) to feed an operator
+            // that only reads them was most of an arithmetic step.
+            if let (Some(a), Some(b)) = (scalar_view(left, frame), scalar_view(right, frame)) {
+                if let Some(value) = plain_scalar_binary(*op, a, b) {
+                    return Ok(value);
+                }
+            }
             let left = eval_atom(interp, left, frame, env, span)?;
             let right = eval_atom(interp, right, frame, env, span)?;
             interp.binary(*op, left, right, span)
         },
         | Rhs::Call(call) => {
-            match eval_call(interp, call, frame, env, false)? {
+            match eval_call(interp, call, frame, env, false, false)? {
                 | Flow::Value(value) => Ok(value),
                 | Flow::Tail { .. } => unreachable!("a value-position call is not trampolined"),
             }
@@ -863,7 +939,7 @@ fn eval_rhs_rest(
             interp.binary(*op, left, right, span)
         },
         | Rhs::Call(call) => {
-            match eval_call(interp, call, frame, env, false)? {
+            match eval_call(interp, call, frame, env, false, false)? {
                 | Flow::Value(value) => Ok(value),
                 | Flow::Tail { .. } => unreachable!("a value-position call is not trampolined"),
             }
@@ -975,8 +1051,10 @@ fn eval_rhs_rest(
         },
         | Rhs::Index { base, indices } => {
             let base = eval_atom(interp, base, frame, env, span)?;
-            if !matches!(base, Value::Tensor(_)) {
-                return Err(EvalError::new("E0302", "indexing expects a tensor").at(span));
+            if !matches!(base, Value::Tensor(_) | Value::Str(_)) {
+                return Err(
+                    EvalError::new("E0302", "indexing expects a tensor or a string").at(span),
+                );
             }
             let mut resolved = Vec::with_capacity(indices.len());
             for index in indices {

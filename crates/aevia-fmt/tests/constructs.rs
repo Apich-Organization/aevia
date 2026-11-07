@@ -272,3 +272,17 @@ fn a_colon_slice_without_a_step_is_the_range_it_means() {
 "
     );
 }
+
+#[test]
+fn inline_match_arms_round_trip_inside_expressions() {
+    // §2.3.4: inside brackets there is no line to end, so the arms share the
+    // `with` line; at the end of a line the block form is kept.
+    let source = "let v = [match o with | Some(n) -> n | None -> 0, 1]\n";
+    assert_eq!(round_trip(source), source);
+    let nested =
+        "let w = f(match a with | Some(x) -> (match x with | 0 -> 1 | _ -> 2) | None -> 3)\n";
+    assert_eq!(round_trip(nested), nested);
+    let block = "let u = match o with\n    | Some(n) -> n\n    | None -> 0\n";
+    let formatted = round_trip(block);
+    assert!(formatted.contains("\n    | None -> 0"), "{formatted}");
+}

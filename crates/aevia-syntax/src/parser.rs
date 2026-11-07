@@ -127,6 +127,22 @@ impl<'a> Parser<'a> {
         &self.token().kind
     }
 
+    /// Whether the token `offset` places ahead can begin an operand.
+    fn starts_expression_at(
+        &self,
+        offset: usize,
+    ) -> bool {
+        matches!(
+            self.kind_at(offset),
+            TokenKind::Ident(_)
+                | TokenKind::UpperIdent(_)
+                | TokenKind::Int(_)
+                | TokenKind::Float(_)
+                | TokenKind::Str(_)
+                | TokenKind::Punct(Punct::LParen | Punct::LBracket | Punct::Minus)
+        )
+    }
+
     fn kind_at(
         &self,
         offset: usize,
@@ -1396,8 +1412,24 @@ impl<'a> Parser<'a> {
         self.bump();
         let scrutinee = self.expr();
         self.expect_kw(Keyword::With);
-        // §A.3: `match_body` is `NEWLINE INDENT ... DEDENT` or `NEWLINE ...`,
-        // so the arms never start on the `with` line.
+        // §A.3: `match_body` is `NEWLINE INDENT ... DEDENT`, `NEWLINE ...`, or
+        // the inline form `with | p -> e | q -> f` whose arms share the `with`
+        // line. The inline form is the only one that can be written inside
+        // brackets, where layout produces no `NEWLINE` (§1.4): without it a
+        // `match` could not be an argument, `println(match o with ...)`.
+        if self.at_punct(Punct::Pipe) {
+            let mut arms = Vec::new();
+            while self.at_punct(Punct::Pipe) {
+                arms.push(self.match_arm_inline());
+            }
+            return Expr::new(
+                ExprKind::Match {
+                    scrutinee: Box::new(scrutinee),
+                    arms,
+                },
+                start.join(self.previous_span()),
+            );
+        }
         let indented = if self.indent_follows() {
             self.bump();
             self.bump();
@@ -1406,7 +1438,7 @@ impl<'a> Parser<'a> {
             self.bump();
             false
         } else {
-            self.error_here("E0202", "expected end of line after `with`");
+            self.error_here("E0202", "expected end of line or `|` after `with`");
             false
         };
         let mut arms = Vec::new();
@@ -1430,6 +1462,27 @@ impl<'a> Parser<'a> {
             },
             start.join(self.previous_span()),
         )
+    }
+
+    /// One arm of the inline form: the arm ends where its body does, and the
+    /// next `|` (or whatever follows the `match`) is not consumed.
+    fn match_arm_inline(&mut self) -> MatchArm {
+        let start = self.span();
+        self.bump(); // '|'
+        let pattern = self.pattern();
+        let guard = if self.eat_kw(Keyword::If) {
+            Some(self.expr())
+        } else {
+            None
+        };
+        self.expect_punct(Punct::Arrow);
+        let body = self.expr();
+        MatchArm {
+            pattern,
+            guard,
+            body,
+            span: start.join(self.previous_span()),
+        }
     }
 
     fn match_arm(&mut self) -> MatchArm {
@@ -1507,6 +1560,26 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
+                if self.at_punct(Punct::LArrow) {
+                    // `let x <- action` mixes the two statement forms. Say
+                    // which one was meant and recover as the bind it reads as.
+                    let span = self.span();
+                    self.diagnostics.push(
+                        Diagnostic::error("E0202", "`<-` does not follow `let`", span).with_help(
+                            "run an action and bind its result with `x <- action`; \
+                             `let x = e` binds a pure value",
+                        ),
+                    );
+                    self.bump();
+                    let value = self.expr();
+                    self.expect_newline();
+                    stmts.push(DoStmt::Bind {
+                        pattern,
+                        value,
+                        span: stmt_start.join(self.previous_span()),
+                    });
+                    continue;
+                }
                 self.expect_punct(Punct::Equals);
                 let value = self.expr();
                 self.expect_newline();
@@ -1718,6 +1791,33 @@ impl<'a> Parser<'a> {
                 | TokenKind::Punct(Punct::Star) => BinOp::Mul,
                 | TokenKind::Punct(Punct::Slash) => BinOp::Div,
                 | TokenKind::Punct(Punct::At) => BinOp::MatMul,
+                // §1.8.2: `%` is the percent unit; after an expression that
+                // is not a number literal it can only be a remainder written
+                // the C way. Say so once, and read it as `mod(a, b)` so the
+                // rest of the line is checked normally.
+                | TokenKind::Punct(Punct::Percent) if self.starts_expression_at(1) => {
+                    let percent = self.span();
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E0202",
+                            "`%` is the percent unit, not a remainder operator",
+                            percent,
+                        )
+                        .with_help("write `mod(a, b)` (or `rem(a, b)`) for the remainder"),
+                    );
+                    self.bump();
+                    let right = self.unary_expr();
+                    let span = left.span.join(right.span);
+                    let callee = Expr::new(ExprKind::Var("mod".to_string()), percent);
+                    left = Expr::new(
+                        ExprKind::Call {
+                            callee: Box::new(callee),
+                            args: vec![left, right],
+                        },
+                        span,
+                    );
+                    continue;
+                },
                 | _ => return left,
             };
             self.bump();

@@ -1361,3 +1361,42 @@ fn locked_detects_dependency_manifest_changes_even_when_sources_are_unchanged() 
     );
     assert_eq!(std::fs::read(demo.join("aevia.lock")).unwrap(), lock);
 }
+
+#[test]
+fn caps_sandboxes_a_program_from_the_command_line() {
+    // §9.14: `--caps` is the capability set a program starts with.
+    let scratch = Scratch::new("caps");
+    std::fs::write(scratch.path().join("data.txt"), "secret").expect("write");
+    std::fs::write(
+        scratch.path().join("main.aev"),
+        "fn main(): IO Unit = do\n    r <- read_file(\"data.txt\")\n    println(\"{r}\")\n",
+    )
+    .expect("write");
+    let open = aevia(scratch.path(), &["run", "main.aev"]);
+    assert_eq!(code(&open), 0, "{}", stderr(&open));
+    assert!(
+        stdout(&open).contains("Ok(\"secret\")"),
+        "{}",
+        stdout(&open)
+    );
+    let sandboxed = aevia(scratch.path(), &["--caps", "", "run", "main.aev"]);
+    assert_eq!(code(&sandboxed), 0, "{}", stderr(&sandboxed));
+    assert!(
+        stdout(&sandboxed).contains("E0902"),
+        "{}",
+        stdout(&sandboxed)
+    );
+    let bad = aevia(scratch.path(), &["--caps", "disk", "run", "main.aev"]);
+    assert_ne!(code(&bad), 0);
+    assert!(stderr(&bad).contains("`disk`"), "{}", stderr(&bad));
+}
+
+#[test]
+fn diagnostics_name_paths_without_the_verbatim_prefix() {
+    let scratch = Scratch::new("paths");
+    std::fs::write(scratch.path().join("bad.aev"), "let x = 1 m + 1 s\n").expect("write");
+    let output = aevia(scratch.path(), &["check", "bad.aev"]);
+    let text = stderr(&output);
+    assert!(!text.contains(r"\?\"), "{text}");
+    assert!(text.contains("--> bad.aev:1:"), "{text}");
+}

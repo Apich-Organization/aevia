@@ -857,7 +857,7 @@ impl CallProofKey {
     ) -> Option<Self> {
         use std::hash::Hash;
         use std::hash::Hasher;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = crate::fxhash::FxHasher::default();
         for value in args {
             let (tag, dim) = argument_tag(value)?;
             tag.hash(&mut hasher);
@@ -883,14 +883,14 @@ impl CallProofKey {
 /// object while the entry exists.
 #[derive(Default)]
 pub(crate) struct CallProofCache {
-    entries: std::cell::RefCell<std::collections::HashMap<CallProofKey, Vec<CallProofEntry>>>,
+    entries: std::cell::RefCell<crate::fxhash::FxHashMap<CallProofKey, Vec<CallProofEntry>>>,
     /// Concrete results already handed out, per original proof.
     ///
     /// Each activation installs its proof's bindings, and the next call's key
     /// names those bindings by identity. Without this, a recursive call made
     /// a new (equal) proof every iteration, so its key never repeated.
     canonical: std::cell::RefCell<
-        std::collections::HashMap<usize, (Rc<FunctionProof>, Vec<Rc<FunctionProof>>)>,
+        crate::fxhash::FxHashMap<usize, (Rc<FunctionProof>, Vec<Rc<FunctionProof>>)>,
     >,
 }
 

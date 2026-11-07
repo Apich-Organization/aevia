@@ -58,6 +58,9 @@ struct Options {
     jobs: Option<usize>,
     /// `--locked`: the lock file must already match the package tree.
     locked: bool,
+    /// `--caps fs,rand`: the runtime capabilities a program starts with
+    /// (§9.14); `None` grants all of them.
+    caps: Option<u8>,
 }
 
 /// The `--color` setting.
@@ -82,6 +85,7 @@ impl Default for Options {
             release: false,
             jobs: None,
             locked: false,
+            caps: None,
         }
     }
 }
@@ -159,6 +163,14 @@ impl Options {
                         format!("`--budget` expects a number of execution steps, found `{raw}`")
                     })?);
                 },
+                | "--caps" => {
+                    let raw = take("--caps", &mut index)?;
+                    options.caps = Some(aevia_core::value::caps::parse(&raw).map_err(|unknown| {
+                        format!(
+                            "`--caps` expects a comma-separated list of fs, net, env, rand, gpu, found `{unknown}`"
+                        )
+                    })?);
+                },
                 | "--release" => options.release = true,
                 | "--locked" => options.locked = true,
                 | "--jobs" => {
@@ -230,6 +242,9 @@ fn apply_options(
     if let Some(budget) = options.budget {
         interp.max_tail_calls = budget;
         interp.max_io_steps = budget;
+    }
+    if let Some(caps) = options.caps {
+        interp.capabilities = caps;
     }
     // The CLI thread declared its stack (`install_stack_budget`), so non-tail
     // recursion is bounded by the stack that is actually left; the fixed
@@ -387,6 +402,8 @@ usage:
 options (anywhere on the command line):
   --max-stack <MiB>         stack the interpreter runs on (default 1024)
   --budget <steps>          trampoline/IO steps before `E0805`
+  --caps <list>             run with only these capabilities: fs,net,env,rand,gpu
+                            (an empty list sandboxes everything; default: all)
   --color <when>            auto, always, or never (default auto)
   --locked                  fail instead of rewriting an out-of-date aevia.lock
   --release                 accepted for §9.9; reported as having no effect
@@ -2178,13 +2195,10 @@ mod tests {
             repl_latex(&mut session, "1/2").expect("renders"),
             r"\frac{1}{2}"
         );
-        // A symbolic value goes through the same `to_latex` engine; a bare
-        // symbol is typeset upright, which is what `to_latex("x")` does.
+        // A symbolic value goes through the same `to_latex` engine; a
+        // single-letter symbol is an (italic) math variable.
         declare(&mut session, "let s = symbol(\"x\")");
-        assert_eq!(
-            repl_latex(&mut session, "s").expect("renders"),
-            r"\mathrm{x}"
-        );
+        assert_eq!(repl_latex(&mut session, "s").expect("renders"), "x");
     }
 
     #[test]
