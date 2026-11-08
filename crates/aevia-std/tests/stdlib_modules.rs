@@ -45,9 +45,12 @@ fn the_embedded_tree_is_the_module_tree() {
         "`stdlib::modules()` and `stdlib::TREE` disagree"
     );
     for module in stdlib::modules() {
-        let expected = format!("module {}\n", module.path.replace('/', "."));
+        // A unit-system module declares its system after the name (§5.11).
+        let name = format!("module {}", module.path.replace('/', "."));
+        let expected = format!("{name}\n");
+        let with_system = format!("{name} with units ");
         assert!(
-            module.source.contains(&expected),
+            module.source.contains(&expected) || module.source.contains(&with_system),
             "`{}` does not declare `{}`",
             module.path,
             expected.trim_end()

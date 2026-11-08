@@ -68,6 +68,8 @@ use num_traits::Zero;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+mod sparse;
+
 /// What a name exported by a module denotes.
 #[derive(Clone, Debug)]
 pub enum Export {
@@ -581,6 +583,10 @@ pub struct HostRegistration {
     pub name: String,
     /// The Aevia function that implements it.
     pub function: String,
+    /// The function's parameters: their names and, once checked, the
+    /// dimension of each (`Dim::one()` for a non-scalar or unresolved one).
+    /// The runtime traces the function on symbols of these dimensions.
+    pub params: Vec<(String, Dim)>,
 }
 
 /// The interface of a checked module.
@@ -622,6 +628,9 @@ pub struct CheckedModule {
     /// `dyn`/`check` call sites with the concrete dimension the checker
     /// materialised for them (§4.9.4).
     pub dyn_calls: Vec<DynCall>,
+    /// `to_system`/`from_system` call sites (§5.11.5): the system and the SI
+    /// dimension of the quantity on the SI side of the conversion.
+    pub system_calls: HashMap<Span, (String, Dim)>,
     /// The stability marker of each declared name (§13.8.1).
     pub stability: IndexMap<String, Stability>,
     /// `@op`/`@rule` registrations the checker accepted (§13.5.2).
@@ -660,6 +669,18 @@ pub struct CheckedModule {
     /// materialise each literal at the representation recorded here, which is
     /// the explicit coercion at the boundary the type says is there.
     pub literal_reps: HashMap<Span, Rep>,
+    /// Constant regions (§3.10.4): the root of every closed literal
+    /// arithmetic tree whose static representation is inexact (`Float`,
+    /// `Complex`, or a representation variable resolved per activation).
+    ///
+    /// The runtime evaluates such a tree with exact leaves and rounds the
+    /// result once into the recorded representation, so `0.1 * 3 : Float` is
+    /// the nearest `f64` to `3/10` and the static type still agrees with the
+    /// runtime value. A tree whose exact evaluation fails (a division by
+    /// zero) is evaluated step by step in its static representation instead.
+    pub constant_regions: HashMap<Span, Rep>,
+    /// The module's unit system (§5.11), when it declares one.
+    pub unit_system: Option<String>,
     /// The resolved type of each expression, keyed by its span.
     ///
     /// Every expression the checker visits has an entry: the type `synth`
@@ -720,7 +741,7 @@ impl CheckedModule {
 /// fills it from the kernel's own table ([`CheckOptions::default`] does).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Capabilities {
-    names: HashSet<String>,
+    names: std::collections::BTreeSet<String>,
 }
 
 impl Capabilities {
@@ -862,6 +883,7 @@ pub fn check_module_with_interfaces(
 
 /// The visible binding of one direct imported interface. Nominal identities
 /// remain on its types and keys; `prefix` is only a source lookup name.
+#[derive(Debug)]
 pub struct InterfaceBinding {
     pub module: ModulePath,
     pub prefix: String,
@@ -1388,6 +1410,13 @@ struct Checker {
     literal_context: Option<Rep>,
     literal_classes: HashMap<Span, LiteralClass>,
     literal_region: Option<(LiteralKind, Rep)>,
+    /// Roots of closed literal arithmetic trees (§3.10.4 constant regions).
+    constant_region_roots: Vec<Span>,
+    /// Set once an unsatisfiable numeric relation has been reported.
+    numeric_conflict_reported: bool,
+    /// While set, dimensions are read in SI even in a module with a unit
+    /// system (unit declarations and `from_system<D>` targets, §5.11).
+    si_dimensions: bool,
     /// Top-level names that some body actually read, for `W0303`.
     referenced: HashSet<String>,
     /// `check` call sites whose `d` is only known after the whole module has
@@ -1490,6 +1519,9 @@ impl Checker {
             literal_context: None,
             literal_classes: HashMap::new(),
             literal_region: None,
+            constant_region_roots: Vec::new(),
+            numeric_conflict_reported: false,
+            si_dimensions: false,
             referenced: HashSet::new(),
             pending_checks: Vec::new(),
             local_binders: Vec::new(),
@@ -2142,6 +2174,21 @@ impl Checker {
                             );
                             continue;
                         }
+                        let params = match &decl.kind {
+                            | DeclKind::Fn { args, .. } => {
+                                args.iter()
+                                    .enumerate()
+                                    .map(|(index, arg)| {
+                                        let name = match &arg.pattern.kind {
+                                            | PatKind::Var(name) => name.clone(),
+                                            | _ => format!("arg{index}"),
+                                        };
+                                        (name, Dim::one())
+                                    })
+                                    .collect()
+                            },
+                            | _ => Vec::new(),
+                        };
                         self.registrations.push(HostRegistration {
                             span: attr.span,
                             kind: if attr.name == "op" {
@@ -2151,6 +2198,7 @@ impl Checker {
                             },
                             name: name_arg,
                             function,
+                            params,
                         });
                     },
                     // `@bench` (§9.12) and `@compile_fail` (§9.12) are read by
@@ -2169,6 +2217,31 @@ impl Checker {
         self.checked.anonymous_file = self.file;
         self.module_path = self.checked.module_path();
         self.check_attributes(module);
+        // §5.11: `module M with units natural`. The module's unit table
+        // resolves through the system from here on, which is what reduces
+        // every unit literal (dimension and scale) and every dimension
+        // written in a type; imported bindings keep their SI types.
+        if let Some((system, span)) = &module.unit_system {
+            match aevia_rssn::registry::registry().unit_system(system) {
+                | Some(found) => {
+                    self.units = std::mem::take(&mut self.units).with_system(found);
+                    self.checked.unit_system = Some(system.clone());
+                },
+                | None => {
+                    let known: Vec<String> = aevia_rssn::registry::registry()
+                        .unit_systems
+                        .iter()
+                        .map(|system| system.name.clone())
+                        .collect();
+                    self.error_help(
+                        "E0512",
+                        format!("unknown unit system `{system}`"),
+                        *span,
+                        &format!("the kernel provides: {}", known.join(", ")),
+                    );
+                },
+            }
+        }
 
         // Pass A: types, dimensions and units.
         //
@@ -2460,7 +2533,7 @@ impl Checker {
             );
         }
 
-        if self.mixed_rep {
+        if self.mixed_rep || self.infer.has_real_float_join() {
             self.warn(
                 "W0302",
                 "mixing `Real` and `Float` uses the exact `Real` path",
@@ -2714,6 +2787,17 @@ impl Checker {
                 }
             }
         }
+        // §3.10.4: a closed literal arithmetic tree is a constant expression.
+        // Its value is computed exactly and materialised once in the tree's
+        // static representation, so only inexact representations need the
+        // table; an exact one already evaluates exactly leaf by leaf.
+        for span in std::mem::take(&mut self.constant_region_roots) {
+            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span) {
+                if !matches!(rep, Rep::Int | Rep::Real) {
+                    self.checked.constant_regions.insert(span, *rep);
+                }
+            }
+        }
         self.checked.expr_types = resolved_expr_types;
         for function in self.checked.functions.values_mut() {
             function.scheme = self.infer.resolve_scheme(&function.scheme);
@@ -2746,7 +2830,7 @@ impl Checker {
             }
         }
         for message in self.infer.take_numeric_errors() {
-            self.error("E0302", message, Span::new(self.file, 0, 0));
+            self.report_unify(UnifyError::Numeric(message), Span::new(self.file, 0, 0));
         }
         let mut completed_origins = HashMap::new();
         for function in self.checked.functions.values_mut() {
@@ -2846,7 +2930,19 @@ impl Checker {
         // §13.8.1: stability markers travel with the interface, so the editor
         // can show them and a consumer can avoid a deprecated name.
         self.checked.stability = self.stability.clone();
-        self.checked.registrations = self.registrations.clone();
+        let mut registrations = self.registrations.clone();
+        for registration in &mut registrations {
+            if let Some(scheme) = self.globals.get(&registration.function) {
+                if let Type::Fn(params, _) = self.infer.resolve(&scheme.ty) {
+                    for ((_, dim), ty) in registration.params.iter_mut().zip(params.iter()) {
+                        if let Type::Scalar(_, found) = self.infer.resolve(ty) {
+                            *dim = self.infer.resolve_dim(&found);
+                        }
+                    }
+                }
+            }
+        }
+        self.checked.registrations = registrations;
         self.checked.errors = self.diagnostics.error_count();
     }
 
@@ -3020,10 +3116,15 @@ impl Checker {
         else {
             return;
         };
+        // §5.11.4: a unit is a definition in SI, wherever it is declared; a
+        // module with a unit system sees it through the system like any other
+        // unit, and an SI importer sees the unit it wrote.
+        let si_dimensions = std::mem::replace(&mut self.si_dimensions, true);
         let dimension = self.convert_dim(dim, decl.span);
+        self.si_dimensions = si_dimensions;
         let mut scale_value = scale.clone();
         if let Some(base) = base {
-            match self.units.resolve(base) {
+            match self.units.resolve_si(base) {
                 | Ok(resolved) => scale_value = scale_value.mul(&resolved.scale),
                 | Err(error) => {
                     self.unit_error(error, decl.span);
@@ -3035,7 +3136,7 @@ impl Checker {
             | Some((offset_scale, offset_unit)) => {
                 let mut value = offset_scale.clone();
                 if let Some(unit) = offset_unit {
-                    match self.units.resolve(unit) {
+                    match self.units.resolve_si(unit) {
                         | Ok(resolved) => {
                             // §5.1.1: the offset must measure the same
                             // dimension as the unit it is attached to.
@@ -3082,8 +3183,9 @@ impl Checker {
             self.unit_error(error, decl.span);
             return;
         }
+        let local = self.units.reduce_dim(&dimension);
         self.globals
-            .insert(name.clone(), Scheme::mono(Type::UnitOf(dimension)));
+            .insert(name.clone(), Scheme::mono(Type::UnitOf(local)));
         if !decl.private {
             self.checked
                 .exports
@@ -5215,6 +5317,9 @@ impl Checker {
         {
             let class = self.literal_class(expr);
             if class.tree {
+                if !class.atomic {
+                    self.constant_region_roots.push(expr.span);
+                }
                 return self.synth_literal_region(expr, class.homogeneous);
             }
         }
@@ -6179,6 +6284,7 @@ impl Checker {
                 match resolved {
                     // §4.9.3: unary `-` and `+` preserve `Dyn<ρ>`.
                     | Type::Scalar(..) | Type::Tensor { .. } | Type::Dyn(_) => resolved,
+                    | Type::Adt(..) if builtins::sparse_parts(&resolved).is_some() => resolved,
                     | Type::Error => Type::Error,
                     | other => {
                         let symbol = if op == UnOp::Neg { "-" } else { "+" };
@@ -6465,6 +6571,10 @@ impl Checker {
             if op != BinOp::Pow {
                 right_resolved = self.force_scalar(&right_resolved);
             }
+        }
+        if let Some(ty) = self.sparse_binary(op, &left_resolved, &right_resolved, left, right, span)
+        {
+            return ty;
         }
         match op {
             | BinOp::Add | BinOp::Sub => {
@@ -7245,18 +7355,14 @@ impl Checker {
             |rep: Rep| !matches!(rep,Rep::Var(id) if protected.representations.contains_key(&id));
         let decimal =
             |kind: LiteralKind| matches!(kind, LiteralKind::Decimal | LiteralKind::QuantityDecimal);
-        if let (Some(ak), Some(bk)) = (a_kind, b_kind) {
-            if unprotected(a) && unprotected(b) && decimal(ak) != decimal(bk) {
-                self.mixed_rep = true;
-                for rep in [a, b] {
-                    if let Err(error) = self.infer.unify_rep(rep, Rep::Real) {
-                        self.report_unify(error, Span::new(self.file, 0, 0));
-                    }
-                }
-                a = self.infer.resolve_rep(a);
-                b = self.infer.resolve_rep(b);
-            }
-        }
+        // §3.10.2: a mixed integer/decimal literal pair keeps two independent
+        // domains; each leaf defaults by its own rule and the result is their
+        // `join` (`1 + 1.0 : Float`). Forcing both to `Real` here was the
+        // recorded "exact decimal folding" deviation. Exactness of a closed
+        // literal tree is now a *value* property — the constant region is
+        // folded exactly and rounded once (see `constant_regions`) — so it no
+        // longer changes the static type.
+        let _ = decimal;
         for (variable, concrete, kind) in [(a, b, a_kind), (b, a, b_kind)] {
             if matches!(variable, Rep::Var(_))
                 && !matches!(concrete, Rep::Var(_))
@@ -7415,6 +7521,12 @@ impl Checker {
                 // `dyn` takes no type argument: its `d` comes from the argument.
                 if name == "check" {
                     return self.check_call(args, type_args.first(), span);
+                }
+                if name == "from_system" && !self.is_locally_defined(name) {
+                    return self.system_call(false, args, type_args.first(), span);
+                }
+                if builtins::takes_format_argument(name) && !self.is_locally_defined(name) {
+                    return self.sparse_format_call(name, type_args, args, span);
                 }
             }
             let inner_ty = self.synth(inner);
@@ -7576,11 +7688,19 @@ impl Checker {
             if name == "check" {
                 return self.check_call(args, None, span);
             }
+            if matches!(name.as_str(), "to_system" | "from_system")
+                && !self.is_locally_defined(name)
+            {
+                return self.system_call(name == "to_system", args, None, span);
+            }
             // §8.1: `min_all`/`max_all` reduce a whole tensor of any rank to
             // its scalar element (`min`/`max` stay the binary scalar
             // functions). A scheme cannot quantify the shape's rank, so the
             // element/dimension relationship is enforced here instead of by a
             // rank-1-only scheme.
+            if matches!(name.as_str(), "sparse_coo" | "contract") {
+                return self.sparse_special_call(name, args, span);
+            }
             if matches!(name.as_str(), "min_all" | "max_all") {
                 if args.len() != 1 {
                     self.error(
@@ -7640,6 +7760,10 @@ impl Checker {
                     return Type::Error;
                 }
                 let arg_ty = self.synth(&args[0]);
+                let arg_ty = match builtins::sparse_parts(&self.infer.resolve(&arg_ty)) {
+                    | Some((_, dense)) => dense.clone(),
+                    | None => arg_ty,
+                };
                 return match self.infer.resolve(&arg_ty) {
                     | Type::Tensor { shape, .. } => {
                         if name == "rank" {
@@ -7683,6 +7807,38 @@ impl Checker {
                     return Type::Error;
                 }
                 let arg_ty = self.synth(&args[0]);
+                let arg_resolved = self.infer.resolve(&arg_ty);
+                if let Some((format, dense)) = builtins::sparse_parts(&arg_resolved) {
+                    let format = format.clone();
+                    return match dense {
+                        | Type::Tensor { shape, elem } if shape.rank() == 2 => {
+                            let swapped = match shape {
+                                | Shape::Refined(items) if items.len() == 2 => {
+                                    Shape::Refined(vec![items[1].clone(), items[0].clone()])
+                                },
+                                | _ => Shape::Rank(2),
+                            };
+                            builtins::sparse_type(
+                                format,
+                                Type::Tensor {
+                                    shape: swapped,
+                                    elem: elem.clone(),
+                                },
+                            )
+                        },
+                        | other => {
+                            self.error_help(
+                                "E0302",
+                                format!(
+                                    "`transpose` expects a rank-2 sparse matrix, found {other}"
+                                ),
+                                args[0].span,
+                                "only a matrix can be transposed",
+                            );
+                            Type::Error
+                        },
+                    };
+                }
                 return match self.infer.resolve(&arg_ty) {
                     | Type::Tensor { shape, elem } if shape.rank() == 2 => {
                         let swapped = match &shape {
@@ -7808,6 +7964,18 @@ impl Checker {
             if let Some(candidates) = builtins::schemes(name) {
                 if candidates.len() > 1 {
                     return self.overloaded_call(name, &candidates, args, span);
+                }
+                // A single-scheme builtin whose name is also a prelude unit (`cg` is
+                // both the conjugate-gradient solver and the centigram): in call
+                // position the function wins, as it does for `min`.
+                if self.units.lookup(name).is_some()
+                    && matches!(
+                        self.globals.get(name).map(|scheme| &scheme.ty),
+                        Some(Type::UnitOf(_)) | None
+                    )
+                {
+                    let ty = self.infer.instantiate(&candidates[0]);
+                    return self.call_with_type(ty, args, span);
                 }
             }
         }
@@ -8829,6 +8997,125 @@ impl Checker {
         Type::result(Type::Scalar(rep, dim), builtins::dim_error_type())
     }
 
+    /// §5.11.5: `to_system("natural", x)` and `from_system<D>("natural", x)`.
+    ///
+    /// `to_system` takes an SI quantity of a concrete dimension `d` to the
+    /// system's representative `R(d)`; `from_system<D>` takes a value of
+    /// `R(D)` back to the SI dimension `D`, which must be written because the
+    /// reduction forgets it (`L` and `T` are both `Energy^-1`). `D` is read in
+    /// SI even inside a module with a unit system. The runtime needs the
+    /// system and the SI dimension, recorded in `system_calls`.
+    fn system_call(
+        &mut self,
+        to: bool,
+        args: &[Expr],
+        type_arg: Option<&Ty>,
+        span: Span,
+    ) -> Type {
+        let name = if to {
+            "to_system"
+        } else {
+            "from_system"
+        };
+        if args.len() != 2 {
+            self.error(
+                "E0315",
+                format!(
+                    "`{name}` takes 2 arguments (a system name and a value), found {}",
+                    args.len()
+                ),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        self.check(&args[0], &Type::string());
+        let Some(system_name) = string_constant(&args[0]) else {
+            self.error_help(
+                "E0302",
+                format!("`{name}` needs the unit system as a string literal"),
+                args[0].span,
+                "write the name, for example `\"natural\"`",
+            );
+            self.synth(&args[1]);
+            return Type::Error;
+        };
+        let Some(system) = aevia_rssn::registry::registry().unit_system(&system_name) else {
+            self.error(
+                "E0512",
+                format!("unknown unit system `{system_name}`"),
+                args[0].span,
+            );
+            self.synth(&args[1]);
+            return Type::Error;
+        };
+        let value = self.synth(&args[1]);
+        let value = self.force_scalar(&value);
+        let Type::Scalar(rep, dim) = self.infer.resolve(&value) else {
+            if !matches!(self.infer.resolve(&value), Type::Error) {
+                self.error(
+                    "E0302",
+                    format!("`{name}` converts a scalar quantity"),
+                    args[1].span,
+                );
+            }
+            return Type::Error;
+        };
+        let rep = self.infer.resolve_rep(rep).div_rep();
+        let si = if to {
+            let dim = self.infer.resolve_dim(&dim);
+            if !dim.is_concrete() {
+                self.error_help(
+                    "E0304",
+                    format!(
+                        "`to_system` needs the argument's dimension to be known here, found {}",
+                        self.dims.format(&dim)
+                    ),
+                    args[1].span,
+                    "annotate the value's dimension",
+                );
+                return Type::Error;
+            }
+            dim
+        } else {
+            let Some(ty) = type_arg else {
+                self.error_help(
+                    "E0304",
+                    "`from_system` needs the SI dimension it converts to",
+                    span,
+                    "write it as a type argument, for example `from_system<L>(\"natural\", x)`",
+                );
+                return Type::Error;
+            };
+            let saved = std::mem::replace(&mut self.si_dimensions, true);
+            let target = self.dimension_type_argument(ty);
+            self.si_dimensions = saved;
+            let Some(target) = target else {
+                return Type::Error;
+            };
+            let target = self.infer.resolve_dim(&target);
+            let reduced = system.reduce_dim(&target);
+            if let Err(error) = self
+                .infer
+                .unify(&Type::Scalar(rep, dim.clone()), &Type::Scalar(rep, reduced))
+            {
+                self.report_unify(error, args[1].span);
+            }
+            target
+        };
+        self.checked
+            .system_calls
+            .insert(span, (system_name, si.clone()));
+        let result = if to {
+            system.reduce_dim(&si)
+        } else {
+            si
+        };
+        Type::Scalar(rep, result)
+    }
+
     /// The dimension a `check<d>` type argument names (§4.9.4).
     ///
     /// `d` is written in the type language: `L`/`Length` is a named dimension,
@@ -8847,7 +9134,15 @@ impl Checker {
                 {
                     return Some(dim.clone());
                 }
-                self.dims.lookup(name).or_else(|| {
+                let si_dimensions = self.si_dimensions;
+                let reduce = |dim: Dim| {
+                    if si_dimensions {
+                        dim
+                    } else {
+                        self.units.reduce_dim(&dim)
+                    }
+                };
+                self.dims.lookup(name).map(reduce).or_else(|| {
                     self.error(
                         "E0407",
                         format!("unknown dimension `{name}` in `check<{name}>`"),
@@ -8858,7 +9153,15 @@ impl Checker {
             },
             | TyKind::Named { path, args } if args.is_empty() => {
                 let name = path.join(".");
-                self.dims.lookup(&name).or_else(|| {
+                let si_dimensions = self.si_dimensions;
+                let reduce = |dim: Dim| {
+                    if si_dimensions {
+                        dim
+                    } else {
+                        self.units.reduce_dim(&dim)
+                    }
+                };
+                self.dims.lookup(&name).map(reduce).or_else(|| {
                     self.error(
                         "E0407",
                         format!("unknown dimension `{name}` in `check<{name}>`"),
@@ -9372,6 +9675,10 @@ impl Checker {
             }
             return Type::Str;
         }
+        if let Some((_, dense)) = builtins::sparse_parts(&resolved) {
+            let dense = dense.clone();
+            return self.sparse_index(&dense, indices, span);
+        }
         let Type::Tensor { shape, elem } = resolved else {
             self.error(
                 "E0302",
@@ -9620,7 +9927,8 @@ impl Checker {
             .push((self.function_stack.len(), span, destination.clone()));
         self.scopes.push(HashMap::new());
         let mut last_ty = Type::Unit;
-        for stmt in stmts {
+        for (position, stmt) in stmts.iter().enumerate() {
+            let is_last = position + 1 == stmts.len();
             match stmt {
                 | DoStmt::Let {
                     pattern, ty, value, ..
@@ -9656,7 +9964,8 @@ impl Checker {
                     let ty = self.synth(expr);
                     match self.infer.resolve(&ty) {
                         | Type::Io(inner) => {
-                            if !inner.is_unit() {
+                            // The last statement's result is the block's.
+                            if !inner.is_unit() && !is_last {
                                 self.warn(
                                     "W0202",
                                     "this IO action's result is discarded",
@@ -10347,12 +10656,33 @@ impl Checker {
                     elem: Box::new(self.convert_type_with_params(elem, params)),
                 }
             },
-            // `Sparse<fmt, shape, τ>` has the shape of its dense counterpart;
-            // the storage format is a runtime property.
-            | TyKind::Sparse { shape, elem, .. } => {
-                Type::Tensor {
+            // `Sparse<fmt, shape, τ>` is its own type (§13.9.5): it carries the
+            // format and the dense counterpart (same shape and element), and it
+            // does not unify with `Tensor<shape, τ>`.
+            | TyKind::Sparse { format, shape, elem } => {
+                let dense = Type::Tensor {
                     shape: self.convert_shape(shape),
                     elem: Box::new(self.convert_type_with_params(elem, params)),
+                };
+                let canonical = match format.to_ascii_lowercase().as_str() {
+                    | "csr" => "Csr",
+                    | "csc" => "Csc",
+                    | "coo" => "Coo",
+                    | "block" => "Block",
+                    | "bcsr" => "Bcsr",
+                    | _ => "",
+                };
+                match builtins::format_type(canonical) {
+                    | Some(marker) => builtins::sparse_type(marker, dense),
+                    | None => {
+                        self.error_help(
+                            "E0310",
+                            format!("`{format}` is not a sparse format"),
+                            ty.span,
+                            "the formats are Csr, Csc, Coo, Block and Bcsr",
+                        );
+                        Type::Error
+                    },
                 }
             },
             // A row sum is the union of its summands' fields.
@@ -10834,6 +11164,11 @@ impl Checker {
                     return dim.clone();
                 }
                 match self.dims.lookup(name) {
+                    // §5.11.2: a dimension written in a module with a unit
+                    // system denotes its representative (`L` is `Energy^-1`
+                    // in natural units). The reduction is a homomorphism, so
+                    // reducing each named factor reduces the whole product.
+                    | Some(dim) if !self.si_dimensions => self.units.reduce_dim(&dim),
                     | Some(dim) => dim,
                     | None => {
                         if self.implicit_params {
@@ -11095,6 +11430,26 @@ impl Checker {
                     );
                 }
                 self.diagnostics.push(diagnostic);
+            },
+            // One unsatisfiable representation system is one error. The
+            // relation stays in the constraint store, so every later
+            // propagation through it would otherwise report the same
+            // conflict again at each span it touches.
+            | UnifyError::Numeric(message) => {
+                if std::mem::replace(&mut self.numeric_conflict_reported, true) {
+                    return;
+                }
+                self.diagnostics.push(
+                    Diagnostic::error("E0302", "type mismatch", span)
+                        .with_primary_label(
+                            "no numeric representation satisfies the arithmetic here",
+                        )
+                        .with_note(message)
+                        .with_help(
+                            "a decimal literal is never `Int`; annotate the binding with \
+                             `Float` or `Real`, or convert explicitly",
+                        ),
+                );
             },
             | other => {
                 self.diagnostics
@@ -11671,7 +12026,10 @@ fn opaque_type(name: &str) -> Type {
 }
 
 /// Maps a manifest signature type to the checker's type.
-fn rssn_type(sig: &aevia_rssn::SigType) -> Type {
+fn rssn_type(
+    sig: &aevia_rssn::SigType,
+    infer: &mut Infer,
+) -> Type {
     use aevia_rssn::SigType as S;
     match sig {
         | S::Int => Type::int(),
@@ -11702,23 +12060,27 @@ fn rssn_type(sig: &aevia_rssn::SigType) -> Type {
                 || Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1))),
                 |shape| Shape::refined(shape.iter().copied().map(Some)),
             );
-            Type::tensor(shape, rssn_type(elem))
+            Type::tensor(shape, rssn_type(elem, infer))
         },
+        // A kernel sparse value is an Aevia `Sparse<F, shape, τ>` of the same
+        // rank. The format is a runtime property of the kernel value, so it
+        // stays an unsolved variable (§13.9.5).
         | S::Sparse { rank, elem } => {
             let shape = Shape::Rank(rank.map_or(1, |rank| u32::try_from(rank).unwrap_or(1)));
-            Type::tensor(shape, rssn_type(elem))
+            let format = infer.fresh_type();
+            builtins::sparse_type(format, Type::tensor(shape, rssn_type(elem, infer)))
         },
         | S::Record(fields) => {
             Type::record(
                 fields
                     .iter()
-                    .map(|(name, ty)| (name.clone(), rssn_type(ty))),
+                    .map(|(name, ty)| (name.clone(), rssn_type(ty, infer))),
             )
         },
         | S::Func(params, ret) => {
             Type::Fn(
-                params.iter().map(rssn_type).collect(),
-                Box::new(rssn_type(ret)),
+                params.iter().map(|param| rssn_type(param, infer)).collect(),
+                Box::new(rssn_type(ret, infer)),
             )
         },
         | S::Table | S::Device | S::Opaque(_) | S::Var(_) | S::Variant(_) => dynamic_value_type(),
@@ -12015,11 +12377,14 @@ impl Checker {
         &mut self,
         signature: &aevia_rssn::Sig,
     ) -> Type {
-        let mut params: Vec<Type> = signature.params.iter().map(rssn_type).collect();
+        let mut params: Vec<Type> = Vec::with_capacity(signature.params.len() + 1);
+        for param in &signature.params {
+            params.push(rssn_type(param, &mut self.infer));
+        }
         if signature.variadic.is_some() {
             params.push(Type::tensor(Shape::Rank(1), dynamic_value_type()));
         }
-        Type::Fn(params, Box::new(rssn_type(&signature.ret)))
+        Type::Fn(params, Box::new(rssn_type(&signature.ret, &mut self.infer)))
     }
 
     /// Types a call to a class method and solves its constraints.
@@ -12195,14 +12560,10 @@ mod literal_region_tests {
                         else {
                             panic!("missing result")
                         };
-                        assert_eq!(
-                            scheme.ty,
-                            if first.starts_with('(') {
-                                Type::float(Dim::one())
-                            } else {
-                                Type::real(Dim::one())
-                            }
-                        );
+                        // §3.10.2: `join(Int, Float) = Float` for both
+                        // spellings; exactness of the closed tree is a value
+                        // property (constant-region folding), not a type.
+                        assert_eq!(scheme.ty, Type::float(Dim::one()));
                     }
                 }
             })

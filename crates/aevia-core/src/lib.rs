@@ -5,14 +5,17 @@
 //! use aevia_core::Interp;
 //! use aevia_core::compile;
 //!
-//! let source = "let g = 9.80665 m/s^2\nlet h = 20.0 m\nlet t = sqrt(2 * h / g)\n";
+//! let source =
+//!     "let g: Real[L/T^2] = 9.80665 m/s^2\nlet h: Real[L] = 20.0 m\nlet t = sqrt(2 * h / g)\n";
 //! let compilation = compile("test.aev", source);
 //! assert!(!compilation.diagnostics.has_errors());
 //! let module = compilation.module.as_ref().expect("parsed");
 //! let mut interp = Interp::new(&compilation.checked);
 //! interp.load(module);
 //! let value = interp.eval_toplevel("t").expect("evaluates");
-//! // `h` and `g` are exact, so the square root has no exact value and stays
+//! // `h` and `g` are annotated `Real`, so their decimal literals are read
+//! // exactly (§3.10.1); without the annotation they would be `Float`.
+//! // The square root of an exact value has no exact value and stays
 //! // symbolic (§6.3.1), its square factor pulled out; `approx` is the
 //! // explicit step to a number.
 //! assert!(aevia_core::value::repr(&value).contains("sqrt("));
@@ -40,10 +43,14 @@ pub mod io_do;
 mod jit;
 pub mod kernel;
 pub mod manifest;
+pub mod parallel;
 mod pattern;
+mod plugin_source;
 pub mod rssn_module;
 pub mod source;
+pub mod sparse;
 pub mod sym;
+mod systems;
 mod try_control;
 pub mod value;
 
@@ -138,31 +145,12 @@ pub fn compile_with_source_identity(
 }
 
 impl Interp {
-    /// Reports `@op`/`@rule` host registrations the checker accepted (§13.5.2).
-    ///
-    /// Publishing an Aevia function as a kernel operator or rewrite rule needs
-    /// the plugin-source ABI; this build has `core.plugin.source` disabled, so
-    /// a registration that reaches the runtime is exactly that named
-    /// capability gap. Dropping it silently would make `@op` look like it
-    /// worked when nothing was registered.
+    /// Kept for hosts that called it before loading a module: registration
+    /// now happens after the module's functions are bound
+    /// ([`Interp::publish_registrations_in`]), so there is nothing to report
+    /// beforehand.
     pub fn publish_registrations(&mut self) -> Diagnostics {
-        let mut diagnostics = Diagnostics::new();
-        for registration in &self.registrations {
-            let kind = match registration.kind {
-                | aevia_types::check::HostRegistrationKind::Op => "op",
-                | aevia_types::check::HostRegistrationKind::Rule => "rule",
-            };
-            diagnostics.push(Diagnostic::error(
-                "E1001",
-                format!(
-                    "`@{kind}(\"{}\")` needs the `core.plugin.source` capability, which this \
-                     build does not have; the function is not registered with the kernel",
-                    registration.name
-                ),
-                registration.span,
-            ));
-        }
-        diagnostics
+        Diagnostics::new()
     }
 
     /// Evaluates a module's top-level declarations.
@@ -176,6 +164,9 @@ impl Interp {
     ) -> Diagnostics {
         let mut diagnostics = self.publish_registrations();
         let root = self.module_scope(Vec::new());
+        self.file_scopes.insert(module.file, root.clone());
+        self.file_keys
+            .insert(module.file, std::sync::Arc::from("<single module>"));
         diagnostics.extend(self.load_into(module, &root));
         // A single-file program keeps its names unqualified, which is what
         // `eval_toplevel` and the REPL expect.
@@ -198,6 +189,9 @@ impl Interp {
     ) -> Diagnostics {
         let mut diagnostics = self.publish_registrations();
         let scope = self.module_scope(Vec::new());
+        self.file_scopes.insert(module.file, scope.clone());
+        self.file_keys
+            .insert(module.file, std::sync::Arc::from(path.join(".").as_str()));
         diagnostics.extend(self.load_into(module, &scope));
         let names = top_level_names(module);
         if path.is_empty() {
@@ -266,6 +260,9 @@ impl Interp {
         // must use *this module's* nominal identity (D6), not the first
         // same-named type in the process registry.
         bind_module_constructors(self, module, &root);
+        // §13.5.2: functions are values now and no `let` has run yet, so a
+        // top-level binding may already call a published operator.
+        diagnostics.extend(self.publish_module_registrations(module, &root));
         // Then the bindings, in passes: `let a = b + 1` before `let b = 41` is
         // legal (§7.1.2), so a pass that hits an unbound name retries once the
         // names after it are bound.
@@ -336,6 +333,7 @@ impl Interp {
             &self.method_refs,
             &self.context.evidence.constructor_refs,
             &self.context.evidence.expr_types,
+            &self.constant_regions,
         );
         let root = root.clone();
         for decl in &lowered.fns {
@@ -356,6 +354,7 @@ impl Interp {
             }
         }
         bind_module_constructors(self, module, &root);
+        diagnostics.extend(self.publish_module_registrations(module, &root));
         let mut pending: Vec<usize> = (0..lowered.lets.len()).collect();
         while !pending.is_empty() {
             let mut deferred = Vec::new();
@@ -520,6 +519,7 @@ impl Interp {
                 &self.method_refs,
                 &self.context.evidence.constructor_refs,
                 &self.context.evidence.expr_types,
+                &self.constant_regions,
             ) {
                 return self.load_lowered(lowered);
             }
@@ -724,6 +724,18 @@ pub fn run(
         ));
     };
     let mut interp = Interp::new(&compilation.checked).with_buffer();
+    // §9.7: workers recompile the same source, so closures cross by span.
+    let replica_source = source.to_string();
+    let replica_name = name.to_string();
+    interp.set_replica(std::sync::Arc::new(move || {
+        let compilation = compile(&replica_name, &replica_source);
+        let module = compilation.module.as_ref().ok_or("no module")?;
+        let mut replica = Interp::new(&compilation.checked).with_buffer();
+        if replica.load(module).has_errors() {
+            return Err("the program's top level failed on a worker".to_string());
+        }
+        Ok(replica)
+    }));
     let load_diagnostics = interp.load(module);
     if load_diagnostics.has_errors() {
         return Err(load_diagnostics.items[0].clone());

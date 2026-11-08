@@ -1071,6 +1071,11 @@ impl fmt::Display for Type {
             | Self::Record(row) => write!(f, "{{ {row} }}"),
             | Self::Adt(id, args) => {
                 let name = crate::adt::name_of(*id);
+                if name == "Sparse" && args.len() == 2 {
+                    if let Self::Tensor { shape, elem } = &args[1] {
+                        return write!(f, "Sparse<{}, {shape}, {elem}>", args[0]);
+                    }
+                }
                 if args.is_empty() {
                     f.write_str(&name)
                 } else {

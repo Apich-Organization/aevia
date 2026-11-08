@@ -494,9 +494,8 @@ cdylib 未实现、单位表缺 §5.3.3 的七项，均已关闭）。
     源码闭包，不把 evaluator 的 `Rc` 图传给其他线程；具体数值、`Bool`、
     `String` 及其张量和闭合记录按完整可用的形状、量纲证据递归校验，空结构
     不凭空推断。数值求解器另限 `Float` 标量与向量。句柄在外层调用返回后失效。
-    `core.plugin.source`
-    仍不可用：源码 `@op` 打包未实现，`Rssn.register`/`register_plugin` 报
-    `E1001`（Rust host 插件仍经嵌入 API 注册）。
+    `core.plugin.source` 可用：`@op` 函数被追踪为 kernel 定义、`@rule` 为重写，
+    作为进程内插件注册（§13.5.2）；`Rssn.register` 只接受 host `Plugin`。
 19. **单位属于 session。** `Session::register_unit` 注册的单位只出现在该
     session 的 manifest（`KernelManifest::build_with_units`）；进程级
     `KernelManifest::build` 给出不同的单位表与 hash。插件注册的单位只属于

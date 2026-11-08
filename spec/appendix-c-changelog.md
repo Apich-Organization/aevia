@@ -856,3 +856,97 @@ RSSN 上游又推进了一轮，这一版把规范里“等 RSSN 支持”的几
 - `limit(sqrt(x+1) - sqrt(x), oo)`；`ln(x*y)` 在正性假设下不展开。
 - AST 求值器仍保留（`AEVIA_EVAL=ast`）；它在 10^4 步记录尾递归上报 `E0805`，
   IR 是唯一应依赖的执行路径。
+
+## Revision 14 — 稀疏张量落地：`storage.sparse` 启用（2026-11-07）
+
+本轮把 §8.4.1 / §13.9.5 里一直是命名缺口的稀疏存储类做成了真正的运行时。
+
+### 1. 已实现
+
+- **运行时值。** `Value::Sparse(Rc<SparseData>)`（`aevia-core/src/sparse.rs`）：
+  形状、元素量纲、格式（`Csr`/`Csc` 为二维压缩，`Coo` 为任意秩的稀疏张量）、
+  按字典序排列且无重复的已存储项。已存储项永不等于隐式零；不变量由
+  `SparseData::validate` 检查（debug 构建下每次构造后都断言）。
+- **精确性。** 元素存储与稠密张量同一规则：每个已存储元素都是 `Float` 时是
+  `f64` 缓冲，否则是装箱的 `Int`/`Real`/`Complex`/符号标量；装箱元素的每个运算
+  都走语言自己的标量算术，精确值不会被舍入。隐式零是元素表示与量纲的零。
+- **类型。** checker 的 `Sparse<F, shape, τ>` 不再擦除为 `Tensor`：它是带格式的
+  独立类型，`Sparse` 与 `Tensor` 不隐式互转；格式是类型的一部分；元素量纲按稠密
+  规则传播（和要求相等 `E0401`，积相乘，`spsolve` 相除）。
+- **内建函数。** `from_dense<F>`、`to_dense`、`convert<G>`、`nnz`、`density`、
+  `format_of`、`sparse_coo`、`sparse_csr`、`speye<F>`、`spdiag<F>`、`transpose`、
+  `kron`、`spsolve`、`cg`、`contract`、`map_nonzero`、`nonzeros`，以及对
+  `sum`/`matmul` 的稀疏重载和 `get` / `A[i, j, …]`。
+- **运算符。** `+ - * /` 与 `==` `!=`，以及 `@` 的 dense×sparse、sparse×dense、
+  sparse×sparse 布局分派（AST 与 IR 两个求值器、checker 同步）；Hadamard 积只遍历
+  已存储项。
+- **求解器。** `spsolve`：`Float` 走 `faer` 稀疏 LU（`aevia_std::sparse`，不稠密化），
+  精确元素走稀疏高斯消元；`cg`：无预条件共轭梯度。10^5 量级的三对角系统在
+  `f64` 路径上是毫秒级；测试用 200 000 阶系统保证任何稠密化都会被拒绝。
+- **内核边界。** `aevia-rssn` 新增 `Val::Sparse`，与 RSSN 的 `Value::Sparse`
+  一一对应，**不再稠密化**；越界索引仍是 `E0809`。`term_of_value` 仍拒绝稀疏值
+  进入项图。
+- **能力。** `storage.sparse` 启用（`Block`/`Bcsr` 构造报 `E1001`，capability
+  名 `storage.sparse.block`）。`spec_signatures` 里关于 `transpose` 稀疏重载的
+  缺口记录已移除。
+- **示例与测试。** `examples/sparse.aev`（一维杆与二维板的稳态导热，带单位）；
+  `crates/aevia-core/tests/sparse.rs`。
+
+### 2. 附带修复
+
+- 单方案内建与单位同名（`cg` 也是厘克）时，调用位置现在选函数，和 `min` 的
+  处理一致；此前 `cg(...)` 报 `E0305 Unit[Mass] is not a function`。
+
+### 3. 仍然开放
+
+- `Block`/`Bcsr` 只在类型里存在；形状细化只检查秩；`cg` 无预条件子；`spsolve` 不使用
+  对称性（不走 Cholesky）；不支持稀疏切片；稀疏值不能进入 RSSN 项图；格式仍是封闭集合。
+
+## Revision 15 — alpha 重构：字面量折叠、单位制、并行与并发、源码插件、增量检查（2026-11-08）
+
+本轮不是小修补，而是对几处设计决定的重新思考；每一条都改了规范文本，而不只是
+实现。
+
+1. **字面量折叠偏差撤销（§3.10.4，取代 Revision 9 §4 第 1 条）。** 旧实现把
+   混合字面量 `1.0 + 2` 强制读成 `Real`，并在 `Float` 静态类型下把十进制量字面量
+   折叠为精确有理数——静态 `Float` 的值在运行期是精确数，是健全性缺陷。新规则：
+   折叠是**与运行期求值一致的编译期求值**。一个字面量只舍入一次（`1.1 km` 是离
+   1100 最近的 f64）；闭合字面量算术树是常量区域，按静态表示求值一次并记忆化，
+   全 `Float` 的无量纲树在 IR 降级时用 IEEE 运算折叠为常数（JIT 可见）。静态
+   类型按 §3.4.1/§3.10.2：`1.0 + 2 : Float`。小数字面量遇到精确操作数时按精确
+   十进制读取（`1/3 + 0.1 = 13/30`）。曾考虑 Go 式"精确折叠再舍入一次"，因为
+   它让 `0.1 + 0.2` 与 `let a = 0.1 in a + 0.2` 结果不同（破坏纯语言的等式推理）
+   而放弃。同一不可满足的数值约束系统只报一次 `E0302`。
+2. **单位制（新 §5.11）。** 自然、Planck、原子、几何化单位由 kernel 定义
+   （`manifest.unit_systems`），宿主做约化算术。关键决定：单位制**约化量纲的
+   来源**（标注、单位字面量、`check<d>`），从不重新解释值——自然单位里的
+   `1 m` 就是 SI 量 `1/(ħc)`，类型 `Energy^-1` 在 SI 里同样正确，所以值跨模块
+   流动不需要商群统一。语法 `module M with units natural`；`to_system`/
+   `from_system<D>` 显式换算；无理尺度单位报 `E0511`，未知单位制 `E0512`；
+   `Units.Natural`/`Planck`/`Atomic`/`Geometrized` 从 manifest 生成，`c`、`hbar`
+   等由约化本身得到精确的 `1`。`approx` 不再把 `pi`/`e` 当自由符号；`pi` 的两种
+   表示在乘积里合并。
+3. **并行求值（§9.7.2）。** 无共享副本 + 可移植值；IR 闭包按模块身份和偏移跨
+   线程；不能跨线程或工作线程失败时回退为顺序求值，所以并行从不改变值或错误；
+   `par_reduce` 的块边界只取决于长度。`par_map` 不再是"顺序执行"的记录偏差，
+   `--jobs` 不再是"无效果"的选项。
+4. **并发任务（新 §9.7.3）。** `spawn`/`await`/`Task a`，任务输出在 await 时
+   按 await 顺序写出（确定性输出）。补上缺失的 `pure : a -> IO a`；`do` 块最后
+   一条语句的结果不再触发 `W0202`。新诊断 `E0811`。
+5. **源码插件（§13.5.2）。** `@op`/`@rule` 用追踪发布为 kernel 定义/重写（而非
+   不可跨线程、kernel 无法分析的宿主回调）；`load_plugin(path)` 运行期加载；
+   `core.plugin.source` 启用。kernel 侧：定义头允许 `/` 分隔的命名空间，
+   `Session::register_shared(&self)`；按名调用能找到会话里新注册的算子。
+6. **增量检查（§9.11）。** `CheckCache` + `driver::load_incremental` + `aevia
+   watch`：输入指纹（源码、`FileId`、导入的已检查接口、绑定、身份、选项）不变
+   的模块复用；接口不变的编辑不重查导入者。能力集改用有序集合，使指纹确定。
+   跨进程：`aevia check` 的整程序缓存（`.aevia/cache/`）按观察到的全部输入与编译
+   器身份重放结果（`--no-cache` 跳过）。
+7. **Fresnel 积分（§8.2.2）。** kernel 新算子 `fresnels`/`fresnelc`：实/复数
+   数值（复 `erf` 经 Faddeeva 函数）、对称性与无穷远极限、导数、二次相位与矩的
+   原函数、`∫₀^∞ sin(x²)` 等定积分、Taylor 级数、erf 形式、编译 lowering、
+   Meijer-G 约化；Aevia 名 `fresnel_s`/`fresnel_c`。局部符号微分遇到命名的特殊
+   函数时交给 kernel（以前对 `erf` 等直接报 `E1001`）。
+
+仍未完成（如实记录）：按模块的磁盘 `.aevi` 接口缓存；复数 Fresnel 的验证区间包络；
+副本构建的一次性开销使小规模 `par_map` 无加速。

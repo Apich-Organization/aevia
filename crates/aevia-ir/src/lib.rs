@@ -204,6 +204,11 @@ pub enum Rhs {
     /// A source numeric literal whose representation is chosen by its generic
     /// activation. The containing statement retains the literal's source span.
     NumericLiteral(NumberLit),
+    /// A constant region (§3.10.4): a closed literal arithmetic tree the
+    /// interpreter evaluates exactly and rounds once into its static
+    /// representation. Dimensionless `Float` regions are folded during
+    /// lowering instead and never appear here.
+    ConstantRegion(Rc<aevia_syntax::ast::Expr>),
     /// A first-class method reference, retaining the resolved class identity.
     ClassMethodRef {
         /// Full nominal identity of the defining class.

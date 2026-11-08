@@ -23,6 +23,8 @@ num-rational.workspace = true
 num-traits.workspace = true
 indexmap.workspace = true
 unicode-segmentation.workspace = true
+# Worker pool for parallel evaluation (§9.7); already in the build through faer.
+rayon = "1"
 
 [[bench]]
 name = "interp"

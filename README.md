@@ -138,12 +138,31 @@ the strong order plus Itô/commutative/adaptive/Lévy-area flags for the kernel'
 8 schemes but has no weak-order column — `sde_order` in Aevia supplies
 `{strong, weak}`. `Sde`/the Prelude provide the typed solver surface
 (`sdeint_diag`, `sdeint_general`, `wiener`, `sde_order`, `sde_ensemble_seed`);
-the solver loops stay host-side because they need Aevia closures. Two
-host-bridge capabilities
-are declared but off in this build — `core.callback` (an Aevia closure cannot
-cross as a kernel `HostCallback`) and `core.plugin.source` (source-level `@op`
-packaging) — so programs that need them get `E1001` naming the capability, not
-a type error.
+the solver loops stay host-side because they need Aevia closures.
+
+The alpha round (spec appendix C, Revision 15) added:
+
+* **Unit systems** (§5.11): `module Hep with units natural` (also `planck`,
+  `atomic`, `geometrized`) reduces the dimensions written in the module — a
+  length is an inverse energy — while every value stays an honest SI quantity,
+  so values cross module boundaries without reinterpretation. `to_system` /
+  `from_system<D>` convert explicitly; `Units.Natural` and friends are generated
+  from the kernel manifest, with `c = hbar = 1` produced by the reduction itself.
+* **Literal folding without the old deviation** (§3.10.4): a literal is rounded
+  once, closed literal trees are compile-time constants evaluated in their
+  static representation, and `1.0 + 2` is the spec's `Float`.
+* **Parallel evaluation and tasks** (§9.7): `par_map`, `par_tabulate` and
+  `par_reduce` run on shared-nothing interpreter replicas (`--jobs N`) and
+  never change a value; `spawn`/`await` run IO concurrently with deterministic
+  output. `AEVIA_PARALLEL_TRACE=1` explains every sequential fallback.
+* **Source plugins** (§13.5.2): `@op`/`@rule` functions are traced into kernel
+  definitions and rewrites (so the kernel can differentiate and evaluate them);
+  `load_plugin(path)` loads a plugin file at run time.
+* **Incremental checking** (§9.11): `aevia watch file.aev` re-checks only the
+  modules whose source or imported interfaces changed.
+* **Fresnel integrals** (§8.2.2): `fresnel_s`/`fresnel_c`, numerically and
+  through the kernel's calculus (derivatives, antiderivatives of quadratic
+  phases, definite integrals, Meijer-G).
 
 ## License
 

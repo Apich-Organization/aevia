@@ -178,7 +178,9 @@ mod tests {
         assert!(sde.contains("| GeneralNoncommutative(Int)"));
         assert!(sde.contains("type SdeOpts<T>"));
         assert!(!sde.contains("type SdePath"));
-        assert_eq!(generated.len() + 1, TREE.len());
+        // `Units.Constants` and the four unit-system modules come from the
+        // kernel manifest, not from chapter 8.
+        assert_eq!(generated.len() + 5, TREE.len());
     }
 
     #[test]

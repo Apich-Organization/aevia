@@ -181,17 +181,17 @@ fn hover_on_a_let_binder_and_its_use_agree() {
 
 #[test]
 fn hover_on_an_expression_reports_its_type() {
-    // `1.0 + 2` is `Real`: `Float ⊗ Exact → Real` (§6.3.2). The cursor is on
+    // `1.0 + 2` is `Float`: `join(Int, Float) = Float` (§3.4.1). The cursor is on
     // the operator, which is inside no name, so the answer can only come from
     // the expression table.
     let source = "let x = 1.0 + 2\n";
     with(source, |analysis| {
         let on_operator = analysis.hover(offset_of(source, "+", 1)).expect("hover");
-        assert_eq!(on_operator.contents, "```aevia\nReal\n```");
+        assert_eq!(on_operator.contents, "```aevia\nFloat\n```");
         assert_eq!(on_operator.range, Some(analysis.document().range_of(8, 15)));
         // The literal on the left is the same type, and its own span.
         let on_literal = analysis.hover(offset_of(source, "1.0", 1)).expect("hover");
-        assert_eq!(on_literal.contents, "```aevia\nReal\n```");
+        assert_eq!(on_literal.contents, "```aevia\nFloat\n```");
         assert_eq!(on_literal.range, Some(analysis.document().range_of(8, 11)));
     });
 }

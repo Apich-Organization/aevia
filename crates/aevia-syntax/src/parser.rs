@@ -376,10 +376,28 @@ impl<'a> Parser<'a> {
     fn module(&mut self) -> Module {
         let file = self.file;
         let mut name = None;
+        let mut unit_system = None;
         self.skip_newlines();
         if self.at_kw(Keyword::Module) {
             self.bump();
             name = Some(self.module_path());
+            // §5.11: `module M with units natural` selects the unit system the
+            // module's dimensions and unit literals are written in.
+            if self.at_kw(Keyword::With) {
+                self.bump();
+                if self.ident_is("units") {
+                    self.bump();
+                    let span = self.span();
+                    if let TokenKind::Ident(system) = self.kind().clone() {
+                        self.bump();
+                        unit_system = Some((system, span));
+                    } else {
+                        self.unexpected("a unit system name such as `natural`");
+                    }
+                } else {
+                    self.unexpected("`units` (as in `module M with units natural`)");
+                }
+            }
             self.expect_newline();
             self.skip_newlines();
         }
@@ -401,7 +419,12 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
         }
-        Module { name, decls, file }
+        Module {
+            name,
+            unit_system,
+            decls,
+            file,
+        }
     }
 
     fn module_path(&mut self) -> Vec<String> {

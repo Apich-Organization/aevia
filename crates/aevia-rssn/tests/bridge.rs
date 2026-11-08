@@ -605,23 +605,36 @@ fn a_sparse_entry_outside_the_shape_is_an_error() {
     assert_eq!(error.kind, Failure::Kernel);
 }
 
-/// The zeros a densified sparse matrix is filled with carry the element type:
-/// a `Float` matrix must not come back with `Int` zeros.
+/// A sparse value crosses the bridge as it is: nothing is densified, so there
+/// are no zeros to give the wrong element type, and the stored entries keep
+/// theirs.
 #[test]
-fn a_sparse_zero_carries_the_element_type() {
+fn a_sparse_value_crosses_without_being_densified() {
     let sparse = Value::Sparse(SparseValue {
         shape: vec![2],
         format: rssn::kernel::value::SparseFormat::Csr,
         indices: vec![1],
         data: vec![Value::Float(2.5)],
     });
-    let dense = Val::from_rssn(&sparse, kernel::kernel().id()).expect("a well-formed sparse value");
-    let Val::Tensor { shape, data } = dense else {
-        panic!("a sparse value densifies into a tensor");
+    let crossed =
+        Val::from_rssn(&sparse, kernel::kernel().id()).expect("a well-formed sparse value");
+    let Val::Sparse {
+        format,
+        shape,
+        indices,
+        data,
+    } = &crossed
+    else {
+        panic!("a sparse value stays sparse");
     };
-    assert_eq!(shape, vec![2]);
-    assert_eq!(data[0], Val::Num(Num::Float(0.0)), "the zero is a float");
-    assert_eq!(data[1], Val::Num(Num::Float(2.5)));
+    assert_eq!(*format, aevia_rssn::SparseKind::Csr);
+    assert_eq!(shape, &vec![2]);
+    assert_eq!(indices, &vec![1]);
+    assert_eq!(data, &vec![Val::Num(Num::Float(2.5))]);
+    let back = crossed
+        .to_rssn(kernel::kernel().id())
+        .expect("converts back");
+    assert_eq!(back, sparse, "the round trip is the identity");
 }
 
 /// An integer too large for `f64` is not an infinite number, and the bridge
@@ -784,35 +797,23 @@ fn the_capability_table_is_the_single_source() {
     }
 }
 
-/// Scoped callbacks are available; source-level plugin construction is not.
+/// Scoped callbacks and source-level plugins (§13.5.2) are both available,
+/// as two distinct rows of the one capability table.
 #[test]
 fn callback_and_source_plugin_capabilities_are_distinct() {
     let capabilities = &registry().capabilities;
     assert!(capabilities.has("core.callback"));
-    for name in ["core.plugin.source"] {
-        let row = capabilities
-            .table()
-            .into_iter()
-            .find(|row| row.name == name)
-            .unwrap_or_else(|| panic!("`{name}` has no row in the capability table"));
-        assert!(!row.enabled, "`{name}` must be disabled in this build");
-        assert!(!capabilities.has(name), "`has` must agree with the row");
-        let error = capabilities
-            .require(name)
-            .expect_err("the capability is off");
-        assert_eq!(error.code, "E1001");
-        assert_eq!(error.kind, Failure::Capability);
-        assert!(
-            error.message.contains(name),
-            "the message must name the capability: {}",
-            error.message
-        );
-    }
-    assert!(
-        capabilities.has("core.plugin"),
-        "`core.plugin` is an enabled kernel capability; only the source-level \
-         plugin packaging is missing"
+    let row = capabilities
+        .table()
+        .into_iter()
+        .find(|row| row.name == "core.plugin.source")
+        .expect("`core.plugin.source` has a row in the capability table");
+    assert!(row.enabled, "source plugins need only in-process plugins");
+    assert_eq!(
+        capabilities.has("core.plugin.source"),
+        capabilities.has("core.plugin.in-process")
     );
+    assert!(capabilities.has("core.plugin"));
 }
 
 // ---------------------------------------------------------------------------

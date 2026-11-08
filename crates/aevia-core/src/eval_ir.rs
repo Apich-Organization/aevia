@@ -999,6 +999,16 @@ fn eval_rhs_rest(
                 },
             }
         },
+        | Rhs::ConstantRegion(expr) => {
+            let scope = env
+                .scope
+                .clone()
+                .unwrap_or_else(|| interp.module_scope(Vec::new()));
+            match interp.constant_region_rep(span) {
+                | Some(rep) => interp.eval_constant_region(expr, rep, &scope),
+                | None => interp.eval(expr, &scope),
+            }
+        },
         | Rhs::NumericLiteral(number) => {
             interp.memoized_literal(span, |interp| {
                 Ok(Value::Num(match number {
@@ -1065,7 +1075,7 @@ fn eval_rhs_rest(
         },
         | Rhs::Index { base, indices } => {
             let base = eval_atom(interp, base, frame, env, span)?;
-            if !matches!(base, Value::Tensor(_) | Value::Str(_)) {
+            if !matches!(base, Value::Tensor(_) | Value::Str(_) | Value::Sparse(_)) {
                 return Err(
                     EvalError::new("E0302", "indexing expects a tensor or a string").at(span),
                 );
@@ -1141,7 +1151,7 @@ fn eval_rhs_rest(
                     | StrPart::Text(text) => out.push_str(text),
                     | StrPart::Atom(atom) => {
                         let value = eval_atom(interp, atom, frame, env, span)?;
-                        out.push_str(&value::show(&value));
+                        out.push_str(&value::show(&interp.system_display(value)));
                     },
                 }
             }

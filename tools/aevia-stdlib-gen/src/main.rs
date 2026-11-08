@@ -65,6 +65,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from("stdlib/Units/Constants.aev"),
         support::constants_module_source(),
     );
+    for (path, system) in aevia_stdlib_model::stdlib::SYSTEM_MODULES {
+        expected.insert(
+            PathBuf::from(format!("stdlib/{path}.aev")),
+            support::system_module_source(path, system),
+        );
+    }
     expected.insert(
         PathBuf::from("src/stdlib_table.rs"),
         aevia_stdlib_model::stdlib::embedding_table_source(),

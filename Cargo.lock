@@ -44,6 +44,7 @@ dependencies = [
  "num-bigint",
  "num-rational",
  "num-traits",
+ "rayon",
  "unicode-segmentation",
 ]
 

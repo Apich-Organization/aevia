@@ -210,12 +210,11 @@ println  : Show a => a -> IO Unit
 eprintln : Show a => a -> IO Unit
 ```
 
-> **实现状态（2026-11-04）**：`par_map`/`rng` 已进入 §3.8.4 的内置类表、
-> Prelude 签名与运行时 dispatch；checker 在调用点检查 `Parallel a`
-> （`Int`/`Float` 及其张量可以并行，符号 `Real` 被静态拒绝，§3.8.4）。
-> `rng` 是纯函数，返回“下一个数”闭包。`par_map` 的结果顺序与输入一致；
-> 当前解释器是 `!Send`，这一构建里 map 实际按顺序执行——这是
-> §9.7.2 rayon 措辞的实现偏差，不是结果语义的偏差（顺序/确定性不变）。
+> **实现状态（2026-11-08）**：`par_map`/`par_tabulate`/`par_reduce`/`rng`
+> 已进入 §3.8.4 的内置类表、Prelude 签名与运行时 dispatch；checker 在调用点
+> 检查 `Parallel a`。`par_map` 在工作线程副本上真正并行（§9.7.2）：结果顺序
+> 与输入一致，`par_reduce` 的块边界只取决于长度，线程数不改变任何结果；值
+> 不能跨线程时回退为顺序求值。`spawn`/`await`/`pure` 见 §9.7.3。
 
 ### 8.1.8 程序参数
 
@@ -276,6 +275,7 @@ gamma        : Scalar<ρ,1> -> Scalar<ρ,1>
 lgamma       : Scalar<ρ,1> -> Scalar<ρ,1>
 beta         : (Scalar<ρ,1>, Scalar<ρ,1>) -> Scalar<ρ,1>
 erf erfc     : Scalar<ρ,1> -> Scalar<ρ,1>
+fresnel_s fresnel_c : Scalar<ρ,1> -> Scalar<ρ,1>   # S(x)=∫₀ˣ sin(πt²/2)dt，C 同理（DLMF 7.2.7）
 zeta         : Scalar<ρ,1> -> Scalar<ρ,1>
 bessel_j0 j1 : Scalar<ρ,1> -> Scalar<ρ,1>
 bessel_jn    : (Int, Scalar<ρ,1>) -> Scalar<ρ,1>
@@ -381,28 +381,118 @@ type LinAlgError = | Singular | NotConverged | NotPositiveDefinite | ShapeMismat
 type Sparse<F, shape, τ>
 
 from_dense<F> : Tensor<shape, τ> -> Sparse<F, shape, τ>
-to_dense   : Sparse<F, shape, τ> -> Tensor<shape, τ>
-nnz        : Sparse<F, shape, τ> -> Int
-transpose  : Sparse<F, [m,n], τ> -> Sparse<F, [n,m], τ>
-matmul     : Sparse<F, [m,k], Scalar<ρ,d>> × Sparse<G, [k,n], Scalar<ρ,e>>
-           -> Sparse<Csr, [m,n], Scalar<ρ,d*e>>
+to_dense      : Sparse<F, shape, τ> -> Tensor<shape, τ>
+convert<G>    : Sparse<F, shape, τ> -> Sparse<G, shape, τ>
+nnz           : Sparse<F, shape, τ> -> Int
+density       : Sparse<F, shape, τ> -> Float
+format_of     : Sparse<F, shape, τ> -> String
+sparse_coo    : (Tensor<1, Int>, Tensor<2, Int>, Tensor<1, Scalar<ρ,d>>)
+              -> Sparse<Coo, shape, Scalar<ρ,d>>
+sparse_csr    : (Int, Int, Tensor<1, Int>, Tensor<1, Int>, Tensor<1, Scalar<ρ,d>>)
+              -> Sparse<Csr, [m,n], Scalar<ρ,d>>
+speye<F>      : Int -> Sparse<F, [n,n], Float>
+spdiag<F>     : Tensor<1, Scalar<ρ,d>> -> Sparse<F, [n,n], Scalar<ρ,d>>
+transpose     : Sparse<F, [m,n], τ> -> Sparse<F, [n,m], τ>
+matmul        : (Sparse<F, [m,k], Scalar<ρ,d>>, Sparse<G, [k,n], Scalar<ρ,e>>)
+              -> Sparse<Csr, [m,n], Scalar<ρ,d*e>>
+kron          : (Sparse<F, [m,n], Scalar<ρ,d>>, Sparse<G, [p,q], Scalar<ρ,e>>)
+              -> Sparse<Csr, [m*p,n*q], Scalar<ρ,d*e>>
+spsolve       : (Sparse<F, [n,n], Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
+              -> Tensor<1, Scalar<div_rep(ρ),e/d>>
+cg            : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, Float, Int)
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool }
+contract      : (Sparse<F, shape, τ>, Sparse<G, shape, τ>, [Int], [Int]) -> Sparse<Coo, shape, τ>
+map_nonzero   : ((Scalar<ρ,d>) -> Scalar<σ,e>, Sparse<F, shape, Scalar<ρ,d>>)
+              -> Sparse<F, shape, Scalar<σ,e>>
+nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Scalar<ρ,d>)>
 ```
 
-`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。`Sparse` 是核心类型构造器，`F` 是 `Format` kind；`from_dense`/`to_dense`/`nnz` 是内建函数（实现为一个 CSR 记录往返，`stdlib` 测试覆盖），不是可实例化的 `Layout` 类型类。**v1 的稀疏值就是 `from_dense` 返回的 CSR 记录**（`rows`/`cols`/`values`/`col_indices`/`row_ptr`），不是运行时存储类：checker 的 `Sparse`/`TyKind::Sparse` 是类型层镜像，并**擦除为对应的 dense `Tensor`**（所以 `transpose` 只有 dense `Tensor<2>` 的 typing，没有 `Sparse` 重载）；`aevia-core` 的 `Storage` 没有 sparse 变体，kernel 的稀疏值过桥时被 densify。存储类级别的通用稀疏算法（含 `transpose`/`matmul`/`@` 布局分派）以命名 capability gap `storage.sparse` 记录（§13.9.5），是**运行时缺口**而不是类型层承诺。`@` 在 dense/sparse
-混合时按布局分派；不隐式互转。格式当前是封闭集合；用户自定义格式要等
-RSSN 开放 `Format`（§13.9.5）。RSSN 的 `TypeExpr::Sparse` 只有 rank，所以
-`shape` 细化在 Aevia 侧检查，边界降为 rank + 运行时 shape。RSSN 的
-`term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds`
-里 `in_term_graph = false`），所以稀疏运算必须走 `eval_dyn` 内核或 Aevia
-自己的布局内核；不能把稀疏值直接喂给通用重写算子。稀疏存储由 kernel 的
-`faer`（`sparse-linalg`）后端承担；宿主不接触具体格式的存储布局。
+另有三个对 `Sparse` 重载的既有名字：`sum(A)`、`sum(A, axis)`（与稠密版同样
+保留被归约的轴，结果是稠密张量）和 `get(A, i, j, …)`（也可写 `A[i, j, …]`，
+返回存储的元素，未存储位置返回**隐式零**）。
 
-> **实现状态（2026-11-05）**：`from_dense`/`to_dense`/`nnz` 已实现并通过
-> CSR 记录往返测试；**没有运行时 `Sparse` 值类型**（记录约定，不是存储类）。
-> `transpose`/`matmul` 的稀疏版本和 `@` 的 dense/sparse 布局分派**尚未
-> 实现**——属 `storage.sparse` 命名 capability gap（§13.9.5），不是静默
-> 遗漏；当前只对 dense 张量分派，稠密矩阵仍可走 `faer`。用户自定义
-> `Format` 也不可用。
+`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。
+`Sparse` 是核心类型构造器，`F` 是 `Format` kind；它**不**擦除为 `Tensor`：
+`Sparse<F, shape, τ>` 与 `Tensor<shape, τ>` 之间没有隐式转换，格式是类型的一
+部分（`Sparse<Csr, …>` 不能当作 `Sparse<Coo, …>` 传递，要用 `convert<G>`）。
+`from_dense<F>`/`speye<F>`/`spdiag<F>` 的 `F` 缺省为 `Csr`；`convert<G>` 必须
+写出目标格式。`Csr`/`Csc` 是二维（矩阵）格式，`Coo` 是任意秩的**稀疏张量**。
+`Block`/`Bcsr` 在类型里被接受，但运行时无法构造：任何试图构造它们的调用报
+`E1001`（capability `storage.sparse.block`）。
+
+**运行时表示。** `Value::Sparse` 是一等运行时值，不是记录约定。它保存形状、
+元素量纲、格式，以及按字典序排列、无重复的已存储项（CSR/CSC 用压缩指针，COO 用
+平铺坐标）；**已存储项永不等于隐式零**（构造与每个运算都丢弃零项，
+`SparseData::validate` 在 debug 构建里检查这些不变量）。元素存储与稠密张量
+同一规则：当且仅当每个已存储元素都是 `Float`（隐式零也是 `0.0`）时是 `f64`
+缓冲，否则是装箱的 `Int`/`Real`/`Complex`/符号标量，所有运算都经过语言自己的
+标量算术——精确值**永不**舍入为 `f64`。隐式零是元素表示与量纲的零：`Int` 为 `0`、
+`Real` 为精确的 `0`、`Float` 为 `0.0`、`Complex` 为 `0+0i`。
+
+**构造与校验。** `sparse_coo(shape, indices, values)` 的 `indices` 可以是
+`[nnz, rank]` 的 `Int` 矩阵、`Int` 元组列表（`[(0, 0), (1, 1)]`），秩为 1 时也
+可以是 `Int` 列表；`values` 与 `indices` 等长。越界、负下标、长度不符是 `E0802`。
+**重复坐标按求和合并**（有限元装配的语义），合并后等于零的项被丢弃。
+`sparse_csr(rows, cols, row_ptr, col_indices, values)` 要求 `row_ptr` 长
+`rows+1`、以 `0` 开始、单调、以 `nnz` 结束，且每行的列下标严格递增且小于
+`cols`，否则 `E0802`。`from_dense` 丢弃为零的元素，`to_dense` 填回隐式零；
+稠密结果的元素个数超过实现上限（10^8）报 `E0802`，所以任何意外的稠密化都会被
+拒绝而不是耗尽内存。
+
+**算术与布局分派**（元素量纲的规则与稠密张量完全一致：和要求量纲相等 `E0401`，
+积相乘，`spsolve` 相除）：
+
+| 运算 | 结果 |
+|---|---|
+| `sparse ± sparse` | `Sparse`，格式取左操作数 |
+| `sparse ± dense`、`dense ± sparse` | 稠密 `Tensor`（混合布局的结果落在能容纳它的布局） |
+| `sparse * s`、`s * sparse`、`sparse / s`（`s` 为标量或单位，含带量纲标量） | `Sparse` |
+| `sparse * sparse`、`sparse * dense`、`dense * sparse`（Hadamard 积） | `Sparse`；只遍历已存储项，稠密一侧在未存储位置的值被忽略 |
+| `sparse @ dense`（向量或矩阵）、`dense @ sparse` | 稠密 `Tensor` |
+| `sparse @ sparse`、`matmul`、`kron` | `Sparse<Csr, …>` |
+| `-A`、`transpose(A)` | `Sparse`，格式不变 |
+
+`sparse / sparse`、标量除以稀疏、`sparse + 标量` 没有定义（会稠密化或产生无穷
+零），报 `E0302`；需要时先 `to_dense`。`==`/`!=` 比较两个稀疏值的**逻辑内容**
+（形状相同且已存储项相同，数值按与稠密张量相同的规则比较，所以 `1` 等于 `1.0`），
+**与格式无关**：同一矩阵的 `Csr` 与 `Coo` 相等。`show` 写成
+`sparse(Csr, [3, 3], { (0, 0) = 4.0, … })`；`repr` 是能重建同一个值的表达式
+`convert<Csr>(sparse_coo([3, 3], [(0, 0), …], [4.0, …]))`。
+
+**求解。** `spsolve(A, b)` 对 `Float` 元素调用 `faer` 的稀疏 LU（COLAMD 排序，
+`aevia_std::sparse`），不稠密化——10^5 阶三对角系统是毫秒级；对精确元素
+（`Int`/`Real`/`Complex`/混合）用稀疏高斯消元，结果保持精确（`Int` 系统得到
+精确有理数）。奇异矩阵是 `E0806`。结果量纲是 `e/d`。`cg(A, b, tol, maxiter)`
+是无预条件共轭梯度（要求对称正定的 `Float` 矩阵），返回
+`{ x, iterations, residual, converged }`；未达到容差不是错误而是
+`converged = false`。
+
+**秩 N 与收缩。** `contract(A, B, axes_a, axes_b)` 是成对张量收缩
+（`tensordot`）：`axes_a`/`axes_b` 是**列表字面量**（结果的秩由它们的长度静态
+决定），结果的轴是 `A` 的自由轴再接 `B` 的自由轴。两个稀疏操作数得到
+`Sparse<Coo, …>`；一个稀疏、一个稠密得到稠密 `Tensor`；全部轴都收缩得到标量；
+两个都是稠密是类型错误。`map_nonzero(f, A)` 只对**已存储项**调用 `f`，因此要求
+`f(0) = 0`（对未存储位置不调用，返回零的项被丢弃）；`nonzeros(A)` 返回
+`(下标, 值)` 元组的列表。
+
+**与内核的边界。** RSSN 的 `TypeExpr::Sparse` 只有 `rank`，所以 Aevia 的
+`Sparse<F, shape, τ>` 在边界降为 rank + 运行时格式；`aevia-rssn` 的
+`Val::Sparse` 与 RSSN 的 `Value::Sparse`（平铺行主序升序索引 + 值）一一对应，
+**不再稠密化**。RSSN 的 `term_of_value` 仍不接受 `Value::Sparse` 进入项图
+（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用
+重写算子；稀疏运算由 Aevia 自己的布局内核承担，`faer`（`sparse-linalg`）负责
+稀疏 LU。用户自定义格式要等 RSSN 开放 `Format`（§13.9.5）。
+
+> **实现状态（2026-11-07）**：以上全部已实现并有测试覆盖
+> （`crates/aevia-core/tests/sparse.rs`）：`Value::Sparse` 运行时值（`Csr`/
+> `Csc`/`Coo`，`f64` 与精确两类存储）、checker 中独立的 `Sparse<F, shape, τ>`
+> 类型（不再擦除为 `Tensor`）、`@` 的四种布局分派（AST 与 IR 求值器）、
+> 稀疏 LU/高斯消元/CG、秩 N 收缩与到内核的无稠密化过桥。能力
+> `storage.sparse` 因此**已启用**。**剩余缺口**：`Block`/`Bcsr` 只在类型里
+> 存在（`E1001`）；类型里的 `shape` 只检查秩（细化的 `[m,n]` 在稀疏函数的
+> 签名里不做 Nat 求解，与目前的 `matmul` 一致）；`cg` 没有预条件子，
+> `spsolve` 不使用对称性（不走 Cholesky）；不支持对稀疏值切片（只支持逐轴单个
+> 下标）；稀疏值不能进入 RSSN 的项图。
 
 ## 8.5 Calculus
 
@@ -1201,12 +1291,12 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
   各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
   调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及
   回调错误均返回错误。空回调列表等价于动态调用。
-- `Rssn.register`/`Rssn.register_plugin` 的类型正确，但 Aevia 源码无法构造
-  `Plugin` 值：源码级 `@op` 打包（§13.5.2）未实现，因此运行时报
-  `E1001("core.plugin.source")`。Rust host 插件仍可经嵌入 API
-  （`Session::register`）注册。
-- `core.callback` 标记上述受限的回调桥可用；`core.plugin.source` 仍为
-  `enabled = false`。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；
+- `Rssn.register`/`Rssn.register_plugin` 接受 host `Plugin`；Aevia 源码不持有
+  这种值（运行期 `E0302`，附注指向源码机制）。源码插件经声明发布（§13.5.2）：
+  `@op`/`@rule` 函数在模块加载时注册，`load_plugin(path) : String -> IO
+  (Result<Int, String>)` 在运行期加载一个插件文件。
+- `core.callback` 标记上述受限的回调桥可用；`core.plugin.source` 现为
+  `enabled = true`。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；
   对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed 别名。
   别名在调用时认证回调的具体签名，并按实例化结果类型验证返回值；无法证明
   类型或维度的签名仍只提供动态入口。

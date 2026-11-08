@@ -134,6 +134,7 @@ fn documented_codes() -> Vec<&'static str> {
     // B.7 units.
     push!(
         "E0501", "E0502", "E0503", "E0504", "E0505", "E0506", "E0507", "E0508", "E0509", "E0510",
+        "E0511", "E0512",
     );
     // B.8 modules.
     push!(
@@ -318,6 +319,9 @@ fn table() -> Vec<(&'static str, Cover)> {
             "E0510",
             Front("let t: Float[Θ] = 10 K\nlet c = value_in(°C, t)\n"),
         ),
+        // §5.11.4: a charge has no exact scale in Heaviside-Lorentz units.
+        ("E0511", Front("module M with units natural\nlet q = 1 C\n")),
+        ("E0512", Front("module M with units imperial\nlet x = 1\n")),
         // ----- B.8 modules -------------------------------------------------
         (
             "E0601",
@@ -474,7 +478,10 @@ fn table() -> Vec<(&'static str, Cover)> {
             ),
         ),
         ("W0301", Front("let x = symbol(\"x\")\n")),
-        ("W0302", Front("let x = 1 m + 1.0 m\n")),
+        (
+            "W0302",
+            Front("let r: Real[L] = 1 m\nlet a: Float[L] = 1.0 m\nlet x = r + a\n"),
+        ),
         ("W0303", Front("let x = symbol(\"x\")\n")),
         (
             "W0501",

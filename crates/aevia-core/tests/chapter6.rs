@@ -337,13 +337,20 @@ fn the_exactness_matrix_keeps_its_phases() {
     let integers = num("let x = 1 + 2\n", "x");
     assert!(matches!(integers.kind, NumKind::Int(_)), "1 + 2 is an Int");
 
+    // §3.4.1/§3.10.2: an unannotated `1.0 + 2` is `join(Int, Float)`, a
+    // `Float`; a `Real` context reads the same literals exactly.
     let mixed = num("let x = 1.0 + 2\n", "x");
     assert!(
-        matches!(&mixed.kind, NumKind::Exact(_)),
-        "Float ⊗ Exact is Real, found {}",
+        matches!(&mixed.kind, NumKind::Float(value) if *value == 3.0),
+        "Int ⊗ Float is Float, found {}",
         aevia_core::value::repr(&Value::Num(mixed.clone()))
     );
-    assert_eq!(aevia_core::value::repr(&Value::Num(mixed)), "3");
+    let exact = num("let x: Real = 1.0 + 2\n", "x");
+    assert!(matches!(&exact.kind, NumKind::Exact(_)));
+    assert_eq!(aevia_core::value::repr(&Value::Num(exact)), "3");
+    // A decimal literal that meets an exact operand is read exactly.
+    let tenth = num("let x = 1 / 3 + 0.1\n", "x");
+    assert_eq!(aevia_core::value::repr(&Value::Num(tenth)), "13/30");
 
     let fractions = num("let x = 1 / 3 + 0.5\n", "x");
     assert!(matches!(&fractions.kind, NumKind::Exact(_)));

@@ -574,15 +574,6 @@ const MANUAL_FINDINGS: &[(&str, &str, &str, &str)] = &[
         "frontend (aevia-types builtins/check)",
     ),
     (
-        "8.4",
-        "transpose",
-        "the sparse overload of §8.4 (`Sparse<F,[m,n],τ> -> Sparse<F,[n,m],τ>`) \
-         has no scheme and no runtime arm; there is no `Sparse` value \
-         representation in aevia-core this round, so this is a documented \
-         capability gap (`storage.sparse`), not a silent omission",
-        "runtime (`storage.sparse`, out of this round's scope) + frontend scheme",
-    ),
-    (
         "8.14",
         "+",
         "§8.14 declares `Measurement` arithmetic (`+`, `-`, `*`); at audit time \

@@ -959,6 +959,8 @@ pub struct Constructor {
 pub struct Module {
     /// The declared module name, if any.
     pub name: Option<Vec<String>>,
+    /// The module's unit system (§5.11), from `module M with units natural`.
+    pub unit_system: Option<(String, crate::span::Span)>,
     /// The declarations, in source order.
     pub decls: Vec<Decl>,
     /// The file the module came from.

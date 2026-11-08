@@ -661,8 +661,16 @@ pub fn instantiate_dimensions(
             | (S::Int | S::Real | S::Float | S::Complex, Type::Scalar(_, got)) => {
                 infer.unify_dim(&Dim::one(), got)
             },
-            | (S::Tensor { elem, .. } | S::Sparse { elem, .. }, Type::Tensor { elem: got, .. }) => {
+            | (S::Tensor { elem, .. }, Type::Tensor { elem: got, .. }) => {
                 constrain(elem, got, infer, dims)
+            },
+            | (S::Sparse { elem, .. }, Type::Adt(..)) => {
+                match crate::builtins::sparse_parts(&actual) {
+                    | Some((_, Type::Tensor { elem: got, .. })) => {
+                        constrain(elem, got, infer, dims)
+                    },
+                    | _ => Ok(()),
+                }
             },
             | (S::Record(fields), Type::Record(row)) => {
                 for (name, field) in fields {
@@ -769,10 +777,11 @@ fn sig_type_to_type(
             rank: Some(rank),
             elem,
         } => {
-            Type::tensor(
+            let dense = Type::tensor(
                 Shape::Rank(u32::try_from(*rank).unwrap_or(1)),
                 sig_type_to_type(elem, infer, dims)?,
-            )
+            );
+            crate::builtins::sparse_type(infer.fresh_type(), dense)
         },
         | S::Record(fields) => {
             let mut converted = Vec::with_capacity(fields.len());

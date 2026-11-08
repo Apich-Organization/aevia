@@ -1,8 +1,70 @@
-## The `Units/Natural` module of §8.20.
+## The constants in natural units: c = hbar = k_B = epsilon_0 = 1.
 ##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
-module Units.Natural
+## particle-physics natural units: c = hbar = k_B = epsilon_0 = 1 (Heaviside-Lorentz); every mechanical, thermal and electromagnetic dimension is a power of energy.
+##
+## Generated from the rssn Kernel Manifest (`manifest.unit_systems` and
+## `manifest.constants`, §5.11.7). Do not edit; regenerate with
+## `cargo run -p aevia-stdlib-gen -- --write`.
+## rssn 3.0.0-rc.1, api 2
+module Units.Natural with units natural
 
-## A natural-unit system requires a kernel registry and is not provided yet.
-## This module declares no bindings.
+## Faraday constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+let f: Float[1/Amount] = 1.823637436512817e23 mol^-1
+## Newtonian constant of gravitation (CODATA 2022, measured)
+let g: Real[Length^3/(Mass*Time^2)] = 0.000000000066743 m^3*kg^-1*s^-2
+## conductance quantum (SI 2019 definition, exact)
+let g_0: Real[Current^2*Time^3/(Length^2*Mass)] = 0.00007748091729 A^2*m^-2*kg^-1*s^3
+## Josephson constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+let k_J: Float = 9.639127479592409e-2
+## luminous efficacy (SI 2019 definition, exact)
+let k_cd: Real[Luminosity*Time^3/(Length^2*Mass)] = 683 m^-2*cd*kg^-1*s^3
+## molar mass constant (SI 2019 definition, exact)
+let m_u: Real[Mass/Amount] = 0.001 mol^-1*kg
+## Avogadro constant (SI 2019 definition, exact)
+let n_A: Real[1/Amount] = 602214076000000000000000 mol^-1
+## magnetic flux quantum (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+let phi_0: Float = 1.0374382970800772e1
+## molar gas constant (SI 2019 definition, exact)
+let r: Real[Length^2*Mass/(Amount*Temperature*Time^2)] = 8.31446261815324 mol^-1*m^2*kg*K^-1*s^-2
+## von Klitzing constant (SI 2019 definition, exact)
+let r_K: Real[Length^2*Mass/(Current^2*Time^3)] = 25812.8074593045 A^-2*m^2*kg*s^-3
+## Rydberg constant (CODATA 2022, measured)
+let r_inf: Real[1/Length] = 10973731.568157 m^-1
+## triple point of water (CGPM 1954, exact)
+let t_tp: Real[Temperature] = 273.16 K
+## Bohr radius (CODATA 2022, measured)
+let a_0: Real[Length] = 0.0000000000529177210544 m
+## fine-structure constant (CODATA 2022, measured)
+let alpha: Real = 0.0072973525643
+## standard atmosphere (CGPM 1954, exact)
+let atm: Real[Mass/(Length*Time^2)] = 101325 m^-1*kg*s^-2
+## speed of light in vacuum (SI 2019 definition, exact)
+let c: Real[Length/Time] = 299792458 m*s^-1
+## caesium hyperfine frequency (SI 2019 definition, exact)
+let dnu_Cs: Real[1/Time] = 9192631770 s^-1
+## elementary charge (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
+let e: Float = 3.0282212076902987e-1
+## vacuum electric permittivity (CODATA 2022, measured)
+let epsilon_0: Real[Current^2*Time^4/(Length^3*Mass)] = 0.0000000000088541878188 A^2*m^-3*kg^-1*s^4
+## standard acceleration of gravity (CGPM 1901, exact)
+let g_n: Real[Length/Time^2] = 9.80665 m*s^-2
+## Planck constant (SI 2019 definition, exact)
+let h: Real[Length^2*Mass/Time] = 0.000000000000000000000000000000000662607015 m^2*kg*s^-1
+## reduced Planck constant (SI 2019 definition, exact)
+let hbar: Real[Length^2*Mass/Time] = (0.0000000000000000000000000000000003313035075 m^2*kg*s^-1) / pi
+## Boltzmann constant (SI 2019 definition, exact)
+let k_B: Real[Length^2*Mass/(Temperature*Time^2)] = 0.00000000000000000000001380649 m^2*kg*K^-1*s^-2
+## electron mass (CODATA 2022, measured)
+let m_e: Real[Mass] = 0.00000000000000000000000000000091093837139 kg
+## neutron mass (CODATA 2022, measured)
+let m_n: Real[Mass] = 0.00000000000000000000000000167492750056 kg
+## proton mass (CODATA 2022, measured)
+let m_p: Real[Mass] = 0.00000000000000000000000000167262192595 kg
+## atomic mass constant (CODATA 2022, measured)
+let m_u_2: Real[Mass] = 0.00000000000000000000000000166053906892 kg
+## vacuum magnetic permeability (CODATA 2022, measured)
+let mu_0: Real[Length*Mass/(Current^2*Time^2)] = 0.00000125663706127 A^-2*m*kg*s^-2
+## Bohr magneton (CODATA 2022, measured); an irrational power of the unity constants, so a Float
+let mu_B: Float[Time^2/(Length^2*Mass)] = 1.84938443822728e12 m^-2*kg^-1*s^2
+## Stefan-Boltzmann constant (CODATA 2022, measured)
+let sigma_SB: Real[Mass/(Temperature^4*Time^3)] = 0.00000005670374419 kg*K^-4*s^-3

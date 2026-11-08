@@ -159,15 +159,15 @@ fn main(): IO Unit = do
 
 #[test]
 fn a_float_mixed_with_an_exact_value_is_real() {
-    // §6.3.2: `Float ⊗ Exact -> Real`. `1.0 + 2` used to be `Float 3`, which
-    // made the exactness guarantee untestable.
+    // §6.3.2: `Float ⊗ Exact -> Real`; `1.0 + 2` alone is `Int ⊗ Float`, a
+    // `Float` (§3.4.1), and is exact only where `Real` is expected.
     let sum = num("let a = 1.0 + 2\n", "a");
     assert!(
-        matches!(sum.kind, NumKind::Exact(_)),
-        "expected an exact value, found {}",
+        matches!(sum.kind, NumKind::Float(_)),
+        "expected a float, found {}",
         sum.kind.type_name()
     );
-    assert_eq!(repr("let a = 1.0 + 2\n", "a"), "3");
+    assert_eq!(repr("let a: Real = 1.0 + 2\n", "a"), "3");
 
     let third = num("let a = 1/3 + 0.5\n", "a");
     assert!(
@@ -333,7 +333,8 @@ fn strings_interpolate_values() {
     let x = 2.0 m
     println("x = {x}, twice = {2 * x}")
 "#);
-    assert_eq!(output, "x = 2 m, twice = 4 m\n");
+    // §3.10.1: `2.0 m` is a `Float[L]` and shows as one.
+    assert_eq!(output, "x = 2.0 m, twice = 4.0 m\n");
 }
 
 #[test]

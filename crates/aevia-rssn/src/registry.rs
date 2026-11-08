@@ -423,8 +423,16 @@ impl Capabilities {
                 "callback",
                 self.dynamic_call && self.higher_order,
             ),
-            // Source-level plugin construction is not implemented.
-            row("core.plugin.source", "plugin_source", false),
+            // Source-level plugins (§13.5.2): an `@op` function is traced to a
+            // kernel definition and an `@rule` function to a rewrite, then
+            // registered as an in-process plugin. That needs in-process
+            // plugins and the definition language, nothing a build can lack
+            // once `core.plugin.in-process` is there.
+            row(
+                "core.plugin.source",
+                "plugin_source",
+                self.plugin_kinds.iter().any(|kind| kind == "in-process"),
+            ),
             row(
                 "core.structured_results",
                 "structured_results",
@@ -611,6 +619,9 @@ pub struct Registry {
     pub units: Vec<UnitInfo>,
     /// Physical constants, sorted by symbol.
     pub constants: Vec<ConstantInfo>,
+    /// Unit systems (§5.11), sorted by name. An entry whose unity constants
+    /// are missing or whose dimensions are not a basis is dropped.
+    pub unit_systems: Vec<std::sync::Arc<aevia_dim::systems::UnitSystem>>,
     /// What the build can do.
     pub capabilities: Capabilities,
     /// The kernel version.
@@ -678,6 +689,12 @@ impl Registry {
                 .collect(),
             units: manifest.units.iter().map(convert_unit).collect(),
             constants: manifest.constants.iter().map(convert_constant).collect(),
+            unit_systems: manifest
+                .unit_systems
+                .iter()
+                .filter_map(|system| convert_unit_system(system, &manifest.constants))
+                .map(std::sync::Arc::new)
+                .collect(),
             capabilities: Capabilities {
                 dynamic_call: features.dynamic_call,
                 jit: features.jit,
@@ -1230,6 +1247,56 @@ fn convert_unit(unit: &rssn::kernel::value::UnitValue) -> UnitInfo {
         aliases: unit.aliases.clone(),
         prefixable: unit.prefixable,
         category: unit.category.clone(),
+    }
+}
+
+/// A manifest unit system, with each unity quantity's SI value and
+/// dimension taken from the manifest's constants (§5.11).
+fn convert_unit_system(
+    system: &rssn::dim::systems::UnitSystemValue,
+    constants: &[rssn::kernel::value::ConstantValue],
+) -> Option<aevia_dim::systems::UnitSystem> {
+    let mut unity = Vec::with_capacity(system.unity.len());
+    for (symbol, multiplier, label) in &system.unity {
+        let constant = constants.iter().find(|c| &c.symbol == symbol)?;
+        unity.push(aevia_dim::systems::Unity {
+            symbol: symbol.clone(),
+            label: label.clone(),
+            dim: convert_dim(&constant.dimension),
+            value: convert_scale(multiplier).mul(&convert_scale(&constant.value)),
+        });
+    }
+    let generators = system
+        .generators
+        .iter()
+        .map(|(name, dimension, display)| {
+            aevia_dim::systems::Generator {
+                name: name.clone(),
+                dim: convert_dim(dimension),
+                display: display.clone(),
+            }
+        })
+        .collect();
+    let converted = aevia_dim::systems::UnitSystem {
+        name: system.name.clone(),
+        description: system.description.clone(),
+        unity,
+        generators,
+    };
+    converted.is_valid().then_some(converted)
+}
+
+impl Registry {
+    /// The unit system called `name` (§5.11).
+    #[must_use]
+    pub fn unit_system(
+        &self,
+        name: &str,
+    ) -> Option<std::sync::Arc<aevia_dim::systems::UnitSystem>> {
+        self.unit_systems
+            .iter()
+            .find(|system| system.name == name)
+            .cloned()
     }
 }
 

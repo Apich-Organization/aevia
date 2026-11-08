@@ -39,6 +39,7 @@ pub mod ode;
 pub mod pde;
 pub mod sde;
 pub mod sim;
+pub mod sparse;
 pub mod spec;
 pub mod special;
 pub mod stats;

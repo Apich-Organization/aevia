@@ -310,30 +310,23 @@ fn host_only_callback_dispatch_requires_an_interpreter_scope() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn register_names_the_missing_source_plugin_capability() {
+fn register_points_at_the_source_plugin_mechanisms() {
     for name in ["register", "register_plugin"] {
         let error = rssn_module::call(name, vec![Value::Unit], Span::default())
-            .expect_err("no Aevia expression can build a `Plugin`");
-        assert_eq!(error.code, "E1001", "`{name}` must report a capability gap");
+            .expect_err("no Aevia expression can build a host `Plugin`");
+        assert_eq!(error.code, "E0302", "`{name}`");
         assert!(
-            error.message.contains("core.plugin.source"),
-            "`{name}` must name `core.plugin.source`, not `core.plugin` (which \
-             this build does provide): {}",
-            error.message
-        );
-        assert!(
-            error.notes.iter().any(|note| note.contains("@op")),
-            "the note must name the missing source-level plugin packaging: {:?}",
+            error
+                .notes
+                .iter()
+                .any(|note| note.contains("@op") && note.contains("load_plugin")),
+            "the note must name the source-level mechanisms: {:?}",
             error.notes
         );
     }
     let capabilities = &aevia_rssn::registry().capabilities;
-    assert!(!capabilities.has("core.plugin.source"));
-    assert!(
-        capabilities.has("core.plugin"),
-        "in-process host plugins exist in this build; only the source-level \
-         packaging is missing"
-    );
+    assert!(capabilities.has("core.plugin.source"));
+    assert!(capabilities.has("core.plugin"));
 }
 
 #[test]
