@@ -2608,6 +2608,15 @@ impl Interp {
                 }
                 let len = elements.len();
                 let dim = value::value_dim(&elements[0]);
+                for elem in &elements[1..] {
+                    if value::value_dim(elem) != dim {
+                        return Err(EvalError::new(
+                            "E0401",
+                            "tensor cons elements must have the same dimension",
+                        )
+                        .at(span));
+                    }
+                }
                 Ok(build_tensor(elements, vec![len], dim))
             },
             | BinOp::Pipe | BinOp::PipeBack => {
@@ -2675,6 +2684,11 @@ impl Interp {
                         self.finish_measurement(product, uncertainty, span)
                     },
                     | BinOp::Div => {
+                        if right_value.is_zero() {
+                            return Err(
+                                EvalError::new("E0801", "measurement division by zero").at(span)
+                            );
+                        }
                         let quotient = self.binary(
                             BinOp::Div,
                             Value::Num(left_value.clone()),
@@ -2714,6 +2728,11 @@ impl Interp {
                 };
                 match op {
                     | BinOp::Mul | BinOp::Div => {
+                        if op == BinOp::Div && scalar.is_zero() {
+                            return Err(
+                                EvalError::new("E0801", "measurement division by zero").at(span)
+                            );
+                        }
                         let value = self.binary(
                             op,
                             Value::Num(measurement_value),

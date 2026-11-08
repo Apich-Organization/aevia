@@ -1030,7 +1030,15 @@ impl<'a> Lexer<'a> {
 fn is_superscript(c: char) -> bool {
     matches!(
         c,
-        '\u{2070}'..='\u{2079}' | '\u{00B9}' | '\u{00B2}' | '\u{00B3}' | '\u{207B}' | '\u{207A}'
+        '\u{2070}'
+            ..='\u{2079}'
+                | '\u{00B9}'
+                | '\u{00B2}'
+                | '\u{00B3}'
+                | '\u{207B}'
+                | '\u{207A}'
+                | '\u{207D}'
+                | '\u{207E}'
     )
 }
 
@@ -1384,6 +1392,10 @@ mod regression_tests {
         let output = lex(0, "2 s\u{207B}\u{00B9}").expect("lexes");
         assert!(output.tokens.iter().any(
             |token| matches!(&token.kind, TokenKind::Superscript(text) if text == "\u{207B}\u{00B9}")
+        ));
+        let output = lex(0, "4 m\u{207D}\u{207B}\u{00B2}\u{207E}").expect("lexes");
+        assert!(output.tokens.iter().any(
+            |token| matches!(&token.kind, TokenKind::Superscript(text) if text == "\u{207D}\u{207B}\u{00B2}\u{207E}")
         ));
     }
 

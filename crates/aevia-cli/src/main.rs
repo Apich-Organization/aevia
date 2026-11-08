@@ -10,10 +10,9 @@
 //! cache is written yet, so `clean` can never claim to have removed something
 //! it did not. `lsp` starts the `aevia-lsp` server of §9.10 on standard I/O.
 //!
-//! The §9.9 flags `--release` and `--jobs` are accepted and reported as having
-//! no effect: Aevia is interpreted and no phase of the toolchain is parallel,
-//! so silently ignoring them would let a user believe an optimisation level or
-//! a thread count was in force.
+//! The §9.9 flag `--release` is accepted and reported as having no effect:
+//! Aevia's interpreter does not use optimization levels. `--jobs N` configures
+//! the Rayon worker thread pool used for parallel evaluation (`par_map`).
 
 mod doctest;
 mod package;
@@ -406,7 +405,7 @@ options (anywhere on the command line):
   --color <when>            auto, always, or never (default auto)
   --locked                  fail instead of rewriting an out-of-date aevia.lock
   --release                 accepted for §9.9; reported as having no effect
-  --jobs <N>                accepted for §9.9; reported as having no effect
+  --jobs <N>                worker threads for parallel evaluation (par_map)
 
 doctests (aevia test --doc, §7.5.5/§9.12):
   every `aevia` fenced block in a `##` doc comment is compiled. A block whose
@@ -436,8 +435,8 @@ packages:
 
 known gaps (each command says so rather than pretending):
   `clean` removes `.aevia/`, but this toolchain writes no build cache yet, so
-  it normally reports that there is nothing to clean. `--release` and `--jobs`
-  are accepted and reported as having no effect."
+  it normally reports that there is nothing to clean. `--release` is accepted
+  and reported as having no effect."
     );
 }
 

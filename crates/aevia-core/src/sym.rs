@@ -510,6 +510,9 @@ impl Term {
             if value.is_zero() && exponent.is_positive() {
                 return zero();
             }
+            if value.is_zero() && exponent.is_negative() {
+                return Term::Sym("oo".to_string());
+            }
             if exponent.denom().is_one() {
                 if let Some(power) = exponent.numer().to_i32() {
                     return rational(aevia_dim::rat::pow_int(value, power));
@@ -532,6 +535,9 @@ impl Term {
                         let mut root = BigRational::new(numerator_root, denominator_root);
                         let power = exponent.numer().clone();
                         if power.is_negative() {
+                            if root.is_zero() {
+                                return Term::Sym("oo".to_string());
+                            }
                             root = root.recip();
                         }
                         if let Some(power) = power.abs().to_i32() {
@@ -1323,7 +1329,8 @@ impl Term {
                     f.write_str("/")?;
                     // `^` binds tighter than `/`, so `x/y^2` needs no brackets.
                     let wrap = matches!(bottom, Self::Add(_) | Self::Mul(_))
-                        || matches!(&bottom, Self::Num(value) if !value.denom().is_one());
+                        || matches!(&bottom, Self::Num(value) if !value.denom().is_one())
+                        || is_negative(&bottom);
                     if wrap {
                         f.write_str("(")?;
                         bottom.render(f, repr)?;
@@ -1367,7 +1374,10 @@ impl Term {
                 } else {
                     Self::Pow(base.clone(), -exponent)
                 };
-                if matches!(positive, Self::Add(_) | Self::Mul(_)) {
+                if matches!(positive, Self::Add(_) | Self::Mul(_))
+                    || matches!(&positive, Self::Num(value) if !value.denom().is_one())
+                    || is_negative(&positive)
+                {
                     f.write_str("(")?;
                     positive.render(f, repr)?;
                     return f.write_str(")");
@@ -2068,5 +2078,21 @@ mod tests {
             term.substitute("x", &Term::int(3)).expect("substitutes"),
             Term::int(6)
         );
+    }
+
+    #[test]
+    fn zero_negative_powers_and_rendering() {
+        assert_eq!(
+            Term::pow(Term::int(0), BigRational::from_integer(BigInt::from(-1))),
+            Term::Sym("oo".to_string())
+        );
+        let div_neg = Term::mul(
+            sym("y"),
+            Term::pow(
+                Term::mul(Term::int(-1), sym("x")),
+                BigRational::from_integer(BigInt::from(-1)),
+            ),
+        );
+        assert_eq!(div_neg.to_string(), "y/(-x)");
     }
 }

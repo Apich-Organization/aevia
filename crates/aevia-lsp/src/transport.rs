@@ -109,6 +109,9 @@ impl<R: BufRead> Reader<R> {
         let Some(length) = length else {
             return Err(TransportError::MissingLength);
         };
+        if length == 0 {
+            return Err(TransportError::InvalidLength);
+        }
         let mut body = Vec::new();
         body.try_reserve_exact(length).map_err(|_| {
             TransportError::Io(io::Error::new(

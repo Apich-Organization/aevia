@@ -3475,7 +3475,7 @@ fn operator_name(punct: Punct) -> Option<&'static str> {
     })
 }
 
-/// Converts a superscript run such as `⁻¹` to an integer exponent.
+/// Converts a superscript run such as `⁻¹` or `⁽⁻¹⁾` to an integer exponent.
 fn parse_superscript(text: &str) -> Option<i32> {
     let mut value: i32 = 0;
     let mut negative = false;
@@ -3502,8 +3502,18 @@ fn parse_superscript(text: &str) -> Option<i32> {
                 value = value.checked_mul(10)?.checked_add(3)?;
                 saw_digit = true;
             },
-            | '\u{207B}' => negative = true,
-            | '\u{207A}' => {},
+            | '\u{207B}' => {
+                if saw_digit || negative {
+                    return None;
+                }
+                negative = true;
+            },
+            | '\u{207A}' => {
+                if saw_digit {
+                    return None;
+                }
+            },
+            | '\u{207D}' | '\u{207E}' => {},
             | _ => return None,
         }
     }

@@ -435,13 +435,10 @@ impl Server {
         }
         // Invalid batches retain both text and version; a later full
         // replacement can resynchronize without exposing a half-applied source.
-        if self
-            .documents
-            .get_mut(&uri)
-            .unwrap()
-            .apply_batch(&edits, version)
-            .is_err()
-        {
+        let Some(doc) = self.documents.get_mut(&uri) else {
+            return;
+        };
+        if doc.apply_batch(&edits, version).is_err() {
             return;
         }
         self.publish_affected(&uri);

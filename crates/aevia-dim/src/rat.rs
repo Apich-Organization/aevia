@@ -64,6 +64,9 @@ pub fn parse_decimal(text: &str) -> Option<BigRational> {
         value = -value;
     }
     let scale = exponent - i64::try_from(frac_part.len()).ok()?;
+    if scale.abs() > 10_000 {
+        return None;
+    }
     let ten = BigInt::from(10);
     let result = if scale >= 0 {
         BigRational::from_integer(value * ten.pow(u32::try_from(scale).ok()?))
@@ -79,6 +82,9 @@ pub fn pow_int(
     value: &BigRational,
     exponent: i32,
 ) -> BigRational {
+    if value.is_zero() && exponent < 0 {
+        return BigRational::zero();
+    }
     let magnitude = exponent.unsigned_abs();
     let powered = value.pow(i32::try_from(magnitude).unwrap_or(i32::MAX));
     if exponent < 0 {
@@ -197,6 +203,8 @@ mod tests {
     fn rational_powers_are_exact() {
         assert_eq!(pow_int(&ratio(2, 3), 2), ratio(4, 9));
         assert_eq!(pow_int(&ratio(2, 3), -1), ratio(3, 2));
+        assert_eq!(pow_int(&ratio(0, 1), -1), ratio(0, 1));
+        assert_eq!(parse_decimal("1e999999999"), None);
     }
 
     #[test]

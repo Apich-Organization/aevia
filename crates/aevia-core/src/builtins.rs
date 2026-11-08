@@ -3939,7 +3939,8 @@ pub fn call(
         },
         | "write_npy" => {
             let path = expect_str(&args, 0, name, span)?;
-            let extension = std::path::Path::new(&path)
+            let clean_path = path.split(['?', '#']).next().unwrap_or(&path);
+            let extension = std::path::Path::new(clean_path)
                 .extension()
                 .and_then(std::ffi::OsStr::to_str)
                 .unwrap_or_default()
@@ -3986,7 +3987,8 @@ pub fn call(
             let path = expect_str(&args, 0, name, span)?;
             // Appendix B E0904: an extension this reader cannot decode is a
             // typed `Err`, not a generic parse failure later.
-            let extension = std::path::Path::new(&path)
+            let clean_path = path.split(['?', '#']).next().unwrap_or(&path);
+            let extension = std::path::Path::new(clean_path)
                 .extension()
                 .and_then(std::ffi::OsStr::to_str)
                 .unwrap_or_default()
@@ -4095,7 +4097,8 @@ pub fn call(
         },
         | "read_json" => {
             let path = expect_str(&args, 0, name, span)?;
-            let extension = std::path::Path::new(&path)
+            let clean_path = path.split(['?', '#']).next().unwrap_or(&path);
+            let extension = std::path::Path::new(clean_path)
                 .extension()
                 .and_then(std::ffi::OsStr::to_str)
                 .unwrap_or_default()
@@ -8179,35 +8182,46 @@ fn fill_template(
     let mut out = String::with_capacity(template.len());
     let mut next = 0usize;
     let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('}') else {
-            out.push_str(&rest[open..]);
-            return out;
-        };
-        let inside = &after[..close];
-        let chosen = if inside.is_empty() {
-            let index = next;
-            next += 1;
-            parts.get(index)
+    while !rest.is_empty() {
+        if rest.starts_with("{{") {
+            out.push('{');
+            rest = &rest[2..];
+        } else if rest.starts_with("}}") {
+            out.push('}');
+            rest = &rest[2..];
+        } else if rest.starts_with('{') {
+            let after = &rest[1..];
+            if let Some(close) = after.find('}') {
+                let inside = &after[..close];
+                let chosen = if inside.is_empty() {
+                    let index = next;
+                    next += 1;
+                    parts.get(index)
+                } else {
+                    inside
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| parts.get(index))
+                };
+                match chosen {
+                    | Some(part) => out.push_str(part),
+                    | None => {
+                        out.push('{');
+                        out.push_str(inside);
+                        out.push('}');
+                    },
+                }
+                rest = &after[close + 1..];
+            } else {
+                out.push_str(rest);
+                break;
+            }
         } else {
-            inside
-                .parse::<usize>()
-                .ok()
-                .and_then(|index| parts.get(index))
-        };
-        match chosen {
-            | Some(part) => out.push_str(part),
-            | None => {
-                out.push('{');
-                out.push_str(inside);
-                out.push('}');
-            },
+            let next_brace = rest.find(['{', '}']).unwrap_or(rest.len());
+            out.push_str(&rest[..next_brace]);
+            rest = &rest[next_brace..];
         }
-        rest = &after[close + 1..];
     }
-    out.push_str(rest);
     out
 }
 
@@ -8222,6 +8236,10 @@ mod template_tests {
         assert_eq!(fill_template("{1}{0}{1}", &parts), "bab");
         assert_eq!(fill_template("{x} {} {9}", &parts), "{x} a {9}");
         assert_eq!(fill_template("open { brace", &parts), "open { brace");
+        assert_eq!(
+            fill_template("escaped {{lit}} and {} and }}", &parts),
+            "escaped {lit} and a and }"
+        );
     }
 }
 

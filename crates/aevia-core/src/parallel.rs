@@ -639,7 +639,7 @@ pub fn default_jobs() -> usize {
 
 /// Inputs below this size are mapped sequentially: the replica round trip
 /// costs more than it saves.
-const MIN_PARALLEL: usize = 2;
+const MIN_PARALLEL: usize = 32;
 
 fn chunks(len: usize) -> Vec<std::ops::Range<usize>> {
     // Chunk boundaries depend only on the length, never on the thread count.
