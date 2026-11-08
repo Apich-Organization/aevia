@@ -521,13 +521,15 @@ cdylib 未实现、单位表缺 §5.3.3 的七项，均已关闭）。
     求解器需要 `&Fn + Sync` host 闭包，manifest 的 `Value` ABI 传不了，
     所以 kernel 的 CO-03 把求解循环、ensemble 统计、host-callback drift 和
     `FnMut` adapter 留在宿主侧；Aevia 的 `sdeint_*` 不是 `Rssn` 算子。
-    **宿主侧已落地**：`aevia-std::sde` 实现六种方法与 fixed/adaptive 求解，
+    **宿主侧已落地**：`aevia-std::sde` 实现七种方法与 fixed/adaptive 求解，
     `aevia-core` 负责 dispatch/记录展平（`sde_runtime` 10/10 通过，
     源码级 `sde_language` 5/5 通过），`core.sde` 在本构建 enabled；
     **源码级策略记录也已验证可用**（`Sde.Fixed`/`Sde.Adaptive` +
     `Sde.Diagonal`/`Sde.General(m)` 通过检查并跑出路径，见 §13.2.2 状态）；
-    记录状态 + 一般噪声在语言层是 checker 的 `E0302`，运行时的
-    `E1001("sde.general.record")` 只保留给宿主层直接调 builtin 的路径。
+    记录状态 + 一般噪声现在可用（扩散是带噪声轴的同形状记录，
+    `GeneralDiffusionOf<s>`，§8.9.1）；非交换噪声与 Stratonovich 自适应也已
+    实现，`E1001("sde.general.record"/"sde.noncommutative"/
+    "sde.interpretation")` 不再产生。
     记录顺序/一致性见 §10.3.7。
     `manifest_hash` 变化一方面因为 `Features` 多了这个字段，另一方面本轮
     加了 `sde_scheme_info`（hash 从 `8ed92a22…` 变为 `8d2c3764…`）。

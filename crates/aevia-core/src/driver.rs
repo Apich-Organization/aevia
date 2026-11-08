@@ -7,6 +7,9 @@
 //! Loading is a post-order walk, so a module is always checked after the
 //! modules it imports, and a cycle is reported rather than followed.
 
+use crate::disk_cache::Counters;
+use crate::disk_cache::Digest;
+use crate::disk_cache::KeyInputs;
 use crate::manifest::ResolvedModule;
 use crate::manifest::Roots;
 use crate::source::SourceDependency;
@@ -110,6 +113,10 @@ pub struct LoadStats {
     pub checks: usize,
     /// How many diagnostics the pass produced, after deduplication.
     pub diagnostics: usize,
+    /// How many modules were restored from `.aevi` files instead of checked.
+    pub disk_hits: usize,
+    /// How many `.aevi` files this load wrote.
+    pub disk_writes: usize,
 }
 
 /// Loads and checks several entry files in **one** pass.
@@ -155,6 +162,8 @@ pub fn load_all_with_roots(
         modules: modules.len(),
         checks: modules.len(),
         diagnostics: diagnostics.items.len(),
+        disk_hits: 0,
+        disk_writes: 0,
     };
     (
         Program {
@@ -314,6 +323,10 @@ struct Loader {
     kernel_modules: HashMap<PathBuf, (String, String)>,
     /// Checked modules kept from earlier loads (§9.11); see [`CheckCache`].
     cache: Option<std::rc::Rc<std::cell::RefCell<CheckCache>>>,
+    /// The per-module on-disk cache (`.aevi`, §9.11), when configured.
+    disk: Option<crate::disk_cache::DiskCache>,
+    /// What this load did, readable by the entry point after `finish`.
+    counters: std::sync::Arc<Counters>,
 }
 
 /// Incremental checking (§9.11): checked modules kept between loads.
@@ -384,11 +397,57 @@ pub fn load_incremental(
     options: &CheckOptions,
     cache: &std::rc::Rc<std::cell::RefCell<CheckCache>>,
 ) -> (Program, LoadStats) {
+    load_configured(entry, roots, overlays, options, Some(cache), None)
+}
+
+/// Loads `entry` through the per-module on-disk cache (`.aevi`, spec §9.11).
+///
+/// A module whose key — source text, `FileId`, identity, import bindings, the
+/// interface digests of its dependencies, the capability set and the compiler
+/// identity — matches a file in `disk` is restored from it instead of being
+/// checked; a module that is checked is written back. The program is exactly
+/// the one [`load_with_roots_and_overlays`] builds; `LoadStats::checks` counts
+/// only the modules the checker ran on, `disk_hits` and `disk_writes` the
+/// cache traffic.
+#[must_use]
+pub fn load_with_disk_cache(
+    entry: &Path,
+    roots: Roots,
+    overlays: &SourceOverlays,
+    options: &CheckOptions,
+    disk: &crate::disk_cache::DiskCache,
+) -> (Program, LoadStats) {
+    load_configured(entry, roots, overlays, options, None, Some(disk))
+}
+
+/// [`load_incremental`] that also consults and fills an on-disk cache: a
+/// `watch` session keeps its in-memory [`CheckCache`] and starts warm from the
+/// previous process's `.aevi` files.
+#[must_use]
+pub fn load_incremental_with_disk_cache(
+    entry: &Path,
+    roots: Roots,
+    overlays: &SourceOverlays,
+    options: &CheckOptions,
+    cache: &std::rc::Rc<std::cell::RefCell<CheckCache>>,
+    disk: &crate::disk_cache::DiskCache,
+) -> (Program, LoadStats) {
+    load_configured(entry, roots, overlays, options, Some(cache), Some(disk))
+}
+
+fn load_configured(
+    entry: &Path,
+    roots: Roots,
+    overlays: &SourceOverlays,
+    options: &CheckOptions,
+    cache: Option<&std::rc::Rc<std::cell::RefCell<CheckCache>>>,
+    disk: Option<&crate::disk_cache::DiskCache>,
+) -> (Program, LoadStats) {
     let roots = match entry.parent() {
         | Some(dir) => roots.with_local(dir),
         | None => roots,
     };
-    {
+    if let Some(cache) = cache {
         let mut cache = cache.borrow_mut();
         cache.reused = 0;
         cache.checked = 0;
@@ -397,9 +456,11 @@ pub fn load_incremental(
         roots: Some(roots),
         options: options.clone(),
         overlay: overlays.clone(),
-        cache: Some(cache.clone()),
+        cache: cache.cloned(),
+        disk: disk.cloned(),
         ..Loader::default()
     };
+    let counters = loader.counters.clone();
     let root = loader.load_entry(entry);
     let files = loader.parsed.len();
     let (modules, sources, mut diagnostics, dependencies) = loader.finish(root);
@@ -408,8 +469,10 @@ pub fn load_incremental(
         entries: 1,
         files,
         modules: modules.len(),
-        checks: cache.borrow().checked,
+        checks: Counters::get(&counters.checked),
         diagnostics: diagnostics.items.len(),
+        disk_hits: Counters::get(&counters.disk_hits),
+        disk_writes: Counters::get(&counters.disk_writes),
     };
     (
         Program {
@@ -843,6 +906,9 @@ impl Loader {
             }
         }
         let mut modules: Vec<LoadedModule> = Vec::new();
+        // The interface digest of each module already resolved (`None` when it
+        // could not be digested), for the on-disk cache keys.
+        let mut digests: HashMap<FileId, Option<Digest>> = HashMap::new();
         // The checked interfaces of the modules already resolved, in dependency
         // order (§7.4). They carry classes, instances and alias definitions, so
         // an importer can use a class it did not declare and expand an imported
@@ -854,15 +920,18 @@ impl Loader {
             // The imports of this module, as the checker wants them: one entry
             // per resolved module, with the prefix its names are reachable
             // under.
-            let mut imports: Vec<Import> = Vec::new();
+            // Materialised only when the checker (or the in-memory fingerprint)
+            // needs them: a module restored from disk never clones its
+            // dependencies' export tables.
+            let mut import_specs: Vec<(String, usize, Option<Vec<String>>)> = Vec::new();
             let mut runtime_imports = Vec::new();
             let mut bindings = Vec::new();
             for (target, import_path, alias, open, names) in &parsed.imports {
-                let Some(other) = self
+                let Some((other_index, other)) = self
                     .order
                     .iter()
                     .position(|candidate| candidate == target)
-                    .and_then(|index| modules.get(index))
+                    .and_then(|index| modules.get(index).map(|module| (index, module)))
                 else {
                     continue;
                 };
@@ -881,7 +950,7 @@ impl Loader {
                         matches!(&decl.kind, DeclKind::Import { path, .. } if path == import_path)
                     })
                     .map_or_else(Span::default, |decl| decl.span);
-                let mut exports = other.checked.exports.clone();
+                let exports = &other.checked.exports;
                 if let Some(selected) = names {
                     // `import A.B { a, b }` brings only those names in, and a
                     // name the module does not export is an error rather than
@@ -903,7 +972,6 @@ impl Loader {
                             );
                         }
                     }
-                    exports.retain(|name, _| selected.contains(name));
                 }
                 bindings.push(InterfaceBinding {
                     module: other.checked.module_path(),
@@ -926,7 +994,7 @@ impl Loader {
                     prefix: prefix.clone(),
                     names: runtime_names,
                 });
-                imports.push((prefix, exports));
+                import_specs.push((prefix, other_index, names.clone()));
             }
             // A module sees its dependency closure, never unrelated modules
             // merely checked earlier in the package traversal.
@@ -939,11 +1007,25 @@ impl Loader {
                     }
                 }
             }
-            let interfaces: Vec<ModuleInterface> = modules
-                .iter()
-                .filter(|module| reachable.contains(&module.file))
-                .map(|module| module.checked.interface())
-                .collect();
+            let interfaces = || -> Vec<ModuleInterface> {
+                modules
+                    .iter()
+                    .filter(|module| reachable.contains(&module.file))
+                    .map(|module| module.checked.interface())
+                    .collect()
+            };
+            let imports = || -> Vec<Import> {
+                import_specs
+                    .iter()
+                    .map(|(prefix, index, names)| {
+                        let mut exports = modules[*index].checked.exports.clone();
+                        if let Some(selected) = names {
+                            exports.retain(|name, _| selected.contains(name));
+                        }
+                        (prefix.clone(), exports)
+                    })
+                    .collect()
+            };
             let identity = if self.stdlib.contains_key(&path.path)
                 || self.kernel_modules.contains_key(&path.path)
             {
@@ -963,8 +1045,8 @@ impl Loader {
                 fingerprint(&[
                     &text,
                     &parsed.file,
-                    &imports,
-                    &interfaces,
+                    &imports(),
+                    &interfaces(),
                     &identity,
                     &bindings,
                     &self.options,
@@ -984,10 +1066,72 @@ impl Loader {
                 },
                 | _ => None,
             };
-            let checked = match reused {
+            // The on-disk key (§9.11). Generated kernel namespaces depend on
+            // the live manifest rather than on a source file, so they are
+            // never cached; a module whose dependency interfaces cannot all
+            // be digested is simply not cacheable.
+            let disk_key = match &self.disk {
+                | Some(disk) if !self.kernel_modules.contains_key(&path.path) => {
+                    let closure: Option<Vec<Digest>> = modules
+                        .iter()
+                        .filter(|module| reachable.contains(&module.file))
+                        .map(|module| digests.get(&module.file).copied().flatten())
+                        .collect();
+                    closure.and_then(|closure| {
+                        let text = self
+                            .sources
+                            .file(parsed.file)
+                            .map(|file| file.text.clone())
+                            .unwrap_or_default();
+                        let prefixes: Vec<String> = import_specs
+                            .iter()
+                            .map(|(prefix, _, _)| prefix.clone())
+                            .collect();
+                        disk.key(&KeyInputs {
+                            text: &text,
+                            file: parsed.file,
+                            path: &parsed.path,
+                            identity: &identity,
+                            bindings: &bindings,
+                            prefixes: &prefixes,
+                            options: &self.options,
+                            interfaces: &closure,
+                        })
+                    })
+                },
+                | _ => None,
+            };
+            let mut own_digest: Option<Digest> = None;
+            let mut from_memory = false;
+            let mut loaded_from_disk = false;
+            let restored = match reused {
                 | Some(checked) => {
-                    if let Some(cache) = &self.cache {
-                        cache.borrow_mut().reused += 1;
+                    from_memory = true;
+                    Some(checked)
+                },
+                | None => {
+                    match (&self.disk, &disk_key) {
+                        | (Some(disk), Some(key)) => {
+                            disk.load(key, parsed.file).map(|hit| {
+                                own_digest = Some(hit.interface);
+                                loaded_from_disk = true;
+                                Counters::bump(&self.counters.disk_hits);
+                                aevia_types::check::CheckResult {
+                                    diagnostics: hit.diagnostics,
+                                    module: hit.module,
+                                }
+                            })
+                        },
+                        | _ => None,
+                    }
+                },
+            };
+            let checked = match restored {
+                | Some(checked) => {
+                    if from_memory {
+                        if let Some(cache) = &self.cache {
+                            cache.borrow_mut().reused += 1;
+                        }
                     }
                     checked
                 },
@@ -995,28 +1139,55 @@ impl Loader {
                     let checked = check_module_with_identity(
                         parsed.file,
                         &parsed.module,
-                        &imports,
-                        &interfaces,
+                        &imports(),
+                        &interfaces(),
                         &self.options,
                         identity,
                         &bindings,
                     );
-                    if let (Some(cache), Some(print)) = (&self.cache, print) {
-                        let mut cache = cache.borrow_mut();
-                        cache.checked += 1;
-                        cache.entries.insert(
-                            cache_key,
-                            CacheEntry {
-                                file: parsed.file,
-                                fingerprint: print,
-                                diagnostics: checked.diagnostics.clone(),
-                                module: checked.module.clone(),
-                            },
-                        );
+                    Counters::bump(&self.counters.checked);
+                    if let Some(cache) = &self.cache {
+                        cache.borrow_mut().checked += 1;
                     }
                     checked
                 },
             };
+            if self.disk.is_some() {
+                if own_digest.is_none() {
+                    own_digest = crate::disk_cache::interface_digest(&checked.module.interface());
+                }
+                digests.insert(parsed.file, own_digest);
+                // Only an error-free check is stored: its diagnostics are
+                // warnings, and every type it declares is complete.
+                if !from_memory && !loaded_from_disk && !checked.diagnostics.has_errors() {
+                    if let (Some(disk), Some(key), Some(digest)) =
+                        (&self.disk, &disk_key, own_digest)
+                    {
+                        if disk.store(
+                            key,
+                            parsed.file,
+                            digest,
+                            &checked.diagnostics,
+                            &checked.module,
+                        ) {
+                            Counters::bump(&self.counters.disk_writes);
+                        }
+                    }
+                }
+            }
+            if !from_memory {
+                if let (Some(cache), Some(print)) = (&self.cache, print) {
+                    cache.borrow_mut().entries.insert(
+                        cache_key,
+                        CacheEntry {
+                            file: parsed.file,
+                            fingerprint: print,
+                            diagnostics: checked.diagnostics.clone(),
+                            module: checked.module.clone(),
+                        },
+                    );
+                }
+            }
             self.diagnostics.extend(checked.diagnostics.clone());
             let aliases = prefixes
                 .get(&path)

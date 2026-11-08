@@ -39,9 +39,18 @@ fn sparse_adt() -> adt::AdtId {
 }
 
 /// The marker type of a storage format, if `name` is one.
+///
+/// `Block` is the type-level spelling of block CSR and a synonym of `Bcsr`:
+/// both name the same marker, so `Sparse<Block, …>` and `Sparse<Bcsr, …>` are
+/// the same type.
 #[must_use]
 pub fn format_type(name: &str) -> Option<Type> {
-    FORMATS.contains(&name).then(|| error_type(name))
+    let canonical = if name == "Block" {
+        "Bcsr"
+    } else {
+        name
+    };
+    FORMATS.contains(&name).then(|| error_type(canonical))
 }
 
 /// `Sparse<format, dense>`, where `dense` is the `Tensor<shape, τ>` with the
@@ -153,6 +162,27 @@ pub fn sparse_schemes(
                 0,
                 0,
                 func(vec![sparse_type(var(1), var(2))], Type::string()),
+            )]
+        },
+        // `to_bcsr(A, br, bc)`: block CSR with an explicit block shape.
+        | "to_bcsr" => {
+            vec![scheme(
+                2,
+                1,
+                0,
+                func(
+                    vec![sp(var(1), 2, elem(0)), int(), int()],
+                    sp(error_type("Bcsr"), 2, elem(0)),
+                ),
+            )]
+        },
+        // `block_size(A)`: the `(br, bc)` block shape (`(1, 1)` off Bcsr).
+        | "block_size" => {
+            vec![scheme(
+                3,
+                0,
+                0,
+                func(vec![sparse_type(var(1), var(2))], tuple(vec![int(), int()])),
             )]
         },
         | "convert" => {
@@ -269,6 +299,37 @@ pub fn sparse_schemes(
                         ("iterations".to_string(), int()),
                         ("residual".to_string(), Type::float(one())),
                         ("converged".to_string(), Type::bool()),
+                    ]),
+                ),
+            )]
+        },
+        // `cg_with(A, b, { tol, maxiter, precond })`: the `Precond` constructor
+        // is a standard-library variant, so its field is left to inference.
+        | "cg_with" => {
+            let float = |dim: u32| Type::float(dim_var(dim));
+            vec![scheme(
+                3,
+                2,
+                0,
+                func(
+                    vec![
+                        sp(var(1), 2, float(0)),
+                        tensor(1, float(1)),
+                        Type::record(vec![
+                            ("tol".to_string(), Type::float(one())),
+                            ("maxiter".to_string(), int()),
+                            ("precond".to_string(), var(2)),
+                        ]),
+                    ],
+                    Type::record(vec![
+                        (
+                            "x".to_string(),
+                            tensor(1, Type::float(dim_var(1).div(&dim_var(0)))),
+                        ),
+                        ("iterations".to_string(), int()),
+                        ("residual".to_string(), Type::float(one())),
+                        ("converged".to_string(), Type::bool()),
+                        ("precond".to_string(), Type::string()),
                     ]),
                 ),
             )]

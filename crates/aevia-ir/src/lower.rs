@@ -1528,7 +1528,6 @@ fn exact_decimal(text: &str) -> Option<num_rational::BigRational> {
     aevia_dim::parse_decimal(text)
 }
 
-
 /// The `f64` a float literal denotes.
 ///
 /// The lexer has already validated the literal (a malformed one is `E0106`

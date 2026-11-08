@@ -1583,19 +1583,25 @@ pub fn call(
             )))
         },
         | "symfun" => {
-            let _ = expect_str(&args, 0, name, span)?;
-            // Applying an unknown function symbol needs a term form for
-            // uninterpreted functions, which arrives with the backend bridge.
-            Ok(Value::Native(Rc::new(NativeFn(Box::new(
-                move |_interp, _args, span| {
-                    Err(EvalError::new(
-                        "E1001",
-                        "`symfun` application needs the rssn symbolic backend",
-                    )
-                    .at(span))
-                },
-            )))))
+            // §6.4.5: an unknown function symbol. Its application is the
+            // kernel's undetermined-function node `apply(y, t)`, so `diff`
+            // keeps `diff(y(t), t)` as a closed form and `dsolve` can solve
+            // for it. Every `symfun` call is a fresh function, named like a
+            // `symbol`: the first `y` keeps its name, later ones get `#n`.
+            let display = expect_str(&args, 0, name, span)?;
+            let count = interp
+                .symbol_counts
+                .entry(format!("fn {display}"))
+                .or_insert(0);
+            *count += 1;
+            let internal = if *count == 1 {
+                display
+            } else {
+                format!("{display}#{count}")
+            };
+            Ok(symfun_value(internal))
         },
+        | "dsolve" => dsolve(interp, &args, span),
         | "diff" => {
             let function = args
                 .first()
@@ -3814,9 +3820,8 @@ pub fn call(
         },
 
         // ----- §8.9.1 stochastic differential equations -------------------
-        | "wiener" | "sde_order" | "sde_ensemble_seed" | "sdeint_diag" | "sdeint_general" => {
-            sde_call(interp, name, &args, span)
-        },
+        | "wiener" | "sde_order" | "sde_order_with" | "sde_ensemble_seed" | "sdeint_diag"
+        | "sdeint_general" => sde_call(interp, name, &args, span),
 
         // ----- §8.10 PDE --------------------------------------------------
         | "solve_poisson" => {
@@ -4573,6 +4578,168 @@ fn argument_dim(
         span,
     )?;
     Ok(crate::value::value_dim(&applied))
+}
+
+/// The value of `symfun(name)`: applying it builds `apply(name, args…)`.
+///
+/// The result's dimension is the codomain the checker gave this call site
+/// (`SymFun<d, e>` is `Real[d] -> Real[e]`), read from the resolved
+/// expression types, so `y(t)` for `y : SymFun<T, L>` is a length.
+fn symfun_value(internal: String) -> Value {
+    Value::Native(Rc::new(NativeFn(Box::new(move |interp, args, span| {
+        let mut kernel_args = vec![aevia_rssn::Val::Symbol(internal.clone())];
+        for arg in &args {
+            let term = value_to_term(arg)?;
+            kernel_args.push(bridge::term_val(&term)?);
+        }
+        let node = aevia_rssn::kernel()
+            .apply_node("apply", &kernel_args)
+            .map_err(|failure| bridge::error(&failure).at(span))?;
+        let term = bridge::term_of(&node).ok_or_else(|| {
+            EvalError::new(
+                "E1003",
+                "the kernel built no term for a function application",
+            )
+            .at(span)
+        })?;
+        let dim = match interp.expr_types.get(&span) {
+            | Some(aevia_types::Type::Scalar(_, dim)) => dim.clone(),
+            | _ => Dim::one(),
+        };
+        Ok(Value::Num(NumVal::symbolic(term, dim)))
+    }))))
+}
+
+/// The kernel `eq(lhs, rhs)` node of an equation proposition.
+fn equation_val(
+    value: &Value,
+    what: &str,
+    span: Span,
+) -> Result<aevia_rssn::Val, EvalError> {
+    let Value::Prop(prop) = value else {
+        return Err(EvalError::new(
+            "E0302",
+            format!(
+                "`{what}` must be an equation `lhs == rhs`, found {}",
+                value.type_name()
+            ),
+        )
+        .at(span));
+    };
+    let Some(comparison) = prop.comparison.as_ref().filter(|c| c.op == BinOp::Eq) else {
+        return Err(EvalError::new(
+            "E0302",
+            format!(
+                "`{what}` must be an equation `lhs == rhs`, found `{}`",
+                prop.text
+            ),
+        )
+        .at(span));
+    };
+    let lhs = bridge::term_val(&value_to_term(&comparison.left)?)?;
+    let rhs = bridge::term_val(&value_to_term(&comparison.right)?)?;
+    aevia_rssn::kernel()
+        .apply_node("eq", &[lhs, rhs])
+        .map_err(|failure| bridge::error(&failure).at(span))
+}
+
+/// `dsolve(eq, y, t)` and `dsolve(eq, y, t, conditions)` (§6.4.5).
+///
+/// The kernel's `dsolve(eq, y(t))` (or with `list(conditions…)`) answers
+/// `y(t) = F(t)`; the result is the function `s ↦ F(s)` with the codomain's
+/// dimension. An implicit or parametric answer, or no answer, is
+/// `Err(MathError)` carrying the kernel's rendering, never a guess.
+fn dsolve(
+    interp: &mut Interp,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    if !(3..=4).contains(&args.len()) {
+        return Err(arity("dsolve", 3, args.len(), span));
+    }
+    let equation = equation_val(&args[0], "dsolve", span)?;
+    let function = args[1].clone();
+    let variable = args[2].clone();
+    let Value::Num(var_num) = &variable else {
+        return Err(EvalError::new("E0302", "`dsolve` needs a symbol as its variable").at(span));
+    };
+    let Some(var_name) = symbol_name(var_num) else {
+        return Err(EvalError::new("E0302", "`dsolve` needs a symbol as its variable").at(span));
+    };
+    let unknown = interp.apply(function.clone(), vec![variable.clone()], span)?;
+    let unknown_val = bridge::term_val(&value_to_term(&unknown)?)?;
+    let result_dim = match &unknown {
+        | Value::Num(num) => num.dim.clone(),
+        | _ => Dim::one(),
+    };
+    let mut request = vec![equation, unknown_val.clone()];
+    if let Some(conditions) = args.get(3) {
+        let Value::Tensor(list) = conditions else {
+            return Err(
+                EvalError::new("E0302", "`dsolve` conditions are a list of equations").at(span),
+            );
+        };
+        let mut items = Vec::new();
+        for condition in list.elements().iter() {
+            items.push(equation_val(condition, "dsolve condition", span)?);
+        }
+        let list = aevia_rssn::kernel()
+            .apply_node("list", &items)
+            .map_err(|failure| bridge::error(&failure).at(span))?;
+        request.push(list);
+    }
+    let kernel = aevia_rssn::kernel();
+    let failure = |message: String| Ok(err(Value::string(message)));
+    let node = match kernel.apply_node("dsolve", &request) {
+        | Ok(node) => node,
+        | Err(failure_value) => return failure(failure_value.message),
+    };
+    let aevia_rssn::Val::Term(handle) = node else {
+        return failure("the kernel built no `dsolve` request".to_string());
+    };
+    let computed = match kernel.compute(handle, &aevia_rssn::Opts::symbolic()) {
+        | Ok(computed) => computed,
+        | Err(error) => return failure(error.message),
+    };
+    let aevia_rssn::Val::Term(answer) = &computed.val else {
+        return failure(format!("dsolve answered `{}`", computed.val.text()));
+    };
+    let text = kernel.try_text(*answer).unwrap_or_default();
+    if !computed.reduced {
+        return failure(format!("dsolve found no closed-form solution: {text}"));
+    }
+    let explicit = kernel.structure(*answer).ok().and_then(|(op, children)| {
+        let [lhs, rhs] = children.as_slice() else {
+            return None;
+        };
+        let lhs_text = kernel.try_text(*lhs).ok()?;
+        let unknown_text = match &unknown_val {
+            | aevia_rssn::Val::Term(sym) => kernel.try_text(*sym).ok()?,
+            | other => other.text(),
+        };
+        (op == "eq" && lhs_text == unknown_text).then_some(*rhs)
+    });
+    let Some(rhs) = explicit else {
+        return failure(format!(
+            "dsolve found an implicit or parametric solution: {text}"
+        ));
+    };
+    let Some(solution) = bridge::term_of(&aevia_rssn::Val::Term(rhs)) else {
+        return failure(format!("dsolve answered `{text}`, which has no term form"));
+    };
+    let solution = Rc::new(solution);
+    let function = Value::Native(Rc::new(NativeFn(Box::new(move |_interp, args, span| {
+        let Some(argument) = args.first() else {
+            return Err(arity("dsolve solution", 1, 0, span));
+        };
+        let replacement = value_to_term(argument)?;
+        let value = solution.substitute(&var_name, &replacement)?;
+        Ok(fold_closed(Value::Num(NumVal::symbolic(
+            value,
+            result_dim.clone(),
+        ))))
+    }))));
+    Ok(ok(function))
 }
 
 /// Wraps a fallible kernel answer in `Result<_, MathError>`.
@@ -6672,6 +6839,9 @@ fn sde_method_named(name: &str) -> Option<aevia_std::sde::Method> {
         | "HeunStratonovich" => aevia_std::sde::Method::HeunStratonovich,
         | "SrkPlaten" => aevia_std::sde::Method::SrkPlaten,
         | "MilsteinNoncommutative" => aevia_std::sde::Method::MilsteinNoncommutative,
+        | "MilsteinNoncommutativeStratonovich" => {
+            aevia_std::sde::Method::MilsteinNoncommutativeStratonovich
+        },
         | _ => return None,
     })
 }
@@ -6685,6 +6855,9 @@ fn sde_method_value(method: aevia_std::sde::Method) -> Value {
         | aevia_std::sde::Method::HeunStratonovich => (3, "HeunStratonovich"),
         | aevia_std::sde::Method::SrkPlaten => (4, "SrkPlaten"),
         | aevia_std::sde::Method::MilsteinNoncommutative => (5, "MilsteinNoncommutative"),
+        | aevia_std::sde::Method::MilsteinNoncommutativeStratonovich => {
+            (6, "MilsteinNoncommutativeStratonovich")
+        },
     };
     let id = adt::intern(adt::Adt {
         name: "SdeMethod".to_string(),
@@ -6891,6 +7064,26 @@ fn sde_call(
                 ("weak", Value::float(order.weak)),
             ]))
         },
+        | "sde_order_with" => {
+            let (Some(Value::Variant(method)), Some(structure)) = (args.first(), args.get(1))
+            else {
+                return Err(EvalError::new(
+                    "E0302",
+                    "`sde_order_with` expects an `SdeMethod` and an `SdeStructure`",
+                )
+                .at(span));
+            };
+            let method = sde_method_named(&method.name).ok_or_else(|| {
+                EvalError::new("E0302", format!("`{}` is not an `SdeMethod`", method.name)).at(span)
+            })?;
+            let structure = sde_structure(structure)
+                .map_err(|error| EvalError::new("E0302", error.to_string()).at(span))?;
+            let order = aevia_std::sde::sde_order_for(method, structure);
+            Ok(record_of(vec![
+                ("strong", Value::float(order.strong)),
+                ("weak", Value::float(order.weak)),
+            ]))
+        },
         | "sde_ensemble_seed" => {
             let seed = expect_int(args, 0, name, span)?.max(0) as u64;
             let index = expect_int(args, 1, name, span)?.max(0) as usize;
@@ -6942,13 +7135,6 @@ fn sde_integrate(
         } else {
             "`sdeint_diag` needs the `Diagonal` structure; use `sdeint_general`".to_string()
         }))));
-    }
-    if general && matches!(shape, StateShape::Record(_)) {
-        return Ok(err(sde_error_value(&SdeError::Unsupported {
-            capability: "sde.general.record",
-            detail: "general noise with a record state is not statically expressible in this build"
-                .to_string(),
-        })));
     }
     let coefficients = if diagonal {
         state_count
@@ -7016,9 +7202,9 @@ fn sde_integrate(
         ];
         match interp.apply(diffusion_value.clone(), argument, span) {
             | Ok(value) => {
-                match flatten_state(&value) {
-                    | Ok((_, values)) if values.len() == expected => Ok(values),
-                    | Ok((_, values)) => {
+                match flatten_by_shape(&diffusion_shape, &value) {
+                    | Ok(values) if values.len() == expected => Ok(values),
+                    | Ok(values) => {
                         Err(SdeError::Shape(format!(
                             "the diffusion returned {} coefficient(s); this structure needs {expected}",
                             values.len(),
@@ -7074,6 +7260,51 @@ fn sde_integrate(
             ])))
         },
         | Err(error) => Ok(err(sde_error_value(&error))),
+    }
+}
+
+/// Flattens a diffusion value in the field order of the *state* it belongs to.
+///
+/// For a record state the diffusion is a record with the same field names
+/// whose scalar fields hold the `m` noise coefficients of that component (a
+/// `Tensor<1>` of `m`) and whose rank-`r` tensor fields become rank-`r + 1`
+/// tensors (`[.., m]`); walking the state's fields by name and concatenating
+/// them row-major gives exactly the kernel's `n x m` row-major matrix, whatever
+/// order the diffusion record's fields were written in. Other states flatten
+/// as usual (`Diagonal` coefficients, or the rank-2 `n x m` tensor).
+///
+/// # Errors
+///
+/// `E0302` for a missing field or a value that holds something other than
+/// numbers.
+fn flatten_by_shape(
+    shape: &StateShape,
+    value: &Value,
+) -> Result<Vec<f64>, EvalError> {
+    match (shape, value) {
+        | (StateShape::Record(fields), Value::Record(record)) => {
+            let mut flat = Vec::new();
+            for (name, sub) in fields {
+                let field = record.fields.get(name).ok_or_else(|| {
+                    EvalError::new(
+                        "E0302",
+                        format!("the diffusion of a record state has no field `{name}`"),
+                    )
+                })?;
+                flat.extend(flatten_by_shape(sub, field)?);
+            }
+            Ok(flat)
+        },
+        | (StateShape::Record(_), other) => {
+            Err(EvalError::new(
+                "E0302",
+                format!(
+                    "the diffusion of a record state must be a record, found {}",
+                    other.type_name()
+                ),
+            ))
+        },
+        | _ => flatten_state(value).map(|(_, flat)| flat),
     }
 }
 

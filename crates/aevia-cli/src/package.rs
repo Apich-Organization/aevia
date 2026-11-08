@@ -281,11 +281,12 @@ pub fn update(
 
 /// `aevia clean` — remove the `.aevia/` build directory of §9.11.
 ///
-/// §9.11 designates `.aevia/target/` for build products and `.aevi` files for
-/// the interface cache. This toolchain writes neither yet, so the command is
-/// honest about what it finds: it removes `.aevia/` if one exists (an older or
-/// future build, or one a user created) and otherwise says there is nothing to
-/// clean. It never claims to have removed a cache that does not exist.
+/// `aevia check` and `aevia run` write the whole-program replay records and
+/// the per-module `.aevi` files (§9.11) under `.aevia/cache/`, next to the
+/// entry file: in the package directory for an entry at its root and in
+/// `src/` for the conventional `src/main.aev`. The command removes `.aevia/`
+/// from both places and otherwise says there is nothing to clean. It never
+/// claims to have removed a cache that does not exist.
 pub fn clean(args: &[String]) -> ExitCode {
     if let Some(extra) = args.first() {
         eprintln!("aevia clean: expected no arguments, found `{extra}`");
@@ -298,29 +299,41 @@ pub fn clean(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         },
     };
-    let cache = package.dir.join(".aevia");
-    if !cache.exists() {
+    // The cache lives next to the entry file: in the package directory, and in
+    // the entry's own directory (`src/` for the conventional `src/main.aev`).
+    let mut caches = vec![package.dir.join(".aevia")];
+    if let Some(entry_dir) = package.entry_path().parent() {
+        let beside_entry = entry_dir.join(".aevia");
+        if !caches.contains(&beside_entry) {
+            caches.push(beside_entry);
+        }
+    }
+    caches.retain(|cache| cache.exists());
+    if caches.is_empty() {
         println!(
-            "nothing to clean: `{}` does not exist (this toolchain writes no build cache yet)",
-            cache.display()
+            "nothing to clean: `{}` does not exist (`aevia check` and `aevia run` write the \
+             per-module `.aevi` cache there)",
+            package.dir.join(".aevia").display()
         );
         return ExitCode::SUCCESS;
     }
-    let files = count_files(&cache);
-    match std::fs::remove_dir_all(&cache) {
-        | Ok(()) => {
-            println!(
-                "removed {} ({files} file{})",
-                cache.display(),
-                if files == 1 { "" } else { "s" }
-            );
-            ExitCode::SUCCESS
-        },
-        | Err(error) => {
-            eprintln!("aevia clean: cannot remove `{}`: {error}", cache.display());
-            ExitCode::from(1)
-        },
+    for cache in caches {
+        let files = count_files(&cache);
+        match std::fs::remove_dir_all(&cache) {
+            | Ok(()) => {
+                println!(
+                    "removed {} ({files} file{})",
+                    cache.display(),
+                    if files == 1 { "" } else { "s" }
+                );
+            },
+            | Err(error) => {
+                eprintln!("aevia clean: cannot remove `{}`: {error}", cache.display());
+                return ExitCode::from(1);
+            },
+        }
     }
+    ExitCode::SUCCESS
 }
 
 /// How many files a directory holds, for the `clean` report.

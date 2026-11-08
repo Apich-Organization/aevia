@@ -1,0 +1,14 @@
+# Build products
+target/
+**/target/
+
+# Local configuration: the development database URL, OAuth secrets and the
+# session key. Nothing here is committed.
+.env
+.env.*
+!.env.example
+infra/secrets/
+
+# Editor and OS noise
+.DS_Store
+*.swp

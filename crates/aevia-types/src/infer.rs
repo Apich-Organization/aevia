@@ -505,7 +505,28 @@ impl Infer {
                 continue;
             };
             let constraint = self.resolve_numeric(&constraint);
-            let dependencies = Self::numeric_variables(&constraint).into_iter().collect();
+            let mut dependencies: Vec<u32> =
+                Self::numeric_variables(&constraint).into_iter().collect();
+            dependencies.sort_unstable();
+            // Merging two variables can make constraints identical: the N
+            // element literals of a tensor literal all become `Literal { ty:
+            // root, kind }`. A conjunction is idempotent, so the duplicate is
+            // retired instead of kept; otherwise every later binding on the
+            // component re-resolved all N of them (quadratic checking of a
+            // long literal: 2000 elements took seconds).
+            let duplicate = dependencies.first().is_some_and(|first| {
+                self.numeric.affected(*first).into_iter().any(|other| {
+                    other != id
+                        && self
+                            .numeric
+                            .get(other)
+                            .is_some_and(|existing| self.resolve_numeric(existing) == constraint)
+                })
+            });
+            if duplicate {
+                self.numeric.retire(id);
+                continue;
+            }
             self.cache_numeric_transfer(&constraint);
             self.numeric.replace(id, constraint, dependencies);
         }
@@ -1220,9 +1241,14 @@ impl Infer {
             return ty.clone();
         }
         match ty {
+            // A chain `a := b := c := …` is followed without spending depth:
+            // a tensor literal of N elements unifies N fresh variables in a
+            // line, and the depth bound is for *structural* nesting. Cutting
+            // the chain at 128 left the variable unresolved, so a literal with
+            // more than 128 elements failed at run time (`E0304`).
             | Type::Var(id) => {
-                match self.subst.get(id) {
-                    | Some(bound) => self.resolve_depth(bound, depth + 1),
+                match self.follow_type(*id) {
+                    | Some(bound) => self.resolve_depth(&bound, depth + 1),
                     | None => ty.clone(),
                 }
             },
@@ -1305,18 +1331,44 @@ impl Infer {
         rep: Rep,
         depth: u32,
     ) -> Rep {
-        if depth > 128 {
-            return rep;
+        let _ = depth;
+        // Iterative: a representation chain has no structure to bound, and a
+        // cycle is impossible (each step is bounded by the table's size).
+        let mut current = rep;
+        for _ in 0..=self.rep_subst.len() {
+            match current {
+                | Rep::Var(id) => {
+                    match self.rep_subst.get(&id) {
+                        | Some(bound) => current = *bound,
+                        | None => return current,
+                    }
+                },
+                | other => return other,
+            }
         }
-        match rep {
-            | Rep::Var(id) => {
-                match self.rep_subst.get(&id) {
-                    | Some(bound) => self.resolve_rep_depth(*bound, depth + 1),
-                    | None => rep,
-                }
-            },
-            | other => other,
+        current
+    }
+
+    /// The first non-variable binding at the end of the chain from `id`, or
+    /// the last variable when the chain ends unbound (`None` if `id` itself
+    /// is unbound).
+    fn follow_type(
+        &self,
+        id: u32,
+    ) -> Option<Type> {
+        let mut bound = self.subst.get(&id)?.clone();
+        for _ in 0..=self.subst.len() {
+            match &bound {
+                | Type::Var(next) => {
+                    match self.subst.get(next) {
+                        | Some(further) => bound = further.clone(),
+                        | None => return Some(bound),
+                    }
+                },
+                | _ => return Some(bound),
+            }
         }
+        Some(bound)
     }
 
     /// Resolves a row through substitutions.
@@ -1338,10 +1390,21 @@ impl Infer {
         }
         match row {
             | Row::Var(id) => {
-                match self.row_subst.get(id) {
-                    | Some(bound) => self.resolve_row_depth(bound, depth + 1),
-                    | None => row.clone(),
+                let Some(mut bound) = self.row_subst.get(id).cloned() else {
+                    return row.clone();
+                };
+                for _ in 0..=self.row_subst.len() {
+                    match &bound {
+                        | Row::Var(next) => {
+                            match self.row_subst.get(next) {
+                                | Some(further) => bound = further.clone(),
+                                | None => break,
+                            }
+                        },
+                        | _ => break,
+                    }
                 }
+                self.resolve_row_depth(&bound, depth + 1)
             },
             | Row::Extend { label, ty, tail } => {
                 Row::Extend {
@@ -1414,10 +1477,21 @@ impl Infer {
         match nat {
             | Nat::Lit(value) => Nat::Lit(*value),
             | Nat::Var(id) => {
-                match self.nat_subst.get(id) {
-                    | Some(bound) => self.resolve_nat_depth(&bound.clone(), depth + 1),
-                    | None => nat.clone(),
+                let Some(mut bound) = self.nat_subst.get(id).cloned() else {
+                    return nat.clone();
+                };
+                for _ in 0..=self.nat_subst.len() {
+                    match &bound {
+                        | Nat::Var(next) => {
+                            match self.nat_subst.get(next) {
+                                | Some(further) => bound = further.clone(),
+                                | None => break,
+                            }
+                        },
+                        | _ => break,
+                    }
                 }
+                self.resolve_nat_depth(&bound, depth + 1)
             },
             | Nat::Add(left, right) => {
                 let left = self.resolve_nat_depth(left, depth + 1);

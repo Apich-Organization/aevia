@@ -167,6 +167,288 @@ pub fn cg(
     })
 }
 
+/// Whether `a` is exactly symmetric (pattern and values) with a positive
+/// diagonal: the cheap necessary conditions for a Cholesky attempt.
+fn looks_spd(a: &Csr<'_>) -> bool {
+    if a.rows != a.cols || a.rows == 0 {
+        return false;
+    }
+    let entry = |i: usize, j: usize| -> Option<f64> {
+        let row = &a.col_idx[a.row_ptr[i]..a.row_ptr[i + 1]];
+        row.binary_search(&j)
+            .ok()
+            .map(|p| a.values[a.row_ptr[i] + p])
+    };
+    for i in 0..a.rows {
+        match entry(i, i) {
+            | Some(d) if d > 0.0 => {},
+            | _ => return false,
+        }
+        for k in a.row_ptr[i]..a.row_ptr[i + 1] {
+            let j = a.col_idx[k];
+            if j != i && entry(j, i) != Some(a.values[k]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Solves `A x = b` by sparse Cholesky (`A = L Lᵀ`, lower triangle read).
+///
+/// # Errors
+/// [`NumericError::NotPositiveDefinite`] when `A` is not symmetric positive
+/// definite (or the factorisation breaks down), plus the shape errors of
+/// [`lu_solve`].
+pub fn cholesky_solve(
+    a: &Csr<'_>,
+    b: &[f64],
+) -> Result<Vec<f64>, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if b.len() != a.rows {
+        return Err(NumericError::ShapeMismatch(format!(
+            "matrix has {} rows, right-hand side has {} entries",
+            a.rows,
+            b.len()
+        )));
+    }
+    if !looks_spd(a) {
+        return Err(NumericError::NotPositiveDefinite);
+    }
+    let n = a.rows;
+    let mut triplets = Vec::with_capacity(a.values.len());
+    for row in 0..n {
+        for k in a.row_ptr[row]..a.row_ptr[row + 1] {
+            triplets.push(Triplet::new(row, a.col_idx[k], a.values[k]));
+        }
+    }
+    let matrix = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &triplets)
+        .map_err(|_| NumericError::NotPositiveDefinite)?;
+    let llt = matrix
+        .sp_cholesky(faer::Side::Lower)
+        .map_err(|_| NumericError::NotPositiveDefinite)?;
+    let rhs = faer::Col::<f64>::from_fn(n, |i| b[i]);
+    let solution = llt.solve(&rhs);
+    let out: Vec<f64> = (0..n).map(|i| solution[i]).collect();
+    if out.iter().any(|value| !value.is_finite()) {
+        return Err(NumericError::NotPositiveDefinite);
+    }
+    Ok(out)
+}
+
+/// Solves `A x = b`: sparse Cholesky when `A` is symmetric positive
+/// definite, otherwise (or when the factorisation fails) sparse LU. The
+/// second component names the factorisation used (`"Cholesky"` or `"LU"`).
+///
+/// # Errors
+/// As [`lu_solve`].
+pub fn solve_auto(
+    a: &Csr<'_>,
+    b: &[f64],
+) -> Result<(Vec<f64>, &'static str), NumericError> {
+    if let Ok(x) = cholesky_solve(a, b) {
+        return Ok((x, "Cholesky"));
+    }
+    lu_solve(a, b).map(|x| (x, "LU"))
+}
+
+/// The preconditioner a caller asks [`cg_precond`] for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrecondKind {
+    /// No preconditioner.
+    Identity,
+    /// Diagonal scaling.
+    Jacobi,
+    /// Inverted diagonal blocks (rssn `Bsr::block_jacobi`).
+    BlockJacobi,
+    /// Incomplete LU with the sparsity pattern (block ILU(0) for a block
+    /// operand).
+    Ilu0,
+    /// Incomplete Cholesky with the sparsity pattern.
+    Ic0,
+    /// The strongest factorisation that succeeds.
+    Auto,
+}
+
+/// The result of [`cg_precond`].
+#[derive(Clone, Debug)]
+pub struct PrecondCgResult {
+    /// The final iterate.
+    pub x: Vec<f64>,
+    /// Iterations performed.
+    pub iterations: usize,
+    /// The relative residual `‖b − A x‖ / ‖b‖`.
+    pub residual: f64,
+    /// Whether the tolerance was reached.
+    pub converged: bool,
+    /// The preconditioner actually used: `"Identity"`, `"Jacobi"`,
+    /// `"BlockJacobi"`, `"BlockIlu0"`, `"Ilu0"` or `"Ic0"`.
+    pub precond: &'static str,
+}
+
+enum Built {
+    Identity,
+    Jacobi(Vec<f64>),
+    Block(rssn::kernels::bsr::BlockJacobi),
+    BlockIlu(rssn::kernels::bsr::Bilu0),
+    Ilu(rssn::kernels::krylov::Ilu0),
+    Ic(rssn::kernels::krylov::Ic0),
+}
+
+impl Built {
+    fn apply(
+        &self,
+        r: &[f64],
+        z: &mut [f64],
+    ) {
+        match self {
+            | Self::Identity => z.copy_from_slice(r),
+            | Self::Jacobi(inv) => {
+                for ((zi, ri), di) in z.iter_mut().zip(r).zip(inv) {
+                    *zi = ri * di;
+                }
+            },
+            | Self::Block(p) => p.apply(r, z),
+            | Self::BlockIlu(p) => p.apply(r, z),
+            | Self::Ilu(p) => p.apply(r, z),
+            | Self::Ic(p) => p.apply(r, z),
+        }
+    }
+
+    const fn name(&self) -> &'static str {
+        match self {
+            | Self::Identity => "Identity",
+            | Self::Jacobi(_) => "Jacobi",
+            | Self::Block(_) => "BlockJacobi",
+            | Self::BlockIlu(_) => "BlockIlu0",
+            | Self::Ilu(_) => "Ilu0",
+            | Self::Ic(_) => "Ic0",
+        }
+    }
+}
+
+/// The square block shape the block preconditioners use: the operand's own
+/// block when it is square, else the automatic choice.
+fn square_block(
+    csr: &rssn::kernels::krylov::Csr,
+    hint: Option<(usize, usize)>,
+) -> (usize, usize) {
+    match hint {
+        | Some((r, c)) if r == c && csr.rows % r == 0 => (r, c),
+        | _ => rssn::kernels::bsr::choose_block_size(csr, &[(4, 4), (3, 3), (2, 2), (1, 1)]),
+    }
+}
+
+fn build_preconditioner(
+    csr: &rssn::kernels::krylov::Csr,
+    kind: PrecondKind,
+    block: Option<(usize, usize)>,
+) -> Built {
+    use rssn::kernels::bsr::Bsr;
+    let jacobi = || Built::Jacobi(csr.jacobi_inverse());
+    let blocked = || {
+        let (br, bc) = square_block(csr, block);
+        Bsr::from_csr(csr, br, bc).ok()
+    };
+    match kind {
+        | PrecondKind::Identity => Built::Identity,
+        | PrecondKind::Jacobi => jacobi(),
+        | PrecondKind::BlockJacobi => {
+            blocked()
+                .and_then(|b| b.block_jacobi().ok())
+                .map_or_else(jacobi, Built::Block)
+        },
+        | PrecondKind::Ilu0 => {
+            if block.is_some() {
+                blocked()
+                    .and_then(|b| b.bilu0().ok())
+                    .map(Built::BlockIlu)
+                    .or_else(|| csr.ilu0().map(Built::Ilu))
+                    .unwrap_or_else(jacobi)
+            } else {
+                csr.ilu0().map_or_else(jacobi, Built::Ilu)
+            }
+        },
+        | PrecondKind::Ic0 => csr.ic0().map_or_else(jacobi, Built::Ic),
+        | PrecondKind::Auto => {
+            if block.is_some() {
+                if let Some(b) = blocked() {
+                    if let Ok(p) = b.bilu0() {
+                        return Built::BlockIlu(p);
+                    }
+                    if let Ok(p) = b.block_jacobi() {
+                        return Built::Block(p);
+                    }
+                }
+            }
+            let auto = rssn::kernels::krylov::auto_preconditioner(csr);
+            match auto.kind() {
+                | rssn::kernels::krylov::AutoPreconditionerKind::Ic0 => {
+                    csr.ic0().map_or_else(jacobi, Built::Ic)
+                },
+                | rssn::kernels::krylov::AutoPreconditionerKind::Ilu0 => {
+                    csr.ilu0().map_or_else(jacobi, Built::Ilu)
+                },
+                | rssn::kernels::krylov::AutoPreconditionerKind::Jacobi => jacobi(),
+            }
+        },
+    }
+}
+
+/// Preconditioned conjugate gradients from a zero start.
+///
+/// `block` is the block shape of a block-CSR operand (`None` otherwise); it
+/// selects rssn's block Jacobi / block ILU(0) for those kinds. A
+/// factorisation that breaks down falls back to Jacobi, and the kind that was
+/// really applied is reported in the result.
+///
+/// # Errors
+/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+pub fn cg_precond(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_iterations: usize,
+    kind: PrecondKind,
+    block: Option<(usize, usize)>,
+) -> Result<PrecondCgResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if b.len() != a.rows {
+        return Err(NumericError::ShapeMismatch(format!(
+            "matrix has {} rows, right-hand side has {} entries",
+            a.rows,
+            b.len()
+        )));
+    }
+    let csr = rssn::kernels::krylov::Csr {
+        rows: a.rows,
+        cols: a.cols,
+        indptr: a.row_ptr.to_vec(),
+        indices: a.col_idx.to_vec(),
+        values: a.values.to_vec(),
+    };
+    let built = build_preconditioner(&csr, kind, block);
+    let result = rssn::kernels::krylov::cg(
+        |x, y| csr.matvec(x, y),
+        |r, z| built.apply(r, z),
+        b,
+        None,
+        tolerance,
+        max_iterations,
+    );
+    Ok(PrecondCgResult {
+        x: result.x,
+        iterations: result.iterations,
+        residual: result.residual,
+        converged: result.converged,
+        precond: built.name(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +491,109 @@ mod tests {
         }
         let back = a.matvec(&direct).expect("matvec");
         assert!(back.iter().all(|v| (v - 1.0).abs() < 1e-9));
+    }
+
+    fn poisson2d(m: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+        let (mut ptr, mut idx, mut val) = (vec![0], Vec::new(), Vec::new());
+        for y in 0..m {
+            for x in 0..m {
+                let i = y * m + x;
+                if y > 0 {
+                    idx.push(i - m);
+                    val.push(-1.0);
+                }
+                if x > 0 {
+                    idx.push(i - 1);
+                    val.push(-1.0);
+                }
+                idx.push(i);
+                val.push(4.0);
+                if x + 1 < m {
+                    idx.push(i + 1);
+                    val.push(-1.0);
+                }
+                if y + 1 < m {
+                    idx.push(i + m);
+                    val.push(-1.0);
+                }
+                ptr.push(idx.len());
+            }
+        }
+        (ptr, idx, val)
+    }
+
+    #[test]
+    fn cholesky_matches_lu_on_2d_poisson() {
+        let m = 12;
+        let (ptr, idx, val) = poisson2d(m);
+        let n = m * m;
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
+        let lu = lu_solve(&a, &b).expect("lu");
+        let llt = cholesky_solve(&a, &b).expect("cholesky");
+        for (p, q) in lu.iter().zip(&llt) {
+            assert!((p - q).abs() < 1e-10);
+        }
+        let (auto, how) = solve_auto(&a, &b).expect("auto");
+        assert_eq!(how, "Cholesky");
+        assert!(auto.iter().zip(&lu).all(|(p, q)| (p - q).abs() < 1e-10));
+    }
+
+    #[test]
+    fn indefinite_matrices_fall_back_to_lu() {
+        let (ptr, idx, val) = (vec![0, 2, 4], vec![0, 1, 0, 1], vec![1.0, 2.0, 2.0, 1.0]);
+        let a = Csr {
+            rows: 2,
+            cols: 2,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        assert_eq!(
+            cholesky_solve(&a, &[1.0, 1.0]),
+            Err(NumericError::NotPositiveDefinite)
+        );
+        let (x, how) = solve_auto(&a, &[3.0, 3.0]).expect("lu");
+        assert_eq!(how, "LU");
+        assert!((x[0] - 1.0).abs() < 1e-12 && (x[1] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn every_preconditioner_converges_on_poisson() {
+        let m = 10;
+        let (ptr, idx, val) = poisson2d(m);
+        let n = m * m;
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let b = vec![1.0; n];
+        let plain = cg_precond(&a, &b, 1e-10, 500, PrecondKind::Identity, None).expect("cg");
+        assert!(plain.converged);
+        assert_eq!(plain.precond, "Identity");
+        for (kind, name, block) in [
+            (PrecondKind::Jacobi, "Jacobi", None),
+            (PrecondKind::BlockJacobi, "BlockJacobi", None),
+            (PrecondKind::Ilu0, "Ilu0", None),
+            (PrecondKind::Ic0, "Ic0", None),
+            (PrecondKind::Auto, "Ic0", None),
+            (PrecondKind::Ilu0, "BlockIlu0", Some((2, 2))),
+            (PrecondKind::Auto, "BlockIlu0", Some((2, 2))),
+        ] {
+            let r = cg_precond(&a, &b, 1e-10, 500, kind, block).expect("cg");
+            assert!(r.converged, "{name}");
+            assert_eq!(r.precond, name);
+            assert!(r.iterations <= plain.iterations, "{name}");
+            assert!(r.x.iter().zip(&plain.x).all(|(p, q)| (p - q).abs() < 1e-6));
+        }
     }
 }

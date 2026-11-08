@@ -160,9 +160,13 @@ fn type_applied_constructor_captures_its_callee() {
         1,
         "the type application must capture z"
     );
-    assert!(inner.body.stmts.iter().any(|stmt| matches!(stmt,
-        Stmt::Let(item) if matches!(&item.rhs, Rhs::TypeApply { callee: Atom::Capture(0), .. })
-    )), "type application must read its captured callee: {:?}", inner.body);
+    assert!(
+        inner.body.stmts.iter().any(|stmt| matches!(stmt,
+            Stmt::Let(item) if matches!(&item.rhs, Rhs::TypeApply { callee: Atom::Capture(0), .. })
+        )),
+        "type application must read its captured callee: {:?}",
+        inner.body
+    );
 }
 
 #[test]

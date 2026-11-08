@@ -132,6 +132,28 @@ crate::kernels::ball::jacobian_at_terms	opaque			fn jacobian_at_terms (system : 
 crate::kernels::ball::real_terms	opaque			fn real_terms (system : & [Vec < PolyTerm >]) -> Vec < Vec < CTerm > >
 crate::kernels::ball::values_at	opaque			fn values_at (system : & [Vec < PolyTerm >] , x : & [Cx] ,) -> Vec < Cx >
 crate::kernels::ball::values_at_terms	opaque			fn values_at_terms (system : & [Vec < CTerm >] , x : & [Cx] ,) -> Vec < Cx >
+crate::kernels::bsr::Bilu0::apply	associated-method			fn apply (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::bsr::BlockJacobi::apply	associated-method			fn apply (& self , r : & [f64] , z : & mut [f64] ,)
+crate::kernels::bsr::BlockJacobi::block_size	associated-method			const fn block_size (& self) -> usize
+crate::kernels::bsr::Bsr::bilu0	associated-method			fn bilu0 (& self) -> Result < Bilu0 , BsrError >
+crate::kernels::bsr::Bsr::block_cols	associated-method			const fn block_cols (& self) -> usize
+crate::kernels::bsr::Bsr::block_count	associated-method			const fn block_count (& self) -> usize
+crate::kernels::bsr::Bsr::block_jacobi	associated-method			fn block_jacobi (& self) -> Result < BlockJacobi , BsrError >
+crate::kernels::bsr::Bsr::block_rows	associated-method			const fn block_rows (& self) -> usize
+crate::kernels::bsr::Bsr::diagonal_blocks	associated-method			fn diagonal_blocks (& self) -> Result < Vec < Vec < f64 > > , BsrError >
+crate::kernels::bsr::Bsr::fill_ratio	associated-method			fn fill_ratio (& self) -> f64
+crate::kernels::bsr::Bsr::from_csr	associated-method			fn from_csr (csr : & Csr , br : usize , bc : usize ,) -> Result < Self , BsrError >
+crate::kernels::bsr::Bsr::from_triplets	associated-method			fn from_triplets (nrows : usize , ncols : usize , br : usize , bc : usize , trip : & [(usize , usize , f64)] ,) -> Result < Self , BsrError >
+crate::kernels::bsr::Bsr::matmul	associated-method			fn matmul (& self , other : & Self ,) -> Result < Self , BsrError >
+crate::kernels::bsr::Bsr::matvec	associated-method			fn matvec (& self , x : & [f64] , y : & mut [f64] ,)
+crate::kernels::bsr::Bsr::matvec_transpose	associated-method			fn matvec_transpose (& self , x : & [f64] , y : & mut [f64] ,)
+crate::kernels::bsr::Bsr::nnz	associated-method			fn nnz (& self) -> usize
+crate::kernels::bsr::Bsr::stored_len	associated-method			const fn stored_len (& self) -> usize
+crate::kernels::bsr::Bsr::to_csr	associated-method			fn to_csr (& self) -> Csr
+crate::kernels::bsr::Bsr::transpose	associated-method			fn transpose (& self) -> Self
+crate::kernels::bsr::Bsr::validate	associated-method			fn validate (& self) -> Result < () , String >
+crate::kernels::bsr::Bsr::zeros	associated-method			fn zeros (nrows : usize , ncols : usize , br : usize , bc : usize ,) -> Result < Self , BsrError >
+crate::kernels::bsr::choose_block_size	opaque			fn choose_block_size (csr : & Csr , candidates : & [(usize , usize)] ,) -> (usize , usize)
 crate::kernels::calculus::derivative	callback			fn derivative (f : impl Fn (f64) -> f64 , x : f64 ,) -> f64
 crate::kernels::calculus::gradient	callback			fn gradient (f : impl Fn (& [f64]) -> f64 , point : & [f64] ,) -> Vec < f64 >
 crate::kernels::calculus::hessian	callback			fn hessian (f : impl Fn (& [f64]) -> f64 , point : & [f64] ,) -> Vec < f64 >
@@ -984,14 +1006,20 @@ crate::kernels::sde::heun_stratonovich	callback			fn heun_stratonovich < A , G >
 crate::kernels::sde::levy_areas	opaque			fn levy_areas (rng : & mut Rng , m : usize , h : f64 , dw : & [f64] , terms : usize ,) -> Vec < f64 >
 crate::kernels::sde::milstein	callback			fn milstein < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::sde::milstein_noncommutative	callback			fn milstein_noncommutative < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , noise : & NoiseSample ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::milstein_noncommutative_stratonovich	callback			fn milstein_noncommutative_stratonovich < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , noise : & NoiseSample ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::sde::milstein_stratonovich	callback			fn milstein_stratonovich < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::sde::noncommutative_noise_grid	opaque			fn noncommutative_noise_grid (m : usize , t0 : f64 , t1 : f64 , opts : & SdeNoncommutativeOptions ,) -> NoiseSample
 crate::kernels::sde::sample_noise	opaque			fn sample_noise (rng : & mut Rng , m : usize , steps : usize , h : f64 , terms : usize ,) -> NoiseSample
 crate::kernels::sde::sde_adaptive	callback			fn sde_adaptive < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , rtol : f64 , atol : f64 , seed : u64 , max_steps : usize ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::sde_adaptive_noncommutative_stratonovich_with	callback			fn sde_adaptive_noncommutative_stratonovich_with < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdeNoncommutativeOptions ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::sde::sde_adaptive_noncommutative_with	callback			fn sde_adaptive_noncommutative_with < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdeNoncommutativeOptions ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::sde_adaptive_stratonovich_with	callback			fn sde_adaptive_stratonovich_with < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdeAdaptiveOptions ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::sde::sde_adaptive_with	callback			fn sde_adaptive_with < A , G > (drift : A , diff : G , m : usize , t0 : f64 , t1 : f64 , y0 : & [f64] , opts : & SdeAdaptiveOptions ,) -> Result < SdePath , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::sde::sde_ensemble	callback			fn sde_ensemble < A , G > (drift : A , diff : G , m : usize , (t0 , h , steps) : (f64 , f64 , usize) , y0 : & [f64] , paths : usize , seed : u64 , scheme : EnsembleScheme ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) + Sync , G : Fn (f64 , & [f64] , & mut [f64]) + Sync ,
+crate::kernels::sde::srk_noncommutative	callback			fn srk_noncommutative < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , noise : & NoiseSample ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::srk_noncommutative_stratonovich	callback			fn srk_noncommutative_stratonovich < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , noise : & NoiseSample ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::sde::srk_platen	callback			fn srk_platen < A , G > (drift : A , diff : G , m : usize , t0 : f64 , h : f64 , y0 : & [f64] , dws : & [Vec < f64 >] ,) -> Result < Vec < Vec < f64 > > , SdeError > where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
+crate::kernels::sde::stratonovich_to_ito_drift	callback			fn stratonovich_to_ito_drift < 'a , A , G > (drift : & 'a A , diff : & 'a G , m : usize ,) -> impl Fn (f64 , & [f64] , & mut [f64]) + 'a where A : Fn (f64 , & [f64] , & mut [f64]) , G : Fn (f64 , & [f64] , & mut [f64]) ,
 crate::kernels::series::evaluate_power_series	no-declared-adapter			fn evaluate_power_series (coefficients : & [f64] , center : f64 , x : f64 ,) -> f64
 crate::kernels::series::sum_range	callback			fn sum_range (term : impl Fn (f64) -> f64 , from : i64 , to : i64 ,) -> f64
 crate::kernels::series::sum_to_infinity	callback			fn sum_to_infinity (term : impl Fn (f64) -> f64 , from : i64 , tolerance : f64 , max_terms : usize ,) -> SeriesSum

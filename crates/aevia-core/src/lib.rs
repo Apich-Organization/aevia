@@ -31,6 +31,7 @@
 
 pub mod builtins;
 mod callback;
+pub mod disk_cache;
 pub mod driver;
 pub mod eval;
 pub mod eval_ir;

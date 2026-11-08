@@ -432,9 +432,12 @@ impl Checker {
     }
 
     /// `A[i, j, …]` on a sparse tensor: one `Int` per axis, giving the
-    /// element type.
+    /// element type. With a range on some axis it is a slice instead: the
+    /// integer axes disappear, the ranged axes stay, and the result is a
+    /// sparse tensor (rank 2 keeps the format, any other rank is `Coo`).
     pub(super) fn sparse_index(
         &mut self,
+        format: &Type,
         dense: &Type,
         indices: &[SliceAst],
         span: Span,
@@ -454,6 +457,7 @@ impl Checker {
             );
             return Type::Error;
         }
+        let mut kept = 0u32;
         for index in indices {
             match index {
                 | SliceAst::Index(expr) => {
@@ -462,17 +466,28 @@ impl Checker {
                         self.report_unify(error, expr.span);
                     }
                 },
-                | SliceAst::Range { .. } => {
-                    self.error_help(
-                        "E0302",
-                        "a sparse tensor cannot be sliced",
-                        span,
-                        "index it with one `Int` per axis, or `to_dense` first",
-                    );
-                    return Type::Error;
+                | SliceAst::Range { start, end, step, .. } => {
+                    kept += 1;
+                    for part in [start, end, step].into_iter().flatten() {
+                        let ty = self.synth(part);
+                        if let Err(error) = self.infer.unify(&ty, &Type::int()) {
+                            self.report_unify(error, part.span);
+                        }
+                    }
                 },
             }
         }
-        self.force_scalar(&self.infer.resolve(elem))
+        if kept == 0 {
+            return self.force_scalar(&self.infer.resolve(elem));
+        }
+        let marker = if kept == 2 {
+            format.clone()
+        } else {
+            builtins::format_type("Coo").unwrap_or(Type::Error)
+        };
+        builtins::sparse_type(
+            marker,
+            Type::tensor(Shape::Rank(kept), self.infer.resolve(elem)),
+        )
     }
 }

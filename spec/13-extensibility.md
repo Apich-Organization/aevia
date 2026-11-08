@@ -519,6 +519,19 @@ kernel 可以调用它、对它求导、穿过它化简与积分、数值求值�
 - 发布发生在模块的函数绑定之后、顶层 `let` 求值之前，所以顶层绑定已经可以经
   `Rssn.dynamic("mydomain/softplus", …)` 调用它。每个加载的模块注册一个进程内
   插件 `aevia/<module>#n`，属于当前线程的 kernel 会话（§13.6）。
+- **源码算子是一等算子（2026-11-08）。** 发布顺序是：先把每个 `@op` 追踪成
+  kernel 定义，并把检查得到的参数/结果量纲作为该算子的**量纲签名**一起注册
+  （rssn `Registry::register_dim_signature`：参数与结果是签名变量的单项式，
+  每次使用时由实参量纲求解变量，`fn area(r: Real[d]): Real[d^2]` 的
+  `demo/area(r)` 在 kernel 的量纲推断里是 `dim(r)^2`）；然后把模块里该函数的
+  绑定换成包装：**全部实参是数值**（或无自由符号的闭式项）时执行 Aevia 函数体，
+  **有符号实参**时构造算子结点 `demo/softplus(x)`（kernel 项，按句柄携带），
+  结果量纲由签名给出，实参量纲与签名冲突是 `E0401`；最后才追踪 `@rule`，所以
+  规则可以谈论源码算子（`fn r(x: Real[1]) = (softplus(-x), softplus(x) - x)`）。
+  `diff`/`simplify`/`integral` 等请求作用在算子结点上时，kernel 看到的是算子、
+  它的定义和关于它的全部规则。kernel 拒绝插件时恢复原绑定。`Rssn.dynamic`
+  的结果用 `show` 显示所携带的数或项及其量纲见证（`repr` 仍是不透明的
+  `<Value>`，因为它不能从文本重建）。
 - **动态加载**：`load_plugin(path) : String -> IO (Result<Int, String>)` 在运行期
   加载、检查、求值一个源码文件（含其导入），发布其中的 `@op`/`@rule`，返回发布
   数量；需要 `fs` 能力。
@@ -781,9 +794,10 @@ dim.user_base_dimensions
 `core.distributed`、`io.binary`。
 
 **存储类稀疏**（`storage.sparse`，§13.9.5/§8.4.1）原先是一个命名缺口，自 2026-11-07
-起**已启用**：`Value::Sparse` 是运行时值，`Csr`/`Csc`/`Coo` 可构造；仍缺的
-只有 `Block`/`Bcsr`（类型里存在，构造报 `E1001`，capability 名
-`storage.sparse.block`）。它是 Aevia 自己的存储类，不由 RSSN manifest 的
+起**已启用**：`Value::Sparse` 是运行时值，`Csr`/`Csc`/`Coo` 可构造；块格式
+`Bcsr`（类型里也写作 `Block`）随后也成为真实格式（`to_bcsr`、`convert<Bcsr>`，
+见 §8.4.1），不再有 `storage.sparse.block` 这个缺口，也不再报对应的 `E1001`。
+它是 Aevia 自己的存储类，不由 RSSN manifest 的
 `Features` 字段发布，所以不出现在 `Rssn.Capabilities` 里。
 
 Aevia 编译器在类型检查后检查 capability；缺失时：
@@ -858,17 +872,19 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 - 分布式张量用 `Sharded<Mesh, Tensor<...>>` 库类型；`Mesh` 是运行时
   拓扑，不是类型参数。这样不会为设备/分片生成类型组合爆炸。
 
-> **实现状态（2026-11-04）**：`Device` 值、`to_device`/`on`/`device_of` 已
+> **实现状态（2026-11-08）**：`Device` 值、`to_device`/`on`/`device_of` 已
 > 类型化；没有 `core.gpu` 时 `to_device`/`on` 报 `E1001("core.gpu")`，与
-> 设计一致。`@jit` 当前**只接受零参数**（`@jit(target = …)` 报
-> `E0210("jit takes no arguments")`），JIT 目标选择尚未实现；`Gpu`/
-> `Distributed` 也没有后端，只是可构造的运行时值。
+> 设计一致。`@jit(target = Cpu)` 与 `@jit` 等价；`@jit(target = Gpu(n))` 与
+> `@jit(target = Distributed(..))` 被语言接受，在检查期（目标静态可知）报
+> `E1001("core.gpu")`/`E1001("core.distributed")`；其他参数是 `E0210`。
+> 属性参数里"构造器作用于常量"（`Gpu(0)`）算编译期常量（§2.2.7）。
+> `Gpu`/`Distributed` 没有后端，只是可构造的运行时值。
 
 ### 13.9.5 稀疏与布局
 
 **决定：`Sparse<F, shape, τ>` 是核心类型构造器，`F` 是格式类型。**
 
-- 格式：`Csr`、`Csc`、`Coo`、`Block`、`Bcsr`；当前是封闭集合，用户
+- 格式：`Csr`、`Csc`、`Coo`、`Bcsr`（`Block` 是它的同义写法）；当前是封闭集合，用户
   自定义格式要等 RSSN 开放 `Format` kind（当前插件只能注册算子/单位）。
 - `Layout` 类（设计上）：`nnz`、`to_dense`、`from_dense`、`matmul`、
   `transpose`；当前实现是内建函数，不是可实例化的类型类。
@@ -879,15 +895,20 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 - 稀疏不是库补丁，而是类型系统的一部分；`shape` 细化同样适用（目前检查到秩）。
 
 > **实现状态（2026-11-07）**：`Sparse<F, shape, τ>` 是独立的类型构造器，运行时
-> 有真正的 `Value::Sparse`（`Csr`/`Csc`/`Coo`；`f64` 缓冲与精确装箱两类存储，
+> 有真正的 `Value::Sparse`（`Csr`/`Csc`/`Coo`/`Bcsr`；`f64` 缓冲与精确装箱两类存储，
 > 精确值不舍入），`storage.sparse` 因此**已启用**。`@` 的四种布局分派
 > （sparse×dense、dense×sparse、sparse×sparse，加 dense×dense）在 AST 与 IR
 > 求值器、在 checker 里都已实现；`Sparse` 与 `Tensor` 之间只有显式转换
 > （`from_dense<F>`、`to_dense`、`convert<G>`），checker 不会让一个替代另一个。
 > 稀疏值过 RSSN 边界不再稠密化（`aevia-rssn::Val::Sparse` ↔ `Value::Sparse`），
 > `term_of_value` 仍拒绝它进入项图。具体的内建函数、精确性与错误码见 §8.4.1。
-> **剩余缺口**：`Block`/`Bcsr` 只在类型里（构造报 `E1001`）；形状细化只检查
-> 秩；`cg` 无预条件子；不支持稀疏切片；格式仍是封闭集合（用户自定义
+> `Block`/`Bcsr`（块压缩稀疏行，`br × bc` 稠密块的 CSR；块内允许零填充、
+> `nnz` 只数逻辑非零、块形状由 `to_bcsr(A, br, bc)` 显式给出或按填充率自动选取）
+> 已是真实格式，`@` 在 `f64` 类用块内核（§8.4.1）。
+> 预条件 `cg_with`（`Precond`：Identity/Jacobi/BlockJacobi/Ilu0/Ic0/Auto，块格式用
+> rssn 的块 Jacobi 与块 ILU(0)）、`spsolve` 对对称正定矩阵的 Cholesky 优先路径、
+> 稀疏切片（`A[i, :]`、`A[r0..r1, c0..c1]`，不稠密化）均已实现，细节见 §8.4.1。
+> **剩余缺口**：形状细化只检查秩；格式仍是封闭集合（用户自定义
 > `Format` 要等 RSSN 开放）。
 
 ### 13.9.6 效果与能力

@@ -1,0 +1,5 @@
+[Unit]
+Description=Aevia PostgreSQL data directory
+
+[Volume]
+VolumeName=aevia-db

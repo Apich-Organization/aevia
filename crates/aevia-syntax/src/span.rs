@@ -10,7 +10,9 @@ use std::fmt;
 pub type FileId = u32;
 
 /// A byte range in one source file.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct Span {
     /// The file the range belongs to.
     pub file: FileId,

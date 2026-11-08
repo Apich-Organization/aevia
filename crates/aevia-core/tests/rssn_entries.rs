@@ -7,12 +7,13 @@
 //! real checker and the real evaluator, not just through the bridge.
 //!
 //! Scoped `Rssn.call_ho` supports concrete Float callbacks; the empty list
-//! remains the ordinary dynamic call. Source-level plugin construction remains
-//! a capability gap:
+//! remains the ordinary dynamic call. Plugin construction from source goes
+//! through declarations, not values:
 //!
-//! * `Rssn.register`/`Rssn.register_plugin` need a `Plugin` value; in-process
-//!   plugins are Rust host objects (§13.5.1) and source-level `@op` packaging
-//!   (§13.5.2) is not implemented, so both are `E1001("core.plugin.source")`.
+//! * `Rssn.register`/`Rssn.register_plugin` need a host `Plugin` value, which
+//!   Aevia source cannot hold (§13.5.1), so both are `E0302` with a note that
+//!   names the source mechanisms: `@op`/`@rule` (published when the module
+//!   loads, `core.plugin.source`) and `load_plugin(path)` (§13.5.2).
 
 #![allow(clippy::result_large_err)]
 

@@ -26,7 +26,9 @@ use std::fmt;
 /// SI/host base dimensions use canonical names. Source declarations use a
 /// nominal owner and declaration name, independent of import/display aliases.
 /// Variables use a numeric id allocated by the type checker.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum Atom {
     /// An SI or host base dimension such as `Length` or a host-defined `Currency`.
     Base(Box<str>),
@@ -40,7 +42,7 @@ pub enum Atom {
 ///
 /// Ownership and declaration name determine equality, order and hashing. An
 /// import may change the display hint without creating a new generator.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NominalBase {
     owner: Box<str>,
     name: Box<str>,
@@ -223,6 +225,22 @@ impl fmt::Display for Atom {
 #[derive(Clone, Default)]
 pub struct Dim {
     factors: Option<std::sync::Arc<[(Atom, BigRational)]>>,
+}
+
+impl serde::Serialize for Dim {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.slice().iter().map(|(atom, exp)| (atom, exp)))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Dim {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let factors: Vec<(Atom, BigRational)> = serde::Deserialize::deserialize(deserializer)?;
+        Ok(Self::from_factors(factors))
+    }
 }
 
 impl PartialEq for Dim {
@@ -799,7 +817,7 @@ fn si_symbol(base: &str) -> &str {
 ///
 /// The seven SI bases are always present; `dimension Currency` adds a base and
 /// `dimension Area = L^2` adds an alias.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DimEnv {
     bases: Vec<String>,
     base_values: IndexMap<String, Dim>,
@@ -1256,9 +1274,22 @@ impl DimUnifier {
             return dim.clone();
         }
         dim.substitute(|id| {
-            self.subst
-                .get(&id)
-                .map(|value| self.resolve_depth(value, depth + 1))
+            // Follow a chain of variable-to-variable bindings without
+            // spending depth: a literal with many quantity elements unifies
+            // that many fresh variables in a line.
+            let mut value = self.subst.get(&id)?;
+            for _ in 0..=self.subst.len() {
+                let mut factors = value.factors();
+                let next = match (factors.next(), factors.next()) {
+                    | (Some((Atom::Var(next), exponent)), None) if exponent.is_one() => *next,
+                    | _ => break,
+                };
+                match self.subst.get(&next) {
+                    | Some(further) => value = further,
+                    | None => break,
+                }
+            }
+            Some(self.resolve_depth(value, depth + 1))
         })
     }
 

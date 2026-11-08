@@ -10,7 +10,7 @@ use crate::span::Span;
 use std::fmt::Write as _;
 
 /// How serious a diagnostic is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Severity {
     /// The program cannot be compiled or run.
     Error,
@@ -31,7 +31,7 @@ impl Severity {
 }
 
 /// A secondary span with its own message.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Label {
     /// Where the label points.
     pub span: Span,
@@ -40,7 +40,7 @@ pub struct Label {
 }
 
 /// A compiler diagnostic.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Diagnostic {
     /// Error or warning.
     pub severity: Severity,
@@ -250,7 +250,7 @@ impl Diagnostic {
 }
 
 /// A list of diagnostics produced by one phase.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Diagnostics {
     /// The diagnostics, in source order.
     pub items: Vec<Diagnostic>,

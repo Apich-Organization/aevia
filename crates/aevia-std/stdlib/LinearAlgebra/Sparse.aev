@@ -4,7 +4,11 @@
 ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module LinearAlgebra.Sparse
 
+type Precond = | Identity | Jacobi | BlockJacobi | Ilu0 | Ic0 | Auto
+
+let block_size = block_size
 let cg = cg
+let cg_with = cg_with
 let contract = contract
 let convert = convert
 let density = density
@@ -20,5 +24,6 @@ let sparse_csr = sparse_csr
 let spdiag = spdiag
 let speye = speye
 let spsolve = spsolve
+let to_bcsr = to_bcsr
 let to_dense = to_dense
 let transpose = transpose

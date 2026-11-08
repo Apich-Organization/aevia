@@ -516,7 +516,7 @@ aevia clean                        # 清理构建产物
 常用 flag：
 
 ```
---release          优化模式（当前解释器实现无 JIT/构建缓存，接受并提示“无效果”）
+--release          优化模式（当前解释器实现无 JIT，接受并提示“无效果”）
 --jobs N           并行度（同上：当前实现单进程解释执行，接受并提示“无效果”）
 --max-stack MiB    解释器线程的栈上限（默认 256）
 --budget STEPS     尾调用/IO 步骤预算（默认 100,000,000；不是秒，见 §9.3.4）
@@ -525,10 +525,10 @@ aevia clean                        # 清理构建产物
 --locked           拒绝修改 `aevia.lock`（`update`/`add`）
 ```
 
-> **实现状态（截至本轮）**：`clean` 删除 `.aevia/`（当前实现不写构建缓存，
-> 因此通常只报告“没有可清理的内容”）；§9.11 的 `.aevi` 接口缓存尚未实现，
-> 每次编译都重新检查全部模块。这是已记录的性能/增量编译缺口，不是语义
-> 差异。
+> **实现状态（2026-11-08）**：`check`/`run` 把整程序重放记录与按模块的
+> `.aevi` 缓存写在入口旁的 `.aevia/cache/`（§9.11.2、§9.11.3）；`clean` 删除
+> 包目录与入口所在目录中的 `.aevia/`，没有这样的目录时报告“没有可清理的
+> 内容”。`--no-cache` 让 `check`/`run` 既不读也不写这两种缓存。
 >
 > **程序参数（2026-11-05 已实现）**：`aevia run [file] -- args…` 只把 `--`
 > **之后**的字符串交给程序；程序用 `args()` 读取（§8.1.8），返回值是
@@ -651,11 +651,56 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时；`check` 模式即
   颜色样式）都是未命中。记录描述整个程序，所以不必序列化已检查接口也是精确
   的。`--no-cache` 跳过它；`aevia clean` 删除 `.aevia/`。
 
+- **按模块的磁盘缓存（§9.11.3，`.aevi`）。** 每个已检查模块一个文件，位于入口
+  旁的 `.aevia/cache/modules/<模块路径>-<键的 16 位十六进制>.aevi`，标准库模块
+  也缓存（收益最大）；由 RSSN 清单即时生成的内核命名空间不缓存，含错误的检查
+  结果也不缓存。文件内容：魔数 `AEVI`、格式版本（`FORMAT_VERSION`，小端 u32）、
+  128 位键、正文长度与 FNV-1a 校验、正文。正文是 `persist::encode` 写出的
+  `bincode`：入口的 `FileId`、接口摘要、诊断和**完整的** `CheckedModule`（不止
+  接口：运行期与编辑器读的构造器表、方言证据、`expr_types` 等都在内）。写入先
+  写临时文件再改名，所以并发进程不会读到半个文件；缺失、截断、校验失败、键
+  或版本不符的文件一律是静默未命中，并在重新检查后被覆盖。同一模块名最多保留
+  4 个修订，更旧的在写入后清理。
+  - **键**是下列输入的稳定 128 位哈希（两路 FNV-1a，**不是** `DefaultHasher`，
+    后者跨进程/构建不稳定）：模块源码文本、`FileId`、模块路径与加载器给的
+    名义身份（`ModulePath`，含包来源）、导入绑定（模块、前缀、名字表）、**依赖
+    闭包中每个模块的接口摘要**（按检查顺序）、检查选项（能力集）、编译器身份
+    （`aevia-core` 版本、`FORMAT_VERSION`、RSSN 清单哈希、当前可执行文件的
+    大小与修改时间）。接口摘要是 `ModuleInterface` 经同一编码器写出后的哈希，
+    其中每个 ADT 已被替换为它的符号定义，所以摘要不含任何 `AdtId`。因此**不改
+    变接口的编辑只重查被编辑的模块**，改变接口则重查全部依赖者（与
+    §9.11.1 的 early cutoff 一致）；改能力集、改导入绑定、换编译器构建都是
+    未命中。
+  - **`AdtId` 不进入文件（§7.3）。** `AdtId` 是进程内见证。`CheckedModule`
+    里每个 `AdtId` 字段（`Type::Adt`、`Export` 的 `adt`、构造器表、
+    `constructor_refs`……）都经 `persist::adt_ref`/`adt_pair_map` 适配器写出：
+    编码时线程局部上下文给每个出现的 `AdtId` 分配一个文件内下标，并在 ADT
+    表里写下它的完整定义（`AdtKey` = 模块路径 + 名字 + 声明 schema、参数、
+    参数种类、构造器及其字段类型——字段类型递归经同一适配器，环通过下标
+    表达）。保留的 `Option`/`Result`/`Ordering`（0/1/2）按原值写。解码时先把
+    ADT 表**重新驻留**到本进程的注册表：已有完整且 `AdtKey`（含 schema）相同
+    的类型就复用其 `AdtId`（标准库与已解码的导入通常已在），否则
+    `allocate_in` + `set_param_kinds` + `set_ctors` 新建；宿主/不透明类型按名字
+    `intern`。得到 `旧下标 → 新 AdtId` 映射后才解码正文。跨进程测试
+    （`aevia-cli/tests/module_cache.rs`）让新进程从磁盘还原用户 ADT，并构造、
+    匹配其构造器，输出与源码检查一致。
+  - 缓存项只在同一 `FileId` 下复用（与 `CheckCache` 同一规则），所以 span 无需
+    重映射；`FileId` 在键里也在文件里，不符即未命中。
+  - `LoadStats` 增加 `disk_hits` 与 `disk_writes`；入口函数是
+    `driver::load_with_disk_cache` 与 `driver::load_incremental_with_disk_cache`
+    （`DiskCache::beside(entry)` 给出约定位置），既有 API 源码兼容。
+
 > **实现状态（2026-11-08）**：进程内增量检查（`driver::load_incremental`、
-> `CheckCache`、`watch`）与跨进程整程序检查缓存已实现。**按模块**的磁盘
-> `.aevi` 接口缓存仍未实现：它需要把 `CheckedModule` 序列化，而检查证据里有
-> 进程内驻留的 ADT 标识。registry 客户端仍未实现（依赖只有 path 依赖；
-> `version`/`git`/registry 依赖报 `E0605`）。
+> `CheckCache`、`watch`）、跨进程整程序检查缓存与按模块的 `.aevi` 缓存都已
+> 实现；后者由 `aevia-core/tests/disk_cache.rs`（二次加载全命中、`AdtId`
+> 重映射后运行与模式匹配、体编辑只重查自身、接口编辑重查依赖者、损坏文件
+> 未命中、能力集变化未命中、`CheckedModule` 编解码往返）和
+> `aevia-cli/tests/module_cache.rs`（跨进程）覆盖。已知限制：每个文件都带
+> 完整的单位表与量纲环境（`CheckedModule.units`/`dims`），体积比接口大；
+> 键对依赖闭包里每个模块的接口摘要求哈希，大图上随闭包大小线性增长；
+> `watch`、LSP 与 `test` 命令尚未接入磁盘缓存；清理旧修订按“每个模块名保留
+> 4 个”的启发式进行，不做全局容量限制。registry 客户端仍未实现（依赖只有
+> path 依赖；`version`/`git`/registry 依赖报 `E0605`）。
 
 ## 9.12 测试与基准
 

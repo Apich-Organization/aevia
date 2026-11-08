@@ -267,7 +267,6 @@ impl SharedSlice {
     }
 }
 
-
 /// A strided window over a shared `f64` buffer (§6.6.4, §9.5).
 ///
 /// The element at logical row-major index `(i₀, …, iₙ₋₁)` is
@@ -2670,7 +2669,27 @@ fn render_at(
                 format_scalar(&scalar)
             }
         },
-        | Value::KernelValue(_) => "<Value>".to_string(),
+        // A kernel value is not reconstructible from text, so `repr` keeps
+        // the opaque marker; `show` renders what it carries (a number, a term
+        // in the kernel's syntax) and its dimension when the kernel or the
+        // host established one, so `Rssn.dynamic(..)` results are readable.
+        | Value::KernelValue(_) if repr => "<Value>".to_string(),
+        | Value::KernelValue(kernel) => {
+            let text = match &kernel.payload {
+                | aevia_rssn::Val::Term(handle) => {
+                    aevia_rssn::kernel()
+                        .try_text(*handle)
+                        .unwrap_or_else(|_| kernel.payload.text())
+                },
+                | other => other.text(),
+            };
+            match &kernel.witness {
+                | aevia_rssn::witness::DimensionWitness::Scalar(dim) if !dim.is_one() => {
+                    format!("{text} [{dim}]")
+                },
+                | _ => text,
+            }
+        },
         | Value::KernelError(error) => format!("{}: {}", error.code, error.message),
         | Value::TypeRep(_) => "<TypeRep>".to_string(),
         | Value::Callback(_) => "<Callback>".to_string(),

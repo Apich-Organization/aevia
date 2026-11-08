@@ -71,7 +71,7 @@ use std::collections::HashSet;
 mod sparse;
 
 /// What a name exported by a module denotes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Export {
     /// A function or value binding.
     Value {
@@ -85,6 +85,7 @@ pub enum Export {
     /// A variant constructor.
     Ctor {
         /// The type it belongs to.
+        #[serde(with = "crate::persist::adt_ref")]
         adt: adt::AdtId,
         /// Its position in the type.
         index: usize,
@@ -96,6 +97,7 @@ pub enum Export {
     /// (as a value) must work, so the export carries both.
     TypeCtor {
         /// The type.
+        #[serde(with = "crate::persist::adt_ref")]
         adt: adt::AdtId,
         /// The constructor's position.
         index: usize,
@@ -105,6 +107,7 @@ pub enum Export {
     /// A nominal type.
     Type {
         /// The registered type.
+        #[serde(with = "crate::persist::adt_ref")]
         adt: adt::AdtId,
     },
     /// A transparent type alias.
@@ -131,7 +134,7 @@ pub enum Export {
 /// The checker picks the overload; the runtime must execute this key and never
 /// resolve again, or a program would run a different overload than it was
 /// typed against.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RssnCall {
     /// Where the call is written.
     pub span: Span,
@@ -144,7 +147,7 @@ pub struct RssnCall {
 }
 
 /// What a class-method call site should execute (round-2 decision 1c).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DictTarget {
     /// The exact instance the checker proved, identified symbolically.
     Instance(InstanceKey),
@@ -166,7 +169,7 @@ pub enum DictTarget {
 }
 
 /// A builtin operation the runtime already implements structurally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BuiltinDispatch {
     /// The structural `Show` printer (records, `Dyn`, unit values, …).
     ShowStructural,
@@ -179,7 +182,7 @@ pub enum BuiltinDispatch {
 ///
 /// `aevia-core` must dispatch `method` on `head` to the body of the instance
 /// this record names (`target`), instead of to a global of the same name.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DictionaryUse {
     /// Where the call is written.
     pub span: Span,
@@ -194,7 +197,7 @@ pub struct DictionaryUse {
 }
 
 /// A method used as a value, resolved at its defining source reference.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClassMethodRef {
     /// Full nominal class identity, independent of its visible spelling.
     pub class: ClassKey,
@@ -203,7 +206,7 @@ pub struct ClassMethodRef {
 }
 
 /// One explicitly ordered generic binder on a source function.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GenericBinder {
     Type(Type),
     Representation(Rep),
@@ -253,7 +256,7 @@ impl GenericBinder {
 }
 
 /// The lexical boundary exited by a source `?` operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TryBoundary {
     /// A real source function/lambda (never an implementation thunk).
     Function(Span),
@@ -261,14 +264,14 @@ pub enum TryBoundary {
     Do(Span),
 }
 /// The checked destination and result container of one source `?`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TryTarget {
     pub boundary: TryBoundary,
     pub result: Type,
 }
 
 /// The checked signature that belongs to the actual source function body.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FunctionEvidence {
     /// Source return boundary, retained independently of callable identity.
     pub site: Span,
@@ -442,7 +445,7 @@ fn constructor_binders(scheme: &Scheme) -> Vec<GenericBinder> {
 }
 
 /// One class exported with a module's interface (§7.1.3/§7.4).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClassExport {
     /// The symbolic identity.
     pub key: ClassKey,
@@ -453,13 +456,14 @@ pub struct ClassExport {
 }
 
 /// One instance exported with a module's interface.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InstanceExport {
     /// The symbolic identity: module + class key + canonical head.
     pub key: InstanceKey,
     /// The head type, for re-registration and diagnostics.
     pub head: Type,
     /// The specialised method types (`a` substituted by the head).
+    #[serde(with = "crate::persist::sorted_map")]
     pub methods: HashMap<String, Type>,
     /// True when it came from `derive`; the runtime needs this to know the
     /// instance body is the builtin structural operation, not a user body.
@@ -468,7 +472,7 @@ pub struct InstanceExport {
 
 /// The kind of one parameter of a generic declaration (§2: the annotation may
 /// be omitted and the kind then inferred from the body).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AliasParamKind {
     /// A type parameter (`type Pair<a, b>`).
     Type,
@@ -485,7 +489,7 @@ pub enum AliasParamKind {
 /// `Export::Alias` carries only the arity today; an importer cannot expand an
 /// alias without the body, which is why `type Vec2` was `E0301` from another
 /// module (§7.4). This is the definition the interface carries.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AliasExport {
     /// The number of parameters.
     pub params: usize,
@@ -500,7 +504,7 @@ pub struct AliasExport {
 ///
 /// The flat [`CheckedModule::exports`] table remains for the current driver and
 /// editor; this is the complete interface and the thing an importer merges.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ModuleInterface {
     /// The module path.
     pub name: ModulePath,
@@ -521,7 +525,7 @@ pub struct ModuleInterface {
 /// The interface of a checked module.
 
 /// The two type-directed `Dyn` primitives of §3.11/§4.9.4.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum DynPrimitive {
     /// `dyn(x)`: the static dimension `d` is materialised into the value.
     Dyn,
@@ -539,7 +543,7 @@ pub enum DynPrimitive {
 /// materialisation is redundant but harmless); for `check` it is the answer the
 /// runtime must compare against — without it `check` cannot fail and `E0412`
 /// is unreachable.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DynCall {
     /// Where the call is written.
     pub span: Span,
@@ -550,7 +554,7 @@ pub struct DynCall {
 }
 
 /// The stability marker of a declaration (§13.8.1).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Stability {
     /// Stable within a major version.
     Stable,
@@ -561,7 +565,7 @@ pub enum Stability {
 }
 
 /// Which host extension a [`HostRegistration`] is (§13.5.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HostRegistrationKind {
     /// `@op("name")`: an Aevia function exposed as an RSSN operator.
     Op,
@@ -573,7 +577,7 @@ pub enum HostRegistrationKind {
 ///
 /// The checker proves the declaration and names the operator; publishing it to
 /// the kernel is a runtime/bridge step (the Aevia function is a host callback).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HostRegistration {
     /// Where the attribute is written.
     pub span: Span,
@@ -587,10 +591,15 @@ pub struct HostRegistration {
     /// dimension of each (`Dim::one()` for a non-scalar or unresolved one).
     /// The runtime traces the function on symbols of these dimensions.
     pub params: Vec<(String, Dim)>,
+    /// The dimension of the function's result once checked (`Dim::one()`
+    /// for a non-scalar or unresolved one). With [`Self::params`] it is the
+    /// operator's dimension signature: dimension variables of a polymorphic
+    /// function stay variables, which the kernel solves at each use.
+    pub result: Dim,
 }
 
 /// The interface of a checked module.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CheckedModule {
     /// The module path, when declared.
     pub name: Option<Vec<String>>,
@@ -599,18 +608,24 @@ pub struct CheckedModule {
     pub identity: Option<ModulePath>,
     /// Every locally declared constructor, including private types. Runtime
     /// initialization pins the exact registry witness from this compilation.
+    #[serde(with = "crate::persist::adt_pair_map")]
     pub constructors: IndexMap<String, (adt::AdtId, usize)>,
     /// Checked source constructor expressions and patterns, excluding value aliases.
+    #[serde(with = "crate::persist::sorted_adt_pair_map")]
     pub constructor_refs: HashMap<Span, (adt::AdtId, usize)>,
     /// Function signatures by declaration/lambda site, retaining body variables.
+    #[serde(with = "crate::persist::sorted_map")]
     pub functions: HashMap<Span, FunctionEvidence>,
     pub function_headers: IndexMap<String, Vec<GenericBinder>>,
     /// Exact source origins and binder projections for visible callable names.
     pub callable_exports: IndexMap<String, CallableProjection>,
+    #[serde(with = "crate::persist::sorted_map")]
     pub generic_refs: HashMap<Span, Vec<GenericBinder>>,
     /// Source-authenticated selections in the actual declaration's order.
+    #[serde(with = "crate::persist::sorted_map")]
     pub callable_refs: HashMap<Span, CallableProjection>,
     /// Exact lexical destinations for `?`, including deferred IO boundaries.
+    #[serde(with = "crate::persist::sorted_map")]
     pub try_targets: HashMap<Span, TryTarget>,
     /// The file this module came from, used to build a deterministic module
     /// path when there is no `module` declaration (`<fileN>`).
@@ -618,8 +633,10 @@ pub struct CheckedModule {
     /// Exported names.
     pub exports: IndexMap<String, Export>,
     /// The unit table after user declarations.
+    #[serde(with = "crate::persist::default_units")]
     pub units: UnitTable,
     /// The dimension environment after user declarations.
+    #[serde(with = "crate::persist::default_dims")]
     pub dims: DimEnv,
     /// Names of `test` declarations, in order.
     pub tests: Vec<String>,
@@ -630,6 +647,7 @@ pub struct CheckedModule {
     pub dyn_calls: Vec<DynCall>,
     /// `to_system`/`from_system` call sites (§5.11.5): the system and the SI
     /// dimension of the quantity on the SI side of the conversion.
+    #[serde(with = "crate::persist::sorted_map")]
     pub system_calls: HashMap<Span, (String, Dim)>,
     /// The stability marker of each declared name (§13.8.1).
     pub stability: IndexMap<String, Stability>,
@@ -642,8 +660,10 @@ pub struct CheckedModule {
     /// All classes declared locally, including private runtime declarations.
     pub local_classes: IndexMap<ClassKey, ClassExport>,
     /// Exact runtime instance declarations keyed by their source site.
+    #[serde(with = "crate::persist::sorted_map")]
     pub instance_sites: HashMap<Span, InstanceExport>,
     /// First-class method references with their resolved nominal identity.
+    #[serde(with = "crate::persist::sorted_map")]
     pub method_refs: HashMap<Span, ClassMethodRef>,
     /// Instances this module declares, with the registry identity the runtime
     /// needs (round-2 decision 1b).
@@ -668,6 +688,7 @@ pub struct CheckedModule {
     /// runtime representation disagreed. The IR lowering and the evaluator must
     /// materialise each literal at the representation recorded here, which is
     /// the explicit coercion at the boundary the type says is there.
+    #[serde(with = "crate::persist::sorted_map")]
     pub literal_reps: HashMap<Span, Rep>,
     /// Constant regions (§3.10.4): the root of every closed literal
     /// arithmetic tree whose static representation is inexact (`Float`,
@@ -678,6 +699,7 @@ pub struct CheckedModule {
     /// the nearest `f64` to `3/10` and the static type still agrees with the
     /// runtime value. A tree whose exact evaluation fails (a division by
     /// zero) is evaluated step by step in its static representation instead.
+    #[serde(with = "crate::persist::sorted_map")]
     pub constant_regions: HashMap<Span, Rep>,
     /// The module's unit system (§5.11), when it declares one.
     pub unit_system: Option<String>,
@@ -694,6 +716,7 @@ pub struct CheckedModule {
     ///
     /// This is what lets a language server answer "what is the type of *this*
     /// expression". [`Self::exports`] answers the same question for a name.
+    #[serde(with = "crate::persist::sorted_map")]
     pub expr_types: HashMap<Span, Type>,
     /// Number of errors.
     pub errors: usize,
@@ -739,7 +762,7 @@ impl CheckedModule {
 /// host-extension attributes need the plugin ABI. The set is a plain list of
 /// names so `aevia-types` stays independent of the manifest's shape; a caller
 /// fills it from the kernel's own table ([`CheckOptions::default`] does).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Capabilities {
     names: std::collections::BTreeSet<String>,
 }
@@ -812,7 +835,7 @@ impl Capabilities {
 }
 
 /// Options for one check.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CheckOptions {
     /// The backend capabilities to check against (§13.8.2).
     pub capabilities: Capabilities,
@@ -883,7 +906,7 @@ pub fn check_module_with_interfaces(
 
 /// The visible binding of one direct imported interface. Nominal identities
 /// remain on its types and keys; `prefix` is only a source lookup name.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct InterfaceBinding {
     pub module: ModulePath,
     pub prefix: String,
@@ -1326,7 +1349,6 @@ fn bare_type_name(ty: &Ty) -> Option<&String> {
         | _ => None,
     }
 }
-
 
 #[derive(Clone, Copy, Debug, Default)]
 struct LiteralClass {
@@ -2057,8 +2079,54 @@ impl Checker {
                             );
                             continue;
                         }
-                        if let Some(arg) = attr.args.first() {
-                            self.error("E0210", "`@jit` takes no arguments", arg.value.span);
+                        // §13.9.4: `@jit(target = Cpu)` is the default target;
+                        // `Gpu(n)` and `Distributed(..)` are accepted by the
+                        // language and need a device backend, which is a
+                        // capability gap, not a syntax error.
+                        let mut bad_argument = false;
+                        for arg in &attr.args {
+                            let device = match (&arg.name, &arg.value.kind) {
+                                | (Some(name), ExprKind::Var(device)) if name == "target" => {
+                                    Some(device.as_str())
+                                },
+                                | (Some(name), ExprKind::Call { callee, .. }) if name == "target" => {
+                                    match &callee.kind {
+                                        | ExprKind::Var(device) => Some(device.as_str()),
+                                        | _ => None,
+                                    }
+                                },
+                                | _ => None,
+                            };
+                            match device {
+                                | Some("Cpu") => {},
+                                | Some(device @ ("Gpu" | "Distributed")) => {
+                                    let capability = if device == "Gpu" {
+                                        "core.gpu"
+                                    } else {
+                                        "core.distributed"
+                                    };
+                                    if !self.options.capabilities.has(capability) {
+                                        self.error_help(
+                                            "E1001",
+                                            format!("backend capability `{capability}` is missing"),
+                                            arg.value.span,
+                                            "this build compiles `@jit` functions for the CPU only; use `@jit` or `@jit(target = Cpu)`",
+                                        );
+                                        bad_argument = true;
+                                    }
+                                },
+                                | _ => {
+                                    self.error_help(
+                                        "E0210",
+                                        "`@jit` takes only `target = Cpu | Gpu(n) | Distributed(..)`",
+                                        arg.value.span,
+                                        "write `@jit` or `@jit(target = Cpu)`",
+                                    );
+                                    bad_argument = true;
+                                },
+                            }
+                        }
+                        if bad_argument {
                             continue;
                         }
                         if !self.options.capabilities.has("core.jit") {
@@ -2170,7 +2238,7 @@ impl Checker {
                                 "E1001",
                                 "backend capability `core.plugin.source` is missing",
                                 attr.span,
-                                "source-level operator and rule registration is not implemented; call the function normally (§13.5.2)",
+                                "this build has no in-process kernel plugins, which `@op`/`@rule` publish into; call the function normally (§13.5.2)",
                             );
                             continue;
                         }
@@ -2199,6 +2267,7 @@ impl Checker {
                             name: name_arg,
                             function,
                             params,
+                            result: Dim::one(),
                         });
                     },
                     // `@bench` (§9.12) and `@compile_fail` (§9.12) are read by
@@ -2933,11 +3002,14 @@ impl Checker {
         let mut registrations = self.registrations.clone();
         for registration in &mut registrations {
             if let Some(scheme) = self.globals.get(&registration.function) {
-                if let Type::Fn(params, _) = self.infer.resolve(&scheme.ty) {
+                if let Type::Fn(params, result) = self.infer.resolve(&scheme.ty) {
                     for ((_, dim), ty) in registration.params.iter_mut().zip(params.iter()) {
                         if let Type::Scalar(_, found) = self.infer.resolve(ty) {
                             *dim = self.infer.resolve_dim(&found);
                         }
+                    }
+                    if let Type::Scalar(_, found) = self.infer.resolve(&result) {
+                        registration.result = self.infer.resolve_dim(&found);
                     }
                 }
             }
@@ -8781,15 +8853,24 @@ impl Checker {
         let expected_diffusion = if name == "sdeint_diag" {
             self.diffusion_of(&state, span)
         } else {
+            let mut record_diffusion = None;
             let elem = match self.infer.resolve(&state) {
                 | Type::Scalar(_, _) => state.clone(),
                 | Type::Tensor { shape, elem } if shape.rank() == 1 => (*elem).clone(),
+                // A record state: the diffusion is a record of the same shape whose
+                // fields carry a trailing noise axis (`GeneralDiffusionOf<s>`).
+                | Type::Record(_) => {
+                    record_diffusion = Some(self.general_diffusion_of(&state, span));
+                    state.clone()
+                },
                 | other => {
                     self.error_help(
                         "E0302",
-                        format!("`sdeint_general` needs a scalar or rank-1 state, found {other}"),
+                        format!(
+                            "`sdeint_general` needs a scalar, rank-1 or record state, found {other}"
+                        ),
                         span,
-                        "use `sdeint_diag` for a record state, or pass a `Tensor<1, Float>` state",
+                        "pass a `Float`, a `Tensor<1, Float>` or a closed record of them as the state",
                     );
                     for arg in &args[1..] {
                         self.synth(arg);
@@ -8797,7 +8878,9 @@ impl Checker {
                     return Type::Error;
                 },
             };
-            if elem.is_error() {
+            if let Some(record) = record_diffusion {
+                record
+            } else if elem.is_error() {
                 Type::Error
             } else {
                 Type::tensor(Shape::Rank(2), self.diffusion_of(&elem, span))
@@ -9675,9 +9758,9 @@ impl Checker {
             }
             return Type::Str;
         }
-        if let Some((_, dense)) = builtins::sparse_parts(&resolved) {
-            let dense = dense.clone();
-            return self.sparse_index(&dense, indices, span);
+        if let Some((format, dense)) = builtins::sparse_parts(&resolved) {
+            let (format, dense) = (format.clone(), dense.clone());
+            return self.sparse_index(&format, &dense, indices, span);
         }
         let Type::Tensor { shape, elem } = resolved else {
             self.error(
@@ -11053,6 +11136,81 @@ impl Checker {
         }
     }
 
+    /// §8.9.1: the diffusion of `sdeint_general` for a state `s` with `m` noise
+    /// channels (the channel count is a run-time check, like the matrix width of
+    /// a rank-1 state): `GeneralDiffusionOf<s>` is `DiffusionOf<s>` with a
+    /// trailing noise axis on every leaf.
+    ///
+    /// ```text
+    /// GeneralDiffusionOf<Scalar<ρ,d>>   = Tensor<1, Scalar<ρ, d / T^(1/2)>>
+    /// GeneralDiffusionOf<Tensor<n, τ>>  = Tensor<n + 1, DiffusionOf<τ>>
+    /// GeneralDiffusionOf<{ l: τ, … }>   = { l: GeneralDiffusionOf<τ>, … }
+    /// ```
+    ///
+    /// Flattening it field by field, row-major, is the kernel's `n x m` diffusion
+    /// matrix (a scalar field is one row of `m` coefficients).
+    fn general_diffusion_of(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> Type {
+        let resolved = self.infer.resolve(ty);
+        match resolved {
+            | Type::Scalar(..) => {
+                let leaf = self.diffusion_of(&resolved, span);
+                if leaf.is_error() {
+                    Type::Error
+                } else {
+                    Type::tensor(Shape::Rank(1), leaf)
+                }
+            },
+            | Type::Tensor { shape, elem } => {
+                let leaf = self.diffusion_of(&elem, span);
+                if leaf.is_error() {
+                    return Type::Error;
+                }
+                let shape = match shape {
+                    | Shape::Rank(rank) => Shape::Rank(rank + 1),
+                    | Shape::Refined(mut items) => {
+                        items.push(None);
+                        Shape::Refined(items)
+                    },
+                };
+                Type::Tensor {
+                    shape,
+                    elem: Box::new(leaf),
+                }
+            },
+            | Type::Record(row) => {
+                if row.tail_var().is_some() {
+                    self.error_help(
+                        "E0302",
+                        "an SDE state cannot be an open record",
+                        span,
+                        "write the state as a closed record type",
+                    );
+                    return Type::Error;
+                }
+                let fields = row
+                    .fields()
+                    .into_iter()
+                    .map(|(name, ty)| (name, self.general_diffusion_of(&ty, span)))
+                    .collect::<Vec<_>>();
+                Type::Record(Row::closed(fields))
+            },
+            | Type::Var(_) => {
+                let scalar = self.force_scalar(&resolved);
+                if matches!(self.infer.resolve(&scalar), Type::Error) {
+                    Type::Error
+                } else {
+                    self.general_diffusion_of(&scalar, span)
+                }
+            },
+            // `Int`/`Bool`/function fields: the same `E0302` as `DiffusionOf`.
+            | other => self.diffusion_of(&other, span),
+        }
+    }
+
     fn convert_shape(
         &mut self,
         shape: &ShapeAst,
@@ -11847,6 +12005,12 @@ fn is_attribute_constant(expr: &Expr) -> bool {
                 .all(|piece| matches!(piece, StrPiece::Text(_)))
         },
         | ExprKind::Var(_) | ExprKind::QName(_) => true,
+        // A constructor applied to constants (`Gpu(0)`, §13.9.4) is a
+        // constant: constructors are capitalised, functions are not.
+        | ExprKind::Call { callee, args } => {
+            matches!(&callee.kind, ExprKind::Var(name) if name.starts_with(char::is_uppercase))
+                && args.iter().all(is_attribute_constant)
+        },
         | ExprKind::Unary { op, operand } => {
             matches!(op, UnOp::Neg | UnOp::Pos | UnOp::Not) && is_attribute_constant(operand)
         },

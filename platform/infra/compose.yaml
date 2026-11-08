@@ -1,0 +1,105 @@
+# Aevia registry — single-host deployment.
+#
+# Works with `podman compose` (Podman 5+, compose provider installed),
+# `podman-compose`, and `docker compose`. No `version:` key: it is obsolete in
+# Compose v2 and rejected by podman-compose.
+#
+#   ./deploy.sh up
+#
+# Everything the services read comes from ./.env (see .env.example). compose also
+# auto-loads that file for the ${...} interpolation below, which is why the
+# healthcheck escapes it as $${...} — the shell inside the container expands it.
+name: aevia
+
+# One logging policy for all three services. json-file is understood by Docker
+# and by Podman (it aliases to k8s-file); the size caps are what keeps a chatty
+# access log from filling the host disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Containerfile.postgres
+      args:
+        POSTGRES_IMAGE: postgres:18-trixie
+    image: localhost/aevia/postgres:18-trixie
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Pinned here as well as in the image so an operator reading compose.yaml
+      # sees the path that the volume below mounts.
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - aevia-db:/var/lib/postgresql/data
+    # Deliberately no `ports:`. The database is reachable only over the compose
+    # network, by service name. Publishing 5432 would put it on the host's
+    # interfaces, where a single weak password is the only thing between it and
+    # the internet — and the registry needs no external database client.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging: *logging
+    mem_limit: 1g
+
+  registry:
+    build:
+      context: ..
+      dockerfile: infra/Containerfile.server
+      args:
+        RUST_VERSION: "1.97"
+      # The language crates live in a sibling checkout, outside the main
+      # context. See the header of infra/Containerfile.server.
+      additional_contexts:
+        lang: ../../crates
+    image: localhost/aevia/registry:0.1.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # `:U` makes podman chown the volume to the container uid (10001) on first
+      # use. Without it a rootless volume is owned by the mapped root user and
+      # the non-root process cannot create its archive directories. Docker
+      # ignores the flag and uses the ownership baked into the image.
+      - aevia-data:/var/lib/aevia/packages:U
+    ports:
+      # Loopback only. Caddy is the only thing that speaks to the outside world;
+      # the plaintext listener must not be reachable from the LAN.
+      - "127.0.0.1:8080:8080"
+    logging: *logging
+    mem_limit: 2g
+
+  caddy:
+    # Official image; the binary is a static Go build, so its Debian base is
+    # irrelevant to the registry's glibc requirements.
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"        # ACME HTTP-01 challenge and the HTTP->HTTPS redirect
+      - "443:443"      # HTTPS
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - caddy-data:/data      # certificates and ACME account keys
+      - caddy-config:/config
+    depends_on:
+      - registry
+    logging: *logging
+    mem_limit: 256m
+
+volumes:
+  aevia-db:
+  aevia-data:
+  caddy-data:
+  caddy-config:

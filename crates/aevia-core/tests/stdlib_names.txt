@@ -46,6 +46,7 @@ bessel_y0
 bessel_yn
 beta
 binomial
+block_size
 by_cases
 cancel
 cbrt
@@ -53,6 +54,7 @@ cdf
 ceil
 centroid
 cg
+cg_with
 chebyshev_fit
 chebyshev_t
 chebyshev_u
@@ -267,6 +269,7 @@ scatter_with
 schema
 sde_ensemble_seed
 sde_order
+sde_order_with
 sdeint_diag
 sdeint_general
 select
@@ -312,6 +315,7 @@ sym_ne
 take
 tan
 tanh
+to_bcsr
 to_callback
 to_dense
 to_device

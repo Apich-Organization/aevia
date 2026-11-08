@@ -1,0 +1,46 @@
+# Mirror of the language workspace root (`../Cargo.toml` in the language
+# repository), reduced to the four crates aevia-registry-docs pulls in through
+# its default `compiler` feature: aevia-doc -> aevia-syntax, aevia-fmt;
+# aevia-fmt -> aevia-syntax, aevia-dim; aevia-syntax -> aevia-dim.
+#
+# It exists because those crates inherit `version`/`edition`/`rust-version`/
+# `license`/`repository` and their external dependencies via `.workspace = true`,
+# and cargo refuses to load a crate whose workspace root it cannot find. The
+# real root sits above `crates/`, outside both build contexts, so the Containerfile
+# copies this file to /build/Cargo.toml instead.
+#
+# Keep the two tables below in step with the language repository. If it adds a
+# `.workspace = true` dependency to one of these four crates, add the key here
+# too — cargo fails with "dependency `<name>` was not found in `workspace.dependencies`"
+# until you do.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/aevia-dim",
+    "crates/aevia-syntax",
+    "crates/aevia-fmt",
+    "crates/aevia-doc",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+repository = "https://github.com/Apich-Organization/aevia"
+
+[workspace.dependencies]
+aevia-dim = { path = "crates/aevia-dim" }
+aevia-syntax = { path = "crates/aevia-syntax" }
+aevia-fmt = { path = "crates/aevia-fmt" }
+aevia-doc = { path = "crates/aevia-doc" }
+
+indexmap = { version = "2", features = ["serde"] }
+num-bigint = { version = "0.4", features = ["serde"] }
+num-integer = "0.1"
+num-rational = { version = "0.4", features = ["serde"] }
+num-traits = "0.2"
+serde = { version = "1", features = ["derive", "rc"] }
+unicode-ident = "1"
+unicode-normalization = "0.1"

@@ -1,0 +1,32 @@
+[Unit]
+Description=Aevia TLS edge (Caddy)
+Requires=aevia-registry.container aevia.network
+After=aevia-registry.container aevia.network
+
+[Container]
+ContainerName=aevia-caddy
+Image=caddy:2
+# The only unit whose image comes from a registry, so the only one where
+# `podman auto-update` means something. Caddy publishes patch releases for TLS
+# and ACME issues; picking them up unattended is worth more than the churn.
+AutoUpdate=registry
+Network=aevia.network
+
+PublishPort=80:80
+PublishPort=443:443
+# HTTP/3. Optional but free once 443/udp is published.
+PublishPort=443:443/udp
+
+# The Caddyfile is the whole configuration; see infra/Caddyfile.
+Volume=%h/.config/aevia/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+# Certificates and ACME account keys live here. Losing this directory only means
+# re-issuing certificates, but it does count against Let's Encrypt rate limits.
+Volume=%h/.local/share/aevia/caddy/data:/data:Z
+Volume=%h/.local/share/aevia/caddy/config:/config:Z
+LogDriver=journald
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,31 @@
+[Unit]
+Description=Aevia package registry
+Requires=aevia-db.container aevia-data.volume aevia.network
+After=aevia-db.container aevia-data.volume aevia.network
+
+[Container]
+ContainerName=aevia-registry
+Image=localhost/aevia/registry:0.1.0
+Network=aevia.network
+
+# Loopback only: Caddy is the only process that speaks to the outside world.
+PublishPort=127.0.0.1:8080:8080
+
+# :U because the image runs as uid 10001, not as the mapped root that owns a
+# fresh rootless volume.
+Volume=aevia-data.volume:/var/lib/aevia/packages:U
+
+EnvironmentFile=%h/.config/aevia/aevia.env
+LogDriver=journald
+
+
+# Deliberately no AutoUpdate=: this image is built on the host by deploy.sh, so
+# there is no registry to poll. Rebuild and restart instead (see README).
+
+[Service]
+Restart=always
+# Covers the sqlx migrations that run before the listener binds.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

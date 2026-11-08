@@ -1,0 +1,4 @@
+# Backups are produced by `deploy.sh backup`. They are database dumps and package
+# archives: never commit them, and copy them off this host.
+*
+!.gitignore

@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+#
+# aevia-db — PostgreSQL 18 on Debian 13.
+#
+# The upstream `postgres:18-trixie` tag already is exactly that: docker-library
+# builds it FROM debian:trixie-slim and installs the 18.x packages from the
+# trixie-pgdg apt repository (verified against 18/trixie/Dockerfile upstream).
+# Re-deriving it from debian:trixie-slim + `apt-get install postgresql` would
+# mean re-implementing initdb, the POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB
+# contract, gosu privilege dropping and the WAL/signal handling that the official
+# entrypoint gets right. So this file is a thin hardening layer, not a rebuild.
+#
+# Build (compose does it for you):
+#   docker build -f infra/Containerfile.postgres -t localhost/aevia/postgres:18-trixie infra/
+
+ARG POSTGRES_IMAGE=postgres:18-trixie
+FROM ${POSTGRES_IMAGE}
+
+# PostgreSQL 18 moved the official image's PGDATA to /var/lib/postgresql/18/docker
+# and its VOLUME to /var/lib/postgresql. We pin the documented path instead, so
+# operators have one volume to back up and one path in every command:
+# /var/lib/postgresql/data. The entrypoint honours PGDATA verbatim (it only runs
+# its "old volume mount" migration branch when PGDATA is the 18 default).
+ENV PGDATA=/var/lib/postgresql/data
+
+# Pre-create it owned by postgres: with `USER postgres` below, initdb runs
+# unprivileged and cannot chown anything, so the directory has to be right at
+# build time. 0700 is initdb's own requirement.
+RUN install -d -o postgres -g postgres -m 0700 /var/lib/postgresql/data
+
+VOLUME ["/var/lib/postgresql/data"]
+
+# The upstream image starts as root and drops to postgres with gosu. Running as
+# postgres directly removes that step: the entrypoint supports it (it skips the
+# gosu branch when uid != 0), and under rootless podman it also means the
+# container never holds a mapped-root process at all.
+USER postgres
+
+EXPOSE 5432
+
+# pg_isready returns 0 only when the postmaster accepts connections; -h forces a
+# TCP probe so a half-started server on the socket file is not mistaken for ready.
+# The shell form is required: POSTGRES_USER/POSTGRES_DB are container env, not
+# build args, so they must expand at run time.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=6 \
+    CMD pg_isready -h 127.0.0.1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}"

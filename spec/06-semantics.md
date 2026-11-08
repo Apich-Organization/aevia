@@ -250,6 +250,11 @@ let sol = dsolve(eq, y, t)           # Result<(Real[T] -> Real[L]), MathError>
 - `dsolve` 接受 `Prop` 方程、未知函数、自变量；返回解函数。
 - 解中的积分常数用 `C1`、`C2` 表示；用户可以 `subst` 或作为函数参数。
 - 数值 ODE 用 `odeint`（§8.9），不走 `dsolve`。
+- 第四个参数可选：初始/边界条件列表 `[y(0) == 1, …]`，用于确定积分常数。
+- 运行时：`symfun("y")` 的应用是 kernel 的未定函数结点 `apply(y, t)`，结果量纲取
+  检查器为该调用点解出的值域量纲；`dsolve` 把 `dsolve(eq, y(t)[, list(条件)])`
+  交给 rssn 的 ODE 求解器，答案为显式 `y(t) = F(t)` 时返回函数 `s ↦ F(s)`；隐式或
+  参数式解、或无闭式解时返回 `Err`（携带 kernel 的渲染），不猜测。
 
 ## 6.5 模式匹配
 

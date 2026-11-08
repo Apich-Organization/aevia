@@ -1,0 +1,26 @@
+[package]
+name = "aevia-registry-docs"
+description = "Renders aevia-doc output into the pages the documentation site serves"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# On by default: the documentation site is built by the compiler that will run
+# the package, not by a second, weaker parser. Turn it off only to build the
+# platform on a machine where the language repository is not checked out.
+default = ["compiler"]
+compiler = ["dep:aevia-doc", "dep:aevia-syntax"]
+
+[dependencies]
+aevia-registry-core.workspace = true
+ammonia.workspace = true
+aevia-doc = { workspace = true, optional = true }
+aevia-syntax = { workspace = true, optional = true }
+pulldown-cmark.workspace = true
+tracing.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

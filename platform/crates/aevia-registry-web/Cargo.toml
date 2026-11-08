@@ -1,0 +1,15 @@
+[package]
+name = "aevia-registry-web"
+description = "Leptos pages for aevia.apich.org, rendered server-side"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-registry-core.workspace = true
+leptos.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

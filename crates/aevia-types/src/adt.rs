@@ -51,7 +51,6 @@ pub fn key_of(id: AdtId) -> AdtKey {
     key
 }
 
-
 /// The stable lexical origin of an allocated declaration.
 #[must_use]
 pub fn module_of(id: AdtId) -> ModulePath {
@@ -68,6 +67,26 @@ fn completed() -> &'static RwLock<std::collections::HashSet<AdtId>> {
 fn schemas() -> &'static RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>> {
     static SCHEMAS: OnceLock<RwLock<HashMap<AdtId, crate::DeclarationSchemaKey>>> = OnceLock::new();
     SCHEMAS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+/// A complete, already-registered source type with exactly this symbolic key
+/// (module, name and declaration schema). The cache decoder reuses it instead
+/// of allocating a second witness for an unchanged declaration.
+#[must_use]
+pub fn find_complete(key: &AdtKey) -> Option<AdtId> {
+    let candidates: Vec<AdtId> = {
+        let guard = registry().read().ok()?;
+        let identities = modules().read().ok()?;
+        guard
+            .iter()
+            .enumerate()
+            .filter(|(_, adt)| adt.name == key.name)
+            .filter_map(|(index, _)| u32::try_from(index).ok())
+            .filter(|id| identities.get(id) == Some(&key.module))
+            .collect()
+    };
+    candidates
+        .into_iter()
+        .find(|id| is_complete(*id) && key_of(*id) == *key)
 }
 pub(crate) fn is_complete(id: AdtId) -> bool {
     completed().read().is_ok_and(|table| table.contains(&id))
@@ -119,7 +138,7 @@ pub fn set_module(
 
 /// The kind of one declared parameter of a variant type (§2: the kind may be
 /// omitted and inferred from the constructor fields, or written `<d: Dim>`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ParamKind {
     /// A type parameter (`type Tree<a>`).
     Type,
@@ -160,7 +179,7 @@ pub fn param_kinds_of(id: AdtId) -> Vec<ParamKind> {
 }
 
 /// One constructor of a variant type.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ctor {
     /// The constructor name.
     pub name: String,
@@ -169,7 +188,7 @@ pub struct Ctor {
 }
 
 /// A nominal variant type.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Adt {
     /// The type name.
     pub name: String,

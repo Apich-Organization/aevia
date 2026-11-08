@@ -115,6 +115,15 @@ These are the places where the implementation had to choose, and the reasoning:
   82 units and 30 constants at the time of writing), and symbolic values *are*
   rssn terms: an integral the local layer has no node for is carried by handle,
   not approximated.
+* **Source operators are kernel operators.** `@op("ns/name")` publishes a
+  function as a kernel definition with a dimension signature taken from its
+  checked type; on symbolic arguments the function then builds the operator
+  node, so `@rule`s, `diff` and `simplify` see the operator rather than its
+  expansion (§13.5.2).
+* **Checked modules are cached on disk.** `aevia check`/`run` keep a `.aevi`
+  file per module under `.aevia/cache/modules`; process-local ADT ids are
+  replaced by symbolic keys and remapped on load (§9.11.3). `--no-cache`
+  bypasses it and `aevia clean` removes it.
 * **Dimensions stop at the kernel boundary.** The term graph is dimensionless
   (§10.3.6); a result's dimension is restored from the static type and the
   argument, which is why `antiderivative(fn t: Real[L] => t)(2.0 m)` is `2 m^2`.

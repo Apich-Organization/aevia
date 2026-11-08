@@ -15,7 +15,8 @@
 //! `ValueKinds`). `call_ho` executes interpreter-owned callbacks in a
 //! thread-affine scope; the host-only `call` helper has no interpreter and
 //! cannot run non-empty callback lists. `register` and `register_plugin`
-//! still report `E1001`: source-level `@op` packaging is not implemented.
+//! take a host `Plugin`, which source cannot hold (`E0302`); source plugins
+//! are published by `@op`/`@rule` declarations and `load_plugin` (§13.5.2).
 //!
 //! # Two operator paths, one decision
 //!

@@ -40,11 +40,13 @@ dependencies = [
  "aevia-std",
  "aevia-syntax",
  "aevia-types",
+ "bincode",
  "indexmap",
  "num-bigint",
  "num-rational",
  "num-traits",
  "rayon",
+ "serde",
  "unicode-segmentation",
 ]
 
@@ -57,6 +59,7 @@ dependencies = [
  "num-integer",
  "num-rational",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -155,6 +158,7 @@ dependencies = [
  "num-bigint",
  "num-rational",
  "num-traits",
+ "serde",
  "unicode-ident",
  "unicode-normalization",
 ]
@@ -166,10 +170,12 @@ dependencies = [
  "aevia-dim",
  "aevia-rssn",
  "aevia-syntax",
+ "bincode",
  "indexmap",
  "num-bigint",
  "num-rational",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -262,6 +268,15 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bincode-next"
@@ -1053,6 +1068,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

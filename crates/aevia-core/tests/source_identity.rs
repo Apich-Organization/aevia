@@ -191,7 +191,6 @@ fn virtual_uri_schemes_without_double_slashes_remain_virtual_sources() {
     );
 }
 
-
 #[test]
 fn localhost_file_uri_uses_the_same_source_identity_as_the_editor_path() {
     let scratch = Scratch::new("localhost-uri");

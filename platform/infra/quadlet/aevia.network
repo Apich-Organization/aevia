@@ -1,0 +1,7 @@
+[Unit]
+Description=Aevia private network (db + registry + caddy)
+
+[Network]
+# Explicit name so the three units agree on it and `podman network inspect aevia`
+# works. Without NetworkName the network would be named after this unit file.
+NetworkName=aevia

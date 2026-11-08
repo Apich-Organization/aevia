@@ -153,6 +153,22 @@ impl Interp {
     /// Runs after the module's declarations are bound, so every function is a
     /// value. Each failure is an `E1006` at its attribute; the rest of the
     /// module's registrations still go through.
+    ///
+    /// The order is what makes source operators first-class:
+    ///
+    /// 1. every `@op` function is traced into a kernel definition, with its
+    ///    checked parameter and result dimensions as the operator's
+    ///    dimension signature;
+    /// 2. each traced function's binding is replaced by a wrapper
+    ///    ([`operator_wrapper`]): on numeric arguments it runs the Aevia body,
+    ///    on symbolic ones it builds the operator node `name(args…)`, so the
+    ///    symbolic layer and the kernel see `demo/softplus(x)` rather than its
+    ///    expansion;
+    /// 3. the `@rule` functions are traced *after* that, so a rule can be
+    ///    stated about a source operator (`softplus(-x) => softplus(x) - x`);
+    /// 4. one plugin carries the definitions, signatures and rewrites.
+    ///
+    /// If the kernel refuses the plugin, the original bindings are restored.
     pub fn publish_registrations_in(
         &mut self,
         registrations: &[HostRegistration],
@@ -164,42 +180,63 @@ impl Interp {
             return diagnostics;
         }
         let mut definitions = Vec::new();
+        let mut signatures = Vec::new();
         let mut rewrites = Vec::new();
         let mut published = Vec::new();
-        for registration in registrations {
-            let Some(function) = scope.lookup(&registration.function) else {
+        let mut replaced: Vec<(String, Value)> = Vec::new();
+        let fail =
+            |diagnostics: &mut Diagnostics, registration: &HostRegistration, reason: String| {
                 diagnostics.push(Diagnostic::error(
                     "E1006",
-                    format!("`{}` is not bound", registration.function),
+                    format!(
+                        "`@{}(\"{}\")` cannot be published: {reason}",
+                        kind_name(registration.kind),
+                        registration.name
+                    ),
                     registration.span,
                 ));
+            };
+        let ops = registrations
+            .iter()
+            .filter(|registration| registration.kind == HostRegistrationKind::Op);
+        let rules = registrations
+            .iter()
+            .filter(|registration| registration.kind == HostRegistrationKind::Rule);
+        for registration in ops {
+            let Some(function) = scope.lookup(&registration.function) else {
+                fail(
+                    &mut diagnostics,
+                    registration,
+                    format!("`{}` is not bound", registration.function),
+                );
                 continue;
             };
-            match trace(self, registration, function) {
+            match trace(self, registration, function.clone()) {
                 | Ok(text) => {
-                    match registration.kind {
-                        | HostRegistrationKind::Op => definitions.push(text),
-                        | HostRegistrationKind::Rule => rewrites.push(text),
-                    }
+                    definitions.push(text);
+                    signatures.push(aevia_rssn::SourceOpSignature {
+                        name: registration.name.clone(),
+                        params: registration
+                            .params
+                            .iter()
+                            .map(|(_, dim)| aevia_rssn::registry::to_dim_expr(dim))
+                            .collect(),
+                        result: aevia_rssn::registry::to_dim_expr(&registration.result),
+                    });
+                    let wrapper = operator_wrapper(registration, function.clone());
+                    scope
+                        .vars
+                        .borrow_mut()
+                        .insert(registration.function.clone(), wrapper);
+                    replaced.push((registration.function.clone(), function));
                     published.push(registration);
                 },
-                | Err(reason) => {
-                    diagnostics.push(Diagnostic::error(
-                        "E1006",
-                        format!(
-                            "`@{}(\"{}\")` cannot be published: {reason}",
-                            kind_name(registration.kind),
-                            registration.name
-                        ),
-                        registration.span,
-                    ));
-                },
+                | Err(reason) => fail(&mut diagnostics, registration, reason),
             }
         }
-        if definitions.is_empty() && rewrites.is_empty() {
-            return diagnostics;
-        }
-        // A REPL reloads modules; each load is its own plugin.
+        // The operators go to the kernel before any rule is traced: a rule
+        // about `softplus` builds the node `demo/softplus(..)`, which the
+        // kernel must already know.
         let serial = PLUGINS.with(|count| {
             let next = count.get() + 1;
             count.set(next);
@@ -210,23 +247,143 @@ impl Interp {
         } else {
             format!("aevia/{module}#{serial}")
         };
-        if let Err(reason) =
-            aevia_rssn::kernel().register_source_plugin(&name, "0.1.0", definitions, rewrites)
+        let refuse =
+            |diagnostics: &mut Diagnostics, published: &[&HostRegistration], reason: &str| {
+                for registration in published {
+                    diagnostics.push(Diagnostic::error(
+                        "E1006",
+                        format!(
+                            "the kernel refused `@{}(\"{}\")`: {reason}",
+                            kind_name(registration.kind),
+                            registration.name
+                        ),
+                        registration.span,
+                    ));
+                }
+            };
+        if !definitions.is_empty()
+            && let Err(reason) = aevia_rssn::kernel().register_source_plugin_with(
+                &name,
+                "0.1.0",
+                definitions,
+                Vec::new(),
+                signatures,
+            )
         {
-            for registration in published {
-                diagnostics.push(Diagnostic::error(
-                    "E1006",
-                    format!(
-                        "the kernel refused `@{}(\"{}\")`: {reason}",
-                        kind_name(registration.kind),
-                        registration.name
-                    ),
-                    registration.span,
-                ));
+            // The kernel has no such operators: calls must keep running the
+            // Aevia bodies rather than build nodes nobody can reduce.
+            for (function, original) in replaced {
+                scope.vars.borrow_mut().insert(function, original);
             }
+            refuse(&mut diagnostics, &published, &reason);
+            published.clear();
+        }
+        let mut rule_registrations = Vec::new();
+        for registration in rules {
+            let Some(function) = scope.lookup(&registration.function) else {
+                fail(
+                    &mut diagnostics,
+                    registration,
+                    format!("`{}` is not bound", registration.function),
+                );
+                continue;
+            };
+            match trace(self, registration, function) {
+                | Ok(text) => {
+                    rewrites.push(text);
+                    rule_registrations.push(registration);
+                },
+                | Err(reason) => fail(&mut diagnostics, registration, reason),
+            }
+        }
+        if !rewrites.is_empty()
+            && let Err(reason) = aevia_rssn::kernel().register_source_plugin_with(
+                &format!("{name}/rules"),
+                "0.1.0",
+                Vec::new(),
+                rewrites,
+                Vec::new(),
+            )
+        {
+            refuse(&mut diagnostics, &rule_registrations, &reason);
         }
         diagnostics
     }
+}
+
+/// Whether an argument is symbolic: a term with free symbols. A closed term
+/// (`pi`, `sqrt(2)`) is a number for this purpose; the body evaluates it.
+fn is_symbolic(value: &Value) -> bool {
+    match value {
+        | Value::Num(num) => {
+            match &num.kind {
+                | crate::value::NumKind::Sym(term) => !term.free_symbols().is_empty(),
+                | _ => false,
+            }
+        },
+        | _ => false,
+    }
+}
+
+/// The binding a published `@op` function is replaced with (§13.5.2).
+///
+/// * All arguments numeric (or closed terms): the original Aevia function
+///   runs. It is equal to what the kernel would compute from the definition
+///   and avoids a kernel round trip per call.
+/// * Some argument symbolic: the result is the operator node
+///   `name(args…)` (a kernel term, carried by handle), with the dimension
+///   the checked signature gives for the arguments' dimensions. Kernel
+///   requests on it — `diff`, `simplify`, `integrate`, numeric evaluation —
+///   see the operator, its definition and every `@rule` about it.
+fn operator_wrapper(
+    registration: &HostRegistration,
+    original: Value,
+) -> Value {
+    let name = registration.name.clone();
+    let params: Vec<aevia_dim::Dim> = registration
+        .params
+        .iter()
+        .map(|(_, dim)| dim.clone())
+        .collect();
+    let result = registration.result.clone();
+    Value::Native(Rc::new(crate::value::NativeFn(Box::new(
+        move |interp: &mut Interp, args: Vec<Value>, span| {
+            if !args.iter().any(is_symbolic) {
+                return interp.apply(original.clone(), args, span);
+            }
+            let mut unifier = aevia_dim::DimUnifier::new();
+            let mut kernel_args = Vec::with_capacity(args.len());
+            for (index, arg) in args.iter().enumerate() {
+                if let (Value::Num(num), Some(expected)) = (arg, params.get(index))
+                    && unifier.unify(expected, &num.dim).is_err()
+                {
+                    return Err(crate::eval::EvalError::new(
+                        "E0401",
+                        format!(
+                            "argument {} of `{name}` has dimension {}, the operator expects \
+                             {expected}",
+                            index + 1,
+                            num.dim
+                        ),
+                    )
+                    .at(span));
+                }
+                let term = crate::builtins::value_to_term(arg)?;
+                kernel_args.push(crate::kernel::term_val(&term)?);
+            }
+            let node = aevia_rssn::kernel()
+                .apply_node(&name, &kernel_args)
+                .map_err(|failure| crate::kernel::error(&failure).at(span))?;
+            let term = crate::kernel::term_of(&node).ok_or_else(|| {
+                crate::eval::EvalError::new(
+                    "E1003",
+                    format!("the kernel built no term for `{name}`"),
+                )
+                .at(span)
+            })?;
+            Ok(Value::Num(NumVal::symbolic(term, unifier.resolve(&result))))
+        },
+    ))))
 }
 
 /// `load_plugin(path)`: loads, checks and evaluates the module at `path`

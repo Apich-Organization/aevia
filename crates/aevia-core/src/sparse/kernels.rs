@@ -491,6 +491,43 @@ pub(crate) fn spmm<T: Clone, Rg: Ring<T>>(
     Ok(out)
 }
 
+/// `A · X` for a block-CSR `A` (`ptr`/`idx` over blocks, `vals` row-major
+/// `br x bc` slots per block) and a dense `X` of `n` columns.
+///
+/// The padding zeros inside a block are skipped, and every output entry
+/// accumulates its products in column order, so the result is bit-identical
+/// to the CSR kernel [`spmm`] with the `f64` ring.
+pub(crate) fn bsr_spmm_f64(
+    ptr: &[usize],
+    idx: &[usize],
+    vals: &[f64],
+    block: (usize, usize),
+    rows: usize,
+    x: &[f64],
+    n: usize,
+) -> Vec<f64> {
+    let (br, bc) = block;
+    let bs = br * bc;
+    let mut out = vec![0.0; rows * n];
+    for ib in 0..ptr.len().saturating_sub(1) {
+        for r in 0..br {
+            let row = &mut out[(ib * br + r) * n..(ib * br + r + 1) * n];
+            for k in ptr[ib]..ptr[ib + 1] {
+                for c in 0..bc {
+                    let v = vals[k * bs + r * bc + c];
+                    if v != 0.0 {
+                        let xr = &x[(idx[k] * bc + c) * n..(idx[k] * bc + c + 1) * n];
+                        for (o, xv) in row.iter_mut().zip(xr) {
+                            *o += v * xv;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// `X · B` for a dense `X` of `p` rows (`p = 1` is vector-matrix).
 pub(crate) fn dense_spmm<T: Clone, Rg: Ring<T>>(
     x: &[T],

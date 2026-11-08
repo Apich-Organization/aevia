@@ -1,0 +1,6 @@
+[Unit]
+Description=Aevia package archive root
+
+[Volume]
+# Holds every published .aevia tarball; the only state the registry itself owns.
+VolumeName=aevia-data

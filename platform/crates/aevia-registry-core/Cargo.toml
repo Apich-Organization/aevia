@@ -1,0 +1,29 @@
+[package]
+name = "aevia-registry-core"
+description = "Domain types for the Aevia registry: names, manifests, tarballs, signed statements, index records"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+ed25519-dalek.workspace = true
+flate2.workspace = true
+hex.workspace = true
+pgp.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -597,9 +597,9 @@ pub struct Interp {
     pub dyn_calls: HashMap<Span, Dim>,
     /// Host registrations (`@op`/`@rule`) the checker accepted (§13.5.2).
     ///
-    /// Publishing them to the kernel is a bridge step this build does not
-    /// implement; the runtime reports the named `core.plugin.source` gap
-    /// instead of silently dropping them.
+    /// The loader publishes them to the kernel once the module's functions
+    /// are bound ([`Interp::publish_registrations_in`]): definitions with
+    /// dimension signatures first, then the rules.
     pub registrations: Vec<aevia_types::check::HostRegistration>,
     /// The representation the checker instantiated for every numeric literal,
     /// keyed by the literal's span (§3.10.1, §6.3.2).
@@ -4798,6 +4798,73 @@ impl Interp {
             return index_string(text, indices, span);
         }
         if let Value::Sparse(sparse) = &base {
+            if indices
+                .iter()
+                .any(|index| matches!(index, SliceValue::Range { .. }))
+            {
+                // §8.4.1: a range keeps its axis, an integer removes it; the
+                // stored entries are filtered, never densified.
+                if indices.len() != sparse.rank() {
+                    return Err(EvalError::new(
+                        "E0802",
+                        format!(
+                            "a rank-{} sparse tensor is sliced by {} selector(s), found {}",
+                            sparse.rank(),
+                            sparse.rank(),
+                            indices.len()
+                        ),
+                    )
+                    .at(span));
+                }
+                let mut axes = Vec::with_capacity(indices.len());
+                for (axis, index) in indices.iter().enumerate() {
+                    let extent = sparse.shape[axis];
+                    match index {
+                        | SliceValue::Index(value) => {
+                            let coordinate = value.unwrap_or(0.0) as isize;
+                            let at = normalize_index(coordinate, extent).ok_or_else(|| {
+                                EvalError::new(
+                                    "E0802",
+                                    format!(
+                                        "index {coordinate} is out of bounds for axis {axis} of extent {extent}"
+                                    ),
+                                )
+                                .at(span)
+                            })?;
+                            axes.push(crate::sparse::SliceAxis::At(at));
+                        },
+                        | SliceValue::Range {
+                            start,
+                            end,
+                            inclusive,
+                            step,
+                        } => {
+                            if let Some(step) = step {
+                                let (start, count, step) =
+                                    walk_range(*start, *end, *step, extent, span)?;
+                                axes.push(crate::sparse::SliceAxis::Walk { start, count, step });
+                                continue;
+                            }
+                            let lo =
+                                normalize_bound(start.map_or(0, |v| v as isize), extent, false);
+                            let hi = normalize_bound(
+                                end.map_or(extent as isize, |v| v as isize),
+                                extent,
+                                *inclusive,
+                            );
+                            if lo > hi {
+                                return Err(EvalError::new("E0802", "empty slice").at(span));
+                            }
+                            axes.push(crate::sparse::SliceAxis::Walk {
+                                start: lo,
+                                count: hi - lo,
+                                step: 1,
+                            });
+                        },
+                    }
+                }
+                return crate::sparse::slice(sparse, &axes, span);
+            }
             let mut coordinates = Vec::with_capacity(indices.len());
             for index in indices {
                 match index {
@@ -4805,7 +4872,7 @@ impl Interp {
                     | _ => {
                         return Err(EvalError::new(
                             "E0802",
-                            "a sparse tensor is indexed by one Int per axis (slicing a sparse tensor is not defined)",
+                            "a sparse tensor is indexed by one Int per axis",
                         )
                         .at(span));
                     },
@@ -5508,7 +5575,6 @@ impl EvalError {
         self
     }
 }
-
 
 fn to_complex(num: &NumVal) -> (f64, f64) {
     match &num.kind {
@@ -7344,7 +7410,6 @@ fn drop_indexed_axes(
     data.verified_element = None;
     Value::Tensor(Rc::new(data))
 }
-
 
 /// The coherent value of a `Float` unit literal, rounded **once** (§3.10.4).
 ///

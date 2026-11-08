@@ -518,7 +518,8 @@ fn malformed_options_are_e0802() {
         "the message names the missing field"
     );
 
-    // The non-commutative method without any Lévy-area modes.
+    // `terms = 0` is the documented default (`clamp(ceil(1/sqrt(dt)), 16, 4096)`),
+    // not an error, for the Lévy-area methods.
     let options = fixed_options_with_terms(
         method(5, "MilsteinNoncommutative"),
         structure("GeneralNoncommutative", Some(1)),
@@ -536,58 +537,49 @@ fn malformed_options_are_e0802() {
             ))
         },
     ))));
-    let error = err_payload(
+    let path = ok_payload(
         call(
             "sdeint_general",
             vec![identity_drift(), matrix, Value::float(1.0), options],
         ),
-        "terms missing",
+        "terms defaulted",
     );
-    assert_eq!(error.name, "Invalid");
-    assert!(
-        aevia_core::value::show(&Value::Variant(error)).contains("terms"),
-        "the message asks for the Lévy-area modes"
-    );
+    assert_eq!(float_of(&path.fields["noise"]), 1.0);
 }
 
-/// Capability gaps surface as `Unsupported` with the capability name, not as a
-/// silently different scheme.
+/// The former capability gaps (`sde.interpretation`, `sde.noncommutative`) are closed:
+/// adaptive Stratonovich integrates (exact Itô conversion) and the Lévy-area method
+/// takes any structure.
 #[test]
-fn unsupported_combinations_name_their_capability() {
-    let capability_of = |value: Value, context: &str| -> String {
-        let error = err_payload(value, context);
-        assert_eq!(error.name, "Unsupported", "{context}: {error:?}");
-        match error.fields.first() {
-            | Some(Value::Str(text)) => text.to_string(),
-            | other => panic!("{context}: the capability is a string, found {other:?}"),
-        }
-    };
+fn the_former_capability_gaps_now_integrate() {
+    for (index, name) in [
+        (2, "MilsteinStratonovich"),
+        (3, "HeunStratonovich"),
+        (4, "SrkPlaten"),
+    ] {
+        let options = adaptive_options(
+            method(index, name),
+            structure("Diagonal", None),
+            9,
+            0,
+            0.05,
+            1e-3,
+        );
+        let path = ok_payload(
+            call(
+                "sdeint_diag",
+                vec![
+                    identity_drift(),
+                    unit_diffusion(),
+                    Value::float(1.0),
+                    options,
+                ],
+            ),
+            name,
+        );
+        assert!(float_of(&path.fields["steps"]) >= 1.0, "{name}");
+    }
 
-    // A Stratonovich scheme has no adaptive controller in this build.
-    let options = adaptive_options(
-        method(3, "HeunStratonovich"),
-        structure("Diagonal", None),
-        9,
-        0,
-        0.05,
-        1e-3,
-    );
-    let capability = capability_of(
-        call(
-            "sdeint_diag",
-            vec![
-                identity_drift(),
-                unit_diffusion(),
-                Value::float(1.0),
-                options,
-            ],
-        ),
-        "adaptive Stratonovich",
-    );
-    assert_eq!(capability, "sde.interpretation");
-
-    // The non-commutative method requires non-commutative noise. The Lévy-area
-    // mode count is valid, so the *combination* is what is reported.
     let options = fixed_options_with_terms(
         method(5, "MilsteinNoncommutative"),
         structure("Diagonal", None),
@@ -596,7 +588,7 @@ fn unsupported_combinations_name_their_capability() {
         1,
         2,
     );
-    let capability = capability_of(
+    let path = ok_payload(
         call(
             "sdeint_diag",
             vec![
@@ -606,51 +598,168 @@ fn unsupported_combinations_name_their_capability() {
                 options,
             ],
         ),
-        "non-commutative on diagonal",
+        "non-commutative method on diagonal noise",
     );
-    assert_eq!(capability, "sde.noncommutative");
-}
-#[test]
-fn general_noise_with_a_record_state_is_named_gap() {
-    let drift: Value = Value::Native(Rc::new(NativeFn(Box::new(
-        |_interp: &mut aevia_core::Interp, _args: Vec<Value>, _span: Span| {
-            Ok(record(vec![("x", Value::float(0.0))]))
-        },
-    ))));
-    let diffusion: Value = Value::Native(Rc::new(NativeFn(Box::new(
-        |_interp: &mut aevia_core::Interp, _args: Vec<Value>, _span: Span| {
-            Ok(aevia_core::eval::build_tensor(
-                vec![Value::float(1.0)],
-                vec![1, 1],
-                aevia_dim::Dim::one(),
-            ))
-        },
-    ))));
-    let initial = record(vec![("x", Value::float(1.0))]);
+    assert_eq!(float_of(&path.fields["steps"]), 1.0);
+
+    // the new method name round-trips through the dispatcher
     let options = fixed_options(
-        method(0, "EulerMaruyama"),
-        structure("General", Some(1)),
+        method(6, "MilsteinNoncommutativeStratonovich"),
+        structure("Diagonal", None),
         1,
         0.1,
-        1,
+        2,
     );
-    let error = err_payload(
-        call("sdeint_general", vec![drift, diffusion, initial, options]),
+    let path = ok_payload(
+        call(
+            "sdeint_diag",
+            vec![
+                identity_drift(),
+                unit_diffusion(),
+                Value::float(1.0),
+                options,
+            ],
+        ),
+        "MilsteinNoncommutativeStratonovich",
+    );
+    let Value::Variant(reported) = &path.fields["method"] else {
+        panic!("the path reports its method");
+    };
+    assert_eq!(reported.name, "MilsteinNoncommutativeStratonovich");
+}
+
+/// `sde_order_with` reports the order for a method on a structure; `sde_order` keeps its
+/// commutative meaning.
+#[test]
+fn sde_order_with_depends_on_the_structure() {
+    let strong = |method_value: Value, structure_value: Value| -> f64 {
+        let Value::Record(order) = call("sde_order_with", vec![method_value, structure_value])
+        else {
+            panic!("sde_order_with answers a record")
+        };
+        float_of(&order.fields["strong"])
+    };
+    assert_eq!(
+        strong(
+            method(3, "HeunStratonovich"),
+            structure("GeneralNoncommutative", Some(2))
+        ),
+        0.5
+    );
+    assert_eq!(
+        strong(method(3, "HeunStratonovich"), structure("Diagonal", None)),
+        1.0
+    );
+    assert_eq!(
+        strong(
+            method(1, "Milstein"),
+            structure("GeneralNoncommutative", Some(2))
+        ),
+        1.0
+    );
+    let Value::Record(order) = call("sde_order", vec![method(3, "HeunStratonovich")]) else {
+        panic!("sde_order answers a record")
+    };
+    assert_eq!(float_of(&order.fields["strong"]), 1.0);
+}
+
+/// General noise with a record state: the diffusion is a record of the same shape whose
+/// fields carry a noise axis (`GeneralDiffusionOf<s>`). With constant coefficients the EM
+/// path is exact, `y_T = y_0 + sum_k G dW_k`, so it can be checked against `wiener`; the
+/// diffusion record is written in the opposite field order to prove fields are matched by
+/// name, not by position.
+#[test]
+fn general_noise_with_a_record_state_integrates() {
+    let zero_rate: Value = Value::Native(Rc::new(NativeFn(Box::new(
+        |_interp: &mut aevia_core::Interp, _args: Vec<Value>, _span: Span| {
+            Ok(record(vec![
+                ("x", Value::float(0.0)),
+                (
+                    "v",
+                    aevia_core::eval::build_tensor(
+                        vec![Value::float(0.0), Value::float(0.0)],
+                        vec![2],
+                        aevia_dim::Dim::one(),
+                    ),
+                ),
+            ]))
+        },
+    ))));
+    // x: scalar field -> 2 coefficients; v: rank-1 field of 2 -> [2, 2].
+    let diffusion: Value = Value::Native(Rc::new(NativeFn(Box::new(
+        |_interp: &mut aevia_core::Interp, _args: Vec<Value>, _span: Span| {
+            Ok(record(vec![
+                (
+                    "v",
+                    aevia_core::eval::build_tensor(
+                        vec![
+                            Value::float(0.3),
+                            Value::float(-0.1),
+                            Value::float(0.0),
+                            Value::float(0.4),
+                        ],
+                        vec![2, 2],
+                        aevia_dim::Dim::one(),
+                    ),
+                ),
+                (
+                    "x",
+                    aevia_core::eval::build_tensor(
+                        vec![Value::float(0.1), Value::float(0.2)],
+                        vec![2],
+                        aevia_dim::Dim::one(),
+                    ),
+                ),
+            ]))
+        },
+    ))));
+    let initial = record(vec![
+        ("x", Value::float(1.0)),
+        (
+            "v",
+            aevia_core::eval::build_tensor(
+                vec![Value::float(0.0), Value::float(0.5)],
+                vec![2],
+                aevia_dim::Dim::one(),
+            ),
+        ),
+    ]);
+    let (seed, steps, dt) = (3, 6, 0.1);
+    let options = fixed_options(
+        method(0, "EulerMaruyama"),
+        structure("General", Some(2)),
+        seed,
+        dt,
+        steps,
+    );
+    let path = ok_payload(
+        call(
+            "sdeint_general",
+            vec![zero_rate, diffusion, initial, options],
+        ),
         "sdeint_general with a record state",
     );
-    assert_eq!(error.name, "Unsupported");
-    assert!(
-        error
-            .fields
-            .first()
-            .and_then(|value| {
-                match value {
-                    | Value::Str(text) => Some(text.to_string()),
-                    | _ => None,
-                }
-            })
-            .is_some_and(|capability| capability == "sde.general.record"),
-        "the Err payload names the capability: {:?}",
-        error.fields
+    assert_eq!(float_of(&path.fields["noise"]), 2.0);
+    let states = tensor_of(&path.fields["y"]).elements();
+    let Value::Record(last) = states.last().expect("a final state") else {
+        panic!("the states are records")
+    };
+    let w = aevia_std::sde::wiener(seed as u64, 2, steps as usize, dt);
+    let (w0, w1): (f64, f64) = (
+        w.iter().map(|row| row[0]).sum(),
+        w.iter().map(|row| row[1]).sum(),
     );
+    let x = float_of(&last.fields["x"]);
+    assert!((x - (1.0 + 0.1 * w0 + 0.2 * w1)).abs() < 1e-12, "x = {x}");
+    let v: Vec<f64> = tensor_of(&last.fields["v"])
+        .elements()
+        .iter()
+        .map(float_of)
+        .collect();
+    assert!(
+        (v[0] - (0.3 * w0 - 0.1 * w1)).abs() < 1e-12,
+        "v0 = {}",
+        v[0]
+    );
+    assert!((v[1] - (0.5 + 0.4 * w1)).abs() < 1e-12, "v1 = {}", v[1]);
 }

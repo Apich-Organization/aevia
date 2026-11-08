@@ -16,7 +16,6 @@
 //! `cargo run -p aevia-stdlib-gen -- --write` to regenerate,
 //! or pass `--check` to verify without modifying files.
 
-
 /// One embedded module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Module {
@@ -219,7 +218,14 @@ mod tests {
                     // Modules whose spec section declares real types (options,
                     // the nominal `Distribution<d>`, FFT's `Norm`) carry them.
                     .filter(|_| {
-                        !["Ode", "Sde", "Stats/Distributions", "FFT"].contains(&path.as_str())
+                        ![
+                            "Ode",
+                            "Sde",
+                            "Stats/Distributions",
+                            "FFT",
+                            "LinearAlgebra/Sparse",
+                        ]
+                        .contains(&path.as_str())
                             && !path.starts_with("Physics/")
                     })
                 {

@@ -357,7 +357,6 @@ fn a_manifest_only_nominal_origin_change_invalidates_the_cached_program() {
     );
 }
 
-
 #[test]
 fn unsaved_imports_share_one_source_snapshot_and_close_restores_disk() {
     let (package, source) = imported_package("all-overlays");

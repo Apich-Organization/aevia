@@ -1,0 +1,150 @@
+# syntax=docker/dockerfile:1.7
+#
+# aevia-registry — the aevia.apich.org service binary.
+#
+# Build context is the platform repository root (this file lives in infra/):
+#
+#   docker build -f infra/Containerfile.server \
+#       --build-context lang=../crates \
+#       -t localhost/aevia/registry:0.1.0 .
+#
+# The extra `lang` context is mandatory, not a convenience. The workspace's
+# crates/aevia-registry-docs depends on `../crates/aevia-doc` and
+# `../crates/aevia-syntax`, i.e. on the language repository that is checked out
+# *next to* this one. Paths outside the main context cannot be COPYed, so the
+# language crates/ tree is supplied as a second, read-only context. compose.yaml
+# (additional_contexts) and deploy.sh pass it for you.
+#
+# Multi-arch: the image is built for the host's own architecture. On the aarch64
+# host that is a native build; on x86_64 use `--platform linux/arm64` with qemu
+# binfmt installed (see docs/DEPLOY.md). Nothing here hard-codes a target triple.
+
+ARG RUST_VERSION=1.97
+
+# --- builder ---------------------------------------------------------------
+# rust:1.97-slim-trixie is the pinned toolchain (workspace rust-version = 1.97)
+# on Debian 13. It ships gcc and libc6-dev, which the `ring` assembly needs.
+FROM rust:${RUST_VERSION}-slim-trixie AS builder
+
+# Never let cargo write an incremental cache: it doubles the layer size and the
+# build is a one-shot.
+ENV CARGO_INCREMENTAL=0 \
+    CARGO_TERM_COLOR=never
+
+WORKDIR /build/platform
+
+# Layer 1 — manifests only. This layer changes only when a manifest changes, so
+# the dummy build below is reused for every source-only rebuild.
+COPY Cargo.toml Cargo.lock ./
+COPY crates/aevia-registry-core/Cargo.toml   crates/aevia-registry-core/Cargo.toml
+COPY crates/aevia-registry-db/Cargo.toml     crates/aevia-registry-db/Cargo.toml
+COPY crates/aevia-registry-docs/Cargo.toml   crates/aevia-registry-docs/Cargo.toml
+COPY crates/aevia-registry-web/Cargo.toml    crates/aevia-registry-web/Cargo.toml
+COPY crates/aevia-registry-server/Cargo.toml crates/aevia-registry-server/Cargo.toml
+COPY crates/aevia-pkg/Cargo.toml             crates/aevia-pkg/Cargo.toml
+
+# Layer 1b — the language crates pulled in by the `compiler` feature of
+# aevia-registry-docs. Only their manifests are needed to resolve the graph.
+COPY --from=lang aevia-doc/Cargo.toml    /build/crates/aevia-doc/Cargo.toml
+COPY --from=lang aevia-syntax/Cargo.toml /build/crates/aevia-syntax/Cargo.toml
+COPY --from=lang aevia-fmt/Cargo.toml    /build/crates/aevia-fmt/Cargo.toml
+COPY --from=lang aevia-dim/Cargo.toml    /build/crates/aevia-dim/Cargo.toml
+
+# The language crates inherit version/edition/license and their external
+# dependencies from the language workspace root (`../Cargo.toml`), which lives
+# above crates/ and is therefore in neither build context. This checked-in file
+# reproduces exactly those two inherited tables; it is the one piece of the
+# build that must be kept in step with the language repository.
+COPY infra/lang-workspace.toml /build/Cargo.toml
+
+# Layer 2 — dummy sources. Compiling the whole third-party graph against an
+# empty crate is what makes the cache work: every dependency is built once, in a
+# layer keyed only by Cargo.toml/Cargo.lock, and real source edits never
+# invalidate it.
+RUN set -eux; \
+    for c in aevia-registry-core aevia-registry-db aevia-registry-docs aevia-registry-web; do \
+        mkdir -p "crates/$c/src"; : > "crates/$c/src/lib.rs"; \
+    done; \
+    for c in aevia-registry-server aevia-pkg; do \
+        mkdir -p "crates/$c/src"; echo 'fn main() {}' > "crates/$c/src/main.rs"; \
+    done; \
+    for c in aevia-doc aevia-syntax aevia-fmt aevia-dim; do \
+        mkdir -p "/build/crates/$c/src"; : > "/build/crates/$c/src/lib.rs"; \
+    done
+
+# --locked keeps the build honest: the committed Cargo.lock is the dependency
+# set, and a stale lockfile fails loudly instead of silently re-resolving.
+# Override with --build-arg CARGO_LOCKED= while manifests are in flux.
+ARG CARGO_LOCKED=--locked
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    cargo build --release -p aevia-registry-server ${CARGO_LOCKED}
+
+# Layer 3 — real sources. Everything above is cached; only the workspace crates
+# are recompiled here.
+COPY crates ./crates
+COPY --from=lang aevia-doc    /build/crates/aevia-doc
+COPY --from=lang aevia-syntax /build/crates/aevia-syntax
+COPY --from=lang aevia-fmt    /build/crates/aevia-fmt
+COPY --from=lang aevia-dim    /build/crates/aevia-dim
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    cargo build --release -p aevia-registry-server ${CARGO_LOCKED} && \
+    install -D -m 0755 target/release/aevia-registry /out/aevia-registry && \
+    strip --strip-all /out/aevia-registry
+
+# --- runtime ---------------------------------------------------------------
+# No toolchain, no cargo registry, no source tree: the final image carries a
+# stripped binary and two shared libraries' worth of Debian. Nothing in the
+# image can be used to rebuild or to read the build's intermediate state.
+FROM debian:trixie-slim AS runtime
+
+# ca-certificates: outbound TLS to github.com and orcid.org for the OAuth flows.
+# curl: the healthcheck below. It is ~1.5 MB with its dependencies and is the
+# smallest tool in Debian that exits non-zero on both a refused connection and
+# an HTTP error status; `wget --spider` is not in trixie-slim either and treats
+# several 4xx responses as success. No libssl is installed: the binary links
+# rustls (see Cargo.lock: `ring`, no `openssl-sys`), so there is nothing to keep
+# in step with a system TLS library.
+#
+# The service account is created with a plain `useradd`, not `--system`: that flag
+# implies a uid below 1000, and 10001 is deliberately above the range systemd
+# hands out to dynamic users, so `:U` volume ownership stays stable across hosts
+# and reboots.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd --system --gid 10001 aevia; \
+    useradd --uid 10001 --gid aevia \
+        --home-dir /var/lib/aevia --no-create-home \
+        --shell /usr/sbin/nologin aevia; \
+    install -d -o aevia -g aevia -m 0750 /var/lib/aevia/packages
+
+COPY --from=builder /out/aevia-registry /usr/local/bin/aevia-registry
+
+# The archive root is the only path the process writes. Declared as a volume so
+# an anonymous run still persists packages, and so the mount point is documented
+# in the image metadata.
+VOLUME ["/var/lib/aevia/packages"]
+
+# Numeric user: rootless podman maps the container's uid 10001 onto a high host
+# uid, so no host user has to exist. 10001 is above the range systemd allocates
+# to dynamic users, which keeps `:U` volume ownership stable across hosts.
+USER 10001:10001
+
+EXPOSE 8080
+
+# Defaults mirrored from the binary so `podman inspect` shows them. Every one is
+# overridable at run time; see .env.example for the full contract.
+ENV AEVIA_BIND=0.0.0.0:8080 \
+    AEVIA_STORAGE_DIR=/var/lib/aevia/packages \
+    RUST_LOG=aevia_registry=info,tower_http=warn
+
+# /healthz answers 200 only when the database answers, so --fail is the whole
+# test. start-period covers the sqlx migrations the binary runs before it binds.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["curl", "--fail", "--silent", "--show-error", "--max-time", "4", \
+         "http://127.0.0.1:8080/healthz"]
+
+ENTRYPOINT ["/usr/local/bin/aevia-registry"]

@@ -15,6 +15,7 @@ num-traits.workspace = true
 unicode-ident.workspace = true
 unicode-normalization.workspace = true
 indexmap.workspace = true
+serde.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

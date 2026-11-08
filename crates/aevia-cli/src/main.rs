@@ -434,9 +434,16 @@ packages:
   resolved, so a bare `aevia-std = \"0.1\"` in `[dependencies]` is `E0605`.
 
 known gaps (each command says so rather than pretending):
-  `clean` removes `.aevia/`, but this toolchain writes no build cache yet, so
-  it normally reports that there is nothing to clean. `--release` is accepted
-  and reported as having no effect."
+  `--release` is accepted and reported as having no effect.
+
+build cache (§9.11):
+  `check` and `run` keep one `.aevi` file per checked module (the standard
+  library included) under `.aevia/cache/modules/` next to the entry file, and
+  `check` also replays whole unchanged programs from `.aevia/cache/`. An entry
+  is keyed by the module's source, its imports' interfaces, the capability set
+  and the compiler build, so an edit rechecks only what it can change; a bad
+  file is just a miss. `--no-cache` switches both caches off for that command;
+  `aevia clean` removes `.aevia/`."
     );
 }
 
@@ -500,15 +507,37 @@ fn entry_path(
 /// the entry file's directory — so `aevia run examples/modules/main.aev` still
 /// reads `examples/modules/Geometry/Shapes.aev`.
 fn load_at(path: &Path) -> Program {
-    match Package::owning(path) {
+    load_at_with(path, false)
+}
+
+/// [`load_at`], optionally through the per-module `.aevi` cache (§9.11) that
+/// lives in `.aevia/cache/modules/` next to the entry file.
+fn load_at_with(
+    path: &Path,
+    cached: bool,
+) -> Program {
+    let roots = match Package::owning(path) {
         | Ok(Some(package)) => {
             match package.roots() {
-                | Ok(roots) => driver::load_with_roots(path, roots),
-                | Err(error) => manifest_failure(&error),
+                | Ok(roots) => roots,
+                | Err(error) => return manifest_failure(&error),
             }
         },
-        | Ok(None) => driver::load(path),
-        | Err(error) => manifest_failure(&error),
+        | Ok(None) => aevia_core::manifest::Roots::adjacent(path),
+        | Err(error) => return manifest_failure(&error),
+    };
+    if cached {
+        let disk = aevia_core::disk_cache::DiskCache::beside(path);
+        let (program, _) = driver::load_with_disk_cache(
+            path,
+            roots,
+            &aevia_core::source::SourceOverlays::new(),
+            &aevia_types::check::CheckOptions::default(),
+            &disk,
+        );
+        program
+    } else {
+        driver::load_with_roots(path, roots)
     }
 }
 
@@ -537,6 +566,7 @@ fn run_command(
     let mut file: Option<String> = None;
     let mut example: Option<String> = None;
     let mut program_args: Vec<String> = Vec::new();
+    let mut no_cache = false;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index].as_str();
@@ -545,6 +575,7 @@ fn run_command(
             break;
         }
         match argument {
+            | "--no-cache" => no_cache = true,
             | "--example" => {
                 index += 1;
                 let Some(name) = args.get(index) else {
@@ -555,7 +586,7 @@ fn run_command(
             },
             | other if other.starts_with('-') => {
                 eprintln!(
-                    "aevia run: unknown option `{other}` (the options are `--example NAME`; \
+                    "aevia run: unknown option `{other}` (the options are `--example NAME` and `--no-cache`; \
                      program arguments go after `--`)"
                 );
                 return ExitCode::from(2);
@@ -587,7 +618,7 @@ fn run_command(
             | Err(code) => return code,
         }
     };
-    let program = match load_program(&path, style(options)) {
+    let program = match load_program_with(&path, style(options), !no_cache) {
         | Ok(program) => program,
         | Err(code) => return code,
     };
@@ -608,7 +639,7 @@ fn run_command(
     // call-depth guard: it has no `install_stack_budget` of its own.
     let replica_path = path.clone();
     interp.set_replica(std::sync::Arc::new(move || {
-        let program = load_at(&replica_path);
+        let program = load_at_with(&replica_path, !no_cache);
         if program.diagnostics.has_errors() {
             return Err("the program no longer checks".to_string());
         }
@@ -712,7 +743,16 @@ fn load_program(
     path: &Path,
     style: Style,
 ) -> Result<Program, ExitCode> {
-    let program = load_at(path);
+    load_program_with(path, style, false)
+}
+
+/// [`load_program`] with the per-module `.aevi` cache switched on or off.
+fn load_program_with(
+    path: &Path,
+    style: Style,
+    cached: bool,
+) -> Result<Program, ExitCode> {
+    let program = load_at_with(path, cached);
     if program.modules.is_empty() && program.diagnostics.has_errors() {
         report(&program.diagnostics, &program.sources, style);
         return Err(ExitCode::from(1));
@@ -733,7 +773,7 @@ fn check_command(
         .collect();
     if let Some(unknown) = files.iter().find(|argument| argument.starts_with('-')) {
         eprintln!(
-            "aevia check: unknown option `{unknown}` (the option is `--all`; a file is optional)"
+            "aevia check: unknown option `{unknown}` (the options are `--all` and `--no-cache`; a file is optional)"
         );
         return ExitCode::from(2);
     }
@@ -757,7 +797,7 @@ fn check_command(
     if let Some(Some(hit)) = cache.as_ref().map(check_cache::Entry::replay) {
         return hit;
     }
-    let program = load_at(&path);
+    let program = load_at_with(&path, !no_cache);
     let rendered = if program.diagnostics.is_empty() {
         String::new()
     } else {

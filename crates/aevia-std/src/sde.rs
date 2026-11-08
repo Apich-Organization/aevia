@@ -9,27 +9,40 @@
 //!
 //! # What is implemented
 //!
-//! | method | calculus | noise it may be used with | order (strong/weak) |
-//! |---|---|---|---|
-//! | `EulerMaruyama` | Itô | diagonal, commutative general, non-commutative general | 0.5 / 1 |
-//! | `Milstein` | Itô | diagonal, commutative general | 1 / 1 |
-//! | `MilsteinStratonovich` | Stratonovich | diagonal, commutative general | 1 / 1 |
-//! | `HeunStratonovich` | Stratonovich | diagonal, commutative general | 1 / 1 |
-//! | `SrkPlaten` | Itô | diagonal, commutative general | 1 / 1 |
-//! | `MilsteinNoncommutative` | Itô | general only (Lévy areas) | 1 / 1 |
+//! The **method name selects the scheme family and the calculus; the structure
+//! selects the commutative or the non-commutative kernel**:
+//!
+//! | method | calculus | commutative noise (`Diagonal`, `General{commutative: true}`) | non-commutative noise (`General{commutative: false}`) | order strong/weak |
+//! |---|---|---|---|---|
+//! | `EulerMaruyama` | Itô | Euler–Maruyama | Euler–Maruyama | 0.5 / 1 |
+//! | `Milstein` | Itô | Milstein | Milstein with Lévy areas | 1 / 1 |
+//! | `MilsteinStratonovich` | Stratonovich | Milstein (Strat.) | Milstein (Strat.) with Lévy areas | 1 / 1 |
+//! | `HeunStratonovich` | Stratonovich | Heun | Heun | 1 / 1 (commutative); **0.5 / 1** (non-commutative) |
+//! | `SrkPlaten` | Itô | Platen's derivative-free SRK | Kloeden–Platen SRK (11.1.7) with Lévy areas | 1 / 1 |
+//! | `MilsteinNoncommutative` | Itô | Milstein with Lévy areas (explicit alias) | same | 1 / 1 |
+//! | `MilsteinNoncommutativeStratonovich` | Stratonovich | Milstein (Strat.) with Lévy areas (alias) | same | 1 / 1 |
 //!
 //! The calculus is part of the method name, not an orthogonal option: nearly
 //! every Itô/Stratonovich mix-up in the wild is a scheme whose name does not say
-//! which integral it converges to.
+//! which integral it converges to. [`sde_order_for`] reports the order for a
+//! `(method, structure)` pair; [`sde_order`] is the commutative-noise order.
 //!
 //! Step policy is fixed (`dt`/`steps`, or an explicit **uniform** grid) or
 //! adaptive (`rtol`/`atol`, Brownian-bridge rejection in the kernel). Adaptive
-//! integration exists for the Itô commutative (`EulerMaruyama`/`Milstein`) and
-//! the non-commutative Milstein schemes; a Stratonovich adaptive combination is
-//! [`SdeError::Unsupported`] with a capability name, not a silent fallback. The
-//! kernel's adaptive controller returns the *Milstein* solution (its estimate is
-//! EM-vs-Milstein), which is stated in [`integrate`]'s documentation rather than
-//! hidden: asking for adaptive `EulerMaruyama` gets that same controlled path.
+//! integration works for every method:
+//!
+//! * Itô, commutative noise (`EulerMaruyama`, `Milstein`, `SrkPlaten`): the
+//!   kernel's embedded EM/Milstein controller, which returns the *Milstein*
+//!   solution, so these requests give the same controlled path (the requested
+//!   name is kept in [`Path::method`]);
+//! * Stratonovich, commutative noise (`MilsteinStratonovich`,
+//!   `HeunStratonovich`): **exact conversion to Itô form** — the drift becomes
+//!   `a~ = a + 1/2 sum_j (D_j g)_{.j}` and the Itô controller runs on `(a~, g)`.
+//!   The returned path is the controlled Itô–Milstein solution of the equivalent
+//!   Itô SDE, which converges to the Stratonovich solution;
+//! * non-commutative noise (and the `*Noncommutative*` methods): the fine-cell
+//!   controller with Chen's relation (`cells`, default [`DEFAULT_CELLS`]), the
+//!   Itô one, or the Itô-converted one for Stratonovich methods.
 //!
 //! # Determinism and the two RNG streams
 //!
@@ -40,7 +53,9 @@
 //!   therefore consume *the same numbers* — a test asserts the path equals a
 //!   hand-driven kernel EM run on `wiener`'s increments. Same build ⇒
 //!   bit-identical; cross-platform bit identity is not promised.
-//! * Fixed-step non-commutative Milstein and every adaptive path need the
+//! * Fixed-step schemes that use Lévy areas (every method on non-commutative
+//!   noise except Euler–Maruyama and Heun, and the `*Noncommutative*` methods)
+//!   and every adaptive path need the
 //!   kernel's internal xoshiro stream (`rssn::kernels::random::Rng`) because the
 //!   kernel samples Brownian bridges and Lévy areas as it goes. They are
 //!   seeded from [`Options::seed`] and deterministic for a given build; they do
@@ -53,13 +68,19 @@
 //! * Fixed-step kernels assume a uniform step; an explicit non-uniform grid is
 //!   rejected with `E0802` (use the adaptive schedule for variable steps).
 //! * A `General { commutative: true }` structure is a **claim by the caller**:
-//!   the Milstein/SRK/Heun corrections for general noise are only valid for
-//!   commutative noise. Passing `commutative: false` to them is `E1001`
-//!   (`sde.noncommutative`); use `MilsteinNoncommutative` there.
+//!   the Milstein/SRK corrections without Lévy areas are only valid for
+//!   commutative noise. Declare `commutative: false` and the same method names
+//!   dispatch to the Lévy-area kernels instead (no error).
 //! * Lévy areas are simulated with a finite Fourier expansion
-//!   ([`Options::terms`]); accuracy improves with the mode count, and the
-//!   non-commutative scheme is strong order one at best.
-//! * No events/root-finding and no dense output in this round.
+//!   ([`Options::terms`]) plus the Gaussian tail correction; accuracy improves
+//!   with the mode count. `terms == 0` means "default": [`default_terms`]
+//!   `= clamp(ceil(1/sqrt(h)), 16, 4096)` for the step (or the Brownian cell) `h`.
+//!   Non-commutative schemes are strong order one at best.
+//! * `HeunStratonovich` on non-commutative noise is accepted but is only strong
+//!   order 1/2 there (it uses no Lévy areas); use `MilsteinStratonovich` or a
+//!   `*Noncommutative*` method for order one.
+//! * No events/root-finding and no dense output in this round (`SdeError::Unsupported`,
+//!   capability `sde.events`, is reserved for them; no current combination produces it).
 //! * Ensembles run paths sequentially: an Aevia interpreter closure is
 //!   single-threaded (`!Send`), so the kernel's rayon ensemble cannot be used
 //!   without an `unsafe` callback. The per-path seed is derived from the pair
@@ -98,8 +119,8 @@ pub enum SdeError {
     StepLimit(String),
     /// An unsupported combination, naming the capability (`E1001`).
     Unsupported {
-        /// The capability a build would need (`core.sde`, `sde.noncommutative`,
-        /// `sde.interpretation`, `sde.events`, …).
+        /// The capability a build would need (`core.sde`, `sde.events`, …). The
+        /// former `sde.noncommutative` and `sde.interpretation` gaps are closed.
         capability: &'static str,
         /// What exactly is not implemented, for the note.
         detail: String,
@@ -135,6 +156,9 @@ impl SdeError {
         Self::Invalid(message.into())
     }
 
+    // Reserved for capabilities that are genuinely missing (`sde.events`); no current
+    // method/structure/step-policy combination produces it.
+    #[allow(dead_code)]
     fn unsupported(
         capability: &'static str,
         detail: impl Into<String>,
@@ -219,8 +243,13 @@ pub enum Method {
     HeunStratonovich,
     /// SRK–Platen (Itô), strong order 1 for commutative noise.
     SrkPlaten,
-    /// Milstein (Itô) for non-commutative noise, using simulated Lévy areas.
+    /// Milstein (Itô) with simulated Lévy areas, whatever the structure (an
+    /// explicit alias; `Milstein` already dispatches here on non-commutative
+    /// noise).
     MilsteinNoncommutative,
+    /// Milstein (Stratonovich) with simulated Lévy areas, whatever the structure
+    /// (an explicit alias of `MilsteinStratonovich` on non-commutative noise).
+    MilsteinNoncommutativeStratonovich,
 }
 
 /// Which stochastic integral a scheme converges to.
@@ -243,6 +272,7 @@ impl Method {
             | Self::HeunStratonovich => "heun_stratonovich",
             | Self::SrkPlaten => "srk_platen",
             | Self::MilsteinNoncommutative => "milstein_noncommutative",
+            | Self::MilsteinNoncommutativeStratonovich => "milstein_noncommutative_stratonovich",
         }
     }
 
@@ -256,6 +286,7 @@ impl Method {
             | "heun_stratonovich" | "heun" => Self::HeunStratonovich,
             | "srk_platen" | "srk" => Self::SrkPlaten,
             | "milstein_noncommutative" => Self::MilsteinNoncommutative,
+            | "milstein_noncommutative_stratonovich" => Self::MilsteinNoncommutativeStratonovich,
             | _ => return None,
         })
     }
@@ -268,7 +299,9 @@ impl Method {
             | Self::Milstein
             | Self::SrkPlaten
             | Self::MilsteinNoncommutative => Calculus::Ito,
-            | Self::MilsteinStratonovich | Self::HeunStratonovich => Calculus::Stratonovich,
+            | Self::MilsteinStratonovich
+            | Self::HeunStratonovich
+            | Self::MilsteinNoncommutativeStratonovich => Calculus::Stratonovich,
         }
     }
 }
@@ -286,7 +319,8 @@ pub struct Order {
     pub weak: f64,
 }
 
-/// The strong/weak order of `method`, as the kernel's documentation states it.
+/// The strong/weak order of `method` on **commutative** noise (see
+/// [`sde_order_for`] for a given structure), as the kernel's documentation states it.
 #[must_use]
 pub fn sde_order(method: Method) -> Order {
     match method {
@@ -303,13 +337,34 @@ pub fn sde_order(method: Method) -> Order {
         | Method::MilsteinStratonovich
         | Method::HeunStratonovich
         | Method::SrkPlaten
-        | Method::MilsteinNoncommutative => {
+        | Method::MilsteinNoncommutative
+        | Method::MilsteinNoncommutativeStratonovich => {
             Order {
                 strong: 1.0,
                 weak: 1.0,
             }
         },
     }
+}
+
+/// The strong/weak order of `method` on noise of the given `structure`.
+///
+/// As [`sde_order`], except that `HeunStratonovich` on non-commutative noise is
+/// only strong order 1/2 (it has no Lévy-area term), and that the schemes which
+/// dispatch to the Lévy-area kernels on non-commutative noise keep strong order
+/// one.
+#[must_use]
+pub fn sde_order_for(
+    method: Method,
+    structure: Structure,
+) -> Order {
+    if method == Method::HeunStratonovich && !structure.is_commutative() {
+        return Order {
+            strong: 0.5,
+            weak: 1.0,
+        };
+    }
+    sde_order(method)
 }
 
 /// How the diffusion enters the equation.
@@ -391,8 +446,8 @@ pub enum Schedule {
         /// Step budget; exhaustion is `E0807`.
         max_steps: usize,
         /// Brownian cells for the non-commutative adaptive solver on `[t0,t1]`.
-        /// Ignored by the commutative solver; must be positive when the method
-        /// is `MilsteinNoncommutative`.
+        /// Ignored by the commutative solvers; `0` selects [`DEFAULT_CELLS`] when
+        /// the non-commutative solver is used.
         cells: usize,
     },
 }
@@ -401,8 +456,8 @@ pub enum Schedule {
 ///
 /// There is no `Default`: a seed and a step are not guessable, so they are
 /// constructor arguments (the spec requires an explicit seed for reproducibility
-/// and an explicit step policy). [`Options::with_terms`] is required for
-/// [`Method::MilsteinNoncommutative`].
+/// and an explicit step policy). [`Options::with_terms`] is optional: `0` selects
+/// [`default_terms`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
     /// The scheme.
@@ -416,9 +471,8 @@ pub struct Options {
     pub t0: f64,
     /// The step policy.
     pub schedule: Schedule,
-    /// Fourier modes of the simulated Lévy areas; `0` until
-    /// [`Options::with_terms`] sets it, and required (> 0) for the
-    /// non-commutative method.
+    /// Fourier modes of the simulated Lévy areas; `0` (the default) selects
+    /// [`default_terms`] for the step (or Brownian cell) size.
     pub terms: usize,
 }
 
@@ -521,6 +575,29 @@ impl Options {
     ) -> Self {
         self.terms = terms;
         self
+    }
+}
+
+/// Brownian cells of the non-commutative adaptive solver when `cells == 0`.
+pub const DEFAULT_CELLS: usize = 4096;
+
+/// The default number of Fourier modes of the simulated Lévy areas for a step
+/// (or Brownian cell) of size `h`: `clamp(ceil(1 / sqrt(h)), 16, 4096)`.
+///
+/// The truncation error of the area decays like `h p^(-3/2)` with the kernel's
+/// Gaussian tail correction, so this rule keeps it far below the `O(h)` strong
+/// error of the scheme at an `O(m^2 / sqrt(h))` sampling cost per step.
+#[must_use]
+pub fn default_terms(h: f64) -> usize {
+    let h = h.abs();
+    if !(h.is_finite() && h > 0.0) {
+        return 16;
+    }
+    let p = (1.0 / h.sqrt()).ceil();
+    if p >= 4096.0 {
+        4096
+    } else {
+        (p as usize).max(16)
     }
 }
 
@@ -803,16 +880,22 @@ where
 /// adaptive path consume the kernel's internal stream (seeded from
 /// [`Options::seed`]); see the module docs.
 ///
-/// The adaptive controller integrates the Itô commutative pair with the kernel's
-/// Milstein-controlled step size: the returned states are the kernel's Milstein
-/// solution for both `EulerMaruyama` and `Milstein` requests. This is the
-/// kernel's documented contract, not a hidden substitution of the requested
-/// scheme's control law.
+/// The adaptive controller integrates with the kernel's Milstein-controlled
+/// step size: the returned states are the kernel's Milstein solution for the
+/// `EulerMaruyama`, `Milstein` and `SrkPlaten` requests (Itô). For the
+/// Stratonovich methods the drift is converted exactly to its Itô equivalent
+/// (`a~ = a + 1/2 sum_j (D_j g)_{.j}`) and the same controller runs on the
+/// converted SDE: the returned path is the controlled Itô–Milstein solution of
+/// the equivalent Itô SDE, which converges to the Stratonovich solution.
+/// Non-commutative noise uses the fine-cell controller (`cells`, default
+/// [`DEFAULT_CELLS`]). This is the kernel's documented contract, not a hidden
+/// substitution of the requested scheme's control law.
 ///
 /// # Errors
 ///
 /// `E0802` for shapes/parameters, `E0806` for a non-finite state, `E0807` for a
-/// step collapse, `E1001` (with a capability) for an unsupported combination.
+/// step collapse. No method/structure/step-policy combination is refused with
+/// `E1001` any more.
 pub fn integrate<A, G>(
     drift: A,
     diffusion: G,
@@ -917,11 +1000,6 @@ fn validate_options(
     if options.structure.noise(y0.len()) == 0 {
         return Err(SdeError::invalid("the noise dimension is zero"));
     }
-    if options.method == Method::MilsteinNoncommutative && options.terms == 0 {
-        return Err(SdeError::invalid(
-            "`milstein_noncommutative` needs `terms > 0` for the simulated Lévy areas",
-        ));
-    }
     match &options.schedule {
         | Schedule::Fixed { dt, steps } => {
             if !dt.is_finite() || *dt <= 0.0 {
@@ -957,60 +1035,10 @@ fn validate_options(
             if *max_steps == 0 {
                 return Err(SdeError::invalid("the step budget must be positive"));
             }
-            if options.method == Method::MilsteinNoncommutative && *cells == 0 {
-                return Err(SdeError::invalid(
-                    "the non-commutative adaptive method needs `cells > 0`",
-                ));
-            }
+            let _ = cells;
         },
     }
-    check_combination(options)
-}
-
-/// Rejects method/structure/step-policy combinations this build cannot honour.
-fn check_combination(options: &Options) -> Result<(), SdeError> {
-    let adaptive = matches!(options.schedule, Schedule::Adaptive { .. });
-    let commutative = options.structure.is_commutative();
-    if options.method == Method::MilsteinNoncommutative && commutative {
-        return Err(SdeError::unsupported(
-            "sde.noncommutative",
-            "`milstein_noncommutative` is for non-commutative noise; declare \
-             `General { commutative = false }`",
-        ));
-    }
-    if !commutative
-        && matches!(
-            options.method,
-            Method::Milstein
-                | Method::MilsteinStratonovich
-                | Method::HeunStratonovich
-                | Method::SrkPlaten
-        )
-    {
-        return Err(SdeError::unsupported(
-            "sde.noncommutative",
-            format!(
-                "`{}` uses derivative corrections valid only for commutative noise",
-                options.method.name()
-            ),
-        ));
-    }
-    if !adaptive {
-        return Ok(());
-    }
-    match options.method {
-        | Method::EulerMaruyama | Method::Milstein => Ok(()),
-        | Method::MilsteinNoncommutative => Ok(()),
-        | Method::MilsteinStratonovich | Method::HeunStratonovich | Method::SrkPlaten => {
-            Err(SdeError::unsupported(
-                "sde.interpretation",
-                format!(
-                    "this build has no adaptive controller for `{}`; use a fixed step",
-                    options.method.name()
-                ),
-            ))
-        },
-    }
+    Ok(())
 }
 
 /// The step size and count of a uniform explicit grid.
@@ -1041,6 +1069,29 @@ fn uniform_grid(times: &[f64]) -> Result<(f64, usize), SdeError> {
     Ok((dt, times.len() - 1))
 }
 
+/// Whether a fixed-step run needs the kernel's Lévy-area noise: the explicit
+/// `*Noncommutative*` methods always, and `Milstein`, `MilsteinStratonovich` and
+/// `SrkPlaten` on non-commutative noise. Euler–Maruyama and Heun use plain
+/// increments (and Heun is then only strong order 1/2).
+fn uses_levy_areas(options: &Options) -> bool {
+    match options.method {
+        | Method::MilsteinNoncommutative | Method::MilsteinNoncommutativeStratonovich => true,
+        | Method::Milstein | Method::MilsteinStratonovich | Method::SrkPlaten => {
+            !options.structure.is_commutative()
+        },
+        | Method::EulerMaruyama | Method::HeunStratonovich => false,
+    }
+}
+
+/// Whether an adaptive run uses the non-commutative (fine-cell) controller.
+fn adaptive_noncommutative(options: &Options) -> bool {
+    !options.structure.is_commutative()
+        || matches!(
+            options.method,
+            Method::MilsteinNoncommutative | Method::MilsteinNoncommutativeStratonovich
+        )
+}
+
 /// A fixed-step integration.
 fn fixed<A, G>(
     adapters: &Adapters<A, G>,
@@ -1057,13 +1108,28 @@ where
     let t0 = options.t0;
     let drift = |t: f64, y: &[f64], out: &mut [f64]| adapters.drift_at(t, y, out);
     let diffusion = |t: f64, y: &[f64], out: &mut [f64]| adapters.diffusion_at(t, y, out);
-    let states = if options.method == Method::MilsteinNoncommutative {
+    let states = if uses_levy_areas(options) {
         // Lévy areas are sampled by the kernel's stream (it needs the same Rng
         // that draws the bridge/fourier coefficients).
         let mut rng = Rng::new(options.seed);
-        let sample = kernel::sample_noise(&mut rng, noise, steps, dt, options.terms.max(1));
-        kernel::milstein_noncommutative(drift, diffusion, noise, t0, dt, y0, &sample)
-            .map_err(SdeError::from)?
+        let terms = if options.terms == 0 {
+            default_terms(dt)
+        } else {
+            options.terms
+        };
+        let sample = kernel::sample_noise(&mut rng, noise, steps, dt, terms);
+        match options.method {
+            | Method::MilsteinStratonovich | Method::MilsteinNoncommutativeStratonovich => {
+                kernel::milstein_noncommutative_stratonovich(
+                    drift, diffusion, noise, t0, dt, y0, &sample,
+                )
+            },
+            | Method::SrkPlaten => {
+                kernel::srk_noncommutative(drift, diffusion, noise, t0, dt, y0, &sample)
+            },
+            | _ => kernel::milstein_noncommutative(drift, diffusion, noise, t0, dt, y0, &sample),
+        }
+        .map_err(SdeError::from)?
     } else {
         let increments = wiener(options.seed, noise, steps, dt);
         match options.method {
@@ -1082,8 +1148,12 @@ where
             | Method::SrkPlaten => {
                 kernel::srk_platen(drift, diffusion, noise, t0, dt, y0, &increments)
             },
-            // Handled above; kept total for the match.
-            | Method::MilsteinNoncommutative => unreachable!("non-commutative path"),
+            // The explicit Lévy-area methods are routed by `uses_levy_areas`.
+            | Method::MilsteinNoncommutative | Method::MilsteinNoncommutativeStratonovich => {
+                return Err(SdeError::invalid(
+                    "internal: a Lévy-area method took the plain path",
+                ));
+            },
         }
         .map_err(SdeError::from)?
     };
@@ -1124,41 +1194,43 @@ where
     let noise = options.structure.noise(y0.len());
     let drift = |t: f64, y: &[f64], out: &mut [f64]| adapters.drift_at(t, y, out);
     let diffusion = |t: f64, y: &[f64], out: &mut [f64]| adapters.diffusion_at(t, y, out);
-    let path = if options.method == Method::MilsteinNoncommutative {
-        let cell_count = cells.max(1);
-        kernel::sde_adaptive_noncommutative_with(
-            drift,
-            diffusion,
-            noise,
-            options.t0,
-            t1,
-            y0,
-            &kernel::SdeNoncommutativeOptions {
-                base: kernel::SdeAdaptiveOptions {
-                    rtol,
-                    atol,
-                    seed: options.seed,
-                    max_steps,
-                },
-                cells: cell_count,
-                terms: options.terms.max(1),
-            },
-        )
+    let stratonovich = options.method.calculus() == Calculus::Stratonovich;
+    let base = kernel::SdeAdaptiveOptions {
+        rtol,
+        atol,
+        seed: options.seed,
+        max_steps,
+    };
+    let path = if adaptive_noncommutative(options) {
+        let cell_count = if cells == 0 {
+            DEFAULT_CELLS
+        } else {
+            cells
+        };
+        let cell_width = (t1 - options.t0) / cell_count as f64;
+        let terms = if options.terms == 0 {
+            default_terms(cell_width)
+        } else {
+            options.terms
+        };
+        let nc = kernel::SdeNoncommutativeOptions {
+            base,
+            cells: cell_count,
+            terms,
+        };
+        if stratonovich {
+            kernel::sde_adaptive_noncommutative_stratonovich_with(
+                drift, diffusion, noise, options.t0, t1, y0, &nc,
+            )
+        } else {
+            kernel::sde_adaptive_noncommutative_with(
+                drift, diffusion, noise, options.t0, t1, y0, &nc,
+            )
+        }
+    } else if stratonovich {
+        kernel::sde_adaptive_stratonovich_with(drift, diffusion, noise, options.t0, t1, y0, &base)
     } else {
-        kernel::sde_adaptive_with(
-            drift,
-            diffusion,
-            noise,
-            options.t0,
-            t1,
-            y0,
-            &kernel::SdeAdaptiveOptions {
-                rtol,
-                atol,
-                seed: options.seed,
-                max_steps,
-            },
-        )
+        kernel::sde_adaptive_with(drift, diffusion, noise, options.t0, t1, y0, &base)
     }
     .map_err(SdeError::from)?;
     if let Some(failure) = adapters.failure() {
@@ -1302,9 +1374,12 @@ mod tests {
             Method::MilsteinStratonovich,
             Method::HeunStratonovich,
             Method::SrkPlaten,
+            Method::MilsteinNoncommutative,
+            Method::MilsteinNoncommutativeStratonovich,
         ] {
             let (drift, diffusion) = gbm(0.02, 0.3);
-            let options = Options::fixed(method, Structure::Diagonal, 3, 0.0, 0.01, 10);
+            let options =
+                Options::fixed(method, Structure::Diagonal, 3, 0.0, 0.01, 10).with_terms(4);
             let path = integrate(drift, diffusion, &[1.0], &options)
                 .unwrap_or_else(|error| panic!("{}: {error}", method.name()));
             assert_eq!(path.method, method);
@@ -1419,7 +1494,7 @@ mod tests {
         assert_eq!(first.y, second.y, "same seed, same path");
         assert!(first.y.iter().flatten().all(|value| value.is_finite()));
 
-        // No `terms` is a parameter error, not a silent default.
+        // `terms == 0` selects the documented default rule, not an error.
         let missing = Options::fixed(
             Method::MilsteinNoncommutative,
             Structure::General {
@@ -1431,14 +1506,19 @@ mod tests {
             0.01,
             10,
         );
-        let error = integrate(
-            |_t: f64, _y: &[f64]| Ok(vec![0.0, 0.0]),
-            |_t: f64, _y: &[f64]| Ok(vec![0.0; 4]),
+        let defaulted = integrate(drift, diffusion, &[1.0, 1.0], &missing).expect("default terms");
+        let explicit = integrate(
+            drift,
+            diffusion,
             &[1.0, 1.0],
-            &missing,
+            &missing.clone().with_terms(default_terms(0.01)),
         )
-        .expect_err("terms are required");
-        assert_eq!(error.code(), "E0802");
+        .expect("explicit terms");
+        assert_eq!(defaulted.y, explicit.y, "terms = 0 means default_terms(dt)");
+        assert_eq!(default_terms(0.01), 16);
+        assert_eq!(default_terms(1e-4), 100);
+        assert_eq!(default_terms(1e-12), 4096);
+        assert_eq!(default_terms(0.0), 16);
     }
 
     #[test]
@@ -1585,8 +1665,8 @@ mod tests {
         .expect_err("step limit");
         assert_eq!(error.code(), "E0807");
 
-        // A Stratonovich method under an adaptive controller names the gap.
-        let error = integrate(
+        // A Stratonovich method under an adaptive controller now runs (Ito conversion).
+        let path = integrate(
             |_t: f64, _y: &[f64]| Ok(vec![0.0]),
             |_t: f64, _y: &[f64]| Ok(vec![0.1]),
             &[1.0],
@@ -1598,18 +1678,18 @@ mod tests {
                 1.0,
                 1e-3,
                 1e-6,
-                100,
+                10_000,
                 0,
             ),
         )
-        .expect_err("adaptive Stratonovich");
-        assert_eq!(error.code(), "E1001");
-        assert_eq!(error.capability(), Some("sde.interpretation"));
+        .expect("adaptive Stratonovich");
+        assert!(path.steps > 0);
 
-        // A commutative method on declared non-commutative noise names the gap.
-        let error = integrate(
+        // A commutative-only method on declared non-commutative noise dispatches
+        // to the Levy-area kernel instead of failing.
+        let path = integrate(
             |_t: f64, _y: &[f64]| Ok(vec![0.0, 0.0]),
-            |_t: f64, _y: &[f64]| Ok(vec![0.0; 4]),
+            |_t: f64, y: &[f64]| Ok(vec![0.1 * y[1], 0.1, 0.2, 0.1 * y[0]]),
             &[1.0, 1.0],
             &Options::fixed(
                 Method::Milstein,
@@ -1623,9 +1703,8 @@ mod tests {
                 2,
             ),
         )
-        .expect_err("non-commutative Milstein");
-        assert_eq!(error.code(), "E1001");
-        assert_eq!(error.capability(), Some("sde.noncommutative"));
+        .expect("non-commutative Milstein");
+        assert_eq!(path.steps, 2);
 
         // A non-uniform explicit grid is rejected: the kernel's fixed-step
         // solvers assume one step size.
@@ -1747,23 +1826,170 @@ mod tests {
     }
 
     #[test]
-    fn the_noncommutative_method_needs_noncommutative_noise() {
-        let error = integrate(
-            |_t: f64, _y: &[f64]| Ok(vec![0.0]),
-            |_t: f64, _y: &[f64]| Ok(vec![0.1]),
-            &[1.0],
-            &Options::fixed(
-                Method::MilsteinNoncommutative,
-                Structure::Diagonal,
-                1,
-                0.0,
-                0.01,
-                2,
+    fn the_noncommutative_methods_also_run_on_commutative_noise() {
+        // The Levy-area methods are valid for any structure (the areas just
+        // drop out of the commutative correction).
+        for method in [
+            Method::MilsteinNoncommutative,
+            Method::MilsteinNoncommutativeStratonovich,
+        ] {
+            let path = integrate(
+                |_t: f64, _y: &[f64]| Ok(vec![0.0]),
+                |_t: f64, y: &[f64]| Ok(vec![0.1 * y[0]]),
+                &[1.0],
+                &Options::fixed(method, Structure::Diagonal, 1, 0.0, 0.01, 4).with_terms(4),
             )
-            .with_terms(4),
+            .expect("Levy-area method on diagonal noise");
+            assert_eq!(path.steps, 4);
+            assert_eq!(path.method, method);
+        }
+    }
+
+    const NC: Structure = Structure::General {
+        noise: 2,
+        commutative: false,
+    };
+
+    /// Two non-commuting noise fields on a 2-state system.
+    fn nc_system() -> (Coeff, Coeff) {
+        (
+            Box::new(|_t: f64, y: &[f64]| Ok(vec![-0.5 * y[0], -0.3 * y[1]])),
+            Box::new(|_t: f64, y: &[f64]| Ok(vec![0.3 * y[1], 0.1, 0.2, 0.3 * y[0]])),
         )
-        .expect_err("non-commutative method on diagonal noise");
-        assert_eq!(error.code(), "E1001");
-        assert_eq!(error.capability(), Some("sde.noncommutative"));
+    }
+
+    /// The method name selects the family, the structure the kernel: `Milstein` /
+    /// `MilsteinStratonovich` on non-commutative noise are the explicit
+    /// non-commutative methods, bit for bit.
+    #[test]
+    fn method_names_dispatch_on_the_structure() {
+        let run = |method| {
+            let (drift, diffusion) = nc_system();
+            let options = Options::fixed(method, NC, 17, 0.0, 0.01, 12).with_terms(5);
+            integrate(drift, diffusion, &[1.0, 0.5], &options).expect("path")
+        };
+        assert_eq!(
+            run(Method::Milstein).y,
+            run(Method::MilsteinNoncommutative).y
+        );
+        assert_eq!(
+            run(Method::MilsteinStratonovich).y,
+            run(Method::MilsteinNoncommutativeStratonovich).y
+        );
+        assert_ne!(
+            run(Method::Milstein).y,
+            run(Method::MilsteinStratonovich).y,
+            "the calculus is part of the method"
+        );
+        for method in [
+            Method::SrkPlaten,
+            Method::HeunStratonovich,
+            Method::EulerMaruyama,
+        ] {
+            let path = run(method);
+            assert!(path.y.iter().flatten().all(|value| value.is_finite()));
+            assert_eq!(path.method, method);
+        }
+        // SRK on non-commutative noise is not the commutative SRK.
+        assert_ne!(run(Method::SrkPlaten).y, run(Method::EulerMaruyama).y);
+    }
+
+    #[test]
+    fn orders_depend_on_the_structure() {
+        assert_eq!(sde_order_for(Method::HeunStratonovich, NC).strong, 0.5);
+        assert_eq!(
+            sde_order_for(Method::HeunStratonovich, Structure::Diagonal).strong,
+            1.0
+        );
+        assert_eq!(sde_order_for(Method::Milstein, NC).strong, 1.0);
+        assert_eq!(sde_order_for(Method::SrkPlaten, NC).strong, 1.0);
+        assert_eq!(sde_order_for(Method::EulerMaruyama, NC).strong, 0.5);
+        assert_eq!(
+            sde_order(Method::MilsteinNoncommutativeStratonovich).strong,
+            1.0
+        );
+        assert_eq!(
+            Method::from_name("milstein_noncommutative_stratonovich"),
+            Some(Method::MilsteinNoncommutativeStratonovich)
+        );
+        assert_eq!(
+            Method::MilsteinNoncommutativeStratonovich.calculus(),
+            Calculus::Stratonovich
+        );
+    }
+
+    /// Adaptive Stratonovich on `dX = sigma X o dW`: the mean over paths is
+    /// `exp(sigma^2 T / 2)` (the Ito mean would be 1), and adaptive `SrkPlaten`
+    /// runs the Ito controller.
+    #[test]
+    fn adaptive_stratonovich_has_the_stratonovich_mean() {
+        let sigma = 0.5;
+        let paths = 300_u64;
+        let (mut sum, mut square) = (0.0, 0.0);
+        for seed in 0..paths {
+            let (drift, diffusion) = gbm(0.0, sigma);
+            let options = Options::adaptive(
+                Method::MilsteinStratonovich,
+                Structure::Diagonal,
+                1000 + seed,
+                0.0,
+                1.0,
+                1e-3,
+                1e-4,
+                100_000,
+                0,
+            );
+            let path = integrate(drift, diffusion, &[1.0], &options).expect("adaptive Strat");
+            let x = path.last().expect("end")[0];
+            sum += x;
+            square += x * x;
+        }
+        let n = paths as f64;
+        let mean = sum / n;
+        let se = ((square / n - mean * mean) / n).sqrt();
+        let strat = (0.5 * sigma * sigma).exp();
+        assert!(
+            (mean - strat).abs() < 4.5 * se,
+            "mean {mean} vs {strat} (se {se})"
+        );
+
+        let (drift, diffusion) = gbm(0.0, sigma);
+        let srk = integrate(
+            drift,
+            diffusion,
+            &[1.0],
+            &Options::adaptive(
+                Method::SrkPlaten,
+                Structure::Diagonal,
+                5,
+                0.0,
+                1.0,
+                1e-3,
+                1e-4,
+                100_000,
+                0,
+            ),
+        )
+        .expect("adaptive SRK");
+        assert!(srk.steps > 0);
+    }
+
+    #[test]
+    fn adaptive_noncommutative_runs_for_every_method_with_default_cells() {
+        for method in [
+            Method::EulerMaruyama,
+            Method::Milstein,
+            Method::MilsteinStratonovich,
+            Method::HeunStratonovich,
+            Method::SrkPlaten,
+            Method::MilsteinNoncommutativeStratonovich,
+        ] {
+            let (drift, diffusion) = nc_system();
+            let options = Options::adaptive(method, NC, 21, 0.0, 0.2, 1e-2, 1e-5, 100_000, 0);
+            let path = integrate(drift, diffusion, &[1.0, 0.5], &options)
+                .unwrap_or_else(|error| panic!("{}: {error}", method.name()));
+            assert!(path.steps > 0, "{}", method.name());
+            assert!((path.t.last().copied().unwrap() - 0.2).abs() < 1e-12);
+        }
     }
 }

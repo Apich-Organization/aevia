@@ -1656,6 +1656,37 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
+        // §6.4.5: `dsolve(eq, y, t)` solves the ODE `eq` for the unknown
+        // function `y : SymFun<d, e>` of `t : Real[d]`; the optional list of
+        // equations fixes the integration constants.
+        | "dsolve" => {
+            let unknown = || func(vec![Type::real(dim_var(0))], Type::real(dim_var(1)));
+            vec![
+                scheme(
+                    0,
+                    2,
+                    0,
+                    func(
+                        vec![Type::Prop, unknown(), Type::real(dim_var(0))],
+                        Type::result(unknown(), error_type("MathError")),
+                    ),
+                ),
+                scheme(
+                    0,
+                    2,
+                    0,
+                    func(
+                        vec![
+                            Type::Prop,
+                            unknown(),
+                            Type::real(dim_var(0)),
+                            list(Type::Prop),
+                        ],
+                        Type::result(unknown(), error_type("MathError")),
+                    ),
+                ),
+            ]
+        },
         | "nsolve" => {
             vec![scheme(
                 1,
@@ -2904,6 +2935,23 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
+        // `sde_order_with(method, structure)`: the order of a scheme on a noise
+        // structure (`HeunStratonovich` is strong 1/2 on non-commutative noise).
+        // Loose arguments, like `sde_order`: the constructors are not values.
+        | "sde_order_with" => {
+            vec![scheme(
+                2,
+                0,
+                0,
+                func(
+                    vec![var(0), var(1)],
+                    Type::record(vec![
+                        ("strong".to_string(), Type::float(one())),
+                        ("weak".to_string(), Type::float(one())),
+                    ]),
+                ),
+            )]
+        },
         | "sde_ensemble_seed" => {
             vec![scheme(
                 0,
@@ -3646,12 +3694,15 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "density",
     "format_of",
     "convert",
+    "to_bcsr",
+    "block_size",
     "sparse_coo",
     "sparse_csr",
     "speye",
     "spdiag",
     "spsolve",
     "cg",
+    "cg_with",
     "kron",
     "contract",
     "map_nonzero",

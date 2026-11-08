@@ -1,0 +1,42 @@
+[Unit]
+Description=Aevia PostgreSQL 18
+Requires=aevia-db.volume aevia.network
+After=aevia-db.volume aevia.network
+
+[Container]
+ContainerName=aevia-db
+Image=localhost/aevia/postgres:18-trixie
+Network=aevia.network
+
+# :U hands the volume to the container's postgres uid (999) on first start. A
+# rootless named volume is created owned by the mapped root user, which the
+# unprivileged postgres process cannot write to.
+Volume=aevia-db.volume:/var/lib/postgresql/data:U
+
+# POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB / DATABASE_URL / AEVIA_* all
+# live here. chmod 600. See infra/.env.example for the full list.
+EnvironmentFile=%h/.config/aevia/aevia.env
+Environment=PGDATA=/var/lib/postgresql/data
+
+# No PublishPort: the database is reachable only from the aevia network, by
+# service name. Publishing 5432 would expose it to the host's interfaces.
+
+# pg_isready without -U/-d: it reports whether the postmaster accepts
+# connections and never authenticates, so there is nothing to parameterise — and
+# a literal $ in a Quadlet file would be expanded by the generator, not by the
+# shell inside the container.
+HealthCmd=pg_isready -h 127.0.0.1
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=6
+HealthStartPeriod=30s
+LogDriver=journald
+
+[Service]
+Restart=always
+# PostgreSQL needs time to shut down cleanly; SIGINT is the fast-shutdown signal
+# the image sets as STOPSIGNAL.
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

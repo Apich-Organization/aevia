@@ -27,19 +27,22 @@ license = "Apache-2.0"
 repository = "https://github.com/Apich-Organization/aevia"
 
 [workspace.dependencies]
-num-bigint = "0.4"
-num-rational = "0.4"
+num-bigint = { version = "0.4", features = ["serde"] }
+num-rational = { version = "0.4", features = ["serde"] }
 # The `f64` linear-algebra backend: blocked GEMM and LAPACK-class factorisations.
 # `sparse-linalg` backs the sparse LU of `aevia_std::sparse` (the `rand` and
 # `npy` features are still unused here).
 faer = { version = "0.24", default-features = false, features = ["std", "rayon", "sparse-linalg"] }
 num-integer = "0.1"
 num-traits = "0.2"
-indexmap = "2"
+indexmap = { version = "2", features = ["serde"] }
 unicode-ident = "1"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
 serde_json = "1"
+# The `.aevi` checked-module cache (spec 9.11): serde types, compact binary codec.
+serde = { version = "1", features = ["derive", "rc"] }
+bincode = "1"
 
 aevia-dim = { path = "crates/aevia-dim" }
 aevia-syntax = { path = "crates/aevia-syntax" }

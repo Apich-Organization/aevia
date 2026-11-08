@@ -42,6 +42,7 @@ pub use declaration_schema::DeclarationSchemaKey;
 pub mod infer;
 pub mod keys;
 mod numeric_index;
+pub mod persist;
 pub mod representation;
 pub mod rssn_resolve;
 pub mod substitution;

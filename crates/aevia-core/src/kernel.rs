@@ -104,7 +104,9 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
             }
             Val::Sparse {
                 format: match sparse.format {
-                    | crate::sparse::SparseFormat::Csr => aevia_rssn::SparseKind::Csr,
+                    | crate::sparse::SparseFormat::Csr | crate::sparse::SparseFormat::Bcsr => {
+                        aevia_rssn::SparseKind::Csr
+                    },
                     | crate::sparse::SparseFormat::Csc => aevia_rssn::SparseKind::Csc,
                     | crate::sparse::SparseFormat::Coo => aevia_rssn::SparseKind::Coo,
                 },

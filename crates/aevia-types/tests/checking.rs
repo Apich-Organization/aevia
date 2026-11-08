@@ -1926,9 +1926,28 @@ let path: Result<{ t: Tensor<1, Float[T]>, y: Tensor<1, Float[L]>, steps: Int, r
         "fn drift(t: Float[T], s: Float[L]): Float[L] = 1.0 m\nfn noise(t: Float[T], s: Float[L]): DiffusionOf<Float[L]> = sqrt(s * s / t)\nlet p = sdeint_diag(drift, noise, 1.0 m, { method = \"Milstein\" })\n",
         "E0401",
     );
-    // `sdeint_general` restricts the state to scalar or rank-1.
+    // `sdeint_general` takes a record state too: its diffusion is a record of the same shape
+    // with a noise axis on every leaf (`GeneralDiffusionOf<s>`), not the diagonal
+    // `DiffusionOf<s>`.
+    expect_ok(
+        "fn drift(t: Float[T], s: { p: Float[L] }): RateOf<{ p: Float[L] }> = { p = 1.0 m/s }
+fn noise(t: Float[T], s: { p: Float[L] }): { p: Tensor<1, Float[L / T^(1/2)]> } = { p = [sqrt(1.0 m^2 / t), sqrt(2.0 m^2 / t)] }
+let p = sdeint_general(drift, noise, { p = 1.0 m }, { method = \"Milstein\" })
+",
+    );
     expect_error(
-        "fn drift(t: Float[T], s: { p: Float[L] }): RateOf<{ p: Float[L] }> = { p = 1.0 m/s }\nfn noise(t: Float[T], s: { p: Float[L] }): DiffusionOf<{ p: Float[L] }> = { p = sqrt(1.0 m^2 / t) }\nlet p = sdeint_general(drift, noise, { p = 1.0 m }, { method = \"Milstein\" })\n",
+        "fn drift(t: Float[T], s: { p: Float[L] }): RateOf<{ p: Float[L] }> = { p = 1.0 m/s }
+fn noise(t: Float[T], s: { p: Float[L] }): DiffusionOf<{ p: Float[L] }> = { p = sqrt(1.0 m^2 / t) }
+let p = sdeint_general(drift, noise, { p = 1.0 m }, { method = \"Milstein\" })
+",
+        "E0302",
+    );
+    // An `Int` state field is still `E0302`.
+    expect_error(
+        "fn drift(t: Float[T], s: { n: Int }): Int = 0
+fn noise(t: Float[T], s: { n: Int }): Int = 0
+let p = sdeint_general(drift, noise, { n = 1 }, { method = \"Milstein\" })
+",
         "E0302",
     );
 }

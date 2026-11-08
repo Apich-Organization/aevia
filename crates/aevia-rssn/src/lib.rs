@@ -44,6 +44,7 @@ pub use kernel::Computed;
 pub use kernel::Expr;
 pub use kernel::Kernel;
 pub use kernel::Opts;
+pub use kernel::SourceOpSignature;
 pub use kernel::kernel;
 pub use kernel::reset;
 pub use registry::Capabilities;

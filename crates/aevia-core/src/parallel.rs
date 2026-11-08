@@ -162,7 +162,6 @@ pub enum Portable {
 
 const MAX_DEPTH: usize = 256;
 
-
 fn unit_def(display: Option<&Rc<UnitDef>>) -> Option<UnitDef> {
     display.map(|unit| (**unit).clone())
 }

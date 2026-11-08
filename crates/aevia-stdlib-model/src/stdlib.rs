@@ -383,6 +383,8 @@ fn type_declarations(
 ) -> Vec<String> {
     let (section, wanted): (&str, &[&str]) = match path {
         | "Ode" => ("8.9", &["OdeMethod", "OdeOpts"]),
+        // §8.4.1: the preconditioner of `cg_with`.
+        | "LinearAlgebra/Sparse" => ("8.4.1", &["Precond"]),
         // §8.7.1: the nominal distribution type and its parameter records,
         // so `Normal({ mu = 0.0 m, sigma = 0.1 m })` is a source value.
         | "Stats/Distributions" => {

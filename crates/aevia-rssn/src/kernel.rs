@@ -710,6 +710,20 @@ pub struct Computed {
     pub reduced: bool,
 }
 
+/// The dimension signature of an operator defined from Aevia source
+/// (§13.5.2): its parameters' and result's dimensions as signature
+/// dimensions, with the source function's dimension variables as
+/// `DimExpr::Var`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceOpSignature {
+    /// The operator name (`demo/area`).
+    pub name: String,
+    /// One dimension per parameter.
+    pub params: Vec<rssn::kernel::signature::DimExpr>,
+    /// The result's dimension.
+    pub result: rssn::kernel::signature::DimExpr,
+}
+
 /// A kernel session.
 pub struct Kernel {
     session: Session,
@@ -743,12 +757,51 @@ impl Kernel {
         definitions: Vec<String>,
         rewrites: Vec<String>,
     ) -> Result<u32, String> {
+        self.register_source_plugin_with(name, version, definitions, rewrites, Vec::new())
+    }
+
+    /// [`Kernel::register_source_plugin`] with the dimension signatures of
+    /// the defined operators.
+    ///
+    /// Each [`SourceOpSignature`] becomes the operator's dimension rule
+    /// (`rssn::graph::signature_rule`): the kernel's dimension inference then
+    /// knows that `demo/area(r)` has dimension `dim(r)^2`, and a dynamic call
+    /// returns a dimension witness instead of `Unknown`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Kernel::register_source_plugin`], plus a signature that names an
+    /// operator the definitions did not create or that the kernel cannot
+    /// state (a symbolic exponent).
+    pub fn register_source_plugin_with(
+        &self,
+        name: &str,
+        version: &str,
+        definitions: Vec<String>,
+        rewrites: Vec<String>,
+        signatures: Vec<SourceOpSignature>,
+    ) -> Result<u32, String> {
         use rssn::kernel::plugin::PluginError;
         let plugin = rssn::kernel::plugin::SimplePlugin::new(name, version, move |registry| {
             let texts: Vec<&str> = definitions.iter().map(String::as_str).collect();
             if !texts.is_empty() {
                 registry
                     .register_definitions(&texts)
+                    .map_err(|error| PluginError::Registration(error.to_string()))?;
+            }
+            for signature in &signatures {
+                let op = registry
+                    .graph()
+                    .ops()
+                    .lookup(&signature.name)
+                    .ok_or_else(|| {
+                        PluginError::Registration(format!(
+                            "no operator `{}` to attach a dimension signature to",
+                            signature.name
+                        ))
+                    })?;
+                registry
+                    .register_dim_signature(op, &signature.params, &signature.result)
                     .map_err(|error| PluginError::Registration(error.to_string()))?;
             }
             let rules: Vec<&str> = rewrites.iter().map(String::as_str).collect();
@@ -764,6 +817,49 @@ impl Kernel {
             .register_shared(Box::new(plugin))
             .map(|id| id.0)
             .map_err(|error| error.to_string())
+    }
+
+    /// Builds the operator application `name(args…)` as a term without
+    /// reducing it: the node a source operator call denotes on symbolic
+    /// arguments (§13.5.2). Unlike [`Kernel::call`] it never resolves an
+    /// overload or runs the operator.
+    ///
+    /// # Errors
+    ///
+    /// An argument that has no term form, or a session failure.
+    pub fn apply_node(
+        &self,
+        name: &str,
+        args: &[Val],
+    ) -> Result<Val, KernelError> {
+        let mut terms = Vec::with_capacity(args.len());
+        for arg in args {
+            terms.push(self.as_term(name, arg)?);
+        }
+        let term = self
+            .session
+            .call(name, &terms)
+            .map_err(|error| from_compute_error(&error).at_operator(name))?;
+        Ok(Val::Term(Sym::new(self.id.0, term.id())))
+    }
+
+    /// The operator name and the children of a term: the structural view
+    /// a host needs to take an answer such as `y(x) = C1*exp(x)` apart.
+    ///
+    /// # Errors
+    ///
+    /// A stale or foreign handle.
+    pub fn structure(
+        &self,
+        sym: Sym,
+    ) -> Result<(String, Vec<Sym>), KernelError> {
+        let term = self.term(sym)?;
+        let children = term
+            .children()
+            .into_iter()
+            .map(|child| Sym::new(self.id.0, child.id()))
+            .collect();
+        Ok((term.op_name().to_string(), children))
     }
 
     /// The session's identity, for rejecting stale handles.

@@ -404,10 +404,10 @@ fn bench_says_so_when_there_is_nothing_to_measure() {
 
 #[test]
 fn clean_removes_the_build_directory_and_says_when_there_is_none() {
-    // §9.9/§9.11: `clean` removes the `.aevia/` build directory. This
-    // toolchain writes no cache yet, so a package that has never been built
-    // has nothing to clean — and `clean` says so rather than reporting a
-    // removal that did not happen.
+    // §9.9/§9.11: `clean` removes the `.aevia/` build directory, where
+    // `check` and `run` keep their caches. A package that has never been
+    // checked has nothing to clean — and `clean` says so rather than
+    // reporting a removal that did not happen.
     let scratch = Scratch::new("clean");
     assert_eq!(code(&aevia(scratch.path(), &["init", "demo"])), 0);
     let demo = scratch.path().join("demo");

@@ -123,3 +123,67 @@ fn a_plugin_file_is_loaded_at_run_time() {
     assert!(lines[1].starts_with("Ok("), "{output}");
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// Runs a program's `main` and returns its output lines.
+fn run_lines(source: &str) -> Vec<String> {
+    let output = aevia_core::run(source, "ops.aev").expect("runs");
+    output.lines().map(str::to_string).collect()
+}
+
+#[test]
+fn a_source_operator_is_an_operator_node_on_symbols() {
+    let lines = run_lines(
+        r#"@op("demo/softplus")
+fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
+
+fn main(): IO Unit = do
+    let x = symbol("x")
+    println(softplus(0))
+    println(softplus(x))
+    let d = diff(fn t: Real[1] => softplus(t))
+    println(d(0))
+"#,
+    );
+    // Numbers run the Aevia body; a symbol builds the kernel's node.
+    assert_eq!(lines[0], "ln(2)", "{lines:?}");
+    assert!(lines[1].contains("demo/softplus(x"), "{lines:?}");
+    // The kernel differentiates through the definition: d/dx at 0 is 1/2.
+    assert!(
+        lines[2] == "1/2" || lines[2].starts_with("0.5"),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_source_operator_carries_its_dimension_signature() {
+    let lines = run_lines(
+        r#"@op("demo/area")
+fn area(r: Real[L]): Real[L^2] = pi * r * r
+
+fn main(): IO Unit = do
+    println(area(2 m))
+    let r = symbol("r") * 1 m
+    let a = area(r)
+    println(a)
+    println(Rssn.dynamic("demo/area", [to_value(3.0)]))
+"#,
+    );
+    assert_eq!(lines[0], "4*pi m^2", "{lines:?}");
+    assert!(lines[1].contains("demo/area"), "{lines:?}");
+    // The dynamic path shows the value instead of an opaque marker.
+    assert!(lines[2].starts_with("Ok("), "{lines:?}");
+    assert!(!lines[2].contains("<Value>"), "{lines:?}");
+}
+
+#[test]
+fn a_rule_can_mention_a_source_operator() {
+    let (_interp, diagnostics) = load(
+        r#"@op("demo/softplus2")
+fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
+
+@rule("demo/softplus2-neg")
+fn softplus_neg(x: Real[1]) = (softplus(-x), softplus(x) - x)
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}

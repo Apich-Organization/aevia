@@ -23,7 +23,7 @@ pub type AdtId = u32;
 ///
 /// `Rep::Var` is a representation variable: `sqrt` and `+` are polymorphic in
 /// it, and it is resolved by unification or by the defaulting rules of §3.10.2.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Rep {
     /// Arbitrary-precision integer; always dimensionless.
     Int,
@@ -156,7 +156,7 @@ impl fmt::Display for Rep {
 /// Literals are representation-polymorphic (§3.10.1): `1` can become `Int`,
 /// `Real`, `Float` or `Complex` depending on context, but never a dimensioned
 /// scalar — for that you write `1 m`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum LiteralKind {
     /// An integer literal: default `Int`, dimensionless only.
     Int,
@@ -196,7 +196,9 @@ impl LiteralKind {
 /// there is no general recursion or proof terms. A variable is solved by
 /// [`crate::infer::Infer::unify_nat`] when a linear equation isolates it
 /// (`n + 1 ~ 3` ⇒ `n = 2`, `2 * n ~ 6` ⇒ `n = 3`).
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum Nat {
     /// A concrete extent.
     Lit(usize),
@@ -352,7 +354,7 @@ impl fmt::Display for Nat {
 /// requires it, §3.5.4), the extents are not. `Refined` is
 /// `Tensor<[n1, ..., nk], τ>` with `None` for `?`; each extent is a type-level
 /// [`Nat`], so `reshape<[n + 1, 2]>` is expressible.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Shape {
     /// Only the rank is known.
     Rank(u32),
@@ -468,7 +470,7 @@ impl fmt::Display for Shape {
 }
 
 /// A record row: labels in order, terminated by an empty row or a row variable.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Row {
     /// The closed empty row.
     Empty,
@@ -637,7 +639,7 @@ impl fmt::Display for Row {
 }
 
 /// A rank-polymorphic tensor constructor, preserved across value aliases.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum TensorIntrinsic {
     /// Construct a tensor of zeros.
     Zeros,
@@ -671,7 +673,7 @@ impl TensorIntrinsic {
 }
 
 /// The callable identity and optional explicitly selected element representation.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TensorIntrinsicType {
     /// The constructor's operation.
     pub kind: TensorIntrinsic,
@@ -680,7 +682,7 @@ pub struct TensorIntrinsicType {
 }
 
 /// A type.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Type {
     /// `Scalar<ρ, δ>`: every numeric scalar.
     Scalar(Rep, Dim),
@@ -720,7 +722,7 @@ pub enum Type {
     /// A record with a row.
     Record(Row),
     /// A nominal variant type with arguments.
-    Adt(AdtId, Vec<Type>),
+    Adt(#[serde(with = "crate::persist::adt_ref")] AdtId, Vec<Type>),
     /// `IO τ`.
     Io(Box<Type>),
     /// `Dyn<ρ>`.
@@ -1184,7 +1186,7 @@ fn render_dim(dim: &Dim) -> String {
 ///
 /// Constraints live only in the type language: an instance set is resolved
 /// statically (PLAN D3), so a scheme never carries a runtime dictionary.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Constraint {
     /// The class name.
     pub class: String,
@@ -1220,7 +1222,7 @@ impl fmt::Display for Constraint {
 }
 
 /// A polymorphic type scheme.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Scheme {
     /// Quantified type variables.
     pub vars: Vec<u32>,

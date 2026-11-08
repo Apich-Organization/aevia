@@ -192,7 +192,12 @@ fn construction_errors_are_reported() {
     );
     assert_eq!(bad("sparse_csr(2, 2, [0, 1, 3], [0], [1.0])"), "E0802");
     assert_eq!(bad("from_dense<Csr>([1.0, 2.0])"), "E0802");
-    assert_eq!(bad("from_dense<Block>([[1.0]])"), "E1001");
+    // `Block`/`Bcsr` are real formats now (see `tests/sparse_block.rs`).
+    assert_eq!(bad("from_dense<Block>([1.0, 2.0])"), "E0802");
+    assert_eq!(
+        bad("to_bcsr(from_dense([[1.0, 2.0], [3.0, 4.0]]), 3, 3)"),
+        "E0802"
+    );
     assert_eq!(
         bad("convert<Csr>(sparse_coo([2, 2, 2], [(0, 0, 0)], [1.0]))"),
         "E0802"

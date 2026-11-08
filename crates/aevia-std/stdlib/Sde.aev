@@ -11,6 +11,7 @@ type SdeMethod =
     | HeunStratonovich
     | SrkPlaten
     | MilsteinNoncommutative
+    | MilsteinNoncommutativeStratonovich
 
 type SdeStructure =
     | Diagonal
@@ -40,6 +41,7 @@ type SdeOpts<T> = | Fixed(SdeFixedOpts<T>) | Adaptive(SdeAdaptiveOpts<T>)
 
 let sde_ensemble_seed = sde_ensemble_seed
 let sde_order = sde_order
+let sde_order_with = sde_order_with
 let sdeint_diag = sdeint_diag
 let sdeint_general = sdeint_general
 let wiener = wiener

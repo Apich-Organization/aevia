@@ -101,7 +101,8 @@ DiffusionOf<{ l1: τ1, ..., ln: τn }> = { l1: DiffusionOf<τ1>, ..., ln: Diffus
 `Int`/`Bool`/函数字段的状态不合法，报 `E0302`（与 `RateOf` 相同）。这是
 **对角**扩散（每个状态分量一个噪声通道）的类型；一般 `n × m` 噪声用
 §8.9.1 的 `sdeint_general`，其扩散参数类型是
-`Tensor<2, Scalar<ρ, d/T^(1/2)>>`。
+`Tensor<2, Scalar<ρ, d/T^(1/2)>>`（记录状态则是同形状记录、每个叶子多一个噪声轴的
+`GeneralDiffusionOf<s>`，见 §8.9.1）。
 
 常用辅助类型（在 Prelude 或对应库中定义）：
 

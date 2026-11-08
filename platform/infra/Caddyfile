@@ -1,0 +1,79 @@
+# Aevia registry — edge proxy.
+#
+# Caddy terminates TLS here for two reasons. First, automatic ACME: no
+# certificate file to renew, no cron job to forget, and HTTP/3 for free. Second,
+# blast radius: the registry binds a plaintext listener on loopback inside the
+# compose network, so exactly one process holds the keys and exactly one process
+# needs ports 80/443. If TLS is ever misconfigured, the service itself is still
+# healthy and reachable for debugging.
+{
+	# The admin API is unused at run time and would expose an unauthenticated
+	# configuration endpoint on the container network.
+	admin off
+
+	# ACME account contact — where Let's Encrypt sends expiry and revocation
+	# notices. Change it to a mailbox someone reads.
+	email ops@apich.org
+}
+
+aevia.apich.org {
+	# No `tls` directive: with a public DNS name Caddy provisions and renews a
+	# Let's Encrypt certificate on first start and redirects :80 to :443.
+
+	# zstd first: current browsers all prefer it and it beats gzip noticeably on
+	# the HTML and JSON this site serves. gzip stays for older clients.
+	encode zstd gzip
+
+	header {
+		# The site is HTTPS-only by construction (Caddy owns :80 and redirects),
+		# so the year-long max-age cannot lock anyone out of a plaintext origin.
+		# includeSubDomains is safe: no other apich.org host is served over HTTP.
+		# No `preload`: that is a one-way commitment to a browser-vendor list.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Stop MIME sniffing, which turns a downloaded .aevi archive into an
+		# executable in old IE/Edge.
+		X-Content-Type-Options "nosniff"
+		# Do not leak registry URLs (package names, search terms) to third-party
+		# sites in the Referer header.
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# The site renders its own inline hydration script and an inline <style>
+		# block, so 'unsafe-inline' is required for script-src/style-src; nothing
+		# is loaded from a third-party origin — no CDN, analytics or web fonts.
+		# frame-ancestors 'none' blocks clickjacking, object-src 'none' closes the
+		# legacy plugin surface, form-action 'self' keeps the login forms local.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'"
+		# Caddy would otherwise send `Server: Caddy`.
+		-Server
+	}
+
+	# A 16 MiB package plus multipart boundaries, the signed statement and the
+	# manifest. Rejecting here is the only place an oversized upload is stopped
+	# before it reaches the application's buffers. 24 MB leaves ~50% headroom.
+	request_body {
+		max_size 24MB
+	}
+
+	# Asset filenames are content-hashed, so a year-long immutable cache is safe:
+	# new bytes mean a new URL. Everything else keeps Caddy's default (no cache
+	# headers), because the index and package pages must stay fresh.
+	@static path /static/*
+	header @static Cache-Control "public, max-age=31536000, immutable"
+
+	# JSON to stdout. The container runtime already collects stdout, and JSON
+	# survives a trip through journald or Loki without a re-parsing stage.
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+
+	# Plain HTTP to the registry container. X-Forwarded-For is *overwritten* with
+	# the connection's peer address rather than appended: the app trusts that
+	# header when AEVIA_TRUST_PROXY=true, so appending would let a client choose
+	# its own IP.
+	reverse_proxy registry:8080 {
+		# X-Forwarded-Proto and X-Forwarded-Host are set by Caddy already; only
+		# the client address needs to be replaced.
+		header_up X-Forwarded-For {client_ip}
+	}
+}

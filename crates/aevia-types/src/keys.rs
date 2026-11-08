@@ -28,12 +28,25 @@ use crate::ty::Type;
 use std::fmt;
 
 /// A module path, `[]` for the prelude/builtin scope, `["A", "B"]` for `A.B`.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct ModulePath(pub Vec<String>, Option<ModuleOrigin>);
 
 /// The source identity of a module in a path package. Lookup aliases and
 /// declared names are deliberately absent: neither may merge nominal types.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub struct ModuleOrigin {
     /// Canonical package directory, including its declared name and version.
     pub package: String,
@@ -124,7 +137,9 @@ impl fmt::Display for ModulePath {
 }
 
 /// `(defining module, type name)` — the nominal identity of a type.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub struct AdtKey {
     /// The complete declaration schema, when this is a finalized source type.
     pub schema: Option<crate::DeclarationSchemaKey>,
@@ -163,7 +178,9 @@ impl fmt::Display for AdtKey {
 }
 
 /// `(defining module, class name)`.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub struct ClassKey {
     /// The module that declares the class.
     pub module: ModulePath,
@@ -209,7 +226,9 @@ impl fmt::Display for ClassKey {
 
 /// A representation, spelled out so the key does not depend on `Rep`'s internal
 /// numbering.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum RepKind {
     /// Arbitrary-precision integer.
     Int,
@@ -255,7 +274,9 @@ impl fmt::Display for RepKind {
 /// tensor and an exact `Real` tensor are *both* exact storage, so a runtime
 /// witness cannot tell `Tensor<1, Int>` from `Tensor<1, Real>`. Two instances
 /// whose witnesses collide are rejected (`E0311`) instead of guessed at.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum StorageClass {
     /// Exact rational elements (`Int` and `Real`).
     Exact,
@@ -296,7 +317,9 @@ impl fmt::Display for StorageClass {
 /// `Wildcard` marks a position the instance leaves open (`instance C for
 /// Option<a>`): a wildcard head cannot be dispatched by exact key, only by
 /// witness.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum HeadKey {
     /// A concrete scalar representation.
     Scalar(RepKind),
@@ -508,7 +531,9 @@ fn row_labels(row: &Row) -> Vec<String> {
 
 /// `(defining module, class key, canonical head)` — the identity of an
 /// instance.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub struct InstanceKey {
     /// The module that declares the instance.
     pub module: ModulePath,

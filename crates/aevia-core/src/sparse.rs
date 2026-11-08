@@ -7,11 +7,23 @@
 //! stored entries:
 //!
 //! * `Csr` / `Csc` are rank 2 and compressed (`ptr`, `idx`);
-//! * `Coo` is rank N and holds the flat, lexicographically sorted coordinates.
+//! * `Coo` is rank N and holds the flat, lexicographically sorted coordinates;
+//! * `Bcsr` (block CSR, also spelled `Block`) is rank 2 and holds dense
+//!   `br x bc` blocks in CSR layout over the *blocks*: `ptr` counts the stored
+//!   blocks of each block row, `idx` their block columns (strictly
+//!   increasing), and the values hold `br * bc` slots per stored block,
+//!   row-major inside the block. The block shape is [`SparseData::block`]
+//!   (`(1, 1)` for every other format).
 //!
 //! Every format stores each logical entry at most once, in sorted order, and
 //! never stores an element equal to the implicit zero ([`SparseData::validate`]
 //! checks this; it runs under `debug_assert!` after every construction).
+//! `Bcsr` relaxes this in one place only: the slots *inside* a stored block
+//! may be zero (padding), but every stored block holds at least one nonzero.
+//! [`SparseData::nnz`] counts the logical nonzeros, never the padding
+//! ([`SparseData::stored_len`] counts the slots), and the sorted
+//! [`Entries`] form skips the padding, so every operation that goes through
+//! it is format-blind.
 //!
 //! # Exactness
 //!
@@ -36,6 +48,7 @@
 mod api;
 mod kernels;
 
+pub(crate) use api::SliceAxis;
 pub(crate) use api::binary;
 pub(crate) use api::call;
 pub(crate) use api::call_typed;
@@ -43,6 +56,7 @@ pub(crate) use api::equal_data;
 pub(crate) use api::index;
 pub(crate) use api::negate;
 pub(crate) use api::render;
+pub(crate) use api::slice;
 
 use crate::eval::EvalError;
 use crate::eval::build_tensor;
@@ -78,6 +92,9 @@ pub enum SparseFormat {
     Csc,
     /// Coordinate list (rank N).
     Coo,
+    /// Block compressed sparse row (rank 2); the type language also spells it
+    /// `Block`.
+    Bcsr,
 }
 
 impl SparseFormat {
@@ -88,16 +105,16 @@ impl SparseFormat {
             | Self::Csr => "Csr",
             | Self::Csc => "Csc",
             | Self::Coo => "Coo",
+            | Self::Bcsr => "Bcsr",
         }
     }
 
     /// Reads a format name.
     ///
-    /// `Block` and `Bcsr` are formats of the type language that this runtime
-    /// cannot build: they are `E1001`, not an unknown name.
+    /// `Block` is a synonym of `Bcsr`.
     ///
     /// # Errors
-    /// `E1001` for `Block`/`Bcsr`, `E0310` for anything else.
+    /// `E0310` for a name that is not a format.
     pub fn parse(
         name: &str,
         span: Span,
@@ -106,20 +123,11 @@ impl SparseFormat {
             | "Csr" | "CSR" => Ok(Self::Csr),
             | "Csc" | "CSC" => Ok(Self::Csc),
             | "Coo" | "COO" => Ok(Self::Coo),
-            | "Block" | "Bcsr" | "BCSR" => {
-                Err(EvalError::new(
-                    "E1001",
-                    format!(
-                        "the sparse format `{name}` is accepted in types but this runtime cannot \
-                         store it (capability `storage.sparse.block`)"
-                    ),
-                )
-                .at(span))
-            },
+            | "Block" | "Bcsr" | "BCSR" | "BlockCsr" => Ok(Self::Bcsr),
             | other => {
                 Err(EvalError::new(
                     "E0310",
-                    format!("`{other}` is not a sparse format (expected Csr, Csc or Coo)"),
+                    format!("`{other}` is not a sparse format (expected Csr, Csc, Coo or Bcsr)"),
                 )
                 .at(span))
             },
@@ -135,6 +143,9 @@ pub(crate) enum Pattern {
     /// `ptr` has one more entry than the compressed axis; `idx` holds the
     /// other coordinate (`Csr`: columns, `Csc`: rows).
     Compressed { ptr: Vec<usize>, idx: Vec<usize> },
+    /// Block CSR: `ptr` over block rows, `idx` the block columns; the values
+    /// hold `br * bc` slots per block (`Bcsr`).
+    Blocked { ptr: Vec<usize>, idx: Vec<usize> },
 }
 
 /// The stored element values.
@@ -159,6 +170,8 @@ pub struct SparseData {
     pub display: Option<Rc<UnitDef>>,
     /// The implicit zero: the zero of the element representation, with `dim`.
     pub zero: NumVal,
+    /// The block shape `(br, bc)` of a `Bcsr` tensor; `(1, 1)` otherwise.
+    pub block: (usize, usize),
     pub(crate) pattern: Pattern,
     pub(crate) values: SpValues,
 }
@@ -201,13 +214,139 @@ impl<T> Entries<T> {
     }
 }
 
+/// The largest fill ratio (stored slots per logical nonzero) the automatic
+/// block-size choice accepts; the same threshold as rssn's
+/// `kernels::bsr::choose_block_size`.
+pub(crate) const MAX_BLOCK_FILL: f64 = 1.5;
+
+/// The distinct `br x bc` blocks that hold an entry of sorted `coords`.
+fn count_blocks(
+    shape: &[usize],
+    coords: &[usize],
+    br: usize,
+    bc: usize,
+) -> usize {
+    let mut mark = vec![usize::MAX; shape[1] / bc];
+    let mut blocks = 0;
+    for pair in coords.chunks_exact(2) {
+        let (ib, jb) = (pair[0] / br, pair[1] / bc);
+        if mark[jb] != ib {
+            mark[jb] = ib;
+            blocks += 1;
+        }
+    }
+    blocks
+}
+
+/// The block shape `convert<Bcsr>` and the other format-only constructors use.
+///
+/// Candidates are `{4, 3, 2, 1}²` (squares first) restricted to the divisors
+/// of the shape; the largest block whose fill ratio is at most
+/// [`MAX_BLOCK_FILL`] wins, a tie in area going to the lower ratio and then to
+/// the earlier (square) candidate. `(1, 1)` when nothing qualifies.
+pub(crate) fn auto_block(
+    shape: &[usize],
+    coords: &[usize],
+) -> (usize, usize) {
+    const CANDIDATES: [(usize, usize); 15] = [
+        (4, 4),
+        (3, 3),
+        (2, 2),
+        (4, 3),
+        (3, 4),
+        (4, 2),
+        (2, 4),
+        (3, 2),
+        (2, 3),
+        (4, 1),
+        (1, 4),
+        (3, 1),
+        (1, 3),
+        (2, 1),
+        (1, 2),
+    ];
+    let nnz = coords.len() / 2;
+    let mut best = (1, 1);
+    let mut best_key = (1usize, f64::INFINITY);
+    if nnz == 0 || shape.len() != 2 {
+        return best;
+    }
+    for (br, bc) in CANDIDATES {
+        if shape[0] % br != 0 || shape[1] % bc != 0 {
+            continue;
+        }
+        let area = br * bc;
+        if area < best_key.0 {
+            continue;
+        }
+        let ratio = (count_blocks(shape, coords, br, bc) * area) as f64 / nnz as f64;
+        if ratio <= MAX_BLOCK_FILL && (area > best_key.0 || ratio < best_key.1) {
+            best = (br, bc);
+            best_key = (area, ratio);
+        }
+    }
+    best
+}
+
+/// The block-CSR pattern and values of sorted, zero-free entries.
+fn blocked_parts<T: Store>(
+    shape: &[usize],
+    block: (usize, usize),
+    entries: Entries<T>,
+) -> (Pattern, Vec<T>) {
+    let (br, bc) = block;
+    let bs = br * bc;
+    let (nbr, nbc) = (shape[0] / br, shape[1] / bc);
+    let nnz = entries.len();
+    let mut ptr = vec![0usize; nbr + 1];
+    let mut idx: Vec<usize> = Vec::new();
+    let mut vals: Vec<T> = Vec::new();
+    let mut slot = vec![usize::MAX; nbc];
+    let mut at = 0;
+    for ib in 0..nbr {
+        let mut stop = at;
+        while stop < nnz && entries.coords[stop * 2] < (ib + 1) * br {
+            stop += 1;
+        }
+        let first = idx.len();
+        for q in at..stop {
+            let jb = entries.coords[q * 2 + 1] / bc;
+            if slot[jb] == usize::MAX {
+                slot[jb] = 0;
+                idx.push(jb);
+            }
+        }
+        idx[first..].sort_unstable();
+        vals.resize(idx.len() * bs, T::pad_zero());
+        for (offset, jb) in idx[first..].iter().enumerate() {
+            slot[*jb] = first + offset;
+        }
+        for q in at..stop {
+            let (row, col) = (entries.coords[q * 2], entries.coords[q * 2 + 1]);
+            vals[slot[col / bc] * bs + (row - ib * br) * bc + col % bc] = entries.vals[q].clone();
+        }
+        for jb in &idx[first..] {
+            slot[*jb] = usize::MAX;
+        }
+        ptr[ib + 1] = idx.len();
+        at = stop;
+    }
+    (Pattern::Blocked { ptr, idx }, vals)
+}
+
 /// An element class: `f64` or a boxed [`Value`].
 pub(crate) trait Store: Clone + 'static {
+    /// The filler of a padding slot inside a stored block of a `Bcsr` tensor.
+    fn pad_zero() -> Self;
     fn wrap(values: Vec<Self>) -> SpValues;
     fn view(values: &SpValues) -> Option<&[Self]>;
 }
 
 impl Store for f64 {
+    fn pad_zero() -> Self {
+        0.0
+    }
+
     fn wrap(values: Vec<Self>) -> SpValues {
         SpValues::F64(values)
     }
@@ -221,6 +360,11 @@ impl Store for f64 {
 }
 
 impl Store for Value {
+    fn pad_zero() -> Self {
+        // Replaced by the zero of the final element class in `assemble`.
+        Value::Num(zero_num(0, &Dim::one()))
+    }
+
     fn wrap(values: Vec<Self>) -> SpValues {
         SpValues::Boxed(values)
     }
@@ -389,12 +533,36 @@ pub(crate) fn index_list(
 // ---------------------------------------------------------------------------
 
 impl SparseData {
-    /// The number of stored entries.
+    /// The number of logically nonzero entries (the padding inside the
+    /// blocks of a `Bcsr` tensor is not counted).
     #[must_use]
     pub fn nnz(&self) -> usize {
+        match &self.pattern {
+            | Pattern::Blocked { .. } => self.nonzero_mask().iter().filter(|k| **k).count(),
+            | _ => self.stored_len(),
+        }
+    }
+
+    /// The number of stored value slots: `nnz` for every format but `Bcsr`,
+    /// where it includes the padding zeros of the stored blocks.
+    #[must_use]
+    pub fn stored_len(&self) -> usize {
         match &self.values {
             | SpValues::F64(items) => items.len(),
             | SpValues::Boxed(items) => items.len(),
+        }
+    }
+
+    /// For each stored slot, whether it holds a logical nonzero.
+    pub(crate) fn nonzero_mask(&self) -> Vec<bool> {
+        match &self.values {
+            | SpValues::F64(items) => items.iter().map(|v| *v != 0.0).collect(),
+            | SpValues::Boxed(items) => {
+                items
+                    .iter()
+                    .map(|v| !matches!(v, Value::Num(n) if num_is_zero(n)))
+                    .collect()
+            },
         }
     }
 
@@ -473,6 +641,29 @@ impl SparseData {
                     vals: values,
                 }
             },
+            | Pattern::Blocked { ptr, idx } => {
+                // Row-major over the blocks, skipping the padding zeros.
+                let (br, bc) = self.block;
+                let bs = br * bc;
+                let live = self.nonzero_mask();
+                let mut coords = Vec::new();
+                let mut vals = Vec::new();
+                for ib in 0..ptr.len().saturating_sub(1) {
+                    for r in 0..br {
+                        for k in ptr[ib]..ptr[ib + 1] {
+                            for c in 0..bc {
+                                let slot = k * bs + r * bc + c;
+                                if live[slot] {
+                                    coords.push(ib * br + r);
+                                    coords.push(idx[k] * bc + c);
+                                    vals.push(values[slot].clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                Entries { rank, coords, vals }
+            },
             | Pattern::Compressed { ptr, idx } => {
                 let mut coords = Vec::with_capacity(idx.len() * 2);
                 match self.format {
@@ -529,8 +720,13 @@ impl SparseData {
         zero_rank: u8,
         entries: Entries<T>,
     ) -> Self {
+        let mut block = (1, 1);
         let (pattern, values) = match format {
             | SparseFormat::Coo => (Pattern::Coords(entries.coords), entries.vals),
+            | SparseFormat::Bcsr => {
+                block = auto_block(&shape, &entries.coords);
+                blocked_parts(&shape, block, entries)
+            },
             | SparseFormat::Csr => {
                 let rows = shape[0];
                 let nnz = entries.vals.len();
@@ -574,24 +770,55 @@ impl SparseData {
             dim,
             display,
             zero_rank,
+            block,
             pattern,
             T::wrap(values),
         )
     }
 
+    /// Builds a `Bcsr` tensor with an explicit block shape from sorted,
+    /// duplicate-free, zero-free entries.
+    ///
+    /// The block shape must be positive and divide the shape; callers check
+    /// that and report `E0802`.
+    pub(crate) fn from_entries_blocked<T: Store>(
+        shape: Vec<usize>,
+        dim: Dim,
+        display: Option<Rc<UnitDef>>,
+        zero_rank: u8,
+        block: (usize, usize),
+        entries: Entries<T>,
+    ) -> Self {
+        let (pattern, values) = blocked_parts(&shape, block, entries);
+        Self::assemble(
+            SparseFormat::Bcsr,
+            shape,
+            dim,
+            display,
+            zero_rank,
+            block,
+            pattern,
+            T::wrap(values),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn assemble(
         format: SparseFormat,
         shape: Vec<usize>,
         dim: Dim,
         display: Option<Rc<UnitDef>>,
         zero_rank: u8,
+        block: (usize, usize),
         pattern: Pattern,
         values: SpValues,
     ) -> Self {
         let mut rank = zero_rank;
         let mut values = values;
-        if let SpValues::Boxed(items) = &values {
-            for item in items {
+        if let SpValues::Boxed(items) = &mut values {
+            // Padding zeros (only inside `Bcsr` blocks) do not raise the class.
+            let live = |v: &Value| !matches!(v, Value::Num(n) if num_is_zero(n));
+            for item in items.iter().filter(|v| live(v)) {
                 if let Value::Num(num) = item {
                     rank = rank.max(kind_rank(&num.kind));
                 }
@@ -600,6 +827,7 @@ impl SparseData {
             let all_float = rank == 2
                 && items
                     .iter()
+                    .filter(|v| live(v))
                     .all(|v| matches!(v, Value::Num(n) if matches!(n.kind, NumKind::Float(_))));
             if all_float {
                 let floats = items
@@ -615,6 +843,14 @@ impl SparseData {
                     })
                     .collect();
                 values = SpValues::F64(floats);
+            } else if matches!(pattern, Pattern::Blocked { .. }) {
+                // Padding takes the zero of the final element class.
+                let zero = Value::Num(zero_num(rank, &dim));
+                for item in items.iter_mut() {
+                    if !live(item) {
+                        *item = zero.clone();
+                    }
+                }
             }
         } else {
             rank = 2;
@@ -626,6 +862,7 @@ impl SparseData {
             dim,
             display,
             zero,
+            block,
             pattern,
             values,
         };
@@ -640,7 +877,7 @@ impl SparseData {
     pub fn validate(&self) -> Result<(), String> {
         let rank = self.rank();
         match self.format {
-            | SparseFormat::Csr | SparseFormat::Csc if rank != 2 => {
+            | SparseFormat::Csr | SparseFormat::Csc | SparseFormat::Bcsr if rank != 2 => {
                 return Err(format!(
                     "{} must have rank 2, found {rank}",
                     self.format.name()
@@ -648,8 +885,47 @@ impl SparseData {
             },
             | _ => {},
         }
-        let nnz = self.nnz();
+        let nnz = self.stored_len();
+        if (self.format == SparseFormat::Bcsr) != matches!(self.pattern, Pattern::Blocked { .. })
+            || (self.format != SparseFormat::Bcsr && self.block != (1, 1))
+        {
+            return Err("the pattern does not match the format".into());
+        }
         match &self.pattern {
+            | Pattern::Blocked { ptr, idx } => {
+                let (br, bc) = self.block;
+                if br == 0 || bc == 0 || self.shape[0] % br != 0 || self.shape[1] % bc != 0 {
+                    return Err(format!(
+                        "block {br}x{bc} does not divide the shape {:?}",
+                        self.shape
+                    ));
+                }
+                let (nbr, nbc) = (self.shape[0] / br, self.shape[1] / bc);
+                if ptr.len() != nbr + 1
+                    || ptr[0] != 0
+                    || ptr[nbr] != idx.len()
+                    || nnz != idx.len() * br * bc
+                {
+                    return Err("block pointers do not match the values".into());
+                }
+                let live = self.nonzero_mask();
+                for a in 0..nbr {
+                    if ptr[a] > ptr[a + 1] {
+                        return Err("pointers are not monotone".into());
+                    }
+                    for k in ptr[a]..ptr[a + 1] {
+                        if idx[k] >= nbc {
+                            return Err("block index out of range".into());
+                        }
+                        if k > ptr[a] && idx[k - 1] >= idx[k] {
+                            return Err("block indices are not strictly increasing".into());
+                        }
+                        if !live[k * br * bc..(k + 1) * br * bc].iter().any(|l| *l) {
+                            return Err("an all-zero block is stored".into());
+                        }
+                    }
+                }
+            },
             | Pattern::Coords(coords) => {
                 if self.format != SparseFormat::Coo || coords.len() != nnz * rank {
                     return Err("coordinate list does not match the values".into());
@@ -694,6 +970,10 @@ impl SparseData {
                     return Err("coordinates are not strictly sorted".into());
                 }
             }
+        }
+        if matches!(self.pattern, Pattern::Blocked { .. }) {
+            // Zeros inside a stored block are padding, not explicit zeros.
+            return Ok(());
         }
         let explicit_zero = match &self.values {
             | SpValues::F64(items) => items.iter().any(|v| *v == 0.0),

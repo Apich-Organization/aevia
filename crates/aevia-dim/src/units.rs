@@ -28,7 +28,7 @@ use std::fmt;
 ///
 /// `pi` is kept as a separate exponent so that `deg` (`pi/180`) stays exact
 /// and `30 deg` can print as `pi/6` rather than a float.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Scale {
     /// The rational factor.
     pub rat: BigRational,
@@ -198,7 +198,7 @@ impl fmt::Display for Scale {
 }
 
 /// One unit definition.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UnitDef {
     /// The canonical spelling, e.g. `m`.
     pub name: String,
@@ -297,7 +297,7 @@ impl UnitDef {
 ///
 /// The parser produces this; resolution against a [`UnitTable`] happens during
 /// name resolution, which is why the parser itself never needs a symbol table.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum UnitExpr {
     /// A single unit name, possibly qualified (`Units.SI.km`).
     Name(String),
@@ -467,9 +467,10 @@ const PREFIXES: &[(&str, i32)] = &[
 ];
 
 /// The registry of units visible to a compilation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UnitTable {
     defs: Vec<UnitDef>,
+    #[serde(serialize_with = "sorted_index")]
     index: HashMap<String, usize>,
     /// The module's unit system (§5.11). Every resolution goes through it:
     /// a unit's dimension becomes its representative and its scale is
@@ -1147,4 +1148,13 @@ mod regression_tests {
         let exponent = BigRational::from_integer(BigInt::from(3_000_000_000_i64));
         assert!(scale.pow(&exponent).is_none());
     }
+}
+
+/// Serializes the name index in key order, so the encoding of a unit table (and
+/// of the cache files that hold one) does not depend on hash iteration order.
+fn sorted_index<S: serde::Serializer>(
+    index: &HashMap<String, usize>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(index.iter().collect::<std::collections::BTreeMap<_, _>>())
 }
