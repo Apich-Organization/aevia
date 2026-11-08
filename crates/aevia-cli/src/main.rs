@@ -54,7 +54,8 @@ struct Options {
     color: ColorChoice,
     /// `--release`: accepted, with a note that there is no optimisation level.
     release: bool,
-    /// `--jobs N`: accepted, with a note that no phase is parallel.
+    /// `--jobs N`: worker threads for parallel evaluation (§9.7); the default
+    /// is the machine's available parallelism (or `AEVIA_JOBS`).
     jobs: Option<usize>,
     /// `--locked`: the lock file must already match the package tree.
     locked: bool,
@@ -104,12 +105,6 @@ impl Options {
                  level to select (§9.9)"
                     .to_string(),
             );
-        }
-        if let Some(jobs) = self.jobs {
-            notes.push(format!(
-                "`--jobs {jobs}` has no effect: no phase of this toolchain runs in parallel, so \
-                 the value cannot schedule anything (§9.9)"
-            ));
         }
         notes
     }
@@ -246,6 +241,9 @@ fn apply_options(
     if let Some(caps) = options.caps {
         interp.capabilities = caps;
     }
+    if let Some(jobs) = options.jobs {
+        interp.set_jobs(jobs);
+    }
     // The CLI thread declared its stack (`install_stack_budget`), so non-tail
     // recursion is bounded by the stack that is actually left; the fixed
     // call count stays only as a runaway guard.
@@ -268,6 +266,7 @@ fn run_cli(
     match args.first().map(String::as_str) {
         | Some("run") => run_command(options, &args[1..]),
         | Some("check") => check_command(options, &args[1..]),
+        | Some("watch") => watch_command(options, &args[1..]),
         | Some("test") => test_command(options, &args[1..]),
         | Some("repl") => repl(options),
         | Some("fmt") => tooling::fmt(options, &args[1..]),
@@ -604,7 +603,32 @@ fn run_command(
     apply_options(&mut interp, options);
     interp.output = Output::Console;
     // Host arguments exist before the program's top-level declarations run.
-    interp.set_args(program_args);
+    interp.set_args(program_args.clone());
+    // §9.7: worker threads rebuild the program from the same entry file, so
+    // closures cross by source span. A replica keeps the interpreter's own
+    // call-depth guard: it has no `install_stack_budget` of its own.
+    let replica_path = path.clone();
+    interp.set_replica(std::sync::Arc::new(move || {
+        let program = load_at(&replica_path);
+        if program.diagnostics.has_errors() {
+            return Err("the program no longer checks".to_string());
+        }
+        let entry = program.entry().ok_or("no module produced")?;
+        let mut replica = Interp::new(&entry.checked);
+        if let Some(budget) = options.budget {
+            replica.max_tail_calls = budget;
+            replica.max_io_steps = budget;
+        }
+        if let Some(caps) = options.caps {
+            replica.capabilities = caps;
+        }
+        replica.set_args(program_args.clone());
+        let diagnostics = driver::run_modules(&mut replica, &program);
+        if diagnostics.has_errors() {
+            return Err("the program's top level failed on a worker".to_string());
+        }
+        Ok(replica)
+    }));
     let load_diagnostics = driver::run_modules(&mut interp, &program);
     if report(&load_diagnostics, &program.sources, style(options)) {
         return ExitCode::from(1);
@@ -702,9 +726,10 @@ fn check_command(
     args: &[String],
 ) -> ExitCode {
     let all = args.iter().any(|argument| argument == "--all");
+    let no_cache = args.iter().any(|argument| argument == "--no-cache");
     let files: Vec<String> = args
         .iter()
-        .filter(|argument| argument.as_str() != "--all")
+        .filter(|argument| argument.as_str() != "--all" && argument.as_str() != "--no-cache")
         .cloned()
         .collect();
     if let Some(unknown) = files.iter().find(|argument| argument.starts_with('-')) {
@@ -729,16 +754,251 @@ fn check_command(
         | Ok(path) => path,
         | Err(code) => return code,
     };
+    let cache = (!no_cache).then(|| check_cache::Entry::for_entry(&path, style(options)));
+    if let Some(Some(hit)) = cache.as_ref().map(check_cache::Entry::replay) {
+        return hit;
+    }
     let program = load_at(&path);
-    if report(&program.diagnostics, &program.sources, style(options)) {
-        ExitCode::from(1)
+    let rendered = if program.diagnostics.is_empty() {
+        String::new()
+    } else {
+        program
+            .diagnostics
+            .render_with(&program.sources, style(options))
+    };
+    eprint!("{rendered}");
+    let failed = program.diagnostics.has_errors();
+    let summary = if failed {
+        String::new()
     } else {
         let count = program.modules.len();
         if count > 1 {
-            println!("{}: ok ({count} modules)", path.display());
+            format!("{}: ok ({count} modules)\n", path.display())
         } else {
-            println!("{}: ok", path.display());
+            format!("{}: ok\n", path.display())
         }
+    };
+    print!("{summary}");
+    if let Some(cache) = cache {
+        cache.store(&program.dependencies, failed, &rendered, &summary);
+    }
+    if failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// The cross-process check cache (§9.11.2).
+///
+/// `aevia check <file>` records, under `.aevia/cache/` next to the entry,
+/// every input the load observed — each file read with a hash of its text,
+/// and each import candidate that did not exist — together with the
+/// compiler's identity and the rendered result. A later `check` whose inputs
+/// all still match replays the result without loading anything; any change
+/// (an edited file, a newly created module that would now be imported, a
+/// rebuilt compiler, another colour style) is a miss. The record describes a
+/// whole program, so it is exact without serialising checked interfaces.
+mod check_cache {
+    use super::*;
+
+    pub(super) struct Entry {
+        file: PathBuf,
+        header: String,
+    }
+
+    fn compiler_identity() -> String {
+        std::env::current_exe()
+            .and_then(|exe| std::fs::metadata(&exe).map(|meta| (exe, meta)))
+            .map(|(exe, meta)| {
+                format!(
+                    "{}|{}|{:?}",
+                    exe.display(),
+                    meta.len(),
+                    meta.modified().ok()
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    impl Entry {
+        pub(super) fn for_entry(
+            entry: &Path,
+            style: Style,
+        ) -> Self {
+            use std::hash::Hash as _;
+            use std::hash::Hasher as _;
+            let canonical = aevia_core::source::canonical_path(entry);
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            canonical.hash(&mut hasher);
+            let directory = entry
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+                .join(".aevia")
+                .join("cache");
+            Self {
+                file: directory.join(format!("check-{:016x}.txt", hasher.finish())),
+                header: format!(
+                    "aevia-check-cache 1\ncompiler {}\nentry {}\nstyle {style:?}\n",
+                    compiler_identity(),
+                    canonical.display()
+                ),
+            }
+        }
+
+        /// Replays a matching record: its output and its exit status.
+        pub(super) fn replay(&self) -> Option<ExitCode> {
+            let text = std::fs::read_to_string(&self.file).ok()?;
+            let rest = text.strip_prefix(&self.header)?;
+            let (inputs, output) = rest.split_once("\0status ")?;
+            for line in inputs.lines() {
+                let stamp = line.strip_prefix("dep ")?;
+                if !aevia_core::source::stamp_is_current(stamp) {
+                    return None;
+                }
+            }
+            let (status, output) = output.split_once('\n')?;
+            let (stderr, stdout) = output.split_once("\0stdout\n")?;
+            eprint!("{stderr}");
+            print!("{stdout}");
+            Some(if status == "fail" {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            })
+        }
+
+        pub(super) fn store(
+            &self,
+            dependencies: &[aevia_core::source::SourceDependency],
+            failed: bool,
+            stderr: &str,
+            stdout: &str,
+        ) {
+            let mut text = self.header.clone();
+            for dependency in dependencies {
+                text.push_str("dep ");
+                text.push_str(&dependency.stamp());
+                text.push('\n');
+            }
+            text.push_str(if failed {
+                "\0status fail\n"
+            } else {
+                "\0status ok\n"
+            });
+            text.push_str(stderr);
+            text.push_str("\0stdout\n");
+            text.push_str(stdout);
+            if let Some(directory) = self.file.parent() {
+                if std::fs::create_dir_all(directory).is_ok() {
+                    let _ = std::fs::write(&self.file, text);
+                }
+            }
+        }
+    }
+}
+
+/// `aevia watch <file> [--once] [--runs N]` (§9.11): re-checks on every change.
+///
+/// The session keeps a [`driver::CheckCache`], so a module whose source and
+/// imported interfaces did not change is not checked again: after the first
+/// load the standard library and untouched package modules are reused, and an
+/// edit to one file rechecks that file and only those importers whose view of
+/// its interface changed. Each round prints how many modules were checked and
+/// how many were reused. `--once` (or `--runs N`) stops after that many
+/// rounds; the default runs until interrupted.
+fn watch_command(
+    options: Options,
+    args: &[String],
+) -> ExitCode {
+    let mut files = Vec::new();
+    let mut runs: Option<usize> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            | "--once" => runs = Some(1),
+            | "--runs" => {
+                index += 1;
+                let Some(count) = args.get(index).and_then(|text| text.parse().ok()) else {
+                    eprintln!("aevia watch: `--runs` expects a count");
+                    return ExitCode::from(2);
+                };
+                runs = Some(count);
+            },
+            | other if other.starts_with('-') => {
+                eprintln!(
+                    "aevia watch: unknown option `{other}` (the options are `--once`, `--runs N`)"
+                );
+                return ExitCode::from(2);
+            },
+            | other => files.push(other.to_string()),
+        }
+        index += 1;
+    }
+    let path = match entry_path(&files, "watch") {
+        | Ok(path) => path,
+        | Err(code) => return code,
+    };
+    let roots = match Package::owning(&path) {
+        | Ok(Some(package)) => {
+            match package.roots() {
+                | Ok(roots) => roots,
+                | Err(error) => {
+                    eprintln!("aevia watch: {}", error.message);
+                    return ExitCode::from(1);
+                },
+            }
+        },
+        | Ok(None) => aevia_core::manifest::Roots::adjacent(&path),
+        | Err(error) => {
+            eprintln!("aevia watch: {}", error.message);
+            return ExitCode::from(1);
+        },
+    };
+    let cache = std::rc::Rc::new(std::cell::RefCell::new(driver::CheckCache::new()));
+    let overlays = aevia_core::source::SourceOverlays::new();
+    let mut round = 0usize;
+    let mut failed;
+    loop {
+        round += 1;
+        let started = std::time::Instant::now();
+        let (program, stats) = driver::load_incremental(
+            &path,
+            roots.clone(),
+            &overlays,
+            &aevia_types::check::CheckOptions::default(),
+            &cache,
+        );
+        let elapsed = started.elapsed();
+        failed = report(&program.diagnostics, &program.sources, style(options));
+        let reused = cache.borrow().reused;
+        println!(
+            "[{round}] {}: {} ({} modules: {} checked, {reused} reused) in {:.1} ms",
+            path.display(),
+            if failed { "errors" } else { "ok" },
+            stats.modules,
+            stats.checks,
+            elapsed.as_secs_f64() * 1000.0
+        );
+        if runs.is_some_and(|runs| round >= runs) {
+            break;
+        }
+        // Wait until some observed input — a read file, or an import
+        // candidate that did not exist — changes.
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if program
+                .dependencies
+                .iter()
+                .any(|dependency| !dependency.is_current(&overlays))
+            {
+                break;
+            }
+        }
+    }
+    if failed {
+        ExitCode::from(1)
+    } else {
         ExitCode::SUCCESS
     }
 }
@@ -1542,6 +1802,7 @@ fn repl_core(
         &compilation.checked.method_refs,
         &compilation.checked.constructor_refs,
         &compilation.checked.expr_types,
+        &compilation.checked.constant_regions,
     )
     .ok_or("this declaration has no Core IR")?;
     Ok(format!("{lowered:#?}"))
@@ -2123,7 +2384,8 @@ mod tests {
         assert_eq!(rest, args(&["check"]));
         let notes = options.notes().join("\n");
         assert!(notes.contains("--release"), "{notes}");
-        assert!(notes.contains("--jobs 4"), "{notes}");
+        // `--jobs` now sizes the worker pool (§9.7), so it is not a note.
+        assert!(!notes.contains("--jobs"), "{notes}");
         // A job count of zero is a mistake, not a request for the default.
         assert!(Options::parse(&args(&["--jobs", "0", "check"])).is_err());
         // Flags that take no value do not swallow the command.

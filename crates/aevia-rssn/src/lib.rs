@@ -58,7 +58,21 @@ pub use registry::UnitInfo;
 pub use registry::registry;
 pub use registry::resolve_key;
 pub use rssn::kernel::signature::OpKey;
+
+/// The normalized Fresnel integrals `S(x) = ∫₀ˣ sin(πt²/2) dt` and
+/// `C(x) = ∫₀ˣ cos(πt²/2) dt` (DLMF 7.2.7), from the kernel's numerics.
+#[must_use]
+pub fn fresnel_s(x: f64) -> f64 {
+    rssn::kernels::fresnel::fresnel_s(x)
+}
+
+/// See [`fresnel_s`].
+#[must_use]
+pub fn fresnel_c(x: f64) -> f64 {
+    rssn::kernels::fresnel::fresnel_c(x)
+}
 pub use value::Num;
+pub use value::SparseKind;
 pub use value::Sym;
 pub use value::UnitVal;
 pub use value::Val;

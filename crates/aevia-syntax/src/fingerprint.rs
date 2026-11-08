@@ -26,6 +26,11 @@ pub fn module(module: &Module) -> String {
         },
         | None => out.push_str("<none>"),
     }
+    if let Some((system, _)) = &module.unit_system {
+        out.push_str("units<");
+        out.push_str(system);
+        out.push('>');
+    }
     out.push('{');
     for decl in &module.decls {
         decl_into(&mut out, decl);

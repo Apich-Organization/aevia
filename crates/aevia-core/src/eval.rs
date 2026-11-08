@@ -452,6 +452,21 @@ pub struct Interp {
     pub(crate) call_proofs: crate::generics::CallProofCache,
     /// Literal values per (site, bindings, module); see
     /// [`Interp::memoized_literal`].
+    /// Builds worker replicas for parallel evaluation (§9.7); `None` keeps
+    /// every parallel primitive sequential.
+    pub(crate) replica: Option<crate::parallel::Replica>,
+    /// How many worker threads parallel primitives may use.
+    pub(crate) jobs: usize,
+    /// Whether this interpreter is a replica on a worker thread (§9.7.2).
+    pub(crate) on_worker: bool,
+    /// The scope each loaded module was evaluated in, by file (closures
+    /// rebuilt on a replica resolve their module names through it).
+    pub(crate) file_scopes: crate::parallel::FileScopes,
+    /// The module identity of each loaded file (see `parallel::FileKeys`).
+    pub(crate) file_keys: crate::parallel::FileKeys,
+    /// Set while a constant region (§3.10.4) is being evaluated, so its
+    /// operands do not re-enter the region table.
+    pub(crate) folding_constant: std::cell::Cell<bool>,
     pub(crate) literal_values: std::cell::RefCell<
         crate::fxhash::FxHashMap<
             (Span, usize, usize),
@@ -594,6 +609,8 @@ pub struct Interp {
     /// had a `Float`), which is the measured static/runtime disagreement. The
     /// IR lowering reads the same table, so both evaluators agree.
     pub literal_reps: HashMap<Span, Rep>,
+    /// Constant-region roots (§3.10.4), for the IR lowering.
+    pub constant_regions: HashMap<Span, Rep>,
     /// A literal or unit value uses the defining source file's unit namespace,
     /// even when called after another package installed a same-named unit.
     pub(crate) module_units: HashMap<aevia_syntax::FileId, UnitTable>,
@@ -787,6 +804,12 @@ impl Interp {
             tensor_inputs: crate::generics::TensorInputCache::default(),
             call_proofs: crate::generics::CallProofCache::default(),
             constructor_witnesses: std::cell::RefCell::default(),
+            replica: None,
+            jobs: crate::parallel::default_jobs(),
+            on_worker: false,
+            file_scopes: HashMap::new(),
+            file_keys: HashMap::new(),
+            folding_constant: std::cell::Cell::new(false),
             literal_values: std::cell::RefCell::default(),
             instance_globals: RefCell::default(),
             buffer_pool: RefCell::default(),
@@ -819,6 +842,7 @@ impl Interp {
                 .collect(),
             registrations: checked.registrations.clone(),
             literal_reps: checked.literal_reps.clone(),
+            constant_regions: checked.constant_regions.clone(),
             module_units: [(checked.anonymous_file, checked.units.clone())]
                 .into_iter()
                 .collect(),
@@ -953,6 +977,9 @@ impl Interp {
         self.expr_types.extend(checked.expr_types.clone());
         self.literal_reps.retain(|span, _| span.file != file);
         self.literal_reps.extend(checked.literal_reps.clone());
+        self.constant_regions.retain(|span, _| span.file != file);
+        self.constant_regions
+            .extend(checked.constant_regions.clone());
         self.dyn_calls.retain(|span, _| span.file != file);
         self.dyn_calls.extend(
             checked
@@ -1376,7 +1403,7 @@ impl Interp {
         }
     }
 
-    fn write_out(
+    pub(crate) fn write_out(
         &mut self,
         text: &str,
         newline: bool,
@@ -1578,6 +1605,9 @@ impl Interp {
         operand: &Expr,
         env: &Rc<Scope>,
     ) -> Result<Value, EvalError> {
+        if let Some(rep) = self.constant_region_rep(expr.span) {
+            return self.eval_constant_region(expr, rep, env);
+        }
         let value = self.eval(operand, env)?;
         self.unary(*op, value, expr.span)
     }
@@ -1604,9 +1634,75 @@ impl Interp {
             let right_value = self.eval(right, env)?;
             return self.binary(*op, left_value, right_value, expr.span);
         }
+        if let Some(rep) = self.constant_region_rep(expr.span) {
+            return self.eval_constant_region(expr, rep, env);
+        }
         let left_value = self.eval(left, env)?;
         let right_value = self.eval(right, env)?;
         self.binary(*op, left_value, right_value, expr.span)
+    }
+
+    /// The representation a constant region at `span` is evaluated in, when
+    /// `span` is the root of one and its evaluation is not already running.
+    pub(crate) fn constant_region_rep(
+        &self,
+        span: Span,
+    ) -> Option<Rep> {
+        if self.folding_constant.get() {
+            return None;
+        }
+        let rep = self.context.evidence.constant_regions.get(&span).copied()?;
+        Some(match rep {
+            | Rep::Var(_) => {
+                self.bindings
+                    .as_ref()
+                    .filter(|bindings| {
+                        bindings
+                            .context
+                            .upgrade()
+                            .is_some_and(|context| Rc::ptr_eq(&context, &self.context))
+                    })
+                    .map_or(rep, |bindings| bindings.values.rep(rep))
+            },
+            | concrete => concrete,
+        })
+    }
+
+    /// §3.10.4: a closed literal arithmetic tree is a compile-time constant.
+    ///
+    /// It is evaluated **in its static representation**, step by step, exactly
+    /// as the same tree would be evaluated at run time, and the result is
+    /// memoized per site and activation. Folding is therefore an optimisation
+    /// that cannot change a value: `0.1 + 0.2 : Float` is
+    /// `0.30000000000000004` whether it is written inline or through a `let`,
+    /// which is what keeps equational reasoning valid in a pure language. The
+    /// exactness a decimal literal deserves is a property of the *literal*
+    /// (its text is rounded once, see [`Interp::quantity`]), not of the tree.
+    pub(crate) fn eval_constant_region(
+        &mut self,
+        expr: &Expr,
+        _rep: Rep,
+        env: &Rc<Scope>,
+    ) -> Result<Value, EvalError> {
+        self.memoized_literal(expr.span, |interp| {
+            interp.folding_constant.set(true);
+            let value = match &expr.kind {
+                | ExprKind::Unary { op, operand } => {
+                    interp
+                        .eval(operand, env)
+                        .and_then(|value| interp.unary(*op, value, expr.span))
+                },
+                | ExprKind::Binary { op, left, right } => {
+                    interp.eval(left, env).and_then(|left| {
+                        let right = interp.eval(right, env)?;
+                        interp.binary(*op, left, right, expr.span)
+                    })
+                },
+                | _ => interp.eval(expr, env),
+            };
+            interp.folding_constant.set(false);
+            value
+        })
     }
 
     #[inline(never)]
@@ -1829,7 +1925,7 @@ impl Interp {
                         | StrPiece::Text(text) => out.push_str(text),
                         | StrPiece::Expr(inner) => {
                             let value = self.eval(inner, env)?;
-                            out.push_str(&value::show(&value));
+                            out.push_str(&value::show(&self.system_display(value)));
                         },
                     }
                 }
@@ -2236,6 +2332,29 @@ impl Interp {
         span: Span,
         as_float: bool,
     ) -> Result<Value, EvalError> {
+        let quantity = self.quantity_in_unit(value, unit, span, as_float)?;
+        // §5.11.6: a literal the module's unit system makes dimensionless
+        // (`299792458 m/s` is `1` in natural units) is a pure number; showing
+        // it in its SI unit would print `299792458 m*s^-1` for the value 1.
+        let units = &self.context.evidence.units;
+        if units.system().is_some() {
+            if let Value::Num(mut num) = quantity {
+                if num.dim.is_one() && units.resolve_si(unit).is_ok_and(|si| !si.dim.is_one()) {
+                    num.display = None;
+                }
+                return Ok(Value::Num(num));
+            }
+        }
+        Ok(quantity)
+    }
+
+    fn quantity_in_unit(
+        &mut self,
+        value: &NumberLit,
+        unit: &aevia_dim::UnitExpr,
+        span: Span,
+        as_float: bool,
+    ) -> Result<Value, EvalError> {
         let kind = if value.is_decimal() {
             aevia_types::LiteralKind::QuantityDecimal
         } else {
@@ -2269,7 +2388,7 @@ impl Interp {
             return Ok(Value::Num(num));
         }
         if representation == Some(Rep::Complex) {
-            let coherent = value.as_f64() * resolved.scale.to_f64();
+            let coherent = rounded_coherent(value, &resolved.scale);
             return Ok(Value::Num(NumVal {
                 kind: NumKind::Complex(coherent, 0.0),
                 dim: resolved.dim,
@@ -2279,8 +2398,7 @@ impl Interp {
         // §3.10.1: the literal's context chose `Float`, so its value is an f64
         // — including a unit literal such as `2.0 m` in a `Float[L]` slot.
         if as_float {
-            let coefficient = value.as_f64();
-            let coherent = coefficient * resolved.scale.to_f64();
+            let coherent = rounded_coherent(value, &resolved.scale);
             let mut num = NumVal::float(coherent, resolved.dim);
             num.display = Some(display);
             return Ok(Value::Num(num));
@@ -2356,6 +2474,7 @@ impl Interp {
                         };
                         Ok(Value::Num(num))
                     },
+                    | Value::Sparse(sparse) => crate::sparse::negate(self, &sparse, span),
                     | Value::Tensor(tensor) => {
                         let elements = tensor
                             .elements()
@@ -2436,6 +2555,9 @@ impl Interp {
                     return Ok(result);
                 }
             }
+        }
+        if matches!(left, Value::Sparse(_)) || matches!(right, Value::Sparse(_)) {
+            return crate::sparse::binary(self, op, left, right, span);
         }
         // §8.14: measurement arithmetic is the library type's own operator set,
         // with independent-error propagation. It is handled before the numeric
@@ -4601,7 +4723,7 @@ impl Interp {
     ) -> Result<Value, EvalError> {
         // The base is checked before any index is evaluated, so a bad base is
         // reported without running the indices.
-        if !matches!(base, Value::Tensor(_) | Value::Str(_)) {
+        if !matches!(base, Value::Tensor(_) | Value::Str(_) | Value::Sparse(_)) {
             return Err(EvalError::new("E0302", "indexing expects a tensor or a string").at(span));
         }
         let mut resolved = Vec::with_capacity(indices.len());
@@ -4655,6 +4777,22 @@ impl Interp {
     ) -> Result<Value, EvalError> {
         if let Value::Str(text) = &base {
             return index_string(text, indices, span);
+        }
+        if let Value::Sparse(sparse) = &base {
+            let mut coordinates = Vec::with_capacity(indices.len());
+            for index in indices {
+                match index {
+                    | SliceValue::Index(Some(value)) => coordinates.push(*value as isize),
+                    | _ => {
+                        return Err(EvalError::new(
+                            "E0802",
+                            "a sparse tensor is indexed by one Int per axis (slicing a sparse tensor is not defined)",
+                        )
+                        .at(span));
+                    },
+                }
+            }
+            return crate::sparse::index(sparse, &coordinates, span);
         }
         let Value::Tensor(tensor) = base else {
             return Err(EvalError::new("E0302", "indexing expects a tensor").at(span));
@@ -5197,6 +5335,21 @@ impl Interp {
                             )
                         },
                     };
+                },
+                | IoAction::LoadPlugin(path) => {
+                    if self.capabilities & crate::value::caps::FS == 0 {
+                        return Err(EvalError::new(
+                            "E0810",
+                            "`load_plugin` reads a file and needs the `fs` capability",
+                        ));
+                    }
+                    last = crate::plugin_source::load_plugin(std::path::Path::new(path));
+                },
+                | IoAction::Spawn(thunk) => {
+                    last = self.spawn_task(thunk, Span::default())?;
+                },
+                | IoAction::Await(task) => {
+                    last = self.await_task(task, Span::default())?;
                 },
                 | IoAction::ReadLine => {
                     let mut line = String::new();
@@ -6487,10 +6640,12 @@ pub fn witness_of_value(value: &Value) -> Option<Witness> {
         | Value::Unit => Some(Witness::Unit),
         | Value::Prop(_) => Some(Witness::Prop),
         | Value::Closure(_) | Value::Native(_) | Value::Ctor { .. } | Value::Io(_) => None,
+        | Value::Sparse(_)
         | Value::Dyn(_)
         | Value::UnitOf(_)
         | Value::TypeRep(_)
         | Value::Callback(_)
+        | Value::Task(_)
         | Value::KernelValue(_)
         | Value::KernelError(_)
         | Value::Error => None,
@@ -7005,7 +7160,7 @@ mod ast_stack_budget_tests {
 /// A unit's scale as a dimensionless number in the phase of the value it
 /// scales: an f64 for a `Float` (so `Float` stays `Float`), exact otherwise,
 /// with a factor of `pi` kept symbolic (`deg`).
-fn unit_scale_value(
+pub(crate) fn unit_scale_value(
     unit: &UnitDef,
     float: bool,
 ) -> NumVal {
@@ -7169,4 +7324,30 @@ fn drop_indexed_axes(
     data.shape = shape;
     data.verified_element = None;
     Value::Tensor(Rc::new(data))
+}
+
+
+/// The coherent value of a `Float` unit literal, rounded **once** (§3.10.4).
+///
+/// `1.1 km` denotes exactly `1100 m`; multiplying the rounded coefficient by
+/// the rounded scale (`1.1 * 1000.0`) rounds twice and can miss the nearest
+/// `f64`. The exact product is formed first and converted once; a scale with
+/// a factor of `pi` (`deg`) multiplies the correctly rounded rational part by
+/// `pi^k` in `f64`.
+pub(crate) fn rounded_coherent(
+    value: &NumberLit,
+    scale: &aevia_dim::Scale,
+) -> f64 {
+    match value.as_rational() {
+        | Some(coefficient) => {
+            let exact = coefficient * scale.rat.clone();
+            let base = aevia_dim::rat::to_f64(&exact);
+            if scale.pi == 0 {
+                base
+            } else {
+                base * std::f64::consts::PI.powi(scale.pi)
+            }
+        },
+        | None => value.as_f64() * scale.to_f64(),
+    }
 }

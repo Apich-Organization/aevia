@@ -102,6 +102,24 @@ pub const TREE: &[ModuleDef] = &[
         types: &[],
     },
     ModuleDef {
+        path: "Units/Planck",
+        sections: &[],
+        names: &[],
+        types: &[],
+    },
+    ModuleDef {
+        path: "Units/Atomic",
+        sections: &[],
+        names: &[],
+        types: &[],
+    },
+    ModuleDef {
+        path: "Units/Geometrized",
+        sections: &[],
+        names: &[],
+        types: &[],
+    },
+    ModuleDef {
         path: "Units/Constants",
         sections: &[],
         names: &[],
@@ -336,7 +354,7 @@ pub fn spec_module_sources(spec_source: &str) -> Vec<(String, String)> {
         .map(|section| (section.number.as_str(), section))
         .collect();
     TREE.iter()
-        .filter(|module| module.path != "Units/Constants")
+        .filter(|module| !is_manifest_generated(module.path))
         .map(|module| {
             let mut names: Vec<&str> = Vec::new();
             for number in module.sections {
@@ -478,9 +496,6 @@ fn special_body(path: &str) -> Option<String> {
             Some("Astronomy unit names are ambient Unit values from the kernel registry.")
         },
         | "Units/CGS" => Some("CGS unit names are ambient Unit values from the kernel registry."),
-        | "Units/Natural" => {
-            Some("A natural-unit system requires a kernel registry and is not provided yet.")
-        },
         | _ => None,
     };
     if let Some(note) = unit_note {
@@ -609,4 +624,19 @@ pub fn embedding_table_source() -> String {
     }
     out.push_str("];\n");
     out
+}
+
+/// The unit-system modules (§5.11.7): module path and kernel system name.
+pub const SYSTEM_MODULES: &[(&str, &str)] = &[
+    ("Units/Natural", "natural"),
+    ("Units/Planck", "planck"),
+    ("Units/Atomic", "atomic"),
+    ("Units/Geometrized", "geometrized"),
+];
+
+/// Modules whose source comes from the Kernel Manifest rather than from
+/// chapter 8: the constants and the constants of each unit system.
+#[must_use]
+pub fn is_manifest_generated(path: &str) -> bool {
+    path == "Units/Constants" || SYSTEM_MODULES.iter().any(|(module, _)| *module == path)
 }

@@ -377,6 +377,14 @@ pub enum UnitError {
     Duplicate(String),
     /// A prefix was applied to a unit that does not accept prefixes.
     NotPrefixable(String),
+    /// The unit's conversion into the module's unit system is irrational
+    /// (`C` in Heaviside-Lorentz natural units needs `(ε₀ħc)^(1/2)`).
+    NotInSystem {
+        /// The unit as written.
+        unit: String,
+        /// The module's unit system.
+        system: String,
+    },
 }
 
 impl UnitError {
@@ -389,6 +397,7 @@ impl UnitError {
             | Self::InexactPower(_) => "E0506",
             | Self::Duplicate(_) => "E0505",
             | Self::NotPrefixable(_) => "E0503",
+            | Self::NotInSystem { .. } => "E0511",
         }
     }
 }
@@ -414,6 +423,14 @@ impl fmt::Display for UnitError {
             },
             | Self::Duplicate(name) => write!(f, "duplicate unit `{name}`"),
             | Self::NotPrefixable(name) => write!(f, "`{name}` does not accept SI prefixes"),
+            | Self::NotInSystem { unit, system } => {
+                write!(
+                    f,
+                    "`{unit}` has no exact scale in {system} units (its conversion factor is an \
+                     irrational power of the unity constants); write the value in {system} \
+                     units, or convert an SI value with `to_system(\"{system}\", x)`"
+                )
+            },
         }
     }
 }
@@ -454,6 +471,11 @@ const PREFIXES: &[(&str, i32)] = &[
 pub struct UnitTable {
     defs: Vec<UnitDef>,
     index: HashMap<String, usize>,
+    /// The module's unit system (§5.11). Every resolution goes through it:
+    /// a unit's dimension becomes its representative and its scale is
+    /// divided by the system's conversion factor, so `1 m` in natural units
+    /// is `1/(ħc)` of the representative `Energy^-1`.
+    system: Option<std::sync::Arc<crate::systems::UnitSystem>>,
 }
 
 impl Default for UnitTable {
@@ -469,7 +491,71 @@ impl UnitTable {
         Self {
             defs: Vec::new(),
             index: HashMap::new(),
+            system: None,
         }
+    }
+
+    /// The same table resolving through `system` (§5.11).
+    #[must_use]
+    pub fn with_system(
+        mut self,
+        system: std::sync::Arc<crate::systems::UnitSystem>,
+    ) -> Self {
+        self.system = Some(system);
+        self
+    }
+
+    /// The module's unit system, when it is not SI.
+    #[must_use]
+    pub fn system(&self) -> Option<&crate::systems::UnitSystem> {
+        self.system.as_deref()
+    }
+
+    /// The shared handle of the module's unit system.
+    #[must_use]
+    pub fn system_handle(&self) -> Option<std::sync::Arc<crate::systems::UnitSystem>> {
+        self.system.clone()
+    }
+
+    /// Reduces a dimension written in this module (§5.11.2): its
+    /// representative in the module's system, or itself in SI.
+    #[must_use]
+    pub fn reduce_dim(
+        &self,
+        dim: &Dim,
+    ) -> Dim {
+        self.system
+            .as_ref()
+            .map_or_else(|| dim.clone(), |system| system.reduce_dim(dim))
+    }
+
+    /// Moves a resolved SI unit into the module's system.
+    fn into_system(
+        &self,
+        unit: ResolvedUnit,
+    ) -> Result<ResolvedUnit, UnitError> {
+        let Some(system) = &self.system else {
+            return Ok(unit);
+        };
+        let Some(reduction) = system.reduce(&unit.dim) else {
+            return Ok(unit);
+        };
+        if reduction.is_identity() {
+            return Ok(unit);
+        }
+        let factor = system.factor_scale(&reduction).ok_or_else(|| {
+            UnitError::NotInSystem {
+                unit: unit.name.clone(),
+                system: system.name.clone(),
+            }
+        })?;
+        Ok(ResolvedUnit {
+            name: unit.name,
+            dim: reduction.dim,
+            scale: unit.scale.div(&factor),
+            offset: unit.offset.map(|offset| offset.div(&factor)),
+            affine: unit.affine,
+        })
     }
 
     /// A table from a list of definitions.
@@ -700,8 +786,40 @@ impl UnitTable {
     ///
     /// Exact names win over prefixed readings: `kg` is the base unit, not
     /// `k`+`g`, and `min` is minute, not `m`+`in` (§5.1.4).
+    ///
+    /// In a module with a unit system (§5.11) the definition is the one the
+    /// system sees: its representative dimension and corrected scale. A unit
+    /// with no exact scale in the system is `None` here; [`UnitTable::resolve`]
+    /// reports it as [`UnitError::NotInSystem`].
     #[must_use]
     pub fn lookup(
+        &self,
+        name: &str,
+    ) -> Option<UnitDef> {
+        let def = self.lookup_si(name)?;
+        if self.system.is_none() {
+            return Some(def);
+        }
+        let resolved = self
+            .into_system(ResolvedUnit {
+                name: def.display.clone(),
+                dim: def.dim.clone(),
+                scale: def.scale.clone(),
+                offset: def.offset.clone(),
+                affine: def.affine,
+            })
+            .ok()?;
+        Some(UnitDef {
+            dim: resolved.dim,
+            scale: resolved.scale,
+            offset: resolved.offset,
+            ..def
+        })
+    }
+
+    /// [`UnitTable::lookup`] in plain SI, ignoring the module's system.
+    #[must_use]
+    pub fn lookup_si(
         &self,
         name: &str,
     ) -> Option<UnitDef> {
@@ -750,7 +868,7 @@ impl UnitTable {
         &self,
         name: &str,
     ) -> bool {
-        self.lookup(name).is_some()
+        self.lookup_si(name).is_some()
     }
 
     /// Resolves a single name to a resolved unit, keeping affine information.
@@ -759,6 +877,14 @@ impl UnitTable {
     ///
     /// Returns [`UnitError::Unknown`] for an unregistered name.
     pub fn resolve_name(
+        &self,
+        name: &str,
+    ) -> Result<ResolvedUnit, UnitError> {
+        let unit = self.resolve_name_si(name)?;
+        self.into_system(unit)
+    }
+
+    fn resolve_name_si(
         &self,
         name: &str,
     ) -> Result<ResolvedUnit, UnitError> {
@@ -771,7 +897,7 @@ impl UnitTable {
             | _ => name,
         };
         let unit = self
-            .lookup(local)
+            .lookup_si(local)
             .ok_or_else(|| UnitError::Unknown(name.to_string()))?;
         Ok(ResolvedUnit {
             name: unit.display.clone(),
@@ -792,8 +918,23 @@ impl UnitTable {
         &self,
         expr: &UnitExpr,
     ) -> Result<ResolvedUnit, UnitError> {
+        // The expression is composed in SI and moved into the system once,
+        // so `C^2/J` is exact in natural units although `C` alone is not.
+        let unit = self.resolve_si(expr)?;
+        self.into_system(unit)
+    }
+
+    /// [`UnitTable::resolve`] in plain SI.
+    ///
+    /// # Errors
+    ///
+    /// As [`UnitTable::resolve`], except [`UnitError::NotInSystem`].
+    pub fn resolve_si(
+        &self,
+        expr: &UnitExpr,
+    ) -> Result<ResolvedUnit, UnitError> {
         match expr {
-            | UnitExpr::Name(name) => self.resolve_name(name),
+            | UnitExpr::Name(name) => self.resolve_name_si(name),
             | UnitExpr::Percent => {
                 Ok(ResolvedUnit {
                     name: "%".to_string(),
@@ -803,10 +944,10 @@ impl UnitTable {
                     affine: false,
                 })
             },
-            | UnitExpr::Paren(inner) => self.resolve(inner),
+            | UnitExpr::Paren(inner) => self.resolve_si(inner),
             | UnitExpr::Mul(left, right) => {
-                let left = self.resolve(left)?;
-                let right = self.resolve(right)?;
+                let left = self.resolve_si(left)?;
+                let right = self.resolve_si(right)?;
                 reject_affine(&left)?;
                 reject_affine(&right)?;
                 Ok(ResolvedUnit {
@@ -818,8 +959,8 @@ impl UnitTable {
                 })
             },
             | UnitExpr::Div(left, right) => {
-                let left = self.resolve(left)?;
-                let right = self.resolve(right)?;
+                let left = self.resolve_si(left)?;
+                let right = self.resolve_si(right)?;
                 reject_affine(&left)?;
                 reject_affine(&right)?;
                 Ok(ResolvedUnit {
@@ -831,7 +972,7 @@ impl UnitTable {
                 })
             },
             | UnitExpr::Pow(base, exponent) => {
-                let base = self.resolve(base)?;
+                let base = self.resolve_si(base)?;
                 reject_affine(&base)?;
                 let scale = base
                     .scale

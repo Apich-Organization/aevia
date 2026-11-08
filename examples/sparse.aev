@@ -1,0 +1,52 @@
+## Sparse linear algebra: steady heat conduction in a rod and in a plate.
+##
+## `Sparse<F, shape, τ>` is a real storage class, not a dense tensor in disguise:
+## the matrices below are assembled from their nonzeros (`sparse_coo`), solved
+## directly (`spsolve`, sparse LU) or iteratively (`cg`), and carry their units
+## all the way through - the temperatures come out in kelvin because
+## `[A] = W/(m^3 K)` and `[b] = W/m^3`.
+
+## The 1-D Dirichlet Laplacian `tridiag(-1, 2, -1)` of order `n`, assembled from
+## its three diagonals. Duplicate coordinates would be summed, which is how a
+## finite-element assembly adds the contribution of each element.
+fn laplacian1d(n: Int) =
+    let ii = range(0, n)
+    let jj = range(0, n - 1)
+    let diag = sparse_coo([n, n], map(fn i => (i, i), ii), map(fn i => 2.0, ii))
+    let off = sparse_coo([n, n], map(fn i => (i, i + 1), jj), map(fn i => -1.0, jj))
+    diag + off + transpose(off)
+
+fn main(): IO Unit = do
+    # --- A rod held at 0 K at both ends, heated uniformly -------------------
+    let n = 99
+    let h = 1.0 m / (n + 1)
+    let k = 50.0 W/(m*K)
+    let q = 2.0e5 W/m^3
+    let a = (k / (h * h)) * laplacian1d(n)
+    let b = map(fn i => q, range(0, n))
+    let t = spsolve(a, b)
+    println("rod: {n} unknowns, {nnz(a)} stored entries, format {format_of(a)}")
+    # The exact profile is q x (L - x) / (2 k): 500 K at the midpoint.
+    println("rod: T(mid) = {t[49]} (exact {q * 0.5 m * 0.5 m / (2.0 * k)})")
+
+    # --- A square plate: the 2-D Laplacian is a Kronecker sum ---------------
+    let m = 30
+    let hp = 1.0 m / (m + 1)
+    let l1 = laplacian1d(m)
+    let eye = speye(m)
+    let lap2 = kron(eye, l1) + kron(l1, eye)
+    let plate = (k / (hp * hp)) * lap2
+    let load = map(fn i => q, range(0, m * m))
+    println("plate: {m * m} unknowns, {nnz(plate)} stored entries, density {density(plate)}")
+
+    # The same system by conjugate gradients and by sparse LU.
+    let by_cg = cg(plate, load, 1e-10, 2000)
+    let by_lu = spsolve(plate, load)
+    println("plate: cg converged = {by_cg.converged} in {by_cg.iterations} iterations")
+    println("plate: both agree = {norm(by_cg.x - by_lu) < 1.0e-4 K}")
+    println("plate: T(center) = {by_lu[15 * m + 15]}")
+
+    # A sparse matrix times a dense vector is dense; times a sparse matrix, sparse.
+    let flux = plate @ by_lu
+    println("plate: residual = {norm(flux - load)}")
+    println("rod: stencil squared has {nnz(laplacian1d(5) @ laplacian1d(5))} entries")

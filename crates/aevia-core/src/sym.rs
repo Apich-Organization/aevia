@@ -427,16 +427,27 @@ impl Term {
         flatten_mul_owned(right, &mut flat);
         let mut constant = BigRational::one();
         let mut factors: Vec<(u64, Term, BigRational)> = Vec::new();
+        // `pi` reaches a product in two spellings — the prelude's kernel
+        // handle and the `Sym("pi")` a unit scale builds (`deg`, `hbar` in
+        // natural units). They are one base, so `pi/pi` cancels.
+        let canonical = |term: Term| {
+            if is_pi(&term) {
+                Term::Sym("pi".to_string())
+            } else {
+                term
+            }
+        };
         for term in flat {
-            match term {
+            match canonical(term) {
                 | Term::Num(value) => constant *= value,
                 | Term::Pow(base, exponent) => {
+                    let base = canonical(*base);
                     let hash = term_hash(&base);
                     match factors.iter_mut().find(|(existing_hash, existing, _)| {
-                        *existing_hash == hash && *existing == *base
+                        *existing_hash == hash && *existing == base
                     }) {
                         | Some((_, _, existing)) => *existing += exponent,
-                        | None => factors.push((hash, *base, exponent)),
+                        | None => factors.push((hash, base, exponent)),
                     }
                 },
                 | other => {
@@ -782,11 +793,27 @@ impl Term {
                         )
                     },
                     | Fun::Ite => unreachable!("handled above"),
-                    | Fun::Other(name) => {
-                        return Err(EvalError::new(
-                            "E1001",
-                            format!("differentiating `{name}` needs the kernel"),
-                        ));
+                    // A named special function (`erf`, `fresnels`, a plugin
+                    // operator) is differentiated by the kernel, which owns
+                    // its derivative rule: the whole term is built there and
+                    // its derivative read back.
+                    | Fun::Other(_) => {
+                        let Ok(aevia_rssn::Val::Term(handle)) = crate::kernel::term_val(self)
+                        else {
+                            return Err(EvalError::new(
+                                "E1003",
+                                "the kernel could not build this term to differentiate it",
+                            ));
+                        };
+                        let result = aevia_rssn::kernel()
+                            .diff(handle, symbol)
+                            .map_err(|failure| crate::kernel::error(&failure))?;
+                        return crate::kernel::term_of(&result).ok_or_else(|| {
+                            EvalError::new(
+                                "E1003",
+                                "the kernel answered with a value that has no term form",
+                            )
+                        });
                     },
                 };
                 Term::mul(outer, inner)

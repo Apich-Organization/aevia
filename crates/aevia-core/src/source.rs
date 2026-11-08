@@ -350,6 +350,25 @@ impl SourceDependency {
         &self.path
     }
 
+    /// A one-line, persistent description of this observation (§9.11.2):
+    /// the logical and physical path, whether the file existed, and a hash
+    /// of the text that was read. [`stamp_is_current`] answers, in a later
+    /// process, whether the file system still matches it.
+    #[must_use]
+    pub fn stamp(&self) -> String {
+        let read = match &self.read {
+            | SourceRead::NotRead => "-".to_string(),
+            | SourceRead::Loaded(text) => format!("{:016x}", text_hash(text)),
+            | SourceRead::Failed(kind) => format!("!{kind:?}"),
+        };
+        format!(
+            "{}\t{}\t{}\t{read}",
+            self.path.display(),
+            self.canonical.display(),
+            u8::from(self.available)
+        )
+    }
+
     /// Physical target observed at load time, retained separately from the
     /// logical candidate so hosts can refresh after a symlink is retargeted.
     #[must_use]
@@ -385,5 +404,40 @@ impl SourceDependency {
                     && std::fs::read_to_string(&self.path).is_err_and(|error| error.kind() == *kind)
             },
         }
+    }
+}
+
+fn text_hash(text: &str) -> u64 {
+    use std::hash::Hash as _;
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Whether the file system still matches a [`SourceDependency::stamp`]
+/// written by an earlier process: same physical target, same existence, and
+/// — for a file that was read — the same text.
+#[must_use]
+pub fn stamp_is_current(stamp: &str) -> bool {
+    let mut fields = stamp.split('\t');
+    let (Some(path), Some(canonical), Some(available), Some(read)) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return false;
+    };
+    let path = Path::new(path);
+    if canonical_path(path).display().to_string() != canonical
+        || u8::from(path.is_file()).to_string() != available
+    {
+        return false;
+    }
+    match read {
+        | "-" => true,
+        | hash if hash.starts_with('!') => std::fs::read_to_string(path).is_err(),
+        | hash => {
+            std::fs::read_to_string(path)
+                .is_ok_and(|text| format!("{:016x}", text_hash(&text)) == hash)
+        },
     }
 }

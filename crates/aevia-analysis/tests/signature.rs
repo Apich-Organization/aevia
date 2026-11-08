@@ -223,7 +223,14 @@ fn a_builtin_reports_all_its_overloads_and_selects_by_arity() {
     let help = analysis
         .signature_help(offset_of(source, "(t, 1)") + 1)
         .expect("inside sum");
-    assert_eq!(help.signatures.len(), 4, "{help:#?}");
+    // Four dense overloads plus the `Sparse` ones (§8.4.1).
+    assert!(help.signatures.len() >= 4, "{help:#?}");
+    assert!(
+        help.signatures
+            .iter()
+            .any(|signature| signature.label.contains("Sparse<")),
+        "{help:#?}"
+    );
     assert!(
         help.signatures[help.active_signature]
             .label

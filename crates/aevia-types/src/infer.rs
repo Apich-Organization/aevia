@@ -841,6 +841,43 @@ impl Infer {
         matches!(result,Rep::Var(id) if self.division_inputs.get(&id).is_some_and(|original| self.resolve_rep(*original) == input))
     }
 
+    /// Whether the variable `id` is an operand of a `join` whose other
+    /// operand is exact: already `Real`, or an integer division's result
+    /// (which is `Real` whatever its input, §3.4.2).
+    fn meets_exact(
+        &self,
+        id: u32,
+    ) -> bool {
+        let target = self.resolve_rep(Rep::Var(id));
+        self.join_inputs.values().any(|(left, right)| {
+            let (left, right) = (self.resolve_rep(*left), self.resolve_rep(*right));
+            let other = if left == target {
+                right
+            } else if right == target {
+                left
+            } else {
+                return false;
+            };
+            match other {
+                | Rep::Real => true,
+                | Rep::Var(other) => self.division_inputs.contains_key(&other),
+                | _ => false,
+            }
+        })
+    }
+
+    /// Whether some resolved arithmetic `join` met `Real` and `Float`
+    /// (§3.4.1: the exact side wins, which `W0302` reports).
+    #[must_use]
+    pub fn has_real_float_join(&self) -> bool {
+        self.join_inputs.values().any(|(left, right)| {
+            matches!(
+                (self.resolve_rep(*left), self.resolve_rep(*right)),
+                (Rep::Real, Rep::Float) | (Rep::Float, Rep::Real)
+            )
+        })
+    }
+
     /// Composite arithmetic retains literal domains, but it is no longer a
     /// direct source literal when a surrounding operation chooses readings.
     pub fn finish_literal_expression(
@@ -1031,13 +1068,18 @@ impl Infer {
                 continue;
             }
             let preferred = self.literal_kind(&ty).unwrap_or(*kind);
-            for rep in [
-                Rep::default_for_literal(preferred),
-                Rep::Int,
-                Rep::Float,
-                Rep::Real,
-                Rep::Complex,
-            ] {
+            // §3.10.1: a decimal literal that meets an exact operand is read
+            // as its exact decimal, so `1/3 + 0.1` is `13/30`.
+            let exact_partner = match &ty {
+                | Type::Scalar(Rep::Var(id), _) | Type::Var(id) => self.meets_exact(*id),
+                | _ => false,
+            };
+            let first = if exact_partner && preferred.accepts_rep(Rep::Real) {
+                Rep::Real
+            } else {
+                Rep::default_for_literal(preferred)
+            };
+            for rep in [first, Rep::Int, Rep::Float, Rep::Real, Rep::Complex] {
                 if !kind.accepts_rep(rep) || !preferred.accepts_rep(rep) {
                     continue;
                 }
@@ -1872,7 +1914,16 @@ impl Infer {
                     self.bind_rep(a, Rep::Var(b))
                 }
             },
-            | (Rep::Var(id), other) | (other, Rep::Var(id)) => self.bind_rep(id, other),
+            | (Rep::Var(id), other) | (other, Rep::Var(id)) => {
+                if std::env::var_os("AEVIA_TRACE_REP").is_some() {
+                    eprintln!(
+                        "bind r{id} := {other:?}
+{}",
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+                self.bind_rep(id, other)
+            },
             | _ => {
                 Err(UnifyError::Mismatch {
                     left: Type::Scalar(left, Dim::one()),
@@ -2991,9 +3042,106 @@ impl Infer {
         &mut self,
         id: u32,
     ) -> Rep {
-        let literal = self.rep_literals.get(&id).copied();
-        self.choose_representation(id, literal)
-            .unwrap_or_else(|| literal.map_or(Rep::Real, Rep::default_for_literal))
+        self.default_rep_at(id, 0)
+    }
+
+    /// §3.10.2: an arithmetic result is not an independent variable. Its
+    /// default is the `join` (or `div_rep`) of its operands' defaults, so the
+    /// operands are defaulted first — leaves by their literal rule — and the
+    /// result follows. Defaulting the result first picked rule 4 (`Real`) for
+    /// `1 + 1.0` and then let the `Float` leaf promote silently (`W0302`),
+    /// which made the static type of a mixed literal tree disagree with the
+    /// spec's `join(Int, Float) = Float`.
+    fn default_rep_at(
+        &mut self,
+        id: u32,
+        depth: u32,
+    ) -> Rep {
+        if let Rep::Var(current) = self.resolve_rep(Rep::Var(id)) {
+            let derived = if depth < 4096 {
+                self.derived_default(current, depth)
+            } else {
+                None
+            };
+            if let Rep::Var(current) = self.resolve_rep(Rep::Var(current)) {
+                if let Some(rep) = derived {
+                    let ty = Type::Scalar(Rep::Var(current), Dim::one());
+                    let reading = Type::Scalar(rep, Dim::one());
+                    if self.probe_numeric_reading(&ty, &reading).is_ok()
+                        && self.unify_rep(Rep::Var(current), rep).is_ok()
+                    {
+                        return rep;
+                    }
+                }
+                let literal = self.rep_literals.get(&current).copied();
+                return self
+                    .choose_representation(current, literal)
+                    .unwrap_or_else(|| literal.map_or(Rep::Real, Rep::default_for_literal));
+            }
+        }
+        self.resolve_rep(Rep::Var(id))
+    }
+
+    /// The default an arithmetic result inherits from its operands.
+    fn derived_default(
+        &mut self,
+        id: u32,
+        depth: u32,
+    ) -> Option<Rep> {
+        if let Some((left, right)) = self.join_inputs.get(&id).copied() {
+            // Operands that are not direct literal leaves are defaulted
+            // first. A literal leaf that then meets an exact `Real` is read
+            // exactly (§3.10.1: `1/3 + 0.1` is `13/30`, not `1/3` plus the
+            // binary expansion of `0.1`); otherwise it takes its own default.
+            let is_leaf = |infer: &Self, rep: Rep| {
+                matches!(infer.resolve_rep(rep), Rep::Var(input) if input != id
+                    && infer.direct_literal_kind(Rep::Var(input)).is_some())
+            };
+            let order = if is_leaf(self, left) && !is_leaf(self, right) {
+                [right, left]
+            } else {
+                [left, right]
+            };
+            let mut resolved_first = None;
+            for operand in order {
+                if let (Some(Rep::Real), Rep::Var(input)) =
+                    (resolved_first, self.resolve_rep(operand))
+                {
+                    let kind = self.direct_literal_kind(Rep::Var(input));
+                    if kind.is_some_and(|kind| kind.accepts_rep(Rep::Real)) && input != id {
+                        let ty = Type::Scalar(Rep::Var(input), Dim::one());
+                        let reading = Type::Scalar(Rep::Real, Dim::one());
+                        if self.probe_numeric_reading(&ty, &reading).is_ok() {
+                            let _ = self.unify_rep(Rep::Var(input), Rep::Real);
+                        }
+                    }
+                }
+                let resolved = match self.resolve_rep(operand) {
+                    | Rep::Var(input) if input != id && self.above_floor(input) => {
+                        self.default_rep_at(input, depth + 1)
+                    },
+                    | other => other,
+                };
+                if resolved_first.is_none() {
+                    resolved_first = Some(resolved);
+                }
+            }
+            let operands = [self.resolve_rep(left), self.resolve_rep(right)];
+            return match (operands[0], operands[1]) {
+                | (Rep::Var(_), _) | (_, Rep::Var(_)) => None,
+                | (a, b) => a.join_concrete(b),
+            };
+        }
+        if let Some(input) = self.division_inputs.get(&id).copied() {
+            let resolved = match self.resolve_rep(input) {
+                | Rep::Var(operand) if operand != id && self.above_floor(operand) => {
+                    self.default_rep_at(operand, depth + 1)
+                },
+                | other => other,
+            };
+            return (!matches!(resolved, Rep::Var(_))).then(|| resolved.div_rep());
+        }
+        None
     }
 
     fn default_dim(

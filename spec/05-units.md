@@ -319,14 +319,12 @@ type  = Scalar<rep(number), dim(unit_expr)>
 > `Session::register_unit` 注册的单位只出现在该 session 的 manifest 里
 > （`KernelManifest::build_with_units`），进程级表由 `build` 读取。
 
-`Units.Natural` 的设计是“单位制”而不是“改常数”：它本应导出一组新的单位，
-其中 `c`、`hbar` 的数值是 1，用户 `open Units.Natural` 后 `1 GeV` 等写法成立。
-**当前实现状态**：kernel 没有 natural-unit registry，Aevia 也不允许在 manifest
-之外维护第二张单位表（§5.10 第 1 条），所以这一构建里的 `Units.Natural`
-是一个**文档性空模块**（`import Units.Natural` 能解析，但不导出单位）；`c`、
-`hbar` 作为**物理常数的值**来自 `Units.Constants`，`GeV` 由 `G`+`eV` 前缀
-得到。真正的 natural-unit 系统需要 kernel 增加 registry（记录为缺口），
-在那之前不要声称 `open Units.Natural` 会改变 `c`/`hbar` 的数值。
+`Units.Natural`、`Units.Planck`、`Units.Atomic`、`Units.Geometrized` 是
+§5.11 单位制下的**常数模块**：它们自己声明 `with units <system>`，内容从
+`manifest.unit_systems` 与 `manifest.constants` 生成，因此 `c`、`hbar`、
+`k_B` 在 `Units.Natural` 里**由约化本身**得到精确的 `1`，而不是手写的特例。
+单位制的选择不是 `open` 一个模块，而是模块头 `module M with units natural`
+（§5.11）。
 
 ## 5.4 换算与显示
 

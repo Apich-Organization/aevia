@@ -4,8 +4,21 @@
 ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module LinearAlgebra.Sparse
 
+let cg = cg
+let contract = contract
+let convert = convert
+let density = density
+let format_of = format_of
 let from_dense = from_dense
+let kron = kron
+let map_nonzero = map_nonzero
 let matmul = matmul
 let nnz = nnz
+let nonzeros = nonzeros
+let sparse_coo = sparse_coo
+let sparse_csr = sparse_csr
+let spdiag = spdiag
+let speye = speye
+let spsolve = spsolve
 let to_dense = to_dense
 let transpose = transpose

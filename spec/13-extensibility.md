@@ -299,11 +299,9 @@ Rssn.Units           : Tensor<1, String>     # 单位名；单位值在生成的
   成源码 lambda。
   回调在原线程同步执行，外层调用结束即失效；跨线程调用和同作用域重入被拒绝，
   回调错误经 `OpError` 传回。空列表就是一次动态调用。
-- `Rssn.register`/`Rssn.register_plugin` 类型正确，但 Aevia 源码无法构造
-  `Plugin` 值（源码级 `@op` 打包未实现）：运行时报
-  `E1001("core.plugin.source")`；Rust host 插件仍经嵌入 API 注册
-  （§13.5.1）。`core.plugin.source` 是 capability 表里 `enabled = false`
-  的行；`core.callback` 表示上述受限回调桥可用。
+- `Rssn.register`/`Rssn.register_plugin` 接受 host `Plugin`；源码插件由
+  `@op`/`@rule` 与 `load_plugin` 发布（§13.5.2）。`core.plugin.source` 在有
+  进程内插件的构建中为 `enabled = true`；`core.callback` 表示受限回调桥可用。
 
 ### 13.3.3 错误
 
@@ -497,20 +495,37 @@ Rssn.register(plugin)          # -> Result<PluginId, PluginError>
 
 ### 13.5.2 Aevia 函数作为 RSSN 算子
 
-`@op` 把 Aevia 函数包装成 `HostCallback`，注册为 RSSN 算子。
-这样用户可以用 Aevia 写领域算子，同时享受 RSSN 的符号重写/数值内核：
+`@op` 把 Aevia 函数发布为 RSSN 算子，`@rule` 发布为重写规则：
 
 ```aevia
 @op("mydomain/softplus")
 fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
+
+@rule("mydomain/sinh-exp")
+fn sinh_exp(x: Real[1]) = (sinh(x), (exp(x) - exp(-x)) / 2)
 ```
 
-限制：回调必须是纯的、线程安全的（或标记 `SessionBound`）；符号重写
-规则必须显式注册，不能从函数体自动推导。
+**决定：用追踪而不是回调。** kernel 的扩展语言就是它的项语言：算子是定义
+`name(a, b) := body`，规则是重写 `name: lhs => rhs`。Aevia 函数以**追踪**变成
+它们：用带各参数已检查量纲的新符号调用函数，它构造的项就是定义体。这不需要
+第二个编译器，并继承 kernel 的全部能力——`mydomain/softplus` 成为定义之后，
+kernel 可以调用它、对它求导、穿过它化简与积分、数值求值，这是不透明的宿主
+回调做不到的（回调也无法跨线程，`Rc` 解释器不是 `Send`）。
+
+- 代价是被检查的：结果依赖于对参数的控制流（`if x > 0`、对值的 `match`）或
+  做 IO 的函数追踪不出项，注册报 `E1006` 并给出原因。
+- 规则函数返回二元组 `(lhs, rhs)`，参数就是规则的模式变量；`lhs` 必须是算子
+  应用（追踪时会被局部化简，所以 `x * 0` 不是合法的左端）。
+- 发布发生在模块的函数绑定之后、顶层 `let` 求值之前，所以顶层绑定已经可以经
+  `Rssn.dynamic("mydomain/softplus", …)` 调用它。每个加载的模块注册一个进程内
+  插件 `aevia/<module>#n`，属于当前线程的 kernel 会话（§13.6）。
+- **动态加载**：`load_plugin(path) : String -> IO (Result<Int, String>)` 在运行期
+  加载、检查、求值一个源码文件（含其导入），发布其中的 `@op`/`@rule`，返回发布
+  数量；需要 `fs` 能力。
 
 `@op("mydomain/softplus")` 里的 `mydomain/` 是**算子名的一部分**（插件
-命名空间），不是 `rule_set/name` 限定符；运行时 `call_value` 仍按完整
-字符串查找，不能拆成 `rule_set` + `name`。
+命名空间），不是 `rule_set/name` 限定符；kernel 的定义头允许 `/` 分隔的标识符
+段，`call_value` 按完整字符串查找。
 
 ### 13.5.3 安全
 
@@ -743,7 +758,7 @@ core.higher_order
 core.structured_results
 core.sde                   # 由 features.sde 派生；SDE 噪声原语可用
 core.callback              # true：同线程作用域回调，支持具体结构化签名
-core.plugin.source         # false：源码级 @op 打包未实现
+core.plugin.source         # 源码级 @op/@rule/load_plugin（需 in-process 插件）
 core.plugin
 core.plugin.in-process
 core.plugin.cdylib         # 仅 plugin-cdylib 构建
@@ -763,8 +778,13 @@ dim.user_base_dimensions
 出现在诊断里，`Rssn.Capabilities` 不会列出：`core.symbolic`、`core.numeric`、
 `core.tensor`、`core.linalg`、`core.ode`、`core.pde`、`core.fft`、
 `core.stats`、`core.units`、`core.assume.general`、`core.gpu`、
-`core.distributed`、`io.binary`，以及**存储类稀疏**的命名缺口
-`storage.sparse`（§13.9.5：v1 用 CSR 记录，不是运行时存储类）。
+`core.distributed`、`io.binary`。
+
+**存储类稀疏**（`storage.sparse`，§13.9.5/§8.4.1）原先是一个命名缺口，自 2026-11-07
+起**已启用**：`Value::Sparse` 是运行时值，`Csr`/`Csc`/`Coo` 可构造；仍缺的
+只有 `Block`/`Bcsr`（类型里存在，构造报 `E1001`，capability 名
+`storage.sparse.block`）。它是 Aevia 自己的存储类，不由 RSSN manifest 的
+`Features` 字段发布，所以不出现在 `Rssn.Capabilities` 里。
 
 Aevia 编译器在类型检查后检查 capability；缺失时：
 
@@ -856,17 +876,19 @@ Aevia 编译器在类型检查后检查 capability；缺失时：
 - `Sparse` 与 `Tensor` 之间显式转换；不隐式互转。RSSN 的 `TypeExpr::Sparse`
   只有 `rank`，所以 Aevia 的 `Sparse<F,shape,τ>` 在边界降为 rank + 运行时
   shape；细化形状由 Aevia 自己检查。
-- 稀疏不是库补丁，而是类型系统的一部分；`shape` 细化同样适用。
+- 稀疏不是库补丁，而是类型系统的一部分；`shape` 细化同样适用（目前检查到秩）。
 
-> **实现状态（2026-11-05）**：`Sparse` 类型构造器与 `from_dense`/`to_dense`/
-> `nnz` 已实现（CSR **记录**往返，stdlib 测试覆盖）；**v1 没有运行时
-> `Storage::Sparse` 值类型**——`from_dense` 返回 CSR 字段的记录，checker 的
-> `TyKind::Sparse` 是类型层镜像；kernel 的 `Value::Sparse` 过桥时被 densify。
-> `matmul`/`transpose` 的稀疏版本与 `@` 的 dense/sparse 布局分派**尚未
-> 实现**，以命名 capability gap **`storage.sparse`** 记录（不是静默遗漏；
-> 本轮的 scoping 见 `.workbuddy-ai/design/storage-sparse-scope.md`）；当前
-> `@` 只分派 dense 张量。格式仍是封闭集合。在真正的存储类/算法落地前，
-> 不要声称运行时存在 `Sparse` 值类型。
+> **实现状态（2026-11-07）**：`Sparse<F, shape, τ>` 是独立的类型构造器，运行时
+> 有真正的 `Value::Sparse`（`Csr`/`Csc`/`Coo`；`f64` 缓冲与精确装箱两类存储，
+> 精确值不舍入），`storage.sparse` 因此**已启用**。`@` 的四种布局分派
+> （sparse×dense、dense×sparse、sparse×sparse，加 dense×dense）在 AST 与 IR
+> 求值器、在 checker 里都已实现；`Sparse` 与 `Tensor` 之间只有显式转换
+> （`from_dense<F>`、`to_dense`、`convert<G>`），checker 不会让一个替代另一个。
+> 稀疏值过 RSSN 边界不再稠密化（`aevia-rssn::Val::Sparse` ↔ `Value::Sparse`），
+> `term_of_value` 仍拒绝它进入项图。具体的内建函数、精确性与错误码见 §8.4.1。
+> **剩余缺口**：`Block`/`Bcsr` 只在类型里（构造报 `E1001`）；形状细化只检查
+> 秩；`cg` 无预条件子；不支持稀疏切片；格式仍是封闭集合（用户自定义
+> `Format` 要等 RSSN 开放）。
 
 ### 13.9.6 效果与能力
 

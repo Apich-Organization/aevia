@@ -312,6 +312,124 @@ struct Loader {
     stdlib: HashMap<PathBuf, Vec<String>>,
     /// RSSN namespaces generated lazily from the live kernel manifest.
     kernel_modules: HashMap<PathBuf, (String, String)>,
+    /// Checked modules kept from earlier loads (§9.11); see [`CheckCache`].
+    cache: Option<std::rc::Rc<std::cell::RefCell<CheckCache>>>,
+}
+
+/// Incremental checking (§9.11): checked modules kept between loads.
+///
+/// Checking a module is a function of its source text, its `FileId`, the
+/// checked interfaces of its imports, the bindings they are imported under,
+/// its identity and the check options. A module whose inputs all hash the
+/// same as on the previous load is not checked again — its `CheckedModule`
+/// and diagnostics are reused — and because the fingerprint includes the
+/// imports' *checked interfaces*, an edit that leaves a dependency's interface
+/// unchanged does not recheck the modules that import it (early cutoff). The
+/// standard library and unchanged package modules are therefore checked once
+/// per session, and an edit to the entry file rechecks only the entry.
+///
+/// `FileId`s are positions in the load's `SourceMap`, so they are the same
+/// on every load of a program whose import graph has not changed; an entry
+/// is reused only under the same `FileId`, which keeps every span in the
+/// reused interface pointing into the text it was checked against.
+///
+/// The fingerprint is a 64-bit hash of the inputs' structural rendering;
+/// the cache is per process (a `watch` session, an editor, a REPL).
+#[derive(Default)]
+pub struct CheckCache {
+    entries: HashMap<String, CacheEntry>,
+    /// Modules reused from the cache on the most recent load.
+    pub reused: usize,
+    /// Modules checked on the most recent load.
+    pub checked: usize,
+}
+
+struct CacheEntry {
+    file: FileId,
+    fingerprint: u64,
+    diagnostics: Diagnostics,
+    module: aevia_types::check::CheckedModule,
+}
+
+impl CheckCache {
+    /// An empty cache.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// How many modules the cache holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Loads `entry` reusing the modules `cache` kept from earlier loads.
+///
+/// The result is exactly the program [`load_with_roots_and_overlays`] would
+/// produce; `LoadStats::checks` counts only the modules checked this time and
+/// `cache.reused` the ones that were not.
+#[must_use]
+pub fn load_incremental(
+    entry: &Path,
+    roots: Roots,
+    overlays: &SourceOverlays,
+    options: &CheckOptions,
+    cache: &std::rc::Rc<std::cell::RefCell<CheckCache>>,
+) -> (Program, LoadStats) {
+    let roots = match entry.parent() {
+        | Some(dir) => roots.with_local(dir),
+        | None => roots,
+    };
+    {
+        let mut cache = cache.borrow_mut();
+        cache.reused = 0;
+        cache.checked = 0;
+    }
+    let mut loader = Loader {
+        roots: Some(roots),
+        options: options.clone(),
+        overlay: overlays.clone(),
+        cache: Some(cache.clone()),
+        ..Loader::default()
+    };
+    let root = loader.load_entry(entry);
+    let files = loader.parsed.len();
+    let (modules, sources, mut diagnostics, dependencies) = loader.finish(root);
+    dedupe_diagnostics(&mut diagnostics);
+    let stats = LoadStats {
+        entries: 1,
+        files,
+        modules: modules.len(),
+        checks: cache.borrow().checked,
+        diagnostics: diagnostics.items.len(),
+    };
+    (
+        Program {
+            sources,
+            modules,
+            diagnostics,
+            dependencies,
+        },
+        stats,
+    )
+}
+
+fn fingerprint(parts: &[&dyn std::fmt::Debug]) -> u64 {
+    use std::hash::Hash as _;
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for part in parts {
+        format!("{part:?}").hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 struct Parsed {
@@ -523,6 +641,7 @@ impl Loader {
                         file,
                         module: Module {
                             name: None,
+                            unit_system: None,
                             decls: Vec::new(),
                             file,
                         },
@@ -834,15 +953,70 @@ impl Loader {
                     .as_ref()
                     .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
             };
-            let checked = check_module_with_identity(
-                parsed.file,
-                &parsed.module,
-                &imports,
-                &interfaces,
-                &self.options,
-                identity,
-                &bindings,
-            );
+            let cache_key = format!("{path:?}");
+            let print = self.cache.as_ref().map(|_| {
+                let text = self
+                    .sources
+                    .file(parsed.file)
+                    .map(|file| file.text.clone())
+                    .unwrap_or_default();
+                fingerprint(&[
+                    &text,
+                    &parsed.file,
+                    &imports,
+                    &interfaces,
+                    &identity,
+                    &bindings,
+                    &self.options,
+                ])
+            });
+            let reused = match (&self.cache, print) {
+                | (Some(cache), Some(print)) => {
+                    let cache = cache.borrow();
+                    cache.entries.get(&cache_key).and_then(|entry| {
+                        (entry.file == parsed.file && entry.fingerprint == print).then(|| {
+                            aevia_types::check::CheckResult {
+                                diagnostics: entry.diagnostics.clone(),
+                                module: entry.module.clone(),
+                            }
+                        })
+                    })
+                },
+                | _ => None,
+            };
+            let checked = match reused {
+                | Some(checked) => {
+                    if let Some(cache) = &self.cache {
+                        cache.borrow_mut().reused += 1;
+                    }
+                    checked
+                },
+                | None => {
+                    let checked = check_module_with_identity(
+                        parsed.file,
+                        &parsed.module,
+                        &imports,
+                        &interfaces,
+                        &self.options,
+                        identity,
+                        &bindings,
+                    );
+                    if let (Some(cache), Some(print)) = (&self.cache, print) {
+                        let mut cache = cache.borrow_mut();
+                        cache.checked += 1;
+                        cache.entries.insert(
+                            cache_key,
+                            CacheEntry {
+                                file: parsed.file,
+                                fingerprint: print,
+                                diagnostics: checked.diagnostics.clone(),
+                                module: checked.module.clone(),
+                            },
+                        );
+                    }
+                    checked
+                },
+            };
             self.diagnostics.extend(checked.diagnostics.clone());
             let aliases = prefixes
                 .get(&path)
@@ -972,7 +1146,7 @@ pub fn run_modules(
                 }
             }
         }
-        diagnostics.extend(interp.publish_registrations());
+        interp.registrations = module.checked.registrations.clone();
         diagnostics.extend(interp.load_into(&module.module, &scope));
         let names = crate::top_level_names(&module.module);
         let mut values = HashMap::new();
@@ -992,6 +1166,16 @@ pub fn run_modules(
             }
         }
         exports.insert(module.file, values);
+        interp.file_scopes.insert(module.file, scope.clone());
+        interp.file_keys.insert(
+            module.file,
+            std::sync::Arc::from(format!(
+                "{}|{:?}|{:?}",
+                module.path.join("."),
+                module.source.path,
+                module.source.owner
+            )),
+        );
         scopes.insert(module.file, scope);
         if index == last {
             continue;

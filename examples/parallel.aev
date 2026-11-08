@@ -1,0 +1,23 @@
+module Parallel
+
+## The midpoint rule for pi = integral of 4/(1+x^2) over [0, 1], split into
+## blocks mapped in parallel. `par_map`/`par_tabulate` keep the input order
+## and `par_reduce` uses blocks fixed by the input length, so the printed
+## values are the same for every `--jobs N`.
+let steps = 2000
+let width = 1.0 / 400000.0
+
+fn block(i: Int): Float =
+    sum(map(fn (k) => 4.0 / (1.0 + ((i * steps + k) * width + width / 2.0)^2) * width, linspace(0.0, 1999.0, 2000)))
+
+fn report(): IO Float = do
+    println("the task is running on a worker")
+    pure(sum(par_tabulate(200, block)))
+
+fn main(): IO Unit = do
+    let parts = par_tabulate(200, block)
+    println(par_reduce(fn (a, b) => a + b, 0.0, parts))
+    task <- spawn(report)
+    println("spawned")
+    estimate <- await(task)
+    println(estimate)

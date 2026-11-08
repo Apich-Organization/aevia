@@ -962,6 +962,10 @@ pub fn is_structural_show_head(ty: &Type) -> bool {
                     .iter()
                     .all(|(_, field)| is_structural_show_head(field))
         },
+        // A sparse tensor prints structurally when its elements do.
+        | Type::Adt(_, args) if crate::builtins::sparse_parts(ty).is_some() => {
+            is_structural_show_head(&args[1])
+        },
         // A nominal user type needs its own `Show` instance (or `derive`): the
         // printer cannot know a variant's field order or constructor names.
         | Type::Adt(..)

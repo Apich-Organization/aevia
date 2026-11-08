@@ -52,6 +52,7 @@ cbrt
 cdf
 ceil
 centroid
+cg
 chebyshev_fit
 chebyshev_t
 chebyshev_u
@@ -73,6 +74,8 @@ concat
 conj
 const
 contains
+contract
+convert
 corr
 cos
 cosh
@@ -83,6 +86,7 @@ decide
 default_plot_opts
 defint
 degree
+density
 det
 det_unit
 device_of
@@ -124,6 +128,9 @@ fold
 fold_left
 forall
 format
+format_of
+fresnel_c
+fresnel_s
 from_dense
 from_json
 from_value
@@ -155,6 +162,7 @@ is_subset
 j1
 jacobian
 join
+kron
 kurtosis
 label
 laguerre_l
@@ -181,6 +189,7 @@ map
 map2
 map_err
 map_indexed
+map_nonzero
 matmul
 matvec
 max
@@ -196,6 +205,7 @@ mod
 mode
 nan
 nnz
+nonzeros
 norm
 normalize
 not
@@ -283,8 +293,13 @@ solve_wave
 sort
 sort_by
 sort_float
+sparse_coo
+sparse_csr
+spdiag
+speye
 spline
 split
+spsolve
 sqrt
 starts_with
 std

@@ -104,7 +104,7 @@ fn every_embedded_module_loads() {
     let modules: Vec<String> = aevia_std::stdlib::module_paths()
         .map(|path| format!("import {}", path.replace('/', ".")))
         .collect();
-    assert_eq!(modules.len(), 38, "the §8.20 tree has 38 modules");
+    assert_eq!(modules.len(), 41, "the §8.20 tree has 41 modules");
     let source = format!(
         "module Main\n\n{}\n\nfn main(): IO Unit = println(\"loaded\")\n",
         modules.join("\n")

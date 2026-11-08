@@ -24,6 +24,15 @@ use crate::ty::Type;
 use aevia_dim::Dim;
 use num_rational::BigRational;
 
+mod sparse;
+
+pub use sparse::FORMATS as SPARSE_FORMATS;
+pub use sparse::format_type;
+pub use sparse::sparse_parts;
+pub use sparse::sparse_schemes;
+pub use sparse::sparse_type;
+pub use sparse::takes_format_argument;
+
 /// Builds a scheme quantifying `vars` type/representation variables, `dims`
 /// dimension variables and `rows` row variables.
 ///
@@ -333,15 +342,16 @@ fn json() -> Type {
     error_type("Json")
 }
 
-/// The opaque `Sparse<F, shape, τ>` of §8.4.1.
-fn sparse(element: Type) -> Type {
+/// The opaque `Task<a>` of §9.7.3: a running concurrent computation.
+#[must_use]
+pub fn task(result: Type) -> Type {
     Type::Adt(
         adt::intern(Adt {
-            name: "Sparse".to_string(),
-            params: vec!["f".to_string(), "shape".to_string(), "t".to_string()],
+            name: "Task".to_string(),
+            params: vec!["a".to_string()],
             ctors: Vec::new(),
         }),
-        vec![error_type("Format"), element],
+        vec![result],
     )
 }
 
@@ -379,6 +389,15 @@ fn measurement(dim: Dim) -> Type {
 /// Returns every scheme attached to a built-in name, if it is one.
 #[must_use]
 pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
+    if let Some(found) = sparse::sparse_schemes(name, None) {
+        return Some(found);
+    }
+    let mut found = base_schemes(name)?;
+    found.extend(sparse::sparse_overloads(name));
+    Some(found)
+}
+
+fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
     Some(match name {
         // ----- constants -------------------------------------------------
         | "pi" | "e" | "oo" => vec![Scheme::mono(Type::real(one()))],
@@ -441,6 +460,21 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
+        // §5.11.5: conversions between SI and a unit system. Both are typed
+        // at the call site (the system name is a literal, the dimension is
+        // reduced through the kernel's table), so the schemes only fix the
+        // shape of the call.
+        | "to_system" | "from_system" => {
+            vec![scheme(
+                1,
+                2,
+                0,
+                func(
+                    vec![Type::string(), scalar(rep_var(0), dim_var(0))],
+                    scalar(Rep::Real, dim_var(1)),
+                ),
+            )]
+        },
         | "check_with" => {
             vec![scheme(
                 1,
@@ -492,7 +526,7 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
         },
         | "exp" | "ln" | "log" | "log2" | "log10" | "sin" | "cos" | "tan" | "asin" | "acos"
         | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "gamma"
-        | "lgamma" | "erf" | "erfc" | "zeta" => {
+        | "lgamma" | "erf" | "erfc" | "zeta" | "fresnel_s" | "fresnel_c" => {
             vec![scheme(
                 1,
                 0,
@@ -1197,6 +1231,48 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 ty: func(vec![func(vec![var(0)], var(1)), list(var(0))], list(var(1))),
             }]
         },
+        // §8.3/§9.7: `par_tabulate(n, f)` maps `f` over `0..n` on workers.
+        | "par_tabulate" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(
+                    vec![Type::int(), func(vec![Type::int()], var(0))],
+                    list(var(0)),
+                ),
+            )]
+        },
+        // §8.3/§9.7: an associative reduction with `zero` as its identity.
+        | "par_reduce" => {
+            vec![Scheme {
+                vars: vec![0],
+                dims: Vec::new(),
+                rows: Vec::new(),
+                nats: Vec::new(),
+                constraints: vec![Constraint::new("Parallel", vec![var(0)])],
+                numeric: Vec::new(),
+                materializations: Vec::new(),
+                ty: func(
+                    vec![func(vec![var(0), var(0)], var(0)), var(0), list(var(0))],
+                    var(0),
+                ),
+            }]
+        },
+        // §9.7.3: concurrent tasks. `spawn` starts the action a thunk
+        // builds; `await` waits for its result.
+        | "spawn" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(vec![func(Vec::new(), io(var(0)))], io(task(var(0)))),
+            )]
+        },
+        | "await" => vec![scheme(1, 0, 0, func(vec![task(var(0))], io(var(0))))],
+        // §6.8.2: the action that does nothing and produces `x`; the last
+        // statement of a `do` that computes a value.
+        | "pure" => vec![scheme(1, 0, 0, func(vec![var(0)], io(var(0))))],
         // §6.10: `rng(seed)` is the pure, reproducible generator; `random()` is
         // the `IO` one. The value is a next-number function.
         | "rng" => {
@@ -1433,6 +1509,15 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
             ))]
         },
         | "read_line" => vec![Scheme::mono(func(vec![unit_ty()], io(Type::string())))],
+        // §13.5.2: loads an Aevia source file at run time and publishes its
+        // `@op`/`@rule` functions to the kernel; the count of published
+        // registrations, or the diagnostics as text.
+        | "load_plugin" => {
+            vec![Scheme::mono(func(
+                vec![Type::string()],
+                io(Type::result(Type::int(), Type::string())),
+            ))]
+        },
         // §9.14 / §13.9.6: `with_cap(caps, thunk)` runs the action the thunk
         // builds with only the named capabilities (a comma-separated list of
         // `fs`, `net`, `env`, `rand`, `gpu`) still granted.
@@ -2164,25 +2249,6 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        // §8.4.1: the sparse layout family.
-        | "from_dense" => {
-            vec![scheme(
-                1,
-                0,
-                0,
-                func(vec![tensor(2, var(0))], sparse(var(0))),
-            )]
-        },
-        | "to_dense" => {
-            vec![scheme(
-                1,
-                0,
-                0,
-                func(vec![sparse(var(0))], tensor(2, var(0))),
-            )]
-        },
-        | "nnz" => vec![scheme(1, 0, 0, func(vec![sparse(var(0))], Type::int()))],
-
         // §8.4: refined-shape constructors. The shape lives in a type argument
         // the checker does not read yet, so the static rank is the common
         // two-dimensional one; the runtime builds whatever the argument says.
@@ -3304,6 +3370,7 @@ pub fn is_special(name: &str) -> bool {
 #[must_use]
 pub fn takes_type_argument(name: &str) -> bool {
     matches!(name, "zeros" | "ones" | "reshape" | "zeros_of" | "ones_of")
+        || sparse::takes_format_argument(name)
 }
 
 #[cfg(test)]
@@ -3336,7 +3403,7 @@ mod tests {
         assert_eq!(schemes("length").expect("length").len(), 3);
         // §8.4 and §8.5 give `sum` the reduction, the keepdims axis form for
         // ranks 1 and 2, and the calculus summation `sum(f, a, b)`.
-        assert_eq!(schemes("sum").expect("sum").len(), 4);
+        assert_eq!(schemes("sum").expect("sum").len(), 12);
     }
 }
 
@@ -3374,6 +3441,8 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "lgamma",
     "erf",
     "erfc",
+    "fresnel_s",
+    "fresnel_c",
     "zeta",
     "atan2",
     "hypot",
@@ -3572,6 +3641,22 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "from_dense",
     "to_dense",
     "nnz",
+    "to_system",
+    "from_system",
+    "density",
+    "format_of",
+    "convert",
+    "sparse_coo",
+    "sparse_csr",
+    "speye",
+    "spdiag",
+    "spsolve",
+    "cg",
+    "kron",
+    "contract",
+    "map_nonzero",
+    "nonzeros",
+    "get",
     "zeros_of",
     "ones_of",
     "numeric_deriv",

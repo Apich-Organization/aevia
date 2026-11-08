@@ -1939,6 +1939,12 @@ pub enum IoAction {
     },
     /// Reads one line from stdin.
     ReadLine,
+    /// Loads a source plugin (§13.5.2) and publishes its registrations.
+    LoadPlugin(String),
+    /// Starts `thunk()` as a concurrent task (§9.7.3); produces a `Task`.
+    Spawn(Value),
+    /// Waits for a task and produces its result.
+    Await(Rc<crate::parallel::TaskHandle>),
     /// Runs an action and passes its result to a function.
     Bind {
         /// The action.
@@ -2119,6 +2125,8 @@ pub enum Value {
     Str(Rc<str>),
     /// A tensor.
     Tensor(Rc<TensorData>),
+    /// A sparse tensor (§8.4.1): `Sparse<F, shape, τ>`.
+    Sparse(Rc<crate::sparse::SparseData>),
     /// A record.
     Record(Rc<RecordValue>),
     /// A variant.
@@ -2158,6 +2166,8 @@ pub enum Value {
     TypeRep(Rc<aevia_types::Type>),
     /// A checked evaluator-local callback for the kernel callback ABI.
     Callback(Rc<CallbackValue>),
+    /// A concurrent task started by `spawn` (§9.7.3).
+    Task(Rc<crate::parallel::TaskHandle>),
     /// A poisoned value produced after an error.
     Error,
 }
@@ -2211,6 +2221,7 @@ impl Value {
             | Self::Num(num) => num.kind.type_name(),
             | Self::Str(_) => "String",
             | Self::Tensor(_) => "Tensor",
+            | Self::Sparse(_) => "Sparse",
             | Self::Record(_) => "record",
             | Self::Variant(_) => "variant",
             | Self::Closure(_) | Self::Native(_) => "function",
@@ -2223,6 +2234,7 @@ impl Value {
             | Self::KernelError(_) => "OpError",
             | Self::TypeRep(_) => "TypeRep",
             | Self::Callback(_) => "Callback",
+            | Self::Task(_) => "Task",
             | Self::Error => "<error>",
         }
     }
@@ -2577,6 +2589,7 @@ fn render_at(
             }
         },
         | Value::Tensor(tensor) => show_tensor_in(tensor, repr),
+        | Value::Sparse(sparse) => crate::sparse::render(sparse, repr),
         | Value::Record(record) => {
             // Tuples are records labelled `0, 1, …` (deviation 5); they are
             // written `(a, b)`, so they print that way too.
@@ -2661,6 +2674,7 @@ fn render_at(
         | Value::KernelError(error) => format!("{}: {}", error.code, error.message),
         | Value::TypeRep(_) => "<TypeRep>".to_string(),
         | Value::Callback(_) => "<Callback>".to_string(),
+        | Value::Task(_) => "<Task>".to_string(),
         | Value::Error => "<error>".to_string(),
     }
 }
@@ -2799,6 +2813,9 @@ pub fn to_math(
                 unit.display.clone()
             })
         },
+        | Value::Sparse(_) => {
+            Err("a sparse tensor has no mathematical form; use `to_dense`".to_string())
+        },
         | Value::Io(_) => Err("an IO action has no mathematical form".to_string()),
         | Value::Prop(prop) => Ok(prop.text.clone()),
         | Value::Dyn(dynamic) => Ok(math_scalar(&dynamic.as_scalar(), syntax)),
@@ -2806,6 +2823,7 @@ pub fn to_math(
         | Value::KernelError(_)
         | Value::TypeRep(_)
         | Value::Callback(_) => Err("an opaque kernel value has no mathematical form".to_string()),
+        | Value::Task(_) => Err("a task has no mathematical form".to_string()),
         | Value::Error => Err("an error value has no mathematical form".to_string()),
     }
 }
@@ -2943,6 +2961,7 @@ pub fn equal(
         | (Value::Str(a), Value::Str(b)) => Ok(a == b),
         | (Value::Num(a), Value::Num(b)) => Ok(numbers_equal(a, b)),
         | (Value::Tensor(a), Value::Tensor(b)) => tensors_equal(a, b),
+        | (Value::Sparse(a), Value::Sparse(b)) => Ok(crate::sparse::equal_data(a, b)),
         | (Value::Record(a), Value::Record(b)) => {
             if a.fields.len() != b.fields.len() {
                 return Ok(false);
@@ -3115,6 +3134,7 @@ pub fn value_dim(value: &Value) -> Dim {
     match value {
         | Value::Num(num) => num.dim.clone(),
         | Value::Tensor(tensor) => tensor.dim.clone(),
+        | Value::Sparse(sparse) => sparse.dim.clone(),
         | Value::Dyn(dynamic) => dynamic.dim.clone(),
         | _ => Dim::one(),
     }

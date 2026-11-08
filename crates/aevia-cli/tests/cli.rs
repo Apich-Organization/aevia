@@ -584,10 +584,14 @@ fn the_flags_with_no_effect_are_reported_rather_than_dropped() {
     assert!(stderr(&output).contains("--release"), "{}", stderr(&output));
     assert!(stderr(&output).contains("no effect"), "{}", stderr(&output));
 
+    // `--jobs` sizes the parallel-evaluation worker pool (§9.7): no note.
     let output = aevia(scratch.path(), &["check", "--jobs", "4", "a.aev"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stderr(&output).contains("--jobs 4"), "{}", stderr(&output));
-    assert!(stderr(&output).contains("no effect"), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("no effect"),
+        "{}",
+        stderr(&output)
+    );
 
     let output = aevia(scratch.path(), &["check", "--jobs", "0", "a.aev"]);
     assert_eq!(code(&output), 2);
@@ -1399,4 +1403,36 @@ fn diagnostics_name_paths_without_the_verbatim_prefix() {
     let text = stderr(&output);
     assert!(!text.contains(r"\?\"), "{text}");
     assert!(text.contains("--> bad.aev:1:"), "{text}");
+}
+
+#[test]
+fn check_replays_an_unchanged_program_and_misses_on_any_change() {
+    // §9.11.2: the cross-process cache keys a whole program by every input
+    // its load observed.
+    let scratch = Scratch::new("check-cache");
+    scratch.write("main.aev", "import Helper\nlet y = Helper.twice(2.0 m)\n");
+    scratch.write(
+        "Helper.aev",
+        "module Helper\nfn twice(x: Float[L]): Float[L] = 2 * x\n",
+    );
+    let first = aevia(scratch.path(), &["check", "main.aev"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(scratch.path().join(".aevia").join("cache").is_dir());
+    let second = aevia(scratch.path(), &["check", "main.aev"]);
+    assert_eq!(code(&second), 0);
+    assert_eq!(stdout(&second), stdout(&first), "a hit replays the output");
+    // An edit to an imported module is a miss, and its error is reported.
+    scratch.write(
+        "Helper.aev",
+        "module Helper\nfn twice(x: Float[L]): Float[T] = 2 * x\n",
+    );
+    let third = aevia(scratch.path(), &["check", "main.aev"]);
+    assert_eq!(code(&third), 1);
+    assert!(stderr(&third).contains("E0401"), "{}", stderr(&third));
+    // The failure replays too, and `--no-cache` bypasses the record.
+    let fourth = aevia(scratch.path(), &["check", "main.aev"]);
+    assert_eq!(code(&fourth), 1);
+    assert_eq!(stderr(&fourth), stderr(&third));
+    let fifth = aevia(scratch.path(), &["check", "--no-cache", "main.aev"]);
+    assert_eq!(code(&fifth), 1);
 }

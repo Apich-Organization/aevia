@@ -123,6 +123,8 @@ help: did you mean `2 * h / g`?
 | `E0508` | affine unit in product/power | 单独使用 |
 | `E0509` | `to` unit dimension mismatch | 换单位 |
 | `E0510` | affine display on a temperature difference | 用 `delta_to` |
+| `E0511` | unit has no exact scale in the module's unit system (§5.11.4) | 写单位制的数，或 `to_system` 换算 SI 值 |
+| `E0512` | unknown unit system (§5.11.3) | 用 kernel 提供的名字（natural、planck、atomic、geometrized） |
 
 ## B.8 模块错误（E06xx）
 
@@ -158,6 +160,7 @@ help: did you mean `2 * h / g`?
 | `E0808` | budget exhausted | 是 |
 | `E0809` | internal type/dimension invariant violated | 否 |
 | `E0810` | IO error | 是 |
+| `E0811` | task failure: a task result that cannot cross threads, a task awaited twice, or a stopped worker (§9.7.3) | 是 |
 | `E0899` | panic | 否 |
 
 ## B.11 IO 错误（E09xx）

@@ -691,10 +691,14 @@ fn a_redundant_match_arm_warns() {
 #[test]
 fn mixing_real_and_float_warns_about_the_exact_path() {
     // §3.4.1 / appendix B.6.
+    // Two *values* of the two phases mix; a decimal literal next to an exact
+    // one is read exactly instead (§3.10.1), so a literal pair does not warn.
     assert!(
-        warnings("let x = 1 m + 1.0 m\n").contains(&"W0302".to_string()),
+        warnings("let r: Real[L] = 1 m\nlet a: Float[L] = 1.0 m\nlet x = r + a\n")
+            .contains(&"W0302".to_string()),
         "mixing Real and Float must warn"
     );
+    assert!(!warnings("let x = 1 m + 1.0 m\n").contains(&"W0302".to_string()));
 }
 
 #[test]
@@ -916,19 +920,28 @@ fn expr_type(
 fn an_expression_has_a_recorded_type() {
     let source = "let x = 1.0 + 2\n";
     let module = expect_ok(source);
-    // §6.3.2: `Float ⊗ Exact → Real`. The entry is the expression's, not the
-    // binding's: `x` is recorded separately at its own span.
+    // §3.4.1/§3.10.2: `join(Int, Float) = Float`; the closed tree's value is
+    // folded exactly (§3.10.4), a value property rather than its type. The
+    // entry is the expression's, not the binding's: `x` is recorded
+    // separately at its own span.
     assert_eq!(
         expr_type(&module, source, "1.0 + 2", 1),
-        Type::real(aevia_dim::Dim::one())
+        Type::float(aevia_dim::Dim::one())
     );
     assert_eq!(
         expr_type(&module, source, "1.0", 1),
-        Type::real(aevia_dim::Dim::one())
+        Type::float(aevia_dim::Dim::one())
     );
     assert_eq!(
         expr_type(&module, source, "x", 1),
-        Type::real(aevia_dim::Dim::one())
+        Type::float(aevia_dim::Dim::one())
+    );
+    assert!(
+        module
+            .constant_regions
+            .values()
+            .any(|rep| *rep == aevia_types::Rep::Float),
+        "the closed tree is a Float constant region"
     );
 }
 
@@ -977,19 +990,27 @@ fn every_expression_has_at_most_one_entry_per_span() {
 }
 
 #[test]
-fn a_mixed_literal_sum_is_real_on_either_side() {
-    // §6.3.2: an exact literal and a decimal one meet on the exact `Real`
-    // path. `1.5 + 1` used to be `Int` and `1 + 1.5` `Float` — the same sum
-    // typed two ways, one of which cannot hold the value.
+fn a_mixed_literal_sum_is_float_on_either_side() {
+    // §3.4.1/§3.10.2: an integer literal and a decimal one meet at
+    // `join(Int, Float) = Float`, whichever side each is on. `1.5 + 1` used to
+    // be `Int` and `1 + 1.5` `Float` — the same sum typed two ways, one of
+    // which cannot hold the value. Exactness is kept by constant-region
+    // folding (§3.10.4), not by changing the type.
     let source = "let a = 1.5 + 1\nlet b = 1 + 1.5\nlet c = 1.0 / 2\n";
     let module = expect_ok(source);
     for name in ["a", "b", "c"] {
         assert_eq!(
             scheme_of(&module, name).ty,
-            Type::real(aevia_dim::Dim::one()),
-            "`{name}` must be Real"
+            Type::float(aevia_dim::Dim::one()),
+            "`{name}` must be Float"
         );
     }
+    // A `Real` context still reads the same tree exactly (§3.10.3).
+    let module = expect_ok("let d: Real = 1.5 + 1\n");
+    assert_eq!(
+        scheme_of(&module, "d").ty,
+        Type::real(aevia_dim::Dim::one())
+    );
 }
 
 #[test]
@@ -1007,11 +1028,14 @@ let z: Int = x
     );
     assert_eq!(codes, ["E0302"], "the exact sum must not become an Int");
 
-    // ... and it is still exact, so a `Real` annotation fits.
+    // ... and it is a `Float` (§3.10.2), so a `Real` annotation on the
+    // *variable* is a mismatch; the literal tree itself still reads exactly
+    // where `Real` is expected (§3.10.3).
     let (codes, _) = check(
         r#"let x = 1.0 + 2
 let y = x * 3
-let z: Real = x
+let z: Real = 1.0 + 2
+let w: Float = x
 "#,
     );
     assert!(codes.is_empty(), "expected no errors, got {codes:?}");
@@ -1557,24 +1581,28 @@ fn caller(): Int = old_api(1)
 
 #[test]
 fn op_and_rule_report_the_missing_plugin_abi_or_register() {
-    // §13.5.2: `@op` wraps an Aevia function as a kernel host callback and
-    // `@rule` publishes a rewrite rule — source-level extension packaging. The
-    // manifest's `core.plugin.source` row is false in this build, so the
-    // attribute is `E1001` naming it, never a silent no-op.
+    // §13.5.2: `@op` publishes an Aevia function as a kernel definition and
+    // `@rule` as a rewrite. The manifest's `core.plugin.source` row says
+    // whether the build can; without it the attribute is `E1001` naming it,
+    // never a silent no-op.
     let source = "@op(\"mydomain/softplus\")\nfn softplus(x: Float): Float = x\n";
+    let (errors, _, _) = check_with_capabilities(source, Capabilities::from_names(["core.jit"]));
+    assert!(
+        errors.iter().any(|error| error == "E1001"),
+        "the diagnostic must name the capability: {errors:?}"
+    );
+    // This build has in-process plugins, so the default options accept it.
     let lexed = lex(0, source).expect("lexes");
     let (module, _) = parse_module(0, source, &lexed);
     let result = check_module(0, &module);
-    let detail = result
-        .diagnostics
-        .items
-        .iter()
-        .find(|item| item.code == "E1001")
-        .expect("E1001 for @op");
     assert!(
-        detail.message.contains("core.plugin.source"),
-        "the diagnostic must name the capability: {}",
-        detail.message
+        result
+            .diagnostics
+            .items
+            .iter()
+            .all(|item| item.code != "E1001"),
+        "{:?}",
+        result.diagnostics.items
     );
     let (errors, _, module) = check_with_capabilities(
         r#"@op("mydomain/softplus")

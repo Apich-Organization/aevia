@@ -27,7 +27,9 @@ pub(crate) type SpanMap<V> = crate::fxhash::FxHashMap<Span, V>;
 pub(crate) struct ModuleEvidence {
     pub(crate) expr_types: SpanMap<Type>,
     pub(crate) literal_reps: SpanMap<aevia_types::Rep>,
+    pub(crate) constant_regions: SpanMap<aevia_types::Rep>,
     pub(crate) dyn_calls: SpanMap<aevia_dim::Dim>,
+    pub(crate) system_calls: SpanMap<(String, aevia_dim::Dim)>,
     pub(crate) rssn_calls: SpanMap<aevia_rssn::OpKey>,
     pub(crate) dictionaries: SpanMap<Vec<DictionaryUse>>,
     pub(crate) method_refs: SpanMap<aevia_types::check::ClassMethodRef>,
@@ -66,6 +68,8 @@ impl ModuleContext {
             evidence: ModuleEvidence {
                 expr_types: respan(&checked.expr_types),
                 literal_reps: respan(&checked.literal_reps),
+                constant_regions: respan(&checked.constant_regions),
+                system_calls: respan(&checked.system_calls),
                 dyn_calls: checked
                     .dyn_calls
                     .iter()

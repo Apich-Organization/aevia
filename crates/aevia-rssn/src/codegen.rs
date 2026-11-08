@@ -348,6 +348,116 @@ pub fn constants(registry: &Registry) -> String {
     out
 }
 
+/// The body of `Units.<System>` (§5.11.7): every constant, written inside a
+/// module that is itself in the system.
+///
+/// The module declares `with units <system>`, so each constant's literal is
+/// reduced by the same rule as any user literal: the unity constants come out
+/// as exactly `1`, and a constant whose conversion factor has integer
+/// exponents stays exact. A constant whose factor is irrational (a charge in
+/// Heaviside-Lorentz units needs `(ε₀ħc)^(1/2)`) cannot be written as an
+/// exact literal there; it is emitted as the correctly rounded `Float` the
+/// kernel's factor gives, with its representative dimension.
+#[must_use]
+pub fn system_constants(
+    registry: &Registry,
+    system: &aevia_dim::systems::UnitSystem,
+    module: &str,
+) -> String {
+    let mut out = String::new();
+    let unity: Vec<&str> = system
+        .unity
+        .iter()
+        .map(|unity| unity.label.as_str())
+        .collect();
+    let _ = writeln!(
+        out,
+        "## The constants in {name} units: {unity} = 1.\n\
+         ##\n\
+         ## {description}.\n\
+         ##\n\
+         ## Generated from the rssn Kernel Manifest (`manifest.unit_systems` and\n\
+         ## `manifest.constants`, §5.11.7). Do not edit; regenerate with\n\
+         ## `cargo run -p aevia-stdlib-gen -- --write`.\n\
+         ## rssn {version}, api {api}\n\
+         module {module} with units {name}\n",
+        name = system.name,
+        unity = unity.join(" = "),
+        description = system.description,
+        version = registry.version,
+        api = registry.api_version,
+    );
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for constant in &registry.constants {
+        if has_owned_dimension(&constant.dim) {
+            continue;
+        }
+        let mut binding = value_name(&constant.symbol);
+        if !used.insert(binding.clone()) {
+            let mut suffix = 2;
+            loop {
+                let candidate = format!("{binding}_{suffix}");
+                if used.insert(candidate.clone()) {
+                    binding = candidate;
+                    break;
+                }
+                suffix += 1;
+            }
+        }
+        let Some(reduction) = system.reduce(&constant.dim) else {
+            continue;
+        };
+        let dim = constant.dim.to_plain_string();
+        let doc = format!(
+            "## {} ({}{})",
+            constant.name,
+            constant.source,
+            if constant.exact {
+                ", exact"
+            } else {
+                ", measured"
+            }
+        );
+        if reduction.is_integral() {
+            let ty = if dim.is_empty() || dim == "1" {
+                "Real".to_string()
+            } else {
+                format!("Real[{dim}]")
+            };
+            let _ = writeln!(
+                out,
+                "{doc}\nlet {binding}: {ty} = {}",
+                constant_value(constant)
+            );
+            continue;
+        }
+        let value = constant.value.to_f64() / system.factor_f64(&reduction);
+        let unit = unit_source(&reduction.dim);
+        let representative = reduction.dim.to_plain_string();
+        let ty = if representative.is_empty() || representative == "1" {
+            "Float".to_string()
+        } else {
+            format!("Float[{representative}]")
+        };
+        let literal = format!("{value:e}");
+        let literal = if literal.contains('.') {
+            literal
+        } else {
+            literal.replacen('e', ".0e", 1)
+        };
+        let quantity = if unit.is_empty() {
+            literal
+        } else {
+            format!("{literal} {unit}")
+        };
+        let _ = writeln!(
+            out,
+            "{doc}; an irrational power of the unity constants, so a Float\nlet {binding}: {ty} = {quantity}"
+        );
+    }
+    out
+}
+
 fn has_owned_dimension(dim: &aevia_dim::Dim) -> bool {
     dim.factors()
         .any(|(atom, _)| matches!(atom, aevia_dim::Atom::Nominal(_)))

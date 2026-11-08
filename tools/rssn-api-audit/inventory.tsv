@@ -389,6 +389,16 @@ crate::kernels::fractal_geometry_and_chaos::mandelbrot_escape_time	no-declared-a
 crate::kernels::fractal_geometry_and_chaos::orbit_density	no-declared-adapter			fn orbit_density (points : & [(f64 , f64)] , x_bins : usize , y_bins : usize , x_range : (f64 , f64) , y_range : (f64 , f64) ,) -> Vec < Vec < usize > >
 crate::kernels::fractal_geometry_and_chaos::orbit_entropy	no-declared-adapter			fn orbit_entropy (density : & [Vec < usize >]) -> f64
 crate::kernels::fractal_geometry_and_chaos::sierpinski_triangle_ifs	opaque			fn sierpinski_triangle_ifs () -> (Vec < AffineTransform2D > , Vec < f64 >)
+crate::kernels::fresnel::erf_complex	opaque			fn erf_complex (z : Complex64) -> Complex64
+crate::kernels::fresnel::faddeeva_w	opaque			fn faddeeva_w (z : Complex64) -> Complex64
+crate::kernels::fresnel::fresnel_c	declared	num_fresnel_c		fn fresnel_c (x : f64) -> f64
+crate::kernels::fresnel::fresnel_f	no-declared-adapter			fn fresnel_f (x : f64) -> f64
+crate::kernels::fresnel::fresnel_fg	no-declared-adapter			fn fresnel_fg (x : f64) -> (f64 , f64)
+crate::kernels::fresnel::fresnel_g	no-declared-adapter			fn fresnel_g (x : f64) -> f64
+crate::kernels::fresnel::fresnel_s	declared	num_fresnel_s		fn fresnel_s (x : f64) -> f64
+crate::kernels::fresnel::fresnel_sc	no-declared-adapter			fn fresnel_sc (x : f64) -> (f64 , f64)
+crate::kernels::fresnel::fresnel_sc_complex	no-declared-adapter			fn fresnel_sc_complex (re : f64 , im : f64 ,) -> ((f64 , f64) , (f64 , f64))
+crate::kernels::fresnel::sin_cos_half_pi_square	no-declared-adapter			fn sin_cos_half_pi_square (x : f64) -> (f64 , f64)
 crate::kernels::functional_analysis::gram_schmidt	no-declared-adapter			fn gram_schmidt (basis : & [Vec < (f64 , f64) >]) -> Result < Vec < Vec < (f64 , f64) > > , String >
 crate::kernels::functional_analysis::gram_schmidt_orthonormal	no-declared-adapter			fn gram_schmidt_orthonormal (basis : & [Vec < (f64 , f64) >]) -> Result < Vec < Vec < (f64 , f64) > > , String >
 crate::kernels::functional_analysis::infinity_norm	no-declared-adapter			fn infinity_norm (points : & [(f64 , f64)]) -> f64

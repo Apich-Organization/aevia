@@ -525,7 +525,9 @@ fn collect_rhs_forms(
                 }
             }
         },
-        | Rhs::Quantity { .. } | Rhs::NumericLiteral(_) => out.push("literal"),
+        | Rhs::Quantity { .. } | Rhs::NumericLiteral(_) | Rhs::ConstantRegion(_) => {
+            out.push("literal")
+        },
         | Rhs::Str(parts) => {
             for part in parts {
                 match part {

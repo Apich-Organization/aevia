@@ -22,3 +22,16 @@ pub fn constants_module_source() -> String {
         api = registry.api_version,
     )
 }
+
+/// `Units.Natural`, `Units.Planck`, ...: the constants in one unit system
+/// (§5.11.7), from the same manifest tables as `Units.Constants`.
+pub fn system_module_source(
+    path: &str,
+    system: &str,
+) -> String {
+    let registry = aevia_rssn::registry();
+    let found = registry
+        .unit_system(system)
+        .unwrap_or_else(|| panic!("the kernel manifest has no unit system `{system}`"));
+    aevia_rssn::codegen::system_constants(registry, &found, &path.replace('/', "."))
+}

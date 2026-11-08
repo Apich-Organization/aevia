@@ -121,7 +121,7 @@ fn an_exact_matmul_is_still_exact() {
          let b = [[5, 6], [7, 8]]\n\
          let p = a @ b\n\
          let c = [[1, 2], [3, 4]]\n\
-         let h = [[0.5, 0], [0, 0.5]]\n\
+         let h = [[1/2, 0], [0, 1/2]]\n\
          let q = c @ h\n",
     );
 
@@ -141,8 +141,9 @@ fn an_exact_matmul_is_still_exact() {
     let values: Vec<BigRational> = elements(&p).iter().map(as_rational).collect();
     assert_eq!(values, [integer(19), integer(22), integer(43), integer(50)]);
 
-    // Rationals in, rationals out: `0.5` is the exact decimal `1/2`, so the
-    // product is exact and must not be a float that merely rounds to it.
+    // Rationals in, rationals out: `1/2` is exact (an unannotated `0.5` would
+    // be a `Float`, §3.10.2), so the product is exact and must not be a float
+    // that merely rounds to it.
     let q = interp.eval_toplevel("q").expect("q");
     assert_eq!(phases(&q), ["Exact", "Exact", "Exact", "Exact"]);
     let exact: Vec<BigRational> = elements(&q).iter().map(as_rational).collect();

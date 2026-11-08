@@ -94,6 +94,25 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
                 data,
             }
         },
+        | Value::Sparse(sparse) => {
+            let (indices, values) = sparse
+                .to_flat_parts()
+                .map_err(|message| EvalError::new("E0809", message))?;
+            let mut data = Vec::with_capacity(values.len());
+            for item in &values {
+                data.push(to_val(item)?);
+            }
+            Val::Sparse {
+                format: match sparse.format {
+                    | crate::sparse::SparseFormat::Csr => aevia_rssn::SparseKind::Csr,
+                    | crate::sparse::SparseFormat::Csc => aevia_rssn::SparseKind::Csc,
+                    | crate::sparse::SparseFormat::Coo => aevia_rssn::SparseKind::Coo,
+                },
+                shape: sparse.shape.clone(),
+                indices,
+                data,
+            }
+        },
         | Value::Record(record) => {
             let mut fields = Vec::with_capacity(record.fields.len());
             for (name, item) in &record.fields {
@@ -140,7 +159,8 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
         | Value::Io(_)
         | Value::TypeRep(_)
         | Value::KernelError(_)
-        | Value::Callback(_) => {
+        | Value::Callback(_)
+        | Value::Task(_) => {
             return Err(EvalError::new(
                 "E1003",
                 "a function cannot be passed to the kernel",
@@ -426,6 +446,32 @@ pub fn from_val(
                 dim,
                 display: None,
             })
+        },
+        | Val::Sparse {
+            format,
+            shape,
+            indices,
+            data,
+        } => {
+            let values: Vec<Value> = data
+                .iter()
+                .map(|item| from_val(item, dim.clone()))
+                .collect();
+            let format = match format {
+                | aevia_rssn::SparseKind::Csr => crate::sparse::SparseFormat::Csr,
+                | aevia_rssn::SparseKind::Csc => crate::sparse::SparseFormat::Csc,
+                | aevia_rssn::SparseKind::Coo => crate::sparse::SparseFormat::Coo,
+            };
+            match crate::sparse::SparseData::from_flat_parts(
+                format,
+                shape.clone(),
+                indices,
+                values,
+                dim,
+            ) {
+                | Ok(sparse) => Value::Sparse(Rc::new(sparse)),
+                | Err(_) => Value::Error,
+            }
         },
         | Val::Tensor { shape, data } => {
             let storage: Vec<Value> = data

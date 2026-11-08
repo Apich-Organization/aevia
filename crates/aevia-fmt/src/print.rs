@@ -105,7 +105,12 @@ impl Printer {
         module: &Module,
     ) -> Result<String, String> {
         if let Some(name) = &module.name {
-            self.line(&format!("module {}", name.join(".")));
+            match &module.unit_system {
+                | Some((system, _)) => {
+                    self.line(&format!("module {} with units {system}", name.join(".")));
+                },
+                | None => self.line(&format!("module {}", name.join("."))),
+            }
             self.blank();
         }
         for (index, decl) in module.decls.iter().enumerate() {

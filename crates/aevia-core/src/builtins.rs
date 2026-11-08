@@ -176,6 +176,9 @@ pub fn call_typed(
                 result, &tensor,
             )))
         },
+        | "from_dense" | "convert" | "speye" | "spdiag" => {
+            crate::sparse::call_typed(interp, name, types, &args, span)
+        },
         | _ => call(interp, name, args, span),
     }
 }
@@ -235,6 +238,9 @@ pub fn call(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, EvalError> {
+    if let Some(result) = crate::sparse::call(interp, name, &args, span) {
+        return result;
+    }
     match name {
         // ----- output -----------------------------------------------------
         | "print" => io_print(interp, &args, false, false, span),
@@ -245,7 +251,9 @@ pub fn call(
         // is what let every test believe `3`, `3/1` and `3.0` were one value.
         | "show" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
-            Ok(Value::string(crate::value::show(value)))
+            Ok(Value::string(crate::value::show(
+                &interp.system_display(value.clone()),
+            )))
         },
         | "repr" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
@@ -291,6 +299,26 @@ pub fn call(
         | "gamma" => gamma(interp, name, &args, span),
         | "erf" => unary_math(interp, name, &args, span, MathKind::Float(erf)),
         | "erfc" => unary_math(interp, name, &args, span, MathKind::Float(|x| 1.0 - erf(x))),
+        // DLMF 7.2.7; exact arguments stay symbolic as the kernel's
+        // `fresnels`/`fresnelc`, which it differentiates and integrates.
+        | "fresnel_s" => {
+            unary_math(
+                interp,
+                name,
+                &args,
+                span,
+                MathKind::Float(aevia_rssn::fresnel_s),
+            )
+        },
+        | "fresnel_c" => {
+            unary_math(
+                interp,
+                name,
+                &args,
+                span,
+                MathKind::Float(aevia_rssn::fresnel_c),
+            )
+        },
         | "atan2" => {
             let y = expect_num(&args, 0, name, span)?;
             let x = expect_num(&args, 1, name, span)?;
@@ -1049,15 +1077,110 @@ pub fn call(
             if tensor.rank() != 1 {
                 return Err(EvalError::new("E0802", "`par_map` expects a rank-1 tensor").at(span));
             }
-            let mut elements = Vec::with_capacity(tensor.storage.len());
-            for element in tensor.elements() {
-                elements.push(interp.apply(function.clone(), vec![element], span)?);
-            }
+            let inputs: Vec<Value> = tensor.elements();
+            // §9.7: on worker replicas when the function and the elements
+            // can cross threads; otherwise (and on any worker failure) the
+            // sequential map, which gives the same value or the same error.
+            let elements = match interp.par_map_values(&function, &inputs) {
+                | Some(elements) => elements,
+                | None => {
+                    let mut elements = Vec::with_capacity(inputs.len());
+                    for element in inputs {
+                        elements.push(interp.apply(function.clone(), vec![element], span)?);
+                    }
+                    elements
+                },
+            };
             let dim = elements
                 .first()
                 .map_or_else(Dim::one, crate::value::value_dim);
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], dim))
+        },
+        // §8.3: `par_tabulate(n, f)` is `par_map(f, [0, …, n-1])`.
+        | "par_tabulate" => {
+            let count = expect_num(&args, 0, name, span)?;
+            let NumKind::Int(count) = &count.kind else {
+                return Err(
+                    EvalError::new("E0302", "`par_tabulate` expects an Int count").at(span),
+                );
+            };
+            let count = num_traits::ToPrimitive::to_usize(count).ok_or_else(|| {
+                EvalError::new("E0802", "`par_tabulate` needs a non-negative count").at(span)
+            })?;
+            let function = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, args.len(), span))?;
+            let inputs: Vec<Value> = (0..count)
+                .map(|index| Value::Num(NumVal::int(BigInt::from(index))))
+                .collect();
+            let elements = match interp.par_map_values(&function, &inputs) {
+                | Some(elements) => elements,
+                | None => {
+                    let mut elements = Vec::with_capacity(count);
+                    for input in inputs {
+                        elements.push(interp.apply(function.clone(), vec![input], span)?);
+                    }
+                    elements
+                },
+            };
+            let dim = elements
+                .first()
+                .map_or_else(Dim::one, crate::value::value_dim);
+            Ok(build_tensor(elements, vec![count], dim))
+        },
+        // §8.3: an associative reduction over fixed blocks (see
+        // `parallel::Interp::par_reduce_values` for the determinism rule).
+        | "par_reduce" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 3, 0, span))?;
+            let zero = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 3, args.len(), span))?;
+            let tensor = expect_tensor(&args, 2, name, span)?;
+            if tensor.rank() != 1 {
+                return Err(
+                    EvalError::new("E0802", "`par_reduce` expects a rank-1 tensor").at(span),
+                );
+            }
+            let inputs: Vec<Value> = tensor.elements();
+            interp.par_reduce_values(&function, &zero, &inputs, span)
+        },
+        | "pure" => {
+            let value = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
+            Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(value))))
+        },
+        // §9.7.3: concurrent tasks are IO actions.
+        | "spawn" => {
+            let thunk = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 1, 0, span))?;
+            Ok(Value::Io(Rc::new(crate::value::IoAction::Spawn(thunk))))
+        },
+        | "await" => {
+            match args.first() {
+                | Some(Value::Task(task)) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::Await(
+                        task.clone(),
+                    ))))
+                },
+                | Some(other) => {
+                    Err(EvalError::new(
+                        "E0302",
+                        format!("`await` expects a Task, found {}", other.type_name()),
+                    )
+                    .at(span))
+                },
+                | None => Err(arity(name, 1, 0, span)),
+            }
         },
         | "map" => {
             let function = args
@@ -1658,7 +1781,14 @@ pub fn call(
                 }
             }
             let term = value_to_term(&value)?;
-            let free = term.try_free_symbols()?;
+            // `pi` and `e` are the mathematical constants, not unknowns: an
+            // exact unit scale (`30 deg`, `hbar` in natural units) carries
+            // `pi` and is still a number (`Term::is_numeric` agrees).
+            let free: Vec<String> = term
+                .try_free_symbols()?
+                .into_iter()
+                .filter(|name| name != "pi" && name != "e")
+                .collect();
             if !free.is_empty() {
                 return Ok(err(Value::string(format!(
                     "free symbols: {}",
@@ -1683,10 +1813,19 @@ pub fn call(
                             )))
                         },
                         | Some(number) => Ok(ok(Value::Num(NumVal::float(number, dim)))),
-                        | None => Ok(err(Value::string("not numeric"))),
+                        | None => {
+                            Ok(direct_approx(&term, dim)
+                                .unwrap_or_else(|| err(Value::string("not numeric"))))
+                        },
                     }
                 },
-                | Err(failure) => Ok(err(Value::string(failure.message))),
+                // A closed term the kernel's numeric target declines (an
+                // exact rational times a power of `pi` from a unit scale) is
+                // still a number: evaluate it directly.
+                | Err(failure) => {
+                    Ok(direct_approx(&term, dim)
+                        .unwrap_or_else(|| err(Value::string(failure.message))))
+                },
             }
         },
         | "subst" => {
@@ -1775,6 +1914,13 @@ pub fn call(
             })))
         },
         | "read_line" => Ok(Value::Io(Rc::new(crate::value::IoAction::ReadLine))),
+        | "load_plugin" => {
+            let path = match args.first() {
+                | Some(Value::Str(path)) => path.to_string(),
+                | _ => return Err(arity(name, 1, args.len(), span)),
+            };
+            Ok(Value::Io(Rc::new(crate::value::IoAction::LoadPlugin(path))))
+        },
         // §9.12: the program arguments the host set with `Interp::set_args`,
         // as a rank-1 `Tensor<1, String>`.
         | "args" => {
@@ -2937,6 +3083,31 @@ pub fn call(
             }
             Ok(ok(Value::Num(dynamic.as_scalar())))
         },
+        // §5.11.5: the checker recorded the system and the SI dimension.
+        | "to_system" | "from_system" => {
+            let num = expect_num(&args, 1, name, span)?;
+            let (system_name, si) = interp
+                .context
+                .evidence
+                .system_calls
+                .get(&span)
+                .cloned()
+                .ok_or_else(|| {
+                    EvalError::new("E0304", format!("`{name}` was not resolved by the checker"))
+                        .at(span)
+                })?;
+            let system = crate::systems::lookup(&system_name).ok_or_else(|| {
+                EvalError::new("E0512", format!("unknown unit system `{system_name}`")).at(span)
+            })?;
+            let (direction, target) = if name == "to_system" {
+                (-1, system.reduce_dim(&si))
+            } else {
+                (1, si.clone())
+            };
+            crate::systems::convert(&system, &si, &num, direction, target)
+                .map(Value::Num)
+                .map_err(|message| EvalError::new("E0302", message).at(span))
+        },
         | "check_with" => {
             let dim = expect_dim_value(&args, 0, name, span)?;
             let dynamic = expect_dyn(&args, 1, name, span)?;
@@ -2977,133 +3148,6 @@ pub fn call(
                 display: None,
             })))
         },
-        | "from_dense" => {
-            let tensor = expect_tensor(&args, 0, name, span)?;
-            let (rows, cols, entries) = tensor_matrix(&tensor, name, span)?;
-            let mut values = Vec::new();
-            let mut columns = Vec::new();
-            let mut row_pointer = Vec::with_capacity(rows + 1);
-            row_pointer.push(Value::int(0));
-            for row in 0..rows {
-                for column in 0..cols {
-                    let entry = entries[row * cols + column];
-                    if entry != 0.0 {
-                        values.push(entry);
-                        columns.push(Value::int(i64::try_from(column).unwrap_or(0)));
-                    }
-                }
-                row_pointer.push(Value::int(i64::try_from(values.len()).unwrap_or(0)));
-            }
-            let column_count = columns.len();
-            let pointer_count = row_pointer.len();
-            Ok(record_of(vec![
-                ("format", Value::string("Csr")),
-                ("rows", Value::int(i64::try_from(rows).unwrap_or(0))),
-                ("cols", Value::int(i64::try_from(cols).unwrap_or(0))),
-                (
-                    "values",
-                    float_tensor(vec![values.len()], values, tensor.dim.clone()),
-                ),
-                (
-                    "col_indices",
-                    build_tensor(columns, vec![column_count], Dim::one()),
-                ),
-                (
-                    "row_ptr",
-                    build_tensor(row_pointer, vec![pointer_count], Dim::one()),
-                ),
-            ]))
-        },
-        | "to_dense" => {
-            let Value::Record(sparse) = args.first().cloned().unwrap_or(Value::Unit) else {
-                return Err(EvalError::new("E0302", "`to_dense` expects a sparse matrix").at(span));
-            };
-            let rows = sparse
-                .fields
-                .get("rows")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0) as usize;
-            let cols = sparse
-                .fields
-                .get("cols")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0) as usize;
-            let values = sparse
-                .fields
-                .get("values")
-                .and_then(|value| {
-                    match value {
-                        | Value::Tensor(tensor) => Some(tensor.clone()),
-                        | _ => None,
-                    }
-                })
-                .ok_or_else(|| {
-                    EvalError::new("E0306", "the sparse matrix has no `values`").at(span)
-                })?;
-            let indices = sparse
-                .fields
-                .get("col_indices")
-                .and_then(|value| {
-                    match value {
-                        | Value::Tensor(tensor) => Some(tensor.clone()),
-                        | _ => None,
-                    }
-                })
-                .ok_or_else(|| {
-                    EvalError::new("E0306", "the sparse matrix has no `col_indices`").at(span)
-                })?;
-            let row_ptr = sparse
-                .fields
-                .get("row_ptr")
-                .and_then(|value| {
-                    match value {
-                        | Value::Tensor(tensor) => Some(tensor.clone()),
-                        | _ => None,
-                    }
-                })
-                .ok_or_else(|| {
-                    EvalError::new("E0306", "the sparse matrix has no `row_ptr`").at(span)
-                })?;
-            let numbers = tensor_values(&values)?;
-            let pointers: Vec<usize> = row_ptr
-                .elements()
-                .iter()
-                .map(|value| value.as_f64().unwrap_or(0.0) as usize)
-                .collect();
-            let mut dense = vec![0.0; rows * cols];
-            for row in 0..rows {
-                let start = pointers.get(row).copied().unwrap_or(0);
-                let end = pointers.get(row + 1).copied().unwrap_or(start);
-                for entry in start..end {
-                    let column = indices
-                        .elements()
-                        .get(entry)
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0) as usize;
-                    if column < cols {
-                        dense[row * cols + column] = numbers.get(entry).copied().unwrap_or(0.0);
-                    }
-                }
-            }
-            Ok(float_tensor(vec![rows, cols], dense, values.dim.clone()))
-        },
-        | "nnz" => {
-            let Some(Value::Record(sparse)) = args.first() else {
-                return Err(EvalError::new("E0302", "`nnz` expects a sparse matrix").at(span));
-            };
-            let count = sparse
-                .fields
-                .get("values")
-                .and_then(|value| {
-                    match value {
-                        | Value::Tensor(tensor) => Some(tensor.storage.len()),
-                        | _ => None,
-                    }
-                })
-                .unwrap_or(0);
-            Ok(Value::int(i64::try_from(count).unwrap_or(i64::MAX)))
-        },
-
         // ----- §8.7 statistics --------------------------------------------
         | "median" | "mode" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
@@ -5331,14 +5375,14 @@ fn shape_error(message: String) -> Value {
 }
 
 fn io_print(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     args: &[Value],
     newline: bool,
     stderr: bool,
     span: Span,
 ) -> Result<Value, EvalError> {
     let value = args.first().ok_or_else(|| arity("print", 1, 0, span))?;
-    let text = show(value);
+    let text = show(&interp.system_display(value.clone()));
     Ok(Value::Io(Rc::new(crate::value::IoAction::Print {
         text,
         newline,
@@ -5377,6 +5421,8 @@ fn fun_of(name: &str) -> Fun {
                 | "atanh" => "atanh",
                 | "erf" => "erf",
                 | "erfc" => "erfc",
+                | "fresnel_s" => "fresnels",
+                | "fresnel_c" => "fresnelc",
                 | "gamma" => "gamma",
                 | _ => "f",
             })
@@ -6255,7 +6301,7 @@ fn linsolve(
     Ok(ok(build_tensor(elements, vec![n], dim)))
 }
 
-fn value_to_term(value: &Value) -> Result<Term, EvalError> {
+pub(crate) fn value_to_term(value: &Value) -> Result<Term, EvalError> {
     match value {
         | Value::Num(num) => {
             match &num.kind {
@@ -7629,6 +7675,18 @@ fn hash_into(
             mix(state, b"s");
             mix(state, text.as_bytes());
         },
+        | Value::Sparse(sparse) => {
+            mix(state, b"S");
+            for extent in &sparse.shape {
+                mix(state, &extent.to_le_bytes());
+            }
+            for (coord, element) in sparse.stored() {
+                for c in coord {
+                    mix(state, &c.to_le_bytes());
+                }
+                hash_into(&element, state)?;
+            }
+        },
         | Value::Tensor(tensor) => {
             mix(state, b"T");
             for extent in &tensor.shape {
@@ -7674,6 +7732,7 @@ fn hash_into(
         | Value::Io(_)
         | Value::TypeRep(_)
         | Value::Callback(_)
+        | Value::Task(_)
         | Value::KernelValue(_)
         | Value::KernelError(_)
         | Value::Error => {
@@ -8641,4 +8700,15 @@ fn expect_set<'a>(
         format!("`{name}` expects a set, found {}", value.type_name()),
     )
     .at(span))
+}
+
+/// `approx` of a closed term by direct `f64` evaluation, when it is finite.
+fn direct_approx(
+    term: &crate::sym::Term,
+    dim: Dim,
+) -> Option<Value> {
+    let value = term.eval(&std::collections::HashMap::new()).ok()?;
+    value
+        .is_finite()
+        .then(|| ok(Value::Num(NumVal::float(value, dim))))
 }

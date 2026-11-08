@@ -1337,12 +1337,12 @@ fn call_ho_with_interp(
 /// `Rssn.register(plugin)` and its alias `Rssn.register_plugin(plugin)`.
 ///
 /// §8.19 types the argument as `Plugin`, the handle §13.5.1 registers with
-/// `Session::register(Box<dyn Plugin>)`. No Aevia expression can produce one:
-/// a kernel `Plugin` is a Rust host object registered through the embedding
-/// API, and the source-level form (§13.5.2, `@op` packaging) is not
-/// implemented. The runtime reports `E1001("core.plugin.source")` rather than
-/// pretending to register something; `core.plugin` itself is *not* claimed
-/// missing, because in-process host plugins exist in this build.
+/// `Session::register(Box<dyn Plugin>)`. A kernel `Plugin` is a Rust host
+/// object; Aevia source never holds one. Source plugins are published by
+/// their declarations instead (§13.5.2): `@op`/`@rule` functions when their
+/// module loads, and `load_plugin(path)` for a file at run time. A value that
+/// reaches `Rssn.register` is therefore a type error at run time (`E0302`)
+/// with that guidance, not a missing capability.
 fn register(
     args: &[Value],
     span: Span,
@@ -1354,12 +1354,14 @@ fn register(
         )
         .at(span));
     }
-    Err(capability_gap(
-        "core.plugin.source",
-        "no Aevia source expression can construct a `Plugin` value: Rust host \
-         plugins are registered through the embedding API (§13.5.1), and \
-         source-level `@op` packaging (§13.5.2) is the missing feature",
-        span,
+    Err(EvalError::new(
+        "E0302",
+        "`Rssn.register` takes a host `Plugin`, which Aevia source cannot hold",
+    )
+    .at(span)
+    .with_note(
+        "publish source operators with `@op(\"name\")`/`@rule(\"name\")` (registered when \
+         the module loads) or load a plugin file with `load_plugin(path)` (§13.5.2)",
     ))
 }
 
@@ -1394,25 +1396,6 @@ fn forward(
         },
         | Err(failure) => Ok(err(value_error(failure.code, failure.message))),
     }
-}
-
-/// An `E1001` naming a capability this build does not provide.
-///
-/// The capability comes from the one table in [`aevia_rssn::Capabilities`], so
-/// the message and `Rssn.Capabilities` cannot disagree; the debug assertion
-/// catches the day a capability is turned on while the arm that reports it
-/// missing is still there.
-fn capability_gap(
-    capability: &str,
-    why: &str,
-    span: Span,
-) -> EvalError {
-    debug_assert!(
-        !registry().capabilities.has(capability),
-        "`{capability}` is provided by this build, so an arm reporting it missing is stale"
-    );
-    let failure = aevia_rssn::KernelError::capability(capability);
-    bridge::error(&failure).at(span).with_note(why)
 }
 
 /// `Rssn.call_key(name, hash, values)`.

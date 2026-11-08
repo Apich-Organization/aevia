@@ -725,6 +725,47 @@ impl Kernel {
         Self { session, id }
     }
 
+    /// Registers a plugin compiled from Aevia source (§13.5.2): kernel
+    /// definitions (`name(a, b) := body`) for `@op` functions and declarative
+    /// rewrites (`name: lhs => rhs`) for `@rule` functions.
+    ///
+    /// The operators then exist in this thread's session like any built-in
+    /// one: the kernel can call, differentiate, simplify and evaluate them.
+    ///
+    /// # Errors
+    ///
+    /// The kernel's refusal: a duplicate plugin name, or a definition or
+    /// rewrite that does not parse.
+    pub fn register_source_plugin(
+        &self,
+        name: &str,
+        version: &str,
+        definitions: Vec<String>,
+        rewrites: Vec<String>,
+    ) -> Result<u32, String> {
+        use rssn::kernel::plugin::PluginError;
+        let plugin = rssn::kernel::plugin::SimplePlugin::new(name, version, move |registry| {
+            let texts: Vec<&str> = definitions.iter().map(String::as_str).collect();
+            if !texts.is_empty() {
+                registry
+                    .register_definitions(&texts)
+                    .map_err(|error| PluginError::Registration(error.to_string()))?;
+            }
+            let rules: Vec<&str> = rewrites.iter().map(String::as_str).collect();
+            if !rules.is_empty() {
+                registry
+                    .register_rewrites(rssn::graph::Tier::Normalize, &rules)
+                    .map_err(|error| PluginError::Registration(error.to_string()))?;
+            }
+            Ok(())
+        })
+        .with_description("compiled from Aevia source (@op/@rule)");
+        self.session
+            .register_shared(Box::new(plugin))
+            .map(|id| id.0)
+            .map_err(|error| error.to_string())
+    }
+
     /// The session's identity, for rejecting stale handles.
     #[must_use]
     pub const fn id(&self) -> SessionId {
@@ -818,9 +859,19 @@ impl Kernel {
         }
         let registry = crate::registry::registry();
         registry.capabilities.require("core.dynamic_call")?;
-        let entry = registry
-            .op(name)
-            .ok_or_else(|| KernelError::new("E1003", format!("rssn has no operator `{name}`")))?;
+        let Some(entry) = registry.op(name) else {
+            // The process registry is the startup manifest. An operator a
+            // plugin registered in *this session* afterwards (§13.5.2) is
+            // still callable by name; it carries no dimension witness.
+            if self.session.manifest().ops.iter().any(|op| op.name == name) {
+                let value = self.call(name, args)?;
+                return Ok((value, crate::witness::DimensionWitness::Unknown));
+            }
+            return Err(KernelError::new(
+                "E1003",
+                format!("rssn has no operator `{name}`"),
+            ));
+        };
         registry.capabilities.require_op(entry)?;
         let mut converted = self.convert(name, args)?;
         if entry.source.is_exact() && entry.signatures.len() == 1 {

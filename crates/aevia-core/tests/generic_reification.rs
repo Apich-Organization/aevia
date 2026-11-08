@@ -791,7 +791,6 @@ let literal_default = 1.0 + 2
             ("rational", 5, 2),
             ("whole_quotient", 3, 1),
             ("whole_inverse", 1, 1),
-            ("literal_default", 3, 1),
         ] {
             let actual = interp.eval_toplevel(name).unwrap();
             let aevia_core::value::NumKind::Exact(rational) = &actual.as_num().unwrap().kind else {
@@ -803,6 +802,19 @@ let literal_default = 1.0 + 2
                 "{mode:?} {name}"
             );
         }
+        // §3.10.2: an unannotated mixed literal sum is `Float`.
+        assert!(
+            matches!(
+                interp
+                    .eval_toplevel("literal_default")
+                    .unwrap()
+                    .as_num()
+                    .unwrap()
+                    .kind,
+                aevia_core::value::NumKind::Float(value) if value == 3.0
+            ),
+            "{mode:?} literal_default"
+        );
         let Value::Tensor(scaled) = interp.eval_toplevel("scaled").unwrap() else {
             panic!("expected tensor")
         };
@@ -850,7 +862,7 @@ let direct = 1.0 + 2
                     .as_num()
                     .unwrap()
                     .kind,
-                aevia_core::value::NumKind::Exact(_)
+                aevia_core::value::NumKind::Float(value) if value == 3.0
             ),
             "{mode:?}"
         );

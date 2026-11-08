@@ -123,6 +123,7 @@ pub fn lower_module_with_source_refs(
         method_refs,
         constructor_refs,
         &HashMap::new(),
+        &HashMap::new(),
     )
 }
 
@@ -139,8 +140,10 @@ pub fn lower_module_with_runtime_evidence<
     method_refs: &HashMap<Span, ClassMethodRef>,
     constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), S1>,
     expr_types: &HashMap<Span, aevia_types::Type, S2>,
+    constant_regions: &HashMap<Span, Rep>,
 ) -> Module {
     let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
+    lowerer.constant_regions = constant_regions.clone();
     lowerer.method_refs = method_refs.clone();
     lowerer.constructor_refs = constructor_refs
         .iter()
@@ -298,6 +301,7 @@ pub fn lower_decl_with_source_refs(
         method_refs,
         constructor_refs,
         &HashMap::new(),
+        &HashMap::new(),
     )
 }
 
@@ -311,8 +315,10 @@ pub fn lower_decl_with_runtime_evidence<S1: std::hash::BuildHasher, S2: std::has
     method_refs: &HashMap<Span, ClassMethodRef>,
     constructor_refs: &HashMap<Span, (aevia_types::adt::AdtId, usize), S1>,
     expr_types: &HashMap<Span, aevia_types::Type, S2>,
+    constant_regions: &HashMap<Span, Rep>,
 ) -> Option<LoweredDecl> {
     let mut lowerer = Lowerer::new(rssn_calls, dictionaries, literal_reps);
+    lowerer.constant_regions = constant_regions.clone();
     lowerer.method_refs = method_refs.clone();
     lowerer.constructor_refs = constructor_refs
         .iter()
@@ -415,6 +421,8 @@ struct Lowerer {
     dictionaries: HashMap<Span, Vec<DictionaryUse>>,
     /// The instantiated representation of every numeric literal, by span.
     literal_reps: HashMap<Span, Rep>,
+    /// Roots of constant regions (§3.10.4) with their static representation.
+    constant_regions: HashMap<Span, Rep>,
     method_refs: HashMap<Span, ClassMethodRef>,
     constructor_refs: HashMap<Span, (aevia_types::adt::AdtId, usize)>,
     function_values: HashMap<Span, ()>,
@@ -443,6 +451,7 @@ impl Lowerer {
             rssn,
             dictionaries: table,
             literal_reps: literal_reps.clone(),
+            constant_regions: HashMap::new(),
             method_refs: HashMap::new(),
             constructor_refs: HashMap::new(),
             function_values: HashMap::new(),
@@ -1061,6 +1070,11 @@ impl Lowerer {
                     }
                 }
             },
+            | ExprKind::Unary { .. } | ExprKind::Binary { .. }
+                if self.constant_regions.contains_key(&expr.span) =>
+            {
+                self.constant_region(expr, builder)
+            },
             | ExprKind::Unary { op, operand } => {
                 let operand = self.value(operand, builder);
                 self.emit(builder, Rhs::Unary { op: *op, operand }, expr.span)
@@ -1233,6 +1247,63 @@ impl Lowerer {
                     expr.span,
                 )
             },
+        }
+    }
+
+    /// §3.10.4: a closed literal arithmetic tree is a compile-time constant.
+    /// A dimensionless tree whose every leaf is a `Float` literal is folded
+    /// here with the same IEEE operations the interpreter would perform, into
+    /// one `f64` atom the JIT also sees as a constant. Anything else (units,
+    /// integer leaves, a `Complex` or generic reading) is left to the
+    /// interpreter, which evaluates it once in its static representation and
+    /// memoizes it.
+    fn constant_region(
+        &mut self,
+        expr: &Expr,
+        builder: &mut Builder,
+    ) -> Atom {
+        if self.constant_regions.get(&expr.span) == Some(&Rep::Float) {
+            if let Some(value) = self.fold_float(expr) {
+                return Atom::Float(value);
+            }
+        }
+        self.emit(
+            builder,
+            Rhs::ConstantRegion(Rc::new(expr.clone())),
+            expr.span,
+        )
+    }
+
+    /// IEEE evaluation of a tree of `Float` literals, or `None` when a leaf
+    /// has another representation or the tree has another shape.
+    fn fold_float(
+        &self,
+        expr: &Expr,
+    ) -> Option<f64> {
+        match &expr.kind {
+            | ExprKind::Float(text) if self.literal_rep(expr.span) == Some(Rep::Float) => {
+                Some(parse_float_literal(text))
+            },
+            | ExprKind::Unary { op, operand } => {
+                let value = self.fold_float(operand)?;
+                match op {
+                    | aevia_syntax::ast::UnOp::Neg => Some(-value),
+                    | aevia_syntax::ast::UnOp::Pos => Some(value),
+                    | _ => None,
+                }
+            },
+            | ExprKind::Binary { op, left, right } => {
+                let left = self.fold_float(left)?;
+                let right = self.fold_float(right)?;
+                match op {
+                    | BinOp::Add => Some(left + right),
+                    | BinOp::Sub => Some(left - right),
+                    | BinOp::Mul => Some(left * right),
+                    | BinOp::Div => Some(left / right),
+                    | _ => None,
+                }
+            },
+            | _ => None,
         }
     }
 
@@ -1456,6 +1527,7 @@ impl Lowerer {
 fn exact_decimal(text: &str) -> Option<num_rational::BigRational> {
     aevia_dim::parse_decimal(text)
 }
+
 
 /// The `f64` a float literal denotes.
 ///

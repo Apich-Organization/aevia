@@ -20,6 +20,8 @@ use rssn::kernel::value::OpaqueValue;
 use rssn::kernel::value::QuantityValue;
 use rssn::kernel::value::RecordValue;
 use rssn::kernel::value::SessionId;
+use rssn::kernel::value::SparseFormat;
+use rssn::kernel::value::SparseValue;
 use rssn::kernel::value::TensorValue;
 use rssn::kernel::value::TermRef;
 use rssn::kernel::value::UnitValue;
@@ -253,6 +255,17 @@ impl UnitVal {
     }
 }
 
+/// The storage format of a sparse value crossing the bridge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SparseKind {
+    /// Compressed sparse row.
+    Csr,
+    /// Compressed sparse column.
+    Csc,
+    /// Coordinate list.
+    Coo,
+}
+
 /// A value crossing the bridge.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Val {
@@ -278,6 +291,17 @@ pub enum Val {
         /// Extents, outermost first.
         shape: Vec<usize>,
         /// Elements.
+        data: Vec<Self>,
+    },
+    /// A sparse tensor: only the stored entries cross the bridge.
+    Sparse {
+        /// The storage format.
+        format: SparseKind,
+        /// Extents, outermost first.
+        shape: Vec<usize>,
+        /// Flat row-major indices of the stored entries, ascending.
+        indices: Vec<u64>,
+        /// The stored entries, in the order of `indices`.
         data: Vec<Self>,
     },
     /// A record.
@@ -386,6 +410,27 @@ impl Val {
                     data: converted,
                 })
             },
+            | Self::Sparse {
+                format,
+                shape,
+                indices,
+                data,
+            } => {
+                let mut converted = Vec::with_capacity(data.len());
+                for item in data {
+                    converted.push(item.to_rssn(session)?);
+                }
+                Value::Sparse(SparseValue {
+                    shape: shape.clone(),
+                    format: match format {
+                        | SparseKind::Csr => SparseFormat::Csr,
+                        | SparseKind::Csc => SparseFormat::Csc,
+                        | SparseKind::Coo => SparseFormat::Coo,
+                    },
+                    indices: indices.clone(),
+                    data: converted,
+                })
+            },
             | Self::Record(fields) => {
                 let mut converted = Vec::with_capacity(fields.len());
                 for (name, value) in fields {
@@ -466,51 +511,55 @@ impl Val {
                 }
             },
             | Value::Sparse(sparse) => {
-                // A sparse value becomes a dense one: the host tensor type is
-                // dense, and dropping the zeros would change the shape the
-                // caller sees.
+                // The stored entries cross as they are: densifying would
+                // allocate the zeros the representation exists to avoid.
                 let extent = sparse
                     .shape
                     .iter()
-                    .try_fold(1usize, |acc, extent| acc.checked_mul(*extent))
+                    .try_fold(1u64, |acc, extent| {
+                        acc.checked_mul(u64::try_from(*extent).ok()?)
+                    })
                     .ok_or_else(|| {
                         KernelError::of(
                             "E0809",
                             crate::error::Failure::Kernel,
-                            format!(
-                                "a sparse tensor of shape {:?} is too large to densify",
-                                sparse.shape
-                            ),
+                            format!("a sparse tensor of shape {:?} overflows", sparse.shape),
                         )
                     })?;
-                // The zeros carry the element type, not `Int`: a sparse
-                // `Real` matrix densified into `Int` zeros changes the type of
-                // every element the kernel did not store.
-                let zero = match sparse.data.first() {
-                    | Some(Value::Float(_)) => Self::Num(Num::Float(0.0)),
-                    | Some(Value::Real(_)) => Self::Num(Num::Rat(BigRational::default())),
-                    | _ => Self::Num(Num::Int(BigInt::from(0))),
-                };
-                let mut data = vec![zero; extent];
-                for (index, item) in sparse.indices.iter().zip(&sparse.data) {
-                    let position = usize::try_from(*index)
-                        .ok()
-                        .filter(|position| *position < extent)
-                        .ok_or_else(|| {
-                            // Dropping the entry would silently produce a
-                            // matrix that is not the one the kernel computed.
-                            KernelError::of(
-                                "E0809",
-                                crate::error::Failure::Kernel,
-                                format!(
-                                    "a sparse entry is stored at {index}, outside a tensor of {extent} elements"
-                                ),
-                            )
-                        })?;
-                    data[position] = Self::from_rssn(item, session)?;
+                if sparse.indices.len() != sparse.data.len() {
+                    return Err(KernelError::of(
+                        "E0809",
+                        crate::error::Failure::Kernel,
+                        format!(
+                            "a sparse tensor stores {} indices for {} values",
+                            sparse.indices.len(),
+                            sparse.data.len()
+                        ),
+                    ));
                 }
-                Self::Tensor {
+                if let Some(index) = sparse.indices.iter().find(|index| **index >= extent) {
+                    // Dropping the entry would silently produce a matrix that
+                    // is not the one the kernel computed.
+                    return Err(KernelError::of(
+                        "E0809",
+                        crate::error::Failure::Kernel,
+                        format!(
+                            "a sparse entry is stored at {index}, outside a tensor of {extent} elements"
+                        ),
+                    ));
+                }
+                let mut data = Vec::with_capacity(sparse.data.len());
+                for item in &sparse.data {
+                    data.push(Self::from_rssn(item, session)?);
+                }
+                Self::Sparse {
+                    format: match sparse.format {
+                        | SparseFormat::Csr => SparseKind::Csr,
+                        | SparseFormat::Csc => SparseKind::Csc,
+                        | SparseFormat::Coo => SparseKind::Coo,
+                    },
                     shape: sparse.shape.clone(),
+                    indices: sparse.indices.clone(),
                     data,
                 }
             },
@@ -622,6 +671,16 @@ impl Val {
                 let _ = shape;
                 let items: Vec<String> = data.iter().map(Self::text).collect();
                 format!("[{}]", items.join(", "))
+            },
+            | Self::Sparse {
+                shape, indices, data, ..
+            } => {
+                let items: Vec<String> = indices
+                    .iter()
+                    .zip(data)
+                    .map(|(index, value)| format!("{index} = {}", value.text()))
+                    .collect();
+                format!("sparse({shape:?}, {{ {} }})", items.join(", "))
             },
             | Self::Record(fields) => {
                 let items: Vec<String> = fields
