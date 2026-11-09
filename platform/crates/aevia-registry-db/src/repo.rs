@@ -126,15 +126,16 @@ pub async fn add_signing_key(
     .await
     .map_err(|error| {
         if let sqlx::Error::Database(ref database) = error
-            && database.is_unique_violation() {
-                return Error::new(
-                    crate::E_CONFLICT,
-                    format!(
-                        "the key {fingerprint} is already bound to a publisher; a key may sign \
+            && database.is_unique_violation()
+        {
+            return Error::new(
+                crate::E_CONFLICT,
+                format!(
+                    "the key {fingerprint} is already bound to a publisher; a key may sign \
                          for one account only"
-                    ),
-                );
-            }
+                ),
+            );
+        }
         sql_error("cannot bind the key", error)
     })
 }

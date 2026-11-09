@@ -105,16 +105,17 @@ pub async fn start(
 ) -> ApiResult<Json<DeviceResponse>> {
     let key = SignerKey::detect(&request.public_key).map_err(ApiError::from_core)?;
     if let Some(kind) = aevia_registry_core::signature::KeyKind::parse(&request.kind)
-        && kind != key.kind {
-            return Err(ApiError::bad_request(
-                "E_KEY",
-                format!(
-                    "the key is {}, but the request says {}",
-                    key.kind.as_str(),
-                    kind.as_str()
-                ),
-            ));
-        }
+        && kind != key.kind
+    {
+        return Err(ApiError::bad_request(
+            "E_KEY",
+            format!(
+                "the key is {}, but the request says {}",
+                key.kind.as_str(),
+                kind.as_str()
+            ),
+        ));
+    }
     let fingerprint = key.fingerprint().map_err(ApiError::from_core)?;
     if let Some(existing) =
         repo::signing_key_by_fingerprint(&state.pool, key.kind.as_str(), &fingerprint).await?
@@ -202,6 +203,7 @@ pub struct ActivateForm {
 /// `400` when the code is missing, `404` when it is unknown or expired.
 pub async fn page(
     State(state): State<AppState>,
+    crate::http::Language(lang): crate::http::Language,
     Query(query): Query<ActivateQuery>,
     headers: HeaderMap,
 ) -> PageResult<Response> {
@@ -232,6 +234,7 @@ pub async fn page(
         return Ok(Redirect::to(&target).into_response());
     }
     Ok(Html(aevia_registry_web::activate(
+        lang,
         &user_code,
         viewer.as_ref(),
         &device.key_kind,

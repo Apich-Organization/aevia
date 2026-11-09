@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "aevia_registry"
+path = "src/lib.rs"
+
 [[bin]]
 name = "aevia-registry"
 path = "src/main.rs"

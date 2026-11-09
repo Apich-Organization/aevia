@@ -209,9 +209,9 @@ pub async fn callback(
                         "member",
                     )
                     .await
-                    {
-                        tracing::warn!(%error, org = %org, "cannot record organisation membership");
-                    }
+                {
+                    tracing::warn!(%error, org = %org, "cannot record organisation membership");
+                }
             }
         },
         | Err(error) => tracing::warn!(%error, "cannot list GitHub App installations"),

@@ -1,0 +1,157 @@
+# Continuous integration for the Aevia registry and documentation site.
+#
+# Where the compiler crates come from
+# ----------------------------------
+# `aevia-registry-docs` depends on `aevia-doc` (and, through it, `aevia-syntax`
+# and `aevia-fmt`) by path: `../crates/aevia-doc` relative to this workspace,
+# which is `crates/` sitting beside `platform/`. Cargo loads every workspace
+# member's manifest *before* it applies `--exclude` or `--no-default-features`,
+# so a missing path dependency fails the entire workspace. Excluding
+# `aevia-registry-docs` and `aevia-registry-server` from the commands below
+# would not make this file pass, and neither would building the docs crate
+# without its `compiler` feature — both were tried. The dependency has to be
+# there.
+#
+# This repository contains both `platform/` and the language `crates/`, so the
+# ordinary `actions/checkout` below already provides it. A standalone platform
+# checkout would instead need the language repository checked out so that
+# `<workspace>/crates/aevia-doc` exists — an `actions/checkout` with
+# `path: lang` followed by `ln -s lang/crates crates`, whose `repository:` must
+# name the real language repository, not a mirror. It is not added here: it
+# would duplicate the checkout this repository already contains.
+
+name: platform
+
+"on":
+  push:
+    paths:
+      - "platform/**"
+  pull_request:
+    paths:
+      - "platform/**"
+  workflow_dispatch:
+
+# Nothing here writes to the repository; the default token is read-only anyway,
+# but stating it keeps a future `permissions:` addition from widening it.
+permissions:
+  contents: read
+
+# A push to a branch supersedes the run for the previous commit: the newer
+# commit is the one anyone will look at, and the runner minutes are not free.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental artefacts are large and almost never hit across a fresh
+  # checkout; turning them off keeps the cache below to the interesting half.
+  CARGO_INCREMENTAL: "0"
+
+defaults:
+  run:
+    working-directory: platform
+
+jobs:
+  check:
+    name: fmt, clippy, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+          components: rustfmt, clippy
+
+      # `rust-cache` keys on the `rustc -vV` it finds on PATH as well as on
+      # Cargo.lock, so a cache filled by one toolchain is never restored into a
+      # build by another: the target directory would contain rlibs the pinned
+      # compiler refuses to link.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: platform -> target
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  test-with-database:
+    name: tests against PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # The HTTP integration tests drive the real router against a real database
+    # and return early when `AEVIA_TEST_DATABASE_URL` is unset, so the `check`
+    # job above never exercises them. This job is the only place they run: it
+    # exists so a migration or a query that is wrong only on PostgreSQL — a
+    # unique index, a constraint, a type — cannot merge green.
+    services:
+      postgres:
+        image: postgres:18-trixie
+        env:
+          POSTGRES_USER: aevia
+          POSTGRES_PASSWORD: aevia
+          POSTGRES_DB: aevia
+        ports:
+          - 5432:5432
+        # The container is up before `pg_isready` says so; without the health
+        # check the first test races the initdb that is still running.
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U aevia -d aevia"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AEVIA_TEST_DATABASE_URL: postgres://aevia:aevia@127.0.0.1:5432/aevia
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: platform -> target
+
+      - name: Tests with a database
+        run: cargo test --workspace
+
+  docs:
+    name: docs without the compiler feature
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: platform -> target
+
+      # `aevia-doc` is a path dependency, so this still needs the checkout that
+      # the header describes — the full build cannot run without it. What this
+      # step proves is narrower and still worth a job: the rendering half of
+      # `aevia-registry-docs` compiles without linking the compiler crates,
+      # which is the configuration a machine without the language repository
+      # would use.
+      - name: Build the docs crate without the compiler
+        run: cargo build -p aevia-registry-docs --no-default-features

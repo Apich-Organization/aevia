@@ -235,9 +235,10 @@ pub fn text_files(bytes: &[u8]) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     for (name, data) in walk(bytes)? {
         if (name.ends_with(".aev") || name.ends_with(".toml") || name.ends_with(".md"))
-            && let Ok(text) = String::from_utf8(data) {
-                out.push((name, text));
-            }
+            && let Ok(text) = String::from_utf8(data)
+        {
+            out.push((name, text));
+        }
     }
     Ok(out)
 }

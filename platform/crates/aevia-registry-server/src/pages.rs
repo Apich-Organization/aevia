@@ -44,6 +44,7 @@ use aevia_registry_web as web;
 
 use crate::error::PageError;
 use crate::error::PageResult;
+use crate::http::Language;
 use crate::state::AppState;
 
 /// How many packages a list page shows.
@@ -74,13 +75,14 @@ pub fn urlencode(value: &str) -> String {
 /// `E_DB` when the counts or the recent list cannot be read.
 pub async fn home(
     State(state): State<AppState>,
+    Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let stats = repo::stats(&state.pool).await?;
     let (recent, _) = repo::list_packages(&state.pool, "", "recent", 6, 0).await?;
     let cards = cards_of(&recent);
     let viewer = state.viewer(&headers).await;
-    Ok(Html(web::home(&stats, &cards, viewer.as_ref())))
+    Ok(Html(web::home(lang, &stats, &cards, viewer.as_ref())))
 }
 
 /// The query of `/crates`.
@@ -101,6 +103,7 @@ pub struct ListQuery {
 /// `E_DB` when the list cannot be read.
 pub async fn crates(
     State(state): State<AppState>,
+    Language(lang): Language,
     Query(query): Query<ListQuery>,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
@@ -122,7 +125,7 @@ pub async fn crates(
         items: cards_of(&items),
     };
     let viewer = state.viewer(&headers).await;
-    Ok(Html(web::crate_list(&list, viewer.as_ref())))
+    Ok(Html(web::crate_list(lang, &list, viewer.as_ref())))
 }
 
 /// `GET /crates/{owner}/{name}`
@@ -132,11 +135,13 @@ pub async fn crates(
 /// `404` when the package does not exist, `E_DB` when a read fails.
 pub async fn crate_detail(
     State(state): State<AppState>,
+    Language(lang): Language,
     Path((owner, name)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let page = build_crate_page(&state, &headers, &owner, &name, None).await?;
     Ok(Html(web::crate_page(
+        lang,
         &page,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -149,11 +154,13 @@ pub async fn crate_detail(
 /// `404` when the package or the version does not exist.
 pub async fn crate_version(
     State(state): State<AppState>,
+    Language(lang): Language,
     Path((owner, name, version)): Path<(String, String, String)>,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let page = build_crate_page(&state, &headers, &owner, &name, Some(version)).await?;
     Ok(Html(web::crate_page(
+        lang,
         &page,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -221,12 +228,14 @@ pub(crate) async fn build_crate_page(
 /// `E_DB` when the list cannot be read.
 pub async fn docs_landing(
     State(state): State<AppState>,
+    Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let (items, _) = repo::list_packages(&state.pool, "", "recent", 60, 0).await?;
     let documented: Vec<PackageSummary> = items.into_iter().filter(|item| item.has_docs).collect();
     let cards = cards_of(&documented);
     Ok(Html(web::docs_landing(
+        lang,
         &cards,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -265,6 +274,7 @@ pub async fn docs_latest(
 /// `404` when the version has no documentation.
 pub async fn docs_index(
     State(state): State<AppState>,
+    Language(lang): Language,
     Path((owner, name, version)): Path<(String, String, String)>,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
@@ -294,6 +304,7 @@ pub async fn docs_index(
         other_versions,
     };
     Ok(Html(web::docs_index(
+        lang,
         &page,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -306,6 +317,7 @@ pub async fn docs_index(
 /// `404` when the module page does not exist.
 pub async fn docs_module(
     State(state): State<AppState>,
+    Language(lang): Language,
     Path((owner, name, version, module)): Path<(String, String, String, String)>,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
@@ -336,6 +348,7 @@ pub async fn docs_module(
         undocumented: usize::try_from(page.undocumented).unwrap_or(0),
     };
     Ok(Html(web::docs_module(
+        lang,
         &model,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -374,6 +387,7 @@ async fn resolve_version(
 /// `403` when nobody is signed in, `E_DB` when a read fails.
 pub async fn account(
     State(state): State<AppState>,
+    Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let Some((_, publisher)) = state.current(&headers).await else {
@@ -396,7 +410,7 @@ pub async fn account(
             .collect(),
         packages: cards_of(&packages),
     };
-    Ok(Html(web::account(&page)))
+    Ok(Html(web::account(lang, &page)))
 }
 
 /// The form of `POST /account/keys`.
@@ -474,12 +488,14 @@ pub async fn account_revoke_key(
 /// Never fails; a missing provider is shown as unavailable.
 pub async fn login(
     State(state): State<AppState>,
+    Language(lang): Language,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let next = crate::state::safe_next(query.get("next").map(String::as_str));
     let viewer = state.viewer(&headers).await;
     Ok(Html(web::login(
+        lang,
         viewer.as_ref(),
         &next,
         state.config.github.is_some(),
@@ -514,6 +530,7 @@ pub async fn logout(
 /// `E_DB` when the log cannot be read.
 pub async fn log(
     State(state): State<AppState>,
+    Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
     let entries = repo::log_entries(&state.pool, 0, LOG_PAGE).await?;
@@ -523,11 +540,108 @@ pub async fn log(
         (entry.seq, entry.entry_hash.clone())
     });
     Ok(Html(web::log_page(
+        lang,
         &views,
         seq,
         &hash,
         state.viewer(&headers).await.as_ref(),
     )))
+}
+
+// --------------------------------------------------------------------- spec
+
+/// `GET /spec`
+///
+/// # Errors
+///
+/// Never fails: a deployment without a mounted specification renders the
+/// explanation of how to mount one.
+pub async fn spec_index(
+    State(state): State<AppState>,
+    Language(lang): Language,
+    headers: HeaderMap,
+) -> PageResult<Html<String>> {
+    Ok(Html(web::spec_index(
+        state.spec.book(),
+        lang,
+        state.viewer(&headers).await.as_ref(),
+    )))
+}
+
+/// `GET /spec/all`
+///
+/// # Errors
+///
+/// Never fails, for the same reason as [`spec_index`].
+pub async fn spec_all(
+    State(state): State<AppState>,
+    Language(lang): Language,
+    headers: HeaderMap,
+) -> PageResult<Html<String>> {
+    Ok(Html(web::spec_all(
+        state.spec.book(),
+        lang,
+        state.viewer(&headers).await.as_ref(),
+    )))
+}
+
+/// `GET /spec/{slug}`
+///
+/// # Errors
+///
+/// `404` when the specification has no such chapter.
+pub async fn spec_chapter(
+    State(state): State<AppState>,
+    Language(lang): Language,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> PageResult<Html<String>> {
+    let book = state.spec.book();
+    let Some(chapter) = book.chapter(&slug) else {
+        return Err(
+            PageError::not_found(format!("The specification has no chapter `{slug}`."))
+                .in_lang(lang),
+        );
+    };
+    Ok(Html(web::spec_page(
+        book,
+        chapter,
+        lang,
+        state.viewer(&headers).await.as_ref(),
+    )))
+}
+
+/// `GET /lang/{code}` — remembers a language and returns to the page.
+///
+/// A GET, not a POST: choosing a language is not a state change anyone needs to
+/// protect, and a link works from every page without a form. The redirect target
+/// is taken from the `Referer` and reduced to its path, so the endpoint cannot
+/// be turned into an open redirect.
+pub async fn set_language(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let language = aevia_registry_core::Lang::parse(&code).unwrap_or(aevia_registry_core::Lang::En);
+    let target = headers
+        .get(axum::http::header::REFERER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|referer| url::Url::parse(referer).ok())
+        .map(|url| match url.query() {
+            | Some(query) => format!("{}?{query}", url.path()),
+            | None => url.path().to_string(),
+        })
+        .filter(|path| path.starts_with('/') && !path.starts_with("//"))
+        .unwrap_or_else(|| "/".to_string());
+    let mut response = Redirect::to(&target).into_response();
+    response.headers_mut().insert(
+        crate::http::set_cookie_header(),
+        crate::http::language_cookie(
+            language.code(),
+            crate::http::is_secure(&state.config.base_url),
+        ),
+    );
+    response
 }
 
 /// `GET /static/site.css`

@@ -204,6 +204,25 @@ points at a tarball, and a tarball without its row is unreachable.
 a backup on its own — it lives on the same disk as the volumes. Copy it
 elsewhere (restic, `rsync`, object storage) on a schedule.
 
+### The specification
+
+`/spec` serves the language's design standard, which is **not** part of this
+repository and **not** baked into the image. `compose.yaml` mounts the sibling
+checkout read-only:
+
+```yaml
+- ../../spec:/spec:ro
+```
+
+That is `../spec` relative to the language repository root, i.e. the directory
+holding `00-overview.md` … `appendix-c-changelog.md`. The server reads it once at
+start-up and holds the rendered pages in memory, so **updating the document is a
+`git pull` in the language checkout plus `./deploy.sh restart`** — no rebuild.
+
+If the mount is missing the site still starts: `/spec` then says, in both
+languages, that the specification is not mounted and names `AEVIA_SPEC_DIR`.
+Nothing else on the site depends on it.
+
 ---
 
 ## 6. Backup and restore

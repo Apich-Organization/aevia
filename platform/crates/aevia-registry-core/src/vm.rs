@@ -328,6 +328,97 @@ pub struct LogEntryView {
     pub at: String,
 }
 
+/// One heading inside a specification chapter.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SpecHeading {
+    /// 2, 3 or 4.
+    pub level: u8,
+    /// The heading text, tags stripped.
+    pub text: String,
+    /// The anchor id the page carries.
+    pub id: String,
+}
+
+/// One chapter of the language specification.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SpecChapter {
+    /// The URL segment, `04-dimensions`.
+    pub slug: String,
+    /// The chapter number as written, `04` or `A`.
+    pub number: String,
+    /// The chapter's own heading, in the language it was written in.
+    pub title: String,
+    /// The heading with its leading `NN — ` removed, for lists that show the
+    /// number in their own column.
+    pub short_title: String,
+    /// The English title, always present so an English reader can navigate.
+    pub title_en: String,
+    /// A short English abstract, when one has been written.
+    pub summary_en: Option<String>,
+    /// The chapter body, rendered.
+    pub html: String,
+    /// Its headings, for the table of contents.
+    pub toc: Vec<SpecHeading>,
+    /// Approximate word count, for the index.
+    pub words: usize,
+    /// Whether the chapter is normative.
+    pub normative: bool,
+}
+
+/// The whole specification, in reading order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SpecBook {
+    /// The revision string the text declares, e.g. `12`.
+    pub revision: String,
+    /// The chapters, in order.
+    pub chapters: Vec<SpecChapter>,
+}
+
+impl SpecBook {
+    /// The chapter with this slug.
+    #[must_use]
+    pub fn chapter(
+        &self,
+        slug: &str,
+    ) -> Option<&SpecChapter> {
+        self.chapters.iter().find(|chapter| chapter.slug == slug)
+    }
+
+    /// The chapter before `slug`, for the previous link.
+    #[must_use]
+    pub fn previous(
+        &self,
+        slug: &str,
+    ) -> Option<&SpecChapter> {
+        let index = self
+            .chapters
+            .iter()
+            .position(|chapter| chapter.slug == slug)?;
+        index
+            .checked_sub(1)
+            .and_then(|index| self.chapters.get(index))
+    }
+
+    /// The chapter after `slug`, for the next link.
+    #[must_use]
+    pub fn next(
+        &self,
+        slug: &str,
+    ) -> Option<&SpecChapter> {
+        let index = self
+            .chapters
+            .iter()
+            .position(|chapter| chapter.slug == slug)?;
+        self.chapters.get(index + 1)
+    }
+
+    /// Total words across every chapter.
+    #[must_use]
+    pub fn words(&self) -> usize {
+        self.chapters.iter().map(|chapter| chapter.words).sum()
+    }
+}
+
 /// Formats a byte count the way a person reads it.
 #[must_use]
 pub fn human_bytes(bytes: u64) -> String {

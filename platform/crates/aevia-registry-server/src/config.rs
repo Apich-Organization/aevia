@@ -58,6 +58,8 @@ pub struct Config {
     pub database_url: String,
     /// Where archives are stored.
     pub storage_dir: PathBuf,
+    /// Where the language specification's Markdown chapters live.
+    pub spec_dir: PathBuf,
     /// The HMAC key for session cookies.
     pub session_secret: Vec<u8>,
     /// The name the site shows.
@@ -105,6 +107,9 @@ impl Config {
             .trim_end_matches('/')
             .to_string();
         let storage_dir = PathBuf::from(optional("AEVIA_STORAGE_DIR", "/var/lib/aevia/packages"));
+        // Defaults to the language repository checked out next to this one,
+        // which is where a developer runs the server from.
+        let spec_dir = PathBuf::from(optional("AEVIA_SPEC_DIR", "../spec"));
         let github = match (
             var("AEVIA_GITHUB_CLIENT_ID"),
             var("AEVIA_GITHUB_CLIENT_SECRET"),
@@ -133,6 +138,7 @@ impl Config {
             base_url,
             database_url,
             storage_dir,
+            spec_dir,
             session_secret,
             registry_name: optional("AEVIA_REGISTRY_NAME", "aevia"),
             docs_enabled: flag("AEVIA_DOCS_ENABLED", true),

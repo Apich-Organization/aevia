@@ -207,9 +207,23 @@ seconds; stop on anything but `pending`.
 | `/auth/{github,orcid}/callback` | OAuth return |
 | `POST /logout` | end the session |
 | `/log` | the transparency log |
+| `/spec` | the specification's chapter list |
+| `/spec/{slug}` | one chapter, e.g. `/spec/04-dimensions` |
+| `/spec/all` | the single-page edition, generated on request |
+| `/lang/{code}` | remembers `en` or `zh` in a cookie and returns to the page |
 | `/activate?code=` | approve a device key (GET form, POST approve) |
 | `/static/site.css`, `/static/app.js` | assets |
 | `/healthz` | `200` when the database answers, `503` otherwise |
+
+## Language
+
+Every page renders in English or Chinese. The language comes from, in order:
+`?lang=` on the request, the `aevia_lang` cookie (set by `/lang/{code}`), the
+`Accept-Language` header, and finally English. The `lang` attribute on `<html>`
+follows it, so a browser's font and line-breaking rules apply correctly.
+
+`GET /lang/zh` sets the cookie and redirects to the `Referer`'s path — reduced
+to a same-site path, so the endpoint is not an open redirect.
 
 ## Statements
 

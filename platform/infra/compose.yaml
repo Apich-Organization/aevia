@@ -73,6 +73,10 @@ services:
       # the non-root process cannot create its archive directories. Docker
       # ignores the flag and uses the ownership baked into the image.
       - aevia-data:/var/lib/aevia/packages:U
+      # The language specification, mounted read-only from the sibling
+      # checkout. `/spec` renders whatever is in this directory, so updating the
+      # document is a `git pull` plus a restart — no image rebuild.
+      - ../../spec:/spec:ro
     ports:
       # Loopback only. Caddy is the only thing that speaks to the outside world;
       # the plaintext listener must not be reachable from the LAN.

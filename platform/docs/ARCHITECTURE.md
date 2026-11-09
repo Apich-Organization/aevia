@@ -185,6 +185,65 @@ Three rules shape it:
   request that cannot get a connection is better off failing fast than holding a
   proxy slot.
 
+
+## The specification site
+
+`/spec` is the language's design standard, served from the repository that owns
+it. The chapters are read from `AEVIA_SPEC_DIR` at start-up, rendered once, and
+held in memory:
+
+```
+spec/*.md ──▶ rewrite links ──▶ markdown ──▶ sanitise ──▶ add heading ids ──▶ pages
+                 │                                             │
+                 └ sibling links become /spec/<slug>            └ table of contents
+```
+
+Three decisions are worth stating:
+
+* **The site does not serve the bundled edition.** The language repository
+  already ships `Aevia-Language-Specification.md`, stitched together by
+  `tools/bundle_spec.py`. Serving that file would show whatever the last person
+  remembered to regenerate; reading the chapters means the site and the
+  repository cannot disagree, and `/spec/all` produces the single-page edition
+  on request instead of storing a second copy.
+* **Links are rewritten, not broken.** Inside `spec/`, a chapter links to its
+  siblings as `04-dimensions.md` and to files outside the directory as
+  `../RSSN-INTEGRATION-REQUIREMENTS.md`. On the site the first becomes
+  `/spec/04-dimensions` and the second is sent to the repository, where the file
+  actually exists.
+* **Heading ids keep their CJK.** `4.1 量纲代数` becomes `4-1-量纲代数`, not
+  `section-7`. A reader who copies a link should be able to see what it points
+  at, and the ids are stable across rebuilds because they come from the text.
+
+The chapter order is the bundler's order, hard-coded in `src/spec.rs` with a
+comment pointing at `tools/bundle_spec.py`. If a chapter is added to one, it must
+be added to the other; the failure is visible (a chapter missing from the site)
+rather than silent.
+
+## Two languages
+
+Every page is rendered in English or Chinese. The rules:
+
+* **The language is a request property, not a URL property.** `?lang=zh` names
+  one for a single request (so a link can carry it); otherwise a cookie set by
+  `/lang/{code}` decides; otherwise `Accept-Language`; otherwise English. No
+  page has two URLs for two languages, so a link is never stale because someone
+  switched.
+* **Strings live next to the markup that uses them.** Each page module owns a
+  block of `Msg` constants (`Msg::new("crates", "包")`) rather than a central
+  catalogue. A translator editing `crates.rs` does not have to open a second
+  file, and deleting a section deletes its strings.
+* **Identifiers are never translated.** Commands, package names, module paths,
+  fingerprints and SPDX identifiers stay as they are in both languages — a
+  translated command is a command that does not run.
+* **The specification is the exception, and says so.** The normative chapters
+  are Chinese. Rather than machine-translate 480 KB of normative text — which
+  would leave a reader unable to tell which sentences are load-bearing — each
+  chapter carries an English title and abstract, and the abstract box states that
+  the Chinese text is the normative one. Translating the chapters properly is a
+  job for a translator with review; the structure is ready for it (a parallel
+  `spec/en/` tree would slot into the same loader).
+
 ## Known limits
 
 Stated plainly, because a registry that hides its gaps is worse than one that
@@ -202,4 +261,8 @@ names them:
   declaration on the module page. That is the language toolchain's behaviour,
   not the registry's, and the fix belongs there.
 * **Documentation has no search index.** Pages are stored and served; there is
-  no full-text index over them.
+  no full-text index over them — not for a package's documentation, and not for
+  the specification.
+* **The specification's normative text is Chinese only.** The English layer is
+  titles and abstracts; a full translation needs a translator, and the loader is
+  ready for a parallel tree when one exists.

@@ -12,6 +12,7 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 
 use aevia_registry_core::Error;
+use aevia_registry_core::Lang;
 
 /// An API failure, rendered as `{"error":{"code":…,"message":…}}`.
 #[derive(Debug)]
@@ -113,6 +114,11 @@ pub struct PageError {
     pub code: String,
     /// The sentence shown to the reader.
     pub message: String,
+    /// The language to render the page in.
+    ///
+    /// Set by the handler that knows the request's preference; the default is
+    /// English, which is the language the messages themselves are written in.
+    pub lang: Lang,
 }
 
 impl PageError {
@@ -123,6 +129,7 @@ impl PageError {
             status: StatusCode::NOT_FOUND,
             code: "E_NOT_FOUND".to_string(),
             message: message.into(),
+            lang: Lang::En,
         }
     }
 
@@ -133,6 +140,7 @@ impl PageError {
             status: StatusCode::FORBIDDEN,
             code: "E_FORBIDDEN".to_string(),
             message: message.into(),
+            lang: Lang::En,
         }
     }
 
@@ -143,7 +151,20 @@ impl PageError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "E_DB".to_string(),
             message: message.into(),
+            lang: Lang::En,
         }
+    }
+}
+
+impl PageError {
+    /// Renders this error in `lang`.
+    #[must_use]
+    pub fn in_lang(
+        mut self,
+        lang: Lang,
+    ) -> Self {
+        self.lang = lang;
+        self
     }
 }
 
@@ -154,6 +175,7 @@ impl From<Error> for PageError {
             status,
             code: error.code.to_string(),
             message: error.message,
+            lang: Lang::En,
         }
     }
 }
@@ -163,8 +185,13 @@ impl IntoResponse for PageError {
         if self.status.is_server_error() {
             tracing::error!(code = %self.code, message = %self.message, "page failed");
         }
-        let html =
-            aevia_registry_web::error_page(self.status.as_u16(), &self.code, &self.message, None);
+        let html = aevia_registry_web::error_page(
+            self.lang,
+            self.status.as_u16(),
+            &self.code,
+            &self.message,
+            None,
+        );
         (self.status, Html(html)).into_response()
     }
 }

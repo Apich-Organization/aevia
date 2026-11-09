@@ -5,13 +5,20 @@
 //! the cookie flags, the trust boundary for `X-Forwarded-For`, and the source
 //! of randomness for session ids and nonces.
 
+use axum::extract::FromRequestParts;
 use axum::http::HeaderMap;
 use axum::http::HeaderValue;
 use axum::http::header::SET_COOKIE;
+use axum::http::request::Parts;
+
+use aevia_registry_core::Lang;
 use rand::RngCore as _;
 
 /// The session cookie's name.
 pub const SESSION_COOKIE: &str = "aevia_session";
+
+/// The cookie that remembers the reader's language.
+pub const LANG_COOKIE: &str = "aevia_lang";
 
 /// The path every cookie is scoped to.
 const COOKIE_PATH: &str = "/";
@@ -26,9 +33,10 @@ pub fn cookie(
     for part in header.split(';') {
         let part = part.trim();
         if let Some((key, value)) = part.split_once('=')
-            && key.trim() == name {
-                return Some(value.trim().to_string());
-            }
+            && key.trim() == name
+        {
+            return Some(value.trim().to_string());
+        }
     }
     None
 }
@@ -55,6 +63,25 @@ pub fn session_cookie(
     HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
+/// Builds the `Set-Cookie` header that remembers a language.
+///
+/// A year, because a language preference is not a session: a reader who chose
+/// Chinese should not be asked again next month. No `HttpOnly` — the value is
+/// not a secret, and letting the page read it would allow a client-side switch
+/// later without a round trip.
+#[must_use]
+pub fn language_cookie(
+    code: &str,
+    secure: bool,
+) -> HeaderValue {
+    let mut value =
+        format!("{LANG_COOKIE}={code}; Path={COOKIE_PATH}; SameSite=Lax; Max-Age=31536000");
+    if secure {
+        value.push_str("; Secure");
+    }
+    HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
 /// Builds the `Set-Cookie` header that ends a session.
 #[must_use]
 pub fn clear_session_cookie() -> HeaderValue {
@@ -68,6 +95,60 @@ pub fn clear_session_cookie() -> HeaderValue {
 #[must_use]
 pub fn set_cookie_header() -> axum::http::HeaderName {
     SET_COOKIE
+}
+
+/// The language a request asks for, from its headers.
+///
+/// The same rule as the [`Language`] extractor, exposed as a function for the
+/// places that hold a `HeaderMap` but cannot take an extractor — the 404
+/// fallback and the error page.
+#[must_use]
+pub fn language_from(headers: &HeaderMap) -> Lang {
+    cookie(headers, LANG_COOKIE)
+        .and_then(|value| Lang::parse(&value))
+        .or_else(|| {
+            headers
+                .get(axum::http::header::ACCEPT_LANGUAGE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(Lang::from_accept_language)
+        })
+        .unwrap_or(Lang::En)
+}
+
+/// The reader's language, from the cookie or the `Accept-Language` header.
+///
+/// The cookie wins: a reader who has explicitly chosen a language should not be
+/// overruled by their browser's header on the next request. `Accept-Language`
+/// is the first-visit guess, and English is the fallback because the API and
+/// the code are English.
+pub struct Language(pub Lang);
+
+impl std::ops::Deref for Language {
+    type Target = Lang;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for Language {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        // `?lang=zh` beats the cookie: a link that says which language it wants
+        // must win over a preference set months ago, or the link is a lie.
+        let from_query = parts
+            .uri
+            .query()
+            .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("lang=")))
+            .and_then(Lang::parse);
+        Ok(Self(
+            from_query.unwrap_or_else(|| language_from(&parts.headers)),
+        ))
+    }
 }
 
 /// `n` random bytes, hex encoded.
@@ -126,6 +207,19 @@ pub fn is_secure(base_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_language_cookie_is_a_preference() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            HeaderValue::from_static("aevia_lang=zh"),
+        );
+        assert_eq!(
+            cookie(&headers, LANG_COOKIE).and_then(|value| Lang::parse(&value)),
+            Some(Lang::Zh)
+        );
+    }
 
     #[test]
     fn a_cookie_is_found_among_others() {

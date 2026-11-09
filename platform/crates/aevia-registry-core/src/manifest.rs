@@ -554,10 +554,11 @@ fn normalize_remote(url: &str) -> String {
     let url = url.trim();
     // `git@github.com:owner/repo.git` → `https://github.com/owner/repo`
     if let Some(rest) = url.strip_prefix("git@")
-        && let Some((host, path)) = rest.split_once(':') {
-            let path = path.strip_suffix(".git").unwrap_or(path);
-            return format!("https://{host}/{path}");
-        }
+        && let Some((host, path)) = rest.split_once(':')
+    {
+        let path = path.strip_suffix(".git").unwrap_or(path);
+        return format!("https://{host}/{path}");
+    }
     if let Some(rest) = url.strip_prefix("ssh://git@") {
         let rest = rest.strip_suffix(".git").unwrap_or(rest);
         return format!("https://{rest}");

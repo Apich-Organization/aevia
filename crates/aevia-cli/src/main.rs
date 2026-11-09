@@ -16,6 +16,7 @@
 
 mod doctest;
 mod package;
+mod registry;
 mod tooling;
 
 use aevia_core::Interp;
@@ -277,6 +278,9 @@ fn run_cli(
         | Some("add") => package::add(&args[1..], options.locked),
         | Some("update") => package::update(&args[1..], options.locked),
         | Some("rssn") => rssn_command(&args[1..]),
+        // The registry client is a separate binary; `aevia pkg` forwards to it
+        // so the toolchain has one entry point. See `registry.rs`.
+        | Some("pkg") => registry::run(&args[1..]),
         | Some("--version" | "-V") => {
             println!("aevia {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -395,6 +399,8 @@ usage:
   aevia clean               remove the package's `.aevia/` build directory
   aevia lsp [--stdio]       start the language server on standard input/output
   aevia rssn [--emit] [--out DIR]  audit a Kernel Manifest and generate the Rssn module
+  aevia pkg <command>       publish, yank, search, add and verify registry packages
+                            (forwards to `aevia-pkg`; see `aevia pkg --help`)
   aevia --version           print the version
 
 options (anywhere on the command line):

@@ -18,6 +18,7 @@ use aevia_registry_db::repo;
 
 use crate::config::Config;
 use crate::http;
+use crate::spec::SpecStore;
 use crate::storage::Storage;
 
 /// Everything a handler needs.
@@ -29,6 +30,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// The archive store.
     pub storage: Storage,
+    /// The language specification, rendered once at start-up.
+    pub spec: Arc<SpecStore>,
     /// The outbound HTTP client.
     pub http: reqwest::Client,
 }
@@ -40,6 +43,7 @@ impl AppState {
         pool: PgPool,
         config: Arc<Config>,
         storage: Storage,
+        spec: Arc<SpecStore>,
     ) -> Self {
         let http = reqwest::Client::builder()
             // A provider that does not answer in ten seconds is not going to.
@@ -51,6 +55,7 @@ impl AppState {
             pool,
             config,
             storage,
+            spec,
             http,
         }
     }

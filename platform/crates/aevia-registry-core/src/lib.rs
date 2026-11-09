@@ -20,11 +20,13 @@
 //! * [`signature`] — OpenPGP (recommended) and SSH signature verification.
 //! * [`index`] — the sparse-index record clients resolve versions from.
 //! * [`vm`] — the view models the server hands to the Leptos pages.
+//! * [`lang`] — the two languages the site is written in.
 
 #![forbid(unsafe_code)]
 
 pub mod error;
 pub mod index;
+pub mod lang;
 pub mod manifest;
 pub mod name;
 pub mod signature;
@@ -34,4 +36,5 @@ pub mod vm;
 
 pub use error::Error;
 pub use error::Result;
+pub use lang::Lang;
 pub use name::PackageId;

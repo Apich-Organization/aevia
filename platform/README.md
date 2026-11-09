@@ -9,9 +9,14 @@ anywhere in the build.
 ```
 crates.io          →  aevia.apich.org/crates
 docs.rs            →  aevia.apich.org/docs
+the design standard →  aevia.apich.org/spec   (bilingual, rendered from spec/*.md)
 cargo login        →  aevia-pkg login          (no token; a key binding)
 cargo publish      →  aevia-pkg publish        (signed statement, not a bearer token)
 ```
+
+The site speaks English and Chinese; the switch is in the top bar and the choice
+is remembered in a cookie. `?lang=zh` works on any page and wins over the cookie,
+so a link can name its language.
 
 ## What is here
 
@@ -22,7 +27,7 @@ cargo publish      →  aevia-pkg publish        (signed statement, not a bearer
 | `crates/aevia-registry-docs` | Turns a published package into the HTML pages under `/docs`, using the language's own `aevia-doc` crate. |
 | `crates/aevia-registry-web` | The Leptos pages. Server-rendered to `String`; no hydration, no client-side router. |
 | `crates/aevia-registry-server` | The binary: routes, OAuth, publish verification, archive storage, background documentation builds. |
-| `crates/aevia-pkg` | The client: `login`, `publish`, `yank`, `search`, `info`, `add`, `verify`, `key`, `status`. |
+| `crates/aevia-pkg` | The client: `login`, `publish`, `yank`, `search`, `info`, `add`, `verify`, `key`, `status`. `aevia pkg …` in the language toolchain forwards to it. |
 | `infra/` | Debian 13 container images, a Podman-compose stack, Quadlet units, a Caddyfile and a deploy script. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [security model](docs/SECURITY.md), [deployment](docs/DEPLOY.md). |
 
@@ -50,6 +55,23 @@ this one — because documentation is built by the compiler that will run the
 package. Build with `--no-default-features -p aevia-registry-docs` only if you
 are working on the platform without that checkout.
 
+## Development
+
+`scripts/dev.sh` wraps the quick start in one command — a PostgreSQL container
+on `127.0.0.1:55432` and the environment the server reads:
+
+```console
+./scripts/dev.sh up      # start the database, print the exports
+./scripts/dev.sh run     # up, then cargo run -p aevia-registry-server
+./scripts/dev.sh reset   # drop and recreate the schema
+./scripts/dev.sh down    # stop and remove the container
+```
+
+The tests that need a database read `AEVIA_TEST_DATABASE_URL` and skip
+themselves when it is unset; point it at that container
+(`postgres://aevia:aevia@127.0.0.1:55432/aevia`) to run them. The specification
+pages are read from `AEVIA_SPEC_DIR`, by default `../spec`.
+
 ## Publishing
 
 There is no `cargo login` equivalent that hands out a token, and no long-lived
@@ -60,6 +82,9 @@ canonical statement:
 aevia-pkg login            # binds your key to your account, once
 aevia-pkg publish          # from a package directory with aevia.toml
 ```
+
+(`aevia pkg …` works too: the language CLI forwards to `aevia-pkg`, which it
+finds on `PATH`, beside itself, or at `$AEVIA_PKG`.)
 
 `login` prints a code and a URL. You open the URL, sign in with GitHub or ORCID,
 and confirm the key's fingerprint; the terminal polls until the binding exists.
@@ -97,6 +122,14 @@ publish time from the `##` comments in its source by `aevia-doc`, so the site
 shows the API the compiler sees, not a second parser's guess. Pages are stored
 with the version and never rebuilt from a later source tree.
 
+**`/spec`** — the language specification, rendered from the language
+repository's `spec/*.md` at start-up: one page per chapter with a sticky
+sidebar, a per-page table of contents and CJK-aware anchors, plus `/spec/all`,
+the single-page edition the bundler produces, generated on request instead of
+checked in. The chapters are normative Chinese; every chapter carries an English
+title and abstract so an English reader can find what they need. Point
+`AEVIA_SPEC_DIR` at the `spec/` directory (the container mounts it read-only).
+
 ## Where this departs from the Rust ecosystem
 
 These are deliberate, and each is argued in [ARCHITECTURE.md](docs/ARCHITECTURE.md):
@@ -129,11 +162,30 @@ upgrades, the Quadlet alternative — is [docs/DEPLOY.md](docs/DEPLOY.md).
 cargo test --workspace
 ```
 
-The suite covers name and manifest rules, deterministic packing, statement
-canonicalisation, signature verification, the SQL helpers, page rendering, and
-the documentation builder. Two integration tests are `#[ignore]`d because they
-need a live `gpg` and a registry; `target/e2e.py`-style scripts were used during
-development to exercise a real signed publish against a running server.
+174 tests in three layers:
+
+* **Unit** — name and manifest rules, deterministic packing, statement
+  canonicalisation, signature verification, SQL helpers, page rendering in both
+  languages, the specification loader, the documentation builder.
+* **HTTP integration** (`crates/aevia-registry-server/tests/api.rs`) — real
+  requests through the real router against a real PostgreSQL: health, stats,
+  challenge validation, a full signed publish that is then replayed and refused,
+  index, download, yank, 404s and the language switch. They **skip themselves**
+  unless `AEVIA_TEST_DATABASE_URL` is set:
+
+  ```console
+  docker run -d --name aevia-tests-db \
+      -e POSTGRES_USER=aevia -e POSTGRES_PASSWORD=aevia \
+      -e POSTGRES_DB=aevia -p 55433:5432 postgres:18-trixie
+  AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55433/aevia cargo test --workspace
+  ```
+
+  The signed-publish test shells out to `gpg` and skips when it is absent.
+* **Client** (`crates/aevia-pkg`) — the CLI parser, config round-trips, and the
+  statement-mismatch refusals.
+
+`scripts/dev.sh` brings up the same database for development; CI runs the
+database-backed job on every push.
 
 ## Licence
 

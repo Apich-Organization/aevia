@@ -14,6 +14,9 @@ PublishPort=127.0.0.1:8080:8080
 # :U because the image runs as uid 10001, not as the mapped root that owns a
 # fresh rootless volume.
 Volume=aevia-data.volume:/var/lib/aevia/packages:U
+# The language specification, read-only. Adjust the host path to where the
+# language repository is checked out; `/spec` renders what it finds there.
+Volume=%h/aevia/spec:/spec:ro
 
 EnvironmentFile=%h/.config/aevia/aevia.env
 LogDriver=journald

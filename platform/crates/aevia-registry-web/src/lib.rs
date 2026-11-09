@@ -35,6 +35,7 @@ mod home;
 mod layout;
 mod log;
 mod login;
+mod spec;
 mod styles;
 
 pub use account::{account, activate};
@@ -44,10 +45,55 @@ pub use error::error_page;
 pub use home::home;
 pub use log::log_page;
 pub use login::login;
+pub use spec::spec_all;
+pub use spec::spec_index;
+pub use spec::spec_page;
 pub use styles::{APP_JS, SITE_CSS};
 
+use aevia_registry_core::Lang;
 use leptos::prelude::Owner;
 use leptos::prelude::RenderHtml;
+
+/// One string, in both languages.
+///
+/// The pair lives next to the markup that uses it rather than in a central
+/// catalogue: a translator editing `crates.rs` should not have to open a second
+/// file to find the label they are looking at, and a deleted section should
+/// take its strings with it. `of` is the only way to read one, so a page cannot
+/// accidentally render the wrong language.
+pub(crate) struct Msg {
+    en: &'static str,
+    zh: &'static str,
+}
+
+impl Msg {
+    /// Builds a pair.
+    pub(crate) const fn new(
+        en: &'static str,
+        zh: &'static str,
+    ) -> Self {
+        Self { en, zh }
+    }
+
+    /// The string in `lang`.
+    pub(crate) fn of(
+        &self,
+        lang: Lang,
+    ) -> &'static str {
+        match lang {
+            | Lang::En => self.en,
+            | Lang::Zh => self.zh,
+        }
+    }
+}
+
+/// The `lang` attribute for the document element.
+pub(crate) fn lang_attr(lang: Lang) -> &'static str {
+    match lang {
+        | Lang::En => "en",
+        | Lang::Zh => "zh-CN",
+    }
+}
 
 /// Renders one view into a document string.
 ///

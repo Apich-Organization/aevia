@@ -91,6 +91,9 @@ h4 {
 
 h1 {
   font-size: 2.2rem;
+  /* Keeps a two-line Chinese heading from leaving one character alone on the
+     second line, which is the most visible way a translated page looks wrong. */
+  text-wrap: balance;
 }
 
 h2 {
@@ -1044,6 +1047,40 @@ tbody th {
   }
 }
 
+@media (max-width: 620px) {
+  /* The top bar has four groups — wordmark, nav, language, identity — and at
+     this width they cannot share a row without the last one being clipped. The
+     nav gets its own row; the rest stay on the first. */
+  .topbar {
+    gap: 10px 16px;
+  }
+
+  .topnav {
+    order: 3;
+    flex-basis: 100%;
+    gap: 14px;
+  }
+
+  .langswitch {
+    margin-right: 4px;
+  }
+
+  .hero h1 {
+    max-width: none;
+  }
+
+  pre {
+    font-size: 0.75rem;
+  }
+
+  /* A three-line example that scrolls sideways on a phone is worse than one
+     that wraps: the reader is looking at a snippet, not at a file. */
+  .hero-grid pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+
 @media (max-width: 560px) {
   main {
     padding: 28px 16px 56px;
@@ -1070,6 +1107,525 @@ tbody th {
     animation: none !important;
   }
 }
+/* ---------------------------------------------------------------- language */
+
+.langswitch {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin-right: 12px;
+  font-size: 0.75rem;
+}
+
+.langswitch .lang {
+  padding: 3px 7px;
+  border-radius: 3px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.langswitch .lang[aria-current="page"] {
+  color: var(--fg);
+  background: var(--bg-soft);
+  font-weight: 600;
+}
+
+.langswitch .lang:hover {
+  color: var(--accent);
+}
+
+/* --------------------------------------------------------------- spec index */
+
+.spec-intro {
+  margin: 32px 0 24px;
+}
+
+.spec-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.spec-table th {
+  text-align: left;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+}
+
+.spec-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  vertical-align: top;
+}
+
+.spec-table td.num,
+.spec-table .num {
+  font-family: var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+  width: 1%;
+}
+
+.spec-table a {
+  text-decoration: none;
+}
+
+.spec-table a:hover {
+  text-decoration: underline;
+}
+
+.row-sub {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  margin-top: 2px;
+}
+
+/* ----------------------------------------------------------- spec chapters */
+
+.spec-shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+  margin: 32px 0 64px;
+}
+
+.spec-nav {
+  position: sticky;
+  top: 24px;
+  font-size: 0.8125rem;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.spec-nav ol {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+  border-left: 1px solid var(--line);
+}
+
+.spec-nav .spec-link {
+  display: flex;
+  gap: 8px;
+  padding: 5px 10px;
+  color: var(--muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  margin-left: -1px;
+  line-height: 1.35;
+}
+
+.spec-nav .spec-link .num {
+  font-family: var(--mono);
+  opacity: 0.75;
+  min-width: 1.6em;
+}
+
+.spec-nav .spec-link:hover {
+  color: var(--fg);
+}
+
+.spec-nav .spec-link.current {
+  color: var(--fg);
+  border-left-color: var(--accent);
+  background: var(--bg-soft);
+  font-weight: 600;
+}
+
+.spec-nav .spec-home,
+.spec-nav .spec-all {
+  display: block;
+  padding: 4px 0;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.spec-nav .spec-home:hover,
+.spec-nav .spec-all:hover {
+  color: var(--accent);
+}
+
+.spec-body {
+  min-width: 0;
+  max-width: 74ch;
+}
+
+.spec-head {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+}
+
+.spec-head h1 {
+  margin: 6px 0 4px;
+  font-size: 1.9rem;
+  line-height: 1.25;
+}
+
+.spec-head .eyebrow {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.spec-head .subtitle,
+.spec-chapter .subtitle {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.spec-head .meta {
+  margin: 8px 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.abstract {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-soft);
+  padding: 14px 18px;
+  margin: 0 0 24px;
+  font-size: 0.9375rem;
+}
+
+.abstract h2 {
+  margin: 0 0 6px;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.abstract p {
+  margin: 0 0 8px;
+  line-height: 1.65;
+}
+
+.abstract .note {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.onpage {
+  border: 1px solid var(--line);
+  padding: 10px 14px;
+  margin: 0 0 28px;
+  font-size: 0.875rem;
+  background: var(--bg-soft);
+}
+
+.onpage summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.onpage ol {
+  margin: 10px 0 4px;
+  padding-left: 0;
+  list-style: none;
+  columns: 2;
+  column-gap: 32px;
+}
+
+.onpage li {
+  margin: 3px 0;
+  break-inside: avoid;
+}
+
+.onpage a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.onpage a:hover {
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------ spec content */
+
+.prose {
+  font-size: 1rem;
+  line-height: 1.72;
+}
+
+.prose > h2 {
+  margin: 40px 0 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 1.25rem;
+}
+
+.prose > h2:first-child {
+  margin-top: 8px;
+  border-top: none;
+  padding-top: 0;
+}
+
+.prose h3 {
+  margin: 28px 0 8px;
+  font-size: 1.0625rem;
+}
+
+.prose h4 {
+  margin: 22px 0 6px;
+  font-size: 0.9375rem;
+}
+
+.prose p,
+.prose li {
+  margin: 10px 0;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 22px;
+}
+
+.prose blockquote {
+  margin: 16px 0;
+  padding: 2px 0 2px 16px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 18px 0;
+  font-size: 0.875rem;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid var(--line);
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose th {
+  background: var(--bg-soft);
+  font-weight: 600;
+}
+
+.prose pre {
+  background: var(--code-bg);
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  border-left: 2px solid var(--line);
+}
+
+.prose code {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+
+.prose :not(pre) > code {
+  background: var(--code-bg);
+  padding: 1px 4px;
+}
+
+.prose hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 32px 0;
+}
+
+.chapter-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.chapter-link {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-decoration: none;
+  max-width: 46%;
+}
+
+.chapter-link .direction {
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chapter-link .title {
+  color: var(--accent);
+}
+
+.chapter-link.next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.spec-chapter {
+  margin: 56px 0 0;
+  padding-top: 8px;
+}
+
+.spec-chapter > h2 {
+  font-size: 1.5rem;
+  margin: 0 0 4px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.spec-toc {
+  border: 1px solid var(--line);
+  padding: 14px 20px;
+  margin: 0 0 32px;
+}
+
+.spec-toc h2 {
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.spec-toc ol {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  columns: 2;
+  column-gap: 32px;
+  font-size: 0.875rem;
+}
+
+.spec-toc .num {
+  font-family: var(--mono);
+  color: var(--muted);
+  margin-right: 8px;
+}
+
+.spec-toc a {
+  text-decoration: none;
+}
+
+.spec-toc a:hover {
+  text-decoration: underline;
+}
+
+.badge-quiet {
+  background: var(--bg-soft);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.empty-page {
+  margin: 64px 0;
+  max-width: 60ch;
+}
+
+@media (max-width: 900px) {
+  .spec-shell {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .spec-nav {
+    position: static;
+    max-height: none;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 16px;
+  }
+
+  .onpage ol,
+  .spec-toc ol {
+    columns: 1;
+  }
+}
+
+/* ------------------------------------------------------------- sign in page */
+
+.signin {
+  max-width: 62ch;
+  margin: 48px 0 64px;
+}
+
+.signin h1 {
+  margin-bottom: 8px;
+}
+
+.provider-list {
+  display: grid;
+  gap: 10px;
+  margin: 28px 0 20px;
+}
+
+.provider {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+a.provider:hover {
+  border-color: var(--accent);
+}
+
+.provider-name {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.provider-note {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+/* A provider this deployment has not configured: still listed, so an operator
+   can see what is missing, but visibly inert. */
+.provider-off {
+  background: var(--bg-soft);
+  border-style: dashed;
+}
+
+.provider-off .provider-name {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* The "read it as one page" call to action under the specification index. */
+.more {
+  margin: 20px 0 28px;
+}
+
 "#;
 
 /// The script served inline at the end of every page.
