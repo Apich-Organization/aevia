@@ -169,10 +169,10 @@ pub fn set_param_kinds(
 /// [`set_param_kinds`] recorded otherwise.
 #[must_use]
 pub fn param_kinds_of(id: AdtId) -> Vec<ParamKind> {
-    if let Ok(table) = param_kinds().read() {
-        if let Some(kinds) = table.get(&id) {
-            return kinds.clone();
-        }
+    if let Ok(table) = param_kinds().read()
+        && let Some(kinds) = table.get(&id)
+    {
+        return kinds.clone();
     }
     let count = get(id).map_or(0, |adt| adt.params.len());
     vec![ParamKind::Type; count]
@@ -290,7 +290,7 @@ pub fn intern(adt: Adt) -> AdtId {
 }
 
 /// Allocates a *fresh* id for a nominal type declared by a compilation unit
-/// (PLAN D6).
+/// .
 ///
 /// Ids are never reused and never keyed by name, so two modules that both
 /// declare `type Shape` get distinct types, and a user `type Result` cannot
@@ -343,15 +343,14 @@ pub fn set_ctors(
     if is_complete(id) {
         return;
     }
-    if let Ok(mut guard) = registry().write() {
-        if let Some(entry) = usize::try_from(id)
+    if let Ok(mut guard) = registry().write()
+        && let Some(entry) = usize::try_from(id)
             .ok()
             .and_then(|index| guard.get_mut(index))
-        {
-            Arc::make_mut(entry).ctors = ctors;
-            if let Ok(mut table) = completed().write() {
-                table.insert(id);
-            }
+    {
+        Arc::make_mut(entry).ctors = ctors;
+        if let Ok(mut table) = completed().write() {
+            table.insert(id);
         }
     }
 }
@@ -493,7 +492,7 @@ mod tests {
 
     #[test]
     fn allocation_never_reuses_an_id() {
-        // §3.2.4 / PLAN D6: two compilation units that declare the same name
+        // §3.2.4: two compilation units that declare the same name
         // must not share one nominal type.
         let first = allocate("Shape", Vec::new());
         let second = allocate("Shape", Vec::new());

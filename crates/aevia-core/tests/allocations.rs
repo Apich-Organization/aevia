@@ -8,6 +8,8 @@
 //!
 //! One test function only: the counter is process-global, so the measurements
 //! must not run concurrently with each other.
+#![allow(clippy::result_large_err)]
+// test helpers return the interpreter's own error type
 
 // The package lint denies `unsafe`; a `#[global_allocator]` is necessarily an
 // unsafe impl. This file is the single exception, and every method forwards to

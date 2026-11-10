@@ -197,13 +197,14 @@ fn resolve_local_function(
     };
     if tail.is_empty() {
         for item in items {
-            if let Item::Fn(f) = item {
-                if public(&f.vis) && f.sig.ident == head.as_str() {
-                    return Ok(Some((
-                        f.sig.clone(),
-                        [cfg_so_far, &cfg(&f.attrs)].join(" ").trim().to_string(),
-                    )));
-                }
+            if let Item::Fn(f) = item
+                && public(&f.vis)
+                && f.sig.ident == head.as_str()
+            {
+                return Ok(Some((
+                    f.sig.clone(),
+                    [cfg_so_far, &cfg(&f.attrs)].join(" ").trim().to_string(),
+                )));
             }
             if let Item::Use(u) = item {
                 if !public(&u.vis) {
@@ -439,12 +440,11 @@ fn visit_items(
                 };
                 let mut aliases = BTreeMap::new();
                 for child in child_items {
-                    if let Item::Use(u) = child {
-                        if let syn::UseTree::Path(path) = &u.tree {
-                            if path.ident == "super" {
-                                collect_parent_imports(&path.tree, &parent_types, &mut aliases);
-                            }
-                        }
+                    if let Item::Use(u) = child
+                        && let syn::UseTree::Path(path) = &u.tree
+                        && path.ident == "super"
+                    {
+                        collect_parent_imports(&path.tree, &parent_types, &mut aliases);
                     }
                 }
                 for child in child_items {

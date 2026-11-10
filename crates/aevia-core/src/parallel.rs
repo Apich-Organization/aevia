@@ -312,10 +312,10 @@ impl ReplicaIndex {
         let mut pending: Vec<Rc<aevia_ir::Function>> = Vec::new();
         let mut seen_values = 0usize;
         let visit = |value: &Value, pending: &mut Vec<Rc<aevia_ir::Function>>| {
-            if let Value::Closure(closure) = value {
-                if let ClosureBody::Ir(function) = &closure.body {
-                    pending.push(function.clone());
-                }
+            if let Value::Closure(closure) = value
+                && let ClosureBody::Ir(function) = &closure.body
+            {
+                pending.push(function.clone());
             }
         };
         for value in interp.globals.values() {
@@ -843,27 +843,27 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         let replica = self.parallel_replica().filter(|_| !self.on_worker);
-        if let (Some(replica), Some(portable)) = (replica, to_portable(&self.file_keys, thunk)) {
-            if let Some(pool) = pool(self.jobs) {
-                let (sender, receiver) = std::sync::mpsc::channel();
-                pool.spawn(move || {
-                    let outcome = with_worker(&replica, |interp, index| {
-                        let thunk = from_portable(interp, index, portable)?;
-                        Some(run_task(interp, thunk))
-                    })
-                    .unwrap_or_else(|| {
-                        TaskOutcome::Failed {
-                            code: "E0811",
-                            message: "the task could not start on a worker".into(),
-                            output: String::new(),
-                        }
-                    });
-                    let _ = sender.send(outcome);
+        if let (Some(replica), Some(portable)) = (replica, to_portable(&self.file_keys, thunk))
+            && let Some(pool) = pool(self.jobs)
+        {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            pool.spawn(move || {
+                let outcome = with_worker(&replica, |interp, index| {
+                    let thunk = from_portable(interp, index, portable)?;
+                    Some(run_task(interp, thunk))
+                })
+                .unwrap_or_else(|| {
+                    TaskOutcome::Failed {
+                        code: "E0811",
+                        message: "the task could not start on a worker".into(),
+                        output: String::new(),
+                    }
                 });
-                return Ok(Value::Task(Rc::new(TaskHandle {
-                    state: RefCell::new(TaskState::Running(receiver)),
-                })));
-            }
+                let _ = sender.send(outcome);
+            });
+            return Ok(Value::Task(Rc::new(TaskHandle {
+                state: RefCell::new(TaskState::Running(receiver)),
+            })));
         }
         // The thunk cannot cross: run it here, now, with the same buffering.
         let saved = std::mem::replace(

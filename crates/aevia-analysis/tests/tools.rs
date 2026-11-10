@@ -304,8 +304,8 @@ fn token_list(source: &str) -> Vec<(String, TokenKind)> {
         .collect()
 }
 
-fn kinds_of<'a>(
-    tokens: &'a [(String, TokenKind)],
+fn kinds_of(
+    tokens: &[(String, TokenKind)],
     text: &str,
 ) -> Vec<TokenKind> {
     tokens

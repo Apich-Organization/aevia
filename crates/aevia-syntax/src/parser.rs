@@ -2398,15 +2398,15 @@ impl<'a> Parser<'a> {
         }
         // Operator section `(+)`.
         if let TokenKind::Punct(punct) = self.kind().clone() {
-            if self.punct_at(1, Punct::RParen) {
-                if let Some(name) = operator_name(punct) {
-                    self.bump();
-                    self.bump();
-                    return Expr::new(
-                        ExprKind::Var(format!("({name})")),
-                        start.join(self.previous_span()),
-                    );
-                }
+            if self.punct_at(1, Punct::RParen)
+                && let Some(name) = operator_name(punct)
+            {
+                self.bump();
+                self.bump();
+                return Expr::new(
+                    ExprKind::Var(format!("({name})")),
+                    start.join(self.previous_span()),
+                );
             }
             // A *partial* section such as `(== 1)` or `(* 2)` is not in the
             // grammar (§1.8.5): only the bare operator or a lambda is a

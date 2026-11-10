@@ -415,10 +415,10 @@ pub fn bench(
             continue;
         }
         for (name, _) in benches {
-            if let Some(pattern) = &filter {
-                if !name.contains(pattern.as_str()) {
-                    continue;
-                }
+            if let Some(pattern) = &filter
+                && !name.contains(pattern.as_str())
+            {
+                continue;
             }
             let row = run_bench(
                 &mut interp,

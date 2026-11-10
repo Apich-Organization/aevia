@@ -258,10 +258,10 @@ fn run_cli(
     for note in options.notes() {
         eprintln!("aevia: note: {note}");
     }
-    if options.locked {
-        if let Err(code) = locked_precheck(&args) {
-            return code;
-        }
+    if options.locked
+        && let Err(code) = locked_precheck(&args)
+    {
+        return code;
     }
     match args.first().map(String::as_str) {
         | Some("run") => run_command(options, &args[1..]),
@@ -934,10 +934,10 @@ mod check_cache {
             text.push_str(stderr);
             text.push_str("\0stdout\n");
             text.push_str(stdout);
-            if let Some(directory) = self.file.parent() {
-                if std::fs::create_dir_all(directory).is_ok() {
-                    let _ = std::fs::write(&self.file, text);
-                }
+            if let Some(directory) = self.file.parent()
+                && std::fs::create_dir_all(directory).is_ok()
+            {
+                let _ = std::fs::write(&self.file, text);
             }
         }
     }
@@ -1240,10 +1240,10 @@ fn test_command(
     let mut matched = 0usize;
     for decl in &module.decls {
         if let DeclKind::Test { name, body } = &decl.kind {
-            if let Some(pattern) = &filter {
-                if !name.contains(pattern.as_str()) {
-                    continue;
-                }
+            if let Some(pattern) = &filter
+                && !name.contains(pattern.as_str())
+            {
+                continue;
             }
             matched += 1;
             match interp.eval(body, &root) {
@@ -1299,11 +1299,11 @@ fn rssn_command(args: &[String]) -> ExitCode {
             // `--emit` can only have been the destination.
             | "--emit" => {
                 emit = true;
-                if let Some(next) = args.get(index + 1) {
-                    if !next.starts_with('-') {
-                        out = Some(next.clone());
-                        index += 1;
-                    }
+                if let Some(next) = args.get(index + 1)
+                    && !next.starts_with('-')
+                {
+                    out = Some(next.clone());
+                    index += 1;
                 }
                 index += 1;
             },
@@ -1918,9 +1918,7 @@ fn compile_repl_expression(
 }
 
 /// The synthetic expression declaration of a REPL compilation.
-fn repl_expression<'a>(
-    compilation: &'a aevia_core::Compilation
-) -> Result<&'a aevia_syntax::Expr, String> {
+fn repl_expression(compilation: &aevia_core::Compilation) -> Result<&aevia_syntax::Expr, String> {
     let module = compilation
         .module
         .as_ref()
@@ -2336,8 +2334,10 @@ mod tests {
 
     #[test]
     fn the_style_follows_the_color_choice() {
-        let mut options = Options::default();
-        options.color = ColorChoice::Always;
+        let mut options = Options {
+            color: ColorChoice::Always,
+            ..Options::default()
+        };
         assert_eq!(style(options), Style::Ansi);
         options.color = ColorChoice::Never;
         assert_eq!(style(options), Style::Plain);

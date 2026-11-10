@@ -162,7 +162,7 @@ upgrades, the Quadlet alternative — is [docs/DEPLOY.md](docs/DEPLOY.md).
 cargo test --workspace
 ```
 
-174 tests in three layers:
+The tests come in three layers:
 
 * **Unit** — name and manifest rules, deterministic packing, statement
   canonicalisation, signature verification, SQL helpers, page rendering in both

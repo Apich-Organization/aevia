@@ -225,7 +225,7 @@ pub struct Infer {
     /// One set for all four kinds: every id comes from the same counter, so
     /// the ids are disjoint.
     weak: HashSet<u32>,
-    /// `ρ ⊒ σ` lower bounds recorded by `join` (§3.4.1, PLAN D4).
+    /// `ρ ⊒ σ` lower bounds recorded by `join` (§3.4.1).
     rep_lower: HashMap<u32, Vec<Rep>>,
     numeric: crate::numeric_index::NumericIndex<NumericConstraint>,
     division_inputs: HashMap<u32, Rep>,
@@ -237,7 +237,7 @@ pub struct Infer {
     composite_literals: HashSet<u32>,
     numeric_universals: HashSet<u32>,
     numeric_errors: Vec<String>,
-    /// `ρ lacks l` side conditions on row variables (§3.6.1, PLAN D5).
+    /// `ρ lacks l` side conditions on row variables (§3.6.1).
     lacks: HashMap<u32, Vec<String>>,
     /// Type-level natural-number substitution (§3.5.1).
     nat_subst: HashMap<u32, Nat>,
@@ -348,7 +348,7 @@ impl Infer {
         Row::Var(id)
     }
 
-    /// A fresh *weak* dimension variable (§3.3.3, PLAN D7).
+    /// A fresh *weak* dimension variable (§3.3.3).
     ///
     /// A weak variable is never generalised: every use of the binding that
     /// owns it must agree on one dimension, which is what makes a symbol keep
@@ -621,10 +621,10 @@ impl Infer {
         }
         if let NumericConstraint::Literal { ty, kind } = &constraint {
             self.mark_literal(ty, *kind);
-            if let Type::Scalar(_, dim) = self.resolve(ty) {
-                if !kind.is_quantity() {
-                    self.unify_dim(&dim, &Dim::one())?;
-                }
+            if let Type::Scalar(_, dim) = self.resolve(ty)
+                && !kind.is_quantity()
+            {
+                self.unify_dim(&dim, &Dim::one())?;
             }
         } else if !self.contains_numeric(&constraint) {
             self.push_numeric(constraint);
@@ -712,12 +712,12 @@ impl Infer {
                         .map_err(|error| UnifyError::Numeric(error.to_string()))?;
                 let mut changed = false;
                 for (id, domain) in domains.variables() {
-                    if let Some(rep) = domain.unique() {
-                        if matches!(self.resolve_rep(Rep::Var(id)), Rep::Var(_)) {
-                            self.rep_subst.insert(id, rep);
-                            self.numeric_changed(id);
-                            changed = true;
-                        }
+                    if let Some(rep) = domain.unique()
+                        && matches!(self.resolve_rep(Rep::Var(id)), Rep::Var(_))
+                    {
+                        self.rep_subst.insert(id, rep);
+                        self.numeric_changed(id);
+                        changed = true;
                     }
                 }
                 if changed {
@@ -2056,13 +2056,13 @@ impl Infer {
                 });
             }
         }
-        if let Some(kind) = self.rep_literals.get(&id).copied() {
-            if !kind.accepts_rep(value) {
-                return Err(UnifyError::LiteralMismatch {
-                    kind,
-                    requested: Type::Scalar(value, Dim::one()),
-                });
-            }
+        if let Some(kind) = self.rep_literals.get(&id).copied()
+            && !kind.accepts_rep(value)
+        {
+            return Err(UnifyError::LiteralMismatch {
+                kind,
+                requested: Type::Scalar(value, Dim::one()),
+            });
         }
         let level = self.rep_levels.get(&id).copied().unwrap_or(0);
         self.rep_subst.insert(id, value);
@@ -2746,10 +2746,11 @@ impl Infer {
                 }
             },
             | Type::Scalar(rep, dim) => {
-                if let Rep::Var(id) = rep {
-                    if rep_var(*id) && !vars.contains(id) {
-                        vars.push(*id);
-                    }
+                if let Rep::Var(id) = rep
+                    && rep_var(*id)
+                    && !vars.contains(id)
+                {
+                    vars.push(*id);
                 }
                 for id in dim.vars() {
                     if dim_var(id) && !dims.contains(&id) {
@@ -2797,10 +2798,11 @@ impl Infer {
                 self.collect_generalizable(inner, level, vars, dims, rows, nats);
             },
             | Type::TensorIntrinsic(intrinsic) => {
-                if let Some(Rep::Var(id)) = intrinsic.element {
-                    if rep_var(id) && !vars.contains(&id) {
-                        vars.push(id);
-                    }
+                if let Some(Rep::Var(id)) = intrinsic.element
+                    && rep_var(id)
+                    && !vars.contains(&id)
+                {
+                    vars.push(id);
                 }
             },
             | Type::Point(dim) | Type::UnitOf(dim) => {
@@ -2862,7 +2864,7 @@ impl Infer {
 
     /// Defaults the variables a scheme did *not* quantify (§3.10.2).
     ///
-    /// This is the module-end step of PLAN D4: generalisation runs first, so
+    /// This is the module-end step: generalisation runs first, so
     /// `<d>`-polymorphic functions keep their dimension variables and only
     /// weak and literal variables are defaulted.
     pub fn default_scheme(
@@ -3052,15 +3054,15 @@ impl Infer {
                 )
             },
             | Type::TensorIntrinsic(mut intrinsic) => {
-                if let Some(rep) = intrinsic.element {
-                    if let Type::Scalar(rep, _) = self.default_inner(
+                if let Some(rep) = intrinsic.element
+                    && let Type::Scalar(rep, _) = self.default_inner(
                         &Type::Scalar(rep, Dim::one()),
                         scheme,
                         warnings,
                         depth + 1,
-                    ) {
-                        intrinsic.element = Some(rep);
-                    }
+                    )
+                {
+                    intrinsic.element = Some(rep);
                 }
                 Type::TensorIntrinsic(intrinsic)
             },
@@ -3630,7 +3632,7 @@ mod tests {
 
     #[test]
     fn joining_an_int_records_a_bound_instead_of_binding() {
-        // §3.4.1 / PLAN D4.
+        // §3.4.1.
         let mut infer = Infer::new();
         let rep = infer.fresh_rep();
         infer

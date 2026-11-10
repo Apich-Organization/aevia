@@ -397,10 +397,17 @@ mod tests {
         with_scoped(&mut interp, vec![callback], |handles| {
             assert!(
                 handles[0]
-                    .call(&[value.clone()], &[witness(Some(SigType::Float))])
+                    .call(
+                        std::slice::from_ref(&value),
+                        &[witness(Some(SigType::Float))]
+                    )
                     .is_ok()
             );
-            assert!(handles[0].call(&[value.clone()], &[witness(None)]).is_err());
+            assert!(
+                handles[0]
+                    .call(std::slice::from_ref(&value), &[witness(None)])
+                    .is_err()
+            );
             assert!(
                 handles[0]
                     .call(&[value], &[witness(Some(SigType::Int))])
@@ -448,7 +455,11 @@ mod tests {
         ]);
         let mut interp = Interp::new(&aevia_types::CheckedModule::default());
         with_scoped(&mut interp, vec![callback], |handles| {
-            assert!(handles[0].call(&[value.clone()], &[witness]).is_ok());
+            assert!(
+                handles[0]
+                    .call(std::slice::from_ref(&value), &[witness])
+                    .is_ok()
+            );
             assert!(
                 handles[0]
                     .call(&[value], &[DimensionWitness::Unknown])
@@ -495,7 +506,7 @@ mod tests {
             };
             with_scoped(&mut interp, vec![callback], |handles| {
                 let (returned, _) = handles[0]
-                    .call(&[value.clone()], &[witness.clone()])
+                    .call(std::slice::from_ref(&value), std::slice::from_ref(&witness))
                     .unwrap();
                 assert_eq!(returned, value, "{mode:?}");
             })
@@ -566,7 +577,10 @@ mod tests {
             };
             with_scoped(&mut interp, vec![callback], |handles| {
                 let (returned, evidence) = handles[0]
-                    .call(&[payload.clone()], &[witness.clone()])
+                    .call(
+                        std::slice::from_ref(&payload),
+                        std::slice::from_ref(&witness),
+                    )
                     .unwrap();
                 assert_eq!(returned, payload, "{mode:?}");
                 assert_eq!(evidence, witness, "{mode:?}");
@@ -612,7 +626,10 @@ mod tests {
             };
             with_scoped(&mut interp, vec![callback], |handles| {
                 let (returned, evidence) = handles[0]
-                    .call(&[payload.clone()], &[witness.clone()])
+                    .call(
+                        std::slice::from_ref(&payload),
+                        std::slice::from_ref(&witness),
+                    )
                     .unwrap();
                 assert_eq!(returned, payload, "{mode:?}");
                 assert_eq!(evidence, witness, "{mode:?}");

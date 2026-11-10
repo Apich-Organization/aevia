@@ -1,4 +1,5 @@
 //! Nominal, transactional pattern execution and zero-copy vector tails.
+#![allow(clippy::result_large_err)] // test helpers return the interpreter's own error type
 use aevia_core::Compilation;
 use aevia_core::Interp;
 use aevia_core::Mode;

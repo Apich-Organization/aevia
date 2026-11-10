@@ -82,7 +82,7 @@ fn the_sde_noise_operators_carry_their_sqrt_of_time_types() {
     use aevia_rssn::SigType;
     use aevia_rssn::registry;
     let registry = registry();
-    let text = aevia_rssn::codegen::operators(&registry);
+    let text = aevia_rssn::codegen::operators(registry);
 
     let wiener = registry.op("sde_wiener").expect("sde_wiener is registered");
     assert_eq!(wiener.source, aevia_rssn::Source::Overlay);
@@ -182,7 +182,7 @@ fn sde_scheme_info_is_a_typed_overlay_operator() {
         },
         "the flags are a rank-1 tensor of exact reals"
     );
-    let text = aevia_rssn::codegen::operators(&registry);
+    let text = aevia_rssn::codegen::operators(registry);
     assert!(
         text.contains("Rssn.invoke(\"sde_scheme_info\", "),
         "`sde_scheme_info` has no generated declaration"
@@ -694,7 +694,7 @@ fn the_sde_capability_is_a_row_and_a_binding() {
         "the row is the manifest's `Features.sde`"
     );
     assert_eq!(row.enabled, capabilities.has("core.sde"));
-    let text = aevia_rssn::codegen::operators(&registry());
+    let text = aevia_rssn::codegen::operators(registry());
     assert!(
         text.contains(&format!("let sde: Bool = {}", row.enabled)),
         "`Rssn.aev` must declare the capability binding"

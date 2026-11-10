@@ -1262,10 +1262,10 @@ impl Lowerer {
         expr: &Expr,
         builder: &mut Builder,
     ) -> Atom {
-        if self.constant_regions.get(&expr.span) == Some(&Rep::Float) {
-            if let Some(value) = self.fold_float(expr) {
-                return Atom::Float(value);
-            }
+        if self.constant_regions.get(&expr.span) == Some(&Rep::Float)
+            && let Some(value) = self.fold_float(expr)
+        {
+            return Atom::Float(value);
         }
         self.emit(
             builder,
@@ -1363,42 +1363,41 @@ impl Lowerer {
             });
         }
         // `Rssn.<op>(…)`: the checker pinned the overload at this span.
-        if self.rssn.contains_key(&expr.span) {
-            if let Some(name) = rssn_operator_name(callee) {
-                let values = self.values(args, builder);
-                return Rhs::Call(Call {
-                    callee: Atom::Unit,
-                    callee_span: callee.span,
-                    args: values,
-                    arg_spans: args.iter().map(|arg| arg.span).collect(),
-                    kind: CallKind::Rssn { name },
-                    span: expr.span,
-                });
-            }
+        if self.rssn.contains_key(&expr.span)
+            && let Some(name) = rssn_operator_name(callee)
+        {
+            let values = self.values(args, builder);
+            return Rhs::Call(Call {
+                callee: Atom::Unit,
+                callee_span: callee.span,
+                args: values,
+                arg_spans: args.iter().map(|arg| arg.span).collect(),
+                kind: CallKind::Rssn { name },
+                span: expr.span,
+            });
         }
         // A class method the checker resolved to an instance (§3.8.1,
         // round-2 decision 1c): the IR carries the pinned target, not a name to
         // resolve again.
-        if let ExprKind::Var(name) = &callee.kind {
-            if let Some(use_site) = self
+        if let ExprKind::Var(name) = &callee.kind
+            && let Some(use_site) = self
                 .dictionaries
                 .get(&expr.span)
                 .and_then(|sites| sites.iter().find(|site| &site.method == name))
                 .cloned()
-            {
-                let values = self.values(args, builder);
-                return Rhs::Call(Call {
-                    callee: Atom::Global(name.clone()),
-                    callee_span: callee.span,
-                    args: values,
-                    arg_spans: args.iter().map(|arg| arg.span).collect(),
-                    kind: CallKind::Dictionary {
-                        method: name.clone(),
-                        target: Some(use_site.target),
-                    },
-                    span: expr.span,
-                });
-            }
+        {
+            let values = self.values(args, builder);
+            return Rhs::Call(Call {
+                callee: Atom::Global(name.clone()),
+                callee_span: callee.span,
+                args: values,
+                arg_spans: args.iter().map(|arg| arg.span).collect(),
+                kind: CallKind::Dictionary {
+                    method: name.clone(),
+                    target: Some(use_site.target),
+                },
+                span: expr.span,
+            });
         }
         if let Some((adt, index, name)) = self.saturated_constructor(callee, args.len()) {
             let values = self.values(args, builder);

@@ -1,7 +1,7 @@
 //! Helpers shared by the conformance tests.
 //!
 //! Every test asserts on the diagnostic *code* and on the *span*, never on the
-//! message text, so the wording stays free to change (PLAN.md §3.2).
+//! message text, so the wording stays free to change.
 
 #![allow(dead_code)]
 

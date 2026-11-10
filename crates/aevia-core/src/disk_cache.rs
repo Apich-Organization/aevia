@@ -125,7 +125,7 @@ fn compiler_identity() -> &'static str {
     static IDENTITY: OnceLock<String> = OnceLock::new();
     IDENTITY.get_or_init(|| {
         let exe = std::env::current_exe()
-            .and_then(|exe| std::fs::metadata(exe))
+            .and_then(std::fs::metadata)
             .map(|meta| format!("{}|{:?}", meta.len(), meta.modified().ok()))
             .unwrap_or_default();
         format!(
@@ -402,7 +402,7 @@ impl DiskCache {
         if files.len() <= KEEP_PER_MODULE {
             return;
         }
-        files.sort_by(|left, right| right.0.cmp(&left.0));
+        files.sort_by_key(|file| std::cmp::Reverse(file.0));
         for (_, path) in files.into_iter().skip(KEEP_PER_MODULE) {
             let _ = std::fs::remove_file(path);
         }

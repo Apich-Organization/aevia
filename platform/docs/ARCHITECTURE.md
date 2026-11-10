@@ -208,7 +208,7 @@ Three decisions are worth stating:
   on request instead of storing a second copy.
 * **Links are rewritten, not broken.** Inside `spec/`, a chapter links to its
   siblings as `04-dimensions.md` and to files outside the directory as
-  `../RSSN-INTEGRATION-REQUIREMENTS.md`. On the site the first becomes
+  `../ARCHITECTURE.md`. On the site the first becomes
   `/spec/04-dimensions` and the second is sent to the repository, where the file
   actually exists.
 * **Heading ids keep their CJK.** `4.1 量纲代数` becomes `4-1-量纲代数`, not

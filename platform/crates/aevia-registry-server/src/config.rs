@@ -84,10 +84,12 @@ impl Config {
         let database_url = required("DATABASE_URL")?;
         let session_secret = {
             let raw = required("AEVIA_SESSION_SECRET")?;
-            let bytes = hex::decode(raw.trim()).map_err(|_| ConfigError {
-                message:
-                    "AEVIA_SESSION_SECRET must be hex; generate it with `openssl rand -hex 32`"
-                        .to_string(),
+            let bytes = hex::decode(raw.trim()).map_err(|_| {
+                ConfigError {
+                    message:
+                        "AEVIA_SESSION_SECRET must be hex; generate it with `openssl rand -hex 32`"
+                            .to_string(),
+                }
             })?;
             if bytes.len() < 32 {
                 return Err(ConfigError {
@@ -100,8 +102,10 @@ impl Config {
         };
         let bind = optional("AEVIA_BIND", "0.0.0.0:8080")
             .parse::<SocketAddr>()
-            .map_err(|error| ConfigError {
-                message: format!("AEVIA_BIND is not an address: {error}"),
+            .map_err(|error| {
+                ConfigError {
+                    message: format!("AEVIA_BIND is not an address: {error}"),
+                }
             })?;
         let base_url = optional("AEVIA_BASE_URL", "https://aevia.apich.org")
             .trim_end_matches('/')
@@ -114,23 +118,27 @@ impl Config {
             var("AEVIA_GITHUB_CLIENT_ID"),
             var("AEVIA_GITHUB_CLIENT_SECRET"),
         ) {
-            | (Some(client_id), Some(client_secret)) => Some(GithubConfig {
-                client_id,
-                client_secret,
-            }),
+            | (Some(client_id), Some(client_secret)) => {
+                Some(GithubConfig {
+                    client_id,
+                    client_secret,
+                })
+            },
             | _ => None,
         };
         let orcid = match (
             var("AEVIA_ORCID_CLIENT_ID"),
             var("AEVIA_ORCID_CLIENT_SECRET"),
         ) {
-            | (Some(client_id), Some(client_secret)) => Some(OrcidConfig {
-                client_id,
-                client_secret,
-                base: optional("AEVIA_ORCID_BASE", "https://orcid.org")
-                    .trim_end_matches('/')
-                    .to_string(),
-            }),
+            | (Some(client_id), Some(client_secret)) => {
+                Some(OrcidConfig {
+                    client_id,
+                    client_secret,
+                    base: optional("AEVIA_ORCID_BASE", "https://orcid.org")
+                        .trim_end_matches('/')
+                        .to_string(),
+                })
+            },
             | _ => None,
         };
         Ok(Self {
@@ -166,8 +174,10 @@ fn var(name: &str) -> Option<String> {
 }
 
 fn required(name: &str) -> Result<String, ConfigError> {
-    var(name).ok_or_else(|| ConfigError {
-        message: format!("{name} is required; see infra/.env.example"),
+    var(name).ok_or_else(|| {
+        ConfigError {
+            message: format!("{name} is required; see infra/.env.example"),
+        }
     })
 }
 

@@ -126,14 +126,13 @@ fn classify(
             }
             // A class-method call: the interesting fact is which instance
             // implements it, which is what "operator provenance" means here.
-            if let Some(call) = occurrence.call {
-                if checked
+            if let Some(call) = occurrence.call
+                && checked
                     .dictionaries
                     .iter()
                     .any(|use_| use_.span == call && use_.method == *name)
-                {
-                    return Some(TokenKind::Operator);
-                }
+            {
+                return Some(TokenKind::Operator);
             }
             // A binding the walk resolved is a local no matter what else
             // shares its spelling: the SI table has a unit called `d` (day)

@@ -1,6 +1,6 @@
 //! Type classes: declarations, instances, and head-matching resolution (§3.8).
 //!
-//! Resolution is static (PLAN D3): a constraint `C τ` is solved against the
+//! Resolution is static: a constraint `C τ` is solved against the
 //! instance set when `τ` becomes concrete, and the chosen instance is recorded
 //! in [`crate::check::CheckedModule::dictionaries`] so the runtime can execute
 //! exactly the instance the checker proved.

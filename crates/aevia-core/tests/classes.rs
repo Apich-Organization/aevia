@@ -1,4 +1,4 @@
-//! Type classes at run time (§3.8, PLAN D3).
+//! Type classes at run time (§3.8).
 //!
 //! Every assertion here is about *which body ran* — an instance returns a
 //! value no builtin and no other instance produces — or about the error code a

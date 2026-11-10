@@ -439,11 +439,11 @@ pub(crate) fn spgemm<T: Clone, Rg: Ring<T>>(
         }
         touched.sort_unstable();
         for c in touched.drain(..) {
-            if let Some(value) = acc[c].take() {
-                if !ring.is_zero(&value) {
-                    idx.push(c);
-                    vals.push(value);
-                }
+            if let Some(value) = acc[c].take()
+                && !ring.is_zero(&value)
+            {
+                idx.push(c);
+                vals.push(value);
             }
         }
         ptr.push(idx.len());

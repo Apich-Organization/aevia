@@ -237,9 +237,13 @@ pub async fn add(
 
     let base = match dir {
         | Some(dir) => dir.to_path_buf(),
-        | None => std::env::current_dir()
-            .map_err(|error| CliError::new(format!("cannot read the current directory: {error}")))
-            .map(|cwd| package::find_root(&cwd).unwrap_or(cwd))?,
+        | None => {
+            std::env::current_dir()
+                .map_err(|error| {
+                    CliError::new(format!("cannot read the current directory: {error}"))
+                })
+                .map(|cwd| package::find_root(&cwd).unwrap_or(cwd))?
+        },
     };
     let dest = base.join("vendor").join(id.name());
 

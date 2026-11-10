@@ -479,17 +479,17 @@ impl PackageGraph {
             for (alias, dependency) in dependencies {
                 let Dependency::Path { path } = dependency;
                 let dependency_dir = package_identity(&identity.join(path))?;
-                if let Some(existing) = graph.aliases.get(&alias) {
-                    if existing != &dependency_dir {
-                        return Err(ManifestError::new(
-                            "E0606",
-                            format!(
-                                "`{alias}` is claimed by both `{}` and `{}`",
-                                existing.display(),
-                                dependency_dir.display()
-                            ),
-                        ));
-                    }
+                if let Some(existing) = graph.aliases.get(&alias)
+                    && existing != &dependency_dir
+                {
+                    return Err(ManifestError::new(
+                        "E0606",
+                        format!(
+                            "`{alias}` is claimed by both `{}` and `{}`",
+                            existing.display(),
+                            dependency_dir.display()
+                        ),
+                    ));
                 }
                 graph.aliases.insert(alias, dependency_dir.clone());
                 if !graph.packages.contains_key(&dependency_dir) {
@@ -652,28 +652,28 @@ impl Roots {
                 owner: importer.owner.clone(),
             });
         }
-        if let Some((first, rest)) = path.split_first() {
-            if let Some(base) = self.packages.get(first) {
-                let owner = self.package_owners.get(first).cloned();
-                if rest.is_empty() {
-                    if let Some(entry) = self.entries.get(first) {
-                        out.push(ResolvedModule {
-                            path: entry.clone(),
-                            owner: owner.clone(),
-                        });
-                    }
+        if let Some((first, rest)) = path.split_first()
+            && let Some(base) = self.packages.get(first)
+        {
+            let owner = self.package_owners.get(first).cloned();
+            if rest.is_empty() {
+                if let Some(entry) = self.entries.get(first) {
                     out.push(ResolvedModule {
-                        path: base.join(format!("{first}.aev")),
-                        owner,
+                        path: entry.clone(),
+                        owner: owner.clone(),
                     });
-                } else {
-                    let mut file = base.clone();
-                    for segment in rest {
-                        file.push(segment);
-                    }
-                    file.set_extension("aev");
-                    out.push(ResolvedModule { path: file, owner });
                 }
+                out.push(ResolvedModule {
+                    path: base.join(format!("{first}.aev")),
+                    owner,
+                });
+            } else {
+                let mut file = base.clone();
+                for segment in rest {
+                    file.push(segment);
+                }
+                file.set_extension("aev");
+                out.push(ResolvedModule { path: file, owner });
             }
         }
         out
@@ -771,12 +771,9 @@ impl Roots {
         if path.is_empty() {
             return None;
         }
-        for candidate in self.candidates(path) {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        None
+        self.candidates(path)
+            .into_iter()
+            .find(|candidate| candidate.is_file())
     }
 
     /// Every file an import path could have meant, for a `E0607` message.
@@ -906,24 +903,24 @@ impl Roots {
             candidate.set_extension("aev");
             out.push(candidate);
         }
-        if let Some((first, rest)) = path.split_first() {
-            if let Some(base) = self.packages.get(first) {
-                if rest.is_empty() {
-                    // `import Lib` names the package itself: its entry file.
-                    // Joining `src` with no segment produced `src.aev`, which
-                    // is why a dependency could not be imported at all.
-                    if let Some(entry) = self.entries.get(first) {
-                        out.push(entry.clone());
-                    }
-                    out.push(base.join(format!("{first}.aev")));
-                } else {
-                    let mut target = base.clone();
-                    for segment in rest {
-                        target.push(segment);
-                    }
-                    target.set_extension("aev");
-                    out.push(target);
+        if let Some((first, rest)) = path.split_first()
+            && let Some(base) = self.packages.get(first)
+        {
+            if rest.is_empty() {
+                // `import Lib` names the package itself: its entry file.
+                // Joining `src` with no segment produced `src.aev`, which
+                // is why a dependency could not be imported at all.
+                if let Some(entry) = self.entries.get(first) {
+                    out.push(entry.clone());
                 }
+                out.push(base.join(format!("{first}.aev")));
+            } else {
+                let mut target = base.clone();
+                for segment in rest {
+                    target.push(segment);
+                }
+                target.set_extension("aev");
+                out.push(target);
             }
         }
         out

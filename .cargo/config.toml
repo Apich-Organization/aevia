@@ -1,4 +1,4 @@
 # The interpreter is recursive; deep but legal programs need more stack than
-# the default test threads provide. The CLI uses its own 256 MiB thread.
+# the default test threads provide. The CLI runs on its own thread (`--max-stack`, 1024 MiB by default).
 [env]
 RUST_MIN_STACK = "67108864"

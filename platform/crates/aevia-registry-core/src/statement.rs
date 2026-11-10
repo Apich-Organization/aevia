@@ -250,12 +250,14 @@ impl Statement {
         match tag {
             | PUBLISH_TAG => Ok(Self::Publish(PublishStatement::parse(text)?)),
             | YANK_TAG => Ok(Self::Yank(YankStatement::parse(text)?)),
-            | other => Err(Error::new(
-                E_STATEMENT,
-                format!(
-                    "`{other}` is not a statement tag; expected `{PUBLISH_TAG}` or `{YANK_TAG}`"
-                ),
-            )),
+            | other => {
+                Err(Error::new(
+                    E_STATEMENT,
+                    format!(
+                        "`{other}` is not a statement tag; expected `{PUBLISH_TAG}` or `{YANK_TAG}`"
+                    ),
+                ))
+            },
         }
     }
 

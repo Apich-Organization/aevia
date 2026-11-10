@@ -226,6 +226,7 @@ impl Nat {
 
     /// `self + other`.
     #[must_use]
+    #[allow(clippy::should_implement_trait)] // exponent arithmetic on `Copy` values, not `std::ops::Add`
     pub fn add(
         self,
         other: Self,
@@ -235,6 +236,7 @@ impl Nat {
 
     /// `self * other`.
     #[must_use]
+    #[allow(clippy::should_implement_trait)] // exponent arithmetic on `Copy` values, not `std::ops::Mul`
     pub fn mul(
         self,
         other: Self,
@@ -1073,10 +1075,11 @@ impl fmt::Display for Type {
             | Self::Record(row) => write!(f, "{{ {row} }}"),
             | Self::Adt(id, args) => {
                 let name = crate::adt::name_of(*id);
-                if name == "Sparse" && args.len() == 2 {
-                    if let Self::Tensor { shape, elem } = &args[1] {
-                        return write!(f, "Sparse<{}, {shape}, {elem}>", args[0]);
-                    }
+                if name == "Sparse"
+                    && args.len() == 2
+                    && let Self::Tensor { shape, elem } = &args[1]
+                {
+                    return write!(f, "Sparse<{}, {shape}, {elem}>", args[0]);
                 }
                 if args.is_empty() {
                     f.write_str(&name)
@@ -1185,7 +1188,7 @@ fn render_dim(dim: &Dim) -> String {
 /// A class constraint on a scheme, `C τ1 ... τn` (§3.2.5, §3.8).
 ///
 /// Constraints live only in the type language: an instance set is resolved
-/// statically (PLAN D3), so a scheme never carries a runtime dictionary.
+/// statically, so a scheme never carries a runtime dictionary.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Constraint {
     /// The class name.

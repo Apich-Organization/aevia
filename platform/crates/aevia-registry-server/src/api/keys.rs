@@ -83,10 +83,12 @@ pub async fn status(
     };
     let publisher = repo::publisher(&state.pool, key.publisher_id)
         .await?
-        .map(|row| PublisherSummary {
-            handle: row.handle,
-            kind: row.kind,
-            display_name: row.display_name,
+        .map(|row| {
+            PublisherSummary {
+                handle: row.handle,
+                kind: row.kind,
+                display_name: row.display_name,
+            }
         });
     Ok(Json(KeyStatus {
         registered: true,

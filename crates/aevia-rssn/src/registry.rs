@@ -249,7 +249,7 @@ impl OpEntry {
     /// values: arity first, then the weakest per-argument match, then the
     /// unique maximum. A tie is `E1002`; nothing accepted is `E1003`. The
     /// checker calls this so that what it types is what the runtime executes
-    /// (PLAN D1).
+    /// .
     ///
     /// # Errors
     ///
@@ -483,7 +483,7 @@ impl Capabilities {
 
     /// Fails with `E1001` naming `name` when the build lacks it.
     ///
-    /// This is what a genuine backend gap must report (PLAN §3.1): the code
+    /// This is what a genuine backend gap must report: the code
     /// names the capability, so a user can tell "this build cannot" from
     /// "this program is wrong".
     ///
@@ -775,7 +775,7 @@ impl Registry {
     ///
     /// This is the function the checker calls at a `Rssn.<op>` call site: it
     /// returns the `OpKey` to pin, and it is the *only* place the choice is
-    /// made. The runtime executes that key without resolving again (PLAN D1).
+    /// made. The runtime executes that key without resolving again.
     ///
     /// # Errors
     ///

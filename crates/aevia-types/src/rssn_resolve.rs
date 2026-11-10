@@ -9,7 +9,7 @@
 //! 4. a tie is `E1002`, no match is `E1003`.
 //!
 //! Resolution is a *type-level* decision, made once, at the call site; the
-//! runtime executes the key it produced (PLAN D1).
+//! runtime executes the key it produced.
 
 use crate::ty::Rep;
 use crate::ty::Shape;
@@ -717,10 +717,7 @@ fn map_dim(
     dims: &mut std::collections::HashMap<u32, Dim>,
 ) -> Dim {
     for id in dim.vars() {
-        if !dims.contains_key(&id) {
-            let fresh = infer.fresh_dim();
-            dims.insert(id, fresh);
-        }
+        dims.entry(id).or_insert_with(|| infer.fresh_dim());
     }
     dim.substitute(|id| dims.get(&id).cloned())
 }

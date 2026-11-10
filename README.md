@@ -48,50 +48,79 @@ cargo test --workspace
 cargo run -p aevia-cli -- check examples/units.aev
 cargo run -p aevia-cli -- run examples/symbolic.aev
 cargo run -p aevia-cli -- run examples/calculus.aev
+cargo run -p aevia-cli -- test tests/units.aev
 cargo run -p aevia-cli -- repl
 cargo run -p aevia-cli -- rssn --audit
 cargo run -p aevia-cli -- rssn --emit generated/ --namespaces
 ```
+
+The binary is called `aevia`. Its commands:
+
+| Command | Purpose |
+|---|---|
+| `run [--example NAME] [file] [-- args…]` | compile and run a program (the package entry by default) |
+| `check [--all] [file…]`, `watch [file]` | type-check; `watch` re-checks only the modules whose source or imported interfaces changed |
+| `test [--filter PAT] [--doc]` | run `test` declarations; with `--doc`, compile the `aevia` code blocks of `##` doc comments |
+| `repl` | interactive session |
+| `fmt [--check]`, `doc [--open]`, `bench` | formatter, Markdown API docs, `@bench` timing with baselines |
+| `init`, `add <path>`, `update`, `clean` | packages (`aevia.toml`, `aevia.lock`); dependencies are local paths |
+| `lsp` | language server on stdio |
+| `rssn [--audit] [--emit DIR [--namespaces]]` | audit the Kernel Manifest and generate the `Rssn` module |
+| `pkg …` | registry client (publish, yank, search, add, verify); forwards to `aevia-pkg` from [`platform/`](platform/README.md) |
+
+`aevia --help` is the full reference; chapter 9.9 of the standard documents it.
+Useful flags: `--jobs N` (parallel evaluation), `--caps fs,net,env,rand,gpu`
+(run with only these capabilities), `--no-cache`, `--locked`.
+
+The requirements are Rust 1.97 or newer (edition 2024) and the `rssn` kernel
+(`3.0.0-rc.1`, `api_version = 2`) checked out next to this repository
+(`../rssn`). `aevia-rssn` links it directly, so the operator set, the unit table
+and the physical constants all come from rssn's Kernel Manifest — there is no
+second list to keep in step. `aevia rssn` prints the live version, API version,
+manifest hash, operator/signature-source counts and unit/constant counts.
+`rssn --audit` classifies each overload as an exact typed binding, a
+dynamic/approximate signature, or unavailable and explains the limits.
+`--emit DIR --namespaces` additionally generates modules grouped by kernel rule
+set: exact signatures use pinned keys; other entries use the dynamic value-list
+ABI and return its `Result` error channel. The manifest only covers registered
+operators, and callback-based Rust kernels still require a host callback bridge.
 
 The test profile keeps source line tables for backtraces while omitting full
 variable and type debug data. This bounds disk and linker-memory costs when
 many integration tests link the RSSN kernel. For debugger inspection of a
 particular test, use `CARGO_PROFILE_TEST_DEBUG=2 cargo test -p <crate> --test <name>`.
 Use a shared `CARGO_TARGET_DIR` and run Cargo jobs in sequence when working on
-both repositories; separate feature combinations can rebuild the kernel.
+both repositories; separate feature combinations can rebuild the kernel. The
+optional `jit` feature (`cargo build -p aevia-cli --features jit`) lowers pure
+numeric code to machine code through rssn's Cranelift backend.
 
-The requirements are Rust 1.97 or newer (edition 2024) and the `rssn` kernel
-(`3.0.0-rc.1`, `api_version = 2`) checked out next to this repository.
-`aevia-rssn` links it directly, so the operator set, the unit table and the
-physical constants all come from rssn's Kernel Manifest — there is no second
-list to keep in step. `cargo run -p aevia-cli -- rssn` prints the live version,
-API version, manifest hash, operator/signature-source counts and unit/constant
-counts. `rssn --audit` classifies each overload as an exact typed binding,
-a dynamic/approximate signature, or unavailable and explains the limits.
-`--emit DIR --namespaces` additionally generates modules grouped by kernel
-rule set: exact signatures use pinned keys; other entries use the dynamic
-value-list ABI and return its `Result` error channel. The manifest only covers
-registered operators, and callback-based Rust kernels still require a host
-callback bridge.
+## Repository layout
 
-The kernel-facing contract (what the manifest carries, which API is stable, and
-which gaps remain) is [RSSN-INTEGRATION-REQUIREMENTS.md](RSSN-INTEGRATION-REQUIREMENTS.md).
+| Path | What it holds |
+|---|---|
+| `crates/` | the compiler, runtime and tooling, one crate per concern (table below) |
+| `spec/` | the design standard, chapter by chapter; `Aevia-Language-Specification.md` and `.html` are generated from it by `tools/bundle_spec.py` and never edited by hand |
+| `examples/`, `tests/` | runnable programs, and conformance tests written in Aevia itself |
+| `platform/` | the package registry, the documentation site and the signed-publish client (a separate Cargo workspace) |
+| `tools/` | `aevia-stdlib-gen` (standard-library generation check), `rssn-api-audit` (kernel API inventory), `aevia-prof` (profiler), `bundle_spec.py` |
 
 ## What is where
 
+[ARCHITECTURE.md](ARCHITECTURE.md) explains how a program travels through these
+crates and where the boundary with rssn lies.
+
 | Crate | Responsibility | Spec |
 |---|---|---|
-| `crates/aevia-dim` | dimension algebra (exact rational exponents, unification with occurs check), unit registry with SI prefixes and affine scales | ch. 04, 05 |
+| `crates/aevia-dim` | dimension algebra (exact rational exponents, unification with occurs check), unit registry with SI prefixes and affine scales, unit systems | ch. 04, 05 |
 | `crates/aevia-syntax` | UTF-8 lexer with the layout algorithm, parser for the complete grammar, AST, diagnostics renderer | ch. 01, 02, app. A/B |
-| `crates/aevia-types` | `Scalar<ρ, δ>`, tensors, records with rows, nominal variants, HM inference with dimension unification, defaulting, exhaustiveness | ch. 03, 04 |
+| `crates/aevia-types` | `Scalar<ρ, δ>`, tensors, records with rows, nominal variants, classes, HM inference with dimension unification, defaulting, exhaustiveness | ch. 03, 04 |
 | `crates/aevia-rssn` | the kernel bridge: session, value conversion, manifest registry, `Rssn` module generation | ch. 10, 13 |
-| `crates/aevia-std` | the standard library: linear algebra, statistics, special functions, distributions, FFT, interpolation, ODE/SDE/PDE, tables, simulation | ch. 08 |
 | `crates/aevia-ir` | the Core IR: ANF, closure conversion, per-node spans and call sites, lowering from the typed AST | §9.2.2 |
-| `crates/aevia-core` | values, tensors, closures, IO actions, the symbolic layer on top of rssn, the AST and IR interpreters, built-ins, the module loader | ch. 06, 07, 08 |
-| `crates/aevia-cli` | `run`, `check`, `test`, `repl`, `rssn` | ch. 09 |
-
-`examples/` holds runnable programs; `tests/` holds conformance tests in Aevia
-itself.
+| `crates/aevia-std`, `crates/aevia-stdlib-model` | the standard library: embedded module tree, linear algebra, statistics, special functions, distributions, FFT, interpolation, ODE/SDE/PDE, sparse, tables; and its generation model | ch. 08 |
+| `crates/aevia-core` | values, tensors, closures, IO actions, the symbolic layer on top of rssn, the interpreters, built-ins, the module loader, caches, parallel replicas, source plugins, optional JIT | ch. 06, 07, 08, 09 |
+| `crates/aevia-fmt`, `crates/aevia-doc` | formatter; API documentation and doctests | §9.9 |
+| `crates/aevia-analysis`, `crates/aevia-lsp` | editor-independent semantic queries; the language-server adapter | §9.10 |
+| `crates/aevia-cli` | the `aevia` binary | ch. 09 |
 
 ## Design decisions worth knowing
 
@@ -111,8 +140,8 @@ These are the places where the implementation had to choose, and the reasoning:
   dimension and display unit, a tensor its shape, and a variant its constructor
   tag, so `show`, `to`, `value_in` and pattern matching work without types.
 * **The kernel is the only operator registry.** `Rssn.sin`, the unit table and
-  `Units.Constants` are all generated from the Kernel Manifest (1382 operators,
-  82 units and 30 constants at the time of writing), and symbolic values *are*
+  `Units.Constants` are all generated from the Kernel Manifest (1476 operators,
+  82 units and 30 constants at rssn 3.0.0-rc.1), and symbolic values *are*
   rssn terms: an integral the local layer has no node for is carried by handle,
   not approximated.
 * **Source operators are kernel operators.** `@op("ns/name")` publishes a
@@ -130,48 +159,40 @@ These are the places where the implementation had to choose, and the reasoning:
 
 ## Status
 
-See [STATUS.md](STATUS.md) for the chapter-by-chapter state, the deliberate
-deviations (type-class dictionaries, Core IR, `Rssn.invoke`) and the roadmap;
-the design standard's revision history is in
-[appendix C](spec/appendix-c-changelog.md). All nine complete programs in
-chapter 11 of the standard now type-check (and the runnable ones run); the
-standard library's module tree is embedded in `crates/aevia-std/stdlib/` and the
-loader falls back to it when no package root resolves a module, so
-`import Math { sqrt }`, `open Units.SI` and `import Physics.Ising` work from user
-source (a local file still wins); chapter 8's names also remain reachable
-through the Prelude, which is why the quick start needs no imports. SDE support
-landed end to end: the kernel exposes the noise primitives
-`sde_wiener`/`sde_levy_areas` and the manifest-only metadata query
-`sde_scheme_info` as operators (capability `core.sde`); `sde_scheme_info` gives
-the strong order plus Itô/commutative/adaptive/Lévy-area flags for the kernel's
-8 schemes but has no weak-order column — `sde_order` in Aevia supplies
-`{strong, weak}`. `Sde`/the Prelude provide the typed solver surface
-(`sdeint_diag`, `sdeint_general`, `wiener`, `sde_order`, `sde_ensemble_seed`);
-the solver loops stay host-side because they need Aevia closures.
+The standard's revision history and its known gaps are in
+[appendix C](spec/appendix-c-changelog.md); the current text is Revision 13. All
+nine complete programs in chapter 11 of the standard type-check (and the
+runnable ones run). The standard library's module tree is embedded in
+`crates/aevia-std/stdlib/` and the loader falls back to it when no package root
+resolves a module, so `import Math { sqrt }`, `open Units.SI` and
+`import Physics.Ising` work from user source (a local file still wins); chapter
+8's names also remain reachable through the Prelude, which is why the quick
+start needs no imports.
 
-The alpha round (spec appendix C, Revision 15) added:
+Implemented beyond the core language, each specified in its chapter:
 
 * **Unit systems** (§5.11): `module Hep with units natural` (also `planck`,
   `atomic`, `geometrized`) reduces the dimensions written in the module — a
-  length is an inverse energy — while every value stays an honest SI quantity,
-  so values cross module boundaries without reinterpretation. `to_system` /
-  `from_system<D>` convert explicitly; `Units.Natural` and friends are generated
-  from the kernel manifest, with `c = hbar = 1` produced by the reduction itself.
-* **Literal folding without the old deviation** (§3.10.4): a literal is rounded
-  once, closed literal trees are compile-time constants evaluated in their
-  static representation, and `1.0 + 2` is the spec's `Float`.
+  length is an inverse energy — while every value stays an honest SI quantity.
+  `to_system` / `from_system<D>` convert explicitly.
 * **Parallel evaluation and tasks** (§9.7): `par_map`, `par_tabulate` and
   `par_reduce` run on shared-nothing interpreter replicas (`--jobs N`) and
   never change a value; `spawn`/`await` run IO concurrently with deterministic
   output. `AEVIA_PARALLEL_TRACE=1` explains every sequential fallback.
 * **Source plugins** (§13.5.2): `@op`/`@rule` functions are traced into kernel
-  definitions and rewrites (so the kernel can differentiate and evaluate them);
-  `load_plugin(path)` loads a plugin file at run time.
+  definitions and rewrites; `load_plugin(path)` loads a plugin file at run time.
 * **Incremental checking** (§9.11): `aevia watch file.aev` re-checks only the
   modules whose source or imported interfaces changed.
-* **Fresnel integrals** (§8.2.2): `fresnel_s`/`fresnel_c`, numerically and
-  through the kernel's calculus (derivatives, antiderivatives of quadratic
-  phases, definite integrals, Meijer-G).
+* **SDE** (§8.9.1): the kernel exposes the noise primitives
+  `sde_wiener`/`sde_levy_areas` and the metadata query `sde_scheme_info`;
+  `Sde` and the Prelude provide the typed solver surface (`sdeint_diag`,
+  `sdeint_general`, `wiener`, `sde_order`, `sde_ensemble_seed`). The solver loops
+  stay host-side because they need Aevia closures.
+
+Known gaps (appendix C, section 5): dependency resolution in the toolchain is
+local-path only, GPU/distributed targets are reported as unsupported
+capabilities (`E1001`), sparse values do not enter the rssn term graph, and
+SDE event handling is missing.
 
 ## License
 

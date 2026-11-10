@@ -879,7 +879,7 @@ impl Kernel {
     /// # Deprecated
     ///
     /// This is the **pre-pinning** path: it hands the kernel a name and lets
-    /// the kernel choose an overload, which is exactly the freedom PLAN D1
+    /// the kernel choose an overload, which is exactly the freedom pinning
     /// removes. It exists only because the checker still types `Rssn.<op>` as
     /// `manifest.overloads[0]`; it is scheduled for deletion, and no new
     /// caller may use it. New code resolves once with
@@ -1087,7 +1087,7 @@ impl Kernel {
 
     /// Calls exactly the overload `key` names.
     ///
-    /// This is the execution entry point of PLAN D1: the key was chosen
+    /// This is the execution entry point of pinned calls: the key was chosen
     /// statically (or once, by [`Kernel::resolve`]) and is executed as it
     /// stands. Nothing here looks for a better match, and no error path falls
     /// back to [`Kernel::call`].
@@ -1239,13 +1239,13 @@ impl Kernel {
         if !entry.higher_order || !entry.source.is_exact() || entry.signatures.len() != 1 {
             return Err(KernelError::capability("core.callback.signature"));
         }
-        if let Some(key) = key {
-            if entry.key_index(key) != Some(0) {
-                return Err(KernelError::new(
-                    "E1005",
-                    "kernel callback overload key is not registered",
-                ));
-            }
+        if let Some(key) = key
+            && entry.key_index(key) != Some(0)
+        {
+            return Err(KernelError::new(
+                "E1005",
+                "kernel callback overload key is not registered",
+            ));
         }
         let signature = &entry.signatures[0];
         for (index, (value, witness)) in args.iter().zip(witnesses).enumerate() {
@@ -1478,18 +1478,18 @@ impl Kernel {
                 // wrong here: Aevia's checker already decided the types, and a
                 // symbolic argument is a term, not a `Real`. `Session::call`
                 // is the node constructor, which is what §10.6.1 asks for.
-                if let Some(entry) = crate::registry::registry().op(name) {
-                    if !entry.accepts(args.len()) {
-                        return Err(KernelError::new(
-                            "E0315",
-                            format!(
-                                "`{name}` takes {} argument(s), found {}",
-                                entry.arity.0,
-                                args.len()
-                            ),
-                        )
-                        .at_operator(name));
-                    }
+                if let Some(entry) = crate::registry::registry().op(name)
+                    && !entry.accepts(args.len())
+                {
+                    return Err(KernelError::new(
+                        "E0315",
+                        format!(
+                            "`{name}` takes {} argument(s), found {}",
+                            entry.arity.0,
+                            args.len()
+                        ),
+                    )
+                    .at_operator(name));
                 }
                 let mut terms = Vec::with_capacity(args.len());
                 for arg in args {

@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(s.len(), 2);
         assert_eq!(vt.len(), 2 * 3);
         // `u diag(s) vt` is `a`.
-        let mut rebuilt = vec![0.0; 6];
+        let mut rebuilt = [0.0; 6];
         for row in 0..2 {
             for column in 0..3 {
                 let mut total = 0.0;

@@ -28,6 +28,13 @@
 //! ```
 
 #![forbid(unsafe_code)]
+// Checker nodes and diagnostics are deliberately unboxed plain data, and inference helpers thread
+// explicit context; boxing would only add indirection.
+#![allow(
+    clippy::large_enum_variant,
+    clippy::too_many_arguments,
+    clippy::result_large_err
+)]
 
 pub mod adt;
 pub mod builtins;

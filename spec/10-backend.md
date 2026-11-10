@@ -48,7 +48,7 @@ Rssn.dynamic("myplugin_softplus", args)  # 插件/叶子：没有签名
   按 `Match` 格选、并列报 `E1002`（§13.4.1）。`resolve_overload` 只用于
   “先解析再缓存”，且只缓存 `Best::Unique` 的结果。
 
-完整接口清单见根目录 [`RSSN-INTEGRATION-REQUIREMENTS.md`](../RSSN-INTEGRATION-REQUIREMENTS.md)，
+完整的内核侧契约见 rssn 仓库的 `docs/KERNEL.md`，
 Aevia 侧规则见 [13 — Extensibility](13-extensibility.md)。
 
 ## 10.1 rssn 的能力边界

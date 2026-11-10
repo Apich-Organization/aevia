@@ -314,22 +314,6 @@ fn respell_square_roots(text: &str) -> String {
     current
 }
 
-#[cfg(test)]
-mod spelling_tests {
-    use super::foreign_text;
-
-    #[test]
-    fn kernel_text_is_respelt_in_aevia_terms() {
-        assert_eq!(foreign_text("E"), "e");
-        assert_eq!(foreign_text("E^x + 1"), "e^x + 1");
-        assert_eq!(foreign_text("pi^(1/2)"), "sqrt(pi)");
-        assert_eq!(foreign_text("2*(x + 1)^(1/2)"), "2*sqrt(x + 1)");
-        assert_eq!(foreign_text("exp(x)^(1/2)/3"), "sqrt(exp(x))/3");
-        assert_eq!(foreign_text("Ei(x) + EE"), "Ei(x) + EE");
-        assert_eq!(foreign_text("x^(1/3)"), "x^(1/3)");
-    }
-}
-
 /// Removes the disambiguating suffix from internal symbol names.
 ///
 /// `symbol("x")` allocates `x`, `x#2`, ... so that two calls denote different
@@ -678,4 +662,20 @@ pub fn kernel_symbol(name: &str) -> Sym {
     let kernel = aevia_rssn::kernel();
     let value = Val::Symbol(name.to_string());
     kernel.term_of(&value).unwrap_or(Sym::new(0, 0))
+}
+
+#[cfg(test)]
+mod spelling_tests {
+    use super::foreign_text;
+
+    #[test]
+    fn kernel_text_is_respelt_in_aevia_terms() {
+        assert_eq!(foreign_text("E"), "e");
+        assert_eq!(foreign_text("E^x + 1"), "e^x + 1");
+        assert_eq!(foreign_text("pi^(1/2)"), "sqrt(pi)");
+        assert_eq!(foreign_text("2*(x + 1)^(1/2)"), "2*sqrt(x + 1)");
+        assert_eq!(foreign_text("exp(x)^(1/2)/3"), "sqrt(exp(x))/3");
+        assert_eq!(foreign_text("Ei(x) + EE"), "Ei(x) + EE");
+        assert_eq!(foreign_text("x^(1/3)"), "x^(1/3)");
+    }
 }

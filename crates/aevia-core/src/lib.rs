@@ -26,7 +26,10 @@
     clippy::needless_range_loop,
     clippy::should_implement_trait,
     clippy::type_complexity,
-    clippy::result_large_err
+    clippy::result_large_err,
+    // Runtime and evidence enums are unboxed plain data; the builtin dispatcher threads explicit context.
+    clippy::large_enum_variant,
+    clippy::too_many_arguments
 )]
 
 pub mod builtins;
@@ -503,16 +506,16 @@ impl Interp {
         } = &decl.kind
         {
             for ctor in ctors {
-                if let Some(&(adt, index)) = self.current_constructors.get(&ctor.name) {
-                    if let Some(value) = crate::eval::source_ctor_value_at(adt, index) {
-                        self.globals.insert(ctor.name.clone(), value);
-                    }
+                if let Some(&(adt, index)) = self.current_constructors.get(&ctor.name)
+                    && let Some(value) = crate::eval::source_ctor_value_at(adt, index)
+                {
+                    self.globals.insert(ctor.name.clone(), value);
                 }
             }
             return Ok(());
         }
-        if self.mode == Mode::Ir {
-            if let Some(lowered) = aevia_ir::lower::lower_decl_with_runtime_evidence(
+        if self.mode == Mode::Ir
+            && let Some(lowered) = aevia_ir::lower::lower_decl_with_runtime_evidence(
                 decl,
                 &self.rssn_call_sites,
                 &self.dictionary_sites,
@@ -521,9 +524,9 @@ impl Interp {
                 &self.context.evidence.constructor_refs,
                 &self.context.evidence.expr_types,
                 &self.constant_regions,
-            ) {
-                return self.load_lowered(lowered);
-            }
+            )
+        {
+            return self.load_lowered(lowered);
         }
         let root = self.root();
         self.remember_scope(&root);
@@ -676,10 +679,10 @@ fn bind_module_constructors(
             continue;
         };
         for ctor in ctors {
-            if let Some(&(adt, index)) = interp.current_constructors.get(&ctor.name) {
-                if let Some(value) = crate::eval::source_ctor_value_at(adt, index) {
-                    root.vars.borrow_mut().insert(ctor.name.clone(), value);
-                }
+            if let Some(&(adt, index)) = interp.current_constructors.get(&ctor.name)
+                && let Some(value) = crate::eval::source_ctor_value_at(adt, index)
+            {
+                root.vars.borrow_mut().insert(ctor.name.clone(), value);
             }
         }
     }

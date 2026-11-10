@@ -260,12 +260,14 @@ impl Module {
             decls: doc
                 .decls
                 .iter()
-                .map(|decl| Decl {
-                    kind: decl.kind.clone(),
-                    name: decl.name.clone(),
-                    signature: decl.signature.clone(),
-                    doc: decl.doc.clone(),
-                    private: decl.private,
+                .map(|decl| {
+                    Decl {
+                        kind: decl.kind.clone(),
+                        name: decl.name.clone(),
+                        signature: decl.signature.clone(),
+                        doc: decl.doc.clone(),
+                        private: decl.private,
+                    }
                 })
                 .collect(),
         }

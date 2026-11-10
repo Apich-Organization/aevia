@@ -1,6 +1,6 @@
 //! Differential parity between the AST evaluator and the Core IR evaluator.
 //!
-//! This is the gate PLAN D2 sets: the IR is only allowed to be the default
+//! This is the gate for the IR: it is only allowed to be the default
 //! because every program the project has produces the *same observable result*
 //! on both paths. The comparison is on values, output and error codes — never
 //! on a rendered substring that a wording change could make agree by accident.

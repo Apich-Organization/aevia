@@ -304,14 +304,13 @@ pub fn propagate(
                         valid = false;
                         break;
                     };
-                    if let Rep::Var(id) = operand {
-                        if assignments
+                    if let Rep::Var(id) = operand
+                        && assignments
                             .insert(*id, value)
                             .is_some_and(|previous| previous != value)
-                        {
-                            valid = false;
-                            break;
-                        }
+                    {
+                        valid = false;
+                        break;
                     }
                     values.push(value);
                 }

@@ -45,10 +45,10 @@ pub fn run(
     let mut checked = 0usize;
     for path in &paths {
         let shown = path.display().to_string();
-        if let Some(pattern) = filter {
-            if !shown.contains(pattern) {
-                continue;
-            }
+        if let Some(pattern) = filter
+            && !shown.contains(pattern)
+        {
+            continue;
         }
         let source = match std::fs::read_to_string(path) {
             | Ok(source) => source,
@@ -106,11 +106,12 @@ pub fn run(
             }
         }
     }
-    if let Some(pattern) = filter {
-        if checked == 0 && failed == 0 {
-            eprintln!("aevia test --doc: the filter `{pattern}` matched no doctest");
-            return ExitCode::from(1);
-        }
+    if let Some(pattern) = filter
+        && checked == 0
+        && failed == 0
+    {
+        eprintln!("aevia test --doc: the filter `{pattern}` matched no doctest");
+        return ExitCode::from(1);
     }
     if checked == 0 {
         eprintln!("aevia test --doc: no ```aevia code blocks found; nothing was checked");

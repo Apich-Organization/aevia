@@ -119,19 +119,19 @@ pub fn sections(source: &str) -> Vec<Section> {
             head_word,
             "type" | "class" | "fn" | "module" | "instance" | "import" | "let"
         ) {
-            if head_word == "type" {
-                if let Some(declared) = declared_type(trimmed) {
-                    let index = current.unwrap_or_else(|| {
-                        out.push(Section {
-                            number: String::new(),
-                            title: String::new(),
-                            names: Vec::new(),
-                            types: Vec::new(),
-                        });
-                        out.len() - 1
+            if head_word == "type"
+                && let Some(declared) = declared_type(trimmed)
+            {
+                let index = current.unwrap_or_else(|| {
+                    out.push(Section {
+                        number: String::new(),
+                        title: String::new(),
+                        names: Vec::new(),
+                        types: Vec::new(),
                     });
-                    out[index].types.push(declared);
-                }
+                    out.len() - 1
+                });
+                out[index].types.push(declared);
             }
             continue;
         }

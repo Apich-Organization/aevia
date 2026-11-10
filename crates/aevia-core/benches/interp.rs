@@ -14,6 +14,7 @@
 //! Workloads: a 10 000-step tail loop, `map` over 2 000 elements with an IR
 //! closure, `fold` over the same tensor with a native function, dense `sum`, and
 //! symbolic-term construction (100/200/400 operands).
+#![allow(clippy::result_large_err)] // test helpers return the interpreter's own error type
 
 use aevia_core::Interp;
 use aevia_core::Mode;

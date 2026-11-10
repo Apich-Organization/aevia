@@ -1,7 +1,7 @@
 //! Every diagnostic code in appendix B is reachable — or listed as not.
 //!
-//! PLAN.md §3 rule 3: "Every diagnostic code the spec documents is reachable
-//! from a test." This table is the audit of that rule for the front end. Each
+//! Rule: every diagnostic code the spec documents is reachable from a
+//! test. This table is the audit of that rule for the front end. Each
 //! code has one disposition:
 //!
 //! * [`Cover::Front`] — a program that produces the code, run here through the

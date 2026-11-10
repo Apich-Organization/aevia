@@ -198,15 +198,16 @@ pub(crate) fn tensor_witnesses(
             return None;
         }
     }
-    if let Type::Scalar(_, dim) = elem {
-        if &tensor.dim != dim {
-            return None;
-        }
+    if let Type::Scalar(_, dim) = elem
+        && &tensor.dim != dim
+    {
+        return None;
     }
-    if tensor.storage.is_empty() && !empty_tensor_has_schema(tensor, elem) {
-        if !(declared_empty && matches!(tensor.storage, Storage::Boxed(_))) {
-            return None;
-        }
+    if tensor.storage.is_empty()
+        && !empty_tensor_has_schema(tensor, elem)
+        && !(declared_empty && matches!(tensor.storage, Storage::Boxed(_)))
+    {
+        return None;
     }
     // Homogeneous primitive elements need no per-element origin objects: the
     // payload and the independently stored dimension witness validate them.

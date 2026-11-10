@@ -168,7 +168,7 @@ pub fn integrate_until_event(
                     continue;
                 }
                 let (trajectory, hits) = ode::solve_fixed_events(
-                    &f,
+                    f,
                     states.last().unwrap(),
                     (pair[0], pair[1]),
                     options.steps.max(1),
@@ -193,11 +193,11 @@ pub fn integrate_until_event(
             Ok((times, states))
         } else {
             let solution = match options.method {
-                | Method::Dopri5 => ode_adaptive::dopri5(&f, start, end, y0, &opts, &events),
-                | Method::Radau => ode_stiff::radau5_events(&f, start, end, y0, &opts, &events),
-                | Method::Bdf => ode_stiff::bdf_events(&f, start, end, y0, &opts, 5, &events),
+                | Method::Dopri5 => ode_adaptive::dopri5(f, start, end, y0, &opts, &events),
+                | Method::Radau => ode_stiff::radau5_events(f, start, end, y0, &opts, &events),
+                | Method::Bdf => ode_stiff::bdf_events(f, start, end, y0, &opts, 5, &events),
                 | Method::Rosenbrock23 => {
-                    ode_adaptive::rosenbrock23_events(&f, start, end, y0, &opts, &events)
+                    ode_adaptive::rosenbrock23_events(f, start, end, y0, &opts, &events)
                 },
                 | Method::Rk4 => unreachable!(),
             }

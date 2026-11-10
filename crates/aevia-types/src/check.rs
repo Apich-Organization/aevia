@@ -129,7 +129,7 @@ pub enum Export {
     },
 }
 
-/// One statically resolved `Rssn.<op>` call (PLAN D1).
+/// One statically resolved `Rssn.<op>` call.
 ///
 /// The checker picks the overload; the runtime must execute this key and never
 /// resolve again, or a program would run a different overload than it was
@@ -521,8 +521,6 @@ pub struct ModuleInterface {
     /// Exact source origins and binder projections for visible callable names.
     pub callable_exports: IndexMap<String, CallableProjection>,
 }
-
-/// The interface of a checked module.
 
 /// The two type-directed `Dyn` primitives of §3.11/§4.9.4.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -1241,10 +1239,10 @@ impl ParamUsage {
                 }
             },
             | TyKind::Named { path, args } => {
-                if args.is_empty() {
-                    if let Some(name) = path.last() {
-                        self.types.insert(name.clone());
-                    }
+                if args.is_empty()
+                    && let Some(name) = path.last()
+                {
+                    self.types.insert(name.clone());
                 }
                 for arg in args {
                     self.scan(arg);
@@ -1613,17 +1611,17 @@ impl Checker {
             }
             let mut dimension_names = HashMap::new();
             for (name, export) in exports {
-                if let Export::Dimension { dim, .. } = export {
-                    if let Some((aevia_dim::Atom::Nominal(base), power)) = dim.factors().next() {
-                        if dim.factors().count() == 1 && power.is_one() {
-                            let display = if prefix.is_empty() {
-                                name.clone()
-                            } else {
-                                format!("{prefix}.{name}")
-                            };
-                            dimension_names.entry(base.clone()).or_insert(display);
-                        }
-                    }
+                if let Export::Dimension { dim, .. } = export
+                    && let Some((aevia_dim::Atom::Nominal(base), power)) = dim.factors().next()
+                    && dim.factors().count() == 1
+                    && power.is_one()
+                {
+                    let display = if prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{prefix}.{name}")
+                    };
+                    dimension_names.entry(base.clone()).or_insert(display);
                 }
             }
             for (name, export) in exports {
@@ -1829,13 +1827,12 @@ impl Checker {
             } else {
                 format!("{}.{}", module.dotted(), name)
             };
-            if !self.globals.contains_key(&qualified) {
-                if let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
+            if !self.globals.contains_key(&qualified)
+                && let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
                     export
-                {
-                    self.constructor_bindings
-                        .insert(qualified.clone(), (*adt, *index));
-                }
+            {
+                self.constructor_bindings
+                    .insert(qualified.clone(), (*adt, *index));
             }
             match export {
                 | Export::Type { adt } => {
@@ -2462,7 +2459,7 @@ impl Checker {
 
         // Pass D: generalise every top-level binding, then default what is
         // left. Defaulting *after* generalisation is what keeps `<d>`
-        // polymorphic functions polymorphic (PLAN D4, §3.10.2).
+        // polymorphic functions polymorphic (§3.10.2).
         self.infer.leave_level();
         for (name, _) in &pending {
             let Some(scheme) = self.globals.get(name).cloned() else {
@@ -2818,10 +2815,10 @@ impl Checker {
                 },
                 | _ => None,
             };
-            if let Some(reading) = reading {
-                if let Err(error) = self.infer.unify(&ty, &reading) {
-                    literal_default_errors.push((error, *span));
-                }
+            if let Some(reading) = reading
+                && let Err(error) = self.infer.unify(&ty, &reading)
+            {
+                literal_default_errors.push((error, *span));
             }
         }
         for (error, span) in literal_default_errors {
@@ -2840,20 +2837,20 @@ impl Checker {
                 .get(&span)
                 .filter(|ty| crate::class::has_variables(ty))
             {
-                if let Some((Some(owner), kind)) = self.literal_owners.get(&span) {
-                    if let Some(function) = self.checked.functions.get_mut(owner) {
-                        function.numeric_literals.push((span, *kind, ty.clone()));
-                    }
+                if let Some((Some(owner), kind)) = self.literal_owners.get(&span)
+                    && let Some(function) = self.checked.functions.get_mut(owner)
+                {
+                    function.numeric_literals.push((span, *kind, ty.clone()));
                 }
                 if let Type::Scalar(rep, _) = ty {
                     self.checked.literal_reps.insert(span, *rep);
                 }
                 continue;
             }
-            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span) {
-                if let Some(rep) = self.infer.literal_representation(*rep) {
-                    self.checked.literal_reps.insert(span, rep);
-                }
+            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span)
+                && let Some(rep) = self.infer.literal_representation(*rep)
+            {
+                self.checked.literal_reps.insert(span, rep);
             }
         }
         // §3.10.4: a closed literal arithmetic tree is a constant expression.
@@ -2861,10 +2858,10 @@ impl Checker {
         // static representation, so only inexact representations need the
         // table; an exact one already evaluates exactly leaf by leaf.
         for span in std::mem::take(&mut self.constant_region_roots) {
-            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span) {
-                if !matches!(rep, Rep::Int | Rep::Real) {
-                    self.checked.constant_regions.insert(span, *rep);
-                }
+            if let Some(Type::Scalar(rep, _)) = resolved_expr_types.get(&span)
+                && !matches!(rep, Rep::Int | Rep::Real)
+            {
+                self.checked.constant_regions.insert(span, *rep);
             }
         }
         self.checked.expr_types = resolved_expr_types;
@@ -2932,26 +2929,26 @@ impl Checker {
                 .collect();
         }
         for (name, export) in &self.checked.exports {
-            if let Export::Value { scheme, .. } = export {
-                if matches!(scheme.ty, Type::Fn(..)) {
-                    let headers = self
-                        .generic_bindings
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| inferred_binders(scheme));
-                    if let Some(projection) = self.global_callables.get(name) {
-                        self.checked
-                            .callable_exports
-                            .insert(name.clone(), projection.resolved(&self.infer));
-                    }
-                    self.checked.function_headers.insert(
-                        name.clone(),
-                        headers
-                            .iter()
-                            .map(|header| header.resolved(&self.infer))
-                            .collect(),
-                    );
+            if let Export::Value { scheme, .. } = export
+                && matches!(scheme.ty, Type::Fn(..))
+            {
+                let headers = self
+                    .generic_bindings
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| inferred_binders(scheme));
+                if let Some(projection) = self.global_callables.get(name) {
+                    self.checked
+                        .callable_exports
+                        .insert(name.clone(), projection.resolved(&self.infer));
                 }
+                self.checked.function_headers.insert(
+                    name.clone(),
+                    headers
+                        .iter()
+                        .map(|header| header.resolved(&self.infer))
+                        .collect(),
+                );
             }
         }
         // §7.1.3/§7.4, round-2 decision 1b: classes, instances and alias
@@ -3001,16 +2998,16 @@ impl Checker {
         self.checked.stability = self.stability.clone();
         let mut registrations = self.registrations.clone();
         for registration in &mut registrations {
-            if let Some(scheme) = self.globals.get(&registration.function) {
-                if let Type::Fn(params, result) = self.infer.resolve(&scheme.ty) {
-                    for ((_, dim), ty) in registration.params.iter_mut().zip(params.iter()) {
-                        if let Type::Scalar(_, found) = self.infer.resolve(ty) {
-                            *dim = self.infer.resolve_dim(&found);
-                        }
+            if let Some(scheme) = self.globals.get(&registration.function)
+                && let Type::Fn(params, result) = self.infer.resolve(&scheme.ty)
+            {
+                for ((_, dim), ty) in registration.params.iter_mut().zip(params.iter()) {
+                    if let Type::Scalar(_, found) = self.infer.resolve(ty) {
+                        *dim = self.infer.resolve_dim(&found);
                     }
-                    if let Type::Scalar(_, found) = self.infer.resolve(&result) {
-                        registration.result = self.infer.resolve_dim(&found);
-                    }
+                }
+                if let Type::Scalar(_, found) = self.infer.resolve(&result) {
+                    registration.result = self.infer.resolve_dim(&found);
                 }
             }
         }
@@ -3075,13 +3072,13 @@ impl Checker {
         self.literal_spans.push(span);
         let owner = self.function_stack.last().copied();
         let previous = self.literal_owners.insert(span, (owner, kind));
-        if previous != Some((owner, kind)) {
-            if let Some(owner) = owner {
-                self.function_literal_sites
-                    .entry(owner)
-                    .or_default()
-                    .push((span, kind));
-            }
+        if previous != Some((owner, kind))
+            && let Some(owner) = owner
+        {
+            self.function_literal_sites
+                .entry(owner)
+                .or_default()
+                .push((span, kind));
         }
     }
 
@@ -4156,7 +4153,7 @@ impl Checker {
             };
             // The instance's method must have the class method's type with the
             // head substituted for the class parameter.
-            let expected = declared.substitute_params(&[head.clone()]);
+            let expected = declared.substitute_params(std::slice::from_ref(&head));
             self.scopes.push(HashMap::new());
             let mut params = Vec::new();
             let Type::Fn(expected_params, expected_ret) = self.infer.resolve(&expected) else {
@@ -4167,10 +4164,10 @@ impl Checker {
                 let ty = match (&param.ty, expected_params.get(index)) {
                     | (Some(annotation), _) => {
                         let annotated = self.convert_type(annotation);
-                        if let Some(want) = expected_params.get(index) {
-                            if let Err(error) = self.infer.unify(&annotated, want) {
-                                self.report_unify(error, param.span);
-                            }
+                        if let Some(want) = expected_params.get(index)
+                            && let Err(error) = self.infer.unify(&annotated, want)
+                        {
+                            self.report_unify(error, param.span);
                         }
                         annotated
                     },
@@ -5255,7 +5252,7 @@ impl Checker {
         }
         // Generalise as soon as the body is checked, so a *later* declaration
         // that uses this one sees the polymorphic type. Defaulting still waits
-        // for the end of the module (PLAN D4).
+        // for the end of the module.
         let mut scheme = self.infer.generalize_at(0, &target, Vec::new());
         scheme.materializations = self.value_materializations(value.span);
         self.infer.attach_numeric_scheme(&mut scheme);
@@ -5605,12 +5602,14 @@ impl Checker {
         while let Some((expr, ready, context)) = pending.pop() {
             if !ready {
                 let class = self.literal_class(expr);
-                if kind.is_none() && expr.span != root.span && !class.atomic {
-                    if let Some(kind) = class.homogeneous {
-                        let ty = self.synth_literal_region(expr, Some(kind));
-                        types.insert(expr.span, ty);
-                        continue;
-                    }
+                if kind.is_none()
+                    && expr.span != root.span
+                    && !class.atomic
+                    && let Some(kind) = class.homogeneous
+                {
+                    let ty = self.synth_literal_region(expr, Some(kind));
+                    types.insert(expr.span, ty);
+                    continue;
                 }
                 match &expr.kind {
                     | ExprKind::Unary { operand, .. } => {
@@ -5648,20 +5647,20 @@ impl Checker {
                     )
                 },
                 | _ => {
-                    if kind.is_none() {
-                        if let Some(leaf_kind) = self.literal_class(expr).homogeneous {
-                            let rep = if let Some((_, rep)) = contexts[context]
-                                .iter()
-                                .find(|(kind, _)| *kind == leaf_kind)
-                            {
-                                *rep
-                            } else {
-                                let rep = self.infer.fresh_rep();
-                                contexts[context].push((leaf_kind, rep));
-                                rep
-                            };
-                            self.literal_region = Some((leaf_kind, rep));
-                        }
+                    if kind.is_none()
+                        && let Some(leaf_kind) = self.literal_class(expr).homogeneous
+                    {
+                        let rep = if let Some((_, rep)) = contexts[context]
+                            .iter()
+                            .find(|(kind, _)| *kind == leaf_kind)
+                        {
+                            *rep
+                        } else {
+                            let rep = self.infer.fresh_rep();
+                            contexts[context].push((leaf_kind, rep));
+                            rep
+                        };
+                        self.literal_region = Some((leaf_kind, rep));
                     }
                     let ty = self.synth_inner(expr);
                     if kind.is_none() {
@@ -5674,10 +5673,10 @@ impl Checker {
             types.insert(expr.span, ty);
         }
         self.literal_region = previous;
-        if !self.literal_class(root).atomic {
-            if let Some((_, rep)) = reading {
-                self.infer.finish_literal_expression(rep);
-            }
+        if !self.literal_class(root).atomic
+            && let Some((_, rep)) = reading
+        {
+            self.infer.finish_literal_expression(rep);
         }
         types.remove(&root.span).unwrap_or(Type::Error)
     }
@@ -6138,18 +6137,17 @@ impl Checker {
         // context, including exact decimals inside arithmetic. Published
         // callable signatures and expressions containing variables/calls never
         // enter this branch: their numeric transfers remain authoritative.
-        if self.literal_class(expr).tree {
-            if let Type::Scalar(rep, _) = &resolved_expected {
-                if !matches!(rep, Rep::Var(_)) {
-                    let previous = self.literal_context.replace(*rep);
-                    let actual = self.synth(expr);
-                    self.literal_context = previous;
-                    if let Err(error) = self.infer.unify(&actual, expected) {
-                        self.report_unify(error, expr.span);
-                    }
-                    return;
-                }
+        if self.literal_class(expr).tree
+            && let Type::Scalar(rep, _) = &resolved_expected
+            && !matches!(rep, Rep::Var(_))
+        {
+            let previous = self.literal_context.replace(*rep);
+            let actual = self.synth(expr);
+            self.literal_context = previous;
+            if let Err(error) = self.infer.unify(&actual, expected) {
+                self.report_unify(error, expr.span);
             }
+            return;
         }
         // An empty list has no element to learn its type from; the context
         // supplies it, which is what `let e: Tensor<1, Float> = []` means.
@@ -6348,8 +6346,8 @@ impl Checker {
         span: Span,
     ) -> Type {
         let resolved = match op {
-            | UnOp::Neg | UnOp::Pos => self.force_scalar(&ty),
-            | _ => self.infer.resolve(&ty),
+            | UnOp::Neg | UnOp::Pos => self.force_scalar(ty),
+            | _ => self.infer.resolve(ty),
         };
         match op {
             | UnOp::Neg | UnOp::Pos => {
@@ -6883,7 +6881,7 @@ impl Checker {
                 } else if matches!(left, Type::Error) || matches!(right, Type::Error) {
                     // An operand that failed was reported where it failed.
                 } else if let Some(name) =
-                    self.shadowed_unit_operand(&left, &right, left_expr, right_expr)
+                    self.shadowed_unit_operand(left, right, left_expr, right_expr)
                 {
                     self.error_help(
                         "E0302",
@@ -7172,31 +7170,30 @@ impl Checker {
         // type-level variable (§3.5.1).
         let ls = self.infer.resolve_shape(left_shape);
         let rs = self.infer.resolve_shape(right_shape);
-        if let (Shape::Refined(left_items), Shape::Refined(right_items)) = (&ls, &rs) {
-            if let (Some(k), Some(k2)) = (
+        if let (Shape::Refined(left_items), Shape::Refined(right_items)) = (&ls, &rs)
+            && let (Some(k), Some(k2)) = (
                 left_items.get(1).cloned().flatten(),
                 right_items.first().cloned().flatten(),
-            ) {
-                if let Err(error) = self.infer.unify_nat(&k, &k2) {
-                    // A concrete mismatch is a shape error (`E0802`); a
-                    // non-linear Nat equation is `E0304`.
-                    match error {
-                        | crate::infer::UnifyError::NatMismatch { .. } => {
-                            let left_extent = self.infer.resolve_nat(&k);
-                            let right_extent = self.infer.resolve_nat(&k2);
-                            self.error(
+            )
+            && let Err(error) = self.infer.unify_nat(&k, &k2)
+        {
+            // A concrete mismatch is a shape error (`E0802`); a
+            // non-linear Nat equation is `E0304`.
+            match error {
+                | crate::infer::UnifyError::NatMismatch { .. } => {
+                    let left_extent = self.infer.resolve_nat(&k);
+                    let right_extent = self.infer.resolve_nat(&k2);
+                    self.error(
                                 "E0802",
                                 format!(
                                     "matmul requires left columns ({left_extent}) = right rows ({right_extent})"
                                 ),
                                 span,
                             );
-                        },
-                        | other => self.report_unify(other, span),
-                    }
-                    return Type::Error;
-                }
+                },
+                | other => self.report_unify(other, span),
             }
+            return Type::Error;
         }
         match (ls.rank(), rs.rank()) {
             | (2, 2) => {
@@ -7411,7 +7408,7 @@ impl Checker {
     /// Two concrete representations take their least upper bound — `join(Int,
     /// Float) = Float`, so `fn f(a: Int): Int = a + 2.0` is a type error
     /// instead of silently typing as `Int`. When one side is a variable the
-    /// other side becomes a *lower bound* (PLAN D4): the variable stays free,
+    /// other side becomes a *lower bound*: the variable stays free,
     /// so `fn f(x) = x + 1` is polymorphic rather than `Int -> Int`.
     fn join_rep(
         &mut self,
@@ -7439,14 +7436,11 @@ impl Checker {
             if matches!(variable, Rep::Var(_))
                 && !matches!(concrete, Rep::Var(_))
                 && unprotected(variable)
+                && let Some(kind) = kind
+                && let Some(reading) = literal_reading_above(kind, concrete)
+                && let Err(error) = self.infer.unify_rep(variable, reading)
             {
-                if let Some(kind) = kind {
-                    if let Some(reading) = literal_reading_above(kind, concrete) {
-                        if let Err(error) = self.infer.unify_rep(variable, reading) {
-                            self.report_unify(error, Span::new(self.file, 0, 0));
-                        }
-                    }
-                }
+                self.report_unify(error, Span::new(self.file, 0, 0));
             }
         }
         a = self.infer.resolve_rep(a);
@@ -7529,7 +7523,7 @@ impl Checker {
             return self.partial_application(callee, args, span);
         }
         // `Rssn.<op>(...)`: resolve the overload *here* and pin it, so the
-        // runtime cannot execute a different one (PLAN D1).
+        // runtime cannot execute a different one.
         if let Some(op) = rssn_op_name(callee) {
             return self.rssn_call(&op, args, span);
         }
@@ -7554,27 +7548,24 @@ impl Checker {
             // one manifest overload by its pinned `OpKey` digest, so the call
             // has that overload's declared result type. Anything else keeps
             // the dynamic value type and lets the runtime report E1005.
-            if args.len() == expected.len() {
-                if let (Some(op_name), Some(hash)) =
+            if args.len() == expected.len()
+                && let (Some(op_name), Some(hash)) =
                     (string_constant(&args[0]), string_constant(&args[1]))
-                {
-                    if let Some(ty) =
-                        crate::rssn_resolve::invoke_result(&op_name, &hash, &mut self.infer)
-                    {
-                        return ty;
-                    }
-                }
+                && let Some(ty) =
+                    crate::rssn_resolve::invoke_result(&op_name, &hash, &mut self.infer)
+            {
+                return ty;
             }
             return dynamic_value_type();
         }
         // A class method is solved against the instance table after the
         // arguments are checked, so the constraint sees the argument's type.
-        if let ExprKind::Var(name) = &callee.kind {
-            if let Some(scheme) = self.globals.get(name).cloned() {
-                if self.method_bindings.contains_key(name) && !self.is_locally_defined(name) {
-                    return self.class_method_call(name, &scheme, args, span);
-                }
-            }
+        if let ExprKind::Var(name) = &callee.kind
+            && let Some(scheme) = self.globals.get(name).cloned()
+            && self.method_bindings.contains_key(name)
+            && !self.is_locally_defined(name)
+        {
+            return self.class_method_call(name, &scheme, args, span);
         }
         // `zeros<Float>(3, 4)`: the type argument fixes the element type.
         if let ExprKind::TypeApp {
@@ -7730,18 +7721,16 @@ impl Checker {
                     | "max_all"
                     | "transpose"
             );
-            if !has_special_typing {
-                if let Some(scheme) = self.globals.get(name) {
-                    if matches!(scheme.ty, Type::UnitOf(_)) {
-                        if let Some(candidates) = builtins::schemes(name) {
-                            if candidates.len() > 1 {
-                                return self.overloaded_call(name, &candidates, args, span);
-                            }
-                            let ty = self.infer.instantiate(&candidates[0]);
-                            return self.call_with_type(ty, args, span);
-                        }
-                    }
+            if !has_special_typing
+                && let Some(scheme) = self.globals.get(name)
+                && matches!(scheme.ty, Type::UnitOf(_))
+                && let Some(candidates) = builtins::schemes(name)
+            {
+                if candidates.len() > 1 {
+                    return self.overloaded_call(name, &candidates, args, span);
                 }
+                let ty = self.infer.instantiate(&candidates[0]);
+                return self.call_with_type(ty, args, span);
             }
             // §8.9: the ODE entry points are typed through the built-in type
             // function `RateOf<s>`, which unification cannot express.
@@ -7936,32 +7925,32 @@ impl Checker {
             if name == "par_map" {
                 return self.par_map_call(args, span);
             }
-            if is_transcendental(name) {
-                if let Some(arg) = args.first() {
-                    let ty = self.synth(arg);
-                    if let Type::Scalar(rep, dim) = self.infer.resolve(&ty) {
-                        // An unresolved dimension is *committed* to 1: `exp(t)`
-                        // in an unannotated lambda is dimensionless until
-                        // something else says otherwise. A concrete dimension
-                        // other than 1 is the error §3.4.4 describes.
-                        let resolved = self.infer.resolve_dim(&dim);
-                        if !resolved.is_one()
-                            && (resolved.is_concrete()
-                                || self.infer.unify_dim(&resolved, &Dim::one()).is_err())
-                        {
-                            let formatted = self.dims.format(&resolved);
-                            self.error_help(
-                                "E0403",
-                                format!(
-                                    "`{name}` requires a dimensionless argument, found {formatted}"
-                                ),
-                                arg.span,
-                                "divide by a unit first, for example `x / 1 m`",
-                            );
-                            return Type::Error;
-                        }
-                        return Type::Scalar(rep, Dim::one());
+            if is_transcendental(name)
+                && let Some(arg) = args.first()
+            {
+                let ty = self.synth(arg);
+                if let Type::Scalar(rep, dim) = self.infer.resolve(&ty) {
+                    // An unresolved dimension is *committed* to 1: `exp(t)`
+                    // in an unannotated lambda is dimensionless until
+                    // something else says otherwise. A concrete dimension
+                    // other than 1 is the error §3.4.4 describes.
+                    let resolved = self.infer.resolve_dim(&dim);
+                    if !resolved.is_one()
+                        && (resolved.is_concrete()
+                            || self.infer.unify_dim(&resolved, &Dim::one()).is_err())
+                    {
+                        let formatted = self.dims.format(&resolved);
+                        self.error_help(
+                            "E0403",
+                            format!(
+                                "`{name}` requires a dimensionless argument, found {formatted}"
+                            ),
+                            arg.span,
+                            "divide by a unit first, for example `x / 1 m`",
+                        );
+                        return Type::Error;
                     }
+                    return Type::Scalar(rep, Dim::one());
                 }
             }
             if builtins::is_special(name) && !matches!(name.as_str(), "zeros" | "ones" | "fill") {
@@ -7969,10 +7958,10 @@ impl Checker {
             }
             // §5.4.1: an affine unit displays a `Point`, never a temperature
             // difference — `value_in(°C, 10 K)` is `E0510`, not a conversion.
-            if matches!(name.as_str(), "value_in" | "to") {
-                if let Some(ty) = self.unit_display_call(name, args, span) {
-                    return ty;
-                }
+            if matches!(name.as_str(), "value_in" | "to")
+                && let Some(ty) = self.unit_display_call(name, args, span)
+            {
+                return ty;
             }
             // §4.11: `det`/`prod` of a dimensioned tensor cannot be expressed
             // statically — the exponent is the runtime order.
@@ -7982,21 +7971,21 @@ impl Checker {
                 let types_before = self.expr_types.len();
                 if let Some(arg) = args.first() {
                     let ty = self.synth(arg);
-                    if let Type::Tensor { elem, .. } = self.infer.resolve(&ty) {
-                        if let Type::Scalar(_, dim) = self.infer.resolve(&elem) {
-                            let resolved = self.infer.resolve_dim(&dim);
-                            if !resolved.is_one() && resolved.is_concrete() {
-                                let formatted = self.dims.format(&resolved);
-                                self.error_help(
-                                    "E0410",
-                                    format!(
-                                        "`{name}` of a {formatted} tensor needs a runtime dimension"
-                                    ),
-                                    arg.span,
-                                    "divide by a unit first, or use `det_unit`",
-                                );
-                                return Type::Error;
-                            }
+                    if let Type::Tensor { elem, .. } = self.infer.resolve(&ty)
+                        && let Type::Scalar(_, dim) = self.infer.resolve(&elem)
+                    {
+                        let resolved = self.infer.resolve_dim(&dim);
+                        if !resolved.is_one() && resolved.is_concrete() {
+                            let formatted = self.dims.format(&resolved);
+                            self.error_help(
+                                "E0410",
+                                format!(
+                                    "`{name}` of a {formatted} tensor needs a runtime dimension"
+                                ),
+                                arg.span,
+                                "divide by a unit first, or use `det_unit`",
+                            );
+                            return Type::Error;
                         }
                     }
                 }
@@ -8009,29 +7998,29 @@ impl Checker {
             }
             // §8.1.9: building a set orders its elements, so the element
             // type needs a total order, exactly as `sort` does.
-            if name == "set_of" {
-                if let Some(arg) = args.first() {
-                    let ty = self.synth(arg);
-                    let elem = match self.infer.resolve(&ty) {
-                        | Type::Tensor { elem, .. } => Some(*elem),
-                        | _ => None,
-                    };
-                    if let Some(elem) = elem {
-                        self.require_instance("TotalOrd", &elem, span);
-                        return Type::Adt(adt::set_id(), vec![self.infer.resolve(&elem)]);
-                    }
-                    return Type::Adt(adt::set_id(), vec![self.infer.fresh_type()]);
+            if name == "set_of"
+                && let Some(arg) = args.first()
+            {
+                let ty = self.synth(arg);
+                let elem = match self.infer.resolve(&ty) {
+                    | Type::Tensor { elem, .. } => Some(*elem),
+                    | _ => None,
+                };
+                if let Some(elem) = elem {
+                    self.require_instance("TotalOrd", &elem, span);
+                    return Type::Adt(adt::set_id(), vec![self.infer.resolve(&elem)]);
                 }
+                return Type::Adt(adt::set_id(), vec![self.infer.fresh_type()]);
             }
             // §3.8.4: `sort` needs a total order.
-            if name == "sort" {
-                if let Some(arg) = args.first() {
-                    let ty = self.synth(arg);
-                    if let Type::Tensor { elem, .. } = self.infer.resolve(&ty) {
-                        self.require_instance("TotalOrd", &elem, span);
-                    }
-                    return ty;
+            if name == "sort"
+                && let Some(arg) = args.first()
+            {
+                let ty = self.synth(arg);
+                if let Type::Tensor { elem, .. } = self.infer.resolve(&ty) {
+                    self.require_instance("TotalOrd", &elem, span);
                 }
+                return ty;
             }
             if let Some(candidates) = builtins::schemes(name) {
                 if candidates.len() > 1 {
@@ -8271,13 +8260,11 @@ impl Checker {
             );
             return None;
         }
-        if generic {
-            if let Some(site) = self.function_stack.last() {
-                self.function_reifications
-                    .entry(*site)
-                    .or_default()
-                    .push(resolved.clone());
-            }
+        if generic && let Some(site) = self.function_stack.last() {
+            self.function_reifications
+                .entry(*site)
+                .or_default()
+                .push(resolved.clone());
         }
         self.note_type(argument.span, &resolved);
         Some(resolved)
@@ -8328,6 +8315,7 @@ impl Checker {
                 .all(|id| allowed.naturals.contains_key(id))
     }
 
+    #[allow(clippy::wrong_self_convention)] // lowers a call; not a conversion of `self`
     fn to_callback_call(
         &mut self,
         args: &[Expr],
@@ -8422,6 +8410,7 @@ impl Checker {
         )))
     }
 
+    #[allow(clippy::wrong_self_convention)] // checks a call; not a constructor
     fn from_value_call(
         &mut self,
         specialization: Option<Type>,
@@ -8606,30 +8595,27 @@ impl Checker {
                 | Shape::Refined(items) => Some(items.clone()),
                 | Shape::Rank(_) => None,
             };
-            if let Some(source_items) = source_items {
-                if let (Some(source_product), Some(target_product)) = (
+            if let Some(source_items) = source_items
+                && let (Some(source_product), Some(target_product)) = (
                     self.shape_product(&source_items),
                     self.shape_product(&target),
-                ) {
-                    if let Err(error) = self.infer.unify_nat(&source_product, &target_product) {
-                        match error {
-                            | crate::infer::UnifyError::NatMismatch { .. } => {
-                                let source_count = self.infer.resolve_nat(&source_product);
-                                let target_count = self.infer.resolve_nat(&target_product);
-                                self.error_help(
-                                    "E0802",
-                                    format!(
-                                        "cannot reshape {source_count} element(s) into {target_count}"
-                                    ),
-                                    span,
-                                    "the element count must be preserved",
-                                );
-                            },
-                            | other => self.report_unify(other, span),
-                        }
-                        return Type::Error;
-                    }
+                )
+                && let Err(error) = self.infer.unify_nat(&source_product, &target_product)
+            {
+                match error {
+                    | crate::infer::UnifyError::NatMismatch { .. } => {
+                        let source_count = self.infer.resolve_nat(&source_product);
+                        let target_count = self.infer.resolve_nat(&target_product);
+                        self.error_help(
+                            "E0802",
+                            format!("cannot reshape {source_count} element(s) into {target_count}"),
+                            span,
+                            "the element count must be preserved",
+                        );
+                    },
+                    | other => self.report_unify(other, span),
                 }
+                return Type::Error;
             }
             let target = self.infer.resolve_shape(&Shape::Refined(target));
             return Type::result(Type::tensor(target, elem), builtins::shape_error_type());
@@ -8736,10 +8722,10 @@ impl Checker {
                 }
                 let state = self.infer.resolve(&params[1]);
                 let rate = self.rate_of(&state, span);
-                if !rate.is_error() {
-                    if let Err(error) = self.infer.unify(&ret, &rate) {
-                        self.report_unify(error, args[0].span);
-                    }
+                if !rate.is_error()
+                    && let Err(error) = self.infer.unify(&ret, &rate)
+                {
+                    self.report_unify(error, args[0].span);
                 }
                 state
             },
@@ -8826,10 +8812,10 @@ impl Checker {
                 }
                 let state = self.infer.resolve(&params[1]);
                 let rate = self.rate_of(&state, span);
-                if !rate.is_error() {
-                    if let Err(error) = self.infer.unify(&ret, &rate) {
-                        self.report_unify(error, args[0].span);
-                    }
+                if !rate.is_error()
+                    && let Err(error) = self.infer.unify(&ret, &rate)
+                {
+                    self.report_unify(error, args[0].span);
                 }
                 state
             },
@@ -8895,10 +8881,10 @@ impl Checker {
                 if let Err(error) = self.infer.unify(&params[1], &state) {
                     self.report_unify(error, args[1].span);
                 }
-                if !expected_diffusion.is_error() {
-                    if let Err(error) = self.infer.unify(&ret, &expected_diffusion) {
-                        self.report_unify(error, args[1].span);
-                    }
+                if !expected_diffusion.is_error()
+                    && let Err(error) = self.infer.unify(&ret, &expected_diffusion)
+                {
+                    self.report_unify(error, args[1].span);
                 }
             },
             | other => {
@@ -9432,13 +9418,13 @@ impl Checker {
                         | GenericBinder::Row(_) => Type::Record(self.convert_type_as_row(arg)),
                     };
                     self.note_type(arg.span, &argument);
-                    if crate::class::has_variables(&argument) {
-                        if let Some(site) = self.function_stack.last() {
-                            self.function_reifications
-                                .entry(*site)
-                                .or_default()
-                                .push(argument.clone());
-                        }
+                    if crate::class::has_variables(&argument)
+                        && let Some(site) = self.function_stack.last()
+                    {
+                        self.function_reifications
+                            .entry(*site)
+                            .or_default()
+                            .push(argument.clone());
                     }
                     if let Err(error) = self.infer.unify(&header.as_type(), &argument) {
                         self.report_unify(error, arg.span);
@@ -9564,12 +9550,11 @@ impl Checker {
             let ty = self.synth(value);
             if base.is_some() {
                 // §3.6.2: adding a field requires `row(p) lacks z`.
-                if row.field(name).is_none() {
-                    if let Some(tail) = row.tail_var() {
-                        if let Err(error) = self.infer.require_lacks(tail, name) {
-                            self.report_unify(error, value.span);
-                        }
-                    }
+                if row.field(name).is_none()
+                    && let Some(tail) = row.tail_var()
+                    && let Err(error) = self.infer.require_lacks(tail, name)
+                {
+                    self.report_unify(error, value.span);
                 }
                 row = row.update(name, ty);
             } else {
@@ -9787,17 +9772,18 @@ impl Checker {
                     }
                     // A literal index into a refined shape is checked here;
                     // a dynamic one is checked at run time (§3.5.4).
-                    if let Some(value) = literal_index(expr) {
-                        if let Shape::Refined(items) = &shape {
-                            if let Some(Some(extent)) = items.get(position) {
-                                // §3.5.1: an extent that is still a Nat
-                                // variable cannot be bounds-checked here; the
-                                // runtime check covers it.
-                                let extent_nat = self.infer.resolve_nat(extent);
-                                if let Some(extent) = extent_nat.as_const() {
-                                    let extent = i64::try_from(extent).unwrap_or(i64::MAX);
-                                    if value < -extent || value >= extent {
-                                        self.error_help(
+                    if let Some(value) = literal_index(expr)
+                        && let Shape::Refined(items) = &shape
+                        && let Some(Some(extent)) = items.get(position)
+                    {
+                        // §3.5.1: an extent that is still a Nat
+                        // variable cannot be bounds-checked here; the
+                        // runtime check covers it.
+                        let extent_nat = self.infer.resolve_nat(extent);
+                        if let Some(extent) = extent_nat.as_const() {
+                            let extent = i64::try_from(extent).unwrap_or(i64::MAX);
+                            if value < -extent || value >= extent {
+                                self.error_help(
                                             "E0802",
                                             format!(
                                                 "index {value} is out of bounds for a dimension of extent {extent}"
@@ -9805,8 +9791,6 @@ impl Checker {
                                             expr.span,
                                             "a literal index is checked at compile time",
                                         );
-                                    }
-                                }
                             }
                         }
                     }
@@ -10172,16 +10156,16 @@ impl Checker {
                 }
                 continue;
             }
-            if let PatKind::Ctor { name: written, args } = &Self::pattern_inner(pattern).kind {
-                if written == name {
-                    any = true;
-                    for (index, column) in columns.iter_mut().enumerate() {
-                        column.push(
-                            args.get(index)
-                                .cloned()
-                                .unwrap_or_else(Self::wildcard_pattern),
-                        );
-                    }
+            if let PatKind::Ctor { name: written, args } = &Self::pattern_inner(pattern).kind
+                && written == name
+            {
+                any = true;
+                for (index, column) in columns.iter_mut().enumerate() {
+                    column.push(
+                        args.get(index)
+                            .cloned()
+                            .unwrap_or_else(Self::wildcard_pattern),
+                    );
                 }
             }
         }
@@ -10247,21 +10231,18 @@ impl Checker {
         if Self::pattern_catch_all(pattern) {
             return self.patterns_cover(previous, ty, 0);
         }
-        if let Type::Adt(id, _) = self.infer.resolve(ty) {
-            if let PatKind::Ctor { name, .. } = &Self::pattern_inner(pattern).kind {
-                if let Some(registered) = adt::get(id) {
-                    if let Some(ctor) = registered.ctors.iter().find(|ctor| ctor.name == *name) {
-                        if ctor.fields.is_empty() {
-                            return previous.iter().any(|prior| {
-                                matches!(
-                                    &Self::pattern_inner(prior).kind,
-                                    PatKind::Ctor { name: written, .. } if written == name
-                                )
-                            });
-                        }
-                    }
-                }
-            }
+        if let Type::Adt(id, _) = self.infer.resolve(ty)
+            && let PatKind::Ctor { name, .. } = &Self::pattern_inner(pattern).kind
+            && let Some(registered) = adt::get(id)
+            && let Some(ctor) = registered.ctors.iter().find(|ctor| ctor.name == *name)
+            && ctor.fields.is_empty()
+        {
+            return previous.iter().any(|prior| {
+                matches!(
+                    &Self::pattern_inner(prior).kind,
+                    PatKind::Ctor { name: written, .. } if written == name
+                )
+            });
         }
         // A duplicate literal is redundant; a new literal never is (the domain
         // is infinite).
@@ -10486,16 +10467,16 @@ impl Checker {
                 }
             },
             | PatKind::Ctor { name, args } => {
-                if matches!(self.infer.resolve(ty), Type::Var(_)) {
-                    if let Some((id, index)) = self.constructor_bindings.get(name).copied() {
-                        let constructor = self.infer.instantiate(&ctor_scheme(id, index));
-                        let result = match constructor {
-                            | Type::Fn(_, result) => *result,
-                            | value => value,
-                        };
-                        if let Err(error) = self.infer.unify(ty, &result) {
-                            self.report_unify(error, pattern.span);
-                        }
+                if matches!(self.infer.resolve(ty), Type::Var(_))
+                    && let Some((id, index)) = self.constructor_bindings.get(name).copied()
+                {
+                    let constructor = self.infer.instantiate(&ctor_scheme(id, index));
+                    let result = match constructor {
+                        | Type::Fn(_, result) => *result,
+                        | value => value,
+                    };
+                    if let Err(error) = self.infer.unify(ty, &result) {
+                        self.report_unify(error, pattern.span);
                     }
                 }
                 let resolved = self.infer.resolve(ty);
@@ -10648,23 +10629,23 @@ impl Checker {
                 for item in items {
                     self.bind_pattern_inner(item, &elem);
                 }
-                if let Some(name) = rest {
-                    if let Some(scope) = self.scopes.last_mut() {
-                        scope.insert(
-                            name.clone(),
-                            Scheme::mono(Type::tensor(
-                                if matches_rank {
-                                    shape
-                                        .extent(0)
-                                        .and_then(|n| n.checked_sub(items.len()))
-                                        .map_or(Shape::Rank(1), |n| Shape::refined(vec![Some(n)]))
-                                } else {
-                                    Shape::Rank(1)
-                                },
-                                (*elem).clone(),
-                            )),
-                        );
-                    }
+                if let Some(name) = rest
+                    && let Some(scope) = self.scopes.last_mut()
+                {
+                    scope.insert(
+                        name.clone(),
+                        Scheme::mono(Type::tensor(
+                            if matches_rank {
+                                shape
+                                    .extent(0)
+                                    .and_then(|n| n.checked_sub(items.len()))
+                                    .map_or(Shape::Rank(1), |n| Shape::refined(vec![Some(n)]))
+                            } else {
+                                Shape::Rank(1)
+                            },
+                            (*elem).clone(),
+                        )),
+                    );
                 }
             },
             | PatKind::Lit(lit) => {
@@ -10885,14 +10866,13 @@ impl Checker {
             },
             | TyKind::Named { path, args } => {
                 let name = path.join(".");
-                if args.is_empty() {
-                    if let Some((_, parameter)) = params
+                if args.is_empty()
+                    && let Some((_, parameter)) = params
                         .iter()
                         .rev()
                         .find(|(parameter, _)| parameter == &name)
-                    {
-                        return parameter.clone();
-                    }
+                {
+                    return parameter.clone();
                 }
                 if self.declaring_alias.as_deref() == Some(name.as_str()) {
                     self.error_help(
@@ -12255,7 +12235,7 @@ fn rssn_type(
 impl Checker {
     /// Types `Rssn.<name>` in *value* position.
     ///
-    /// An overloaded name is not a first-class value (PLAN D1): unless every
+    /// An overloaded name is not a first-class value: unless every
     /// overload has the same type, using it without a call is `E0303`.
     fn rssn_member(
         &mut self,

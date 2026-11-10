@@ -502,10 +502,10 @@ fn the_constants_module_declares_each_name_once() {
     let module = parse("Constants.aev", &text);
     let mut names: Vec<String> = Vec::new();
     for decl in &module.decls {
-        if let aevia_syntax::DeclKind::Let { pattern, .. } = &decl.kind {
-            if let aevia_syntax::PatKind::Var(name) = &pattern.kind {
-                names.push(name.clone());
-            }
+        if let aevia_syntax::DeclKind::Let { pattern, .. } = &decl.kind
+            && let aevia_syntax::PatKind::Var(name) = &pattern.kind
+        {
+            names.push(name.clone());
         }
     }
     let mut sorted = names.clone();

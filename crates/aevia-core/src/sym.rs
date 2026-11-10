@@ -513,10 +513,10 @@ impl Term {
             if value.is_zero() && exponent.is_negative() {
                 return Term::Sym("oo".to_string());
             }
-            if exponent.denom().is_one() {
-                if let Some(power) = exponent.numer().to_i32() {
-                    return rational(aevia_dim::rat::pow_int(value, power));
-                }
+            if exponent.denom().is_one()
+                && let Some(power) = exponent.numer().to_i32()
+            {
+                return rational(aevia_dim::rat::pow_int(value, power));
             }
             // `u^(1/2)` is `sqrt(u)`, so a fractional power and a square root
             // are the same term and `sqrt(2)^2` folds (§6.3.1).
@@ -526,50 +526,48 @@ impl Term {
             // A rational power of an exact number is exact when the root is:
             // `(1/4)^(1/2) = 1/2`, `8^(1/3) = 2`, `(-8)^(1/3) = -2`. Otherwise
             // the term stays formal (`2^(1/2)` is `sqrt(2)`).
-            if !exponent.denom().is_one() {
-                if let Some(degree) = exponent.denom().to_u32() {
-                    if let (Some(numerator_root), Some(denominator_root)) = (
-                        perfect_root(value.numer(), degree),
-                        perfect_root(value.denom(), degree),
-                    ) {
-                        let mut root = BigRational::new(numerator_root, denominator_root);
-                        let power = exponent.numer().clone();
-                        if power.is_negative() {
-                            if root.is_zero() {
-                                return Term::Sym("oo".to_string());
-                            }
-                            root = root.recip();
-                        }
-                        if let Some(power) = power.abs().to_i32() {
-                            return rational(aevia_dim::rat::pow_int(&root, power));
-                        }
+            if !exponent.denom().is_one()
+                && let Some(degree) = exponent.denom().to_u32()
+                && let (Some(numerator_root), Some(denominator_root)) = (
+                    perfect_root(value.numer(), degree),
+                    perfect_root(value.denom(), degree),
+                )
+            {
+                let mut root = BigRational::new(numerator_root, denominator_root);
+                let power = exponent.numer().clone();
+                if power.is_negative() {
+                    if root.is_zero() {
+                        return Term::Sym("oo".to_string());
                     }
+                    root = root.recip();
+                }
+                if let Some(power) = power.abs().to_i32() {
+                    return rational(aevia_dim::rat::pow_int(&root, power));
                 }
             }
         }
         // `sqrt(u)^(2k) = u^k`, so `sqrt(2)^2` is exactly `2` and not a float
         // that happens to print as `2` (§6.3.1).
-        if let Term::Fun(Fun::Sqrt, args) = &base {
-            if let (Some(inner), true) = (args.first(), exponent.denom().is_one()) {
-                if let Some(power) = exponent.numer().to_i32() {
-                    if power % 2 == 0 {
-                        return Term::pow(
-                            inner.clone(),
-                            BigRational::from_integer(BigInt::from(power / 2)),
-                        );
-                    }
-                }
-            }
+        if let Term::Fun(Fun::Sqrt, args) = &base
+            && let (Some(inner), true) = (args.first(), exponent.denom().is_one())
+            && let Some(power) = exponent.numer().to_i32()
+            && power % 2 == 0
+        {
+            return Term::pow(
+                inner.clone(),
+                BigRational::from_integer(BigInt::from(power / 2)),
+            );
         }
         // `(a*b)^n = a^n * b^n` for a positive integer `n`: keeps `sqrt(8)^2`
         // (`(2*sqrt(2))^2`) exact and `(2*x)^2` as `4*x^2`.
-        if let Term::Mul(factors) = &base {
-            if exponent.denom().is_one() && exponent.is_positive() {
-                return factors
-                    .iter()
-                    .map(|factor| Term::pow(factor.clone(), exponent.clone()))
-                    .fold(one(), Term::mul);
-            }
+        if let Term::Mul(factors) = &base
+            && exponent.denom().is_one()
+            && exponent.is_positive()
+        {
+            return factors
+                .iter()
+                .map(|factor| Term::pow(factor.clone(), exponent.clone()))
+                .fold(one(), Term::mul);
         }
         if let Term::Pow(inner, inner_exponent) = &base {
             // (x^a)^b = x^(ab) only when b is an integer; with a fractional
@@ -608,14 +606,14 @@ impl Term {
         args: Vec<Term>,
     ) -> Term {
         if let Fun::Ite = function {
-            if args.len() == 3 {
-                if let Term::Num(condition) = &args[0] {
-                    return if condition.is_zero() {
-                        args[2].clone()
-                    } else {
-                        args[1].clone()
-                    };
-                }
+            if args.len() == 3
+                && let Term::Num(condition) = &args[0]
+            {
+                return if condition.is_zero() {
+                    args[2].clone()
+                } else {
+                    args[1].clone()
+                };
             }
             return Term::Fun(function, args);
         }
@@ -624,10 +622,10 @@ impl Term {
                 if let Some(result) = exact_function(function, value) {
                     return rational(result);
                 }
-                if let Fun::Sqrt = function {
-                    if let Some(result) = extract_square_factor(value) {
-                        return result;
-                    }
+                if let Fun::Sqrt = function
+                    && let Some(result) = extract_square_factor(value)
+                {
+                    return result;
                 }
             }
             if let Some(result) = exact_special(function, &args[0]) {
@@ -931,7 +929,7 @@ fn perfect_root(
         return None;
     }
     let negative = value.is_negative();
-    if negative && degree % 2 == 0 {
+    if negative && degree.is_multiple_of(2) {
         return None;
     }
     // Exact integer root: no `f64` round trip, so integers above 2^53 are
@@ -1238,7 +1236,7 @@ impl Term {
                 // reader expects (`x^3 - 3*x + 1`); terms of equal degree keep
                 // their canonical order, and constants come last.
                 let mut ordered: Vec<&Term> = items.iter().collect();
-                ordered.sort_by(|a, b| display_degree(b).cmp(&display_degree(a)));
+                ordered.sort_by_key(|item| std::cmp::Reverse(display_degree(item)));
                 for (index, item) in ordered.into_iter().enumerate() {
                     if index > 0 {
                         // `… - oo` is the negative-infinity term, not `-1*oo`.
@@ -1260,32 +1258,30 @@ impl Term {
             | Self::Mul(items) => {
                 // `-1 * oo` is the extended-real negative infinity and reads as
                 // `-oo`, not `-1*oo` (§6.3.4: `ln(0)` returns `-oo`).
-                if let [Self::Num(coefficient), rest] = items.as_slice() {
-                    if coefficient == &BigRational::from_integer(BigInt::from(-1))
-                        && is_infinity_term(rest)
-                    {
-                        f.write_str("-oo")?;
-                        return Ok(());
-                    }
+                if let [Self::Num(coefficient), rest] = items.as_slice()
+                    && coefficient == &BigRational::from_integer(BigInt::from(-1))
+                    && is_infinity_term(rest)
+                {
+                    f.write_str("-oo")?;
+                    return Ok(());
                 }
                 // A leading `-1` reads as a sign: `-x`, `-sqrt(3)`, `-(a + b)`.
-                if let [Self::Num(coefficient), rest @ ..] = items.as_slice() {
-                    if coefficient == &BigRational::from_integer(BigInt::from(-1))
-                        && !rest.is_empty()
-                    {
-                        f.write_str("-")?;
-                        let tail = if rest.len() == 1 {
-                            rest[0].clone()
-                        } else {
-                            Self::Mul(rest.to_vec())
-                        };
-                        if matches!(tail, Self::Add(_)) {
-                            f.write_str("(")?;
-                            tail.render(f, repr)?;
-                            return f.write_str(")");
-                        }
-                        return tail.render(f, repr);
+                if let [Self::Num(coefficient), rest @ ..] = items.as_slice()
+                    && coefficient == &BigRational::from_integer(BigInt::from(-1))
+                    && !rest.is_empty()
+                {
+                    f.write_str("-")?;
+                    let tail = if rest.len() == 1 {
+                        rest[0].clone()
+                    } else {
+                        Self::Mul(rest.to_vec())
+                    };
+                    if matches!(tail, Self::Add(_)) {
+                        f.write_str("(")?;
+                        tail.render(f, repr)?;
+                        return f.write_str(")");
                     }
+                    return tail.render(f, repr);
                 }
                 // Factors with a negative power form the denominator:
                 // `2*(x^2 + 1)^-1*x` reads as `2*x/(x^2 + 1)`, and an
@@ -1504,16 +1500,17 @@ fn math_symbol(
 ) -> String {
     let name = display_name(name);
     // `x_1` is `x` with subscript `1`.
-    if let Some((base, sub)) = name.split_once('_') {
-        if !base.is_empty() && !sub.is_empty() {
-            let base = math_symbol(base, latex);
-            let sub = math_symbol(sub, latex);
-            return if latex {
-                format!("{base}_{{{sub}}}")
-            } else {
-                format!("{base}_({sub})")
-            };
-        }
+    if let Some((base, sub)) = name.split_once('_')
+        && !base.is_empty()
+        && !sub.is_empty()
+    {
+        let base = math_symbol(base, latex);
+        let sub = math_symbol(sub, latex);
+        return if latex {
+            format!("{base}_{{{sub}}}")
+        } else {
+            format!("{base}_({sub})")
+        };
     }
     if GREEK.contains(&name) {
         return if latex {
@@ -1559,7 +1556,7 @@ fn math_parts(
         | Term::Sym(name) => (math_symbol(name, latex), 0),
         | Term::Add(items) => {
             let mut ordered: Vec<&Term> = items.iter().collect();
-            ordered.sort_by(|a, b| display_degree(b).cmp(&display_degree(a)));
+            ordered.sort_by_key(|item| std::cmp::Reverse(display_degree(item)));
             let mut out = String::new();
             for (index, item) in ordered.into_iter().enumerate() {
                 if index == 0 {

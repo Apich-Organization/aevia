@@ -206,7 +206,7 @@ pub(crate) fn head_shape(
                     // record, and the value at run time is a record, not a variant.
                     aliases
                         .get(&name)
-                        .map_or(HeadShape::Nominal(name), |aliased| type_head_shape(aliased))
+                        .map_or(HeadShape::Nominal(name), type_head_shape)
                 } else {
                     HeadShape::Unknown
                 }
@@ -376,7 +376,7 @@ pub enum Output {
 /// Which evaluator runs a program.
 ///
 /// The AST path stays selectable: it is the semantic reference, and a feature
-/// that cannot be made to agree on both paths stays on it (§9.2.2, PLAN D2).
+/// that cannot be made to agree on both paths stays on it (§9.2.2).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     /// Walk the typed AST.
@@ -570,14 +570,14 @@ pub struct Interp {
     /// The program arguments `args()` reports (§9.12), set by the host.
     pub program_args: Vec<String>,
     /// The overload the checker pinned for each `Rssn.<op>` call site, keyed
-    /// by the call's span (PLAN D1).
+    /// by the call's span.
     ///
     /// The runtime executes this key and never resolves again: a second
     /// resolution by argument values could pick a different overload than the
     /// one the program was typed against.
     pub rssn_calls: HashMap<Span, aevia_rssn::OpKey>,
     /// The instance the checker proved for each class-method call site, keyed
-    /// by the call's span (§3.8.1, PLAN D3).
+    /// by the call's span (§3.8.1).
     ///
     /// A call the checker resolved this way runs the instance's body; the
     /// global of the same name is only the fallback for a prelude instance.
@@ -1211,21 +1211,21 @@ impl Interp {
                 if let Some(Some(body)) = self.find_instance_template(&global) {
                     return Some(Dispatch::Instance(body));
                 }
-                if self.active_scope.is_none() {
-                    if let Some(body) = self.globals.get(&*global).cloned() {
-                        return Some(Dispatch::Instance(body));
-                    }
+                if self.active_scope.is_none()
+                    && let Some(body) = self.globals.get(&*global).cloned()
+                {
+                    return Some(Dispatch::Instance(body));
                 }
                 // The checked key is authoritative. A missing user body is
                 // an error; selecting another instance would be unsound.
-                return if self.is_builtin_instance(use_site) {
+                if self.is_builtin_instance(use_site) {
                     Some(Dispatch::Builtin)
                 } else {
                     None
-                };
+                }
             },
             | DictTarget::Builtin(BuiltinDispatch::ShowStructural | BuiltinDispatch::Derived) => {
-                return Some(Dispatch::Builtin);
+                Some(Dispatch::Builtin)
             },
             | DictTarget::Witness { candidates, derived } => {
                 let templates = self.instance_templates();
@@ -1241,12 +1241,11 @@ impl Interp {
                                 runtime_head_matches(head, first, &mut HashMap::new())
                             })
                     });
-                    if let Some(entry) = matched.next() {
-                        if matched.next().is_none() {
-                            if let Some(body) = entry.instantiate() {
-                                return Some(Dispatch::Instance(body));
-                            }
-                        }
+                    if let Some(entry) = matched.next()
+                        && matched.next().is_none()
+                        && let Some(body) = entry.instantiate()
+                    {
+                        return Some(Dispatch::Instance(body));
                     }
                 }
                 // A checked candidate must be proved by the runtime value;
@@ -1270,7 +1269,7 @@ impl Interp {
                         return Some(Dispatch::Builtin);
                     }
                 }
-                return None;
+                None
             },
         }
     }
@@ -1384,7 +1383,7 @@ impl Interp {
     /// Selects which evaluator runs the program.
     ///
     /// The AST path is the semantic reference; the IR path is the default once
-    /// the two agree on the whole suite (§9.2.2, PLAN D2).
+    /// the two agree on the whole suite (§9.2.2).
     #[must_use]
     pub fn with_mode(
         mut self,
@@ -1437,7 +1436,7 @@ impl Interp {
     #[must_use]
     pub fn root(&self) -> Rc<Scope> {
         let mut imports = self.module_scopes.iter().collect::<Vec<_>>();
-        imports.sort_by(|(a, _), (b, _)| a.cmp(b));
+        imports.sort_by_key(|(a, _)| *a);
         let scope = Scope::module(
             self.context.clone(),
             imports
@@ -1556,21 +1555,20 @@ impl Interp {
                 ..
             },
         ) = (&ty, &mut value)
+            && let aevia_types::Type::Adt(result_id, _) = result.as_ref()
         {
-            if let aevia_types::Type::Adt(result_id, _) = result.as_ref() {
-                let authentic = source_constructor.is_some_and(|(declared, declared_index)| {
-                    declared_index == *index && adt::same_type(declared, *adt)
-                });
-                if authentic
-                    && token.adt == *adt
-                    && token.index == *index
-                    && token.name == *name
-                    && adt::same_type(*result_id, *adt)
-                    && !aevia_types::class::has_variables(result)
-                    && token.selected_result.is_none()
-                {
-                    token.selected_result = Some((**result).clone());
-                }
+            let authentic = source_constructor.is_some_and(|(declared, declared_index)| {
+                declared_index == *index && adt::same_type(declared, *adt)
+            });
+            if authentic
+                && token.adt == *adt
+                && token.index == *index
+                && token.name == *name
+                && adt::same_type(*result_id, *adt)
+                && !aevia_types::class::has_variables(result)
+                && token.selected_result.is_none()
+            {
+                token.selected_result = Some((**result).clone());
             }
         }
         if aevia_types::class::has_variables(&ty) {
@@ -1586,12 +1584,11 @@ impl Interp {
                 && variant.type_args.is_none()
                 && adt::same_type(*id, variant.adt)
                 && crate::host_witness::checked_constructor_result(&value, &ty)
+                && let Value::Variant(variant) = &mut value
             {
-                if let Value::Variant(variant) = &mut value {
-                    let variant = Rc::make_mut(variant);
-                    variant.verified_type = Some(ty.clone());
-                    variant.type_args = Some(args.clone());
-                }
+                let variant = Rc::make_mut(variant);
+                variant.verified_type = Some(ty.clone());
+                variant.type_args = Some(args.clone());
             }
         }
         value
@@ -1756,7 +1753,7 @@ impl Interp {
             return self.apply_source_call(function, values, expr.span, callee.span, &arg_spans);
         }
         // `Rssn.<op>(…)`: execute the overload the checker pinned at
-        // this call site (PLAN D1). There is no fallback — resolving
+        // this call site. There is no fallback — resolving
         // again here would let the executed overload differ from the
         // typed one, which is the unsoundness the pin exists to
         // remove. An unknown key is `E1005`, never a re-resolution.
@@ -1772,14 +1769,14 @@ impl Interp {
         // unreachable — it lives under a mangled global that no
         // program can name — and the call would run the global of the
         // method name instead.
-        if let ExprKind::Var(name) = &callee.kind {
-            if let Some(use_site) = self.dictionary_use(expr.span, name) {
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval(arg, env)?);
-                }
-                return self.run_dictionary(&use_site, name, values, expr.span);
+        if let ExprKind::Var(name) = &callee.kind
+            && let Some(use_site) = self.dictionary_use(expr.span, name)
+        {
+            let mut values = Vec::with_capacity(args.len());
+            for arg in args {
+                values.push(self.eval(arg, env)?);
             }
+            return self.run_dictionary(&use_site, name, values, expr.span);
         }
         let function = self.eval_callee(callee, env)?;
         let mut values = Vec::with_capacity(args.len());
@@ -2007,10 +2004,10 @@ impl Interp {
                     // `Rssn.sin` is a kernel operator, not a record field.
                     return Ok(crate::rssn_module::member(name));
                 }
-                if let Some(qualified) = qualified_name(base, name) {
-                    if self.globals.contains_key(&qualified) {
-                        return self.lookup(&qualified, env, expr.span);
-                    }
+                if let Some(qualified) = qualified_name(base, name)
+                    && self.globals.contains_key(&qualified)
+                {
+                    return self.lookup(&qualified, env, expr.span);
                 }
                 match self.eval(base, env)? {
                     | Value::Record(record) => {
@@ -2104,10 +2101,10 @@ impl Interp {
         if !self.constants_seeded && matches!(name, "pi" | "oo" | "e" | "nan" | "i") {
             self.seed_constants();
         }
-        if let Some(scope) = scope {
-            if let Some(value) = scope.lookup(name) {
-                return Ok(value);
-            }
+        if let Some(scope) = scope
+            && let Some(value) = scope.lookup(name)
+        {
+            return Ok(value);
         }
         if let Some(reference) = self
             .context
@@ -2164,10 +2161,10 @@ impl Interp {
         if let Some(unit) = source_units.lookup(name) {
             return Ok(Value::UnitOf(Rc::new(unit)));
         }
-        if let Some((adt, index, _)) = adt::find_prelude_ctor(name) {
-            if let Some(value) = source_ctor_value_at(adt, index) {
-                return Ok(value);
-            }
+        if let Some((adt, index, _)) = adt::find_prelude_ctor(name)
+            && let Some(value) = source_ctor_value_at(adt, index)
+        {
+            return Ok(value);
         }
         Err(EvalError::new("E0301", format!("unbound name `{name}`")).at(span))
     }
@@ -2337,13 +2334,13 @@ impl Interp {
         // (`299792458 m/s` is `1` in natural units) is a pure number; showing
         // it in its SI unit would print `299792458 m*s^-1` for the value 1.
         let units = &self.context.evidence.units;
-        if units.system().is_some() {
-            if let Value::Num(mut num) = quantity {
-                if num.dim.is_one() && units.resolve_si(unit).is_ok_and(|si| !si.dim.is_one()) {
-                    num.display = None;
-                }
-                return Ok(Value::Num(num));
+        if units.system().is_some()
+            && let Value::Num(mut num) = quantity
+        {
+            if num.dim.is_one() && units.resolve_si(unit).is_ok_and(|si| !si.dim.is_one()) {
+                num.display = None;
             }
+            return Ok(Value::Num(num));
         }
         Ok(quantity)
     }
@@ -2549,12 +2546,11 @@ impl Interp {
         // question directly. It declines anything it is not certain about
         // (dimensions, display units, other representations, division, powers)
         // and leaves those to the general path.
-        if let (Value::Num(a), Value::Num(b)) = (&left, &right) {
-            if let (Some(a), Some(b)) = (Scalar::of(a), Scalar::of(b)) {
-                if let Some(result) = plain_scalar_binary(op, a, b) {
-                    return Ok(result);
-                }
-            }
+        if let (Value::Num(a), Value::Num(b)) = (&left, &right)
+            && let (Some(a), Some(b)) = (Scalar::of(a), Scalar::of(b))
+            && let Some(result) = plain_scalar_binary(op, a, b)
+        {
+            return Ok(result);
         }
         if matches!(left, Value::Sparse(_)) || matches!(right, Value::Sparse(_)) {
             return crate::sparse::binary(self, op, left, right, span);
@@ -3415,28 +3411,28 @@ impl Interp {
             .at(span)
         })?;
         let count = TensorData::element_count(&shape);
-        if count == 0 && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
-            if let (Storage::TypedExact(_, a), Storage::TypedExact(_, b)) =
+        if count == 0
+            && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+            && let (Storage::TypedExact(_, a), Storage::TypedExact(_, b)) =
                 (left.storage.backing(), right.storage.backing())
-            {
-                let rep = if *a == value::ExactRep::Int && *b == value::ExactRep::Int {
-                    value::ExactRep::Int
-                } else {
-                    value::ExactRep::Real
-                };
-                let dim = if op == BinOp::Mul {
-                    left.dim.mul(&right.dim)
-                } else {
-                    left.dim.clone()
-                };
-                return Ok(Value::Tensor(Rc::new(TensorData {
-                    verified_element: None,
-                    shape,
-                    storage: Storage::TypedExact(Vec::new(), rep),
-                    dim,
-                    display: None,
-                })));
-            }
+        {
+            let rep = if *a == value::ExactRep::Int && *b == value::ExactRep::Int {
+                value::ExactRep::Int
+            } else {
+                value::ExactRep::Real
+            };
+            let dim = if op == BinOp::Mul {
+                left.dim.mul(&right.dim)
+            } else {
+                left.dim.clone()
+            };
+            return Ok(Value::Tensor(Rc::new(TensorData {
+                verified_element: None,
+                shape,
+                storage: Storage::TypedExact(Vec::new(), rep),
+                dim,
+                display: None,
+            })));
         }
         let mut elements = Vec::with_capacity(count);
         for index in 0..count {
@@ -3712,93 +3708,90 @@ impl Interp {
         types: &[aevia_syntax::ast::Ty],
         span: Span,
     ) -> Value {
-        if let Value::Closure(closure) = &function {
-            if let Some(proof) = &closure.proof {
-                if !proof.definition.binders.is_empty() {
-                    let selected =
-                        self.checked_callable_selection(proof, span, true)
-                            .and_then(|selected| {
-                                if let Some(expected @ aevia_types::Type::Fn(..)) =
-                                    self.resolved_expr_type(span)
-                                {
-                                    selected.specialize(&expected)
-                                } else {
-                                    Ok(selected)
-                                }
-                            });
-                    return match selected {
-                        | Ok(proof) => {
-                            Value::Closure(crate::generics::specialize_closure(closure, proof))
-                        },
-                        | Err(error) => {
-                            Value::Native(Rc::new(NativeFn(Box::new(move |_, _, _| {
-                                Err(error.clone())
-                            }))))
-                        },
-                    };
-                }
-            }
+        if let Value::Closure(closure) = &function
+            && let Some(proof) = &closure.proof
+            && !proof.definition.binders.is_empty()
+        {
+            let selected =
+                self.checked_callable_selection(proof, span, true)
+                    .and_then(|selected| {
+                        if let Some(expected @ aevia_types::Type::Fn(..)) =
+                            self.resolved_expr_type(span)
+                        {
+                            selected.specialize(&expected)
+                        } else {
+                            Ok(selected)
+                        }
+                    });
+            return match selected {
+                | Ok(proof) => Value::Closure(crate::generics::specialize_closure(closure, proof)),
+                | Err(error) => {
+                    Value::Native(Rc::new(NativeFn(Box::new(move |_, _, _| {
+                        Err(error.clone())
+                    }))))
+                },
+            };
         }
         if let Some(expected) = self.resolved_expr_type(span) {
             let result = match &expected {
                 | aevia_types::Type::Fn(_, result) => result.as_ref(),
                 | ty => ty,
             };
-            if let aevia_types::Type::Adt(expected_id, _) = result {
-                if !aevia_types::class::has_variables(result) {
-                    match &function {
-                        | Value::Ctor {
-                            adt,
-                            index,
-                            name,
-                            origin: Some(origin),
-                            ..
-                        } if origin.adt == *adt
-                            && origin.index == *index
-                            && origin.name == *name
-                            && adt::same_type(*adt, *expected_id) =>
+            if let aevia_types::Type::Adt(expected_id, _) = result
+                && !aevia_types::class::has_variables(result)
+            {
+                match &function {
+                    | Value::Ctor {
+                        adt,
+                        index,
+                        name,
+                        origin: Some(origin),
+                        ..
+                    } if origin.adt == *adt
+                        && origin.index == *index
+                        && origin.name == *name
+                        && adt::same_type(*adt, *expected_id) =>
+                    {
+                        if origin
+                            .selected_result
+                            .as_ref()
+                            .is_none_or(|old| crate::host_witness::strict_schema_equal(old, result))
                         {
-                            if origin.selected_result.as_ref().is_none_or(|old| {
-                                crate::host_witness::strict_schema_equal(old, result)
-                            }) {
-                                let mut selected = function.clone();
-                                if let Value::Ctor {
-                                    origin: Some(origin), ..
-                                } = &mut selected
-                                {
-                                    origin.selected_result = Some(result.clone());
-                                }
-                                return selected;
-                            }
-                        },
-                        | Value::Variant(variant)
-                            if variant.constructor_origin
-                                && adt::same_type(variant.adt, *expected_id) =>
-                        {
-                            if variant.verified_type.as_ref().is_some_and(|old| {
-                                crate::host_witness::strict_schema_equal(old, result)
-                            }) {
-                                return function;
-                            }
-                            if variant.verified_type.is_none()
-                                && variant.type_args.is_none()
-                                && crate::host_witness::checked_constructor_result(
-                                    &function, result,
-                                )
+                            let mut selected = function.clone();
+                            if let Value::Ctor {
+                                origin: Some(origin), ..
+                            } = &mut selected
                             {
-                                let mut selected = function.clone();
-                                if let Value::Variant(variant) = &mut selected {
-                                    let variant = Rc::make_mut(variant);
-                                    variant.verified_type = Some(result.clone());
-                                    if let aevia_types::Type::Adt(_, args) = result {
-                                        variant.type_args = Some(args.clone());
-                                    }
-                                }
-                                return selected;
+                                origin.selected_result = Some(result.clone());
                             }
-                        },
-                        | _ => {},
-                    }
+                            return selected;
+                        }
+                    },
+                    | Value::Variant(variant)
+                        if variant.constructor_origin
+                            && adt::same_type(variant.adt, *expected_id) =>
+                    {
+                        if variant.verified_type.as_ref().is_some_and(|old| {
+                            crate::host_witness::strict_schema_equal(old, result)
+                        }) {
+                            return function;
+                        }
+                        if variant.verified_type.is_none()
+                            && variant.type_args.is_none()
+                            && crate::host_witness::checked_constructor_result(&function, result)
+                        {
+                            let mut selected = function.clone();
+                            if let Value::Variant(variant) = &mut selected {
+                                let variant = Rc::make_mut(variant);
+                                variant.verified_type = Some(result.clone());
+                                if let aevia_types::Type::Adt(_, args) = result {
+                                    variant.type_args = Some(args.clone());
+                                }
+                            }
+                            return selected;
+                        }
+                    },
+                    | _ => {},
                 }
             }
         }
@@ -4032,22 +4025,21 @@ impl Interp {
             // value to re-prove it made every `Cons(x, acc)` linear in `acc`
             // (and building a list quadratic). Only a type that still has
             // variables is checked against the payload.
-            if crate::host_witness::checked_constructor_result(&result, &ty) {
-                if let Value::Variant(variant) = &mut result {
-                    let variant = Rc::make_mut(variant);
-                    variant.verified_type = Some(ty.clone());
-                    if let aevia_types::Type::Adt(_, args) = ty {
-                        variant.type_args = Some(args);
-                    }
+            if crate::host_witness::checked_constructor_result(&result, &ty)
+                && let Value::Variant(variant) = &mut result
+            {
+                let variant = Rc::make_mut(variant);
+                variant.verified_type = Some(ty.clone());
+                if let aevia_types::Type::Adt(_, args) = ty {
+                    variant.type_args = Some(args);
                 }
             }
         }
-        if let Some((value, ty)) = input {
-            if let Some(witness) = crate::host_witness::capture(&value, &ty, false) {
-                if let Value::KernelValue(kernel) = &mut result {
-                    Rc::make_mut(kernel).host_witness = Some(Rc::new(witness));
-                }
-            }
+        if let Some((value, ty)) = input
+            && let Some(witness) = crate::host_witness::capture(&value, &ty, false)
+            && let Value::KernelValue(kernel) = &mut result
+        {
+            Rc::make_mut(kernel).host_witness = Some(Rc::new(witness));
         }
         Ok(result)
     }
@@ -4469,7 +4461,7 @@ impl Interp {
 
     /// Executes a `Rssn.<op>` call with the overload the checker pinned.
     ///
-    /// There is no fallback (PLAN D1): resolving again here would let the
+    /// There is no fallback: resolving again here would let the
     /// executed overload differ from the one the program was typed against, so
     /// an unknown key is `E1005`.
     pub(crate) fn call_rssn(
@@ -4605,70 +4597,70 @@ impl Interp {
         let mut value = self.tensor_from_values_unverified(values, span)?;
         // This function is called only for an actual AST/IR tensor literal,
         // never for a variable read or a host higher-order apply.
-        if let Some(aevia_types::Type::Tensor { shape, elem }) = self.resolved_expr_type(span) {
-            if let Value::Tensor(tensor) = &mut value {
-                // Empty literal storage has no elements from which to learn a
-                // representation. Its own checked literal type may supply it;
-                // unlike a variable read, this is a genuine creation site.
-                if tensor.storage.is_empty()
-                    && matches!(tensor.storage, Storage::Boxed(_))
-                    && tensor.shape.len() == shape.rank() as usize
-                    && tensor
-                        .shape
-                        .iter()
-                        .enumerate()
-                        .all(|(i, n)| shape.extent(i).is_none_or(|e| e == *n))
-                {
-                    let choice = match elem.as_ref() {
-                        | aevia_types::Type::Scalar(Rep::Int, dim) => {
-                            Some((
-                                Storage::TypedExact(Vec::new(), value::ExactRep::Int),
-                                dim.clone(),
-                            ))
-                        },
-                        | aevia_types::Type::Scalar(Rep::Real, dim) => {
-                            Some((
-                                Storage::TypedExact(Vec::new(), value::ExactRep::Real),
-                                dim.clone(),
-                            ))
-                        },
-                        | aevia_types::Type::Scalar(Rep::Float, dim) => {
-                            Some((Storage::Dense(Rc::new(Vec::new())), dim.clone()))
-                        },
-                        | aevia_types::Type::Bool => Some((Storage::Bool(Vec::new()), Dim::one())),
-                        | _ => None,
-                    };
-                    if let Some((storage, dim)) = choice {
-                        let tensor = Rc::make_mut(tensor);
-                        tensor.storage = storage;
-                        tensor.dim = dim;
-                    }
+        if let Some(aevia_types::Type::Tensor { shape, elem }) = self.resolved_expr_type(span)
+            && let Value::Tensor(tensor) = &mut value
+        {
+            // Empty literal storage has no elements from which to learn a
+            // representation. Its own checked literal type may supply it;
+            // unlike a variable read, this is a genuine creation site.
+            if tensor.storage.is_empty()
+                && matches!(tensor.storage, Storage::Boxed(_))
+                && tensor.shape.len() == shape.rank() as usize
+                && tensor
+                    .shape
+                    .iter()
+                    .enumerate()
+                    .all(|(i, n)| shape.extent(i).is_none_or(|e| e == *n))
+            {
+                let choice = match elem.as_ref() {
+                    | aevia_types::Type::Scalar(Rep::Int, dim) => {
+                        Some((
+                            Storage::TypedExact(Vec::new(), value::ExactRep::Int),
+                            dim.clone(),
+                        ))
+                    },
+                    | aevia_types::Type::Scalar(Rep::Real, dim) => {
+                        Some((
+                            Storage::TypedExact(Vec::new(), value::ExactRep::Real),
+                            dim.clone(),
+                        ))
+                    },
+                    | aevia_types::Type::Scalar(Rep::Float, dim) => {
+                        Some((Storage::Dense(Rc::new(Vec::new())), dim.clone()))
+                    },
+                    | aevia_types::Type::Bool => Some((Storage::Bool(Vec::new()), Dim::one())),
+                    | _ => None,
+                };
+                if let Some((storage, dim)) = choice {
+                    let tensor = Rc::make_mut(tensor);
+                    tensor.storage = storage;
+                    tensor.dim = dim;
                 }
-                let checked_shape = tensor.shape.len() == shape.rank() as usize
-                    && tensor.shape.iter().enumerate().all(|(axis, extent)| {
-                        shape
-                            .extent(axis)
-                            .is_none_or(|expected| expected == *extent)
-                    })
-                    && tensor
-                        .shape
-                        .iter()
-                        .try_fold(1usize, |count, extent| count.checked_mul(*extent))
-                        == Some(tensor.storage.len());
-                // Opaque callable values have their own private proof. They
-                // cannot pass through the numerical host witness validator.
-                let checked_elements = !aevia_types::class::has_variables(&elem)
-                    && checked_shape
-                    && (0..tensor.storage.len()).all(|index| {
-                        tensor
-                            .get_flat(index)
-                            .is_some_and(|value| self.runtime_input_matches(&value, &elem))
-                    });
-                if checked_elements
-                    || crate::host_witness::tensor_witnesses(tensor, &shape, &elem, true).is_some()
-                {
-                    Rc::make_mut(tensor).verified_element = Some(Rc::new(*elem));
-                }
+            }
+            let checked_shape = tensor.shape.len() == shape.rank() as usize
+                && tensor.shape.iter().enumerate().all(|(axis, extent)| {
+                    shape
+                        .extent(axis)
+                        .is_none_or(|expected| expected == *extent)
+                })
+                && tensor
+                    .shape
+                    .iter()
+                    .try_fold(1usize, |count, extent| count.checked_mul(*extent))
+                    == Some(tensor.storage.len());
+            // Opaque callable values have their own private proof. They
+            // cannot pass through the numerical host witness validator.
+            let checked_elements = !aevia_types::class::has_variables(&elem)
+                && checked_shape
+                && (0..tensor.storage.len()).all(|index| {
+                    tensor
+                        .get_flat(index)
+                        .is_some_and(|value| self.runtime_input_matches(&value, &elem))
+                });
+            if checked_elements
+                || crate::host_witness::tensor_witnesses(tensor, &shape, &elem, true).is_some()
+            {
+                Rc::make_mut(tensor).verified_element = Some(Rc::new(*elem));
             }
         }
         Ok(value)
@@ -5041,11 +5033,11 @@ impl Interp {
                 }
             }
             if count == 0 {
-                return Ok(empty_tensor_like(&tensor, new_shape));
+                return Ok(empty_tensor_like(tensor, new_shape));
             }
             return Ok(crate::host_witness::preserve_tensor_schema(
                 build_tensor(elements, new_shape, tensor.dim.clone()),
-                &tensor,
+                tensor,
             ));
         }
         while ranges.len() < tensor.rank() {
@@ -5074,11 +5066,11 @@ impl Interp {
             }
         }
         if count == 0 {
-            return Ok(empty_tensor_like(&tensor, new_shape));
+            return Ok(empty_tensor_like(tensor, new_shape));
         }
         Ok(crate::host_witness::preserve_tensor_schema(
             build_tensor(elements, new_shape, tensor.dim.clone()),
-            &tensor,
+            tensor,
         ))
     }
 

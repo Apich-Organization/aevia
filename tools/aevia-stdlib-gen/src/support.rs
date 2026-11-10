@@ -25,6 +25,8 @@ pub fn constants_module_source() -> String {
 
 /// `Units.Natural`, `Units.Planck`, ...: the constants in one unit system
 /// (§5.11.7), from the same manifest tables as `Units.Constants`.
+// Shared with the standard-library tests by path; the generator itself does not call it.
+#[allow(dead_code)]
 pub fn system_module_source(
     path: &str,
     system: &str,

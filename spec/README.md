@@ -13,8 +13,8 @@ the same expression; units, dimensional inference, rewriting, numerical kernels,
 JIT compilation and physics simulations are provided by the backend. Aevia does
 not maintain a second operator list or a second unit table: it consumes the
 RSSN **Kernel Manifest** and `rssn::dim` registry, and generates its `Rssn`
-module from them. See [13 — Extensibility](13-extensibility.md) and the
-[backend requirements](../RSSN-INTEGRATION-REQUIREMENTS.md).
+module from them. See [13 — Extensibility](13-extensibility.md) and the kernel
+documentation in the rssn repository (`docs/KERNEL.md`).
 
 > This document is the **normative design**. It is written to be implementable:
 > the grammar is complete, the typing rules are stated, the runtime architecture
@@ -45,8 +45,9 @@ module from them. See [13 — Extensibility](13-extensibility.md) and the
 | [Appendix B — Diagnostics](appendix-b-diagnostics.md) | Error codes and message format | Yes |
 | [Appendix C — Changelog](appendix-c-changelog.md) | Audit revisions | Informational |
 
-后端接口清单：[`RSSN-INTEGRATION-REQUIREMENTS.md`](../RSSN-INTEGRATION-REQUIREMENTS.md)。这是
-Aevia 规范能够成立的前提，不是可选的实现细节。
+后端接口契约在 rssn 仓库的 `docs/KERNEL.md`（Kernel Manifest、动态调用 ABI、
+插件、单位与量纲）和 `docs/DIMENSIONS.md` 中。这是 Aevia 规范能够成立的前提，不是
+可选的实现细节。实现的 crate 划分见本仓库根目录的 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ## Conformance language
 
@@ -59,19 +60,14 @@ diagnostic category (the exact wording is not normative).
 ## Design status
 
 This is a **design standard**, not a frozen implementation. Chapters marked
-normative are intended to be implemented as written; the changelog records every
-audit round. The current text is **Revision 10**, after six rounds of independent
-audits plus the extensibility/backend-integration redesign, the live-kernel
-alignment with **`rssn 3.0.0-rc.1`** (now **1381 operators, 32 rule sets, 24
-overlays, 82 units**, with `features.sde`; see appendix C), and the second
-implementation round: symbolic instance keys and module-exported classes/
-instances/aliases, the §8.20 standard-library module tree (38 generated modules with the
-loader fallback), typed SDE surface (§8.9.1) over the kernel's §SDE operators,
-type-level `Nat` linear unification, and the tooling completion (doctests, bench
-baselines, multi-module editor analysis). Revision 9 states the dispatch/extension
-boundary explicitly (no runtime multimethods, no multi-parameter classes, no
-per-type monomorphization; instances selected statically or by canonical
-witnesses) and Revision 10 expands that into the implemented instance-key model.
+normative are intended to be implemented as written; [appendix C](appendix-c-changelog.md)
+records every revision and the known gaps. The current text is **Revision 13**,
+aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`; its Kernel Manifest at that
+version has 1476 operators in 37 rule sets, 25 signature overlays, 82 units and 30
+constants — the live counts come from `aevia rssn`, not from this paragraph).
+Dispatch and extension follow the boundary stated in chapter 13: no runtime
+multimethods, no multi-parameter classes, no per-type monomorphization; instances
+are selected statically or by canonical witnesses.
 There is **no v1/v2 language split**: every capability is designed in; a backend
 that does not yet implement one reports a capability diagnostic (`E1001`) instead
 of removing the language feature.

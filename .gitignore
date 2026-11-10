@@ -20,9 +20,7 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 .workbuddy-ai/
-PLAN.md
-STATUS.md
-RSSN-INTEGRATION-REQUIREMENTS.md
 
 # Per-module .aevi cache and build products (spec 9.11)
 .aevia/
+.claude/

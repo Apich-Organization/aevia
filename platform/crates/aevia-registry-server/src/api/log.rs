@@ -58,22 +58,26 @@ pub async fn entries(
     let from = query.from.unwrap_or(0).max(0);
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let rows = repo::log_entries(&state.pool, from, limit).await?;
-    let head = repo::log_head(&state.pool).await?.map(|entry| Head {
-        seq: entry.seq,
-        hash: entry.entry_hash,
-        at: entry.created_at.to_rfc3339(),
+    let head = repo::log_head(&state.pool).await?.map(|entry| {
+        Head {
+            seq: entry.seq,
+            hash: entry.entry_hash,
+            at: entry.created_at.to_rfc3339(),
+        }
     });
     Ok(Json(LogPage {
         head,
         entries: rows
             .iter()
-            .map(|entry| LogEntryView {
-                seq: entry.seq,
-                kind: entry.kind.clone(),
-                summary: entry.summary.clone(),
-                hash: entry.entry_hash.clone(),
-                prev: entry.prev_hash.clone(),
-                at: entry.created_at.to_rfc3339(),
+            .map(|entry| {
+                LogEntryView {
+                    seq: entry.seq,
+                    kind: entry.kind.clone(),
+                    summary: entry.summary.clone(),
+                    hash: entry.entry_hash.clone(),
+                    prev: entry.prev_hash.clone(),
+                    at: entry.created_at.to_rfc3339(),
+                }
             })
             .collect(),
     }))

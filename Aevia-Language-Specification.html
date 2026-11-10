@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>Aevia Language Specification — Revision 12</title>
+  <title>Aevia Language Specification — Revision 13</title>
   <style>
     /* Default styles provided by pandoc.
     ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -238,10 +238,10 @@
 </head>
 <body>
 <header id="title-block-header">
-<h1 class="title">Aevia Language Specification — Revision 12</h1>
+<h1 class="title">Aevia Language Specification — Revision 13</h1>
 </header>
 <h1 id="aevia-language-specification">Aevia Language Specification</h1>
-<p><strong>Single-file edition — Revision 12</strong></p>
+<p><strong>Single-file edition — Revision 13</strong></p>
 <blockquote>
 <p>本文件由 <code>spec/</code>
 下的章节按顺序合并生成（<code>tools/bundle_spec.py</code>）；章节内的相对链接在单文件版中不再可用。</p>
@@ -288,8 +288,8 @@ simulations are provided by the backend. Aevia does not maintain a
 second operator list or a second unit table: it consumes the RSSN
 <strong>Kernel Manifest</strong> and <code>rssn::dim</code> registry,
 and generates its <code>Rssn</code> module from them. See <a
-href="13-extensibility.md">13 — Extensibility</a> and the <a
-href="../RSSN-INTEGRATION-REQUIREMENTS.md">backend requirements</a>.</p>
+href="13-extensibility.md">13 — Extensibility</a> and the kernel
+documentation in the rssn repository (<code>docs/KERNEL.md</code>).</p>
 <blockquote>
 <p>This document is the <strong>normative design</strong>. It is written
 to be implementable: the grammar is complete, the typing rules are
@@ -396,9 +396,11 @@ Diagnostics</a></td>
 </tr>
 </tbody>
 </table>
-<p>后端接口清单：<a
-href="../RSSN-INTEGRATION-REQUIREMENTS.md"><code>RSSN-INTEGRATION-REQUIREMENTS.md</code></a>。这是
-Aevia 规范能够成立的前提，不是可选的实现细节。</p>
+<p>后端接口契约在 rssn 仓库的 <code>docs/KERNEL.md</code>（Kernel
+Manifest、动态调用 ABI、 插件、单位与量纲）和
+<code>docs/DIMENSIONS.md</code> 中。这是 Aevia 规范能够成立的前提，不是
+可选的实现细节。实现的 crate 划分见本仓库根目录的 <a
+href="../ARCHITECTURE.md">ARCHITECTURE.md</a>。</p>
 <h2 id="conformance-language">Conformance language</h2>
 <p>The key words <strong>MUST</strong>, <strong>MUST NOT</strong>,
 <strong>REQUIRED</strong>, <strong>SHOULD</strong>, <strong>SHOULD
@@ -410,25 +412,19 @@ wording is not normative).</p>
 <h2 id="design-status">Design status</h2>
 <p>This is a <strong>design standard</strong>, not a frozen
 implementation. Chapters marked normative are intended to be implemented
-as written; the changelog records every audit round. The current text is
-<strong>Revision 10</strong>, after six rounds of independent audits
-plus the extensibility/backend-integration redesign, the live-kernel
-alignment with <strong><code>rssn 3.0.0-rc.1</code></strong> (now
-<strong>1381 operators, 32 rule sets, 24 overlays, 82 units</strong>,
-with <code>features.sde</code>; see appendix C), and the second
-implementation round: symbolic instance keys and module-exported
-classes/ instances/aliases, the §8.20 standard-library module tree (38
-generated modules with the loader fallback), typed SDE surface (§8.9.1)
-over the kernel's §SDE operators, type-level <code>Nat</code> linear
-unification, and the tooling completion (doctests, bench baselines,
-multi-module editor analysis). Revision 9 states the dispatch/extension
-boundary explicitly (no runtime multimethods, no multi-parameter
-classes, no per-type monomorphization; instances selected statically or
-by canonical witnesses) and Revision 10 expands that into the
-implemented instance-key model. There is <strong>no v1/v2 language
-split</strong>: every capability is designed in; a backend that does not
-yet implement one reports a capability diagnostic (<code>E1001</code>)
-instead of removing the language feature.</p>
+as written; <a href="appendix-c-changelog.md">appendix C</a> records
+every revision and the known gaps. The current text is <strong>Revision
+13</strong>, aligned with <strong><code>rssn 3.0.0-rc.1</code></strong>
+(<code>api_version = 2</code>; its Kernel Manifest at that version has
+1476 operators in 37 rule sets, 25 signature overlays, 82 units and 30
+constants — the live counts come from <code>aevia rssn</code>, not from
+this paragraph). Dispatch and extension follow the boundary stated in
+chapter 13: no runtime multimethods, no multi-parameter classes, no
+per-type monomorphization; instances are selected statically or by
+canonical witnesses. There is <strong>no v1/v2 language split</strong>:
+every capability is designed in; a backend that does not yet implement
+one reports a capability diagnostic (<code>E1001</code>) instead of
+removing the language feature.</p>
 <h2 id="a-one-sentence-summary">A one-sentence summary</h2>
 <blockquote>
 <p>Aevia makes the dimension of a quantity a type, the unit a
@@ -5806,6 +5802,110 @@ FFI/导出。</strong> 静态路径的项图 无量纲，用
 <code>Off</code>；<code>Dyn&lt;ρ&gt;</code> 的量纲由宿主保存为
 <code>DimTerm</code>，不依赖字符串。</li>
 </ol>
+<h2 id="511-单位制">5.11 单位制</h2>
+<p>物理学家常把几个常数取作
+1（<code>c = 1</code>、<code>ħ = 1</code>），于是长度成为能量的倒数。Aevia
+把这件事做成<strong>模块级的量纲约化</strong>，而不是另一套数值：模块里<em>写出来</em>的量纲随
+单位制化简，而每一个值仍然是诚实的 SI 量。</p>
+<h3 id="5111-选择单位制">5.11.1 选择单位制</h3>
+<p>单位制由模块头选择，名字是一个标识符：</p>
+<pre class="aevia"><code>module Hep with units natural</code></pre>
+<p>kernel 提供四个单位制（来自 <code>manifest.unit_systems</code>，Aevia
+不自带第二份）：</p>
+<table>
+<thead>
+<tr>
+<th>名字</th>
+<th>取作 1 的量</th>
+<th>约化后剩下的生成量纲</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>natural</code></td>
+<td><code>c</code>、<code>hbar</code>、<code>k_B</code>、<code>epsilon_0</code>（Heaviside–Lorentz）</td>
+<td>能量、物质的量、发光强度</td>
+</tr>
+<tr>
+<td><code>planck</code></td>
+<td><code>c</code>、<code>hbar</code>、<code>G</code>、<code>k_B</code>、<code>4 pi epsilon_0</code></td>
+<td>物质的量、发光强度</td>
+</tr>
+<tr>
+<td><code>atomic</code></td>
+<td><code>hbar</code>、<code>m_e</code>、<code>e</code>、<code>4 pi epsilon_0</code></td>
+<td>温度、物质的量、发光强度</td>
+</tr>
+<tr>
+<td><code>geometrized</code></td>
+<td><code>c</code>、<code>G</code></td>
+<td>长度、电流、温度、物质的量、发光强度</td>
+</tr>
+</tbody>
+</table>
+<p><code>Units.Natural</code>、<code>Units.Planck</code>、<code>Units.Atomic</code>、<code>Units.Geometrized</code>（§5.8）是
+这些单位制下的常数模块，由 <code>manifest.unit_systems</code> 与
+<code>manifest.constants</code>
+生成；<code>c</code>、<code>hbar</code>、<code>k_B</code> 在
+<code>Units.Natural</code> 里由约化本身得到精确的 <code>1</code>，不是
+手写的特例。</p>
+<h3 id="5112-约化">5.11.2 约化</h3>
+<p>取单位制的“取作 1 的量”的量纲 <code>q₁ … q_k</code> 与生成量纲
+<code>g₁ … g_m</code>，它们必须是七个 SI
+基量纲在有理数上的一组基。于是每个 SI 量纲 <code>d</code> 唯一分解为</p>
+<pre><code>d = Π qᵢ^λᵢ · Π gⱼ^μⱼ</code></pre>
+<p><code>Π gⱼ^μⱼ</code> 称为 <code>d</code>
+的<strong>代表</strong>，记作 <code>R(d)</code>。量纲为 <code>d</code>
+的量 <code>x</code> 的<strong>单位制值</strong>是
+<code>x / Π Qᵢ^λᵢ</code>（<code>Qᵢ</code> 是第 i 个量的精确 SI
+值）；它本身是量纲为 <code>R(d)</code> 的 SI 量。 例如在
+<code>natural</code> 中
+<code>R(L) = R(T) = Energy^-1</code>，<code>1 m</code> 的单位制值是
+<code>1 m / (ħ c) ≈ 5.07e24 J⁻¹</code>。用户基量纲与量纲变量不在七个 SI
+基量纲张成的空间里， 约化不改动它们。</p>
+<p>在带单位制的模块中，<strong>该模块里写出的</strong>量纲标注与单位字面量都先约化再检查，
+所以 <code>fn f(x: Real[L]): Real[L]</code> 与
+<code>fn f(x: Real[T]): Real[T]</code> 在 <code>natural</code> 里是
+同一个类型。</p>
+<h3 id="5113-值不被重新解释">5.11.3 值不被重新解释</h3>
+<p>约化只改变模块里<em>写下</em>的量纲，从不改变值：模块中的每个量仍是
+SI 量，只是它的
+类型用代表量纲书写。因此值可以进出带单位制的模块而无需转换，进入 SI
+模块后 类型依然正确；<strong>导入的绑定保持它们在原模块中的 SI
+类型</strong>。</p>
+<p>模块头写了 kernel 没有的名字，是 <code>E0512</code>，诊断列出 kernel
+提供的名字。</p>
+<h3 id="5114-没有精确尺度的单位">5.11.4 没有精确尺度的单位</h3>
+<p>单位字面量按单位制约化时需要一个精确尺度。若约化的某个指数不是整数，尺度
+无理，该单位在此单位制下没有精确尺度，报 <code>E0511</code>。典型例子是
+Heaviside–Lorentz 的 <code>natural</code> 中的电荷单位
+<code>C</code>，它需要
+<code>(ε₀ħc)^(1/2)</code>。处理办法：直接写单位制中的 数，或用 §5.11.5
+的 <code>to_system</code> 换算 SI 值。</p>
+<h3 id="5115-显式换算">5.11.5 显式换算</h3>
+<pre class="aevia"><code>to_system(&quot;natural&quot;, x)           # SI 量 x → 其代表量纲 R(d) 的单位制值
+from_system&lt;L&gt;(&quot;natural&quot;, y)      # 单位制值 y → SI 量纲 L 的量</code></pre>
+<ul>
+<li>单位制名必须是字符串字面量，否则 <code>E0302</code>；未知名字是
+<code>E0512</code>；参数个数不是 2 是 <code>E0315</code>。</li>
+<li><code>to_system</code> 要求实参的量纲在检查时已知（具体量纲），否则
+<code>E0304</code>；结果类型 是同一表示、量纲为 <code>R(d)</code> 的
+<code>Scalar</code>。</li>
+<li><code>from_system&lt;D&gt;</code> 必须写出目标 SI 量纲
+<code>D</code>（约化会遗忘它：<code>L</code> 与 <code>T</code> 都是
+<code>Energy^-1</code>），否则 <code>E0304</code>；<code>D</code> 总是按
+SI 读，即使调用发生在带单位制的模块里。 实参的量纲必须等于
+<code>R(D)</code>，否则按普通量纲不匹配报告。</li>
+<li>结果的表示与实参相同。<code>Float</code>/<code>Complex</code>
+乘以浮点因子；精确的 <code>Int</code>/<code>Real</code> 在因子 是不含 π
+的精确尺度时保持为精确有理数，否则结果是符号项（因子以精确的
+幂的乘积出现），不会静默降为浮点。</li>
+</ul>
+<h3 id="5116-显示">5.11.6 显示</h3>
+<p>在带单位制的模块里，没有自带显示单位的量按单位制的生成量纲显示：<code>natural</code>
+中的 能量倒数显示为 <code>eV^-1</code>，而不是
+<code>s^2/(m^2*kg)</code>。这只选择显示单位，值不变；记录、 变体（例如
+<code>approx</code> 返回的 <code>Ok(x)</code>）与元组逐字段显示。</p>
 <p>下一章定义求值：一个 <code>Real</code>
 值在什么时候是精确数、什么时候是符号项、 什么时候变成
 <code>Float</code>，以及张量和 IO 如何运行。</p>
@@ -6770,33 +6870,33 @@ registry 的
 <h2 id="75-包">7.5 包</h2>
 <h3 id="751-清单">7.5.1 清单</h3>
 <p><code>aevia.toml</code>：</p>
-<div class="sourceCode" id="cb177"><pre
-class="sourceCode toml"><code class="sourceCode toml"><span id="cb177-1"><a href="#cb177-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[package]</span></span>
-<span id="cb177-2"><a href="#cb177-2" aria-hidden="true" tabindex="-1"></a><span class="dt">name</span> <span class="op">=</span> <span class="st">&quot;kinematics&quot;</span></span>
-<span id="cb177-3"><a href="#cb177-3" aria-hidden="true" tabindex="-1"></a><span class="dt">version</span> <span class="op">=</span> <span class="st">&quot;0.1.0&quot;</span></span>
-<span id="cb177-4"><a href="#cb177-4" aria-hidden="true" tabindex="-1"></a><span class="dt">edition</span> <span class="op">=</span> <span class="st">&quot;2026&quot;</span></span>
-<span id="cb177-5"><a href="#cb177-5" aria-hidden="true" tabindex="-1"></a><span class="dt">authors</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;...&quot;</span><span class="op">]</span></span>
-<span id="cb177-6"><a href="#cb177-6" aria-hidden="true" tabindex="-1"></a><span class="dt">description</span> <span class="op">=</span> <span class="st">&quot;...&quot;</span></span>
-<span id="cb177-7"><a href="#cb177-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb177-8"><a href="#cb177-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
-<span id="cb177-9"><a href="#cb177-9" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia-std</span> <span class="op">=</span> <span class="st">&quot;0.1&quot;</span></span>
-<span id="cb177-10"><a href="#cb177-10" aria-hidden="true" tabindex="-1"></a><span class="dt">units-extra</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../units-extra&quot;</span><span class="op"> }</span></span>
-<span id="cb177-11"><a href="#cb177-11" aria-hidden="true" tabindex="-1"></a><span class="dt">plotting</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">git</span><span class="op"> =</span> <span class="st">&quot;https://example.com/plotting.git&quot;</span><span class="op">, </span><span class="dt">tag</span><span class="op"> =</span> <span class="st">&quot;v0.2.0&quot;</span><span class="op"> }</span></span>
-<span id="cb177-12"><a href="#cb177-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb177-13"><a href="#cb177-13" aria-hidden="true" tabindex="-1"></a><span class="kw">[compat]</span></span>
-<span id="cb177-14"><a href="#cb177-14" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia</span> <span class="op">=</span> <span class="st">&quot;&gt;=1.0, &lt;2.0&quot;</span></span>
-<span id="cb177-15"><a href="#cb177-15" aria-hidden="true" tabindex="-1"></a><span class="dt">rssn_api</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
-<span id="cb177-16"><a href="#cb177-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb177-17"><a href="#cb177-17" aria-hidden="true" tabindex="-1"></a><span class="kw">[capabilities]</span></span>
-<span id="cb177-18"><a href="#cb177-18" aria-hidden="true" tabindex="-1"></a><span class="dt">requires</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;fs&quot;</span><span class="op">]</span></span>
-<span id="cb177-19"><a href="#cb177-19" aria-hidden="true" tabindex="-1"></a><span class="dt">provides</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;kinematics&quot;</span><span class="op">]</span></span>
-<span id="cb177-20"><a href="#cb177-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb177-21"><a href="#cb177-21" aria-hidden="true" tabindex="-1"></a><span class="kw">[build]</span></span>
-<span id="cb177-22"><a href="#cb177-22" aria-hidden="true" tabindex="-1"></a><span class="dt">target</span> <span class="op">=</span> <span class="st">&quot;executable&quot;</span>       <span class="co"># 或 &quot;library&quot;</span></span>
-<span id="cb177-23"><a href="#cb177-23" aria-hidden="true" tabindex="-1"></a><span class="dt">entry</span> <span class="op">=</span> <span class="st">&quot;src/main.aev&quot;</span>      <span class="co"># 可执行包的入口；默认 src/main.aev</span></span>
-<span id="cb177-24"><a href="#cb177-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb177-25"><a href="#cb177-25" aria-hidden="true" tabindex="-1"></a><span class="kw">[profile.release]</span></span>
-<span id="cb177-26"><a href="#cb177-26" aria-hidden="true" tabindex="-1"></a><span class="dt">opt</span> <span class="op">=</span> <span class="dv">3</span></span></code></pre></div>
+<div class="sourceCode" id="cb180"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb180-1"><a href="#cb180-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[package]</span></span>
+<span id="cb180-2"><a href="#cb180-2" aria-hidden="true" tabindex="-1"></a><span class="dt">name</span> <span class="op">=</span> <span class="st">&quot;kinematics&quot;</span></span>
+<span id="cb180-3"><a href="#cb180-3" aria-hidden="true" tabindex="-1"></a><span class="dt">version</span> <span class="op">=</span> <span class="st">&quot;0.1.0&quot;</span></span>
+<span id="cb180-4"><a href="#cb180-4" aria-hidden="true" tabindex="-1"></a><span class="dt">edition</span> <span class="op">=</span> <span class="st">&quot;2026&quot;</span></span>
+<span id="cb180-5"><a href="#cb180-5" aria-hidden="true" tabindex="-1"></a><span class="dt">authors</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;...&quot;</span><span class="op">]</span></span>
+<span id="cb180-6"><a href="#cb180-6" aria-hidden="true" tabindex="-1"></a><span class="dt">description</span> <span class="op">=</span> <span class="st">&quot;...&quot;</span></span>
+<span id="cb180-7"><a href="#cb180-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb180-8"><a href="#cb180-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
+<span id="cb180-9"><a href="#cb180-9" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia-std</span> <span class="op">=</span> <span class="st">&quot;0.1&quot;</span></span>
+<span id="cb180-10"><a href="#cb180-10" aria-hidden="true" tabindex="-1"></a><span class="dt">units-extra</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../units-extra&quot;</span><span class="op"> }</span></span>
+<span id="cb180-11"><a href="#cb180-11" aria-hidden="true" tabindex="-1"></a><span class="dt">plotting</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">git</span><span class="op"> =</span> <span class="st">&quot;https://example.com/plotting.git&quot;</span><span class="op">, </span><span class="dt">tag</span><span class="op"> =</span> <span class="st">&quot;v0.2.0&quot;</span><span class="op"> }</span></span>
+<span id="cb180-12"><a href="#cb180-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb180-13"><a href="#cb180-13" aria-hidden="true" tabindex="-1"></a><span class="kw">[compat]</span></span>
+<span id="cb180-14"><a href="#cb180-14" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia</span> <span class="op">=</span> <span class="st">&quot;&gt;=1.0, &lt;2.0&quot;</span></span>
+<span id="cb180-15"><a href="#cb180-15" aria-hidden="true" tabindex="-1"></a><span class="dt">rssn_api</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb180-16"><a href="#cb180-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb180-17"><a href="#cb180-17" aria-hidden="true" tabindex="-1"></a><span class="kw">[capabilities]</span></span>
+<span id="cb180-18"><a href="#cb180-18" aria-hidden="true" tabindex="-1"></a><span class="dt">requires</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;fs&quot;</span><span class="op">]</span></span>
+<span id="cb180-19"><a href="#cb180-19" aria-hidden="true" tabindex="-1"></a><span class="dt">provides</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;kinematics&quot;</span><span class="op">]</span></span>
+<span id="cb180-20"><a href="#cb180-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb180-21"><a href="#cb180-21" aria-hidden="true" tabindex="-1"></a><span class="kw">[build]</span></span>
+<span id="cb180-22"><a href="#cb180-22" aria-hidden="true" tabindex="-1"></a><span class="dt">target</span> <span class="op">=</span> <span class="st">&quot;executable&quot;</span>       <span class="co"># 或 &quot;library&quot;</span></span>
+<span id="cb180-23"><a href="#cb180-23" aria-hidden="true" tabindex="-1"></a><span class="dt">entry</span> <span class="op">=</span> <span class="st">&quot;src/main.aev&quot;</span>      <span class="co"># 可执行包的入口；默认 src/main.aev</span></span>
+<span id="cb180-24"><a href="#cb180-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb180-25"><a href="#cb180-25" aria-hidden="true" tabindex="-1"></a><span class="kw">[profile.release]</span></span>
+<span id="cb180-26"><a href="#cb180-26" aria-hidden="true" tabindex="-1"></a><span class="dt">opt</span> <span class="op">=</span> <span class="dv">3</span></span></code></pre></div>
 <blockquote>
 <p><strong>实现状态（2026-11-04）</strong>：清单解析、<code>target</code>/<code>entry</code>、<code>--locked</code>、内容哈希与
 path 依赖已实现；<strong><code>version</code>/<code>git</code> 依赖与
@@ -9377,21 +9477,27 @@ m, km, cm, mm, µm, nm, ft, in, mi, ...
 <h2 id="99-cli">9.9 CLI</h2>
 <pre><code>aevia run [--example NAME] [file] [-- args...]  # 运行可执行包/文件/示例
 aevia repl                         # 交互式
-aevia check [--all]                # 类型/量纲检查
-aevia fmt [--check]                # 格式化
+aevia check [--all] [file...]      # 类型/量纲检查
+aevia watch [file]                 # 监视源码，只重检变化的模块（§9.11）
+aevia fmt [--check] [file...]      # 格式化
 aevia test [--filter pat] [--doc]  # 运行测试 / 编译文档中的 aevia 代码块
-aevia doc [--open]                 # 生成文档
+aevia doc [--open] [--out DIR]     # 生成文档
 aevia bench [--filter pat] [--iterations N] [--warmup N]
             [--save-baseline FILE] [--compare-baseline FILE] [--threshold RATIO]
 aevia init name                    # 新建包
-aevia add dep                      # 添加依赖
+aevia add path                     # 添加路径依赖并重新解析锁文件
 aevia update                       # 更新锁文件
-aevia clean                        # 清理构建产物</code></pre>
-<p>常用 flag：</p>
-<pre><code>--release          优化模式（当前解释器实现无 JIT，接受并提示“无效果”）
---jobs N           并行度（同上：当前实现单进程解释执行，接受并提示“无效果”）
---max-stack MiB    解释器线程的栈上限（默认 256）
+aevia clean                        # 删除 .aevia/ 构建缓存
+aevia lsp [--stdio]                # 语言服务器（§9.10）
+aevia rssn [--audit] [--emit DIR [--namespaces]]  # 审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
+aevia pkg command                  # 注册表客户端：登录、发布、撤回、搜索、校验（转发给 aevia-pkg）</code></pre>
+<p>常用 flag（可出现在命令行任意位置）：</p>
+<pre><code>--release          接受，但提示“无效果”（解释器没有优化档位；JIT 见 §9.6）
+--jobs N           并行求值的工作线程数（par_map 等，§9.7.2）
+--max-stack MiB    解释器线程的栈上限（默认 1024）
 --budget STEPS     尾调用/IO 步骤预算（默认 100,000,000；不是秒，见 §9.3.4）
+--caps LIST        只授予这些 capability：fs,net,env,rand,gpu（空列表 = 全部沙箱；默认全部）
+--no-cache         `check`/`run` 既不读也不写磁盘缓存（§9.11）
 --out PATH         输出路径（`rssn --emit`、`doc` 使用）
 --color auto|always|never
 --locked           拒绝修改 `aevia.lock`（`update`/`add`）</code></pre>
@@ -9473,43 +9579,43 @@ URI；未保存缓冲区也保留导入图（
 <code>initialize</code>
 返回的<strong>精确能力列表</strong>（<code>aevia-lsp</code> 的
 <code>capabilities()</code>）：</p>
-<div class="sourceCode" id="cb229"><pre
-class="sourceCode json"><code class="sourceCode json"><span id="cb229-1"><a href="#cb229-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
-<span id="cb229-2"><a href="#cb229-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;positionEncoding&quot;</span><span class="fu">:</span> <span class="st">&quot;utf-16&quot;</span><span class="fu">,</span></span>
-<span id="cb229-3"><a href="#cb229-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;textDocumentSync&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="dt">&quot;openClose&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span> <span class="dt">&quot;change&quot;</span><span class="fu">:</span> <span class="dv">2</span><span class="fu">,</span> <span class="dt">&quot;save&quot;</span><span class="fu">:</span> <span class="kw">true</span> <span class="fu">},</span></span>
-<span id="cb229-4"><a href="#cb229-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hoverProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-5"><a href="#cb229-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;completionProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="dt">&quot;resolveProvider&quot;</span><span class="fu">:</span> <span class="kw">false</span> <span class="fu">},</span></span>
-<span id="cb229-6"><a href="#cb229-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;definitionProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-7"><a href="#cb229-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;typeDefinitionProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-8"><a href="#cb229-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;documentSymbolProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-9"><a href="#cb229-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;documentFormattingProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-10"><a href="#cb229-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;codeActionProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-11"><a href="#cb229-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;workspaceSymbolProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-12"><a href="#cb229-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;referencesProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-13"><a href="#cb229-13" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;renameProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="dt">&quot;prepareProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span> <span class="fu">},</span></span>
-<span id="cb229-14"><a href="#cb229-14" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;signatureHelpProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb229-15"><a href="#cb229-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;triggerCharacters&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;(&quot;</span><span class="ot">,</span> <span class="st">&quot;,&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
-<span id="cb229-16"><a href="#cb229-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;retriggerCharacters&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;,&quot;</span><span class="ot">]</span></span>
-<span id="cb229-17"><a href="#cb229-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
-<span id="cb229-18"><a href="#cb229-18" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;semanticTokensProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb229-19"><a href="#cb229-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;legend&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb229-20"><a href="#cb229-20" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;tokenTypes&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;type&quot;</span><span class="ot">,</span> <span class="st">&quot;dimension&quot;</span><span class="ot">,</span> <span class="st">&quot;unit&quot;</span><span class="ot">,</span> <span class="st">&quot;operator&quot;</span><span class="ot">,</span> <span class="st">&quot;function&quot;</span><span class="ot">,</span> <span class="st">&quot;variable&quot;</span><span class="ot">,</span> <span class="st">&quot;enumMember&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
-<span id="cb229-21"><a href="#cb229-21" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;tokenModifiers&quot;</span><span class="fu">:</span> <span class="ot">[]</span></span>
-<span id="cb229-22"><a href="#cb229-22" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
-<span id="cb229-23"><a href="#cb229-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;full&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-24"><a href="#cb229-24" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;range&quot;</span><span class="fu">:</span> <span class="kw">false</span></span>
-<span id="cb229-25"><a href="#cb229-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
-<span id="cb229-26"><a href="#cb229-26" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;experimental&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb229-27"><a href="#cb229-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;multiModuleAnalysis&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb229-28"><a href="#cb229-28" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;savedFiles&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
-<span id="cb229-29"><a href="#cb229-29" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;unsavedBuffers&quot;</span><span class="fu">:</span> <span class="st">&quot;snapshot overlays for all open physical buffers&quot;</span></span>
-<span id="cb229-30"><a href="#cb229-30" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
-<span id="cb229-31"><a href="#cb229-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;analysisCache&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
-<span id="cb229-32"><a href="#cb229-32" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;strategy&quot;</span><span class="fu">:</span> <span class="st">&quot;observed source contents + import candidates + package resolution&quot;</span><span class="fu">,</span></span>
-<span id="cb229-33"><a href="#cb229-33" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;capacity&quot;</span><span class="fu">:</span> <span class="dv">4</span></span>
-<span id="cb229-34"><a href="#cb229-34" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
-<span id="cb229-35"><a href="#cb229-35" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
-<span id="cb229-36"><a href="#cb229-36" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb232"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb232-1"><a href="#cb232-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb232-2"><a href="#cb232-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;positionEncoding&quot;</span><span class="fu">:</span> <span class="st">&quot;utf-16&quot;</span><span class="fu">,</span></span>
+<span id="cb232-3"><a href="#cb232-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;textDocumentSync&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="dt">&quot;openClose&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span> <span class="dt">&quot;change&quot;</span><span class="fu">:</span> <span class="dv">2</span><span class="fu">,</span> <span class="dt">&quot;save&quot;</span><span class="fu">:</span> <span class="kw">true</span> <span class="fu">},</span></span>
+<span id="cb232-4"><a href="#cb232-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hoverProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-5"><a href="#cb232-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;completionProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="dt">&quot;resolveProvider&quot;</span><span class="fu">:</span> <span class="kw">false</span> <span class="fu">},</span></span>
+<span id="cb232-6"><a href="#cb232-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;definitionProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-7"><a href="#cb232-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;typeDefinitionProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-8"><a href="#cb232-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;documentSymbolProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-9"><a href="#cb232-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;documentFormattingProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-10"><a href="#cb232-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;codeActionProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-11"><a href="#cb232-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;workspaceSymbolProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-12"><a href="#cb232-12" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;referencesProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-13"><a href="#cb232-13" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;renameProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="dt">&quot;prepareProvider&quot;</span><span class="fu">:</span> <span class="kw">true</span> <span class="fu">},</span></span>
+<span id="cb232-14"><a href="#cb232-14" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;signatureHelpProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb232-15"><a href="#cb232-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;triggerCharacters&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;(&quot;</span><span class="ot">,</span> <span class="st">&quot;,&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb232-16"><a href="#cb232-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;retriggerCharacters&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;,&quot;</span><span class="ot">]</span></span>
+<span id="cb232-17"><a href="#cb232-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb232-18"><a href="#cb232-18" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;semanticTokensProvider&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb232-19"><a href="#cb232-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;legend&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb232-20"><a href="#cb232-20" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;tokenTypes&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;type&quot;</span><span class="ot">,</span> <span class="st">&quot;dimension&quot;</span><span class="ot">,</span> <span class="st">&quot;unit&quot;</span><span class="ot">,</span> <span class="st">&quot;operator&quot;</span><span class="ot">,</span> <span class="st">&quot;function&quot;</span><span class="ot">,</span> <span class="st">&quot;variable&quot;</span><span class="ot">,</span> <span class="st">&quot;enumMember&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb232-21"><a href="#cb232-21" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;tokenModifiers&quot;</span><span class="fu">:</span> <span class="ot">[]</span></span>
+<span id="cb232-22"><a href="#cb232-22" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
+<span id="cb232-23"><a href="#cb232-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;full&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-24"><a href="#cb232-24" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;range&quot;</span><span class="fu">:</span> <span class="kw">false</span></span>
+<span id="cb232-25"><a href="#cb232-25" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb232-26"><a href="#cb232-26" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;experimental&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb232-27"><a href="#cb232-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;multiModuleAnalysis&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb232-28"><a href="#cb232-28" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;savedFiles&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb232-29"><a href="#cb232-29" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;unsavedBuffers&quot;</span><span class="fu">:</span> <span class="st">&quot;snapshot overlays for all open physical buffers&quot;</span></span>
+<span id="cb232-30"><a href="#cb232-30" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
+<span id="cb232-31"><a href="#cb232-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;analysisCache&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb232-32"><a href="#cb232-32" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;strategy&quot;</span><span class="fu">:</span> <span class="st">&quot;observed source contents + import candidates + package resolution&quot;</span><span class="fu">,</span></span>
+<span id="cb232-33"><a href="#cb232-33" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;capacity&quot;</span><span class="fu">:</span> <span class="dv">4</span></span>
+<span id="cb232-34"><a href="#cb232-34" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb232-35"><a href="#cb232-35" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb232-36"><a href="#cb232-36" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p><code>aevia-lsp/tests/protocol.rs</code> 断言这份 capability
 表（只声明已实现的行为； <code>workspace/symbol</code>
 在已加载程序的全模块上工作、无文档时空列表）。
@@ -9832,16 +9938,14 @@ diagnostics</strong>；<code>cargo test -p aevia-rssn</code> 为 78
 <code>E1002</code>（§13.4.1）。<code>resolve_overload</code> 只用于
 “先解析再缓存”，且只缓存 <code>Best::Unique</code> 的结果。</li>
 </ul>
-<p>完整接口清单见根目录 <a
-href="../RSSN-INTEGRATION-REQUIREMENTS.md"><code>RSSN-INTEGRATION-REQUIREMENTS.md</code></a>，
-Aevia 侧规则见 <a href="13-extensibility.md">13 —
-Extensibility</a>。</p>
+<p>完整的内核侧契约见 rssn 仓库的 <code>docs/KERNEL.md</code>， Aevia
+侧规则见 <a href="13-extensibility.md">13 — Extensibility</a>。</p>
 <h2 id="101-rssn-的能力边界">10.1 rssn 的能力边界</h2>
 <p>rssn 的核心入口是：</p>
-<div class="sourceCode" id="cb233"><pre
-class="sourceCode rust"><code class="sourceCode rust"><span id="cb233-1"><a href="#cb233-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> s <span class="op">=</span> <span class="pp">Session::</span>new()<span class="op">;</span></span>
-<span id="cb233-2"><a href="#cb233-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> x <span class="op">=</span> s<span class="op">.</span>sym(<span class="st">&quot;x&quot;</span>)<span class="op">;</span></span>
-<span id="cb233-3"><a href="#cb233-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> answer <span class="op">=</span> s<span class="op">.</span>compute(diff(sin(x) <span class="op">*</span> cos(x)<span class="op">,</span> x)<span class="op">,</span> <span class="op">&amp;</span><span class="pp">Config::</span>new())<span class="op">?;</span></span></code></pre></div>
+<div class="sourceCode" id="cb236"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb236-1"><a href="#cb236-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> s <span class="op">=</span> <span class="pp">Session::</span>new()<span class="op">;</span></span>
+<span id="cb236-2"><a href="#cb236-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> x <span class="op">=</span> s<span class="op">.</span>sym(<span class="st">&quot;x&quot;</span>)<span class="op">;</span></span>
+<span id="cb236-3"><a href="#cb236-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> answer <span class="op">=</span> s<span class="op">.</span>compute(diff(sin(x) <span class="op">*</span> cos(x)<span class="op">,</span> x)<span class="op">,</span> <span class="op">&amp;</span><span class="pp">Config::</span>new())<span class="op">?;</span></span></code></pre></div>
 <ul>
 <li><code>Session</code> 拥有一个 hash-consed
 项图；<code>Term&lt;'s&gt;</code> 是带生命周期的句柄。</li>
@@ -10004,9 +10108,9 @@ Cranelift（0.137）。</li>
 <code>add(re, mul(im, i))</code>。</li>
 </ul>
 <h3 id="1022-符号">10.2.2 符号</h3>
-<div class="sourceCode" id="cb234"><pre
-class="sourceCode rust"><code class="sourceCode rust"><span id="cb234-1"><a href="#cb234-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> name <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;{base}#{id}&quot;</span>)<span class="op">;</span>     <span class="co">// 内部唯一名</span></span>
-<span id="cb234-2"><a href="#cb234-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> term <span class="op">=</span> session<span class="op">.</span>sym(<span class="op">&amp;</span>name)<span class="op">;</span></span></code></pre></div>
+<div class="sourceCode" id="cb237"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb237-1"><a href="#cb237-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> name <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;{base}#{id}&quot;</span>)<span class="op">;</span>     <span class="co">// 内部唯一名</span></span>
+<span id="cb237-2"><a href="#cb237-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> term <span class="op">=</span> session<span class="op">.</span>sym(<span class="op">&amp;</span>name)<span class="op">;</span></span></code></pre></div>
 <ul>
 <li>显示名与内部名分开；<code>symbol("x")</code> 的内部名是
 <code>x#1</code>，显示 <code>x</code>。</li>
@@ -10268,8 +10372,8 @@ SI 数值；<code>Real</code>/ <code>Float</code>
 导出；<code>Units.*</code> 从 <code>manifest.units</code>
 生成，不维护第二张表。</p>
 <h3 id="1037-仿真">10.3.7 仿真</h3>
-<div class="sourceCode" id="cb236"><pre
-class="sourceCode rust"><code class="sourceCode rust"><span id="cb236-1"><a href="#cb236-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> json <span class="op">=</span> <span class="pp">rssn::sim::scenario::</span>run(<span class="st">&quot;ising&quot;</span><span class="op">,</span> params)<span class="op">?;</span></span></code></pre></div>
+<div class="sourceCode" id="cb239"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb239-1"><a href="#cb239-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> json <span class="op">=</span> <span class="pp">rssn::sim::scenario::</span>run(<span class="st">&quot;ising&quot;</span><span class="op">,</span> params)<span class="op">?;</span></span></code></pre></div>
 <p>Aevia 的 <code>simulate(name, json)</code>
 直接调用；场景名的唯一来源是 kernel 的
 <code>sim::scenario::SCENARIOS</code>（本次测量 29 个，含
@@ -10365,12 +10469,12 @@ detach（写时复制），所以请求期注册不会漏进
 <code>Session</code>。Aevia 的桥把内核会话
 放在<strong>线程本地</strong>（<code>aevia-rssn</code> 的
 <code>kernel()</code>）：</p>
-<div class="sourceCode" id="cb237"><pre
-class="sourceCode rust"><code class="sourceCode rust"><span id="cb237-1"><a href="#cb237-1" aria-hidden="true" tabindex="-1"></a><span class="pp">thread_local!</span> <span class="op">{</span></span>
-<span id="cb237-2"><a href="#cb237-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">static</span> KERNEL<span class="op">:</span> RefCell<span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span>Rc<span class="op">&lt;</span>Kernel<span class="op">&gt;&gt;&gt;</span> <span class="op">=</span> <span class="kw">const</span> <span class="op">{</span> <span class="pp">RefCell::</span>new(<span class="cn">None</span>) <span class="op">};</span></span>
-<span id="cb237-3"><a href="#cb237-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
-<span id="cb237-4"><a href="#cb237-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb237-5"><a href="#cb237-5" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> kernel() <span class="op">-&gt;</span> Rc<span class="op">&lt;</span>Kernel<span class="op">&gt;;</span>   <span class="co">// 当前线程的会话，首次使用时创建</span></span></code></pre></div>
+<div class="sourceCode" id="cb240"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb240-1"><a href="#cb240-1" aria-hidden="true" tabindex="-1"></a><span class="pp">thread_local!</span> <span class="op">{</span></span>
+<span id="cb240-2"><a href="#cb240-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">static</span> KERNEL<span class="op">:</span> RefCell<span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span>Rc<span class="op">&lt;</span>Kernel<span class="op">&gt;&gt;&gt;</span> <span class="op">=</span> <span class="kw">const</span> <span class="op">{</span> <span class="pp">RefCell::</span>new(<span class="cn">None</span>) <span class="op">};</span></span>
+<span id="cb240-3"><a href="#cb240-3" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb240-4"><a href="#cb240-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb240-5"><a href="#cb240-5" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> kernel() <span class="op">-&gt;</span> Rc<span class="op">&lt;</span>Kernel<span class="op">&gt;;</span>   <span class="co">// 当前线程的会话，首次使用时创建</span></span></code></pre></div>
 <ul>
 <li>每个线程一个内核会话；<code>par_map</code>
 的“工作线程”因此会各自创建会话（当前 <code>par_map</code> 顺序执行，见
@@ -11652,9 +11756,10 @@ lowering；</li>
 分层：语言能力一次设计到位；后端尚未实现的 部分用 <strong>capability
 诊断</strong>（<code>E1001</code>）报告，而不是删掉语言特性或让用户
 等到下一个大版本。</p>
-<p>本章的详细后端接口清单在项目根目录 <a
-href="../RSSN-INTEGRATION-REQUIREMENTS.md"><code>RSSN-INTEGRATION-REQUIREMENTS.md</code></a>。
-这里定义 Aevia 侧的规范性契约。</p>
+<p>本章的详细后端接口契约在 rssn 仓库的
+<code>docs/KERNEL.md</code>（Kernel Manifest、动态 调用
+ABI、插件）、<code>docs/DIMENSIONS.md</code> 与
+<code>docs/CALLBACKS.md</code>。 这里定义 Aevia 侧的规范性契约。</p>
 <hr />
 <h2 id="131-三条公理">13.1 三条公理</h2>
 <ol type="1">
@@ -12211,11 +12316,11 @@ set）。签名有四个来源，优先级从高到低：</p>
 <h3 id="1351-插件">13.5.1 插件</h3>
 <p>插件不是新语法，而是<strong>普通 Aevia 包 + 清单标记 +
 属性</strong>：</p>
-<div class="sourceCode" id="cb261"><pre
-class="sourceCode toml"><code class="sourceCode toml"><span id="cb261-1"><a href="#cb261-1" aria-hidden="true" tabindex="-1"></a><span class="co"># aevia.toml</span></span>
-<span id="cb261-2"><a href="#cb261-2" aria-hidden="true" tabindex="-1"></a><span class="kw">[plugin]</span></span>
-<span id="cb261-3"><a href="#cb261-3" aria-hidden="true" tabindex="-1"></a><span class="dt">kind</span> <span class="op">=</span> <span class="st">&quot;aevia&quot;</span>          <span class="co"># 进程内；对应 RSSN 的 PluginKind::InProcess</span></span>
-<span id="cb261-4"><a href="#cb261-4" aria-hidden="true" tabindex="-1"></a><span class="dt">abi</span> <span class="op">=</span> <span class="dv">1</span></span></code></pre></div>
+<div class="sourceCode" id="cb264"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb264-1"><a href="#cb264-1" aria-hidden="true" tabindex="-1"></a><span class="co"># aevia.toml</span></span>
+<span id="cb264-2"><a href="#cb264-2" aria-hidden="true" tabindex="-1"></a><span class="kw">[plugin]</span></span>
+<span id="cb264-3"><a href="#cb264-3" aria-hidden="true" tabindex="-1"></a><span class="dt">kind</span> <span class="op">=</span> <span class="st">&quot;aevia&quot;</span>          <span class="co"># 进程内；对应 RSSN 的 PluginKind::InProcess</span></span>
+<span id="cb264-4"><a href="#cb264-4" aria-hidden="true" tabindex="-1"></a><span class="dt">abi</span> <span class="op">=</span> <span class="dv">1</span></span></code></pre></div>
 <p><code>kind</code> 的两个取值对应 RSSN 的
 <code>PluginKind</code>：</p>
 <table>
@@ -12441,17 +12546,17 @@ true</strong>（不是 feature 门控），所以每个构建都支持；唯一�
 <h3 id="1365-物理常数">13.6.5 物理常数</h3>
 <p><code>manifest.constants</code> 是
 <code>Vec&lt;ConstantValue&gt;</code>（30 条、18 条精确）：</p>
-<div class="sourceCode" id="cb266"><pre
-class="sourceCode rust"><code class="sourceCode rust"><span id="cb266-1"><a href="#cb266-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ConstantValue <span class="op">{</span></span>
-<span id="cb266-2"><a href="#cb266-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>        <span class="co">// &quot;speed of light in vacuum&quot;</span></span>
-<span id="cb266-3"><a href="#cb266-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> symbol<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>      <span class="co">// &quot;c&quot;</span></span>
-<span id="cb266-4"><a href="#cb266-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> value<span class="op">:</span> ScaleValue<span class="op">,</span>   <span class="co">// 精确有理数，相干 SI</span></span>
-<span id="cb266-5"><a href="#cb266-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> dimension<span class="op">:</span> DimExpr<span class="op">,</span></span>
-<span id="cb266-6"><a href="#cb266-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> unit<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>        <span class="co">// &quot;m/s&quot;</span></span>
-<span id="cb266-7"><a href="#cb266-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> exact<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
-<span id="cb266-8"><a href="#cb266-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> uncertainty<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>ScaleValue<span class="op">&gt;,</span></span>
-<span id="cb266-9"><a href="#cb266-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> source<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>      <span class="co">// &quot;SI 2019 definition&quot; / &quot;CODATA 2022&quot;</span></span>
-<span id="cb266-10"><a href="#cb266-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb269"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb269-1"><a href="#cb269-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ConstantValue <span class="op">{</span></span>
+<span id="cb269-2"><a href="#cb269-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>        <span class="co">// &quot;speed of light in vacuum&quot;</span></span>
+<span id="cb269-3"><a href="#cb269-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> symbol<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>      <span class="co">// &quot;c&quot;</span></span>
+<span id="cb269-4"><a href="#cb269-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> value<span class="op">:</span> ScaleValue<span class="op">,</span>   <span class="co">// 精确有理数，相干 SI</span></span>
+<span id="cb269-5"><a href="#cb269-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> dimension<span class="op">:</span> DimExpr<span class="op">,</span></span>
+<span id="cb269-6"><a href="#cb269-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> unit<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>        <span class="co">// &quot;m/s&quot;</span></span>
+<span id="cb269-7"><a href="#cb269-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> exact<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb269-8"><a href="#cb269-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> uncertainty<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>ScaleValue<span class="op">&gt;,</span></span>
+<span id="cb269-9"><a href="#cb269-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> source<span class="op">:</span> <span class="dt">String</span><span class="op">,</span>      <span class="co">// &quot;SI 2019 definition&quot; / &quot;CODATA 2022&quot;</span></span>
+<span id="cb269-10"><a href="#cb269-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p><code>Units.Constants</code> 由它生成，规则：</p>
 <ul>
 <li>符号原样使用（<code>c</code>、<code>g_n</code>、<code>h</code>、<code>hbar</code>、<code>k_B</code>、<code>N_A</code>、<code>e</code>、<code>G</code>、
@@ -12502,33 +12607,33 @@ detach，请求之间互不影响；</li>
 的状态说明与 本节一致。</p>
 </blockquote>
 <h3 id="1371-包清单">13.7.1 包清单</h3>
-<div class="sourceCode" id="cb267"><pre
-class="sourceCode toml"><code class="sourceCode toml"><span id="cb267-1"><a href="#cb267-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[package]</span></span>
-<span id="cb267-2"><a href="#cb267-2" aria-hidden="true" tabindex="-1"></a><span class="dt">name</span> <span class="op">=</span> <span class="st">&quot;aevia-thermo&quot;</span></span>
-<span id="cb267-3"><a href="#cb267-3" aria-hidden="true" tabindex="-1"></a><span class="dt">version</span> <span class="op">=</span> <span class="st">&quot;0.3.0&quot;</span></span>
-<span id="cb267-4"><a href="#cb267-4" aria-hidden="true" tabindex="-1"></a><span class="dt">edition</span> <span class="op">=</span> <span class="st">&quot;2026&quot;</span></span>
-<span id="cb267-5"><a href="#cb267-5" aria-hidden="true" tabindex="-1"></a><span class="dt">license</span> <span class="op">=</span> <span class="st">&quot;MIT&quot;</span></span>
-<span id="cb267-6"><a href="#cb267-6" aria-hidden="true" tabindex="-1"></a><span class="dt">content_hash</span> <span class="op">=</span> <span class="st">&quot;blake3:...&quot;</span></span>
-<span id="cb267-7"><a href="#cb267-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb267-8"><a href="#cb267-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[deps]</span></span>
-<span id="cb267-9"><a href="#cb267-9" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia-std</span> <span class="op">=</span> <span class="st">&quot;^1.0&quot;</span></span>
-<span id="cb267-10"><a href="#cb267-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb267-11"><a href="#cb267-11" aria-hidden="true" tabindex="-1"></a><span class="kw">[compat]</span></span>
-<span id="cb267-12"><a href="#cb267-12" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia</span> <span class="op">=</span> <span class="st">&quot;&gt;=1.0, &lt;2.0&quot;</span></span>
-<span id="cb267-13"><a href="#cb267-13" aria-hidden="true" tabindex="-1"></a><span class="dt">rssn_api</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
-<span id="cb267-14"><a href="#cb267-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb267-15"><a href="#cb267-15" aria-hidden="true" tabindex="-1"></a><span class="kw">[capabilities]</span></span>
-<span id="cb267-16"><a href="#cb267-16" aria-hidden="true" tabindex="-1"></a><span class="dt">requires</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;fs&quot;</span><span class="op">]</span></span>
-<span id="cb267-17"><a href="#cb267-17" aria-hidden="true" tabindex="-1"></a><span class="dt">provides</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;thermo&quot;</span><span class="op">]</span></span>
-<span id="cb267-18"><a href="#cb267-18" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb267-19"><a href="#cb267-19" aria-hidden="true" tabindex="-1"></a><span class="kw">[operators]</span></span>
-<span id="cb267-20"><a href="#cb267-20" aria-hidden="true" tabindex="-1"></a><span class="dt">exports</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;thermo/enthalpy&quot;</span><span class="op">,</span> <span class="st">&quot;thermo/entropy&quot;</span><span class="op">]</span></span>
-<span id="cb267-21"><a href="#cb267-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb267-22"><a href="#cb267-22" aria-hidden="true" tabindex="-1"></a><span class="kw">[units]</span></span>
-<span id="cb267-23"><a href="#cb267-23" aria-hidden="true" tabindex="-1"></a><span class="dt">exports</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;J&quot;</span><span class="op">,</span> <span class="st">&quot;kJ&quot;</span><span class="op">,</span> <span class="st">&quot;cal&quot;</span><span class="op">]</span></span>
-<span id="cb267-24"><a href="#cb267-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb267-25"><a href="#cb267-25" aria-hidden="true" tabindex="-1"></a><span class="kw">[dimensions]</span></span>
-<span id="cb267-26"><a href="#cb267-26" aria-hidden="true" tabindex="-1"></a><span class="dt">exports</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;Entropy&quot;</span><span class="op">]</span></span></code></pre></div>
+<div class="sourceCode" id="cb270"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb270-1"><a href="#cb270-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[package]</span></span>
+<span id="cb270-2"><a href="#cb270-2" aria-hidden="true" tabindex="-1"></a><span class="dt">name</span> <span class="op">=</span> <span class="st">&quot;aevia-thermo&quot;</span></span>
+<span id="cb270-3"><a href="#cb270-3" aria-hidden="true" tabindex="-1"></a><span class="dt">version</span> <span class="op">=</span> <span class="st">&quot;0.3.0&quot;</span></span>
+<span id="cb270-4"><a href="#cb270-4" aria-hidden="true" tabindex="-1"></a><span class="dt">edition</span> <span class="op">=</span> <span class="st">&quot;2026&quot;</span></span>
+<span id="cb270-5"><a href="#cb270-5" aria-hidden="true" tabindex="-1"></a><span class="dt">license</span> <span class="op">=</span> <span class="st">&quot;MIT&quot;</span></span>
+<span id="cb270-6"><a href="#cb270-6" aria-hidden="true" tabindex="-1"></a><span class="dt">content_hash</span> <span class="op">=</span> <span class="st">&quot;blake3:...&quot;</span></span>
+<span id="cb270-7"><a href="#cb270-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb270-8"><a href="#cb270-8" aria-hidden="true" tabindex="-1"></a><span class="kw">[deps]</span></span>
+<span id="cb270-9"><a href="#cb270-9" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia-std</span> <span class="op">=</span> <span class="st">&quot;^1.0&quot;</span></span>
+<span id="cb270-10"><a href="#cb270-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb270-11"><a href="#cb270-11" aria-hidden="true" tabindex="-1"></a><span class="kw">[compat]</span></span>
+<span id="cb270-12"><a href="#cb270-12" aria-hidden="true" tabindex="-1"></a><span class="dt">aevia</span> <span class="op">=</span> <span class="st">&quot;&gt;=1.0, &lt;2.0&quot;</span></span>
+<span id="cb270-13"><a href="#cb270-13" aria-hidden="true" tabindex="-1"></a><span class="dt">rssn_api</span> <span class="op">=</span> <span class="st">&quot;1&quot;</span></span>
+<span id="cb270-14"><a href="#cb270-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb270-15"><a href="#cb270-15" aria-hidden="true" tabindex="-1"></a><span class="kw">[capabilities]</span></span>
+<span id="cb270-16"><a href="#cb270-16" aria-hidden="true" tabindex="-1"></a><span class="dt">requires</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;fs&quot;</span><span class="op">]</span></span>
+<span id="cb270-17"><a href="#cb270-17" aria-hidden="true" tabindex="-1"></a><span class="dt">provides</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;thermo&quot;</span><span class="op">]</span></span>
+<span id="cb270-18"><a href="#cb270-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb270-19"><a href="#cb270-19" aria-hidden="true" tabindex="-1"></a><span class="kw">[operators]</span></span>
+<span id="cb270-20"><a href="#cb270-20" aria-hidden="true" tabindex="-1"></a><span class="dt">exports</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;thermo/enthalpy&quot;</span><span class="op">,</span> <span class="st">&quot;thermo/entropy&quot;</span><span class="op">]</span></span>
+<span id="cb270-21"><a href="#cb270-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb270-22"><a href="#cb270-22" aria-hidden="true" tabindex="-1"></a><span class="kw">[units]</span></span>
+<span id="cb270-23"><a href="#cb270-23" aria-hidden="true" tabindex="-1"></a><span class="dt">exports</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;J&quot;</span><span class="op">,</span> <span class="st">&quot;kJ&quot;</span><span class="op">,</span> <span class="st">&quot;cal&quot;</span><span class="op">]</span></span>
+<span id="cb270-24"><a href="#cb270-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb270-25"><a href="#cb270-25" aria-hidden="true" tabindex="-1"></a><span class="kw">[dimensions]</span></span>
+<span id="cb270-26"><a href="#cb270-26" aria-hidden="true" tabindex="-1"></a><span class="dt">exports</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;Entropy&quot;</span><span class="op">]</span></span></code></pre></div>
 <h3 id="1372-协议">13.7.2 协议</h3>
 <pre><code>GET /index.json                     # 全部包名 + 最新版本 + 摘要
 GET /pkg/{name}/{version}.tar.zst   # 内容寻址的包
@@ -14210,13 +14315,66 @@ kernel 的 <code>diff</code>/化简/<code>@rule</code>
 <code>limit(sqrt(x)*(sqrt(x+1) - sqrt(x)), x, oo) = 0</code>，正确值为
 1/2）。</li>
 </ol>
-<h2 id="4-记录在案的未实现边界known-gaps">4. 记录在案的未实现边界（Known
+<h2 id="4-revision-132026-11-07--2026-11-09信任边界与规则收紧">4.
+Revision 13（2026-11-07 ~ 2026-11-09）：信任边界与规则收紧</h2>
+<p>本轮改变的是几条语言规则，并把此前只存在于实现中的部分写入规范正文。下列条目
+在对应章节里以“Revision 13”标注。</p>
+<ol type="1">
+<li><strong>单位表达式的空白规则（§1.8.1）。</strong>
+此前单位表达式内的运算符一直延续到数字
+或表达式边界，<code>3 m * x</code> 是单位
+<code>m*x</code>；现在空白是单位与算术的分界，紧贴写法
+<code>3 m*x</code> 仍是单位表达式。规范自己的导览
+<code>70 kg * v^2 / 2</code> 因此可以通过名字解析。</li>
+<li><strong>未解出的量纲变量作指数的底数（§3.4.3）。</strong>
+<code>diff(fn t =&gt; t^t)</code> 中 lambda
+参数的量纲仍是推断变量时，检查器令其为 <code>1</code>（与
+<code>sin(t)</code> 让 <code>t</code> 无量纲同一条 规则），不再报
+<code>E0404</code>。</li>
+<li><strong>声明的量纲参数是刚性的（§4.4.1）。</strong>
+<code>fn f&lt;d&gt;</code> 的函数体不能替调用者选定 <code>d</code>；
+违反时报 <code>E0318</code>。</li>
+<li><strong><code>show</code> 保留 <code>Float</code>
+的相位（§6.12.3）。</strong> 整数值的 <code>Float</code>
+带小数点（<code>10.0</code>）， 精确的 <code>10</code> 与浮点的
+<code>10.0</code> 不再显示得一样。</li>
+<li><strong><code>Set&lt;τ&gt;</code>
+有了值与操作（§8.1.5.1）。</strong>
+此前只有类型。<code>set_insert</code> 等返回新集合，
+集合相等与插入顺序无关。</li>
+<li><strong>运行时信任边界（§9.2.3，规范性）。</strong>
+运行时执行检查器的证明而不重新证明：
+已检查的源调用不重新验证实参，已检查的构造器应用不遍历载荷，宿主边界处仍完整
+验证，字面量按（位置、证据、模块）记忆。结果不变，工作量下降一到两个数量级。</li>
+<li><strong>字面量折叠（§3.10.4）取代 Revision 9 记录的偏差。</strong>
+一个字面量只舍入一次，
+闭合的字面量算术树是编译期常量，<code>1.0 + 2</code> 是
+<code>Float</code>。</li>
+<li><strong>单位制（§5.11）写入规范正文。</strong>
+<code>module M with units natural</code>（还有 <code>planck</code>、
+<code>atomic</code>、<code>geometrized</code>）按单位制约化模块里写出的量纲，值始终是诚实的
+SI 量； <code>to_system</code>/<code>from_system&lt;D&gt;</code>
+显式换算；<code>E0511</code>、<code>E0512</code>。实现与附录 B
+的诊断码早已 存在，章节正文此前缺失，现补全。</li>
+<li><strong>文档对齐。</strong> §9.9 的命令与 flag 对齐实际
+CLI（<code>watch</code>、<code>lsp</code>、<code>rssn</code>、<code>pkg</code>、
+<code>--caps</code>、<code>--no-cache</code>、<code>--jobs</code>
+已实现）；已删除的 <code>RSSN-INTEGRATION-REQUIREMENTS.md</code>
+的引用改指 rssn 仓库的
+<code>docs/KERNEL.md</code>；<code>spec/README.md</code> 的修订号与
+kernel 计数更新。</li>
+</ol>
+<h2 id="5-记录在案的未实现边界known-gaps">5. 记录在案的未实现边界（Known
 Gaps）</h2>
 <ol type="1">
-<li><strong>远程包注册表与 SemVer
-依赖解析</strong>：<code>aevia add</code> 只支持本地路径依赖；
-<code>version</code>/<code>git</code>/registry 依赖报
-<code>E0605</code>。</li>
+<li><strong>工具链内的 SemVer
+依赖解析</strong>：<code>aevia add</code>/<code>aevia update</code> 与
+<code>aevia.toml</code> 只解析
+本地路径依赖；<code>version</code>/<code>git</code>/registry 依赖报
+<code>E0605</code>。注册表本身（<code>platform/</code>：
+签名发布、索引、文档站）与客户端
+<code>aevia pkg</code>（<code>aevia-pkg</code>）已存在，但编译器的依赖
+解析还没有接上它。</li>
 <li><strong>设备后端</strong>：<code>Gpu</code>/<code>Distributed</code>
 只是可构造的运行时值；<code>on</code>/<code>to_device</code>/
 <code>@jit(target = Gpu(..))</code> 报

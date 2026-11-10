@@ -1,0 +1,245 @@
+# Continuous integration. The same structure is used by the rssn repository:
+# fmt -> clippy -> test (matrix) -> contracts -> docs, summarised by one
+# `ci-success` job so branch protection needs a single required check.
+#
+# Layout of the runner workspace
+# ------------------------------
+# `aevia-rssn` links the kernel by path (`../../../rssn` from its crate), so the
+# two repositories are checked out side by side: `$GITHUB_WORKSPACE/aevia` and
+# `$GITHUB_WORKSPACE/rssn`. The kernel revision is the repository variable
+# RSSN_REF (default `main`); set it to build against a branch or a tag.
+#
+# `platform/` is a separate Cargo workspace that depends on the language crates
+# by path (`../crates/aevia-doc`), so the same checkout serves it.
+
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Workspace `rust-version`; the toolchain every gate below uses.
+  RUST_TOOLCHAIN: "1.97"
+
+defaults:
+  run:
+    working-directory: aevia
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ vars.RSSN_REF || 'main' }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: cargo +nightly fmt --all --check
+      - run: cargo +nightly fmt --all --check
+        working-directory: aevia/platform
+
+  clippy:
+    name: clippy (${{ matrix.workspace }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [".", "platform"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ vars.RSSN_REF || 'main' }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aevia/${{ matrix.workspace }}
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: aevia/${{ matrix.workspace }}
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ vars.RSSN_REF || 'main' }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aevia
+      - name: System dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - run: cargo test --workspace
+
+  platform:
+    name: platform (tests against PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The HTTP integration tests drive the real router against a real database
+    # and return early when `AEVIA_TEST_DATABASE_URL` is unset. This job is the
+    # only place they run: a migration or query that is wrong only on
+    # PostgreSQL must not merge green.
+    services:
+      postgres:
+        image: postgres:18-trixie
+        env:
+          POSTGRES_USER: aevia
+          POSTGRES_PASSWORD: aevia
+          POSTGRES_DB: aevia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U aevia -d aevia"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AEVIA_TEST_DATABASE_URL: postgres://aevia:aevia@127.0.0.1:5432/aevia
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ vars.RSSN_REF || 'main' }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aevia/platform
+      - name: Mirror of the language workspace root is current
+        run: sh infra/check-lang-workspace.sh ..
+        working-directory: aevia/platform
+      - name: Tests (with a database)
+        run: cargo test --workspace
+        working-directory: aevia/platform
+      - name: The documentation crate builds without the compiler feature
+        run: cargo build -p aevia-registry-docs --no-default-features
+        working-directory: aevia/platform
+
+  contracts:
+    name: contracts (stdlib, kernel API, specification)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ vars.RSSN_REF || 'main' }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aevia
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - name: Generated standard library is current
+        run: cargo run -p aevia-stdlib-gen -- --check
+      - name: Kernel API inventory is current
+        run: cargo run -p rssn-api-audit -- --check
+      - name: Single-file specification is current
+        run: |
+          python3 tools/bundle_spec.py --no-html
+          git diff --exit-code -- Aevia-Language-Specification.md
+
+  docs:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ vars.RSSN_REF || 'main' }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aevia
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - run: cargo doc --workspace --no-deps
+
+  platform-image:
+    name: platform container image (build only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - name: Build the registry image
+        working-directory: aevia/platform
+        run: |
+          docker build -f infra/Containerfile.server \
+            --build-context lang=../crates \
+            -t aevia-registry:ci .
+
+  ci-success:
+    name: CI success
+    if: always()
+    needs: [fmt, clippy, test, platform, contracts, docs, platform-image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have succeeded
+        working-directory: .
+        run: |
+          echo '${{ toJSON(needs) }}'
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false"

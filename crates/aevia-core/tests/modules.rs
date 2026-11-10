@@ -295,7 +295,7 @@ fn a_type_and_its_constructor_may_share_a_name() {
 fn every_module_contributes_its_pinned_keys() {
     // A `Rssn.<op>` call in an imported module is pinned against *that* file's
     // span, so the evaluator needs every module's table, not just the entry
-    // module's (PLAN D1). The program is not run: `aevia-types` still types a
+    // module's. The program is not run: `aevia-types` still types a
     // pinned call as the operator itself (see the report), which makes an
     // annotated call site unprovable.
     let scratch = Scratch::new("rssn-call");

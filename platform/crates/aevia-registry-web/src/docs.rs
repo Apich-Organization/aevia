@@ -213,13 +213,15 @@ pub fn docs_index(
     };
 
     let readme = match &page.readme_html {
-        | Some(html) => view! {
-            <section>
-                <h2>{README.of(lang)}</h2>
-                <div class="readme" inner_html=html.clone()></div>
-            </section>
-        }
-        .into_any(),
+        | Some(html) => {
+            view! {
+                <section>
+                    <h2>{README.of(lang)}</h2>
+                    <div class="readme" inner_html=html.clone()></div>
+                </section>
+            }
+            .into_any()
+        },
         | None => ().into_any(),
     };
 

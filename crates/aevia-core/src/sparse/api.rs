@@ -73,7 +73,7 @@ fn wrap_like<T: Store>(
     if like.format == SparseFormat::Bcsr && shape.len() == 2 {
         let (br, bc) = like.block;
         for (r, c) in [(br, bc), (bc, br)] {
-            if shape[0] % r == 0 && shape[1] % c == 0 {
+            if shape[0].is_multiple_of(r) && shape[1].is_multiple_of(c) {
                 return Value::Sparse(Rc::new(SparseData::from_entries_blocked(
                     shape,
                     dim,
@@ -573,7 +573,8 @@ fn to_bcsr(
     span: Span,
 ) -> R<Value> {
     check_format_rank(SparseFormat::Bcsr, data.rank(), span)?;
-    if br == 0 || bc == 0 || data.shape[0] % br != 0 || data.shape[1] % bc != 0 {
+    if br == 0 || bc == 0 || !data.shape[0].is_multiple_of(br) || !data.shape[1].is_multiple_of(bc)
+    {
         return Err(err(
             "E0802",
             format!(
@@ -1182,17 +1183,17 @@ fn sum(
         | Some(value) => Some(index_of(value, "sum axis", span)?),
         | None => None,
     };
-    if let Some(axis) = axis {
-        if axis >= data.rank() {
-            return Err(err(
-                "E0802",
-                format!(
-                    "axis {axis} is out of range for a rank-{} tensor",
-                    data.rank()
-                ),
-                span,
-            ));
-        }
+    if let Some(axis) = axis
+        && axis >= data.rank()
+    {
+        return Err(err(
+            "E0802",
+            format!(
+                "axis {axis} is out of range for a rank-{} tensor",
+                data.rank()
+            ),
+            span,
+        ));
     }
     if let Some(entries) = data.entries::<f64>() {
         return Ok(match axis {
@@ -1449,23 +1450,23 @@ fn sparse_dense_matmul(
         .with_note("matmul requires left columns = right rows"));
     }
     let dim = a.dim.mul(&x.dim);
-    if a.is_f64() {
-        if let Some(dense) = x.dense_flat() {
-            if let (SparseFormat::Bcsr, super::Pattern::Blocked { ptr, idx }, SpValues::F64(vals)) =
-                (a.format, &a.pattern, &a.values)
-            {
-                let out = kernels::bsr_spmm_f64(ptr, idx, vals, a.block, m, &dense, n);
-                return Ok(dense_value_f64(out_shape, out, dim, None));
-            }
-            let csr = kernels::csr_parts::<f64>(a, span)?;
-            let out = kernels::spmm(&csr, &dense, n, &mut FloatRing)?;
-            return Ok(dense_value_f64(
-                out_shape,
-                out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
-                dim,
-                None,
-            ));
+    if a.is_f64()
+        && let Some(dense) = x.dense_flat()
+    {
+        if let (SparseFormat::Bcsr, super::Pattern::Blocked { ptr, idx }, SpValues::F64(vals)) =
+            (a.format, &a.pattern, &a.values)
+        {
+            let out = kernels::bsr_spmm_f64(ptr, idx, vals, a.block, m, &dense, n);
+            return Ok(dense_value_f64(out_shape, out, dim, None));
         }
+        let csr = kernels::csr_parts::<f64>(a, span)?;
+        let out = kernels::spmm(&csr, &dense, n, &mut FloatRing)?;
+        return Ok(dense_value_f64(
+            out_shape,
+            out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
+            dim,
+            None,
+        ));
     }
     let b = boxed(a);
     let csr = kernels::csr_parts::<Value>(&b, span)?;
@@ -1507,17 +1508,17 @@ fn dense_sparse_matmul(
         .with_note("matmul requires left columns = right rows"));
     }
     let dim = x.dim.mul(&b.dim);
-    if b.is_f64() {
-        if let Some(dense) = x.dense_flat() {
-            let csr = kernels::csr_parts::<f64>(b, span)?;
-            let out = kernels::dense_spmm(&dense, p, &csr, &mut FloatRing)?;
-            return Ok(dense_value_f64(
-                out_shape,
-                out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
-                dim,
-                None,
-            ));
-        }
+    if b.is_f64()
+        && let Some(dense) = x.dense_flat()
+    {
+        let csr = kernels::csr_parts::<f64>(b, span)?;
+        let out = kernels::dense_spmm(&dense, p, &csr, &mut FloatRing)?;
+        return Ok(dense_value_f64(
+            out_shape,
+            out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
+            dim,
+            None,
+        ));
     }
     let bb = boxed(b);
     let csr = kernels::csr_parts::<Value>(&bb, span)?;
@@ -1711,22 +1712,22 @@ fn spsolve(
         ));
     }
     let dim = b.dim.div(&a.dim);
-    if a.is_f64() {
-        if let Some(rhs) = b.dense_flat() {
-            let csr = kernels::csr_parts::<f64>(a, span)?;
-            let view = aevia_std::sparse::Csr {
-                rows: n,
-                cols: n,
-                row_ptr: &csr.ptr,
-                col_idx: &csr.idx,
-                values: &csr.vals,
-            };
-            // A symmetric positive-definite matrix goes through sparse
-            // Cholesky; anything else (or a breakdown) through sparse LU.
-            let (x, _) = aevia_std::sparse::solve_auto(&view, &rhs)
-                .map_err(|e| err("E0806", format!("`spsolve`: {e}"), span))?;
-            return Ok(dense_value_f64(vec![n], x, dim, None));
-        }
+    if a.is_f64()
+        && let Some(rhs) = b.dense_flat()
+    {
+        let csr = kernels::csr_parts::<f64>(a, span)?;
+        let view = aevia_std::sparse::Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &csr.ptr,
+            col_idx: &csr.idx,
+            values: &csr.vals,
+        };
+        // A symmetric positive-definite matrix goes through sparse
+        // Cholesky; anything else (or a breakdown) through sparse LU.
+        let (x, _) = aevia_std::sparse::solve_auto(&view, &rhs)
+            .map_err(|e| err("E0806", format!("`spsolve`: {e}"), span))?;
+        return Ok(dense_value_f64(vec![n], x, dim, None));
     }
     let ba = boxed(a);
     let csr = kernels::csr_parts::<Value>(&ba, span)?;

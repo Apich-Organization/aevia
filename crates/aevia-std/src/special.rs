@@ -6,6 +6,11 @@
 //! of an exact integer is handled by the runtime, because that is where
 //! exactness can be kept.
 
+// The Bessel approximations carry their published nine-digit constants (for
+// example `0.636_619_772` for `2/pi`): the coefficients were fitted together with
+// them, so replacing one by the exact value would change the approximation.
+#![allow(clippy::approx_constant)]
+
 use std::f64::consts::PI;
 
 /// The natural logarithm of the Gamma function, for `x > 0`.
@@ -61,12 +66,12 @@ pub fn erf(x: f64) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-    let value = if x > 0.0 {
+
+    if x > 0.0 {
         regularized_gamma_p(0.5, x * x)
     } else {
         -regularized_gamma_p(0.5, x * x)
-    };
-    value
+    }
 }
 
 /// The complementary error function.

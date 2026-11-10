@@ -158,10 +158,10 @@ pub(crate) fn run_closure(
     // a million allocations.
     let mut frame: Vec<Value> = interp.take_buffer(usize::try_from(function.nslots).unwrap_or(0));
     let outcome = 'run: loop {
-        if let Some(scope) = &env.scope {
-            if let Err(error) = interp.enter_scope(scope) {
-                break 'run Err(error);
-            }
+        if let Some(scope) = &env.scope
+            && let Err(error) = interp.enter_scope(scope)
+        {
+            break 'run Err(error);
         }
         interp.bindings = bindings.clone();
         #[cfg(feature = "jit")]
@@ -543,7 +543,7 @@ fn eval_tail(
 fn eval_call(
     interp: &mut Interp,
     call: &Call,
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
     tail: bool,
     exit: bool,
@@ -573,17 +573,16 @@ fn finish_source_call(
     instance: Option<Rc<crate::generics::FunctionProof>>,
     tail: bool,
 ) -> Result<Flow, EvalError> {
-    if tail {
-        if let Value::Closure(closure) = &function {
-            if matches!(closure.body, ClosureBody::Ir(_)) {
-                return Ok(Flow::Tail {
-                    closure: closure.clone(),
-                    args: values,
-                    span: call.span,
-                    instance,
-                });
-            }
-        }
+    if tail
+        && let Value::Closure(closure) = &function
+        && matches!(closure.body, ClosureBody::Ir(_))
+    {
+        return Ok(Flow::Tail {
+            closure: closure.clone(),
+            args: values,
+            span: call.span,
+            instance,
+        });
     }
     if instance.is_some() {
         Ok(Flow::Value(interp.apply_instantiated(
@@ -603,7 +602,7 @@ fn finish_source_call(
 fn eval_normal_call(
     interp: &mut Interp,
     call: &Call,
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
     tail: bool,
     exit: bool,
@@ -619,7 +618,7 @@ fn eval_typed_call(
     interp: &mut Interp,
     call: &Call,
     types: &[aevia_syntax::ast::Ty],
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
     tail: bool,
     exit: bool,
@@ -636,7 +635,7 @@ fn eval_dictionary_call(
     interp: &mut Interp,
     call: &Call,
     method: &str,
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
     tail: bool,
 ) -> Result<Flow, EvalError> {
@@ -662,17 +661,16 @@ fn eval_dictionary_call(
             let mut values = values;
             let instance =
                 interp.prepare_function_call(&body, &mut values, Some(call.callee_span))?;
-            if tail {
-                if let Value::Closure(closure) = &body {
-                    if matches!(closure.body, ClosureBody::Ir(_)) {
-                        return Ok(Flow::Tail {
-                            closure: closure.clone(),
-                            args: values,
-                            span: call.span,
-                            instance,
-                        });
-                    }
-                }
+            if tail
+                && let Value::Closure(closure) = &body
+                && matches!(closure.body, ClosureBody::Ir(_))
+            {
+                return Ok(Flow::Tail {
+                    closure: closure.clone(),
+                    args: values,
+                    span: call.span,
+                    instance,
+                });
             }
             Ok(Flow::Value(
                 interp.apply_instantiated(body, values, call.span, instance)?,
@@ -690,7 +688,7 @@ fn eval_dictionary_call(
 fn eval_call_args(
     interp: &mut Interp,
     call: &Call,
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
     last_use: bool,
 ) -> Result<Vec<Value>, EvalError> {
@@ -715,7 +713,7 @@ fn eval_call_args(
 fn eval_atoms(
     interp: &mut Interp,
     atoms: &[Atom],
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
     span: Span,
 ) -> Result<Vec<Value>, EvalError> {
@@ -748,7 +746,7 @@ fn scalar_view<'a>(
 fn eval_atom(
     interp: &mut Interp,
     atom: &Atom,
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
     span: Span,
 ) -> Result<Value, EvalError> {
@@ -870,10 +868,10 @@ fn eval_rhs(
             // Operands that are frame slots or literals are read in place;
             // cloning them (a `BigInt` allocation each) to feed an operator
             // that only reads them was most of an arithmetic step.
-            if let (Some(a), Some(b)) = (scalar_view(left, frame), scalar_view(right, frame)) {
-                if let Some(value) = plain_scalar_binary(*op, a, b) {
-                    return Ok(value);
-                }
+            if let (Some(a), Some(b)) = (scalar_view(left, frame), scalar_view(right, frame))
+                && let Some(value) = plain_scalar_binary(*op, a, b)
+            {
+                return Ok(value);
             }
             let left = eval_atom(interp, left, frame, env, span)?;
             let right = eval_atom(interp, right, frame, env, span)?;
@@ -957,15 +955,15 @@ fn eval_rhs_rest(
             self_capture,
         } => {
             let closure = build_closure(function, frame, env, interp.bindings.as_ref());
-            if let (Some(index), Value::Closure(inner)) = (self_capture, &closure) {
-                if let ClosureEnv::Ir(ir_env) = &inner.env {
-                    let mut slots = ir_env.slots.borrow_mut();
-                    let position = *index as usize;
-                    if position >= slots.len() {
-                        slots.resize(position + 1, Value::Unit);
-                    }
-                    slots[position] = closure.clone();
+            if let (Some(index), Value::Closure(inner)) = (self_capture, &closure)
+                && let ClosureEnv::Ir(ir_env) = &inner.env
+            {
+                let mut slots = ir_env.slots.borrow_mut();
+                let position = *index as usize;
+                if position >= slots.len() {
+                    slots.resize(position + 1, Value::Unit);
                 }
+                slots[position] = closure.clone();
             }
             Ok(closure)
         },
@@ -978,10 +976,10 @@ fn eval_rhs_rest(
             qualified,
             name,
         } => {
-            if let Some(qualified) = qualified {
-                if interp.globals.contains_key(qualified) {
-                    return interp.lookup_global(qualified, env.scope.as_ref(), span);
-                }
+            if let Some(qualified) = qualified
+                && interp.globals.contains_key(qualified)
+            {
+                return interp.lookup_global(qualified, env.scope.as_ref(), span);
             }
             let base = eval_atom(interp, base, frame, env, span)?;
             match base {
@@ -1191,7 +1189,7 @@ fn eval_rhs_rest(
 fn build_do(
     interp: &mut Interp,
     plan: &Rc<DoPlan>,
-    frame: &mut Vec<Value>,
+    frame: &mut [Value],
     env: &Rc<IrEnv>,
 ) -> Result<Value, EvalError> {
     let mut slots = Vec::with_capacity(plan.captures.len());

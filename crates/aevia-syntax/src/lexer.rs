@@ -499,10 +499,10 @@ impl<'a> Lexer<'a> {
     fn degree_unit(&mut self) {
         let start = self.mark();
         self.bump();
-        if let Some(next) = self.peek() {
-            if next == 'C' || next == 'F' {
-                self.bump();
-            }
+        if let Some(next) = self.peek()
+            && (next == 'C' || next == 'F')
+        {
+            self.bump();
         }
         let text = self.src[start - self.base..self.pos].to_string();
         self.emit(TokenKind::Ident(text), start);
@@ -523,75 +523,73 @@ impl<'a> Lexer<'a> {
 
     fn number(&mut self) {
         let start = self.mark();
-        if self.peek() == Some('0') {
-            if let Some(radix_char) = self.peek_at(1) {
-                let radix = match radix_char {
-                    | 'x' | 'X' => Some(16),
-                    | 'o' | 'O' => Some(8),
-                    | 'b' | 'B' => Some(2),
-                    | _ => None,
-                };
-                if let Some(radix) = radix {
-                    self.bump();
-                    self.bump();
-                    let digits_start = self.pos;
-                    let mut cleaned = String::new();
-                    let mut last_underscore = false;
-                    while let Some(c) = self.peek() {
-                        if c == '_' {
-                            if cleaned.is_empty() || last_underscore {
-                                let at = self.mark();
-                                self.bump();
-                                self.error(
-                                    "E0106",
-                                    "misplaced `_` in numeric literal",
-                                    at,
-                                    self.mark(),
-                                );
-                                continue;
-                            }
-                            last_underscore = true;
-                            self.bump();
-                        } else if c.is_digit(radix) {
-                            cleaned.push(c);
-                            last_underscore = false;
-                            self.bump();
-                        } else {
-                            break;
-                        }
-                    }
-                    if last_underscore {
-                        let at = self.mark();
-                        self.error("E0106", "numeric literal ends with `_`", at, at);
-                    }
-                    if cleaned.is_empty() {
-                        self.error("E0106", "numeric literal has no digits", start, self.mark());
-                        return;
-                    }
-                    if self.pos == digits_start {
-                        self.error("E0106", "numeric literal has no digits", start, self.mark());
-                        return;
-                    }
-                    if let Some(next) = self.peek() {
-                        if next.is_alphanumeric() {
+        if self.peek() == Some('0')
+            && let Some(radix_char) = self.peek_at(1)
+        {
+            let radix = match radix_char {
+                | 'x' | 'X' => Some(16),
+                | 'o' | 'O' => Some(8),
+                | 'b' | 'B' => Some(2),
+                | _ => None,
+            };
+            if let Some(radix) = radix {
+                self.bump();
+                self.bump();
+                let digits_start = self.pos;
+                let mut cleaned = String::new();
+                let mut last_underscore = false;
+                while let Some(c) = self.peek() {
+                    if c == '_' {
+                        if cleaned.is_empty() || last_underscore {
                             let at = self.mark();
                             self.bump();
                             self.error(
                                 "E0106",
-                                format!("`{next}` is not a digit of this base"),
+                                "misplaced `_` in numeric literal",
                                 at,
                                 self.mark(),
                             );
+                            continue;
                         }
+                        last_underscore = true;
+                        self.bump();
+                    } else if c.is_digit(radix) {
+                        cleaned.push(c);
+                        last_underscore = false;
+                        self.bump();
+                    } else {
+                        break;
                     }
-                    match BigInt::from_str_radix(&cleaned, radix) {
-                        | Ok(value) => self.emit(TokenKind::Int(value), start),
-                        | Err(_) => {
-                            self.error("E0106", "invalid numeric literal", start, self.mark())
-                        },
-                    }
+                }
+                if last_underscore {
+                    let at = self.mark();
+                    self.error("E0106", "numeric literal ends with `_`", at, at);
+                }
+                if cleaned.is_empty() {
+                    self.error("E0106", "numeric literal has no digits", start, self.mark());
                     return;
                 }
+                if self.pos == digits_start {
+                    self.error("E0106", "numeric literal has no digits", start, self.mark());
+                    return;
+                }
+                if let Some(next) = self.peek()
+                    && next.is_alphanumeric()
+                {
+                    let at = self.mark();
+                    self.bump();
+                    self.error(
+                        "E0106",
+                        format!("`{next}` is not a digit of this base"),
+                        at,
+                        self.mark(),
+                    );
+                }
+                match BigInt::from_str_radix(&cleaned, radix) {
+                    | Ok(value) => self.emit(TokenKind::Int(value), start),
+                    | Err(_) => self.error("E0106", "invalid numeric literal", start, self.mark()),
+                }
+                return;
             }
         }
 

@@ -258,16 +258,14 @@ impl crate::Interp {
             .active_scope
             .as_ref()
             .and_then(|scope| scope.context.as_ref())
-        {
-            if let Some(template) = context
+            && let Some(template) = context
                 .instances
                 .borrow()
                 .iter()
                 .rev()
                 .find(|template| template.entry.global == global)
-            {
-                return Some(template.instantiate());
-            }
+        {
+            return Some(template.instantiate());
         }
         let mut pending = self.active_scope.iter().cloned().collect::<Vec<_>>();
         let mut scopes = std::collections::HashSet::new();
@@ -276,18 +274,16 @@ impl crate::Interp {
             if !scopes.insert(Rc::as_ptr(&scope)) {
                 continue;
             }
-            if let Some(context) = &scope.context {
-                if contexts.insert(Rc::as_ptr(context)) {
-                    if let Some(template) = context
-                        .instances
-                        .borrow()
-                        .iter()
-                        .rev()
-                        .find(|template| template.entry.global == global)
-                    {
-                        return Some(template.instantiate());
-                    }
-                }
+            if let Some(context) = &scope.context
+                && contexts.insert(Rc::as_ptr(context))
+                && let Some(template) = context
+                    .instances
+                    .borrow()
+                    .iter()
+                    .rev()
+                    .find(|template| template.entry.global == global)
+            {
+                return Some(template.instantiate());
             }
             pending.extend(scope.imports.iter().rev().cloned());
             if let Some(parent) = &scope.parent {
@@ -365,14 +361,14 @@ impl crate::Interp {
             if !scopes.insert(Rc::as_ptr(&scope)) {
                 continue;
             }
-            if let Some(context) = &scope.context {
-                if contexts.insert(Rc::as_ptr(context)) {
-                    for template in context.instances.borrow().iter().rev() {
-                        // Newest lexical implementation wins only within this
-                        // revision's scope graph, never via mutable globals.
-                        if seen.insert(template.entry.global.clone()) {
-                            result.push(template.clone());
-                        }
+            if let Some(context) = &scope.context
+                && contexts.insert(Rc::as_ptr(context))
+            {
+                for template in context.instances.borrow().iter().rev() {
+                    // Newest lexical implementation wins only within this
+                    // revision's scope graph, never via mutable globals.
+                    if seen.insert(template.entry.global.clone()) {
+                        result.push(template.clone());
                     }
                 }
             }

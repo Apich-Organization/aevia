@@ -262,7 +262,7 @@ let d = Dot(2.5)
 let payload = match d with
     | Dot(v) -> v
 ";
-    let values = values(&source, &["y", "z", "payload"]);
+    let values = values(source, &["y", "z", "payload"]);
     assert_eq!(values, vec!["a", "2", "2.5"]);
 }
 
@@ -281,7 +281,7 @@ fn pick(c: Color): Int =
 let picked = pick(Red)
 let other = pick(Blue)
 ";
-    let values = values(&source, &["picked", "other"]);
+    let values = values(source, &["picked", "other"]);
     assert_eq!(values, vec!["1", "2"]);
 }
 

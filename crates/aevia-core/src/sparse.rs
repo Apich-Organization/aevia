@@ -228,7 +228,7 @@ fn count_blocks(
 ) -> usize {
     let mut mark = vec![usize::MAX; shape[1] / bc];
     let mut blocks = 0;
-    for pair in coords.chunks_exact(2) {
+    for pair in coords.as_chunks::<2>().0 {
         let (ib, jb) = (pair[0] / br, pair[1] / bc);
         if mark[jb] != ib {
             mark[jb] = ib;
@@ -272,7 +272,7 @@ pub(crate) fn auto_block(
         return best;
     }
     for (br, bc) in CANDIDATES {
-        if shape[0] % br != 0 || shape[1] % bc != 0 {
+        if !shape[0].is_multiple_of(br) || !shape[1].is_multiple_of(bc) {
             continue;
         }
         let area = br * bc;
@@ -894,7 +894,11 @@ impl SparseData {
         match &self.pattern {
             | Pattern::Blocked { ptr, idx } => {
                 let (br, bc) = self.block;
-                if br == 0 || bc == 0 || self.shape[0] % br != 0 || self.shape[1] % bc != 0 {
+                if br == 0
+                    || bc == 0
+                    || !self.shape[0].is_multiple_of(br)
+                    || !self.shape[1].is_multiple_of(bc)
+                {
                     return Err(format!(
                         "block {br}x{bc} does not divide the shape {:?}",
                         self.shape
@@ -976,7 +980,7 @@ impl SparseData {
             return Ok(());
         }
         let explicit_zero = match &self.values {
-            | SpValues::F64(items) => items.iter().any(|v| *v == 0.0),
+            | SpValues::F64(items) => items.contains(&0.0),
             | SpValues::Boxed(items) => {
                 items
                     .iter()

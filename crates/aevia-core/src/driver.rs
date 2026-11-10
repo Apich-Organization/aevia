@@ -1001,10 +1001,10 @@ impl Loader {
             let mut reachable = std::collections::HashSet::new();
             let mut pending: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
             while let Some(file) = pending.pop() {
-                if reachable.insert(file) {
-                    if let Some(module) = modules.iter().find(|module| module.file == file) {
-                        pending.extend(module.imports.iter().map(|import| import.file));
-                    }
+                if reachable.insert(file)
+                    && let Some(module) = modules.iter().find(|module| module.file == file)
+                {
+                    pending.extend(module.imports.iter().map(|import| import.file));
                 }
             }
             let interfaces = || -> Vec<ModuleInterface> {
@@ -1128,10 +1128,8 @@ impl Loader {
             };
             let checked = match restored {
                 | Some(checked) => {
-                    if from_memory {
-                        if let Some(cache) = &self.cache {
-                            cache.borrow_mut().reused += 1;
-                        }
+                    if from_memory && let Some(cache) = &self.cache {
+                        cache.borrow_mut().reused += 1;
                     }
                     checked
                 },
@@ -1159,34 +1157,32 @@ impl Loader {
                 digests.insert(parsed.file, own_digest);
                 // Only an error-free check is stored: its diagnostics are
                 // warnings, and every type it declares is complete.
-                if !from_memory && !loaded_from_disk && !checked.diagnostics.has_errors() {
-                    if let (Some(disk), Some(key), Some(digest)) =
+                if !from_memory
+                    && !loaded_from_disk
+                    && !checked.diagnostics.has_errors()
+                    && let (Some(disk), Some(key), Some(digest)) =
                         (&self.disk, &disk_key, own_digest)
-                    {
-                        if disk.store(
-                            key,
-                            parsed.file,
-                            digest,
-                            &checked.diagnostics,
-                            &checked.module,
-                        ) {
-                            Counters::bump(&self.counters.disk_writes);
-                        }
-                    }
+                    && disk.store(
+                        key,
+                        parsed.file,
+                        digest,
+                        &checked.diagnostics,
+                        &checked.module,
+                    )
+                {
+                    Counters::bump(&self.counters.disk_writes);
                 }
             }
-            if !from_memory {
-                if let (Some(cache), Some(print)) = (&self.cache, print) {
-                    cache.borrow_mut().entries.insert(
-                        cache_key,
-                        CacheEntry {
-                            file: parsed.file,
-                            fingerprint: print,
-                            diagnostics: checked.diagnostics.clone(),
-                            module: checked.module.clone(),
-                        },
-                    );
-                }
+            if !from_memory && let (Some(cache), Some(print)) = (&self.cache, print) {
+                cache.borrow_mut().entries.insert(
+                    cache_key,
+                    CacheEntry {
+                        file: parsed.file,
+                        fingerprint: print,
+                        diagnostics: checked.diagnostics.clone(),
+                        module: checked.module.clone(),
+                    },
+                );
             }
             self.diagnostics.extend(checked.diagnostics.clone());
             let aliases = prefixes

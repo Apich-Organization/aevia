@@ -353,32 +353,32 @@ fn declarations() -> Vec<Decl> {
         }
         // `name1 name2 : signature`; a declaration may continue on the next
         // line (indented), which is folded into `signature`.
-        if let Some((head, rest)) = trimmed.split_once(':') {
-            if let Some(names) = declaration_names(head) {
-                // A new declaration ends the previous one: without this flush
-                // only the last declaration of each block would be kept.
-                flush_declaration(&mut out, &mut current, &mut last_signature);
-                let mut signature = rest.to_string();
-                for marker in ["  #", " #"] {
-                    if let Some((before, _)) = signature.split_once(marker) {
-                        signature = before.to_string();
-                    }
+        if let Some((head, rest)) = trimmed.split_once(':')
+            && let Some(names) = declaration_names(head)
+        {
+            // A new declaration ends the previous one: without this flush
+            // only the last declaration of each block would be kept.
+            flush_declaration(&mut out, &mut current, &mut last_signature);
+            let mut signature = rest.to_string();
+            for marker in ["  #", " #"] {
+                if let Some((before, _)) = signature.split_once(marker) {
+                    signature = before.to_string();
                 }
-                let signature = signature.trim().to_string();
-                if signature.starts_with("同上") {
-                    // `同上` (same as above) refers to the declaration just
-                    // before it: `root : 同上` is `nsolve_f`'s signature,
-                    // `errorbar_with : 同上 + PlotOpts` adds one parameter.
-                    let Some(previous) = last_signature.as_deref() else {
-                        continue;
-                    };
-                    let signature = inherit_signature(previous, &signature);
-                    current = Some((section.clone(), names, signature));
-                } else {
-                    current = Some((section.clone(), names, signature));
-                }
-                continue;
             }
+            let signature = signature.trim().to_string();
+            if signature.starts_with("同上") {
+                // `同上` (same as above) refers to the declaration just
+                // before it: `root : 同上` is `nsolve_f`'s signature,
+                // `errorbar_with : 同上 + PlotOpts` adds one parameter.
+                let Some(previous) = last_signature.as_deref() else {
+                    continue;
+                };
+                let signature = inherit_signature(previous, &signature);
+                current = Some((section.clone(), names, signature));
+            } else {
+                current = Some((section.clone(), names, signature));
+            }
+            continue;
         }
         if let Some((_, _, signature)) = current.as_mut() {
             if let Some((before, _)) = trimmed.split_once(" #") {
@@ -631,7 +631,7 @@ fn audit() -> (Vec<Mismatch>, Vec<String>) {
                     values
                 };
                 let rendered: Vec<String> = schemes.iter().map(scheme_type_head).collect();
-                let arity_ok = spec_arity.map_or(true, |arity| arities.contains(&arity));
+                let arity_ok = spec_arity.is_none_or(|arity| arities.contains(&arity));
                 let class_ok = classes
                     .iter()
                     .any(|scheme| classes_agree(spec_class, scheme));
@@ -650,13 +650,12 @@ fn audit() -> (Vec<Mismatch>, Vec<String>) {
                     });
                 }
                 table.push(format!(
-                    "| {} | `{}` | `{}` | `{}` | {} / {} | {} | {} |",
+                    "| {} | `{}` | `{}` | `{}` | {} / {arities:?} | {} | {} |",
                     decl.section,
                     decl.name,
                     decl.signature,
                     rendered.join(" ; "),
                     spec_arity.map_or("?".to_string(), |a| a.to_string()),
-                    format!("{arities:?}"),
                     if arity_ok && class_ok {
                         "MATCH"
                     } else {

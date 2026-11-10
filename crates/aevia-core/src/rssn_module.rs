@@ -21,7 +21,7 @@
 //! # Two operator paths, one decision
 //!
 //! [`call_operator`] takes an explicit [`OpKey`] and never resolves anything:
-//! that is the path PLAN D1 requires, and the one the checker pins. [`call`]'s
+//! that is the path the design requires, and the one the checker pins. [`call`]'s
 //! operator arm is unreachable from a checked call site — the evaluator uses
 //! [`call_operator`] — so an operator that reaches it is `E1005` rather than a
 //! re-resolution.
@@ -100,7 +100,7 @@ pub fn call(
         | "overloads" => overloads(&args, span),
         // An operator call reaches the evaluator through
         // `Interp::rssn_calls`, which carries the key the checker pinned
-        // (PLAN D1). Reaching this arm means the call did not come from a
+        //. Reaching this arm means the call did not come from a
         // checked call site, and there is nothing to resolve *with*.
         | _ => {
             Err(EvalError::new(
@@ -108,7 +108,7 @@ pub fn call(
                 format!("`Rssn.{name}` has no pinned overload here"),
             )
             .at(span)
-            .with_note("an operator is not a first-class value (PLAN D1)"))
+            .with_note("an operator is not a first-class value"))
         },
     }
 }
@@ -312,7 +312,7 @@ pub fn is_entry_point(name: &str) -> bool {
 
 /// Calls exactly the overload `key` names, without resolving anything.
 ///
-/// This is the dispatch entry point of PLAN D1: the key was chosen
+/// This is the dispatch entry point of pinned calls: the key was chosen
 /// statically, so the runtime must execute it and never look for a better
 /// match.
 ///
@@ -365,11 +365,12 @@ fn flatten_arguments(
 ) -> Vec<Value> {
     let mut flat = Vec::new();
     for (index, arg) in args.iter().enumerate() {
-        if entry.is_variadic() && index + 1 == args.len() {
-            if let Some(items) = list_items(arg) {
-                flat.extend(items);
-                continue;
-            }
+        if entry.is_variadic()
+            && index + 1 == args.len()
+            && let Some(items) = list_items(arg)
+        {
+            flat.extend(items);
+            continue;
         }
         flat.push(arg.clone());
     }
@@ -406,13 +407,14 @@ fn arguments(
     for (index, arg) in args.iter().enumerate() {
         // Only the trailing argument spreads, and only when it is a list: a
         // rank-1 tensor is the static `[α]`, anything else is a single value.
-        if variadic && Some(index) == last {
-            if let Some(items) = list_items(arg) {
-                for item in &items {
-                    converted.push(bridge::to_val(item)?);
-                }
-                continue;
+        if variadic
+            && Some(index) == last
+            && let Some(items) = list_items(arg)
+        {
+            for item in &items {
+                converted.push(bridge::to_val(item)?);
             }
+            continue;
         }
         converted.push(bridge::to_val(arg)?);
     }
@@ -510,24 +512,22 @@ pub(crate) fn host_dimension_witness(value: &Value) -> aevia_rssn::witness::Dime
             // Private tensor provenance can establish it, but only after the
             // current public shape and storage have been revalidated.
             let mut element = None;
-            if tensor.storage.is_empty() {
-                if let Some(schema) = tensor.verified_element.as_deref() {
-                    let rank = u32::try_from(tensor.shape.len()).ok();
-                    let valid = rank.is_some_and(|rank| {
-                        crate::host_witness::tensor_witnesses(
-                            tensor,
-                            &aevia_types::Shape::Rank(rank),
-                            schema,
-                            false,
-                        )
-                        .is_some()
-                    });
-                    if valid {
-                        if let Some((repr, witness)) = empty_schema(schema) {
-                            element_repr = Some(repr);
-                            element = Some(Box::new(witness));
-                        }
-                    }
+            if tensor.storage.is_empty()
+                && let Some(schema) = tensor.verified_element.as_deref()
+            {
+                let rank = u32::try_from(tensor.shape.len()).ok();
+                let valid = rank.is_some_and(|rank| {
+                    crate::host_witness::tensor_witnesses(
+                        tensor,
+                        &aevia_types::Shape::Rank(rank),
+                        schema,
+                        false,
+                    )
+                    .is_some()
+                });
+                if valid && let Some((repr, witness)) = empty_schema(schema) {
+                    element_repr = Some(repr);
+                    element = Some(Box::new(witness));
                 }
             }
             W::Tensor {
@@ -1147,7 +1147,7 @@ fn signature_dim(
 
 /// The `OpKey` a `Rssn.<name>` call with these argument types denotes.
 ///
-/// The checker calls this at a call site (PLAN D1, `W2.8`): the returned key
+/// The checker calls this at a call site: the returned key
 /// is pinned into the Core IR and handed to [`call_operator`], so the overload
 /// that was typed is the overload that runs. Resolution is `kernel::overload`'s
 /// lattice, not a second implementation of it.
@@ -1184,17 +1184,18 @@ fn typed_call(
         .at(span));
     };
     let result = dynamic_call(args, span)?;
-    if let Value::Variant(variant) = &result {
-        if variant.adt == aevia_types::adt::RESULT_ID && variant.index == 0 {
-            let Some(payload) = variant.fields.first() else {
-                return Ok(err(value_error(
-                    "TypeMismatch",
-                    "kernel returned an empty Ok",
-                )));
-            };
-            if let Err(reason) = validate_kernel_value(payload, expected) {
-                return Ok(err(value_error("TypeMismatch", reason)));
-            }
+    if let Value::Variant(variant) = &result
+        && variant.adt == aevia_types::adt::RESULT_ID
+        && variant.index == 0
+    {
+        let Some(payload) = variant.fields.first() else {
+            return Ok(err(value_error(
+                "TypeMismatch",
+                "kernel returned an empty Ok",
+            )));
+        };
+        if let Err(reason) = validate_kernel_value(payload, expected) {
+            return Ok(err(value_error("TypeMismatch", reason)));
         }
     }
     Ok(result)
@@ -1876,10 +1877,10 @@ fn validate_payload(
             }
             if let Shape::Refined(extents) = expected_shape {
                 for (actual, extent) in shape.iter().zip(extents) {
-                    if let Some(extent) = extent {
-                        if extent.as_const() != Some(*actual) {
-                            return Err(mismatch());
-                        }
+                    if let Some(extent) = extent
+                        && extent.as_const() != Some(*actual)
+                    {
+                        return Err(mismatch());
                     }
                 }
             }
@@ -1924,10 +1925,10 @@ fn validate_payload(
                         return Err(mismatch());
                     }
                 }
-                if let Type::Scalar(_, dim) = elem.as_ref() {
-                    if !dim.is_concrete() || dimension.as_ref() != Some(dim) {
-                        return Err(mismatch());
-                    }
+                if let Type::Scalar(_, dim) = elem.as_ref()
+                    && (!dim.is_concrete() || dimension.as_ref() != Some(dim))
+                {
+                    return Err(mismatch());
                 }
                 return Ok(());
             }

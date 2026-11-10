@@ -151,10 +151,12 @@ impl Config {
         match std::fs::read_to_string(&path) {
             | Ok(text) => Self::parse(&text, &path.display().to_string()),
             | Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            | Err(error) => Err(CliError::new(format!(
-                "cannot read `{}`: {error}",
-                path.display()
-            ))),
+            | Err(error) => {
+                Err(CliError::new(format!(
+                    "cannot read `{}`: {error}",
+                    path.display()
+                )))
+            },
         }
     }
 

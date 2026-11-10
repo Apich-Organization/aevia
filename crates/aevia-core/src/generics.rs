@@ -513,10 +513,10 @@ impl Interp {
         // recursive numeric loop asks the same question every iteration, and
         // answering it by re-unification was ~90% of the cost of a call.
         let key = CallProofKey::new(self, original, callee, args);
-        if let Some(key) = &key {
-            if let Some(hit) = self.call_proofs.get(key, args) {
-                return Ok(Some(hit));
-            }
+        if let Some(key) = &key
+            && let Some(hit) = self.call_proofs.get(key, args)
+        {
+            return Ok(Some(hit));
         }
         let result = self.prepare_function_call_uncached(original, args, callee)?;
         let result = result.map(|proof| self.call_proofs.canonical(original, proof));
@@ -835,10 +835,10 @@ impl Interp {
                 {
                     return false;
                 }
-                if let Type::Scalar(_, dim) = &**elem {
-                    if &tensor.dim != dim {
-                        return false;
-                    }
+                if let Type::Scalar(_, dim) = &**elem
+                    && &tensor.dim != dim
+                {
+                    return false;
                 }
                 if self.tensor_inputs.contains(tensor, elem) {
                     return true;

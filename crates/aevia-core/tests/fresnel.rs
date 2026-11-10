@@ -16,9 +16,9 @@ fn values_match_reference_tables() {
 "#);
     let values: Vec<f64> = output.lines().map(|line| line.parse().unwrap()).collect();
     let reference = [
-        0.438_259_147_390_354_766,
-        0.779_893_400_376_822_829,
-        -0.343_415_678_363_698_242,
+        0.438_259_147_390_354_76,
+        0.779_893_400_376_822_9,
+        -0.343_415_678_363_698_24,
         0.499_999_898_678_817_9,
     ];
     for (got, want) in values.iter().zip(reference) {

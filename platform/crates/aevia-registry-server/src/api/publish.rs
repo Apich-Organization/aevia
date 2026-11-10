@@ -427,14 +427,16 @@ fn spawn_docs_build(
                 let pages: Vec<aevia_registry_db::models::DocsPage> = docs
                     .pages
                     .iter()
-                    .map(|page| aevia_registry_db::models::DocsPage {
-                        version_id,
-                        path: page.path.clone(),
-                        title: page.title.clone(),
-                        html: page.html.clone(),
-                        decls: i32::try_from(page.decls).unwrap_or(i32::MAX),
-                        undocumented: i32::try_from(page.undocumented).unwrap_or(i32::MAX),
-                        source_file: page.source_file.clone(),
+                    .map(|page| {
+                        aevia_registry_db::models::DocsPage {
+                            version_id,
+                            path: page.path.clone(),
+                            title: page.title.clone(),
+                            html: page.html.clone(),
+                            decls: i32::try_from(page.decls).unwrap_or(i32::MAX),
+                            undocumented: i32::try_from(page.undocumented).unwrap_or(i32::MAX),
+                            source_file: page.source_file.clone(),
+                        }
                     })
                     .collect();
                 if let Err(error) = repo::replace_docs(&pool, version_id, &pages).await {

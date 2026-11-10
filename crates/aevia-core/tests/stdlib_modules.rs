@@ -191,18 +191,18 @@ fn specification_programs() -> Vec<Problem> {
         }
         if raw.trim_start().starts_with("```") {
             in_block = false;
-            if language == "aevia" && !block.contains("...") {
-                if let Some(module) = block
+            if language == "aevia"
+                && !block.contains("...")
+                && let Some(module) = block
                     .lines()
                     .find_map(|line| line.trim().strip_prefix("module "))
                     .map(str::trim)
-                {
-                    out.push(Problem {
-                        section: section.clone(),
-                        module: module.to_string(),
-                        source: block.clone(),
-                    });
-                }
+            {
+                out.push(Problem {
+                    section: section.clone(),
+                    module: module.to_string(),
+                    source: block.clone(),
+                });
             }
             continue;
         }

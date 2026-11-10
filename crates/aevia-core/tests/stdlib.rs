@@ -815,7 +815,7 @@ fn compile_fail_answers_whether_a_source_compiles() {
 fn an_exact_factorisation_stays_exact() {
     // `lu` of an exact matrix keeps rationals (§8.4 keeps ρ).
     let matrix = aevia_core::eval::build_tensor(
-        (1..=4).map(|value| int(value)).collect(),
+        (1..=4).map(int).collect(),
         vec![2, 2],
         aevia_dim::Dim::one(),
     );

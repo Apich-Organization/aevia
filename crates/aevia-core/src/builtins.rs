@@ -1301,10 +1301,10 @@ pub fn call(
             // behaviour below, which flattens it: `reverse` is typed
             // `Tensor<1,a> -> Tensor<1,a>` (§8), and changing what it does to
             // a matrix is a semantic change, not a representation one.
-            if tensor.rank() == 1 {
-                if let Some(view) = tensor.reversed_view(0) {
-                    return Ok(Value::Tensor(Rc::new(view)));
-                }
+            if tensor.rank() == 1
+                && let Some(view) = tensor.reversed_view(0)
+            {
+                return Ok(Value::Tensor(Rc::new(view)));
             }
             let mut elements = tensor.elements();
             elements.reverse();
@@ -1779,12 +1779,11 @@ pub fn call(
             let dim = crate::value::value_dim(&value);
             // A concrete value is already its own approximation: `approx(9)`
             // is `Ok(9.0)` (§6.13 step 5), not a kernel round trip.
-            if let Value::Num(number) = &value {
-                if !number.is_symbolic() {
-                    if let Some(approximate) = number.to_f64() {
-                        return Ok(ok(Value::Num(NumVal::float(approximate, dim))));
-                    }
-                }
+            if let Value::Num(number) = &value
+                && !number.is_symbolic()
+                && let Some(approximate) = number.to_f64()
+            {
+                return Ok(ok(Value::Num(NumVal::float(approximate, dim))));
             }
             let term = value_to_term(&value)?;
             // `pi` and `e` are the mathematical constants, not unknowns: an
@@ -2848,15 +2847,15 @@ pub fn call(
             // §8.4 keeps `ρ`, so an exact matrix has an exact factorisation
             // when the norms have exact square roots; otherwise the float
             // Gram-Schmidt answers.
-            if let Some(exact) = exact_values(&matrix) {
-                if rows <= 8 && cols <= 8 {
-                    if let Ok((q, r)) = aevia_std::linalg::qr_exact(rows, cols, &exact) {
-                        return Ok(tuple(vec![
-                            rational_tensor(vec![rows, rows], &q, Dim::one()),
-                            rational_tensor(vec![rows, cols], &r, dim),
-                        ]));
-                    }
-                }
+            if let Some(exact) = exact_values(&matrix)
+                && rows <= 8
+                && cols <= 8
+                && let Ok((q, r)) = aevia_std::linalg::qr_exact(rows, cols, &exact)
+            {
+                return Ok(tuple(vec![
+                    rational_tensor(vec![rows, rows], &q, Dim::one()),
+                    rational_tensor(vec![rows, cols], &r, dim),
+                ]));
             }
             let (q, r) = aevia_std::linalg::qr(rows, cols, &entries)
                 .map_err(|error| numeric_error(name, error, span))?;
@@ -2869,16 +2868,17 @@ pub fn call(
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
-            if rows == cols && rows <= 32 {
-                if let Some(exact) = exact_values(&matrix) {
-                    let (p, l, u) = aevia_std::linalg::lu_exact(rows, &exact)
-                        .map_err(|error| numeric_error(name, error, span))?;
-                    return Ok(tuple(vec![
-                        rational_tensor(vec![rows, rows], &p, Dim::one()),
-                        rational_tensor(vec![rows, rows], &l, Dim::one()),
-                        rational_tensor(vec![rows, cols], &u, dim),
-                    ]));
-                }
+            if rows == cols
+                && rows <= 32
+                && let Some(exact) = exact_values(&matrix)
+            {
+                let (p, l, u) = aevia_std::linalg::lu_exact(rows, &exact)
+                    .map_err(|error| numeric_error(name, error, span))?;
+                return Ok(tuple(vec![
+                    rational_tensor(vec![rows, rows], &p, Dim::one()),
+                    rational_tensor(vec![rows, rows], &l, Dim::one()),
+                    rational_tensor(vec![rows, cols], &u, dim),
+                ]));
             }
             let (p, l, u) = aevia_std::linalg::lu(rows, cols, &entries)
                 .map_err(|error| numeric_error(name, error, span))?;
@@ -3082,10 +3082,10 @@ pub fn call(
             // it by span. Compare it with the dimension the value carries; a
             // mismatch is the appendix-B `E0412` class, carried as the
             // recoverable `Err(DimError)` the signature promises.
-            if let Some(expected) = interp.context.evidence.dyn_calls.get(&span) {
-                if dynamic.dim != *expected {
-                    return Ok(err(dim_error(expected, &dynamic.dim)));
-                }
+            if let Some(expected) = interp.context.evidence.dyn_calls.get(&span)
+                && dynamic.dim != *expected
+            {
+                return Ok(err(dim_error(expected, &dynamic.dim)));
             }
             Ok(ok(Value::Num(dynamic.as_scalar())))
         },
@@ -4070,15 +4070,16 @@ pub fn call(
                 func: native(|_interp, values, _span| {
                     // Propagate a failed write with its taxonomy code instead of
                     // reporting success.
-                    if let Some(Value::Variant(result)) = values.first() {
-                        if result.adt == adt::RESULT_ID && result.index == 1 {
-                            let failed = result.fields.first().cloned().unwrap_or_else(|| {
-                                Value::string("E0901: the file could not be written")
-                            });
-                            return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                                failed,
-                            )))));
-                        }
+                    if let Some(Value::Variant(result)) = values.first()
+                        && result.adt == adt::RESULT_ID
+                        && result.index == 1
+                    {
+                        let failed = result.fields.first().cloned().unwrap_or_else(|| {
+                            Value::string("E0901: the file could not be written")
+                        });
+                        return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                            failed,
+                        )))));
                     }
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(ok(
                         Value::Unit,
@@ -4178,15 +4179,16 @@ pub fn call(
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
                 action: Rc::new(crate::value::IoAction::WriteFile { path, contents: text }),
                 func: native(|_interp, values, _span| {
-                    if let Some(Value::Variant(result)) = values.first() {
-                        if result.adt == adt::RESULT_ID && result.index == 1 {
-                            let failed = result.fields.first().cloned().unwrap_or_else(|| {
-                                Value::string("E0901: the file could not be written")
-                            });
-                            return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                                failed,
-                            )))));
-                        }
+                    if let Some(Value::Variant(result)) = values.first()
+                        && result.adt == adt::RESULT_ID
+                        && result.index == 1
+                    {
+                        let failed = result.fields.first().cloned().unwrap_or_else(|| {
+                            Value::string("E0901: the file could not be written")
+                        });
+                        return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                            failed,
+                        )))));
                     }
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(ok(
                         Value::Unit,
@@ -6514,31 +6516,31 @@ fn symbol_name(num: &NumVal) -> Option<String> {
 
 fn render_plot(spec: &Value) -> String {
     let mut polylines = String::new();
-    if let Value::Record(record) = spec {
-        if let Some(Value::Tensor(series)) = record.fields.get("series") {
-            for item in series.elements() {
-                if let Value::Record(series) = item {
-                    let label = series.fields.get("label").map_or_else(String::new, show);
-                    let x = series.fields.get("x").cloned().unwrap_or(Value::Unit);
-                    let y = series.fields.get("y").cloned().unwrap_or(Value::Unit);
-                    if let (Value::Tensor(x), Value::Tensor(y)) = (&x, &y) {
-                        let points: Vec<String> = x
-                            .elements()
-                            .iter()
-                            .zip(y.elements())
-                            .map(|(x, y)| {
-                                format!(
-                                    "{},{}",
-                                    x.as_f64().unwrap_or(0.0),
-                                    y.as_f64().unwrap_or(0.0)
-                                )
-                            })
-                            .collect();
-                        polylines.push_str(&format!(
+    if let Value::Record(record) = spec
+        && let Some(Value::Tensor(series)) = record.fields.get("series")
+    {
+        for item in series.elements() {
+            if let Value::Record(series) = item {
+                let label = series.fields.get("label").map_or_else(String::new, show);
+                let x = series.fields.get("x").cloned().unwrap_or(Value::Unit);
+                let y = series.fields.get("y").cloned().unwrap_or(Value::Unit);
+                if let (Value::Tensor(x), Value::Tensor(y)) = (&x, &y) {
+                    let points: Vec<String> = x
+                        .elements()
+                        .iter()
+                        .zip(y.elements())
+                        .map(|(x, y)| {
+                            format!(
+                                "{},{}",
+                                x.as_f64().unwrap_or(0.0),
+                                y.as_f64().unwrap_or(0.0)
+                            )
+                        })
+                        .collect();
+                    polylines.push_str(&format!(
                             "<polyline fill=\"none\" stroke=\"#c0392b\" stroke-width=\"2\" points=\"{}\"><title>{label}</title></polyline>\n",
                             points.join(" ")
                         ));
-                    }
                 }
             }
         }
@@ -8741,9 +8743,9 @@ fn join_tables(
     name: &str,
     span: Span,
 ) -> Result<Value, EvalError> {
-    let left = table_from(&args, 0, name, span)?;
-    let right = table_from(&args, 1, name, span)?;
-    let key = expect_str(&args, 2, name, span)?;
+    let left = table_from(args, 0, name, span)?;
+    let right = table_from(args, 1, name, span)?;
+    let key = expect_str(args, 2, name, span)?;
     let Some(left_index) = left.columns.iter().position(|name| *name == key) else {
         return Ok(err(Value::string(format!(
             "the left table has no column `{key}`"
@@ -8937,12 +8939,11 @@ fn expect_set<'a>(
         return Ok(std::borrow::Cow::Borrowed(items));
     }
     // A set whose elements were stored densely (all `Float`/`Int` scalars).
-    if let Value::Variant(variant) = value {
-        if variant.adt == aevia_types::adt::set_id() {
-            if let Some(Value::Tensor(tensor)) = variant.fields.first() {
-                return Ok(std::borrow::Cow::Owned(tensor.elements()));
-            }
-        }
+    if let Value::Variant(variant) = value
+        && variant.adt == aevia_types::adt::set_id()
+        && let Some(Value::Tensor(tensor)) = variant.fields.first()
+    {
+        return Ok(std::borrow::Cow::Owned(tensor.elements()));
     }
     Err(EvalError::new(
         "E0302",

@@ -336,7 +336,7 @@ fn square_block(
     hint: Option<(usize, usize)>,
 ) -> (usize, usize) {
     match hint {
-        | Some((r, c)) if r == c && csr.rows % r == 0 => (r, c),
+        | Some((r, c)) if r == c && csr.rows.is_multiple_of(r) => (r, c),
         | _ => rssn::kernels::bsr::choose_block_size(csr, &[(4, 4), (3, 3), (2, 2), (1, 1)]),
     }
 }
@@ -373,14 +373,14 @@ fn build_preconditioner(
         },
         | PrecondKind::Ic0 => csr.ic0().map_or_else(jacobi, Built::Ic),
         | PrecondKind::Auto => {
-            if block.is_some() {
-                if let Some(b) = blocked() {
-                    if let Ok(p) = b.bilu0() {
-                        return Built::BlockIlu(p);
-                    }
-                    if let Ok(p) = b.block_jacobi() {
-                        return Built::Block(p);
-                    }
+            if block.is_some()
+                && let Some(b) = blocked()
+            {
+                if let Ok(p) = b.bilu0() {
+                    return Built::BlockIlu(p);
+                }
+                if let Ok(p) = b.block_jacobi() {
+                    return Built::Block(p);
                 }
             }
             let auto = rssn::kernels::krylov::auto_preconditioner(csr);

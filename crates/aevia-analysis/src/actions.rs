@@ -324,11 +324,11 @@ fn extract_actions(
 }
 
 /// The innermost expression inside `outer` that the request touches.
-fn innermost_inside<'a>(
-    outer: &'a Expr,
+fn innermost_inside(
+    outer: &Expr,
     start: u32,
     end: u32,
-) -> Option<&'a Expr> {
+) -> Option<&Expr> {
     let mut best: Option<&Expr> = None;
     walk::expression(outer, &mut |expr| {
         if !walk::touches(expr.span, start, end) {
@@ -427,7 +427,7 @@ fn dimension_actions(
                 },
                 format!(" {unit}"),
             );
-            let candidate = candidate_text(document, &[edit.clone()]);
+            let candidate = candidate_text(document, std::slice::from_ref(&edit));
             let new_errors = compile_errors(document, &candidate);
             // A dimension fix must *remove* the error it fixes; an action that
             // merely moves it elsewhere is not offered.

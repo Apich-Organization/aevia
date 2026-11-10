@@ -132,10 +132,10 @@ fn captures_are_ordered_by_first_use() {
     // The body binds `f` first; find the closure in the body's statements.
     let mut found = None;
     for stmt in &outer.body.stmts {
-        if let Stmt::Let(item) = stmt {
-            if let Rhs::Closure(function) = &item.rhs {
-                found = Some(function.clone());
-            }
+        if let Stmt::Let(item) = stmt
+            && let Rhs::Closure(function) = &item.rhs
+        {
+            found = Some(function.clone());
         }
     }
     let inner = found.expect("the body builds a closure");

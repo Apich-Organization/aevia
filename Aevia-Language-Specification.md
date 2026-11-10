@@ -1,6 +1,6 @@
 # Aevia Language Specification
 
-**Single-file edition — Revision 12**
+**Single-file edition — Revision 13**
 
 > 本文件由 `spec/` 下的章节按顺序合并生成（`tools/bundle_spec.py`）；章节内的相对链接在单文件版中不再可用。
 
@@ -65,8 +65,8 @@ the same expression; units, dimensional inference, rewriting, numerical kernels,
 JIT compilation and physics simulations are provided by the backend. Aevia does
 not maintain a second operator list or a second unit table: it consumes the
 RSSN **Kernel Manifest** and `rssn::dim` registry, and generates its `Rssn`
-module from them. See [13 — Extensibility](13-extensibility.md) and the
-[backend requirements](../RSSN-INTEGRATION-REQUIREMENTS.md).
+module from them. See [13 — Extensibility](13-extensibility.md) and the kernel
+documentation in the rssn repository (`docs/KERNEL.md`).
 
 > This document is the **normative design**. It is written to be implementable:
 > the grammar is complete, the typing rules are stated, the runtime architecture
@@ -97,8 +97,9 @@ module from them. See [13 — Extensibility](13-extensibility.md) and the
 | [Appendix B — Diagnostics](appendix-b-diagnostics.md) | Error codes and message format | Yes |
 | [Appendix C — Changelog](appendix-c-changelog.md) | Audit revisions | Informational |
 
-后端接口清单：[`RSSN-INTEGRATION-REQUIREMENTS.md`](../RSSN-INTEGRATION-REQUIREMENTS.md)。这是
-Aevia 规范能够成立的前提，不是可选的实现细节。
+后端接口契约在 rssn 仓库的 `docs/KERNEL.md`（Kernel Manifest、动态调用 ABI、
+插件、单位与量纲）和 `docs/DIMENSIONS.md` 中。这是 Aevia 规范能够成立的前提，不是
+可选的实现细节。实现的 crate 划分见本仓库根目录的 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ## Conformance language
 
@@ -111,19 +112,14 @@ diagnostic category (the exact wording is not normative).
 ## Design status
 
 This is a **design standard**, not a frozen implementation. Chapters marked
-normative are intended to be implemented as written; the changelog records every
-audit round. The current text is **Revision 10**, after six rounds of independent
-audits plus the extensibility/backend-integration redesign, the live-kernel
-alignment with **`rssn 3.0.0-rc.1`** (now **1381 operators, 32 rule sets, 24
-overlays, 82 units**, with `features.sde`; see appendix C), and the second
-implementation round: symbolic instance keys and module-exported classes/
-instances/aliases, the §8.20 standard-library module tree (38 generated modules with the
-loader fallback), typed SDE surface (§8.9.1) over the kernel's §SDE operators,
-type-level `Nat` linear unification, and the tooling completion (doctests, bench
-baselines, multi-module editor analysis). Revision 9 states the dispatch/extension
-boundary explicitly (no runtime multimethods, no multi-parameter classes, no
-per-type monomorphization; instances selected statically or by canonical
-witnesses) and Revision 10 expands that into the implemented instance-key model.
+normative are intended to be implemented as written; [appendix C](appendix-c-changelog.md)
+records every revision and the known gaps. The current text is **Revision 13**,
+aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`; its Kernel Manifest at that
+version has 1476 operators in 37 rule sets, 25 signature overlays, 82 units and 30
+constants — the live counts come from `aevia rssn`, not from this paragraph).
+Dispatch and extension follow the boundary stated in chapter 13: no runtime
+multimethods, no multi-parameter classes, no per-type monomorphization; instances
+are selected statically or by canonical witnesses.
 There is **no v1/v2 language split**: every capability is designed in; a backend
 that does not yet implement one reports a capability diagnostic (`E1001`) instead
 of removing the language feature.
@@ -4016,6 +4012,92 @@ rssn 的 `rssn::dim` 提供 `DimTerm`/`DimArena`/`UnitRegistry`；`units` 规则
 5. **rssn 的 `DimensionMode::Strict` 只用于 FFI/导出。** 静态路径的项图
    无量纲，用 `Off`；`Dyn<ρ>` 的量纲由宿主保存为 `DimTerm`，不依赖字符串。
 
+## 5.11 单位制
+
+物理学家常把几个常数取作 1（`c = 1`、`ħ = 1`），于是长度成为能量的倒数。Aevia
+把这件事做成**模块级的量纲约化**，而不是另一套数值：模块里*写出来*的量纲随
+单位制化简，而每一个值仍然是诚实的 SI 量。
+
+### 5.11.1 选择单位制
+
+单位制由模块头选择，名字是一个标识符：
+
+```aevia
+module Hep with units natural
+```
+
+kernel 提供四个单位制（来自 `manifest.unit_systems`，Aevia 不自带第二份）：
+
+| 名字 | 取作 1 的量 | 约化后剩下的生成量纲 |
+|---|---|---|
+| `natural` | `c`、`hbar`、`k_B`、`epsilon_0`（Heaviside–Lorentz） | 能量、物质的量、发光强度 |
+| `planck` | `c`、`hbar`、`G`、`k_B`、`4 pi epsilon_0` | 物质的量、发光强度 |
+| `atomic` | `hbar`、`m_e`、`e`、`4 pi epsilon_0` | 温度、物质的量、发光强度 |
+| `geometrized` | `c`、`G` | 长度、电流、温度、物质的量、发光强度 |
+
+`Units.Natural`、`Units.Planck`、`Units.Atomic`、`Units.Geometrized`（§5.8）是
+这些单位制下的常数模块，由 `manifest.unit_systems` 与 `manifest.constants`
+生成；`c`、`hbar`、`k_B` 在 `Units.Natural` 里由约化本身得到精确的 `1`，不是
+手写的特例。
+
+### 5.11.2 约化
+
+取单位制的“取作 1 的量”的量纲 `q₁ … q_k` 与生成量纲 `g₁ … g_m`，它们必须是七个
+SI 基量纲在有理数上的一组基。于是每个 SI 量纲 `d` 唯一分解为
+
+```
+d = Π qᵢ^λᵢ · Π gⱼ^μⱼ
+```
+
+`Π gⱼ^μⱼ` 称为 `d` 的**代表**，记作 `R(d)`。量纲为 `d` 的量 `x` 的**单位制值**是
+`x / Π Qᵢ^λᵢ`（`Qᵢ` 是第 i 个量的精确 SI 值）；它本身是量纲为 `R(d)` 的 SI 量。
+例如在 `natural` 中 `R(L) = R(T) = Energy^-1`，`1 m` 的单位制值是
+`1 m / (ħ c) ≈ 5.07e24 J⁻¹`。用户基量纲与量纲变量不在七个 SI 基量纲张成的空间里，
+约化不改动它们。
+
+在带单位制的模块中，**该模块里写出的**量纲标注与单位字面量都先约化再检查，
+所以 `fn f(x: Real[L]): Real[L]` 与 `fn f(x: Real[T]): Real[T]` 在 `natural` 里是
+同一个类型。
+
+### 5.11.3 值不被重新解释
+
+约化只改变模块里*写下*的量纲，从不改变值：模块中的每个量仍是 SI 量，只是它的
+类型用代表量纲书写。因此值可以进出带单位制的模块而无需转换，进入 SI 模块后
+类型依然正确；**导入的绑定保持它们在原模块中的 SI 类型**。
+
+模块头写了 kernel 没有的名字，是 `E0512`，诊断列出 kernel 提供的名字。
+
+### 5.11.4 没有精确尺度的单位
+
+单位字面量按单位制约化时需要一个精确尺度。若约化的某个指数不是整数，尺度
+无理，该单位在此单位制下没有精确尺度，报 `E0511`。典型例子是 Heaviside–Lorentz
+的 `natural` 中的电荷单位 `C`，它需要 `(ε₀ħc)^(1/2)`。处理办法：直接写单位制中的
+数，或用 §5.11.5 的 `to_system` 换算 SI 值。
+
+### 5.11.5 显式换算
+
+```aevia
+to_system("natural", x)           # SI 量 x → 其代表量纲 R(d) 的单位制值
+from_system<L>("natural", y)      # 单位制值 y → SI 量纲 L 的量
+```
+
+- 单位制名必须是字符串字面量，否则 `E0302`；未知名字是 `E0512`；参数个数不是
+  2 是 `E0315`。
+- `to_system` 要求实参的量纲在检查时已知（具体量纲），否则 `E0304`；结果类型
+  是同一表示、量纲为 `R(d)` 的 `Scalar`。
+- `from_system<D>` 必须写出目标 SI 量纲 `D`（约化会遗忘它：`L` 与 `T` 都是
+  `Energy^-1`），否则 `E0304`；`D` 总是按 SI 读，即使调用发生在带单位制的模块里。
+  实参的量纲必须等于 `R(D)`，否则按普通量纲不匹配报告。
+- 结果的表示与实参相同。`Float`/`Complex` 乘以浮点因子；精确的 `Int`/`Real` 在因子
+  是不含 π 的精确尺度时保持为精确有理数，否则结果是符号项（因子以精确的
+  幂的乘积出现），不会静默降为浮点。
+
+### 5.11.6 显示
+
+在带单位制的模块里，没有自带显示单位的量按单位制的生成量纲显示：`natural` 中的
+能量倒数显示为 `eV^-1`，而不是 `s^2/(m^2*kg)`。这只选择显示单位，值不变；记录、
+变体（例如 `approx` 返回的 `Ok(x)`）与元组逐字段显示。
+
 下一章定义求值：一个 `Real` 值在什么时候是精确数、什么时候是符号项、
 什么时候变成 `Float`，以及张量和 IO 如何运行。
 
@@ -7030,25 +7112,31 @@ REPL 支持多行输入（缩进块）、Ctrl-C 取消当前求值、Ctrl-D 退�
 ```
 aevia run [--example NAME] [file] [-- args...]  # 运行可执行包/文件/示例
 aevia repl                         # 交互式
-aevia check [--all]                # 类型/量纲检查
-aevia fmt [--check]                # 格式化
+aevia check [--all] [file...]      # 类型/量纲检查
+aevia watch [file]                 # 监视源码，只重检变化的模块（§9.11）
+aevia fmt [--check] [file...]      # 格式化
 aevia test [--filter pat] [--doc]  # 运行测试 / 编译文档中的 aevia 代码块
-aevia doc [--open]                 # 生成文档
+aevia doc [--open] [--out DIR]     # 生成文档
 aevia bench [--filter pat] [--iterations N] [--warmup N]
             [--save-baseline FILE] [--compare-baseline FILE] [--threshold RATIO]
 aevia init name                    # 新建包
-aevia add dep                      # 添加依赖
+aevia add path                     # 添加路径依赖并重新解析锁文件
 aevia update                       # 更新锁文件
-aevia clean                        # 清理构建产物
+aevia clean                        # 删除 .aevia/ 构建缓存
+aevia lsp [--stdio]                # 语言服务器（§9.10）
+aevia rssn [--audit] [--emit DIR [--namespaces]]  # 审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
+aevia pkg command                  # 注册表客户端：登录、发布、撤回、搜索、校验（转发给 aevia-pkg）
 ```
 
-常用 flag：
+常用 flag（可出现在命令行任意位置）：
 
 ```
---release          优化模式（当前解释器实现无 JIT，接受并提示“无效果”）
---jobs N           并行度（同上：当前实现单进程解释执行，接受并提示“无效果”）
---max-stack MiB    解释器线程的栈上限（默认 256）
+--release          接受，但提示“无效果”（解释器没有优化档位；JIT 见 §9.6）
+--jobs N           并行求值的工作线程数（par_map 等，§9.7.2）
+--max-stack MiB    解释器线程的栈上限（默认 1024）
 --budget STEPS     尾调用/IO 步骤预算（默认 100,000,000；不是秒，见 §9.3.4）
+--caps LIST        只授予这些 capability：fs,net,env,rand,gpu（空列表 = 全部沙箱；默认全部）
+--no-cache         `check`/`run` 既不读也不写磁盘缓存（§9.11）
 --out PATH         输出路径（`rssn --emit`、`doc` 使用）
 --color auto|always|never
 --locked           拒绝修改 `aevia.lock`（`update`/`add`）
@@ -7376,7 +7464,7 @@ Rssn.dynamic("myplugin_softplus", args)  # 插件/叶子：没有签名
   按 `Match` 格选、并列报 `E1002`（§13.4.1）。`resolve_overload` 只用于
   “先解析再缓存”，且只缓存 `Best::Unique` 的结果。
 
-完整接口清单见根目录 [`RSSN-INTEGRATION-REQUIREMENTS.md`](../RSSN-INTEGRATION-REQUIREMENTS.md)，
+完整的内核侧契约见 rssn 仓库的 `docs/KERNEL.md`，
 Aevia 侧规则见 [13 — Extensibility](13-extensibility.md)。
 
 ## 10.1 rssn 的能力边界
@@ -8705,8 +8793,8 @@ Aevia 成功的标志不是“功能多”，而是：
 部分用 **capability 诊断**（`E1001`）报告，而不是删掉语言特性或让用户
 等到下一个大版本。
 
-本章的详细后端接口清单在项目根目录
-[`RSSN-INTEGRATION-REQUIREMENTS.md`](../RSSN-INTEGRATION-REQUIREMENTS.md)。
+本章的详细后端接口契约在 rssn 仓库的 `docs/KERNEL.md`（Kernel Manifest、动态
+调用 ABI、插件）、`docs/DIMENSIONS.md` 与 `docs/CALLBACKS.md`。
 这里定义 Aevia 侧的规范性契约。
 
 ---
@@ -10394,10 +10482,42 @@ help: transpose B or reshape A
    实际极限为零"的分母直接相除的错误（此前隐藏地会给出
    `limit(sqrt(x)*(sqrt(x+1) - sqrt(x)), x, oo) = 0`，正确值为 1/2）。
 
-## 4. 记录在案的未实现边界（Known Gaps）
+## 4. Revision 13（2026-11-07 ~ 2026-11-09）：信任边界与规则收紧
 
-1. **远程包注册表与 SemVer 依赖解析**：`aevia add` 只支持本地路径依赖；
-   `version`/`git`/registry 依赖报 `E0605`。
+本轮改变的是几条语言规则，并把此前只存在于实现中的部分写入规范正文。下列条目
+在对应章节里以“Revision 13”标注。
+
+1. **单位表达式的空白规则（§1.8.1）。** 此前单位表达式内的运算符一直延续到数字
+   或表达式边界，`3 m * x` 是单位 `m*x`；现在空白是单位与算术的分界，紧贴写法
+   `3 m*x` 仍是单位表达式。规范自己的导览 `70 kg * v^2 / 2` 因此可以通过名字解析。
+2. **未解出的量纲变量作指数的底数（§3.4.3）。** `diff(fn t => t^t)` 中 lambda
+   参数的量纲仍是推断变量时，检查器令其为 `1`（与 `sin(t)` 让 `t` 无量纲同一条
+   规则），不再报 `E0404`。
+3. **声明的量纲参数是刚性的（§4.4.1）。** `fn f<d>` 的函数体不能替调用者选定 `d`；
+   违反时报 `E0318`。
+4. **`show` 保留 `Float` 的相位（§6.12.3）。** 整数值的 `Float` 带小数点（`10.0`），
+   精确的 `10` 与浮点的 `10.0` 不再显示得一样。
+5. **`Set<τ>` 有了值与操作（§8.1.5.1）。** 此前只有类型。`set_insert` 等返回新集合，
+   集合相等与插入顺序无关。
+6. **运行时信任边界（§9.2.3，规范性）。** 运行时执行检查器的证明而不重新证明：
+   已检查的源调用不重新验证实参，已检查的构造器应用不遍历载荷，宿主边界处仍完整
+   验证，字面量按（位置、证据、模块）记忆。结果不变，工作量下降一到两个数量级。
+7. **字面量折叠（§3.10.4）取代 Revision 9 记录的偏差。** 一个字面量只舍入一次，
+   闭合的字面量算术树是编译期常量，`1.0 + 2` 是 `Float`。
+8. **单位制（§5.11）写入规范正文。** `module M with units natural`（还有 `planck`、
+   `atomic`、`geometrized`）按单位制约化模块里写出的量纲，值始终是诚实的 SI 量；
+   `to_system`/`from_system<D>` 显式换算；`E0511`、`E0512`。实现与附录 B 的诊断码早已
+   存在，章节正文此前缺失，现补全。
+9. **文档对齐。** §9.9 的命令与 flag 对齐实际 CLI（`watch`、`lsp`、`rssn`、`pkg`、
+   `--caps`、`--no-cache`、`--jobs` 已实现）；已删除的 `RSSN-INTEGRATION-REQUIREMENTS.md`
+   的引用改指 rssn 仓库的 `docs/KERNEL.md`；`spec/README.md` 的修订号与 kernel 计数更新。
+
+## 5. 记录在案的未实现边界（Known Gaps）
+
+1. **工具链内的 SemVer 依赖解析**：`aevia add`/`aevia update` 与 `aevia.toml` 只解析
+   本地路径依赖；`version`/`git`/registry 依赖报 `E0605`。注册表本身（`platform/`：
+   签名发布、索引、文档站）与客户端 `aevia pkg`（`aevia-pkg`）已存在，但编译器的依赖
+   解析还没有接上它。
 2. **设备后端**：`Gpu`/`Distributed` 只是可构造的运行时值；`on`/`to_device`/
    `@jit(target = Gpu(..))` 报 `E1001("core.gpu")`/`E1001("core.distributed")`。
 3. **稀疏值进入 RSSN 项图**与形状细化（只检查秩）仍是空白（§13.9.5）。

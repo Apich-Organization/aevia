@@ -165,6 +165,9 @@ fn solve(
         for row in 0..n {
             if row != col && !m[row][col].is_zero() {
                 let factor = m[row][col].clone();
+                // `m[row]` is written while `m[col]` is read, so the rows cannot
+                // be iterated together.
+                #[allow(clippy::needless_range_loop)]
                 for k in col..=n {
                     let delta = &factor * &m[col][k];
                     m[row][k] -= delta;
@@ -333,10 +336,10 @@ impl UnitSystem {
                     },
                 }
             }
-            if let (true, Some(k)) = (consistent, ratio) {
-                if k.denom().is_one() {
-                    return Some((generator.display.clone(), k.numer().clone()));
-                }
+            if let (true, Some(k)) = (consistent, ratio)
+                && k.denom().is_one()
+            {
+                return Some((generator.display.clone(), k.numer().clone()));
             }
         }
         None

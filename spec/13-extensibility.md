@@ -5,8 +5,8 @@
 部分用 **capability 诊断**（`E1001`）报告，而不是删掉语言特性或让用户
 等到下一个大版本。
 
-本章的详细后端接口清单在项目根目录
-[`RSSN-INTEGRATION-REQUIREMENTS.md`](../RSSN-INTEGRATION-REQUIREMENTS.md)。
+本章的详细后端接口契约在 rssn 仓库的 `docs/KERNEL.md`（Kernel Manifest、动态
+调用 ABI、插件）、`docs/DIMENSIONS.md` 与 `docs/CALLBACKS.md`。
 这里定义 Aevia 侧的规范性契约。
 
 ---

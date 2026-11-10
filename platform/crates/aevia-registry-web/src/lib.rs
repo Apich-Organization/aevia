@@ -38,9 +38,13 @@ mod login;
 mod spec;
 mod styles;
 
-pub use account::{account, activate};
-pub use crates::{crate_list, crate_page};
-pub use docs::{docs_index, docs_landing, docs_module};
+pub use account::account;
+pub use account::activate;
+pub use crates::crate_list;
+pub use crates::crate_page;
+pub use docs::docs_index;
+pub use docs::docs_landing;
+pub use docs::docs_module;
 pub use error::error_page;
 pub use home::home;
 pub use log::log_page;
@@ -48,7 +52,8 @@ pub use login::login;
 pub use spec::spec_all;
 pub use spec::spec_index;
 pub use spec::spec_page;
-pub use styles::{APP_JS, SITE_CSS};
+pub use styles::APP_JS;
+pub use styles::SITE_CSS;
 
 use aevia_registry_core::Lang;
 use leptos::prelude::Owner;

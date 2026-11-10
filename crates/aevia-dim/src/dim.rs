@@ -152,7 +152,9 @@ fn unhex(text: &str) -> Option<String> {
     }
     let bytes: Option<Vec<u8>> = text
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let a = char::from(pair[0]).to_digit(16)?;
             let b = char::from(pair[1]).to_digit(16)?;
@@ -185,12 +187,11 @@ impl Atom {
     /// Decode an owned base spelling, preserving unrecognized host names.
     #[must_use]
     pub fn from_transport_base(name: &str) -> Self {
-        if let Some(encoded) = name.strip_prefix(NOMINAL_PREFIX) {
-            if let Some((owner, name)) = encoded.split_once('_') {
-                if let (Some(owner), Some(name)) = (unhex(owner), unhex(name)) {
-                    return Self::Nominal(NominalBase::new(owner, name));
-                }
-            }
+        if let Some(encoded) = name.strip_prefix(NOMINAL_PREFIX)
+            && let Some((owner, name)) = encoded.split_once('_')
+            && let (Some(owner), Some(name)) = (unhex(owner), unhex(name))
+        {
+            return Self::Nominal(NominalBase::new(owner, name));
         }
         if let Some(raw) = name.strip_prefix(RAW_PREFIX).and_then(unhex) {
             return Self::Base(raw.into());
@@ -386,15 +387,14 @@ impl Dim {
         &self,
         display: &str,
     ) -> Self {
-        if self.slice().len() == 1 {
-            if let Some((Atom::Nominal(base), exponent)) = self.slice().first() {
-                if exponent.is_one() {
-                    return Self::from_factors([(
-                        Atom::Nominal(base.with_display(display)),
-                        exponent.clone(),
-                    )]);
-                }
-            }
+        if self.slice().len() == 1
+            && let Some((Atom::Nominal(base), exponent)) = self.slice().first()
+            && exponent.is_one()
+        {
+            return Self::from_factors([(
+                Atom::Nominal(base.with_display(display)),
+                exponent.clone(),
+            )]);
         }
         self.clone()
     }
@@ -1383,6 +1383,48 @@ impl DimUnifier {
     }
 }
 
+/// The SI derived unit whose dimension is exactly `dim`, if any.
+fn derived_si_symbol(dim: &Dim) -> Option<&'static str> {
+    if !dim.is_concrete() || dim.is_one() {
+        return None;
+    }
+    // (symbol, [M, L, T, I] exponents)
+    const TABLE: [(&str, [i64; 4]); 11] = [
+        ("N", [1, 1, -2, 0]),
+        ("J", [1, 2, -2, 0]),
+        ("W", [1, 2, -3, 0]),
+        ("Pa", [1, -1, -2, 0]),
+        ("C", [0, 0, 1, 1]),
+        ("V", [1, 2, -3, -1]),
+        ("Ω", [1, 2, -3, -2]),
+        ("F", [-1, -2, 4, 2]),
+        ("H", [1, 2, -2, -2]),
+        ("Wb", [1, 2, -2, -1]),
+        ("T", [1, 0, -2, -1]),
+    ];
+    let mut exponents = [0i64; 4];
+    for (atom, exponent) in dim.factors() {
+        let Atom::Base(name) = atom else {
+            return None;
+        };
+        let slot = match name.as_ref() {
+            | "Mass" => 0,
+            | "Length" => 1,
+            | "Time" => 2,
+            | "Current" => 3,
+            | _ => return None,
+        };
+        if !exponent.is_integer() {
+            return None;
+        }
+        exponents[slot] = i64::try_from(exponent.numer()).ok()?;
+    }
+    TABLE
+        .iter()
+        .find(|(_, row)| *row == exponents)
+        .map(|(symbol, _)| *symbol)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1516,46 +1558,4 @@ mod tests {
         assert_eq!(plain, "Time^(1/2)");
         assert_eq!(Dim::parse_plain(&plain).unwrap(), time.pow(&half));
     }
-}
-
-/// The SI derived unit whose dimension is exactly `dim`, if any.
-fn derived_si_symbol(dim: &Dim) -> Option<&'static str> {
-    if !dim.is_concrete() || dim.is_one() {
-        return None;
-    }
-    // (symbol, [M, L, T, I] exponents)
-    const TABLE: [(&str, [i64; 4]); 11] = [
-        ("N", [1, 1, -2, 0]),
-        ("J", [1, 2, -2, 0]),
-        ("W", [1, 2, -3, 0]),
-        ("Pa", [1, -1, -2, 0]),
-        ("C", [0, 0, 1, 1]),
-        ("V", [1, 2, -3, -1]),
-        ("Ω", [1, 2, -3, -2]),
-        ("F", [-1, -2, 4, 2]),
-        ("H", [1, 2, -2, -2]),
-        ("Wb", [1, 2, -2, -1]),
-        ("T", [1, 0, -2, -1]),
-    ];
-    let mut exponents = [0i64; 4];
-    for (atom, exponent) in dim.factors() {
-        let Atom::Base(name) = atom else {
-            return None;
-        };
-        let slot = match name.as_ref() {
-            | "Mass" => 0,
-            | "Length" => 1,
-            | "Time" => 2,
-            | "Current" => 3,
-            | _ => return None,
-        };
-        if !exponent.is_integer() {
-            return None;
-        }
-        exponents[slot] = i64::try_from(exponent.numer()).ok()?;
-    }
-    TABLE
-        .iter()
-        .find(|(_, row)| *row == exponents)
-        .map(|(symbol, _)| *symbol)
 }

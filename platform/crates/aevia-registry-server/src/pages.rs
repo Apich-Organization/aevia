@@ -183,15 +183,19 @@ pub(crate) async fn build_crate_page(
     };
     let versions = repo::versions(&state.pool, package.id).await?;
     let selected = match &version {
-        | Some(version) => versions
-            .iter()
-            .find(|row| &row.version == version)
-            .cloned()
-            .ok_or_else(|| PageError::not_found(format!("{id} has no version {version}.")))?,
-        | None => repo::latest_version(&state.pool, package.id)
-            .await?
-            .or_else(|| versions.first().cloned())
-            .ok_or_else(|| PageError::not_found(format!("{id} has no published versions.")))?,
+        | Some(version) => {
+            versions
+                .iter()
+                .find(|row| &row.version == version)
+                .cloned()
+                .ok_or_else(|| PageError::not_found(format!("{id} has no version {version}.")))?
+        },
+        | None => {
+            repo::latest_version(&state.pool, package.id)
+                .await?
+                .or_else(|| versions.first().cloned())
+                .ok_or_else(|| PageError::not_found(format!("{id} has no published versions.")))?
+        },
     };
     let downloads = repo::package_downloads(&state.pool, package.id).await?;
     let viewer = state.current(headers).await;
@@ -284,10 +288,12 @@ pub async fn docs_index(
     let modules: Vec<ModuleLink> = pages
         .iter()
         .filter(|page| !page.path.is_empty())
-        .map(|page| ModuleLink {
-            path: page.path.clone(),
-            decls: usize::try_from(page.decls).unwrap_or(0),
-            undocumented: usize::try_from(page.undocumented).unwrap_or(0),
+        .map(|page| {
+            ModuleLink {
+                path: page.path.clone(),
+                decls: usize::try_from(page.decls).unwrap_or(0),
+                undocumented: usize::try_from(page.undocumented).unwrap_or(0),
+            }
         })
         .collect();
     let total_decls: usize = modules.iter().map(|module| module.decls).sum();
@@ -331,10 +337,12 @@ pub async fn docs_module(
     let modules: Vec<ModuleLink> = pages
         .iter()
         .filter(|page| !page.path.is_empty())
-        .map(|page| ModuleLink {
-            path: page.path.clone(),
-            decls: usize::try_from(page.decls).unwrap_or(0),
-            undocumented: usize::try_from(page.undocumented).unwrap_or(0),
+        .map(|page| {
+            ModuleLink {
+                path: page.path.clone(),
+                decls: usize::try_from(page.decls).unwrap_or(0),
+                undocumented: usize::try_from(page.undocumented).unwrap_or(0),
+            }
         })
         .collect();
     let model = DocModulePage {
@@ -399,13 +407,15 @@ pub async fn account(
         viewer: crate::state::viewer_of(&publisher),
         keys: keys
             .iter()
-            .map(|key| KeyView {
-                id: key.id,
-                kind: key.kind.clone(),
-                fingerprint: key.fingerprint.clone(),
-                label: key.label.clone(),
-                created_at: key.created_at.to_rfc3339(),
-                revoked: key.revoked_at.is_some(),
+            .map(|key| {
+                KeyView {
+                    id: key.id,
+                    kind: key.kind.clone(),
+                    fingerprint: key.fingerprint.clone(),
+                    label: key.label.clone(),
+                    created_at: key.created_at.to_rfc3339(),
+                    revoked: key.revoked_at.is_some(),
+                }
             })
             .collect(),
         packages: cards_of(&packages),
@@ -627,9 +637,11 @@ pub async fn set_language(
         .get(axum::http::header::REFERER)
         .and_then(|value| value.to_str().ok())
         .and_then(|referer| url::Url::parse(referer).ok())
-        .map(|url| match url.query() {
-            | Some(query) => format!("{}?{query}", url.path()),
-            | None => url.path().to_string(),
+        .map(|url| {
+            match url.query() {
+                | Some(query) => format!("{}?{query}", url.path()),
+                | None => url.path().to_string(),
+            }
         })
         .filter(|path| path.starts_with('/') && !path.starts_with("//"))
         .unwrap_or_else(|| "/".to_string());
@@ -678,23 +690,27 @@ pub async fn healthz(State(state): State<AppState>) -> Response {
         .fetch_one(&state.pool)
         .await
     {
-        | Ok(_) => (
-            StatusCode::OK,
-            axum::Json(serde_json::json!({
-                "status": "ok",
-                "registry": state.config.registry_name,
-                "time": Utc::now().to_rfc3339(),
-            })),
-        )
-            .into_response(),
-        | Err(error) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({
-                "status": "degraded",
-                "error": error.to_string(),
-            })),
-        )
-            .into_response(),
+        | Ok(_) => {
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "status": "ok",
+                    "registry": state.config.registry_name,
+                    "time": Utc::now().to_rfc3339(),
+                })),
+            )
+                .into_response()
+        },
+        | Err(error) => {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "status": "degraded",
+                    "error": error.to_string(),
+                })),
+            )
+                .into_response()
+        },
     }
 }
 

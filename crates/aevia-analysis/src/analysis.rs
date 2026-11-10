@@ -69,6 +69,7 @@ use std::rc::Rc;
 use unicode_ident::is_xid_continue;
 
 /// Where the answers come from.
+#[allow(clippy::large_enum_variant)] // two long-lived values; boxing would only add indirection
 enum Source {
     /// The document's text alone — the unsaved-buffer fallback.
     Single(aevia_core::Compilation),
@@ -841,10 +842,9 @@ impl<'a> Analysis<'a> {
             .dictionaries
             .iter()
             .find(|dictionary| dictionary.span == call_span)
+            && let Some(signature) = dictionary_signature(views, dictionary)
         {
-            if let Some(signature) = dictionary_signature(views, dictionary) {
-                return Some((vec![signature], 0));
-            }
+            return Some((vec![signature], 0));
         }
         if matches!(
             view.checked.expr_types.get(&callee.span),
@@ -886,32 +886,33 @@ impl<'a> Analysis<'a> {
             | _ => {},
         }
         if let Some(parts) = callee_path(callee) {
-            if parts.first().map(String::as_str) == Some("Rssn") && parts.len() > 1 {
-                if let Some(signatures) = rssn_signatures(view, &parts[1..], call_span) {
-                    return Some(signatures);
-                }
+            if parts.first().map(String::as_str) == Some("Rssn")
+                && parts.len() > 1
+                && let Some(signatures) = rssn_signatures(view, &parts[1..], call_span)
+            {
+                return Some(signatures);
             }
             let resolved = if parts.len() == 1 {
                 resolve_unqualified_in(views, view, &parts[0])
             } else {
                 resolve_qualified_in(views, view, &parts)
             };
-            if let Some((module, _)) = resolved {
-                if let Some(signatures) = export_signatures(views, module, &parts) {
-                    return Some(signatures);
-                }
+            if let Some((module, _)) = resolved
+                && let Some(signatures) = export_signatures(views, module, &parts)
+            {
+                return Some(signatures);
             }
-            if parts.len() == 1 {
-                if let Some(schemes) = aevia_types::builtins::schemes(&parts[0]) {
-                    let name = parts[0].as_str();
-                    let signatures: Vec<SignatureInfo> = schemes
-                        .iter()
-                        .map(|scheme| scheme_signature(name, scheme, None))
-                        .collect();
-                    if !signatures.is_empty() {
-                        let active = active_by_arity(&signatures, argument_count);
-                        return Some((signatures, active));
-                    }
+            if parts.len() == 1
+                && let Some(schemes) = aevia_types::builtins::schemes(&parts[0])
+            {
+                let name = parts[0].as_str();
+                let signatures: Vec<SignatureInfo> = schemes
+                    .iter()
+                    .map(|scheme| scheme_signature(name, scheme, None))
+                    .collect();
+                if !signatures.is_empty() {
+                    let active = active_by_arity(&signatures, argument_count);
+                    return Some((signatures, active));
                 }
             }
         }
@@ -1127,17 +1128,16 @@ impl<'a> Analysis<'a> {
                 // A class method call the checker resolved: the interesting
                 // fact is *which instance*, not the scheme, because the scheme
                 // is the class's and the instance is the proof.
-                if let Some(call) = occurrence.call {
-                    if let Some(use_) = checked
+                if let Some(call) = occurrence.call
+                    && let Some(use_) = checked
                         .dictionaries
                         .iter()
                         .find(|use_| use_.span == call && &use_.method == name)
-                    {
-                        return Some(format!(
-                            "**class method** `{name}`\n\nclass `{}` · instance for `{}`",
-                            use_.class, use_.head
-                        ));
-                    }
+                {
+                    return Some(format!(
+                        "**class method** `{name}`\n\nclass `{}` · instance for `{}`",
+                        use_.class, use_.head
+                    ));
                 }
                 if let Some(export) = checked.exports.get(name) {
                     let text = describe_export(name, export)?;
@@ -1321,7 +1321,7 @@ impl<'a> Analysis<'a> {
     /// resolved against the loaded program's exports, so hover answers with the
     /// same scheme `aevia check` used. `Rssn.<op>` is the one dotted name the
     /// *checker* records: it pins the overload at the call site, and that pin is
-    /// the whole point of PLAN D1, so it is what the hover reports.
+    /// the whole point of pinning, so it is what the hover reports.
     fn describe_qualified(
         &self,
         path: &[String],
@@ -1332,10 +1332,10 @@ impl<'a> Analysis<'a> {
             let text = describe_export(&full, export)?;
             let polymorphic = export_is_polymorphic(export);
             let mut text = self.with_use_type(text, span, polymorphic);
-            if let Some(program) = self.program() {
-                if let Some(module) = program.modules.get(index) {
-                    text.push_str(&format!("\n\nimported from `{}`", module.path.join(".")));
-                }
+            if let Some(program) = self.program()
+                && let Some(module) = program.modules.get(index)
+            {
+                text.push_str(&format!("\n\nimported from `{}`", module.path.join(".")));
             }
             return Some(text);
         }
@@ -1360,10 +1360,10 @@ impl<'a> Analysis<'a> {
         if let Some(signature) = entry.and_then(|entry| entry.signatures.get(call.overload)) {
             text.push_str(&format!("\n\n```aevia\n{}\n```", signature.render()));
         }
-        if let Some(entry) = entry {
-            if !entry.doc.is_empty() {
-                text.push_str(&format!("\n\n{}", entry.doc));
-            }
+        if let Some(entry) = entry
+            && !entry.doc.is_empty()
+        {
+            text.push_str(&format!("\n\n{}", entry.doc));
         }
         Some(text)
     }
@@ -2061,10 +2061,9 @@ fn resolve_qualified_in(
             .iter()
             .rev()
             .find(|(import, _, _)| *import == key)
+            && let Some(kind) = resolve_export(views, *target, member)
         {
-            if let Some(kind) = resolve_export(views, *target, member) {
-                return Some((*target, kind));
-            }
+            return Some((*target, kind));
         }
     }
     None
@@ -2118,10 +2117,10 @@ fn resolve_target(
     let view = views.get(entry)?;
     let occurrence = occurrence::at(&view.occurrences, offset)?;
     let name = occurrence_name(&occurrence.role)?.to_string();
-    if let Role::Qualified(path) = &occurrence.role {
-        if path.first().map(String::as_str) == Some("Rssn") {
-            return None;
-        }
+    if let Role::Qualified(path) = &occurrence.role
+        && path.first().map(String::as_str) == Some("Rssn")
+    {
+        return None;
     }
     if matches!(occurrence.role, Role::Method { .. }) {
         return None;
@@ -2135,18 +2134,18 @@ fn resolve_target(
             .definitions
             .get(&name)
             .map(|span| occurrence::name_span(view.text, *span, &name));
-        if declaration == Some(binding) {
-            if let Some(kind) = view.checked.exports.get(&name).map(export_kind) {
-                return Some(Target {
-                    file: view.file,
-                    span: binding,
-                    name,
-                    reach: Reach::Module {
-                        module: view.index,
-                        kind,
-                    },
-                });
-            }
+        if declaration == Some(binding)
+            && let Some(kind) = view.checked.exports.get(&name).map(export_kind)
+        {
+            return Some(Target {
+                file: view.file,
+                span: binding,
+                name,
+                reach: Reach::Module {
+                    module: view.index,
+                    kind,
+                },
+            });
         }
         return Some(Target {
             file: view.file,
@@ -2207,15 +2206,15 @@ fn check_physical_rename(
             if physical_declaration(views, file, span) != Some(target_key) {
                 continue;
             }
-            if new_name != target.name && matches!(occurrence.role, Role::Name(_)) {
-                if let Some(binding) = view.occurrences.lookup(occurrence, new_name) {
-                    if physical_declaration(views, view.file, binding) != Some(target_key) {
-                        return Err(RenameError::Collision(format!(
-                            "`{new_name}` would capture a reference in `{}`",
-                            view.document
-                        )));
-                    }
-                }
+            if new_name != target.name
+                && matches!(occurrence.role, Role::Name(_))
+                && let Some(binding) = view.occurrences.lookup(occurrence, new_name)
+                && physical_declaration(views, view.file, binding) != Some(target_key)
+            {
+                return Err(RenameError::Collision(format!(
+                    "`{new_name}` would capture a reference in `{}`",
+                    view.document
+                )));
             }
             let occurrence_span = occurrence_edit_span(view.text, occurrence, name);
             edited.insert((view.document, occurrence_span.start, occurrence_span.end));
@@ -2310,15 +2309,15 @@ fn collect_references(
             let Some(canonical) = canonical_decl_of(views, view, occurrence) else {
                 continue;
             };
-            if physical_declaration(&views, canonical.0, canonical.1)
-                != physical_declaration(&views, target.file, target.span)
+            if physical_declaration(views, canonical.0, canonical.1)
+                != physical_declaration(views, target.file, target.span)
             {
                 continue;
             }
             let span = occurrence_edit_span(view.text, occurrence, name);
             if !include_declaration
-                && physical_declaration(&views, view.file, span)
-                    == physical_declaration(&views, target.file, target.span)
+                && physical_declaration(views, view.file, span)
+                    == physical_declaration(views, target.file, target.span)
             {
                 continue;
             }
@@ -2664,14 +2663,14 @@ fn field_target(
         .collect();
     match owners.as_slice() {
         | [owner] => {
-            if let Some(declared_in) = &cursor.owner {
-                if declared_in != *owner {
-                    return Err(RenameError::NotRenamable(format!(
-                        "`{}` is a field of `{declared_in}`, which is declared in this document, \
+            if let Some(declared_in) = &cursor.owner
+                && declared_in != *owner
+            {
+                return Err(RenameError::NotRenamable(format!(
+                    "`{}` is a field of `{declared_in}`, which is declared in this document, \
                          but the field's own type cannot be renamed from here",
-                        cursor.name
-                    )));
-                }
+                    cursor.name
+                )));
             }
             Ok(FieldTarget {
                 name: cursor.name.clone(),
@@ -3185,10 +3184,10 @@ fn type_declaration_doc(
     name: &str,
 ) -> Option<String> {
     for decl in &view.module.decls {
-        if let DeclKind::Type { name: declared, .. } = &decl.kind {
-            if declared == name {
-                return doc_before(view.text, decl.span.start);
-            }
+        if let DeclKind::Type { name: declared, .. } = &decl.kind
+            && declared == name
+        {
+            return doc_before(view.text, decl.span.start);
         }
     }
     None
@@ -3308,10 +3307,10 @@ impl Analysis<'_> {
 }
 
 /// The type annotation written on the binder at `binding`.
-fn binding_annotation<'a>(
-    module: &'a Module,
+fn binding_annotation(
+    module: &Module,
     binding: Span,
-) -> Option<&'a Ty> {
+) -> Option<&Ty> {
     for decl in &module.decls {
         match &decl.kind {
             | DeclKind::Fn { args, .. } => {
@@ -3343,19 +3342,19 @@ fn binding_annotation<'a>(
         match &expr.kind {
             | ExprKind::Block { stmts, .. } => {
                 for statement in stmts {
-                    if let BlockStmt::Let { pattern, ty, .. } = statement {
-                        if pattern.span == binding {
-                            found = ty.as_ref();
-                        }
+                    if let BlockStmt::Let { pattern, ty, .. } = statement
+                        && pattern.span == binding
+                    {
+                        found = ty.as_ref();
                     }
                 }
             },
             | ExprKind::Do { stmts } => {
                 for statement in stmts {
-                    if let DoStmt::Let { pattern, ty, .. } = statement {
-                        if pattern.span == binding {
-                            found = ty.as_ref();
-                        }
+                    if let DoStmt::Let { pattern, ty, .. } = statement
+                        && pattern.span == binding
+                    {
+                        found = ty.as_ref();
                     }
                 }
             },
@@ -3393,15 +3392,15 @@ fn annotation_fields(
                                 .collect(),
                         );
                     }
-                    if let Some(alias) = candidate.checked.alias_defs.get(key) {
-                        if let Type::Record(row) = &alias.body {
-                            return Some(
-                                row.fields()
-                                    .into_iter()
-                                    .map(|(label, ty)| (label, Some(ty.to_string())))
-                                    .collect(),
-                            );
-                        }
+                    if let Some(alias) = candidate.checked.alias_defs.get(key)
+                        && let Type::Record(row) = &alias.body
+                    {
+                        return Some(
+                            row.fields()
+                                .into_iter()
+                                .map(|(label, ty)| (label, Some(ty.to_string())))
+                                .collect(),
+                        );
                     }
                 }
             }

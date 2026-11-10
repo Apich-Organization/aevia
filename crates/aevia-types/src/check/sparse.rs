@@ -384,10 +384,10 @@ impl Checker {
         }
         let operand = |this: &Self, ty: &Type| -> Option<(bool, Shape, Type)> {
             let resolved = this.infer.resolve(ty);
-            if let Some((_, dense)) = builtins::sparse_parts(&resolved) {
-                if let Type::Tensor { shape, elem } = dense {
-                    return Some((true, shape.clone(), (**elem).clone()));
-                }
+            if let Some((_, dense)) = builtins::sparse_parts(&resolved)
+                && let Type::Tensor { shape, elem } = dense
+            {
+                return Some((true, shape.clone(), (**elem).clone()));
             }
             match resolved {
                 | Type::Tensor { shape, elem } => Some((false, shape, *elem)),

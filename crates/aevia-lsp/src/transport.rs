@@ -89,21 +89,21 @@ impl<R: BufRead> Reader<R> {
             if line.is_empty() {
                 break;
             }
-            if let Some((name, value)) = line.split_once(':') {
-                if name.trim().eq_ignore_ascii_case("content-length") {
-                    let value = value.trim();
-                    if length.is_some()
-                        || value.is_empty()
-                        || !value.bytes().all(|b| b.is_ascii_digit())
-                    {
-                        return Err(TransportError::InvalidLength);
-                    }
-                    length = Some(
-                        value
-                            .parse::<usize>()
-                            .map_err(|_| TransportError::InvalidLength)?,
-                    );
+            if let Some((name, value)) = line.split_once(':')
+                && name.trim().eq_ignore_ascii_case("content-length")
+            {
+                let value = value.trim();
+                if length.is_some()
+                    || value.is_empty()
+                    || !value.bytes().all(|b| b.is_ascii_digit())
+                {
+                    return Err(TransportError::InvalidLength);
                 }
+                length = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| TransportError::InvalidLength)?,
+                );
             }
         }
         let Some(length) = length else {

@@ -2664,7 +2664,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 ),
             )]
         },
-        // §8.7.1: the distribution interface. Without type classes (PLAN D3)
+        // §8.7.1: the distribution interface. Without type classes
         // the distribution argument is an unconstrained variable; the runtime
         // reads its fields.
         | "pdf" => {
@@ -3421,40 +3421,6 @@ pub fn takes_type_argument(name: &str) -> bool {
         || sparse::takes_format_argument(name)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sqrt_halves_the_exponent() {
-        let scheme = schemes("sqrt").expect("sqrt exists").remove(0);
-        assert_eq!(scheme.dims.len(), 1);
-        let Type::Fn(_, ret) = &scheme.ty else {
-            panic!("expected function");
-        };
-        let Type::Scalar(_, dim) = &**ret else {
-            panic!("expected scalar");
-        };
-        assert_eq!(*dim, Dim::var(0).pow(&half()));
-    }
-
-    #[test]
-    fn unknown_names_are_not_builtins() {
-        assert!(!is_builtin("not_a_function"));
-        assert!(is_builtin("sqrt"));
-        assert!(is_builtin("println"));
-    }
-
-    #[test]
-    fn overloading_is_visible() {
-        // `length` of a string, a rank-1 tensor and a set (§8.1.5.1).
-        assert_eq!(schemes("length").expect("length").len(), 3);
-        // §8.4 and §8.5 give `sum` the reduction, the keepdims axis form for
-        // ranks 1 and 2, and the calculus summation `sum(f, a, b)`.
-        assert_eq!(schemes("sum").expect("sum").len(), 12);
-    }
-}
-
 /// Every name [`schemes`] answers for, transcribed from it.
 ///
 /// `schemes` answers one name at a time and cannot be enumerated; this list is
@@ -3812,3 +3778,37 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "type_rep",
     "with_cap",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqrt_halves_the_exponent() {
+        let scheme = schemes("sqrt").expect("sqrt exists").remove(0);
+        assert_eq!(scheme.dims.len(), 1);
+        let Type::Fn(_, ret) = &scheme.ty else {
+            panic!("expected function");
+        };
+        let Type::Scalar(_, dim) = &**ret else {
+            panic!("expected scalar");
+        };
+        assert_eq!(*dim, Dim::var(0).pow(&half()));
+    }
+
+    #[test]
+    fn unknown_names_are_not_builtins() {
+        assert!(!is_builtin("not_a_function"));
+        assert!(is_builtin("sqrt"));
+        assert!(is_builtin("println"));
+    }
+
+    #[test]
+    fn overloading_is_visible() {
+        // `length` of a string, a rank-1 tensor and a set (§8.1.5.1).
+        assert_eq!(schemes("length").expect("length").len(), 3);
+        // §8.4 and §8.5 give `sum` the reduction, the keepdims axis form for
+        // ranks 1 and 2, and the calculus summation `sum(f, a, b)`.
+        assert_eq!(schemes("sum").expect("sum").len(), 12);
+    }
+}

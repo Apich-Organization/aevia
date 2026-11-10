@@ -234,9 +234,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         | Command::Login { key, ssh, label } => {
             auth::login(&app, key.as_deref(), ssh.as_deref(), label.as_deref()).await
         },
-        | Command::Key { command } => match command {
-            | KeyCommand::List => query::key_list(&app),
-            | KeyCommand::Show { key } => query::key_show(&app, key.as_deref()).await,
+        | Command::Key { command } => {
+            match command {
+                | KeyCommand::List => query::key_list(&app),
+                | KeyCommand::Show { key } => query::key_show(&app, key.as_deref()).await,
+            }
         },
         | Command::Publish {
             key,

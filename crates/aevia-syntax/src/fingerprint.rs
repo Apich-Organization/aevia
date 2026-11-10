@@ -185,7 +185,7 @@ fn decl_into(
                     param_into(out, param);
                     out.push(',');
                 }
-                out.push_str(")");
+                out.push(')');
                 if let Some(ret) = &method.ret {
                     out.push_str(" : ");
                     ty_into(out, ret);
@@ -381,7 +381,7 @@ fn expr_into(
                         actions.push(Task::Text(format!("{value}").into()));
                     },
                     | NumberLit::Decimal(text) => {
-                        actions.push(Task::Text(format!("{text}").into()));
+                        actions.push(Task::Text(text.to_string().into()));
                     },
                 }
                 actions.push(Task::Char(' '));

@@ -1,0 +1,167 @@
+# Continuous delivery. Pushing a tag `vX.Y.Z[-pre]` that matches the workspace version in
+# Cargo.toml: builds the `aevia` and `aevia-pkg` binaries on three
+# platforms, creates a GitHub release with checksummed archives and the
+# single-file specification, and publishes the registry container image to
+# GHCR. Deploying the image to aevia.apich.org stays a manual operation
+# (platform/docs/DEPLOY.md).
+#
+# The kernel revision is the repository variable RSSN_REF (default `main`);
+# release from a tag of rssn by setting it to that tag.
+
+name: Release
+
+"on":
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build the artifacts but do not create a release or push the image"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.97"
+
+jobs:
+  verify:
+    name: Verify tag and version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: version
+        run: |
+          # The workspace version (every crate inherits it). Reading the file
+          # avoids resolving the path dependency on the sibling rssn checkout.
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)
+          echo "workspace version: $version"
+          if [ -z "$version" ]; then echo "::error::no workspace version found"; exit 1; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the workspace version ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          case "$version" in *-*) pre=true ;; *) pre=false ;; esac
+          echo "prerelease=${pre}" >> "$GITHUB_OUTPUT"
+
+  binaries:
+    name: Binaries (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: linux-x86_64 }
+          - { os: windows-latest, target: windows-x86_64 }
+          - { os: macos-latest, target: macos-arm64 }
+    env:
+      # Distribution binaries must not depend on the CPU of the build host.
+      RUSTFLAGS: "-C target-cpu=generic"
+    defaults:
+      run:
+        shell: bash
+        working-directory: aevia
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: aevia
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Apich-Organization/rssn
+          ref: ${{ vars.RSSN_REF || 'main' }}
+          path: rssn
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            aevia
+            aevia/platform
+      - name: System dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
+      - name: Build the language toolchain
+        run: cargo build --release -p aevia-cli --features jit
+      - name: Build the registry client
+        working-directory: aevia/platform
+        run: cargo build --release -p aevia-pkg
+      - name: Package
+        run: |
+          name="aevia-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          for bin in target/release/aevia target/release/aevia.exe \
+                     platform/target/release/aevia-pkg platform/target/release/aevia-pkg.exe; do
+            [ -f "$bin" ] && cp "$bin" "dist/${name}/"
+          done
+          cp LICENSE README.md "dist/${name}/"
+          (cd dist && tar -czf "${name}.tar.gz" "${name}")
+          (cd dist && (sha256sum "${name}.tar.gz" 2>/dev/null || shasum -a 256 "${name}.tar.gz") > "${name}.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aevia-${{ matrix.target }}
+          path: |
+            aevia/dist/*.tar.gz
+            aevia/dist/*.sha256
+
+  github-release:
+    name: GitHub release
+    needs: [verify, binaries]
+    if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then flags="--prerelease"; fi
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            Aevia-Language-Specification.md Aevia-Language-Specification.html \
+            --title "aevia ${{ needs.verify.outputs.version }}" \
+            --generate-notes $flags
+
+  registry-image:
+    name: Registry image (GHCR)
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build
+        working-directory: platform
+        run: |
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/${owner}/aevia-registry"
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+          docker build -f infra/Containerfile.server \
+            --build-context lang=../crates \
+            -t "${image}:${{ needs.verify.outputs.version }}" \
+            -t "${image}:latest" .
+      - name: Push
+        if: github.ref_type == 'tag' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push "${IMAGE}:${{ needs.verify.outputs.version }}"
+          if [ "${{ needs.verify.outputs.prerelease }}" = "false" ]; then
+            docker push "${IMAGE}:latest"
+          fi

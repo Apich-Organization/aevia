@@ -87,9 +87,9 @@ fn package(name: &str) -> (Package, String) {
     (package, source)
 }
 
-fn analysis<'a>(
+fn analysis(
     package: &Package,
-    source: &'a str,
+    source: &str,
 ) -> (Document, std::path::PathBuf) {
     let path = package.path("src/B.aev");
     (Document::new(path.display().to_string(), 1, source), path)

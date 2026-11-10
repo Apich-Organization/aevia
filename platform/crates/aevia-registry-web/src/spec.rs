@@ -195,14 +195,16 @@ pub fn spec_page(
         view! { <span class="badge badge-quiet">{INFORMATIVE.of(lang)}</span> }.into_any()
     };
     let abstract_block = match (&chapter.summary_en, lang) {
-        | (Some(summary), Lang::En) => view! {
-            <aside class="abstract">
-                <h2>{ABSTRACT.of(lang)}</h2>
-                <p>{summary.clone()}</p>
-                <p class="note">{NOT_NORMATIVE_NOTE.of(lang)}</p>
-            </aside>
-        }
-        .into_any(),
+        | (Some(summary), Lang::En) => {
+            view! {
+                <aside class="abstract">
+                    <h2>{ABSTRACT.of(lang)}</h2>
+                    <p>{summary.clone()}</p>
+                    <p class="note">{NOT_NORMATIVE_NOTE.of(lang)}</p>
+                </aside>
+            }
+            .into_any()
+        },
         | _ => ().into_any(),
     };
     let toc = toc_block(&chapter.toc, lang);
@@ -409,23 +411,27 @@ fn chapter_nav(
     next: Option<(String, String)>,
 ) -> AnyView {
     let previous_block = match previous {
-        | Some((href, title)) => view! {
-            <a class="chapter-link previous" href=href>
-                <span class="direction">{PREVIOUS.of(lang)}</span>
-                <span class="title">{title}</span>
-            </a>
-        }
-        .into_any(),
+        | Some((href, title)) => {
+            view! {
+                <a class="chapter-link previous" href=href>
+                    <span class="direction">{PREVIOUS.of(lang)}</span>
+                    <span class="title">{title}</span>
+                </a>
+            }
+            .into_any()
+        },
         | None => ().into_any(),
     };
     let next_block = match next {
-        | Some((href, title)) => view! {
-            <a class="chapter-link next" href=href>
-                <span class="direction">{NEXT.of(lang)}</span>
-                <span class="title">{title}</span>
-            </a>
-        }
-        .into_any(),
+        | Some((href, title)) => {
+            view! {
+                <a class="chapter-link next" href=href>
+                    <span class="direction">{NEXT.of(lang)}</span>
+                    <span class="title">{title}</span>
+                </a>
+            }
+            .into_any()
+        },
         | None => ().into_any(),
     };
     view! { <nav class="chapter-nav">{previous_block}{next_block}</nav> }.into_any()

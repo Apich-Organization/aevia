@@ -623,7 +623,7 @@ fn a_recursive_type_is_legal_and_positivity_is_checked() {
 
 #[test]
 fn a_type_declaration_gets_a_fresh_id_per_compilation_unit() {
-    // §3.2.4 / PLAN D6: ids are allocated, not looked up by name, so two
+    // §3.2.4: ids are allocated, not looked up by name, so two
     // modules that both declare `type Shape` do not share one nominal type.
     expect_error("type A = | A\ntype A = | A\n", "E0316");
     let first = expect_ok("type Shape = | Circle\n");
@@ -745,7 +745,7 @@ fn indexing_keeps_the_refinement() {
 
 #[test]
 fn a_rssn_call_is_resolved_and_pinned() {
-    // PLAN D1: the checker picks the overload and records its key, so the
+    // The checker picks the overload and records its key, so the
     // runtime cannot execute a different one.
     let module = expect_ok("let a = Rssn.sin(0.5)\n");
     assert_eq!(module.rssn_calls.len(), 1);
@@ -765,7 +765,7 @@ fn a_rssn_call_is_resolved_and_pinned() {
 
 #[test]
 fn an_overloaded_rssn_name_is_not_a_value() {
-    // PLAN D1: `Rssn.<op>` outside call position is `E0303` unless every
+    // `Rssn.<op>` outside call position is `E0303` unless every
     // overload has one type.
     expect_error("let a = Rssn.sin\n", "E0303");
     // A member with one fixed type is still a value.

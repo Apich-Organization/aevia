@@ -170,13 +170,15 @@ pub async fn status(
         device.status.clone()
     };
     let publisher = match device.publisher_id {
-        | Some(id) => repo::publisher(&state.pool, id)
-            .await?
-            .map(|row| PublisherSummary {
-                handle: row.handle,
-                kind: row.kind,
-                display_name: row.display_name,
-            }),
+        | Some(id) => {
+            repo::publisher(&state.pool, id).await?.map(|row| {
+                PublisherSummary {
+                    handle: row.handle,
+                    kind: row.kind,
+                    display_name: row.display_name,
+                }
+            })
+        },
         | None => None,
     };
     Ok(Json(DeviceStatus { status, publisher }))

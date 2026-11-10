@@ -14,7 +14,7 @@
 //!
 //! A name that is typed but has no arm fails the test, and so does a name whose
 //! `E1001` does not name a capability: a missing *implementation* is a bug,
-//! not a gap (PLAN §3 rule 1).
+//! not a gap.
 
 #![allow(clippy::result_large_err)]
 
@@ -275,10 +275,10 @@ fn chapter_eight_has_no_capability_gaps() {
         if name.starts_with("Rssn.") || adt::find_prelude_ctor(name).is_some() {
             continue;
         }
-        if let Err(error) = builtins::call_simple(name, probe()) {
-            if error.code == "E1001" {
-                gaps.push((name.to_string(), error.message));
-            }
+        if let Err(error) = builtins::call_simple(name, probe())
+            && error.code == "E1001"
+        {
+            gaps.push((name.to_string(), error.message));
         }
     }
     gaps.sort();

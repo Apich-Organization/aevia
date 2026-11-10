@@ -61,17 +61,10 @@ fn interp(source: &str) -> Interp {
 /// eager, so a runtime failure in one is reported at load time).
 fn load_error(source: &str) -> (String, String) {
     let compilation = compile("chapter6.aev", source);
-    let (module, checked) = if compilation.diagnostics.has_errors() {
-        (
-            compilation.module.expect("a parsed module"),
-            compilation.checked,
-        )
-    } else {
-        (
-            compilation.module.expect("a parsed module"),
-            compilation.checked,
-        )
-    };
+    let (module, checked) = (
+        compilation.module.expect("a parsed module"),
+        compilation.checked,
+    );
     let mut interpreter = Interp::new(&checked).with_buffer();
     let diagnostics = interpreter.load(&module);
     assert!(

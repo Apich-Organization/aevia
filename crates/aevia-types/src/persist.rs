@@ -424,10 +424,11 @@ fn resolve(
         let created = usize::try_from(id).is_ok_and(|index| index >= before);
         return (id, created);
     }
-    if reuse && record.key.schema.is_some() {
-        if let Some(existing) = adt::find_complete(&record.key) {
-            return (existing, false);
-        }
+    if reuse
+        && record.key.schema.is_some()
+        && let Some(existing) = adt::find_complete(&record.key)
+    {
+        return (existing, false);
     }
     let id = adt::allocate_in(record.module.clone(), &record.name, record.params.clone());
     adt::set_param_kinds(id, record.kinds.clone());

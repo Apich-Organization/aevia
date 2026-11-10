@@ -257,13 +257,15 @@ pub async fn key_show(
     // Registration is a network question, so a failure here is reported as an
     // unknown rather than as an error: the key is still the key.
     match app.client.key_status(&local.fingerprint).await {
-        | Ok(status) if status.registered => println!(
-            "registered  yes{}",
-            status
-                .publisher
-                .map(|publisher| format!(" — {}", publisher.label()))
-                .unwrap_or_default()
-        ),
+        | Ok(status) if status.registered => {
+            println!(
+                "registered  yes{}",
+                status
+                    .publisher
+                    .map(|publisher| format!(" — {}", publisher.label()))
+                    .unwrap_or_default()
+            )
+        },
         | Ok(_) => {
             println!("registered  no");
             println!(
@@ -297,21 +299,25 @@ pub async fn status(app: &App) -> Result<(), CliError> {
         .as_deref()
         .and_then(|fingerprint| keys::find(&keys, fingerprint))
         .map(|key| key.fingerprint.clone())
-        .or_else(|| match keys.as_slice() {
-            | [only] => Some(only.fingerprint.clone()),
-            | _ => None,
+        .or_else(|| {
+            match keys.as_slice() {
+                | [only] => Some(only.fingerprint.clone()),
+                | _ => None,
+            }
         });
 
     // `None` means "no key was chosen at all", which is a different answer from
     // "the registry could not be asked", and a publisher reading `status` needs
     // to tell them apart.
     let registration: Option<Result<api::KeyStatus, String>> = match &default {
-        | Some(fingerprint) => Some(
-            app.client
-                .key_status(fingerprint)
-                .await
-                .map_err(|error| error.message),
-        ),
+        | Some(fingerprint) => {
+            Some(
+                app.client
+                    .key_status(fingerprint)
+                    .await
+                    .map_err(|error| error.message),
+            )
+        },
         | None => None,
     };
 
@@ -350,24 +356,28 @@ pub async fn status(app: &App) -> Result<(), CliError> {
     println!("registry     {}", app.client.base());
     println!("config       {}", app.home.join("config.toml").display());
     match &default {
-        | Some(fingerprint) => println!(
-            "default key  {fingerprint}{}",
-            app.config
-                .default_key_kind
-                .map(|kind| format!(" ({})", kind.as_str()))
-                .unwrap_or_default()
-        ),
+        | Some(fingerprint) => {
+            println!(
+                "default key  {fingerprint}{}",
+                app.config
+                    .default_key_kind
+                    .map(|kind| format!(" ({})", kind.as_str()))
+                    .unwrap_or_default()
+            )
+        },
         | None => println!("default key  none — run `aevia-pkg login`"),
     }
     match &registration {
-        | Some(Ok(status)) if status.registered => println!(
-            "registered   yes{}",
-            status
-                .publisher
-                .as_ref()
-                .map(|publisher| format!(" — {}", publisher.label()))
-                .unwrap_or_default()
-        ),
+        | Some(Ok(status)) if status.registered => {
+            println!(
+                "registered   yes{}",
+                status
+                    .publisher
+                    .as_ref()
+                    .map(|publisher| format!(" — {}", publisher.label()))
+                    .unwrap_or_default()
+            )
+        },
         | Some(Ok(_)) => println!("registered   no — run `aevia-pkg login`"),
         | Some(Err(message)) => println!("registered   unknown ({message})"),
         | None => println!("registered   none — run `aevia-pkg login`"),
@@ -387,12 +397,14 @@ pub async fn status(app: &App) -> Result<(), CliError> {
     );
     println!("keys         {} found on this machine", keys.len());
     match &package {
-        | Some((root, manifest)) => println!(
-            "package      {} {} in {}",
-            manifest.name,
-            manifest.version,
-            root.display()
-        ),
+        | Some((root, manifest)) => {
+            println!(
+                "package      {} {} in {}",
+                manifest.name,
+                manifest.version,
+                root.display()
+            )
+        },
         | None => println!("package      none in `{}` or above", cwd.display()),
     }
     Ok(())

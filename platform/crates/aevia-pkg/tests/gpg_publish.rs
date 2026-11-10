@@ -507,13 +507,15 @@ fn json_string(
     while let Some(character) = characters.next() {
         match character {
             | '"' => return Some(out),
-            | '\\' => match characters.next()? {
-                | 'n' => out.push('\n'),
-                | 'r' => out.push('\r'),
-                | 't' => out.push('\t'),
-                | '"' => out.push('"'),
-                | '\\' => out.push('\\'),
-                | other => out.push(other),
+            | '\\' => {
+                match characters.next()? {
+                    | 'n' => out.push('\n'),
+                    | 'r' => out.push('\r'),
+                    | 't' => out.push('\t'),
+                    | '"' => out.push('"'),
+                    | '\\' => out.push('\\'),
+                    | other => out.push(other),
+                }
             },
             | other => out.push(other),
         }

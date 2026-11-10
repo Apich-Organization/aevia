@@ -128,10 +128,12 @@ impl Storage {
         match std::fs::remove_file(&path) {
             | Ok(()) => Ok(()),
             | Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            | Err(error) => Err(Error::io(
-                format!("cannot remove `{}`", path.display()),
-                &error,
-            )),
+            | Err(error) => {
+                Err(Error::io(
+                    format!("cannot remove `{}`", path.display()),
+                    &error,
+                ))
+            },
         }
     }
 }

@@ -1263,7 +1263,7 @@ impl TensorData {
             if *count > 0 && *first >= self.shape[axis] {
                 return None;
             }
-            let magnitude = usize::try_from(step.unsigned_abs()).ok()?;
+            let magnitude = step.unsigned_abs();
             if magnitude == 0 {
                 return None;
             }
@@ -1599,10 +1599,10 @@ impl Drop for VariantValue {
         }
         let mut pending = std::mem::take(&mut self.fields);
         while let Some(value) = pending.pop() {
-            if let Value::Variant(variant) = value {
-                if let Ok(mut inner) = Rc::try_unwrap(variant) {
-                    pending.append(&mut inner.fields);
-                }
+            if let Value::Variant(variant) = value
+                && let Ok(mut inner) = Rc::try_unwrap(variant)
+            {
+                pending.append(&mut inner.fields);
             }
         }
     }
@@ -2456,12 +2456,11 @@ fn float_in_display_unit(
     };
     if let (Some(scale), Some(offset), Some(exact)) =
         (exact_scale, exact_offset, BigRational::from_float(value))
+        && !scale.is_zero()
     {
-        if !scale.is_zero() {
-            let rounded = aevia_dim::rat::to_f64(&((exact - offset) / scale));
-            if format_float(rounded).len() < format_float(ieee).len() {
-                return rounded;
-            }
+        let rounded = aevia_dim::rat::to_f64(&((exact - offset) / scale));
+        if format_float(rounded).len() < format_float(ieee).len() {
+            return rounded;
         }
     }
     ieee
@@ -3124,16 +3123,17 @@ pub(crate) fn mark_ctor_result(
     value: &mut Value,
     origin: &SourceCtorToken,
 ) {
-    if let Value::Variant(variant) = value {
-        if variant.adt == origin.adt && variant.index == origin.index {
-            let valid = aevia_types::adt::get(variant.adt)
-                .and_then(|entry| entry.ctors.get(variant.index).cloned())
-                .is_some_and(|ctor| {
-                    ctor.name == variant.name && ctor.fields.len() == variant.fields.len()
-                });
-            if valid {
-                Rc::make_mut(variant).constructor_origin = true;
-            }
+    if let Value::Variant(variant) = value
+        && variant.adt == origin.adt
+        && variant.index == origin.index
+    {
+        let valid = aevia_types::adt::get(variant.adt)
+            .and_then(|entry| entry.ctors.get(variant.index).cloned())
+            .is_some_and(|ctor| {
+                ctor.name == variant.name && ctor.fields.len() == variant.fields.len()
+            });
+        if valid {
+            Rc::make_mut(variant).constructor_origin = true;
         }
     }
 }

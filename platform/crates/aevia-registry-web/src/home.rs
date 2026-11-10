@@ -206,13 +206,15 @@ mod tests {
     #[test]
     fn the_front_page_lists_at_most_six_crates() {
         let items: Vec<CrateCard> = (0..9)
-            .map(|index| CrateCard {
-                id: format!("apich/pkg{index}").parse().expect("valid identity"),
-                description: None,
-                version: "0.1.0".to_string(),
-                updated_at: "2026-11-01T10:00:00Z".to_string(),
-                downloads: index,
-                has_docs: false,
+            .map(|index| {
+                CrateCard {
+                    id: format!("apich/pkg{index}").parse().expect("valid identity"),
+                    description: None,
+                    version: "0.1.0".to_string(),
+                    updated_at: "2026-11-01T10:00:00Z".to_string(),
+                    downloads: index,
+                    has_docs: false,
+                }
             })
             .collect();
         let html = home(Lang::En, &stats(), &items, None);

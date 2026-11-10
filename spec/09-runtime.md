@@ -501,25 +501,31 @@ REPL 支持多行输入（缩进块）、Ctrl-C 取消当前求值、Ctrl-D 退�
 ```
 aevia run [--example NAME] [file] [-- args...]  # 运行可执行包/文件/示例
 aevia repl                         # 交互式
-aevia check [--all]                # 类型/量纲检查
-aevia fmt [--check]                # 格式化
+aevia check [--all] [file...]      # 类型/量纲检查
+aevia watch [file]                 # 监视源码，只重检变化的模块（§9.11）
+aevia fmt [--check] [file...]      # 格式化
 aevia test [--filter pat] [--doc]  # 运行测试 / 编译文档中的 aevia 代码块
-aevia doc [--open]                 # 生成文档
+aevia doc [--open] [--out DIR]     # 生成文档
 aevia bench [--filter pat] [--iterations N] [--warmup N]
             [--save-baseline FILE] [--compare-baseline FILE] [--threshold RATIO]
 aevia init name                    # 新建包
-aevia add dep                      # 添加依赖
+aevia add path                     # 添加路径依赖并重新解析锁文件
 aevia update                       # 更新锁文件
-aevia clean                        # 清理构建产物
+aevia clean                        # 删除 .aevia/ 构建缓存
+aevia lsp [--stdio]                # 语言服务器（§9.10）
+aevia rssn [--audit] [--emit DIR [--namespaces]]  # 审计 Kernel Manifest / 生成 Rssn 模块（第 13 章）
+aevia pkg command                  # 注册表客户端：登录、发布、撤回、搜索、校验（转发给 aevia-pkg）
 ```
 
-常用 flag：
+常用 flag（可出现在命令行任意位置）：
 
 ```
---release          优化模式（当前解释器实现无 JIT，接受并提示“无效果”）
---jobs N           并行度（同上：当前实现单进程解释执行，接受并提示“无效果”）
---max-stack MiB    解释器线程的栈上限（默认 256）
+--release          接受，但提示“无效果”（解释器没有优化档位；JIT 见 §9.6）
+--jobs N           并行求值的工作线程数（par_map 等，§9.7.2）
+--max-stack MiB    解释器线程的栈上限（默认 1024）
 --budget STEPS     尾调用/IO 步骤预算（默认 100,000,000；不是秒，见 §9.3.4）
+--caps LIST        只授予这些 capability：fs,net,env,rand,gpu（空列表 = 全部沙箱；默认全部）
+--no-cache         `check`/`run` 既不读也不写磁盘缓存（§9.11）
 --out PATH         输出路径（`rssn --emit`、`doc` 使用）
 --color auto|always|never
 --locked           拒绝修改 `aevia.lock`（`update`/`add`）

@@ -372,7 +372,7 @@ fn strip_first_heading(text: &str) -> String {
 /// Points the specification's relative links at the right place.
 ///
 /// Inside `spec/`, a chapter links to its siblings as `01-lexical.md` and to
-/// files outside it as `../RSSN-INTEGRATION-REQUIREMENTS.md`. On the site the
+/// files outside it as `../ARCHITECTURE.md`. On the site the
 /// first must become `/spec/01-lexical` and the second has no page at all, so it
 /// is sent to the repository where the file does exist.
 fn rewrite_links(body: &str) -> String {
@@ -593,8 +593,8 @@ mod tests {
             "/spec/04-dimensions#4.2"
         );
         assert_eq!(
-            rewrite_target("../RSSN-INTEGRATION-REQUIREMENTS.md"),
-            "https://github.com/Apich-Organization/aevia/blob/main/RSSN-INTEGRATION-REQUIREMENTS.md"
+            rewrite_target("../ARCHITECTURE.md"),
+            "https://github.com/Apich-Organization/aevia/blob/main/ARCHITECTURE.md"
         );
         assert_eq!(rewrite_target("https://example.com"), "https://example.com");
     }

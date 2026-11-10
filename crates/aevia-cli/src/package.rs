@@ -239,16 +239,15 @@ fn commit_package(
             })?;
         }
         if let Err(error) = std::fs::rename(&lock_stage, &lock_path) {
-            if change_manifest {
-                if let Err(restore) = std::fs::rename(&backup_stage, &manifest_path) {
-                    // Keep the backup available if restoration itself fails.
-                    owned_stages.retain(|path| path != &backup_stage);
-                    return Err(format!(
-                        "cannot install `{}`: {error}; cannot restore manifest: {restore}; original saved at `{}`",
-                        lock_path.display(),
-                        backup_stage.display()
-                    ));
-                }
+            if change_manifest && let Err(restore) = std::fs::rename(&backup_stage, &manifest_path)
+            {
+                // Keep the backup available if restoration itself fails.
+                owned_stages.retain(|path| path != &backup_stage);
+                return Err(format!(
+                    "cannot install `{}`: {error}; cannot restore manifest: {restore}; original saved at `{}`",
+                    lock_path.display(),
+                    backup_stage.display()
+                ));
             }
             return Err(format!("cannot install `{}`: {error}", lock_path.display()));
         }

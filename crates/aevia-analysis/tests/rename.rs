@@ -129,7 +129,7 @@ fn apply(
             )
         })
         .collect();
-    replacements.sort_by(|left, right| right.0.cmp(&left.0));
+    replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0));
     let mut out = text.to_string();
     for (start, end, new_text) in replacements {
         out.replace_range(start..end, &new_text);

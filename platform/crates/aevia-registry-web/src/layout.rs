@@ -161,10 +161,12 @@ fn viewer_chrome(
     viewer: Option<&Viewer>,
 ) -> AnyView {
     match viewer {
-        | None => view! {
-            <a class="btn btn-ghost" href="/login">{SIGN_IN.of(lang)}</a>
-        }
-        .into_any(),
+        | None => {
+            view! {
+                <a class="btn btn-ghost" href="/login">{SIGN_IN.of(lang)}</a>
+            }
+            .into_any()
+        },
         | Some(viewer) => {
             let handle = viewer.handle.clone();
             let profile = viewer.as_owner().profile_url();
@@ -190,10 +192,12 @@ fn viewer_chrome(
 /// than as a provider without pictures.
 pub(crate) fn avatar(owner: &OwnerView) -> AnyView {
     match &owner.avatar_url {
-        | Some(url) if !url.is_empty() => view! {
-            <img class="avatar" src=url.clone() alt="" width="20" height="20" loading="lazy"/>
-        }
-        .into_any(),
+        | Some(url) if !url.is_empty() => {
+            view! {
+                <img class="avatar" src=url.clone() alt="" width="20" height="20" loading="lazy"/>
+            }
+            .into_any()
+        },
         | _ => view! {
             <span class="avatar avatar-fallback" aria-hidden="true">{initial(&owner.handle)}</span>
         }

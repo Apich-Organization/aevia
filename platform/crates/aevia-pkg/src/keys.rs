@@ -465,9 +465,11 @@ pub fn sign(
     match (&key.kind, &key.origin) {
         | (KeyKind::OpenPgp, _) => sign_openpgp(&key.fingerprint, statement),
         | (KeyKind::Ssh, KeyOrigin::Ssh { private_path, .. }) => sign_ssh(private_path, statement),
-        | (KeyKind::Ssh, KeyOrigin::Gpg) => Err(CliError::new(
-            "this SSH key has no private key file to sign with",
-        )),
+        | (KeyKind::Ssh, KeyOrigin::Gpg) => {
+            Err(CliError::new(
+                "this SSH key has no private key file to sign with",
+            ))
+        },
     }
 }
 

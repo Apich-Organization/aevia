@@ -25,6 +25,8 @@
 
 #![forbid(unsafe_code)]
 #![allow(clippy::needless_range_loop, clippy::many_single_char_names)]
+// Tuples of factors (LU, QR, SVD, eigen pairs) are returned as-is to match the formulas.
+#![allow(clippy::type_complexity)]
 
 pub mod calc;
 pub mod complex;
@@ -135,6 +137,7 @@ impl Complex {
 
     /// `self * other`.
     #[must_use]
+    #[allow(clippy::should_implement_trait)] // checked/fallible arithmetic, not `std::ops::Mul`
     pub fn mul(
         self,
         other: Self,
@@ -147,6 +150,7 @@ impl Complex {
 
     /// `self / other`.
     #[must_use]
+    #[allow(clippy::should_implement_trait)] // checked/fallible arithmetic, not `std::ops::Div`
     pub fn div(
         self,
         other: Self,

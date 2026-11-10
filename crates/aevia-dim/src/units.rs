@@ -531,6 +531,7 @@ impl UnitTable {
     }
 
     /// Moves a resolved SI unit into the module's system.
+    #[allow(clippy::wrong_self_convention)] // converts its argument, not `self`
     fn into_system(
         &self,
         unit: ResolvedUnit,

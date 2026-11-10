@@ -6,7 +6,7 @@
 //! not on `aevia-core`: `Value` lives there, and an interpreter that owned the
 //! IR types as well would be a cycle.
 //!
-//! Three properties are the reason the IR exists (PLAN D2):
+//! Three properties are the reason the IR exists:
 //!
 //! * **ANF.** Every intermediate is named. A call takes atoms, an `if` takes an
 //!   atom, and a compound argument becomes its own `let`, so evaluation order
@@ -20,10 +20,13 @@
 //!
 //! Every node carries the [`Span`] it came from, so a diagnostic or a stack
 //! frame can name its source location, and the pinned `Rssn` overload and the
-//! resolved class instance stay keyed by that span (PLAN D1, D3).
+//! resolved class instance stay keyed by that span.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::too_many_lines)]
+// The IR nodes are plain data kept unboxed so lowering and the interpreter match them directly;
+// lowering helpers thread explicit context instead of bundling it into a struct.
+#![allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 
 pub mod lower;
 

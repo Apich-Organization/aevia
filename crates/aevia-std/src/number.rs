@@ -23,9 +23,9 @@ pub fn factor(n: i64) -> Vec<(i64, u32)> {
     }
     let mut candidate = 2u64;
     while candidate * candidate <= remaining && candidate <= 1_000_000 {
-        if remaining % candidate == 0 {
+        if remaining.is_multiple_of(candidate) {
             let mut exponent = 0;
-            while remaining % candidate == 0 {
+            while remaining.is_multiple_of(candidate) {
                 remaining /= candidate;
                 exponent += 1;
             }
@@ -87,13 +87,13 @@ pub fn is_prime(n: u64) -> bool {
         if n == small {
             return true;
         }
-        if n % small == 0 {
+        if n.is_multiple_of(small) {
             return false;
         }
     }
     let mut d = n - 1;
     let mut r = 0u32;
-    while d % 2 == 0 {
+    while d.is_multiple_of(2) {
         d /= 2;
         r += 1;
     }
@@ -149,7 +149,7 @@ fn mul_mod(
 
 /// Pollard's rho, for a composite with no small factor.
 fn pollard_rho(n: u64) -> u64 {
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         return 2;
     }
     let mut c = 1u64;
