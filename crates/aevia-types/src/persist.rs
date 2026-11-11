@@ -179,16 +179,15 @@ pub mod adt_pair_map {
     /// # Errors
     ///
     /// Fails outside [`encode`].
-    pub fn serialize<'a, K, M, S>(
-        map: &'a M,
+    pub fn serialize<K, S>(
+        map: &indexmap::IndexMap<K, (AdtId, usize)>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
-        K: Serialize + 'a,
-        &'a M: IntoIterator<Item = (&'a K, &'a (AdtId, usize))>,
+        K: Serialize + std::hash::Hash + Eq,
         S: serde::Serializer,
     {
-        serializer.collect_seq(map.into_iter().map(|(key, value)| (key, PairRef(value))))
+        serializer.collect_seq(map.iter().map(|(key, value)| (key, PairRef(value))))
     }
 
     /// Reads the entries and maps their ADT indices to this process's ids.

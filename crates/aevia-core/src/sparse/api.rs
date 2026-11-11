@@ -312,6 +312,8 @@ pub(crate) fn call(
             | "spsolve"
             | "cg"
             | "cg_with"
+            | "gmres_with"
+            | "bicgstab_with"
             | "kron"
             | "contract"
             | "map_nonzero"
@@ -423,7 +425,7 @@ fn run(
             spsolve(interp, data, rhs, span)
         },
         | "cg" => cg(args, span),
-        | "cg_with" => cg_with(args, span),
+        | "cg_with" | "gmres_with" | "bicgstab_with" => iterative_with(name, args, span),
         | "map_nonzero" => map_nonzero(interp, args, span),
         | "nonzeros" => nonzeros(sparse_arg(args, 0, name, span)?),
         | "contract" => contract(interp, args, span),
@@ -1460,7 +1462,7 @@ fn sparse_dense_matmul(
             return Ok(dense_value_f64(out_shape, out, dim, None));
         }
         let csr = kernels::csr_parts::<f64>(a, span)?;
-        let out = kernels::spmm(&csr, &dense, n, &mut FloatRing)?;
+        let out = kernels::spmm_f64(&csr, &dense, n);
         return Ok(dense_value_f64(
             out_shape,
             out.into_iter().map(|v| v.unwrap_or(0.0)).collect(),
@@ -1798,36 +1800,45 @@ fn cg(
 }
 
 /// `cg_with(A, b, { tol, maxiter, precond })`: preconditioned conjugate
-/// gradients. `precond` is a `Precond` constructor (`Identity`, `Jacobi`,
-/// `BlockJacobi`, `Ilu0`, `Ic0`, `Auto`); the result also reports the
-/// preconditioner that was really applied.
-fn cg_with(
+/// gradients; `gmres_with(A, b, { tol, maxiter, restart, precond })` and
+/// `bicgstab_with(A, b, { tol, maxiter, precond })`: the Krylov solvers for
+/// general (nonsymmetric) matrices. `precond` is a `Precond` constructor
+/// (`Identity`, `Jacobi`, `BlockJacobi`, `Ilu0`, `Ic0`, `Auto`); the result
+/// also reports the preconditioner that was really applied.
+fn iterative_with(
+    name: &str,
     args: &[Value],
     span: Span,
 ) -> R<Value> {
+    use aevia_std::sparse::Krylov;
     use aevia_std::sparse::PrecondKind;
-    let a = sparse_arg(args, 0, "cg_with", span)?;
-    let b = tensor_arg(args, 1, "cg_with", span)?;
+    let expected = match name {
+        | "gmres_with" => "{ tol, maxiter, restart, precond }",
+        | "bicgstab_with" => "{ tol, maxiter, precond }",
+        | _ => "{ tol, maxiter, precond }",
+    };
+    let a = sparse_arg(args, 0, name, span)?;
+    let b = tensor_arg(args, 1, name, span)?;
     let Some(Value::Record(options)) = args.get(2) else {
         return Err(err(
             "E0302",
-            "`cg_with` expects an options record `{ tol, maxiter, precond }`",
+            format!("`{name}` expects an options record `{expected}`"),
             span,
         ));
     };
-    let field = |name: &str| {
-        options.fields.get(name).ok_or_else(|| {
+    let field = |field_name: &str| {
+        options.fields.get(field_name).ok_or_else(|| {
             err(
                 "E0302",
-                format!("`cg_with` options lack the field `{name}`"),
+                format!("`{name}` options lack the field `{field_name}`"),
                 span,
             )
         })
     };
     let tolerance = field("tol")?
         .as_f64()
-        .ok_or_else(|| err("E0302", "`cg_with`: `tol` must be a Float", span))?;
-    let max_iterations = index_of(field("maxiter")?, "cg_with maxiter", span)?;
+        .ok_or_else(|| err("E0302", format!("`{name}`: `tol` must be a Float"), span))?;
+    let max_iterations = index_of(field("maxiter")?, "maxiter", span)?;
     let kind = match field("precond")? {
         | Value::Variant(variant) => {
             match variant.name.as_str() {
@@ -1852,26 +1863,41 @@ fn cg_with(
             return Err(err(
                 "E0302",
                 format!(
-                    "`cg_with`: `precond` must be a `Precond`, found {}",
+                    "`{name}`: `precond` must be a `Precond`, found {}",
                     other.type_name()
                 ),
                 span,
             ));
         },
     };
-    rank2(a, "`cg_with`", span)?;
+    let method = match name {
+        | "gmres_with" => {
+            let restart = index_of(field("restart")?, "restart", span)?;
+            if restart == 0 {
+                return Err(err(
+                    "E0802",
+                    "`gmres_with`: `restart` must be positive",
+                    span,
+                ));
+            }
+            Some(Krylov::Gmres { restart })
+        },
+        | "bicgstab_with" => Some(Krylov::Bicgstab),
+        | _ => None,
+    };
+    rank2(a, &format!("`{name}`"), span)?;
     let n = a.shape[0];
     if a.shape[1] != n || b.rank() != 1 || b.shape[0] != n {
         return Err(err(
             "E0802",
-            format!("`cg_with` needs a square matrix and a right-hand side of shape [{n}]"),
+            format!("`{name}` needs a square matrix and a right-hand side of shape [{n}]"),
             span,
         ));
     }
     let (true, Some(rhs)) = (a.is_f64(), b.dense_flat()) else {
         return Err(err(
             "E0302",
-            "`cg_with` iterates in floating point: the matrix and the right-hand side must be Float",
+            format!("`{name}` iterates in floating point: the matrix and the right-hand side must be Float"),
             span,
         )
         .with_note("use `spsolve` for exact elements"));
@@ -1885,8 +1911,23 @@ fn cg_with(
         values: &csr.vals,
     };
     let block = (a.format == SparseFormat::Bcsr).then_some(a.block);
-    let result = aevia_std::sparse::cg_precond(&view, &rhs, tolerance, max_iterations, kind, block)
-        .map_err(|e| err("E0806", format!("`cg_with`: {e}"), span))?;
+    let result = match method {
+        | None => {
+            aevia_std::sparse::cg_precond(&view, &rhs, tolerance, max_iterations, kind, block)
+        },
+        | Some(method) => {
+            aevia_std::sparse::krylov_precond(
+                &view,
+                &rhs,
+                tolerance,
+                max_iterations,
+                method,
+                kind,
+                block,
+            )
+        },
+    }
+    .map_err(|e| err("E0806", format!("`{name}`: {e}"), span))?;
     Ok(record_of(vec![
         (
             "x",

@@ -128,6 +128,11 @@ pub fn namespace_source(
     registry: &Registry,
     name: &str,
 ) -> Option<String> {
+    // Domain modules (`Rssn_NumberTheory`) come first: they are CamelCase and
+    // the rule-set namespaces are snake_case, so the two never collide.
+    if let Some(source) = crate::domains::domain_source(registry, name) {
+        return Some(source);
+    }
     let (_, group) = namespace_names(registry)
         .into_iter()
         .find(|(module, _)| module == name)?;
@@ -1120,7 +1125,7 @@ pub fn binding_base_name(
     }
 }
 
-fn sanitise(name: &str) -> String {
+pub(crate) fn sanitise(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for (index, ch) in name.chars().enumerate() {
         if ch.is_ascii_alphanumeric() || ch == '_' {
@@ -1141,7 +1146,7 @@ fn sanitise(name: &str) -> String {
     out
 }
 
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {

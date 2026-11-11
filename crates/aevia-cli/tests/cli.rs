@@ -179,11 +179,11 @@ fn add_refuses_something_that_is_not_a_package() {
     let manifest = std::fs::read_to_string(demo.join("aevia.toml")).expect("reads");
     assert!(!manifest.contains("path ="), "{manifest}");
 
-    // A version range is not resolved by anything, so `add` says so.
+    // A bare `--version` flag is not an option; ranges go in `owner/name@REQ`.
     let output = aevia(&demo, &["add", "--version", "0.1"]);
     assert_ne!(code(&output), 0);
     assert!(
-        stderr(&output).contains("no registry"),
+        stderr(&output).contains("is not an option of `aevia add`"),
         "{}",
         stderr(&output)
     );

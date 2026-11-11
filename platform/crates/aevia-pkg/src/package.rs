@@ -140,6 +140,37 @@ pub fn parse_target(spec: &str) -> Result<(PackageId, Option<String>), CliError>
     Ok((id, None))
 }
 
+/// Splits `owner/name[@requirement]` into the identity and the requirement.
+///
+/// The requirement is anything `aevia.toml` accepts after `version =`: `1.2`
+/// (a caret), `^1.2`, `~1.2.3`, `>=1.2, <2`, `=1.2.3`, `*`.
+///
+/// # Errors
+///
+/// `E_NAME` for an identity that does not parse, `E_VERSION` for a
+/// requirement that does not.
+pub fn parse_requirement_target(
+    spec: &str
+) -> Result<(PackageId, Option<aevia_resolve::VersionReq>), CliError> {
+    let spec = spec.trim();
+    let (identity, requirement) = match spec.split_once('@') {
+        | Some((identity, requirement)) => (identity, Some(requirement)),
+        | None => (spec, None),
+    };
+    let id: PackageId = identity.parse().map_err(CliError::from)?;
+    let req = match requirement {
+        | Some(text) => {
+            Some(aevia_resolve::VersionReq::parse(text).map_err(|error| {
+                CliError::new(format!("E_VERSION: {error}")).with_next_step(
+                    "write the requirement as in aevia.toml: `1.2`, `^1.2`, `~1.2.3`, `>=1.2, <2`",
+                )
+            })?)
+        },
+        | None => None,
+    };
+    Ok((id, req))
+}
+
 /// Whether `version` is the `major.minor.patch` shape the toolchain writes.
 ///
 /// Pre-release and build suffixes are refused here for the same reason
@@ -147,15 +178,7 @@ pub fn parse_target(spec: &str) -> Result<(PackageId, Option<String>), CliError>
 /// them, so a version with `-rc.1` could never be reproduced by the toolchain.
 #[must_use]
 pub fn valid_version(version: &str) -> bool {
-    let mut parts = version.split('.');
-    let mut count = 0;
-    for part in &mut parts {
-        if part.is_empty() || !part.chars().all(|character| character.is_ascii_digit()) {
-            return false;
-        }
-        count += 1;
-    }
-    count == 3
+    aevia_resolve::Version::parse(version).is_ok_and(|parsed| parsed.build.is_empty())
 }
 
 /// The `[dependencies]` key a package is imported under, `UnitsExtra`.
@@ -241,7 +264,6 @@ mod tests {
         for spec in [
             "units-extra",
             "apich/units@1.0",
-            "apich/units@1.0.0-rc.1",
             "apich/9lives",
         ] {
             let error = parse_target(spec).expect_err(spec);
@@ -256,6 +278,21 @@ mod tests {
         assert!(!valid_version("1.0"));
         assert!(!valid_version("1.0.0.0"));
         assert!(!valid_version("v1.0.0"));
+        assert!(valid_version("1.0.0-rc.1"));
+        assert!(!valid_version("1.0.0+build"));
+    }
+
+    #[test]
+    fn a_requirement_target_splits_on_the_at_sign() {
+        let (id, req) = parse_requirement_target("apich/units-extra@^1.2").expect("parses");
+        assert_eq!(id.to_path(), "apich/units-extra");
+        assert_eq!(req.expect("req").to_string(), "^1.2");
+        let (_, req) = parse_requirement_target("apich/units-extra@>=1.2, <2").expect("parses");
+        assert_eq!(req.expect("req").to_string(), ">=1.2, <2");
+        let (_, req) = parse_requirement_target("apich/units-extra").expect("parses");
+        assert!(req.is_none());
+        assert!(parse_requirement_target("apich/units@^x").is_err());
+        assert!(parse_requirement_target("units@1").is_err());
     }
 
     #[test]

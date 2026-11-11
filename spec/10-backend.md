@@ -280,6 +280,51 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
 `Vec<i8>`，包装器按 `width`/`height` 行主序 reshape 成 `Tensor<2, Int>`；
 `sim` 的错误是字符串，包装器按前缀映射成 `SimError` 枚举。
 
+### 10.3.8 领域模块：`Rssn_<Domain>`
+
+平铺的 `Rssn.<op>` 与按 rule set 分组的 `Rssn_<rule_set>` 都沿用 **kernel 的**组织方式；
+它们说不出“`invmod` 取一个模数、返回一个剩余”：`invmod` 的 kernel 签名是派生的
+`Real -> Real`，而 `discrete` 这个 rule set 同时装着有限域、图、编码和密码学。
+领域模块是 Aevia 一侧的分组，由 **manifest + 一份小的声明式 overlay**
+（`crates/aevia-rssn/domains.overlay`）生成：
+
+* `domain`/`family`：算子到领域（`NumberTheory`、`Combinatorics`、`Group`、
+  `FiniteField`、`Graph`、`Coding`、`Crypto`、`Topology` 等 29 个）的归属，
+  按 `rule_set:glob` 匹配，先匹配者胜。**每个 rule set 必须被某个 family 认领**，
+  kernel 新增 rule set 或算子而 overlay 没有归属时覆盖检查失败。
+* 三档暴露：**typed**（`sig`，Aevia 类型写成 `Result<T, OpError>`，包装器由签名
+  推导）、**dynamic**（自动生成的 `Result<Value, OpError>` 包装器，新算子零编辑即可
+  调用）、**excluded**（`exclude`，必须写理由）。`mode D typed` 的领域里，
+  既无 `sig`、`dynamic` 也无 `exclude` 的算子是覆盖错误；`sig` 的参数个数与 manifest
+  的 arity 不符、`sig` 指向已不存在的算子同样失败。
+* 转换是**泛型**的，不是逐函数写的：参数 `to_value(x)`，结果 `from_value<T>(v)`。
+  丰富类型用 `codec Type to_fn from_fn` 声明一对转换函数（每个类型一对，不是每个
+  算子一对）：`Perm`（0 起始，边界上 ±1，kernel 的排列是 1 起始）、`Graph`/`Group`
+  （包装不透明 `Value` 句柄的名义类型）、`PermGroup`。
+* 错误通道：kernel 失败是 `Err(OpError)`；图后端算子在参数越出定义域时返回**未约化的
+  调用项**（`invmod(6, 15)`），`from_value` 把它报告为带该项文本的 `TypeMismatch`，
+  不再是一个笼统的“does not prove”。
+* 维度证据：`sig` 同时是 overlay 对“该算子是无量纲参数的纯函数”的声明；另外，
+  kernel 自己声明的 `Dimensionless` 规则、以及参数已知无量纲时的
+  `List/NonMetric/Compare/Angle` 规则，会让裸数结果携带 `Scalar(1)` 证据。其余规则
+  （`Same`、`Sum`、`Custom`…）不被信任。`list(...)` 项结果在上述可信时被读回成张量
+  （等长行合并成高阶张量，不等长保留为张量的张量）。
+* **构建期还是运行期**：运行期。模块在解析 `import Rssn_NumberTheory` 时由 live
+  manifest 渲染（`codegen::namespace_source`），不提交生成的 Aevia 源，因此不会与所链接
+  的 kernel 漂移。提交的只有 overlay 与覆盖报告
+  `tools/rssn-api-audit/RSSN-COVERAGE.md`；测试 `cargo test -p aevia-rssn --test
+  domains` 重新生成报告并比对（`AEVIA_BLESS=1` 重写）。领域模块的源码可由 `aevia_rssn::domains::domain_files` 导出审阅
+  （CLI 的 `--emit` 目前只导出规则集命名空间）。
+* 示例：`tests/domain_number_theory.aev`、`domain_combinatorics.aev`、
+  `domain_finite_fields.aev`；`Zmod` 把剩余与模数放在同一个值里，`zmod_inv(x)` 对非单位
+  返回 `Err`，混用不同模数返回 `Err`。
+
+**语言缺口（尚未实现）**：`let x: Zmod<17> = 5; x * x ^ -1` 需要三项语言改动，均在
+`aevia-types`/`aevia-core` 中，不属于绑定层：(1) 变体类型接受 `Nat` 参数（目前
+`E0317`）；(2) `Num`/`Fractional` 类带 `add/sub/mul/neg/from_int/inv` 方法，并让二元
+运算符对用户名义类型分派到实例；(3) 整数字面量按期望类型经 `from_int` 提升。在此之前
+`Zmod` 的模数是运行期携带的，运算以函数形式给出（`zmod_mul(x, inv)`）。
+
 ## 10.4 量纲桥
 
 量纲/单位的唯一事实来源是 RSSN 的 `rssn::dim`（`DimTerm`/`DimArena`/
@@ -392,6 +437,99 @@ pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创�
   这条路径。
 - `TieredBackend` 先解释、后台编译；适合 REPL 和交互式。
 - JIT 失败回退解释器；不改变语义。
+
+### 10.6.5 设备：数据并行执行 / Devices: data-parallel execution
+
+**English summary.** rssn has two orthogonal execution axes. `Backend` turns
+one closed form into a scalar function (interpreter, tape, Cranelift). A
+`Device` (`rssn::backend::device`) runs *one program over many rows* on a CPU
+thread pool or a GPU. Aevia maps its `Device` value (`Cpu | Gpu(Int) |
+Distributed(Cluster)`, §8.18) to rssn devices; transfers stay explicit.
+
+**两条互相独立的轴。**
+
+| 轴 | rssn 抽象 | 回答的问题 |
+|---|---|---|
+| 一个项怎样变成函数 | `Backend` / `Compiled` | 在一个点上求值 |
+| 许多行在哪里跑 | `Device` / `Buffer` / `KernelIr` | 在 10⁶ 行上求值；对 10⁴ 个初值积分 |
+
+JIT（§9.6）属于第一条轴，**不是** GPU 路径；`@jit(target = Gpu(n))`
+选择的是第二条轴的设备。
+
+**能力发现。** 两层，都是事实而不是猜测：
+
+1. 构建层：manifest `features.devices`（字符串列表：`cpu`、`cpu-parallel`，
+   以及启用 rssn `gpu-wgpu` feature 时的 `gpu-wgpu`）。这是编译期事实，
+   不探测硬件，所以可以进 `manifest_hash`。`core.gpu` 能力 =
+   `features.devices` 含任一 `gpu-*`。
+2. 运行层：`rssn::backend::device::registry().list()` 返回 `DeviceInfo`
+   （`id`、`kind`、`dtypes`、`ops`、`parallelism`、`unified_memory`、
+   `deterministic`）。没有适配器不是错误，只是没有 GPU 设备。Aevia 侧封装在
+   `aevia_rssn::device`（`available()`、`has_gpu()`、`resolve(Selector)`）。
+
+**`Device` 值到 rssn 设备的映射。**
+
+| Aevia | rssn id | 说明 |
+|---|---|---|
+| `Cpu` | `cpu` | 单线程；参考语义 |
+| `Cpu`（`Device.cpu_parallel` 提示） | `cpu-parallel` | rayon；与 `cpu` **逐位相同** |
+| `Gpu(n)` | 注册表中第 `n` 个 `DeviceKind::Gpu`（`gpu:wgpu:n`） | 无则 `E1001("core.gpu")`，消息带已注册 GPU 数 |
+| `Distributed(c)` | 无 | 仍为 `E1001("core.distributed")`；不在本设计内 |
+
+`Device.cpu_parallel` 是设计中的新值（`type Device` 增加一个无参构造器
+`CpuParallel`）；在类型表实现前，它由 `Selector::CpuParallel` 表示。
+
+**传输是显式的。** `to_device(t, Gpu(n))` = 一次 `upload`（`F64` 张量在只有
+`f32` 的设备上转为 `f32`，**这会改变数值**；见下）；`device_of` 读张量的设备
+标签；结果回到宿主要 `download`，不存在隐式传输。`on(device, thunk)` 是作用域
+执行：`thunk` 内的批量原语（`Device.map`）用该设备，作用域结束时释放缓冲区。
+
+**精度合约。** 内核 IR 的语义是 `f64`（与 tape/解释器相同）。设备在
+`DeviceInfo.dtypes` 里声明自己有没有 `F64`：
+
+- `cpu`、`cpu-parallel`：`F64`，与解释器逐位相同（含 NaN、`select`、越界
+  `gather` 读 NaN）。这是 §9.7.2 "线程数不改变任何结果" 在设备上的延伸。
+- `gpu:*`（WGSL）：只有 `F32`。Aevia **不会**把 `Float` 的结果悄悄换成
+  `f32`：`Device.map` 在 `Gpu` 上返回 `Float`（值经 `f32` 舍入），文档与错误
+  信息标明；要求位精确的代码选 `Cpu`/`CpuParallel`。
+
+**可降低到设备的函数。** 与 §9.6.1 的 JIT 门控一致的纯子集：无捕获、`Float`
+标量算术、初等函数、比较、`if`（两侧纯，急切求值后 `select`）。含宿主调用的项
+（算子的 `EvalFn`、C 外部函数，例如 gamma/erf/Bessel）在 rssn 里是 `Call`/
+`Extern`，**不能**降到设备：`KernelIr::from_tape` 返回 `Unsupported`，
+`DeviceBackend` 对这种项回退宿主 tape，Aevia 的 `Device.map` 回退解释器逐行
+求值。回退不改变值（CPU 设备上）。
+
+**批量原语（设计）。**
+
+```
+Device.available : () -> IO (List DeviceInfo)       # 注册表快照
+Device.map       : (Float -> Float, Tensor<[n],Float>) -> Tensor<[n],Float>
+                                                     # 在 Cpu/CpuParallel 上；纯，确定
+Device.map_on    : (Device, Float -> Float, Tensor<[n],Float>) -> IO (Tensor<[n],Float>)
+Device.reduce    : (Reduce, Tensor<[n],Float>) -> Float   # Sum | Prod | Min | Max
+Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor<[m,k],Float>
+                                                     # 同一程序、k 个初值；固定步长 RK4
+```
+
+纯、位确定的版本只在 CPU 设备上承诺；`map_on(Gpu(n), ..)` 是 `IO`，因为分配与
+传输是效应，且结果受设备精度约束。
+
+**实现状态（本节撰写时）。**
+
+- 已实现：rssn 侧完整的设备层（注册表、`Buffer`、`KernelIr`、CPU 参考设备、
+  WGSL 发射器与黄金测试、可选 `gpu-wgpu` 设备、`ensemble_rk4`）；manifest
+  `features.devices`；Aevia 侧 `aevia_rssn::device`（发现、`Selector`、
+  `BatchProgram`）与 `aevia-core` 的 `jit::map_floats`（把纯 `Float` 函数在
+  CPU 设备上批量应用，有测试）。
+- **未实现**：`Device.map`/`map_on`/`reduce`/`ensemble`/`available` 作为语言内
+  原语。它们要在类型表（`aevia-types`）和内建表（`aevia-core`）各加条目，
+  并由 `aevia-stdlib-gen` 重新生成 `Device.aev`；这些文件不在本设计的改动
+  范围内。接入点是 `jit::map_floats`（需要 `--features jit`，因为 Core IR 到
+  `Inst` 的降低目前在 JIT 模块里；批量执行本身不需要 Cranelift）。
+- `to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`；接入需要张量值携带设备
+  缓冲区句柄（目前 `Tensor` 的设备元数据只有标签），这是下一步，不是本节已做。
+- GPU 的 `reduce`/`matmul` 没有实现（`DeviceInfo.ops` 如实标明）。
 
 ## 10.7 错误映射
 

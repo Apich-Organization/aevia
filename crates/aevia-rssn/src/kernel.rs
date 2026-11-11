@@ -1080,9 +1080,133 @@ impl Kernel {
             .session
             .call_value(name, &converted, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(name))?;
-        let witness =
-            crate::witness::extract(&raw, entry.source.is_exact() && entry.is_value_native());
-        Ok((Val::from_rssn(&raw, self.id)?, witness))
+        let trusted = (entry.source.is_exact() && entry.is_value_native())
+            || result_is_dimensionless(entry, witnesses);
+        let mut witness = crate::witness::extract(&raw, trusted);
+        let mut value = Val::from_rssn(&raw, self.id)?;
+        // A graph-backed operator answers `[[1, 1, 2], [2]]` as a `list` term.
+        // For a result already known to be dimensionless, read the term back
+        // into a tensor (nested when the rows differ in length) so that
+        // `from_value<Tensor<..>>` can decode it. Anything else stays a term.
+        if trusted
+            && let Val::Term(sym) = &value
+            && let Some((lifted, lifted_witness)) = self.lift_list(*sym)
+        {
+            value = lifted;
+            witness = lifted_witness;
+        }
+        Ok((value, witness))
+    }
+
+    /// Reads a `list(...)` term of numbers (or of such lists) as a tensor.
+    ///
+    /// Rows of equal shape merge into one higher-rank tensor; unequal rows
+    /// stay a tensor of tensors. Returns `None` for anything that is not a
+    /// well-formed, non-empty numeric list, in which case the caller keeps
+    /// the term. The witness claims dimension 1: the caller must only use this
+    /// where the operator's rule already made the result dimensionless.
+    fn lift_list(
+        &self,
+        sym: Sym,
+    ) -> Option<(Val, crate::witness::DimensionWitness)> {
+        use crate::witness::DimensionWitness as W;
+        let (op, children) = self.structure(sym).ok()?;
+        if op != "list" || children.is_empty() {
+            return None;
+        }
+        let one = aevia_dim::Dim::one();
+        let mut items: Vec<(Val, W)> = Vec::with_capacity(children.len());
+        for child in children {
+            let item = match self.structure(child) {
+                | Ok((child_op, _)) if child_op == "list" => self.lift_list(child)?,
+                | _ => {
+                    match self.value_of(child).ok()? {
+                        | value @ Val::Num(_) => (value, W::Scalar(one.clone())),
+                        | _ => return None,
+                    }
+                },
+            };
+            items.push(item);
+        }
+        let repr = |value: &Val| {
+            match value {
+                | Val::Num(Num::Int(_)) => Some(crate::SigType::Int),
+                | Val::Num(Num::Rat(_)) => Some(crate::SigType::Real),
+                | Val::Num(Num::Float(_)) => Some(crate::SigType::Float),
+                | _ => None,
+            }
+        };
+        if items.iter().all(|(value, _)| matches!(value, Val::Num(_))) {
+            // Mixed Int/Rat leaves are Real; Float never mixes with exact.
+            let mut element_repr = crate::SigType::Int;
+            for (value, _) in &items {
+                match repr(value)? {
+                    | crate::SigType::Int => {},
+                    | crate::SigType::Real if element_repr == crate::SigType::Int => {
+                        element_repr = crate::SigType::Real;
+                    },
+                    | crate::SigType::Real => {},
+                    | crate::SigType::Float if element_repr == crate::SigType::Int => {
+                        element_repr = crate::SigType::Float;
+                    },
+                    | crate::SigType::Float => {},
+                    | _ => return None,
+                }
+            }
+            let data: Vec<Val> = items.into_iter().map(|(value, _)| value).collect();
+            return Some((
+                Val::Tensor {
+                    shape: vec![data.len()],
+                    data,
+                },
+                W::Tensor {
+                    dimension: Some(one.clone()),
+                    element: Some(Box::new(W::Scalar(one))),
+                    element_repr: Some(element_repr),
+                    elements: Vec::new(),
+                },
+            ));
+        }
+        let n = items.len();
+        let first_shape = match &items[0].0 {
+            | Val::Tensor { shape, .. } => Some(shape.clone()),
+            | _ => None,
+        };
+        let uniform = first_shape.as_ref().is_some_and(|first| {
+            items.iter().all(|(value, witness)| {
+                matches!(value, Val::Tensor { shape, .. } if shape == first)
+                    && *witness == items[0].1
+            })
+        });
+        if uniform {
+            let mut shape = vec![n];
+            shape.extend(first_shape?);
+            let witness = items[0].1.clone();
+            let mut data = Vec::new();
+            for (value, _) in items {
+                if let Val::Tensor { data: inner, .. } = value {
+                    data.extend(inner);
+                }
+            }
+            return Some((Val::Tensor { shape, data }, witness));
+        }
+        if items
+            .iter()
+            .any(|(value, _)| !matches!(value, Val::Tensor { .. }))
+        {
+            return None;
+        }
+        let witnesses: Vec<W> = items.iter().map(|(_, w)| w.clone()).collect();
+        let data: Vec<Val> = items.into_iter().map(|(value, _)| value).collect();
+        Some((
+            Val::Tensor { shape: vec![n], data },
+            W::Tensor {
+                dimension: None,
+                element: None,
+                element_repr: None,
+                elements: witnesses,
+            },
+        ))
     }
 
     /// Calls exactly the overload `key` names.
@@ -2087,5 +2211,57 @@ mod recursive_callback_witness_tests {
             data: vec![Val::Num(Num::Float(0.0)); 3],
         };
         assert!(validate_callback_result(&payload, &witness, &inner).is_err());
+    }
+}
+
+/// Whether the kernel's *own dimension rule* makes a bare numeric result
+/// dimensionless.
+///
+/// A `Derived` signature never states a dimension, so before this rule a
+/// derived operator's number could not "prove" `Int` or `Float` at
+/// `from_value`, however obviously dimensionless it was (`invmod`, `binomial`,
+/// `totient`). The manifest does state the rule, though:
+///
+/// * `Dimensionless` says the result is a pure number whatever the arguments;
+/// * `List`, `NonMetric`, `Compare` and `Angle` yield pure numbers only when
+///   every argument is itself *known* to be dimensionless.
+///
+/// Any other rule (`Same`, `Sum`, `Product`, `Custom`, ...) depends on the
+/// arguments' dimensions and is not trusted here, so a dimensioned result is
+/// still never mislabelled.
+fn result_is_dimensionless(
+    entry: &crate::registry::OpEntry,
+    witnesses: &[crate::witness::DimensionWitness],
+) -> bool {
+    use crate::witness::DimensionWitness as W;
+    use rssn::kernel::signature::DimRuleInfo as R;
+    fn known_one(w: &W) -> bool {
+        match w {
+            | W::Unknown => false,
+            | W::Scalar(d) => d.is_one(),
+            | W::Tensor {
+                dimension,
+                element,
+                elements,
+                ..
+            } => {
+                dimension.as_ref().is_none_or(aevia_dim::Dim::is_one)
+                    && element.as_ref().is_none_or(|w| known_one(w))
+                    && elements.iter().all(known_one)
+            },
+            | W::Record(fields) => fields.iter().all(|(_, w)| known_one(w)),
+        }
+    }
+    // A curated signature (`domains.overlay`) is the overlay's statement that
+    // the operator is a pure function of dimensionless arguments, whatever its
+    // (often `Custom`) kernel dimension rule says. Inputs were already checked
+    // dimensionless by the caller.
+    if crate::domains::overlay().sigs.contains_key(&entry.name) {
+        return true;
+    }
+    match &entry.dim_rule {
+        | Some(R::Dimensionless) => true,
+        | Some(R::List | R::NonMetric | R::Compare | R::Angle) => witnesses.iter().all(known_one),
+        | _ => false,
     }
 }

@@ -213,6 +213,10 @@ CI 检查：生成器输出与提交的生成文件一致；manifest 快照变�
   `Rssn.call_key(key, args)`，`key` 来自 `Rssn.overloads(name)` 或
   `OpInfo.keys`。
 
+- 领域模块：`import Rssn_NumberTheory`（`Rssn_<Domain>`，CamelCase）给出按数学领域
+  分组、带类型与 `Result` 通道的包装器，规则见 §10.3.8；`Rssn_<rule_set>` 仍按 kernel
+  分组并保持可用。
+
 名字冲突时，短名只保留**最稳定**的那个（`Stable` 优先，`since` 早者
 优先）；其余必须用限定名。生成器在 manifest 中记录短名映射。
 

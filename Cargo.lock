@@ -24,6 +24,7 @@ dependencies = [
  "aevia-fmt",
  "aevia-ir",
  "aevia-lsp",
+ "aevia-resolve",
  "aevia-rssn",
  "aevia-syntax",
  "aevia-types",
@@ -36,6 +37,7 @@ version = "0.1.0"
 dependencies = [
  "aevia-dim",
  "aevia-ir",
+ "aevia-resolve",
  "aevia-rssn",
  "aevia-std",
  "aevia-syntax",
@@ -108,10 +110,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aevia-resolve"
+version = "0.1.0"
+
+[[package]]
 name = "aevia-rssn"
 version = "0.1.0"
 dependencies = [
+ "aevia-core",
  "aevia-dim",
+ "aevia-stdlib-model",
  "aevia-syntax",
  "aevia-types",
  "num-bigint",

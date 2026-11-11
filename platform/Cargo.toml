@@ -25,6 +25,9 @@ authors = ["The Aevia contributors"]
 aevia-doc = { path = "../crates/aevia-doc" }
 aevia-syntax = { path = "../crates/aevia-syntax" }
 aevia-fmt = { path = "../crates/aevia-fmt" }
+# Versions, requirements, the resolver and the sparse-index reader: pure, no
+# dependencies, shared with the toolchain so both agree on what `^1.2` means.
+aevia-resolve = { path = "../crates/aevia-resolve" }
 
 aevia-registry-core = { path = "crates/aevia-registry-core" }
 aevia-registry-db = { path = "crates/aevia-registry-db" }
@@ -44,7 +47,6 @@ pgp = { version = "0.21", default-features = false }
 rand = "0.9"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
-semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

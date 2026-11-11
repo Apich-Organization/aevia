@@ -244,6 +244,32 @@ Every page is rendered in English or Chinese. The rules:
   job for a translator with review; the structure is ready for it (a parallel
   `spec/en/` tree would slot into the same loader).
 
+## Dependencies and resolution
+
+A version's dependencies are decided at publish time and are data from then
+on. The publish handler parses `aevia.toml` with the toolchain's own rules
+(`aevia-registry-core::manifest`), refuses a manifest the consumers could not
+use (bare `path` dependencies, self-dependency), and checks every dependency
+against the catalogue: the package exists and some non-yanked version satisfies
+the requirement. The accepted list is stored once, as the JSON the sparse index
+serves (`package`, `req`, optional `import`), and mirrored into
+`version_dependencies` in the same transaction, which is what answers "who
+depends on this package?" without scanning documents.
+
+The registry never *decides* a resolution for a build. Clients resolve from
+the index with `aevia-resolve`, the crate the toolchain links, so a result
+cannot depend on which side computed it; `POST /api/v1/resolve` runs that same
+crate over the same index text for clients that prefer one request. The
+resolver is synchronous and the catalogue is not, so the endpoint resolves in
+rounds, loading packages the resolver reports as missing.
+
+Consistency rules the handlers keep: the publish (rows, dependency rows,
+archive file, log link) and the yank (flag, `updated_at`, log link) are each one
+transaction; the index is rebuilt from the row on every request with an `ETag`,
+so a yank is visible at the next resolution; the download endpoint re-hashes the
+stored bytes and fails loudly (`E_INTEGRITY`) rather than serve an archive that
+no longer matches the checksum the signature covers.
+
 ## Known limits
 
 Stated plainly, because a registry that hides its gaps is worse than one that

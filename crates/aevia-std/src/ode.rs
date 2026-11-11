@@ -23,6 +23,10 @@ pub enum Method {
     Bdf,
     /// Adaptive Rosenbrock 2(3).
     Rosenbrock23,
+    /// Dormand–Prince, switching to Radau IIA when the explicit method
+    /// exhausts its step budget (a stiff problem needs far more explicit steps
+    /// than its accuracy requires, §8.9 "stiff solver selection").
+    Auto,
 }
 
 impl Method {
@@ -30,7 +34,12 @@ impl Method {
     #[must_use]
     pub fn capability(&self) -> Option<&'static str> {
         match self {
-            | Self::Rk4 | Self::Dopri5 | Self::Radau | Self::Bdf | Self::Rosenbrock23 => None,
+            | Self::Rk4
+            | Self::Dopri5
+            | Self::Radau
+            | Self::Bdf
+            | Self::Rosenbrock23
+            | Self::Auto => None,
         }
     }
 }
@@ -125,6 +134,33 @@ pub fn integrate_until_event(
             "the time interval is too large".into(),
         ));
     }
+    if options.method == Method::Auto {
+        let specs = [EventSpec {
+            terminal: true,
+            direction: 0,
+        }];
+        let solution = solve(rhs, y0, (start, end), options, &specs, &mut |_, t, y| {
+            event(t, y)
+        })?;
+        let terminal = *solution.t.last().ok_or(NumericError::NotConverged)?;
+        let mut times = Vec::new();
+        let mut states = Vec::new();
+        for &t in ts.iter().take_while(|&&t| t <= terminal) {
+            times.push(t);
+            states.push(solution.eval(t).ok_or(NumericError::NotConverged)?);
+        }
+        if times.last().copied() != Some(terminal) {
+            times.push(terminal);
+            states.push(
+                solution
+                    .y
+                    .last()
+                    .cloned()
+                    .ok_or(NumericError::NotConverged)?,
+            );
+        }
+        return Ok((times, states));
+    }
     let rhs = RefCell::new(rhs);
     let failure = RefCell::new(None);
     let f = |t: f64, y: &[f64], out: &mut [f64]| {
@@ -199,7 +235,7 @@ pub fn integrate_until_event(
                 | Method::Rosenbrock23 => {
                     ode_adaptive::rosenbrock23_events(f, start, end, y0, &opts, &events)
                 },
-                | Method::Rk4 => unreachable!(),
+                | Method::Rk4 | Method::Auto => unreachable!(),
             }
             .map_err(|_| NumericError::NotConverged);
             solution.and_then(|solution| {
@@ -270,7 +306,7 @@ pub fn integrate(
     }
     if matches!(
         options.method,
-        Method::Dopri5 | Method::Radau | Method::Bdf | Method::Rosenbrock23
+        Method::Dopri5 | Method::Radau | Method::Bdf | Method::Rosenbrock23 | Method::Auto
     ) && (!options.rtol.is_finite()
         || !options.atol.is_finite()
         || options.rtol < 0.0
@@ -293,6 +329,17 @@ pub fn integrate(
         Method::Radau | Method::Bdf | Method::Rosenbrock23
     ) {
         return stiff_integrate(rhs, y0, ts, options);
+    }
+    if options.method == Method::Auto {
+        let last = ts[ts.len() - 1];
+        if ts[0] == last || y0.is_empty() {
+            return Ok(vec![y0.to_vec(); ts.len()]);
+        }
+        let solution = solve(rhs, y0, (ts[0], last), options, &[], &mut |_, _, _| 0.0)?;
+        return ts
+            .iter()
+            .map(|&t| solution.eval(t).ok_or(NumericError::NotConverged))
+            .collect();
     }
     let mut out = Vec::with_capacity(ts.len());
     let mut y = y0.to_vec();
@@ -326,7 +373,9 @@ pub fn integrate(
                 y = state;
                 t = time;
             },
-            | Method::Radau | Method::Bdf | Method::Rosenbrock23 => unreachable!("handled above"),
+            | Method::Radau | Method::Bdf | Method::Rosenbrock23 | Method::Auto => {
+                unreachable!("handled above")
+            },
         }
         out.push(y.clone());
     }
@@ -585,6 +634,509 @@ fn dopri5(
     Ok((y, t))
 }
 
+// ---------------------------------------------------------------------------
+// Solutions with dense output and events (§8.9)
+// ---------------------------------------------------------------------------
+
+/// How one event function is watched: a sign change of `g(t, y)` is an event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventSpec {
+    /// Integration stops at the event.
+    pub terminal: bool,
+    /// `1` rising only, `-1` falling only, `0` both.
+    pub direction: i8,
+}
+
+/// The event functions of [`solve`]: `(index, t, y) -> g`.
+pub type Events<'a> = dyn FnMut(usize, f64, &[f64]) -> f64 + 'a;
+
+/// A located event.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hit {
+    /// Index of the event function.
+    pub index: usize,
+    /// The event time.
+    pub t: f64,
+    /// The state at the event time.
+    pub y: Vec<f64>,
+}
+
+#[derive(Clone, Debug)]
+enum Dense {
+    /// The kernel's continuous extension (Dormand–Prince: order 4; Radau:
+    /// collocation polynomial; BDF: Newton backward differences).
+    Kernel(Box<rssn::kernels::ode_adaptive::OdeSolution>),
+    /// Cubic Hermite interpolation through the nodes and their derivatives
+    /// (fixed-step `Rk4`, whose kernel keeps no stage data).
+    Hermite { rates: Vec<Vec<f64>> },
+}
+
+/// An ODE solution that can be evaluated at any time inside its span.
+#[derive(Clone, Debug)]
+pub struct Solution {
+    /// Accepted time points (increasing).
+    pub t: Vec<f64>,
+    /// States at the accepted time points.
+    pub y: Vec<Vec<f64>>,
+    /// Located events, in time order.
+    pub hits: Vec<Hit>,
+    /// Right-hand-side evaluations.
+    pub nfev: usize,
+    /// Rejected steps (adaptive methods).
+    pub rejected: usize,
+    /// The method that produced the solution: [`Method::Auto`] reports the
+    /// method it settled on.
+    pub method: Method,
+    dense: Dense,
+}
+
+impl Solution {
+    /// The state at `t`, from the method's continuous extension; `None` outside
+    /// the integrated span (which ends at a terminal event, if one fired).
+    #[must_use]
+    pub fn eval(
+        &self,
+        t: f64,
+    ) -> Option<Vec<f64>> {
+        let (&first, &last) = (self.t.first()?, self.t.last()?);
+        if !(first..=last).contains(&t) {
+            return None;
+        }
+        if t == first {
+            return self.y.first().cloned();
+        }
+        if t == last {
+            return self.y.last().cloned();
+        }
+        match &self.dense {
+            | Dense::Kernel(solution) => solution.eval(t),
+            | Dense::Hermite { rates } => {
+                let upper = self
+                    .t
+                    .partition_point(|&node| node < t)
+                    .clamp(1, self.t.len() - 1);
+                let lower = upper - 1;
+                let h = self.t[upper] - self.t[lower];
+                let s = (t - self.t[lower]) / h;
+                let (h00, h10, h01, h11) = (
+                    2.0 * s * s * s - 3.0 * s * s + 1.0,
+                    s * s * s - 2.0 * s * s + s,
+                    -2.0 * s * s * s + 3.0 * s * s,
+                    s * s * s - s * s,
+                );
+                Some(
+                    (0..self.y[lower].len())
+                        .map(|index| {
+                            h00 * self.y[lower][index]
+                                + h10 * h * rates[lower][index]
+                                + h01 * self.y[upper][index]
+                                + h11 * h * rates[upper][index]
+                        })
+                        .collect(),
+                )
+            },
+        }
+    }
+
+    /// The span the solution covers: `(t0, t_end)`, where `t_end` is the
+    /// terminal event time if one fired.
+    #[must_use]
+    pub fn span(&self) -> (f64, f64) {
+        (
+            self.t.first().copied().unwrap_or(0.0),
+            self.t.last().copied().unwrap_or(0.0),
+        )
+    }
+}
+
+/// The step budget of [`Method::Auto`]'s explicit attempt. A non-stiff problem
+/// at these tolerances needs far fewer; a stiff one runs into the stability
+/// limit and exhausts it.
+const AUTO_STEP_BUDGET: usize = 20_000;
+
+/// Integrates `rhs` over `span = (t0, t1)` (forward in time) and keeps a
+/// continuous extension, watching `specs.len()` event functions `events(i, t, y)`.
+///
+/// Event semantics are the kernel's: a sign change of `g` between accepted
+/// states is located by root finding on the continuous extension (`Rk4`:
+/// bisection by reintegrating the step); `direction` filters rising/falling
+/// crossings and a `terminal` event ends the integration there. For `Rk4`,
+/// `options.steps` is the **total** number of steps over the span.
+///
+/// # Errors
+///
+/// [`NumericError::Domain`] for non-finite data, bad tolerances or a backward
+/// span, and [`NumericError::NotConverged`] when the step collapses.
+pub fn solve(
+    rhs: &mut Rate<'_>,
+    y0: &[f64],
+    span: (f64, f64),
+    options: Options,
+    specs: &[EventSpec],
+    events: &mut Events<'_>,
+) -> Result<Solution, NumericError> {
+    use rssn::kernels::ode;
+    use rssn::kernels::ode_adaptive::Event;
+    use rssn::kernels::ode_adaptive::OdeOptions;
+    use rssn::kernels::ode_adaptive::{
+        self,
+    };
+    use rssn::kernels::ode_stiff;
+    use std::cell::Cell;
+    use std::cell::RefCell;
+
+    let (start, end) = span;
+    if !start.is_finite()
+        || !end.is_finite()
+        || !y0.iter().all(|x| x.is_finite())
+        || !options.rtol.is_finite()
+        || options.rtol < 0.0
+        || !options.atol.is_finite()
+        || options.atol <= 0.0
+    {
+        return Err(NumericError::Domain(
+            "invalid ODE span, state or tolerances".into(),
+        ));
+    }
+    if end < start {
+        return Err(NumericError::Domain(
+            "the ODE span must run forward in time".into(),
+        ));
+    }
+    if !(end - start).is_finite() {
+        return Err(NumericError::Domain(
+            "the time interval is too large".into(),
+        ));
+    }
+    if y0.is_empty() {
+        return Err(NumericError::Domain("the ODE state is empty".into()));
+    }
+    if end == start {
+        return Ok(Solution {
+            t: vec![start],
+            y: vec![y0.to_vec()],
+            hits: Vec::new(),
+            nfev: 0,
+            rejected: 0,
+            method: options.method,
+            dense: Dense::Hermite {
+                rates: vec![vec![0.0; y0.len()]],
+            },
+        });
+    }
+    let rhs_cell = RefCell::new(rhs);
+    let failure: RefCell<Option<NumericError>> = RefCell::new(None);
+    let f = |t: f64, y: &[f64], out: &mut [f64]| {
+        match evaluate(&mut **rhs_cell.borrow_mut(), t, y, out.len()) {
+            | Ok(rate) => out.copy_from_slice(&rate),
+            | Err(error) => {
+                if failure.borrow().is_none() {
+                    *failure.borrow_mut() = Some(error);
+                }
+                out.fill(f64::NAN);
+            },
+        }
+    };
+    let events_cell = RefCell::new(events);
+    let invalid_event = Cell::new(false);
+    let guards: Vec<Box<dyn Fn(f64, &[f64]) -> f64 + '_>> = (0..specs.len())
+        .map(|index| {
+            let events_cell = &events_cell;
+            let invalid_event = &invalid_event;
+            Box::new(move |t: f64, y: &[f64]| {
+                let value = events_cell.borrow_mut()(index, t, y);
+                if !value.is_finite() {
+                    invalid_event.set(true);
+                }
+                value
+            }) as Box<dyn Fn(f64, &[f64]) -> f64 + '_>
+        })
+        .collect();
+    let kernel_events: Vec<Event<'_>> = guards
+        .iter()
+        .zip(specs)
+        .map(|(g, spec)| {
+            Event {
+                g: g.as_ref(),
+                terminal: spec.terminal,
+                direction: spec.direction,
+            }
+        })
+        .collect();
+    let opts = OdeOptions {
+        rtol: options.rtol,
+        atol: options.atol,
+        ..OdeOptions::default()
+    };
+    let to_hits = |hits: &[ode_adaptive::EventHit]| -> Vec<Hit> {
+        hits.iter()
+            .map(|hit| {
+                Hit {
+                    index: hit.index,
+                    t: hit.t,
+                    y: hit.y.clone(),
+                }
+            })
+            .collect()
+    };
+    let kernel = |method: Method| -> Result<Solution, NumericError> {
+        let solution = match method {
+            | Method::Dopri5 => ode_adaptive::dopri5(&f, start, end, y0, &opts, &kernel_events),
+            | Method::Radau => ode_stiff::radau5_events(&f, start, end, y0, &opts, &kernel_events),
+            | Method::Bdf => ode_stiff::bdf_events(&f, start, end, y0, &opts, 5, &kernel_events),
+            | Method::Rosenbrock23 => {
+                ode_adaptive::rosenbrock23_events(&f, start, end, y0, &opts, &kernel_events)
+            },
+            | Method::Rk4 | Method::Auto => unreachable!("handled by the caller"),
+        }
+        .map_err(|_| NumericError::NotConverged)?;
+        Ok(Solution {
+            t: solution.t.clone(),
+            y: solution.y.clone(),
+            hits: to_hits(&solution.events),
+            nfev: solution.nfev,
+            rejected: solution.rejected,
+            method,
+            dense: Dense::Kernel(Box::new(solution)),
+        })
+    };
+    let result = (|| {
+        match options.method {
+            | Method::Rk4 => {
+                let (trajectory, fixed_hits) = ode::solve_fixed_events(
+                    &f,
+                    y0,
+                    (start, end),
+                    options.steps.max(1),
+                    ode::OdeSolverMethod::RungeKutta4,
+                    &kernel_events,
+                )
+                .map_err(|_| NumericError::NotConverged)?;
+                let mut rates = Vec::with_capacity(trajectory.t.len());
+                for (&t, y) in trajectory.t.iter().zip(&trajectory.y) {
+                    let mut rate = vec![0.0; y.len()];
+                    f(t, y, &mut rate);
+                    rates.push(rate);
+                }
+                let steps = options.steps.max(1);
+                Ok(Solution {
+                    hits: fixed_hits
+                        .iter()
+                        .map(|hit| {
+                            Hit {
+                                index: hit.index,
+                                t: hit.t,
+                                y: hit.y.clone(),
+                            }
+                        })
+                        .collect(),
+                    nfev: 4 * steps + trajectory.t.len(),
+                    rejected: 0,
+                    method: Method::Rk4,
+                    dense: Dense::Hermite { rates },
+                    t: trajectory.t,
+                    y: trajectory.y,
+                })
+            },
+            | Method::Auto => {
+                let budgeted = OdeOptions {
+                    max_steps: AUTO_STEP_BUDGET,
+                    ..opts
+                };
+                match ode_adaptive::dopri5(&f, start, end, y0, &budgeted, &kernel_events) {
+                    | Ok(solution) => {
+                        Ok(Solution {
+                            t: solution.t.clone(),
+                            y: solution.y.clone(),
+                            hits: to_hits(&solution.events),
+                            nfev: solution.nfev,
+                            rejected: solution.rejected,
+                            method: Method::Dopri5,
+                            dense: Dense::Kernel(Box::new(solution)),
+                        })
+                    },
+                    // A genuine failure (non-finite state, callback error) is not
+                    // a stiffness signal; only an exhausted budget is.
+                    | Err(ode_adaptive::OdeError::StepLimit) if failure.borrow().is_none() => {
+                        kernel(Method::Radau)
+                    },
+                    | Err(_) => Err(NumericError::NotConverged),
+                }
+            },
+            | method => kernel(method),
+        }
+    })();
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    if invalid_event.get() {
+        return Err(NumericError::Domain(
+            "an event returned a non-finite value".into(),
+        ));
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Higher-order equations (§8.9)
+// ---------------------------------------------------------------------------
+
+/// Rewrites `y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)` as the first-order system on the
+/// stacked state `z = (y, y′, …, y⁽ⁿ⁻¹⁾)`, `n` blocks of `dim` components:
+/// the first `n − 1` blocks of `z′` are the last `n − 1` blocks of `z`, and the
+/// last block is `f(t, z)`.
+///
+/// `f` receives the stacked state and answers the `dim` components of the top
+/// derivative. The order and block size are checked by the caller; a wrong
+/// length from `f` is reported by the integrator as a shape mismatch.
+pub fn reduce_order<'a>(
+    order: usize,
+    dim: usize,
+    mut f: impl FnMut(f64, &[f64]) -> Vec<f64> + 'a,
+) -> impl FnMut(f64, &[f64]) -> Vec<f64> + 'a {
+    move |t, z| {
+        let mut out = Vec::with_capacity(order * dim);
+        out.extend_from_slice(&z[dim..order * dim]);
+        // A wrong-length answer is passed on unchanged so the integrator
+        // reports it as a shape mismatch rather than the reduction hiding it.
+        out.extend(f(t, z));
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Boundary-value problems by single shooting (§8.9)
+// ---------------------------------------------------------------------------
+
+/// A boundary condition `r(y(t0), y(t1)) = 0` with as many residuals as the
+/// state has components.
+pub type Boundary<'a> = dyn FnMut(&[f64], &[f64]) -> Vec<f64> + 'a;
+
+/// Solves the two-point boundary-value problem `y′ = f(t, y)`,
+/// `r(y(t0), y(t1)) = 0` by single shooting: Newton's method on the initial
+/// state with a forward-difference Jacobian (one integration per unknown) and
+/// a backtracking line search. `guess` is the initial state to start from.
+///
+/// The returned solution is the final integration, so it has dense output.
+/// Single shooting needs the problem to be well conditioned over the span
+/// (the sensitivity of `y(t1)` to `y(t0)` must not blow up); stiff or
+/// exponentially unstable problems need multiple shooting or collocation,
+/// which this routine does not provide.
+///
+/// # Errors
+///
+/// [`NumericError::ShapeMismatch`] when `r` does not return `n` residuals,
+/// [`NumericError::Singular`] for a singular Jacobian and
+/// [`NumericError::NotConverged`] when Newton's method does not converge in
+/// 60 iterations or an integration fails.
+pub fn shoot(
+    rhs: &mut Rate<'_>,
+    guess: &[f64],
+    span: (f64, f64),
+    options: Options,
+    boundary: &mut Boundary<'_>,
+) -> Result<Solution, NumericError> {
+    let n = guess.len();
+    let integrate_from = |rhs: &mut Rate<'_>, y0: &[f64]| -> Result<Solution, NumericError> {
+        solve(rhs, y0, span, options, &[], &mut |_, _, _| 0.0)
+    };
+    let mut residual = |rhs: &mut Rate<'_>, p: &[f64]| -> Result<Vec<f64>, NumericError> {
+        let solution = integrate_from(rhs, p)?;
+        let end = solution.y.last().ok_or(NumericError::NotConverged)?;
+        let r = boundary(p, end);
+        if r.len() != n {
+            return Err(NumericError::ShapeMismatch(format!(
+                "the boundary condition returned {} residual(s) for a state of {n} component(s)",
+                r.len()
+            )));
+        }
+        if !r.iter().all(|value| value.is_finite()) {
+            return Err(NumericError::Domain(
+                "the boundary condition returned a non-finite value".into(),
+            ));
+        }
+        Ok(r)
+    };
+    let norm = |v: &[f64]| v.iter().fold(0.0f64, |acc, x| acc.max(x.abs()));
+    let mut p = guess.to_vec();
+    let mut r = residual(rhs, &p)?;
+    for _ in 0..60 {
+        // The scale of the residual is the scale of the data, not 1.
+        if norm(&r) <= 1e-9 * (1.0 + norm(&p)) {
+            return integrate_from(rhs, &p);
+        }
+        // Forward-difference Jacobian, one column per initial component.
+        let mut jacobian = vec![vec![0.0; n]; n];
+        for column in 0..n {
+            let step = f64::EPSILON.sqrt() * p[column].abs().max(1.0);
+            let mut shifted = p.clone();
+            shifted[column] += step;
+            let shifted_r = residual(rhs, &shifted)?;
+            for row in 0..n {
+                jacobian[row][column] = (shifted_r[row] - r[row]) / step;
+            }
+        }
+        let delta = solve_dense(jacobian, r.iter().map(|x| -x).collect())?;
+        // Backtracking: accept the first step that reduces the residual.
+        let mut scale = 1.0;
+        let mut accepted = false;
+        for _ in 0..30 {
+            let trial: Vec<f64> = p.iter().zip(&delta).map(|(x, d)| x + scale * d).collect();
+            if let Ok(trial_r) = residual(rhs, &trial)
+                && norm(&trial_r) < norm(&r)
+            {
+                p = trial;
+                r = trial_r;
+                accepted = true;
+                break;
+            }
+            scale *= 0.5;
+        }
+        if !accepted {
+            return Err(NumericError::NotConverged);
+        }
+    }
+    if norm(&r) <= 1e-9 * (1.0 + norm(&p)) {
+        return integrate_from(rhs, &p);
+    }
+    Err(NumericError::NotConverged)
+}
+
+/// Gaussian elimination with partial pivoting for the small Newton systems of
+/// [`shoot`].
+fn solve_dense(
+    mut a: Vec<Vec<f64>>,
+    mut b: Vec<f64>,
+) -> Result<Vec<f64>, NumericError> {
+    let n = b.len();
+    for column in 0..n {
+        let pivot = (column..n)
+            .max_by(|&i, &j| a[i][column].abs().total_cmp(&a[j][column].abs()))
+            .unwrap_or(column);
+        if a[pivot][column].abs() < 1e-300 || !a[pivot][column].is_finite() {
+            return Err(NumericError::Singular);
+        }
+        a.swap(column, pivot);
+        b.swap(column, pivot);
+        for row in column + 1..n {
+            let factor = a[row][column] / a[column][column];
+            for k in column..n {
+                a[row][k] -= factor * a[column][k];
+            }
+            b[row] -= factor * b[column];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for row in (0..n).rev() {
+        let tail: f64 = (row + 1..n).map(|k| a[row][k] * x[k]).sum();
+        x[row] = (b[row] - tail) / a[row][row];
+    }
+    if x.iter().any(|value| !value.is_finite()) {
+        return Err(NumericError::Singular);
+    }
+    Ok(x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,5 +1372,303 @@ mod tests {
                 "{method:?}"
             );
         }
+    }
+
+    // ----- dense output, events, order, convergence ---------------------
+
+    /// The observed order of accuracy between two step sizes.
+    fn observed_order(
+        coarse: f64,
+        fine: f64,
+    ) -> f64 {
+        (coarse / fine).log2()
+    }
+
+    #[test]
+    fn rk4_converges_with_fourth_order() {
+        // y' = y on [0, 1]: halving the step divides the error by 2^4.
+        let error = |steps: usize| {
+            let mut rhs = |_t: f64, y: &[f64]| vec![y[0]];
+            let options = Options {
+                method: Method::Rk4,
+                steps,
+                ..Options::default()
+            };
+            let out = integrate(&mut rhs, &[1.0], &[0.0, 1.0], options).unwrap();
+            (out[1][0] - std::f64::consts::E).abs()
+        };
+        let (e1, e2, e3) = (error(8), error(16), error(32));
+        assert!(
+            (3.8..4.3).contains(&observed_order(e1, e2)),
+            "orders {} {}",
+            observed_order(e1, e2),
+            observed_order(e2, e3)
+        );
+        assert!((3.8..4.3).contains(&observed_order(e2, e3)));
+    }
+
+    #[test]
+    fn dopri5_error_tracks_the_tolerance() {
+        // Tightening the tolerance by 10^2 tightens the error accordingly.
+        let error = |rtol: f64| {
+            let mut rhs = |_t: f64, y: &[f64]| vec![y[1], -y[0]];
+            let options = Options {
+                rtol,
+                atol: rtol * 1e-2,
+                ..Options::default()
+            };
+            let out = integrate(&mut rhs, &[1.0, 0.0], &[0.0, 10.0], options).unwrap();
+            (out[1][0] - 10.0f64.cos()).abs()
+        };
+        let (loose, medium, tight) = (error(1e-4), error(1e-6), error(1e-8));
+        assert!(
+            loose < 1e-2 && medium < 1e-4 && tight < 1e-6,
+            "{loose} {medium} {tight}"
+        );
+        assert!(tight < medium && medium < loose);
+    }
+
+    #[test]
+    fn dense_output_follows_the_exact_solution() {
+        // y' = y, y(0) = 1 on [0, 2]; evaluate between the accepted steps.
+        let mut rhs = |_t: f64, y: &[f64]| vec![y[0]];
+        let solution = solve(
+            &mut rhs,
+            &[1.0],
+            (0.0, 2.0),
+            Options::default(),
+            &[],
+            &mut |_, _, _| 0.0,
+        )
+        .unwrap();
+        assert_eq!(solution.method, Method::Dopri5);
+        for k in 0..=200 {
+            let t = 2.0 * f64::from(k) / 200.0;
+            let y = solution.eval(t).unwrap()[0];
+            assert!((y - t.exp()).abs() < 1e-6 * t.exp().max(1.0), "t = {t}");
+        }
+        assert!(solution.eval(-0.1).is_none() && solution.eval(2.1).is_none());
+    }
+
+    #[test]
+    fn hermite_dense_output_of_rk4_is_fourth_order_accurate() {
+        // Cubic Hermite interpolation: O(h^4) in the interpolation error.
+        let error = |steps: usize| {
+            let mut rhs = |_t: f64, y: &[f64]| vec![y[0]];
+            let options = Options {
+                method: Method::Rk4,
+                steps,
+                ..Options::default()
+            };
+            let solution = solve(
+                &mut rhs,
+                &[1.0],
+                (0.0, 1.0),
+                options,
+                &[],
+                &mut |_, _, _| 0.0,
+            )
+            .unwrap();
+            (0..steps)
+                .map(|k| {
+                    let t = (k as f64 + 0.5) / steps as f64;
+                    (solution.eval(t).unwrap()[0] - t.exp()).abs()
+                })
+                .fold(0.0, f64::max)
+        };
+        let (e1, e2) = (error(10), error(20));
+        assert!(
+            (3.5..4.6).contains(&observed_order(e1, e2)),
+            "{}",
+            observed_order(e1, e2)
+        );
+    }
+
+    fn oscillator_events(
+        specs: &[EventSpec],
+        method: Method,
+    ) -> Solution {
+        // cos t crosses zero at pi/2, 3pi/2, ...; it is falling at the first.
+        let mut rhs = |_t: f64, y: &[f64]| vec![y[1], -y[0]];
+        solve(
+            &mut rhs,
+            &[1.0, 0.0],
+            (0.0, 4.0 * std::f64::consts::PI),
+            Options {
+                method,
+                steps: 4000,
+                ..Options::default()
+            },
+            specs,
+            &mut |_, _t, y| y[0],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn events_respect_direction_and_terminal() {
+        use std::f64::consts::PI;
+        for method in [Method::Dopri5, Method::Rk4, Method::Radau] {
+            // Both directions, non-terminal: pi/2, 3pi/2, 5pi/2, 7pi/2.
+            let all = oscillator_events(
+                &[EventSpec {
+                    terminal: false,
+                    direction: 0,
+                }],
+                method,
+            );
+            let times: Vec<f64> = all.hits.iter().map(|hit| hit.t).collect();
+            assert_eq!(times.len(), 4, "{method:?}: {times:?}");
+            for (k, t) in times.iter().enumerate() {
+                assert!(
+                    (t - (PI / 2.0 + PI * k as f64)).abs() < 1e-5,
+                    "{method:?}: {times:?}"
+                );
+            }
+            // The integration ran to the end of the span.
+            assert!((all.span().1 - 4.0 * PI).abs() < 1e-9);
+            // Rising only: 3pi/2 and 7pi/2.
+            let rising = oscillator_events(
+                &[EventSpec {
+                    terminal: false,
+                    direction: 1,
+                }],
+                method,
+            );
+            let times: Vec<f64> = rising.hits.iter().map(|hit| hit.t).collect();
+            assert_eq!(times.len(), 2, "{method:?}: {times:?}");
+            assert!((times[0] - 1.5 * PI).abs() < 1e-5 && (times[1] - 3.5 * PI).abs() < 1e-5);
+            // Falling and terminal: stops at pi/2.
+            let first = oscillator_events(
+                &[EventSpec {
+                    terminal: true,
+                    direction: -1,
+                }],
+                method,
+            );
+            assert_eq!(first.hits.len(), 1);
+            assert!((first.span().1 - PI / 2.0).abs() < 1e-5, "{method:?}");
+            assert!((first.hits[0].y[0]).abs() < 1e-5);
+            assert!(first.eval(PI).is_none(), "dense output ends at the event");
+        }
+    }
+
+    #[test]
+    fn auto_stays_explicit_on_a_mild_problem_and_switches_on_a_stiff_one() {
+        let mut mild = |_t: f64, y: &[f64]| vec![-y[0]];
+        let options = Options {
+            method: Method::Auto,
+            ..Options::default()
+        };
+        let solution = solve(
+            &mut mild,
+            &[1.0],
+            (0.0, 5.0),
+            options,
+            &[],
+            &mut |_, _, _| 0.0,
+        )
+        .unwrap();
+        assert_eq!(solution.method, Method::Dopri5);
+        assert!((solution.eval(5.0).unwrap()[0] - (-5.0f64).exp()).abs() < 1e-7);
+        // y' = -1e6 (y - cos t) - sin t has the smooth solution cos t and a
+        // transient with rate 1e6: an explicit method needs ~3e5 steps.
+        let mut stiff = |t: f64, y: &[f64]| vec![-1.0e6 * (y[0] - t.cos()) - t.sin()];
+        let solution = solve(
+            &mut stiff,
+            &[1.0],
+            (0.0, 1.0),
+            options,
+            &[],
+            &mut |_, _, _| 0.0,
+        )
+        .unwrap();
+        assert_eq!(solution.method, Method::Radau);
+        assert!((solution.eval(1.0).unwrap()[0] - 1.0f64.cos()).abs() < 1e-5);
+        // `integrate` takes the same route.
+        let grid = [0.0, 0.5, 1.0];
+        let out = integrate(&mut stiff, &[1.0], &grid, options).unwrap();
+        assert!((out[1][0] - 0.5f64.cos()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_higher_order_equation_reduces_to_first_order() {
+        // y'' = -y, y(0) = 1, y'(0) = 0: y = cos t, stacked z = (y, y').
+        let mut rhs = reduce_order(2, 1, |_t, z| vec![-z[0]]);
+        let solution = solve(
+            &mut rhs,
+            &[1.0, 0.0],
+            (0.0, std::f64::consts::PI),
+            Options::default(),
+            &[],
+            &mut |_, _, _| 0.0,
+        )
+        .unwrap();
+        let end = solution.y.last().unwrap();
+        assert!((end[0] + 1.0).abs() < 1e-6 && end[1].abs() < 1e-6);
+        // Third order, two components: the top derivative is minus the first
+        // derivative, so y = (cos t, 2 sin t) with y'(0) = (0, 2) and
+        // y''(0) = (-1, 0).
+        let mut rhs = reduce_order(3, 2, |_t, z| vec![-z[2], -z[3]]);
+        let solution = solve(
+            &mut rhs,
+            &[1.0, 0.0, 0.0, 2.0, -1.0, 0.0],
+            (0.0, 1.0),
+            Options::default(),
+            &[],
+            &mut |_, _, _| 0.0,
+        )
+        .unwrap();
+        let end = solution.y.last().unwrap();
+        assert!((end[0] - 1.0f64.cos()).abs() < 1e-6, "{end:?}");
+        assert!((end[1] - 2.0 * 1.0f64.sin()).abs() < 1e-6, "{end:?}");
+        assert!((end[2] + 1.0f64.sin()).abs() < 1e-6, "{end:?}");
+    }
+
+    #[test]
+    fn shooting_solves_a_linear_boundary_value_problem() {
+        // y'' = -y, y(0) = 0, y(pi/2) = 1 has y = sin t, so y'(0) = 1.
+        let mut rhs = |_t: f64, y: &[f64]| vec![y[1], -y[0]];
+        let solution = shoot(
+            &mut rhs,
+            &[0.0, 0.0],
+            (0.0, std::f64::consts::FRAC_PI_2),
+            Options::default(),
+            &mut |a, b| vec![a[0], b[0] - 1.0],
+        )
+        .unwrap();
+        assert!((solution.y[0][1] - 1.0).abs() < 1e-6);
+        let mid = solution.eval(std::f64::consts::FRAC_PI_4).unwrap();
+        assert!((mid[0] - std::f64::consts::FRAC_PI_4.sin()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn shooting_solves_a_nonlinear_boundary_value_problem() {
+        // y'' = 3/2 y^2, y(0) = 4, y(1) = 1 has y = 4 / (1 + x)^2, y'(0) = -8.
+        let mut rhs = |_t: f64, y: &[f64]| vec![y[1], 1.5 * y[0] * y[0]];
+        let solution = shoot(
+            &mut rhs,
+            &[4.0, -5.0],
+            (0.0, 1.0),
+            Options::default(),
+            &mut |a, b| vec![a[0] - 4.0, b[0] - 1.0],
+        )
+        .unwrap();
+        assert!((solution.y[0][1] + 8.0).abs() < 1e-4, "{:?}", solution.y[0]);
+        let y = solution.eval(0.5).unwrap()[0];
+        assert!((y - 4.0 / 2.25).abs() < 1e-5, "{y}");
+    }
+
+    #[test]
+    fn shooting_reports_a_wrong_number_of_conditions() {
+        let mut rhs = |_t: f64, y: &[f64]| vec![y[1], -y[0]];
+        let outcome = shoot(
+            &mut rhs,
+            &[0.0, 0.0],
+            (0.0, 1.0),
+            Options::default(),
+            &mut |a, _| vec![a[0]],
+        );
+        assert!(matches!(outcome, Err(NumericError::ShapeMismatch(_))));
     }
 }

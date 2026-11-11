@@ -2201,6 +2201,12 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 func(vec![var(0)], Type::result(var(0), error_type("ShapeError"))),
             )]
         },
+        // `refine_shape<shape>` names its target in a shape type argument,
+        // which `Checker::shape_constructor` reads; this is the fallback for a
+        // call without one.
+        | "refine_shape" => {
+            vec![scheme(1, 0, 0, func(vec![var(0)], Type::option(var(0))))]
+        },
         | "reshape_dyn" => {
             vec![scheme(
                 1,
@@ -2899,6 +2905,82 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 func(vec![var(0), var(0), var(0), var(0)], var(1)),
             )]
         },
+        // The ODE and ensemble entry points that need the `RateOf` /
+        // `DiffusionOf` type functions are typed by the checker
+        // (`ode_ext_call`, `sde_call`); these loose schemes make the names
+        // first-class.
+        | "ode_solve" | "ode_bvp" => {
+            vec![scheme(
+                2,
+                0,
+                0,
+                func(vec![var(0), var(0), var(0), var(0), var(0)], var(1)),
+            )]
+        },
+        | "odeint_order" => {
+            vec![scheme(2, 0, 0, func(vec![var(0), var(0), var(0)], var(1)))]
+        },
+        | "odeint_order_with" => {
+            vec![scheme(
+                2,
+                0,
+                0,
+                func(vec![var(0), var(0), var(0), var(0)], var(1)),
+            )]
+        },
+        | "sde_ensemble_diag" | "sde_ensemble_general" => {
+            vec![scheme(
+                2,
+                0,
+                0,
+                func(vec![var(0), var(0), var(0), var(0), var(0)], var(1)),
+            )]
+        },
+        // Continuous output and events on a numerical SDE path (§8.9.1). The
+        // path is any record with the `SdePath` fields `t` and `y` (an open
+        // row), so a path from `sdeint_*` and one rebuilt by `sde_events` both
+        // fit and the state type `s` flows from `y` to the result.
+        | "sde_at" | "sde_resample" | "sde_interp" | "sde_events" => {
+            let path = || {
+                Type::Record(Row::Extend {
+                    label: "t".to_string(),
+                    ty: Box::new(list(Type::float(time()))),
+                    tail: Box::new(Row::Extend {
+                        label: "y".to_string(),
+                        ty: Box::new(list(var(0))),
+                        tail: Box::new(Row::Var(0)),
+                    }),
+                })
+            };
+            let ty = match name {
+                | "sde_at" => func(vec![path(), Type::float(time())], var(0)),
+                | "sde_resample" => func(vec![path(), list(Type::float(time()))], list(var(0))),
+                | "sde_interp" => func(vec![path()], func(vec![Type::float(time())], var(0))),
+                | _ => {
+                    let event = Type::record(vec![
+                        (
+                            "g".to_string(),
+                            func(vec![Type::float(time()), var(0)], Type::float(one())),
+                        ),
+                        ("terminal".to_string(), Type::bool()),
+                        ("direction".to_string(), Type::int()),
+                    ]);
+                    let hit = Type::record(vec![
+                        ("index".to_string(), Type::int()),
+                        ("t".to_string(), Type::float(time())),
+                        ("y".to_string(), var(0)),
+                    ]);
+                    func(
+                        vec![path(), list(event)],
+                        Type::record(vec![
+                            ("path".to_string(), path()),
+                            ("hits".to_string(), list(hit)),
+                        ]),
+                    )
+                },
+            };
+            vec![scheme(1, 0, 1, ty)]
+        },
         // `wiener(seed, m, steps, dt) -> Tensor<2, Float[T^(1/2)]]`: the
         // increments are Brownian (`dW ~ √dt`), matching the kernel manifest
         // `sde_wiener(seed, m, steps, h)` argument order (§8.9.1).
@@ -3417,8 +3499,10 @@ pub fn is_special(name: &str) -> bool {
 /// keeps the list here so the IR lowering and `aevia-core` cannot drift apart.
 #[must_use]
 pub fn takes_type_argument(name: &str) -> bool {
-    matches!(name, "zeros" | "ones" | "reshape" | "zeros_of" | "ones_of")
-        || sparse::takes_format_argument(name)
+    matches!(
+        name,
+        "zeros" | "ones" | "reshape" | "zeros_of" | "ones_of" | "refine_shape"
+    ) || sparse::takes_format_argument(name)
 }
 
 /// Every name [`schemes`] answers for, transcribed from it.
@@ -3647,6 +3731,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "tril",
     "triu",
     "reshape",
+    "refine_shape",
     "reshape_dyn",
     "set",
     "map_indexed",
@@ -3669,6 +3754,8 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "spsolve",
     "cg",
     "cg_with",
+    "gmres_with",
+    "bicgstab_with",
     "kron",
     "contract",
     "map_nonzero",

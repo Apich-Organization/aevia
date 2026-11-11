@@ -147,8 +147,21 @@ impl OwnerView {
 pub struct DependencyView {
     /// The module root it is imported under.
     pub import: String,
-    /// The path the manifest declared.
-    pub path: String,
+    /// The package it resolves to, `owner/name`.
+    pub package: String,
+    /// The version requirement.
+    pub req: String,
+}
+
+/// A published version that depends on the package being shown.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DependentView {
+    /// The dependent package, `owner/name`.
+    pub package: String,
+    /// The newest non-yanked version of it that depends on this one.
+    pub version: String,
+    /// The requirement that version states.
+    pub req: String,
 }
 
 /// Everything a package page shows.
@@ -174,6 +187,9 @@ pub struct CratePage {
     pub owners: Vec<OwnerView>,
     /// The selected version's dependencies.
     pub dependencies: Vec<DependencyView>,
+    /// Packages that depend on this one (reverse dependencies).
+    #[serde(default)]
+    pub dependents: Vec<DependentView>,
     /// When the package first appeared.
     pub created_at: String,
     /// When it last changed.

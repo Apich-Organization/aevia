@@ -116,6 +116,10 @@ out side by side.
 
 * **Manifest as the single registry.** `Rssn.sin`, `Units.Constants` and the
   unit table are generated from the manifest (`aevia rssn --emit DIR --namespaces`).
+  Domain modules (`import Rssn_NumberTheory`, `Rssn_FiniteField`, `Rssn_Group`, ...) are rendered at
+  import time from the manifest plus `crates/aevia-rssn/domains.overlay` (typed signatures, codecs,
+  exclusions); a test fails when an operator is neither bound nor excluded and keeps
+  `tools/rssn-api-audit/RSSN-COVERAGE.md` current (spec §10.3.8).
   Exact signatures use pinned `OpKey`s; other entries use the dynamic value-list
   ABI and return its `Result` error channel. `aevia rssn --audit` classifies each
   overload as an exact typed binding, a dynamic/approximate signature or

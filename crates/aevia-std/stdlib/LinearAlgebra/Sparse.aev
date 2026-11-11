@@ -6,6 +6,7 @@ module LinearAlgebra.Sparse
 
 type Precond = | Identity | Jacobi | BlockJacobi | Ilu0 | Ic0 | Auto
 
+let bicgstab_with = bicgstab_with
 let block_size = block_size
 let cg = cg
 let cg_with = cg_with
@@ -14,6 +15,7 @@ let convert = convert
 let density = density
 let format_of = format_of
 let from_dense = from_dense
+let gmres_with = gmres_with
 let kron = kron
 let map_nonzero = map_nonzero
 let matmul = matmul

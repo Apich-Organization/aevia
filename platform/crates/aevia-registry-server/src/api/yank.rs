@@ -140,8 +140,18 @@ pub async fn yank(
             "the package belongs to a different publisher",
         ));
     }
+    // The flag, the package's `updated_at` and the log link change together:
+    // the sparse index is derived from the row, and a yank the log does not
+    // mention (or a log entry for a yank that did not happen) would make the
+    // transparency log lie about what clients are being told.
+    let mut transaction = state.pool.begin().await.map_err(|error| {
+        ApiError::from_core(aevia_registry_db::sql_error(
+            "cannot start the yank transaction",
+            error,
+        ))
+    })?;
     let Some(row) = repo::set_yanked(
-        &state.pool,
+        &mut *transaction,
         package.id,
         &statement.version,
         statement.yanked,
@@ -153,14 +163,14 @@ pub async fn yank(
             statement.name, statement.version
         )));
     };
-    repo::touch_package(&state.pool, package.id).await?;
+    repo::touch_package(&mut *transaction, package.id).await?;
     let verb = if statement.yanked {
         "yanked"
     } else {
         "restored"
     };
-    repo::append_log(
-        &state.pool,
+    repo::append_log_in(
+        &mut transaction,
         "yank",
         &format!(
             "{} {verb} {} {}",
@@ -175,5 +185,11 @@ pub async fn yank(
         }),
     )
     .await?;
+    transaction.commit().await.map_err(|error| {
+        ApiError::from_core(aevia_registry_db::sql_error(
+            "cannot commit the yank",
+            error,
+        ))
+    })?;
     Ok(StatusCode::NO_CONTENT)
 }

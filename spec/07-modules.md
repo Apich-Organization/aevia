@@ -218,9 +218,10 @@ authors = ["..."]
 description = "..."
 
 [dependencies]
-aevia-std = "0.1"
-units-extra = { path = "../units-extra" }
-plotting = { git = "https://example.com/plotting.git", tag = "v0.2.0" }
+Units = "^1.2"                                        # 官方作用域：aevia/units
+Plot = { package = "apich/plot", version = "~2.1" }   # registry 包
+Kinematics = { path = "../kinematics" }               # 本地路径包
+Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # 本地开发用路径，发布后按版本
 
 [compat]
 aevia = ">=1.0, <2.0"
@@ -238,32 +239,114 @@ entry = "src/main.aev"      # 可执行包的入口；默认 src/main.aev
 opt = 3
 ```
 
-> **实现状态（2026-11-04）**：清单解析、`target`/`entry`、`--locked`、内容哈希与
-> path 依赖已实现；**`version`/`git` 依赖与 registry 未实现**（分别报 `E0605`/
-> 无 registry 客户端，`aevia add/update` 只管理本地清单/锁文件）。上面的
-> `git`/`version` 示例是设计目标，不是当前可用的依赖形式；`[capabilities]` 目前
-> 只被解析/保留，没有运行时权限检查（§9.14）。
+> **实现状态（2026-11-10）**：清单解析、`target`/`entry`、`--locked`、内容哈希、
+> path 依赖与 **registry 依赖（版本需求、解析、锁、校验后的本地副本）** 已实现，见
+> §7.5.1.1 与 §7.5.2；**`git` 依赖不存在**（报 `E0605`）。`[compat]`、
+> `[capabilities]`、`[build]`、`[profile.*]` 示例是设计目标：当前清单读取器只读
+> `[package]` 与 `[dependencies]`，其余表报 `E0605`（`[capabilities]` 目前也没有运行时
+> 权限检查，§9.14）。
 
-- `name` 是包名，`snake_case`；导入时用包名作为根模块。
-- `version` 是 SemVer。
+- `name` 是包名，`snake_case`；导入时用依赖键（导入根）。
+- `version` 是 SemVer 2.0：`major.minor.patch`，可带 `-pre-release`；发布版本不得带
+  `+build` 元数据（两个仅 build 不同的版本优先级相同，registry 无法区分）。
 - `edition` 是语言版本（`2026`）。
-- 依赖可以是 registry、path、git；默认从中心 registry 解析（§13.7），
-  path/git 用于本地开发和私有包。registry 是内容寻址 + 签名 + capability
-  声明的，不是“以后再加”的附属品。
+- 依赖有三种来源：registry、path，或两者并存（`path` 用于本地开发，`version` 用于发布后
+  的使用者）。不存在 git 依赖。registry 是内容寻址 + 签名 + capability 声明的，不是
+  “以后再加”的附属品。
 - `target` 为 `library` 时不需要 `main`；为 `executable` 时必须有
   `main : IO Unit`。
 - `entry` 默认 `src/main.aev`。
 
+#### 7.5.1.1 依赖声明与版本需求
+
+`[dependencies]` 的键是**导入根**（`UpperCamelCase`，不含 `-`），值有以下形式：
+
+| 写法 | 含义 |
+|---|---|
+| `Units = "^1.2"` | 官方作用域包 `aevia/units`，需求 `^1.2`。包名由键转 `snake_case`（`UnitsExtra` → `aevia/units_extra`）；缩写键（`FFT`）要显式写 `package`。 |
+| `Plot = { package = "apich/plot", version = "~2.1" }` | 指定 `owner/name` 的 registry 包。 |
+| `Lib = { path = "../lib" }` | 本地路径包。 |
+| `Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }` | 两者并存：本包从源码构建时用 `path`；本包作为 registry 包被使用时（`path` 目录不存在）只用 `package`/`version`。**发布的清单不得含纯 `path` 依赖**——使用者没有那个目录——服务器在发布时拒绝（`E_MANIFEST`）。 |
+
+`version` 是**版本需求**（Cargo 的语法与含义）：
+
+| 写法 | 含义 |
+|---|---|
+| `1.2.3`、`^1.2.3` | `>=1.2.3, <2.0.0`（裸版本即 `^`） |
+| `^0.2.3` / `^0.0.3` | `>=0.2.3, <0.3.0` / 恰为 `0.0.3` |
+| `~1.2.3`、`~1.2`、`~1` | `>=1.2.3, <1.3.0`、`<1.3.0`、`<2.0.0` |
+| `1.*`、`1.2.x` | 通配 |
+| `>=1.2, <2`、`=1.2.3`、`>1`、`<=1.2` | 比较子，逗号表示合取 |
+| `*` | 任意**正式**版本 |
+
+预发布版本（`1.0.0-rc.1`）只有当需求中某个比较子写出了**同一** `major.minor.patch` 的
+预发布时才满足；`^1`、`*` 永远不会选中预发布版本，因此 `aevia update` 不会悄悄采用候选
+版。可含内联表中的逗号（`">=1.2, <2"`），行尾 `#` 注释被忽略。
+
+#### 7.5.1.2 解析：每个兼容系列至多一个版本
+
+解析器是 `aevia-resolve`（纯 crate，无 I/O，无依赖；工具链与 registry 共用）。语义：
+
+1. 满足所有需求；每个选中版本的依赖也被满足；选中版本之间**无依赖环**（环报错并列出环）。
+2. **每个包的每个兼容系列至多选一个版本**。兼容系列：`>=1.0` 取主版本（`1.x`），`0.y`
+   取 `0.y`，`0.0.z` 取 `0.0.z`（即 `^` 的含义）。因此 `1.4` 与 `1.9` 不会同时出现，
+   而 `1.x` 与 `2.x` 可以共存，各自有自己的名义类型（§7.3：身份含包名/版本/目录）。
+   共存的前提是两条边用**不同的导入根**；程序范围的导入根表仍然只允许一个根名对应一个
+   包，否则 `E0606`（消息列出争用的两个版本）。
+3. 在所有解中偏好**已锁定**的版本，其余取**最高**的兼容版本；`yanked` 的版本只在锁
+   文件已经包含它时才可被选中（yank 不破坏已有构建，也不影响新解析）。
+4. 结果与索引的迭代顺序无关（确定性）；不可满足时给出推导树式的说明：哪个需求无法满足、
+   尝试过哪些候选及各自失败原因（连续相同失败折叠成区间）。
+5. 实现是带冲突导向回跳的回溯求解器（不是 PubGrub，因为一个需求可由多个系列的“槽”满足，
+   与“每包一个版本”的 PubGrub 项不兼容）。测试包括与穷举搜索的随机对照与回跳的复杂度
+   断言。
+
+registry 包的索引 `deps` 只记录 `package`、`req` 和（与默认导入根不同时）`import`。
+
 ### 7.5.2 锁文件
 
-`aevia.lock` 记录每个依赖的精确版本、源 URL、内容哈希和签名。构建 MUST
-使用锁文件；`aevia update` 更新。锁文件保证可复现构建；registry 包必须
-带内容哈希，yank 不删除内容。
+`aevia.lock` 记录每个依赖的精确版本、来源和摘要。构建 MUST 使用锁文件；`aevia
+update` 更新。锁文件保证可复现构建；registry 包必须带内容哈希，yank 不删除内容。
+
+格式（`version = 1`，字段与顺序固定，包按 `(source, import)` 排序，因此未变的解析产生
+逐字节相同的文件）：
+
+```toml
+[[package]]
+name = "apich/plot"          # registry 包：registry 身份 owner/name
+version = "2.1.3"
+import = "Plot"              # 导入根（每个别名一条，与 path 包一致）
+source = "registry+aevia"    # registry 的逻辑名，不是 URL：换镜像不改锁
+checksum = "sha256:…"        # 归档摘要，来自索引（签名覆盖它）
+
+[[package]]
+name = "dep"                 # path 包：[package] name
+version = "0.2.0"
+import = "Dep"
+source = "path+../dep"
+hash = "fnv1a64:…"           # 清单 + 源树 + 入口的摘要
+```
+
+registry 工作流：
+
+- 索引：`.aevia/registry/index/<owner>/<name>`（`$AEVIA_REGISTRY_DIR` 可共享）是
+  `GET /api/v1/index/{owner}/{name}` 的原文。解析只读这些文件；缺失时 `aevia
+  add/update/tree` 调用 `aevia-pkg index` 下载（`--offline` 禁止，并报告缺哪个包），
+  编译器本身从不联网。
+- 源码：`aevia fetch`（= `aevia-pkg vendor`）下载归档，校验摘要与 OpenPGP/SSH 签名后解包
+  到 `.aevia/registry/src/<owner>/<name>/<version>/`，并写入 `.aevia-pkg-checksum`。
+  构建 MUST 只读这些目录，且拒绝没有该标记或标记与索引摘要不符的目录（`E0607`），
+  也拒绝清单依赖与索引记录不一致的目录（`E0605`）。
+- `aevia update` 无参数时忽略锁取最新；`aevia update owner/name…` 只移动指定的包，其余
+  保持锁定。`--locked` 下任何变化都是错误。`aevia tree` 打印 path 与 registry 包的依赖树。
+- `aevia clean` 保留 `.aevia/registry`（不是构建产物）；`aevia clean --registry` 才删除。
 
 > **path 包实现（2026-11-05）**：模块根与锁文件从同一个已验证的包图生成。
 > 包节点以 canonical 目录去重，导入别名是图的边；同一包的每个别名都进入锁
 > 文件。当前仍保留程序范围内的传递依赖别名表：不同包争用同一导入根报
-> `E0606`，尚不支持不同包各自为同名依赖选择不同版本。
+> `E0606`。解析层允许同一包的不兼容系列共存（§7.5.1.2），但程序范围的导入根表仍要求
+> 一个根名只指向一个包，所以共存要求两条依赖边用不同的导入根；让每个包各自拥有自己的
+> 依赖名字空间（含 `Roots` 的按包查找）尚未实现。
 >
 > 锁文件路径相对于根包，依赖内容摘要覆盖 canonical 清单、`src/**/*.aev`
 > 和入口文件，因此改依赖的 `entry` 或依赖边也使 `--locked` 失效。源目录中
@@ -357,8 +440,8 @@ test "dimension rejection" =
 | `E0603` | 打开的名字冲突 |
 | `E0604` | 孤儿实例 |
 | `E0605` | 包清单错误 |
-| `E0606` | 依赖版本冲突 |
-| `E0607` | 找不到模块/包 |
+| `E0606` | 依赖版本冲突（需求不可满足、依赖环、导入根争用） |
+| `E0607` | 找不到模块/包（含：registry 索引未缓存、包未 `fetch` 或校验标记不符） |
 | `E0608` | 入口缺失或签名错误 |
 
 下一章给出标准库的签名。标准库是语言的一部分：单位、数学、线性代数、

@@ -339,6 +339,7 @@ fill     : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>
 linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>
 reshape<shape> : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>
 reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>
+refine_shape<shape> : Tensor<n, τ> -> Option<Tensor<shape, τ>>
 flatten  : Tensor<n, a> -> Tensor<1, a>
 at       : (Tensor<n, a>, Int) -> Tensor<n-1, a>     # 要求 n >= 1
 set      : (Tensor<n, a>, Tensor<1, Int>, a) -> Tensor<n, a>
@@ -362,6 +363,21 @@ std      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 参数构造器，应写固定参数的 lambda，例如 `fn (n) => zeros(n)`。`reshape<[n1, ..., nk]>(a)` 的目标形状
 显式给出；元素数在编译期（形状已知时）或运行时检查。`reshape_dyn(a,
 shape)` 用运行时形状向量，返回 `Result`。
+
+**形状分支：`refine_shape`。** `refine_shape<[3, ?]>(a)` 在运行时检查 `a` 的各
+extent 是否等于类型实参里写出的字面量（`?` 表示任意 extent），相符得
+`Some(b)`（`b : Tensor<[3, ?], τ>`），否则 `None`；秩在编译期检查（秩不符是 `E0302`）。
+因此"依形状分支"写成对 `Option` 的 `match`，每个分支里的 `b` 在**类型**中已
+带有具体 extent，后续的矩阵乘法、索引、`reshape` 都按它做静态检查：
+
+```
+match refine_shape<[3, 3]>(m) with
+| Some(sq) -> sq @ sq            # sq : Tensor<[3, 3], Float>，乘法维度静态已知
+| None -> m
+```
+
+extent 必须是字面量或 `?`：类型级变量在运行时没有值，`refine_shape<[n]>(a)` 是
+`E0304`（变量 extent 的细化只能由签名里的等式求解，不能靠运行时测试）。
 
 `@` 按秩分派：`A @ B`（2×2）、`A @ x`（2×1）、`x @ A`（1×2）、
 `x @ y`（1×1 点积）。`matmul` 只做 2×2；`matvec`/`vecmat`/`dot` 是显式
@@ -404,6 +420,10 @@ spsolve       : (Sparse<F, [n,n], Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
 cg            : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, Float, Int)
               -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool }
 type Precond = | Identity | Jacobi | BlockJacobi | Ilu0 | Ic0 | Auto
+gmres_with    : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, restart: Int, precond: Precond })
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
+bicgstab_with : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond })
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
 cg_with       : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond })
               -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
 contract      : (Sparse<F, shape, τ>, Sparse<G, shape, τ>, [Int], [Int]) -> Sparse<Coo, shape, τ>
@@ -411,6 +431,24 @@ map_nonzero   : ((Scalar<ρ,d>) -> Scalar<σ,e>, Sparse<F, shape, Scalar<ρ,d>>)
               -> Sparse<F, shape, Scalar<σ,e>>
 nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Scalar<ρ,d>)>
 ```
+
+**非对称系统：`gmres_with` 与 `bicgstab_with`。** `cg`/`cg_with` 要求对称正定；
+一般方阵（对流—扩散、非对称离散化）用 `gmres_with(A, b, { tol, maxiter, restart,
+precond })`（重启 GMRES(`restart`)，右预条件，残差范数单调不增，内存
+`O(restart·n)`）或 `bicgstab_with(A, b, { tol, maxiter, precond })`（BiCGSTAB，
+短递推、常数内存，残差历史可能不规则）。两者来自 RSSN 的 Krylov 内核，从零向量
+起步，返回与 `cg_with` 同形的记录（`x`、`iterations`、`residual`、`converged`、
+`precond`）；未达容差是 `converged = false` 而非错误，`restart = 0` 是 `E0802`。
+预条件子取 `Precond`，但对非对称矩阵 `Ic0` 与 `Auto` 都**改用** `Ilu0`（`Auto` 对
+`Bcsr` 先试块 ILU(0)）；分解失败退回 `Jacobi`，`precond` 字段如实报告用了哪一种。
+元素必须是 `Float`；精确元素用 `spsolve`。结果量纲是 `e/d`。直接法仍是
+`spsolve`（对称正定先试 Cholesky，否则 LU）。
+
+**并行与确定性。** `sparse @ dense`（向量或矩阵，含 `Bcsr` 的块内核）在乘加量不小
+于 2^17 时按行分块并行：块大小是常数（256 行，`Bcsr` 为一个块行），每个输出行
+由恰好一个工作项按列序累加，所以结果与线程数无关，且与顺序内核逐位相同。
+Krylov 迭代本身是顺序的（只有 `A @ x` 并行），因此 `cg_with`/`gmres_with`/
+`bicgstab_with` 的迭代序列也与线程数无关。
 
 **预条件共轭梯度与切片。** `cg_with(A, b, { tol, maxiter, precond })` 是带预条件子的
 `cg`（`cg` 本身不变）。`Precond` 是标准库变体（`import LinearAlgebra.Sparse { Precond,
@@ -557,8 +595,13 @@ Jacobi, cg_with }`）：`Identity`（无预条件子）、`Jacobi`（对角缩�
 > （`crates/aevia-core/tests/sparse_block.rs`；`@` 在 `f64` 类用块内核，rssn
 > 侧的块 Jacobi 与块 ILU(0) 经 `cg_with` 接到语言层。预条件 `cg_with`、
 > `spsolve` 的 Cholesky 优先路径与稀疏切片都已实现（`tests/sparse_followup.rs`）。
-> **剩余缺口**：类型里的 `shape` 只检查秩（细化的 `[m,n]` 在稀疏函数的
-> 签名里不做 Nat 求解，与目前的 `matmul` 一致）；稀疏值不能进入 RSSN 的项图。
+> **形状传播（2026-11 核对）**：`Sparse<F, [m,n], τ>` 的细化形状**会**被检查
+> 与传播（`crates/aevia-types/src/check/sparse.rs`）：`A @ B` 的内维、`A @ x`、
+> `A ± B`、`spsolve(A, b)`、`transpose`、`kron`（`[m*p, n*q]`）、`to_dense`/
+> `from_dense` 都对字面量与带 Nat 变量的 extent 做统一，不符是编译错误
+> （`tests/shape_refinement.rs`）。此前这里写的"只检查秩"已过时。
+> **剩余缺口**：稀疏值不能进入 RSSN 的项图；`gmres_with`/`bicgstab_with` 不接受
+> 精确元素；没有稀疏特征值/SVD。
 
 ## 8.5 Calculus
 
@@ -780,7 +823,7 @@ type AxisScale = | Linear | Log
 ## 8.9 ODE
 
 ```
-type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23
+type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
 type OdeOpts<s> = {
     rtol: Float[1],
     atol: Float[1],
@@ -825,6 +868,84 @@ RateOf<{ l1: τ1, ..., ln: τn }> = { l1: RateOf<τ1>, ..., ln: RateOf<τn> }
 Float[d]>` 按行主序展平。当前只支持 `Float` 标量/张量字段；含 `Int`/
 `Bool`/函数字段的状态报 `E0302`，把常量参数捕获在 `rhs` 闭包里。`Tensor<1,
 s>` 用 `Boxed` 存储；数值内核只看到扁平 `f64`，Aevia 负责装箱/拆箱。
+
+**8.9.0 解对象、稠密输出、多事件、高阶方程、边值问题**
+
+`odeint`/`solve_ivp` 只给离散输出和一个终止事件。需要在**任意时刻**取值、多个事件
+（带方向、可终止或不终止）、高阶方程或边值问题时用下面的入口；它们与
+`odeint_with` 共用 `OdeOpts<s>`、`RateOf<s>` 和展平契约，并与 §8.9.1 的 SDE 事件/
+稠密输出 API 同形（`{ g, terminal, direction }`、`{ index, t, y }`、`at`）。
+
+```
+type OdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],   # 变号即事件；必须返回无量纲数
+    terminal: Bool,                 # true：积分在该事件处停止
+    direction: Int,                 # -1 只认下降穿越，0 两个方向，1 只认上升穿越
+}
+type OdeHit<s> = { index: Int, t: Float[T], y: s }
+type OdeSolution<s> = {
+    t: Tensor<1, Float[T]>, y: Tensor<1, s>,        # 接受的步节点
+    at: (Float[T]) -> s,                            # 连续扩展：任意 t 处取值
+    events: Tensor<1, OdeHit<s>>,                   # 按时间排序的事件
+    nfev: Int, rejected: Int, method: String,
+}
+
+ode_solve : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), OdeOpts<s>, Tensor<1, OdeEvent<s>>)
+          -> OdeSolution<s>
+odeint_order : (((Float[T], y0, y1, ..., yk) -> RateOf^(k+1)<y0>), (y0, y1, ..., yk), Tensor<1, Float[T]>)
+          -> { t: Tensor<1, Float[T]>, y: Tensor<1, y0>, d: Tensor<1, (y0, y1, ..., yk)> }
+odeint_order_with : (rhs, (y0, y1, ..., yk), Tensor<1, Float[T]>, OdeOpts<y0>)
+          -> { t: Tensor<1, Float[T]>, y: Tensor<1, y0>, d: Tensor<1, (y0, y1, ..., yk)> }
+ode_bvp : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), ((s, s) -> Tensor<1, Float[d]>), OdeOpts<s>)
+          -> OdeSolution<s>
+```
+
+**连续输出。** `ode_solve(rhs, y0, (t0, t1), opts, events)` 在整个区间上积分
+（`t1 ≥ t0`；反向积分不支持）并保留方法自带的连续扩展，`sol.at(t)` 在
+`[t0, t_end]` 内任意时刻取值（区间外是 `E0802`，量纲不是 `T` 是 `E0401`）。`Dopri5`
+用 RSSN 的 4 阶连续扩展；`Radau`/`Bdf`/`Rosenbrock23` 用各自的配置多项式/向后差分
+插值；`Rk4` 没有级数据，用节点上的三次 Hermite 插值（插值误差 `O(h^4)`，随步长
+四阶收敛）。`Rk4` 的 `steps` 在这里是**整个区间的总步数**（`odeint_with` 里是每个
+输出区间的子步数）。`at` 是一个函数值（不是数据），所以含 `at` 的解不能跨线程
+返回；要在 `par_map` 里返回，只取 `t`/`y`。
+
+**事件。** `events` 是 `OdeEvent` 的列表，可以为空（`[]`）。每个事件的 `g` 在接受的
+步之间变号（`g0 < 0 ≤ g1` 为上升，`g0 > 0 ≥ g1` 为下降，`direction` 过滤）时由根
+查找在连续扩展上定位（`Rk4`：重积分的二分），命中记入 `events`（`index` 是列表下
+标）；`terminal = true` 的事件让积分在该点结束，`t`/`y` 的最后一个节点就是命中点，
+`at` 的有效区间随之截断。同一步内的多个命中按时间排序，终止事件之后的命中丢弃。
+`g` 返回有量纲的值是 `E0302`；方向取值不是 -1/0/1 是 `E0802`。
+
+**刚性求解器选择。** `AutoSwitch` 先用 `Dopri5`，且只给它 20000 次尝试步；预算耗尽
+（刚性问题受稳定性限制，步数远超精度所需）就改用 `Radau` 重新积分整个区间，
+`sol.method` 报告最终用的方法（`"Dopri5"` 或 `"Radau"`）。这是**按步数预算**判定，
+不是特征值估计：中等刚性（例如需要几万步）的问题会白白多跑一遍显式方法；
+明知刚性时直接选 `Radau`/`Bdf`/`Rosenbrock23`。`AutoSwitch` 也用于 `odeint_with`、
+`solve_ivp` 和事件积分（同样的规则）。
+
+**高阶方程。** `odeint_order(f, (y0, y1, …, y_{n-1}), times)` 积分
+`y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)`（`n` 是 `f` 的参数个数减一，`n ≥ 1`），内部化成
+堆叠状态 `z = (y, y′, …, y⁽ⁿ⁻¹⁾)` 上的一阶系统，除了 `y⁽ⁿ⁾ = f` 之外每个分量
+都是平凡的 `zₖ′ = zₖ₊₁`。**量纲逐阶追踪**：第 `k` 阶导数的类型是 `RateOf` 作用 `k` 次，
+`y : Float[L]` 时 `y′ : Float[L/T]`、`y″ : Float[L/T^2]`，`f` 必须返回 `L/T^n`
+（检查期 `E0401`/`E0302`；运行期再核对初值每一项的量纲与结构，量纲不符 `E0401`）。
+`y` 可以是标量、张量或记录，各阶导数结构相同。返回 `d` 是各阶导数的元组历史，
+`y` 是第 0 阶。`odeint_order_with` 多一个 `OdeOpts<y0>`（方法、容差；`events` 必须为
+`None`，要事件请手工化阶后用 `ode_solve`）。例（弹簧 `x″ = -(k/m) x`）：
+
+```
+let sol = odeint_order(fn (_t, x, v) => -(k / m) * x, (1.0 m, 0.0 m/s), times)
+# x : Float[L]，v : Float[L/T]，返回值 Float[L/T^2]
+```
+
+**边值问题（单步打靶）。** `ode_bvp(rhs, guess, (t0, t1), bc, opts)` 求解
+`y′ = rhs(t, y)`、`bc(y(t0), y(t1)) = 0`：`bc` 返回与状态分量个数相同的残差张量。
+算法是对初始状态的牛顿迭代（前向差分 Jacobian，每个未知量一次积分；带回溯线搜索），
+`guess` 是牛顿的起点，收敛判据 `‖r‖∞ ≤ 1e-9 (1 + ‖y0‖∞)`，最多 60 次迭代；返回
+最后一次积分的 `OdeSolution`（所以有 `at`）。二阶边值问题先用 `odeint_order` 的化阶
+思路写成状态 `(y, y′)`。残差个数不符是 `E0802`，雅可比奇异或不收敛是
+`NotConverged`。**限制**：这是单步打靶，只适用于 `y(t1)` 对 `y(t0)` 的灵敏度不爆炸的
+问题；指数不稳定（长区间、刚性）的边值问题需要多重打靶或配置法，此处**没有**提供。
 
 导入的 `odeint`/`odeint_with`/`solve_ivp`（以及 §8.9.1 的 `sdeint_*`，例如
 `import Ode { odeint }`）**保持类型函数语义**：`RateOf<s>`/`DiffusionOf<s>`
@@ -894,7 +1015,50 @@ sde_order        : SdeMethod -> { strong: Float[1], weak: Float[1] }
 sde_order_with   : (SdeMethod, SdeStructure) -> { strong: Float[1], weak: Float[1] }
                    # 按结构给阶：HeunStratonovich 在不可交换噪声上只有强 1/2
 sde_ensemble_seed: (Int, Int) -> Int     # (seed, index)，纯函数
+
+type SdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],  # 变号即事件，无量纲
+    terminal: Bool,                # true：路径在第一个这样的事件处截断
+    direction: Int,                # -1 下降，0 两个方向，1 上升
+}
+type SdeHit<s> = { index: Int, t: Float[T], y: s }
+
+sde_at       : (SdePath<s>, Float[T]) -> s
+sde_resample : (SdePath<s>, Tensor<1, Float[T]>) -> Tensor<1, s>
+sde_interp   : SdePath<s> -> ((Float[T]) -> s)
+sde_events   : (SdePath<s>, Tensor<1, SdeEvent<s>>) -> { path: SdePath<s>, hits: Tensor<1, SdeHit<s>> }
+sde_ensemble_diag    : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> DiffusionOf<s>), s, SdeOpts<T>, Int)
+                       -> Tensor<1, Result<SdePath<s>, SdeError>>
+sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralDiffusionOf<s>), s, SdeOpts<T>, Int)
+                       -> Tensor<1, Result<SdePath<s>, SdeError>>
 ```
+
+**连续输出（`saveat`、可在任意 `t` 调用的路径）。** 数值 SDE 路径只在节点上已知。
+`sde_at(path, t)` 取 `t` 处的状态，`sde_resample(path, ts)` 是 `saveat`（逐个时刻取值，
+结果 `Tensor<1, s>`），`sde_interp(path)` 返回可调用的 `Float[T] -> s`。插值是节点之间的
+**线性弦**：连续、确定、节点处精确，精度与格式本身同阶（强阶至多 1，Brownian 路径在
+节点间本来只有 Hölder-1/2）；它**不**补回步内的 Brownian 桥方差，所以节点之间的统计量
+比真过程低 `O(dt)`，需要精确的节点分布统计时直接用 `y`。区间外是 `E0802`，`t` 的量纲
+不是路径的时间量纲是 `E0401`。路径本身仍是**纯数据**（没有闭包字段），因此可以跨线程
+返回；可调用对象由 `sde_interp` 单独构造。
+
+**事件。** `sde_events(path, events)` 在离散路径上检测 `g` 的符号变化（节点上
+`g0 < 0 ≤ g1` 上升、`g0 > 0 ≥ g1` 下降，`direction` 过滤；与 ODE 事件同约定），
+穿越时刻是弦上 `g` 的根（二分），状态是弦上的插值。返回 `{ path, hits }`：`hits` 按时间
+排序；若有 `terminal` 事件，`path` 在第一个终止命中处截断（命中点作为最后一个节点，
+`steps` 随之更新），其后命中丢弃，否则 `path` 原样返回。因为只观察离散路径，两个节点
+之间"穿越后又返回"的连续过程事件是看不见的（任何离散格式都如此）。终止事件是**事后**
+截断：同一随机流上与"在事件处停止"得到相同的路径，但不会节省被丢弃部分的计算。
+`g` 返回有量纲的值是 `E0302`，`direction` 越界是 `E0802`。
+
+**集合（并行、确定）。** `sde_ensemble_diag/general(drift, diffusion, y0, opts, n)` 积分 `n`
+条路径，第 `i` 条使用种子 `sde_ensemble_seed(seed, i)`，其余选项相同；返回长度 `n`
+的 `Tensor<1, Result<SdePath<s>, SdeError>>`（`n ≤ 0` 是 `E0802`；个别成员的失败是该
+成员的 `Err`）。成员 `i` 只依赖 `(seed, i)`，所以**结果与执行顺序、线程数无关**。成员
+经 §9.7.2 的无共享副本并行执行（成员数不少于 32、drift/diffusion 可跨线程、未
+`--jobs 1` 时），否则在本线程顺序执行，两条路径给出逐位相同的值（回退由
+`AEVIA_PARALLEL_TRACE=1` 报告）。等价的手写形式是
+`par_tabulate(n, fn i => sdeint_diag(drift, diffusion, y0, <opts 的种子换成 sde_ensemble_seed(seed, i)>))`。
 
 **分派规则**：**方法名选择方案族和积分约定，结构选择可交换还是不可交换
 内核**。因此每个方法名在每种结构上都可用，不再有 `E1001`：
@@ -958,8 +1122,8 @@ Brownian bridge 拒绝/重采（内核）。**所有方法都支持自适应**�
 构建内可复现，不承诺跨平台逐位相同。非交换定步长与所有自适应路径需要内核
 自己的 xoshiro 流（bridge 拒绝与 Lévy 面积在求解过程中采样），由 `seed`
 播种，同样只承诺同构建可复现。`sde_ensemble_seed` 只依赖 `(seed, index)`，
-所以集合成员与执行顺序/线程数无关；解释器闭包是 `!Send`，v1 的集合按顺序
-运行。
+所以集合成员与执行顺序/线程数无关；`sde_ensemble_diag/general` 在语言层并行运行
+成员（见下）。
 
 **错误表**（不新增 Appendix-B 码）：`E0802` 形状/参数（含 `General` 的
 `m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；
@@ -969,9 +1133,10 @@ Brownian bridge 拒绝/重采（内核）。**所有方法都支持自适应**�
 三个缺口已关闭。`SdeError` 是不透明错误类型（像 `SimError`），语言层
 不暴露构造器。
 
-**v1 明确不做**：events/根查找、dense output、用户自定义噪声结构、显式非均匀网格（定步长内核假设均匀步长，报 `E0802`；需要变
+**v1 明确不做**：用户自定义噪声结构、显式非均匀网格（定步长内核假设均匀步长，报 `E0802`；需要变
 步长时用 `Adaptive`）、求解器 manifest 算子（求解器需要回调，无法越过
-manifest ABI）。
+manifest ABI）、Brownian 桥稠密输出（`sde_at` 是线性弦，见上）、在积分**过程中**提前停止
+的终止事件（`sde_events` 是事后截断）。事件与稠密输出已在上面实现（原先此处列为不做）。
 
 > **实现状态（2026-11-08，SDE 非交换/Stratonovich 补全轮）**：运行时与
 > `aevia-std` 的 SDE 求解器已落地，下面的组合也已用源码程序实际跑通（见
@@ -1004,9 +1169,8 @@ manifest ABI）。
 >   `rng(seed)` 相同的语言 LCG 流；非交换定步长与自适应路径用内核 xoshiro
 >   流，由 `seed` 播种；只承诺同构建可复现，不承诺跨平台逐位一致；
 > - **确定性**：`seed` 必填；`sde_ensemble_seed(seed,index)` 是纯函数，成员
->   与执行顺序/线程数无关。**语言层没有 ensemble runner**：只有 seed 助手是
->   入口；`aevia-std` 内部的顺序 ensemble 尚未接线，所以不要从“集合按顺序
->   运行”推断存在可调用的集合 API；
+>   与执行顺序/线程数无关。**ensemble runner 已接线**（`sde_ensemble_diag`/`sde_ensemble_general`，经并行副本，
+>   见上）；
 > - **入口与类型**：`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/
 >   `sde_ensemble_seed` 是 Prelude 内建，并由 `Sde` 模块 re-export；
 >   `Sde` 模块还声明本节的 `SdeMethod`/`SdeStructure`/`SdeFixedOpts`/

@@ -21,6 +21,7 @@ aevia-syntax.workspace = true
 aevia-types.workspace = true
 aevia-ir.workspace = true
 aevia-core.workspace = true
+aevia-resolve.workspace = true
 aevia-rssn.workspace = true
 aevia-fmt.workspace = true
 aevia-doc.workspace = true

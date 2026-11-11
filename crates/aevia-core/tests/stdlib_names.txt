@@ -45,6 +45,7 @@ bessel_jn
 bessel_y0
 bessel_yn
 beta
+bicgstab_with
 binomial
 block_size
 by_cases
@@ -138,6 +139,7 @@ from_json
 from_value
 gamma
 gcd
+gmres_with
 grad
 grad_f
 heatmap
@@ -214,7 +216,11 @@ not
 nsolve
 nsolve_f
 numeric_deriv
+ode_bvp
+ode_solve
 odeint
+odeint_order
+odeint_order_with
 odeint_with
 on
 ones
@@ -250,6 +256,7 @@ read_csv
 read_csv_dyn
 read_json
 read_npy
+refine_shape
 rem
 replace
 repr
@@ -267,9 +274,15 @@ save
 scatter
 scatter_with
 schema
+sde_at
+sde_ensemble_diag
+sde_ensemble_general
 sde_ensemble_seed
+sde_events
+sde_interp
 sde_order
 sde_order_with
+sde_resample
 sdeint_diag
 sdeint_general
 select

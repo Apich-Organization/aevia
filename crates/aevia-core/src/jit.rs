@@ -344,6 +344,26 @@ fn compile(
         }
     }
     // Start again: the speculative step lowering can have emitted operations.
+    let (insts, result) = lower_scalar(function, literals, parameters, expected_result)?;
+    let program = Program::compile(insts, function.params.len(), vec![result.reg])?;
+    Some(Compiled::Scalar {
+        program,
+        result: result.kind,
+    })
+}
+
+/// Straight-line SSA for a pure function (no tail loop): the instruction
+/// sequence and its result operand. Shared by the scalar machine-code path and
+/// by [`map_floats`].
+fn lower_scalar(
+    function: &Function,
+    literals: &[(Span, u64)],
+    parameters: &[Kind],
+    expected_result: Kind,
+) -> Option<(Vec<Inst>, Operand)> {
+    if !function.jit || !function.captures.is_empty() || parameters.len() != function.params.len() {
+        return None;
+    }
     let mut builder = Builder {
         insts: Vec::new(),
         literals,
@@ -360,11 +380,34 @@ fn compile(
     if result.kind != expected_result {
         return None;
     }
-    let program = Program::compile(builder.insts, function.params.len(), vec![result.reg])?;
-    Some(Compiled::Scalar {
-        program,
-        result: result.kind,
-    })
+    Some((builder.insts, result))
+}
+
+/// Applies a pure `Float -> ... -> Float` function to whole columns on an RSSN
+/// device (`spec/10-backend.md` §10.6.5): the batch seam behind
+/// `Device.cpu_parallel`.
+///
+/// `columns[i][row]` is parameter `i` of row `row`. Returns `None` when the
+/// function does not lower (the same conditions as `@jit`: no captures, only
+/// pure `Float` arithmetic, comparisons and branches) or the device fails; the
+/// caller then maps the interpreter over the rows, which gives the same
+/// values on a CPU device. A device with `f32` arithmetic returns rounded
+/// values, so a caller that promises bit-identical results must restrict
+/// itself to the CPU devices.
+///
+/// No builtin calls this yet: registering `Device.map` needs entries in the
+/// type and builtin tables, which the stdlib generator owns (see the spec).
+#[allow(dead_code)]
+pub(crate) fn map_floats(
+    function: &Function,
+    literals: &[(Span, u64)],
+    columns: &[&[f64]],
+    device: &dyn aevia_rssn::device::Device,
+) -> Option<Vec<f64>> {
+    let kinds = vec![Kind::Float; function.params.len()];
+    let (insts, result) = lower_scalar(function, literals, &kinds, Kind::Float)?;
+    let program = aevia_rssn::device::BatchProgram::new(insts, kinds.len(), vec![result.reg])?;
+    program.run(device, columns)?.into_iter().next()
 }
 
 // The weak reference guards against pointer reuse. All live and dead entries
@@ -593,6 +636,31 @@ mod tests {
             nslots: 3,
             span,
         })
+    }
+
+    #[test]
+    fn map_floats_runs_a_branching_function_on_the_cpu_devices() {
+        let f = function(
+            "@jit
+fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
+",
+        );
+        let xs: Vec<f64> = (0..5000).map(|i| f64::from(i) * 0.01 - 20.0).collect();
+        let none: &[(Span, u64)] = &[];
+        for selector in [
+            aevia_rssn::device::Selector::Cpu,
+            aevia_rssn::device::Selector::CpuParallel,
+        ] {
+            let device = aevia_rssn::device::resolve(selector).unwrap();
+            let out = map_floats(&f, none, &[&xs], &*device).unwrap();
+            for (x, y) in xs.iter().zip(&out) {
+                let want = if *x > 0.0 { x * 2.0 } else { 0.0 - x };
+                assert_eq!(y.to_bits(), want.to_bits());
+            }
+        }
+        // Wrong arity of columns: refused, caller falls back to the interpreter.
+        let device = aevia_rssn::device::resolve(aevia_rssn::device::Selector::Cpu).unwrap();
+        assert!(map_floats(&f, none, &[], &*device).is_none());
     }
 
     #[test]

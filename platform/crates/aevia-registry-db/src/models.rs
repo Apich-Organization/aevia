@@ -239,6 +239,19 @@ pub struct PackageSummary {
     pub has_docs: bool,
 }
 
+/// A published package that depends on another: one row per dependent.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct Dependent {
+    /// The dependent's owner handle.
+    pub owner_handle: String,
+    /// The dependent's name, as its author spells it.
+    pub name: String,
+    /// The newest non-yanked version of it that depends on the package.
+    pub version: String,
+    /// The requirement that version states.
+    pub req: String,
+}
+
 /// The columns a new version writes.
 pub struct NewVersion<'a> {
     /// The package.

@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 aevia-registry-core.workspace = true
+aevia-resolve.workspace = true
 chrono.workspace = true
 clap.workspace = true
 reqwest.workspace = true

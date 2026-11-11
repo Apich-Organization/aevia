@@ -27,7 +27,7 @@ so a link can name its language.
 | `crates/aevia-registry-docs` | Turns a published package into the HTML pages under `/docs`, using the language's own `aevia-doc` crate. |
 | `crates/aevia-registry-web` | The Leptos pages. Server-rendered to `String`; no hydration, no client-side router. |
 | `crates/aevia-registry-server` | The binary: routes, OAuth, publish verification, archive storage, background documentation builds. |
-| `crates/aevia-pkg` | The client: `login`, `publish`, `yank`, `search`, `info`, `add`, `verify`, `key`, `status`. `aevia pkg …` in the language toolchain forwards to it. |
+| `crates/aevia-pkg` | The client: `login`, `publish`, `yank`, `search`, `info`, `verify`, `key`, `status`, and the dependency commands `add owner/name@REQ`, `index`, `update`, `vendor` (`fetch`), `tree`, `lock [--check]`. `aevia pkg …` in the language toolchain forwards to it; `aevia add/update/fetch/tree` call it to fill `.aevia/registry`. |
 | `infra/` | Debian 13 container images, a Podman-compose stack, Quadlet units, a Caddyfile and a deploy script. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [security model](docs/SECURITY.md), [deployment](docs/DEPLOY.md). |
 
@@ -105,6 +105,32 @@ exact bytes with `gpg --detach-sign --armor` or `ssh-keygen -Y sign`, and the
 server verifies it before anything is written. A captured signature names one
 archive and dies in five minutes, so replaying it publishes nothing — the
 registry spends the nonce and refuses the second attempt.
+
+## Dependencies
+
+A package depends on registry packages by version requirement
+(`Units = "^1.2"`, `Plot = { package = "apich/plot", version = "~2.1" }`; the
+syntax and the resolution rules are `spec/07-modules.md` §7.5). The pieces:
+
+| Piece | Where |
+|---|---|
+| versions, requirements, the resolver, the sparse-index reader | `../crates/aevia-resolve` (pure; shared with the toolchain) |
+| the index the registry serves, `deps` with `package`/`req`/`import` | `GET /api/v1/index/{owner}/{name}` |
+| reverse dependencies, server-side resolution | `/api/v1/crates/{owner}/{name}/dependents`, `POST /api/v1/resolve` |
+| the local cache both `aevia` and `aevia-pkg` use | `.aevia/registry/{index,src}` (or `$AEVIA_REGISTRY_DIR`, `--cache`) |
+
+```console
+aevia add apich/plot@~2.1       # resolves, writes aevia.toml + aevia.lock, vendors
+aevia tree                      # path and registry packages
+aevia update [apich/units]      # newest compatible versions (all, or only these)
+aevia fetch                     # download + verify what aevia.lock names
+aevia-pkg lock --check          # is aevia.lock what the registry index resolves to?
+```
+
+`aevia` itself never touches the network: it resolves from the cached index
+files and builds from the unpacked sources, refusing a source directory whose
+`.aevia-pkg-checksum` does not carry the checksum the index records.
+`--offline` makes a missing file an error that names it.
 
 ## The three surfaces
 

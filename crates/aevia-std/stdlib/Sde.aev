@@ -39,9 +39,23 @@ type SdeAdaptiveOpts<T> = {
 
 type SdeOpts<T> = | Fixed(SdeFixedOpts<T>) | Adaptive(SdeAdaptiveOpts<T>)
 
+type SdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],
+    terminal: Bool,
+    direction: Int,
+}
+
+type SdeHit<s> = { index: Int, t: Float[T], y: s }
+
+let sde_at = sde_at
+let sde_ensemble_diag = sde_ensemble_diag
+let sde_ensemble_general = sde_ensemble_general
 let sde_ensemble_seed = sde_ensemble_seed
+let sde_events = sde_events
+let sde_interp = sde_interp
 let sde_order = sde_order
 let sde_order_with = sde_order_with
+let sde_resample = sde_resample
 let sdeint_diag = sdeint_diag
 let sdeint_general = sdeint_general
 let wiener = wiener

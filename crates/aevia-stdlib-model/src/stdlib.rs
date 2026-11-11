@@ -382,7 +382,12 @@ fn type_declarations(
     source: &str,
 ) -> Vec<String> {
     let (section, wanted): (&str, &[&str]) = match path {
-        | "Ode" => ("8.9", &["OdeMethod", "OdeOpts"]),
+        | "Ode" => {
+            (
+                "8.9",
+                &["OdeMethod", "OdeOpts", "OdeEvent", "OdeHit", "OdeSolution"],
+            )
+        },
         // §8.4.1: the preconditioner of `cg_with`.
         | "LinearAlgebra/Sparse" => ("8.4.1", &["Precond"]),
         // §8.7.1: the nominal distribution type and its parameter records,
@@ -414,6 +419,8 @@ fn type_declarations(
                     "SdeFixedOpts",
                     "SdeAdaptiveOpts",
                     "SdeOpts",
+                    "SdeEvent",
+                    "SdeHit",
                 ],
             )
         },

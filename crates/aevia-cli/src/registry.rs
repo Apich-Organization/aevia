@@ -34,6 +34,34 @@ const BINARY: &str = if cfg!(windows) {
     "aevia-pkg"
 };
 
+/// Runs `aevia-pkg` with `args` and reports whether it succeeded; the
+/// dependency commands (`add`, `update`, `fetch`) use this to download indexes
+/// and verified sources into `.aevia/registry` while keeping their own output.
+///
+/// # Errors
+///
+/// A message when the binary cannot be found or run, or exits unsuccessfully.
+pub fn invoke(args: &[String]) -> Result<(), String> {
+    let Some(binary) = locate() else {
+        return Err(format!(
+            "cannot find `{BINARY}` (set `AEVIA_PKG`, put it on `PATH`, or install it with \
+             `cargo install --path platform/crates/aevia-pkg`); it downloads and verifies \
+             registry packages"
+        ));
+    };
+    match Command::new(&binary).args(args).status() {
+        | Ok(status) if status.success() => Ok(()),
+        | Ok(status) => {
+            Err(format!(
+                "`{} {}` failed ({status})",
+                binary.display(),
+                args.join(" ")
+            ))
+        },
+        | Err(error) => Err(format!("cannot run `{}`: {error}", binary.display())),
+    }
+}
+
 /// Runs `aevia-pkg` with `args`.
 pub fn run(args: &[String]) -> ExitCode {
     let Some(binary) = locate() else {

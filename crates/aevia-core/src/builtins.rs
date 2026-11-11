@@ -176,11 +176,53 @@ pub fn call_typed(
                 result, &tensor,
             )))
         },
+        // `refine_shape<[3, ?]>(a)`: `Some(a)` when every stated extent
+        // matches, `None` otherwise. The rank was checked statically.
+        | "refine_shape" => {
+            let Some(extents) = types.first().and_then(refine_extents) else {
+                return Err(EvalError::new(
+                    "E0310",
+                    "`refine_shape` needs a concrete shape, as in `refine_shape<[3, ?]>(a)`",
+                )
+                .at(span));
+            };
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let matches = tensor.shape.len() == extents.len()
+                && tensor
+                    .shape
+                    .iter()
+                    .zip(&extents)
+                    .all(|(actual, wanted)| wanted.is_none_or(|wanted| wanted == *actual));
+            if matches {
+                Ok(some(Value::Tensor(tensor)))
+            } else {
+                Ok(make_variant(adt::OPTION_ID, 0, "None", Vec::new()))
+            }
+        },
         | "from_dense" | "convert" | "speye" | "spdiag" => {
             crate::sparse::call_typed(interp, name, types, &args, span)
         },
         | _ => call(interp, name, args, span),
     }
+}
+
+/// The extents of a `refine_shape` target; `None` entries are `?` (any extent).
+fn refine_extents(ty: &Ty) -> Option<Vec<Option<usize>>> {
+    let ShapeAst::Refined(items) = (match &ty.kind {
+        | TyKind::ShapeArg(shape) | TyKind::Tensor { shape, .. } => shape,
+        | _ => return None,
+    }) else {
+        return None;
+    };
+    items
+        .iter()
+        .map(|item| {
+            match item {
+                | ShapeItem::Known(nat) => nat_value(nat).map(Some),
+                | ShapeItem::Unknown => Some(None),
+            }
+        })
+        .collect()
 }
 
 /// The extents a shape type argument states.
@@ -2929,7 +2971,7 @@ pub fn call(
         // `reshape`/`zeros_of`/`ones_of` read their shape from the type
         // argument (`call_typed`). Reaching this arm means the call was
         // written without one, and the runtime has no shape to build.
-        | "reshape" | "zeros_of" | "ones_of" => {
+        | "reshape" | "zeros_of" | "ones_of" | "refine_shape" => {
             Err(EvalError::new(
                 "E0310",
                 format!("`{name}` needs its shape type argument, as in `{name}<[3, 2]>(…)`"),
@@ -3819,9 +3861,29 @@ pub fn call(
             ]))
         },
 
+        // ----- §8.9 dense output, events, higher order, BVP ----------------
+        | "ode_solve" => ode_solve_call(interp, &args, span),
+        | "ode_bvp" => ode_bvp_call(interp, &args, span),
+        | "odeint_order" | "odeint_order_with" => odeint_order_call(interp, name, &args, span),
+
         // ----- §8.9.1 stochastic differential equations -------------------
         | "wiener" | "sde_order" | "sde_order_with" | "sde_ensemble_seed" | "sdeint_diag"
         | "sdeint_general" => sde_call(interp, name, &args, span),
+        | "sde_at" | "sde_resample" | "sde_interp" | "sde_events" => {
+            sde_path_call(interp, name, &args, span)
+        },
+        | "sde_ensemble_diag" | "sde_ensemble_general" => {
+            sde_ensemble_call(interp, name, &args, span)
+        },
+        // One ensemble member; only reached through `sde_ensemble_*` (and a
+        // worker replica applying the partially applied builtin).
+        | "sde_member" => {
+            let (Some(Value::Str(base)), Some(index)) = (args.first(), args.get(5)) else {
+                return Err(EvalError::new("E0302", "`sde_member` is internal").at(span));
+            };
+            let index = index_value(index, span)?;
+            sde_integrate(interp, base, &args[1..5], Some(index), span)
+        },
 
         // ----- §8.10 PDE --------------------------------------------------
         | "solve_poisson" => {
@@ -6589,7 +6651,7 @@ fn complex_values(tensor: &TensorData) -> Result<Vec<aevia_std::Complex>, EvalEr
 }
 
 /// The shape of an ODE state, so that a flat `Vec<f64>` can be rebuilt (§8.9).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum StateShape {
     /// A scalar with its dimension.
     Scalar(Dim),
@@ -6754,6 +6816,886 @@ fn run_ode(
         return Err(error);
     }
     solution.map_err(|error| numeric_error(name, error, span))
+}
+
+// ----- §8.9 solutions: dense output, events, higher order, BVP -------------
+
+/// One `OdeEvent` / `SdeEvent` record: `{ g, terminal, direction }`.
+#[derive(Clone)]
+struct ParsedEvent {
+    g: Value,
+    terminal: bool,
+    direction: i8,
+}
+
+/// Reads the event list of `ode_solve` / `sde_events`.
+fn parse_events(
+    value: Option<&Value>,
+    name: &str,
+    span: Span,
+) -> Result<Vec<ParsedEvent>, EvalError> {
+    let Some(Value::Tensor(list)) = value else {
+        return Err(EvalError::new(
+            "E0302",
+            format!("`{name}` expects a tensor of event records `{{ g, terminal, direction }}`"),
+        )
+        .at(span));
+    };
+    let mut events = Vec::new();
+    for element in list.elements() {
+        let Value::Record(record) = &element else {
+            return Err(EvalError::new(
+                "E0302",
+                format!("`{name}`: every event is a record `{{ g, terminal, direction }}`"),
+            )
+            .at(span));
+        };
+        let g = record.fields.get("g").cloned().ok_or_else(|| {
+            EvalError::new("E0302", format!("`{name}`: an event needs a function `g`")).at(span)
+        })?;
+        let terminal = match record.fields.get("terminal") {
+            | Some(Value::Bool(flag)) => *flag,
+            | _ => {
+                return Err(EvalError::new(
+                    "E0302",
+                    format!("`{name}`: an event needs a `Bool` field `terminal`"),
+                )
+                .at(span));
+            },
+        };
+        let direction = match record.fields.get("direction").and_then(Value::as_f64) {
+            | Some(value) if value == -1.0 || value == 0.0 || value == 1.0 => value as i8,
+            | _ => {
+                return Err(EvalError::new(
+                    "E0802",
+                    format!("`{name}`: an event's `direction` is -1 (falling), 0 or 1 (rising)"),
+                )
+                .at(span));
+            },
+        };
+        events.push(ParsedEvent {
+            g,
+            terminal,
+            direction,
+        });
+    }
+    Ok(events)
+}
+
+/// Applies an event function `g(t, y)`; the answer must be a dimensionless
+/// number. A failure is recorded once and answered with `NaN`.
+fn event_value(
+    interp: &mut Interp,
+    event: &Value,
+    shape: &StateShape,
+    time_dim: &Dim,
+    t: f64,
+    state: &[f64],
+    failure: &mut Option<EvalError>,
+    span: Span,
+) -> f64 {
+    let args = vec![
+        Value::Num(NumVal::float(t, time_dim.clone())),
+        rebuild_state(shape, state),
+    ];
+    match interp.apply(event.clone(), args, span) {
+        | Ok(value) => {
+            match value.as_f64() {
+                | Some(number) if crate::value::value_dim(&value) == Dim::one() => number,
+                | _ => {
+                    if failure.is_none() {
+                        *failure = Some(
+                            EvalError::new("E0302", "an event must return a dimensionless number")
+                                .at(span),
+                        );
+                    }
+                    f64::NAN
+                },
+            }
+        },
+        | Err(error) => {
+            if failure.is_none() {
+                *failure = Some(error);
+            }
+            f64::NAN
+        },
+    }
+}
+
+/// The `(t0, t1)` interval of `solve_ivp`-style calls.
+fn ode_interval(
+    value: Option<&Value>,
+    name: &str,
+    span: Span,
+) -> Result<(f64, f64, Dim), EvalError> {
+    let Some(Value::Record(interval)) = value else {
+        return Err(
+            EvalError::new("E0302", format!("`{name}` expects a `(t0, t1)` pair")).at(span),
+        );
+    };
+    let start = interval.fields.get("0").and_then(Value::as_f64);
+    let end = interval.fields.get("1").and_then(Value::as_f64);
+    let (Some(start), Some(end)) = (start, end) else {
+        return Err(
+            EvalError::new("E0302", format!("`{name}` expects a `(t0, t1)` pair")).at(span),
+        );
+    };
+    let time_dim = interval
+        .fields
+        .get("0")
+        .map_or_else(Dim::one, crate::value::value_dim);
+    Ok((start, end, time_dim))
+}
+
+/// The record `ode_solve` and `ode_bvp` answer with: the accepted nodes, the
+/// callable continuous extension `at`, the located events and statistics.
+fn ode_solution_value(
+    solution: aevia_std::ode::Solution,
+    shape: &StateShape,
+    time_dim: &Dim,
+    state_dim: Dim,
+) -> Value {
+    let solution = Rc::new(solution);
+    let len = solution.t.len();
+    let states: Vec<Value> = solution
+        .y
+        .iter()
+        .map(|state| rebuild_state(shape, state))
+        .collect();
+    let hits: Vec<Value> = solution
+        .hits
+        .iter()
+        .map(|hit| {
+            record_of(vec![
+                ("index", Value::int(i64::try_from(hit.index).unwrap_or(0))),
+                ("t", Value::Num(NumVal::float(hit.t, time_dim.clone()))),
+                ("y", rebuild_state(shape, &hit.y)),
+            ])
+        })
+        .collect();
+    let hit_count = hits.len();
+    let at = {
+        let solution = Rc::clone(&solution);
+        let shape = shape.clone();
+        let time_dim = time_dim.clone();
+        Value::Native(Rc::new(NativeFn(Box::new(move |_interp, args, span| {
+            let Some(Value::Num(time)) = args.first() else {
+                return Err(EvalError::new("E0302", "the solution's `at` takes a time").at(span));
+            };
+            if time.dim != time_dim {
+                return Err(EvalError::new(
+                    "E0401",
+                    "the time given to `at` must have the solution's time dimension",
+                )
+                .at(span));
+            }
+            let t = time.to_f64().unwrap_or(f64::NAN);
+            match solution.eval(t) {
+                | Some(state) => Ok(rebuild_state(&shape, &state)),
+                | None => {
+                    let (lo, hi) = solution.span();
+                    Err(EvalError::new(
+                        "E0802",
+                        format!("`at({t})` lies outside the solution's span [{lo}, {hi}]"),
+                    )
+                    .at(span))
+                },
+            }
+        }))))
+    };
+    record_of(vec![
+        (
+            "t",
+            float_tensor(vec![len], solution.t.clone(), time_dim.clone()),
+        ),
+        ("y", build_tensor(states, vec![len], state_dim)),
+        ("at", at),
+        ("events", build_tensor(hits, vec![hit_count], Dim::one())),
+        (
+            "nfev",
+            Value::int(i64::try_from(solution.nfev).unwrap_or(0)),
+        ),
+        (
+            "rejected",
+            Value::int(i64::try_from(solution.rejected).unwrap_or(0)),
+        ),
+        (
+            "method",
+            Value::string(match solution.method {
+                | aevia_std::ode::Method::Rk4 => "Rk4",
+                | aevia_std::ode::Method::Dopri5 => "Dopri5",
+                | aevia_std::ode::Method::Radau => "Radau",
+                | aevia_std::ode::Method::Bdf => "Bdf",
+                | aevia_std::ode::Method::Rosenbrock23 => "Rosenbrock23",
+                | aevia_std::ode::Method::Auto => "AutoSwitch",
+            }),
+        ),
+    ])
+}
+
+/// One right-hand-side evaluation, recording the first failure.
+fn ode_rate_value(
+    interp: &mut Interp,
+    function: &Value,
+    shape: &StateShape,
+    time_dim: &Dim,
+    t: f64,
+    state: &[f64],
+    failure: &mut Option<EvalError>,
+    span: Span,
+) -> Vec<f64> {
+    let args = vec![
+        Value::Num(NumVal::float(t, time_dim.clone())),
+        rebuild_state(shape, state),
+    ];
+    match interp.apply(function.clone(), args, span) {
+        | Ok(value) => ode_rates(&value, shape, time_dim, state.len(), span, failure),
+        | Err(error) => {
+            if failure.is_none() {
+                *failure = Some(error);
+            }
+            vec![0.0; state.len()]
+        },
+    }
+}
+
+/// `ode_solve(rhs, y0, (t0, t1), opts, events)` (§8.9).
+fn ode_solve_call(
+    interp: &mut Interp,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    let name = "ode_solve";
+    let function = args
+        .first()
+        .cloned()
+        .ok_or_else(|| arity(name, 5, 0, span))?;
+    let initial = args
+        .get(1)
+        .cloned()
+        .ok_or_else(|| arity(name, 5, 1, span))?;
+    let (start, end, time_dim) = ode_interval(args.get(2), name, span)?;
+    let options = ode_options(args, 3, span)?;
+    let events = parse_events(args.get(4), name, span)?;
+    let (shape, flat) = flatten_state(&initial)?;
+    let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
+    let outcome = {
+        let cell = std::cell::RefCell::new(&mut *interp);
+        let mut rhs = |t: f64, state: &[f64]| {
+            ode_rate_value(
+                &mut cell.borrow_mut(),
+                &function,
+                &shape,
+                &time_dim,
+                t,
+                state,
+                &mut failure.borrow_mut(),
+                span,
+            )
+        };
+        let specs: Vec<aevia_std::ode::EventSpec> = events
+            .iter()
+            .map(|event| {
+                aevia_std::ode::EventSpec {
+                    terminal: event.terminal,
+                    direction: event.direction,
+                }
+            })
+            .collect();
+        let mut watch = |index: usize, t: f64, state: &[f64]| {
+            event_value(
+                &mut cell.borrow_mut(),
+                &events[index].g,
+                &shape,
+                &time_dim,
+                t,
+                state,
+                &mut failure.borrow_mut(),
+                span,
+            )
+        };
+        aevia_std::ode::solve(&mut rhs, &flat, (start, end), options, &specs, &mut watch)
+    };
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    let solution = outcome.map_err(|error| numeric_error(name, error, span))?;
+    Ok(ode_solution_value(
+        solution,
+        &shape,
+        &time_dim,
+        crate::value::value_dim(&initial),
+    ))
+}
+
+/// `ode_bvp(rhs, guess, (t0, t1), bc, opts)` (§8.9): single shooting.
+fn ode_bvp_call(
+    interp: &mut Interp,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    let name = "ode_bvp";
+    let function = args
+        .first()
+        .cloned()
+        .ok_or_else(|| arity(name, 5, 0, span))?;
+    let guess = args
+        .get(1)
+        .cloned()
+        .ok_or_else(|| arity(name, 5, 1, span))?;
+    let (start, end, time_dim) = ode_interval(args.get(2), name, span)?;
+    let condition = args
+        .get(3)
+        .cloned()
+        .ok_or_else(|| arity(name, 5, 3, span))?;
+    let options = ode_options(args, 4, span)?;
+    let (shape, flat) = flatten_state(&guess)?;
+    let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
+    let outcome = {
+        let cell = std::cell::RefCell::new(&mut *interp);
+        let mut rhs = |t: f64, state: &[f64]| {
+            ode_rate_value(
+                &mut cell.borrow_mut(),
+                &function,
+                &shape,
+                &time_dim,
+                t,
+                state,
+                &mut failure.borrow_mut(),
+                span,
+            )
+        };
+        let mut boundary = |left: &[f64], right: &[f64]| -> Vec<f64> {
+            let arguments = vec![rebuild_state(&shape, left), rebuild_state(&shape, right)];
+            let residual = cell.borrow_mut().apply(condition.clone(), arguments, span);
+            let outcome = match residual {
+                | Ok(Value::Tensor(tensor)) => tensor_values(&tensor),
+                | Ok(Value::Num(number)) => {
+                    number.to_f64().map(|v| vec![v]).ok_or_else(|| {
+                        EvalError::new("E0302", "a boundary residual must be a `Float`").at(span)
+                    })
+                },
+                | Ok(other) => {
+                    Err(EvalError::new(
+                        "E0302",
+                        format!(
+                            "the boundary condition must answer a tensor of residuals, found {}",
+                            other.type_name()
+                        ),
+                    )
+                    .at(span))
+                },
+                | Err(error) => Err(error),
+            };
+            match outcome {
+                | Ok(values) => values,
+                | Err(error) => {
+                    if failure.borrow().is_none() {
+                        *failure.borrow_mut() = Some(error);
+                    }
+                    Vec::new()
+                },
+            }
+        };
+        aevia_std::ode::shoot(&mut rhs, &flat, (start, end), options, &mut boundary)
+    };
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    let solution = outcome.map_err(|error| numeric_error(name, error, span))?;
+    Ok(ode_solution_value(
+        solution,
+        &shape,
+        &time_dim,
+        crate::value::value_dim(&guess),
+    ))
+}
+
+/// `odeint_order(rhs, (y0, y1, …), times)` / `odeint_order_with(…, opts)`
+/// (§8.9): the order-`n` equation `y⁽ⁿ⁾ = rhs(t, y, y′, …, y⁽ⁿ⁻¹⁾)` rewritten
+/// as a first-order system on the stacked state. Every derivative keeps its
+/// own dimension (`y⁽ᵏ⁾` is `y / T^k`), checked against the initial values
+/// and against the right-hand side's answer.
+fn odeint_order_call(
+    interp: &mut Interp,
+    name: &str,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    let expected = if name == "odeint_order" {
+        3
+    } else {
+        4
+    };
+    let function = args
+        .first()
+        .cloned()
+        .ok_or_else(|| arity(name, expected, 0, span))?;
+    let Some(Value::Record(derivatives)) = args.get(1) else {
+        return Err(EvalError::new(
+            "E0302",
+            format!("`{name}` expects the initial values as a tuple `(y, y', …)`"),
+        )
+        .at(span));
+    };
+    let times = expect_tensor(args, 2, name, span)?;
+    let grid = tensor_values(&times)?;
+    let time_dim = times.dim.clone();
+    let options = if name == "odeint_order_with" {
+        if ode_event(args, 3, span)?.is_some() {
+            return Err(EvalError::new(
+                "E0302",
+                "`odeint_order_with` does not support `events`; reduce the equation by hand and use `ode_solve`",
+            )
+            .at(span));
+        }
+        ode_options(args, 3, span)?
+    } else {
+        aevia_std::ode::Options::default()
+    };
+    let order = derivatives.fields.len();
+    if order == 0 {
+        return Err(EvalError::new(
+            "E0302",
+            format!("`{name}` needs at least one initial value"),
+        )
+        .at(span));
+    }
+    let mut shapes = Vec::with_capacity(order);
+    let mut flat = Vec::new();
+    for index in 0..order {
+        let component = derivatives.fields.get(&index.to_string()).ok_or_else(|| {
+            EvalError::new(
+                "E0302",
+                format!("`{name}` expects the initial values as a tuple `(y, y', …)`"),
+            )
+            .at(span)
+        })?;
+        let (shape, values) = flatten_state(component)?;
+        shapes.push(shape);
+        flat.extend(values);
+    }
+    let width = flat.len() / order;
+    // Every derivative has the structure of `y` and the dimension `y / T^k`.
+    let mut divisor = Dim::one();
+    for (index, shape) in shapes.iter().enumerate() {
+        if *shape != scale_state_dims(&shapes[0], &divisor) {
+            return Err(EvalError::new(
+                if state_structure_matches(&shapes[0], shape) {
+                    "E0401"
+                } else {
+                    "E0302"
+                },
+                format!(
+                    "initial value {index} of `{name}` must have the structure of `y` and the dimension of `y` divided by T^{index}"
+                ),
+            )
+            .at(span));
+        }
+        divisor = divisor.mul(&time_dim);
+    }
+    let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
+    let outcome = {
+        let cell = std::cell::RefCell::new(&mut *interp);
+        let top_shape = shapes[order - 1].clone();
+        let reduced = aevia_std::ode::reduce_order(order, width, |t: f64, z: &[f64]| {
+            let mut arguments = Vec::with_capacity(order + 1);
+            arguments.push(Value::Num(NumVal::float(t, time_dim.clone())));
+            for (index, shape) in shapes.iter().enumerate() {
+                arguments.push(rebuild_state(shape, &z[index * width..(index + 1) * width]));
+            }
+            match cell.borrow_mut().apply(function.clone(), arguments, span) {
+                | Ok(value) => {
+                    ode_rates(
+                        &value,
+                        &top_shape,
+                        &time_dim,
+                        width,
+                        span,
+                        &mut failure.borrow_mut(),
+                    )
+                },
+                | Err(error) => {
+                    if failure.borrow().is_none() {
+                        *failure.borrow_mut() = Some(error);
+                    }
+                    vec![0.0; width]
+                },
+            }
+        });
+        let mut reduced = reduced;
+        aevia_std::ode::integrate(&mut reduced, &flat, &grid, options)
+    };
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    let states = outcome.map_err(|error| numeric_error(name, error, span))?;
+    let len = states.len();
+    let y_dim = crate::value::value_dim(derivatives.fields.get("0").expect("checked above"));
+    let ys: Vec<Value> = states
+        .iter()
+        .map(|state| rebuild_state(&shapes[0], &state[..width]))
+        .collect();
+    let all: Vec<Value> = states
+        .iter()
+        .map(|state| {
+            let mut fields = IndexMap::new();
+            for (index, shape) in shapes.iter().enumerate() {
+                fields.insert(
+                    index.to_string(),
+                    rebuild_state(shape, &state[index * width..(index + 1) * width]),
+                );
+            }
+            Value::Record(Rc::new(RecordValue { fields }))
+        })
+        .collect();
+    Ok(record_of(vec![
+        ("t", float_tensor(vec![grid.len()], grid, time_dim)),
+        ("y", build_tensor(ys, vec![len], y_dim)),
+        ("d", build_tensor(all, vec![len], Dim::one())),
+    ]))
+}
+
+/// The state structure with every dimension divided by `divisor`.
+fn scale_state_dims(
+    shape: &StateShape,
+    divisor: &Dim,
+) -> StateShape {
+    match shape {
+        | StateShape::Scalar(dim) => StateShape::Scalar(dim.div(divisor)),
+        | StateShape::Tensor(extent, dim) => StateShape::Tensor(extent.clone(), dim.div(divisor)),
+        | StateShape::Record(fields) => {
+            StateShape::Record(
+                fields
+                    .iter()
+                    .map(|(name, inner)| (name.clone(), scale_state_dims(inner, divisor)))
+                    .collect(),
+            )
+        },
+    }
+}
+
+/// Whether two states have the same structure, ignoring dimensions.
+fn state_structure_matches(
+    left: &StateShape,
+    right: &StateShape,
+) -> bool {
+    match (left, right) {
+        | (StateShape::Scalar(_), StateShape::Scalar(_)) => true,
+        | (StateShape::Tensor(a, _), StateShape::Tensor(b, _)) => a == b,
+        | (StateShape::Record(a), StateShape::Record(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|((na, sa), (nb, sb))| na == nb && state_structure_matches(sa, sb))
+        },
+        | _ => false,
+    }
+}
+
+// ----- §8.9.1 continuous output, events and ensembles ----------------------
+
+/// A numerical SDE path read back from its `SdePath` record.
+struct PathParts {
+    path: aevia_std::sde::Path,
+    shape: StateShape,
+    time_dim: Dim,
+    state_dim: Dim,
+    record: Rc<RecordValue>,
+}
+
+/// Reads the `t` and `y` fields of an `SdePath` (any record with those
+/// fields): the nodes, the state structure and the dimensions.
+fn path_parts(
+    value: Option<&Value>,
+    name: &str,
+    span: Span,
+) -> Result<PathParts, EvalError> {
+    let Some(Value::Record(record)) = value else {
+        return Err(EvalError::new("E0302", format!("`{name}` expects an `SdePath`")).at(span));
+    };
+    let (Some(Value::Tensor(times)), Some(Value::Tensor(states))) =
+        (record.fields.get("t"), record.fields.get("y"))
+    else {
+        return Err(EvalError::new(
+            "E0302",
+            format!("`{name}` expects an `SdePath` with the fields `t` and `y`"),
+        )
+        .at(span));
+    };
+    let t = tensor_values(times)?;
+    let mut y = Vec::with_capacity(states.shape.first().copied().unwrap_or(0));
+    let mut shape = None;
+    for element in states.elements() {
+        let (element_shape, flat) = flatten_state(&element)?;
+        shape.get_or_insert(element_shape);
+        y.push(flat);
+    }
+    let Some(shape) = shape else {
+        return Err(EvalError::new("E0802", format!("`{name}`: the path has no nodes")).at(span));
+    };
+    if t.len() != y.len() {
+        return Err(EvalError::new(
+            "E0802",
+            format!("`{name}`: the path's `t` and `y` differ in length"),
+        )
+        .at(span));
+    }
+    let steps = record
+        .fields
+        .get("steps")
+        .and_then(Value::as_f64)
+        .map_or(t.len() - 1, |steps| steps.max(0.0) as usize);
+    Ok(PathParts {
+        path: aevia_std::sde::Path {
+            t,
+            y,
+            steps,
+            rejected: 0,
+            nfev: 0,
+            seed: 0,
+            noise: 0,
+            method: aevia_std::sde::Method::EulerMaruyama,
+        },
+        shape,
+        time_dim: times.dim.clone(),
+        state_dim: states.dim.clone(),
+        record: Rc::clone(record),
+    })
+}
+
+/// The time of `sde_at` / `sde_interp`: a `Float` of the path's time dimension.
+fn path_time(
+    value: Option<&Value>,
+    time_dim: &Dim,
+    name: &str,
+    span: Span,
+) -> Result<f64, EvalError> {
+    let Some(Value::Num(time)) = value else {
+        return Err(EvalError::new("E0302", format!("`{name}` expects a time")).at(span));
+    };
+    if time.dim != *time_dim {
+        return Err(EvalError::new(
+            "E0401",
+            format!("the time given to `{name}` must have the path's time dimension"),
+        )
+        .at(span));
+    }
+    time.to_f64().ok_or_else(|| {
+        EvalError::new("E0302", format!("`{name}` expects a concrete time")).at(span)
+    })
+}
+
+fn path_range_error(
+    path: &aevia_std::sde::Path,
+    t: f64,
+    span: Span,
+) -> EvalError {
+    EvalError::new(
+        "E0802",
+        format!(
+            "time {t} lies outside the path's span [{}, {}]",
+            path.t.first().copied().unwrap_or(0.0),
+            path.t.last().copied().unwrap_or(0.0)
+        ),
+    )
+    .at(span)
+}
+
+/// `sde_at`, `sde_resample`, `sde_interp` and `sde_events` (§8.9.1).
+fn sde_path_call(
+    interp: &mut Interp,
+    name: &str,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    let parts = path_parts(args.first(), name, span)?;
+    match name {
+        | "sde_at" => {
+            let t = path_time(args.get(1), &parts.time_dim, name, span)?;
+            let state = parts
+                .path
+                .eval(t)
+                .ok_or_else(|| path_range_error(&parts.path, t, span))?;
+            Ok(rebuild_state(&parts.shape, &state))
+        },
+        | "sde_resample" => {
+            let Some(Value::Tensor(times)) = args.get(1) else {
+                return Err(
+                    EvalError::new("E0302", "`sde_resample` expects a tensor of times").at(span),
+                );
+            };
+            if times.dim != parts.time_dim {
+                return Err(EvalError::new(
+                    "E0401",
+                    "the times given to `sde_resample` must have the path's time dimension",
+                )
+                .at(span));
+            }
+            let wanted = tensor_values(times)?;
+            let mut states = Vec::with_capacity(wanted.len());
+            for &t in &wanted {
+                let state = parts
+                    .path
+                    .eval(t)
+                    .ok_or_else(|| path_range_error(&parts.path, t, span))?;
+                states.push(rebuild_state(&parts.shape, &state));
+            }
+            let len = states.len();
+            Ok(build_tensor(states, vec![len], parts.state_dim))
+        },
+        | "sde_interp" => {
+            let PathParts {
+                path,
+                shape,
+                time_dim,
+                ..
+            } = parts;
+            let path = Rc::new(path);
+            Ok(Value::Native(Rc::new(NativeFn(Box::new(
+                move |_interp, args, span| {
+                    let t = path_time(args.first(), &time_dim, "the interpolated path", span)?;
+                    let state = path
+                        .eval(t)
+                        .ok_or_else(|| path_range_error(&path, t, span))?;
+                    Ok(rebuild_state(&shape, &state))
+                },
+            )))))
+        },
+        | _ => {
+            let events = parse_events(args.get(1), name, span)?;
+            let specs: Vec<aevia_std::sde::EventSpec> = events
+                .iter()
+                .map(|event| {
+                    aevia_std::sde::EventSpec {
+                        terminal: event.terminal,
+                        direction: event.direction,
+                    }
+                })
+                .collect();
+            let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
+            let (cut, hits) = {
+                let cell = std::cell::RefCell::new(&mut *interp);
+                let mut watch = |index: usize, t: f64, state: &[f64]| {
+                    event_value(
+                        &mut cell.borrow_mut(),
+                        &events[index].g,
+                        &parts.shape,
+                        &parts.time_dim,
+                        t,
+                        state,
+                        &mut failure.borrow_mut(),
+                        span,
+                    )
+                };
+                aevia_std::sde::events(&parts.path, &specs, &mut watch)
+            };
+            if let Some(error) = failure.into_inner() {
+                return Err(error);
+            }
+            let hit_values: Vec<Value> = hits
+                .iter()
+                .map(|hit| {
+                    record_of(vec![
+                        ("index", Value::int(i64::try_from(hit.index).unwrap_or(0))),
+                        (
+                            "t",
+                            Value::Num(NumVal::float(hit.t, parts.time_dim.clone())),
+                        ),
+                        ("y", rebuild_state(&parts.shape, &hit.y)),
+                    ])
+                })
+                .collect();
+            let hit_count = hit_values.len();
+            let states: Vec<Value> = cut
+                .y
+                .iter()
+                .map(|state| rebuild_state(&parts.shape, state))
+                .collect();
+            let len = states.len();
+            // The cut path keeps every other field of the original record.
+            let mut fields = parts.record.fields.clone();
+            fields.insert(
+                "t".to_string(),
+                float_tensor(vec![len], cut.t.clone(), parts.time_dim.clone()),
+            );
+            fields.insert(
+                "y".to_string(),
+                build_tensor(states, vec![len], parts.state_dim.clone()),
+            );
+            if fields.contains_key("steps") {
+                fields.insert(
+                    "steps".to_string(),
+                    Value::int(i64::try_from(cut.steps).unwrap_or(0)),
+                );
+            }
+            Ok(record_of(vec![
+                ("path", Value::Record(Rc::new(RecordValue { fields }))),
+                (
+                    "hits",
+                    build_tensor(hit_values, vec![hit_count], Dim::one()),
+                ),
+            ]))
+        },
+    }
+}
+
+/// `sde_ensemble_diag` / `sde_ensemble_general`: `n` independent paths with
+/// member seeds `sde_ensemble_seed(seed, i)`.
+///
+/// Member `i` depends only on `(seed, i)`, so the result is the same for every
+/// execution order and thread count. The members run through the parallel
+/// replicas of §9.7.2 when the drift and diffusion can cross threads and the
+/// ensemble is large enough to pay for it, and sequentially on this thread
+/// otherwise; both give the same value.
+fn sde_ensemble_call(
+    interp: &mut Interp,
+    name: &str,
+    args: &[Value],
+    span: Span,
+) -> Result<Value, EvalError> {
+    let base = if name == "sde_ensemble_general" {
+        "sdeint_general"
+    } else {
+        "sdeint_diag"
+    };
+    let count = expect_int(args, 4, name, span)?;
+    if count <= 0 {
+        return Err(EvalError::new("E0802", "an ensemble needs at least one path").at(span));
+    }
+    let count = usize::try_from(count).unwrap_or(0);
+    if args.len() != 5 {
+        return Err(arity(name, 5, args.len(), span));
+    }
+    // A malformed policy is the members' `Err(SdeError)`, not a crash here.
+    let member = Value::Ctor {
+        adt: u32::MAX,
+        index: usize::MAX,
+        name: "sde_member".to_string(),
+        arity: usize::MAX,
+        args: vec![
+            Value::string(base),
+            args[0].clone(),
+            args[1].clone(),
+            args[2].clone(),
+            args[3].clone(),
+        ],
+        origin: None,
+    };
+    let inputs: Vec<Value> = (0..count)
+        .map(|index| Value::int(i64::try_from(index).unwrap_or(0)))
+        .collect();
+    let results = match interp.par_map_values(&member, &inputs) {
+        | Some(results) => results,
+        | None => {
+            let mut results = Vec::with_capacity(count);
+            for input in inputs {
+                results.push(interp.apply(member.clone(), vec![input], span)?);
+            }
+            results
+        },
+    };
+    Ok(build_tensor(results, vec![count], Dim::one()))
 }
 
 // ----- §8.9.1 stochastic differential equations ---------------------------
@@ -6926,6 +7868,24 @@ fn sde_int_field(
         .ok_or_else(|| SdeError::Invalid(format!("the SDE options need `{field}`")))
 }
 
+/// A seed: an exact `Int` taken modulo 2^64, so the value `sde_ensemble_seed`
+/// answers (a full 64-bit number) round-trips through the options record.
+fn exact_seed(value: &Value) -> Option<u64> {
+    match value {
+        | Value::Num(num) => {
+            match &num.kind {
+                | NumKind::Int(int) => {
+                    let modulus = BigInt::one() << 64;
+                    let reduced: BigInt = ((int % &modulus) + &modulus) % &modulus;
+                    reduced.to_u64()
+                },
+                | _ => num.to_f64().map(|v| v.max(0.0) as u64),
+            }
+        },
+        | _ => None,
+    }
+}
+
 fn sde_dim_field(
     record: &RecordValue,
     field: &str,
@@ -6967,7 +7927,11 @@ fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError
             .get("structure")
             .ok_or_else(|| SdeError::Invalid("the SDE options need `structure`".to_string()))?,
     )?;
-    let seed = sde_int_field(record, "seed")?.max(0) as u64;
+    let seed = record
+        .fields
+        .get("seed")
+        .and_then(exact_seed)
+        .ok_or_else(|| SdeError::Invalid("the SDE options need `seed`".to_string()))?;
     let terms = sde_int_field(record, "terms")?.max(0) as usize;
     let t0 = sde_dim_field(record, "t0")?;
     let t0_value = t0
@@ -7087,21 +8051,40 @@ fn sde_call(
             ]))
         },
         | "sde_ensemble_seed" => {
-            let seed = expect_int(args, 0, name, span)?.max(0) as u64;
+            let seed = args
+                .first()
+                .and_then(exact_seed)
+                .ok_or_else(|| arity(name, 2, 0, span))?;
             let index = expect_int(args, 1, name, span)?.max(0) as usize;
             Ok(Value::Num(NumVal::int(BigInt::from(
                 aevia_std::sde::ensemble_seed(seed, index),
             ))))
         },
-        | _ => sde_integrate(interp, name, args, span),
+        | _ => sde_integrate(interp, name, args, None, span),
     }
 }
 
+/// A non-negative `Int` index.
+fn index_value(
+    value: &Value,
+    span: Span,
+) -> Result<usize, EvalError> {
+    value
+        .as_f64()
+        .filter(|number| *number >= 0.0 && number.fract() == 0.0)
+        .map(|number| number as usize)
+        .ok_or_else(|| EvalError::new("E0302", "expected a non-negative `Int`").at(span))
+}
+
 /// `sdeint_diag` / `sdeint_general` (§8.9.1).
+///
+/// With `member = Some(i)` the run is member `i` of an ensemble: its seed is
+/// `ensemble_seed(seed, i)` of the options' seed.
 fn sde_integrate(
     interp: &mut Interp,
     name: &str,
     args: &[Value],
+    member: Option<usize>,
     span: Span,
 ) -> Result<Value, EvalError> {
     let drift = args
@@ -7121,10 +8104,13 @@ fn sde_integrate(
         .cloned()
         .ok_or_else(|| arity(name, 4, 3, span))?;
     let general = name == "sdeint_general";
-    let (options, time_dim) = match sde_options(&options_value) {
+    let (mut options, time_dim) = match sde_options(&options_value) {
         | Ok(pair) => pair,
         | Err(error) => return Ok(err(sde_error_value(&error))),
     };
+    if let Some(index) = member {
+        options.seed = aevia_std::sde::ensemble_seed(options.seed, index);
+    }
     // The step-policy stubs carry a dimension-free `T` field only for typing;
     // the path reports the initial time's dimension.
     let (shape, flat) = flatten_state(&initial)?;
@@ -7448,6 +8434,7 @@ fn ode_options(
             | "Radau" => aevia_std::ode::Method::Radau,
             | "Bdf" => aevia_std::ode::Method::Bdf,
             | "Rosenbrock23" => aevia_std::ode::Method::Rosenbrock23,
+            | "AutoSwitch" => aevia_std::ode::Method::Auto,
             | other => {
                 return Err(
                     EvalError::new("E0302", format!("`{other}` is not an `OdeMethod`")).at(span),

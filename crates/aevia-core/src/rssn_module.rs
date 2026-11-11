@@ -1795,7 +1795,20 @@ fn validate_payload(
     use aevia_types::Row;
     use aevia_types::Shape;
     use aevia_types::Type;
-    let mismatch = || format!("kernel value does not prove expected type {expected}");
+    let mismatch = || {
+        // A graph-backed operator that cannot reduce its arguments (`invmod(6, 15)`:
+        // no inverse) answers with the unreduced call. Say that, and show it,
+        // instead of a bare "does not prove": the term *is* the diagnosis.
+        if let Val::Term(sym) = payload
+            && !matches!(expected, aevia_types::Type::Scalar(Rep::Real, _))
+            && let Ok(text) = aevia_rssn::kernel().try_text(*sym)
+        {
+            return format!(
+                "kernel value does not prove expected type {expected}: the operator did not reduce and returned the term `{text}` (it is undefined for these arguments)"
+            );
+        }
+        format!("kernel value does not prove expected type {expected}")
+    };
     if host.is_some_and(|h| !crate::host_witness::schema_compatible(&h.schema, expected)) {
         return Err(mismatch());
     }

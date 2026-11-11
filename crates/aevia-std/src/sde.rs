@@ -1248,6 +1248,170 @@ where
     })
 }
 
+// ---------------------------------------------------------------------------
+// Continuous output and events on paths (§8.9.1)
+// ---------------------------------------------------------------------------
+
+impl Path {
+    /// The state at time `t`, by linear interpolation between the accepted
+    /// nodes; `None` outside `[t_first, t_last]`.
+    ///
+    /// A numerical SDE path is only known at its nodes. Between them the
+    /// interpolant is the chord, which is continuous and deterministic. It is
+    /// as accurate as the scheme itself (strong order at most 1, and a Brownian
+    /// path is only Hölder-1/2 between nodes anyway); it does not add the
+    /// within-step Brownian-bridge variance, so statistics of `eval` between
+    /// nodes understate the within-step variation by `O(dt)`. Use the node
+    /// values (`y`) when exact distributional statistics at the nodes are
+    /// wanted.
+    #[must_use]
+    pub fn eval(
+        &self,
+        t: f64,
+    ) -> Option<Vec<f64>> {
+        let (&first, &last) = (self.t.first()?, self.t.last()?);
+        if !(first..=last).contains(&t) {
+            return None;
+        }
+        let upper = self.t.partition_point(|&node| node < t);
+        if upper == 0 {
+            return self.y.first().cloned();
+        }
+        if self.t[upper] == t {
+            return Some(self.y[upper].clone());
+        }
+        let lower = upper - 1;
+        let weight = (t - self.t[lower]) / (self.t[upper] - self.t[lower]);
+        Some(
+            self.y[lower]
+                .iter()
+                .zip(&self.y[upper])
+                .map(|(a, b)| a + weight * (b - a))
+                .collect(),
+        )
+    }
+
+    /// The states at the requested times (`saveat`): [`Path::eval`] at each.
+    ///
+    /// # Errors
+    ///
+    /// `E0802` when a time lies outside the path's span.
+    pub fn resample(
+        &self,
+        times: &[f64],
+    ) -> Result<Vec<Vec<f64>>, SdeError> {
+        times
+            .iter()
+            .map(|&t| {
+                self.eval(t).ok_or_else(|| {
+                    SdeError::invalid("a requested time lies outside the path's span")
+                })
+            })
+            .collect()
+    }
+}
+
+/// How one event function of a path is watched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventSpec {
+    /// The path is cut at the first such event.
+    pub terminal: bool,
+    /// `1` rising only, `-1` falling only, `0` both.
+    pub direction: i8,
+}
+
+/// An event on a path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hit {
+    /// Index of the event function.
+    pub index: usize,
+    /// The crossing time.
+    pub t: f64,
+    /// The interpolated state at the crossing.
+    pub y: Vec<f64>,
+}
+
+/// Detects sign changes of `g_i(t, y)` along a path.
+///
+/// Between two consecutive nodes the path is the chord of [`Path::eval`]; a
+/// crossing is a sign change of `g` at the two nodes in an allowed direction
+/// (falling `g0 > 0 >= g1`, rising `g0 < 0 <= g1`, the kernel's convention
+/// for ODE events), and its time is the root of `g` along the chord, found by
+/// bisection. A node where `g` is exactly zero counts once (as the end of the
+/// step that reaches it). Only the discretised path is watched: the
+/// continuous process may cross and return between two nodes, which no
+/// discrete scheme can see.
+///
+/// Hits come in time order. If an event is `terminal`, the returned path ends
+/// at the first terminal hit (the hit is appended as its last node) and later
+/// hits are dropped. The returned path is the input when nothing terminates.
+pub fn events(
+    path: &Path,
+    specs: &[EventSpec],
+    g: &mut dyn FnMut(usize, f64, &[f64]) -> f64,
+) -> (Path, Vec<Hit>) {
+    let mut hits: Vec<Hit> = Vec::new();
+    let mut previous: Vec<f64> = match (path.t.first(), path.y.first()) {
+        | (Some(&t), Some(y)) => (0..specs.len()).map(|i| g(i, t, y)).collect(),
+        | _ => return (path.clone(), hits),
+    };
+    for k in 1..path.t.len() {
+        let (t0, t1) = (path.t[k - 1], path.t[k]);
+        let mut step_hits: Vec<Hit> = Vec::new();
+        for (index, spec) in specs.iter().enumerate() {
+            let g1 = g(index, t1, &path.y[k]);
+            let g0 = previous[index];
+            let crossing = (g0 < 0.0 && g1 >= 0.0 && spec.direction >= 0)
+                || (g0 > 0.0 && g1 <= 0.0 && spec.direction <= 0);
+            if crossing {
+                let at = |s: f64| -> Vec<f64> {
+                    path.y[k - 1]
+                        .iter()
+                        .zip(&path.y[k])
+                        .map(|(a, b)| a + s * (b - a))
+                        .collect()
+                };
+                let (mut lo, mut hi) = (0.0f64, 1.0f64);
+                for _ in 0..64 {
+                    let mid = f64::midpoint(lo, hi);
+                    let value = g(index, t0 + mid * (t1 - t0), &at(mid));
+                    if value == 0.0 {
+                        hi = mid;
+                        break;
+                    }
+                    if (value < 0.0) == (g0 < 0.0) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let s = hi;
+                step_hits.push(Hit {
+                    index,
+                    t: t0 + s * (t1 - t0),
+                    y: at(s),
+                });
+            }
+            previous[index] = g1;
+        }
+        step_hits.sort_by(|a, b| a.t.total_cmp(&b.t));
+        if let Some(position) = step_hits.iter().position(|hit| specs[hit.index].terminal) {
+            step_hits.truncate(position + 1);
+            let last = step_hits[position].clone();
+            hits.extend(step_hits);
+            let mut cut = path.clone();
+            cut.t.truncate(k);
+            cut.y.truncate(k);
+            cut.t.push(last.t);
+            cut.y.push(last.y);
+            cut.steps = cut.t.len() - 1;
+            return (cut, hits);
+        }
+        hits.extend(step_hits);
+    }
+    (path.clone(), hits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1991,5 +2155,125 @@ mod tests {
             assert!(path.steps > 0, "{}", method.name());
             assert!((path.t.last().copied().unwrap() - 0.2).abs() < 1e-12);
         }
+    }
+
+    // ----- continuous output and events on paths --------------------------
+
+    fn decay_path() -> Path {
+        // dX = -X dt with no noise: the Euler path is y_k = (1 - dt)^k.
+        let (drift, diffusion) = ou(1.0, 0.0, 0.0);
+        let options = Options::fixed(
+            Method::EulerMaruyama,
+            Structure::Diagonal,
+            1,
+            0.0,
+            0.01,
+            200,
+        );
+        integrate(drift, diffusion, &[1.0], &options).unwrap()
+    }
+
+    #[test]
+    fn a_path_interpolates_linearly_between_nodes_and_resamples() {
+        let path = decay_path();
+        for (t, y) in path.t.iter().zip(&path.y) {
+            assert_eq!(path.eval(*t).as_ref(), Some(y), "nodes are exact");
+        }
+        let mid = path.eval(0.005).unwrap()[0];
+        assert!((mid - 0.5 * (path.y[0][0] + path.y[1][0])).abs() < 1e-15);
+        let last = *path.t.last().unwrap();
+        assert!(path.eval(-1e-9).is_none() && path.eval(last + 1e-9).is_none());
+        let saved = path.resample(&[0.0, 0.5, last]).unwrap();
+        assert_eq!(saved.len(), 3);
+        // Chord error against the Euler solution is O(dt^2).
+        assert!((saved[1][0] - 0.99f64.powf(50.0)).abs() < 1e-4);
+        assert!(path.resample(&[last + 1.0]).is_err());
+    }
+
+    #[test]
+    fn path_events_locate_crossings_with_direction_and_terminal() {
+        let path = decay_path();
+        let mut g = |_i: usize, _t: f64, y: &[f64]| y[0] - 0.5;
+        let crossing = 0.01 * (0.5f64.ln() / 0.99f64.ln());
+        let falling = EventSpec {
+            terminal: false,
+            direction: -1,
+        };
+        let (whole, hits) = events(&path, &[falling], &mut g);
+        assert_eq!(hits.len(), 1);
+        assert!(
+            (hits[0].t - crossing).abs() < 1e-4,
+            "{} vs {crossing}",
+            hits[0].t
+        );
+        assert!((hits[0].y[0] - 0.5).abs() < 1e-9);
+        assert_eq!(whole, path, "no terminal event leaves the path alone");
+        // The wrong direction sees nothing.
+        let rising = EventSpec {
+            terminal: false,
+            direction: 1,
+        };
+        assert!(events(&path, &[rising], &mut g).1.is_empty());
+        // A terminal event cuts the path and the hit is its last node.
+        let stop = EventSpec {
+            terminal: true,
+            direction: 0,
+        };
+        let (cut, hits) = events(&path, &[stop], &mut g);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(*cut.t.last().unwrap(), hits[0].t);
+        assert!((cut.y.last().unwrap()[0] - 0.5).abs() < 1e-9);
+        assert!(cut.t.len() < path.t.len());
+        assert_eq!(cut.steps, cut.t.len() - 1);
+        // Two events: a non-terminal at 0.5 and a terminal at 0.25. Both fire,
+        // in time order, and the path stops at the second.
+        let mut two = |i: usize, _t: f64, y: &[f64]| y[0] - if i == 0 { 0.5 } else { 0.25 };
+        let (cut, hits) = events(
+            &path,
+            &[
+                falling,
+                EventSpec {
+                    terminal: true,
+                    direction: -1,
+                },
+            ],
+            &mut two,
+        );
+        assert_eq!(
+            hits.iter().map(|hit| hit.index).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert!(hits[0].t < hits[1].t);
+        assert!((cut.t.last().unwrap() - 4.0f64.ln()).abs() < 0.02);
+    }
+
+    #[test]
+    fn a_noisy_path_event_is_reproducible_for_a_seed() {
+        let run = |seed: u64| {
+            let (drift, diffusion) = gbm(0.0, 0.5);
+            let options = Options::fixed(
+                Method::Milstein,
+                Structure::Diagonal,
+                seed,
+                0.0,
+                0.001,
+                2000,
+            );
+            let path = integrate(drift, diffusion, &[1.0], &options).unwrap();
+            let mut g = |_i: usize, _t: f64, y: &[f64]| y[0] - 1.2;
+            events(
+                &path,
+                &[EventSpec {
+                    terminal: true,
+                    direction: 1,
+                }],
+                &mut g,
+            )
+        };
+        let (a, hits_a) = run(5);
+        let (b, hits_b) = run(5);
+        assert_eq!(a, b);
+        assert_eq!(hits_a, hits_b);
+        assert_ne!(run(6).0, a);
     }
 }

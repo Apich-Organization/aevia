@@ -4,7 +4,7 @@
 ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Ode
 
-type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23
+type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
 
 type OdeOpts<s> = {
     rtol: Float[1],
@@ -14,6 +14,25 @@ type OdeOpts<s> = {
     events: Option<(Float[T], s) -> Float[1]>,
 }
 
+type OdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],
+    terminal: Bool,
+    direction: Int,
+}
+
+type OdeHit<s> = { index: Int, t: Float[T], y: s }
+
+type OdeSolution<s> = {
+    t: Tensor<1, Float[T]>, y: Tensor<1, s>,
+    at: (Float[T]) -> s,
+    events: Tensor<1, OdeHit<s>>,
+    nfev: Int, rejected: Int, method: String,
+}
+
+let ode_bvp = ode_bvp
+let ode_solve = ode_solve
 let odeint = odeint
+let odeint_order = odeint_order
+let odeint_order_with = odeint_order_with
 let odeint_with = odeint_with
 let solve_ivp = solve_ivp

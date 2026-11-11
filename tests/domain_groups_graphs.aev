@@ -1,0 +1,65 @@
+## `Rssn_Group` and `Rssn_Graph`: nominal handle types over kernel terms, and
+## 0-based permutations shared with `Rssn_Combinatorics` through a codec.
+## Run with: cargo run -p aevia-cli -- test tests/domain_groups_graphs.aev
+import Rssn_Group as G
+import Rssn_Graph as H
+import Rssn_Combinatorics as C
+
+fn int_is(r: Result<Int, OpError>, expected: Int): Bool =
+    match r with
+    | Ok(v) -> v == expected
+    | Err(_) -> false
+
+fn flag(r: Result<Bool, OpError>): Bool =
+    match r with
+    | Ok(b) -> b
+    | Err(_) -> false
+
+test "order of the cyclic group Z6" =
+    match G.cyclic_group(6) with
+    | Ok(z6) -> int_is(G.group_order(z6), 6) && flag(G.group_is_abelian(z6))
+    | Err(_) -> false
+
+test "S3 is solvable, non-abelian, not simple" =
+    match G.symmetric_group(3) with
+    | Ok(s3) -> int_is(G.group_order(s3), 6) && !flag(G.group_is_abelian(s3)) && flag(G.group_is_solvable(s3)) && !flag(G.group_is_simple(s3))
+    | Err(_) -> false
+
+test "S3 has three conjugacy classes" =
+    match G.symmetric_group(3) with
+    | Ok(s3) -> int_is(G.group_class_count(s3), 3)
+    | Err(_) -> false
+
+test "permutations compose with 0-based images" =
+    match G.perm_compose(C.Perm([1, 2, 0]), C.Perm([1, 2, 0])) with
+    | Ok(p) -> C.perm_images(p) == [2, 0, 1]
+    | Err(_) -> false
+
+test "permutation order and sign" =
+    int_is(G.perm_order(C.Perm([1, 2, 0, 4, 3])), 6) && int_is(G.perm_sign(C.Perm([1, 0, 2])), -1)
+
+test "the order of S4 from two generators" =
+    int_is(G.perm_group_order(G.PermGroup([[1, 0, 2, 3], [1, 2, 3, 0]])), 24)
+
+test "a graph is a nominal handle" =
+    match H.graph_complete(4) with
+    | Ok(k4) -> int_is(H.graph_node_count(k4), 4) && flag(H.graph_is_connected(k4)) && int_is(H.graph_chromatic_number(k4), 4)
+    | Err(_) -> false
+
+test "a cycle graph C5 needs three colours and has a cycle" =
+    match H.graph_cycle(5) with
+    | Ok(c5) -> int_is(H.graph_chromatic_number(c5), 3) && flag(H.graph_has_cycle(c5))
+    | Err(_) -> false
+
+test "the adjacency matrix of a path" =
+    match H.graph_path(3) with
+    | Ok(p3) ->
+        match H.graph_adjacency(p3) with
+        | Ok(a) -> a == [[0, 1, 0], [1, 0, 1], [0, 1, 0]]
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "isomorphism of a graph with its relabelling" =
+    match (H.graph_cycle(4), H.graph_cycle(4)) with
+    | (Ok(a), Ok(b)) -> flag(H.graph_isomorphic(a, b))
+    | _ -> false

@@ -43,3 +43,13 @@ and requires a reviewed dimension formula for every numeric field on bound
 policies. `unbound` rows generate reusable codecs only; they do not register an
 operator or assert a dimension. Generated record destructuring makes field
 addition or removal a Rust compilation error until the policy is reviewed.
+
+## Manifest coverage report
+
+`RSSN-COVERAGE.md` (generated, do not edit) is the manifest-level counterpart of the
+source inventory: for every kernel operator family it states how Aevia exposes it
+(curated typed wrapper, generated dynamic wrapper, or excluded with a reason) and
+whether the exact-typed flat `Rssn.<op>` facade covers it. It is produced from the
+live Kernel Manifest and `crates/aevia-rssn/domains.overlay`;
+`cargo test -p aevia-rssn --test domains` fails when it is stale or when an
+operator is neither bound nor excluded, and `AEVIA_BLESS=1` rewrites it.

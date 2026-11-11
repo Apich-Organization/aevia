@@ -7,6 +7,7 @@
 //! turns "here is a statement and a signature" into "this is who is asking",
 //! so the rules cannot drift between publish and yank.
 
+pub mod deps;
 pub mod download;
 pub mod index;
 pub mod keys;
@@ -131,6 +132,8 @@ pub fn router() -> Router<AppState> {
         .route("/stats", get(stats))
         .route("/search", get(search::search))
         .route("/crates/{owner}/{name}", get(search::detail))
+        .route("/crates/{owner}/{name}/dependents", get(deps::dependents))
+        .route("/resolve", post(deps::resolve))
         .route("/index/config.json", get(index::config))
         .route("/index/{owner}/{name}", get(index::package_index))
         .route("/download/{owner}/{name}/{version}", get(download::archive))

@@ -1,0 +1,430 @@
+# Domain overlay for the Aevia view of the rssn Kernel Manifest.
+#
+# The manifest says what the kernel *is* (operators, rule sets, kernel
+# signatures). This file says how Aevia presents it: which operators form a
+# domain module, which of them get a curated typed signature, which rich types
+# exist, and what is deliberately left out. See `src/domains.rs`.
+#
+# Directives (one per line, `#` starts a comment):
+#   domain  Name | one-line doc
+#   family  Name rule_set:glob [rule_set:glob ...]    first match wins
+#   mode    Name typed|dynamic       `typed`: every operator needs sig/dynamic/exclude
+#   sig     op [as name](p: T, ...) -> Result<R, OpError>
+#   codec   Type to_fn from_fn       wire conversion of a rich type (see prelude)
+#   exclude op [op ...] | reason
+#   dynamic op [op ...] | reason     accepted as dynamic on purpose
+#   prelude Name                     followed by `| ` lines of Aevia source
+
+domain NumberTheory | Number theory over the integers: divisibility, modular arithmetic, primality, factorisation.
+domain Combinatorics | Counting, partitions, permutations as numbers, recurrences.
+domain Group | Finite groups and permutation groups, presentations, characters.
+domain FiniteField | Finite fields GF(p), GF(2^8), extension fields and polynomial arithmetic over them.
+domain Coding | Error-correcting codes and checksums.
+domain Crypto | Elliptic curves, ECDH/ECDSA and RSA.
+domain Graph | Graphs and graph algorithms.
+domain Topology | Simplicial and cubical complexes, homology and persistence.
+domain Crystallography | Point groups, crystal systems and molecular symmetry.
+domain Chaos | Fractals, iterated maps, dynamical-system orbits and fractal dimensions.
+domain Graphics | Quaternions, rigid transforms, curves, meshes and rays.
+domain Discrete | Remaining discrete-mathematics operators.
+domain LieAlgebra | Lie algebras, root systems, representations and Lie groups.
+domain Polynomial | Symbolic polynomials, Groebner bases, real-root isolation, partial fractions.
+domain Logic | Propositional logic, SAT, BDDs.
+domain GeometricAlgebra | Clifford algebra: multivectors, rotors, products.
+domain DifferentialGeometry | Metrics, curvature, differential forms, vector calculus in coordinates.
+domain Functional | Inner-product spaces, operators and integral equations.
+domain Special | Special functions, symbolic and numerical.
+domain Statistics | Distributions, tests and descriptive statistics, symbolic and numerical.
+domain Calculus | Symbolic calculus, variational calculus and result verification.
+domain Elementary | Elementary and complex functions, radicals.
+domain Core | Kernel plumbing: term constructors, rewriting, CSE, unit conversion.
+domain Numeric | Numerical vectors, matrices and callbacks.
+domain LinearAlgebra | Symbolic linear algebra.
+domain Differential | Ordinary, stochastic and partial differential equations.
+domain Physics | Classical and quantum physics formulas.
+domain Solving | Equation solving and optimisation.
+domain Transforms | Integral and discrete transforms.
+
+family NumberTheory number_theory:*
+family Combinatorics combinatorics:*
+family Group discrete:perm_* discrete:group* discrete:cyclic_group discrete:dihedral_group discrete:symmetric_group discrete:klein_four_group discrete:fp_group* discrete:todd_coxeter* discrete:presentation_* discrete:representation_* discrete:character_*
+family FiniteField discrete:gf_* discrete:gfp_* discrete:gfx_* discrete:gf256_* discrete:factor_mod discrete:is_irreducible_mod
+family Coding discrete:bch_* discrete:hamming_* discrete:rs_* discrete:crc* discrete:conv_encode discrete:interleave discrete:deinterleave discrete:code_*
+family Crypto discrete:ec_* discrete:ecdh_* discrete:ecdsa_* discrete:rsa_*
+family Graph discrete:graph* discrete:digraph discrete:induced_subgraph discrete:algebraic_connectivity
+family Topology discrete:sc_* discrete:cubical_* discrete:persist* discrete:rips_* discrete:vietoris_* discrete:betti_at_radius discrete:bottleneck_distance
+family Crystallography discrete:point_group* discrete:crystal* discrete:bravais_lattices discrete:molecule_*
+family Chaos discrete:mandelbrot_* discrete:julia_escape discrete:burning_ship_escape discrete:multibrot_escape discrete:newton_fractal_root discrete:henon_orbit discrete:ifs_* discrete:lorenz* discrete:logistic_* discrete:rossler_orbit discrete:tinkerbell_orbit discrete:map_* discrete:complex_map_* discrete:lyapunov_exponent discrete:orbit_* discrete:moran_dimension discrete:similarity_dimension discrete:box_counting discrete:correlation_dimension
+family Graphics discrete:quat_* discrete:rotation_* discrete:translation_* discrete:scaling_* discrete:shear_2d discrete:reflection_* discrete:reflect discrete:refract discrete:look_at discrete:perspective discrete:orthographic discrete:ray_* discrete:mesh_* discrete:bezier* discrete:bspline discrete:catmull_rom discrete:barycentric
+family Discrete discrete:*
+family LieAlgebra lie_structure:* lie:*
+family Polynomial poly:*
+family Logic logic:*
+family GeometricAlgebra geometric_algebra:*
+family DifferentialGeometry geometry:*
+family Functional functional:*
+family Special special:* numerical_special:*
+family Statistics stats:* numerical_stats:*
+family Calculus calculus:* variational:* verify:*
+family Elementary elementary:* complex:* radicals:*
+family Core kernel:* rewriting:* cse:* units:*
+family Numeric numeric:* numerical_matrix:* numerical_vector:* numerical_callback:*
+family LinearAlgebra linalg:*
+family Differential ode:* sde:* pde:*
+family Physics physics:* physics_quantum:*
+family Solving solve:* optimize:*
+family Transforms transforms:*
+
+# ---------------------------------------------------------------------------
+# Typed domains. `mode typed`: a new kernel operator in these families fails
+# the coverage test until it is given a `sig`, `dynamic` or `exclude` line.
+# ---------------------------------------------------------------------------
+mode NumberTheory typed
+mode Combinatorics typed
+mode FiniteField typed
+
+# A `sig` is also the overlay's statement that the operator is a pure,
+# dimensionless function of its (dimensionless) arguments; see
+# `Kernel::call_with_witnesses`. An argument outside an operator's domain comes
+# back from the kernel as the unreduced call (`invmod(6, 15)`); the generated
+# wrapper turns that into `Err(NotReduced(..))`.
+
+# --- NumberTheory -----------------------------------------------------------
+sig gcd(a: Int, b: Int) -> Result<Int, OpError>
+sig lcm(a: Int, b: Int) -> Result<Int, OpError>
+sig mod as modulo(a: Int, m: Int) -> Result<Int, OpError>
+sig invmod(a: Int, m: Int) -> Result<Int, OpError>
+sig powmod(base: Int, exponent: Int, m: Int) -> Result<Int, OpError>
+sig egcd(a: Int, b: Int) -> Result<Tensor<1, Int>, OpError>
+sig crt(residues: Tensor<1, Int>, moduli: Tensor<1, Int>) -> Result<Int, OpError>
+sig lincong(a: Int, b: Int, m: Int) -> Result<Tensor<1, Int>, OpError>
+sig dlog(base: Int, target: Int, m: Int) -> Result<Int, OpError>
+sig sqrtmod(a: Int, p: Int) -> Result<Int, OpError>
+sig mult_order(a: Int, m: Int) -> Result<Int, OpError>
+sig primitive_root(p: Int) -> Result<Int, OpError>
+sig quadratic_residues(p: Int) -> Result<Tensor<1, Int>, OpError>
+sig legendre_symbol(a: Int, p: Int) -> Result<Int, OpError>
+sig jacobi(a: Int, n: Int) -> Result<Int, OpError>
+sig kronecker_symbol(a: Int, n: Int) -> Result<Int, OpError>
+sig binomial_mod(n: Int, k: Int, m: Int) -> Result<Int, OpError>
+sig isprime as is_prime(n: Int) -> Result<Bool, OpError>
+sig nextprime as next_prime(n: Int) -> Result<Int, OpError>
+sig prevprime as prev_prime(n: Int) -> Result<Int, OpError>
+sig nth_prime(n: Int) -> Result<Int, OpError>
+sig prime_pi(n: Int) -> Result<Int, OpError>
+sig primes(limit: Int) -> Result<Tensor<1, Int>, OpError>
+sig factorint(n: Int) -> Result<Tensor<2, Int>, OpError>
+sig divisors(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig divisor_count(n: Int) -> Result<Int, OpError>
+sig divisor_sum(n: Int) -> Result<Int, OpError>
+sig sigma(n: Int, k: Int) -> Result<Int, OpError>
+sig totient(n: Int) -> Result<Int, OpError>
+sig carmichael(n: Int) -> Result<Int, OpError>
+sig mobius(n: Int) -> Result<Int, OpError>
+sig liouville(n: Int) -> Result<Int, OpError>
+sig omega(n: Int) -> Result<Int, OpError>
+sig bigomega(n: Int) -> Result<Int, OpError>
+sig radical(n: Int) -> Result<Int, OpError>
+sig is_squarefree(n: Int) -> Result<Bool, OpError>
+sig is_square(n: Int) -> Result<Bool, OpError>
+sig isqrt(n: Int) -> Result<Int, OpError>
+sig iroot(n: Int, k: Int) -> Result<Int, OpError>
+sig perfect_power(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig two_squares(n: Int) -> Result<Tensor<1, Int>, OpError>
+sig pell(d: Int) -> Result<Tensor<1, Int>, OpError>
+sig farey(n: Int) -> Result<Tensor<2, Int>, OpError>
+dynamic cfrac convergents | rational-valued: decode the Value with from_value<Tensor<1, Real>>
+dynamic diophantine | takes a symbolic equation term, not integers
+
+# --- Combinatorics ----------------------------------------------------------
+sig ballot(n: Int, k: Int) -> Result<Int, OpError>
+sig bell(n: Int) -> Result<Int, OpError>
+sig bernoulli_number(n: Int) -> Result<Real, OpError>
+sig binomial(n: Int, k: Int) -> Result<Int, OpError>
+sig bracelets(n: Int, k: Int) -> Result<Int, OpError>
+sig catalan(n: Int) -> Result<Int, OpError>
+sig central_binomial(n: Int) -> Result<Int, OpError>
+sig compositions(n: Int, k: Int) -> Result<Int, OpError>
+sig derangements(n: Int) -> Result<Int, OpError>
+sig double_factorial(n: Int) -> Result<Int, OpError>
+sig euler_number(n: Int) -> Result<Int, OpError>
+sig eulerian(n: Int, k: Int) -> Result<Int, OpError>
+sig factorial(n: Int) -> Result<Int, OpError>
+sig falling(x: Int, k: Int) -> Result<Int, OpError>
+sig fibonacci(n: Int) -> Result<Int, OpError>
+sig fubini(n: Int) -> Result<Int, OpError>
+sig harmonic(n: Int) -> Result<Real, OpError>
+sig involutions(n: Int) -> Result<Int, OpError>
+sig lah(n: Int, k: Int) -> Result<Int, OpError>
+sig lucas(n: Int) -> Result<Int, OpError>
+sig motzkin(n: Int) -> Result<Int, OpError>
+sig multinomial(parts: Tensor<1, Int>) -> Result<Int, OpError>
+sig narayana(n: Int, k: Int) -> Result<Int, OpError>
+sig necklaces(n: Int, k: Int) -> Result<Int, OpError>
+sig partitions(n: Int) -> Result<Int, OpError>
+sig partitions_distinct(n: Int) -> Result<Int, OpError>
+sig partitions_k(n: Int, k: Int) -> Result<Int, OpError>
+sig partitions_max(n: Int, k: Int) -> Result<Int, OpError>
+sig permutations(n: Int, k: Int) -> Result<Int, OpError>
+sig rencontres(n: Int, k: Int) -> Result<Int, OpError>
+sig rising(x: Int, k: Int) -> Result<Int, OpError>
+sig schroeder(n: Int) -> Result<Int, OpError>
+sig stirling1(n: Int, k: Int) -> Result<Int, OpError>
+sig stirling2(n: Int, k: Int) -> Result<Int, OpError>
+sig weak_compositions(n: Int, k: Int) -> Result<Int, OpError>
+sig zigzag(n: Int) -> Result<Int, OpError>
+sig cycle_type(p: Perm) -> Result<Tensor<1, Int>, OpError>
+sig inversions(p: Perm) -> Result<Int, OpError>
+sig permutation_order(p: Perm) -> Result<Int, OpError>
+sig permutation_rank(p: Perm) -> Result<Int, OpError>
+sig permutation_sign(p: Perm) -> Result<Int, OpError>
+sig permutation_unrank(n: Int, rank: Int) -> Result<Perm, OpError>
+sig syt_count(shape: Tensor<1, Int>) -> Result<Int, OpError>
+dynamic period | argument is a rational or a sequence term, no integer-only form
+exclude expand_binomial gf_coeffs inclusion_exclusion rsolve | symbolic: they take and return expression terms; call Rssn.dynamic with Real terms
+exclude hook_lengths partition_list | ragged results (a list of lists); use Rssn.dynamic and from_value<Tensor<1, Tensor<1, Int>>>
+
+# --- FiniteField ------------------------------------------------------------
+# Polynomials are coefficient tensors, highest degree first, residues in [0, p).
+sig gf_add(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_sub(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_mul(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_div(a: Int, b: Int, p: Int) -> Result<Int, OpError>
+sig gf_neg(a: Int, p: Int) -> Result<Int, OpError>
+sig gf_inv(a: Int, p: Int) -> Result<Int, OpError>
+sig gf_pow(a: Int, e: Int, p: Int) -> Result<Int, OpError>
+sig gf_is_zero(a: Int, p: Int) -> Result<Bool, OpError>
+sig gf_is_one(a: Int, p: Int) -> Result<Bool, OpError>
+sig gf256_add(a: Int, b: Int) -> Result<Int, OpError>
+sig gf256_mul(a: Int, b: Int) -> Result<Int, OpError>
+sig gf256_div(a: Int, b: Int) -> Result<Int, OpError>
+sig gf256_inv(a: Int) -> Result<Int, OpError>
+sig gf256_pow(a: Int, e: Int) -> Result<Int, OpError>
+sig gf256_exp(e: Int) -> Result<Int, OpError>
+sig gf256_log(a: Int) -> Result<Int, OpError>
+sig gfp_add(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_sub(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_mul(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_gcd(a: Tensor<1, Int>, b: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_derivative(a: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_monic(a: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_degree(a: Tensor<1, Int>, p: Int) -> Result<Int, OpError>
+sig gfp_eval(a: Tensor<1, Int>, x: Int, p: Int) -> Result<Int, OpError>
+sig gfp_isirreducible(a: Tensor<1, Int>, p: Int) -> Result<Bool, OpError>
+sig gfp_powmod(base: Tensor<1, Int>, e: Int, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfp_invmod(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_add(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_sub(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_mul(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_div(a: Tensor<1, Int>, b: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_neg(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_inv(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_pow(a: Tensor<1, Int>, e: Int, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gfx_reduce(a: Tensor<1, Int>, modulus: Tensor<1, Int>, p: Int) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_add(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_mul(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_mod(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_gcd(a: Tensor<1, Int>, b: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_derivative(a: Tensor<1, Int>) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_scale(a: Tensor<1, Int>, c: Int) -> Result<Tensor<1, Int>, OpError>
+sig gf256_poly_eval(a: Tensor<1, Int>, x: Int) -> Result<Int, OpError>
+dynamic gf256_poly_divmod gfp_divmod gfp_egcd gfp_squarefree gfp_factor gfp_ddf gfp_edf gfp_berlekamp | tuple or ragged results (pairs of polynomials, lists of factors with multiplicities); decode with from_value<Tensor<1, Tensor<1, Int>>> or a record
+dynamic gfp_norm | contract not yet pinned down by a test; typed once its normalisation convention is documented in the kernel
+dynamic factor_mod is_irreducible_mod | the three-argument form (polynomial, prime, variable-or-flag) is not the coefficient-tensor API of gfp_*; left dynamic until its argument contract is documented
+
+# ---------------------------------------------------------------------------
+# Rich types. Curated Aevia source that is placed ahead of the generated
+# wrappers. Keep it to types and codecs: the arithmetic belongs to the kernel.
+# ---------------------------------------------------------------------------
+codec Perm perm_to_value perm_from_value
+
+prelude Combinatorics
+| ## A permutation of {0, .., n-1} as the list of images, 0-based like every Aevia
+| ## index. The kernel's permutation operators are 1-based; the `Perm` codec shifts
+| ## at the boundary, so no call site ever sees a 1-based list.
+| type Perm = | Perm(Tensor<1, Int>)
+| derive Eq, Show for Perm
+|
+| fn perm_images(p: Perm): Tensor<1, Int> =
+|     match p with
+|     | Perm(images) -> images
+|
+| fn perm_to_value(p: Perm): Value =
+|     match p with
+|     | Perm(images) -> to_value(map(fn (i: Int) => i + 1, images))
+|
+| fn perm_from_value(v: Value): Result<Perm, OpError> =
+|     match from_value<Tensor<1, Int>>(v) with
+|     | Ok(images) -> Ok(Perm(map(fn (i: Int) => i - 1, images)))
+|     | Err(e) -> Err(e)
+|
+
+prelude NumberTheory
+| ## An element of Z/nZ. The residue and its modulus travel together, so combining two
+| ## moduli is an `Err`, never a silently wrong answer. The arithmetic is the kernel's
+| ## (`modulo`, `invmod`, `powmod`); a residue is always in [0, n).
+| type Zmod = | Zmod(Int, Int)
+| derive Eq, Show for Zmod
+|
+| fn zmod(a: Int, n: Int): Result<Zmod, String> =
+|     if n < 1 then
+|         Err("zmod: the modulus must be positive")
+|     else
+|         match modulo(a, n) with
+|         | Ok(r) -> Ok(Zmod(r, n))
+|         | Err(e) -> Err("{e}")
+|
+| fn zmod_value(x: Zmod): Int =
+|     match x with
+|     | Zmod(a, _) -> a
+|
+| fn zmod_modulus(x: Zmod): Int =
+|     match x with
+|     | Zmod(_, n) -> n
+|
+| fn zmod_same(x: Zmod, y: Zmod): Result<Int, String> =
+|     if zmod_modulus(x) == zmod_modulus(y) then
+|         Ok(zmod_modulus(x))
+|     else
+|         Err("zmod: operands have different moduli")
+|
+| fn zmod_add(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_same(x, y) with
+|     | Ok(n) -> zmod(zmod_value(x) + zmod_value(y), n)
+|     | Err(e) -> Err(e)
+|
+| fn zmod_sub(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_same(x, y) with
+|     | Ok(n) -> zmod(zmod_value(x) - zmod_value(y), n)
+|     | Err(e) -> Err(e)
+|
+| fn zmod_mul(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_same(x, y) with
+|     | Ok(n) -> zmod(zmod_value(x) * zmod_value(y), n)
+|     | Err(e) -> Err(e)
+|
+| fn zmod_neg(x: Zmod): Result<Zmod, String> = zmod(0 - zmod_value(x), zmod_modulus(x))
+|
+| ## The multiplicative inverse; `Err` when x is not a unit.
+| fn zmod_inv(x: Zmod): Result<Zmod, String> =
+|     match invmod(zmod_value(x), zmod_modulus(x)) with
+|     | Ok(r) -> Ok(Zmod(r, zmod_modulus(x)))
+|     | Err(e) -> Err("zmod_inv: {zmod_value(x)} is not invertible modulo {zmod_modulus(x)}")
+|
+| fn zmod_div(x: Zmod, y: Zmod): Result<Zmod, String> =
+|     match zmod_inv(y) with
+|     | Ok(inverse) -> zmod_mul(x, inverse)
+|     | Err(e) -> Err(e)
+|
+| ## x^e for any integer e; a negative exponent inverts first.
+| fn zmod_pow(x: Zmod, e: Int): Result<Zmod, String> =
+|     if e < 0 then
+|         match zmod_inv(x) with
+|         | Ok(inverse) -> zmod_pow(inverse, 0 - e)
+|         | Err(msg) -> Err(msg)
+|     else
+|         match powmod(zmod_value(x), e, zmod_modulus(x)) with
+|         | Ok(r) -> Ok(Zmod(r, zmod_modulus(x)))
+|         | Err(err) -> Err("{err}")
+|
+| ## The multiplicative order of x, when x is a unit.
+| fn zmod_order(x: Zmod): Result<Int, String> =
+|     match mult_order(zmod_value(x), zmod_modulus(x)) with
+|     | Ok(k) -> Ok(k)
+|     | Err(e) -> Err("{e}")
+|
+
+# --- Group and Graph: handle types ------------------------------------------
+# Finite groups and graphs are inert kernel terms (`group(elements, table)`,
+# `graph(n, edges)`). The Aevia types are nominal wrappers around the opaque
+# `Value` handle, so a graph cannot be passed where a group is expected; the
+# codec is one pair of functions per type, and every operator that mentions
+# the type is converted by the generator.
+codec Graph graph_to_value graph_from_value
+codec Group group_to_value group_from_value
+codec PermGroup permgroup_to_value permgroup_from_value
+
+prelude Graph
+| ## A graph as a kernel term. Vertices are 0..n-1; build one with `graph_complete`,
+| ## `graph_cycle`, `graph_path`, `graph_empty` and `graph_add_edge`.
+| type Graph = | Graph(Value)
+|
+| fn graph_to_value(g: Graph): Value =
+|     match g with
+|     | Graph(v) -> v
+|
+| fn graph_from_value(v: Value): Result<Graph, OpError> = Ok(Graph(v))
+|
+
+prelude Group
+| import Rssn_Combinatorics { Perm, perm_to_value, perm_from_value }
+|
+| ## A finite group as a kernel term (`group(elements, table)`).
+| type Group = | Group(Value)
+|
+| fn group_to_value(g: Group): Value =
+|     match g with
+|     | Group(v) -> v
+|
+| fn group_from_value(v: Value): Result<Group, OpError> = Ok(Group(v))
+|
+| ## A permutation group given by generators, one 0-based permutation per row. The
+| ## kernel counts points from 1; the codec shifts at the boundary.
+| type PermGroup = | PermGroup(Tensor<2, Int>)
+|
+| fn permgroup_to_value(g: PermGroup): Value =
+|     match g with
+|     | PermGroup(rows) -> to_value(rows + 1)
+|
+| fn permgroup_from_value(v: Value): Result<PermGroup, OpError> =
+|     match from_value<Tensor<2, Int>>(v) with
+|     | Ok(rows) -> Ok(PermGroup(rows - 1))
+|     | Err(e) -> Err(e)
+|
+
+sig graph_empty(n: Int) -> Result<Graph, OpError>
+sig graph_complete(n: Int) -> Result<Graph, OpError>
+sig graph_path(n: Int) -> Result<Graph, OpError>
+sig graph_cycle(n: Int) -> Result<Graph, OpError>
+sig graph_node_count(g: Graph) -> Result<Int, OpError>
+sig graph_is_directed(g: Graph) -> Result<Bool, OpError>
+sig graph_add_node(g: Graph) -> Result<Graph, OpError>
+sig graph_add_edge(g: Graph, u: Int, v: Int) -> Result<Graph, OpError>
+sig graph_out_degree(g: Graph, u: Int) -> Result<Int, OpError>
+sig graph_in_degree(g: Graph, u: Int) -> Result<Int, OpError>
+sig graph_adjacency(g: Graph) -> Result<Tensor<2, Int>, OpError>
+sig graph_laplacian(g: Graph) -> Result<Tensor<2, Int>, OpError>
+sig graph_bfs(g: Graph, start: Int) -> Result<Tensor<1, Int>, OpError>
+sig graph_dfs(g: Graph, start: Int) -> Result<Tensor<1, Int>, OpError>
+sig graph_is_connected(g: Graph) -> Result<Bool, OpError>
+sig graph_has_cycle(g: Graph) -> Result<Bool, OpError>
+sig graph_chromatic_number(g: Graph) -> Result<Int, OpError>
+sig graph_isomorphic(g: Graph, h: Graph) -> Result<Bool, OpError>
+sig graph_complement(g: Graph) -> Result<Graph, OpError>
+sig graph_disjoint_union(g: Graph, h: Graph) -> Result<Graph, OpError>
+sig graph_join(g: Graph, h: Graph) -> Result<Graph, OpError>
+
+sig cyclic_group(n: Int) -> Result<Group, OpError>
+sig dihedral_group(n: Int) -> Result<Group, OpError>
+sig symmetric_group(n: Int) -> Result<Group, OpError>
+sig klein_four_group() -> Result<Group, OpError>
+sig group_order(g: Group) -> Result<Int, OpError>
+sig group_is_abelian(g: Group) -> Result<Bool, OpError>
+sig group_is_simple(g: Group) -> Result<Bool, OpError>
+sig group_is_solvable(g: Group) -> Result<Bool, OpError>
+sig group_is_nilpotent(g: Group) -> Result<Bool, OpError>
+sig group_is_valid(g: Group) -> Result<Bool, OpError>
+sig group_class_count(g: Group) -> Result<Int, OpError>
+sig group_exponent(g: Group) -> Result<Int, OpError>
+sig group_sylow_count(g: Group, p: Int) -> Result<Int, OpError>
+
+sig perm_compose(p: Perm, q: Perm) -> Result<Perm, OpError>
+sig perm_inverse(p: Perm) -> Result<Perm, OpError>
+sig perm_order(p: Perm) -> Result<Int, OpError>
+sig perm_sign(p: Perm) -> Result<Int, OpError>
+sig perm_group_order(g: PermGroup) -> Result<Int, OpError>
+sig perm_group_is_abelian(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_is_transitive(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_is_solvable(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_is_nilpotent(g: PermGroup) -> Result<Bool, OpError>
+sig perm_group_contains(g: PermGroup, p: Perm) -> Result<Bool, OpError>

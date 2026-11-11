@@ -21,27 +21,17 @@
 //! own headers, because a header travels with the archive: trusting it would
 //! let whoever served the bytes also choose the key they are checked against.
 //!
-//! # Why `add` refuses an unknown directory
-//!
-//! A vendored tree that `aevia-pkg` did not install has no recorded digest, so
-//! there is nothing to compare against. Overwriting it could destroy local
-//! edits; trusting it could vendor something nobody verified. It is refused,
-//! with the command that resolves it.
-
-use std::path::Path;
+//! Vendoring (`registry.rs`) uses [`verify`] and refuses to unpack anything
+//! that did not pass it.
 
 use aevia_registry_core::PackageId;
 use aevia_registry_core::signature::SignerKey;
 use aevia_registry_core::statement::PublishStatement;
 use aevia_registry_core::tarball;
-use aevia_registry_core::vm::human_bytes;
 
 use crate::App;
 use crate::error::CliError;
 use crate::package;
-
-/// The file that records which archive was unpacked into a vendor directory.
-const MARKER: &str = ".aevia-pkg-checksum";
 
 /// The armour headers that start a detached signature.
 const ARMOUR: [&str; 2] = [
@@ -212,117 +202,6 @@ pub async fn verify_command(
         }
     );
     Ok(())
-}
-
-/// `aevia-pkg add`: download, verify, unpack into `vendor/<name>/`.
-///
-/// # Errors
-///
-/// As [`verify`], plus a refusal when the vendor directory already holds
-/// something else, or a filesystem failure while unpacking.
-pub async fn add(
-    app: &App,
-    spec: &str,
-    dir: Option<&Path>,
-) -> Result<(), CliError> {
-    let (id, requested) = package::parse_target(spec)?;
-    let version = match requested {
-        | Some(version) => version,
-        | None => {
-            let page = app.client.crate_page(id.owner(), id.name()).await?;
-            page.selected.version
-        },
-    };
-    let verified = verify(app, &id, &version).await?;
-
-    let base = match dir {
-        | Some(dir) => dir.to_path_buf(),
-        | None => {
-            std::env::current_dir()
-                .map_err(|error| {
-                    CliError::new(format!("cannot read the current directory: {error}"))
-                })
-                .map(|cwd| package::find_root(&cwd).unwrap_or(cwd))?
-        },
-    };
-    let dest = base.join("vendor").join(id.name());
-
-    if dest.exists() {
-        let marker = std::fs::read_to_string(dest.join(MARKER)).ok();
-        let recorded = marker
-            .as_deref()
-            .and_then(|text| text.lines().next())
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
-        if recorded.eq_ignore_ascii_case(&verified.checksum) {
-            println!(
-                "{} {} is already vendored in `{}`",
-                verified.id,
-                verified.version,
-                dest.display()
-            );
-            print_dependency_line(&id);
-            return Ok(());
-        }
-        return Err(CliError::new(format!(
-            "`{}` already exists and {}",
-            dest.display(),
-            if recorded.is_empty() {
-                "was not installed by `aevia-pkg`, so its contents are unknown".to_string()
-            } else {
-                format!("holds {recorded}, not {}", verified.checksum)
-            }
-        ))
-        .with_next_step(format!(
-            "remove `{}` and run the command again to vendor {} {}",
-            dest.display(),
-            verified.id,
-            verified.version
-        )));
-    }
-
-    let written = tarball::unpack(&verified.bytes, &dest).map_err(CliError::from)?;
-    std::fs::write(
-        dest.join(MARKER),
-        format!(
-            "{}\n{} {}\n",
-            verified.checksum, verified.id, verified.version
-        ),
-    )
-    .map_err(|error| {
-        CliError::new(format!(
-            "cannot record the checksum in `{}`: {error}",
-            dest.display()
-        ))
-    })?;
-
-    println!(
-        "vendored {} {} into `{}` ({} files, {})",
-        verified.id,
-        verified.version,
-        dest.display(),
-        written.len(),
-        human_bytes(verified.bytes.len() as u64)
-    );
-    println!(
-        "checksum  {} (signed by {} {})",
-        verified.checksum, verified.key_kind, verified.fingerprint
-    );
-    print_dependency_line(&id);
-    Ok(())
-}
-
-/// Prints the `aevia.toml` line to paste, in the toolchain's own spelling.
-fn print_dependency_line(id: &PackageId) {
-    println!();
-    println!("add this to `aevia.toml`:");
-    println!();
-    println!(
-        "{} = {{ path = \"vendor/{}\" }}",
-        package::import_root(id.name()),
-        id.name()
-    );
 }
 
 /// Splits a signature response into the statement it covers and the signature.

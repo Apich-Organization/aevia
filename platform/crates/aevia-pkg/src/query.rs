@@ -177,8 +177,8 @@ fn print_page(page: &CratePage) {
         println!("dependencies");
         for dependency in &page.dependencies {
             println!(
-                "  {} = {{ path = \"{}\" }}",
-                dependency.import, dependency.path
+                "  {} = {} {}",
+                dependency.import, dependency.package, dependency.req
             );
         }
     }

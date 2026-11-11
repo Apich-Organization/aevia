@@ -31,6 +31,22 @@ pub async fn archive(
 ) -> ApiResult<Response> {
     let (id, row) = resolve(&state, &owner, &name, &version).await?;
     let bytes = state.storage.read(&id, &row.version)?;
+    // The catalogue's checksum is what the index, the signature and the lock
+    // files of every consumer name. Serving bytes that hash to something else
+    // would hand a client an archive its own verification must reject; saying
+    // so here turns silent storage corruption into an operator-visible error.
+    let actual = aevia_registry_core::tarball::checksum(&bytes);
+    if !actual.eq_ignore_ascii_case(&row.checksum) {
+        return Err(ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "E_INTEGRITY",
+            format!(
+                "the stored archive of {id} {} hashes to {actual}, but the catalogue (and the \
+                 signature) say {}; storage and catalogue have diverged",
+                row.version, row.checksum
+            ),
+        ));
+    }
     // Counting is best-effort: a download that succeeded must not fail because
     // the counter could not be bumped.
     let pool = state.pool.clone();

@@ -30,6 +30,8 @@
 
 pub mod bindings;
 pub mod codegen;
+pub mod device;
+pub mod domains;
 pub mod error;
 #[cfg(feature = "jit")]
 pub mod jit;

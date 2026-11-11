@@ -481,6 +481,27 @@ const EXPECTED_MISMATCHES: &[(&str, &str, &str, &str)] = &[
          `Result<SdePath<s>, SdeError>` from RateOf/DiffusionOf",
         "frontend (aevia-types builtins/check)",
     ),
+    (
+        "8.9.1",
+        "sde_ensemble_diag",
+        "generic scheme is loose; `Checker::sde_call` types the call like \
+         `sdeint_diag` and wraps the result in a tensor",
+        "frontend (aevia-types builtins/check)",
+    ),
+    (
+        "8.9",
+        "odeint_order",
+        "generic scheme is loose; `Checker::ode_ext_call` types the call \
+         through RateOf applied once per derivative order",
+        "frontend (aevia-types builtins/check)",
+    ),
+    (
+        "8.9",
+        "odeint_order_with",
+        "generic scheme is loose; `Checker::ode_ext_call` types the call \
+         through RateOf applied once per derivative order",
+        "frontend (aevia-types builtins/check)",
+    ),
 ];
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]

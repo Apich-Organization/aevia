@@ -385,18 +385,17 @@ fn parse_fields(
 }
 
 fn parse_version(version: &str) -> Result<String> {
-    let parsed = semver::Version::parse(version).map_err(|error| {
+    let parsed = aevia_resolve::Version::parse(version).map_err(|error| {
         Error::new(
             E_STATEMENT,
-            format!("`{version}` is not a semantic version: {error}"),
+            format!("`{version}` is not a semantic version: {}", error.reason),
         )
     })?;
-    if !parsed.pre.is_empty() || !parsed.build.is_empty() {
+    if !parsed.build.is_empty() {
         return Err(Error::new(
             E_STATEMENT,
             format!(
-                "`{version}` carries a pre-release or build suffix; `aevia.toml` writes \
-                 `major.minor.patch` only"
+                "`{version}` carries build metadata; two versions that differ only in build                  metadata have the same precedence, so a registry cannot tell them apart —                  publish `major.minor.patch` or `major.minor.patch-pre-release`"
             ),
         ));
     }
@@ -492,12 +491,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pre_release_version_is_refused() {
+    fn a_pre_release_version_is_accepted_and_build_metadata_is_refused() {
         let text = publish()
             .render()
             .replace("version: 0.2.0", "version: 0.2.0-rc.1");
+        let statement = PublishStatement::parse(&text).expect("a pre-release is a version");
+        assert_eq!(statement.version, "0.2.0-rc.1");
+        let text = publish()
+            .render()
+            .replace("version: 0.2.0", "version: 0.2.0+b1");
         let error = PublishStatement::parse(&text).expect_err("refused");
-        assert!(error.message.contains("pre-release"), "{}", error.message);
+        assert!(error.message.contains("build metadata"), "{}", error.message);
     }
 
     #[test]

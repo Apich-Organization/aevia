@@ -29,3 +29,8 @@ num-traits.workspace = true
 # sees.
 aevia-syntax.workspace = true
 aevia-types.workspace = true
+# The domain tests run the `tests/rssn_*.aev` suites through the real interpreter
+# and compare the coverage report with the chapter-8 names. `aevia-core` depends
+# on this crate, so this is a dev-dependency cycle, which cargo allows.
+aevia-core.workspace = true
+aevia-stdlib-model = { path = "../aevia-stdlib-model" }

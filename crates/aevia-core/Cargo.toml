@@ -16,6 +16,7 @@ aevia-dim.workspace = true
 aevia-syntax.workspace = true
 aevia-types.workspace = true
 aevia-ir.workspace = true
+aevia-resolve.workspace = true
 aevia-rssn.workspace = true
 aevia-std = { path = "../aevia-std" }
 num-bigint.workspace = true

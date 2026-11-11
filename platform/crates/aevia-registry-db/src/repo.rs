@@ -306,8 +306,8 @@ pub async fn create_package(
 /// # Errors
 ///
 /// `E_DB` when the query fails.
-pub async fn update_package_meta(
-    pool: &PgPool,
+pub async fn update_package_meta<'e, E: sqlx::PgExecutor<'e>>(
+    pool: E,
     id: i64,
     description: Option<&str>,
     license: Option<&str>,
@@ -338,8 +338,8 @@ pub async fn update_package_meta(
 /// # Errors
 ///
 /// `E_DB` when the query fails.
-pub async fn touch_package(
-    pool: &PgPool,
+pub async fn touch_package<'e, E: sqlx::PgExecutor<'e>>(
+    pool: E,
     id: i64,
 ) -> Result<(), Error> {
     sqlx::query("UPDATE packages SET updated_at = now() WHERE id = $1")
@@ -430,7 +430,7 @@ pub async fn packages_for_publisher(
 
 // ------------------------------------------------------------------ versions
 
-/// Writes a new version.
+/// Writes a new version and its dependency rows in one transaction.
 ///
 /// # Errors
 ///
@@ -439,7 +439,29 @@ pub async fn insert_version(
     pool: &PgPool,
     new: &NewVersion<'_>,
 ) -> Result<Version, Error> {
-    sqlx::query_as::<_, Version>(
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| sql_error("cannot start the publish transaction", error))?;
+    let version = insert_version_in(&mut transaction, new).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| sql_error("cannot commit the version", error))?;
+    Ok(version)
+}
+
+/// [`insert_version`] inside a transaction the caller owns, so the publish can
+/// keep the catalogue, the archive file and the log entry in step.
+///
+/// # Errors
+///
+/// `E_CONFLICT` when the version already exists.
+pub async fn insert_version_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    new: &NewVersion<'_>,
+) -> Result<Version, Error> {
+    let version = sqlx::query_as::<_, Version>(
         "INSERT INTO versions (
             package_id, version, checksum, size_bytes, manifest, dependencies, readme,
             published_by, key_kind, fingerprint, signature, statement
@@ -458,9 +480,77 @@ pub async fn insert_version(
     .bind(new.fingerprint)
     .bind(new.signature)
     .bind(new.statement)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| sql_error("cannot record the version", error))?;
+    for dependency in aevia_registry_core::index::deps_from_json(&new.dependencies) {
+        sqlx::query(
+            "INSERT INTO version_dependencies (version_id, dep_key, req, import)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(version.id)
+        .bind(dependency.package.to_ascii_lowercase())
+        .bind(&dependency.req)
+        .bind(&dependency.import)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| sql_error("cannot record a dependency", error))?;
+    }
+    Ok(version)
+}
+
+/// The newest non-yanked version of every package that depends on `dep_key`
+/// (`owner/name`, name folded), at most `limit` packages.
+///
+/// # Errors
+///
+/// `E_DB` when the query fails.
+pub async fn reverse_dependencies(
+    pool: &PgPool,
+    dep_key: &str,
+    limit: i64,
+) -> Result<Vec<crate::models::Dependent>, Error> {
+    sqlx::query_as::<_, crate::models::Dependent>(
+        "SELECT * FROM (
+             SELECT DISTINCT ON (p.id)
+                    o.handle AS owner_handle, p.name AS name, v.version AS version, d.req AS req
+             FROM version_dependencies d
+             JOIN versions v ON v.id = d.version_id
+             JOIN packages p ON p.id = v.package_id
+             JOIN publishers o ON o.id = p.owner_id
+             WHERE d.dep_key = $1 AND NOT v.yanked
+             ORDER BY p.id, v.created_at DESC
+         ) AS newest
+         ORDER BY owner_handle, name
+         LIMIT $2",
+    )
+    .bind(dep_key)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| sql_error("cannot read the reverse dependencies", error))
+}
+
+/// How many distinct packages depend on `dep_key` through a non-yanked version.
+///
+/// # Errors
+///
+/// `E_DB` when the query fails.
+pub async fn dependents_count(
+    pool: &PgPool,
+    dep_key: &str,
+) -> Result<i64, Error> {
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT v.package_id)
+         FROM version_dependencies d JOIN versions v ON v.id = d.version_id
+         WHERE d.dep_key = $1 AND NOT v.yanked",
+    )
+    .bind(dep_key)
     .fetch_one(pool)
     .await
-    .map_err(|error| sql_error("cannot record the version", error))
+    .map_err(|error| sql_error("cannot count the dependents", error))?;
+    Ok(count)
 }
 
 /// Every version of a package, newest first.
@@ -523,8 +613,8 @@ pub async fn latest_version(
 /// # Errors
 ///
 /// `E_DB` when the query fails.
-pub async fn set_yanked(
-    pool: &PgPool,
+pub async fn set_yanked<'e, E: sqlx::PgExecutor<'e>>(
+    pool: E,
     package_id: i64,
     version: &str,
     yanked: bool,
@@ -1134,14 +1224,35 @@ pub async fn append_log(
         .begin()
         .await
         .map_err(|error| sql_error("cannot start the log transaction", error))?;
+    let entry = append_log_in(&mut transaction, kind, summary, payload).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| sql_error("cannot commit the log entry", error))?;
+    Ok(entry)
+}
+
+/// [`append_log`] inside a transaction the caller owns. The advisory lock is
+/// held until that transaction ends, so the catalogue change and its log link
+/// become visible together or not at all.
+///
+/// # Errors
+///
+/// `E_DB` when a statement fails.
+pub async fn append_log_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    kind: &str,
+    summary: &str,
+    payload: serde_json::Value,
+) -> Result<LogEntry, Error> {
     // 0x6165766961 = "aevia", so the lock id is recognisable in pg_locks.
     sqlx::query("SELECT pg_advisory_xact_lock(1634759273)")
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await
         .map_err(|error| sql_error("cannot lock the log", error))?;
     let head: Option<(i64, String)> =
         sqlx::query_as("SELECT seq, entry_hash FROM publish_log ORDER BY seq DESC LIMIT 1")
-            .fetch_optional(&mut *transaction)
+            .fetch_optional(&mut **transaction)
             .await
             .map_err(|error| sql_error("cannot read the log head", error))?;
     let prev_hash = head
@@ -1158,7 +1269,7 @@ pub async fn append_log(
     hasher.update(b"\n");
     hasher.update(payload_text.as_bytes());
     let entry_hash = hex::encode(hasher.finalize());
-    let entry = sqlx::query_as::<_, LogEntry>(
+    sqlx::query_as::<_, LogEntry>(
         "INSERT INTO publish_log (kind, summary, payload, prev_hash, entry_hash)
          VALUES ($1, $2, $3, $4, $5) RETURNING *",
     )
@@ -1167,14 +1278,9 @@ pub async fn append_log(
     .bind(&payload)
     .bind(&prev_hash)
     .bind(&entry_hash)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await
-    .map_err(|error| sql_error("cannot append to the log", error))?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| sql_error("cannot commit the log entry", error))?;
-    Ok(entry)
+    .map_err(|error| sql_error("cannot append to the log", error))
 }
 
 /// Log entries from `from_seq`, oldest first.

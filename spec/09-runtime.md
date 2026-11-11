@@ -395,6 +395,22 @@ rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策�
 需要 Rust 1.97 或更新版本（RSSN 的最低版本）。默认构建仍关闭 JIT；
 关闭时 `@jit` 报 `E1001`。
 
+### 9.6.4 设备目标 / Device targets
+
+**English summary.** `@jit` stays a scalar, CPU, machine-code path. Data-parallel
+execution on `Cpu`/`CpuParallel`/`Gpu(n)` is a separate mechanism (rssn
+`Device`, `spec/10-backend.md` §10.6.5); a function that qualifies for `@jit`
+also qualifies for the device batch path.
+
+- `@jit(target = Cpu)` 等价于 `@jit`（单点机器码）。`target = Gpu(n)`
+  选择**批量**设备路径，没有 `core.gpu` 时仍为 `E1001("core.gpu")`（检查期）。
+- 设备路径和 JIT 共用同一个降低（Core IR → SSA 指令）和同一门控（§9.6.1）；
+  差别只在后端：JIT 编译一个点的函数，设备在 `rows` 行上启动一个内核。
+- `CpuParallel` 的结果与 `Cpu` 逐位相同，线程数不改变任何结果（延伸 §9.7.2）。
+  `Gpu(n)` 是 `f32`，只保证舍入误差内一致，故不进入纯函数、位确定的原语。
+- 设备不可用、函数不可降低、设备报错：回退解释器逐行求值，值不变（CPU 上）。
+  `AEVIA_PARALLEL_TRACE=1` 同样打印设备回退的原因。
+
 ## 9.7 内存与并发
 
 ### 9.7.1 内存
@@ -432,6 +448,13 @@ rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策�
   副本不再嵌套并行（避免同一池内死锁），并保留解释器自身的调用深度保护。
 - 每个工作线程一个 kernel `Session`（线程本地）；`Session` 的 `RefCell`
   不跨线程。
+- **数值内核的并行审计。** `par_map`/`par_tabulate` 保持输入序、`par_reduce` 按定长块
+  折叠，二者与线程数无关。接入同一规则的数值路径：(1) `sparse @ dense`（含 `Bcsr`）
+  按固定 256 行块并行，每个输出行由一个工作项顺序累加，逐位等于顺序内核；(2)
+  `sde_ensemble_diag/general` 把"成员 `i`"做成部分应用的内建（`Ctor{adt=MAX}`）经
+  `par_map` 的副本执行，成员种子 `ensemble_seed(seed, i)` 只依赖 `(seed, i)`。
+  不并行（有意）：ODE/SDE 单条路径的时间步、Krylov 迭代、`tabulate`（沿用 `par_tabulate`
+  显式并行）。含闭包字段的值（`ode_solve` 的 `at`）不可跨线程，回退顺序。
 
 ### 9.7.3 并发任务
 

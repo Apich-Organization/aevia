@@ -449,6 +449,91 @@ pub fn cg_precond(
     })
 }
 
+/// Which Krylov method [`krylov_precond`] runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Krylov {
+    /// Restarted GMRES(`restart`) with right preconditioning: any square
+    /// nonsingular matrix; the residual norm never increases.
+    Gmres {
+        /// The restart length (the Krylov basis size before restarting).
+        restart: usize,
+    },
+    /// BiCGSTAB: any square nonsingular matrix, short recurrences (constant
+    /// memory), with a possibly irregular residual history.
+    Bicgstab,
+}
+
+/// Preconditioned GMRES or BiCGSTAB from a zero start, for a **general**
+/// (possibly nonsymmetric) square matrix.
+///
+/// The preconditioners are those of [`cg_precond`] except that `Ic0` and the
+/// symmetric `Auto` choice need a symmetric matrix: here `Ic0` is replaced by
+/// `Ilu0` and `Auto` tries `Ilu0` then `Jacobi`. A factorisation that breaks
+/// down falls back to Jacobi, and the kind actually applied is reported. The
+/// iteration is sequential (rssn's Krylov kernels), so the result does not
+/// depend on the thread count.
+///
+/// # Errors
+/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+pub fn krylov_precond(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_iterations: usize,
+    method: Krylov,
+    kind: PrecondKind,
+    block: Option<(usize, usize)>,
+) -> Result<PrecondCgResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if b.len() != a.rows {
+        return Err(NumericError::ShapeMismatch(format!(
+            "matrix has {} rows, right-hand side has {} entries",
+            a.rows,
+            b.len()
+        )));
+    }
+    let csr = rssn::kernels::krylov::Csr {
+        rows: a.rows,
+        cols: a.cols,
+        indptr: a.row_ptr.to_vec(),
+        indices: a.col_idx.to_vec(),
+        values: a.values.to_vec(),
+    };
+    let kind = match kind {
+        | PrecondKind::Ic0 => PrecondKind::Ilu0,
+        | PrecondKind::Auto if block.is_none() => PrecondKind::Ilu0,
+        | other => other,
+    };
+    let built = build_preconditioner(&csr, kind, block);
+    let apply = |x: &[f64], y: &mut [f64]| csr.matvec(x, y);
+    let precondition = |r: &[f64], z: &mut [f64]| built.apply(r, z);
+    let result = match method {
+        | Krylov::Gmres { restart } => {
+            rssn::kernels::krylov::gmres(
+                apply,
+                precondition,
+                b,
+                None,
+                restart.max(1),
+                tolerance,
+                max_iterations,
+            )
+        },
+        | Krylov::Bicgstab => {
+            rssn::kernels::krylov::bicgstab(apply, precondition, b, None, tolerance, max_iterations)
+        },
+    };
+    Ok(PrecondCgResult {
+        x: result.x,
+        iterations: result.iterations,
+        residual: result.residual,
+        converged: result.converged,
+        precond: built.name(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,5 +680,165 @@ mod tests {
             assert!(r.iterations <= plain.iterations, "{name}");
             assert!(r.x.iter().zip(&plain.x).all(|(p, q)| (p - q).abs() < 1e-6));
         }
+    }
+
+    /// A nonsymmetric, diagonally dominant convection-diffusion-like matrix.
+    fn convection(n: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+        let (mut ptr, mut idx, mut val) = (vec![0], Vec::new(), Vec::new());
+        for i in 0..n {
+            if i > 0 {
+                idx.push(i - 1);
+                val.push(-1.6);
+            }
+            idx.push(i);
+            val.push(4.0);
+            if i + 1 < n {
+                idx.push(i + 1);
+                val.push(-0.4);
+            }
+            ptr.push(idx.len());
+        }
+        (ptr, idx, val)
+    }
+
+    #[test]
+    fn gmres_and_bicgstab_solve_a_nonsymmetric_system() {
+        let n = 300;
+        let (ptr, idx, val) = convection(n);
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 7) as f64).collect();
+        let reference = lu_solve(&a, &b).unwrap();
+        for method in [Krylov::Gmres { restart: 40 }, Krylov::Bicgstab] {
+            for kind in [
+                PrecondKind::Identity,
+                PrecondKind::Jacobi,
+                PrecondKind::Ilu0,
+            ] {
+                let result = krylov_precond(&a, &b, 1e-12, 1000, method, kind, None).unwrap();
+                assert!(result.converged, "{method:?} {kind:?}: {}", result.residual);
+                let error = result
+                    .x
+                    .iter()
+                    .zip(&reference)
+                    .map(|(x, r)| (x - r).abs())
+                    .fold(0.0, f64::max);
+                assert!(error < 1e-9, "{method:?} {kind:?}: error {error}");
+                assert_eq!(
+                    result.precond,
+                    match kind {
+                        | PrecondKind::Identity => "Identity",
+                        | PrecondKind::Jacobi => "Jacobi",
+                        | _ => "Ilu0",
+                    }
+                );
+            }
+        }
+        // ILU(0) of a tridiagonal matrix is its exact LU, so it converges in
+        // one iteration where the unpreconditioned method needs many.
+        let plain = krylov_precond(
+            &a,
+            &b,
+            1e-12,
+            1000,
+            Krylov::Gmres { restart: 40 },
+            PrecondKind::Identity,
+            None,
+        )
+        .unwrap();
+        let ilu = krylov_precond(
+            &a,
+            &b,
+            1e-12,
+            1000,
+            Krylov::Gmres { restart: 40 },
+            PrecondKind::Ilu0,
+            None,
+        )
+        .unwrap();
+        assert!(
+            ilu.iterations < plain.iterations,
+            "{} vs {}",
+            ilu.iterations,
+            plain.iterations
+        );
+        // `Ic0` and `Auto` are replaced by ILU(0) for a general matrix.
+        let auto = krylov_precond(
+            &a,
+            &b,
+            1e-12,
+            1000,
+            Krylov::Bicgstab,
+            PrecondKind::Auto,
+            None,
+        )
+        .unwrap();
+        assert_eq!(auto.precond, "Ilu0");
+    }
+
+    #[test]
+    fn krylov_solvers_reject_bad_shapes_and_report_non_convergence() {
+        let (ptr, idx, val) = convection(10);
+        let square = Csr {
+            rows: 10,
+            cols: 10,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        assert!(matches!(
+            krylov_precond(
+                &square,
+                &[1.0; 9],
+                1e-8,
+                10,
+                Krylov::Bicgstab,
+                PrecondKind::Identity,
+                None
+            ),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+        let wide = Csr {
+            rows: 10,
+            cols: 11,
+            ..square
+        };
+        assert!(matches!(
+            krylov_precond(
+                &wide,
+                &[1.0; 10],
+                1e-8,
+                10,
+                Krylov::Gmres { restart: 5 },
+                PrecondKind::Identity,
+                None
+            ),
+            Err(NumericError::NotSquare)
+        ));
+        // Too few iterations is `converged = false`, not an error.
+        let (ptr, idx, val) = convection(200);
+        let big = Csr {
+            rows: 200,
+            cols: 200,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let result = krylov_precond(
+            &big,
+            &[1.0; 200],
+            1e-14,
+            2,
+            Krylov::Gmres { restart: 1 },
+            PrecondKind::Identity,
+            None,
+        )
+        .unwrap();
+        assert!(!result.converged);
     }
 }

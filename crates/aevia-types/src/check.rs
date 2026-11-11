@@ -2447,13 +2447,28 @@ impl Checker {
             // §3.10.2 rule 6 / §3.5.1: a type-level equation that still has
             // several unknowns after the declaration cannot be expressed in its
             // scheme; it is genuinely ambiguous and reported as `E0304`.
-            if self.infer.take_unsolved_nat_equations() > 0 {
-                self.error_help(
-                    "E0304",
-                    "cannot infer the type-level shape extents in this declaration",
-                    decl.span,
-                    "the equation involves several unknown extents; add an annotation that determines them, for example a concrete `Tensor<[3], Float]`",
-                );
+            for unsolved in self.infer.take_unsolved_nat_equations() {
+                if unsolved.linear {
+                    self.error_help(
+                        "E0304",
+                        format!(
+                            "cannot infer the type-level extents; the equation is ambiguous: {}",
+                            unsolved.text
+                        ),
+                        decl.span,
+                        "the equation involves several unknown extents; make the shapes agree, or add an annotation that determines them (for example a concrete `Tensor<[3], Float>`)",
+                    );
+                } else {
+                    self.error_help(
+                        "E0304",
+                        format!(
+                            "cannot solve the type-level equation {} (a product of unknown extents)",
+                            unsolved.text
+                        ),
+                        decl.span,
+                        "a product of unknowns is kept symbolic and only cancels against the same product (`n * m` and `m * n` agree); it cannot be solved for an unknown, so bind one factor",
+                    );
+                }
             }
         }
 
@@ -4875,6 +4890,7 @@ impl Checker {
                 // solver may bind it from a shape equation.
                 | Some(Kind::Nat) => {
                     let nat = self.infer.fresh_nat();
+                    self.infer.name_nat(&nat, &param.name, true);
                     self.nat_params.push((param.name.clone(), nat));
                 },
                 // §2/§3.6: a row parameter is usable as a record tail.
@@ -4898,6 +4914,7 @@ impl Checker {
                         let dim = self.infer.fresh_dim();
                         self.dim_params.push((param.name.clone(), dim));
                         let nat = self.infer.fresh_nat();
+                        self.infer.name_nat(&nat, &param.name, true);
                         self.nat_params.push((param.name.clone(), nat));
                         let row = self.infer.fresh_row();
                         self.row_params.push((param.name.clone(), row));
@@ -6796,14 +6813,18 @@ impl Checker {
                     elem: b,
                 },
             ) => {
-                if let Err(error) = self.infer.unify_shape(shape, b_shape) {
-                    self.report_unify(error, span);
-                }
+                let shape = match self.infer.broadcast_shape(shape, b_shape) {
+                    | Ok(shape) => shape,
+                    | Err(error) => {
+                        self.report_unify(error, span);
+                        shape.clone()
+                    },
+                };
                 let a = self.force_scalar(&self.infer.resolve(a));
                 let b = self.force_scalar(&self.infer.resolve(b));
                 let elem = self.add_type(op, &a, &b, left_expr, right_expr, span);
                 Type::Tensor {
-                    shape: shape.clone(),
+                    shape,
                     elem: Box::new(elem),
                 }
             },
@@ -6937,14 +6958,18 @@ impl Checker {
                     elem: b,
                 },
             ) => {
-                if let Err(error) = self.infer.unify_shape(shape, b_shape) {
-                    self.report_unify(error, span);
-                }
+                let shape = match self.infer.broadcast_shape(shape, b_shape) {
+                    | Ok(shape) => shape,
+                    | Err(error) => {
+                        self.report_unify(error, span);
+                        shape.clone()
+                    },
+                };
                 let a = self.force_scalar(&self.infer.resolve(a));
                 let b = self.force_scalar(&self.infer.resolve(b));
                 let elem = self.mul_type(&a, &b, span);
                 Type::Tensor {
-                    shape: shape.clone(),
+                    shape,
                     elem: Box::new(elem),
                 }
             },
@@ -7018,14 +7043,18 @@ impl Checker {
                     elem: b,
                 },
             ) => {
-                if let Err(error) = self.infer.unify_shape(shape, b_shape) {
-                    self.report_unify(error, span);
-                }
+                let shape = match self.infer.broadcast_shape(shape, b_shape) {
+                    | Ok(shape) => shape,
+                    | Err(error) => {
+                        self.report_unify(error, span);
+                        shape.clone()
+                    },
+                };
                 let a = self.force_scalar(&self.infer.resolve(a));
                 let b = self.force_scalar(&self.infer.resolve(b));
                 let elem = self.div_type(&a, &b, span);
                 Type::Tensor {
-                    shape: shape.clone(),
+                    shape,
                     elem: Box::new(elem),
                 }
             },
@@ -7577,7 +7606,10 @@ impl Checker {
                 // §3.5.1: `reshape<[3, 2]>(a)`, `zeros_of<[3, 4]>()` and
                 // `ones_of<[3, 4]>()` name their target in a *shape* type
                 // argument, so the result has the refined shape.
-                if matches!(name.as_str(), "reshape" | "zeros_of" | "ones_of") {
+                if matches!(
+                    name.as_str(),
+                    "reshape" | "zeros_of" | "ones_of" | "refine_shape"
+                ) {
                     return self.shape_constructor(name, type_args, args, span);
                 }
                 // §4.9.4: `check<d>(x)` names the dimension to materialise. A
@@ -7713,6 +7745,12 @@ impl Checker {
                     | "solve_ivp"
                     | "sdeint_diag"
                     | "sdeint_general"
+                    | "sde_ensemble_diag"
+                    | "sde_ensemble_general"
+                    | "ode_solve"
+                    | "ode_bvp"
+                    | "odeint_order"
+                    | "odeint_order_with"
                     | "par_map"
                     | "rank"
                     | "shape"
@@ -7739,8 +7777,17 @@ impl Checker {
             }
             // §8.9.1: the SDE entry points use two built-in type functions —
             // `RateOf` for the drift and `DiffusionOf` for the diffusion.
-            if matches!(name.as_str(), "sdeint_diag" | "sdeint_general") {
+            if matches!(
+                name.as_str(),
+                "sdeint_diag" | "sdeint_general" | "sde_ensemble_diag" | "sde_ensemble_general"
+            ) {
                 return self.sde_call(name, args, span);
+            }
+            if matches!(
+                name.as_str(),
+                "ode_solve" | "ode_bvp" | "odeint_order" | "odeint_order_with"
+            ) {
+                return self.ode_ext_call(name, args, span);
             }
             // §3.11 / §4.9.4: the type-directed `Dyn` primitives.
             if name == "dyn" {
@@ -8556,6 +8603,76 @@ impl Checker {
         let target = type_args
             .first()
             .and_then(|ty| self.shape_type_argument(ty));
+        // `refine_shape<[3, 2]>(a) : Option<Tensor<[3, 2], τ>>` (§3.5.1): the
+        // run-time check that turns a rank-only (or differently refined) tensor
+        // into a refined one. The branch that matches `Some(b)` knows `b`'s
+        // extents statically; the `None` branch is the "any other shape" case.
+        if name == "refine_shape" {
+            if args.len() != 1 {
+                self.error(
+                    "E0315",
+                    format!("`refine_shape` takes 1 argument, found {}", args.len()),
+                    span,
+                );
+                for arg in args {
+                    self.synth(arg);
+                }
+                return Type::Error;
+            }
+            let arg_ty = self.synth(&args[0]);
+            let (source_shape, elem) = match self.infer.resolve(&arg_ty) {
+                | Type::Tensor { shape, elem } => (shape, (*elem).clone()),
+                | other => {
+                    self.error_help(
+                        "E0302",
+                        format!("`refine_shape` expects a tensor, found {other}"),
+                        args[0].span,
+                        "refine a `Tensor<n, τ>`",
+                    );
+                    return Type::Error;
+                },
+            };
+            let Some(target) = target else {
+                self.error_help(
+                    "E0315",
+                    "`refine_shape` needs its target shape as a type argument",
+                    span,
+                    "write `refine_shape<[3, 2]>(a)`",
+                );
+                return Type::Error;
+            };
+            if usize::try_from(source_shape.rank()).unwrap_or(usize::MAX) != target.len() {
+                self.error_help(
+                    "E0302",
+                    format!(
+                        "cannot refine a rank-{} tensor to a shape of rank {}",
+                        source_shape.rank(),
+                        target.len()
+                    ),
+                    span,
+                    "`refine_shape` checks extents, never the rank",
+                );
+                return Type::Error;
+            }
+            // The check runs at run time, where a type-level variable has no
+            // value: only literal (or `?`) extents can be tested.
+            for extent in target.iter().flatten() {
+                if self.infer.resolve_nat(extent).as_const().is_none() {
+                    self.error_help(
+                        "E0304",
+                        format!(
+                            "`refine_shape` tests extents at run time, but `{}` has no run-time value",
+                            self.infer.render_nat(extent)
+                        ),
+                        span,
+                        "name literal extents, for example `refine_shape<[3, ?]>(a)`",
+                    );
+                    return Type::Error;
+                }
+            }
+            let target = self.infer.resolve_shape(&Shape::Refined(target));
+            return Type::option(Type::tensor(target, elem));
+        }
         if name == "reshape" {
             if args.len() != 1 {
                 self.error(
@@ -8775,6 +8892,184 @@ impl Checker {
         }
     }
 
+    /// The solution record of `ode_solve` / `ode_bvp` (§8.9).
+    fn ode_solution_type(
+        state: &Type,
+        time: &Dim,
+    ) -> Type {
+        let hit = Type::record(vec![
+            ("index".to_string(), Type::int()),
+            ("t".to_string(), Type::float(time.clone())),
+            ("y".to_string(), state.clone()),
+        ]);
+        Type::record(vec![
+            (
+                "t".to_string(),
+                Type::tensor(Shape::Rank(1), Type::float(time.clone())),
+            ),
+            ("y".to_string(), Type::tensor(Shape::Rank(1), state.clone())),
+            (
+                "at".to_string(),
+                Type::func(vec![Type::float(time.clone())], state.clone()),
+            ),
+            ("events".to_string(), Type::tensor(Shape::Rank(1), hit)),
+            ("nfev".to_string(), Type::int()),
+            ("rejected".to_string(), Type::int()),
+            ("method".to_string(), Type::string()),
+        ])
+    }
+
+    /// The event record of `ode_solve` and `sde_events`:
+    /// `{ g: (Float[T], s) -> Float[1], terminal: Bool, direction: Int }`.
+    fn event_record_type(
+        state: &Type,
+        time: &Dim,
+    ) -> Type {
+        Type::record(vec![
+            (
+                "g".to_string(),
+                Type::func(
+                    vec![Type::float(time.clone()), state.clone()],
+                    Type::float(Dim::one()),
+                ),
+            ),
+            ("terminal".to_string(), Type::bool()),
+            ("direction".to_string(), Type::int()),
+        ])
+    }
+
+    /// §8.9: `ode_solve`, `ode_bvp`, `odeint_order`, `odeint_order_with`.
+    ///
+    /// The right-hand side of an order-`n` equation takes `n + 1` arguments
+    /// `(t, y, y', …, y⁽ⁿ⁻¹⁾)` and answers `y⁽ⁿ⁾`; the type of the `k`-th
+    /// derivative is `RateOf` applied `k` times to the state type, so the
+    /// dimension of every derivative is tracked (`y : Float[L]` makes `y'`
+    /// `Float[L/T]` and `y''` `Float[L/T^2]`).
+    fn ode_ext_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        let expected = match name {
+            | "ode_solve" | "ode_bvp" => 5,
+            | "odeint_order" => 3,
+            | _ => 4,
+        };
+        if args.len() != expected {
+            self.error(
+                "E0315",
+                format!("`{name}` takes {expected} arguments, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        let time = Dim::base("Time");
+        let higher = name.starts_with("odeint_order");
+        let rhs_ty = self.synth(&args[0]);
+        let (state, order) = match self.infer.resolve(&rhs_ty) {
+            | Type::Fn(params, ret) if params.len() >= 2 && (higher || params.len() == 2) => {
+                if let Err(error) = self.infer.unify(&params[0], &Type::float(time.clone())) {
+                    self.report_unify(error, args[0].span);
+                }
+                let state = self.infer.resolve(&params[1]);
+                let order = params.len() - 1;
+                let mut derivative = state.clone();
+                for parameter in &params[2..] {
+                    derivative = self.rate_of(&derivative, span);
+                    if derivative.is_error() {
+                        break;
+                    }
+                    if let Err(error) = self.infer.unify(parameter, &derivative) {
+                        self.report_unify(error, args[0].span);
+                    }
+                }
+                if !derivative.is_error() {
+                    let top = self.rate_of(&derivative, span);
+                    if !top.is_error()
+                        && let Err(error) = self.infer.unify(&ret, &top)
+                    {
+                        self.report_unify(error, args[0].span);
+                    }
+                }
+                (state, order)
+            },
+            | other => {
+                let shape = if higher {
+                    "(Float[T], y, y', …, y⁽ⁿ⁻¹⁾) -> y⁽ⁿ⁾"
+                } else {
+                    "(Float[T], s) -> RateOf<s>"
+                };
+                self.error_help(
+                    "E0302",
+                    format!(
+                        "the right-hand side of `{name}` must be a function `{shape}`, found {other}"
+                    ),
+                    args[0].span,
+                    "write `fn rhs(_t: Float[T], s: State): Rate = …`",
+                );
+                for arg in &args[1..] {
+                    self.synth(arg);
+                }
+                return Type::Error;
+            },
+        };
+        let time_series = Type::tensor(Shape::Rank(1), Type::float(time.clone()));
+        let interval = Type::record(vec![
+            ("0".to_string(), Type::float(time.clone())),
+            ("1".to_string(), Type::float(time.clone())),
+        ]);
+        match name {
+            | "ode_solve" => {
+                self.check(&args[1], &state);
+                self.check(&args[2], &interval);
+                self.synth(&args[3]);
+                let events = Type::tensor(Shape::Rank(1), Self::event_record_type(&state, &time));
+                self.check(&args[4], &events);
+                Self::ode_solution_type(&state, &time)
+            },
+            | "ode_bvp" => {
+                self.check(&args[1], &state);
+                self.check(&args[2], &interval);
+                // `bc(y(t0), y(t1))` answers one residual per state component;
+                // the residuals may carry any one dimension.
+                let residual_dim = self.infer.fresh_dim();
+                let boundary = Type::func(
+                    vec![state.clone(), state.clone()],
+                    Type::tensor(Shape::Rank(1), Type::float(residual_dim)),
+                );
+                self.check(&args[3], &boundary);
+                self.synth(&args[4]);
+                Self::ode_solution_type(&state, &time)
+            },
+            | _ => {
+                // The initial value of every derivative, as a tuple.
+                let mut fields = Vec::with_capacity(order);
+                let mut derivative = state.clone();
+                for index in 0..order {
+                    if index > 0 {
+                        derivative = self.rate_of(&derivative, span);
+                    }
+                    fields.push((index.to_string(), derivative.clone()));
+                }
+                let initial = Type::record(fields.clone());
+                self.check(&args[1], &initial);
+                self.check(&args[2], &time_series);
+                if args.len() == 4 {
+                    self.synth(&args[3]);
+                }
+                Type::record(vec![
+                    ("t".to_string(), time_series),
+                    ("y".to_string(), Type::tensor(Shape::Rank(1), state)),
+                    ("d".to_string(), Type::tensor(Shape::Rank(1), initial)),
+                ])
+            },
+        }
+    }
+
     /// §8.9.1: the SDE entry points.
     ///
     /// `sdeint_diag : (((Float[T], s) -> RateOf<s>), ((Float[T], s) ->
@@ -8786,15 +9081,58 @@ impl Checker {
     /// because it depends on the value, not the type.
     fn sde_call(
         &mut self,
+        full_name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
+        // `sde_ensemble_diag(drift, diffusion, y0, opts, n)` is `sdeint_diag`
+        // run `n` times with member seeds: same typing, one more argument,
+        // and a tensor of results.
+        let ensemble = full_name.starts_with("sde_ensemble_");
+        let name = if ensemble {
+            if full_name.ends_with("general") {
+                "sdeint_general"
+            } else {
+                "sdeint_diag"
+            }
+        } else {
+            full_name
+        };
+        if ensemble && args.len() != 5 {
+            self.error(
+                "E0315",
+                format!("`{full_name}` takes 5 arguments, found {}", args.len()),
+                span,
+            );
+            for arg in args {
+                self.synth(arg);
+            }
+            return Type::Error;
+        }
+        let args = if ensemble {
+            self.check(&args[4], &Type::int());
+            &args[..4]
+        } else {
+            args
+        };
+        let result = self.sde_call_single(name, args, span);
+        if ensemble && !result.is_error() {
+            Type::tensor(Shape::Rank(1), result)
+        } else {
+            result
+        }
+    }
+
+    fn sde_call_single(
+        &mut self,
         name: &str,
         args: &[Expr],
         span: Span,
     ) -> Type {
-        const EXPECTED: usize = 4;
-        if args.len() != EXPECTED {
+        if args.len() != 4 {
             self.error(
                 "E0315",
-                format!("`{name}` takes {EXPECTED} arguments, found {}", args.len()),
+                format!("`{name}` takes 4 arguments, found {}", args.len()),
                 span,
             );
             for arg in args {
@@ -11560,7 +11898,15 @@ impl Checker {
                     left: left.clone(),
                     right: right.clone(),
                 };
-                let mut diagnostic = Diagnostic::error(code(&error), error.to_string(), span);
+                let mut diagnostic = Diagnostic::error(
+                    code(&error),
+                    format!(
+                        "shape mismatch: expected {}, found {}",
+                        self.infer.render_shape(&left),
+                        self.infer.render_shape(&right)
+                    ),
+                    span,
+                );
                 if left.rank() != right.rank() {
                     diagnostic = diagnostic.with_help(
                         "tensors of different rank do not broadcast (§3.5.3); \

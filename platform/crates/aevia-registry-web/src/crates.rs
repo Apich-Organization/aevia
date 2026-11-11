@@ -81,6 +81,8 @@ const DEPENDENCIES: Msg = Msg::new("dependencies", "依赖");
 const SECTIONS: Msg = Msg::new("Sections", "分区");
 const NO_VERSIONS: Msg = Msg::new("No versions have been published.", "尚未发布任何版本。");
 const NO_DEPENDENCIES: Msg = Msg::new("No dependencies.", "无依赖。");
+const DEPENDENTS: Msg = Msg::new("used by", "被依赖");
+const NO_DEPENDENTS: Msg = Msg::new("No published package depends on this one.", "尚无已发布的包依赖此包。");
 const DOWNLOAD: Msg = Msg::new("download", "下载");
 const NOT_STATED: Msg = Msg::new("not stated", "未声明");
 const OWNERS: Msg = Msg::new("owners", "发布者");
@@ -92,7 +94,6 @@ const KEY: Msg = Msg::new("key", "密钥");
 const STATUS: Msg = Msg::new("status", "状态");
 const ARCHIVE: Msg = Msg::new("archive", "归档");
 const IMPORT: Msg = Msg::new("import", "导入");
-const PATH: Msg = Msg::new("path", "路径");
 
 // The side panel.
 const LICENSE: Msg = Msg::new("license", "许可证");
@@ -422,6 +423,39 @@ pub fn crate_page(
             .collect()
     };
 
+    let dependent_rows: Vec<AnyView> = if page.dependents.is_empty() {
+        vec![
+            view! {
+                <tr>
+                    <td colspan="3" class="muted">{NO_DEPENDENTS.of(lang)}</td>
+                </tr>
+            }
+            .into_any(),
+        ]
+    } else {
+        page.dependents
+            .iter()
+            .map(|dependent| {
+                view! {
+                    <tr>
+                        <th scope="row">
+                            <a href=format!("/crates/{}", dependent.package)>
+                                <code>{dependent.package.clone()}</code>
+                            </a>
+                        </th>
+                        <td>
+                            <code>{dependent.version.clone()}</code>
+                        </td>
+                        <td>
+                            <code>{dependent.req.clone()}</code>
+                        </td>
+                    </tr>
+                }
+                .into_any()
+            })
+            .collect()
+    };
+
     let dependency_rows: Vec<AnyView> = if page.dependencies.is_empty() {
         vec![
             view! {
@@ -441,7 +475,11 @@ pub fn crate_page(
                             <code>{dependency.import.clone()}</code>
                         </th>
                         <td>
-                            <code>{dependency.path.clone()}</code>
+                            <a href=format!("/crates/{}", dependency.package)>
+                                <code>{dependency.package.clone()}</code>
+                            </a>
+                            " "
+                            <code>{dependency.req.clone()}</code>
                         </td>
                     </tr>
                 }
@@ -520,6 +558,7 @@ pub fn crate_page(
                             <a href="#readme">{README.of(lang)}</a>
                             <a href="#versions">{VERSIONS.of(lang)}</a>
                             <a href="#dependencies">{DEPENDENCIES.of(lang)}</a>
+                            <a href="#dependents">{DEPENDENTS.of(lang)}</a>
                         </nav>
                         <section id="readme">
                             <h2>{README.of(lang)}</h2>
@@ -548,10 +587,23 @@ pub fn crate_page(
                                 <thead>
                                     <tr>
                                         <th scope="col">{IMPORT.of(lang)}</th>
-                                        <th scope="col">{PATH.of(lang)}</th>
+                                        <th scope="col">{PACKAGE.of(lang)}</th>
                                     </tr>
                                 </thead>
                                 <tbody>{dependency_rows}</tbody>
+                            </table>
+                        </section>
+                        <section id="dependents">
+                            <h2>{DEPENDENTS.of(lang)}</h2>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th scope="col">{PACKAGE.of(lang)}</th>
+                                        <th scope="col">{VERSION.of(lang)}</th>
+                                        <th scope="col">{DEPENDENCIES.of(lang)}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>{dependent_rows}</tbody>
                             </table>
                         </section>
                     </div>
@@ -618,6 +670,7 @@ mod tests {
     use super::*;
     use aevia_registry_core::name::PackageId;
     use aevia_registry_core::vm::DependencyView;
+    use aevia_registry_core::vm::DependentView;
     use aevia_registry_core::vm::OwnerView;
     use aevia_registry_core::vm::VersionView;
 
@@ -658,7 +711,13 @@ mod tests {
             }],
             dependencies: vec![DependencyView {
                 import: "Kinematics".to_string(),
-                path: "../kinematics".to_string(),
+                package: "apich/kinematics".to_string(),
+                req: "^1.2".to_string(),
+            }],
+            dependents: vec![DependentView {
+                package: "apich/plot".to_string(),
+                version: "2.1.0".to_string(),
+                req: "^1".to_string(),
             }],
             created_at: "2026-01-02T00:00:00Z".to_string(),
             updated_at: "2026-11-01T10:00:00Z".to_string(),
@@ -681,6 +740,9 @@ mod tests {
         assert!(html.contains("/api/v1/download/apich/units-extra/1.2.0"));
         assert!(html.contains("sha256:9f86d081884c7d659a2feaa0c55ad015"));
         assert!(html.contains("Kinematics"), "dependencies are listed");
+        assert!(html.contains("apich/kinematics"), "the package is named");
+        assert!(html.contains("/crates/apich/kinematics"), "and linked");
+        assert!(html.contains("apich/plot"), "reverse dependencies are listed");
         assert!(html.contains("yank"), "a manager sees the yank control");
     }
 
@@ -693,6 +755,7 @@ mod tests {
         bare.readme_html = None;
         bare.versions = Vec::new();
         bare.dependencies = Vec::new();
+        bare.dependents = Vec::new();
         bare.owners = Vec::new();
         bare.can_manage = false;
         let html = crate_page(Lang::En, &bare, None);

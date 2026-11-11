@@ -491,6 +491,55 @@ pub(crate) fn spmm<T: Clone, Rg: Ring<T>>(
     Ok(out)
 }
 
+/// Products below this many multiply-adds run on the calling thread.
+const PARALLEL_WORK: usize = 1 << 17;
+
+/// Rows per parallel work item. A constant, so the partition never depends on
+/// the number of threads (and, because every output row is accumulated by one
+/// item in column order, neither does any bit of the result).
+const ROW_BLOCK: usize = 256;
+
+/// `A · X` for an `f64` CSR `A` and a dense `X` of `n` columns, row-parallel
+/// for large products.
+///
+/// Bit-identical to [`spmm`] with [`FloatRing`] (the first product of an
+/// entry is stored, later ones are added in column order) and to itself under
+/// any thread count: each output row is computed by exactly one work item.
+pub(crate) fn spmm_f64(
+    a: &Csr<'_, f64>,
+    x: &[f64],
+    n: usize,
+) -> Vec<Option<f64>> {
+    use rayon::prelude::*;
+    let mut out: Vec<Option<f64>> = vec![None; a.rows * n];
+    if out.is_empty() {
+        return out;
+    }
+    let block = |(index, chunk): (usize, &mut [Option<f64>])| {
+        for (local, row_out) in chunk.chunks_mut(n).enumerate() {
+            let i = index * ROW_BLOCK + local;
+            for k in a.ptr[i]..a.ptr[i + 1] {
+                let j = a.idx[k];
+                for (c, slot) in row_out.iter_mut().enumerate() {
+                    let product = a.vals[k] * x[j * n + c];
+                    *slot = Some(match *slot {
+                        | None => product,
+                        | Some(sum) => sum + product,
+                    });
+                }
+            }
+        }
+    };
+    if a.vals.len().saturating_mul(n) >= PARALLEL_WORK {
+        out.par_chunks_mut(ROW_BLOCK * n)
+            .enumerate()
+            .for_each(block);
+    } else {
+        out.chunks_mut(ROW_BLOCK * n).enumerate().for_each(block);
+    }
+    out
+}
+
 /// `A · X` for a block-CSR `A` (`ptr`/`idx` over blocks, `vals` row-major
 /// `br x bc` slots per block) and a dense `X` of `n` columns.
 ///
@@ -506,12 +555,16 @@ pub(crate) fn bsr_spmm_f64(
     x: &[f64],
     n: usize,
 ) -> Vec<f64> {
+    use rayon::prelude::*;
     let (br, bc) = block;
     let bs = br * bc;
     let mut out = vec![0.0; rows * n];
-    for ib in 0..ptr.len().saturating_sub(1) {
-        for r in 0..br {
-            let row = &mut out[(ib * br + r) * n..(ib * br + r + 1) * n];
+    if out.is_empty() {
+        return out;
+    }
+    // One work item per block row: it owns `br` output rows outright.
+    let block_row = |(ib, chunk): (usize, &mut [f64])| {
+        for (r, row) in chunk.chunks_mut(n).enumerate() {
             for k in ptr[ib]..ptr[ib + 1] {
                 for c in 0..bc {
                     let v = vals[k * bs + r * bc + c];
@@ -524,6 +577,11 @@ pub(crate) fn bsr_spmm_f64(
                 }
             }
         }
+    };
+    if vals.len().saturating_mul(n) >= PARALLEL_WORK {
+        out.par_chunks_mut(br * n).enumerate().for_each(block_row);
+    } else {
+        out.chunks_mut(br * n).enumerate().for_each(block_row);
     }
     out
 }

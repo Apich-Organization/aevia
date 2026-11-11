@@ -1,0 +1,121 @@
+## The generated `Rssn_NumberTheory` domain module: typed wrappers over the rssn
+## kernel with a `Result` error channel, and `Zmod` residues that carry their modulus.
+## Run with: cargo run -p aevia-cli -- test tests/domain_number_theory.aev
+import Rssn_NumberTheory as NT
+
+fn int_is(r: Result<Int, OpError>, expected: Int): Bool =
+    match r with
+    | Ok(v) -> v == expected
+    | Err(_) -> false
+
+fn ints_are(r: Result<Tensor<1, Int>, OpError>, expected: Tensor<1, Int>): Bool =
+    match r with
+    | Ok(v) -> v == expected
+    | Err(_) -> false
+
+fn fails<A>(r: Result<A, OpError>): Bool =
+    match r with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+fn flag(r: Result<Bool, OpError>): Bool =
+    match r with
+    | Ok(b) -> b
+    | Err(_) -> false
+
+fn zmod_is(r: Result<NT.Zmod, String>, value: Int, modulus: Int): Bool =
+    match r with
+    | Ok(x) -> NT.zmod_value(x) == value && NT.zmod_modulus(x) == modulus
+    | Err(_) -> false
+
+fn zmod_fails(r: Result<NT.Zmod, String>): Bool =
+    match r with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+test "gcd, lcm and modulo" =
+    int_is(NT.gcd(12, 18), 6) && int_is(NT.lcm(4, 6), 12) && int_is(NT.modulo(17, 5), 2)
+
+test "extended Euclid returns [g, x, y]" =
+    ints_are(NT.egcd(240, 46), [2, -9, 47])
+
+test "modular inverse and power" =
+    int_is(NT.invmod(5, 17), 7) && int_is(NT.powmod(3, 100, 17), 13)
+
+test "a non-invertible residue is an Err, not a silent term" =
+    fails(NT.invmod(6, 15))
+
+test "Chinese remainder theorem" =
+    int_is(NT.crt([2, 3], [3, 5]), 8)
+
+test "discrete logarithm" =
+    int_is(NT.dlog(3, 13, 17), 4)
+
+test "primality and neighbouring primes" =
+    (flag(NT.is_prime(97)) &&
+    int_is(NT.next_prime(100), 101) &&
+    int_is(NT.prev_prime(100), 97) &&
+    int_is(NT.nth_prime(10), 29) &&
+    int_is(NT.prime_pi(100), 25))
+
+test "primes up to a limit" =
+    ints_are(NT.primes(30), [2, 3, 5, 7, 11, 13, 17, 19, 23, 29])
+
+test "factorisation is a table of (prime, exponent) rows" =
+    match NT.factorint(360) with
+    | Ok(table) -> table == [[2, 3], [3, 2], [5, 1]]
+    | Err(_) -> false
+
+test "arithmetic functions" =
+    (int_is(NT.totient(36), 12) &&
+    int_is(NT.divisor_count(360), 24) &&
+    int_is(NT.divisor_sum(360), 1170) &&
+    int_is(NT.mobius(30), -1) &&
+    int_is(NT.omega(360), 3) &&
+    int_is(NT.radical(360), 30))
+
+test "quadratic residues, roots and symbols" =
+    (int_is(NT.sqrtmod(4, 17), 2) &&
+    int_is(NT.legendre_symbol(5, 11), 1) &&
+    int_is(NT.jacobi(5, 21), 1) &&
+    int_is(NT.primitive_root(17), 3) &&
+    int_is(NT.mult_order(3, 7), 6))
+
+test "Pell and sums of two squares" =
+    ints_are(NT.pell(7), [8, 3]) && ints_are(NT.two_squares(25), [3, 4])
+
+test "Zmod: an element knows its modulus" =
+    zmod_is(NT.zmod(20, 17), 3, 17)
+
+test "Zmod: x times its inverse is one" =
+    match NT.zmod(5, 17) with
+    | Err(_) -> false
+    | Ok(x) ->
+        match NT.zmod_inv(x) with
+        | Err(_) -> false
+        | Ok(inverse) -> zmod_is(NT.zmod_mul(x, inverse), 1, 17)
+
+test "Zmod: a negative power inverts first" =
+    match NT.zmod(5, 17) with
+    | Err(_) -> false
+    | Ok(x) -> zmod_is(NT.zmod_pow(x, -1), 7, 17)
+
+test "Zmod: Fermat little theorem" =
+    match NT.zmod(11, 13) with
+    | Err(_) -> false
+    | Ok(x) -> zmod_is(NT.zmod_pow(x, 12), 1, 13)
+
+test "Zmod: mixing moduli is an Err" =
+    match (NT.zmod(2, 7), NT.zmod(3, 11)) with
+    | (Ok(a), Ok(b)) -> zmod_fails(NT.zmod_add(a, b))
+    | _ -> false
+
+test "Zmod: a zero divisor has no inverse" =
+    match NT.zmod(6, 15) with
+    | Err(_) -> false
+    | Ok(x) -> zmod_fails(NT.zmod_inv(x))
+
+test "Zmod: division in a field" =
+    match (NT.zmod(3, 7), NT.zmod(5, 7)) with
+    | (Ok(a), Ok(b)) -> zmod_is(NT.zmod_div(a, b), 2, 7)
+    | _ -> false

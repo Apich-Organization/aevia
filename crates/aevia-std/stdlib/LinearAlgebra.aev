@@ -32,6 +32,7 @@ let ones_of = ones_of
 let outer = outer
 let qr = qr
 let rank = rank
+let refine_shape = refine_shape
 let reshape = reshape
 let reshape_dyn = reshape_dyn
 let set = set

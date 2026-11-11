@@ -88,6 +88,7 @@ name = "aevia-pkg"
 version = "0.1.0"
 dependencies = [
  "aevia-registry-core",
+ "aevia-resolve",
  "chrono",
  "clap",
  "reqwest",
@@ -102,13 +103,13 @@ dependencies = [
 name = "aevia-registry-core"
 version = "0.1.0"
 dependencies = [
+ "aevia-resolve",
  "base64 0.22.1",
  "chrono",
  "ed25519-dalek",
  "flate2",
  "hex",
  "pgp",
- "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -154,6 +155,7 @@ dependencies = [
  "aevia-registry-db",
  "aevia-registry-docs",
  "aevia-registry-web",
+ "aevia-resolve",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -161,7 +163,6 @@ dependencies = [
  "jsonwebtoken",
  "rand 0.9.5",
  "reqwest",
- "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -182,6 +183,10 @@ dependencies = [
  "aevia-registry-core",
  "leptos",
 ]
+
+[[package]]
+name = "aevia-resolve"
+version = "0.1.0"
 
 [[package]]
 name = "aevia-syntax"

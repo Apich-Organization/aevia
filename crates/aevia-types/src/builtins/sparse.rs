@@ -334,6 +334,42 @@ pub fn sparse_schemes(
                 ),
             )]
         },
+        // `gmres_with(A, b, { tol, maxiter, restart, precond })` and
+        // `bicgstab_with(A, b, { tol, maxiter, precond })`: Krylov solvers for
+        // general square matrices; the result has the shape of `cg_with`'s.
+        | "gmres_with" | "bicgstab_with" => {
+            let float = |dim: u32| Type::float(dim_var(dim));
+            let mut options = vec![
+                ("tol".to_string(), Type::float(one())),
+                ("maxiter".to_string(), int()),
+            ];
+            if name == "gmres_with" {
+                options.push(("restart".to_string(), int()));
+            }
+            options.push(("precond".to_string(), var(2)));
+            vec![scheme(
+                3,
+                2,
+                0,
+                func(
+                    vec![
+                        sp(var(1), 2, float(0)),
+                        tensor(1, float(1)),
+                        Type::record(options),
+                    ],
+                    Type::record(vec![
+                        (
+                            "x".to_string(),
+                            tensor(1, Type::float(dim_var(1).div(&dim_var(0)))),
+                        ),
+                        ("iterations".to_string(), int()),
+                        ("residual".to_string(), Type::float(one())),
+                        ("converged".to_string(), Type::bool()),
+                        ("precond".to_string(), Type::string()),
+                    ]),
+                ),
+            )]
+        },
         | "map_nonzero" => {
             RANKS
                 .map(|r| {

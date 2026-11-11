@@ -45,12 +45,59 @@ impl IndexConfig {
 }
 
 /// One dependency, as the index records it.
+///
+/// This is what a resolver needs and nothing else: *which package* and *which
+/// versions*. `import` is the root the dependent imports it under; it is
+/// written only when it differs from the package's default
+/// ([`aevia_resolve::default_import`]), so the common case is two short fields.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IndexDependency {
-    /// The module root it is imported under.
-    pub import: String,
-    /// The path as the manifest wrote it.
-    pub path: String,
+    /// The package, `owner/name` in its canonical (lower-case name) spelling.
+    pub package: String,
+    /// The version requirement, in its canonical rendering (`^1.2`).
+    pub req: String,
+    /// The import root, when it is not the package's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<String>,
+}
+
+impl IndexDependency {
+    /// The import root the dependent uses.
+    #[must_use]
+    pub fn label(&self) -> String {
+        self.import
+            .clone()
+            .unwrap_or_else(|| aevia_resolve::default_import(&self.package))
+    }
+}
+
+/// Reads the dependency list stored with a version.
+///
+/// Tolerant by design: rows written before the registry understood version
+/// requirements hold `{"import", "path"}` entries, which name no package and
+/// can never be resolved. They are skipped instead of failing the whole read,
+/// so an old version still shows up in the index (with no dependencies) rather
+/// than breaking the page.
+#[must_use]
+pub fn deps_from_json(value: &serde_json::Value) -> Vec<IndexDependency> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value::<IndexDependency>(item.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A strong validator for an index body: clients may send it back as
+/// `If-None-Match` and get `304` while nothing was published or yanked.
+#[must_use]
+pub fn etag(body: &str) -> String {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(body.as_bytes());
+    format!("\"{}\"", hex::encode(&digest[..12]))
 }
 
 /// The signature that authorised a version.
@@ -121,10 +168,18 @@ mod tests {
         IndexRecord {
             name: "apich/units-extra".to_string(),
             vers: "0.2.0".to_string(),
-            deps: vec![IndexDependency {
-                import: "UnitsExtra".to_string(),
-                path: "../units".to_string(),
-            }],
+            deps: vec![
+                IndexDependency {
+                    package: "apich/units".to_string(),
+                    req: "^1.2".to_string(),
+                    import: None,
+                },
+                IndexDependency {
+                    package: "apich/plot".to_string(),
+                    req: ">=0.3, <0.5".to_string(),
+                    import: Some("Charts".to_string()),
+                },
+            ],
             cksum: format!("sha256:{}", "ab".repeat(32)),
             yanked: false,
             published_at: "2026-11-08T09:00:00Z".to_string(),
@@ -144,6 +199,35 @@ mod tests {
         let line = record.to_line().expect("serialises");
         assert!(!line.contains('\n'), "an index record is one line");
         assert_eq!(IndexRecord::from_line(&line).expect("parses"), record);
+    }
+
+    #[test]
+    fn the_default_import_is_not_written() {
+        let line = record().to_line().expect("serialises");
+        assert!(line.contains("\"import\":\"Charts\""), "{line}");
+        assert_eq!(line.matches("\"import\"").count(), 1, "{line}");
+        let first = &record().deps[0];
+        assert_eq!(first.label(), "Units");
+    }
+
+    #[test]
+    fn stored_dependencies_are_read_tolerantly() {
+        let stored = serde_json::json!([
+            {"import": "Old", "path": "../old"},
+            {"package": "apich/units", "req": "^1"},
+            "nonsense",
+        ]);
+        let deps = deps_from_json(&stored);
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].package, "apich/units");
+        assert!(deps_from_json(&serde_json::json!(null)).is_empty());
+    }
+
+    #[test]
+    fn the_etag_changes_with_the_body() {
+        assert_eq!(etag("a"), etag("a"));
+        assert_ne!(etag("a"), etag("b"));
+        assert!(etag("a").starts_with('"') && etag("a").ends_with('"'));
     }
 
     #[test]

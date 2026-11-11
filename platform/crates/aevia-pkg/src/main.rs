@@ -36,6 +36,7 @@ mod keys;
 mod package;
 mod publish;
 mod query;
+mod registry;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +65,10 @@ pub struct App {
     pub json: bool,
     /// `--quiet`: suppress progress and warnings.
     pub quiet: bool,
+    /// `--offline`: never contact the registry; use the cache only.
+    pub offline: bool,
+    /// `--cache`: where the index and vendored sources live.
+    pub cache: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -88,6 +93,15 @@ struct Cli {
     /// Suppress progress and warnings.
     #[arg(long, global = true)]
     quiet: bool,
+
+    /// Never contact the registry; resolve and verify from the cache only.
+    #[arg(long, global = true)]
+    offline: bool,
+
+    /// The registry cache: `<DIR>/index` and `<DIR>/src`. Default:
+    /// `$AEVIA_REGISTRY_DIR`, else `.aevia/registry` beside `aevia.toml`.
+    #[arg(long, global = true, value_name = "DIR")]
+    cache: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -166,13 +180,48 @@ enum Command {
         target: String,
     },
 
-    /// Download, verify and vendor a version, and print the manifest line.
+    /// Resolve a requirement, download and verify the packages it needs, and
+    /// print the manifest line.
     Add {
-        /// `owner/name[@version]`; the newest version when none is given.
+        /// `owner/name[@requirement]` (`@^1.2`, `@~1.2.3`, `@>=1.2, <2`); the
+        /// newest release when none is given.
         target: String,
-        /// The package directory to vendor into, the current one by default.
-        #[arg(long, value_name = "DIR")]
-        dir: Option<PathBuf>,
+        /// The import root to use instead of the package's default.
+        #[arg(long = "as", value_name = "NAME")]
+        alias: Option<String>,
+    },
+
+    /// Download the sparse-index files of packages into the cache.
+    Index {
+        /// `owner/name`, one or more.
+        targets: Vec<String>,
+    },
+
+    /// Refresh cached indexes and report the versions that are new.
+    Update {
+        /// `owner/name`; every cached package when none is given.
+        targets: Vec<String>,
+    },
+
+    /// Download and verify what `aevia.lock` names into the cache.
+    #[command(alias = "fetch")]
+    Vendor {
+        /// `owner/name@version` targets instead of the lock file.
+        targets: Vec<String>,
+        /// Download again even when the cache holds a verified copy.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Print the registry dependency tree of the package here.
+    Tree,
+
+    /// Resolve the package's registry dependencies; `--check` compares them
+    /// with `aevia.lock`.
+    Lock {
+        /// Fail when `aevia.lock` names other versions or checksums.
+        #[arg(long)]
+        check: bool,
     },
 
     /// Download one version and check it against its signature.
@@ -228,7 +277,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         home,
         json: cli.json,
         quiet: cli.quiet,
+        offline: cli.offline,
+        cache: cli.cache.clone(),
     };
+    let cache = registry::Cache::locate(
+        app.cache.as_deref(),
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
 
     match cli.command {
         | Command::Login { key, ssh, label } => {
@@ -278,7 +333,16 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             }
             query::info(&app, &id).await
         },
-        | Command::Add { target, dir } => fetch::add(&app, &target, dir.as_deref()).await,
+        | Command::Add { target, alias } => {
+            registry::add(&app, &cache, &target, alias.as_deref()).await
+        },
+        | Command::Index { targets } => registry::index_command(&app, &cache, &targets).await,
+        | Command::Update { targets } => registry::update(&app, &cache, &targets).await,
+        | Command::Vendor { targets, force } => {
+            registry::vendor(&app, &cache, &targets, force).await
+        },
+        | Command::Tree => registry::tree(&app, &cache).await,
+        | Command::Lock { check } => registry::lock(&app, &cache, check).await,
         | Command::Verify { target } => fetch::verify_command(&app, &target).await,
         | Command::Status => query::status(&app).await,
     }
@@ -428,22 +492,52 @@ mod tests {
     }
 
     #[test]
-    fn add_takes_an_optional_directory() {
+    fn add_takes_a_requirement_and_an_alias() {
         let cli = parse(&[
             "aevia-pkg",
             "add",
-            "apich/units-extra@0.2.0",
-            "--dir",
-            "pkg",
+            "apich/units-extra@>=0.2, <1",
+            "--as",
+            "Units",
+            "--offline",
         ])
         .expect("parses");
+        assert!(cli.offline);
         match cli.command {
-            | Command::Add { target, dir } => {
-                assert_eq!(target, "apich/units-extra@0.2.0");
-                assert_eq!(dir.as_deref(), Some(std::path::Path::new("pkg")));
+            | Command::Add { target, alias } => {
+                assert_eq!(target, "apich/units-extra@>=0.2, <1");
+                assert_eq!(alias.as_deref(), Some("Units"));
             },
             | other => panic!("expected add, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_dependency_commands_parse() {
+        assert!(matches!(
+            parse(&["aevia-pkg", "fetch", "--force"]).map(|c| c.command),
+            Ok(Command::Vendor { force: true, .. })
+        ));
+        assert!(matches!(
+            parse(&["aevia-pkg", "vendor", "o/a@1.0.0"]).map(|c| c.command),
+            Ok(Command::Vendor { .. })
+        ));
+        assert!(matches!(
+            parse(&["aevia-pkg", "tree"]).map(|c| c.command),
+            Ok(Command::Tree)
+        ));
+        assert!(matches!(
+            parse(&["aevia-pkg", "lock", "--check"]).map(|c| c.command),
+            Ok(Command::Lock { check: true })
+        ));
+        assert!(matches!(
+            parse(&["aevia-pkg", "update", "o/a", "o/b"]).map(|c| c.command),
+            Ok(Command::Update { .. })
+        ));
+        assert!(matches!(
+            parse(&["aevia-pkg", "--cache", "c", "index", "o/a"]).map(|c| c.command),
+            Ok(Command::Index { .. })
+        ));
     }
 
     #[test]

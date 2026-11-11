@@ -5,6 +5,7 @@ members = [
     "crates/aevia-syntax",
     "crates/aevia-types",
     "crates/aevia-ir",
+    "crates/aevia-resolve",
     "crates/aevia-core",
     "crates/aevia-rssn",
     "crates/aevia-std",
@@ -48,6 +49,7 @@ aevia-dim = { path = "crates/aevia-dim" }
 aevia-syntax = { path = "crates/aevia-syntax" }
 aevia-types = { path = "crates/aevia-types" }
 aevia-ir = { path = "crates/aevia-ir" }
+aevia-resolve = { path = "crates/aevia-resolve" }
 aevia-core = { path = "crates/aevia-core" }
 aevia-rssn = { path = "crates/aevia-rssn" }
 aevia-fmt = { path = "crates/aevia-fmt" }

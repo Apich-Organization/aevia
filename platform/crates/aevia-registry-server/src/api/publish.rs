@@ -269,6 +269,14 @@ pub async fn publish(
         ));
     }
 
+    // Dependencies: a published package can only depend on registry packages
+    // that exist and can be resolved. Checked before anything is written, so a
+    // refused publish costs a nonce and nothing else.
+    manifest
+        .check_publishable_as(&statement.name.to_string())
+        .map_err(ApiError::from_core)?;
+    check_dependencies(&state, &manifest).await?;
+
     // Metadata: the envelope wins, then `aevia-pkg.toml`, then the README.
     let declared = files
         .iter()
@@ -294,7 +302,18 @@ pub async fn publish(
         envelope.keywords.clone()
     };
 
-    // The catalogue rows.
+    // The catalogue rows, the archive file and the log entry in one
+    // transaction: either the version exists everywhere (row, dependency rows,
+    // bytes, log link) or nowhere. The archive is written after the rows so a
+    // conflicting version never overwrites the file of the one that won, and
+    // before the commit so a failed write rolls the rows back instead of
+    // leaving a version whose bytes are missing.
+    let mut transaction = state.pool.begin().await.map_err(|error| {
+        ApiError::from_core(aevia_registry_db::sql_error(
+            "cannot start the publish transaction",
+            error,
+        ))
+    })?;
     let package =
         match repo::package_by_identity(&state.pool, owner_id, &statement.name.name_key()).await? {
             | Some(package) => package,
@@ -308,11 +327,11 @@ pub async fn publish(
                 .await?
             },
         };
-    let dependencies = serde_json::to_value(&manifest.dependencies).map_err(|error| {
+    let dependencies = serde_json::to_value(manifest.index_dependencies()).map_err(|error| {
         ApiError::internal(format!("cannot serialise the dependency list: {error}"))
     })?;
-    let version = repo::insert_version(
-        &state.pool,
+    let version = repo::insert_version_in(
+        &mut transaction,
         &NewVersion {
             package_id: package.id,
             version: &statement.version,
@@ -345,7 +364,7 @@ pub async fn publish(
     })?;
 
     repo::update_package_meta(
-        &state.pool,
+        &mut *transaction,
         package.id,
         description.as_deref(),
         license.as_deref(),
@@ -353,16 +372,14 @@ pub async fn publish(
         &keywords,
     )
     .await?;
-    repo::touch_package(&state.pool, package.id).await?;
+    repo::touch_package(&mut *transaction, package.id).await?;
 
-    // The bytes. Written after the row so a failed write leaves a row whose
-    // archive is missing — a loud inconsistency — rather than an orphan file.
     state
         .storage
         .write(&statement.name, &statement.version, &archive)?;
 
-    let entry = repo::append_log(
-        &state.pool,
+    let entry = repo::append_log_in(
+        &mut transaction,
         "publish",
         &format!(
             "{} published {} {}",
@@ -378,6 +395,12 @@ pub async fn publish(
         }),
     )
     .await?;
+    transaction.commit().await.map_err(|error| {
+        ApiError::from_core(aevia_registry_db::sql_error(
+            "cannot commit the publish",
+            error,
+        ))
+    })?;
 
     // Documentation, off the request path.
     if state.config.docs_enabled {
@@ -470,20 +493,126 @@ fn spawn_docs_build(
 }
 
 fn check_version(version: &str) -> ApiResult<()> {
-    let parsed = semver::Version::parse(version).map_err(|error| {
+    let parsed = aevia_resolve::Version::parse(version).map_err(|error| {
         ApiError::bad_request(
             "E_VERSION",
-            format!("`{version}` is not a version: {error}"),
+            format!("`{version}` is not a version: {}", error.reason),
         )
     })?;
-    if !parsed.pre.is_empty() || !parsed.build.is_empty() {
+    if !parsed.build.is_empty() {
         return Err(ApiError::bad_request(
             "E_VERSION",
             format!(
-                "`{version}` carries a pre-release or build suffix; `aevia.toml` writes \
-                 `major.minor.patch` only"
+                "`{version}` carries build metadata; versions that differ only in build \
+                 metadata have the same precedence, so the registry cannot tell them apart — \
+                 publish `major.minor.patch` or `major.minor.patch-pre-release`"
             ),
         ));
+    }
+    Ok(())
+}
+
+/// The most dependencies one version may declare. Resolution reads every one of
+/// them, so an unbounded list is a way to make every consumer's `aevia update`
+/// slow.
+pub const MAX_DEPENDENCIES: usize = 256;
+
+/// Why a dependency requirement can never be resolved, or `None` when it can.
+///
+/// `versions` is every published version of the target as `(version, yanked)`.
+/// A requirement is resolvable when some non-yanked version satisfies it (a
+/// yanked one is selectable only by a lock file, which a new publish cannot
+/// have).
+#[must_use]
+pub fn dependency_problem(
+    package: &str,
+    req: &aevia_resolve::VersionReq,
+    versions: &[(String, bool)],
+) -> Option<String> {
+    let mut available: Vec<aevia_resolve::Version> = Vec::new();
+    let mut yanked_match = false;
+    for (text, yanked) in versions {
+        let Ok(version) = aevia_resolve::Version::parse(text) else {
+            continue;
+        };
+        if req.matches(&version) {
+            if *yanked {
+                yanked_match = true;
+            } else {
+                return None;
+            }
+        }
+        if !yanked {
+            available.push(version);
+        }
+    }
+    available.sort();
+    let listed = if available.is_empty() {
+        "it has no version that is not yanked".to_string()
+    } else {
+        format!(
+            "available: {}",
+            available
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    Some(format!(
+        "no published version of `{package}` satisfies `{req}` ({listed}{})",
+        if yanked_match {
+            "; a yanked version would match, and nobody can resolve to a yanked version"
+        } else {
+            ""
+        }
+    ))
+}
+
+/// Refuses a manifest whose dependencies cannot be resolved.
+async fn check_dependencies(
+    state: &AppState,
+    manifest: &PackageManifest,
+) -> ApiResult<()> {
+    let dependencies = manifest.index_dependencies();
+    if dependencies.len() > MAX_DEPENDENCIES {
+        return Err(ApiError::bad_request(
+            "E_DEPENDENCY",
+            format!(
+                "{} dependencies; a version may declare at most {MAX_DEPENDENCIES}",
+                dependencies.len()
+            ),
+        ));
+    }
+    for dependency in dependencies {
+        let id = dependency.package.parse::<PackageId>().map_err(|error| {
+            ApiError::bad_request(
+                "E_DEPENDENCY",
+                format!("dependency `{}`: {}", dependency.package, error.message),
+            )
+        })?;
+        let req = aevia_resolve::VersionReq::parse(&dependency.req).map_err(|error| {
+            ApiError::bad_request(
+                "E_DEPENDENCY",
+                format!("dependency `{id}`: {error}"),
+            )
+        })?;
+        let Some((package, _)) =
+            repo::package_by_handle(&state.pool, id.owner(), &id.name_key()).await?
+        else {
+            return Err(ApiError::bad_request(
+                "E_DEPENDENCY",
+                format!("`{id}` is not a package on this registry, so `{}` cannot resolve", dependency.label()),
+            ));
+        };
+        let versions: Vec<(String, bool)> = repo::versions(&state.pool, package.id)
+            .await?
+            .into_iter()
+            .map(|row| (row.version, row.yanked))
+            .collect();
+        if let Some(problem) = dependency_problem(&id.to_string(), &req, &versions) {
+            return Err(ApiError::bad_request("E_DEPENDENCY", problem));
+        }
     }
     Ok(())
 }
@@ -502,5 +631,61 @@ fn check_checksum(checksum: &str) -> ApiResult<()> {
             "E_TARBALL",
             format!("`{checksum}` is not a `sha256:` digest"),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn versions(list: &[(&str, bool)]) -> Vec<(String, bool)> {
+        list.iter()
+            .map(|(version, yanked)| ((*version).to_string(), *yanked))
+            .collect()
+    }
+
+    fn req(text: &str) -> aevia_resolve::VersionReq {
+        aevia_resolve::VersionReq::parse(text).expect("requirement")
+    }
+
+    #[test]
+    fn a_requirement_with_a_live_match_is_resolvable() {
+        let all = versions(&[("1.0.0", false), ("1.2.0", false), ("2.0.0", true)]);
+        assert_eq!(dependency_problem("o/a", &req("^1"), &all), None);
+        assert_eq!(dependency_problem("o/a", &req("*"), &all), None);
+    }
+
+    #[test]
+    fn a_requirement_nothing_satisfies_is_explained_with_what_exists() {
+        let all = versions(&[("1.0.0", false), ("1.2.0", false)]);
+        let problem = dependency_problem("o/a", &req("^3"), &all).expect("unresolvable");
+        assert!(problem.contains("`o/a`") && problem.contains("^3"), "{problem}");
+        assert!(problem.contains("available: 1.0.0, 1.2.0"), "{problem}");
+    }
+
+    #[test]
+    fn a_requirement_only_a_yanked_version_satisfies_is_refused() {
+        let all = versions(&[("1.0.0", false), ("2.0.0", true)]);
+        let problem = dependency_problem("o/a", &req("^2"), &all).expect("unresolvable");
+        assert!(problem.contains("yanked"), "{problem}");
+        let none = versions(&[("1.0.0", true)]);
+        let problem = dependency_problem("o/a", &req("*"), &none).expect("unresolvable");
+        assert!(problem.contains("no version that is not yanked"), "{problem}");
+    }
+
+    #[test]
+    fn a_pre_release_satisfies_only_an_explicit_requirement() {
+        let all = versions(&[("1.0.0-rc.1", false)]);
+        assert!(dependency_problem("o/a", &req("^1"), &all).is_some());
+        assert!(dependency_problem("o/a", &req(">=1.0.0-rc.1"), &all).is_none());
+    }
+
+    #[test]
+    fn versions_may_be_pre_releases_but_not_carry_build_metadata() {
+        assert!(check_version("1.2.3").is_ok());
+        assert!(check_version("1.2.3-rc.1").is_ok());
+        assert!(check_version("1.2.3+b1").is_err());
+        assert!(check_version("1.2").is_err());
+        assert!(check_version("v1.2.3").is_err());
     }
 }

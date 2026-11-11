@@ -29,6 +29,7 @@ use aevia_registry_core::vm::CrateCard;
 use aevia_registry_core::vm::CrateList;
 use aevia_registry_core::vm::CratePage;
 use aevia_registry_core::vm::DependencyView;
+use aevia_registry_core::vm::DependentView;
 use aevia_registry_core::vm::DocModulePage;
 use aevia_registry_core::vm::DocsIndexPage;
 use aevia_registry_core::vm::KeyView;
@@ -203,9 +204,31 @@ pub(crate) async fn build_crate_page(
         .as_ref()
         .is_some_and(|(_, publisher)| publisher.id == package.owner_id);
     let dependencies: Vec<DependencyView> =
-        serde_json::from_value(selected.dependencies.clone()).unwrap_or_default();
+        aevia_registry_core::index::deps_from_json(&selected.dependencies)
+            .into_iter()
+            .map(|dependency| {
+                DependencyView {
+                    import: dependency.label(),
+                    package: dependency.package,
+                    req: dependency.req,
+                }
+            })
+            .collect();
+    let package_id = PackageId::new(&owner_row.handle, &package.name)?;
+    let dependents: Vec<DependentView> =
+        repo::reverse_dependencies(&state.pool, &package_id.key(), 20)
+            .await?
+            .into_iter()
+            .map(|row| {
+                DependentView {
+                    package: format!("{}/{}", row.owner_handle, row.name),
+                    version: row.version,
+                    req: row.req,
+                }
+            })
+            .collect();
     Ok(CratePage {
-        id: PackageId::new(&owner_row.handle, &package.name)?,
+        id: package_id,
         description: package.description.clone(),
         license: package.license.clone(),
         repository: package.repository.clone(),
@@ -218,6 +241,7 @@ pub(crate) async fn build_crate_page(
         selected: version_view(&selected),
         owners: vec![owner_view(&owner_row)],
         dependencies,
+        dependents,
         created_at: package.created_at.to_rfc3339(),
         updated_at: package.updated_at.to_rfc3339(),
         downloads,

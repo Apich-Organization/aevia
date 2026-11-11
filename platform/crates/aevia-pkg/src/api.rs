@@ -425,6 +425,28 @@ impl Client {
         Ok(records)
     }
 
+    /// Fetches the sparse-index text of a package, exactly as served.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::crate_page`].
+    pub async fn index_text(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<String, CliError> {
+        let response = self
+            .http
+            .get(self.api(&format!("/index/{owner}/{name}")))
+            .send()
+            .await;
+        let response = self.check(response).await?;
+        response
+            .text()
+            .await
+            .map_err(|error| CliError::new(format!("the index could not be read: {error}")))
+    }
+
     /// Starts a device authorisation for a public key.
     ///
     /// # Errors

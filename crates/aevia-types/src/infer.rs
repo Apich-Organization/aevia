@@ -74,10 +74,18 @@ pub enum UnifyError {
     /// Two type-level `Nat` terms are inconsistent (§3.5.1): their difference
     /// has no non-negative integer solution.
     NatMismatch {
-        /// The left term.
-        left: Nat,
-        /// The right term.
-        right: Nat,
+        /// The left term, as the reader wrote it.
+        left: String,
+        /// The right term, as the reader wrote it.
+        right: String,
+    },
+    /// Two declared type-level variables (`fn f<n, m>`) were equated; they are
+    /// distinct unknowns, not known to be equal.
+    NatRigid {
+        /// The first variable's name.
+        left: String,
+        /// The second variable's name.
+        right: String,
     },
     /// A type-level `Nat` equation is not linear — a product of two variables.
     /// §3.5.1 only offers linear equations, so the checker reports `E0304`.
@@ -129,6 +137,12 @@ impl std::fmt::Display for UnifyError {
             | Self::NatMismatch { left, right } => {
                 write!(f, "type-level equation has no solution: {left} = {right}")
             },
+            | Self::NatRigid { left, right } => {
+                write!(
+                    f,
+                    "extents `{left}` and `{right}` are different type-level variables and are not known to be equal"
+                )
+            },
             | Self::NatNonLinear { left, right } => {
                 write!(
                     f,
@@ -139,40 +153,41 @@ impl std::fmt::Display for UnifyError {
     }
 }
 
-/// A linear form over type-level `Nat` variables: `Σ cᵢ·vᵢ + c`.
+/// A polynomial over type-level `Nat` variables: `Σ cₘ·m`, where each monomial
+/// `m` is a sorted multiset of variables (the empty monomial is the constant).
 ///
-/// Equations are solved by turning them into `left - right = 0` and isolating
-/// the single remaining variable. Two or more variables leave the equation
-/// pending; a zero-variable form either holds or is inconsistent.
+/// A *linear* equation (only degree-1 monomials) isolates a variable. A product
+/// of two variables (`n * m`) is kept as an opaque monomial: it cancels against
+/// an identical monomial in any order (`n * m ~ m * n`), and it is substituted
+/// when one factor is later solved (`n = 2` turns `n * m` into `2 * m`), but it
+/// is never solved for by itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NatLinear {
-    coeffs: BTreeMap<u32, i128>,
-    constant: i128,
+    terms: BTreeMap<Vec<u32>, i128>,
 }
 
 impl NatLinear {
     fn constant(value: i128) -> Self {
-        Self {
-            coeffs: BTreeMap::new(),
-            constant: value,
-        }
+        let mut terms = BTreeMap::new();
+        terms.insert(Vec::new(), value);
+        Self { terms }.normalised()
     }
 
     fn variable(id: u32) -> Self {
-        let mut coeffs = BTreeMap::new();
-        coeffs.insert(id, 1);
-        Self { coeffs, constant: 0 }
+        let mut terms = BTreeMap::new();
+        terms.insert(vec![id], 1);
+        Self { terms }
     }
 
     fn add(
         mut self,
         other: Self,
     ) -> Self {
-        for (id, coefficient) in other.coeffs {
-            *self.coeffs.entry(id).or_insert(0) += coefficient;
+        for (monomial, coefficient) in other.terms {
+            let entry = self.terms.entry(monomial).or_insert(0);
+            *entry = entry.saturating_add(coefficient);
         }
-        self.constant += other.constant;
-        self
+        self.normalised()
     }
 
     fn sub(
@@ -182,29 +197,102 @@ impl NatLinear {
         self.add(other.negate())
     }
 
-    fn negate(mut self) -> Self {
-        self.constant = -self.constant;
-        for coefficient in self.coeffs.values_mut() {
-            *coefficient = -*coefficient;
-        }
-        self
+    fn negate(self) -> Self {
+        self.scale(-1)
     }
 
     fn scale(
         mut self,
         factor: i128,
     ) -> Self {
-        self.constant *= factor;
-        for coefficient in self.coeffs.values_mut() {
-            *coefficient *= factor;
+        for coefficient in self.terms.values_mut() {
+            *coefficient = coefficient.saturating_mul(factor);
         }
-        self
+        self.normalised()
+    }
+
+    fn mul(
+        &self,
+        other: &Self,
+    ) -> Self {
+        let mut out: BTreeMap<Vec<u32>, i128> = BTreeMap::new();
+        for (left, a) in &self.terms {
+            for (right, b) in &other.terms {
+                let mut monomial = left.clone();
+                monomial.extend(right.iter().copied());
+                monomial.sort_unstable();
+                let entry = out.entry(monomial).or_insert(0);
+                *entry = entry.saturating_add(a.saturating_mul(*b));
+            }
+        }
+        Self { terms: out }.normalised()
     }
 
     fn normalised(mut self) -> Self {
-        self.coeffs.retain(|_, coefficient| *coefficient != 0);
+        self.terms.retain(|_, coefficient| *coefficient != 0);
         self
     }
+
+    /// The constant term.
+    fn constant_part(&self) -> i128 {
+        self.terms.get(&Vec::new()).copied().unwrap_or(0)
+    }
+
+    /// Whether there is no variable left.
+    fn is_constant(&self) -> bool {
+        self.terms.keys().all(Vec::is_empty)
+    }
+
+    /// Whether every monomial has degree at most one.
+    fn is_linear(&self) -> bool {
+        self.terms.keys().all(|monomial| monomial.len() <= 1)
+    }
+
+    /// The degree-one terms: `(variable, coefficient)`.
+    fn linear_terms(&self) -> Vec<(u32, i128)> {
+        self.terms
+            .iter()
+            .filter(|(monomial, _)| monomial.len() == 1)
+            .map(|(monomial, coefficient)| (monomial[0], *coefficient))
+            .collect()
+    }
+
+    /// Whether `id` occurs in a monomial of degree two or more.
+    fn in_product(
+        &self,
+        id: u32,
+    ) -> bool {
+        self.terms
+            .keys()
+            .any(|monomial| monomial.len() > 1 && monomial.contains(&id))
+    }
+
+    /// Every variable of the polynomial.
+    fn variables(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = self.terms.keys().flatten().copied().collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+/// What solving one Nat equation did.
+enum NatStep {
+    /// The equation held with no variable left.
+    Consumed,
+    /// A variable was bound; pending equations are worth retrying.
+    Solved,
+    /// Nothing could be solved yet.
+    Residual(NatLinear),
+}
+
+/// A type-level equation left unsolved at the end of a declaration.
+#[derive(Clone, Debug)]
+pub struct UnsolvedNat {
+    /// `lhs = rhs`, with the variables' source names.
+    pub text: String,
+    /// Whether the equation is linear (otherwise it has a product of unknowns).
+    pub linear: bool,
 }
 
 /// The inference engine state for one module.
@@ -247,6 +335,10 @@ pub struct Infer {
     /// solved yet; after every new binding they are retried. This is what lets
     /// `n + 1 ~ 3` and `2 * n ~ 6` work without a full decision procedure.
     nat_pending: Vec<NatLinear>,
+    /// Source names of type-level variables, for diagnostics.
+    nat_names: HashMap<u32, String>,
+    /// Declared (`fn f<n>`) type-level variables: never merged with each other.
+    nat_rigid: HashSet<u32>,
     next: u32,
     level: u32,
 }
@@ -288,6 +380,8 @@ impl Infer {
             nat_subst: HashMap::new(),
             nat_levels: HashMap::new(),
             nat_pending: Vec::new(),
+            nat_names: HashMap::new(),
+            nat_rigid: HashSet::new(),
             next: 0,
             level: 0,
         }
@@ -1512,47 +1606,221 @@ impl Infer {
         }
     }
 
-    /// The linear form of a Nat term, or `None` when it is not linear (a
-    /// product of two variables, §3.5.1).
-    fn nat_linear(
+    /// Records the source name of a type-level variable, for diagnostics.
+    ///
+    /// A `rigid` variable is one the user declared (`fn f<n>`): the solver may
+    /// bind it to a literal or to an expression of other variables
+    /// (`n + 1 ~ 3` => `n = 2`), but it never merges two distinct declared
+    /// variables (`n ~ m` is an error: the two extents are not known to be
+    /// equal). A variable that is not rigid is an inference variable (a fresh
+    /// instantiation of a generic callee) and unifies with anything.
+    pub fn name_nat(
+        &mut self,
+        nat: &Nat,
+        name: &str,
+        rigid: bool,
+    ) {
+        if let Nat::Var(id) = nat {
+            self.nat_names.insert(*id, name.to_string());
+            if rigid {
+                self.nat_rigid.insert(*id);
+            }
+        }
+    }
+
+    /// A Nat term as the reader wrote it (`n + 1`, `n * m`), resolved through
+    /// the current solution.
+    #[must_use]
+    pub fn render_nat(
         &self,
         nat: &Nat,
-    ) -> Option<NatLinear> {
-        match self.resolve_nat(nat) {
-            | Nat::Lit(value) => Some(NatLinear::constant(i128::try_from(value).ok()?)),
-            | Nat::Var(id) => Some(NatLinear::variable(id)),
+    ) -> String {
+        self.render_nat_prec(&self.resolve_nat(nat), 0)
+    }
+
+    fn render_nat_prec(
+        &self,
+        nat: &Nat,
+        precedence: u8,
+    ) -> String {
+        match nat {
+            | Nat::Lit(value) => value.to_string(),
+            | Nat::Var(id) => {
+                self.nat_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("?{id}"))
+            },
             | Nat::Add(left, right) => {
-                Some(
-                    self.nat_linear(&left)?
-                        .add(self.nat_linear(&right)?)
-                        .normalised(),
-                )
+                let text = format!(
+                    "{} + {}",
+                    self.render_nat_prec(left, 1),
+                    self.render_nat_prec(right, 1)
+                );
+                if precedence > 1 {
+                    format!("({text})")
+                } else {
+                    text
+                }
             },
             | Nat::Mul(left, right) => {
-                let left = self.nat_linear(&left)?;
-                let right = self.nat_linear(&right)?;
-                match (left.coeffs.is_empty(), right.coeffs.is_empty()) {
-                    | (true, true) => Some(NatLinear::constant(left.constant * right.constant)),
-                    | (true, false) => Some(right.scale(left.constant).normalised()),
-                    | (false, true) => Some(left.scale(right.constant).normalised()),
-                    | (false, false) => None,
-                }
+                format!(
+                    "{} * {}",
+                    self.render_nat_prec(left, 2),
+                    self.render_nat_prec(right, 2)
+                )
             },
         }
     }
 
+    /// A shape as the reader wrote it (`[n, m + 1]`), resolved.
+    #[must_use]
+    pub fn render_shape(
+        &self,
+        shape: &Shape,
+    ) -> String {
+        match self.resolve_shape(shape) {
+            | Shape::Rank(rank) => format!("rank {rank}"),
+            | Shape::Refined(items) => {
+                let items: Vec<String> = items
+                    .iter()
+                    .map(|item| {
+                        item.as_ref()
+                            .map_or_else(|| "?".to_string(), |nat| self.render_nat(nat))
+                    })
+                    .collect();
+                format!("[{}]", items.join(", "))
+            },
+        }
+    }
+
+    /// The polynomial of a Nat term, resolved through the substitution.
+    fn nat_poly(
+        &self,
+        nat: &Nat,
+    ) -> NatLinear {
+        match self.resolve_nat(nat) {
+            | Nat::Lit(value) => NatLinear::constant(i128::try_from(value).unwrap_or(i128::MAX)),
+            | Nat::Var(id) => NatLinear::variable(id),
+            | Nat::Add(left, right) => self.nat_poly(&left).add(self.nat_poly(&right)),
+            | Nat::Mul(left, right) => self.nat_poly(&left).mul(&self.nat_poly(&right)),
+        }
+    }
+
+    /// Substitutes the current solution into a stored polynomial.
+    fn reduce_nat(
+        &self,
+        equation: &NatLinear,
+    ) -> NatLinear {
+        let mut out = NatLinear::constant(0);
+        for (monomial, coefficient) in &equation.terms {
+            let mut term = NatLinear::constant(*coefficient);
+            for id in monomial {
+                term = term.mul(&self.nat_poly(&Nat::Var(*id)));
+            }
+            out = out.add(term);
+        }
+        out
+    }
+
+    /// `lhs = rhs` for an equation `lhs - rhs = 0`, for diagnostics.
+    fn describe_nat_equation(
+        &self,
+        equation: &NatLinear,
+    ) -> (String, String) {
+        let side = |negative: bool| {
+            let mut parts = Vec::new();
+            let mut constant = None;
+            for (monomial, coefficient) in &equation.terms {
+                if (*coefficient < 0) != negative {
+                    continue;
+                }
+                let magnitude = coefficient.unsigned_abs();
+                if monomial.is_empty() {
+                    constant = Some(magnitude.to_string());
+                    continue;
+                }
+                let vars: Vec<String> = monomial
+                    .iter()
+                    .map(|id| self.render_nat(&Nat::Var(*id)))
+                    .collect();
+                let product = vars.join(" * ");
+                parts.push(if magnitude == 1 {
+                    product
+                } else {
+                    format!("{magnitude} * {product}")
+                });
+            }
+            parts.extend(constant);
+            if parts.is_empty() {
+                "0".to_string()
+            } else {
+                parts.join(" + ")
+            }
+        };
+        (side(false), side(true))
+    }
+
+    /// A non-negative polynomial back as a Nat term.
+    fn poly_to_nat(equation: &NatLinear) -> Option<Nat> {
+        if equation.terms.values().any(|coefficient| *coefficient < 0) {
+            return None;
+        }
+        let mut result: Option<Nat> = None;
+        let mut push = |term: Nat| {
+            result = Some(match result.take() {
+                | Some(sum) => sum.add(term),
+                | None => term,
+            });
+        };
+        for (monomial, coefficient) in &equation.terms {
+            if monomial.is_empty() {
+                continue;
+            }
+            let mut product: Option<Nat> = None;
+            for id in monomial {
+                let var = Nat::Var(*id);
+                product = Some(match product.take() {
+                    | Some(factor) => factor.mul(var),
+                    | None => var,
+                });
+            }
+            let mut term = product?;
+            if *coefficient != 1 {
+                term = Nat::Lit(usize::try_from(*coefficient).ok()?).mul(term);
+            }
+            push(term);
+        }
+        let constant = equation.constant_part();
+        let has_terms = !equation.terms.is_empty();
+        if constant != 0 || !has_terms {
+            push(Nat::Lit(usize::try_from(constant).ok()?));
+        }
+        result
+    }
+
+    fn nat_is_flexible(
+        &self,
+        id: u32,
+    ) -> bool {
+        !self.nat_rigid.contains(&id) && !self.nat_subst.contains_key(&id)
+    }
+
     /// Unifies two type-level natural numbers (§3.5.1).
     ///
-    /// The difference is put in linear form. One variable isolates (`n + 1 ~ 3`
-    /// ⇒ `n = 2`, `2 * n ~ 6` ⇒ `n = 3`); two or more variables keep the
-    /// equation pending and it is retried after every later binding; a
-    /// variable-free form either holds or is inconsistent.
+    /// The difference is put in polynomial form. A single variable isolates
+    /// (`n + 1 ~ 3` => `n = 2`, `2 * n ~ 6` => `n = 3`); an inference variable
+    /// is eliminated against any expression of the others (`a ~ n + 1` =>
+    /// `a = n + 1`, `a ~ b` => `a = b`); products of variables are opaque
+    /// monomials that cancel when they match (`n * m ~ m * n`); what remains
+    /// stays pending and is retried after every later binding. A form with no
+    /// variable either holds or is inconsistent.
     ///
     /// # Errors
     ///
     /// [`UnifyError::NatMismatch`] when the equation has no non-negative
-    /// integer solution, [`UnifyError::NatNonLinear`] when a product of two
-    /// variables appears (the checker maps it to `E0304`).
+    /// integer solution and [`UnifyError::NatRigid`] when it equates two
+    /// declared extents that are not known to be equal.
     pub fn unify_nat(
         &mut self,
         left: &Nat,
@@ -1563,157 +1831,144 @@ impl Infer {
         if left == right {
             return Ok(());
         }
-        let (Some(left_form), Some(right_form)) = (self.nat_linear(&left), self.nat_linear(&right))
-        else {
-            return Err(UnifyError::NatNonLinear { left, right });
-        };
-        let equation = left_form.sub(right_form).normalised();
-        self.apply_nat_equation(equation)
+        let equation = self.nat_poly(&left).sub(self.nat_poly(&right));
+        let (shown_left, shown_right) = (self.render_nat(&left), self.render_nat(&right));
+        self.apply_nat_equation(equation).map_err(|error| {
+            match error {
+                | UnifyError::NatMismatch { .. } => {
+                    UnifyError::NatMismatch {
+                        left: shown_left,
+                        right: shown_right,
+                    }
+                },
+                | other => other,
+            }
+        })
     }
 
-    /// Solves one linear equation, or keeps it pending when it has several
-    /// variables.
+    /// Applies one equation and every pending one until nothing more can be
+    /// solved; what is left is kept pending.
     fn apply_nat_equation(
         &mut self,
         equation: NatLinear,
     ) -> Result<(), UnifyError> {
-        if equation.coeffs.is_empty() {
-            return if equation.constant == 0 {
-                Ok(())
+        let mut queue: std::collections::VecDeque<NatLinear> = std::collections::VecDeque::new();
+        queue.push_back(equation);
+        queue.extend(std::mem::take(&mut self.nat_pending));
+        let mut kept: Vec<NatLinear> = Vec::new();
+        while let Some(equation) = queue.pop_front() {
+            let equation = self.reduce_nat(&equation);
+            match self.step_nat_equation(equation) {
+                | Ok(NatStep::Consumed) => {},
+                | Ok(NatStep::Solved) => queue.extend(kept.drain(..)),
+                | Ok(NatStep::Residual(equation)) => kept.push(equation),
+                | Err(error) => {
+                    self.nat_pending = kept;
+                    return Err(error);
+                },
+            }
+        }
+        self.nat_pending = kept;
+        Ok(())
+    }
+
+    fn nat_mismatch(
+        &self,
+        equation: &NatLinear,
+    ) -> UnifyError {
+        let (left, right) = self.describe_nat_equation(equation);
+        UnifyError::NatMismatch { left, right }
+    }
+
+    fn step_nat_equation(
+        &mut self,
+        equation: NatLinear,
+    ) -> Result<NatStep, UnifyError> {
+        if equation.is_constant() {
+            return if equation.constant_part() == 0 {
+                Ok(NatStep::Consumed)
             } else {
-                Err(UnifyError::NatMismatch {
-                    left: Nat::Lit(0),
-                    right: Nat::Lit(
-                        usize::try_from(equation.constant.unsigned_abs()).unwrap_or(usize::MAX),
-                    ),
-                })
+                Err(self.nat_mismatch(&equation))
             };
         }
-        if equation.coeffs.len() == 1 {
-            self.solve_isolated(equation)?;
-            return Ok(());
+        let linear = equation.linear_terms();
+        // One variable and a constant: `c*v + k = 0`.
+        if equation.is_linear() && linear.len() == 1 {
+            let (id, coefficient) = linear[0];
+            let rhs = -equation.constant_part();
+            if coefficient == 0 || rhs % coefficient != 0 || rhs / coefficient < 0 {
+                return Err(self.nat_mismatch(&equation));
+            }
+            let value = usize::try_from(rhs / coefficient).unwrap_or(usize::MAX);
+            self.nat_subst.insert(id, Nat::Lit(value));
+            return Ok(NatStep::Solved);
         }
-        self.nat_pending.push(equation);
-        Ok(())
-    }
-
-    /// Solves an equation with exactly one variable, if the solution is a
-    /// non-negative integer; binds it and retries the pending equations.
-    fn solve_isolated(
-        &mut self,
-        equation: NatLinear,
-    ) -> Result<(), UnifyError> {
-        let (&id, &coefficient) = equation
-            .coeffs
+        // An inference variable that appears only linearly is eliminated
+        // against the rest (`a - b = 0` => `a = b`; `a - n - 1 = 0` =>
+        // `a = n + 1`), provided the rest is a non-negative expression.
+        let mut candidates: Vec<(u32, i128)> = linear
             .iter()
-            .next()
-            .expect("the caller checked there is exactly one variable");
-        let rhs = -equation.constant;
-        if coefficient == 0 || rhs % coefficient != 0 {
-            return Err(UnifyError::NatMismatch {
-                left: Nat::Var(id),
-                right: Nat::Lit(usize::try_from(rhs.unsigned_abs()).unwrap_or(usize::MAX)),
-            });
-        }
-        let value = rhs / coefficient;
-        if value < 0 {
-            return Err(UnifyError::NatMismatch {
-                left: Nat::Var(id),
-                right: Nat::Lit(usize::try_from(value.unsigned_abs()).unwrap_or(usize::MAX)),
-            });
-        }
-        self.nat_subst
-            .insert(id, Nat::Lit(usize::try_from(value).unwrap_or(usize::MAX)));
-        self.solve_pending_nat()
-    }
-
-    /// Retries the multi-variable equations; a later binding may have made one
-    /// solvable (or inconsistent).
-    fn solve_pending_nat(&mut self) -> Result<(), UnifyError> {
-        loop {
-            let pending = std::mem::take(&mut self.nat_pending);
-            let mut progressed = false;
-            let mut kept = Vec::new();
-            for equation in pending {
-                // Substitute the current solution into the stored form.
-                let mut reduced = NatLinear::constant(equation.constant);
-                for (id, coefficient) in &equation.coeffs {
-                    let resolved = self.resolve_nat(&Nat::Var(*id));
-                    let Some(form) = self.nat_linear(&resolved) else {
-                        return Err(UnifyError::NatNonLinear {
-                            left: Nat::Var(*id),
-                            right: Nat::Var(*id),
-                        });
-                    };
-                    reduced = reduced.add(form.scale(*coefficient));
-                }
-                let reduced = reduced.normalised();
-                if reduced.coeffs.is_empty() {
-                    if reduced.constant != 0 {
-                        return Err(UnifyError::NatMismatch {
-                            left: Nat::Lit(0),
-                            right: Nat::Lit(
-                                usize::try_from(reduced.constant.unsigned_abs())
-                                    .unwrap_or(usize::MAX),
-                            ),
-                        });
-                    }
-                    continue;
-                }
-                if reduced.coeffs.len() == 1 {
-                    self.solve_isolated_without_retry(reduced)?;
-                    progressed = true;
-                    continue;
-                }
-                kept.push(reduced);
+            .copied()
+            .filter(|(id, _)| self.nat_is_flexible(*id) && !equation.in_product(*id))
+            .collect();
+        candidates.sort_by_key(|(id, _)| (self.nat_level(*id), *id));
+        for (id, coefficient) in candidates.into_iter().rev() {
+            let mut rest = equation.clone();
+            rest.terms.remove(&vec![id]);
+            if rest.terms.values().any(|value| value % coefficient != 0) {
+                continue;
             }
-            self.nat_pending = kept;
-            if !progressed {
-                return Ok(());
+            let mut solution = rest.negate();
+            for value in solution.terms.values_mut() {
+                *value /= coefficient;
             }
+            let Some(expression) = Self::poly_to_nat(&solution) else {
+                continue;
+            };
+            // The eliminated variable's level bounds its replacement's.
+            let level = self.nat_level(id);
+            for var in solution.variables() {
+                let entry = self.nat_levels.entry(var).or_insert(level);
+                *entry = (*entry).min(level);
+            }
+            self.nat_subst.insert(id, expression);
+            return Ok(NatStep::Solved);
         }
+        // Two declared extents that are not the same variable.
+        if equation.is_linear()
+            && linear.len() == 2
+            && equation.constant_part() == 0
+            && linear[0].1 == -linear[1].1
+            && linear.iter().all(|(id, _)| self.nat_rigid.contains(id))
+        {
+            let left = self.render_nat(&Nat::Var(linear[0].0));
+            let right = self.render_nat(&Nat::Var(linear[1].0));
+            return Err(UnifyError::NatRigid { left, right });
+        }
+        Ok(NatStep::Residual(equation))
     }
 
-    /// [`Self::solve_isolated`] without re-entering [`Self::solve_pending_nat`]
-    /// (the caller is already inside it).
-    fn solve_isolated_without_retry(
-        &mut self,
-        equation: NatLinear,
-    ) -> Result<(), UnifyError> {
-        let (&id, &coefficient) = equation.coeffs.iter().next().expect("one variable");
-        let rhs = -equation.constant;
-        if coefficient == 0 || rhs % coefficient != 0 {
-            return Err(UnifyError::NatMismatch {
-                left: Nat::Var(id),
-                right: Nat::Lit(usize::try_from(rhs.unsigned_abs()).unwrap_or(usize::MAX)),
-            });
-        }
-        let value = rhs / coefficient;
-        if value < 0 {
-            return Err(UnifyError::NatMismatch {
-                left: Nat::Var(id),
-                right: Nat::Lit(usize::try_from(value.unsigned_abs()).unwrap_or(usize::MAX)),
-            });
-        }
-        self.nat_subst
-            .insert(id, Nat::Lit(usize::try_from(value).unwrap_or(usize::MAX)));
-        Ok(())
-    }
-
-    /// How many multi-variable Nat equations are still unsolved. The checker
-    /// reports `E0304` for them at the end of the module (§3.10.2 rule 6).
+    /// How many equations are still unsolved.
     #[must_use]
     pub fn unsolved_nat_equations(&self) -> usize {
         self.nat_pending.len()
     }
 
-    /// Removes and returns the number of multi-variable equations still
-    /// pending; the checker reports `E0304` for them at the end of a
-    /// declaration (§3.10.2 rule 6).
-    pub fn take_unsolved_nat_equations(&mut self) -> usize {
-        let count = self.nat_pending.len();
-        self.nat_pending.clear();
-        count
+    /// Removes and returns the equations still pending, rendered as
+    /// `lhs = rhs`; the checker reports each at the end of a declaration
+    /// (§3.10.2 rule 6).
+    pub fn take_unsolved_nat_equations(&mut self) -> Vec<UnsolvedNat> {
+        let pending = std::mem::take(&mut self.nat_pending);
+        pending
+            .iter()
+            .map(|equation| {
+                let (left, right) = self.describe_nat_equation(equation);
+                UnsolvedNat {
+                    text: format!("{left} = {right}"),
+                    linear: equation.is_linear(),
+                }
+            })
+            .collect()
     }
 
     /// The level at which a Nat variable was created, for generalisation.
@@ -2336,6 +2591,79 @@ impl Infer {
                     right: right.clone(),
                 })
             },
+        }
+    }
+
+    /// The shape of an elementwise operation on two tensors of the same rank
+    /// (§3.5.3): each axis must be equal or one side must be `1`, which
+    /// broadcasts (`[3, 1] + [1, 4]` is `[3, 4]`).
+    ///
+    /// Two extents where neither is the literal `1` are unified (so a symbolic
+    /// extent is assumed to equal the other side); `[n, 1] + [1, m]` is
+    /// `[n, m]` with no constraint on `n` and `m`. A rank-only operand has
+    /// unknown extents: they can only be `1` or equal to the other side, so the
+    /// other side's extent wins unless that is `1` too.
+    ///
+    /// # Errors
+    ///
+    /// [`UnifyError::ShapeMismatch`] for different ranks or two different
+    /// literal extents (neither `1`), and the Nat errors of [`Self::unify_nat`].
+    pub fn broadcast_shape(
+        &mut self,
+        left: &Shape,
+        right: &Shape,
+    ) -> Result<Shape, UnifyError> {
+        let left = self.resolve_shape(left);
+        let right = self.resolve_shape(right);
+        let mismatch = || {
+            UnifyError::ShapeMismatch {
+                left: left.clone(),
+                right: right.clone(),
+            }
+        };
+        if left.rank() != right.rank() {
+            return Err(mismatch());
+        }
+        let rank = usize::try_from(left.rank()).unwrap_or(usize::MAX);
+        let axes = |shape: &Shape| -> Vec<Option<Nat>> {
+            match shape {
+                | Shape::Refined(items) => items.clone(),
+                | Shape::Rank(_) => vec![None; rank],
+            }
+        };
+        let (a, b) = (axes(&left), axes(&right));
+        let mut out = Vec::with_capacity(rank);
+        for (x, y) in a.iter().zip(b.iter()) {
+            let one = |nat: &Nat| matches!(nat, Nat::Lit(1));
+            let extent = match (x, y) {
+                | (None, None) => None,
+                | (None, Some(known)) | (Some(known), None) => {
+                    if one(known) {
+                        None
+                    } else {
+                        Some(known.clone())
+                    }
+                },
+                | (Some(p), Some(q)) => {
+                    let (p, q) = (self.resolve_nat(p), self.resolve_nat(q));
+                    if p == q || one(&q) {
+                        Some(p)
+                    } else if one(&p) {
+                        Some(q)
+                    } else if let (Nat::Lit(_), Nat::Lit(_)) = (&p, &q) {
+                        return Err(mismatch());
+                    } else {
+                        self.unify_nat(&p, &q)?;
+                        Some(self.resolve_nat(&p))
+                    }
+                },
+            };
+            out.push(extent);
+        }
+        if out.iter().all(Option::is_none) {
+            Ok(Shape::Rank(left.rank()))
+        } else {
+            Ok(Shape::Refined(out))
         }
     }
 

@@ -1,0 +1,16 @@
+[package]
+name = "aevia-resolve"
+description = "Semantic versions, version requirements and dependency resolution for Aevia packages (pure: no I/O)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# No dependencies on purpose: the toolchain and the registry platform both link
+# this crate, and neither should pay for a version parser it can read in a few
+# hundred lines. The crate does no I/O; an `Index` implementation brings the data.
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
