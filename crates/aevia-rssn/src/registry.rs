@@ -169,6 +169,20 @@ pub struct OpEntry {
     pub raw: Vec<Signature>,
     /// Where the signatures came from.
     pub source: Source,
+    /// Indices into `signatures`/`raw` of the overloads the kernel *witnessed*:
+    /// the engine was observed to satisfy them and each replays from a
+    /// recorded call (`rssn::kernel::sort`). They are more specific than the
+    /// derived symbolic contract and are what the domain modules type
+    /// operators from when no curated `sig` exists.
+    pub witnessed: Vec<usize>,
+    /// The recorded calls behind the witnessed overloads: the call and the
+    /// sort of its answer.
+    pub witnesses: Vec<(String, String)>,
+    /// Witnessed signatures that share their parameters with an overload and
+    /// state a sharper result (`(Term) -> Bool` next to `(Term) -> Term`).
+    /// Not overloads: they take no part in resolution, and only a binding
+    /// with a checked result channel may use them.
+    pub refinements: Vec<Sig>,
     /// Kernel dimensional rule, when declared independently of signatures.
     pub dim_rule: Option<rssn::kernel::signature::DimRuleInfo>,
     /// Why the kernel omitted a signature, if it supplied a reason.
@@ -650,9 +664,28 @@ impl Registry {
                 source: match op.signature_source {
                     | rssn::kernel::manifest::SignatureSource::Declared => Source::Declared,
                     | rssn::kernel::manifest::SignatureSource::Overlay => Source::Overlay,
-                    | rssn::kernel::manifest::SignatureSource::Derived => Source::Derived,
+                    // Witnessed overloads sit next to the derived ones; the
+                    // operator as a whole is still "not hand-declared", and
+                    // `witnessed` says which overloads carry evidence.
+                    | rssn::kernel::manifest::SignatureSource::Derived
+                    | rssn::kernel::manifest::SignatureSource::Witnessed => Source::Derived,
                     | rssn::kernel::manifest::SignatureSource::None => Source::None,
                 },
+                witnessed: op
+                    .overload_sources
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, source)| {
+                        **source == rssn::kernel::manifest::SignatureSource::Witnessed
+                    })
+                    .map(|(index, _)| index)
+                    .collect(),
+                witnesses: op
+                    .witnesses
+                    .iter()
+                    .map(|w| (w.input.clone(), w.output.clone()))
+                    .collect(),
+                refinements: op.refinements.iter().map(convert_signature).collect(),
                 dim_rule: op.dim_rule.clone(),
                 dynamic_reason: op.dynamic_reason.clone(),
                 eval_kind: op.eval,

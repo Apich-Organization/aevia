@@ -22,10 +22,25 @@
 //! * explicit **exclusions** and accepted-dynamic declarations, each with a
 //!   reason.
 //!
-//! Everything not mentioned in the overlay still gets a generated wrapper (the
-//! *dynamic* tier: `Result<Value, OpError>`), so a newly added kernel operator
-//! is callable from its domain module on the next run without any edit. What
-//! the overlay adds is a ratchet: [`problems`] fails when an operator is in a
+//! Everything not mentioned in the overlay still gets a generated wrapper, so a
+//! newly added kernel operator is callable from its domain module on the next
+//! run without any edit. Which wrapper depends on what the kernel knows:
+//!
+//! * the **witnessed** tier: the kernel observed the operator answering real
+//!   calls and recorded the sorts of arguments and answers
+//!   (`rssn::kernel::sort`; "applied to an integer, `divisors` is equal to a
+//!   list of integers"). When such an overload is expressible in Aevia types
+//!   the wrapper is typed exactly like a curated one, with the recorded call
+//!   quoted in its documentation. Nobody wrote the signature: it follows the
+//!   kernel's own test suite, so a new, tested kernel operator arrives typed;
+//! * the **dynamic** tier, `Result<Value, OpError>`, for the rest.
+//!
+//! A witnessed signature is evidence, not a totality proof, which is exactly
+//! what the wrapper's `Result` channel is for: `from_value<T>` validates the
+//! answer and an argument outside what was observed yields `Err`, never a
+//! value of the wrong type.
+//!
+//! What the overlay adds is a ratchet: [`problems`] fails when an operator is in a
 //! domain declared `typed` and has neither a signature nor an exclusion, or
 //! when a kernel rule set has no domain at all.
 //!
@@ -367,6 +382,8 @@ pub fn overlay() -> &'static Overlay {
 pub enum Status {
     /// A curated, typed wrapper with a `Result` error channel.
     Typed,
+    /// A typed wrapper generated from an overload the kernel witnessed.
+    Witnessed,
     /// A generated `Result<Value, OpError>` wrapper; `Some(reason)` when the
     /// overlay accepts that explicitly.
     Dynamic(Option<String>),
@@ -435,6 +452,10 @@ pub fn classify<'a>(
                 Status::Excluded(reason.clone())
             } else if overlay.sigs.contains_key(&op.name) {
                 Status::Typed
+            } else if !overlay.accepted_dynamic.contains_key(&op.name)
+                && !witnessed_sigs(op).is_empty()
+            {
+                Status::Witnessed
             } else {
                 Status::Dynamic(overlay.accepted_dynamic.get(&op.name).cloned())
             };
@@ -702,6 +723,20 @@ fn render(
                 let name = unique(&mut used, &sig.name);
                 typed_wrapper(&mut out, overlay, op, sig, &name);
             },
+            | Status::Witnessed => {
+                let base = crate::codegen::sanitise(&op.name);
+                for (index, sig) in witnessed_sigs(op).iter().enumerate() {
+                    // The best-supported overload takes the operator's name;
+                    // further ones are named after what distinguishes them.
+                    let wanted = if index == 0 {
+                        base.clone()
+                    } else {
+                        format!("{base}_{}", sig.tag)
+                    };
+                    let name = unique(&mut used, &wanted);
+                    witnessed_wrapper(&mut out, op, sig, &name);
+                }
+            },
             | Status::Dynamic(reason) => {
                 let name = unique(&mut used, &crate::codegen::sanitise(&op.name));
                 dynamic_wrapper(&mut out, op, &name, reason.as_deref());
@@ -762,6 +797,137 @@ fn typed_wrapper(
         op = crate::codegen::escape(&op.name),
         args = args.join(", "),
         decoded = decode(overlay, &sig.ret, "wire"),
+    );
+}
+
+/// A witnessed overload in Aevia types.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WitnessedSig {
+    /// Parameter types.
+    pub params: Vec<String>,
+    /// The success type of the `Result`.
+    pub ret: String,
+    /// A short word for the overload (`int`, `real`, `float`), used to name
+    /// the wrappers after the first.
+    pub tag: &'static str,
+}
+
+/// The Aevia spelling of a witnessed type, when it has one.
+///
+/// A symbolic scalar is `Real` (an Aevia `Real` is an exact number *or* an
+/// expression), a rectangular list is a tensor of its rank, and a structured
+/// kernel object (a graph, a group, a sparse matrix: a term headed by its
+/// constructor) is an opaque `Value` handle, which is what it is on the Aevia
+/// side: it can be passed back to the kernel and nothing else. Tuples and
+/// ragged lists have no general Aevia type; an overload that mentions one
+/// stays in the dynamic tier.
+fn witnessed_type(ty: &crate::registry::SigType) -> Option<String> {
+    use crate::registry::SigType as S;
+    Some(match ty {
+        | S::Int => "Int".to_string(),
+        | S::Real | S::Symbol | S::Dyn => "Real".to_string(),
+        | S::Float => "Float".to_string(),
+        | S::Bool => "Bool".to_string(),
+        | S::Opaque(_) => "Value".to_string(),
+        | S::Tensor { rank, elem, .. } => {
+            let rank = (*rank)?;
+            let elem = match elem.as_ref() {
+                | S::Int => "Int",
+                | S::Real | S::Symbol | S::Dyn => "Real",
+                | S::Float => "Float",
+                | S::Bool => "Bool",
+                | _ => return None,
+            };
+            format!("Tensor<{rank}, {elem}>")
+        },
+        | _ => return None,
+    })
+}
+
+/// The witnessed overloads of `op` that Aevia can state, best supported
+/// first (the kernel's order).
+#[must_use]
+pub fn witnessed_sigs(op: &OpEntry) -> Vec<WitnessedSig> {
+    if op.higher_order {
+        return Vec::new();
+    }
+    let mut out: Vec<WitnessedSig> = Vec::new();
+    // Witnessed overloads first, then the refinements: a refinement has the
+    // parameters of the symbolic contract (everything `Real`) and a sharper
+    // result, which the wrapper's `Result` channel checks.
+    let overloads = op
+        .witnessed
+        .iter()
+        .filter_map(|&index| op.signatures.get(index));
+    for sig in overloads.chain(&op.refinements) {
+        if sig.variadic.is_some() {
+            continue;
+        }
+        let params: Option<Vec<String>> = sig.params.iter().map(witnessed_type).collect();
+        let (Some(params), Some(ret)) = (params, witnessed_type(&sig.ret)) else {
+            continue;
+        };
+        // Only handles in and a handle out says nothing a caller can check:
+        // that is the dynamic wrapper.
+        if ret == "Value" && params.iter().all(|p| p == "Value") {
+            continue;
+        }
+        let mentions = |word: &str| params.iter().chain([&ret]).any(|t| t.contains(word));
+        let tag = if mentions("Float") {
+            "float"
+        } else if mentions("Real") {
+            "real"
+        } else if mentions("Int") {
+            "int"
+        } else {
+            "bool"
+        };
+        let candidate = WitnessedSig { params, ret, tag };
+        // Two kernel overloads can collapse to one Aevia signature (a symbol
+        // and a term are both `Real`).
+        if !out.iter().any(|kept| kept.params == candidate.params) {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
+fn witnessed_wrapper(
+    out: &mut String,
+    op: &OpEntry,
+    sig: &WitnessedSig,
+    name: &str,
+) {
+    docs(out, op, "witnessed");
+    let _ = writeln!(
+        out,
+        "## Typed from kernel evidence, not by hand: the engine was observed to satisfy this\n## signature and it replays from a recorded call."
+    );
+    if let Some((call, sort)) = op.witnesses.first() {
+        let _ = writeln!(out, "## Witness: `{call}` has sort `{sort}`.");
+    }
+    let params: Vec<String> = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("a{i}: {t}"))
+        .collect();
+    let args: Vec<String> = (0..sig.params.len())
+        .map(|i| format!("to_value(a{i})"))
+        .collect();
+    let _ = writeln!(
+        out,
+        "fn {name}({params}): Result<{ret}, OpError> =\n    match Rssn.dynamic(\"{op}\", [{args}]) with\n    | Ok(wire) -> {decoded}\n    | Err(failure) -> Err(failure)\n",
+        params = params.join(", "),
+        ret = sig.ret,
+        op = crate::codegen::escape(&op.name),
+        args = args.join(", "),
+        // A handle is returned as it is; anything else is validated.
+        decoded = if sig.ret == "Value" {
+            "Ok(wire)".to_string()
+        } else {
+            format!("from_value<{}>(wire)", sig.ret)
+        },
     );
 }
 
@@ -846,6 +1012,7 @@ pub fn coverage_report(
     let total = placements.len();
     let count = |f: &dyn Fn(&Placement<'_>) -> bool| placements.iter().filter(|p| f(p)).count();
     let typed = count(&|p| p.status == Status::Typed);
+    let witnessed = count(&|p| p.status == Status::Witnessed);
     let dynamic = count(&|p| matches!(p.status, Status::Dynamic(_)));
     let excluded = count(&|p| matches!(p.status, Status::Excluded(_)));
     let unclassified = count(&|p| p.status == Status::Unclassified);
@@ -860,6 +1027,7 @@ pub fn coverage_report(
          | | operators |\n|---|---:|\n\
          | in the manifest | {total} |\n\
          | typed in a domain module (curated `sig`, `Result` channel) | {typed} |\n\
+         | typed in a domain module from kernel evidence (witnessed overload, `Result` channel) | {witnessed} |\n\
          | dynamic in a domain module (generated, `Result<Value, OpError>`) | {dynamic} |\n\
          | excluded from domain modules (with reason) | {excluded} |\n\
          | unclassified (must be 0) | {unclassified} |\n\
@@ -868,14 +1036,15 @@ pub fn coverage_report(
     );
     let _ = writeln!(
         out,
-        "Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<Int, OpError>`), \
+        "Exposure tiers, from best to worst: **typed** (`Rssn_<Domain>.f(x: Int): Result<Int, OpError>`, curated), \
+         **witnessed** (the same shape of wrapper, generated from an overload the kernel observed and can replay), \
          **dynamic** (`Rssn_<Domain>.f(a, b): Result<Value, OpError>`), and the always-available escape hatch \
          `Rssn.dynamic(\"f\", [..])`. Nothing in the manifest is unreachable.\n"
     );
     let _ = writeln!(out, "## By domain\n");
     let _ = writeln!(
         out,
-        "| module | mode | ops | typed | dynamic | excluded | kernel rule sets |\n|---|---|---:|---:|---:|---:|---|"
+        "| module | mode | ops | typed | witnessed | dynamic | excluded | kernel rule sets |\n|---|---|---:|---:|---:|---:|---:|---|"
     );
     for domain in &overlay.domains {
         let mine: Vec<&Placement<'_>> = placements
@@ -885,7 +1054,7 @@ pub fn coverage_report(
         let sets: BTreeSet<&str> = mine.iter().map(|p| p.op.rule_set.as_str()).collect();
         let _ = writeln!(
             out,
-            "| `{}` | {} | {} | {} | {} | {} | {} |",
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} |",
             module_name(&domain.name),
             if domain.typed_required {
                 "typed-required"
@@ -894,6 +1063,9 @@ pub fn coverage_report(
             },
             mine.len(),
             mine.iter().filter(|p| p.status == Status::Typed).count(),
+            mine.iter()
+                .filter(|p| p.status == Status::Witnessed)
+                .count(),
             mine.iter()
                 .filter(|p| matches!(p.status, Status::Dynamic(_)))
                 .count(),
@@ -906,7 +1078,7 @@ pub fn coverage_report(
     let _ = writeln!(out, "\n## By kernel rule set\n");
     let _ = writeln!(
         out,
-        "| rule set | ops | declared/overlay sig | derived sig | flat-facade exact | domain typed | domain dynamic | excluded | domains |\n|---|---:|---:|---:|---:|---:|---:|---:|---|"
+        "| rule set | ops | declared/overlay sig | derived sig | kernel-witnessed | flat-facade exact | domain typed | domain witnessed | domain dynamic | excluded | domains |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"
     );
     let mut by_set: BTreeMap<&str, Vec<&Placement<'_>>> = BTreeMap::new();
     for p in &placements {
@@ -919,14 +1091,16 @@ pub fn coverage_report(
             .collect();
         let _ = writeln!(
             out,
-            "| `{set}` | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{set}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             ps.len(),
             ps.iter().filter(|p| p.op.source.is_exact()).count(),
             ps.iter().filter(|p| !p.op.source.is_exact()).count(),
+            ps.iter().filter(|p| !p.op.witnessed.is_empty()).count(),
             ps.iter()
                 .filter(|p| flat_typed.contains(p.op.name.as_str()))
                 .count(),
             ps.iter().filter(|p| p.status == Status::Typed).count(),
+            ps.iter().filter(|p| p.status == Status::Witnessed).count(),
             ps.iter()
                 .filter(|p| matches!(p.status, Status::Dynamic(_)))
                 .count(),

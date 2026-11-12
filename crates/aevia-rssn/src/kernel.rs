@@ -2259,6 +2259,26 @@ fn result_is_dimensionless(
     if crate::domains::overlay().sigs.contains_key(&entry.name) {
         return true;
     }
+    // A witnessed overload was observed on bare numbers and bare lists and
+    // answered with one: with every argument known to be dimensionless, an
+    // operator whose value is a function of its arguments cannot produce a
+    // dimension. This is what lets the witnessed tier of the domain modules
+    // decode `Int` and `Tensor<_, Int>` results; a dimensioned argument still
+    // gets no such evidence.
+    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
+        && !witnesses.is_empty()
+        && witnesses.iter().all(known_one)
+    {
+        return true;
+    }
+    // The same operators, when the kernel itself says the value is not a
+    // physical scalar (a count, a flag, a structure): an opaque handle among
+    // the arguments carries no dimension witness, and needs none.
+    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
+        && matches!(&entry.dim_rule, Some(R::NonMetric | R::Container))
+    {
+        return true;
+    }
     match &entry.dim_rule {
         | Some(R::Dimensionless) => true,
         | Some(R::List | R::NonMetric | R::Compare | R::Angle) => witnesses.iter().all(known_one),

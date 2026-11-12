@@ -292,11 +292,26 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
   `FiniteField`、`Graph`、`Coding`、`Crypto`、`Topology` 等 29 个）的归属，
   按 `rule_set:glob` 匹配，先匹配者胜。**每个 rule set 必须被某个 family 认领**，
   kernel 新增 rule set 或算子而 overlay 没有归属时覆盖检查失败。
-* 三档暴露：**typed**（`sig`，Aevia 类型写成 `Result<T, OpError>`，包装器由签名
+* 四档暴露（witnessed 见下一条）：**typed**（`sig`，Aevia 类型写成 `Result<T, OpError>`，包装器由签名
   推导）、**dynamic**（自动生成的 `Result<Value, OpError>` 包装器，新算子零编辑即可
   调用）、**excluded**（`exclude`，必须写理由）。`mode D typed` 的领域里，
   既无 `sig`、`dynamic` 也无 `exclude` 的算子是覆盖错误；`sig` 的参数个数与 manifest
   的 arity 不符、`sig` 指向已不存在的算子同样失败。
+* **witnessed 档（自动类型化）**：介于 typed 与 dynamic 之间。kernel 的引擎每次运行结束时，
+  请求（如 `factorint(360)`）与答案（`list(list(2, 3), ...)`）同处一个等价类，这本身就是一条
+  类型判断。kernel 把这些判断记录为"sort 事实"、按参数种类聚类取并、再逐条**重放**见证调用，
+  得到 `signatures.witnessed.json`（rssn `docs/KERNEL.md` §3a）；manifest 里每个重载带
+  `overload_sources`，见证调用在 `witnesses` 中。领域模块对**没有** `sig`、但有可用 Aevia
+  类型表达的见证重载的算子，生成与 typed 档同形的包装器
+  （`fn divisors(a0: Int): Result<Tensor<1, Int>, OpError>`），文档里引用见证调用。
+  类型映射：`Int`→`Int`，有理数/符号表达式/符号→`Real`，浮点→`Float`，`Bool`→`Bool`，
+  矩形列表→`Tensor<秩, 元素>`；元组、不透明对象、参差列表没有通用 Aevia 类型，
+  该重载留在 dynamic 档。一个算子有多个见证重载时，证据最多的占用算子名，其余以
+  `_int`/`_real`/`_float` 后缀区分。**没有人手写这些签名**：corpus 就是 kernel 自己的测试集，
+  kernel 新增并测试一个算子后，重新挖掘即在 Aevia 中自动获得类型。
+  见证签名是**证据而非全称证明**：参数侧可能比算子实际接受的更窄（`Rssn.dynamic` 始终可用），
+  结果由 `from_value<T>` 校验，越出观测范围时得到 `Err`，绝不会得到类型错误的值。
+  `dynamic op | 理由` 仍可把某个算子强制留在 dynamic 档。
 * 转换是**泛型**的，不是逐函数写的：参数 `to_value(x)`，结果 `from_value<T>(v)`。
   丰富类型用 `codec Type to_fn from_fn` 声明一对转换函数（每个类型一对，不是每个
   算子一对）：`Perm`（0 起始，边界上 ±1，kernel 的排列是 1 起始）、`Graph`/`Group`

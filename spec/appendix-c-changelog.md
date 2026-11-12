@@ -149,6 +149,23 @@
    仅 path 包的传递 registry 依赖由 `aevia` 解析但 `aevia-pkg tree/lock` 只读根清单；
    `aevia-pkg` 对 registry 以外的镜像没有 `[source]` 替换；解压后的源树只靠校验标记保证完整性（无逐文件摘要）。
 
+## 4.3 Revision 16（2026-11-12）：见证式自动类型化
+
+1. **witnessed 档（§10.3.8）。** 领域模块不再只有"手写 `sig`"与"`Result<Value, OpError>`"两档。
+   rssn 内核把引擎自己的等式判断（请求与答案同处一个等价类）记录为 sort 事实，经完整引擎重放、
+   聚类取并、变异探测后生成 `signatures.witnessed.json`；Aevia 从 manifest 的
+   `overload_sources` / `refinements` 为没有 `sig` 的算子生成同形的类型化包装器。
+   dynamic 档从 1298 个算子降到 871 个，新增 453 个自动类型化算子，没有一条签名是手写的。
+2. **不透明句柄。** 结构化内核对象（图、群、稀疏矩阵等，以构造子为头的项）在见证签名中映射为
+   `Value`：可以传回内核、可以对它做带类型的查询（`sp_rank(s): Result<Int, OpError>`），除此之外不可见。
+3. **量纲证据。** 见证重载在全部参数已知无量纲时给出无量纲结果证据；内核声明为
+   `NonMetric`/`Container` 的见证算子不要求参数证据（句柄没有量纲）。
+4. **新内核能力随之可用**：`Rssn_LinearAlgebra` 中的精确/符号稀疏矩阵（`sp_*`），
+   `Rssn_Calculus` 中的 D-finite 函数判定（`holonomic_zero`、`holonomic_equal`、`holonomic_ode` 等）。
+   端到端示例见 `tests/domain_witnessed.aev`。
+5. **仍缺：** 见证签名的参数名是位置名（`a0`、`a1`）；元组与参差列表结果仍留在 dynamic 档；
+   同一算子多个见证重载以 `_int`/`_real`/`_float` 后缀区分，而非类型类重载。
+
 ## 5. 记录在案的未实现边界（Known Gaps）
 
 1. **包依赖的边界**：registry 依赖、SemVer 解析和带校验的本地副本已实现（Revision 15）；

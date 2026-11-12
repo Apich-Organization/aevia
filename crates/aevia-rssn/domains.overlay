@@ -35,11 +35,11 @@ domain DifferentialGeometry | Metrics, curvature, differential forms, vector cal
 domain Functional | Inner-product spaces, operators and integral equations.
 domain Special | Special functions, symbolic and numerical.
 domain Statistics | Distributions, tests and descriptive statistics, symbolic and numerical.
-domain Calculus | Symbolic calculus, variational calculus and result verification.
+domain Calculus | Symbolic calculus, variational calculus, result verification, and D-finite functions (differential equations, recurrences, decided identities).
 domain Elementary | Elementary and complex functions, radicals.
 domain Core | Kernel plumbing: term constructors, rewriting, CSE, unit conversion.
 domain Numeric | Numerical vectors, matrices and callbacks.
-domain LinearAlgebra | Symbolic linear algebra.
+domain LinearAlgebra | Symbolic linear algebra, dense and sparse (exact and symbolic sparse matrices, modular methods).
 domain Differential | Ordinary, stochastic and partial differential equations.
 domain Physics | Classical and quantum physics formulas.
 domain Solving | Equation solving and optimisation.
@@ -65,11 +65,11 @@ family DifferentialGeometry geometry:*
 family Functional functional:*
 family Special special:* numerical_special:*
 family Statistics stats:* numerical_stats:*
-family Calculus calculus:* variational:* verify:*
+family Calculus calculus:* variational:* verify:* holonomic:*
 family Elementary elementary:* complex:* radicals:*
 family Core kernel:* rewriting:* cse:* units:*
 family Numeric numeric:* numerical_matrix:* numerical_vector:* numerical_callback:*
-family LinearAlgebra linalg:*
+family LinearAlgebra linalg:* sparse_symbolic:*
 family Differential ode:* sde:* pde:*
 family Physics physics:* physics_quantum:*
 family Solving solve:* optimize:*

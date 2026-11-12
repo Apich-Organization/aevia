@@ -2020,6 +2020,19 @@ Matrix<n, m, τ>              # = Tensor<[n, m], τ>
   solution`）；两个变量相乘不是线性的，报 `E0304`。秩 `Tensor<n, τ>` 的
   `n` 仍须是具体整数（否则 `E0304`），refined shape 的 extent 可以是变量。
   没有 binder 的 shape 变量、以及实例头中的 Nat 变量都报 `E0304`。
+  **多项式形式与刚性变量（Revision 12）。** 等式实际按多项式处理：变量的乘积
+  （`n * m`）是不透明单项式，只与同一乘积相消（`n*m ~ m*n`、`n + m ~ m + n`），
+  一个因子被解出后代回成线性方程（`n = 2` 使 `n*m ~ 6` 解出 `m = 3`）；仍无法
+  解出的乘积在声明末尾报 `E0304`，消息给出 `n * m = 2` 这样的方程。`fn f<n, m>`
+  里**声明的**变量是刚性的：它们可以被字面量或表达式解出（`n + 1 ~ 3`），但两个
+  不同的声明变量不会被合并，`n ~ m` 是 `E0302`（`extents `n` and `m` are different
+  type-level variables`）。泛型被调用方实例化出的变量是推断变量，可与任何表达式
+  消去（`a ~ n + 1`），所以在带符号 extent 的泛型函数里调用另一个泛型函数是合法的。
+  **广播。** 逐元素运算按轴取：相等，或一侧是字面量 `1`（结果取另一侧）；
+  `[3,1] + [1,4]` 是 `[3,4]`，`[n,1] + [1,m]` 是 `[n,m]`；两个都不是 `1` 的符号 extent
+  被统一；rank-only 一侧视为各轴未知（只能是 `1` 或等于另一侧）。秩不同仍不广播。
+  **依形状分支** 用 `refine_shape<[3, ?]>(a) : Option<Tensor<[3, ?], τ>>`（字面量或
+  `?`，§8.4）：`Some` 分支里的张量带静态 extent。
   这足以表达矩阵乘法、reshape、拼接，不需要完整依赖类型。
 - 细化 → 秩-only 是安全隐式转换；秩-only → 细化用
   `refine_shape(a) : Option<Tensor<[...],τ>>`（运行时检查）。
@@ -4918,9 +4931,10 @@ authors = ["..."]
 description = "..."
 
 [dependencies]
-aevia-std = "0.1"
-units-extra = { path = "../units-extra" }
-plotting = { git = "https://example.com/plotting.git", tag = "v0.2.0" }
+Units = "^1.2"                                        # 官方作用域：aevia/units
+Plot = { package = "apich/plot", version = "~2.1" }   # registry 包
+Kinematics = { path = "../kinematics" }               # 本地路径包
+Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # 本地开发用路径，发布后按版本
 
 [compat]
 aevia = ">=1.0, <2.0"
@@ -4938,32 +4952,114 @@ entry = "src/main.aev"      # 可执行包的入口；默认 src/main.aev
 opt = 3
 ```
 
-> **实现状态（2026-11-04）**：清单解析、`target`/`entry`、`--locked`、内容哈希与
-> path 依赖已实现；**`version`/`git` 依赖与 registry 未实现**（分别报 `E0605`/
-> 无 registry 客户端，`aevia add/update` 只管理本地清单/锁文件）。上面的
-> `git`/`version` 示例是设计目标，不是当前可用的依赖形式；`[capabilities]` 目前
-> 只被解析/保留，没有运行时权限检查（§9.14）。
+> **实现状态（2026-11-10）**：清单解析、`target`/`entry`、`--locked`、内容哈希、
+> path 依赖与 **registry 依赖（版本需求、解析、锁、校验后的本地副本）** 已实现，见
+> §7.5.1.1 与 §7.5.2；**`git` 依赖不存在**（报 `E0605`）。`[compat]`、
+> `[capabilities]`、`[build]`、`[profile.*]` 示例是设计目标：当前清单读取器只读
+> `[package]` 与 `[dependencies]`，其余表报 `E0605`（`[capabilities]` 目前也没有运行时
+> 权限检查，§9.14）。
 
-- `name` 是包名，`snake_case`；导入时用包名作为根模块。
-- `version` 是 SemVer。
+- `name` 是包名，`snake_case`；导入时用依赖键（导入根）。
+- `version` 是 SemVer 2.0：`major.minor.patch`，可带 `-pre-release`；发布版本不得带
+  `+build` 元数据（两个仅 build 不同的版本优先级相同，registry 无法区分）。
 - `edition` 是语言版本（`2026`）。
-- 依赖可以是 registry、path、git；默认从中心 registry 解析（§13.7），
-  path/git 用于本地开发和私有包。registry 是内容寻址 + 签名 + capability
-  声明的，不是“以后再加”的附属品。
+- 依赖有三种来源：registry、path，或两者并存（`path` 用于本地开发，`version` 用于发布后
+  的使用者）。不存在 git 依赖。registry 是内容寻址 + 签名 + capability 声明的，不是
+  “以后再加”的附属品。
 - `target` 为 `library` 时不需要 `main`；为 `executable` 时必须有
   `main : IO Unit`。
 - `entry` 默认 `src/main.aev`。
 
+#### 7.5.1.1 依赖声明与版本需求
+
+`[dependencies]` 的键是**导入根**（`UpperCamelCase`，不含 `-`），值有以下形式：
+
+| 写法 | 含义 |
+|---|---|
+| `Units = "^1.2"` | 官方作用域包 `aevia/units`，需求 `^1.2`。包名由键转 `snake_case`（`UnitsExtra` → `aevia/units_extra`）；缩写键（`FFT`）要显式写 `package`。 |
+| `Plot = { package = "apich/plot", version = "~2.1" }` | 指定 `owner/name` 的 registry 包。 |
+| `Lib = { path = "../lib" }` | 本地路径包。 |
+| `Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }` | 两者并存：本包从源码构建时用 `path`；本包作为 registry 包被使用时（`path` 目录不存在）只用 `package`/`version`。**发布的清单不得含纯 `path` 依赖**——使用者没有那个目录——服务器在发布时拒绝（`E_MANIFEST`）。 |
+
+`version` 是**版本需求**（Cargo 的语法与含义）：
+
+| 写法 | 含义 |
+|---|---|
+| `1.2.3`、`^1.2.3` | `>=1.2.3, <2.0.0`（裸版本即 `^`） |
+| `^0.2.3` / `^0.0.3` | `>=0.2.3, <0.3.0` / 恰为 `0.0.3` |
+| `~1.2.3`、`~1.2`、`~1` | `>=1.2.3, <1.3.0`、`<1.3.0`、`<2.0.0` |
+| `1.*`、`1.2.x` | 通配 |
+| `>=1.2, <2`、`=1.2.3`、`>1`、`<=1.2` | 比较子，逗号表示合取 |
+| `*` | 任意**正式**版本 |
+
+预发布版本（`1.0.0-rc.1`）只有当需求中某个比较子写出了**同一** `major.minor.patch` 的
+预发布时才满足；`^1`、`*` 永远不会选中预发布版本，因此 `aevia update` 不会悄悄采用候选
+版。可含内联表中的逗号（`">=1.2, <2"`），行尾 `#` 注释被忽略。
+
+#### 7.5.1.2 解析：每个兼容系列至多一个版本
+
+解析器是 `aevia-resolve`（纯 crate，无 I/O，无依赖；工具链与 registry 共用）。语义：
+
+1. 满足所有需求；每个选中版本的依赖也被满足；选中版本之间**无依赖环**（环报错并列出环）。
+2. **每个包的每个兼容系列至多选一个版本**。兼容系列：`>=1.0` 取主版本（`1.x`），`0.y`
+   取 `0.y`，`0.0.z` 取 `0.0.z`（即 `^` 的含义）。因此 `1.4` 与 `1.9` 不会同时出现，
+   而 `1.x` 与 `2.x` 可以共存，各自有自己的名义类型（§7.3：身份含包名/版本/目录）。
+   共存的前提是两条边用**不同的导入根**；程序范围的导入根表仍然只允许一个根名对应一个
+   包，否则 `E0606`（消息列出争用的两个版本）。
+3. 在所有解中偏好**已锁定**的版本，其余取**最高**的兼容版本；`yanked` 的版本只在锁
+   文件已经包含它时才可被选中（yank 不破坏已有构建，也不影响新解析）。
+4. 结果与索引的迭代顺序无关（确定性）；不可满足时给出推导树式的说明：哪个需求无法满足、
+   尝试过哪些候选及各自失败原因（连续相同失败折叠成区间）。
+5. 实现是带冲突导向回跳的回溯求解器（不是 PubGrub，因为一个需求可由多个系列的“槽”满足，
+   与“每包一个版本”的 PubGrub 项不兼容）。测试包括与穷举搜索的随机对照与回跳的复杂度
+   断言。
+
+registry 包的索引 `deps` 只记录 `package`、`req` 和（与默认导入根不同时）`import`。
+
 ### 7.5.2 锁文件
 
-`aevia.lock` 记录每个依赖的精确版本、源 URL、内容哈希和签名。构建 MUST
-使用锁文件；`aevia update` 更新。锁文件保证可复现构建；registry 包必须
-带内容哈希，yank 不删除内容。
+`aevia.lock` 记录每个依赖的精确版本、来源和摘要。构建 MUST 使用锁文件；`aevia
+update` 更新。锁文件保证可复现构建；registry 包必须带内容哈希，yank 不删除内容。
+
+格式（`version = 1`，字段与顺序固定，包按 `(source, import)` 排序，因此未变的解析产生
+逐字节相同的文件）：
+
+```toml
+[[package]]
+name = "apich/plot"          # registry 包：registry 身份 owner/name
+version = "2.1.3"
+import = "Plot"              # 导入根（每个别名一条，与 path 包一致）
+source = "registry+aevia"    # registry 的逻辑名，不是 URL：换镜像不改锁
+checksum = "sha256:…"        # 归档摘要，来自索引（签名覆盖它）
+
+[[package]]
+name = "dep"                 # path 包：[package] name
+version = "0.2.0"
+import = "Dep"
+source = "path+../dep"
+hash = "fnv1a64:…"           # 清单 + 源树 + 入口的摘要
+```
+
+registry 工作流：
+
+- 索引：`.aevia/registry/index/<owner>/<name>`（`$AEVIA_REGISTRY_DIR` 可共享）是
+  `GET /api/v1/index/{owner}/{name}` 的原文。解析只读这些文件；缺失时 `aevia
+  add/update/tree` 调用 `aevia-pkg index` 下载（`--offline` 禁止，并报告缺哪个包），
+  编译器本身从不联网。
+- 源码：`aevia fetch`（= `aevia-pkg vendor`）下载归档，校验摘要与 OpenPGP/SSH 签名后解包
+  到 `.aevia/registry/src/<owner>/<name>/<version>/`，并写入 `.aevia-pkg-checksum`。
+  构建 MUST 只读这些目录，且拒绝没有该标记或标记与索引摘要不符的目录（`E0607`），
+  也拒绝清单依赖与索引记录不一致的目录（`E0605`）。
+- `aevia update` 无参数时忽略锁取最新；`aevia update owner/name…` 只移动指定的包，其余
+  保持锁定。`--locked` 下任何变化都是错误。`aevia tree` 打印 path 与 registry 包的依赖树。
+- `aevia clean` 保留 `.aevia/registry`（不是构建产物）；`aevia clean --registry` 才删除。
 
 > **path 包实现（2026-11-05）**：模块根与锁文件从同一个已验证的包图生成。
 > 包节点以 canonical 目录去重，导入别名是图的边；同一包的每个别名都进入锁
 > 文件。当前仍保留程序范围内的传递依赖别名表：不同包争用同一导入根报
-> `E0606`，尚不支持不同包各自为同名依赖选择不同版本。
+> `E0606`。解析层允许同一包的不兼容系列共存（§7.5.1.2），但程序范围的导入根表仍要求
+> 一个根名只指向一个包，所以共存要求两条依赖边用不同的导入根；让每个包各自拥有自己的
+> 依赖名字空间（含 `Roots` 的按包查找）尚未实现。
 >
 > 锁文件路径相对于根包，依赖内容摘要覆盖 canonical 清单、`src/**/*.aev`
 > 和入口文件，因此改依赖的 `entry` 或依赖边也使 `--locked` 失效。源目录中
@@ -5057,8 +5153,8 @@ test "dimension rejection" =
 | `E0603` | 打开的名字冲突 |
 | `E0604` | 孤儿实例 |
 | `E0605` | 包清单错误 |
-| `E0606` | 依赖版本冲突 |
-| `E0607` | 找不到模块/包 |
+| `E0606` | 依赖版本冲突（需求不可满足、依赖环、导入根争用） |
+| `E0607` | 找不到模块/包（含：registry 索引未缓存、包未 `fetch` 或校验标记不符） |
 | `E0608` | 入口缺失或签名错误 |
 
 下一章给出标准库的签名。标准库是语言的一部分：单位、数学、线性代数、
@@ -5408,6 +5504,7 @@ fill     : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>
 linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>
 reshape<shape> : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>
 reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>
+refine_shape<shape> : Tensor<n, τ> -> Option<Tensor<shape, τ>>
 flatten  : Tensor<n, a> -> Tensor<1, a>
 at       : (Tensor<n, a>, Int) -> Tensor<n-1, a>     # 要求 n >= 1
 set      : (Tensor<n, a>, Tensor<1, Int>, a) -> Tensor<n, a>
@@ -5431,6 +5528,21 @@ std      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 参数构造器，应写固定参数的 lambda，例如 `fn (n) => zeros(n)`。`reshape<[n1, ..., nk]>(a)` 的目标形状
 显式给出；元素数在编译期（形状已知时）或运行时检查。`reshape_dyn(a,
 shape)` 用运行时形状向量，返回 `Result`。
+
+**形状分支：`refine_shape`。** `refine_shape<[3, ?]>(a)` 在运行时检查 `a` 的各
+extent 是否等于类型实参里写出的字面量（`?` 表示任意 extent），相符得
+`Some(b)`（`b : Tensor<[3, ?], τ>`），否则 `None`；秩在编译期检查（秩不符是 `E0302`）。
+因此"依形状分支"写成对 `Option` 的 `match`，每个分支里的 `b` 在**类型**中已
+带有具体 extent，后续的矩阵乘法、索引、`reshape` 都按它做静态检查：
+
+```
+match refine_shape<[3, 3]>(m) with
+| Some(sq) -> sq @ sq            # sq : Tensor<[3, 3], Float>，乘法维度静态已知
+| None -> m
+```
+
+extent 必须是字面量或 `?`：类型级变量在运行时没有值，`refine_shape<[n]>(a)` 是
+`E0304`（变量 extent 的细化只能由签名里的等式求解，不能靠运行时测试）。
 
 `@` 按秩分派：`A @ B`（2×2）、`A @ x`（2×1）、`x @ A`（1×2）、
 `x @ y`（1×1 点积）。`matmul` 只做 2×2；`matvec`/`vecmat`/`dot` 是显式
@@ -5473,6 +5585,10 @@ spsolve       : (Sparse<F, [n,n], Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>)
 cg            : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, Float, Int)
               -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool }
 type Precond = | Identity | Jacobi | BlockJacobi | Ilu0 | Ic0 | Auto
+gmres_with    : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, restart: Int, precond: Precond })
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
+bicgstab_with : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond })
+              -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
 cg_with       : (Sparse<F, [n,n], Float[d]>, Tensor<1, Float[e]>, { tol: Float, maxiter: Int, precond: Precond })
               -> { x: Tensor<1, Float[e/d]>, iterations: Int, residual: Float, converged: Bool, precond: String }
 contract      : (Sparse<F, shape, τ>, Sparse<G, shape, τ>, [Int], [Int]) -> Sparse<Coo, shape, τ>
@@ -5480,6 +5596,24 @@ map_nonzero   : ((Scalar<ρ,d>) -> Scalar<σ,e>, Sparse<F, shape, Scalar<ρ,d>>)
               -> Sparse<F, shape, Scalar<σ,e>>
 nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Scalar<ρ,d>)>
 ```
+
+**非对称系统：`gmres_with` 与 `bicgstab_with`。** `cg`/`cg_with` 要求对称正定；
+一般方阵（对流—扩散、非对称离散化）用 `gmres_with(A, b, { tol, maxiter, restart,
+precond })`（重启 GMRES(`restart`)，右预条件，残差范数单调不增，内存
+`O(restart·n)`）或 `bicgstab_with(A, b, { tol, maxiter, precond })`（BiCGSTAB，
+短递推、常数内存，残差历史可能不规则）。两者来自 RSSN 的 Krylov 内核，从零向量
+起步，返回与 `cg_with` 同形的记录（`x`、`iterations`、`residual`、`converged`、
+`precond`）；未达容差是 `converged = false` 而非错误，`restart = 0` 是 `E0802`。
+预条件子取 `Precond`，但对非对称矩阵 `Ic0` 与 `Auto` 都**改用** `Ilu0`（`Auto` 对
+`Bcsr` 先试块 ILU(0)）；分解失败退回 `Jacobi`，`precond` 字段如实报告用了哪一种。
+元素必须是 `Float`；精确元素用 `spsolve`。结果量纲是 `e/d`。直接法仍是
+`spsolve`（对称正定先试 Cholesky，否则 LU）。
+
+**并行与确定性。** `sparse @ dense`（向量或矩阵，含 `Bcsr` 的块内核）在乘加量不小
+于 2^17 时按行分块并行：块大小是常数（256 行，`Bcsr` 为一个块行），每个输出行
+由恰好一个工作项按列序累加，所以结果与线程数无关，且与顺序内核逐位相同。
+Krylov 迭代本身是顺序的（只有 `A @ x` 并行），因此 `cg_with`/`gmres_with`/
+`bicgstab_with` 的迭代序列也与线程数无关。
 
 **预条件共轭梯度与切片。** `cg_with(A, b, { tol, maxiter, precond })` 是带预条件子的
 `cg`（`cg` 本身不变）。`Precond` 是标准库变体（`import LinearAlgebra.Sparse { Precond,
@@ -5626,8 +5760,13 @@ Jacobi, cg_with }`）：`Identity`（无预条件子）、`Jacobi`（对角缩�
 > （`crates/aevia-core/tests/sparse_block.rs`；`@` 在 `f64` 类用块内核，rssn
 > 侧的块 Jacobi 与块 ILU(0) 经 `cg_with` 接到语言层。预条件 `cg_with`、
 > `spsolve` 的 Cholesky 优先路径与稀疏切片都已实现（`tests/sparse_followup.rs`）。
-> **剩余缺口**：类型里的 `shape` 只检查秩（细化的 `[m,n]` 在稀疏函数的
-> 签名里不做 Nat 求解，与目前的 `matmul` 一致）；稀疏值不能进入 RSSN 的项图。
+> **形状传播（2026-11 核对）**：`Sparse<F, [m,n], τ>` 的细化形状**会**被检查
+> 与传播（`crates/aevia-types/src/check/sparse.rs`）：`A @ B` 的内维、`A @ x`、
+> `A ± B`、`spsolve(A, b)`、`transpose`、`kron`（`[m*p, n*q]`）、`to_dense`/
+> `from_dense` 都对字面量与带 Nat 变量的 extent 做统一，不符是编译错误
+> （`tests/shape_refinement.rs`）。此前这里写的"只检查秩"已过时。
+> **剩余缺口**：稀疏值不能进入 RSSN 的项图；`gmres_with`/`bicgstab_with` 不接受
+> 精确元素；没有稀疏特征值/SVD。
 
 ## 8.5 Calculus
 
@@ -5849,7 +5988,7 @@ type AxisScale = | Linear | Log
 ## 8.9 ODE
 
 ```
-type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23
+type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
 type OdeOpts<s> = {
     rtol: Float[1],
     atol: Float[1],
@@ -5894,6 +6033,84 @@ RateOf<{ l1: τ1, ..., ln: τn }> = { l1: RateOf<τ1>, ..., ln: RateOf<τn> }
 Float[d]>` 按行主序展平。当前只支持 `Float` 标量/张量字段；含 `Int`/
 `Bool`/函数字段的状态报 `E0302`，把常量参数捕获在 `rhs` 闭包里。`Tensor<1,
 s>` 用 `Boxed` 存储；数值内核只看到扁平 `f64`，Aevia 负责装箱/拆箱。
+
+**8.9.0 解对象、稠密输出、多事件、高阶方程、边值问题**
+
+`odeint`/`solve_ivp` 只给离散输出和一个终止事件。需要在**任意时刻**取值、多个事件
+（带方向、可终止或不终止）、高阶方程或边值问题时用下面的入口；它们与
+`odeint_with` 共用 `OdeOpts<s>`、`RateOf<s>` 和展平契约，并与 §8.9.1 的 SDE 事件/
+稠密输出 API 同形（`{ g, terminal, direction }`、`{ index, t, y }`、`at`）。
+
+```
+type OdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],   # 变号即事件；必须返回无量纲数
+    terminal: Bool,                 # true：积分在该事件处停止
+    direction: Int,                 # -1 只认下降穿越，0 两个方向，1 只认上升穿越
+}
+type OdeHit<s> = { index: Int, t: Float[T], y: s }
+type OdeSolution<s> = {
+    t: Tensor<1, Float[T]>, y: Tensor<1, s>,        # 接受的步节点
+    at: (Float[T]) -> s,                            # 连续扩展：任意 t 处取值
+    events: Tensor<1, OdeHit<s>>,                   # 按时间排序的事件
+    nfev: Int, rejected: Int, method: String,
+}
+
+ode_solve : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), OdeOpts<s>, Tensor<1, OdeEvent<s>>)
+          -> OdeSolution<s>
+odeint_order : (((Float[T], y0, y1, ..., yk) -> RateOf^(k+1)<y0>), (y0, y1, ..., yk), Tensor<1, Float[T]>)
+          -> { t: Tensor<1, Float[T]>, y: Tensor<1, y0>, d: Tensor<1, (y0, y1, ..., yk)> }
+odeint_order_with : (rhs, (y0, y1, ..., yk), Tensor<1, Float[T]>, OdeOpts<y0>)
+          -> { t: Tensor<1, Float[T]>, y: Tensor<1, y0>, d: Tensor<1, (y0, y1, ..., yk)> }
+ode_bvp : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), ((s, s) -> Tensor<1, Float[d]>), OdeOpts<s>)
+          -> OdeSolution<s>
+```
+
+**连续输出。** `ode_solve(rhs, y0, (t0, t1), opts, events)` 在整个区间上积分
+（`t1 ≥ t0`；反向积分不支持）并保留方法自带的连续扩展，`sol.at(t)` 在
+`[t0, t_end]` 内任意时刻取值（区间外是 `E0802`，量纲不是 `T` 是 `E0401`）。`Dopri5`
+用 RSSN 的 4 阶连续扩展；`Radau`/`Bdf`/`Rosenbrock23` 用各自的配置多项式/向后差分
+插值；`Rk4` 没有级数据，用节点上的三次 Hermite 插值（插值误差 `O(h^4)`，随步长
+四阶收敛）。`Rk4` 的 `steps` 在这里是**整个区间的总步数**（`odeint_with` 里是每个
+输出区间的子步数）。`at` 是一个函数值（不是数据），所以含 `at` 的解不能跨线程
+返回；要在 `par_map` 里返回，只取 `t`/`y`。
+
+**事件。** `events` 是 `OdeEvent` 的列表，可以为空（`[]`）。每个事件的 `g` 在接受的
+步之间变号（`g0 < 0 ≤ g1` 为上升，`g0 > 0 ≥ g1` 为下降，`direction` 过滤）时由根
+查找在连续扩展上定位（`Rk4`：重积分的二分），命中记入 `events`（`index` 是列表下
+标）；`terminal = true` 的事件让积分在该点结束，`t`/`y` 的最后一个节点就是命中点，
+`at` 的有效区间随之截断。同一步内的多个命中按时间排序，终止事件之后的命中丢弃。
+`g` 返回有量纲的值是 `E0302`；方向取值不是 -1/0/1 是 `E0802`。
+
+**刚性求解器选择。** `AutoSwitch` 先用 `Dopri5`，且只给它 20000 次尝试步；预算耗尽
+（刚性问题受稳定性限制，步数远超精度所需）就改用 `Radau` 重新积分整个区间，
+`sol.method` 报告最终用的方法（`"Dopri5"` 或 `"Radau"`）。这是**按步数预算**判定，
+不是特征值估计：中等刚性（例如需要几万步）的问题会白白多跑一遍显式方法；
+明知刚性时直接选 `Radau`/`Bdf`/`Rosenbrock23`。`AutoSwitch` 也用于 `odeint_with`、
+`solve_ivp` 和事件积分（同样的规则）。
+
+**高阶方程。** `odeint_order(f, (y0, y1, …, y_{n-1}), times)` 积分
+`y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)`（`n` 是 `f` 的参数个数减一，`n ≥ 1`），内部化成
+堆叠状态 `z = (y, y′, …, y⁽ⁿ⁻¹⁾)` 上的一阶系统，除了 `y⁽ⁿ⁾ = f` 之外每个分量
+都是平凡的 `zₖ′ = zₖ₊₁`。**量纲逐阶追踪**：第 `k` 阶导数的类型是 `RateOf` 作用 `k` 次，
+`y : Float[L]` 时 `y′ : Float[L/T]`、`y″ : Float[L/T^2]`，`f` 必须返回 `L/T^n`
+（检查期 `E0401`/`E0302`；运行期再核对初值每一项的量纲与结构，量纲不符 `E0401`）。
+`y` 可以是标量、张量或记录，各阶导数结构相同。返回 `d` 是各阶导数的元组历史，
+`y` 是第 0 阶。`odeint_order_with` 多一个 `OdeOpts<y0>`（方法、容差；`events` 必须为
+`None`，要事件请手工化阶后用 `ode_solve`）。例（弹簧 `x″ = -(k/m) x`）：
+
+```
+let sol = odeint_order(fn (_t, x, v) => -(k / m) * x, (1.0 m, 0.0 m/s), times)
+# x : Float[L]，v : Float[L/T]，返回值 Float[L/T^2]
+```
+
+**边值问题（单步打靶）。** `ode_bvp(rhs, guess, (t0, t1), bc, opts)` 求解
+`y′ = rhs(t, y)`、`bc(y(t0), y(t1)) = 0`：`bc` 返回与状态分量个数相同的残差张量。
+算法是对初始状态的牛顿迭代（前向差分 Jacobian，每个未知量一次积分；带回溯线搜索），
+`guess` 是牛顿的起点，收敛判据 `‖r‖∞ ≤ 1e-9 (1 + ‖y0‖∞)`，最多 60 次迭代；返回
+最后一次积分的 `OdeSolution`（所以有 `at`）。二阶边值问题先用 `odeint_order` 的化阶
+思路写成状态 `(y, y′)`。残差个数不符是 `E0802`，雅可比奇异或不收敛是
+`NotConverged`。**限制**：这是单步打靶，只适用于 `y(t1)` 对 `y(t0)` 的灵敏度不爆炸的
+问题；指数不稳定（长区间、刚性）的边值问题需要多重打靶或配置法，此处**没有**提供。
 
 导入的 `odeint`/`odeint_with`/`solve_ivp`（以及 §8.9.1 的 `sdeint_*`，例如
 `import Ode { odeint }`）**保持类型函数语义**：`RateOf<s>`/`DiffusionOf<s>`
@@ -5963,7 +6180,50 @@ sde_order        : SdeMethod -> { strong: Float[1], weak: Float[1] }
 sde_order_with   : (SdeMethod, SdeStructure) -> { strong: Float[1], weak: Float[1] }
                    # 按结构给阶：HeunStratonovich 在不可交换噪声上只有强 1/2
 sde_ensemble_seed: (Int, Int) -> Int     # (seed, index)，纯函数
+
+type SdeEvent<s> = {
+    g: (Float[T], s) -> Float[1],  # 变号即事件，无量纲
+    terminal: Bool,                # true：路径在第一个这样的事件处截断
+    direction: Int,                # -1 下降，0 两个方向，1 上升
+}
+type SdeHit<s> = { index: Int, t: Float[T], y: s }
+
+sde_at       : (SdePath<s>, Float[T]) -> s
+sde_resample : (SdePath<s>, Tensor<1, Float[T]>) -> Tensor<1, s>
+sde_interp   : SdePath<s> -> ((Float[T]) -> s)
+sde_events   : (SdePath<s>, Tensor<1, SdeEvent<s>>) -> { path: SdePath<s>, hits: Tensor<1, SdeHit<s>> }
+sde_ensemble_diag    : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> DiffusionOf<s>), s, SdeOpts<T>, Int)
+                       -> Tensor<1, Result<SdePath<s>, SdeError>>
+sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralDiffusionOf<s>), s, SdeOpts<T>, Int)
+                       -> Tensor<1, Result<SdePath<s>, SdeError>>
 ```
+
+**连续输出（`saveat`、可在任意 `t` 调用的路径）。** 数值 SDE 路径只在节点上已知。
+`sde_at(path, t)` 取 `t` 处的状态，`sde_resample(path, ts)` 是 `saveat`（逐个时刻取值，
+结果 `Tensor<1, s>`），`sde_interp(path)` 返回可调用的 `Float[T] -> s`。插值是节点之间的
+**线性弦**：连续、确定、节点处精确，精度与格式本身同阶（强阶至多 1，Brownian 路径在
+节点间本来只有 Hölder-1/2）；它**不**补回步内的 Brownian 桥方差，所以节点之间的统计量
+比真过程低 `O(dt)`，需要精确的节点分布统计时直接用 `y`。区间外是 `E0802`，`t` 的量纲
+不是路径的时间量纲是 `E0401`。路径本身仍是**纯数据**（没有闭包字段），因此可以跨线程
+返回；可调用对象由 `sde_interp` 单独构造。
+
+**事件。** `sde_events(path, events)` 在离散路径上检测 `g` 的符号变化（节点上
+`g0 < 0 ≤ g1` 上升、`g0 > 0 ≥ g1` 下降，`direction` 过滤；与 ODE 事件同约定），
+穿越时刻是弦上 `g` 的根（二分），状态是弦上的插值。返回 `{ path, hits }`：`hits` 按时间
+排序；若有 `terminal` 事件，`path` 在第一个终止命中处截断（命中点作为最后一个节点，
+`steps` 随之更新），其后命中丢弃，否则 `path` 原样返回。因为只观察离散路径，两个节点
+之间"穿越后又返回"的连续过程事件是看不见的（任何离散格式都如此）。终止事件是**事后**
+截断：同一随机流上与"在事件处停止"得到相同的路径，但不会节省被丢弃部分的计算。
+`g` 返回有量纲的值是 `E0302`，`direction` 越界是 `E0802`。
+
+**集合（并行、确定）。** `sde_ensemble_diag/general(drift, diffusion, y0, opts, n)` 积分 `n`
+条路径，第 `i` 条使用种子 `sde_ensemble_seed(seed, i)`，其余选项相同；返回长度 `n`
+的 `Tensor<1, Result<SdePath<s>, SdeError>>`（`n ≤ 0` 是 `E0802`；个别成员的失败是该
+成员的 `Err`）。成员 `i` 只依赖 `(seed, i)`，所以**结果与执行顺序、线程数无关**。成员
+经 §9.7.2 的无共享副本并行执行（成员数不少于 32、drift/diffusion 可跨线程、未
+`--jobs 1` 时），否则在本线程顺序执行，两条路径给出逐位相同的值（回退由
+`AEVIA_PARALLEL_TRACE=1` 报告）。等价的手写形式是
+`par_tabulate(n, fn i => sdeint_diag(drift, diffusion, y0, <opts 的种子换成 sde_ensemble_seed(seed, i)>))`。
 
 **分派规则**：**方法名选择方案族和积分约定，结构选择可交换还是不可交换
 内核**。因此每个方法名在每种结构上都可用，不再有 `E1001`：
@@ -6027,8 +6287,8 @@ Brownian bridge 拒绝/重采（内核）。**所有方法都支持自适应**�
 构建内可复现，不承诺跨平台逐位相同。非交换定步长与所有自适应路径需要内核
 自己的 xoshiro 流（bridge 拒绝与 Lévy 面积在求解过程中采样），由 `seed`
 播种，同样只承诺同构建可复现。`sde_ensemble_seed` 只依赖 `(seed, index)`，
-所以集合成员与执行顺序/线程数无关；解释器闭包是 `!Send`，v1 的集合按顺序
-运行。
+所以集合成员与执行顺序/线程数无关；`sde_ensemble_diag/general` 在语言层并行运行
+成员（见下）。
 
 **错误表**（不新增 Appendix-B 码）：`E0802` 形状/参数（含 `General` 的
 `m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；
@@ -6038,9 +6298,10 @@ Brownian bridge 拒绝/重采（内核）。**所有方法都支持自适应**�
 三个缺口已关闭。`SdeError` 是不透明错误类型（像 `SimError`），语言层
 不暴露构造器。
 
-**v1 明确不做**：events/根查找、dense output、用户自定义噪声结构、显式非均匀网格（定步长内核假设均匀步长，报 `E0802`；需要变
+**v1 明确不做**：用户自定义噪声结构、显式非均匀网格（定步长内核假设均匀步长，报 `E0802`；需要变
 步长时用 `Adaptive`）、求解器 manifest 算子（求解器需要回调，无法越过
-manifest ABI）。
+manifest ABI）、Brownian 桥稠密输出（`sde_at` 是线性弦，见上）、在积分**过程中**提前停止
+的终止事件（`sde_events` 是事后截断）。事件与稠密输出已在上面实现（原先此处列为不做）。
 
 > **实现状态（2026-11-08，SDE 非交换/Stratonovich 补全轮）**：运行时与
 > `aevia-std` 的 SDE 求解器已落地，下面的组合也已用源码程序实际跑通（见
@@ -6073,9 +6334,8 @@ manifest ABI）。
 >   `rng(seed)` 相同的语言 LCG 流；非交换定步长与自适应路径用内核 xoshiro
 >   流，由 `seed` 播种；只承诺同构建可复现，不承诺跨平台逐位一致；
 > - **确定性**：`seed` 必填；`sde_ensemble_seed(seed,index)` 是纯函数，成员
->   与执行顺序/线程数无关。**语言层没有 ensemble runner**：只有 seed 助手是
->   入口；`aevia-std` 内部的顺序 ensemble 尚未接线，所以不要从“集合按顺序
->   运行”推断存在可调用的集合 API；
+>   与执行顺序/线程数无关。**ensemble runner 已接线**（`sde_ensemble_diag`/`sde_ensemble_general`，经并行副本，
+>   见上）；
 > - **入口与类型**：`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/
 >   `sde_ensemble_seed` 是 Prelude 内建，并由 `Sde` 模块 re-export；
 >   `Sde` 模块还声明本节的 `SdeMethod`/`SdeStructure`/`SdeFixedOpts`/
@@ -7006,6 +7266,22 @@ rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策�
 需要 Rust 1.97 或更新版本（RSSN 的最低版本）。默认构建仍关闭 JIT；
 关闭时 `@jit` 报 `E1001`。
 
+### 9.6.4 设备目标 / Device targets
+
+**English summary.** `@jit` stays a scalar, CPU, machine-code path. Data-parallel
+execution on `Cpu`/`CpuParallel`/`Gpu(n)` is a separate mechanism (rssn
+`Device`, `spec/10-backend.md` §10.6.5); a function that qualifies for `@jit`
+also qualifies for the device batch path.
+
+- `@jit(target = Cpu)` 等价于 `@jit`（单点机器码）。`target = Gpu(n)`
+  选择**批量**设备路径，没有 `core.gpu` 时仍为 `E1001("core.gpu")`（检查期）。
+- 设备路径和 JIT 共用同一个降低（Core IR → SSA 指令）和同一门控（§9.6.1）；
+  差别只在后端：JIT 编译一个点的函数，设备在 `rows` 行上启动一个内核。
+- `CpuParallel` 的结果与 `Cpu` 逐位相同，线程数不改变任何结果（延伸 §9.7.2）。
+  `Gpu(n)` 是 `f32`，只保证舍入误差内一致，故不进入纯函数、位确定的原语。
+- 设备不可用、函数不可降低、设备报错：回退解释器逐行求值，值不变（CPU 上）。
+  `AEVIA_PARALLEL_TRACE=1` 同样打印设备回退的原因。
+
 ## 9.7 内存与并发
 
 ### 9.7.1 内存
@@ -7043,6 +7319,13 @@ rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策�
   副本不再嵌套并行（避免同一池内死锁），并保留解释器自身的调用深度保护。
 - 每个工作线程一个 kernel `Session`（线程本地）；`Session` 的 `RefCell`
   不跨线程。
+- **数值内核的并行审计。** `par_map`/`par_tabulate` 保持输入序、`par_reduce` 按定长块
+  折叠，二者与线程数无关。接入同一规则的数值路径：(1) `sparse @ dense`（含 `Bcsr`）
+  按固定 256 行块并行，每个输出行由一个工作项顺序累加，逐位等于顺序内核；(2)
+  `sde_ensemble_diag/general` 把"成员 `i`"做成部分应用的内建（`Ctor{adt=MAX}`）经
+  `par_map` 的副本执行，成员种子 `ensemble_seed(seed, i)` 只依赖 `(seed, i)`。
+  不并行（有意）：ODE/SDE 单条路径的时间步、Krylov 迭代、`tabulate`（沿用 `par_tabulate`
+  显式并行）。含闭包字段的值（`ode_solve` 的 `at`）不可跨线程，回退顺序。
 
 ### 9.7.3 并发任务
 
@@ -7696,6 +7979,66 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
 `Vec<i8>`，包装器按 `width`/`height` 行主序 reshape 成 `Tensor<2, Int>`；
 `sim` 的错误是字符串，包装器按前缀映射成 `SimError` 枚举。
 
+### 10.3.8 领域模块：`Rssn_<Domain>`
+
+平铺的 `Rssn.<op>` 与按 rule set 分组的 `Rssn_<rule_set>` 都沿用 **kernel 的**组织方式；
+它们说不出“`invmod` 取一个模数、返回一个剩余”：`invmod` 的 kernel 签名是派生的
+`Real -> Real`，而 `discrete` 这个 rule set 同时装着有限域、图、编码和密码学。
+领域模块是 Aevia 一侧的分组，由 **manifest + 一份小的声明式 overlay**
+（`crates/aevia-rssn/domains.overlay`）生成：
+
+* `domain`/`family`：算子到领域（`NumberTheory`、`Combinatorics`、`Group`、
+  `FiniteField`、`Graph`、`Coding`、`Crypto`、`Topology` 等 29 个）的归属，
+  按 `rule_set:glob` 匹配，先匹配者胜。**每个 rule set 必须被某个 family 认领**，
+  kernel 新增 rule set 或算子而 overlay 没有归属时覆盖检查失败。
+* 四档暴露（witnessed 见下一条）：**typed**（`sig`，Aevia 类型写成 `Result<T, OpError>`，包装器由签名
+  推导）、**dynamic**（自动生成的 `Result<Value, OpError>` 包装器，新算子零编辑即可
+  调用）、**excluded**（`exclude`，必须写理由）。`mode D typed` 的领域里，
+  既无 `sig`、`dynamic` 也无 `exclude` 的算子是覆盖错误；`sig` 的参数个数与 manifest
+  的 arity 不符、`sig` 指向已不存在的算子同样失败。
+* **witnessed 档（自动类型化）**：介于 typed 与 dynamic 之间。kernel 的引擎每次运行结束时，
+  请求（如 `factorint(360)`）与答案（`list(list(2, 3), ...)`）同处一个等价类，这本身就是一条
+  类型判断。kernel 把这些判断记录为"sort 事实"、按参数种类聚类取并、再逐条**重放**见证调用，
+  得到 `signatures.witnessed.json`（rssn `docs/KERNEL.md` §3a）；manifest 里每个重载带
+  `overload_sources`，见证调用在 `witnesses` 中。领域模块对**没有** `sig`、但有可用 Aevia
+  类型表达的见证重载的算子，生成与 typed 档同形的包装器
+  （`fn divisors(a0: Int): Result<Tensor<1, Int>, OpError>`），文档里引用见证调用。
+  类型映射：`Int`→`Int`，有理数/符号表达式/符号→`Real`，浮点→`Float`，`Bool`→`Bool`，
+  矩形列表→`Tensor<秩, 元素>`；元组、不透明对象、参差列表没有通用 Aevia 类型，
+  该重载留在 dynamic 档。一个算子有多个见证重载时，证据最多的占用算子名，其余以
+  `_int`/`_real`/`_float` 后缀区分。**没有人手写这些签名**：corpus 就是 kernel 自己的测试集，
+  kernel 新增并测试一个算子后，重新挖掘即在 Aevia 中自动获得类型。
+  见证签名是**证据而非全称证明**：参数侧可能比算子实际接受的更窄（`Rssn.dynamic` 始终可用），
+  结果由 `from_value<T>` 校验，越出观测范围时得到 `Err`，绝不会得到类型错误的值。
+  `dynamic op | 理由` 仍可把某个算子强制留在 dynamic 档。
+* 转换是**泛型**的，不是逐函数写的：参数 `to_value(x)`，结果 `from_value<T>(v)`。
+  丰富类型用 `codec Type to_fn from_fn` 声明一对转换函数（每个类型一对，不是每个
+  算子一对）：`Perm`（0 起始，边界上 ±1，kernel 的排列是 1 起始）、`Graph`/`Group`
+  （包装不透明 `Value` 句柄的名义类型）、`PermGroup`。
+* 错误通道：kernel 失败是 `Err(OpError)`；图后端算子在参数越出定义域时返回**未约化的
+  调用项**（`invmod(6, 15)`），`from_value` 把它报告为带该项文本的 `TypeMismatch`，
+  不再是一个笼统的“does not prove”。
+* 维度证据：`sig` 同时是 overlay 对“该算子是无量纲参数的纯函数”的声明；另外，
+  kernel 自己声明的 `Dimensionless` 规则、以及参数已知无量纲时的
+  `List/NonMetric/Compare/Angle` 规则，会让裸数结果携带 `Scalar(1)` 证据。其余规则
+  （`Same`、`Sum`、`Custom`…）不被信任。`list(...)` 项结果在上述可信时被读回成张量
+  （等长行合并成高阶张量，不等长保留为张量的张量）。
+* **构建期还是运行期**：运行期。模块在解析 `import Rssn_NumberTheory` 时由 live
+  manifest 渲染（`codegen::namespace_source`），不提交生成的 Aevia 源，因此不会与所链接
+  的 kernel 漂移。提交的只有 overlay 与覆盖报告
+  `tools/rssn-api-audit/RSSN-COVERAGE.md`；测试 `cargo test -p aevia-rssn --test
+  domains` 重新生成报告并比对（`AEVIA_BLESS=1` 重写）。领域模块的源码可由 `aevia_rssn::domains::domain_files` 导出审阅
+  （CLI 的 `--emit` 目前只导出规则集命名空间）。
+* 示例：`tests/domain_number_theory.aev`、`domain_combinatorics.aev`、
+  `domain_finite_fields.aev`；`Zmod` 把剩余与模数放在同一个值里，`zmod_inv(x)` 对非单位
+  返回 `Err`，混用不同模数返回 `Err`。
+
+**语言缺口（尚未实现）**：`let x: Zmod<17> = 5; x * x ^ -1` 需要三项语言改动，均在
+`aevia-types`/`aevia-core` 中，不属于绑定层：(1) 变体类型接受 `Nat` 参数（目前
+`E0317`）；(2) `Num`/`Fractional` 类带 `add/sub/mul/neg/from_int/inv` 方法，并让二元
+运算符对用户名义类型分派到实例；(3) 整数字面量按期望类型经 `from_int` 提升。在此之前
+`Zmod` 的模数是运行期携带的，运算以函数形式给出（`zmod_mul(x, inv)`）。
+
 ## 10.4 量纲桥
 
 量纲/单位的唯一事实来源是 RSSN 的 `rssn::dim`（`DimTerm`/`DimArena`/
@@ -7808,6 +8151,99 @@ pub fn kernel() -> Rc<Kernel>;   // 当前线程的会话，首次使用时创�
   这条路径。
 - `TieredBackend` 先解释、后台编译；适合 REPL 和交互式。
 - JIT 失败回退解释器；不改变语义。
+
+### 10.6.5 设备：数据并行执行 / Devices: data-parallel execution
+
+**English summary.** rssn has two orthogonal execution axes. `Backend` turns
+one closed form into a scalar function (interpreter, tape, Cranelift). A
+`Device` (`rssn::backend::device`) runs *one program over many rows* on a CPU
+thread pool or a GPU. Aevia maps its `Device` value (`Cpu | Gpu(Int) |
+Distributed(Cluster)`, §8.18) to rssn devices; transfers stay explicit.
+
+**两条互相独立的轴。**
+
+| 轴 | rssn 抽象 | 回答的问题 |
+|---|---|---|
+| 一个项怎样变成函数 | `Backend` / `Compiled` | 在一个点上求值 |
+| 许多行在哪里跑 | `Device` / `Buffer` / `KernelIr` | 在 10⁶ 行上求值；对 10⁴ 个初值积分 |
+
+JIT（§9.6）属于第一条轴，**不是** GPU 路径；`@jit(target = Gpu(n))`
+选择的是第二条轴的设备。
+
+**能力发现。** 两层，都是事实而不是猜测：
+
+1. 构建层：manifest `features.devices`（字符串列表：`cpu`、`cpu-parallel`，
+   以及启用 rssn `gpu-wgpu` feature 时的 `gpu-wgpu`）。这是编译期事实，
+   不探测硬件，所以可以进 `manifest_hash`。`core.gpu` 能力 =
+   `features.devices` 含任一 `gpu-*`。
+2. 运行层：`rssn::backend::device::registry().list()` 返回 `DeviceInfo`
+   （`id`、`kind`、`dtypes`、`ops`、`parallelism`、`unified_memory`、
+   `deterministic`）。没有适配器不是错误，只是没有 GPU 设备。Aevia 侧封装在
+   `aevia_rssn::device`（`available()`、`has_gpu()`、`resolve(Selector)`）。
+
+**`Device` 值到 rssn 设备的映射。**
+
+| Aevia | rssn id | 说明 |
+|---|---|---|
+| `Cpu` | `cpu` | 单线程；参考语义 |
+| `Cpu`（`Device.cpu_parallel` 提示） | `cpu-parallel` | rayon；与 `cpu` **逐位相同** |
+| `Gpu(n)` | 注册表中第 `n` 个 `DeviceKind::Gpu`（`gpu:wgpu:n`） | 无则 `E1001("core.gpu")`，消息带已注册 GPU 数 |
+| `Distributed(c)` | 无 | 仍为 `E1001("core.distributed")`；不在本设计内 |
+
+`Device.cpu_parallel` 是设计中的新值（`type Device` 增加一个无参构造器
+`CpuParallel`）；在类型表实现前，它由 `Selector::CpuParallel` 表示。
+
+**传输是显式的。** `to_device(t, Gpu(n))` = 一次 `upload`（`F64` 张量在只有
+`f32` 的设备上转为 `f32`，**这会改变数值**；见下）；`device_of` 读张量的设备
+标签；结果回到宿主要 `download`，不存在隐式传输。`on(device, thunk)` 是作用域
+执行：`thunk` 内的批量原语（`Device.map`）用该设备，作用域结束时释放缓冲区。
+
+**精度合约。** 内核 IR 的语义是 `f64`（与 tape/解释器相同）。设备在
+`DeviceInfo.dtypes` 里声明自己有没有 `F64`：
+
+- `cpu`、`cpu-parallel`：`F64`，与解释器逐位相同（含 NaN、`select`、越界
+  `gather` 读 NaN）。这是 §9.7.2 "线程数不改变任何结果" 在设备上的延伸。
+- `gpu:*`（WGSL）：只有 `F32`。Aevia **不会**把 `Float` 的结果悄悄换成
+  `f32`：`Device.map` 在 `Gpu` 上返回 `Float`（值经 `f32` 舍入），文档与错误
+  信息标明；要求位精确的代码选 `Cpu`/`CpuParallel`。
+
+**可降低到设备的函数。** 与 §9.6.1 的 JIT 门控一致的纯子集：无捕获、`Float`
+标量算术、初等函数、比较、`if`（两侧纯，急切求值后 `select`）。含宿主调用的项
+（算子的 `EvalFn`、C 外部函数，例如 gamma/erf/Bessel）在 rssn 里是 `Call`/
+`Extern`，**不能**降到设备：`KernelIr::from_tape` 返回 `Unsupported`，
+`DeviceBackend` 对这种项回退宿主 tape，Aevia 的 `Device.map` 回退解释器逐行
+求值。回退不改变值（CPU 设备上）。
+
+**批量原语（设计）。**
+
+```
+Device.available : () -> IO (List DeviceInfo)       # 注册表快照
+Device.map       : (Float -> Float, Tensor<[n],Float>) -> Tensor<[n],Float>
+                                                     # 在 Cpu/CpuParallel 上；纯，确定
+Device.map_on    : (Device, Float -> Float, Tensor<[n],Float>) -> IO (Tensor<[n],Float>)
+Device.reduce    : (Reduce, Tensor<[n],Float>) -> Float   # Sum | Prod | Min | Max
+Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor<[m,k],Float>
+                                                     # 同一程序、k 个初值；固定步长 RK4
+```
+
+纯、位确定的版本只在 CPU 设备上承诺；`map_on(Gpu(n), ..)` 是 `IO`，因为分配与
+传输是效应，且结果受设备精度约束。
+
+**实现状态（本节撰写时）。**
+
+- 已实现：rssn 侧完整的设备层（注册表、`Buffer`、`KernelIr`、CPU 参考设备、
+  WGSL 发射器与黄金测试、可选 `gpu-wgpu` 设备、`ensemble_rk4`）；manifest
+  `features.devices`；Aevia 侧 `aevia_rssn::device`（发现、`Selector`、
+  `BatchProgram`）与 `aevia-core` 的 `jit::map_floats`（把纯 `Float` 函数在
+  CPU 设备上批量应用，有测试）。
+- **未实现**：`Device.map`/`map_on`/`reduce`/`ensemble`/`available` 作为语言内
+  原语。它们要在类型表（`aevia-types`）和内建表（`aevia-core`）各加条目，
+  并由 `aevia-stdlib-gen` 重新生成 `Device.aev`；这些文件不在本设计的改动
+  范围内。接入点是 `jit::map_floats`（需要 `--features jit`，因为 Core IR 到
+  `Inst` 的降低目前在 JIT 模块里；批量执行本身不需要 Cranelift）。
+- `to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`；接入需要张量值携带设备
+  缓冲区句柄（目前 `Tensor` 的设备元数据只有标签），这是下一步，不是本节已做。
+- GPU 的 `reduce`/`matmul` 没有实现（`DeviceInfo.ops` 如实标明）。
 
 ## 10.7 错误映射
 
@@ -9000,6 +9436,10 @@ CI 检查：生成器输出与提交的生成文件一致；manifest 快照变�
   限定名是 Aevia 的命名空间，不是运行时键。要钉死重载用
   `Rssn.call_key(key, args)`，`key` 来自 `Rssn.overloads(name)` 或
   `OpInfo.keys`。
+
+- 领域模块：`import Rssn_NumberTheory`（`Rssn_<Domain>`，CamelCase）给出按数学领域
+  分组、带类型与 `Result` 通道的包装器，规则见 §10.3.8；`Rssn_<rule_set>` 仍按 kernel
+  分组并保持可用。
 
 名字冲突时，短名只保留**最稳定**的那个（`Stable` 优先，`since` 早者
 优先）；其余必须用限定名。生成器在 manifest 中记录短名映射。
@@ -10421,6 +10861,13 @@ help: transpose B or reshape A
   - 修复张量 Cons 维度一致性校验与测量值零除异常。
   - 完善 RSSN FFI 批量计算 `diagnostic_codes` 机器可读编码及确定性 `bincode-next` 序列化。
   - 修复稠密特征值求解器 0x0 与 1x1 边界条件。
+- **Revision 12（数值与类型系统缺口，track 3）**：
+  - **形状细化（§3.5.1/§3.5.3）**：`Nat` 求解器由线性形式升级为多项式形式——变量的乘积（`n * m`）作为不透明单项式保留，可与同一乘积相消（`n*m ~ m*n`），一个因子被解出后代回成线性方程；推断变量（泛型被调用方的新实例）可与任意表达式消去（`a ~ n + 1`、`a ~ b`），修复了"泛型函数在另一个带符号 extent 的泛型函数里被调用时报 `E0304`"。**声明的 extent 是刚性的**：两个不同声明变量（`n`、`m`）不会被悄悄合并，报 `E0302`（原来是含糊的 `E0304`）；仍可被字面量或表达式解出（`n + 1 ~ 3`）。逐元素 `+ - * /` 实现规范早已承诺的 1-extent 广播（`[3,1] + [1,4] = [3,4]`、`[n,1] + [1,m] = [n,m]`），此前类型检查器把它当作形状错误。诊断带源码名字（`n + 1 = n`、`shape mismatch: expected [n, 2], found [n, 3]`）。实现 `refine_shape<[..]>(a) : Option<Tensor<..>>`（规范早有，实现缺失）：形状分支的写法。
+  - **稀疏（§8.4.1）**：第一类稀疏值、CSR/CSC/COO/BSR、转换、`@`、转置、加减、Hadamard、标量积、`spsolve`/`cg`/`cg_with` 此前已完备；新增非对称 Krylov 求解器 `gmres_with`/`bicgstab_with`；`sparse @ dense` 按行并行且逐位确定；更正"形状只检查秩"的过时说法。
+  - **ODE（§8.9.0）**：`ode_solve`（连续输出 `at`、多事件含方向与终止）、`odeint_order`（任意阶，逐阶量纲追踪）、`ode_bvp`（单步打靶）、`AutoSwitch`（Dopri5 → Radau 按步数预算切换）。
+  - **SDE（§8.9.1）**：`sde_at`/`sde_resample`/`sde_interp`（线性弦的连续输出与 saveat）、`sde_events`（方向/终止）、`sde_ensemble_diag/general`（确定播种，经并行副本，结果与线程数无关）；原"v1 不做 events、dense output、ensemble runner"改为已实现。
+  - **并行（§9.7.2）**：审计 `par_map`/`par_reduce`/`par_tabulate` 的确定性，把稀疏 `@` 与 SDE 集合接入同一机制。
+  - **遗留缺口**：多重打靶/配置法 BVP；SDE Brownian 桥稠密输出与积分中途的终止事件；`AutoSwitch` 无特征值估计；`gmres/bicgstab` 不支持精确元素。
 
 ---
 
@@ -10512,12 +10959,57 @@ help: transpose B or reshape A
    `--caps`、`--no-cache`、`--jobs` 已实现）；已删除的 `RSSN-INTEGRATION-REQUIREMENTS.md`
    的引用改指 rssn 仓库的 `docs/KERNEL.md`；`spec/README.md` 的修订号与 kernel 计数更新。
 
+## 4.1 Revision 14（2026-11-10）：rssn 绑定自动化
+
+1. **领域模块（§10.3.8）。** 新增 `Rssn_<Domain>`：manifest 加声明式 overlay
+   （`crates/aevia-rssn/domains.overlay`）按领域生成带类型的模块；转换泛型化，错误走
+   `Result`；覆盖检查在算子既无绑定也无排除时失败；报告
+   `tools/rssn-api-audit/RSSN-COVERAGE.md` 由测试生成并比对。
+2. **维度证据。** 无量纲的 kernel 规则与 overlay `sig` 让派生签名算子的裸数结果可以
+   `from_value<Int>`；`list` 项结果读回为张量；未约化项的错误信息带上该项。
+3. **丰富类型。** `Zmod`、`Perm`（0 起始）、`Graph`、`Group`、`PermGroup`。
+4. **仍缺：** `Zmod<n>`/`GF<p>` 的类型级模数与运算符重载（§10.3.8 列出所需的语言改动）。
+
+## 4.2 Revision 15（2026-11-10）：包平台与依赖解析
+
+1. **`aevia-resolve`（新 crate，§7.5.1.1/§7.5.1.2）。** SemVer 2.0 `Version`（预发布、build、
+   全序）、`VersionReq`（`^ ~ = > >= < <=`、通配、`>=1.2, <2`、预发布规则）、解析器（带冲突导向回跳的回溯，
+   偏好锁定版本再取最高、yank 仅在已锁定时可选、每兼容系列至多一个版本、环检测、确定性、推导树式的失败说明）、
+   registry 稀疏索引读取器（无依赖的严格 JSON 子集）。测试含与穷举搜索的 2000 轮随机对照。
+2. **清单与锁（§7.5.1/§7.5.2）。** `Units = "^1.2"`、`{ package = "owner/name", version = … }`、path+version
+   并存；`E0605` 严格性不变（git/未知键仍拒绝）；锁新增 `checksum`，registry 来源为 `registry+aevia`；
+   仅 path 的锁逐字节不变。解析经本地缓存目录实现（`DirRegistry`），构建只读校验过的本地副本。
+3. **平台（`platform/`）。** 索引的 `deps` 现在记录 `package`/`req`/可选 `import`；发布时校验：不得有纯 path 依赖、
+   不得依赖自身、依赖必须存在且有未 yank 的版本满足需求；版本允许预发布、拒绝 build 元数据；发布与 yank
+   各自在一个事务内（行、依赖行、归档文件、日志链）；索引带 `ETag`；下载校验存储字节的摘要；新增
+   `POST /api/v1/resolve`、`GET /api/v1/crates/{owner}/{name}/dependents` 与包页“被依赖”表。
+4. **客户端。** `aevia add owner/name[@req] [--as]`、`aevia update [owner/name…]`、`aevia fetch`、`aevia tree`
+   （`--offline`）；`aevia-pkg` 新增 `index`、`add@req`、`update`、`vendor`/`fetch`、`tree`、`lock [--check]`。
+5. **仍缺：** 按包的依赖名字空间（同一程序中同名导入根指向不同版本，仍是 `E0606`）；`[patch]` 式覆盖；
+   仅 path 包的传递 registry 依赖由 `aevia` 解析但 `aevia-pkg tree/lock` 只读根清单；
+   `aevia-pkg` 对 registry 以外的镜像没有 `[source]` 替换；解压后的源树只靠校验标记保证完整性（无逐文件摘要）。
+
+## 4.3 Revision 16（2026-11-12）：见证式自动类型化
+
+1. **witnessed 档（§10.3.8）。** 领域模块不再只有"手写 `sig`"与"`Result<Value, OpError>`"两档。
+   rssn 内核把引擎自己的等式判断（请求与答案同处一个等价类）记录为 sort 事实，经完整引擎重放、
+   聚类取并、变异探测后生成 `signatures.witnessed.json`；Aevia 从 manifest 的
+   `overload_sources` / `refinements` 为没有 `sig` 的算子生成同形的类型化包装器。
+   dynamic 档从 1298 个算子降到 871 个，新增 453 个自动类型化算子，没有一条签名是手写的。
+2. **不透明句柄。** 结构化内核对象（图、群、稀疏矩阵等，以构造子为头的项）在见证签名中映射为
+   `Value`：可以传回内核、可以对它做带类型的查询（`sp_rank(s): Result<Int, OpError>`），除此之外不可见。
+3. **量纲证据。** 见证重载在全部参数已知无量纲时给出无量纲结果证据；内核声明为
+   `NonMetric`/`Container` 的见证算子不要求参数证据（句柄没有量纲）。
+4. **新内核能力随之可用**：`Rssn_LinearAlgebra` 中的精确/符号稀疏矩阵（`sp_*`），
+   `Rssn_Calculus` 中的 D-finite 函数判定（`holonomic_zero`、`holonomic_equal`、`holonomic_ode` 等）。
+   端到端示例见 `tests/domain_witnessed.aev`。
+5. **仍缺：** 见证签名的参数名是位置名（`a0`、`a1`）；元组与参差列表结果仍留在 dynamic 档；
+   同一算子多个见证重载以 `_int`/`_real`/`_float` 后缀区分，而非类型类重载。
+
 ## 5. 记录在案的未实现边界（Known Gaps）
 
-1. **工具链内的 SemVer 依赖解析**：`aevia add`/`aevia update` 与 `aevia.toml` 只解析
-   本地路径依赖；`version`/`git`/registry 依赖报 `E0605`。注册表本身（`platform/`：
-   签名发布、索引、文档站）与客户端 `aevia pkg`（`aevia-pkg`）已存在，但编译器的依赖
-   解析还没有接上它。
+1. **包依赖的边界**：registry 依赖、SemVer 解析和带校验的本地副本已实现（Revision 15）；
+   `git` 依赖不存在；按包的依赖名字空间、`[patch]` 覆盖、镜像 `[source]` 替换尚未实现。
 2. **设备后端**：`Gpu`/`Distributed` 只是可构造的运行时值；`on`/`to_device`/
    `@jit(target = Gpu(..))` 报 `E1001("core.gpu")`/`E1001("core.distributed")`。
 3. **稀疏值进入 RSSN 项图**与形状细化（只检查秩）仍是空白（§13.9.5）。

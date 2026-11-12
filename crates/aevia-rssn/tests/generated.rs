@@ -251,7 +251,7 @@ fn the_source_distribution_is_the_manifests() {
         let slot = match op.signature_source {
             | SignatureSource::Declared => 0,
             | SignatureSource::Overlay => 1,
-            | SignatureSource::Derived => 2,
+            | SignatureSource::Derived | SignatureSource::Witnessed => 2,
             | SignatureSource::None => 3,
         };
         expected[slot] += 1;
