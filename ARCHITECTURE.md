@@ -121,7 +121,24 @@ out side by side.
   exclusions). An operator without a curated signature is typed from the kernel's *witnessed*
   overloads when it has one that Aevia can state (signatures the kernel mined from its own runs and can
   replay; rssn `docs/KERNEL.md` §3a), and is dynamic otherwise; a test fails when an operator is neither bound nor excluded and keeps
-  `tools/rssn-api-audit/RSSN-COVERAGE.md` current (spec §10.3.8).
+  `tools/rssn-api-audit/RSSN-COVERAGE.md` current (spec §10.3.8). Witnessed wrappers take parameter
+  names derived from the Aevia type (`n`, `x`, `xs`, `m`, `t3`, `flag`, `v`; a repeated kind is numbered),
+  since the kernel records none.
+* **Numeric operators.** `Rssn_Numeric` carries the operators of rssn's `numeric` rule set
+  (robust statistics, windows and spectra, wavelets, Krylov/sparse/low-rank solvers, tensors, sampled
+  functions, complex special functions, finite-difference solvers, expression operators such as `ode_solve`):
+  67 curated `sig` lines, 8 dynamic ones with a reason. Their answers are floating point, so signatures say
+  `Float`, not `Real`, and a symbol that names a method or wavelet is a `Real`. A `sig` is also what gives a
+  result its dimensionless evidence; a dynamic `Value` from a rank-polymorphic or dimension-free operator
+  cannot be decoded into a `Float` tensor. The kernel's dimension-free names (`heat_fd`/`poisson_fd` take the
+  space dimension from the nesting depth of the data; `solve_heat_equation` and the unsuffixed affine
+  transforms `translation`, `scaling`, `shear`, `reflection`, `rotation`) are the rule: the `_1d`/`_2d`/`_3d`
+  spellings are aliases, and `Rssn_Graphics` claims the unsuffixed names. A signature has one rank, so the
+  finite-difference wrappers are one-dimensional.
+* **Devices.** `aevia_rssn::device` wraps rssn's device registry. The wgpu device provides `F64` as
+  double-single arithmetic (`DeviceInfo::emulated_f64`; pairs of `f32`, relative error about `1e-14`,
+  `f32` exponent range) and `device::plan` fuses chains of launches (a fused plan returns the same bits as
+  the unfused one). The language-level `Device` primitives and `Gpu(n)` are not wired up yet (spec §10.6.5).
   Exact signatures use pinned `OpKey`s; other entries use the dynamic value-list
   ABI and return its `Result` error channel. `aevia rssn --audit` classifies each
   overload as an exact typed binding, a dynamic/approximate signature or

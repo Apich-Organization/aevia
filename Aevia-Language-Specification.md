@@ -6757,6 +6757,51 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 `Rssn.call_key` 则不解析，直接执行 name + `signature_hash` 指定的
 overload。
 
+### 8.19.1 数值域模块 `Rssn_Numeric`
+
+rssn 的 `numeric` 规则集把一批数值内核做成算子（表驱动，只对字面数字求值；符号参数、
+参差列表、被拒绝的参数、不收敛都让调用保持为请求，包装器报告 `Err(NotReduced(..))`）。
+Aevia 把它们归入 `Rssn_Numeric`，其中 67 个有手写的 typed 签名
+（`domains.overlay` 的 `sig`，一律 `Result<_, OpError>`），其余留在 dynamic 档。
+`import Rssn_Numeric as N` 之后：
+
+| 组 | 算子（Aevia 签名） |
+|---|---|
+| 稳健统计 | `mad`、`mad_sigma(xs: Tensor<1, Float>): Float`，`trimmed_mean`、`winsorized_mean(xs, proportion)`，`huber_location(xs, k)`，`biweight_location(xs, c)`，`ecdf(xs, x)`，`kde(xs, x, bandwidth)`，`bandwidth_silverman`、`bandwidth_scott(xs)`，`quantile_hf(xs, p, kind: Int)`（Hyndman–Fan 1–9），`bootstrap_ci(xs, statistic, alpha, resamples, seed): Tensor<1, Float>`（种子固定，可复现） |
+| 窗与谱 | `hann_window`、`hamming_window`、`blackman_window(n: Int)`，`cross_correlation`、`fftconv(xs, ys)`，`fft_abs`、`fft_re`、`fft_im(xs)`，`ifft_re`、`ifft_im(re, im)`，`frft_re`、`frft_im(re, im, order)`（分数傅里叶），`interpolate(xs, ys, x)` |
+| 小波 | `dwt_approx`、`dwt_detail(xs, wavelet)`，`idwt(approx, detail, wavelet)`，`wavedec(xs, wavelet, levels): Tensor<1, Tensor<1, Float>>`，`waverec(coefficients, wavelet)`，`dwt2(m, wavelet): Tensor<3, Float>`（`[LL, LH, HL, HH]`），`idwt2(ll, lh, hl, hh, wavelet)` |
+| Krylov、低秩、排序 | `minres_solve`、`fgmres_solve`、`bicgstab_l_solve(a, b, tol)`，`sparse_solve`、`amg_solve(entries, b, tol, method)`（三元组 `(i, j, v)`，0 起始），`randomized_singular_values(a, k)`，`lobpcg_eigenvalues(a, k, tol)`，`qr_pivoted_rank`、`qr_pivoted_permutation`、`qr_pivoted_diagonal`，`nested_dissection_order(adjacency)`，`polynomial_system_roots(system): Tensor<3, Float>`（同伦延拓） |
+| 采样函数 | `function_l1_norm`、`function_l2_norm`、`function_inf_norm(points: Tensor<2, Float>)`，`function_inner`、`function_project(f, g)`，`function_normalize(f)`；函数是升序的 `(x, y)` 行表 |
+| 复变特殊函数 | `lgamma_complex`、`gamma_complex`、`digamma_complex(re, im)`，`lambert_w_complex(re, im, branch: Int)`，`bessel_j_complex`、`bessel_i_complex(order, re, im)`；结果是 `[re, im]` |
+| 表达式算子 | `oscillatory_integral`（Levin 配点），`anderson_fixed_point`，`newton_cg_minimize`（符号梯度与 Hessian），初值问题 `ode_solve`（`dopri5`、`rosenbrock23`、`radau5`、`bdf`、`sdirk3`、`exprb32`）、`ode_symplectic`（Verlet 与 Yoshida 组合）、`ode_imex`、`ode_etdrk4`；右端项与变量是 `Real` 符号项，其余参数是数字 |
+
+约定与限制：
+
+- **结果是 `Float`**。内核对这些算子只编码浮点数，所以计数与 0 起始下标
+  （`qr_pivoted_rank`、`qr_pivoted_permutation`、`nested_dissection_order`）也以 `Float` 返回；
+  `from_value<Int>` 不会接受它们。`Real`（精确）不是它们的结果类型。
+- **方法、小波、统计量用符号命名**，符号在 Aevia 里是 `Real`：
+  `let haar = symbol("haar")`，再 `N.dwt_approx(xs, haar)`。**每次** `symbol("haar")` 都造一个新符号
+  （`haar#2`、`haar#3`…），内核不认识；所以每个名字只在顶层 `let` 一次再复用。
+- **维度无关**。`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd` 在内核里不分维度：空间维数就是场数据的嵌套深度
+  （列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体，`u[i][j][k]` 是节点
+  `(x_i, y_j, z_k)`）。一个 Aevia 签名只有一个秩，所以 typed 包装器是**一维**形式
+  （`poisson_fd(f: Tensor<1, Float>, boundary: Float)`）；二维、三维用
+  `Rssn.dynamic("poisson_fd", [to_value(field), to_value(0.0)])`，答案是不可解码的 `Value`
+  （没有量纲证据，`from_value<Tensor<2, Float>>` 报 `TypeMismatch`），可以打印或原样传回内核。
+  同理 `tensor_norm`、`tensor_inner`、`tensordot`（秩多态）与 `hosvd`、`hooi`、`cp_als`、`tt_svd`、`tt_dense`
+  （结果是核心、因子、误差的混合列表）留在 dynamic 档，每个都有 `dynamic ... | 理由` 行。
+  符号 PDE 同样只有一个名字：`solve_heat_equation`、`solve_wave_equation`、`solve_laplace_equation`、
+  `solve_poisson_equation`（维数由方程的变量决定，旧的 `_1d`/`_2d`/`_3d` 是别名）；
+  仿射变换 `translation`、`scaling`、`shear`、`reflection`、`rotation` 同理，归入 `Rssn_Graphics`。
+- 参差输入（邻接表、项数不同的多项式方程）没有字面量写法，用 `map(f, range(0, n))` 构造
+  `Tensor<1, Tensor<1, Float>>`。
+
+端到端示例与封闭形式核对：`tests/domain_numeric.aev`（45 个 `test`：`mad([1,2,3,4,100]) = 1`、Hann 窗对称、
+`ifft(fft(x)) = x`、小波分解/重构往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
+`tensordot` 对手算矩阵乘、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），
+由 `cargo test -p aevia-rssn --test aev_suites` 经真实驱动运行。
+
 ## 8.20 库的组织
 
 ```
@@ -8002,7 +8047,8 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
   得到 `signatures.witnessed.json`（rssn `docs/KERNEL.md` §3a）；manifest 里每个重载带
   `overload_sources`，见证调用在 `witnesses` 中。领域模块对**没有** `sig`、但有可用 Aevia
   类型表达的见证重载的算子，生成与 typed 档同形的包装器
-  （`fn divisors(a0: Int): Result<Tensor<1, Int>, OpError>`），文档里引用见证调用。
+  （`fn divisors(n: Int): Result<Tensor<1, Int>, OpError>`），文档里引用见证调用。
+  参数名由类型推出（`n` 整数、`x` 标量、`xs` 向量、`m` 矩阵、`t3` 三阶张量、`flag` 布尔、`v` 句柄；同类重复时编号 `x1`、`x2`）。
   类型映射：`Int`→`Int`，有理数/符号表达式/符号→`Real`，浮点→`Float`，`Bool`→`Bool`，
   矩形列表→`Tensor<秩, 元素>`；元组、不透明对象、参差列表没有通用 Aevia 类型，
   该重载留在 dynamic 档。一个算子有多个见证重载时，证据最多的占用算子名，其余以
@@ -8032,6 +8078,29 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
 * 示例：`tests/domain_number_theory.aev`、`domain_combinatorics.aev`、
   `domain_finite_fields.aev`；`Zmod` 把剩余与模数放在同一个值里，`zmod_inv(x)` 对非单位
   返回 `Err`，混用不同模数返回 `Err`。
+* **Numeric 域的数值算子组（rssn `numeric` 规则集）。** 稳健统计（`mad`、`trimmed_mean`、
+  `huber_location`、`kde`、`quantile_hf`、`bootstrap_ci`…）、窗与谱（`hann_window`、`fft_re`/`fft_im`/`fft_abs`、
+  `ifft_re`/`ifft_im`、`frft_re`/`frft_im`、`cross_correlation`）、小波（`dwt_approx`、`idwt`、`wavedec`、`waverec`、
+  `dwt2`、`idwt2`）、Krylov/稀疏/低秩/张量/函数（`minres_solve`、`fgmres_solve`、`bicgstab_l_solve`、`sparse_solve`、
+  `amg_solve`、`randomized_singular_values`、`lobpcg_eigenvalues`、`tensordot`、`hosvd`、`tt_svd`、`polynomial_system_roots`…）、
+  维度无关的有限差分求解器（`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd`）、复变特殊函数
+  （`lgamma_complex`、`gamma_complex`、`digamma_complex`、`lambert_w_complex`、`bessel_j_complex`、`bessel_i_complex`）
+  与表达式算子（`oscillatory_integral`、`anderson_fixed_point`、`newton_cg_minimize`、`ode_solve`、`ode_symplectic`、
+  `ode_imex`、`ode_etdrk4`）都归入 `Rssn_Numeric`，共 67 条 `sig`，8 个留在 dynamic 档并写明理由
+  （`tensor_norm`/`tensor_inner`/`tensordot` 是秩多态，`hosvd`/`hooi`/`cp_als`/`tt_svd`/`tt_dense` 返回混合列表）。
+  其中的规则：
+  - 这些算子的结果是浮点，签名用 `Float`/`Tensor<n, Float>`，**不是** `Real`（`from_value<Real>` 只接受精确的
+    `Int`/`Rat`）；整数性质的结果（秩、置换下标）同样以 `Float` 返回。
+  - 用符号命名的方法、小波、统计量参数类型是 `Real`（Aevia 的 `symbol(..)` 是 `Real`），表达式参数是 `Real` 项的张量。
+    每次 `symbol("db2")` 调用产生新符号（`db2#2`…），所以每个名字只 `let` 一次再复用。
+  - 维度无关的名字：`heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度，符号 PDE 是
+    `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`，仿射变换是
+    `translation`/`scaling`/`shear`/`reflection`/`rotation`（`Rssn_Graphics` 的 family 认领了不带后缀的名字；`_2d`/`_3d` 是别名）。
+    签名只有一个秩，所以有限差分的 typed 包装器是一维形式，二维/三维走 `Rssn.dynamic`，答案是没有量纲证据的 `Value`
+    （不可 `from_value` 成 `Float` 张量）。
+  - `sig` 即“该算子是无量纲参数的纯函数”的声明，所以 typed 的数值结果带 `Scalar(1)` 证据可以解码；
+    没有 `sig` 的算子，其规则是 `Same`/`Product`/`Any` 时结果不被信任（见上“维度证据”）。
+  端到端测试：`tests/domain_numeric.aev`（封闭形式核对，见 §8.19.1）。
 
 **语言缺口（尚未实现）**：`let x: Zmod<17> = 5; x * x ^ -1` 需要三项语言改动，均在
 `aevia-types`/`aevia-core` 中，不属于绑定层：(1) 变体类型接受 `Nat` 参数（目前
@@ -8203,9 +8272,26 @@ JIT（§9.6）属于第一条轴，**不是** GPU 路径；`@jit(target = Gpu(n)
 
 - `cpu`、`cpu-parallel`：`F64`，与解释器逐位相同（含 NaN、`select`、越界
   `gather` 读 NaN）。这是 §9.7.2 "线程数不改变任何结果" 在设备上的延伸。
-- `gpu:*`（WGSL）：只有 `F32`。Aevia **不会**把 `Float` 的结果悄悄换成
-  `f32`：`Device.map` 在 `Gpu` 上返回 `Float`（值经 `f32` 舍入），文档与错误
-  信息标明；要求位精确的代码选 `Cpu`/`CpuParallel`。
+- `gpu:*`（WGSL）：`F32`，以及**双单精度（double-single）的 `F64`**。WGSL 没有 `f64`，
+  rssn 的 wgpu 设备把 `Dtype::F64` 做成一对 `f32 (hi, lo)`（`hi + lo` 是值，缓冲区里 8 字节，
+  着色器里 `array<vec2<f32>>`），主机在上传时拆分、下载时合并；`DeviceInfo::emulated_f64` 置位，
+  `dtype_epsilon` 对它返回 `2^-44`。精度约 48 位：在 RTX 3060 (Vulkan) 上 `+ - * /` 相对误差 `4e-15`，
+  `sqrt` `1e-14`，`exp` `7e-14`（`F32` 是 `1e-7`），设备测试对每个函数要求 `5e-12`。
+  限制：指数范围仍是 `f32` 的（数据请落在 `1e-30 .. 1e30`），`sin`/`cos`/`tan` 在 `|x| > 1e6` 返回 NaN，
+  `pow`/`exp` 按指数大小放大相对误差；`F32` 与 `F64` 缓冲区不能混在一次启动里（`DeviceError::Mismatch`）。
+  所以它**不是** IEEE 双精度，也不与 CPU 逐位相同；GLSL/OpenCL/CUDA 发射器产出原生 `f64` 源码，但没有设备执行它们。
+  `map_columns`（Aevia 的 `BatchProgram::run`）取设备偏好的 dtype，即 GPU 上走 `F64`。
+  Aevia 仍**不会**把 `Float` 的结果悄悄换成 `f32`：`Device.map` 在 `Gpu` 上返回的 `Float` 带上述误差，
+  文档与错误信息标明；要求位精确的代码选 `Cpu`/`CpuParallel`。
+
+**启动融合（rssn `device::plan`）。** 一串逐元素的内核不必各自启动、各自写回中间列：
+`Plan` 是内核图（输入是外部列或更早内核的输出），`plan.fuse()` 把生产者并入读它输出的消费者
+（用 `Input` 引用），中间列变成寄存器，不再落到显存；寄存器、输入列与参数重新编号
+（消费者的参数跟在生产者之后，重复的外部列共享），仍被别处需要的输出保留为合并后内核的输出且不重算。
+消费者按地址读取该列（`Load`、`Len`、`Gather`）或两个内核都有折叠（fold）时，该边保持为一次启动；
+合并后校验不通过则撤销。融合改变的是值存放的位置，不是怎么算，所以在确定性设备上融合与未融合的计划
+逐位相同（`plan.rs` 测试）。这是显式 API（`Plan::new`、`add`、`result`、`fuse`、`run`），
+`array` 里的驱动仍手工构造启动；Aevia 侧尚未暴露。
 
 **可降低到设备的函数。** 与 §9.6.1 的 JIT 门控一致的纯子集：无捕获、`Float`
 标量算术、初等函数、比较、`if`（两侧纯，急切求值后 `select`）。含宿主调用的项
@@ -8243,7 +8329,8 @@ Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor
   `Inst` 的降低目前在 JIT 模块里；批量执行本身不需要 Cranelift）。
 - `to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`；接入需要张量值携带设备
   缓冲区句柄（目前 `Tensor` 的设备元数据只有标签），这是下一步，不是本节已做。
-- GPU 的 `reduce`/`matmul` 没有实现（`DeviceInfo.ops` 如实标明）。
+- rssn 的 `device::array` 已有归约、融合的 map-reduce、`matmul`、CSR 乘、stencil、all-pairs 与
+  `ensemble_dopri5`（`DeviceInfo.ops` 如实标明各设备支持什么）；Aevia 的 `Device.reduce`/`matmul` 语言原语仍未接入。
 
 ## 10.7 错误映射
 
@@ -11003,8 +11090,30 @@ help: transpose B or reshape A
 4. **新内核能力随之可用**：`Rssn_LinearAlgebra` 中的精确/符号稀疏矩阵（`sp_*`），
    `Rssn_Calculus` 中的 D-finite 函数判定（`holonomic_zero`、`holonomic_equal`、`holonomic_ode` 等）。
    端到端示例见 `tests/domain_witnessed.aev`。
-5. **仍缺：** 见证签名的参数名是位置名（`a0`、`a1`）；元组与参差列表结果仍留在 dynamic 档；
+5. **仍缺：** 见证签名的参数名由类型推出而非来自内核；元组与参差列表结果仍留在 dynamic 档；
    同一算子多个见证重载以 `_int`/`_real`/`_float` 后缀区分，而非类型类重载。
+
+## 4.4 Revision 17（2026-11-12）：数值算子组、维度无关名字、GPU `f64`
+
+1. **`Rssn_Numeric` 的数值算子组（§8.19.1、§10.3.8）。** rssn 的 `numeric` 规则集新增 73 个算子（manifest 从 1502 增至 1590：numeric +73、pde +9、discrete 的仿射名字 +6）。
+   稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量/函数、有限差分求解器、复变特殊函数、表达式算子
+   （`ode_solve`、`ode_symplectic`、`ode_imex`、`ode_etdrk4`、`oscillatory_integral`、`anderson_fixed_point`、
+   `newton_cg_minimize`）进入 `Rssn_Numeric`：67 条手写 `sig`（含原有的 `fftconv`、`interpolate`），8 个 dynamic
+   并写明理由（秩多态张量、返回混合列表的分解）。typed 档由此从 172 增至 239 个算子。
+   两条约定：结果类型是 `Float` 而不是 `Real`（内核只编码浮点；`from_value<Real>` 不接受它）；方法/小波/统计量是
+   符号，类型 `Real`，且每个名字只 `let` 一次（`symbol("db2")` 每次都造新符号）。
+2. **维度无关的名字。** `heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度；符号 PDE 为
+   `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`；仿射变换为
+   `translation`/`scaling`/`shear`/`reflection`/`rotation`（`_2d`/`_3d` 是别名；`Rssn_Graphics` 认领不带后缀的名字，
+   该域从 38 增至 44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维走 `Rssn.dynamic`（答案不可解码）。
+3. **GPU `f64`（§10.6.5）。** rssn 的 wgpu 设备以双单精度提供 `Dtype::F64`（约 48 位，`f32` 的指数范围，
+   `DeviceInfo::emulated_f64`）；新增启动融合规划器 `device::plan`（`Plan::fuse`，融合与未融合逐位相同）。
+   Aevia 侧 `Device`/`to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`，融合规划器尚未暴露为语言原语。
+4. **见证包装器的参数名** 由类型推出（`n`、`x`、`xs`、`m`、`t3`、`flag`、`v`，同类重复时编号），不再是 `a0`、`a1`。
+5. **测试。** 新增 `tests/domain_numeric.aev`（45 个 `test`，封闭形式核对），由 `aev_suites` 与
+   `aevia test` 运行。覆盖报告 `tools/rssn-api-audit/RSSN-COVERAGE.md` 已重新生成。
+6. **仍缺：** 有限差分的 typed 包装器没有二维/三维形式（需要内核发布按秩的 refinement 重载，或语言支持秩参数）；
+   dynamic 档的数值结果不能 `from_value` 成 `Float`（无量纲证据）；manifest 里只有一个 `tensor_outer`，属于 `geometry` 规则集（`Rssn_DifferentialGeometry`），`numeric` 的同名实现不在 `Rssn_Numeric` 中出现。
 
 ## 5. 记录在案的未实现边界（Known Gaps）
 

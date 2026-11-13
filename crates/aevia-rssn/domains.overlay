@@ -55,7 +55,7 @@ family Graph discrete:graph* discrete:digraph discrete:induced_subgraph discrete
 family Topology discrete:sc_* discrete:cubical_* discrete:persist* discrete:rips_* discrete:vietoris_* discrete:betti_at_radius discrete:bottleneck_distance
 family Crystallography discrete:point_group* discrete:crystal* discrete:bravais_lattices discrete:molecule_*
 family Chaos discrete:mandelbrot_* discrete:julia_escape discrete:burning_ship_escape discrete:multibrot_escape discrete:newton_fractal_root discrete:henon_orbit discrete:ifs_* discrete:lorenz* discrete:logistic_* discrete:rossler_orbit discrete:tinkerbell_orbit discrete:map_* discrete:complex_map_* discrete:lyapunov_exponent discrete:orbit_* discrete:moran_dimension discrete:similarity_dimension discrete:box_counting discrete:correlation_dimension
-family Graphics discrete:quat_* discrete:rotation_* discrete:translation_* discrete:scaling_* discrete:shear_2d discrete:reflection_* discrete:reflect discrete:refract discrete:look_at discrete:perspective discrete:orthographic discrete:ray_* discrete:mesh_* discrete:bezier* discrete:bspline discrete:catmull_rom discrete:barycentric
+family Graphics discrete:quat_* discrete:rotation_* discrete:translation discrete:translation_* discrete:scaling discrete:scaling_* discrete:shear discrete:shear_* discrete:rotation discrete:reflection discrete:reflection_* discrete:reflect discrete:refract discrete:look_at discrete:perspective discrete:orthographic discrete:ray_* discrete:mesh_* discrete:bezier* discrete:bspline discrete:catmull_rom discrete:barycentric
 family Discrete discrete:*
 family LieAlgebra lie_structure:* lie:*
 family Polynomial poly:*
@@ -231,6 +231,101 @@ sig gf256_poly_eval(a: Tensor<1, Int>, x: Int) -> Result<Int, OpError>
 dynamic gf256_poly_divmod gfp_divmod gfp_egcd gfp_squarefree gfp_factor gfp_ddf gfp_edf gfp_berlekamp | tuple or ragged results (pairs of polynomials, lists of factors with multiplicities); decode with from_value<Tensor<1, Tensor<1, Int>>> or a record
 dynamic gfp_norm | contract not yet pinned down by a test; typed once its normalisation convention is documented in the kernel
 dynamic factor_mod is_irreducible_mod | the three-argument form (polynomial, prime, variable-or-flag) is not the coefficient-tensor API of gfp_*; left dynamic until its argument contract is documented
+
+# --- Numeric ----------------------------------------------------------------
+# The Numeric domain is not `typed`: an operator without a line here is still
+# generated, as a dynamic wrapper. The operators below take plain numbers and
+# rectangular lists and have a curated signature. The kernel computes them from
+# literal numbers only, so a symbolic argument comes back unreduced and the
+# wrapper reports `Err(NotReduced(..))`. Every answer is a floating-point number
+# (`Float`), including counts and 0-based indices such as `qr_pivoted_rank` and
+# `qr_pivoted_permutation`: the kernel encodes no exact integers here.
+# Robust statistics.
+sig mad(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig mad_sigma(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig trimmed_mean(xs: Tensor<1, Float>, proportion: Float) -> Result<Float, OpError>
+sig winsorized_mean(xs: Tensor<1, Float>, proportion: Float) -> Result<Float, OpError>
+sig huber_location(xs: Tensor<1, Float>, k: Float) -> Result<Float, OpError>
+sig biweight_location(xs: Tensor<1, Float>, c: Float) -> Result<Float, OpError>
+sig ecdf(xs: Tensor<1, Float>, x: Float) -> Result<Float, OpError>
+sig kde(xs: Tensor<1, Float>, x: Float, bandwidth: Float) -> Result<Float, OpError>
+sig bandwidth_silverman(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig bandwidth_scott(xs: Tensor<1, Float>) -> Result<Float, OpError>
+sig quantile_hf(xs: Tensor<1, Float>, p: Float, kind: Int) -> Result<Float, OpError>
+# Windows and spectra. A complex signal is its real and imaginary parts.
+sig hann_window(n: Int) -> Result<Tensor<1, Float>, OpError>
+sig hamming_window(n: Int) -> Result<Tensor<1, Float>, OpError>
+sig blackman_window(n: Int) -> Result<Tensor<1, Float>, OpError>
+sig cross_correlation(xs: Tensor<1, Float>, ys: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig fftconv(xs: Tensor<1, Float>, ys: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig interpolate(xs: Tensor<1, Float>, ys: Tensor<1, Float>, x: Float) -> Result<Float, OpError>
+sig fft_abs(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig fft_re(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig fft_im(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ifft_re(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ifft_im(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig frft_re(re: Tensor<1, Float>, im: Tensor<1, Float>, order: Float) -> Result<Tensor<1, Float>, OpError>
+sig frft_im(re: Tensor<1, Float>, im: Tensor<1, Float>, order: Float) -> Result<Tensor<1, Float>, OpError>
+# Dense Krylov solves, low rank and rank-revealing QR.
+sig minres_solve(a: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig fgmres_solve(a: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig bicgstab_l_solve(a: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig randomized_singular_values(a: Tensor<2, Float>, k: Int) -> Result<Tensor<1, Float>, OpError>
+sig lobpcg_eigenvalues(a: Tensor<2, Float>, k: Int, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig qr_pivoted_rank(a: Tensor<2, Float>, tol: Float) -> Result<Float, OpError>
+sig qr_pivoted_permutation(a: Tensor<2, Float>) -> Result<Tensor<1, Float>, OpError>
+sig qr_pivoted_diagonal(a: Tensor<2, Float>) -> Result<Tensor<1, Float>, OpError>
+# Functions sampled as an n x 2 list of (x, y) points, ascending in x.
+sig function_l1_norm(points: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_l2_norm(points: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_inf_norm(points: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_inner(f: Tensor<2, Float>, g: Tensor<2, Float>) -> Result<Float, OpError>
+sig function_project(f: Tensor<2, Float>, g: Tensor<2, Float>) -> Result<Tensor<2, Float>, OpError>
+sig function_normalize(f: Tensor<2, Float>) -> Result<Tensor<2, Float>, OpError>
+# Complex special functions: arguments are (re, im), results are [re, im].
+sig lgamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig gamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig digamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig lambert_w_complex(re: Float, im: Float, branch: Int) -> Result<Tensor<1, Float>, OpError>
+sig bessel_j_complex(order: Float, re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig bessel_i_complex(order: Float, re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+# Wavelets, bootstrap and sparse solves name a method, wavelet or statistic with a
+# symbol. A symbol is an Aevia `Real` (`let haar = symbol("haar")`): bind it once,
+# every `symbol(..)` call makes a distinct one (`haar#2`) that the kernel does
+# not know.
+sig dwt_approx(xs: Tensor<1, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig dwt_detail(xs: Tensor<1, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig idwt(approx: Tensor<1, Float>, detail: Tensor<1, Float>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig wavedec(xs: Tensor<1, Float>, wavelet: Real, levels: Int) -> Result<Tensor<1, Tensor<1, Float>>, OpError>
+sig waverec(coefficients: Tensor<1, Tensor<1, Float>>, wavelet: Real) -> Result<Tensor<1, Float>, OpError>
+sig dwt2(m: Tensor<2, Float>, wavelet: Real) -> Result<Tensor<3, Float>, OpError>
+sig idwt2(ll: Tensor<2, Float>, lh: Tensor<2, Float>, hl: Tensor<2, Float>, hh: Tensor<2, Float>, wavelet: Real) -> Result<Tensor<2, Float>, OpError>
+sig bootstrap_ci(xs: Tensor<1, Float>, statistic: Real, alpha: Float, resamples: Int, seed: Int) -> Result<Tensor<1, Float>, OpError>
+sig sparse_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, method: Real) -> Result<Tensor<1, Float>, OpError>
+sig amg_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, kind: Real) -> Result<Tensor<1, Float>, OpError>
+# The finite-difference solvers are dimension free in the kernel: the space
+# dimension is the nesting depth of the field. A signature has one rank, so these
+# are the one-dimensional forms; a plane or a cube goes through
+# `Rssn.dynamic("poisson_fd", ..)`, whose answer is an undecoded `Value`.
+sig heat_fd(alpha: Float, u0: Tensor<1, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig wave_fd(c: Float, u0: Tensor<1, Float>, v0: Tensor<1, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig poisson_fd(f: Tensor<1, Float>, boundary: Float) -> Result<Tensor<1, Float>, OpError>
+sig advect_fd(velocity: Tensor<1, Float>, u0: Tensor<1, Float>, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+# Ragged arguments are tensors of tensors; polynomial equations are term tables
+# [[coefficient, e1, .., en], ..], one per equation, with different term counts.
+sig nested_dissection_order(adjacency: Tensor<1, Tensor<1, Float>>) -> Result<Tensor<1, Float>, OpError>
+sig polynomial_system_roots(system: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<3, Float>, OpError>
+# Expression operators: the right-hand sides and variables are symbolic (`Real`
+# terms), every other parameter is a number.
+sig oscillatory_integral(f: Real, g: Real, x: Real, a: Float, b: Float, w: Float, n: Int) -> Result<Tensor<1, Float>, OpError>
+sig anderson_fixed_point(g: Tensor<1, Real>, vars: Tensor<1, Real>, x0: Tensor<1, Float>, tol: Float) -> Result<Tensor<1, Float>, OpError>
+sig newton_cg_minimize(f: Real, vars: Tensor<1, Real>, x0: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ode_solve(rhs: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, y0: Tensor<1, Float>, t0: Float, t1: Float, tol: Float, method: Real) -> Result<Tensor<1, Float>, OpError>
+sig ode_symplectic(accel: Tensor<1, Real>, vars: Tensor<1, Real>, q0: Tensor<1, Float>, p0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int, method: Real) -> Result<Tensor<2, Float>, OpError>
+sig ode_imex(f_ex: Tensor<1, Real>, f_im: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, y0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int, scheme: Real) -> Result<Tensor<1, Float>, OpError>
+sig ode_etdrk4(l: Tensor<2, Float>, f: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, u0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+dynamic tensor_norm tensor_inner tensordot | rank-polymorphic tensors (tensordot also changes rank with its axes): one signature cannot state the rank, and the dynamic Value carries no dimension evidence, so print it or compare show(v)
+dynamic hosvd hooi cp_als tt_svd tt_dense | results are lists of unlike parts (core, factors, error) or a tensor of unknown rank: a ragged tree with no Aevia tensor type
 
 # ---------------------------------------------------------------------------
 # Rich types. Curated Aevia source that is placed ahead of the generated

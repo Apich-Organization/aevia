@@ -1,0 +1,246 @@
+## The numeric operators of the rssn `numeric` rule set through the generated
+## `Rssn_Numeric` module: robust statistics, windows and spectra, wavelets, the
+## finite-difference solvers, Krylov solves, low rank, sampled functions, complex
+## special functions and the operators over expressions (initial-value problems,
+## fixed points, minimisation). Every answer is checked against a closed form.
+## Run with: cargo run -p aevia-cli -- test tests/domain_numeric.aev
+import Rssn_Numeric as N
+
+fn close(r: Result<Float, OpError>, expected: Float, tol: Float): Bool =
+    match r with
+    | Ok(v) -> approx_eq(v, expected, tol)
+    | Err(_) -> false
+
+fn near(got: Tensor<1, Float>, expected: Tensor<1, Float>, tol: Float): Bool =
+    length(got) == length(expected) && all(fn (d: Float) => abs(d) < tol, map2(fn (a: Float, b: Float) => a - b, got, expected))
+
+fn vec_close(r: Result<Tensor<1, Float>, OpError>, expected: Tensor<1, Float>, tol: Float): Bool =
+    match r with
+    | Ok(v) -> near(v, expected, tol)
+    | Err(_) -> false
+
+fn fails<A>(r: Result<A, OpError>): Bool =
+    match r with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+## A dynamic wrapper answers with a `Value` that carries no dimension evidence,
+## so it cannot be decoded into a `Float`; compare its printed form instead.
+fn shown(r: Result<Value, OpError>): String = "{r}"
+
+## A name the kernel reads (a wavelet, a method, a statistic) is a symbol, and
+## `symbol("db2")` makes a *new* symbol on every call (`db2#2`, `db2#3`, ...), which
+## the kernel does not know. Make each one once and reuse it.
+let haar = symbol("haar")
+let db2 = symbol("db2")
+let sym_mean = symbol("mean")
+let fgmres = symbol("fgmres")
+let dopri5 = symbol("dopri5")
+let radau5 = symbol("radau5")
+let yoshida4 = symbol("yoshida4")
+let ars343 = symbol("ars343")
+let x = symbol("x")
+let y = symbol("y")
+let t = symbol("t")
+
+## --- robust statistics ----------------------------------------------------
+
+test "mad of 1, 2, 3, 4, 100 is 1 (median 3, deviations 2 1 0 1 97)" =
+    close(N.mad([1.0, 2.0, 3.0, 4.0, 100.0]), 1.0, 1e-12)
+
+test "mad_sigma scales mad by 1.4826 to estimate a normal sigma" =
+    close(N.mad_sigma([1.0, 2.0, 3.0, 4.0, 100.0]), 1.482602218505602, 1e-9)
+
+test "a trimmed mean drops the outliers, a winsorized mean clamps them" =
+    (close(N.trimmed_mean([1.0, 2.0, 3.0, 10.0, 100.0], 0.2), 5.0, 1e-12) &&
+    close(N.winsorized_mean([1.0, 2.0, 3.0, 10.0, 100.0], 0.2), 5.4, 1e-12))
+
+test "the empirical CDF and the type 7 quantile" =
+    close(N.ecdf([1.0, 2.0, 3.0, 4.0], 2.5), 0.5, 1e-12) && close(N.quantile_hf([1.0, 2.0, 3.0, 4.0], 0.5, 7), 2.5, 1e-12)
+
+test "robust locations of a symmetric sample are its centre" =
+    close(N.huber_location([1.0, 2.0, 3.0, 4.0, 5.0], 1.345), 3.0, 1e-6) && close(N.biweight_location([1.0, 2.0, 3.0, 4.0, 5.0], 6.0), 3.0, 1e-6)
+
+test "a Gaussian kernel density at the only sample point is 1 / (h sqrt(2 pi))" =
+    close(N.kde([0.0], 0.0, 2.0), 0.19947114020071635, 1e-12)
+
+test "a rejected parameter is an Err, not a wrong number" =
+    fails(N.huber_location([1.0, 2.0, 3.0], -1.0)) && fails(N.hann_window(-3))
+
+test "the seeded bootstrap interval of a constant sample is a point" =
+    vec_close(N.bootstrap_ci([2.0, 2.0, 2.0, 2.0], sym_mean, 0.05, 200, 7), [2.0, 2.0], 1e-12)
+
+## --- windows, spectra --------------------------------------------------------
+
+test "a Hann window is symmetric, zero at the ends, one in the middle" =
+    match N.hann_window(9) with
+    | Err(_) -> false
+    | Ok(w) -> (length(w) == 9 &&
+        near(w, reverse(w), 1e-12) &&
+        approx_eq(at(w, 0), 0.0, 1e-12) &&
+        approx_eq(at(w, 4), 1.0, 1e-12))
+
+test "Hamming and Blackman windows are symmetric too" =
+    match (N.hamming_window(8), N.blackman_window(8)) with
+    | (Ok(h), Ok(b)) -> near(h, reverse(h), 1e-12) && near(b, reverse(b), 1e-12) && approx_eq(at(h, 0), 0.08, 1e-12)
+    | _ -> false
+
+test "the spectrum of a constant is a spike at zero frequency" =
+    vec_close(N.fft_abs([1.0, 1.0, 1.0, 1.0]), [4.0, 0.0, 0.0, 0.0], 1e-12)
+
+test "the real and imaginary parts of an impulse spectrum" =
+    vec_close(N.fft_re([1.0, 0.0, 0.0, 0.0]), [1.0, 1.0, 1.0, 1.0], 1e-12) && vec_close(N.fft_im([1.0, 0.0, 0.0, 0.0]), [0.0, 0.0, 0.0, 0.0], 1e-12)
+
+test "ifft(fft(x)) returns x" =
+    match (N.fft_re([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]), N.fft_im([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])) with
+    | (Ok(re), Ok(im)) ->
+        vec_close(N.ifft_re(re, im), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 1e-9) && vec_close(N.ifft_im(re, im), [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-9)
+    | _ -> false
+
+test "the fractional transform of order 1 is the unitary DFT" =
+    vec_close(N.frft_re([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], 1.0), [0.5, 0.5, 0.5, 0.5], 1e-9)
+
+test "convolution through the FFT is polynomial multiplication" =
+    vec_close(N.fftconv([1.0, 2.0], [1.0, 3.0]), [1.0, 5.0, 6.0], 1e-9)
+
+## --- wavelets (the wavelet is a symbol) ---------------------------------------
+
+test "one Haar level of 1, 2, 3, 4 is the scaled pair sums and differences" =
+    (vec_close(N.dwt_approx([1.0, 2.0, 3.0, 4.0], haar), [2.1213203435596424, 4.949747468305833], 1e-9) &&
+    vec_close(N.dwt_detail([1.0, 2.0, 3.0, 4.0], haar), [-0.7071067811865476, -0.7071067811865476], 1e-9))
+
+test "idwt(dwt(x)) returns x for Daubechies 2" =
+    match (N.dwt_approx([1.0, 4.0, 2.0, 8.0, 5.0, 7.0, 3.0, 6.0], db2), N.dwt_detail([1.0, 4.0, 2.0, 8.0, 5.0, 7.0, 3.0, 6.0], db2)) with
+    | (Ok(a), Ok(d)) -> vec_close(N.idwt(a, d, db2), [1.0, 4.0, 2.0, 8.0, 5.0, 7.0, 3.0, 6.0], 1e-9)
+    | _ -> false
+
+test "waverec(wavedec(x)) returns x over three levels" =
+    match N.wavedec([1.0, 4.0, 2.0, 8.0, 5.0, 7.0, 3.0, 6.0], haar, 3) with
+    | Err(_) -> false
+    | Ok(coefficients) -> length(coefficients) == 4 && vec_close(N.waverec(coefficients, haar), [1.0, 4.0, 2.0, 8.0, 5.0, 7.0, 3.0, 6.0], 1e-9)
+
+test "idwt2(dwt2(m)) returns the matrix, with four sub-bands in between" =
+    match N.dwt2([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0], [13.0, 14.0, 15.0, 17.0]], haar) with
+    | Err(_) -> false
+    | Ok(bands) ->
+        match N.idwt2(at(bands, 0), at(bands, 1), at(bands, 2), at(bands, 3), haar) with
+        | Err(_) -> false
+        | Ok(m) -> near(flatten(m), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 17.0], 1e-9)
+
+## --- finite-difference solvers (typed for one space dimension) ----------------
+
+test "poisson_fd: -u'' = 1 on (0, 1) with u(0) = u(1) = 0 has u = x (1 - x) / 2" =
+    match N.poisson_fd(map(fn (_: Float) => 1.0, linspace(0.0, 1.0, 11)), 0.0) with
+    | Err(_) -> false
+    | Ok(u) -> near(u, map(fn (s: Float) => s * (1.0 - s) / 2.0, linspace(0.0, 1.0, 11)), 1e-9)
+
+test "the same call on a square is dimension free: one more nesting level (via Rssn.dynamic)" =
+    shown(Rssn.dynamic("poisson_fd", [to_value([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]), to_value(0.0)])) == "Ok([0.0, 0.0, 0.0, 0.0, 0.0625, 0.0, 0.0, 0.0, 0.0])"
+
+test "heat_fd: sin(pi x) decays like exp(-pi^2 t)" =
+    match N.heat_fd(1.0, map(fn (s: Float) => sin(3.141592653589793 * s), linspace(0.0, 1.0, 51)), 0.0, 0.1, 2000) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(u, 25), exp(-0.986960440108936), 1e-3) && approx_eq(at(u, 0), 0.0, 1e-12)
+
+test "wave_fd: a standing wave sin(pi x) returns to itself after the period 2 / c" =
+    match N.wave_fd(1.0, map(fn (s: Float) => sin(3.141592653589793 * s), linspace(0.0, 1.0, 51)), map(fn (_: Float) => 0.0, linspace(0.0, 1.0, 51)), 0.0, 2.0, 2000) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(u, 25), 1.0, 1e-2)
+
+test "advect_fd: a periodic profile moved by one full period is nearly unchanged" =
+    match N.advect_fd([1.0], map(fn (s: Float) => sin(2.0 * 3.141592653589793 * s), linspace(0.0, 0.96, 25)), 1.0, 400) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(u, 6), 1.0, 5e-2)
+
+## --- Krylov solves, low rank, tensors ---------------------------------------------
+
+test "minres, fgmres and bicgstab(2) solve a small system" =
+    (vec_close(N.minres_solve([[2.0, 1.0], [1.0, 3.0]], [3.0, 5.0], 1e-12), [0.8, 1.4], 1e-8) &&
+    vec_close(N.fgmres_solve([[2.0, 1.0], [1.0, 3.0]], [3.0, 5.0], 1e-12), [0.8, 1.4], 1e-8) &&
+    vec_close(N.bicgstab_l_solve([[2.0, 1.0], [1.0, 3.0]], [3.0, 5.0], 1e-12), [0.8, 1.4], 1e-8))
+
+test "sparse_solve takes (i, j, value) triplets and a method symbol" =
+    vec_close(N.sparse_solve([[0.0, 0.0, 2.0], [0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 3.0]], [3.0, 5.0], 1e-12, fgmres), [0.8, 1.4], 1e-8)
+
+test "qr_pivoted_rank sees the rank of a singular matrix" =
+    close(N.qr_pivoted_rank([[1.0, 2.0], [2.0, 4.0]], 1e-8), 1.0, 1e-12) && close(N.qr_pivoted_rank([[1.0, 0.0], [0.0, 1.0]], 1e-8), 2.0, 1e-12)
+
+test "randomized singular values of a diagonal matrix" =
+    vec_close(N.randomized_singular_values([[3.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 1.0]], 2), [3.0, 2.0], 1e-6)
+
+test "lobpcg finds the smallest eigenvalue of a diagonal matrix" =
+    match N.lobpcg_eigenvalues([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 3.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 4.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 6.0]], 2, 1e-8) with
+    | Ok(values) -> near(values, [1.0, 2.0], 1e-5)
+    | Err(_) -> false
+
+test "tensordot over a shared axis is matrix multiplication (dynamic, compared as text)" =
+    shown(N.tensordot([[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]], [1.0], [0.0])) == "Ok([19.0, 22.0, 43.0, 50.0])"
+
+test "tensor norm and inner product (dynamic, compared as text)" =
+    shown(N.tensor_norm([[3.0, 0.0], [0.0, 4.0]])) == "Ok(5.0)" && shown(N.tensor_inner([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])) == "Ok(10.0)"
+
+test "norms of a sampled function" =
+    (close(N.function_l1_norm([[0.0, 1.0], [1.0, 1.0], [2.0, 1.0]]), 2.0, 1e-12) &&
+    close(N.function_l2_norm([[0.0, 1.0], [1.0, 1.0]]), 1.0, 1e-12) &&
+    close(N.function_inf_norm([[0.0, -3.0], [1.0, 2.0]]), 3.0, 1e-12))
+
+## The neighbours of each vertex of the path 0 - 1 - 2 - 3: a ragged list, which
+## has no literal, is built by `map`.
+fn path_neighbours(i: Int): Tensor<1, Float> =
+    if i == 0 then
+        [1.0]
+    else if i == 1 then
+        [0.0, 2.0]
+    else if i == 2 then
+        [1.0, 3.0]
+    else
+        [2.0]
+
+test "nested dissection orders a path graph: a permutation of its vertices" =
+    match N.nested_dissection_order(map(path_neighbours, range(0, 4))) with
+    | Ok(order) -> length(order) == 4 && near(sort_float(order, false), [0.0, 1.0, 2.0, 3.0], 1e-12)
+    | Err(_) -> false
+
+test "polynomial_system_roots: x^2 - 1 = 0 has the roots 1 and -1" =
+    match N.polynomial_system_roots(map(fn (_: Int) => [[1.0, 2.0], [-1.0, 0.0]], range(0, 1))) with
+    | Ok(roots) -> approx_eq(at(at(at(roots, 0), 0), 0) + at(at(at(roots, 1), 0), 0), 0.0, 1e-8) && approx_eq(at(at(at(roots, 0), 0), 0) * at(at(at(roots, 1), 0), 0), -1.0, 1e-8)
+    | Err(_) -> false
+
+## --- complex special functions: (re, im) in, [re, im] out ----------------------------
+
+test "Gamma(5) = 24 and ln Gamma(5) = ln 24 on the real axis" =
+    vec_close(N.gamma_complex(5.0, 0.0), [24.0, 0.0], 1e-8) && vec_close(N.lgamma_complex(5.0, 0.0), [3.1780538303479458, 0.0], 1e-9)
+
+test "digamma(1) = -gamma and the omega constant W(1) = 0.567143" =
+    vec_close(N.digamma_complex(1.0, 0.0), [-0.5772156649015329, 0.0], 1e-9) && vec_close(N.lambert_w_complex(1.0, 0.0, 0), [0.5671432904097838, 0.0], 1e-9)
+
+test "J0(1) and I0(1) on the real axis" =
+    vec_close(N.bessel_j_complex(0.0, 1.0, 0.0), [0.7651976865579666, 0.0], 1e-9) && vec_close(N.bessel_i_complex(0.0, 1.0, 0.0), [1.2660658777520082, 0.0], 1e-9)
+
+## --- operators over expressions ---------------------------------------------------------
+
+test "ode_solve: y' = -2y, y(0) = 1 gives exp(-2) at t = 1" =
+    vec_close(N.ode_solve([-2 * y], [y], t, [1.0], 0.0, 1.0, 1e-9, dopri5), [0.1353352832366127], 1e-6)
+
+test "ode_solve with a stiff method agrees" =
+    vec_close(N.ode_solve([-2 * y], [y], t, [1.0], 0.0, 1.0, 1e-9, radau5), [0.1353352832366127], 1e-5)
+
+test "ode_symplectic: the harmonic oscillator is a rotation, (cos 1, -sin 1) at t = 1" =
+    match N.ode_symplectic([-y], [y], [1.0], [0.0], 0.0, 1.0, 200, yoshida4) with
+    | Ok(qp) -> near(flatten(qp), [0.5403023058681398, -0.8414709848078965], 1e-6)
+    | Err(_) -> false
+
+test "ode_imex splits y' = -2y into -y explicit and -y implicit" =
+    vec_close(N.ode_imex([-y], [-y], [y], t, [1.0], 0.0, 1.0, 400, ars343), [0.1353352832366127], 1e-5)
+
+test "anderson_fixed_point: x = cos x at 0.739085" =
+    vec_close(N.anderson_fixed_point([cos(x)], [x], [1.0], 1e-12), [0.7390851332151607], 1e-9)
+
+test "newton_cg_minimize finds the bottom of a paraboloid" =
+    vec_close(N.newton_cg_minimize((x - 1) ^ 2 + 2 * (y + 2) ^ 2, [x, y], [0.0, 0.0]), [1.0, -2.0], 1e-6)
+
+test "oscillatory_integral: the integral of exp(10 i x) over (0, 1) is (sin 10 + i (1 - cos 10)) / 10" =
+    vec_close(N.oscillatory_integral(1, x, x, 0.0, 1.0, 10.0, 24), [-0.05440211108893698, 0.18390715290764524], 1e-9)
+
+test "ode_etdrk4: u' = -2u + 1, u(0) = 0 gives (1 - exp(-2)) / 2 at t = 1" =
+    vec_close(N.ode_etdrk4([[-2.0]], [1 + 0 * y], [y], t, [0.0], 0.0, 1.0, 100), [0.43233235838169365], 1e-6)

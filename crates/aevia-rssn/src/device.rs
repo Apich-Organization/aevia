@@ -137,9 +137,11 @@ impl BatchProgram {
 
     /// Runs the program over `columns[i][row]` on `device`; returns one
     /// vector per output. Fails (`None`) on a column-count or length
-    /// mismatch, or when the device reports an error. A device that computes
-    /// in `f32` returns `f32`-rounded values; the CPU devices return the
-    /// interpreter's `f64` results bit for bit.
+    /// mismatch, or when the device reports an error. The CPU devices return
+    /// the interpreter's `f64` results bit for bit. A wgpu device computes
+    /// `f64` columns in double-single arithmetic (pairs of `f32`, relative
+    /// error around `1e-14`, the exponent range of `f32`; see rssn
+    /// `docs/BACKENDS.md`), and `f32`-rounded values when it offers no `F64`.
     #[must_use]
     pub fn run(
         &self,

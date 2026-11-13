@@ -163,8 +163,30 @@
 4. **新内核能力随之可用**：`Rssn_LinearAlgebra` 中的精确/符号稀疏矩阵（`sp_*`），
    `Rssn_Calculus` 中的 D-finite 函数判定（`holonomic_zero`、`holonomic_equal`、`holonomic_ode` 等）。
    端到端示例见 `tests/domain_witnessed.aev`。
-5. **仍缺：** 见证签名的参数名是位置名（`a0`、`a1`）；元组与参差列表结果仍留在 dynamic 档；
+5. **仍缺：** 见证签名的参数名由类型推出而非来自内核；元组与参差列表结果仍留在 dynamic 档；
    同一算子多个见证重载以 `_int`/`_real`/`_float` 后缀区分，而非类型类重载。
+
+## 4.4 Revision 17（2026-11-12）：数值算子组、维度无关名字、GPU `f64`
+
+1. **`Rssn_Numeric` 的数值算子组（§8.19.1、§10.3.8）。** rssn 的 `numeric` 规则集新增 73 个算子（manifest 从 1502 增至 1590：numeric +73、pde +9、discrete 的仿射名字 +6）。
+   稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量/函数、有限差分求解器、复变特殊函数、表达式算子
+   （`ode_solve`、`ode_symplectic`、`ode_imex`、`ode_etdrk4`、`oscillatory_integral`、`anderson_fixed_point`、
+   `newton_cg_minimize`）进入 `Rssn_Numeric`：67 条手写 `sig`（含原有的 `fftconv`、`interpolate`），8 个 dynamic
+   并写明理由（秩多态张量、返回混合列表的分解）。typed 档由此从 172 增至 239 个算子。
+   两条约定：结果类型是 `Float` 而不是 `Real`（内核只编码浮点；`from_value<Real>` 不接受它）；方法/小波/统计量是
+   符号，类型 `Real`，且每个名字只 `let` 一次（`symbol("db2")` 每次都造新符号）。
+2. **维度无关的名字。** `heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度；符号 PDE 为
+   `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`；仿射变换为
+   `translation`/`scaling`/`shear`/`reflection`/`rotation`（`_2d`/`_3d` 是别名；`Rssn_Graphics` 认领不带后缀的名字，
+   该域从 38 增至 44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维走 `Rssn.dynamic`（答案不可解码）。
+3. **GPU `f64`（§10.6.5）。** rssn 的 wgpu 设备以双单精度提供 `Dtype::F64`（约 48 位，`f32` 的指数范围，
+   `DeviceInfo::emulated_f64`）；新增启动融合规划器 `device::plan`（`Plan::fuse`，融合与未融合逐位相同）。
+   Aevia 侧 `Device`/`to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`，融合规划器尚未暴露为语言原语。
+4. **见证包装器的参数名** 由类型推出（`n`、`x`、`xs`、`m`、`t3`、`flag`、`v`，同类重复时编号），不再是 `a0`、`a1`。
+5. **测试。** 新增 `tests/domain_numeric.aev`（45 个 `test`，封闭形式核对），由 `aev_suites` 与
+   `aevia test` 运行。覆盖报告 `tools/rssn-api-audit/RSSN-COVERAGE.md` 已重新生成。
+6. **仍缺：** 有限差分的 typed 包装器没有二维/三维形式（需要内核发布按秩的 refinement 重载，或语言支持秩参数）；
+   dynamic 档的数值结果不能 `from_value` 成 `Float`（无量纲证据）；manifest 里只有一个 `tensor_outer`，属于 `geometry` 规则集（`Rssn_DifferentialGeometry`），`numeric` 的同名实现不在 `Rssn_Numeric` 中出现。
 
 ## 5. 记录在案的未实现边界（Known Gaps）
 

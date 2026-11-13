@@ -85,6 +85,29 @@ set: exact signatures use pinned keys; other entries use the dynamic value-list
 ABI and return its `Result` error channel. The manifest only covers registered
 operators, and callback-based Rust kernels still require a host callback bridge.
 
+Domain modules (`import Rssn_NumberTheory`, `Rssn_Numeric`, ...) give the
+operators curated typed signatures with a `Result<_, OpError>` channel. The
+numeric operator groups of rssn's `numeric` rule set live in `Rssn_Numeric`:
+robust statistics (`mad`, `trimmed_mean`, `kde`, `bootstrap_ci`), windows and
+spectra (`hann_window`, `fft_re`, `ifft_re`, `frft_re`), wavelets (`dwt_approx`,
+`wavedec`, `dwt2`), Krylov, sparse and low-rank solvers (`minres_solve`,
+`sparse_solve`, `randomized_singular_values`), complex special functions
+(`gamma_complex`, `lambert_w_complex`) and operators over expressions
+(`ode_solve`, `ode_symplectic`, `newton_cg_minimize`). Their results are
+`Float`; a wavelet, method or statistic is named by a symbol that must be created
+once with `let`. The finite-difference solvers (`heat_fd`, `wave_fd`,
+`poisson_fd`, `advect_fd`) and the symbolic PDE names (`solve_heat_equation`, ...)
+are dimension free in the kernel (the dimension is the nesting depth of the data);
+the typed wrapper is the one-dimensional form and higher dimensions go through
+`Rssn.dynamic`. Operators without a curated signature get type-derived parameter
+names (`n`, `x`, `xs`, `m`, `t3`, `flag`, `v`; repeats are numbered). See
+`tests/domain_numeric.aev` for closed-form checks (`aevia test tests/domain_numeric.aev`).
+
+On the device side, rssn's wgpu device offers `f64` by double-single arithmetic
+(a pair of `f32`, about 48 bits, the exponent range of `f32`) and fuses chains of
+elementwise launches with its launch planner. Neither is exposed as a language
+primitive yet: `Gpu(n)` is still reported as unsupported (`E1001`).
+
 The test profile keeps source line tables for backtraces while omitting full
 variable and type debug data. This bounds disk and linker-memory costs when
 many integration tests link the RSSN kernel. For debugger inspection of a

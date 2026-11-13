@@ -892,6 +892,50 @@ pub fn witnessed_sigs(op: &OpEntry) -> Vec<WitnessedSig> {
     out
 }
 
+/// Parameter names for a witnessed wrapper. The kernel records no names, so
+/// they come from the Aevia type: `n` for an integer, `x` for a scalar, `xs`
+/// for a vector, `m` for a matrix, `t3` for a rank-3 tensor, `flag` for a
+/// boolean and `v` for a handle. A kind that occurs more than once is
+/// numbered (`x1`, `x2`) so the names stay distinct.
+#[must_use]
+pub fn witnessed_param_names(types: &[String]) -> Vec<String> {
+    let base = |ty: &str| -> String {
+        match ty {
+            | "Int" => "n".to_string(),
+            | "Real" | "Float" => "x".to_string(),
+            | "Bool" => "flag".to_string(),
+            | "Value" => "v".to_string(),
+            | _ => {
+                match ty
+                    .strip_prefix("Tensor<")
+                    .and_then(|rest| rest.split(',').next())
+                    .and_then(|rank| rank.trim().parse::<usize>().ok())
+                {
+                    | Some(1) => "xs".to_string(),
+                    | Some(2) => "m".to_string(),
+                    | Some(rank) => format!("t{rank}"),
+                    | None => "a".to_string(),
+                }
+            },
+        }
+    };
+    let bases: Vec<String> = types.iter().map(|t| base(t)).collect();
+    let mut seen = std::collections::BTreeMap::<&str, usize>::new();
+    bases
+        .iter()
+        .map(|b| {
+            let total = bases.iter().filter(|o| *o == b).count();
+            if total == 1 {
+                b.clone()
+            } else {
+                let k = seen.entry(b.as_str()).or_insert(0);
+                *k += 1;
+                format!("{b}{k}")
+            }
+        })
+        .collect()
+}
+
 fn witnessed_wrapper(
     out: &mut String,
     op: &OpEntry,
@@ -906,15 +950,14 @@ fn witnessed_wrapper(
     if let Some((call, sort)) = op.witnesses.first() {
         let _ = writeln!(out, "## Witness: `{call}` has sort `{sort}`.");
     }
+    let names = witnessed_param_names(&sig.params);
     let params: Vec<String> = sig
         .params
         .iter()
-        .enumerate()
-        .map(|(i, t)| format!("a{i}: {t}"))
+        .zip(&names)
+        .map(|(t, n)| format!("{n}: {t}"))
         .collect();
-    let args: Vec<String> = (0..sig.params.len())
-        .map(|i| format!("to_value(a{i})"))
-        .collect();
+    let args: Vec<String> = names.iter().map(|n| format!("to_value({n})")).collect();
     let _ = writeln!(
         out,
         "fn {name}({params}): Result<{ret}, OpError> =\n    match Rssn.dynamic(\"{op}\", [{args}]) with\n    | Ok(wire) -> {decoded}\n    | Err(failure) -> Err(failure)\n",
@@ -1158,4 +1201,35 @@ pub fn coverage_report(
     }
     let _ = flat_total;
     out
+}
+
+#[cfg(test)]
+mod witnessed_names {
+    use super::witnessed_param_names;
+
+    fn names(types: &[&str]) -> Vec<String> {
+        let owned: Vec<String> = types.iter().map(|t| (*t).to_string()).collect();
+        witnessed_param_names(&owned)
+    }
+
+    #[test]
+    fn names_follow_the_type() {
+        assert_eq!(names(&["Int"]), ["n"]);
+        assert_eq!(names(&["Tensor<2, Real>", "Tensor<1, Real>"]), ["m", "xs"]);
+        assert_eq!(
+            names(&["Bool", "Value", "Tensor<3, Int>"]),
+            ["flag", "v", "t3"]
+        );
+    }
+
+    #[test]
+    fn repeated_kinds_are_numbered_and_stay_distinct() {
+        let got = names(&["Real", "Float", "Int", "Real"]);
+        assert_eq!(got, ["x1", "x2", "n", "x3"]);
+        let mut unique = got.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), got.len());
+        assert!(names(&[]).is_empty());
+    }
 }

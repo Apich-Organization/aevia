@@ -303,7 +303,8 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
   得到 `signatures.witnessed.json`（rssn `docs/KERNEL.md` §3a）；manifest 里每个重载带
   `overload_sources`，见证调用在 `witnesses` 中。领域模块对**没有** `sig`、但有可用 Aevia
   类型表达的见证重载的算子，生成与 typed 档同形的包装器
-  （`fn divisors(a0: Int): Result<Tensor<1, Int>, OpError>`），文档里引用见证调用。
+  （`fn divisors(n: Int): Result<Tensor<1, Int>, OpError>`），文档里引用见证调用。
+  参数名由类型推出（`n` 整数、`x` 标量、`xs` 向量、`m` 矩阵、`t3` 三阶张量、`flag` 布尔、`v` 句柄；同类重复时编号 `x1`、`x2`）。
   类型映射：`Int`→`Int`，有理数/符号表达式/符号→`Real`，浮点→`Float`，`Bool`→`Bool`，
   矩形列表→`Tensor<秩, 元素>`；元组、不透明对象、参差列表没有通用 Aevia 类型，
   该重载留在 dynamic 档。一个算子有多个见证重载时，证据最多的占用算子名，其余以
@@ -333,6 +334,29 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
 * 示例：`tests/domain_number_theory.aev`、`domain_combinatorics.aev`、
   `domain_finite_fields.aev`；`Zmod` 把剩余与模数放在同一个值里，`zmod_inv(x)` 对非单位
   返回 `Err`，混用不同模数返回 `Err`。
+* **Numeric 域的数值算子组（rssn `numeric` 规则集）。** 稳健统计（`mad`、`trimmed_mean`、
+  `huber_location`、`kde`、`quantile_hf`、`bootstrap_ci`…）、窗与谱（`hann_window`、`fft_re`/`fft_im`/`fft_abs`、
+  `ifft_re`/`ifft_im`、`frft_re`/`frft_im`、`cross_correlation`）、小波（`dwt_approx`、`idwt`、`wavedec`、`waverec`、
+  `dwt2`、`idwt2`）、Krylov/稀疏/低秩/张量/函数（`minres_solve`、`fgmres_solve`、`bicgstab_l_solve`、`sparse_solve`、
+  `amg_solve`、`randomized_singular_values`、`lobpcg_eigenvalues`、`tensordot`、`hosvd`、`tt_svd`、`polynomial_system_roots`…）、
+  维度无关的有限差分求解器（`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd`）、复变特殊函数
+  （`lgamma_complex`、`gamma_complex`、`digamma_complex`、`lambert_w_complex`、`bessel_j_complex`、`bessel_i_complex`）
+  与表达式算子（`oscillatory_integral`、`anderson_fixed_point`、`newton_cg_minimize`、`ode_solve`、`ode_symplectic`、
+  `ode_imex`、`ode_etdrk4`）都归入 `Rssn_Numeric`，共 67 条 `sig`，8 个留在 dynamic 档并写明理由
+  （`tensor_norm`/`tensor_inner`/`tensordot` 是秩多态，`hosvd`/`hooi`/`cp_als`/`tt_svd`/`tt_dense` 返回混合列表）。
+  其中的规则：
+  - 这些算子的结果是浮点，签名用 `Float`/`Tensor<n, Float>`，**不是** `Real`（`from_value<Real>` 只接受精确的
+    `Int`/`Rat`）；整数性质的结果（秩、置换下标）同样以 `Float` 返回。
+  - 用符号命名的方法、小波、统计量参数类型是 `Real`（Aevia 的 `symbol(..)` 是 `Real`），表达式参数是 `Real` 项的张量。
+    每次 `symbol("db2")` 调用产生新符号（`db2#2`…），所以每个名字只 `let` 一次再复用。
+  - 维度无关的名字：`heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度，符号 PDE 是
+    `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`，仿射变换是
+    `translation`/`scaling`/`shear`/`reflection`/`rotation`（`Rssn_Graphics` 的 family 认领了不带后缀的名字；`_2d`/`_3d` 是别名）。
+    签名只有一个秩，所以有限差分的 typed 包装器是一维形式，二维/三维走 `Rssn.dynamic`，答案是没有量纲证据的 `Value`
+    （不可 `from_value` 成 `Float` 张量）。
+  - `sig` 即“该算子是无量纲参数的纯函数”的声明，所以 typed 的数值结果带 `Scalar(1)` 证据可以解码；
+    没有 `sig` 的算子，其规则是 `Same`/`Product`/`Any` 时结果不被信任（见上“维度证据”）。
+  端到端测试：`tests/domain_numeric.aev`（封闭形式核对，见 §8.19.1）。
 
 **语言缺口（尚未实现）**：`let x: Zmod<17> = 5; x * x ^ -1` 需要三项语言改动，均在
 `aevia-types`/`aevia-core` 中，不属于绑定层：(1) 变体类型接受 `Nat` 参数（目前
@@ -504,9 +528,26 @@ JIT（§9.6）属于第一条轴，**不是** GPU 路径；`@jit(target = Gpu(n)
 
 - `cpu`、`cpu-parallel`：`F64`，与解释器逐位相同（含 NaN、`select`、越界
   `gather` 读 NaN）。这是 §9.7.2 "线程数不改变任何结果" 在设备上的延伸。
-- `gpu:*`（WGSL）：只有 `F32`。Aevia **不会**把 `Float` 的结果悄悄换成
-  `f32`：`Device.map` 在 `Gpu` 上返回 `Float`（值经 `f32` 舍入），文档与错误
-  信息标明；要求位精确的代码选 `Cpu`/`CpuParallel`。
+- `gpu:*`（WGSL）：`F32`，以及**双单精度（double-single）的 `F64`**。WGSL 没有 `f64`，
+  rssn 的 wgpu 设备把 `Dtype::F64` 做成一对 `f32 (hi, lo)`（`hi + lo` 是值，缓冲区里 8 字节，
+  着色器里 `array<vec2<f32>>`），主机在上传时拆分、下载时合并；`DeviceInfo::emulated_f64` 置位，
+  `dtype_epsilon` 对它返回 `2^-44`。精度约 48 位：在 RTX 3060 (Vulkan) 上 `+ - * /` 相对误差 `4e-15`，
+  `sqrt` `1e-14`，`exp` `7e-14`（`F32` 是 `1e-7`），设备测试对每个函数要求 `5e-12`。
+  限制：指数范围仍是 `f32` 的（数据请落在 `1e-30 .. 1e30`），`sin`/`cos`/`tan` 在 `|x| > 1e6` 返回 NaN，
+  `pow`/`exp` 按指数大小放大相对误差；`F32` 与 `F64` 缓冲区不能混在一次启动里（`DeviceError::Mismatch`）。
+  所以它**不是** IEEE 双精度，也不与 CPU 逐位相同；GLSL/OpenCL/CUDA 发射器产出原生 `f64` 源码，但没有设备执行它们。
+  `map_columns`（Aevia 的 `BatchProgram::run`）取设备偏好的 dtype，即 GPU 上走 `F64`。
+  Aevia 仍**不会**把 `Float` 的结果悄悄换成 `f32`：`Device.map` 在 `Gpu` 上返回的 `Float` 带上述误差，
+  文档与错误信息标明；要求位精确的代码选 `Cpu`/`CpuParallel`。
+
+**启动融合（rssn `device::plan`）。** 一串逐元素的内核不必各自启动、各自写回中间列：
+`Plan` 是内核图（输入是外部列或更早内核的输出），`plan.fuse()` 把生产者并入读它输出的消费者
+（用 `Input` 引用），中间列变成寄存器，不再落到显存；寄存器、输入列与参数重新编号
+（消费者的参数跟在生产者之后，重复的外部列共享），仍被别处需要的输出保留为合并后内核的输出且不重算。
+消费者按地址读取该列（`Load`、`Len`、`Gather`）或两个内核都有折叠（fold）时，该边保持为一次启动；
+合并后校验不通过则撤销。融合改变的是值存放的位置，不是怎么算，所以在确定性设备上融合与未融合的计划
+逐位相同（`plan.rs` 测试）。这是显式 API（`Plan::new`、`add`、`result`、`fuse`、`run`），
+`array` 里的驱动仍手工构造启动；Aevia 侧尚未暴露。
 
 **可降低到设备的函数。** 与 §9.6.1 的 JIT 门控一致的纯子集：无捕获、`Float`
 标量算术、初等函数、比较、`if`（两侧纯，急切求值后 `select`）。含宿主调用的项
@@ -544,7 +585,8 @@ Device.ensemble  : (OdeSystem, Tensor<[m,k],Float>, Float, Float, Int) -> Tensor
   `Inst` 的降低目前在 JIT 模块里；批量执行本身不需要 Cranelift）。
 - `to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`；接入需要张量值携带设备
   缓冲区句柄（目前 `Tensor` 的设备元数据只有标签），这是下一步，不是本节已做。
-- GPU 的 `reduce`/`matmul` 没有实现（`DeviceInfo.ops` 如实标明）。
+- rssn 的 `device::array` 已有归约、融合的 map-reduce、`matmul`、CSR 乘、stencil、all-pairs 与
+  `ensemble_dopri5`（`DeviceInfo.ops` 如实标明各设备支持什么）；Aevia 的 `Device.reduce`/`matmul` 语言原语仍未接入。
 
 ## 10.7 错误映射
 
