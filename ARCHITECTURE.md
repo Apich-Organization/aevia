@@ -155,9 +155,26 @@ out side by side.
 * **Callbacks.** Higher-order kernel operators receive interpreter-owned
   callbacks through the kernel's checked callback bank, in a thread-affine scope.
   The stochastic solvers stay host-side because they need Aevia closures.
-* **JIT.** With feature `jit`, pure `Float`/`Bool` code and self-tail-recursive
-  loops are lowered to rssn's tape and Cranelift (§9.6); anything else falls
-  back to the interpreter.
+* **JIT.** With feature `jit`, a `@jit` function is lowered to rssn's LIR
+  (`rssn::backend::lir`, a typed register machine with real branches, loops
+  and calls) and compiled with Cranelift. `Float`, `Bool` and 64-bit `Int`
+  activations compile: `if`/`match` branch for real, every self tail call is a
+  jump with a fuel check (exhausted fuel hands the trampoline back to the
+  interpreter), a self call in value position is a native recursive call,
+  `Int` `+ - *` are checked, and the elementary functions (`sqrt`, `exp`,
+  `ln`, the trigonometric and hyperbolic families, ...) are guarded so that
+  every case in which the interpreter would not just return `f(x)` (a domain
+  error, an extended-real special value, an overflow) *bails* and the
+  interpreter repeats the pure call. A builtin is used only while the name
+  still resolves to it. Effects, captures, exact numbers, units and tensors
+  stay interpreted; `map_floats` keeps the straight-line tape lowering that
+  devices need.
+* **Simulations.** `import Rssn_Sim_<Name>` renders a typed module for an rssn
+  simulation scenario from the kernel's scenario catalog
+  (`rssn::sim::schema`, `aevia-rssn::sim`): `Params` and `Output` records,
+  a variant type per method-name field (`Rssn_Sim_PoissonMultigrid.W`),
+  `defaults()` from the scenario's own defaults, and `run(p)`. A new scenario,
+  parameter or method in rssn appears in Aevia without a line written here.
 
 The kernel-facing contract is documented in the rssn repository:
 [`docs/KERNEL.md`](../rssn/docs/KERNEL.md) (manifest, dynamic ABI, plugins,

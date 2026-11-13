@@ -128,6 +128,11 @@ pub fn namespace_source(
     registry: &Registry,
     name: &str,
 ) -> Option<String> {
+    // Simulation modules (`Rssn_Sim_HeatNd`) are generated from the kernel's
+    // scenario catalog rather than its operator table.
+    if name.starts_with(crate::sim::MODULE_PREFIX) {
+        return crate::sim::scenario_source(name);
+    }
     // Domain modules (`Rssn_NumberTheory`) come first: they are CamelCase and
     // the rule-set namespaces are snake_case, so the two never collide.
     if let Some(source) = crate::domains::domain_source(registry, name) {

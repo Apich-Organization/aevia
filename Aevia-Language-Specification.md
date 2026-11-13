@@ -6627,6 +6627,15 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 `nbody_gravity`、`kerr_geodesic`。宿主不应手写第二份场景清单：运行时
 从 `rssn::sim::scenario::SCENARIOS` 读。
 
+> **生成的仿真模块（2026-11-13）**：`import Rssn_Sim_<Name>`（如
+> `Rssn_Sim_PoissonMultigrid`、`Rssn_Sim_HeatNd`）在导入时由 rssn 的场景目录
+> （`rssn::sim::schema`）生成类型化模块：`Params`/`Output` 记录、每个方法名
+> 字段一个变体类型（`P.W`、`S.Metropolis`）、`defaults()`（场景自身的默认请求或
+> 内置示例）与 `run(p)`。参数类型与默认值从场景自己的请求类型推断，结果类型
+> 来自一次见证运行，注解表补充推断看不到的部分（可选值、单位、文档）；rssn
+> 新增场景、参数或方法时这里无需手写任何代码。29 个场景全部可生成。参考测试：
+> `tests/sim_catalog.aev`。
+
 > **实现状态（2026-11-04）**：动态入口 `simulate` 已实现（`aevia-std`），
 > `to_json`/`from_json` 已实现并类型化（§8.19 的动态边界）；§8.17 上表的
 > 类型化包装器 `Physics.Ising`/`Physics.Geodesic` 已作为 Aevia 源模块实现
@@ -7281,35 +7290,40 @@ SymbolicCtx {
 
 ### 9.6.2 流程
 
-1. 把 Core IR 降成 rssn 项（`Float` 标量表达式）。
-2. 仅在 `features.jit` 为真时调用 `Term::compile(&["x", "y"])` 得到
-   `Compiled`；否则不进入此路径。
-3. 缓存键：项结构哈希 + 输入名 + `manifest_hash` + 后端版本。
-4. 调用时直接走机器码；失败回退解释器。
+1. 把 Core IR 降成 rssn 的 LIR（`rssn::backend::lir`）：带类型的寄存器机，
+   有基本块、块参数、直接调用（可递归）、带检查的整数运算、有界检查的切片，
+   以及 *bail* 出口。每个激活（参数种类 + 结果种类 + 字面量特化）生成两个
+   LIR 函数：入口形式返回 `(状态, 结果, 下一组参数, 剩余燃料)`，值形式只返回
+   结果，供值位置的递归调用使用。
+2. 仅在 `features.jit` 为真时由 Cranelift 编译（`rssn::backend::lir_jit`）；
+   否则不进入此路径。
+3. 缓存键：函数身份 + 参数种类 + 结果种类 + 字面量特化。
+4. 进入机器码前逐一检查：每个自调用点仍指向本激活，所用的内建函数名仍解析
+   到内建函数（未被遮蔽）。之后直接走机器码；bail 时由解释器从相同参数
+   重新执行（机器码是纯的，重做不可观察）。
 
-rssn 的 `TieredBackend` 可以先解释、后台编译；Aevia 复用这个策略。
+### 9.6.3 语义与限制
 
-### 9.6.3 限制
-
-- 符号值、记录、变体、闭包不进入 JIT。
-- `Select`/`Extern1`/`Gather` 已 lowering，但受 `jit_branch`/`jit_index`
-  与构建 feature 控制；默认构建 `features.jit=false`。
-- `Real` 的精确算术不进入 JIT；需要时先 `to_float`。
-- JIT 的结果与解释器 MUST 数值一致（同一 IEEE 语义）；不一致是 bug。
-
+- 可编译：无捕获、参数与结果为无量纲 `Float`、`Bool` 或 64 位 `Int` 的纯函数；
+  `if`/`match`（字面量、通配、绑定、守卫）真正分支，未取的分支不执行；
+  任意多个自尾调用点编译为带燃料检查的跳转，燃料耗尽时把蹦床交还解释器；
+  值位置的自调用编译为原生递归调用（深度上限 512，超出则 bail）。
+- `Int` 的 `+ - *` 带溢出检查，溢出 bail，由解释器以任意精度完成；`Int`
+  与 `Float` 混合时按 §6 的规则提升为 `Float`。
+- 初等函数（`sqrt`、`cbrt`、`exp`、`ln`/`log`、`log2`、`log10`、三角与双曲
+  函数及其反函数、`√`）带守卫：凡解释器不会简单返回 `f(x)` 的情形（定义域
+  错误、§6.3.4 的扩展实数特值、`±oo`、`ln(0)`）一律 bail。`sqrt`/`cbrt`
+  与解释器一样按 `powf(1/n)` 计算，结果逐位一致。
+- 符号值、记录、变体、闭包、张量、精确数、单位不进入 JIT。
+- JIT 的结果与解释器 MUST 逐位一致；不能保证一致的情形 MUST bail，
+  不一致是 bug。
+- `map_floats`（设备接缝）仍用直线 tape 降级，因为 GPU 需要无控制流的程序。
 
 ### 可选 JIT 构建
 
 使用 `cargo build -p aevia-cli --features jit` 启用 RSSN 的 Cranelift
-后端。IR 解释器会在首次调用 `@jit` 函数时编译并缓存符合条件的函数。
-当前支持无捕获、参数为无量纲 `Float` 的纯标量算术、比较和条件分支；
-单个自尾递归调用点会编译为有预算限制的原生循环。
-调用参数不符合条件、或函数使用其他调用、张量、精确数、单位等其他
-形式时，保持原有解释执行。分支仅在两侧均可安全地作为纯算术执行时
-编译。RSSN 使用独立的 TailLoop 控制流封装纯数值 Tape；其他函数调用与
-递归继续解释。启用该特性
-需要 Rust 1.97 或更新版本（RSSN 的最低版本）。默认构建仍关闭 JIT；
-关闭时 `@jit` 报 `E1001`。
+后端。启用该特性需要 Rust 1.97 或更新版本（RSSN 的最低版本）。默认构建仍
+关闭 JIT；关闭时 `@jit` 报 `E1001`。参考测试：`tests/jit_native.aev`。
 
 ### 9.6.4 设备目标 / Device targets
 

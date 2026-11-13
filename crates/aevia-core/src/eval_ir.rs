@@ -190,6 +190,11 @@ pub(crate) fn run_closure(
                             {
                                 Some(crate::jit::Kind::Float)
                             },
+                            | aevia_types::Type::Scalar(aevia_types::Rep::Int, dim)
+                                if dim.is_one() =>
+                            {
+                                Some(crate::jit::Kind::Int)
+                            },
                             | _ => None,
                         }
                     };
@@ -200,6 +205,14 @@ pub(crate) fn run_closure(
                                 Some(crate::jit::Kind::Float),
                                 Value::Num(crate::value::NumVal {
                                     kind: crate::value::NumKind::Float(_),
+                                    dim,
+                                    display: None,
+                                }),
+                            )
+                            | (
+                                Some(crate::jit::Kind::Int),
+                                Value::Num(crate::value::NumVal {
+                                    kind: crate::value::NumKind::Int(_),
                                     dim,
                                     display: None,
                                 }),
@@ -224,20 +237,38 @@ pub(crate) fn run_closure(
                         kind: crate::value::NumKind::Float(value),
                         dim,
                         display: None,
-                    } if dim == aevia_dim::Dim::one() => Some(value),
+                    } if dim == aevia_dim::Dim::one() => Some(crate::jit::Lit::F(value.to_bits())),
+                    | crate::value::NumVal {
+                        kind: crate::value::NumKind::Int(value),
+                        dim,
+                        display: None,
+                    } if dim == aevia_dim::Dim::one() => {
+                        i64::try_from(&value).ok().map(crate::jit::Lit::I)
+                    },
                     | _ => None,
                 }
             });
             let outcome = expected
                 .zip(literals.as_deref())
                 .and_then(|(expected, literals)| {
-                    crate::jit::run(
+                    crate::jit::run_with(
                         &function,
                         &args,
                         remaining,
                         literals,
                         expected,
-                        |callee_span| {
+                        |ask| {
+                            let callee_span = match ask {
+                                | crate::jit::Ask::Builtin(name) => {
+                                    // The global must reach the builtin: no
+                                    // scope, global or class method shadows it.
+                                    return env.scope.as_ref().is_none_or(|scope| scope.lookup(name).is_none())
+                                        && !interp.globals.contains_key(name)
+                                        && !interp.method_classes.contains_key(name)
+                                        && aevia_types::builtins::is_builtin(name);
+                                },
+                                | crate::jit::Ask::IsSelf(span) => span,
+                            };
                             // Native code may loop only while this name still points to the
                             // same canonical closure and the actual recursive source call
                             // preserves every selected generic binding.

@@ -11,6 +11,31 @@ pub use rssn::backend::tape::Inst;
 pub use rssn::backend::tape::Reg;
 use rssn::backend::tape::Tape;
 
+pub use rssn::backend::Intrinsic;
+pub use rssn::backend::lir;
+
+/// A LIR module ([`lir`]) compiled to machine code; its code lives until this
+/// value is dropped.
+pub struct NativeModule(rssn::backend::lir_jit::LirModule);
+
+impl NativeModule {
+    /// Verifies and compiles `module`; `None` when it is malformed or the
+    /// host cannot compile it.
+    #[must_use]
+    pub fn compile(module: &lir::Module) -> Option<Self> {
+        rssn::backend::lir_jit::LirModule::compile(module).ok().map(Self)
+    }
+
+    /// Calls `func`; `None` when the arguments do not fit its signature.
+    pub fn call(
+        &self,
+        func: lir::FuncId,
+        args: &mut [lir::Value<'_>],
+    ) -> Option<lir::Outcome> {
+        self.0.call(func, args).ok()
+    }
+}
+
 /// A compiled scalar program whose code stays alive until this value is dropped.
 pub struct Program {
     function: JitFunction,

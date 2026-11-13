@@ -1,0 +1,21 @@
+## Generated simulation modules (`Rssn_Sim_*`): typed parameters with the
+## scenario's own defaults, method names as variants, witnessed results.
+## Run with: cargo run -p aevia-cli -- test tests/sim_catalog.aev
+import Rssn_Sim_PoissonMultigrid as P
+import Rssn_Sim_SpinModel as S
+import Rssn_Sim_SodShockTube as Sod
+
+test "multigrid converges from the generated defaults" =
+    match P.run({ P.defaults() with n = 17, cycle = P.W }) with
+    | Ok(out) -> out.converged && out.max_error < 1.0e-2
+    | Err(_) -> false
+
+test "spin model with an enumerated update" =
+    match S.run({ S.defaults() with model = S.Xy, update = S.Metropolis, sweeps = 20 }) with
+    | Ok(out) -> out.sites > 0
+    | Err(_) -> false
+
+test "optional choice fields" =
+    match Sod.run({ Sod.defaults() with limiter = Some(Sod.Minmod) }) with
+    | Ok(out) -> length(out.density) == 32
+    | Err(_) -> false

@@ -16,7 +16,9 @@ aevia-dim.workspace = true
 num-bigint.workspace = true
 num-rational.workspace = true
 num-traits.workspace = true
-rssn = { path = "../../../rssn", default-features = false }
+# Reading the scenario catalog (`sim`): defaults and examples are JSON.
+serde_json.workspace = true
+rssn ={ path = "../../../rssn", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"

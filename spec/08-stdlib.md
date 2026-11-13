@@ -1462,6 +1462,15 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 `nbody_gravity`、`kerr_geodesic`。宿主不应手写第二份场景清单：运行时
 从 `rssn::sim::scenario::SCENARIOS` 读。
 
+> **生成的仿真模块（2026-11-13）**：`import Rssn_Sim_<Name>`（如
+> `Rssn_Sim_PoissonMultigrid`、`Rssn_Sim_HeatNd`）在导入时由 rssn 的场景目录
+> （`rssn::sim::schema`）生成类型化模块：`Params`/`Output` 记录、每个方法名
+> 字段一个变体类型（`P.W`、`S.Metropolis`）、`defaults()`（场景自身的默认请求或
+> 内置示例）与 `run(p)`。参数类型与默认值从场景自己的请求类型推断，结果类型
+> 来自一次见证运行，注解表补充推断看不到的部分（可选值、单位、文档）；rssn
+> 新增场景、参数或方法时这里无需手写任何代码。29 个场景全部可生成。参考测试：
+> `tests/sim_catalog.aev`。
+
 > **实现状态（2026-11-04）**：动态入口 `simulate` 已实现（`aevia-std`），
 > `to_json`/`from_json` 已实现并类型化（§8.19 的动态边界）；§8.17 上表的
 > 类型化包装器 `Physics.Ising`/`Physics.Geodesic` 已作为 Aevia 源模块实现

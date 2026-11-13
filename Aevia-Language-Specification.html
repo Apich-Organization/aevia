@@ -8946,6 +8946,19 @@ JSON；类型化包装器在 <code>Physics.*</code>
 <code>nbody_gravity</code>、<code>kerr_geodesic</code>。宿主不应手写第二份场景清单：运行时
 从 <code>rssn::sim::scenario::SCENARIOS</code> 读。</p>
 <blockquote>
+<p><strong>生成的仿真模块（2026-11-13）</strong>：<code>import Rssn_Sim_&lt;Name&gt;</code>（如
+<code>Rssn_Sim_PoissonMultigrid</code>、<code>Rssn_Sim_HeatNd</code>）在导入时由
+rssn 的场景目录
+（<code>rssn::sim::schema</code>）生成类型化模块：<code>Params</code>/<code>Output</code>
+记录、每个方法名
+字段一个变体类型（<code>P.W</code>、<code>S.Metropolis</code>）、<code>defaults()</code>（场景自身的默认请求或
+内置示例）与
+<code>run(p)</code>。参数类型与默认值从场景自己的请求类型推断，结果类型
+来自一次见证运行，注解表补充推断看不到的部分（可选值、单位、文档）；rssn
+新增场景、参数或方法时这里无需手写任何代码。29
+个场景全部可生成。参考测试： <code>tests/sim_catalog.aev</code>。</p>
+</blockquote>
+<blockquote>
 <p><strong>实现状态（2026-11-04）</strong>：动态入口
 <code>simulate</code> 已实现（<code>aevia-std</code>），
 <code>to_json</code>/<code>from_json</code> 已实现并类型化（§8.19
@@ -9102,6 +9115,111 @@ overload。</p>
 个注册，所以这条路径不做注册级评分，但<strong>会</strong>做签名级校验。
 <code>Rssn.call_key</code> 则不解析，直接执行 name +
 <code>signature_hash</code> 指定的 overload。</p>
+<h3 id="8191-数值域模块-rssn_numeric">8.19.1 数值域模块
+<code>Rssn_Numeric</code></h3>
+<p>rssn 的 <code>numeric</code>
+规则集把一批数值内核做成算子（表驱动，只对字面数字求值；符号参数、
+参差列表、被拒绝的参数、不收敛都让调用保持为请求，包装器报告
+<code>Err(NotReduced(..))</code>）。 Aevia 把它们归入
+<code>Rssn_Numeric</code>，其中 67 个有手写的 typed 签名
+（<code>domains.overlay</code> 的 <code>sig</code>，一律
+<code>Result&lt;_, OpError&gt;</code>），其余留在 dynamic 档。
+<code>import Rssn_Numeric as N</code> 之后：</p>
+<table>
+<thead>
+<tr>
+<th>组</th>
+<th>算子（Aevia 签名）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>稳健统计</td>
+<td><code>mad</code>、<code>mad_sigma(xs: Tensor&lt;1, Float&gt;): Float</code>，<code>trimmed_mean</code>、<code>winsorized_mean(xs, proportion)</code>，<code>huber_location(xs, k)</code>，<code>biweight_location(xs, c)</code>，<code>ecdf(xs, x)</code>，<code>kde(xs, x, bandwidth)</code>，<code>bandwidth_silverman</code>、<code>bandwidth_scott(xs)</code>，<code>quantile_hf(xs, p, kind: Int)</code>（Hyndman–Fan
+1–9），<code>bootstrap_ci(xs, statistic, alpha, resamples, seed): Tensor&lt;1, Float&gt;</code>（种子固定，可复现）</td>
+</tr>
+<tr>
+<td>窗与谱</td>
+<td><code>hann_window</code>、<code>hamming_window</code>、<code>blackman_window(n: Int)</code>，<code>cross_correlation</code>、<code>fftconv(xs, ys)</code>，<code>fft_abs</code>、<code>fft_re</code>、<code>fft_im(xs)</code>，<code>ifft_re</code>、<code>ifft_im(re, im)</code>，<code>frft_re</code>、<code>frft_im(re, im, order)</code>（分数傅里叶），<code>interpolate(xs, ys, x)</code></td>
+</tr>
+<tr>
+<td>小波</td>
+<td><code>dwt_approx</code>、<code>dwt_detail(xs, wavelet)</code>，<code>idwt(approx, detail, wavelet)</code>，<code>wavedec(xs, wavelet, levels): Tensor&lt;1, Tensor&lt;1, Float&gt;&gt;</code>，<code>waverec(coefficients, wavelet)</code>，<code>dwt2(m, wavelet): Tensor&lt;3, Float&gt;</code>（<code>[LL, LH, HL, HH]</code>），<code>idwt2(ll, lh, hl, hh, wavelet)</code></td>
+</tr>
+<tr>
+<td>Krylov、低秩、排序</td>
+<td><code>minres_solve</code>、<code>fgmres_solve</code>、<code>bicgstab_l_solve(a, b, tol)</code>，<code>sparse_solve</code>、<code>amg_solve(entries, b, tol, method)</code>（三元组
+<code>(i, j, v)</code>，0
+起始），<code>randomized_singular_values(a, k)</code>，<code>lobpcg_eigenvalues(a, k, tol)</code>，<code>qr_pivoted_rank</code>、<code>qr_pivoted_permutation</code>、<code>qr_pivoted_diagonal</code>，<code>nested_dissection_order(adjacency)</code>，<code>polynomial_system_roots(system): Tensor&lt;3, Float&gt;</code>（同伦延拓）</td>
+</tr>
+<tr>
+<td>采样函数</td>
+<td><code>function_l1_norm</code>、<code>function_l2_norm</code>、<code>function_inf_norm(points: Tensor&lt;2, Float&gt;)</code>，<code>function_inner</code>、<code>function_project(f, g)</code>，<code>function_normalize(f)</code>；函数是升序的
+<code>(x, y)</code> 行表</td>
+</tr>
+<tr>
+<td>复变特殊函数</td>
+<td><code>lgamma_complex</code>、<code>gamma_complex</code>、<code>digamma_complex(re, im)</code>，<code>lambert_w_complex(re, im, branch: Int)</code>，<code>bessel_j_complex</code>、<code>bessel_i_complex(order, re, im)</code>；结果是
+<code>[re, im]</code></td>
+</tr>
+<tr>
+<td>表达式算子</td>
+<td><code>oscillatory_integral</code>（Levin
+配点），<code>anderson_fixed_point</code>，<code>newton_cg_minimize</code>（符号梯度与
+Hessian），初值问题
+<code>ode_solve</code>（<code>dopri5</code>、<code>rosenbrock23</code>、<code>radau5</code>、<code>bdf</code>、<code>sdirk3</code>、<code>exprb32</code>）、<code>ode_symplectic</code>（Verlet
+与 Yoshida
+组合）、<code>ode_imex</code>、<code>ode_etdrk4</code>；右端项与变量是
+<code>Real</code> 符号项，其余参数是数字</td>
+</tr>
+</tbody>
+</table>
+<p>约定与限制：</p>
+<ul>
+<li><strong>结果是
+<code>Float</code></strong>。内核对这些算子只编码浮点数，所以计数与 0
+起始下标
+（<code>qr_pivoted_rank</code>、<code>qr_pivoted_permutation</code>、<code>nested_dissection_order</code>）也以
+<code>Float</code> 返回； <code>from_value&lt;Int&gt;</code>
+不会接受它们。<code>Real</code>（精确）不是它们的结果类型。</li>
+<li><strong>方法、小波、统计量用符号命名</strong>，符号在 Aevia 里是
+<code>Real</code>： <code>let haar = symbol("haar")</code>，再
+<code>N.dwt_approx(xs, haar)</code>。<strong>每次</strong>
+<code>symbol("haar")</code> 都造一个新符号
+（<code>haar#2</code>、<code>haar#3</code>…），内核不认识；所以每个名字只在顶层
+<code>let</code> 一次再复用。</li>
+<li><strong>维度无关</strong>。<code>heat_fd</code>、<code>wave_fd</code>、<code>poisson_fd</code>、<code>advect_fd</code>
+在内核里不分维度：空间维数就是场数据的嵌套深度
+（列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体，<code>u[i][j][k]</code>
+是节点 <code>(x_i, y_j, z_k)</code>）。一个 Aevia 签名只有一个秩，所以
+typed 包装器是<strong>一维</strong>形式
+（<code>poisson_fd(f: Tensor&lt;1, Float&gt;, boundary: Float)</code>）；二维、三维用
+<code>Rssn.dynamic("poisson_fd", [to_value(field), to_value(0.0)])</code>，答案是不可解码的
+<code>Value</code>
+（没有量纲证据，<code>from_value&lt;Tensor&lt;2, Float&gt;&gt;</code> 报
+<code>TypeMismatch</code>），可以打印或原样传回内核。 同理
+<code>tensor_norm</code>、<code>tensor_inner</code>、<code>tensordot</code>（秩多态）与
+<code>hosvd</code>、<code>hooi</code>、<code>cp_als</code>、<code>tt_svd</code>、<code>tt_dense</code>
+（结果是核心、因子、误差的混合列表）留在 dynamic 档，每个都有
+<code>dynamic ... | 理由</code> 行。 符号 PDE
+同样只有一个名字：<code>solve_heat_equation</code>、<code>solve_wave_equation</code>、<code>solve_laplace_equation</code>、
+<code>solve_poisson_equation</code>（维数由方程的变量决定，旧的
+<code>_1d</code>/<code>_2d</code>/<code>_3d</code> 是别名）； 仿射变换
+<code>translation</code>、<code>scaling</code>、<code>shear</code>、<code>reflection</code>、<code>rotation</code>
+同理，归入 <code>Rssn_Graphics</code>。</li>
+<li>参差输入（邻接表、项数不同的多项式方程）没有字面量写法，用
+<code>map(f, range(0, n))</code> 构造
+<code>Tensor&lt;1, Tensor&lt;1, Float&gt;&gt;</code>。</li>
+</ul>
+<p>端到端示例与封闭形式核对：<code>tests/domain_numeric.aev</code>（45
+个 <code>test</code>：<code>mad([1,2,3,4,100]) = 1</code>、Hann 窗对称、
+<code>ifft(fft(x)) = x</code>、小波分解/重构往返、<code>poisson_fd</code>
+的 <code>-u'' = 1</code> 得 <code>x(1-x)/2</code>、<code>heat_fd</code>
+的 <code>exp(-π²t)</code> 衰减、 <code>tensordot</code>
+对手算矩阵乘、<code>ode_solve</code> 的 <code>y' = -2y</code> 得
+<code>e^-2</code>、<code>lambert_w_complex(1,0,0) = 0.5671…</code>
+等）， 由 <code>cargo test -p aevia-rssn --test aev_suites</code>
+经真实驱动运行。</p>
 <h2 id="820-库的组织">8.20 库的组织</h2>
 <pre><code>Prelude
 Math
@@ -9700,39 +9818,48 @@ JIT。</li>
 </ul>
 <h3 id="962-流程">9.6.2 流程</h3>
 <ol type="1">
-<li>把 Core IR 降成 rssn 项（<code>Float</code> 标量表达式）。</li>
-<li>仅在 <code>features.jit</code> 为真时调用
-<code>Term::compile(&amp;["x", "y"])</code> 得到
-<code>Compiled</code>；否则不进入此路径。</li>
-<li>缓存键：项结构哈希 + 输入名 + <code>manifest_hash</code> +
-后端版本。</li>
-<li>调用时直接走机器码；失败回退解释器。</li>
+<li>把 Core IR 降成 rssn 的
+LIR（<code>rssn::backend::lir</code>）：带类型的寄存器机，
+有基本块、块参数、直接调用（可递归）、带检查的整数运算、有界检查的切片，
+以及 <em>bail</em> 出口。每个激活（参数种类 + 结果种类 +
+字面量特化）生成两个 LIR 函数：入口形式返回
+<code>(状态, 结果, 下一组参数, 剩余燃料)</code>，值形式只返回
+结果，供值位置的递归调用使用。</li>
+<li>仅在 <code>features.jit</code> 为真时由 Cranelift
+编译（<code>rssn::backend::lir_jit</code>）； 否则不进入此路径。</li>
+<li>缓存键：函数身份 + 参数种类 + 结果种类 + 字面量特化。</li>
+<li>进入机器码前逐一检查：每个自调用点仍指向本激活，所用的内建函数名仍解析
+到内建函数（未被遮蔽）。之后直接走机器码；bail 时由解释器从相同参数
+重新执行（机器码是纯的，重做不可观察）。</li>
 </ol>
-<p>rssn 的 <code>TieredBackend</code> 可以先解释、后台编译；Aevia
-复用这个策略。</p>
-<h3 id="963-限制">9.6.3 限制</h3>
+<h3 id="963-语义与限制">9.6.3 语义与限制</h3>
 <ul>
-<li>符号值、记录、变体、闭包不进入 JIT。</li>
-<li><code>Select</code>/<code>Extern1</code>/<code>Gather</code> 已
-lowering，但受 <code>jit_branch</code>/<code>jit_index</code> 与构建
-feature 控制；默认构建 <code>features.jit=false</code>。</li>
-<li><code>Real</code> 的精确算术不进入 JIT；需要时先
-<code>to_float</code>。</li>
-<li>JIT 的结果与解释器 MUST 数值一致（同一 IEEE 语义）；不一致是
-bug。</li>
+<li>可编译：无捕获、参数与结果为无量纲
+<code>Float</code>、<code>Bool</code> 或 64 位 <code>Int</code>
+的纯函数；
+<code>if</code>/<code>match</code>（字面量、通配、绑定、守卫）真正分支，未取的分支不执行；
+任意多个自尾调用点编译为带燃料检查的跳转，燃料耗尽时把蹦床交还解释器；
+值位置的自调用编译为原生递归调用（深度上限 512，超出则 bail）。</li>
+<li><code>Int</code> 的 <code>+ - *</code> 带溢出检查，溢出
+bail，由解释器以任意精度完成；<code>Int</code> 与 <code>Float</code>
+混合时按 §6 的规则提升为 <code>Float</code>。</li>
+<li>初等函数（<code>sqrt</code>、<code>cbrt</code>、<code>exp</code>、<code>ln</code>/<code>log</code>、<code>log2</code>、<code>log10</code>、三角与双曲
+函数及其反函数、<code>√</code>）带守卫：凡解释器不会简单返回
+<code>f(x)</code> 的情形（定义域 错误、§6.3.4
+的扩展实数特值、<code>±oo</code>、<code>ln(0)</code>）一律
+bail。<code>sqrt</code>/<code>cbrt</code> 与解释器一样按
+<code>powf(1/n)</code> 计算，结果逐位一致。</li>
+<li>符号值、记录、变体、闭包、张量、精确数、单位不进入 JIT。</li>
+<li>JIT 的结果与解释器 MUST 逐位一致；不能保证一致的情形 MUST bail，
+不一致是 bug。</li>
+<li><code>map_floats</code>（设备接缝）仍用直线 tape 降级，因为 GPU
+需要无控制流的程序。</li>
 </ul>
 <h3 id="可选-jit-构建">可选 JIT 构建</h3>
 <p>使用 <code>cargo build -p aevia-cli --features jit</code> 启用 RSSN
-的 Cranelift 后端。IR 解释器会在首次调用 <code>@jit</code>
-函数时编译并缓存符合条件的函数。 当前支持无捕获、参数为无量纲
-<code>Float</code> 的纯标量算术、比较和条件分支；
-单个自尾递归调用点会编译为有预算限制的原生循环。
-调用参数不符合条件、或函数使用其他调用、张量、精确数、单位等其他
-形式时，保持原有解释执行。分支仅在两侧均可安全地作为纯算术执行时
-编译。RSSN 使用独立的 TailLoop 控制流封装纯数值 Tape；其他函数调用与
-递归继续解释。启用该特性 需要 Rust 1.97 或更新版本（RSSN
-的最低版本）。默认构建仍关闭 JIT； 关闭时 <code>@jit</code> 报
-<code>E1001</code>。</p>
+的 Cranelift 后端。启用该特性需要 Rust 1.97 或更新版本（RSSN
+的最低版本）。默认构建仍 关闭 JIT；关闭时 <code>@jit</code> 报
+<code>E1001</code>。参考测试：<code>tests/jit_native.aev</code>。</p>
 <h3 id="964-设备目标--device-targets">9.6.4 设备目标 / Device
 targets</h3>
 <p><strong>English summary.</strong> <code>@jit</code> stays a scalar,
@@ -10866,7 +10993,11 @@ manifest 的 arity 不符、<code>sig</code>
 <code>witnesses</code> 中。领域模块对<strong>没有</strong>
 <code>sig</code>、但有可用 Aevia 类型表达的见证重载的算子，生成与 typed
 档同形的包装器
-（<code>fn divisors(a0: Int): Result&lt;Tensor&lt;1, Int&gt;, OpError&gt;</code>），文档里引用见证调用。
+（<code>fn divisors(n: Int): Result&lt;Tensor&lt;1, Int&gt;, OpError&gt;</code>），文档里引用见证调用。
+参数名由类型推出（<code>n</code> 整数、<code>x</code>
+标量、<code>xs</code> 向量、<code>m</code> 矩阵、<code>t3</code>
+三阶张量、<code>flag</code> 布尔、<code>v</code> 句柄；同类重复时编号
+<code>x1</code>、<code>x2</code>）。
 类型映射：<code>Int</code>→<code>Int</code>，有理数/符号表达式/符号→<code>Real</code>，浮点→<code>Float</code>，<code>Bool</code>→<code>Bool</code>，
 矩形列表→<code>Tensor&lt;秩, 元素&gt;</code>；元组、不透明对象、参差列表没有通用
 Aevia 类型， 该重载留在 dynamic
@@ -10913,6 +11044,49 @@ not prove”。</li>
 <code>domain_finite_fields.aev</code>；<code>Zmod</code>
 把剩余与模数放在同一个值里，<code>zmod_inv(x)</code> 对非单位 返回
 <code>Err</code>，混用不同模数返回 <code>Err</code>。</li>
+<li><strong>Numeric 域的数值算子组（rssn <code>numeric</code>
+规则集）。</strong>
+稳健统计（<code>mad</code>、<code>trimmed_mean</code>、
+<code>huber_location</code>、<code>kde</code>、<code>quantile_hf</code>、<code>bootstrap_ci</code>…）、窗与谱（<code>hann_window</code>、<code>fft_re</code>/<code>fft_im</code>/<code>fft_abs</code>、
+<code>ifft_re</code>/<code>ifft_im</code>、<code>frft_re</code>/<code>frft_im</code>、<code>cross_correlation</code>）、小波（<code>dwt_approx</code>、<code>idwt</code>、<code>wavedec</code>、<code>waverec</code>、
+<code>dwt2</code>、<code>idwt2</code>）、Krylov/稀疏/低秩/张量/函数（<code>minres_solve</code>、<code>fgmres_solve</code>、<code>bicgstab_l_solve</code>、<code>sparse_solve</code>、
+<code>amg_solve</code>、<code>randomized_singular_values</code>、<code>lobpcg_eigenvalues</code>、<code>tensordot</code>、<code>hosvd</code>、<code>tt_svd</code>、<code>polynomial_system_roots</code>…）、
+维度无关的有限差分求解器（<code>heat_fd</code>、<code>wave_fd</code>、<code>poisson_fd</code>、<code>advect_fd</code>）、复变特殊函数
+（<code>lgamma_complex</code>、<code>gamma_complex</code>、<code>digamma_complex</code>、<code>lambert_w_complex</code>、<code>bessel_j_complex</code>、<code>bessel_i_complex</code>）
+与表达式算子（<code>oscillatory_integral</code>、<code>anderson_fixed_point</code>、<code>newton_cg_minimize</code>、<code>ode_solve</code>、<code>ode_symplectic</code>、
+<code>ode_imex</code>、<code>ode_etdrk4</code>）都归入
+<code>Rssn_Numeric</code>，共 67 条 <code>sig</code>，8 个留在 dynamic
+档并写明理由
+（<code>tensor_norm</code>/<code>tensor_inner</code>/<code>tensordot</code>
+是秩多态，<code>hosvd</code>/<code>hooi</code>/<code>cp_als</code>/<code>tt_svd</code>/<code>tt_dense</code>
+返回混合列表）。 其中的规则：
+<ul>
+<li>这些算子的结果是浮点，签名用
+<code>Float</code>/<code>Tensor&lt;n, Float&gt;</code>，<strong>不是</strong>
+<code>Real</code>（<code>from_value&lt;Real&gt;</code> 只接受精确的
+<code>Int</code>/<code>Rat</code>）；整数性质的结果（秩、置换下标）同样以
+<code>Float</code> 返回。</li>
+<li>用符号命名的方法、小波、统计量参数类型是 <code>Real</code>（Aevia 的
+<code>symbol(..)</code> 是 <code>Real</code>），表达式参数是
+<code>Real</code> 项的张量。 每次 <code>symbol("db2")</code>
+调用产生新符号（<code>db2#2</code>…），所以每个名字只 <code>let</code>
+一次再复用。</li>
+<li>维度无关的名字：<code>heat_fd</code>/<code>wave_fd</code>/<code>poisson_fd</code>/<code>advect_fd</code>
+的空间维数是场数据的嵌套深度，符号 PDE 是
+<code>solve_heat_equation</code>/<code>solve_wave_equation</code>/<code>solve_laplace_equation</code>/<code>solve_poisson_equation</code>，仿射变换是
+<code>translation</code>/<code>scaling</code>/<code>shear</code>/<code>reflection</code>/<code>rotation</code>（<code>Rssn_Graphics</code>
+的 family 认领了不带后缀的名字；<code>_2d</code>/<code>_3d</code>
+是别名）。 签名只有一个秩，所以有限差分的 typed
+包装器是一维形式，二维/三维走
+<code>Rssn.dynamic</code>，答案是没有量纲证据的 <code>Value</code>
+（不可 <code>from_value</code> 成 <code>Float</code> 张量）。</li>
+<li><code>sig</code> 即“该算子是无量纲参数的纯函数”的声明，所以 typed
+的数值结果带 <code>Scalar(1)</code> 证据可以解码； 没有 <code>sig</code>
+的算子，其规则是 <code>Same</code>/<code>Product</code>/<code>Any</code>
+时结果不被信任（见上“维度证据”）。
+端到端测试：<code>tests/domain_numeric.aev</code>（封闭形式核对，见
+§8.19.1）。</li>
+</ul></li>
 </ul>
 <p><strong>语言缺口（尚未实现）</strong>：<code>let x: Zmod&lt;17&gt; = 5; x * x ^ -1</code>
 需要三项语言改动，均在 <code>aevia-types</code>/<code>aevia-core</code>
@@ -11173,13 +11347,45 @@ tape/解释器相同）。设备在 <code>DeviceInfo.dtypes</code>
 <li><code>cpu</code>、<code>cpu-parallel</code>：<code>F64</code>，与解释器逐位相同（含
 NaN、<code>select</code>、越界 <code>gather</code> 读 NaN）。这是 §9.7.2
 "线程数不改变任何结果" 在设备上的延伸。</li>
-<li><code>gpu:*</code>（WGSL）：只有 <code>F32</code>。Aevia
-<strong>不会</strong>把 <code>Float</code> 的结果悄悄换成
-<code>f32</code>：<code>Device.map</code> 在 <code>Gpu</code> 上返回
-<code>Float</code>（值经 <code>f32</code> 舍入），文档与错误
-信息标明；要求位精确的代码选
+<li><code>gpu:*</code>（WGSL）：<code>F32</code>，以及<strong>双单精度（double-single）的
+<code>F64</code></strong>。WGSL 没有 <code>f64</code>， rssn 的 wgpu
+设备把 <code>Dtype::F64</code> 做成一对
+<code>f32 (hi, lo)</code>（<code>hi + lo</code> 是值，缓冲区里 8 字节，
+着色器里
+<code>array&lt;vec2&lt;f32&gt;&gt;</code>），主机在上传时拆分、下载时合并；<code>DeviceInfo::emulated_f64</code>
+置位， <code>dtype_epsilon</code> 对它返回 <code>2^-44</code>。精度约 48
+位：在 RTX 3060 (Vulkan) 上 <code>+ - * /</code> 相对误差
+<code>4e-15</code>， <code>sqrt</code>
+<code>1e-14</code>，<code>exp</code>
+<code>7e-14</code>（<code>F32</code> 是
+<code>1e-7</code>），设备测试对每个函数要求 <code>5e-12</code>。
+限制：指数范围仍是 <code>f32</code> 的（数据请落在
+<code>1e-30 .. 1e30</code>），<code>sin</code>/<code>cos</code>/<code>tan</code>
+在 <code>|x| &gt; 1e6</code> 返回 NaN，
+<code>pow</code>/<code>exp</code>
+按指数大小放大相对误差；<code>F32</code> 与 <code>F64</code>
+缓冲区不能混在一次启动里（<code>DeviceError::Mismatch</code>）。
+所以它<strong>不是</strong> IEEE 双精度，也不与 CPU
+逐位相同；GLSL/OpenCL/CUDA 发射器产出原生 <code>f64</code>
+源码，但没有设备执行它们。 <code>map_columns</code>（Aevia 的
+<code>BatchProgram::run</code>）取设备偏好的 dtype，即 GPU 上走
+<code>F64</code>。 Aevia 仍<strong>不会</strong>把 <code>Float</code>
+的结果悄悄换成 <code>f32</code>：<code>Device.map</code> 在
+<code>Gpu</code> 上返回的 <code>Float</code> 带上述误差，
+文档与错误信息标明；要求位精确的代码选
 <code>Cpu</code>/<code>CpuParallel</code>。</li>
 </ul>
+<p><strong>启动融合（rssn <code>device::plan</code>）。</strong>
+一串逐元素的内核不必各自启动、各自写回中间列： <code>Plan</code>
+是内核图（输入是外部列或更早内核的输出），<code>plan.fuse()</code>
+把生产者并入读它输出的消费者 （用 <code>Input</code>
+引用），中间列变成寄存器，不再落到显存；寄存器、输入列与参数重新编号
+（消费者的参数跟在生产者之后，重复的外部列共享），仍被别处需要的输出保留为合并后内核的输出且不重算。
+消费者按地址读取该列（<code>Load</code>、<code>Len</code>、<code>Gather</code>）或两个内核都有折叠（fold）时，该边保持为一次启动；
+合并后校验不通过则撤销。融合改变的是值存放的位置，不是怎么算，所以在确定性设备上融合与未融合的计划
+逐位相同（<code>plan.rs</code> 测试）。这是显式
+API（<code>Plan::new</code>、<code>add</code>、<code>result</code>、<code>fuse</code>、<code>run</code>），
+<code>array</code> 里的驱动仍手工构造启动；Aevia 侧尚未暴露。</p>
 <p><strong>可降低到设备的函数。</strong> 与 §9.6.1 的 JIT
 门控一致的纯子集：无捕获、<code>Float</code>
 标量算术、初等函数、比较、<code>if</code>（两侧纯，急切求值后
@@ -11222,8 +11428,11 @@ Cranelift）。</li>
 <code>E1001("core.gpu")</code>；接入需要张量值携带设备 缓冲区句柄（目前
 <code>Tensor</code>
 的设备元数据只有标签），这是下一步，不是本节已做。</li>
-<li>GPU 的 <code>reduce</code>/<code>matmul</code>
-没有实现（<code>DeviceInfo.ops</code> 如实标明）。</li>
+<li>rssn 的 <code>device::array</code> 已有归约、融合的
+map-reduce、<code>matmul</code>、CSR 乘、stencil、all-pairs 与
+<code>ensemble_dopri5</code>（<code>DeviceInfo.ops</code>
+如实标明各设备支持什么）；Aevia 的
+<code>Device.reduce</code>/<code>matmul</code> 语言原语仍未接入。</li>
 </ul>
 <h2 id="107-错误映射">10.7 错误映射</h2>
 <table>
@@ -15166,10 +15375,60 @@ rssn 内核把引擎自己的等式判断（请求与答案同处一个等价类
 函数判定（<code>holonomic_zero</code>、<code>holonomic_equal</code>、<code>holonomic_ode</code>
 等）。 端到端示例见 <code>tests/domain_witnessed.aev</code>。</li>
 <li><strong>仍缺：</strong>
-见证签名的参数名是位置名（<code>a0</code>、<code>a1</code>）；元组与参差列表结果仍留在
-dynamic 档； 同一算子多个见证重载以
+见证签名的参数名由类型推出而非来自内核；元组与参差列表结果仍留在 dynamic
+档； 同一算子多个见证重载以
 <code>_int</code>/<code>_real</code>/<code>_float</code>
 后缀区分，而非类型类重载。</li>
+</ol>
+<h2 id="44-revision-172026-11-12数值算子组维度无关名字gpu-f64">4.4
+Revision 17（2026-11-12）：数值算子组、维度无关名字、GPU
+<code>f64</code></h2>
+<ol type="1">
+<li><strong><code>Rssn_Numeric</code>
+的数值算子组（§8.19.1、§10.3.8）。</strong> rssn 的 <code>numeric</code>
+规则集新增 73 个算子（manifest 从 1502 增至 1590：numeric +73、pde
++9、discrete 的仿射名字 +6）。
+稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量/函数、有限差分求解器、复变特殊函数、表达式算子
+（<code>ode_solve</code>、<code>ode_symplectic</code>、<code>ode_imex</code>、<code>ode_etdrk4</code>、<code>oscillatory_integral</code>、<code>anderson_fixed_point</code>、
+<code>newton_cg_minimize</code>）进入 <code>Rssn_Numeric</code>：67
+条手写 <code>sig</code>（含原有的
+<code>fftconv</code>、<code>interpolate</code>），8 个 dynamic
+并写明理由（秩多态张量、返回混合列表的分解）。typed 档由此从 172 增至
+239 个算子。 两条约定：结果类型是 <code>Float</code> 而不是
+<code>Real</code>（内核只编码浮点；<code>from_value&lt;Real&gt;</code>
+不接受它）；方法/小波/统计量是 符号，类型
+<code>Real</code>，且每个名字只 <code>let</code>
+一次（<code>symbol("db2")</code> 每次都造新符号）。</li>
+<li><strong>维度无关的名字。</strong>
+<code>heat_fd</code>/<code>wave_fd</code>/<code>poisson_fd</code>/<code>advect_fd</code>
+的空间维数是场数据的嵌套深度；符号 PDE 为
+<code>solve_heat_equation</code>/<code>solve_wave_equation</code>/<code>solve_laplace_equation</code>/<code>solve_poisson_equation</code>；仿射变换为
+<code>translation</code>/<code>scaling</code>/<code>shear</code>/<code>reflection</code>/<code>rotation</code>（<code>_2d</code>/<code>_3d</code>
+是别名；<code>Rssn_Graphics</code> 认领不带后缀的名字， 该域从 38 增至
+44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维走
+<code>Rssn.dynamic</code>（答案不可解码）。</li>
+<li><strong>GPU <code>f64</code>（§10.6.5）。</strong> rssn 的 wgpu
+设备以双单精度提供 <code>Dtype::F64</code>（约 48 位，<code>f32</code>
+的指数范围， <code>DeviceInfo::emulated_f64</code>）；新增启动融合规划器
+<code>device::plan</code>（<code>Plan::fuse</code>，融合与未融合逐位相同）。
+Aevia 侧 <code>Device</code>/<code>to_device</code>/<code>on</code> 对
+<code>Gpu(n)</code> 仍报
+<code>E1001("core.gpu")</code>，融合规划器尚未暴露为语言原语。</li>
+<li><strong>见证包装器的参数名</strong>
+由类型推出（<code>n</code>、<code>x</code>、<code>xs</code>、<code>m</code>、<code>t3</code>、<code>flag</code>、<code>v</code>，同类重复时编号），不再是
+<code>a0</code>、<code>a1</code>。</li>
+<li><strong>测试。</strong> 新增
+<code>tests/domain_numeric.aev</code>（45 个
+<code>test</code>，封闭形式核对），由 <code>aev_suites</code> 与
+<code>aevia test</code> 运行。覆盖报告
+<code>tools/rssn-api-audit/RSSN-COVERAGE.md</code> 已重新生成。</li>
+<li><strong>仍缺：</strong> 有限差分的 typed
+包装器没有二维/三维形式（需要内核发布按秩的 refinement
+重载，或语言支持秩参数）； dynamic 档的数值结果不能
+<code>from_value</code> 成 <code>Float</code>（无量纲证据）；manifest
+里只有一个 <code>tensor_outer</code>，属于 <code>geometry</code>
+规则集（<code>Rssn_DifferentialGeometry</code>），<code>numeric</code>
+的同名实现不在 <code>Rssn_Numeric</code> 中出现。</li>
 </ol>
 <h2 id="5-记录在案的未实现边界known-gaps">5. 记录在案的未实现边界（Known
 Gaps）</h2>

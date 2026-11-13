@@ -126,6 +126,7 @@ dependencies = [
  "num-rational",
  "num-traits",
  "rssn",
+ "serde_json",
 ]
 
 [[package]]

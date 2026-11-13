@@ -37,6 +37,7 @@ pub mod error;
 pub mod jit;
 pub mod kernel;
 pub mod registry;
+pub mod sim;
 pub mod value;
 pub mod witness;
 
