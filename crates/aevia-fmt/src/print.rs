@@ -123,7 +123,10 @@ impl Printer {
         // the last one is the indentation before the next statement; any
         // piece between them that is whitespace only is a blank line.
         let lines: Vec<&str> = text.split('\n').collect();
-        lines.len() > 2 && lines[1..lines.len() - 1].iter().any(|line| line.trim().is_empty())
+        lines.len() > 2
+            && lines[1..lines.len() - 1]
+                .iter()
+                .any(|line| line.trim().is_empty())
     }
 
     /// Prints `module`.

@@ -18,47 +18,27 @@ fn flag(r: Result<Bool, OpError>): Bool =
     | Ok(b) -> b
     | Err(_) -> false
 
-test "GF(7) arithmetic" =
-    (int_is(F.gf_add(3, 5, 7), 1) &&
-    int_is(F.gf_mul(3, 5, 7), 1) &&
-    int_is(F.gf_inv(3, 7), 5) &&
-    int_is(F.gf_div(3, 5, 7), 2) &&
-    int_is(F.gf_pow(3, 4, 7), 4) &&
-    int_is(F.gf_neg(3, 7), 4))
+test "GF(7) arithmetic" = int_is(F.gf_add(3, 5, 7), 1) && int_is(F.gf_mul(3, 5, 7), 1) && int_is(F.gf_inv(3, 7), 5) && int_is(F.gf_div(3, 5, 7), 2) && int_is(F.gf_pow(3, 4, 7), 4) && int_is(F.gf_neg(3, 7), 4)
 
-test "GF(7) predicates" =
-    flag(F.gf_is_zero(0, 7)) && flag(F.gf_is_one(1, 7)) && !flag(F.gf_is_zero(1, 7))
+test "GF(7) predicates" = flag(F.gf_is_zero(0, 7)) && flag(F.gf_is_one(1, 7)) && !flag(F.gf_is_zero(1, 7))
 
 test "a field element times its inverse is one" =
     match F.gf_inv(4, 11) with
     | Ok(inverse) -> int_is(F.gf_mul(4, inverse, 11), 1)
     | Err(_) -> false
 
-test "GF(256), the AES field" =
-    (int_is(F.gf256_mul(3, 7), 9) &&
-    int_is(F.gf256_add(3, 7), 4) &&
-    int_is(F.gf256_inv(3), 244) &&
-    int_is(F.gf256_exp(5), 32))
+test "GF(256), the AES field" = int_is(F.gf256_mul(3, 7), 9) && int_is(F.gf256_add(3, 7), 4) && int_is(F.gf256_inv(3), 244) && int_is(F.gf256_exp(5), 32)
 
 test "GF(256): log and exp are inverse" =
     match F.gf256_log(5) with
     | Ok(k) -> int_is(F.gf256_exp(k), 5)
     | Err(_) -> false
 
-test "polynomials over GF(7)" =
-    (poly_is(F.gfp_add([1, 2, 3], [4, 5], 7), [1, 6, 1]) &&
-    poly_is(F.gfp_mul([1, 2, 3], [4, 5], 7), [4, 6, 1, 1]) &&
-    poly_is(F.gfp_sub([1, 2, 3], [4, 5], 7), [1, 5, 5]) &&
-    poly_is(F.gfp_derivative([1, 2, 3], 7), [2, 2]) &&
-    int_is(F.gfp_degree([1, 2, 3], 7), 2) &&
-    int_is(F.gfp_eval([1, 2, 3], 2, 7), 4))
+test "polynomials over GF(7)" = poly_is(F.gfp_add([1, 2, 3], [4, 5], 7), [1, 6, 1]) && poly_is(F.gfp_mul([1, 2, 3], [4, 5], 7), [4, 6, 1, 1]) && poly_is(F.gfp_sub([1, 2, 3], [4, 5], 7), [1, 5, 5]) && poly_is(F.gfp_derivative([1, 2, 3], 7), [2, 2]) && int_is(F.gfp_degree([1, 2, 3], 7), 2) && int_is(F.gfp_eval([1, 2, 3], 2, 7), 4)
 
-test "x^2 + 1 is irreducible over GF(3) and reducible over GF(5)" =
-    flag(F.gfp_isirreducible([1, 0, 1], 3)) && !flag(F.gfp_isirreducible([1, 0, 1], 5))
+test "x^2 + 1 is irreducible over GF(3) and reducible over GF(5)" = flag(F.gfp_isirreducible([1, 0, 1], 3)) && !flag(F.gfp_isirreducible([1, 0, 1], 5))
 
-test "extension field GF(5)[x]/(x^2+1)" =
-    (poly_is(F.gfx_add([1, 2], [3, 4], [1, 0, 1], 5), [4, 1]) &&
-    poly_is(F.gfx_reduce([1, 2, 3], [1, 0, 1], 5), [2, 2]))
+test "extension field GF(5)[x]/(x^2+1)" = poly_is(F.gfx_add([1, 2], [3, 4], [1, 0, 1], 5), [4, 1]) && poly_is(F.gfx_reduce([1, 2, 3], [1, 0, 1], 5), [2, 2])
 
 test "a ragged result stays reachable through the dynamic tier" =
     match F.gfp_divmod([1, 2, 3, 4], [1, 1], 7) with

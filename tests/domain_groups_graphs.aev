@@ -2,7 +2,9 @@
 ## 0-based permutations shared with `Rssn_Combinatorics` through a codec.
 ## Run with: cargo run -p aevia-cli -- test tests/domain_groups_graphs.aev
 import Rssn_Group as G
+
 import Rssn_Graph as H
+
 import Rssn_Combinatorics as C
 
 fn int_is(r: Result<Int, OpError>, expected: Int): Bool =
@@ -35,11 +37,9 @@ test "permutations compose with 0-based images" =
     | Ok(p) -> C.perm_images(p) == [2, 0, 1]
     | Err(_) -> false
 
-test "permutation order and sign" =
-    int_is(G.perm_order(C.Perm([1, 2, 0, 4, 3])), 6) && int_is(G.perm_sign(C.Perm([1, 0, 2])), -1)
+test "permutation order and sign" = int_is(G.perm_order(C.Perm([1, 2, 0, 4, 3])), 6) && int_is(G.perm_sign(C.Perm([1, 0, 2])), -1)
 
-test "the order of S4 from two generators" =
-    int_is(G.perm_group_order(G.PermGroup([[1, 0, 2, 3], [1, 2, 3, 0]])), 24)
+test "the order of S4 from two generators" = int_is(G.perm_group_order(G.PermGroup([[1, 0, 2, 3], [1, 2, 3, 0]])), 24)
 
 test "a graph is a nominal handle" =
     match H.graph_complete(4) with

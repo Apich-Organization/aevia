@@ -1212,6 +1212,19 @@ fn dynamic_call(
     args: &[Value],
     span: Span,
 ) -> Result<Value, EvalError> {
+    dynamic_call_from(args, span, None)
+}
+
+/// [`dynamic_call`] on behalf of the Aevia function `caller`.
+///
+/// A generated wrapper forwards its arguments positionally, so a kernel finding
+/// about "argument 3" can only be put in the wrapper's own terms (`axes_a`) by
+/// someone who knows which wrapper is calling: the innermost frame.
+fn dynamic_call_from(
+    args: &[Value],
+    span: Span,
+    caller: Option<&str>,
+) -> Result<Value, EvalError> {
     let name = args
         .first()
         .map(show)
@@ -1221,7 +1234,28 @@ fn dynamic_call(
         .require("core.dynamic_call")
         .map_err(|failure| bridge::error(&failure).at(span))?;
     let values = dynamic_arguments(args.get(1), span)?;
-    forward(&name, &values, span, false)
+    forward(&name, &values, span, false, caller)
+}
+
+/// How a failure reads to the program that receives it.
+///
+/// A kernel finding is put in the terms of the calling wrapper (its name and
+/// the name of the offending parameter) when `caller` is a curated wrapper of
+/// the operator that reported it, and in the operator's own terms otherwise.
+fn failure_text(
+    failure: &aevia_rssn::KernelError,
+    caller: Option<&str>,
+) -> String {
+    let Some(diag) = &failure.diag else {
+        return failure.message.clone();
+    };
+    let wrapper = caller.and_then(|function| {
+        aevia_rssn::domains::wrapper_params(function, &diag.op).map(|params| (function, params))
+    });
+    match wrapper {
+        | Some((function, params)) => failure.describe(Some(function), Some(&params)),
+        | None => failure.describe(None, None),
+    }
 }
 
 /// `Rssn.call_ho(name, values, callbacks)` without interpreter context.
@@ -1255,7 +1289,7 @@ fn call_ho(
         .require("core.dynamic_call")
         .map_err(|failure| bridge::error(&failure).at(span))?;
     let values = dynamic_arguments(args.get(1), span)?;
-    forward(&name, &values, span, true)
+    forward(&name, &values, span, true, None)
 }
 
 /// Interpreter-aware callback path. The host-only `call` entry point keeps its
@@ -1377,6 +1411,7 @@ fn forward(
     values: &[Value],
     _span: Span,
     _higher_order: bool,
+    caller: Option<&str>,
 ) -> Result<Value, EvalError> {
     let mut converted = Vec::with_capacity(values.len());
     for value in values {
@@ -1396,7 +1431,12 @@ fn forward(
                 host_witness: None,
             }))))
         },
-        | Err(failure) => Ok(err(value_error(failure.code, failure.message))),
+        | Err(failure) => {
+            Ok(err(value_error(
+                failure.code,
+                failure_text(&failure, caller),
+            )))
+        },
     }
 }
 
@@ -1467,7 +1507,7 @@ fn call_key(
                 host_witness: None,
             }))))
         },
-        | Err(error) => Ok(err(value_error(error.code, error.message))),
+        | Err(error) => Ok(err(value_error(error.code, failure_text(&error, None)))),
     }
 }
 
@@ -1662,6 +1702,9 @@ pub fn member(name: &str) -> Value {
             invoke(&args, span, expected.as_ref())
         } else if owned == "call_ho" || owned == "call_ho_key" {
             call_ho_with_interp(interp, &args, span, owned == "call_ho_key")
+        } else if owned == "dynamic" || owned == "call" {
+            let caller = interp.frames.last().map(|frame| frame.function.clone());
+            dynamic_call_from(&args, span, caller.as_deref())
         } else {
             call(&owned, args, span)
         }
@@ -1835,7 +1878,10 @@ fn kernel_pieces(
                     shape: inner.to_vec(),
                     data: data[i * stride..(i + 1) * stride].to_vec(),
                 },
-                parts.get(i).cloned().unwrap_or_else(|| kernel.witness.clone()),
+                parts
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| kernel.witness.clone()),
             )
         };
         items.push(Value::KernelValue(Rc::new(crate::value::KernelValue {

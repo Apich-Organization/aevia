@@ -2,7 +2,9 @@
 ## scenario's own defaults, method names as variants, witnessed results.
 ## Run with: cargo run -p aevia-cli -- test tests/sim_catalog.aev
 import Rssn_Sim_PoissonMultigrid as P
+
 import Rssn_Sim_SpinModel as S
+
 import Rssn_Sim_SodShockTube as Sod
 
 test "multigrid converges from the generated defaults" =

@@ -140,6 +140,17 @@ range    : (Int, Int, Int) -> Tensor<1, Int>
 take     : (Int, Tensor<1, a>) -> Tensor<1, a>
 drop     : (Int, Tensor<1, a>) -> Tensor<1, a>
 reverse  : Tensor<1, a> -> Tensor<1, a>
+reverse  : Tensor<n, a> -> Tensor<n, a>                  # n = 2..4：翻转第一个轴
+reverse_axis : (Tensor<n, a>, Int) -> Tensor<n, a>       # n = 1..4：翻转指定轴
+filter   : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>   # n = 2..4：谓词看一行
+take     : (Int, Tensor<n, a>) -> Tensor<n, a>           # n = 2..4：取前几行
+drop     : (Int, Tensor<n, a>) -> Tensor<n, a>
+concat   : (Tensor<n, a>, Tensor<n, a>) -> Tensor<n, a>  # n = 2..4：沿第一个轴堆叠
+any      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
+all      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
+find     : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Option<Tensor<n-1, a>>
+first    : Tensor<n, a> -> Option<Tensor<n-1, a>>
+last     : Tensor<n, a> -> Option<Tensor<n-1, a>>
 sort     : TotalOrd a => Tensor<1, a> -> Tensor<1, a>
 sort_by  : ((a, a) -> Ordering, Tensor<1, a>) -> Tensor<1, a>
 sort_float : (Tensor<1, Float>, Bool) -> Tensor<1, Float>   # NaN last/first
@@ -167,6 +178,15 @@ argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 `flatten`（秩 ≥ 2）；`sum(a, axis)` 的 keepdims 形式在秩 1 到 4 上可用。秩不是一等类型参数，
 所以每个秩一个重载，由实参的秩选择。`first`/`last` 对空张量给 `None`；`argmax`/`argmin` 对空张量
 是 `E0802`，NaN 不会胜出，相等时取最前的下标。
+
+**秩 ≥ 2 的序列操作（Revision 20）。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（"行"）的序列：
+
+- `reverse` 翻转第一个轴，保持形状（此前运行时把矩阵展平成向量，而类型表只有秩 1；展平请显式写 `reverse(flatten(m))`）。
+  `reverse_axis(t, k)` 翻转第 `k` 轴（秩 1 到 4，负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
+- `filter(p, m)`：`p` 接受一行（秩 `n−1` 的张量），结果保持秩 `n`，行数为被接受的行数；全部拒绝得到第一轴长度为 0 的同秩张量。
+- `any`/`all`/`find` 对行逐个测试；`find` 返回 `Option<Tensor<n-1, a>>`；`first`/`last` 返回第一行/最后一行的 `Option`。
+- `take(k, m)`/`drop(k, m)` 按行取舍；`concat(a, b)` 沿第一个轴堆叠，其余轴的长度必须一致（否则 `E0802`）。
+- 其余元素级操作（`sum`、`map`、`fold`、`sort` 等）仍按元素处理，不受影响。
 
 `length` 对 `String` 和 `Tensor` 重载，由类型类 `Sized` 解析。
 
@@ -819,12 +839,35 @@ sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ## 8.8 FFT / Interpolate
 
 ```
-fft      : Tensor<1, Complex[d]> -> Tensor<1, Complex[d]>       # 无归一化
-ifft     : Tensor<1, Complex[d]> -> Tensor<1, Complex[d]>       # 1/N
-fft_norm : (Tensor<1, Complex[d]>, Norm) -> Tensor<1, Complex[d]>
+fft      : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 无归一化；X ∈ {Complex, Float, Int}
+ifft     : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 1/N
+fft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
+ifft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
+fft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>      # 沿一个轴，n = 1..4
+ifft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>
+fft2     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 最后两个轴，n = 2..4
+ifft2    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
+fftn     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 全部轴，n = 1..4
+ifftn    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
+fftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>   # 任意轴列表
+ifftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>
+fftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>
+ifftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>
 rfft     : Tensor<1, Float[d]> -> Tensor<1, Complex[d]>
 irfft    : Tensor<1, Complex[d]> -> Tensor<1, Float[d]>
+irfft    : (Tensor<1, Complex[d]>, Int) -> Tensor<1, Float[d]>  # 显式长度（奇数长度）
+rfft2    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 最后两个轴，n = 2..4
+irfft2   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
+irfft2   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
+rfftn    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 全部轴，n = 1..4
+irfftn   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
+irfftn   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
+fftshift : Tensor<n, a> -> Tensor<n, a>                         # 全部轴，n = 1..4
+ifftshift : Tensor<n, a> -> Tensor<n, a>
+fftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
+ifftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
 fftfreq  : (Int, Float[T]) -> Tensor<1, Float[1/T]>
+rfftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>             # n/2 + 1 个非负频率
 
 interp1  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 interp2  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
@@ -836,7 +879,20 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 ```
 
 `fft` 不归一化，`ifft` 除以 `N`，因此 `ifft(fft(x)) == x`。需要
-`1/√N` 或其他约定时用 `fft_norm(x, Norm.Unitary)`。
+`1/√N` 或其他约定时用 `fft_norm(x, Unitary)`（`import FFT { Unitary }`，或写 `FFT.Unitary`）。
+
+**变换族的完整性（Revision 20）。** 所有正向/逆向变换接受复数、`Float` 或 `Int` 张量（实数、整数按虚部为 0 提升），
+结果总是复数，量纲与样本相同（频率轴的量纲只出现在 `fftfreq`/`rfftfreq` 的结果里，它们取采样间隔 `Float[T]`，
+返回 `Float[1/T]`——`fftfreq(4, 0.5 s)` 的单位是 `Hz`）。多维变换由行列分解实现：沿每个被变换的轴依次做一维变换。
+
+- `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。
+  轴号从 0 开始，负数从末尾数（`-1` 是最后一轴）；越界或重复的轴是 `E0802`。秩 1 到 4 都有类型。
+- 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；
+  `Unitary` 两向都是 `1/√N`。（`Forward` 在 Revision 20 之前错用了 `1/√N`，现已按文档修正。）
+- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点；`irfft`/`irfft2`/`irfftn`
+  由半谱重建实数张量，默认原长度为 `2(m − 1)`（偶数），奇数长度用带 `Int` 的形式显式给出；`m` 与长度不相容是 `E0802`。
+- `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；
+  `*_axis` 形式只移一个轴。
 
 ```
 type Norm = | Backward | Forward | Unitary

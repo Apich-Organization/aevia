@@ -5,7 +5,6 @@
 ## directly (`spsolve`, sparse LU) or iteratively (`cg`), and carry their units
 ## all the way through - the temperatures come out in kelvin because
 ## `[A] = W/(m^3 K)` and `[b] = W/m^3`.
-
 ## The 1-D Dirichlet Laplacian `tridiag(-1, 2, -1)` of order `n`, assembled from
 ## its three diagonals. Duplicate coordinates would be summed, which is how a
 ## finite-element assembly adds the contribution of each element.
@@ -20,9 +19,9 @@ fn main(): IO Unit = do
     # --- A rod held at 0 K at both ends, heated uniformly -------------------
     let n = 99
     let h = 1.0 m / (n + 1)
-    let k = 50.0 W/(m*K)
+    let k = 50.0 W / (m * K)
     let q = 2.0e5 W/m^3
-    let a = (k / (h * h)) * laplacian1d(n)
+    let a = k / (h * h) * laplacian1d(n)
     let b = map(fn i => q, range(0, n))
     let t = spsolve(a, b)
     println("rod: {n} unknowns, {nnz(a)} stored entries, format {format_of(a)}")
@@ -35,7 +34,7 @@ fn main(): IO Unit = do
     let l1 = laplacian1d(m)
     let eye = speye(m)
     let lap2 = kron(eye, l1) + kron(l1, eye)
-    let plate = (k / (hp * hp)) * lap2
+    let plate = k / (hp * hp) * lap2
     let load = map(fn i => q, range(0, m * m))
     println("plate: {m * m} unknowns, {nnz(plate)} stored entries, density {density(plate)}")
 

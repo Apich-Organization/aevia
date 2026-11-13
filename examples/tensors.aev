@@ -2,8 +2,8 @@ module Tensors
 
 ## Rank, shape and element dimension all come from the literal; `@` dispatches
 ## on rank (§3.5.3a).
-
 let m = [[1.0, 2.0], [3.0, 4.0]]
+
 let v = [5.0, 6.0]
 
 fn main(): IO Unit = do

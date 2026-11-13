@@ -1,60 +1,43 @@
 ## Rank-complete tensor operations, Result combinators and numeric helpers.
 ## Run with: cargo run -p aevia-cli -- test tests/stdlib_ergonomics.aev
+test "sum and mean reduce a matrix" = sum([[1.0, 2.0], [3.0, 4.0]]) == 10.0 && mean([[1.0, 2.0], [3.0, 4.0]]) == 2.5
 
-test "sum and mean reduce a matrix" =
-    sum([[1.0, 2.0], [3.0, 4.0]]) == 10.0 && mean([[1.0, 2.0], [3.0, 4.0]]) == 2.5
+test "sum reduces a rank-3 tensor" = sum([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]) == 36.0
 
-test "sum reduces a rank-3 tensor" =
-    sum([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]) == 36.0
+test "prod, var and std accept a matrix" = prod([[1.0, 2.0], [3.0, 4.0]]) == 24.0 && approx_eq(var([[1.0, 2.0], [3.0, 4.0]]), 1.6666666666666667, 1e-12) && approx_eq(std([[1.0, 2.0], [3.0, 4.0]]), 1.2909944487358056, 1e-12)
 
-test "prod, var and std accept a matrix" =
-    prod([[1.0, 2.0], [3.0, 4.0]]) == 24.0 && approx_eq(var([[1.0, 2.0], [3.0, 4.0]]), 1.6666666666666667, 1e-12) && approx_eq(std([[1.0, 2.0], [3.0, 4.0]]), 1.2909944487358056, 1e-12)
+test "norm of a matrix is Frobenius" = approx_eq(norm([[3.0, 0.0], [0.0, 4.0]]), 5.0, 1e-12)
 
-test "norm of a matrix is Frobenius" =
-    approx_eq(norm([[3.0, 0.0], [0.0, 4.0]]), 5.0, 1e-12)
+test "map keeps the shape of a matrix" = map(fn x => x * 2.0, [[1.0, 2.0], [3.0, 4.0]]) == [[2.0, 4.0], [6.0, 8.0]]
 
-test "map keeps the shape of a matrix" =
-    map(fn (x) => x * 2.0, [[1.0, 2.0], [3.0, 4.0]]) == [[2.0, 4.0], [6.0, 8.0]]
+test "zip_with works on matrices" = zip_with(fn (a, b) => a + b, [[1, 2], [3, 4]], [[10, 20], [30, 40]]) == [[11, 22], [33, 44]]
 
-test "zip_with works on matrices" =
-    zip_with(fn (a, b) => a + b, [[1, 2], [3, 4]], [[10, 20], [30, 40]]) == [[11, 22], [33, 44]]
+test "flatten a rank-3 tensor" = flatten([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]) == [1, 2, 3, 4, 5, 6, 7, 8]
 
-test "flatten a rank-3 tensor" =
-    flatten([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]) == [1, 2, 3, 4, 5, 6, 7, 8]
+test "transpose reverses the axes of a rank-3 tensor" = transpose([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]) == [[[1, 5], [3, 7]], [[2, 6], [4, 8]]]
 
-test "transpose reverses the axes of a rank-3 tensor" =
-    transpose([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]) == [[[1, 5], [3, 7]], [[2, 6], [4, 8]]]
-
-test "transpose of a rank-3 tensor of extent 1x2x3" =
-    shape(transpose([[[1, 2, 3], [4, 5, 6]]])) == [3, 2, 1]
+test "transpose of a rank-3 tensor of extent 1x2x3" = shape(transpose([[[1, 2, 3], [4, 5, 6]]])) == [3, 2, 1]
 
 test "Result map, and_then and unwrap_or" =
     let ok1: Result<Int, String> = Ok(3)
     let bad: Result<Int, String> = Err("no")
-    unwrap_or(map(fn (x) => x + 1, ok1), 0) == 4 && unwrap_or(map(fn (x) => x + 1, bad), 0) == 0 && unwrap_or(and_then(fn (x) => Ok(x * 2), ok1), 0) == 6 && unwrap_or(and_then(fn (x) => Err("stop"), ok1), -1) == -1
+    unwrap_or(map(fn x => x + 1, ok1), 0) == 4 && unwrap_or(map(fn x => x + 1, bad), 0) == 0 && unwrap_or(and_then(fn x => Ok(x * 2), ok1), 0) == 6 && unwrap_or(and_then(fn x => Err("stop"), ok1), -1) == -1
 
 test "is_ok, is_err, ok and ok_or" =
     let good: Result<Int, String> = Ok(1)
     let bad: Result<Int, String> = Err("e")
     is_ok(good) && is_err(bad) && !is_ok(bad) && ok(good) == Some(1) && ok(bad) == None && ok_or(Some(5), "missing") == Ok(5) && ok_or(None, "missing") == Err("missing")
 
-test "first and last are Options" =
-    first([4, 5, 6]) == Some(4) && last([4, 5, 6]) == Some(6)
+test "first and last are Options" = first([4, 5, 6]) == Some(4) && last([4, 5, 6]) == Some(6)
 
-test "cumsum and cumprod" =
-    cumsum([1, 2, 3, 4]) == [1, 3, 6, 10] && cumprod([1, 2, 3, 4]) == [1, 2, 6, 24]
+test "cumsum and cumprod" = cumsum([1, 2, 3, 4]) == [1, 3, 6, 10] && cumprod([1, 2, 3, 4]) == [1, 2, 6, 24]
 
-test "cumsum keeps units" =
-    cumsum([1.0 m, 2.0 m]) == [1.0 m, 3.0 m]
+test "cumsum keeps units" = cumsum([1.0 m, 2.0 m]) == [1.0 m, 3.0 m]
 
-test "argmax and argmin return the first extremum" =
-    argmax([1.0, 5.0, 2.0, 5.0]) == 1 && argmin([3.0, 1.0, 2.0, 1.0]) == 1
+test "argmax and argmin return the first extremum" = argmax([1.0, 5.0, 2.0, 5.0]) == 1 && argmin([3.0, 1.0, 2.0, 1.0]) == 1
 
-test "round to decimal places" =
-    approx_eq(round(3.14159, 2), 3.14, 1e-12) && approx_eq(round(1234.0, -2), 1200.0, 1e-9) && approx_eq(value_in(m, round(2.567 m, 1)), 2.6, 1e-12)
+test "round to decimal places" = approx_eq(round(3.14159, 2), 3.14, 1e-12) && approx_eq(round(1234.0, -2), 1200.0, 1e-9) && approx_eq(value_in(m, round(2.567 m, 1)), 2.6, 1e-12)
 
-test "NaN and infinity are classified" =
-    is_infinite(ln(0.0)) && is_nan(ln(0.0) - ln(0.0)) && !is_finite(ln(0.0))
+test "NaN and infinity are classified" = is_infinite(ln(0.0)) && is_nan(ln(0.0) - ln(0.0)) && !is_finite(ln(0.0))
 
-test "is_finite of ordinary numbers" =
-    is_finite(1.5) && !is_infinite(1.5) && !is_nan(1.5) && is_finite(3)
+test "is_finite of ordinary numbers" = is_finite(1.5) && !is_infinite(1.5) && !is_nan(1.5) && is_finite(3)

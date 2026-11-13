@@ -523,6 +523,72 @@ fn the_fourier_transform_round_trips() {
 }
 
 #[test]
+fn the_transform_family_refuses_bad_axes_and_lengths() {
+    let matrix = tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let vector = tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        call_error("fft_axis", vec![matrix.clone(), int(2)]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fft_axis", vec![matrix.clone(), int(-3)]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fftn_axes", vec![matrix.clone(), exact(vec![0, 0])]).code,
+        "E0802"
+    );
+    assert_eq!(call_error("fft2", vec![vector.clone()]).code, "E0802");
+    let spectrum = call("rfft2", vec![matrix.clone()]);
+    assert_eq!(
+        call_error("irfft2", vec![spectrum.clone(), int(7)]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("reverse_axis", vec![matrix.clone(), int(2)]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("fftshift_axis", vec![matrix, int(5)]).code,
+        "E0802"
+    );
+    // A length that does fit is accepted: the last axis of 2 has 2 bins.
+    let rebuilt = call("irfft2", vec![spectrum, int(2)]);
+    assert_eq!(tensor_of(&rebuilt).shape, vec![2, 2]);
+}
+
+#[test]
+fn the_nd_transform_of_a_rank_three_tensor_has_the_sum_at_the_origin() {
+    let cube = tensor(vec![2, 3, 4], (0..24).map(f64::from).collect());
+    let spectrum = call("fftn", vec![cube.clone()]);
+    let first = tensor_of(&spectrum).elements()[0].clone();
+    let Some(NumKind::Complex(re, im)) = first.as_num().map(|n| &n.kind) else {
+        panic!("a transform of real input is complex");
+    };
+    assert!((re - 276.0).abs() < 1e-9 && im.abs() < 1e-9);
+    assert_eq!(tensor_of(&spectrum).shape, vec![2, 3, 4]);
+    let back = call("ifftn", vec![spectrum]);
+    for (index, element) in tensor_of(&back).elements().iter().enumerate() {
+        let Some(NumKind::Complex(re, im)) = element.as_num().map(|n| &n.kind) else {
+            panic!("complex");
+        };
+        assert!((re - index as f64).abs() < 1e-9 && im.abs() < 1e-9);
+    }
+}
+
+#[test]
+fn rank_two_sequences_are_sequences_of_rows() {
+    let matrix = tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let reversed = call("reverse", vec![matrix.clone()]);
+    let values: Vec<f64> = tensor_of(&reversed).elements().iter().map(as_f64).collect();
+    assert_eq!(tensor_of(&reversed).shape, vec![3, 2]);
+    assert_eq!(values, vec![5.0, 6.0, 3.0, 4.0, 1.0, 2.0]);
+    let flipped = call("reverse_axis", vec![matrix, int(1)]);
+    let values: Vec<f64> = tensor_of(&flipped).elements().iter().map(as_f64).collect();
+    assert_eq!(values, vec![2.0, 1.0, 4.0, 3.0, 6.0, 5.0]);
+}
+
+#[test]
 fn interpolation_and_polynomial_fitting() {
     let xs = tensor(vec![3], vec![0.0, 1.0, 2.0]);
     let ys = tensor(vec![3], vec![0.0, 10.0, 40.0]);

@@ -8074,7 +8074,13 @@ impl Checker {
                 return ty;
             }
             if let Some(candidates) = builtins::schemes(name) {
-                if candidates.len() > 1 {
+                // A call no overload can take by arity may be to a user
+                // function that an import binds under the built-in's name
+                // (`first(p, q)`); it then goes the ordinary way.
+                let arity_fits = candidates
+                    .iter()
+                    .any(|c| matches!(&c.ty, Type::Fn(params, _) if params.len() == args.len()));
+                if candidates.len() > 1 && (arity_fits || !self.globals.contains_key(name)) {
                     return self.overloaded_call(name, &candidates, args, span);
                 }
                 // A single-scheme builtin whose name is also a prelude unit (`cg` is
@@ -9604,6 +9610,7 @@ impl Checker {
         let diagnostics_before = self.diagnostics.items.len();
         let types_before = self.expr_types.len();
         let mut first_error: Option<UnifyError> = None;
+        let mut speculative_failure: Option<&Scheme> = None;
         for candidate in candidates {
             self.infer.restore(&saved);
             self.diagnostics.items.truncate(diagnostics_before);
@@ -9618,7 +9625,16 @@ impl Checker {
                 continue;
             }
             let mut ok = true;
+            // A lambda is checked *against* the parameter type, after the
+            // other arguments have fixed it: synthesising it first leaves its
+            // parameter unknown, and an overloaded operation in the body
+            // (`sum(row)`) would then commit to its first overload and make a
+            // rank-3 `filter(fn (slab) => sum(slab) > 0, cube)` fail.
+            let is_lambda = |arg: &Expr| matches!(arg.kind, ExprKind::Lambda { .. });
             for (arg, param) in args.iter().zip(params.iter()) {
+                if is_lambda(arg) {
+                    continue;
+                }
                 let arg_ty = self.synth(arg);
                 if let Err(error) = self.infer.unify(&arg_ty, param) {
                     first_error.get_or_insert(error);
@@ -9627,6 +9643,53 @@ impl Checker {
                 }
             }
             if ok {
+                for (arg, param) in args.iter().zip(params.iter()) {
+                    if !is_lambda(arg) {
+                        continue;
+                    }
+                    let before = self.diagnostics.items.len();
+                    self.check(arg, param);
+                    if self.diagnostics.items[before..]
+                        .iter()
+                        .any(|item| item.severity == aevia_syntax::Severity::Error)
+                    {
+                        speculative_failure.get_or_insert(candidate);
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                // The division-shaped built-ins (`mean`, `var`, ...) promote
+                // `Int` to `Real` at the call site; an overloaded call must
+                // get the same refinement as a single-scheme one.
+                return self.refine_div_rep_result(name, *ret);
+            }
+        }
+        // Every candidate failed. When one failed only inside a lambda body,
+        // that candidate is the one the author meant: replay it so its own
+        // diagnostics (not "no overload") reach the reader.
+        if first_error.is_none()
+            && let Some(candidate) = speculative_failure
+        {
+            self.infer.restore(&saved);
+            self.diagnostics.items.truncate(diagnostics_before);
+            self.truncate_expr_types(types_before);
+            let callee = self.infer.instantiate(candidate);
+            if let Type::Fn(params, ret) = self.infer.resolve(&callee) {
+                for (arg, param) in args.iter().zip(params.iter()) {
+                    if !matches!(arg.kind, ExprKind::Lambda { .. }) {
+                        let arg_ty = self.synth(arg);
+                        if let Err(error) = self.infer.unify(&arg_ty, param) {
+                            self.report_unify(error, span);
+                        }
+                    }
+                }
+                for (arg, param) in args.iter().zip(params.iter()) {
+                    if matches!(arg.kind, ExprKind::Lambda { .. }) {
+                        self.check(arg, param);
+                    }
+                }
                 return *ret;
             }
         }
@@ -9965,8 +10028,10 @@ impl Checker {
                                         )
                                     },
                                     | None if !fields.is_empty() => {
-                                        let names: Vec<&str> =
-                                            fields.iter().map(|(field, _)| field.as_str()).collect();
+                                        let names: Vec<&str> = fields
+                                            .iter()
+                                            .map(|(field, _)| field.as_str())
+                                            .collect();
                                         self.error_help(
                                             "E0306",
                                             message,
@@ -12028,7 +12093,7 @@ impl Checker {
                     .filter(|def| def.prefixable)
                     .flat_map(|def| std::iter::once(&def.name).chain(def.aliases.iter()))
                     .collect();
-                if let Some(close) = closest_name(rest, bases.iter().map(|s| s.as_str())) {
+                if let Some(close) = closest_unit(rest, bases.iter().map(|s| s.as_str())) {
                     return Some(format!("{prefix}{close}"));
                 }
             }
@@ -12045,7 +12110,7 @@ impl Checker {
                 }
             }
         }
-        closest_name(name, candidates.iter().map(String::as_str)).map(str::to_string)
+        closest_unit(name, candidates.iter().map(String::as_str)).map(str::to_string)
     }
 
     /// The help for an unknown dimension name: a unit written where a
@@ -13285,6 +13350,76 @@ pub fn closest_name<'a>(
     best.map(|(_, candidate)| candidate)
 }
 
+/// Whether `short` can be obtained from `long` by deleting characters.
+fn is_subsequence(
+    short: &[char],
+    long: &[char],
+) -> bool {
+    let mut rest = long.iter();
+    short
+        .iter()
+        .all(|wanted| rest.by_ref().any(|have| have == wanted))
+}
+
+/// The unit spellings a reader is most likely to have meant; they win ties
+/// between equally distant candidates.
+const COMMON_UNITS: &[&str] = &[
+    "m", "s", "g", "kg", "A", "K", "mol", "cd", "Hz", "N", "Pa", "J", "W", "C", "V", "F", "Ω", "S",
+    "T", "L", "min", "h", "d", "rad", "deg", "eV", "bar", "atm", "ft", "in", "mi", "lb", "°C",
+];
+
+/// The unit spelling closest to a misspelt `name`.
+///
+/// Like [`closest_name`] (same distance and first-letter rules), but
+/// equally distant candidates are ranked by what a reader most plausibly
+/// meant instead of alphabetically: first the *containment-minimal* edit (the
+/// candidate is `name` with characters deleted, or `name` with characters
+/// added — `kmm` is `km` plus a stray letter, not `klm` with a wrong one),
+/// then a common unit, then alphabetical order. A pure deletion is accepted
+/// even when it leaves a single character (`mm` -> `m`).
+#[must_use]
+pub fn closest_unit<'a>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let target: Vec<char> = name.chars().collect();
+    let limit = match target.len() {
+        | 0 => return None,
+        | 1..=3 => 1,
+        | 4..=6 => 2,
+        | _ => 3,
+    };
+    let mut best: Option<((usize, bool, bool), &'a str)> = None;
+    for candidate in candidates {
+        if candidate == name || candidate.is_empty() || candidate.contains([':', '@', '$', '#']) {
+            continue;
+        }
+        let other: Vec<char> = candidate.chars().collect();
+        if other.len().abs_diff(target.len()) > limit {
+            continue;
+        }
+        let contained = is_subsequence(&other, &target) || is_subsequence(&target, &other);
+        let distance = osa_distance(&target, &other);
+        if distance > limit || (distance >= other.len() && !contained) {
+            continue;
+        }
+        if distance > 1 && !target[0].to_lowercase().eq(other[0].to_lowercase()) {
+            continue;
+        }
+        let key = (distance, !contained, !COMMON_UNITS.contains(&candidate));
+        let better = match best {
+            | None => true,
+            | Some((current_key, current)) => {
+                key < current_key || (key == current_key && candidate < current)
+            },
+        };
+        if better {
+            best = Some((key, candidate));
+        }
+    }
+    best.map(|(_, candidate)| candidate)
+}
+
 fn osa_distance(
     a: &[char],
     b: &[char],
@@ -13315,6 +13450,24 @@ fn osa_distance(
 #[cfg(test)]
 mod suggestion_tests {
     use super::closest_name;
+    use super::closest_unit;
+
+    #[test]
+    fn a_stray_letter_is_deleted_rather_than_substituted() {
+        // `kmm` is `km` with an extra `m`; `klm` (kilolumen) is a wrong
+        // letter, and used to win alphabetically.
+        let bases = ["m", "lm", "mi", "s"];
+        assert_eq!(closest_unit("mm", bases), Some("m"));
+        assert_eq!(closest_unit("mm", ["lm", "m"]), Some("m"));
+        assert_eq!(closest_unit("kmm", ["klm", "km", "kg"]), Some("km"));
+        // Equally good and equally contained: a common unit beats an
+        // alphabetically earlier odd one.
+        assert_eq!(closest_unit("hh", ["ah", "h"]), Some("h"));
+        assert_eq!(closest_unit("kgg", ["kg", "kgg2"]), Some("kg"));
+        assert_eq!(closest_unit("secs", ["sec", "s", "secs2"]), Some("sec"));
+        // Nothing near stays nothing.
+        assert_eq!(closest_unit("qqqq", ["m", "s"]), None);
+    }
 
     #[test]
     fn close_names_are_suggested_and_far_ones_are_not() {

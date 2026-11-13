@@ -2,9 +2,10 @@ module Symbolic
 
 ## Symbolic and numeric evaluation are two phases of the same expression
 ## (§0.5, §6.13): `diff` returns a function, and calling it substitutes.
-
 let x = symbol("x")
-let f = fn t => t^3 - 3*t + 1
+
+let f = fn t => t ^ 3 - 3 * t + 1
+
 let df = diff(f)
 
 fn main(): IO Unit = do

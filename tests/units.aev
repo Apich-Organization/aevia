@@ -1,23 +1,15 @@
 ## Conformance tests for the unit and dimension layer.
 ## Run with: cargo run -p aevia-cli -- test tests/units.aev
+test "kilometres convert exactly" = approx_eq(value_in(m, 3.2 km), 3200.0, 0.000001)
 
-test "kilometres convert exactly" =
-    approx_eq(value_in(m, 3.2 km), 3200.0, 0.000001)
+test "feet convert exactly" = approx_eq(value_in(m, 1.0 ft), 0.3048, 1e-12)
 
-test "feet convert exactly" =
-    approx_eq(value_in(m, 1.0 ft), 0.3048, 1e-12)
+test "celsius is affine" = approx_eq(value_in(K, 25.0 °C), 298.15, 1e-9)
 
-test "celsius is affine" =
-    approx_eq(value_in(K, 25.0 °C), 298.15, 1e-9)
+test "fahrenheit is affine" = approx_eq(value_in(K, 32.0 °F), 273.15, 1e-6)
 
-test "fahrenheit is affine" =
-    approx_eq(value_in(K, 32.0 °F), 273.15, 1e-6)
+test "percent is one hundredth" = approx_eq(base(50 %), 0.5, 1e-12)
 
-test "percent is one hundredth" =
-    approx_eq(base(50 %), 0.5, 1e-12)
+test "display units do not change the value" = approx_eq(base(to(km, 3200.0 m)), 3200.0 m, 1e-12 m)
 
-test "display units do not change the value" =
-    approx_eq(base(to(km, 3200.0 m)), 3200.0 m, 1e-12 m)
-
-test "compound units fold to coherent values" =
-    approx_eq(value_in(m/s, 36.0 km/h), 10.0, 1e-9)
+test "compound units fold to coherent values" = approx_eq(value_in(m / s, 36.0 km/h), 10.0, 1e-9)

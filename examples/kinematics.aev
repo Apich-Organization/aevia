@@ -6,11 +6,9 @@ module Kinematics
 ## `h` and `g` are exact quantities, so `2 * h / g` is exact too — and `sqrt`
 ## of an exact value with no exact root stays symbolic (§6.3.1). `approx` is
 ## the explicit step from the exact answer to a number (§0.5).
-
 let g = 9.80665 m/s^2
 
-fn fall_time(h: Real[L]): Real[T] =
-    sqrt(2 * h / g)
+fn fall_time(h: Real[L]): Real[T] = sqrt(2 * h / g)
 
 fn main(): IO Unit = do
     let h = 20.0 m

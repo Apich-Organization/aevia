@@ -104,8 +104,21 @@ fields. The rank-polymorphic tensor operators are named by rank the same way
 (`tensor_norm_3`, `tensor_inner_2`, `tensordot_2_2_1`: ranks of both operands and
 the number of contracted axes), and the decompositions `hosvd_3`, `hooi_3`,
 `cp_als_3`, `tt_svd_3`, `tt_dense_3` (ranks 2 to 4) answer with records (`Hosvd3`,
-`Hooi3`, `CpFit`, `TensorTrain`). Only the symbolic PDE names
-(`solve_heat_equation`, ...) are still dimension free. Operators without a curated
+`Hooi3`, `CpFit`, `TensorTrain`; `tucker_dense_3` and `cp_dense_3` rebuild the
+dense tensor, `tensor_contract_3` is the generalised trace). The boundary-condition
+solvers `heat_fd_bc`, `wave_fd_bc` and `poisson_fd_bc` (with `_2d`/`_3d` forms) take
+the boundary kind as a symbol (`dirichlet`, `neumann` or a pattern such as `dn`);
+`advect_fd_upwind`, `ifft_abs`, `erf_complex` and `fresnel_s_complex`/`fresnel_c_complex`
+complete their families. Only the symbolic PDE names
+(`solve_heat_equation`, ...) are still dimension free.
+
+When a kernel operator declines its arguments the wrapper's `Err(OpError)` carries
+the kernel's reason instead of a generic message: a stable code
+(`rssn.diag.shape`, `.domain`, `.singular`, `.incompatible`, `.not_converged`, ...),
+the Aevia function and the offending parameter by name and position, e.g.
+`Err(rssn.diag.domain: tensordot_2_2_1: argument `axes_a` (#3): ...)`. A pure-Neumann
+`poisson_fd_bc` whose data do not balance is `rssn.diag.incompatible`, never a wrong
+field. Operators without a curated
 signature get type-derived parameter
 names (`n`, `x`, `xs`, `m`, `t3`, `flag`, `v`; repeats are numbered). See
 `tests/domain_numeric.aev` for closed-form checks (`aevia test tests/domain_numeric.aev`).
@@ -205,8 +218,15 @@ Revision 19 closed a batch of language-side gaps: rank-complete tensor operation
 `ok`, `ok_or`), `first`/`last`/`cumsum`/`cumprod`/`argmax`/`argmin`, `round(x, n)`,
 `is_nan`/`is_finite`/`is_infinite`, suggestions in unit and dimension diagnostics, and a
 formatter that keeps the blank lines between statements. The tests are
-`tests/stdlib_ergonomics.aev`. Still open: `fft` takes complex tensors only and has no
-multi-dimensional form, and `reverse`/`filter` remain rank 1.
+`tests/stdlib_ergonomics.aev`.
+
+Revision 20 completed the families that Revision 19 left with holes. The FFT family accepts
+real and integer tensors and is complete in N dimensions (`fft2`, `fftn`, `fft_axis`,
+`fftn_axes`, `rfft2`, `rfftn`, their inverses, `fftshift`/`ifftshift`, `rfftfreq`, ranks 1 to
+4). A tensor of rank 2 or more is a sequence of rows: `reverse`, `reverse_axis`, `filter`,
+`take`, `drop`, `concat`, `any`, `all`, `find`, `first` and `last` act on the first axis (it
+used to be rank 1 only, and `reverse` flattened a matrix). The unit "did you mean" prefers the
+smallest edit (`kmm` suggests `km`). The tests are `tests/fft_and_sequences.aev`.
 
 Implemented beyond the core language, each specified in its chapter:
 

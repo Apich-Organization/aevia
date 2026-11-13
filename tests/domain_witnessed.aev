@@ -4,6 +4,7 @@
 ## channel checks every answer.
 ## Run with: cargo run -p aevia-cli -- test tests/domain_witnessed.aev
 import Rssn_LinearAlgebra as LA
+
 import Rssn_Calculus as C
 
 fn flag(r: Result<Bool, OpError>): Bool =
@@ -28,25 +29,20 @@ fn fails<A>(r: Result<A, OpError>): Bool =
 
 let x = symbol("x")
 
-test "a predicate on an integer matrix is a Bool" =
-    flag(LA.is_symmetric([[2, 1], [1, 2]])) && !flag(LA.is_symmetric([[2, 1], [0, 2]]))
+test "a predicate on an integer matrix is a Bool" = flag(LA.is_symmetric([[2, 1], [1, 2]])) && !flag(LA.is_symmetric([[2, 1], [0, 2]]))
 
-test "a Kronecker product of integer matrices is an integer matrix" =
-    ints_are(LA.kron([[1, 2], [3, 4]], [[0, 1], [1, 0]]), [[0, 1, 0, 2], [1, 0, 2, 0], [0, 3, 0, 4], [3, 0, 4, 0]])
+test "a Kronecker product of integer matrices is an integer matrix" = ints_are(LA.kron([[1, 2], [3, 4]], [[0, 1], [1, 0]]), [[0, 1, 0, 2], [1, 0, 2, 0], [0, 3, 0, 4], [3, 0, 4, 0]])
 
 test "an inverse of an integer matrix has exact rational entries" =
     match LA.inverse([[2, 0], [0, 4]]) with
-    | Ok(m) -> m == [[1/2, 0], [0, 1/4]]
+    | Ok(m) -> m == [[1 / 2, 0], [0, 1 / 4]]
     | Err(_) -> false
 
-test "a singular matrix is an Err, not a wrong value" =
-    fails(LA.inverse([[1, 2], [2, 4]]))
+test "a singular matrix is an Err, not a wrong value" = fails(LA.inverse([[1, 2], [2, 4]]))
 
-test "identities of D-finite functions are decided" =
-    flag(C.holonomic_zero(sin(x)^2 + cos(x)^2 - 1, x)) && !flag(C.holonomic_zero(sin(x)^2 + cos(x)^2 - 2, x))
+test "identities of D-finite functions are decided" = flag(C.holonomic_zero(sin(x) ^ 2 + cos(x) ^ 2 - 1, x)) && !flag(C.holonomic_zero(sin(x) ^ 2 + cos(x) ^ 2 - 2, x))
 
-test "outside the decidable class the wrapper reports an error" =
-    fails(C.holonomic_zero(tan(x), x))
+test "outside the decidable class the wrapper reports an error" = fails(C.holonomic_zero(tan(x), x))
 
 test "a sparse matrix is an opaque handle with typed queries" =
     match LA.sp_from_dense([[2, 0, 0], [0, 3, 0], [1, 0, 4]]) with

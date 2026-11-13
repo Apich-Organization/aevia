@@ -33,59 +33,34 @@ fn zmod_fails(r: Result<NT.Zmod, String>): Bool =
     | Ok(_) -> false
     | Err(_) -> true
 
-test "gcd, lcm and modulo" =
-    int_is(NT.gcd(12, 18), 6) && int_is(NT.lcm(4, 6), 12) && int_is(NT.modulo(17, 5), 2)
+test "gcd, lcm and modulo" = int_is(NT.gcd(12, 18), 6) && int_is(NT.lcm(4, 6), 12) && int_is(NT.modulo(17, 5), 2)
 
-test "extended Euclid returns [g, x, y]" =
-    ints_are(NT.egcd(240, 46), [2, -9, 47])
+test "extended Euclid returns [g, x, y]" = ints_are(NT.egcd(240, 46), [2, -9, 47])
 
-test "modular inverse and power" =
-    int_is(NT.invmod(5, 17), 7) && int_is(NT.powmod(3, 100, 17), 13)
+test "modular inverse and power" = int_is(NT.invmod(5, 17), 7) && int_is(NT.powmod(3, 100, 17), 13)
 
-test "a non-invertible residue is an Err, not a silent term" =
-    fails(NT.invmod(6, 15))
+test "a non-invertible residue is an Err, not a silent term" = fails(NT.invmod(6, 15))
 
-test "Chinese remainder theorem" =
-    int_is(NT.crt([2, 3], [3, 5]), 8)
+test "Chinese remainder theorem" = int_is(NT.crt([2, 3], [3, 5]), 8)
 
-test "discrete logarithm" =
-    int_is(NT.dlog(3, 13, 17), 4)
+test "discrete logarithm" = int_is(NT.dlog(3, 13, 17), 4)
 
-test "primality and neighbouring primes" =
-    (flag(NT.is_prime(97)) &&
-    int_is(NT.next_prime(100), 101) &&
-    int_is(NT.prev_prime(100), 97) &&
-    int_is(NT.nth_prime(10), 29) &&
-    int_is(NT.prime_pi(100), 25))
+test "primality and neighbouring primes" = flag(NT.is_prime(97)) && int_is(NT.next_prime(100), 101) && int_is(NT.prev_prime(100), 97) && int_is(NT.nth_prime(10), 29) && int_is(NT.prime_pi(100), 25)
 
-test "primes up to a limit" =
-    ints_are(NT.primes(30), [2, 3, 5, 7, 11, 13, 17, 19, 23, 29])
+test "primes up to a limit" = ints_are(NT.primes(30), [2, 3, 5, 7, 11, 13, 17, 19, 23, 29])
 
 test "factorisation is a table of (prime, exponent) rows" =
     match NT.factorint(360) with
     | Ok(table) -> table == [[2, 3], [3, 2], [5, 1]]
     | Err(_) -> false
 
-test "arithmetic functions" =
-    (int_is(NT.totient(36), 12) &&
-    int_is(NT.divisor_count(360), 24) &&
-    int_is(NT.divisor_sum(360), 1170) &&
-    int_is(NT.mobius(30), -1) &&
-    int_is(NT.omega(360), 3) &&
-    int_is(NT.radical(360), 30))
+test "arithmetic functions" = int_is(NT.totient(36), 12) && int_is(NT.divisor_count(360), 24) && int_is(NT.divisor_sum(360), 1170) && int_is(NT.mobius(30), -1) && int_is(NT.omega(360), 3) && int_is(NT.radical(360), 30)
 
-test "quadratic residues, roots and symbols" =
-    (int_is(NT.sqrtmod(4, 17), 2) &&
-    int_is(NT.legendre_symbol(5, 11), 1) &&
-    int_is(NT.jacobi(5, 21), 1) &&
-    int_is(NT.primitive_root(17), 3) &&
-    int_is(NT.mult_order(3, 7), 6))
+test "quadratic residues, roots and symbols" = int_is(NT.sqrtmod(4, 17), 2) && int_is(NT.legendre_symbol(5, 11), 1) && int_is(NT.jacobi(5, 21), 1) && int_is(NT.primitive_root(17), 3) && int_is(NT.mult_order(3, 7), 6)
 
-test "Pell and sums of two squares" =
-    ints_are(NT.pell(7), [8, 3]) && ints_are(NT.two_squares(25), [3, 4])
+test "Pell and sums of two squares" = ints_are(NT.pell(7), [8, 3]) && ints_are(NT.two_squares(25), [3, 4])
 
-test "Zmod: an element knows its modulus" =
-    zmod_is(NT.zmod(20, 17), 3, 17)
+test "Zmod: an element knows its modulus" = zmod_is(NT.zmod(20, 17), 3, 17)
 
 test "Zmod: x times its inverse is one" =
     match NT.zmod(5, 17) with

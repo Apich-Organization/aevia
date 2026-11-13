@@ -1354,6 +1354,23 @@ pub fn call(
                 }));
             }
             let tensor = expect_tensor(&args, 1, name, span)?;
+            // §8.1.5: a tensor of rank >= 2 is a sequence of rows along its
+            // first axis; the predicate sees a row and the result keeps the
+            // rank.
+            if tensor.rank() >= 2 {
+                let elements = tensor.elements();
+                let mut kept = Vec::new();
+                for index in 0..first_axis_geometry(&tensor).0 {
+                    let row = first_axis_row(&tensor, &elements, index);
+                    if matches!(
+                        interp.apply(function.clone(), vec![row], span)?,
+                        Value::Bool(true)
+                    ) {
+                        kept.push(index);
+                    }
+                }
+                return Ok(gather_first_axis(&tensor, &kept));
+            }
             let mut elements = Vec::new();
             for element in tensor.elements() {
                 if matches!(
@@ -1384,6 +1401,15 @@ pub fn call(
         | "take" | "drop" => {
             let count = expect_int(&args, 0, name, span)?.max(0) as usize;
             let tensor = expect_tensor(&args, 1, name, span)?;
+            if tensor.rank() >= 2 {
+                let rows = first_axis_geometry(&tensor).0;
+                let indices: Vec<usize> = if name == "take" {
+                    (0..count.min(rows)).collect()
+                } else {
+                    (count.min(rows)..rows).collect()
+                };
+                return Ok(gather_first_axis(&tensor, &indices));
+            }
             let elements = tensor.elements();
             let selected: Vec<Value> = if name == "take" {
                 elements.into_iter().take(count).collect()
@@ -1395,21 +1421,22 @@ pub fn call(
         },
         | "reverse" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
-            // §9.5: reversing a rank-1 `f64` tensor is a view — the same
-            // buffer walked backwards — so `xs[::-1]` allocates nothing and
-            // still shares `xs`'s buffer. A rank-2 operand keeps the older
-            // behaviour below, which flattens it: `reverse` is typed
-            // `Tensor<1,a> -> Tensor<1,a>` (§8), and changing what it does to
-            // a matrix is a semantic change, not a representation one.
-            if tensor.rank() == 1
-                && let Some(view) = tensor.reversed_view(0)
-            {
-                return Ok(Value::Tensor(Rc::new(view)));
+            // §9.5: reversing an `f64` tensor is a view — the same buffer
+            // walked backwards — so `xs[::-1]` allocates nothing and still
+            // shares `xs`'s buffer. §8.1.5: at rank >= 2 `reverse` flips the
+            // first axis and keeps the shape (it used to flatten).
+            if tensor.rank() >= 1 {
+                return Ok(flip_axis(&tensor, 0));
             }
             let mut elements = tensor.elements();
             elements.reverse();
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
+        },
+        | "reverse_axis" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let axis = axis_argument(&args, 1, tensor.rank(), name, span)?;
+            Ok(flip_axis(&tensor, axis))
         },
         | "sort" => {
             // §3.8.4: `sort` needs `TotalOrd`, and the checker rejects a type
@@ -1428,6 +1455,26 @@ pub fn call(
                     Ok(Value::string(format!("{a}{b}")))
                 },
                 | (Some(Value::Tensor(a)), Some(Value::Tensor(b))) => {
+                    // At rank >= 2 the operands are stacked along the first
+                    // axis and must agree on the rest.
+                    if a.rank() >= 2 || b.rank() >= 2 {
+                        if a.rank() != b.rank() || a.shape[1..] != b.shape[1..] {
+                            return Err(EvalError::new(
+                                "E0802",
+                                format!(
+                                    "`concat` stacks along the first axis: shapes {:?} and {:?} \
+                                     disagree on the rest",
+                                    a.shape, b.shape
+                                ),
+                            )
+                            .at(span));
+                        }
+                        let mut elements = a.elements();
+                        elements.extend(b.elements());
+                        let mut shape = a.shape.clone();
+                        shape[0] += b.shape[0];
+                        return Ok(build_tensor(elements, shape, a.dim.clone()));
+                    }
                     let mut elements = a.elements();
                     elements.extend(b.elements());
                     let len = elements.len();
@@ -1443,7 +1490,7 @@ pub fn call(
                 .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let mut result = name == "all";
-            for element in tensor.elements() {
+            for element in sequence_items(&tensor) {
                 let value = matches!(
                     interp.apply(function.clone(), vec![element], span)?,
                     Value::Bool(true)
@@ -1464,7 +1511,7 @@ pub fn call(
                 .cloned()
                 .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
-            for element in tensor.elements() {
+            for element in sequence_items(&tensor) {
                 if matches!(
                     interp.apply(function.clone(), vec![element.clone()], span)?,
                     Value::Bool(true)
@@ -1701,7 +1748,15 @@ pub fn call(
             if extent == 0 {
                 return Ok(make_variant(adt::OPTION_ID, 0, "None", Vec::new()));
             }
-            let index = if name == "first" { 0 } else { extent - 1 };
+            let index = if name == "first" {
+                0
+            } else {
+                extent - 1
+            };
+            if tensor.rank() >= 2 {
+                let row = first_axis_row(&tensor, &tensor.elements(), index);
+                return Ok(make_variant(adt::OPTION_ID, 1, "Some", vec![row]));
+            }
             let element = tensor
                 .get(&[index as isize])
                 .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
@@ -3840,51 +3895,119 @@ pub fn call(
         },
 
         // ----- §8.8 FFT and interpolation ---------------------------------
-        | "fft" | "ifft" | "fft_norm" => {
+        | "fft" | "ifft" | "fft_norm" | "ifft_norm" | "fft_axis" | "ifft_axis" | "fft2"
+        | "ifft2" | "fftn" | "ifftn" | "fftn_axes" | "ifftn_axes" | "fftn_norm"
+        | "ifftn_norm" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
-            let mut input = complex_values(&tensor)?;
-            let norm = if name == "fft_norm" {
-                let Some(Value::Variant(variant)) = args.get(1) else {
-                    return Err(
-                        EvalError::new("E0302", "`fft_norm` expects a `Norm` value").at(span)
-                    );
-                };
-                match variant.name.as_str() {
-                    | "Forward" => aevia_std::fft::Norm::Forward,
-                    | "Unitary" => aevia_std::fft::Norm::Unitary,
-                    | _ => aevia_std::fft::Norm::Backward,
-                }
+            let rank = tensor.shape.len();
+            let input = complex_values(&tensor)?;
+            let inverse = name.starts_with('i');
+            let base = name.trim_start_matches('i');
+            let axes = match base {
+                | "fft" | "fft_norm" => vec![rank.saturating_sub(1)],
+                | "fft_axis" => vec![axis_argument(&args, 1, rank, name, span)?],
+                | "fft2" => transform_axes_last_two(rank, name, span)?,
+                | "fftn_axes" => axes_argument(&args, 1, rank, name, span)?,
+                | _ => (0..rank).collect(),
+            };
+            let norm = if base.ends_with("_norm") {
+                norm_argument(&args, 1, name, span)?
             } else {
                 aevia_std::fft::Norm::Backward
             };
-            let output = match name {
-                | "ifft" => aevia_std::fft::ifft(&input),
-                | "fft_norm" => aevia_std::fft::fft_norm(&input, norm),
-                | _ => aevia_std::fft::fft(&input),
-            };
-            input.clear();
-            let len = output.len();
-            Ok(complex_tensor(vec![len], &output, tensor.dim.clone()))
+            let output = aevia_std::fft::fft_axes(&input, &tensor.shape, &axes, inverse, norm)
+                .map_err(|message| {
+                    EvalError::new("E0802", format!("`{name}`: {message}")).at(span)
+                })?;
+            Ok(complex_tensor(
+                tensor.shape.clone(),
+                &output,
+                tensor.dim.clone(),
+            ))
         },
-        | "rfft" => {
+        | "rfft" | "rfft2" | "rfftn" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
+            let rank = tensor.shape.len();
             let signal = tensor_values(&tensor)?;
-            let spectrum = aevia_std::fft::rfft(&signal);
-            let len = spectrum.len();
-            Ok(complex_tensor(vec![len], &spectrum, tensor.dim.clone()))
+            let axes = match name {
+                | "rfft" => vec![rank.saturating_sub(1)],
+                | "rfft2" => transform_axes_last_two(rank, name, span)?,
+                | _ => (0..rank).collect(),
+            };
+            let (spectrum, shape) = aevia_std::fft::rfft_axes(&signal, &tensor.shape, &axes)
+                .map_err(|message| {
+                    EvalError::new("E0802", format!("`{name}`: {message}")).at(span)
+                })?;
+            Ok(complex_tensor(shape, &spectrum, tensor.dim.clone()))
         },
-        | "irfft" => {
+        | "irfft" | "irfft2" | "irfftn" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
+            let rank = tensor.shape.len();
             let spectrum = complex_values(&tensor)?;
-            let signal = aevia_std::fft::irfft(&spectrum, 2 * (spectrum.len().saturating_sub(1)));
-            let len = signal.len();
-            Ok(float_tensor(vec![len], signal, tensor.dim.clone()))
+            let axes = match name {
+                | "irfft" => vec![rank.saturating_sub(1)],
+                | "irfft2" => transform_axes_last_two(rank, name, span)?,
+                | _ => (0..rank).collect(),
+            };
+            let last = axes.last().copied().unwrap_or(0);
+            let bins = tensor.shape.get(last).copied().unwrap_or(0);
+            if spectrum.is_empty() {
+                return Ok(float_tensor(
+                    tensor.shape.clone(),
+                    Vec::new(),
+                    tensor.dim.clone(),
+                ));
+            }
+            let n_last = if args.len() > 1 {
+                usize::try_from(expect_int(&args, 1, name, span)?).map_err(|_| {
+                    EvalError::new(
+                        "E0802",
+                        format!("`{name}`: the length must not be negative"),
+                    )
+                    .at(span)
+                })?
+            } else {
+                2 * bins.saturating_sub(1)
+            };
+            let (signal, shape) =
+                aevia_std::fft::irfft_axes(&spectrum, &tensor.shape, &axes, n_last).map_err(
+                    |message| EvalError::new("E0802", format!("`{name}`: {message}")).at(span),
+                )?;
+            Ok(float_tensor(shape, signal, tensor.dim.clone()))
         },
-        | "fftfreq" => {
+        | "fftshift" | "ifftshift" | "fftshift_axis" | "ifftshift_axis" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let rank = tensor.shape.len();
+            let axes = if name.ends_with("_axis") {
+                vec![axis_argument(&args, 1, rank, name, span)?]
+            } else {
+                (0..rank).collect()
+            };
+            let permutation =
+                aevia_std::fft::shift_permutation(&tensor.shape, &axes, name.starts_with('i'))
+                    .map_err(|message| {
+                        EvalError::new("E0802", format!("`{name}`: {message}")).at(span)
+                    })?;
+            let elements = tensor.elements();
+            let shifted = permutation
+                .into_iter()
+                .map(|index| elements[index].clone())
+                .collect();
+            Ok(build_tensor(
+                shifted,
+                tensor.shape.clone(),
+                tensor.dim.clone(),
+            ))
+        },
+        | "fftfreq" | "rfftfreq" => {
             let count = expect_int(&args, 0, name, span)?.max(0) as usize;
             let spacing = expect_num(&args, 1, name, span)?;
             let d = spacing.to_f64().unwrap_or(1.0);
-            let frequencies = aevia_std::fft::fftfreq(count, d);
+            let frequencies = if name == "rfftfreq" {
+                aevia_std::fft::rfftfreq(count, d)
+            } else {
+                aevia_std::fft::fftfreq(count, d)
+            };
             let len = frequencies.len();
             Ok(float_tensor(vec![len], frequencies, spacing.dim.inverse()))
         },
@@ -5653,6 +5776,167 @@ fn expect_str(
         | Some(Value::Str(text)) => Ok(text.to_string()),
         | _ => Err(arity(name, index + 1, args.len(), span)),
     }
+}
+
+/// An axis argument, counted from the back when negative.
+fn axis_argument(
+    args: &[Value],
+    index: usize,
+    rank: usize,
+    name: &str,
+    span: Span,
+) -> Result<usize, EvalError> {
+    let axis = expect_int(args, index, name, span)?;
+    let resolved = if axis < 0 {
+        axis + rank as i64
+    } else {
+        axis
+    };
+    usize::try_from(resolved)
+        .ok()
+        .filter(|resolved| *resolved < rank)
+        .ok_or_else(|| {
+            EvalError::new(
+                "E0802",
+                format!("`{name}`: axis {axis} is out of range for rank {rank}"),
+            )
+            .at(span)
+        })
+}
+
+/// A list of axes (each as in [`axis_argument`]).
+fn axes_argument(
+    args: &[Value],
+    index: usize,
+    rank: usize,
+    name: &str,
+    span: Span,
+) -> Result<Vec<usize>, EvalError> {
+    let list = expect_tensor(args, index, name, span)?;
+    list.elements()
+        .iter()
+        .map(|element| {
+            let axis = element.as_f64().unwrap_or(f64::NAN);
+            let resolved = if axis < 0.0 {
+                axis + rank as f64
+            } else {
+                axis
+            };
+            if resolved.fract() == 0.0 && resolved >= 0.0 && (resolved as usize) < rank {
+                Ok(resolved as usize)
+            } else {
+                Err(EvalError::new(
+                    "E0802",
+                    format!("`{name}`: axis {axis} is out of range for rank {rank}"),
+                )
+                .at(span))
+            }
+        })
+        .collect()
+}
+
+/// What a predicate sees one at a time: the elements of a vector, the rows
+/// (first-axis slices) of anything of higher rank.
+fn sequence_items(tensor: &TensorData) -> Vec<Value> {
+    let elements = tensor.elements();
+    if tensor.rank() < 2 {
+        return elements;
+    }
+    (0..first_axis_geometry(tensor).0)
+        .map(|index| first_axis_row(tensor, &elements, index))
+        .collect()
+}
+
+/// The last two axes, for the `*2` transforms.
+fn transform_axes_last_two(
+    rank: usize,
+    name: &str,
+    span: Span,
+) -> Result<Vec<usize>, EvalError> {
+    if rank < 2 {
+        return Err(EvalError::new(
+            "E0802",
+            format!("`{name}` needs a tensor of rank 2 or more, found rank {rank}"),
+        )
+        .at(span));
+    }
+    Ok(vec![rank - 2, rank - 1])
+}
+
+/// A `Norm` argument.
+fn norm_argument(
+    args: &[Value],
+    index: usize,
+    name: &str,
+    span: Span,
+) -> Result<aevia_std::fft::Norm, EvalError> {
+    let Some(Value::Variant(variant)) = args.get(index) else {
+        return Err(EvalError::new("E0302", format!("`{name}` expects a `Norm` value")).at(span));
+    };
+    Ok(match variant.name.as_str() {
+        | "Forward" => aevia_std::fft::Norm::Forward,
+        | "Unitary" => aevia_std::fft::Norm::Unitary,
+        | _ => aevia_std::fft::Norm::Backward,
+    })
+}
+
+/// Rank >= 2: the first-axis geometry, as `(rows, elements per row)`.
+fn first_axis_geometry(tensor: &TensorData) -> (usize, usize) {
+    let rows = tensor.shape.first().copied().unwrap_or(0);
+    let width = tensor.shape.iter().skip(1).product::<usize>();
+    (rows, width)
+}
+
+/// Row `index` of a tensor of rank >= 2, as a tensor of one rank less.
+fn first_axis_row(
+    tensor: &TensorData,
+    elements: &[Value],
+    index: usize,
+) -> Value {
+    let (_, width) = first_axis_geometry(tensor);
+    build_tensor(
+        elements[index * width..(index + 1) * width].to_vec(),
+        tensor.shape[1..].to_vec(),
+        tensor.dim.clone(),
+    )
+}
+
+/// The rows of `tensor` listed in `indices`, in that order, stacked on a new
+/// first axis: the result keeps the rank.
+fn gather_first_axis(
+    tensor: &TensorData,
+    indices: &[usize],
+) -> Value {
+    let (_, width) = first_axis_geometry(tensor);
+    let elements = tensor.elements();
+    let mut gathered = Vec::with_capacity(indices.len() * width);
+    for index in indices {
+        gathered.extend_from_slice(&elements[index * width..(index + 1) * width]);
+    }
+    let mut shape = tensor.shape.clone();
+    shape[0] = indices.len();
+    build_tensor(gathered, shape, tensor.dim.clone())
+}
+
+/// `reverse_axis`: the tensor with axis `axis` flipped. A dense `f64` tensor
+/// gets a strided view (no copy); anything else is gathered.
+fn flip_axis(
+    tensor: &Rc<TensorData>,
+    axis: usize,
+) -> Value {
+    if let Some(view) = tensor.reversed_view(axis) {
+        return Value::Tensor(Rc::new(view));
+    }
+    let extent = tensor.shape[axis];
+    let inner: usize = tensor.shape[axis + 1..].iter().product();
+    let elements = tensor.elements();
+    let mut flipped = Vec::with_capacity(elements.len());
+    for (index, _) in elements.iter().enumerate() {
+        let along = (index / inner.max(1)) % extent.max(1);
+        let source = index - along * inner + (extent - 1 - along) * inner;
+        flipped.push(elements[source].clone());
+    }
+    build_tensor(flipped, tensor.shape.clone(), tensor.dim.clone())
 }
 
 fn expect_tensor(

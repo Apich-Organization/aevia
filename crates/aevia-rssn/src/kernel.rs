@@ -1080,6 +1080,7 @@ impl Kernel {
             .session
             .call_value(name, &converted, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(name))?;
+        self.refuse_declined(name, &raw)?;
         let trusted = (entry.source.is_exact() && entry.is_value_native())
             || result_is_dimensionless(entry, witnesses);
         let mut witness = crate::witness::extract(&raw, trusted);
@@ -1234,7 +1235,38 @@ impl Kernel {
             .session
             .call_key(key, &converted, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
+        self.refuse_declined(&key.name, &value)?;
         Val::from_rssn(&value, self.id)
+    }
+
+    /// Turns a call the operator declined into the kernel's reason.
+    ///
+    /// An operator whose evaluator rejects its arguments leaves the call as an
+    /// unreduced term headed by its own name. That is the right answer for a
+    /// rewrite system and the wrong one for a caller who has been promised a
+    /// number, so a result that is exactly the call is explained with
+    /// `Session::explain` and refused with the finding (`rssn.diag.<kind>`,
+    /// the argument at fault, the message). A symbolic argument is not a
+    /// refusal: the call stays as the answer. Any other term, a heavy operator
+    /// that recorded no reason included, is returned as before.
+    fn refuse_declined(
+        &self,
+        name: &str,
+        raw: &Value,
+    ) -> Result<(), KernelError> {
+        let Value::Term(handle) = raw else {
+            return Ok(());
+        };
+        let term = self.term(Sym::new(self.id.0, handle.node))?;
+        if &*term.op_name() != name {
+            return Ok(());
+        }
+        match self.session.explain(term) {
+            | Some(diag) if diag.kind != rssn::kernel::DiagKind::Symbolic => {
+                Err(KernelError::from_diag(diag.in_op(name)))
+            },
+            | _ => Ok(()),
+        }
     }
 
     /// Calls a value-native overload while carrying explicit argument and result
@@ -1280,6 +1312,7 @@ impl Kernel {
             .session
             .call_key(key, &converted, &CallCtx::new())
             .map_err(|error| from_op_error(&error).at_operator(&key.name))?;
+        self.refuse_declined(&key.name, &raw)?;
         let witness = crate::witness::extract(&raw, entry.source.is_exact());
         Ok((Val::from_rssn(&raw, self.id)?, witness))
     }

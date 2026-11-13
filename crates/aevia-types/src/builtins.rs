@@ -411,7 +411,10 @@ fn rank_overloads(name: &str) -> Vec<Scheme> {
                         1,
                         1,
                         0,
-                        func(vec![tensor(rank, elem()), Type::int()], tensor(rank, elem())),
+                        func(
+                            vec![tensor(rank, elem()), Type::int()],
+                            tensor(rank, elem()),
+                        ),
                     ));
                 }
             },
@@ -480,7 +483,12 @@ fn rank_overloads(name: &str) -> Vec<Scheme> {
             },
             // `flatten` of a matrix is in the base table.
             | "flatten" if rank > 2 => {
-                out.push(scheme(1, 0, 0, func(vec![tensor(rank, var(0))], list(var(0)))));
+                out.push(scheme(
+                    1,
+                    0,
+                    0,
+                    func(vec![tensor(rank, var(0))], list(var(0))),
+                ));
             },
             | "map" => {
                 out.push(scheme(
@@ -514,14 +522,202 @@ fn rank_overloads(name: &str) -> Vec<Scheme> {
     out
 }
 
+/// The input types an FFT of the given rank accepts: complex as it is, real
+/// and integer promoted (§8.8). Each is paired with its scheme builder.
+fn fft_input_forms(rank: u32) -> [(Type, Type, u32); 3] {
+    [
+        (
+            tensor(rank, Type::complex(dim_var(0))),
+            tensor(rank, Type::complex(dim_var(0))),
+            1,
+        ),
+        (
+            tensor(rank, Type::float(dim_var(0))),
+            tensor(rank, Type::complex(dim_var(0))),
+            1,
+        ),
+        (
+            tensor(rank, Type::int()),
+            tensor(rank, Type::complex(one())),
+            0,
+        ),
+    ]
+}
+
+/// The §8.8 transform family. Each transform accepts complex, real or integer
+/// tensors; the dimension of the samples is the dimension of the spectrum
+/// (the frequency axes carry the inverse of the sample spacing only in
+/// `fftfreq`/`rfftfreq`, which take the spacing explicitly).
+fn fft_schemes(name: &str) -> Option<Vec<Scheme>> {
+    let mut out = Vec::new();
+    // (ranks, extra arguments) of the complex-to-complex family.
+    let complex_family = |ranks: std::ops::RangeInclusive<u32>, extra: Vec<Type>| {
+        let mut found = Vec::new();
+        for rank in ranks {
+            for (input, output, dims) in fft_input_forms(rank) {
+                let mut args = vec![input];
+                args.extend(extra.iter().cloned());
+                let vars = u32::from(extra.iter().any(|ty| matches!(ty, Type::Var(_))));
+                found.push(scheme(vars, dims, 0, func(args, output)));
+            }
+        }
+        found
+    };
+    match name {
+        | "fft" | "ifft" => out = complex_family(1..=1, vec![]),
+        | "fft_norm" | "ifft_norm" => out = complex_family(1..=1, vec![var(0)]),
+        | "fft_axis" | "ifft_axis" => out = complex_family(1..=MAX_RANK, vec![Type::int()]),
+        | "fft2" | "ifft2" => out = complex_family(2..=MAX_RANK, vec![]),
+        | "fftn" | "ifftn" => out = complex_family(1..=MAX_RANK, vec![]),
+        | "fftn_axes" | "ifftn_axes" => {
+            out = complex_family(1..=MAX_RANK, vec![list(Type::int())]);
+        },
+        | "fftn_norm" | "ifftn_norm" => out = complex_family(1..=MAX_RANK, vec![var(0)]),
+        | "rfft" | "rfft2" | "rfftn" => {
+            let ranks = match name {
+                | "rfft" => 1..=1,
+                | "rfft2" => 2..=MAX_RANK,
+                | _ => 1..=MAX_RANK,
+            };
+            for rank in ranks {
+                out.push(scheme(
+                    0,
+                    1,
+                    0,
+                    func(
+                        vec![tensor(rank, Type::float(dim_var(0)))],
+                        tensor(rank, Type::complex(dim_var(0))),
+                    ),
+                ));
+                out.push(scheme(
+                    0,
+                    0,
+                    0,
+                    func(
+                        vec![tensor(rank, Type::int())],
+                        tensor(rank, Type::complex(one())),
+                    ),
+                ));
+            }
+        },
+        | "irfft" | "irfft2" | "irfftn" => {
+            let ranks = match name {
+                | "irfft" => 1..=1,
+                | "irfft2" => 2..=MAX_RANK,
+                | _ => 1..=MAX_RANK,
+            };
+            for rank in ranks {
+                // The second form names the length of the last axis, which an
+                // odd-length original cannot recover from its half spectrum.
+                for extra in [vec![], vec![Type::int()]] {
+                    let mut args = vec![tensor(rank, Type::complex(dim_var(0)))];
+                    args.extend(extra);
+                    out.push(scheme(
+                        0,
+                        1,
+                        0,
+                        func(args, tensor(rank, Type::float(dim_var(0)))),
+                    ));
+                }
+            }
+        },
+        | "fftshift" | "ifftshift" => {
+            for rank in 1..=MAX_RANK {
+                out.push(scheme(
+                    1,
+                    0,
+                    0,
+                    func(vec![tensor(rank, var(0))], tensor(rank, var(0))),
+                ));
+            }
+        },
+        | "fftshift_axis" | "ifftshift_axis" => {
+            for rank in 1..=MAX_RANK {
+                out.push(scheme(
+                    1,
+                    0,
+                    0,
+                    func(
+                        vec![tensor(rank, var(0)), Type::int()],
+                        tensor(rank, var(0)),
+                    ),
+                ));
+            }
+        },
+        | "fftfreq" | "rfftfreq" => {
+            out.push(scheme(
+                0,
+                1,
+                0,
+                func(
+                    vec![Type::int(), Type::float(dim_var(0))],
+                    list(Type::float(dim_var(0).inverse())),
+                ),
+            ));
+        },
+        | _ => return None,
+    }
+    Some(out)
+}
+
+/// The sequence operations at rank 2 and above (§8.1.5). A tensor of rank
+/// `n > 1` is a sequence of rank-`n-1` slices along its first axis, so
+/// `filter`, `any`, `all`, `find`, `first` and `last` see a *row*, and
+/// `reverse`, `take`, `drop` and `concat` act on the first axis and keep the
+/// rank. Rank 1 is in [`base_schemes`].
+fn first_axis_schemes(name: &str) -> Vec<Scheme> {
+    let mut out = Vec::new();
+    if !matches!(
+        name,
+        "reverse"
+            | "filter"
+            | "take"
+            | "drop"
+            | "concat"
+            | "any"
+            | "all"
+            | "find"
+            | "first"
+            | "last"
+    ) {
+        return out;
+    }
+    for rank in 2..=MAX_RANK {
+        let whole = || tensor(rank, var(0));
+        let row = || tensor(rank - 1, var(0));
+        let predicate = || func(vec![row()], Type::bool());
+        out.push(match name {
+            | "reverse" => scheme(1, 0, 0, func(vec![whole()], whole())),
+            | "filter" => scheme(1, 0, 0, func(vec![predicate(), whole()], whole())),
+            | "take" | "drop" => scheme(1, 0, 0, func(vec![Type::int(), whole()], whole())),
+            | "concat" => scheme(1, 0, 0, func(vec![whole(), whole()], whole())),
+            | "any" | "all" => scheme(1, 0, 0, func(vec![predicate(), whole()], Type::bool())),
+            | "find" => {
+                scheme(
+                    1,
+                    0,
+                    0,
+                    func(vec![predicate(), whole()], Type::option(row())),
+                )
+            },
+            | _ => scheme(1, 0, 0, func(vec![whole()], Type::option(row()))),
+        });
+    }
+    out
+}
+
 /// Returns every scheme attached to a built-in name, if it is one.
 #[must_use]
 pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
     if let Some(found) = sparse::sparse_schemes(name, None) {
         return Some(found);
     }
+    if let Some(found) = fft_schemes(name) {
+        return Some(found);
+    }
     let mut found = base_schemes(name)?;
     found.extend(rank_overloads(name));
+    found.extend(first_axis_schemes(name));
     found.extend(sparse::sparse_overloads(name));
     Some(found)
 }
@@ -1307,10 +1503,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                     0,
                     0,
                     func(
-                        vec![
-                            func(vec![var(0)], var(1)),
-                            Type::result(var(0), var(2)),
-                        ],
+                        vec![func(vec![var(0)], var(1)), Type::result(var(0), var(2))],
                         Type::result(var(1), var(2)),
                     ),
                 ),
@@ -1505,6 +1698,22 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
             )]
         },
         | "reverse" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(var(0))))],
+        // §8.1.5: `reverse_axis(t, k)` flips axis `k` of a tensor of any rank.
+        | "reverse_axis" => {
+            (1..=MAX_RANK)
+                .map(|rank| {
+                    scheme(
+                        1,
+                        0,
+                        0,
+                        func(
+                            vec![tensor(rank, var(0)), Type::int()],
+                            tensor(rank, var(0)),
+                        ),
+                    )
+                })
+                .collect()
+        },
         | "sort" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(var(0))))],
         | "concat" => {
             vec![
@@ -1644,12 +1853,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
         | "unwrap_or" => {
             vec![
-                scheme(
-                    1,
-                    0,
-                    0,
-                    func(vec![Type::option(var(0)), var(0)], var(0)),
-                ),
+                scheme(1, 0, 0, func(vec![Type::option(var(0)), var(0)], var(0))),
                 scheme(
                     2,
                     0,
@@ -1722,10 +1926,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                 1,
                 1,
                 0,
-                func(
-                    vec![tensor(1, scalar(rep_var(0), dim_var(0)))],
-                    Type::int(),
-                ),
+                func(vec![tensor(1, scalar(rep_var(0), dim_var(0)))], Type::int()),
             )]
         },
         | "is_some" | "is_none" => {
@@ -2971,62 +3172,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
             )]
         },
 
-        // ----- §8.8 FFT and interpolation ---------------------------------
-        | "fft" | "ifft" => {
-            vec![scheme(
-                0,
-                1,
-                0,
-                func(
-                    vec![list(Type::complex(dim_var(0)))],
-                    list(Type::complex(dim_var(0))),
-                ),
-            )]
-        },
-        | "fft_norm" => {
-            vec![scheme(
-                1,
-                1,
-                0,
-                func(
-                    vec![list(Type::complex(dim_var(0))), var(0)],
-                    list(Type::complex(dim_var(0))),
-                ),
-            )]
-        },
-        | "rfft" => {
-            vec![scheme(
-                0,
-                1,
-                0,
-                func(
-                    vec![list(Type::float(dim_var(0)))],
-                    list(Type::complex(dim_var(0))),
-                ),
-            )]
-        },
-        | "irfft" => {
-            vec![scheme(
-                0,
-                1,
-                0,
-                func(
-                    vec![list(Type::complex(dim_var(0)))],
-                    list(Type::float(dim_var(0))),
-                ),
-            )]
-        },
-        | "fftfreq" => {
-            vec![scheme(
-                0,
-                1,
-                0,
-                func(
-                    vec![Type::int(), Type::float(dim_var(0))],
-                    list(Type::float(dim_var(0).inverse())),
-                ),
-            )]
-        },
+        // ----- §8.8 interpolation (the transforms are in `fft_schemes`) ----
         | "interp1" | "spline" => {
             vec![scheme(
                 1,
@@ -4070,9 +4216,30 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "fft",
     "ifft",
     "fft_norm",
+    "ifft_norm",
+    "fft_axis",
+    "ifft_axis",
+    "fft2",
+    "ifft2",
+    "fftn",
+    "ifftn",
+    "fftn_axes",
+    "ifftn_axes",
+    "fftn_norm",
+    "ifftn_norm",
     "rfft",
     "irfft",
+    "rfft2",
+    "irfft2",
+    "rfftn",
+    "irfftn",
+    "fftshift",
+    "ifftshift",
+    "fftshift_axis",
+    "ifftshift_axis",
     "fftfreq",
+    "rfftfreq",
+    "reverse_axis",
     "interp1",
     "spline",
     "interp2",

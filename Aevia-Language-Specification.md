@@ -1,6 +1,6 @@
 # Aevia Language Specification
 
-**Single-file edition — Revision 13**
+**Single-file edition — Revision 21**
 
 > 本文件由 `spec/` 下的章节按顺序合并生成（`tools/bundle_spec.py`）；章节内的相对链接在单文件版中不再可用。
 
@@ -5305,6 +5305,17 @@ range    : (Int, Int, Int) -> Tensor<1, Int>
 take     : (Int, Tensor<1, a>) -> Tensor<1, a>
 drop     : (Int, Tensor<1, a>) -> Tensor<1, a>
 reverse  : Tensor<1, a> -> Tensor<1, a>
+reverse  : Tensor<n, a> -> Tensor<n, a>                  # n = 2..4：翻转第一个轴
+reverse_axis : (Tensor<n, a>, Int) -> Tensor<n, a>       # n = 1..4：翻转指定轴
+filter   : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>   # n = 2..4：谓词看一行
+take     : (Int, Tensor<n, a>) -> Tensor<n, a>           # n = 2..4：取前几行
+drop     : (Int, Tensor<n, a>) -> Tensor<n, a>
+concat   : (Tensor<n, a>, Tensor<n, a>) -> Tensor<n, a>  # n = 2..4：沿第一个轴堆叠
+any      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
+all      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
+find     : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Option<Tensor<n-1, a>>
+first    : Tensor<n, a> -> Option<Tensor<n-1, a>>
+last     : Tensor<n, a> -> Option<Tensor<n-1, a>>
 sort     : TotalOrd a => Tensor<1, a> -> Tensor<1, a>
 sort_by  : ((a, a) -> Ordering, Tensor<1, a>) -> Tensor<1, a>
 sort_float : (Tensor<1, Float>, Bool) -> Tensor<1, Float>   # NaN last/first
@@ -5332,6 +5343,15 @@ argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 `flatten`（秩 ≥ 2）；`sum(a, axis)` 的 keepdims 形式在秩 1 到 4 上可用。秩不是一等类型参数，
 所以每个秩一个重载，由实参的秩选择。`first`/`last` 对空张量给 `None`；`argmax`/`argmin` 对空张量
 是 `E0802`，NaN 不会胜出，相等时取最前的下标。
+
+**秩 ≥ 2 的序列操作（Revision 20）。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（"行"）的序列：
+
+- `reverse` 翻转第一个轴，保持形状（此前运行时把矩阵展平成向量，而类型表只有秩 1；展平请显式写 `reverse(flatten(m))`）。
+  `reverse_axis(t, k)` 翻转第 `k` 轴（秩 1 到 4，负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
+- `filter(p, m)`：`p` 接受一行（秩 `n−1` 的张量），结果保持秩 `n`，行数为被接受的行数；全部拒绝得到第一轴长度为 0 的同秩张量。
+- `any`/`all`/`find` 对行逐个测试；`find` 返回 `Option<Tensor<n-1, a>>`；`first`/`last` 返回第一行/最后一行的 `Option`。
+- `take(k, m)`/`drop(k, m)` 按行取舍；`concat(a, b)` 沿第一个轴堆叠，其余轴的长度必须一致（否则 `E0802`）。
+- 其余元素级操作（`sum`、`map`、`fold`、`sort` 等）仍按元素处理，不受影响。
 
 `length` 对 `String` 和 `Tensor` 重载，由类型类 `Sized` 解析。
 
@@ -5984,12 +6004,35 @@ sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ## 8.8 FFT / Interpolate
 
 ```
-fft      : Tensor<1, Complex[d]> -> Tensor<1, Complex[d]>       # 无归一化
-ifft     : Tensor<1, Complex[d]> -> Tensor<1, Complex[d]>       # 1/N
-fft_norm : (Tensor<1, Complex[d]>, Norm) -> Tensor<1, Complex[d]>
+fft      : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 无归一化；X ∈ {Complex, Float, Int}
+ifft     : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 1/N
+fft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
+ifft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
+fft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>      # 沿一个轴，n = 1..4
+ifft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>
+fft2     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 最后两个轴，n = 2..4
+ifft2    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
+fftn     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 全部轴，n = 1..4
+ifftn    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
+fftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>   # 任意轴列表
+ifftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>
+fftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>
+ifftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>
 rfft     : Tensor<1, Float[d]> -> Tensor<1, Complex[d]>
 irfft    : Tensor<1, Complex[d]> -> Tensor<1, Float[d]>
+irfft    : (Tensor<1, Complex[d]>, Int) -> Tensor<1, Float[d]>  # 显式长度（奇数长度）
+rfft2    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 最后两个轴，n = 2..4
+irfft2   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
+irfft2   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
+rfftn    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 全部轴，n = 1..4
+irfftn   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
+irfftn   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
+fftshift : Tensor<n, a> -> Tensor<n, a>                         # 全部轴，n = 1..4
+ifftshift : Tensor<n, a> -> Tensor<n, a>
+fftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
+ifftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
 fftfreq  : (Int, Float[T]) -> Tensor<1, Float[1/T]>
+rfftfreq : (Int, Float[T]) -> Tensor<1, Float[1/T]>             # n/2 + 1 个非负频率
 
 interp1  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>
 interp2  : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>,
@@ -6001,7 +6044,20 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 ```
 
 `fft` 不归一化，`ifft` 除以 `N`，因此 `ifft(fft(x)) == x`。需要
-`1/√N` 或其他约定时用 `fft_norm(x, Norm.Unitary)`。
+`1/√N` 或其他约定时用 `fft_norm(x, Unitary)`（`import FFT { Unitary }`，或写 `FFT.Unitary`）。
+
+**变换族的完整性（Revision 20）。** 所有正向/逆向变换接受复数、`Float` 或 `Int` 张量（实数、整数按虚部为 0 提升），
+结果总是复数，量纲与样本相同（频率轴的量纲只出现在 `fftfreq`/`rfftfreq` 的结果里，它们取采样间隔 `Float[T]`，
+返回 `Float[1/T]`——`fftfreq(4, 0.5 s)` 的单位是 `Hz`）。多维变换由行列分解实现：沿每个被变换的轴依次做一维变换。
+
+- `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。
+  轴号从 0 开始，负数从末尾数（`-1` 是最后一轴）；越界或重复的轴是 `E0802`。秩 1 到 4 都有类型。
+- 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；
+  `Unitary` 两向都是 `1/√N`。（`Forward` 在 Revision 20 之前错用了 `1/√N`，现已按文档修正。）
+- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点；`irfft`/`irfft2`/`irfftn`
+  由半谱重建实数张量，默认原长度为 `2(m − 1)`（偶数），奇数长度用带 `Int` 的形式显式给出；`m` 与长度不相容是 `E0802`。
+- `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；
+  `*_axis` 形式只移一个轴。
 
 ```
 type Norm = | Backward | Forward | Unitary
@@ -8108,6 +8164,19 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
 * 错误通道：kernel 失败是 `Err(OpError)`；图后端算子在参数越出定义域时返回**未约化的
   调用项**（`invmod(6, 15)`），`from_value` 把它报告为带该项文本的 `TypeMismatch`，
   不再是一个笼统的“does not prove”。
+* **诊断通道：为什么没有约化。** 数值算子拒绝参数（形状不符、轴越界、系统奇异、Neumann 数据不相容……）时，kernel 只留下未约化
+  的调用项。`Session::explain(term)`（`rssn::kernel::{Diag, DiagKind}`）在**调用线程**上重放该算子的求值器并给出
+  `Diag { op, arg, kind, message }`。桥（`Kernel::call_with_witnesses`、`call_key`、`call_key_with_witnesses`）在结果恰好是
+  该算子自己的未约化调用、且 `kind` 不是 `Symbolic`（符号参数下保持符号项仍是正确答案）时，不再把项交给 `from_value`，而是返回
+  `KernelError::from_diag`：代码为稳定的 `rssn.diag.<kind>`（`arity`、`shape`、`domain`、`singular`、`incompatible`、
+  `not_converged`、`unsupported`、`symbolic`、`unspecified`），`diag` 字段保留结构化的 `op`/`arg`/`kind`/`message`。
+  `Rssn.dynamic` 在 `Err` 里把它写成用户形式——**函数名、参数名、位置**：
+  ``Err(rssn.diag.domain: tensordot_2_2_1: argument `axes_a` (#3): an axis is past the rank of the first tensor (rank 2): [2])``。
+  函数名取自调用栈最内层的帧（生成的包装器），参数名取自 `domains.overlay` 的 `sig`（`domains::wrapper_params`）；
+  witnessed/dynamic 包装器没有手写参数名，只给位置（`argument #3`）；不是包装器的调用者直接用算子名。
+  `OpError` 仍是不透明类型：`"{e}"` 给出 `代码: 消息`，既有的 `match` 与 `Err(_)` 不受影响，没有新增构造子，
+  也没有新增 `Rssn.*` 成员（代码是 `"{e}"` 的前缀）。在**抛出**位置（`Rssn.<op>(..)` 的类型化调用）同一发现是
+  `E0807`，附注给出稳定代码。只有 `rules::numeric::TABLES` 的算子记录原因；记不出原因的重型算子保持原样（未约化项）。
 * 维度证据：`sig` 同时是 overlay 对“该算子是无量纲参数的纯函数”的声明；另外，
   kernel 自己声明的 `Dimensionless` 规则、以及参数已知无量纲时的
   `List/NonMetric/Compare/Angle` 规则，会让裸数结果携带 `Scalar(1)` 证据。其余规则
@@ -11207,7 +11276,56 @@ help: transpose B or reshape A
 6. **测试。** `tests/stdlib_ergonomics.aev`（18 个 `test`）；`aevia-fmt` 的 `blank_lines_between_statements_are_kept`；
    `aevia-types` 的重载计数断言更新。
 7. **仍缺：** `reverse`/`filter` 等仍只有秩 1（运行时对矩阵 `reverse` 是展平，语义另议）；`fft` 只接受复数张量（实数用 `rfft`）；
-   二维以上的 FFT 没有。
+   二维以上的 FFT 没有。（以上三项已在 Revision 20 解决。）
+
+## 4.7 Revision 20（2026-11-13）：FFT 族补全、秩 ≥ 2 的序列操作、单位建议
+
+1. **FFT 族（§8.8）。** `fft`/`ifft`/`fft_norm` 现在接受 `Complex`、`Float`、`Int` 张量（实数、整数提升为虚部 0，结果为复数，
+   量纲保持）。新增多维变换（行列分解，沿每个变换轴逐一做一维变换，秩 1 到 4）：`fft2`/`ifft2`（最后两轴）、`fftn`/`ifftn`
+   （全部轴）、`fft_axis`/`ifft_axis`（一个轴）、`fftn_axes`/`ifftn_axes`（任意轴列表，负轴从末尾数，越界或重复 `E0802`）、
+   `ifft_norm`、`fftn_norm`/`ifftn_norm`；实数变换 `rfft2`/`rfftn` 与 `irfft2`/`irfftn`（`irfft*` 另有带 `Int` 的形式，
+   给出奇数原长度）；`fftshift`/`ifftshift`（任意元素类型）与 `*_axis`；`rfftfreq`。`fftfreq`/`rfftfreq` 的结果量纲仍是
+   采样间隔的倒数（`fftfreq(4, 0.5 s)` 是 `Hz`）。
+2. **归一化修正。** `fft_norm(x, Forward)` 此前错用 `1/√N`（与 `Unitary` 相同）；按文档应为正向 `1/N`、逆向 1。现已修正，
+   并按被变换的总点数计算（N 维时为各轴长度之积）。
+3. **秩 ≥ 2 的序列操作（§8.1.5）。** 秩 `n ≥ 2` 的张量是沿第一轴的"行"序列：`reverse` 翻转第一轴并保持形状（**语义变化**：
+   此前运行时对矩阵 `reverse` 是展平成向量，而类型表只有秩 1，所以该调用在检查期就是 `E0302`，只有直接调用运行时的
+   代码会受影响；仓库内没有依赖展平的代码）。新增 `reverse_axis(t, k)`；`filter` 的谓词接受一行并保持秩；`any`/`all`/`find`、
+   `first`/`last`、`take`/`drop`、`concat`（沿第一轴堆叠，其余轴必须一致）同样按行。秩 1 的行为不变；`f64` 张量上的 `reverse`/
+   `reverse_axis` 仍是视图。
+4. **单位建议的并列决胜。** `kmm` 过去建议 `klm`（千流明），因为 `m` 与 `lm` 同样是一次编辑，按字典序 `lm` 在前。现在先比较编辑
+   距离，再偏好"包含最小"的编辑（候选是输入删去/加上若干字符，`kmm` 是 `km` 多了一个字母），再偏好常用单位，最后才是字典序；
+   纯删除即使只剩一个字符也接受（`mm` → `m`）。
+5. **测试。** `tests/fft_and_sequences.aev`（39 个 `test`：与教科书 2-D DFT 对拍、各轴子集往返、归一化、半谱往返（含奇数长度）、
+   shift、频率量纲、行语义的序列操作）；`aevia-std` 的 `fft` 单元测试（N 维对拍、往返、`Forward`/`Unitary`、shift 置换、
+   `rfftfreq`）；`aevia-core/tests/stdlib.rs` 的轴/长度错误与秩 3 变换；`aevia-types/tests/unit_suggestions.rs` 与
+   `closest_unit` 单元测试。`stdlib_names.txt` 与生成的 `FFT.aev`/`Prelude.aev` 已更新。
+6. **仍缺：** 秩超过 4 的变换与序列操作；`fold`/`sort`/`zip`/`enumerate` 在秩 ≥ 2 上仍是元素级（展平）语义；
+   `fftn_axes` 没有对应的实数形式（`rfftn` 取全部轴）。
+
+## 4.8 Revision 21（2026-11-13）：kernel 诊断进入 `Err(OpError)`；`Rssn_Numeric` 补全上一轮算子
+
+1. **诊断通道（§10）。** rssn 新增 `Diag`/`DiagKind` 与 `Session::explain`/`apply_diag`。桥在算子留下自己的未约化调用时用
+   `explain` 取原因（符号参数除外），`KernelError` 新增 `diag` 字段与 `from_diag`/`describe`；`Rssn.dynamic` 的 `Err` 现在是
+   `rssn.diag.<kind>: <包装器名>: argument `<参数名>` (#<位置>): <kernel 的消息>`，包装器名取调用栈最内层帧，参数名取
+   `domains.overlay`（`domains::wrapper_params`）。`OpError` 保持不透明、没有新构造子或 `Rssn.*` 成员，既有 `match` 不变，
+   代码即 `"{e}"` 的前缀。类型化的 `Rssn.<op>(..)` 调用位置抛出 `E0807`，附注为稳定代码。
+2. **新增 `Rssn_Numeric` 签名（11 个新名字族，`Rssn_Numeric` 的 typed 档 75 → 86）。** `poisson_fd_bc`、`heat_fd_bc`、`wave_fd_bc`
+   （各有 `_2d`/`_3d`；边界种类 `kind: Real` 是符号 `dirichlet`/`neumann` 或 `d`/`n` 字母模式，如 `sparse_solve` 的 `method`；
+   `boundary` 是单个数，逐轴/逐面的数值列表走 `Rssn.dynamic`）、`advect_fd_upwind`（`_2d`/`_3d`）、`ifft_abs`、
+   `tensor_contract_2/3/4`、`tucker_dense_2/3/4`、`cp_dense_2/3/4`、`erf_complex`、`fresnel_s_complex`、`fresnel_c_complex`。
+   纯 Neumann 的 `poisson_fd_bc` 数据不平衡时是 `rssn.diag.incompatible`，不会给出错误的场。
+   rssn 签名 overlay 里只有秩变量的返回类型（`tensordot`、`tensor_contract`、`tucker_dense`、`cp_dense`）没有难倒绑定生成器：
+   平铺 `Rssn` 门面把它们留在动态档，域模块由 `sig` 逐秩给出，`emit_typecheck` 等测试全部通过。
+3. **测试。** `crates/aevia-rssn/tests/diagnostics.rs`（5 个：`from_diag`、`describe`、包装器参数名、`tensordot` 轴越界的
+   `rssn.diag.domain` 与参数位置、合法调用不受影响）；`tests/domain_numeric.aev` 新增 14 个 `test`（`poisson_fd_bc` 的
+   Dirichlet 等于 `poisson_fd`、不平衡 Neumann 为 `incompatible`、平衡数据有解、混合模式；`heat_fd_bc`/`wave_fd_bc` 常数场；
+   `advect_fd_upwind`；`advect_fd_2d` 速度长度错误指向 `` `velocity` (#1) ``；`tensordot_2_2_1` 轴越界指向 `` `axes_a` (#3) ``；
+   `tensor_contract`；`tucker_dense_3`/`cp_dense_3` 与 `hosvd_3`/`cp_als_3` 互逆；`ifft_abs`；`erf`/Fresnel）。
+   `tools/rssn-api-audit/RSSN-COVERAGE.md` 已重新生成（manifest 1620 个算子，curated typed 258）。
+4. **仍缺：** 只有 `rules::numeric::TABLES` 的算子记录原因，其余重型算子无原因（保持未约化项）；witnessed/dynamic 包装器只给
+   参数位置；`poisson_fd_bc` 等的逐轴/逐面数值列表没有 typed 形式；`OpError` 没有 `code(e)`/`message(e)` 访问器
+   （需要新的 `Rssn.*` 成员与检查器支持，留待检查器一侧的改动）。
 
 ## 5. 记录在案的未实现边界（Known Gaps）
 

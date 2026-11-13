@@ -1,10 +1,10 @@
-## Shapes: one module, imported by `main.aev` as `Geometry.Shapes`.
 module Geometry.Shapes
 
+## Shapes: one module, imported by `main.aev` as `Geometry.Shapes`.
 let tau = 6.283185307179586
 
 ## The area of a circle of radius `r`.
-fn circle(r: Real[L]): Real[L^2] = tau / 2.0 * r^2
+fn circle(r: Real[L]): Real[L^2] = tau / 2.0 * r ^ 2
 
 ## The area of a rectangle.
 fn rectangle(w: Real[L], h: Real[L]): Real[L^2] = w * h

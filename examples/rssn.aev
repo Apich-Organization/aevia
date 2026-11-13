@@ -3,7 +3,6 @@
 ## `Rssn.<name>` is typed from the Kernel Manifest: the checker reads the
 ## signature, the runtime pins the overload. `Rssn.dynamic` is the escape hatch
 ## for an operator that has no signature at all.
-
 fn main(): IO Unit = do
     println("kernel       = {Rssn.Version}")
     println("sin(0.5)     = {Rssn.sin(0.5)}")

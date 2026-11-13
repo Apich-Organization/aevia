@@ -2,7 +2,6 @@ module Units
 
 ## Units are compile-time scales: `3.2 km` and `3200 m` are the same value with
 ## the same type, and `to` only changes how it is printed (§5.4).
-
 fn main(): IO Unit = do
     let d = 3.2 km
     println("{d} = {value_in(m, d)} m")

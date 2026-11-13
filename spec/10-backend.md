@@ -320,6 +320,19 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
 * 错误通道：kernel 失败是 `Err(OpError)`；图后端算子在参数越出定义域时返回**未约化的
   调用项**（`invmod(6, 15)`），`from_value` 把它报告为带该项文本的 `TypeMismatch`，
   不再是一个笼统的“does not prove”。
+* **诊断通道：为什么没有约化。** 数值算子拒绝参数（形状不符、轴越界、系统奇异、Neumann 数据不相容……）时，kernel 只留下未约化
+  的调用项。`Session::explain(term)`（`rssn::kernel::{Diag, DiagKind}`）在**调用线程**上重放该算子的求值器并给出
+  `Diag { op, arg, kind, message }`。桥（`Kernel::call_with_witnesses`、`call_key`、`call_key_with_witnesses`）在结果恰好是
+  该算子自己的未约化调用、且 `kind` 不是 `Symbolic`（符号参数下保持符号项仍是正确答案）时，不再把项交给 `from_value`，而是返回
+  `KernelError::from_diag`：代码为稳定的 `rssn.diag.<kind>`（`arity`、`shape`、`domain`、`singular`、`incompatible`、
+  `not_converged`、`unsupported`、`symbolic`、`unspecified`），`diag` 字段保留结构化的 `op`/`arg`/`kind`/`message`。
+  `Rssn.dynamic` 在 `Err` 里把它写成用户形式——**函数名、参数名、位置**：
+  ``Err(rssn.diag.domain: tensordot_2_2_1: argument `axes_a` (#3): an axis is past the rank of the first tensor (rank 2): [2])``。
+  函数名取自调用栈最内层的帧（生成的包装器），参数名取自 `domains.overlay` 的 `sig`（`domains::wrapper_params`）；
+  witnessed/dynamic 包装器没有手写参数名，只给位置（`argument #3`）；不是包装器的调用者直接用算子名。
+  `OpError` 仍是不透明类型：`"{e}"` 给出 `代码: 消息`，既有的 `match` 与 `Err(_)` 不受影响，没有新增构造子，
+  也没有新增 `Rssn.*` 成员（代码是 `"{e}"` 的前缀）。在**抛出**位置（`Rssn.<op>(..)` 的类型化调用）同一发现是
+  `E0807`，附注给出稳定代码。只有 `rules::numeric::TABLES` 的算子记录原因；记不出原因的重型算子保持原样（未约化项）。
 * 维度证据：`sig` 同时是 overlay 对“该算子是无量纲参数的纯函数”的声明；另外，
   kernel 自己声明的 `Dimensionless` 规则、以及参数已知无量纲时的
   `List/NonMetric/Compare/Angle` 规则，会让裸数结果携带 `Scalar(1)` 证据。其余规则

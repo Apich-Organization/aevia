@@ -13,25 +13,15 @@ fn images_of(r: Result<C.Perm, OpError>): Tensor<1, Int> =
     | Ok(p) -> C.perm_images(p)
     | Err(_) -> [0 - 1]
 
-test "Catalan, Bell, Fibonacci" =
-    int_is(C.catalan(5), 42) && int_is(C.bell(5), 52) && int_is(C.fibonacci(10), 55)
+test "Catalan, Bell, Fibonacci" = int_is(C.catalan(5), 42) && int_is(C.bell(5), 52) && int_is(C.fibonacci(10), 55)
 
-test "binomials and factorials" =
-    (int_is(C.binomial(10, 3), 120) &&
-    int_is(C.factorial(5), 120) &&
-    int_is(C.central_binomial(4), 70) &&
-    int_is(C.permutations(5, 2), 20))
+test "binomials and factorials" = int_is(C.binomial(10, 3), 120) && int_is(C.factorial(5), 120) && int_is(C.central_binomial(4), 70) && int_is(C.permutations(5, 2), 20)
 
-test "Stirling numbers" =
-    int_is(C.stirling1(5, 2), 50) && int_is(C.stirling2(5, 2), 15)
+test "Stirling numbers" = int_is(C.stirling1(5, 2), 50) && int_is(C.stirling2(5, 2), 15)
 
-test "partitions" =
-    (int_is(C.partitions(10), 42) &&
-    int_is(C.partitions_distinct(10), 10) &&
-    int_is(C.partitions_k(10, 3), 8))
+test "partitions" = int_is(C.partitions(10), 42) && int_is(C.partitions_distinct(10), 10) && int_is(C.partitions_k(10, 3), 8)
 
-test "derangements and involutions" =
-    int_is(C.derangements(5), 44) && int_is(C.involutions(5), 26)
+test "derangements and involutions" = int_is(C.derangements(5), 44) && int_is(C.involutions(5), 26)
 
 test "a rational result is exact" =
     match C.harmonic(4) with
@@ -40,17 +30,14 @@ test "a rational result is exact" =
 
 test "a permutation order, sign and inversions are 0-based" =
     let p = C.Perm([1, 2, 0])
-    (int_is(C.permutation_order(p), 3) &&
-    int_is(C.permutation_sign(p), 1) &&
-    int_is(C.inversions(p), 2))
+    int_is(C.permutation_order(p), 3) && int_is(C.permutation_sign(p), 1) && int_is(C.inversions(p), 2)
 
 test "rank and unrank are inverse" =
     match C.permutation_unrank(4, 5) with
     | Err(_) -> false
     | Ok(p) -> int_is(C.permutation_rank(p), 5)
 
-test "unrank yields a 0-based permutation of 0..n-1" =
-    images_of(C.permutation_unrank(3, 4)) == [2, 0, 1]
+test "unrank yields a 0-based permutation of 0..n-1" = images_of(C.permutation_unrank(3, 4)) == [2, 0, 1]
 
 test "cycle type" =
     match C.cycle_type(C.Perm([1, 0, 3, 2, 4])) with

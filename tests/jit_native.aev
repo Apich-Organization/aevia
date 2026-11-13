@@ -3,21 +3,23 @@
 ## `jit` feature the same tests run in the interpreter.
 ## Run with: cargo run -p aevia-cli --features jit -- test tests/jit_native.aev
 @jit
-fn fib(n: Int): Int = match n with
-  | 0 -> 0
-  | 1 -> 1
-  | _ -> fib(n - 1) + fib(n - 2)
+fn fib(n: Int): Int =
+    match n with
+    | 0 -> 0
+    | 1 -> 1
+    | _ -> fib(n - 1) + fib(n - 2)
 
-fn fib_plain(n: Int): Int = match n with
-  | 0 -> 0
-  | 1 -> 1
-  | _ -> fib_plain(n - 1) + fib_plain(n - 2)
+fn fib_plain(n: Int): Int =
+    match n with
+    | 0 -> 0
+    | 1 -> 1
+    | _ -> fib_plain(n - 1) + fib_plain(n - 2)
 
 @jit
-fn integrate(i: Float, n: Float, acc: Float): Float =
-    if i >= n then acc / n
-    else integrate(i + 1.0, n, acc + sqrt(i / n) * exp(0.0 - i / n))
+fn integrate(i: Float, n: Float, acc: Float): Float = if i >= n then acc / n else integrate(i + 1.0, n, acc + sqrt(i / n) * exp(0.0 - i / n))
 
 test "native fib" = fib(27) == 196418
+
 test "interpreted fib" = fib_plain(22) == 17711
+
 test "native float loop with guarded builtins" = integrate(0.0, 200000.0, 0.0) > 0.0

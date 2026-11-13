@@ -249,7 +249,11 @@ impl Overlay {
                                 // `-` declares a decode-only type: the kernel
                                 // produces it (a decomposition record) but never
                                 // takes it, so no encoder exists.
-                                to_value: if to == "-" { String::new() } else { to.to_string() },
+                                to_value: if to == "-" {
+                                    String::new()
+                                } else {
+                                    to.to_string()
+                                },
                                 from_value: from.to_string(),
                             },
                         );
@@ -386,6 +390,24 @@ fn parse_sig(
 pub fn overlay() -> &'static Overlay {
     static OVERLAY: OnceLock<Overlay> = OnceLock::new();
     OVERLAY.get_or_init(|| Overlay::parse(OVERLAY_SOURCE))
+}
+
+/// The parameter names of the curated wrapper `function`, when it is one.
+///
+/// This is how a kernel finding about "argument 3" becomes "argument `axes_a`
+/// (#3)": the kernel counts positions, the wrapper has names. Witnessed and
+/// dynamic wrappers have no curated names and answer `None`.
+#[must_use]
+pub fn wrapper_params(
+    function: &str,
+    op: &str,
+) -> Option<Vec<String>> {
+    overlay()
+        .sigs
+        .get(op)?
+        .iter()
+        .find(|sig| sig.name == function)
+        .map(|sig| sig.params.iter().map(|(name, _)| name.clone()).collect())
 }
 
 /// How an operator is exposed by its domain module.

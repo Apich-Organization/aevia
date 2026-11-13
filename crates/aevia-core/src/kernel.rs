@@ -39,6 +39,13 @@ use std::rc::Rc;
 /// Turns a bridge failure into a runtime error.
 #[must_use]
 pub fn error(failure: &KernelError) -> EvalError {
+    // A call the operator declined is a runtime error in a raising position.
+    // The stable `rssn.diag.<kind>` code is not an `E` code, so it rides in
+    // the note and the error is the "did not reduce" one.
+    if failure.diag.is_some() {
+        return EvalError::new("E0807", failure.describe(None, None))
+            .with_note(format!("diagnostic code: {}", failure.code));
+    }
     let mut error = EvalError::new(failure.code, failure.message.clone());
     if let Some(help) = &failure.help {
         error = error.with_note(help.clone());

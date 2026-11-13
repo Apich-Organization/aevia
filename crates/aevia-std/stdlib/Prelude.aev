@@ -77,6 +77,7 @@ let rem = rem
 let replace = replace
 let repr = repr
 let reverse = reverse
+let reverse_axis = reverse_axis
 let rng = rng
 let round = round
 let shape = shape

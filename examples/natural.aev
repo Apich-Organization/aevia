@@ -7,15 +7,16 @@ import Units.Natural as Nat
 fn compton(m: Real[M]): Real[L] = 1 / m
 
 ## A velocity is a pure number: the fraction of the speed of light.
-fn lorentz(v: Real): Real = 1 / sqrt(1 - v^2)
+fn lorentz(v: Real): Real = 1 / sqrt(1 - v ^ 2)
 
 let m_e = 0.51099895 MeV
+
 let fermi: Real[L] = 1 fm
 
 fn main(): IO Unit = do
     println("c = {Nat.c}, hbar = {Nat.hbar}")
     println("m_e          = {m_e}")
     println("1 fm         = {approx(fermi)}")
-    println("lambda_e     = {approx(from_system<L>(\"natural\", compton(m_e)))}")
+    println("lambda_e     = {approx(from_system<L>("natural", compton(m_e)))}")
     println("gamma(0.6 c) = {approx(lorentz(0.6))}")
     println("1/M_Planck^2 = {approx(Nat.g)}")

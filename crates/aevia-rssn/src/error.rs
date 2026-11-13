@@ -5,6 +5,7 @@
 //! server report the same thing for the same failure.
 
 use crate::value::Sym;
+use rssn::kernel::Diag;
 use rssn::kernel::call::OpError;
 
 /// What kind of failure this is.
@@ -63,6 +64,13 @@ pub struct KernelError {
     /// Boxed because `OpError` is the largest thing a diagnostic can carry and
     /// a `KernelError` is returned by value from every call.
     pub cause: Option<Box<OpError>>,
+    /// The kernel's explanation when an operator declined its arguments: the
+    /// operator, the zero-based argument at fault, the kind and the message.
+    ///
+    /// Set only for a failure that came from `Session::explain`; `code` is then
+    /// the kind's stable `rssn.diag.<kind>` code. The generated wrappers use it
+    /// to name the offending Aevia parameter ([`KernelError::describe`]).
+    pub diag: Option<Box<Diag>>,
 }
 
 impl KernelError {
@@ -79,6 +87,7 @@ impl KernelError {
             kind: Failure::Other,
             operator: None,
             cause: None,
+            diag: None,
         }
     }
 
@@ -96,6 +105,7 @@ impl KernelError {
             kind,
             operator: None,
             cause: None,
+            diag: None,
         }
     }
 
@@ -128,6 +138,59 @@ impl KernelError {
         }
         self.cause = Some(Box::new(error.clone()));
         self
+    }
+
+    /// A failure the kernel explained: an operator that left a call unreduced
+    /// and said why.
+    ///
+    /// The code is the kind's stable `rssn.diag.<kind>`; the message is the
+    /// finding as the kernel printed it. [`Self::describe`] gives the form for
+    /// users once the Aevia function and its parameter names are known.
+    #[must_use]
+    pub fn from_diag(diag: Diag) -> Self {
+        let error: OpError = diag.clone().into();
+        let mut failure = Self::of(diag.kind.code(), Failure::Other, diag.to_string());
+        if !diag.op.is_empty() {
+            failure.operator = Some(diag.op.clone());
+        }
+        failure.cause = Some(Box::new(error));
+        failure.diag = Some(Box::new(diag));
+        failure
+    }
+
+    /// The failure as a person should read it.
+    ///
+    /// For a kernel finding this names the Aevia function and the offending
+    /// parameter: ``tensordot_2_2_1: argument `axes_a` (#3): axis 2 out of range
+    /// for rank 2``. `function` is the wrapper's name (the operator's own name
+    /// when the caller is not a wrapper) and `params` its parameter names;
+    /// without a name the argument is given by position only. Any other failure
+    /// keeps its message.
+    #[must_use]
+    pub fn describe(
+        &self,
+        function: Option<&str>,
+        params: Option<&[String]>,
+    ) -> String {
+        let Some(diag) = &self.diag else {
+            return self.message.clone();
+        };
+        let name = function
+            .filter(|name| !name.is_empty())
+            .or(Some(diag.op.as_str()).filter(|op| !op.is_empty()));
+        let mut text = String::new();
+        if let Some(name) = name {
+            text.push_str(name);
+            text.push_str(": ");
+        }
+        if let Some(index) = diag.arg {
+            match params.and_then(|params| params.get(index)) {
+                | Some(param) => text.push_str(&format!("argument `{param}` (#{}): ", index + 1)),
+                | None => text.push_str(&format!("argument #{}: ", index + 1)),
+            }
+        }
+        text.push_str(&diag.message);
+        text
     }
 
     /// The name of the `OpError` variant, for callers that must not name an

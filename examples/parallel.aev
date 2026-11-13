@@ -5,10 +5,10 @@ module Parallel
 ## and `par_reduce` uses blocks fixed by the input length, so the printed
 ## values are the same for every `--jobs N`.
 let steps = 2000
+
 let width = 1.0 / 400000.0
 
-fn block(i: Int): Float =
-    sum(map(fn (k) => 4.0 / (1.0 + ((i * steps + k) * width + width / 2.0)^2) * width, linspace(0.0, 1999.0, 2000)))
+fn block(i: Int): Float = sum(map(fn k => 4.0 / (1.0 + ((i * steps + k) * width + width / 2.0) ^ 2) * width, linspace(0.0, 1999.0, 2000)))
 
 fn report(): IO Float = do
     println("the task is running on a worker")

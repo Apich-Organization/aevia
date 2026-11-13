@@ -222,7 +222,56 @@
 6. **测试。** `tests/stdlib_ergonomics.aev`（18 个 `test`）；`aevia-fmt` 的 `blank_lines_between_statements_are_kept`；
    `aevia-types` 的重载计数断言更新。
 7. **仍缺：** `reverse`/`filter` 等仍只有秩 1（运行时对矩阵 `reverse` 是展平，语义另议）；`fft` 只接受复数张量（实数用 `rfft`）；
-   二维以上的 FFT 没有。
+   二维以上的 FFT 没有。（以上三项已在 Revision 20 解决。）
+
+## 4.7 Revision 20（2026-11-13）：FFT 族补全、秩 ≥ 2 的序列操作、单位建议
+
+1. **FFT 族（§8.8）。** `fft`/`ifft`/`fft_norm` 现在接受 `Complex`、`Float`、`Int` 张量（实数、整数提升为虚部 0，结果为复数，
+   量纲保持）。新增多维变换（行列分解，沿每个变换轴逐一做一维变换，秩 1 到 4）：`fft2`/`ifft2`（最后两轴）、`fftn`/`ifftn`
+   （全部轴）、`fft_axis`/`ifft_axis`（一个轴）、`fftn_axes`/`ifftn_axes`（任意轴列表，负轴从末尾数，越界或重复 `E0802`）、
+   `ifft_norm`、`fftn_norm`/`ifftn_norm`；实数变换 `rfft2`/`rfftn` 与 `irfft2`/`irfftn`（`irfft*` 另有带 `Int` 的形式，
+   给出奇数原长度）；`fftshift`/`ifftshift`（任意元素类型）与 `*_axis`；`rfftfreq`。`fftfreq`/`rfftfreq` 的结果量纲仍是
+   采样间隔的倒数（`fftfreq(4, 0.5 s)` 是 `Hz`）。
+2. **归一化修正。** `fft_norm(x, Forward)` 此前错用 `1/√N`（与 `Unitary` 相同）；按文档应为正向 `1/N`、逆向 1。现已修正，
+   并按被变换的总点数计算（N 维时为各轴长度之积）。
+3. **秩 ≥ 2 的序列操作（§8.1.5）。** 秩 `n ≥ 2` 的张量是沿第一轴的"行"序列：`reverse` 翻转第一轴并保持形状（**语义变化**：
+   此前运行时对矩阵 `reverse` 是展平成向量，而类型表只有秩 1，所以该调用在检查期就是 `E0302`，只有直接调用运行时的
+   代码会受影响；仓库内没有依赖展平的代码）。新增 `reverse_axis(t, k)`；`filter` 的谓词接受一行并保持秩；`any`/`all`/`find`、
+   `first`/`last`、`take`/`drop`、`concat`（沿第一轴堆叠，其余轴必须一致）同样按行。秩 1 的行为不变；`f64` 张量上的 `reverse`/
+   `reverse_axis` 仍是视图。
+4. **单位建议的并列决胜。** `kmm` 过去建议 `klm`（千流明），因为 `m` 与 `lm` 同样是一次编辑，按字典序 `lm` 在前。现在先比较编辑
+   距离，再偏好"包含最小"的编辑（候选是输入删去/加上若干字符，`kmm` 是 `km` 多了一个字母），再偏好常用单位，最后才是字典序；
+   纯删除即使只剩一个字符也接受（`mm` → `m`）。
+5. **测试。** `tests/fft_and_sequences.aev`（39 个 `test`：与教科书 2-D DFT 对拍、各轴子集往返、归一化、半谱往返（含奇数长度）、
+   shift、频率量纲、行语义的序列操作）；`aevia-std` 的 `fft` 单元测试（N 维对拍、往返、`Forward`/`Unitary`、shift 置换、
+   `rfftfreq`）；`aevia-core/tests/stdlib.rs` 的轴/长度错误与秩 3 变换；`aevia-types/tests/unit_suggestions.rs` 与
+   `closest_unit` 单元测试。`stdlib_names.txt` 与生成的 `FFT.aev`/`Prelude.aev` 已更新。
+6. **仍缺：** 秩超过 4 的变换与序列操作；`fold`/`sort`/`zip`/`enumerate` 在秩 ≥ 2 上仍是元素级（展平）语义；
+   `fftn_axes` 没有对应的实数形式（`rfftn` 取全部轴）。
+
+## 4.8 Revision 21（2026-11-13）：kernel 诊断进入 `Err(OpError)`；`Rssn_Numeric` 补全上一轮算子
+
+1. **诊断通道（§10）。** rssn 新增 `Diag`/`DiagKind` 与 `Session::explain`/`apply_diag`。桥在算子留下自己的未约化调用时用
+   `explain` 取原因（符号参数除外），`KernelError` 新增 `diag` 字段与 `from_diag`/`describe`；`Rssn.dynamic` 的 `Err` 现在是
+   `rssn.diag.<kind>: <包装器名>: argument `<参数名>` (#<位置>): <kernel 的消息>`，包装器名取调用栈最内层帧，参数名取
+   `domains.overlay`（`domains::wrapper_params`）。`OpError` 保持不透明、没有新构造子或 `Rssn.*` 成员，既有 `match` 不变，
+   代码即 `"{e}"` 的前缀。类型化的 `Rssn.<op>(..)` 调用位置抛出 `E0807`，附注为稳定代码。
+2. **新增 `Rssn_Numeric` 签名（11 个新名字族，`Rssn_Numeric` 的 typed 档 75 → 86）。** `poisson_fd_bc`、`heat_fd_bc`、`wave_fd_bc`
+   （各有 `_2d`/`_3d`；边界种类 `kind: Real` 是符号 `dirichlet`/`neumann` 或 `d`/`n` 字母模式，如 `sparse_solve` 的 `method`；
+   `boundary` 是单个数，逐轴/逐面的数值列表走 `Rssn.dynamic`）、`advect_fd_upwind`（`_2d`/`_3d`）、`ifft_abs`、
+   `tensor_contract_2/3/4`、`tucker_dense_2/3/4`、`cp_dense_2/3/4`、`erf_complex`、`fresnel_s_complex`、`fresnel_c_complex`。
+   纯 Neumann 的 `poisson_fd_bc` 数据不平衡时是 `rssn.diag.incompatible`，不会给出错误的场。
+   rssn 签名 overlay 里只有秩变量的返回类型（`tensordot`、`tensor_contract`、`tucker_dense`、`cp_dense`）没有难倒绑定生成器：
+   平铺 `Rssn` 门面把它们留在动态档，域模块由 `sig` 逐秩给出，`emit_typecheck` 等测试全部通过。
+3. **测试。** `crates/aevia-rssn/tests/diagnostics.rs`（5 个：`from_diag`、`describe`、包装器参数名、`tensordot` 轴越界的
+   `rssn.diag.domain` 与参数位置、合法调用不受影响）；`tests/domain_numeric.aev` 新增 14 个 `test`（`poisson_fd_bc` 的
+   Dirichlet 等于 `poisson_fd`、不平衡 Neumann 为 `incompatible`、平衡数据有解、混合模式；`heat_fd_bc`/`wave_fd_bc` 常数场；
+   `advect_fd_upwind`；`advect_fd_2d` 速度长度错误指向 `` `velocity` (#1) ``；`tensordot_2_2_1` 轴越界指向 `` `axes_a` (#3) ``；
+   `tensor_contract`；`tucker_dense_3`/`cp_dense_3` 与 `hosvd_3`/`cp_als_3` 互逆；`ifft_abs`；`erf`/Fresnel）。
+   `tools/rssn-api-audit/RSSN-COVERAGE.md` 已重新生成（manifest 1620 个算子，curated typed 258）。
+4. **仍缺：** 只有 `rules::numeric::TABLES` 的算子记录原因，其余重型算子无原因（保持未约化项）；witnessed/dynamic 包装器只给
+   参数位置；`poisson_fd_bc` 等的逐轴/逐面数值列表没有 typed 形式；`OpError` 没有 `code(e)`/`message(e)` 访问器
+   （需要新的 `Rssn.*` 成员与检查器支持，留待检查器一侧的改动）。
 
 ## 5. 记录在案的未实现边界（Known Gaps）
 

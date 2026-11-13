@@ -264,6 +264,7 @@ sig fft_re(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
 sig fft_im(xs: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
 sig ifft_re(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
 sig ifft_im(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
+sig ifft_abs(re: Tensor<1, Float>, im: Tensor<1, Float>) -> Result<Tensor<1, Float>, OpError>
 sig frft_re(re: Tensor<1, Float>, im: Tensor<1, Float>, order: Float) -> Result<Tensor<1, Float>, OpError>
 sig frft_im(re: Tensor<1, Float>, im: Tensor<1, Float>, order: Float) -> Result<Tensor<1, Float>, OpError>
 # Dense Krylov solves, low rank and rank-revealing QR.
@@ -289,6 +290,11 @@ sig digamma_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
 sig lambert_w_complex(re: Float, im: Float, branch: Int) -> Result<Tensor<1, Float>, OpError>
 sig bessel_j_complex(order: Float, re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
 sig bessel_i_complex(order: Float, re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+# The error function and the Fresnel integrals of `re + i im`, answered as `[re, im]`
+# (the modulus is limited to 1000).
+sig erf_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig fresnel_s_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
+sig fresnel_c_complex(re: Float, im: Float) -> Result<Tensor<1, Float>, OpError>
 # Wavelets, bootstrap and sparse solves name a method, wavelet or statistic with a
 # symbol. A symbol is an Aevia `Real` (`let haar = symbol("haar")`): bind it once,
 # every `symbol(..)` call makes a distinct one (`haar#2`) that the kernel does
@@ -325,6 +331,28 @@ sig poisson_fd as poisson_fd_3d(f: Tensor<3, Float>, boundary: Float) -> Result<
 sig advect_fd(velocity: Tensor<1, Float>, u0: Tensor<1, Float>, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
 sig advect_fd as advect_fd_2d(velocity: Tensor<1, Float>, u0: Tensor<2, Float>, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
 sig advect_fd as advect_fd_3d(velocity: Tensor<1, Float>, u0: Tensor<3, Float>, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig advect_fd_upwind(velocity: Tensor<1, Float>, u0: Tensor<1, Float>, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig advect_fd_upwind as advect_fd_upwind_2d(velocity: Tensor<1, Float>, u0: Tensor<2, Float>, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig advect_fd_upwind as advect_fd_upwind_3d(velocity: Tensor<1, Float>, u0: Tensor<3, Float>, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+# The `_bc` solvers take the boundary kind as a symbol (`Real`, made once with
+# `symbol("neumann")`, as `sparse_solve` takes its `method`): `dirichlet`,
+# `neumann`, or a pattern of `d`/`n` letters, one per axis (`dn` in 2D: Dirichlet
+# on the `x` faces, Neumann on the `y` faces) or one per face in the order
+# `x-, x+, y-, y+, z-, z+`. `boundary` is the one number on the whole boundary (a
+# Neumann value is the outward normal derivative); per-axis or per-face values
+# are the kernel's list form and need `Rssn.dynamic`. Pure Neumann is singular:
+# the data must balance (`sum_i w_i (f_i + b_i) = 0`) or the call answers
+# `rssn.diag.incompatible`, and the solution returned has zero (trapezoid-weighted)
+# mean.
+sig heat_fd_bc(alpha: Float, u0: Tensor<1, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig heat_fd_bc as heat_fd_bc_2d(alpha: Float, u0: Tensor<2, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig heat_fd_bc as heat_fd_bc_3d(alpha: Float, u0: Tensor<3, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig wave_fd_bc(c: Float, u0: Tensor<1, Float>, v0: Tensor<1, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig wave_fd_bc as wave_fd_bc_2d(c: Float, u0: Tensor<2, Float>, v0: Tensor<2, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig wave_fd_bc as wave_fd_bc_3d(c: Float, u0: Tensor<3, Float>, v0: Tensor<3, Float>, kind: Real, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
+sig poisson_fd_bc(f: Tensor<1, Float>, kind: Real, boundary: Float) -> Result<Tensor<1, Float>, OpError>
+sig poisson_fd_bc as poisson_fd_bc_2d(f: Tensor<2, Float>, kind: Real, boundary: Float) -> Result<Tensor<2, Float>, OpError>
+sig poisson_fd_bc as poisson_fd_bc_3d(f: Tensor<3, Float>, kind: Real, boundary: Float) -> Result<Tensor<3, Float>, OpError>
 # Ragged arguments are tensors of tensors; polynomial equations are term tables
 # [[coefficient, e1, .., en], ..], one per equation, with different term counts.
 sig nested_dissection_order(adjacency: Tensor<1, Tensor<1, Float>>) -> Result<Tensor<1, Float>, OpError>
@@ -400,6 +428,21 @@ sig tt_svd as tt_svd_4(t: Tensor<4, Float>, tol: Float, max_rank: Int) -> Result
 sig tt_dense as tt_dense_2(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<2, Float>, OpError>
 sig tt_dense as tt_dense_3(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<3, Float>, OpError>
 sig tt_dense as tt_dense_4(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<4, Float>, OpError>
+# `tensor_contract_<r>` is the generalised trace of a rank-r tensor over two axes
+# (0-based, equal extents) and has rank r - 2 (a `Float` for a matrix). The kernel's
+# result rank is a rank variable (`r`); each Aevia signature fixes it.
+sig tensor_contract as tensor_contract_2(t: Tensor<2, Float>, i: Int, j: Int) -> Result<Float, OpError>
+sig tensor_contract as tensor_contract_3(t: Tensor<3, Float>, i: Int, j: Int) -> Result<Tensor<1, Float>, OpError>
+sig tensor_contract as tensor_contract_4(t: Tensor<4, Float>, i: Int, j: Int) -> Result<Tensor<2, Float>, OpError>
+# `tucker_dense_<r>` and `cp_dense_<r>` rebuild a rank-r tensor from a Tucker core with
+# its r factor matrices (rows = the extent of that mode) or from CP weights with r
+# factor matrices (one column per component).
+sig tucker_dense as tucker_dense_2(core: Tensor<2, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<2, Float>, OpError>
+sig tucker_dense as tucker_dense_3(core: Tensor<3, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<3, Float>, OpError>
+sig tucker_dense as tucker_dense_4(core: Tensor<4, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<4, Float>, OpError>
+sig cp_dense as cp_dense_2(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<2, Float>, OpError>
+sig cp_dense as cp_dense_3(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<3, Float>, OpError>
+sig cp_dense as cp_dense_4(weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>) -> Result<Tensor<4, Float>, OpError>
 
 # ---------------------------------------------------------------------------
 # Rich types. Curated Aevia source that is placed ahead of the generated
