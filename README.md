@@ -96,10 +96,17 @@ spectra (`hann_window`, `fft_re`, `ifft_re`, `frft_re`), wavelets (`dwt_approx`,
 (`ode_solve`, `ode_symplectic`, `newton_cg_minimize`). Their results are
 `Float`; a wavelet, method or statistic is named by a symbol that must be created
 once with `let`. The finite-difference solvers (`heat_fd`, `wave_fd`,
-`poisson_fd`, `advect_fd`) and the symbolic PDE names (`solve_heat_equation`, ...)
-are dimension free in the kernel (the dimension is the nesting depth of the data);
-the typed wrapper is the one-dimensional form and higher dimensions go through
-`Rssn.dynamic`. Operators without a curated signature get type-derived parameter
+`poisson_fd`, `advect_fd`) are dimension free in the kernel (the dimension is the
+nesting depth of the data), but an Aevia type has a literal rank, so each has one
+signature per space dimension: the bare name is the one-dimensional solver and
+`heat_fd_2d`, `heat_fd_3d`, ... take `Tensor<2, Float>` and `Tensor<3, Float>`
+fields. The rank-polymorphic tensor operators are named by rank the same way
+(`tensor_norm_3`, `tensor_inner_2`, `tensordot_2_2_1`: ranks of both operands and
+the number of contracted axes), and the decompositions `hosvd_3`, `hooi_3`,
+`cp_als_3`, `tt_svd_3`, `tt_dense_3` (ranks 2 to 4) answer with records (`Hosvd3`,
+`Hooi3`, `CpFit`, `TensorTrain`). Only the symbolic PDE names
+(`solve_heat_equation`, ...) are still dimension free. Operators without a curated
+signature get type-derived parameter
 names (`n`, `x`, `xs`, `m`, `t3`, `flag`, `v`; repeats are numbered). See
 `tests/domain_numeric.aev` for closed-form checks (`aevia test tests/domain_numeric.aev`).
 
@@ -191,6 +198,15 @@ resolves a module, so `import Math { sqrt }`, `open Units.SI` and
 `import Physics.Ising` work from user source (a local file still wins); chapter
 8's names also remain reachable through the Prelude, which is why the quick
 start needs no imports.
+
+Revision 19 closed a batch of language-side gaps: rank-complete tensor operations
+(`sum`, `mean`, `var`, `std`, `norm`, `map`, `zip_with`, `flatten`, `transpose` at ranks
+2 to 4), `Result` combinators (`map`, `and_then`, `unwrap_or`, `is_ok`, `is_err`,
+`ok`, `ok_or`), `first`/`last`/`cumsum`/`cumprod`/`argmax`/`argmin`, `round(x, n)`,
+`is_nan`/`is_finite`/`is_infinite`, suggestions in unit and dimension diagnostics, and a
+formatter that keeps the blank lines between statements. The tests are
+`tests/stdlib_ergonomics.aev`. Still open: `fft` takes complex tensors only and has no
+multi-dimensional form, and `reverse`/`filter` remain rank 1.
 
 Implemented beyond the core language, each specified in its chapter:
 

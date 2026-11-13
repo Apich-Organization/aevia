@@ -1190,12 +1190,11 @@ impl Kernel {
             }
             return Some((Val::Tensor { shape, data }, witness));
         }
-        if items
-            .iter()
-            .any(|(value, _)| !matches!(value, Val::Tensor { .. }))
-        {
-            return None;
-        }
+        // Parts of unlike kind (tensors and a number, as in the `list(core,
+        // factors, error)` of a decomposition) stay a rank-1 value with one
+        // witness per part: no Aevia tensor type holds them, so
+        // `from_value<Tensor<1, Value>>` hands each part out as a handle and
+        // `from_value<T>` decodes it.
         let witnesses: Vec<W> = items.iter().map(|(_, w)| w.clone()).collect();
         let data: Vec<Val> = items.into_iter().map(|(value, _)| value).collect();
         Some((

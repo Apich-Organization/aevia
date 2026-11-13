@@ -5233,6 +5233,10 @@ clamp    : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>
 floor    : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
 ceil     : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
 round    : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
+round    : (Scalar<ρ,d>, Int) -> Scalar<ρ,d>   # 保留 n 位小数；n 为负时舍入到十、百……
+is_nan   : Scalar<ρ,d> -> Bool
+is_finite : Scalar<ρ,d> -> Bool
+is_infinite : Scalar<ρ,d> -> Bool
 trunc    : Scalar<ρ,d> -> Scalar<ρ,d>         # ρ ≠ Complex
 mod      : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>   # ρ ≠ Complex
 rem      : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>   # ρ ≠ Complex
@@ -5315,7 +5319,19 @@ mean     : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 length   : Tensor<n, a> -> Int
 shape    : Tensor<n, a> -> Tensor<1, Int>
 rank     : Tensor<n, a> -> Int
+first    : Tensor<1, a> -> Option<a>
+last     : Tensor<1, a> -> Option<a>
+cumsum   : Tensor<1, Scalar<ρ,d>> -> Tensor<1, Scalar<ρ,d>>
+cumprod  : Tensor<1, Scalar<ρ,1>> -> Tensor<1, Scalar<ρ,1>>
+argmax   : Tensor<1, Scalar<ρ,d>> -> Int      # 首个最大值的下标
+argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 ```
+
+**秩的完整性（Revision 16）。** 规范里写成 `Tensor<n, …>` 的操作在秩 1 到 4 上都有类型：
+`sum`、`prod`、`mean`、`var`、`std`、`norm`、`normalize`、`map`、`map2`/`zip_with`（同形）以及
+`flatten`（秩 ≥ 2）；`sum(a, axis)` 的 keepdims 形式在秩 1 到 4 上可用。秩不是一等类型参数，
+所以每个秩一个重载，由实参的秩选择。`first`/`last` 对空张量给 `None`；`argmax`/`argmin` 对空张量
+是 `E0802`，NaN 不会胜出，相等时取最前的下标。
 
 `length` 对 `String` 和 `Tensor` 重载，由类型类 `Sized` 解析。
 
@@ -5357,6 +5373,13 @@ map      : ((a -> b), Option<a>) -> Option<b>
 and_then : ((a -> Option<b>), Option<a>) -> Option<b>
 unwrap_or: (Option<a>, a) -> a
 is_some  : Option<a> -> Bool
+is_ok    : Result<a, e> -> Bool
+is_err   : Result<a, e> -> Bool
+ok       : Result<a, e> -> Option<a>
+ok_or    : (Option<a>, e) -> Result<a, e>
+map      : ((a -> b), Result<a, e>) -> Result<b, e>
+and_then : ((a -> Result<b, e>), Result<a, e>) -> Result<b, e>
+unwrap_or: (Result<a, e>, a) -> a
 is_none  : Option<a> -> Bool
 map_err  : ((e -> f), Result<a, e>) -> Result<a, f>
 ```
@@ -5517,6 +5540,10 @@ mean     : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 var      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>
 std      : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>
 ```
+
+`transpose` 在秩 ≥ 2 的张量上反转轴序（秩 3 的 `[a, b, c]` 变成 `[c, b, a]`，细化形状同样反转）；
+秩 1 是 `E0302`（向量没有第二个轴，提示里说明了这一点）。`norm` 在秩 ≥ 2 上是对全部元素的
+范数（`p = 2` 即 Frobenius 范数），`var`/`std`/`mean`/`sum`/`prod` 对全部元素归约（见 §8.1.5）。
 
 `zeros<Float>(3, 4)` 的 `n=2`；`zeros<Int>` 显式指定元素类型。`zeros`/
 `ones`/`fill` 是**内建可变参数**：`n` 由 `Int` 实参的个数决定。它们可从
@@ -6792,14 +6819,17 @@ Aevia 把它们归入 `Rssn_Numeric`，其中 67 个有手写的 typed 签名
 - **方法、小波、统计量用符号命名**，符号在 Aevia 里是 `Real`：
   `let haar = symbol("haar")`，再 `N.dwt_approx(xs, haar)`。**每次** `symbol("haar")` 都造一个新符号
   （`haar#2`、`haar#3`…），内核不认识；所以每个名字只在顶层 `let` 一次再复用。
-- **维度无关**。`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd` 在内核里不分维度：空间维数就是场数据的嵌套深度
+- **维度无关，按维数/秩命名**。`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd` 在内核里不分维度：空间维数就是场数据的嵌套深度
   （列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体，`u[i][j][k]` 是节点
-  `(x_i, y_j, z_k)`）。一个 Aevia 签名只有一个秩，所以 typed 包装器是**一维**形式
-  （`poisson_fd(f: Tensor<1, Float>, boundary: Float)`）；二维、三维用
-  `Rssn.dynamic("poisson_fd", [to_value(field), to_value(0.0)])`，答案是不可解码的 `Value`
-  （没有量纲证据，`from_value<Tensor<2, Float>>` 报 `TypeMismatch`），可以打印或原样传回内核。
-  同理 `tensor_norm`、`tensor_inner`、`tensordot`（秩多态）与 `hosvd`、`hooi`、`cp_als`、`tt_svd`、`tt_dense`
-  （结果是核心、因子、误差的混合列表）留在 dynamic 档，每个都有 `dynamic ... | 理由` 行。
+  `(x_i, y_j, z_k)`）。一个 Aevia 签名只有一个字面量秩，所以一个内核算子带**多条签名，各用自己的名字**：
+  不带后缀的名字是一维形式（`poisson_fd(f: Tensor<1, Float>, boundary: Float)`），`_2d`/`_3d` 取 `Tensor<2, Float>`/
+  `Tensor<3, Float>` 场（`heat_fd_2d`、`wave_fd_3d`、`poisson_fd_2d`、`advect_fd_3d` …），答案与场同形状；
+  平流速度仍是 `Tensor<1, Float>`，每个空间维一个分量。
+  秩多态的张量算子同理按秩命名：`tensor_norm_<r>`、`tensor_inner_<r>`（r = 1..4）与
+  `tensordot_<ra>_<rb>_<k>`（收缩 k 个轴，`axes_a`/`axes_b: Tensor<1, Int>` 从 0 起，结果秩 ra + rb − 2k，0 时为 `Float`；
+  结果秩至多 4）。分解 `hosvd_<r>`、`hooi_<r>`、`cp_als_<r>`、`tt_svd_<r>`、`tt_dense_<r>`（r = 2、3、4）的结果是记录
+  `Hosvd<r>`、`Hooi<r>`、`CpFit`、`TensorTrain`（字段见 `Rssn_Numeric` 前言；因子表是 `Tensor<1, Tensor<2, Float>>`）；
+  混合列表由通用的列表访问器 `from_value<Tensor<1, Value>>` 拆开再逐部分解码（§10.3.8）。
   符号 PDE 同样只有一个名字：`solve_heat_equation`、`solve_wave_equation`、`solve_laplace_equation`、
   `solve_poisson_equation`（维数由方程的变量决定，旧的 `_1d`/`_2d`/`_3d` 是别名）；
   仿射变换 `translation`、`scaling`、`shear`、`reflection`、`rotation` 同理，归入 `Rssn_Graphics`。
@@ -6808,7 +6838,7 @@ Aevia 把它们归入 `Rssn_Numeric`，其中 67 个有手写的 typed 签名
 
 端到端示例与封闭形式核对：`tests/domain_numeric.aev`（45 个 `test`：`mad([1,2,3,4,100]) = 1`、Hann 窗对称、
 `ifft(fft(x)) = x`、小波分解/重构往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
-`tensordot` 对手算矩阵乘、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），
+`tensordot_2_2_1` 对手算矩阵乘、`poisson_fd_2d`/`heat_fd_2d` 的封闭形式、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），
 由 `cargo test -p aevia-rssn --test aev_suites` 经真实驱动运行。
 
 ## 8.20 库的组织
@@ -8100,8 +8130,8 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
   维度无关的有限差分求解器（`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd`）、复变特殊函数
   （`lgamma_complex`、`gamma_complex`、`digamma_complex`、`lambert_w_complex`、`bessel_j_complex`、`bessel_i_complex`）
   与表达式算子（`oscillatory_integral`、`anderson_fixed_point`、`newton_cg_minimize`、`ode_solve`、`ode_symplectic`、
-  `ode_imex`、`ode_etdrk4`）都归入 `Rssn_Numeric`，共 67 条 `sig`，8 个留在 dynamic 档并写明理由
-  （`tensor_norm`/`tensor_inner`/`tensordot` 是秩多态，`hosvd`/`hooi`/`cp_als`/`tt_svd`/`tt_dense` 返回混合列表）。
+  `ode_imex`、`ode_etdrk4`）都归入 `Rssn_Numeric`：75 个算子全部有 `sig`，没有一个留在 dynamic 档
+  （秩多态张量与分解按秩给出多条签名，见下）。
   其中的规则：
   - 这些算子的结果是浮点，签名用 `Float`/`Tensor<n, Float>`，**不是** `Real`（`from_value<Real>` 只接受精确的
     `Int`/`Rat`）；整数性质的结果（秩、置换下标）同样以 `Float` 返回。
@@ -8110,8 +8140,22 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
   - 维度无关的名字：`heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度，符号 PDE 是
     `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`，仿射变换是
     `translation`/`scaling`/`shear`/`reflection`/`rotation`（`Rssn_Graphics` 的 family 认领了不带后缀的名字；`_2d`/`_3d` 是别名）。
-    签名只有一个秩，所以有限差分的 typed 包装器是一维形式，二维/三维走 `Rssn.dynamic`，答案是没有量纲证据的 `Value`
-    （不可 `from_value` 成 `Float` 张量）。
+    签名只有一个字面量秩，所以一个内核算子可以有**多条 `sig`，各用自己的 Aevia 名字**（overlay 写作
+    `sig heat_fd as heat_fd_2d(..)`；`Overlay.sigs` 按算子存一个列表，同名重复是错误，只有一条 `sig` 的 overlay 不受影响）。
+    有限差分：不带后缀的名字保持一维含义，`heat_fd_2d`/`heat_fd_3d`、`wave_fd_2d`/`wave_fd_3d`、`poisson_fd_2d`/
+    `poisson_fd_3d`、`advect_fd_2d`/`advect_fd_3d` 取 `Tensor<2, Float>`/`Tensor<3, Float>` 场并返回同形状的场
+    （平流速度是 `Tensor<1, Float>`，每个空间维一个分量，长度不符返回 `Err`）。
+  - 秩多态张量算子按秩命名为 `<算子>_<秩>`：`tensor_norm_1..4`、`tensor_inner_1..4`（两个同秩操作数），
+    `tensordot_<ra>_<rb>_<k>`（秩 ra、rb 的操作数收缩 k 个轴，`axes_a`/`axes_b` 是 `Tensor<1, Int>`、从 0 起，结果秩为
+    ra + rb − 2k，为 0 时是 `Float`；ra、rb ∈ 1..4，1 ≤ k ≤ min(ra, rb)，结果秩至多 4，共 27 个）。
+    分解 `hosvd_<r>`、`hooi_<r>`、`cp_als_<r>`、`tt_svd_<r>`、`tt_dense_<r>`（r = 2、3、4）返回 `Numeric` 前言里声明的记录：
+    `Hosvd<r>{core, factors, singular_values}`、`Hooi<r>{core, factors, error}`、`CpFit{weights, factors, residual}`、
+    `TensorTrain{cores, error}`；`factors` 是 `Tensor<1, Tensor<2, Float>>`，`cores` 是 `Tensor<1, Tensor<3, Float>>`。
+  - **混合列表的解码机制。** 内核的分解结果是类型各异的部分组成的列表（张量、张量的列表、一个数）。桥把这种
+    结果保留为带逐元素量纲证据的一维值（`kernel.rs` 的 `lift_list` 不再要求每一项都是张量），`from_value<Tensor<1, Value>>`
+    是通用的“列表访问器”：把第一个轴的各部分逐个作为 `Value` 句柄交出（均匀张量按行切片，参差列表取各自的证据），
+    再对每一部分 `from_value<T>`。解码器是前言里的 Aevia 源码（`hosvd3_from_value` 等），用 `codec Hosvd3 - hosvd3_from_value`
+    声明为只解码的类型（`-` 表示没有编码函数，把这样的类型当参数是覆盖检查的错误）。
   - `sig` 即“该算子是无量纲参数的纯函数”的声明，所以 typed 的数值结果带 `Scalar(1)` 证据可以解码；
     没有 `sig` 的算子，其规则是 `Same`/`Product`/`Any` 时结果不被信任（见上“维度证据”）。
   端到端测试：`tests/domain_numeric.aev`（封闭形式核对，见 §8.19.1）。
@@ -11119,15 +11163,51 @@ help: transpose B or reshape A
 2. **维度无关的名字。** `heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度；符号 PDE 为
    `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`；仿射变换为
    `translation`/`scaling`/`shear`/`reflection`/`rotation`（`_2d`/`_3d` 是别名；`Rssn_Graphics` 认领不带后缀的名字，
-   该域从 38 增至 44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维走 `Rssn.dynamic`（答案不可解码）。
+   该域从 38 增至 44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维见 §4.5（`_2d`/`_3d` 形式）。
 3. **GPU `f64`（§10.6.5）。** rssn 的 wgpu 设备以双单精度提供 `Dtype::F64`（约 48 位，`f32` 的指数范围，
    `DeviceInfo::emulated_f64`）；新增启动融合规划器 `device::plan`（`Plan::fuse`，融合与未融合逐位相同）。
    Aevia 侧 `Device`/`to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`，融合规划器尚未暴露为语言原语。
 4. **见证包装器的参数名** 由类型推出（`n`、`x`、`xs`、`m`、`t3`、`flag`、`v`，同类重复时编号），不再是 `a0`、`a1`。
 5. **测试。** 新增 `tests/domain_numeric.aev`（45 个 `test`，封闭形式核对），由 `aev_suites` 与
    `aevia test` 运行。覆盖报告 `tools/rssn-api-audit/RSSN-COVERAGE.md` 已重新生成。
-6. **仍缺：** 有限差分的 typed 包装器没有二维/三维形式（需要内核发布按秩的 refinement 重载，或语言支持秩参数）；
+6. **仍缺（Revision 18 已补二维/三维与分解）：**
    dynamic 档的数值结果不能 `from_value` 成 `Float`（无量纲证据）；manifest 里只有一个 `tensor_outer`，属于 `geometry` 规则集（`Rssn_DifferentialGeometry`），`numeric` 的同名实现不在 `Rssn_Numeric` 中出现。
+
+## 4.5 Revision 18（2026-11-13）：按秩/维数命名的多签名，数值算子全部 typed
+
+1. **一个算子多条 `sig`。** `domains.overlay` 的 `sig op as name(..)` 现在可对同一内核算子重复出现，各用自己的 Aevia 名字
+   （`Overlay.sigs` 由 `op -> SigDef` 改为 `op -> Vec<SigDef>`，同名重复报错；渲染、覆盖检查与覆盖报告逐签名处理；
+   只有一条 `sig` 的 overlay 不变）。新增 `codec Type - from_fn`：只解码的类型。
+2. **有限差分的 2D/3D。** `heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 保持一维含义，新增 `_2d`/`_3d` 形式
+   （`Tensor<2, Float>`、`Tensor<3, Float>` 场）。
+3. **秩多态张量算子。** `tensor_norm_1..4`、`tensor_inner_1..4`、`tensordot_<ra>_<rb>_<k>`（27 个）；分解 `hosvd_r`、
+   `hooi_r`、`cp_als_r`、`tt_svd_r`、`tt_dense_r`（r = 2、3、4）返回前言里的记录 `Hosvd<r>`、`Hooi<r>`、`CpFit`、`TensorTrain`。
+   `Rssn_Numeric` 的 75 个算子全部是 typed，dynamic 档为空。
+4. **混合列表与列表访问器。** 桥的 `lift_list` 接受由张量和数混合的列表（保留逐元素量纲证据）；`from_value<Tensor<1, Value>>`
+   成为通用访问器，把任何内核列表（或张量的第一个轴）拆成 `Value` 句柄，再逐个 `from_value<T>`。
+5. **测试。** `tests/domain_numeric.aev` 新增 2D/3D 的 poisson、heat、wave、advect 封闭形式核对，`tensordot_2_2_2` 等于 Frobenius
+   内积，秩 3 张量范数，`hosvd_3`/`hooi_3`/`cp_als_3`/`tt_svd_3`+`tt_dense_3` 重构。覆盖报告已重新生成。
+6. **仍缺：** 秩超过 4 的张量算子、`tensordot` 结果秩超过 4 的组合、分解的秩 1 与秩 5–6 形式仍走 `Rssn.dynamic`（结果是句柄，
+   可用 `from_value<Tensor<1, Value>>` 手工拆开）；符号 PDE 名字仍维度无关。
+
+## 4.6 Revision 19（2026-11-13）：语言侧补全——秩完整、Result 组合子、诊断建议、格式化
+
+1. **秩完整的张量操作（§8.1.5、§8.4）。** 规范把 `sum`/`prod`/`mean`/`var`/`std`/`norm`/`normalize`/`map`/`map2`/`zip_with`/
+   `flatten`/`transpose` 写成 `Tensor<n, …>`，而类型表只有秩 1（部分有秩 2）：`sum(matrix)` 是 `E0302`，运行时却早已按秩无关实现。
+   现在秩 2–4 都有重载（`rank_overloads`），`sum(a, axis)` 的 keepdims 形式覆盖秩 1–4；`transpose` 在秩 ≥ 2 上反转轴序
+   （运行时新增秩 ≥ 3 的实现，细化形状同样反转）。
+2. **`Result` 的组合子（§8.1.6）。** `map`、`and_then`、`unwrap_or` 增加 `Result` 重载（此前只对 `Option`，`Result` 只有 `map_err`）；
+   新增 `is_ok`、`is_err`、`ok`（`Result → Option`）、`ok_or`（`Option → Result`）。
+3. **列表与数值辅助。** `first`/`last`（`Option`）、`cumsum`/`cumprod`（保留量纲）、`argmax`/`argmin`；`round(x, n)` 保留 `n` 位小数；
+   `is_nan`/`is_finite`/`is_infinite`（`mean([])` 与 `ln(0) - ln(0)` 产生的 NaN 此前无法判断）。
+4. **诊断建议。** `Float[m]`（把单位写在量纲位置）的 `E0407` 现在指出 `m` 是单位、量纲是 `L`；拼错的量纲、拼错的单位
+   （`E0501`，含带前缀的拼写）给出 "did you mean"；记录没有某个字段（`E0306`）且没有近似名时列出现有字段。
+5. **格式化器保留空行。** `aevia fmt` 此前丢掉 `do`/布局块里语句之间的空行（仓库自己的示例都过不了 `fmt --check` 的原因之一）；
+   现在作者留下的空行折叠为一行并保留，结果稳定。
+6. **测试。** `tests/stdlib_ergonomics.aev`（18 个 `test`）；`aevia-fmt` 的 `blank_lines_between_statements_are_kept`；
+   `aevia-types` 的重载计数断言更新。
+7. **仍缺：** `reverse`/`filter` 等仍只有秩 1（运行时对矩阵 `reverse` 是展平，语义另议）；`fft` 只接受复数张量（实数用 `rfft`）；
+   二维以上的 FFT 没有。
 
 ## 5. 记录在案的未实现边界（Known Gaps）
 

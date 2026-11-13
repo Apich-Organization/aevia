@@ -120,6 +120,7 @@ fn print_once(source: &str) -> Result<String, FormatError> {
     let module = parse(source)?;
     let before = comments::scan(source);
     let text = print::Printer::new(before.clone())
+        .with_source(source)
         .module(&module)
         .map_err(|message| FormatError::new(Failure::Unprintable, message))?;
     let after_module = parse(&text).map_err(|error| {

@@ -76,6 +76,8 @@ pub struct Printer {
     comments: Vec<Comment>,
     next_comment: usize,
     error: Option<String>,
+    /// The original text, so a blank line between statements can be kept.
+    source: Option<String>,
     /// The declaration being printed, for the failure message.
     subject: String,
 }
@@ -91,8 +93,37 @@ impl Printer {
             comments,
             next_comment: 0,
             error: None,
+            source: None,
             subject: "the file".to_string(),
         }
+    }
+
+    /// Gives the printer the original text. Without it every blank line
+    /// between statements is dropped; with it a single blank line that the
+    /// author left between two statements of a block survives.
+    #[must_use]
+    pub fn with_source(
+        mut self,
+        source: &str,
+    ) -> Self {
+        self.source = Some(source.to_string());
+        self
+    }
+
+    /// Whether the source has a blank line between byte offsets `from` and `to`.
+    fn blank_between(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> bool {
+        let Some(text) = self.source.as_deref().and_then(|s| s.get(from..to)) else {
+            return false;
+        };
+        // The first piece is the rest of the previous statement's line and
+        // the last one is the indentation before the next statement; any
+        // piece between them that is whitespace only is a blank line.
+        let lines: Vec<&str> = text.split('\n').collect();
+        lines.len() > 2 && lines[1..lines.len() - 1].iter().any(|line| line.trim().is_empty())
     }
 
     /// Prints `module`.
@@ -746,7 +777,14 @@ impl Printer {
             | ExprKind::Block { stmts, tail } => {
                 self.end_line();
                 self.indent += 1;
+                let mut previous_end: Option<usize> = None;
                 for stmt in stmts {
+                    if let Some(end) = previous_end
+                        && self.blank_between(end, block_stmt_start(stmt))
+                    {
+                        self.blank();
+                    }
+                    previous_end = Some(block_stmt_end(stmt));
                     self.flush_comments(block_stmt_start(stmt));
                     match stmt {
                         | BlockStmt::Let {
@@ -775,6 +813,11 @@ impl Printer {
                     }
                 }
                 if let Some(tail) = tail {
+                    if let Some(end) = previous_end
+                        && self.blank_between(end, usize::try_from(tail.span.start).unwrap_or(0))
+                    {
+                        self.blank();
+                    }
                     self.expr(tail, Ctx::tail());
                     self.end_line();
                 }
@@ -785,7 +828,14 @@ impl Printer {
                 self.push("do");
                 self.end_line();
                 self.indent += 1;
+                let mut previous_end: Option<usize> = None;
                 for stmt in stmts {
+                    if let Some(end) = previous_end
+                        && self.blank_between(end, do_stmt_start(stmt))
+                    {
+                        self.blank();
+                    }
+                    previous_end = Some(do_stmt_end(stmt));
                     self.flush_comments(do_stmt_start(stmt));
                     match stmt {
                         | DoStmt::Let {
@@ -1410,6 +1460,22 @@ fn block_stmt_start(stmt: &BlockStmt) -> usize {
     match stmt {
         | BlockStmt::Let { span, .. } => usize::try_from(span.start).unwrap_or(0),
         | BlockStmt::Fn(decl) => usize::try_from(decl.span.start).unwrap_or(0),
+    }
+}
+
+fn block_stmt_end(stmt: &BlockStmt) -> usize {
+    match stmt {
+        | BlockStmt::Let { value, .. } => usize::try_from(value.span.end).unwrap_or(0),
+        | BlockStmt::Fn(decl) => usize::try_from(decl.span.end).unwrap_or(0),
+    }
+}
+
+fn do_stmt_end(stmt: &DoStmt) -> usize {
+    match stmt {
+        | DoStmt::Let { value, .. } | DoStmt::Bind { value, .. } => {
+            usize::try_from(value.span.end).unwrap_or(0)
+        },
+        | DoStmt::Expr(expr) => usize::try_from(expr.span.end).unwrap_or(0),
     }
 }
 

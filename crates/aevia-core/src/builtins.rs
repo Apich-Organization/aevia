@@ -437,6 +437,32 @@ pub fn call(
             let clamped = value.max(low).min(high);
             Ok(Value::Num(NumVal::float(clamped, x.dim)))
         },
+        | "is_nan" | "is_finite" | "is_infinite" => {
+            let num = expect_num(&args, 0, name, span)?;
+            // An exact (`Int`, rational) number is finite and never `NaN`.
+            let value = num.to_f64().unwrap_or(0.0);
+            Ok(Value::Bool(match name {
+                | "is_nan" => value.is_nan(),
+                | "is_finite" => value.is_finite(),
+                | _ => value.is_infinite(),
+            }))
+        },
+        | "round" if args.len() == 2 => {
+            let num = expect_num(&args, 0, name, span)?;
+            let digits = expect_int(&args, 1, name, span)?;
+            let value = num.to_f64().unwrap_or(f64::NAN);
+            // Scale in the direction that keeps the intermediate exact: a
+            // power of ten is exact in `f64` up to 10^22.
+            let power = 10f64.powi(i32::try_from(digits.abs()).unwrap_or(i32::MAX));
+            let rounded = if !value.is_finite() || power.is_infinite() {
+                value
+            } else if digits >= 0 {
+                (value * power).round() / power
+            } else {
+                (value / power).round() * power
+            };
+            Ok(Value::Num(NumVal::float(rounded, num.dim)))
+        },
         | "floor" | "ceil" | "round" | "trunc" => {
             map_scalar(&args, name, span, |num| {
                 let value = num.to_f64().unwrap_or(f64::NAN);
@@ -964,8 +990,30 @@ pub fn call(
         },
         | "transpose" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
-            if tensor.rank() != 2 {
-                return Err(EvalError::new("E0802", "transpose expects a rank-2 tensor").at(span));
+            if tensor.rank() < 2 {
+                return Err(EvalError::new(
+                    "E0802",
+                    "transpose expects a tensor of rank 2 or more",
+                )
+                .at(span));
+            }
+            // §8.4: above rank 2 the transpose reverses the axis order. The
+            // result is built element by element; only the rank-2 case has a
+            // strided view.
+            if tensor.rank() > 2 {
+                let reversed: Vec<usize> = tensor.shape.iter().rev().copied().collect();
+                let count = TensorData::element_count(&reversed);
+                let mut elements = Vec::with_capacity(count);
+                for index in 0..count {
+                    let mut coordinates: Vec<isize> = unravel(index, &reversed)
+                        .into_iter()
+                        .map(|value| value as isize)
+                        .collect();
+                    coordinates.reverse();
+                    elements.push(tensor.get(&coordinates).unwrap_or(Value::Unit));
+                }
+                let result = build_tensor(elements, reversed, tensor.dim.clone());
+                return Ok(crate::host_witness::preserve_tensor_schema(result, &tensor));
             }
             // §9.5: a transpose of an `f64` tensor permutes the strides and
             // moves no data. An exact or boxed tensor has no buffer to point
@@ -1247,6 +1295,16 @@ pub fn call(
                         let inner = variant.fields.first().cloned().unwrap_or(Value::Unit);
                         let mapped = interp.apply(function, vec![inner], span)?;
                         Ok(make_variant(adt::OPTION_ID, 1, "Some", vec![mapped]))
+                    }
+                },
+                // `Ok` is variant 0 of `Result`, `Err` variant 1.
+                | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
+                    if variant.index == 1 {
+                        Ok(Value::Variant(variant.clone()))
+                    } else {
+                        let inner = variant.fields.first().cloned().unwrap_or(Value::Unit);
+                        let mapped = interp.apply(function, vec![inner], span)?;
+                        Ok(make_variant(adt::RESULT_ID, 0, "Ok", vec![mapped]))
                     }
                 },
                 | _ => Err(arity(name, 2, args.len(), span)),
@@ -1560,6 +1618,14 @@ pub fn call(
                         interp.apply(function, vec![inner], span)
                     }
                 },
+                | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
+                    if variant.index == 1 {
+                        Ok(Value::Variant(variant.clone()))
+                    } else {
+                        let inner = variant.fields.first().cloned().unwrap_or(Value::Unit);
+                        interp.apply(function, vec![inner], span)
+                    }
+                },
                 | _ => Err(arity(name, 2, args.len(), span)),
             }
         },
@@ -1568,6 +1634,13 @@ pub fn call(
             match args.first() {
                 | Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
                     if variant.index == 1 {
+                        Ok(variant.fields.first().cloned().unwrap_or(fallback))
+                    } else {
+                        Ok(fallback)
+                    }
+                },
+                | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
+                    if variant.index == 0 {
                         Ok(variant.fields.first().cloned().unwrap_or(fallback))
                     } else {
                         Ok(fallback)
@@ -1587,6 +1660,105 @@ pub fn call(
                 },
                 | _ => Err(arity(name, 1, args.len(), span)),
             }
+        },
+        | "is_ok" | "is_err" => {
+            match args.first() {
+                | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
+                    Ok(Value::Bool((variant.index == 0) == (name == "is_ok")))
+                },
+                | _ => Err(arity(name, 1, args.len(), span)),
+            }
+        },
+        | "ok" => {
+            match args.first() {
+                | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
+                    if variant.index == 0 {
+                        let inner = variant.fields.first().cloned().unwrap_or(Value::Unit);
+                        Ok(make_variant(adt::OPTION_ID, 1, "Some", vec![inner]))
+                    } else {
+                        Ok(make_variant(adt::OPTION_ID, 0, "None", Vec::new()))
+                    }
+                },
+                | _ => Err(arity(name, 1, args.len(), span)),
+            }
+        },
+        | "ok_or" => {
+            let error = args.get(1).cloned().unwrap_or(Value::Unit);
+            match args.first() {
+                | Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
+                    if variant.index == 1 {
+                        Ok(ok(variant.fields.first().cloned().unwrap_or(Value::Unit)))
+                    } else {
+                        Ok(err(error))
+                    }
+                },
+                | _ => Err(arity(name, 2, args.len(), span)),
+            }
+        },
+        | "first" | "last" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let extent = tensor.shape.first().copied().unwrap_or(0);
+            if extent == 0 {
+                return Ok(make_variant(adt::OPTION_ID, 0, "None", Vec::new()));
+            }
+            let index = if name == "first" { 0 } else { extent - 1 };
+            let element = tensor
+                .get(&[index as isize])
+                .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
+            Ok(make_variant(adt::OPTION_ID, 1, "Some", vec![element]))
+        },
+        | "cumsum" | "cumprod" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let operator = if name == "cumsum" { "+" } else { "*" };
+            let mut elements = Vec::with_capacity(tensor.storage.len());
+            let mut running: Option<Value> = None;
+            for element in tensor.elements() {
+                let next = match running.take() {
+                    | None => element,
+                    | Some(acc) => interp.apply_binary(operator, acc, element, span)?,
+                };
+                elements.push(next.clone());
+                running = Some(next);
+            }
+            let dim = elements
+                .first()
+                .map_or_else(|| tensor.dim.clone(), crate::value::value_dim);
+            let len = elements.len();
+            Ok(build_tensor(elements, vec![len], dim))
+        },
+        | "argmax" | "argmin" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let mut best: Option<(usize, f64)> = None;
+            for (index, element) in tensor.elements().iter().enumerate() {
+                let value = element.as_f64().ok_or_else(|| {
+                    EvalError::new(
+                        "E0302",
+                        format!(
+                            "`{name}` needs numeric elements, found {}",
+                            element.type_name()
+                        ),
+                    )
+                    .at(span)
+                })?;
+                // A NaN never wins; the first of equal elements does.
+                let better = match best {
+                    | None => !value.is_nan(),
+                    | Some((_, current)) => {
+                        if name == "argmax" {
+                            value > current
+                        } else {
+                            value < current
+                        }
+                    },
+                };
+                if better {
+                    best = Some((index, value));
+                }
+            }
+            let (index, _) = best.ok_or_else(|| {
+                EvalError::new("E0802", format!("`{name}` of an empty tensor")).at(span)
+            })?;
+            Ok(Value::Num(NumVal::int(BigInt::from(index))))
         },
         | "map_err" => {
             let function = args

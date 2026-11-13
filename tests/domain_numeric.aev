@@ -127,15 +127,74 @@ test "idwt2(dwt2(m)) returns the matrix, with four sub-bands in between" =
         | Err(_) -> false
         | Ok(m) -> near(flatten(m), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 17.0], 1e-9)
 
-## --- finite-difference solvers (typed for one space dimension) ----------------
+## --- finite-difference solvers (one signature per space dimension) ------------
 
 test "poisson_fd: -u'' = 1 on (0, 1) with u(0) = u(1) = 0 has u = x (1 - x) / 2" =
     match N.poisson_fd(map(fn (_: Float) => 1.0, linspace(0.0, 1.0, 11)), 0.0) with
     | Err(_) -> false
     | Ok(u) -> near(u, map(fn (s: Float) => s * (1.0 - s) / 2.0, linspace(0.0, 1.0, 11)), 1e-9)
 
-test "the same call on a square is dimension free: one more nesting level (via Rssn.dynamic)" =
-    shown(Rssn.dynamic("poisson_fd", [to_value([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]), to_value(0.0)])) == "Ok([0.0, 0.0, 0.0, 0.0, 0.0625, 0.0, 0.0, 0.0, 0.0])"
+## The same operators on a plane and a cube: one nesting level more per dimension.
+fn ones2(n: Int): Tensor<2, Float> = ones(n, n)
+
+fn ones3(n: Int): Tensor<3, Float> = ones(n, n, n)
+
+fn zeros2(n: Int): Tensor<2, Float> = zeros(n, n)
+
+fn zeros3(n: Int): Tensor<3, Float> = zeros(n, n, n)
+
+test "poisson_fd_2d: -Laplace(u) = 1 on a 3 x 3 grid has u = h^2 / 4 at the single interior node" =
+    match N.poisson_fd_2d(ones2(3), 0.0) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(u, 1), 1), 0.0625, 1e-12) && approx_eq(at(at(u, 0), 1), 0.0, 1e-12) && at(shape(u), 0) == 3
+
+test "poisson_fd_3d: -Laplace(u) = 1 on a 3 x 3 x 3 grid has u = h^2 / 6 at the centre" =
+    match N.poisson_fd_3d(ones3(3), 0.0) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(at(u, 1), 1), 1), 0.25 / 6.0, 1e-12) && at(shape(u), 2) == 3
+
+test "poisson_fd_2d: -Laplace(u) = 2 pi^2 sin(pi x) sin(pi y) converges to sin(pi x) sin(pi y)" =
+    match N.poisson_fd_2d(19.739208802178716 * outer(map(fn (x: Float) => sin(3.141592653589793 * x), linspace(0.0, 1.0, 21)), map(fn (x: Float) => sin(3.141592653589793 * x), linspace(0.0, 1.0, 21))), 0.0) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(u, 10), 10), 1.0, 5e-3)
+
+test "heat_fd_2d keeps a constant field equal to its boundary value" =
+    match N.heat_fd_2d(1.0, ones2(5), 1.0, 0.01, 40) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(u, 2), 2), 1.0, 1e-9) && approx_eq(at(at(u, 1), 3), 1.0, 1e-9)
+
+test "heat_fd_3d keeps a constant field equal to its boundary value" =
+    match N.heat_fd_3d(1.0, ones3(4), 1.0, 0.002, 20) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(at(u, 1), 2), 1), 1.0, 1e-9) && at(shape(u), 0) == 4
+
+test "heat_fd_2d: a hot interior with a cold boundary cools down" =
+    match N.heat_fd_2d(1.0, ones2(7), 0.0, 0.02, 200) with
+    | Err(_) -> false
+    | Ok(u) -> at(at(u, 3), 3) < 1.0 && at(at(u, 3), 3) > 0.0
+
+test "wave_fd_2d keeps a constant field at rest" =
+    match N.wave_fd_2d(1.0, ones2(5), zeros2(5), 1.0, 0.1, 100) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(u, 2), 2), 1.0, 1e-9)
+
+test "wave_fd_3d keeps a constant field at rest" =
+    match N.wave_fd_3d(1.0, ones3(4), zeros3(4), 1.0, 0.05, 40) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(at(u, 1), 1), 2), 1.0, 1e-9)
+
+test "advect_fd_2d: a uniform periodic field is unchanged" =
+    match N.advect_fd_2d([1.0, 0.5], ones2(8), 0.3, 40) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(u, 3), 4), 1.0, 1e-9)
+
+test "advect_fd_3d: a uniform periodic field is unchanged" =
+    match N.advect_fd_3d([1.0, 0.5, 0.25], ones3(6), 0.2, 20) with
+    | Err(_) -> false
+    | Ok(u) -> approx_eq(at(at(at(u, 1), 2), 3), 1.0, 1e-9)
+
+test "a velocity with the wrong number of components is an Err" =
+    fails(N.advect_fd_2d([1.0], ones2(4), 0.1, 10))
 
 test "heat_fd: sin(pi x) decays like exp(-pi^2 t)" =
     match N.heat_fd(1.0, map(fn (s: Float) => sin(3.141592653589793 * s), linspace(0.0, 1.0, 51)), 0.0, 0.1, 2000) with
@@ -173,11 +232,84 @@ test "lobpcg finds the smallest eigenvalue of a diagonal matrix" =
     | Ok(values) -> near(values, [1.0, 2.0], 1e-5)
     | Err(_) -> false
 
-test "tensordot over a shared axis is matrix multiplication (dynamic, compared as text)" =
-    shown(N.tensordot([[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]], [1.0], [0.0])) == "Ok([19.0, 22.0, 43.0, 50.0])"
+test "tensordot_2_2_1 over a shared axis is matrix multiplication" =
+    match N.tensordot_2_2_1([[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]], [1], [0]) with
+    | Ok(m) -> near(flatten(m), [19.0, 22.0, 43.0, 50.0], 1e-12)
+    | Err(_) -> false
 
-test "tensor norm and inner product (dynamic, compared as text)" =
-    shown(N.tensor_norm([[3.0, 0.0], [0.0, 4.0]])) == "Ok(5.0)" && shown(N.tensor_inner([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]])) == "Ok(10.0)"
+test "tensordot_2_2_2 over both axes is the Frobenius inner product" =
+    (close(N.tensordot_2_2_2([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]], [0, 1], [0, 1]), 10.0, 1e-12) &&
+    close(N.tensor_inner_2([[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]]), 10.0, 1e-12))
+
+test "tensordot_1_1_1 is the dot product and tensordot_3_1_1 contracts one axis of a cube" =
+    (close(N.tensordot_1_1_1([1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [0], [0]), 32.0, 1e-12) &&
+    (match N.tensordot_3_1_1(cube(), [1.0, 1.0], [2], [0]) with
+     | Ok(m) -> near(flatten(m), [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-12) && at(shape(m), 0) == 2 && at(shape(m), 1) == 3
+     | Err(_) -> false))
+
+test "tensor norms of ranks 1 to 3" =
+    (close(N.tensor_norm_1([3.0, 4.0]), 5.0, 1e-12) &&
+    close(N.tensor_norm_2([[3.0, 0.0], [0.0, 4.0]]), 5.0, 1e-12) &&
+    close(N.tensor_norm_3([[[1.0, 2.0], [2.0, 0.0]], [[0.0, 4.0], [0.0, 0.0]]]), 5.0, 1e-12) &&
+    close(N.tensor_inner_1([1.0, 2.0], [3.0, 4.0]), 11.0, 1e-12) &&
+    close(N.tensor_inner_3(cube(), cube()), 140.0, 1e-9))
+
+## The rank-1 cube a (x) b (x) c with a = [1, 2], b = [1, 2, 3], c = [1, -1]; its squared
+## norm is 5 * 14 * 2 = 140.
+fn cube(): Tensor<3, Float> =
+    [[[1.0, -1.0], [2.0, -2.0], [3.0, -3.0]], [[2.0, -2.0], [4.0, -4.0], [6.0, -6.0]]]
+
+## A Tucker model back to a dense tensor: each factor is n_k x r_k, and the new mode
+## lands last, so three contractions of the leading axis restore the mode order.
+fn tucker_dense(core: Tensor<3, Float>, f: Tensor<1, Tensor<2, Float>>): Result<Tensor<3, Float>, OpError> =
+    match N.tensordot_3_2_1(core, at(f, 0), [0], [1]) with
+    | Err(e) -> Err(e)
+    | Ok(a) ->
+        match N.tensordot_3_2_1(a, at(f, 1), [0], [1]) with
+        | Err(e) -> Err(e)
+        | Ok(b) -> N.tensordot_3_2_1(b, at(f, 2), [0], [1])
+
+fn distance(a: Tensor<3, Float>, b: Tensor<3, Float>): Float =
+    match N.tensor_norm_3(a - b) with
+    | Ok(d) -> d
+    | Err(_) -> 1e300
+
+fn full_t3(): Tensor<3, Float> = [[[1.0, 4.0], [2.0, 0.0], [7.0, 3.0]], [[0.0, 1.0], [5.0, 2.0], [1.0, 1.0]]]
+
+fn rebuilt_close(back: Result<Tensor<3, Float>, OpError>, expected: Tensor<3, Float>): Bool =
+    match back with
+    | Ok(t) -> distance(t, expected) < 1e-9
+    | Err(_) -> false
+
+test "hosvd_3 at full rank reconstructs a tensor from core and factors" =
+    match N.hosvd_3(full_t3(), [0, 0, 0]) with
+    | Err(_) -> false
+    | Ok(h) -> length(h.factors) == 3 && length(h.singular_values) == 3 && rebuilt_close(tucker_dense(h.core, h.factors), full_t3())
+
+test "hosvd_3 at multilinear rank (1, 1, 1) captures a rank-1 tensor exactly" =
+    match N.hosvd_3(cube(), [1, 1, 1]) with
+    | Err(_) -> false
+    | Ok(h) -> rebuilt_close(tucker_dense(h.core, h.factors), cube())
+
+test "hooi_3 at multilinear rank (1, 1, 1) captures a rank-1 tensor exactly" =
+    match N.hooi_3(cube(), [1, 1, 1], 20, 1e-12) with
+    | Err(_) -> false
+    | Ok(h) -> h.error < 1e-9 && rebuilt_close(tucker_dense(h.core, h.factors), cube())
+
+test "cp_als_3 recovers a rank-1 tensor: one weight, three factors, no residual" =
+    match N.cp_als_3(cube(), 1, 500, 1) with
+    | Err(_) -> false
+    | Ok(fit) -> length(fit.factors) == 3 && length(fit.weights) == 1 && fit.residual < 1e-6 && approx_eq(abs(at(fit.weights, 0)), sqrt(140.0), 1e-6)
+
+test "tt_svd_3 gives cores that multiply back to the tensor (tt_dense_3)" =
+    match N.tt_svd_3(cube(), 1e-12, 0) with
+    | Err(_) -> false
+    | Ok(train) -> length(train.cores) == 3 && train.error < 1e-9 && rebuilt_close(N.tt_dense_3(train.cores), cube())
+
+test "tt_svd_3 with a rank cap of 1 still reports its truncation error" =
+    match N.tt_svd_3([[[1.0, 0.0], [0.0, 1.0]], [[0.0, 1.0], [1.0, 0.0]]], 0.0, 1) with
+    | Err(_) -> false
+    | Ok(train) -> length(train.cores) == 3 && train.error > 0.1
 
 test "norms of a sampled function" =
     (close(N.function_l1_norm([[0.0, 1.0], [1.0, 1.0], [2.0, 1.0]]), 2.0, 1e-12) &&

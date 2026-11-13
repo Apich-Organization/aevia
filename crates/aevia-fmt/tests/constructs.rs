@@ -286,3 +286,15 @@ fn inline_match_arms_round_trip_inside_expressions() {
     let formatted = round_trip(block);
     assert!(formatted.contains("\n    | None -> 0"), "{formatted}");
 }
+
+/// A blank line the author left between two statements of a `do` or layout
+/// block is a paragraph break and survives formatting; runs of blank lines
+/// collapse to one, and the result is stable.
+#[test]
+fn blank_lines_between_statements_are_kept() {
+    let source = "module T\n\nfn main(): IO Unit = do\n    let a = 1\n\n\n    let b = 2\n    println(\"{a + b}\")\n\nfn f(x: Int): Int =\n    let y = x\n\n    y + 1\n";
+    let formatted = format_source(source).expect("formats");
+    let expected = "module T\n\nfn main(): IO Unit = do\n    let a = 1\n\n    let b = 2\n    println(\"{a + b}\")\n\nfn f(x: Int): Int =\n    let y = x\n\n    y + 1\n";
+    assert_eq!(formatted, expected);
+    assert_eq!(format_source(&formatted).expect("formats again"), formatted);
+}

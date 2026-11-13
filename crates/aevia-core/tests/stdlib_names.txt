@@ -30,6 +30,8 @@ apply
 approx_eq
 approx_map
 arg
+argmax
+argmin
 args
 asin
 asinh
@@ -83,6 +85,8 @@ corr
 cos
 cosh
 cov
+cumprod
+cumsum
 curl
 curry
 decide
@@ -124,6 +128,7 @@ fftfreq
 fill
 filter
 find
+first
 flatten
 flip
 floor
@@ -159,7 +164,12 @@ interp2
 intersection
 inv
 irfft
+is_err
+is_finite
+is_infinite
+is_nan
 is_none
+is_ok
 is_prime
 is_some
 is_subset
@@ -171,6 +181,7 @@ kurtosis
 label
 laguerre_l
 laplacian
+last
 lcm
 least_squares
 legendre_p
@@ -222,6 +233,8 @@ odeint
 odeint_order
 odeint_order_with
 odeint_with
+ok
+ok_or
 on
 ones
 ones_of

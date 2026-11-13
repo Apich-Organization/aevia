@@ -386,6 +386,134 @@ fn measurement(dim: Dim) -> Type {
     ])
 }
 
+/// The highest rank at which the rank-generic tensor operations are typed.
+///
+/// Rank is not a first-class type parameter (§3.5), so an operation that the
+/// specification declares over `Tensor<n, τ>` gets one overload per rank; the
+/// checker picks the overload by the argument's rank. The runtime of every
+/// operation listed in [`rank_overloads`] is already rank-agnostic.
+const MAX_RANK: u32 = 4;
+
+/// The overloads of the rank-generic operations at ranks 2 through
+/// [`MAX_RANK`] (rank 1, and rank 2 where it predates this table, are in
+/// [`base_schemes`]).
+fn rank_overloads(name: &str) -> Vec<Scheme> {
+    let elem = || scalar(rep_var(0), dim_var(0));
+    let square = || dim_var(0).pow(&BigRational::from_integer(2.into()));
+    let mut out = Vec::new();
+    for rank in 2..=MAX_RANK {
+        match name {
+            | "sum" => {
+                out.push(scheme(1, 1, 0, func(vec![tensor(rank, elem())], elem())));
+                // The keepdims axis form of rank 2 is in the base table.
+                if rank > 2 {
+                    out.push(scheme(
+                        1,
+                        1,
+                        0,
+                        func(vec![tensor(rank, elem()), Type::int()], tensor(rank, elem())),
+                    ));
+                }
+            },
+            | "prod" => {
+                out.push(scheme(
+                    1,
+                    0,
+                    0,
+                    func(
+                        vec![tensor(rank, scalar(rep_var(0), one()))],
+                        scalar(rep_var(0), one()),
+                    ),
+                ));
+            },
+            | "mean" => {
+                out.push(scheme(
+                    1,
+                    1,
+                    0,
+                    func(
+                        vec![tensor(rank, elem())],
+                        scalar(rep_var(0).div_rep(), dim_var(0)),
+                    ),
+                ));
+            },
+            | "var" => {
+                let result = || scalar(rep_var(0).div_rep(), square());
+                out.push(scheme(1, 1, 0, func(vec![tensor(rank, elem())], result())));
+                out.push(scheme(
+                    1,
+                    1,
+                    0,
+                    func(vec![tensor(rank, elem()), Type::bool()], result()),
+                ));
+            },
+            | "std" => {
+                out.push(scheme(
+                    1,
+                    1,
+                    0,
+                    func(
+                        vec![tensor(rank, elem())],
+                        scalar(rep_var(0).div_rep(), dim_var(0)),
+                    ),
+                ));
+            },
+            | "norm" => {
+                out.push(scheme(1, 1, 0, func(vec![tensor(rank, elem())], elem())));
+                out.push(scheme(
+                    1,
+                    1,
+                    0,
+                    func(vec![tensor(rank, elem()), Type::int()], elem()),
+                ));
+            },
+            | "normalize" => {
+                out.push(scheme(
+                    1,
+                    1,
+                    0,
+                    func(
+                        vec![tensor(rank, elem())],
+                        tensor(rank, scalar(rep_var(0), one())),
+                    ),
+                ));
+            },
+            // `flatten` of a matrix is in the base table.
+            | "flatten" if rank > 2 => {
+                out.push(scheme(1, 0, 0, func(vec![tensor(rank, var(0))], list(var(0)))));
+            },
+            | "map" => {
+                out.push(scheme(
+                    2,
+                    0,
+                    0,
+                    func(
+                        vec![func(vec![var(0)], var(1)), tensor(rank, var(0))],
+                        tensor(rank, var(1)),
+                    ),
+                ));
+            },
+            | "map2" | "zip_with" => {
+                out.push(scheme(
+                    3,
+                    0,
+                    0,
+                    func(
+                        vec![
+                            func(vec![var(0), var(1)], var(2)),
+                            tensor(rank, var(0)),
+                            tensor(rank, var(1)),
+                        ],
+                        tensor(rank, var(2)),
+                    ),
+                ));
+            },
+            | _ => {},
+        }
+    }
+    out
+}
+
 /// Returns every scheme attached to a built-in name, if it is one.
 #[must_use]
 pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
@@ -393,6 +521,7 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
         return Some(found);
     }
     let mut found = base_schemes(name)?;
+    found.extend(rank_overloads(name));
     found.extend(sparse::sparse_overloads(name));
     Some(found)
 }
@@ -611,7 +740,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
             )]
         },
         | "floor" | "ceil" | "round" | "trunc" => {
-            vec![scheme(
+            let mut found = vec![scheme(
                 1,
                 1,
                 0,
@@ -619,6 +748,30 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                     vec![scalar(rep_var(0), dim_var(0))],
                     scalar(rep_var(0), dim_var(0)),
                 ),
+            )];
+            // `round(x, n)` rounds to `n` decimal places (a negative `n`
+            // rounds to tens, hundreds, …), keeping the unit of `x`.
+            if name == "round" {
+                found.push(scheme(
+                    1,
+                    1,
+                    0,
+                    func(
+                        vec![scalar(rep_var(0), dim_var(0)), Type::int()],
+                        scalar(rep_var(0), dim_var(0)),
+                    ),
+                ));
+            }
+            found
+        },
+        // §8.1.3: IEEE classification, for the `NaN` that `mean([])` and
+        // `0.0 / 0.0` produce; an exact number is always finite.
+        | "is_nan" | "is_finite" | "is_infinite" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(vec![scalar(rep_var(0), dim_var(0))], Type::bool()),
             )]
         },
         | "mod" | "rem" => {
@@ -1147,6 +1300,20 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
                         Type::option(var(1)),
                     ),
                 ),
+                // `map` on a `Result` transforms the `Ok` payload and keeps
+                // an `Err` as it is (the counterpart of `map_err`).
+                scheme(
+                    3,
+                    0,
+                    0,
+                    func(
+                        vec![
+                            func(vec![var(0)], var(1)),
+                            Type::result(var(0), var(2)),
+                        ],
+                        Type::result(var(1), var(2)),
+                    ),
+                ),
             ]
         },
         | "map2" => {
@@ -1448,25 +1615,117 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
 
         // ----- Option / Result -------------------------------------------
         | "and_then" => {
+            vec![
+                scheme(
+                    2,
+                    0,
+                    0,
+                    func(
+                        vec![
+                            func(vec![var(0)], Type::option(var(1))),
+                            Type::option(var(0)),
+                        ],
+                        Type::option(var(1)),
+                    ),
+                ),
+                scheme(
+                    3,
+                    0,
+                    0,
+                    func(
+                        vec![
+                            func(vec![var(0)], Type::result(var(1), var(2))),
+                            Type::result(var(0), var(2)),
+                        ],
+                        Type::result(var(1), var(2)),
+                    ),
+                ),
+            ]
+        },
+        | "unwrap_or" => {
+            vec![
+                scheme(
+                    1,
+                    0,
+                    0,
+                    func(vec![Type::option(var(0)), var(0)], var(0)),
+                ),
+                scheme(
+                    2,
+                    0,
+                    0,
+                    func(vec![Type::result(var(0), var(1)), var(0)], var(0)),
+                ),
+            ]
+        },
+        | "is_ok" | "is_err" => {
+            vec![scheme(
+                2,
+                0,
+                0,
+                func(vec![Type::result(var(0), var(1))], Type::bool()),
+            )]
+        },
+        // `ok(r)` forgets the error: `Ok(x)` is `Some(x)`, `Err(_)` is `None`.
+        | "ok" => {
+            vec![scheme(
+                2,
+                0,
+                0,
+                func(vec![Type::result(var(0), var(1))], Type::option(var(0))),
+            )]
+        },
+        // `ok_or(o, e)` turns a missing value into the error `e`.
+        | "ok_or" => {
             vec![scheme(
                 2,
                 0,
                 0,
                 func(
-                    vec![
-                        func(vec![var(0)], Type::option(var(1))),
-                        Type::option(var(0)),
-                    ],
-                    Type::option(var(1)),
+                    vec![Type::option(var(0)), var(1)],
+                    Type::result(var(0), var(1)),
                 ),
             )]
         },
-        | "unwrap_or" => {
+        | "first" | "last" => {
             vec![scheme(
                 1,
                 0,
                 0,
-                func(vec![Type::option(var(0)), var(0)], var(0)),
+                func(vec![list(var(0))], Type::option(var(0))),
+            )]
+        },
+        | "cumsum" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![tensor(1, scalar(rep_var(0), dim_var(0)))],
+                    tensor(1, scalar(rep_var(0), dim_var(0))),
+                ),
+            )]
+        },
+        | "cumprod" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(
+                    vec![tensor(1, scalar(rep_var(0), one()))],
+                    tensor(1, scalar(rep_var(0), one())),
+                ),
+            )]
+        },
+        | "argmax" | "argmin" => {
+            vec![scheme(
+                1,
+                1,
+                0,
+                func(
+                    vec![tensor(1, scalar(rep_var(0), dim_var(0)))],
+                    Type::int(),
+                ),
             )]
         },
         | "is_some" | "is_none" => {
@@ -3553,6 +3812,9 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "ceil",
     "round",
     "trunc",
+    "is_nan",
+    "is_finite",
+    "is_infinite",
     "mod",
     "rem",
     "div",
@@ -3633,6 +3895,16 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "unwrap_or",
     "is_some",
     "is_none",
+    "is_ok",
+    "is_err",
+    "ok",
+    "ok_or",
+    "first",
+    "last",
+    "cumsum",
+    "cumprod",
+    "argmax",
+    "argmin",
     "map_err",
     "show",
     "repr",
@@ -3895,7 +4167,8 @@ mod tests {
         // `length` of a string, a rank-1 tensor and a set (§8.1.5.1).
         assert_eq!(schemes("length").expect("length").len(), 3);
         // §8.4 and §8.5 give `sum` the reduction, the keepdims axis form for
-        // ranks 1 and 2, and the calculus summation `sum(f, a, b)`.
-        assert_eq!(schemes("sum").expect("sum").len(), 12);
+        // ranks 1 to 4, the full reduction at ranks 2 to 4, and the calculus
+        // summation `sum(f, a, b)`.
+        assert_eq!(schemes("sum").expect("sum").len(), 17);
     }
 }

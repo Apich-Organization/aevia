@@ -342,8 +342,8 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
   维度无关的有限差分求解器（`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd`）、复变特殊函数
   （`lgamma_complex`、`gamma_complex`、`digamma_complex`、`lambert_w_complex`、`bessel_j_complex`、`bessel_i_complex`）
   与表达式算子（`oscillatory_integral`、`anderson_fixed_point`、`newton_cg_minimize`、`ode_solve`、`ode_symplectic`、
-  `ode_imex`、`ode_etdrk4`）都归入 `Rssn_Numeric`，共 67 条 `sig`，8 个留在 dynamic 档并写明理由
-  （`tensor_norm`/`tensor_inner`/`tensordot` 是秩多态，`hosvd`/`hooi`/`cp_als`/`tt_svd`/`tt_dense` 返回混合列表）。
+  `ode_imex`、`ode_etdrk4`）都归入 `Rssn_Numeric`：75 个算子全部有 `sig`，没有一个留在 dynamic 档
+  （秩多态张量与分解按秩给出多条签名，见下）。
   其中的规则：
   - 这些算子的结果是浮点，签名用 `Float`/`Tensor<n, Float>`，**不是** `Real`（`from_value<Real>` 只接受精确的
     `Int`/`Rat`）；整数性质的结果（秩、置换下标）同样以 `Float` 返回。
@@ -352,8 +352,22 @@ manifest”自动生成的——新增场景需要新增一个包装模块。`is
   - 维度无关的名字：`heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度，符号 PDE 是
     `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`，仿射变换是
     `translation`/`scaling`/`shear`/`reflection`/`rotation`（`Rssn_Graphics` 的 family 认领了不带后缀的名字；`_2d`/`_3d` 是别名）。
-    签名只有一个秩，所以有限差分的 typed 包装器是一维形式，二维/三维走 `Rssn.dynamic`，答案是没有量纲证据的 `Value`
-    （不可 `from_value` 成 `Float` 张量）。
+    签名只有一个字面量秩，所以一个内核算子可以有**多条 `sig`，各用自己的 Aevia 名字**（overlay 写作
+    `sig heat_fd as heat_fd_2d(..)`；`Overlay.sigs` 按算子存一个列表，同名重复是错误，只有一条 `sig` 的 overlay 不受影响）。
+    有限差分：不带后缀的名字保持一维含义，`heat_fd_2d`/`heat_fd_3d`、`wave_fd_2d`/`wave_fd_3d`、`poisson_fd_2d`/
+    `poisson_fd_3d`、`advect_fd_2d`/`advect_fd_3d` 取 `Tensor<2, Float>`/`Tensor<3, Float>` 场并返回同形状的场
+    （平流速度是 `Tensor<1, Float>`，每个空间维一个分量，长度不符返回 `Err`）。
+  - 秩多态张量算子按秩命名为 `<算子>_<秩>`：`tensor_norm_1..4`、`tensor_inner_1..4`（两个同秩操作数），
+    `tensordot_<ra>_<rb>_<k>`（秩 ra、rb 的操作数收缩 k 个轴，`axes_a`/`axes_b` 是 `Tensor<1, Int>`、从 0 起，结果秩为
+    ra + rb − 2k，为 0 时是 `Float`；ra、rb ∈ 1..4，1 ≤ k ≤ min(ra, rb)，结果秩至多 4，共 27 个）。
+    分解 `hosvd_<r>`、`hooi_<r>`、`cp_als_<r>`、`tt_svd_<r>`、`tt_dense_<r>`（r = 2、3、4）返回 `Numeric` 前言里声明的记录：
+    `Hosvd<r>{core, factors, singular_values}`、`Hooi<r>{core, factors, error}`、`CpFit{weights, factors, residual}`、
+    `TensorTrain{cores, error}`；`factors` 是 `Tensor<1, Tensor<2, Float>>`，`cores` 是 `Tensor<1, Tensor<3, Float>>`。
+  - **混合列表的解码机制。** 内核的分解结果是类型各异的部分组成的列表（张量、张量的列表、一个数）。桥把这种
+    结果保留为带逐元素量纲证据的一维值（`kernel.rs` 的 `lift_list` 不再要求每一项都是张量），`from_value<Tensor<1, Value>>`
+    是通用的“列表访问器”：把第一个轴的各部分逐个作为 `Value` 句柄交出（均匀张量按行切片，参差列表取各自的证据），
+    再对每一部分 `from_value<T>`。解码器是前言里的 Aevia 源码（`hosvd3_from_value` 等），用 `codec Hosvd3 - hosvd3_from_value`
+    声明为只解码的类型（`-` 表示没有编码函数，把这样的类型当参数是覆盖检查的错误）。
   - `sig` 即“该算子是无量纲参数的纯函数”的声明，所以 typed 的数值结果带 `Scalar(1)` 证据可以解码；
     没有 `sig` 的算子，其规则是 `Same`/`Product`/`Any` 时结果不被信任（见上“维度证据”）。
   端到端测试：`tests/domain_numeric.aev`（封闭形式核对，见 §8.19.1）。

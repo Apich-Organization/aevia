@@ -1771,11 +1771,96 @@ pub(crate) fn validate_kernel_value(
     )
 }
 
+/// `from_value<Tensor<1, Value>>`: the list accessor of a kernel value.
+///
+/// A kernel list of unlike parts (the `list(core, factors, error)` of a tensor
+/// decomposition, whose parts are tensors of different ranks and a number) has
+/// no Aevia tensor type. Asking for `Tensor<1, Value>` hands out the parts of
+/// the first axis as handles, each carrying its own dimension witness, and
+/// `from_value<T>` on a part decodes it as usual. A tensor of rank 2 or more
+/// yields its rows; a scalar is not a list and is an `Err`.
+///
+/// Returns `None` when `expected` is not `Tensor<1, Value>` (the ordinary
+/// path), and `Some` for the accessor, with the same all-or-nothing contract:
+/// the payload is only split, never reinterpreted.
+fn kernel_pieces(
+    value: &Value,
+    expected: &aevia_types::Type,
+) -> Option<Result<Value, String>> {
+    use aevia_rssn::witness::DimensionWitness as W;
+    let aevia_types::Type::Tensor { shape, elem } = expected else {
+        return None;
+    };
+    if shape.rank() != 1 || **elem != aevia_types::builtins::dynamic_value_type() {
+        return None;
+    }
+    let Value::KernelValue(kernel) = value else {
+        return Some(Err("expected an opaque kernel Value".into()));
+    };
+    let Val::Tensor { shape, data } = &kernel.payload else {
+        return Some(Err(format!(
+            "kernel value does not prove expected type {expected}: it is not a list"
+        )));
+    };
+    let &[count, ref inner @ ..] = shape.as_slice() else {
+        return Some(Err("kernel value is a scalar, not a list".into()));
+    };
+    let (dimension, element, parts) = match &kernel.witness {
+        | W::Tensor {
+            dimension,
+            element,
+            elements,
+            ..
+        } => (dimension.clone(), element.as_deref(), elements.as_slice()),
+        | _ => (None, None, [].as_slice()),
+    };
+    if !parts.is_empty() && parts.len() != count {
+        return Some(Err("kernel value has a malformed element witness".into()));
+    }
+    let stride: usize = inner.iter().product();
+    let mut items = Vec::with_capacity(count);
+    for i in 0..count {
+        let (payload, witness) = if inner.is_empty() {
+            let witness = parts
+                .get(i)
+                .cloned()
+                .or_else(|| element.cloned())
+                .or_else(|| dimension.clone().map(W::Scalar))
+                .unwrap_or(W::Unknown);
+            (data[i].clone(), witness)
+        } else {
+            // A slice of a uniform tensor has the witness of the whole.
+            (
+                Val::Tensor {
+                    shape: inner.to_vec(),
+                    data: data[i * stride..(i + 1) * stride].to_vec(),
+                },
+                parts.get(i).cloned().unwrap_or_else(|| kernel.witness.clone()),
+            )
+        };
+        items.push(Value::KernelValue(Rc::new(crate::value::KernelValue {
+            payload,
+            witness,
+            host_witness: None,
+        })));
+    }
+    Some(Ok(Value::Tensor(Rc::new(crate::value::TensorData {
+        verified_element: Some(Rc::new((**elem).clone())),
+        shape: vec![count],
+        storage: crate::value::Storage::Boxed(items),
+        dim: Dim::one(),
+        display: None,
+    }))))
+}
+
 /// Converts only after the shared borrowed validator has established the contract.
 pub(crate) fn from_kernel_value(
     value: &Value,
     expected: &aevia_types::Type,
 ) -> Result<Value, String> {
+    if let Some(pieces) = kernel_pieces(value, expected) {
+        return pieces;
+    }
     validate_kernel_value(value, expected)?;
     let Value::KernelValue(value) = value else {
         unreachable!()

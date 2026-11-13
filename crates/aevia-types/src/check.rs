@@ -7948,21 +7948,25 @@ impl Checker {
                     };
                 }
                 return match self.infer.resolve(&arg_ty) {
-                    | Type::Tensor { shape, elem } if shape.rank() == 2 => {
+                    | Type::Tensor { shape, elem } if shape.rank() >= 2 => {
+                        // §8.4: `transpose` reverses the axis order, so a
+                        // refined shape is reversed whole (`[m, n]` → `[n, m]`,
+                        // `[a, b, c]` → `[c, b, a]`).
+                        let rank = shape.rank();
                         let swapped = match &shape {
-                            | Shape::Refined(items) if items.len() == 2 => {
-                                Shape::Refined(vec![items[1].clone(), items[0].clone()])
+                            | Shape::Refined(items) if items.len() as u32 == rank => {
+                                Shape::Refined(items.iter().rev().cloned().collect())
                             },
-                            | _ => Shape::Rank(2),
+                            | _ => Shape::Rank(rank),
                         };
                         Type::Tensor { shape: swapped, elem }
                     },
                     | other => {
                         self.error_help(
                             "E0302",
-                            format!("`transpose` expects a rank-2 tensor, found {other}"),
+                            format!("`transpose` expects a tensor of rank 2 or more, found {other}"),
                             args[0].span,
-                            "transpose a matrix (`Tensor<2, τ>` or a refined `Tensor<[m, n], τ>`)",
+                            "transpose a matrix (`Tensor<2, τ>`) or any higher-rank tensor, which reverses its axes; a vector is its own transpose",
                         );
                         Type::Error
                     },
@@ -9960,6 +9964,16 @@ impl Checker {
                                             &format!("did you mean `{close}`?"),
                                         )
                                     },
+                                    | None if !fields.is_empty() => {
+                                        let names: Vec<&str> =
+                                            fields.iter().map(|(field, _)| field.as_str()).collect();
+                                        self.error_help(
+                                            "E0306",
+                                            message,
+                                            span,
+                                            &format!("the fields are {}", names.join(", ")),
+                                        )
+                                    },
                                     | None => self.error("E0306", message, span),
                                 }
                                 Type::Error
@@ -11654,7 +11668,13 @@ impl Checker {
                             self.dim_params.push((name.clone(), fresh.clone()));
                             return fresh;
                         }
-                        self.error("E0407", format!("unknown dimension `{name}`"), span);
+                        let help = self.unknown_dimension_help(name);
+                        let mut diagnostic =
+                            Diagnostic::error("E0407", format!("unknown dimension `{name}`"), span);
+                        if let Some(help) = help {
+                            diagnostic = diagnostic.with_help(help);
+                        }
+                        self.diagnostics.push(diagnostic);
                         Dim::one()
                     },
                 }
@@ -11978,8 +11998,72 @@ impl Checker {
         error: UnitError,
         span: Span,
     ) {
-        self.diagnostics
-            .push(Diagnostic::error(error.code(), error.to_string(), span));
+        let mut diagnostic = Diagnostic::error(error.code(), error.to_string(), span);
+        if let UnitError::Unknown(name) = &error
+            && let Some(close) = self.close_unit(name)
+        {
+            diagnostic = diagnostic.with_help(format!("did you mean `{close}`?"));
+        }
+        self.diagnostics.push(diagnostic);
+    }
+
+    /// The unit closest to a misspelt `name`, counting the common prefixed
+    /// spellings (`km`, `ms`, …) as candidates. The error path is the only
+    /// caller, so building the candidate list on demand is fine.
+    fn close_unit(
+        &self,
+        name: &str,
+    ) -> Option<String> {
+        const COMMON_PREFIXES: &[&str] = &["k", "M", "G", "T", "m", "c", "µ", "n", "p"];
+        // A prefix followed by a misspelt unit (`kmm` for `km`) reads best as
+        // the same prefix on the nearest unit name.
+        for prefix in COMMON_PREFIXES {
+            if let Some(rest) = name.strip_prefix(prefix)
+                && rest.len() > 1
+            {
+                let bases: Vec<&String> = self
+                    .units
+                    .list()
+                    .iter()
+                    .filter(|def| def.prefixable)
+                    .flat_map(|def| std::iter::once(&def.name).chain(def.aliases.iter()))
+                    .collect();
+                if let Some(close) = closest_name(rest, bases.iter().map(|s| s.as_str())) {
+                    return Some(format!("{prefix}{close}"));
+                }
+            }
+        }
+        let mut candidates: Vec<String> = Vec::new();
+        for def in self.units.list() {
+            let spellings = std::iter::once(&def.name).chain(def.aliases.iter());
+            for spelling in spellings {
+                candidates.push(spelling.clone());
+                if def.prefixable {
+                    for prefix in COMMON_PREFIXES {
+                        candidates.push(format!("{prefix}{spelling}"));
+                    }
+                }
+            }
+        }
+        closest_name(name, candidates.iter().map(String::as_str)).map(str::to_string)
+    }
+
+    /// The help for an unknown dimension name: a unit written where a
+    /// dimension belongs is the common slip (`Float[m]` for `Float[L]`), then a
+    /// misspelt dimension.
+    fn unknown_dimension_help(
+        &self,
+        name: &str,
+    ) -> Option<String> {
+        if let Some(unit) = self.units.lookup_si(name) {
+            let dim = self.dims.format(&unit.dim);
+            return Some(format!(
+                "`{name}` is a unit, not a dimension: it measures `{dim}`, so write `Float[{dim}]` (units appear in values, as in `2 {name}`)"
+            ));
+        }
+        let mut candidates: Vec<&str> = self.dims.base_names().iter().map(String::as_str).collect();
+        candidates.extend(self.dims.aliases().keys().map(String::as_str));
+        closest_name(name, candidates).map(|close| format!("did you mean `{close}`?"))
     }
 
     fn error(

@@ -304,13 +304,27 @@ sig bootstrap_ci(xs: Tensor<1, Float>, statistic: Real, alpha: Float, resamples:
 sig sparse_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, method: Real) -> Result<Tensor<1, Float>, OpError>
 sig amg_solve(entries: Tensor<2, Float>, b: Tensor<1, Float>, tol: Float, kind: Real) -> Result<Tensor<1, Float>, OpError>
 # The finite-difference solvers are dimension free in the kernel: the space
-# dimension is the nesting depth of the field. A signature has one rank, so these
-# are the one-dimensional forms; a plane or a cube goes through
-# `Rssn.dynamic("poisson_fd", ..)`, whose answer is an undecoded `Value`.
+# dimension is the nesting depth of the field (a line, a plane, a cube). An Aevia
+# signature has one literal rank, so one kernel operator carries one signature per
+# space dimension, each under its own name: the bare name `heat_fd` is the
+# one-dimensional solver, `heat_fd_2d` and `heat_fd_3d` take `Tensor<2, Float>` and
+# `Tensor<3, Float>` fields (indexed `u[i][j]`, `u[i][j][k]`, nodes spread evenly
+# over the unit box, the first and last node on its boundary) and answer the field
+# at `t_end` in the same shape. `boundary` is the constant Dirichlet value on the
+# whole boundary. The advection velocity has one component per space dimension and
+# the field is periodic.
 sig heat_fd(alpha: Float, u0: Tensor<1, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig heat_fd as heat_fd_2d(alpha: Float, u0: Tensor<2, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig heat_fd as heat_fd_3d(alpha: Float, u0: Tensor<3, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
 sig wave_fd(c: Float, u0: Tensor<1, Float>, v0: Tensor<1, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig wave_fd as wave_fd_2d(c: Float, u0: Tensor<2, Float>, v0: Tensor<2, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig wave_fd as wave_fd_3d(c: Float, u0: Tensor<3, Float>, v0: Tensor<3, Float>, boundary: Float, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
 sig poisson_fd(f: Tensor<1, Float>, boundary: Float) -> Result<Tensor<1, Float>, OpError>
+sig poisson_fd as poisson_fd_2d(f: Tensor<2, Float>, boundary: Float) -> Result<Tensor<2, Float>, OpError>
+sig poisson_fd as poisson_fd_3d(f: Tensor<3, Float>, boundary: Float) -> Result<Tensor<3, Float>, OpError>
 sig advect_fd(velocity: Tensor<1, Float>, u0: Tensor<1, Float>, t_end: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
+sig advect_fd as advect_fd_2d(velocity: Tensor<1, Float>, u0: Tensor<2, Float>, t_end: Float, steps: Int) -> Result<Tensor<2, Float>, OpError>
+sig advect_fd as advect_fd_3d(velocity: Tensor<1, Float>, u0: Tensor<3, Float>, t_end: Float, steps: Int) -> Result<Tensor<3, Float>, OpError>
 # Ragged arguments are tensors of tensors; polynomial equations are term tables
 # [[coefficient, e1, .., en], ..], one per equation, with different term counts.
 sig nested_dissection_order(adjacency: Tensor<1, Tensor<1, Float>>) -> Result<Tensor<1, Float>, OpError>
@@ -324,8 +338,68 @@ sig ode_solve(rhs: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, y0: Tensor<1
 sig ode_symplectic(accel: Tensor<1, Real>, vars: Tensor<1, Real>, q0: Tensor<1, Float>, p0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int, method: Real) -> Result<Tensor<2, Float>, OpError>
 sig ode_imex(f_ex: Tensor<1, Real>, f_im: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, y0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int, scheme: Real) -> Result<Tensor<1, Float>, OpError>
 sig ode_etdrk4(l: Tensor<2, Float>, f: Tensor<1, Real>, vars: Tensor<1, Real>, t: Real, u0: Tensor<1, Float>, t0: Float, t1: Float, steps: Int) -> Result<Tensor<1, Float>, OpError>
-dynamic tensor_norm tensor_inner tensordot | rank-polymorphic tensors (tensordot also changes rank with its axes): one signature cannot state the rank, and the dynamic Value carries no dimension evidence, so print it or compare show(v)
-dynamic hosvd hooi cp_als tt_svd tt_dense | results are lists of unlike parts (core, factors, error) or a tensor of unknown rank: a ragged tree with no Aevia tensor type
+# Rank-polymorphic tensor operators. The kernel takes a nested list of any depth; an
+# Aevia type has a literal rank, so each operator has one signature per rank, named
+# `<op>_<rank>`: `tensor_norm_3` takes a `Tensor<3, Float>`. `tensor_inner_<r>` takes
+# two tensors of rank r. `tensordot_<ra>_<rb>_<k>` contracts k axes of a rank-ra
+# and a rank-rb tensor (`axes_a[i]` of `a` against `axes_b[i]` of `b`, 0-based) and
+# has rank ra + rb - 2k (a `Float` when 0); ranks 1..4, k from 1 to min(ra, rb), results
+# up to rank 4 (use `Rssn.dynamic` beyond that). The decompositions have signatures
+# for tensors of rank 2, 3 and 4 and answer with the records declared in the
+# `Numeric` prelude (`Hosvd3`, `Hooi3`, `CpFit`, `TensorTrain`). A rank argument of
+# `0` in `ranks` keeps the full rank of that mode; `tt_dense_<r>` rebuilds a rank-r
+# tensor from r cores of shape (left, n, right).
+sig tensor_norm as tensor_norm_1(t: Tensor<1, Float>) -> Result<Float, OpError>
+sig tensor_norm as tensor_norm_2(t: Tensor<2, Float>) -> Result<Float, OpError>
+sig tensor_norm as tensor_norm_3(t: Tensor<3, Float>) -> Result<Float, OpError>
+sig tensor_norm as tensor_norm_4(t: Tensor<4, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_1(a: Tensor<1, Float>, b: Tensor<1, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_2(a: Tensor<2, Float>, b: Tensor<2, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_3(a: Tensor<3, Float>, b: Tensor<3, Float>) -> Result<Float, OpError>
+sig tensor_inner as tensor_inner_4(a: Tensor<4, Float>, b: Tensor<4, Float>) -> Result<Float, OpError>
+sig tensordot as tensordot_1_1_1(a: Tensor<1, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+sig tensordot as tensordot_1_2_1(a: Tensor<1, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_1_3_1(a: Tensor<1, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_1_4_1(a: Tensor<1, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_2_1_1(a: Tensor<2, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_2_2_1(a: Tensor<2, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_2_2_2(a: Tensor<2, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+sig tensordot as tensordot_2_3_1(a: Tensor<2, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_2_3_2(a: Tensor<2, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_2_4_1(a: Tensor<2, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_2_4_2(a: Tensor<2, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_3_1_1(a: Tensor<3, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_3_2_1(a: Tensor<3, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_3_2_2(a: Tensor<3, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_3_3_1(a: Tensor<3, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_3_3_2(a: Tensor<3, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_3_3_3(a: Tensor<3, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+sig tensordot as tensordot_3_4_2(a: Tensor<3, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_3_4_3(a: Tensor<3, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_4_1_1(a: Tensor<4, Float>, b: Tensor<1, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_4_2_1(a: Tensor<4, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_4_2_2(a: Tensor<4, Float>, b: Tensor<2, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_4_3_2(a: Tensor<4, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<3, Float>, OpError>
+sig tensordot as tensordot_4_3_3(a: Tensor<4, Float>, b: Tensor<3, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<1, Float>, OpError>
+sig tensordot as tensordot_4_4_2(a: Tensor<4, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<4, Float>, OpError>
+sig tensordot as tensordot_4_4_3(a: Tensor<4, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Tensor<2, Float>, OpError>
+sig tensordot as tensordot_4_4_4(a: Tensor<4, Float>, b: Tensor<4, Float>, axes_a: Tensor<1, Int>, axes_b: Tensor<1, Int>) -> Result<Float, OpError>
+
+sig hosvd as hosvd_2(t: Tensor<2, Float>, ranks: Tensor<1, Int>) -> Result<Hosvd2, OpError>
+sig hosvd as hosvd_3(t: Tensor<3, Float>, ranks: Tensor<1, Int>) -> Result<Hosvd3, OpError>
+sig hosvd as hosvd_4(t: Tensor<4, Float>, ranks: Tensor<1, Int>) -> Result<Hosvd4, OpError>
+sig hooi as hooi_2(t: Tensor<2, Float>, ranks: Tensor<1, Int>, sweeps: Int, tol: Float) -> Result<Hooi2, OpError>
+sig hooi as hooi_3(t: Tensor<3, Float>, ranks: Tensor<1, Int>, sweeps: Int, tol: Float) -> Result<Hooi3, OpError>
+sig hooi as hooi_4(t: Tensor<4, Float>, ranks: Tensor<1, Int>, sweeps: Int, tol: Float) -> Result<Hooi4, OpError>
+sig cp_als as cp_als_2(t: Tensor<2, Float>, rank: Int, sweeps: Int, seed: Int) -> Result<CpFit, OpError>
+sig cp_als as cp_als_3(t: Tensor<3, Float>, rank: Int, sweeps: Int, seed: Int) -> Result<CpFit, OpError>
+sig cp_als as cp_als_4(t: Tensor<4, Float>, rank: Int, sweeps: Int, seed: Int) -> Result<CpFit, OpError>
+sig tt_svd as tt_svd_2(t: Tensor<2, Float>, tol: Float, max_rank: Int) -> Result<TensorTrain, OpError>
+sig tt_svd as tt_svd_3(t: Tensor<3, Float>, tol: Float, max_rank: Int) -> Result<TensorTrain, OpError>
+sig tt_svd as tt_svd_4(t: Tensor<4, Float>, tol: Float, max_rank: Int) -> Result<TensorTrain, OpError>
+sig tt_dense as tt_dense_2(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<2, Float>, OpError>
+sig tt_dense as tt_dense_3(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<3, Float>, OpError>
+sig tt_dense as tt_dense_4(cores: Tensor<1, Tensor<3, Float>>) -> Result<Tensor<4, Float>, OpError>
 
 # ---------------------------------------------------------------------------
 # Rich types. Curated Aevia source that is placed ahead of the generated
@@ -354,6 +428,172 @@ prelude Combinatorics
 |     | Err(e) -> Err(e)
 |
 
+# --- Numeric: results of the tensor decompositions ----------------------------
+# The kernel answers a list of unlike parts (`list(core, list(U_1, .., U_N), error)`)
+# that no Aevia tensor type holds. `from_value<Tensor<1, Value>>` hands the parts out as
+# handles, and these decoders give each its type. The types are decode-only.
+codec Hosvd2 - hosvd2_from_value
+codec Hosvd3 - hosvd3_from_value
+codec Hosvd4 - hosvd4_from_value
+codec Hooi2 - hooi2_from_value
+codec Hooi3 - hooi3_from_value
+codec Hooi4 - hooi4_from_value
+codec CpFit - cpfit_from_value
+codec TensorTrain - tensortrain_from_value
+
+prelude Numeric
+| ## Truncated higher-order SVD: the core, one factor matrix per mode (`factors[k]` is
+| ## n_k x r_k with orthonormal columns) and the singular values of each mode unfolding.
+| ## The tensor is `core` multiplied by `factors[k]` along mode k.
+| type Hosvd2 = { core: Tensor<2, Float>, factors: Tensor<1, Tensor<2, Float>>, singular_values: Tensor<1, Tensor<1, Float>> }
+| type Hosvd3 = { core: Tensor<3, Float>, factors: Tensor<1, Tensor<2, Float>>, singular_values: Tensor<1, Tensor<1, Float>> }
+| type Hosvd4 = { core: Tensor<4, Float>, factors: Tensor<1, Tensor<2, Float>>, singular_values: Tensor<1, Tensor<1, Float>> }
+|
+| ## The Tucker approximation refined by higher-order orthogonal iteration, with its
+| ## relative Frobenius error.
+| type Hooi2 = { core: Tensor<2, Float>, factors: Tensor<1, Tensor<2, Float>>, error: Float }
+| type Hooi3 = { core: Tensor<3, Float>, factors: Tensor<1, Tensor<2, Float>>, error: Float }
+| type Hooi4 = { core: Tensor<4, Float>, factors: Tensor<1, Tensor<2, Float>>, error: Float }
+|
+| ## A CP decomposition: sum over r of weights[r] times the outer product of column r of
+| ## every factor matrix, and the relative residual. Compare reconstructions, not factors:
+| ## they are fixed only up to permutation and scaling.
+| type CpFit = { weights: Tensor<1, Float>, factors: Tensor<1, Tensor<2, Float>>, residual: Float }
+|
+| ## A tensor train: `cores[k]` has shape (left, n_k, right), and the truncation error.
+| type TensorTrain = { cores: Tensor<1, Tensor<3, Float>>, error: Float }
+|
+| ## The list of parts, checked to have `n` of them. A list of another length is
+| ## answered with the mismatch the decoder would report for a non-list.
+| fn expect_parts(wire: Value, n: Int): Result<Tensor<1, Value>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         if length(parts) == n then
+|             Ok(parts)
+|         else
+|             match from_value<Float>(wire) with
+|             | Err(e) -> Err(e)
+|             | Ok(_) -> Ok(parts)
+|
+| ## The elements of a kernel list, each decoded by `from_value` (one function per element
+| ## type: `from_value<T>` needs the concrete type at its call site).
+| fn decode_matrices(wire: Value): Result<Tensor<1, Tensor<2, Float>>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         let decoded = map(fn (p: Value) => from_value<Tensor<2, Float>>(p), parts)
+|         match fold(fn (acc: Result<Bool, OpError>, r: Result<Tensor<2, Float>, OpError>) =>
+|             match acc with
+|             | Err(e) -> Err(e)
+|             | Ok(_) ->
+|                 match r with
+|                 | Err(e) -> Err(e)
+|                 | Ok(_) -> Ok(true), Ok(true), decoded) with
+|         | Err(e) -> Err(e)
+|         | Ok(_) -> Ok(map(fn (r: Result<Tensor<2, Float>, OpError>) => match r with | Ok(x) -> x | Err(_) -> zeros(0, 0), decoded))
+|
+| fn decode_vectors(wire: Value): Result<Tensor<1, Tensor<1, Float>>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         let decoded = map(fn (p: Value) => from_value<Tensor<1, Float>>(p), parts)
+|         match fold(fn (acc: Result<Bool, OpError>, r: Result<Tensor<1, Float>, OpError>) =>
+|             match acc with
+|             | Err(e) -> Err(e)
+|             | Ok(_) ->
+|                 match r with
+|                 | Err(e) -> Err(e)
+|                 | Ok(_) -> Ok(true), Ok(true), decoded) with
+|         | Err(e) -> Err(e)
+|         | Ok(_) -> Ok(map(fn (r: Result<Tensor<1, Float>, OpError>) => match r with | Ok(x) -> x | Err(_) -> zeros(0), decoded))
+|
+| fn decode_cores(wire: Value): Result<Tensor<1, Tensor<3, Float>>, OpError> =
+|     match from_value<Tensor<1, Value>>(wire) with
+|     | Err(e) -> Err(e)
+|     | Ok(parts) ->
+|         let decoded = map(fn (p: Value) => from_value<Tensor<3, Float>>(p), parts)
+|         match fold(fn (acc: Result<Bool, OpError>, r: Result<Tensor<3, Float>, OpError>) =>
+|             match acc with
+|             | Err(e) -> Err(e)
+|             | Ok(_) ->
+|                 match r with
+|                 | Err(e) -> Err(e)
+|                 | Ok(_) -> Ok(true), Ok(true), decoded) with
+|         | Err(e) -> Err(e)
+|         | Ok(_) -> Ok(map(fn (r: Result<Tensor<3, Float>, OpError>) => match r with | Ok(x) -> x | Err(_) -> zeros(0, 0, 0), decoded))
+|
+| fn hosvd2_from_value(wire: Value): Result<Hosvd2, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<2, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let sv = decode_vectors(at(ps, 2))?
+|         Ok({ core = core, factors = factors, singular_values = sv })
+|
+| fn hooi2_from_value(wire: Value): Result<Hooi2, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<2, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let err = from_value<Float>(at(ps, 2))?
+|         Ok({ core = core, factors = factors, error = err })
+|
+| fn hosvd3_from_value(wire: Value): Result<Hosvd3, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<3, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let sv = decode_vectors(at(ps, 2))?
+|         Ok({ core = core, factors = factors, singular_values = sv })
+|
+| fn hooi3_from_value(wire: Value): Result<Hooi3, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<3, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let err = from_value<Float>(at(ps, 2))?
+|         Ok({ core = core, factors = factors, error = err })
+|
+| fn hosvd4_from_value(wire: Value): Result<Hosvd4, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<4, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let sv = decode_vectors(at(ps, 2))?
+|         Ok({ core = core, factors = factors, singular_values = sv })
+|
+| fn hooi4_from_value(wire: Value): Result<Hooi4, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let core = from_value<Tensor<4, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let err = from_value<Float>(at(ps, 2))?
+|         Ok({ core = core, factors = factors, error = err })
+|
+| fn cpfit_from_value(wire: Value): Result<CpFit, OpError> =
+|     match expect_parts(wire, 3) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let weights = from_value<Tensor<1, Float>>(at(ps, 0))?
+|         let factors = decode_matrices(at(ps, 1))?
+|         let residual = from_value<Float>(at(ps, 2))?
+|         Ok({ weights = weights, factors = factors, residual = residual })
+|
+| fn tensortrain_from_value(wire: Value): Result<TensorTrain, OpError> =
+|     match expect_parts(wire, 2) with
+|     | Err(e) -> Err(e)
+|     | Ok(ps) ->
+|         let cores = decode_cores(at(ps, 0))?
+|         let err = from_value<Float>(at(ps, 1))?
+|         Ok({ cores = cores, error = err })
+|
 prelude NumberTheory
 | ## An element of Z/nZ. The residue and its modulus travel together, so combining two
 | ## moduli is an `Err`, never a silently wrong answer. The arithmetic is the kernel's

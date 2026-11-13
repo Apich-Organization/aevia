@@ -111,7 +111,7 @@ pub struct SigDef {
 pub struct Codec {
     /// Aevia type name (head identifier).
     pub ty: String,
-    /// `T -> Value`.
+    /// `T -> Value`; empty for a decode-only type (`codec T - from_fn`).
     pub to_value: String,
     /// `Value -> Result<T, OpError>`.
     pub from_value: String,
@@ -124,8 +124,12 @@ pub struct Overlay {
     pub domains: Vec<Domain>,
     /// Families in declaration order; the first match wins.
     pub families: Vec<Family>,
-    /// Typed signatures by operator.
-    pub sigs: BTreeMap<String, SigDef>,
+    /// Typed signatures by operator, in declaration order. One operator can have
+    /// several curated signatures, each under its own Aevia name (`sig heat_fd
+    /// as heat_fd_2d(..)`): the kernel operator is rank polymorphic, Aevia types
+    /// carry a literal rank, so each rank is one signature. The first signature
+    /// of an operator that does not rename it keeps the operator's name.
+    pub sigs: BTreeMap<String, Vec<SigDef>>,
     /// Excluded operators and why.
     pub excluded: BTreeMap<String, String>,
     /// Operators accepted as dynamic and why.
@@ -205,10 +209,14 @@ impl Overlay {
                 | "sig" => {
                     match parse_sig(rest, number) {
                         | Ok(sig) => {
-                            if overlay.sigs.insert(sig.op.clone(), sig).is_some() {
-                                overlay
-                                    .errors
-                                    .push(format!("line {number}: duplicate `sig`"));
+                            let all = overlay.sigs.entry(sig.op.clone()).or_default();
+                            if all.iter().any(|other| other.name == sig.name) {
+                                overlay.errors.push(format!(
+                                    "line {number}: duplicate `sig` for `{}` named `{}`",
+                                    sig.op, sig.name
+                                ));
+                            } else {
+                                all.push(sig);
                             }
                         },
                         | Err(error) => overlay.errors.push(error),
@@ -238,7 +246,10 @@ impl Overlay {
                             ty.to_string(),
                             Codec {
                                 ty: ty.to_string(),
-                                to_value: to.to_string(),
+                                // `-` declares a decode-only type: the kernel
+                                // produces it (a decomposition record) but never
+                                // takes it, so no encoder exists.
+                                to_value: if to == "-" { String::new() } else { to.to_string() },
                                 from_value: from.to_string(),
                             },
                         );
@@ -521,33 +532,45 @@ pub fn problems(
                 ));
             },
             | Status::Typed => {
-                let sig = &overlay.sigs[&op.name];
-                let (min, max) = op.arity;
-                let n = sig.params.len();
-                if n < min || max.is_some_and(|max| n > max) {
-                    out.push(format!(
-                        "overlay line {}: `sig {}` takes {n} parameters but the kernel accepts {min}..{}",
-                        sig.line,
-                        op.name,
-                        max.map_or_else(|| "*".to_string(), |m| m.to_string())
-                    ));
+                for sig in &overlay.sigs[&op.name] {
+                    let (min, max) = op.arity;
+                    let n = sig.params.len();
+                    if n < min || max.is_some_and(|max| n > max) {
+                        out.push(format!(
+                            "overlay line {}: `sig {}` takes {n} parameters but the kernel accepts {min}..{}",
+                            sig.line,
+                            op.name,
+                            max.map_or_else(|| "*".to_string(), |m| m.to_string())
+                        ));
+                    }
+                    if op.higher_order {
+                        out.push(format!(
+                            "overlay line {}: `{}` takes callbacks; a `sig` cannot express that, use the generated callback binding",
+                            sig.line, op.name
+                        ));
+                    }
+                    for (_, ty) in &sig.params {
+                        check_type_known(ty, overlay, &mut out, sig.line);
+                        if let Some(codec) = overlay.codecs.get(head(ty))
+                            && codec.to_value.is_empty()
+                        {
+                            out.push(format!(
+                                "overlay line {}: parameter type `{ty}` is decode-only (`codec {} - ..`) and cannot be passed to the kernel",
+                                sig.line, codec.ty
+                            ));
+                        }
+                    }
+                    check_type_known(&sig.ret, overlay, &mut out, sig.line);
                 }
-                if op.higher_order {
-                    out.push(format!(
-                        "overlay line {}: `{}` takes callbacks; a `sig` cannot express that, use the generated callback binding",
-                        sig.line, op.name
-                    ));
-                }
-                for (_, ty) in &sig.params {
-                    check_type_known(ty, overlay, &mut out, sig.line);
-                }
-                check_type_known(&sig.ret, overlay, &mut out, sig.line);
             },
             | _ => {},
         }
     }
     for codec in overlay.codecs.values() {
         for function in [&codec.to_value, &codec.from_value] {
+            if function.is_empty() {
+                continue;
+            }
             let declared = overlay
                 .domains
                 .iter()
@@ -719,9 +742,10 @@ fn render(
                 let _ = writeln!(out, "## `{}` is not bound here: {reason}\n", op.name);
             },
             | Status::Typed => {
-                let sig = &overlay.sigs[&op.name];
-                let name = unique(&mut used, &sig.name);
-                typed_wrapper(&mut out, overlay, op, sig, &name);
+                for sig in &overlay.sigs[&op.name] {
+                    let name = unique(&mut used, &sig.name);
+                    typed_wrapper(&mut out, overlay, op, sig, &name);
+                }
             },
             | Status::Witnessed => {
                 let base = crate::codegen::sanitise(&op.name);
@@ -1155,12 +1179,21 @@ pub fn coverage_report(
     }
     let _ = writeln!(out, "\n## Typed operators\n");
     for domain in &overlay.domains {
-        let names: Vec<&str> = placements
+        // An operator with several curated signatures lists the Aevia names.
+        let names: Vec<String> = placements
             .iter()
             .filter(|p| {
                 p.status == Status::Typed && p.domain.is_some_and(|d| d.name == domain.name)
             })
-            .map(|p| p.op.name.as_str())
+            .map(|p| {
+                let sigs = &overlay.sigs[&p.op.name];
+                if sigs.len() > 1 {
+                    let aliases: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+                    format!("{} ({})", p.op.name, aliases.join(", "))
+                } else {
+                    p.op.name.clone()
+                }
+            })
             .collect();
         if !names.is_empty() {
             let _ = writeln!(

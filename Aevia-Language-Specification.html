@@ -7309,6 +7309,10 @@ clamp    : (Scalar&lt;ρ,d&gt;, Scalar&lt;ρ,d&gt;, Scalar&lt;ρ,d&gt;) -&gt; Sc
 floor    : Scalar&lt;ρ,d&gt; -&gt; Scalar&lt;ρ,d&gt;         # ρ ≠ Complex
 ceil     : Scalar&lt;ρ,d&gt; -&gt; Scalar&lt;ρ,d&gt;         # ρ ≠ Complex
 round    : Scalar&lt;ρ,d&gt; -&gt; Scalar&lt;ρ,d&gt;         # ρ ≠ Complex
+round    : (Scalar&lt;ρ,d&gt;, Int) -&gt; Scalar&lt;ρ,d&gt;   # 保留 n 位小数；n 为负时舍入到十、百……
+is_nan   : Scalar&lt;ρ,d&gt; -&gt; Bool
+is_finite : Scalar&lt;ρ,d&gt; -&gt; Bool
+is_infinite : Scalar&lt;ρ,d&gt; -&gt; Bool
 trunc    : Scalar&lt;ρ,d&gt; -&gt; Scalar&lt;ρ,d&gt;         # ρ ≠ Complex
 mod      : (Scalar&lt;ρ,d&gt;, Scalar&lt;ρ,d&gt;) -&gt; Scalar&lt;ρ,d&gt;   # ρ ≠ Complex
 rem      : (Scalar&lt;ρ,d&gt;, Scalar&lt;ρ,d&gt;) -&gt; Scalar&lt;ρ,d&gt;   # ρ ≠ Complex
@@ -7387,7 +7391,21 @@ prod     : Tensor&lt;n, Scalar&lt;ρ,1&gt;&gt; -&gt; Scalar&lt;ρ,1&gt;
 mean     : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;
 length   : Tensor&lt;n, a&gt; -&gt; Int
 shape    : Tensor&lt;n, a&gt; -&gt; Tensor&lt;1, Int&gt;
-rank     : Tensor&lt;n, a&gt; -&gt; Int</code></pre>
+rank     : Tensor&lt;n, a&gt; -&gt; Int
+first    : Tensor&lt;1, a&gt; -&gt; Option&lt;a&gt;
+last     : Tensor&lt;1, a&gt; -&gt; Option&lt;a&gt;
+cumsum   : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt;
+cumprod  : Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt; -&gt; Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;
+argmax   : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Int      # 首个最大值的下标
+argmin   : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Int</code></pre>
+<p><strong>秩的完整性（Revision 16）。</strong> 规范里写成
+<code>Tensor&lt;n, …&gt;</code> 的操作在秩 1 到 4 上都有类型：
+<code>sum</code>、<code>prod</code>、<code>mean</code>、<code>var</code>、<code>std</code>、<code>norm</code>、<code>normalize</code>、<code>map</code>、<code>map2</code>/<code>zip_with</code>（同形）以及
+<code>flatten</code>（秩 ≥ 2）；<code>sum(a, axis)</code> 的 keepdims
+形式在秩 1 到 4 上可用。秩不是一等类型参数，
+所以每个秩一个重载，由实参的秩选择。<code>first</code>/<code>last</code>
+对空张量给 <code>None</code>；<code>argmax</code>/<code>argmin</code>
+对空张量 是 <code>E0802</code>，NaN 不会胜出，相等时取最前的下标。</p>
 <p><code>length</code> 对 <code>String</code> 和 <code>Tensor</code>
 重载，由类型类 <code>Sized</code> 解析。</p>
 <p><code>par_map(f, xs)</code>
@@ -7426,6 +7444,13 @@ map      : ((a -&gt; b), Option&lt;a&gt;) -&gt; Option&lt;b&gt;
 and_then : ((a -&gt; Option&lt;b&gt;), Option&lt;a&gt;) -&gt; Option&lt;b&gt;
 unwrap_or: (Option&lt;a&gt;, a) -&gt; a
 is_some  : Option&lt;a&gt; -&gt; Bool
+is_ok    : Result&lt;a, e&gt; -&gt; Bool
+is_err   : Result&lt;a, e&gt; -&gt; Bool
+ok       : Result&lt;a, e&gt; -&gt; Option&lt;a&gt;
+ok_or    : (Option&lt;a&gt;, e) -&gt; Result&lt;a, e&gt;
+map      : ((a -&gt; b), Result&lt;a, e&gt;) -&gt; Result&lt;b, e&gt;
+and_then : ((a -&gt; Result&lt;b, e&gt;), Result&lt;a, e&gt;) -&gt; Result&lt;b, e&gt;
+unwrap_or: (Result&lt;a, e&gt;, a) -&gt; a
 is_none  : Option&lt;a&gt; -&gt; Bool
 map_err  : ((e -&gt; f), Result&lt;a, e&gt;) -&gt; Result&lt;a, f&gt;</code></pre>
 <p><code>?</code> 是语法，不是函数。</p>
@@ -7569,6 +7594,13 @@ sum      : (Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt;, Int) -&gt; Tensor&lt;n, Scalar&
 mean     : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;
 var      : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d^2&gt;
 std      : Tensor&lt;n, Scalar&lt;ρ,d&gt;&gt; -&gt; Scalar&lt;div_rep(ρ),d&gt;</code></pre>
+<p><code>transpose</code> 在秩 ≥ 2 的张量上反转轴序（秩 3 的
+<code>[a, b, c]</code> 变成 <code>[c, b, a]</code>，细化形状同样反转）；
+秩 1 是
+<code>E0302</code>（向量没有第二个轴，提示里说明了这一点）。<code>norm</code>
+在秩 ≥ 2 上是对全部元素的 范数（<code>p = 2</code> 即 Frobenius
+范数），<code>var</code>/<code>std</code>/<code>mean</code>/<code>sum</code>/<code>prod</code>
+对全部元素归约（见 §8.1.5）。</p>
 <p><code>zeros&lt;Float&gt;(3, 4)</code> 的
 <code>n=2</code>；<code>zeros&lt;Int&gt;</code>
 显式指定元素类型。<code>zeros</code>/
@@ -9188,20 +9220,30 @@ Hessian），初值问题
 <code>symbol("haar")</code> 都造一个新符号
 （<code>haar#2</code>、<code>haar#3</code>…），内核不认识；所以每个名字只在顶层
 <code>let</code> 一次再复用。</li>
-<li><strong>维度无关</strong>。<code>heat_fd</code>、<code>wave_fd</code>、<code>poisson_fd</code>、<code>advect_fd</code>
+<li><strong>维度无关，按维数/秩命名</strong>。<code>heat_fd</code>、<code>wave_fd</code>、<code>poisson_fd</code>、<code>advect_fd</code>
 在内核里不分维度：空间维数就是场数据的嵌套深度
 （列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体，<code>u[i][j][k]</code>
-是节点 <code>(x_i, y_j, z_k)</code>）。一个 Aevia 签名只有一个秩，所以
-typed 包装器是<strong>一维</strong>形式
-（<code>poisson_fd(f: Tensor&lt;1, Float&gt;, boundary: Float)</code>）；二维、三维用
-<code>Rssn.dynamic("poisson_fd", [to_value(field), to_value(0.0)])</code>，答案是不可解码的
-<code>Value</code>
-（没有量纲证据，<code>from_value&lt;Tensor&lt;2, Float&gt;&gt;</code> 报
-<code>TypeMismatch</code>），可以打印或原样传回内核。 同理
-<code>tensor_norm</code>、<code>tensor_inner</code>、<code>tensordot</code>（秩多态）与
-<code>hosvd</code>、<code>hooi</code>、<code>cp_als</code>、<code>tt_svd</code>、<code>tt_dense</code>
-（结果是核心、因子、误差的混合列表）留在 dynamic 档，每个都有
-<code>dynamic ... | 理由</code> 行。 符号 PDE
+是节点 <code>(x_i, y_j, z_k)</code>）。一个 Aevia
+签名只有一个字面量秩，所以一个内核算子带<strong>多条签名，各用自己的名字</strong>：
+不带后缀的名字是一维形式（<code>poisson_fd(f: Tensor&lt;1, Float&gt;, boundary: Float)</code>），<code>_2d</code>/<code>_3d</code>
+取 <code>Tensor&lt;2, Float&gt;</code>/
+<code>Tensor&lt;3, Float&gt;</code>
+场（<code>heat_fd_2d</code>、<code>wave_fd_3d</code>、<code>poisson_fd_2d</code>、<code>advect_fd_3d</code>
+…），答案与场同形状； 平流速度仍是
+<code>Tensor&lt;1, Float&gt;</code>，每个空间维一个分量。
+秩多态的张量算子同理按秩命名：<code>tensor_norm_&lt;r&gt;</code>、<code>tensor_inner_&lt;r&gt;</code>（r
+= 1..4）与 <code>tensordot_&lt;ra&gt;_&lt;rb&gt;_&lt;k&gt;</code>（收缩
+k 个轴，<code>axes_a</code>/<code>axes_b: Tensor&lt;1, Int&gt;</code> 从
+0 起，结果秩 ra + rb − 2k，0 时为 <code>Float</code>； 结果秩至多
+4）。分解
+<code>hosvd_&lt;r&gt;</code>、<code>hooi_&lt;r&gt;</code>、<code>cp_als_&lt;r&gt;</code>、<code>tt_svd_&lt;r&gt;</code>、<code>tt_dense_&lt;r&gt;</code>（r
+= 2、3、4）的结果是记录
+<code>Hosvd&lt;r&gt;</code>、<code>Hooi&lt;r&gt;</code>、<code>CpFit</code>、<code>TensorTrain</code>（字段见
+<code>Rssn_Numeric</code> 前言；因子表是
+<code>Tensor&lt;1, Tensor&lt;2, Float&gt;&gt;</code>）；
+混合列表由通用的列表访问器
+<code>from_value&lt;Tensor&lt;1, Value&gt;&gt;</code>
+拆开再逐部分解码（§10.3.8）。 符号 PDE
 同样只有一个名字：<code>solve_heat_equation</code>、<code>solve_wave_equation</code>、<code>solve_laplace_equation</code>、
 <code>solve_poisson_equation</code>（维数由方程的变量决定，旧的
 <code>_1d</code>/<code>_2d</code>/<code>_3d</code> 是别名）； 仿射变换
@@ -9215,8 +9257,10 @@ typed 包装器是<strong>一维</strong>形式
 个 <code>test</code>：<code>mad([1,2,3,4,100]) = 1</code>、Hann 窗对称、
 <code>ifft(fft(x)) = x</code>、小波分解/重构往返、<code>poisson_fd</code>
 的 <code>-u'' = 1</code> 得 <code>x(1-x)/2</code>、<code>heat_fd</code>
-的 <code>exp(-π²t)</code> 衰减、 <code>tensordot</code>
-对手算矩阵乘、<code>ode_solve</code> 的 <code>y' = -2y</code> 得
+的 <code>exp(-π²t)</code> 衰减、 <code>tensordot_2_2_1</code>
+对手算矩阵乘、<code>poisson_fd_2d</code>/<code>heat_fd_2d</code>
+的封闭形式、<code>hosvd_3</code>/<code>tt_svd_3</code>
+的重构、<code>ode_solve</code> 的 <code>y' = -2y</code> 得
 <code>e^-2</code>、<code>lambert_w_complex(1,0,0) = 0.5671…</code>
 等）， 由 <code>cargo test -p aevia-rssn --test aev_suites</code>
 经真实驱动运行。</p>
@@ -11055,11 +11099,9 @@ not prove”。</li>
 （<code>lgamma_complex</code>、<code>gamma_complex</code>、<code>digamma_complex</code>、<code>lambert_w_complex</code>、<code>bessel_j_complex</code>、<code>bessel_i_complex</code>）
 与表达式算子（<code>oscillatory_integral</code>、<code>anderson_fixed_point</code>、<code>newton_cg_minimize</code>、<code>ode_solve</code>、<code>ode_symplectic</code>、
 <code>ode_imex</code>、<code>ode_etdrk4</code>）都归入
-<code>Rssn_Numeric</code>，共 67 条 <code>sig</code>，8 个留在 dynamic
-档并写明理由
-（<code>tensor_norm</code>/<code>tensor_inner</code>/<code>tensordot</code>
-是秩多态，<code>hosvd</code>/<code>hooi</code>/<code>cp_als</code>/<code>tt_svd</code>/<code>tt_dense</code>
-返回混合列表）。 其中的规则：
+<code>Rssn_Numeric</code>：75 个算子全部有
+<code>sig</code>，没有一个留在 dynamic 档
+（秩多态张量与分解按秩给出多条签名，见下）。 其中的规则：
 <ul>
 <li>这些算子的结果是浮点，签名用
 <code>Float</code>/<code>Tensor&lt;n, Float&gt;</code>，<strong>不是</strong>
@@ -11076,10 +11118,43 @@ not prove”。</li>
 <code>solve_heat_equation</code>/<code>solve_wave_equation</code>/<code>solve_laplace_equation</code>/<code>solve_poisson_equation</code>，仿射变换是
 <code>translation</code>/<code>scaling</code>/<code>shear</code>/<code>reflection</code>/<code>rotation</code>（<code>Rssn_Graphics</code>
 的 family 认领了不带后缀的名字；<code>_2d</code>/<code>_3d</code>
-是别名）。 签名只有一个秩，所以有限差分的 typed
-包装器是一维形式，二维/三维走
-<code>Rssn.dynamic</code>，答案是没有量纲证据的 <code>Value</code>
-（不可 <code>from_value</code> 成 <code>Float</code> 张量）。</li>
+是别名）。 签名只有一个字面量秩，所以一个内核算子可以有<strong>多条
+<code>sig</code>，各用自己的 Aevia 名字</strong>（overlay 写作
+<code>sig heat_fd as heat_fd_2d(..)</code>；<code>Overlay.sigs</code>
+按算子存一个列表，同名重复是错误，只有一条 <code>sig</code> 的 overlay
+不受影响）。
+有限差分：不带后缀的名字保持一维含义，<code>heat_fd_2d</code>/<code>heat_fd_3d</code>、<code>wave_fd_2d</code>/<code>wave_fd_3d</code>、<code>poisson_fd_2d</code>/
+<code>poisson_fd_3d</code>、<code>advect_fd_2d</code>/<code>advect_fd_3d</code>
+取
+<code>Tensor&lt;2, Float&gt;</code>/<code>Tensor&lt;3, Float&gt;</code>
+场并返回同形状的场 （平流速度是
+<code>Tensor&lt;1, Float&gt;</code>，每个空间维一个分量，长度不符返回
+<code>Err</code>）。</li>
+<li>秩多态张量算子按秩命名为
+<code>&lt;算子&gt;_&lt;秩&gt;</code>：<code>tensor_norm_1..4</code>、<code>tensor_inner_1..4</code>（两个同秩操作数），
+<code>tensordot_&lt;ra&gt;_&lt;rb&gt;_&lt;k&gt;</code>（秩 ra、rb
+的操作数收缩 k 个轴，<code>axes_a</code>/<code>axes_b</code> 是
+<code>Tensor&lt;1, Int&gt;</code>、从 0 起，结果秩为 ra + rb − 2k，为 0
+时是 <code>Float</code>；ra、rb ∈ 1..4，1 ≤ k ≤ min(ra, rb)，结果秩至多
+4，共 27 个）。 分解
+<code>hosvd_&lt;r&gt;</code>、<code>hooi_&lt;r&gt;</code>、<code>cp_als_&lt;r&gt;</code>、<code>tt_svd_&lt;r&gt;</code>、<code>tt_dense_&lt;r&gt;</code>（r
+= 2、3、4）返回 <code>Numeric</code> 前言里声明的记录：
+<code>Hosvd&lt;r&gt;{core, factors, singular_values}</code>、<code>Hooi&lt;r&gt;{core, factors, error}</code>、<code>CpFit{weights, factors, residual}</code>、
+<code>TensorTrain{cores, error}</code>；<code>factors</code> 是
+<code>Tensor&lt;1, Tensor&lt;2, Float&gt;&gt;</code>，<code>cores</code>
+是 <code>Tensor&lt;1, Tensor&lt;3, Float&gt;&gt;</code>。</li>
+<li><strong>混合列表的解码机制。</strong>
+内核的分解结果是类型各异的部分组成的列表（张量、张量的列表、一个数）。桥把这种
+结果保留为带逐元素量纲证据的一维值（<code>kernel.rs</code> 的
+<code>lift_list</code>
+不再要求每一项都是张量），<code>from_value&lt;Tensor&lt;1, Value&gt;&gt;</code>
+是通用的“列表访问器”：把第一个轴的各部分逐个作为 <code>Value</code>
+句柄交出（均匀张量按行切片，参差列表取各自的证据）， 再对每一部分
+<code>from_value&lt;T&gt;</code>。解码器是前言里的 Aevia
+源码（<code>hosvd3_from_value</code> 等），用
+<code>codec Hosvd3 - hosvd3_from_value</code>
+声明为只解码的类型（<code>-</code>
+表示没有编码函数，把这样的类型当参数是覆盖检查的错误）。</li>
 <li><code>sig</code> 即“该算子是无量纲参数的纯函数”的声明，所以 typed
 的数值结果带 <code>Scalar(1)</code> 证据可以解码； 没有 <code>sig</code>
 的算子，其规则是 <code>Same</code>/<code>Product</code>/<code>Any</code>
@@ -15405,8 +15480,8 @@ Revision 17（2026-11-12）：数值算子组、维度无关名字、GPU
 <code>solve_heat_equation</code>/<code>solve_wave_equation</code>/<code>solve_laplace_equation</code>/<code>solve_poisson_equation</code>；仿射变换为
 <code>translation</code>/<code>scaling</code>/<code>shear</code>/<code>reflection</code>/<code>rotation</code>（<code>_2d</code>/<code>_3d</code>
 是别名；<code>Rssn_Graphics</code> 认领不带后缀的名字， 该域从 38 增至
-44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维走
-<code>Rssn.dynamic</code>（答案不可解码）。</li>
+44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维见
+§4.5（<code>_2d</code>/<code>_3d</code> 形式）。</li>
 <li><strong>GPU <code>f64</code>（§10.6.5）。</strong> rssn 的 wgpu
 设备以双单精度提供 <code>Dtype::F64</code>（约 48 位，<code>f32</code>
 的指数范围， <code>DeviceInfo::emulated_f64</code>）；新增启动融合规划器
@@ -15422,13 +15497,96 @@ Aevia 侧 <code>Device</code>/<code>to_device</code>/<code>on</code> 对
 <code>test</code>，封闭形式核对），由 <code>aev_suites</code> 与
 <code>aevia test</code> 运行。覆盖报告
 <code>tools/rssn-api-audit/RSSN-COVERAGE.md</code> 已重新生成。</li>
-<li><strong>仍缺：</strong> 有限差分的 typed
-包装器没有二维/三维形式（需要内核发布按秩的 refinement
-重载，或语言支持秩参数）； dynamic 档的数值结果不能
-<code>from_value</code> 成 <code>Float</code>（无量纲证据）；manifest
-里只有一个 <code>tensor_outer</code>，属于 <code>geometry</code>
+<li><strong>仍缺（Revision 18 已补二维/三维与分解）：</strong> dynamic
+档的数值结果不能 <code>from_value</code> 成
+<code>Float</code>（无量纲证据）；manifest 里只有一个
+<code>tensor_outer</code>，属于 <code>geometry</code>
 规则集（<code>Rssn_DifferentialGeometry</code>），<code>numeric</code>
 的同名实现不在 <code>Rssn_Numeric</code> 中出现。</li>
+</ol>
+<h2
+id="45-revision-182026-11-13按秩维数命名的多签名数值算子全部-typed">4.5
+Revision 18（2026-11-13）：按秩/维数命名的多签名，数值算子全部
+typed</h2>
+<ol type="1">
+<li><strong>一个算子多条 <code>sig</code>。</strong>
+<code>domains.overlay</code> 的 <code>sig op as name(..)</code>
+现在可对同一内核算子重复出现，各用自己的 Aevia 名字
+（<code>Overlay.sigs</code> 由 <code>op -&gt; SigDef</code> 改为
+<code>op -&gt; Vec&lt;SigDef&gt;</code>，同名重复报错；渲染、覆盖检查与覆盖报告逐签名处理；
+只有一条 <code>sig</code> 的 overlay 不变）。新增
+<code>codec Type - from_fn</code>：只解码的类型。</li>
+<li><strong>有限差分的 2D/3D。</strong>
+<code>heat_fd</code>/<code>wave_fd</code>/<code>poisson_fd</code>/<code>advect_fd</code>
+保持一维含义，新增 <code>_2d</code>/<code>_3d</code> 形式
+（<code>Tensor&lt;2, Float&gt;</code>、<code>Tensor&lt;3, Float&gt;</code>
+场）。</li>
+<li><strong>秩多态张量算子。</strong>
+<code>tensor_norm_1..4</code>、<code>tensor_inner_1..4</code>、<code>tensordot_&lt;ra&gt;_&lt;rb&gt;_&lt;k&gt;</code>（27
+个）；分解 <code>hosvd_r</code>、
+<code>hooi_r</code>、<code>cp_als_r</code>、<code>tt_svd_r</code>、<code>tt_dense_r</code>（r
+= 2、3、4）返回前言里的记录
+<code>Hosvd&lt;r&gt;</code>、<code>Hooi&lt;r&gt;</code>、<code>CpFit</code>、<code>TensorTrain</code>。
+<code>Rssn_Numeric</code> 的 75 个算子全部是 typed，dynamic
+档为空。</li>
+<li><strong>混合列表与列表访问器。</strong> 桥的 <code>lift_list</code>
+接受由张量和数混合的列表（保留逐元素量纲证据）；<code>from_value&lt;Tensor&lt;1, Value&gt;&gt;</code>
+成为通用访问器，把任何内核列表（或张量的第一个轴）拆成
+<code>Value</code> 句柄，再逐个 <code>from_value&lt;T&gt;</code>。</li>
+<li><strong>测试。</strong> <code>tests/domain_numeric.aev</code> 新增
+2D/3D 的 poisson、heat、wave、advect
+封闭形式核对，<code>tensordot_2_2_2</code> 等于 Frobenius 内积，秩 3
+张量范数，<code>hosvd_3</code>/<code>hooi_3</code>/<code>cp_als_3</code>/<code>tt_svd_3</code>+<code>tt_dense_3</code>
+重构。覆盖报告已重新生成。</li>
+<li><strong>仍缺：</strong> 秩超过 4 的张量算子、<code>tensordot</code>
+结果秩超过 4 的组合、分解的秩 1 与秩 5–6 形式仍走
+<code>Rssn.dynamic</code>（结果是句柄， 可用
+<code>from_value&lt;Tensor&lt;1, Value&gt;&gt;</code> 手工拆开）；符号
+PDE 名字仍维度无关。</li>
+</ol>
+<h2
+id="46-revision-192026-11-13语言侧补全秩完整result-组合子诊断建议格式化">4.6
+Revision 19（2026-11-13）：语言侧补全——秩完整、Result
+组合子、诊断建议、格式化</h2>
+<ol type="1">
+<li><strong>秩完整的张量操作（§8.1.5、§8.4）。</strong> 规范把
+<code>sum</code>/<code>prod</code>/<code>mean</code>/<code>var</code>/<code>std</code>/<code>norm</code>/<code>normalize</code>/<code>map</code>/<code>map2</code>/<code>zip_with</code>/
+<code>flatten</code>/<code>transpose</code> 写成
+<code>Tensor&lt;n, …&gt;</code>，而类型表只有秩 1（部分有秩
+2）：<code>sum(matrix)</code> 是
+<code>E0302</code>，运行时却早已按秩无关实现。 现在秩 2–4
+都有重载（<code>rank_overloads</code>），<code>sum(a, axis)</code> 的
+keepdims 形式覆盖秩 1–4；<code>transpose</code> 在秩 ≥ 2 上反转轴序
+（运行时新增秩 ≥ 3 的实现，细化形状同样反转）。</li>
+<li><strong><code>Result</code> 的组合子（§8.1.6）。</strong>
+<code>map</code>、<code>and_then</code>、<code>unwrap_or</code> 增加
+<code>Result</code> 重载（此前只对
+<code>Option</code>，<code>Result</code> 只有 <code>map_err</code>）；
+新增
+<code>is_ok</code>、<code>is_err</code>、<code>ok</code>（<code>Result → Option</code>）、<code>ok_or</code>（<code>Option → Result</code>）。</li>
+<li><strong>列表与数值辅助。</strong>
+<code>first</code>/<code>last</code>（<code>Option</code>）、<code>cumsum</code>/<code>cumprod</code>（保留量纲）、<code>argmax</code>/<code>argmin</code>；<code>round(x, n)</code>
+保留 <code>n</code> 位小数；
+<code>is_nan</code>/<code>is_finite</code>/<code>is_infinite</code>（<code>mean([])</code>
+与 <code>ln(0) - ln(0)</code> 产生的 NaN 此前无法判断）。</li>
+<li><strong>诊断建议。</strong>
+<code>Float[m]</code>（把单位写在量纲位置）的 <code>E0407</code>
+现在指出 <code>m</code> 是单位、量纲是
+<code>L</code>；拼错的量纲、拼错的单位
+（<code>E0501</code>，含带前缀的拼写）给出 "did you
+mean"；记录没有某个字段（<code>E0306</code>）且没有近似名时列出现有字段。</li>
+<li><strong>格式化器保留空行。</strong> <code>aevia fmt</code> 此前丢掉
+<code>do</code>/布局块里语句之间的空行（仓库自己的示例都过不了
+<code>fmt --check</code> 的原因之一）；
+现在作者留下的空行折叠为一行并保留，结果稳定。</li>
+<li><strong>测试。</strong> <code>tests/stdlib_ergonomics.aev</code>（18
+个 <code>test</code>）；<code>aevia-fmt</code> 的
+<code>blank_lines_between_statements_are_kept</code>；
+<code>aevia-types</code> 的重载计数断言更新。</li>
+<li><strong>仍缺：</strong> <code>reverse</code>/<code>filter</code>
+等仍只有秩 1（运行时对矩阵 <code>reverse</code>
+是展平，语义另议）；<code>fft</code> 只接受复数张量（实数用
+<code>rfft</code>）； 二维以上的 FFT 没有。</li>
 </ol>
 <h2 id="5-记录在案的未实现边界known-gaps">5. 记录在案的未实现边界（Known
 Gaps）</h2>
