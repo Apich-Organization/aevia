@@ -23,7 +23,9 @@ impl NativeModule {
     /// host cannot compile it.
     #[must_use]
     pub fn compile(module: &lir::Module) -> Option<Self> {
-        rssn::backend::lir_jit::LirModule::compile(module).ok().map(Self)
+        rssn::backend::lir_jit::LirModule::compile(module)
+            .ok()
+            .map(Self)
     }
 
     /// Calls `func`; `None` when the arguments do not fit its signature.

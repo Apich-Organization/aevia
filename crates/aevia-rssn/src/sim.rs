@@ -36,9 +36,32 @@ use rssn::sim::schema::ScenarioSchema;
 pub const MODULE_PREFIX: &str = "Rssn_Sim_";
 
 const KEYWORDS: &[&str] = &[
-    "as", "class", "derive", "dimension", "do", "else", "false", "fn", "for", "if", "import", "in",
-    "instance", "let", "match", "module", "open", "private", "rec", "test", "then", "true", "type",
-    "unit", "where", "with",
+    "as",
+    "class",
+    "derive",
+    "dimension",
+    "do",
+    "else",
+    "false",
+    "fn",
+    "for",
+    "if",
+    "import",
+    "in",
+    "instance",
+    "let",
+    "match",
+    "module",
+    "open",
+    "private",
+    "rec",
+    "test",
+    "then",
+    "true",
+    "type",
+    "unit",
+    "where",
+    "with",
 ];
 
 /// Constructor names the prelude already uses.
@@ -85,7 +108,10 @@ impl Choices {
                     if ctor.is_empty() || !ctor.starts_with(|c: char| c.is_ascii_alphabetic()) {
                         ctor = format!("{type_name}{ctor}");
                     }
-                    if RESERVED_CTORS.contains(&ctor.as_str()) || seen.contains(&ctor) || ctor == type_name {
+                    if RESERVED_CTORS.contains(&ctor.as_str())
+                        || seen.contains(&ctor)
+                        || ctor == type_name
+                    {
                         ctor = format!("{type_name}{ctor}");
                     }
                     seen.push(ctor.clone());
@@ -129,14 +155,20 @@ fn aevia_type(
             format!("Tensor<{rank}, {}>", aevia_type(field, elem, choices)?)
         },
         | FieldType::List { elem } => format!("Tensor<1, {}>", aevia_type(field, elem, choices)?),
-        | FieldType::Optional { inner } => format!("Option<{}>", aevia_type(field, inner, choices)?),
+        | FieldType::Optional { inner } => {
+            format!("Option<{}>", aevia_type(field, inner, choices)?)
+        },
         | FieldType::Record { fields } => {
             let mut parts = Vec::new();
             for f in fields {
                 if KEYWORDS.contains(&f.name.as_str()) {
                     return None;
                 }
-                parts.push(format!("{}: {}", f.name, aevia_type(&f.name, &f.ty, choices)?));
+                parts.push(format!(
+                    "{}: {}",
+                    f.name,
+                    aevia_type(&f.name, &f.ty, choices)?
+                ));
             }
             format!("{{ {} }}", parts.join(", "))
         },
@@ -154,7 +186,9 @@ fn literal(
     use serde_json::Value as J;
     Some(match (ty, value) {
         | (FieldType::Optional { .. }, J::Null) => "None".to_owned(),
-        | (FieldType::Optional { inner }, v) => format!("Some({})", literal(field, v, inner, choices)?),
+        | (FieldType::Optional { inner }, v) => {
+            format!("Some({})", literal(field, v, inner, choices)?)
+        },
         | (FieldType::Bool, J::Bool(b)) => b.to_string(),
         | (FieldType::Int, J::Number(n)) => n.as_i64()?.to_string(),
         | (FieldType::Float, J::Number(n)) => float_literal(n.as_f64()?)?,
@@ -202,7 +236,11 @@ fn literal(
         | (FieldType::Record { fields }, J::Object(map)) => {
             let mut parts = Vec::new();
             for f in fields {
-                parts.push(format!("{} = {}", f.name, literal(&f.name, map.get(&f.name)?, &f.ty, choices)?));
+                parts.push(format!(
+                    "{} = {}",
+                    f.name,
+                    literal(&f.name, map.get(&f.name)?, &f.ty, choices)?
+                ));
             }
             format!("{{ {} }}", parts.join(", "))
         },
@@ -256,8 +294,12 @@ fn encoder(
         | FieldType::Choice { .. } if choices.get(name).is_some() => {
             format!("{name}_name(p.{name})")
         },
-        | FieldType::Optional { inner } if matches!(**inner, FieldType::Choice { .. }) && choices.get(name).is_some() => {
-            format!("match p.{name} with\n        | Some(c) -> Some({name}_name(c))\n        | None -> None")
+        | FieldType::Optional { inner }
+            if matches!(**inner, FieldType::Choice { .. }) && choices.get(name).is_some() =>
+        {
+            format!(
+                "match p.{name} with\n        | Some(c) -> Some({name}_name(c))\n        | None -> None"
+            )
         },
         | _ => format!("p.{name}"),
     }
@@ -275,7 +317,11 @@ pub fn render(schema: &ScenarioSchema) -> Option<String> {
                 if KEYWORDS.contains(&f.name.as_str()) {
                     return None;
                 }
-                Some((f.name.clone(), aevia_type(&f.name, &f.ty, &choices)?, f.doc.clone()))
+                Some((
+                    f.name.clone(),
+                    aevia_type(&f.name, &f.ty, &choices)?,
+                    f.doc.clone(),
+                ))
             })
             .collect()
     };
@@ -304,7 +350,10 @@ pub fn render(schema: &ScenarioSchema) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        let _ = writeln!(out, "fn {field}_name(c: {type_name}): String =\n    match c with");
+        let _ = writeln!(
+            out,
+            "fn {field}_name(c: {type_name}): String =\n    match c with"
+        );
         for (value, ctor) in ctors {
             let _ = writeln!(out, "    | {ctor} -> {value:?}");
         }
@@ -326,19 +375,33 @@ pub fn render(schema: &ScenarioSchema) -> Option<String> {
     let mut values = Vec::new();
     for f in &schema.params {
         let value = example.get(&f.name).unwrap_or(&serde_json::Value::Null);
-        values.push(format!("    {} = {},", f.name, literal(&f.name, value, &f.ty, &choices)?));
+        values.push(format!(
+            "    {} = {},",
+            f.name,
+            literal(&f.name, value, &f.ty, &choices)?
+        ));
     }
     let _ = writeln!(
         out,
         "## {} request of the scenario.\nfn defaults(): Params = {{\n{}\n}}\n",
-        if schema.all_defaults { "The default" } else { "A small runnable" },
+        if schema.all_defaults {
+            "The default"
+        } else {
+            "A small runnable"
+        },
         values.join("\n")
     );
     // run()
     let encoded: Vec<String> = schema
         .params
         .iter()
-        .map(|f| format!("        {} = {},", f.name, encoder(&f.name, &f.ty, &choices)))
+        .map(|f| {
+            format!(
+                "        {} = {},",
+                f.name,
+                encoder(&f.name, &f.ty, &choices)
+            )
+        })
         .collect();
     let _ = writeln!(
         out,

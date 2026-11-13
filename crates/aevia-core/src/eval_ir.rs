@@ -251,45 +251,41 @@ pub(crate) fn run_closure(
             let outcome = expected
                 .zip(literals.as_deref())
                 .and_then(|(expected, literals)| {
-                    crate::jit::run_with(
-                        &function,
-                        &args,
-                        remaining,
-                        literals,
-                        expected,
-                        |ask| {
-                            let callee_span = match ask {
-                                | crate::jit::Ask::Builtin(name) => {
-                                    // The global must reach the builtin: no
-                                    // scope, global or class method shadows it.
-                                    return env.scope.as_ref().is_none_or(|scope| scope.lookup(name).is_none())
-                                        && !interp.globals.contains_key(name)
-                                        && !interp.method_classes.contains_key(name)
-                                        && aevia_types::builtins::is_builtin(name);
-                                },
-                                | crate::jit::Ask::IsSelf(span) => span,
-                            };
-                            // Native code may loop only while this name still points to the
-                            // same canonical closure and the actual recursive source call
-                            // preserves every selected generic binding.
-                            let Ok(target) = eval_atom(
-                                interp,
-                                &Atom::Global(function.name.to_string()),
-                                &mut frame,
-                                &env,
-                                function.span,
-                            ) else {
-                                return false;
-                            };
-                            interp.self_specialization_matches(
-                                &current_closure,
-                                current_instance.as_ref(),
-                                &target,
-                                callee_span,
-                                &args,
-                            )
-                        },
-                    )
+                    crate::jit::run_with(&function, &args, remaining, literals, expected, |ask| {
+                        let callee_span = match ask {
+                            | crate::jit::Ask::Builtin(name) => {
+                                // The global must reach the builtin: no
+                                // scope, global or class method shadows it.
+                                return env
+                                    .scope
+                                    .as_ref()
+                                    .is_none_or(|scope| scope.lookup(name).is_none())
+                                    && !interp.globals.contains_key(name)
+                                    && !interp.method_classes.contains_key(name)
+                                    && aevia_types::builtins::is_builtin(name);
+                            },
+                            | crate::jit::Ask::IsSelf(span) => span,
+                        };
+                        // Native code may loop only while this name still points to the
+                        // same canonical closure and the actual recursive source call
+                        // preserves every selected generic binding.
+                        let Ok(target) = eval_atom(
+                            interp,
+                            &Atom::Global(function.name.to_string()),
+                            &mut frame,
+                            &env,
+                            function.span,
+                        ) else {
+                            return false;
+                        };
+                        interp.self_specialization_matches(
+                            &current_closure,
+                            current_instance.as_ref(),
+                            &target,
+                            callee_span,
+                            &args,
+                        )
+                    })
                 });
             match outcome {
                 | Some(crate::jit::Outcome::Value(value)) => Some(Flow::Value(value)),

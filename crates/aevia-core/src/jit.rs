@@ -577,7 +577,11 @@ impl Lower<'_> {
                 .ins_typed(L::Call(lir::FuncId(1), args), lir_ty(self.result));
             return Some((r, self.result));
         }
-        match (&call.callee, matches!(call.kind, CallKind::Normal), call.args.as_slice()) {
+        match (
+            &call.callee,
+            matches!(call.kind, CallKind::Normal),
+            call.args.as_slice(),
+        ) {
             | (Atom::Global(name), true, [arg]) => {
                 let x = self.atom(arg, env)?;
                 self.builtin(name, x)
@@ -763,9 +767,7 @@ impl Lower<'_> {
                 self.f.switch_to(e);
                 self.block(else_block, &mut env.clone(), cont)
             },
-            | Tail::Match {
-                scrutinee, arms, ..
-            } => {
+            | Tail::Match { scrutinee, arms, .. } => {
                 let s = self.atom(scrutinee, env)?;
                 for arm in arms {
                     let mut arm_env = env.clone();
@@ -870,7 +872,10 @@ fn lower_form(
     };
     let mut f = FunctionBuilder::new(&function.name, &sig, &results);
     let head = f.new_block();
-    let head_params: Vec<LReg> = params.iter().map(|&k| f.block_param(head, lir_ty(k))).collect();
+    let head_params: Vec<LReg> = params
+        .iter()
+        .map(|&k| f.block_param(head, lir_ty(k)))
+        .collect();
     let fuel = f.block_param(head, Ty::I64);
     let args: Vec<LReg> = (0..=params.len()).map(|i| f.param(i)).collect();
     f.jump(head, &args);
@@ -927,9 +932,22 @@ fn compile_native(
     if !function.jit || !function.captures.is_empty() || parameters.len() != function.params.len() {
         return None;
     }
-    let (entry, sites, tails, used) =
-        lower_form(function, literals, &mut *builtin, parameters, expected_result, true)?;
-    let (value, ..) = lower_form(function, literals, builtin, parameters, expected_result, false)?;
+    let (entry, sites, tails, used) = lower_form(
+        function,
+        literals,
+        &mut *builtin,
+        parameters,
+        expected_result,
+        true,
+    )?;
+    let (value, ..) = lower_form(
+        function,
+        literals,
+        builtin,
+        parameters,
+        expected_result,
+        false,
+    )?;
     let loops = tails > 0;
     let module = lir::Module {
         functions: vec![entry, value],
@@ -952,7 +970,10 @@ fn compile(
     parameters: &[Kind],
     expected_result: Kind,
 ) -> Option<()> {
-    compile_native(function, literals, parameters, expected_result, &mut |_| false).map(|_| ())
+    compile_native(function, literals, parameters, expected_result, &mut |_| {
+        false
+    })
+    .map(|_| ())
 }
 
 /// Straight-line SSA for a pure function (no tail loop): the instruction
@@ -1127,14 +1148,18 @@ pub(crate) fn run_with(
         .iter()
         .map(|value| {
             match value {
-                | Value::Num(num @ NumVal {
-                    kind: NumKind::Float(x),
-                    ..
-                }) if plain(num) => Some((Kind::Float, V::F(*x))),
-                | Value::Num(num @ NumVal {
-                    kind: NumKind::Int(x),
-                    ..
-                }) if plain(num) => Some((Kind::Int, V::I(i64::try_from(x).ok()?))),
+                | Value::Num(
+                    num @ NumVal {
+                        kind: NumKind::Float(x),
+                        ..
+                    },
+                ) if plain(num) => Some((Kind::Float, V::F(*x))),
+                | Value::Num(
+                    num @ NumVal {
+                        kind: NumKind::Int(x),
+                        ..
+                    },
+                ) if plain(num) => Some((Kind::Int, V::I(i64::try_from(x).ok()?))),
                 | Value::Bool(value) => Some((Kind::Bool, V::B(*value))),
                 | _ => None,
             }
@@ -1162,9 +1187,8 @@ pub(crate) fn run_with(
             }
         }
         let mut check = |name: &str| ask(Ask::Builtin(name));
-        let mut compile = || {
-            compile_native(function, literals, &kinds, expected_result, &mut check).map(Rc::new)
-        };
+        let mut compile =
+            || compile_native(function, literals, &kinds, expected_result, &mut check).map(Rc::new);
         let entry = cache
             .entry(key)
             .or_insert_with(|| (Rc::downgrade(function), compile()));
@@ -1175,7 +1199,10 @@ pub(crate) fn run_with(
     })?;
     // Pure native code cannot rebind a name, so one check per self-call site
     // before entering is enough even in a mutable REPL scope.
-    if !native.sites.iter().all(|&(_, callee)| ask(Ask::IsSelf(callee)))
+    if !native
+        .sites
+        .iter()
+        .all(|&(_, callee)| ask(Ask::IsSelf(callee)))
         || !native.used.iter().all(|name| ask(Ask::Builtin(name)))
     {
         return None;
@@ -1197,7 +1224,11 @@ pub(crate) fn run_with(
     };
     #[cfg(test)]
     {
-        let counter = if native.loops { &NATIVE_LOOPS } else { &NATIVE_SCALARS };
+        let counter = if native.loops {
+            &NATIVE_LOOPS
+        } else {
+            &NATIVE_SCALARS
+        };
         counter.with(|count| count.set(count.get() + 1));
     }
     if *status == 0 {
@@ -1414,13 +1445,19 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
             let cache = cache.borrow();
             // The `Int` activation is native too (checked 64-bit arithmetic);
             // the exact `Real` one must stay out of the cache.
-            assert_eq!(cache.len(), 2, "exact calls must not enter the native cache");
+            assert_eq!(
+                cache.len(),
+                2,
+                "exact calls must not enter the native cache"
+            );
             assert!(
                 cache.values().any(|(_, compiled)| compiled.is_some()),
                 "Float activation must compile machine code"
             );
             assert!(cache.keys().any(|(_, _, _, literals)| {
-                literals.iter().any(|(_, bits)| *bits == Lit::F(1.0_f64.to_bits()))
+                literals
+                    .iter()
+                    .any(|(_, bits)| *bits == Lit::F(1.0_f64.to_bits()))
             }));
         });
     }
@@ -1712,7 +1749,10 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
         ) else {
             panic!("expected a pending tail call")
         };
-        assert_eq!(format!("{args:?}"), format!("{:?}", vec![Value::float(0.0), Value::float(6.0)]));
+        assert_eq!(
+            format!("{args:?}"),
+            format!("{:?}", vec![Value::float(0.0), Value::float(6.0)])
+        );
         let done = run(
             &function,
             &[Value::float(3.0), Value::float(0.0)],
@@ -1721,7 +1761,9 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
             Kind::Float,
             |_| true,
         );
-        assert!(matches!(done, Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::float(6.0))));
+        assert!(
+            matches!(done, Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::float(6.0)))
+        );
         assert!(matches!(
             run(
                 &function,
@@ -1847,9 +1889,8 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
 
     #[test]
     fn integers_recurse_natively_and_overflow_falls_back() {
-        let function = function(
-            "@jit\nfn fact(n: Int): Int = if n <= 1 then 1 else n * fact(n - 1)\n",
-        );
+        let function =
+            function("@jit\nfn fact(n: Int): Int = if n <= 1 then 1 else n * fact(n - 1)\n");
         let literals = specialization(&function, |number, _| {
             match number {
                 | aevia_syntax::ast::NumberLit::Int(v) => i64::try_from(v).ok().map(Lit::I),
@@ -1857,8 +1898,19 @@ fn f(x: Float): Float = if x > 0.0 then x * 2.0 else 0.0 - x
             }
         })
         .unwrap();
-        let fact = |n: i64| run(&function, &[Value::int(n)], 1000, &literals, Kind::Int, |_| true);
-        assert!(matches!(fact(20), Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::int(2_432_902_008_176_640_000))));
+        let fact = |n: i64| {
+            run(
+                &function,
+                &[Value::int(n)],
+                1000,
+                &literals,
+                Kind::Int,
+                |_| true,
+            )
+        };
+        assert!(
+            matches!(fact(20), Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::int(2_432_902_008_176_640_000)))
+        );
         // 21! does not fit 64 bits: native code bails, the interpreter takes over.
         assert!(fact(21).is_none());
     }
@@ -1880,13 +1932,23 @@ fn fib(n: Int): Int = match n with
             }
         })
         .unwrap();
-        let got = run(&function, &[Value::int(25)], 10, &literals, Kind::Int, |_| true);
-        assert!(matches!(got, Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::int(75_025))));
+        let got = run(
+            &function,
+            &[Value::int(25)],
+            10,
+            &literals,
+            Kind::Int,
+            |_| true,
+        );
+        assert!(
+            matches!(got, Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::int(75_025)))
+        );
     }
 
     #[test]
     fn builtins_are_guarded_and_must_not_be_shadowed() {
-        let function = function("@jit\nfn f(x: Float): Float = if x > 0.0 then sqrt(x) + ln(x) else exp(x)\n");
+        let function =
+            function("@jit\nfn f(x: Float): Float = if x > 0.0 then sqrt(x) + ln(x) else exp(x)\n");
         let ask = |builtins: bool| {
             move |ask: Ask<'_>| {
                 match ask {
@@ -1896,16 +1958,26 @@ fn fib(n: Int): Int = match n with
             }
         };
         let f = |x: f64, builtins: bool| {
-            run_with(&function, &[Value::float(x)], 0, &[], Kind::Float, ask(builtins))
+            run_with(
+                &function,
+                &[Value::float(x)],
+                0,
+                &[],
+                Kind::Float,
+                ask(builtins),
+            )
         };
         let want = 4.0_f64.powf(0.5) + 4.0_f64.ln();
-        assert!(matches!(f(4.0, true), Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::float(want))));
-        assert!(matches!(f(-1.0, true), Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::float((-1.0_f64).exp()))));
+        assert!(
+            matches!(f(4.0, true), Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::float(want)))
+        );
+        assert!(
+            matches!(f(-1.0, true), Some(Outcome::Value(v)) if format!("{v:?}") == format!("{:?}", Value::float((-1.0_f64).exp())))
+        );
         // `sqrt` of +oo is fine, `ln(+oo)` is the interpreter's exact answer.
         assert!(f(f64::INFINITY, true).is_none());
         // A shadowed builtin keeps the function in the interpreter.
         CACHE.with(|cache| cache.borrow_mut().clear());
         assert!(f(4.0, false).is_none());
     }
-
 }
