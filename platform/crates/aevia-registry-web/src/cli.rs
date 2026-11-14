@@ -15,32 +15,32 @@ use crate::layout;
 
 const TITLE: Msg = Msg::new("command line", "命令行");
 const LEDE: Msg = Msg::new(
-    "Everything on this site has a command. `aevia` is the toolchain; the registry client \
-     `aevia-pkg` signs and uploads, and `aevia` forwards to it.",
-    "站点上的每个操作都有对应命令。`aevia` 是工具链；注册中心客户端 `aevia-pkg` 负责签名和上传，\
-     `aevia` 会转发给它。",
+    "Everything on this site has a command. aevia is the toolchain; the registry client \
+     aevia-pkg signs and uploads, and aevia forwards to it.",
+    "站点上的每个操作都有对应命令。aevia 是工具链；注册中心客户端 aevia-pkg 负责签名和上传，\
+     aevia 会转发给它。",
 );
 const INSTALL: Msg = Msg::new("Install", "安装");
 const INSTALL_BODY: Msg = Msg::new(
-    "Build both binaries from the repository and keep them side by side; `aevia` finds \
-     `aevia-pkg` beside itself, on `PATH`, or at `$AEVIA_PKG`.",
-    "从仓库构建两个可执行文件并放在一起；`aevia` 会在自身旁边、`PATH` 或 `$AEVIA_PKG` 中找到 \
-     `aevia-pkg`。",
+    "Build both binaries from the repository and keep them side by side; aevia finds \
+     aevia-pkg beside itself, on PATH, or at $AEVIA_PKG.",
+    "从仓库构建两个可执行文件并放在一起；aevia 会在自身旁边、PATH 或 $AEVIA_PKG 中找到 \
+     aevia-pkg。",
 );
 const FIRST_PUBLISH: Msg = Msg::new("Publish a package", "发布一个包");
 const FIRST_PUBLISH_BODY: Msg = Msg::new(
-    "There are no tokens. `login` binds a key you already own to your account once; after that \
-     each publish is a signature. `publish` type-checks and format-checks the package first, so \
+    "There are no tokens. login binds a key you already own to your account once; after that \
+     each publish is a signature. publish type-checks and format-checks the package first, so \
      a broken package never reaches the signing prompt.",
-    "没有令牌。`login` 把你已有的密钥一次性绑定到账户；此后每次发布都是一次签名。`publish` \
+    "没有令牌。login 把你已有的密钥一次性绑定到账户；此后每次发布都是一次签名。publish \
      会先做类型检查和格式检查，所以有问题的包不会走到签名提示这一步。",
 );
 const USE_PACKAGE: Msg = Msg::new("Use a package", "使用一个包");
 const USE_PACKAGE_BODY: Msg = Msg::new(
-    "`add` resolves a requirement, writes `aevia.toml` and `aevia.lock`, and vendors the verified \
-     sources. After that `aevia run`, `check` and `test` work offline.",
-    "`add` 解析版本要求，写入 `aevia.toml` 与 `aevia.lock`，并下载经过校验的源码。之后 \
-     `aevia run`、`check`、`test` 均可离线运行。",
+    "add resolves a requirement, writes aevia.toml and aevia.lock, and vendors the verified \
+     sources. After that aevia run, check and test work offline.",
+    "add 解析版本要求，写入 aevia.toml 与 aevia.lock，并下载经过校验的源码。之后 \
+     aevia run、check、test 均可离线运行。",
 );
 const MAP: Msg = Msg::new("Site ↔ command", "站点 ↔ 命令");
 const COMMAND: Msg = Msg::new("command", "命令");

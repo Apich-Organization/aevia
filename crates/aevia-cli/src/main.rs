@@ -454,9 +454,11 @@ editor support (aevia lsp, §9.10):
   roots, and `workspace/symbol` lists declarations from every loaded module.
 
 packages:
-  there is no registry. `aevia add` takes a directory holding an `aevia.toml`,
-  and `aevia update` re-resolves those paths only — a version range is never
-  resolved, so a bare `aevia-std = \"0.1\"` in `[dependencies]` is `E0605`.
+  `aevia add` takes a directory holding an `aevia.toml` (a path dependency) or
+  `owner/name[@req]` from the registry (`https://aevia.apich.org`, or $AEVIA_REGISTRY
+  for `aevia docs`). Registry packages are resolved from the cached sparse index and
+  built from verified sources under `.aevia/registry`; `aevia` itself never touches the
+  network, `aevia-pkg` does. A bare `aevia-std = \"0.1\"` has no owner and is `E0605`.
 
 known gaps (each command says so rather than pretending):
   `--release` is accepted and reported as having no effect.

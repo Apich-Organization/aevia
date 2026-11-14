@@ -65,9 +65,9 @@ const SIGNATURE_BODY: Msg = Msg::new(
 );
 const DOCS_TITLE: Msg = Msg::new("Docs built by the compiler", "文档由编译器生成");
 const DOCS_BODY: Msg = Msg::new(
-    "The compiler reads `##` comments at publish time and renders them from the same syntax tree \
+    "The compiler reads ## comments at publish time and renders them from the same syntax tree \
      it type-checks, so the documentation cannot drift from the code it describes.",
-    "编译器在发布时读取 `##` 注释，并从它做类型检查的同一棵语法树渲染页面，因此文档不会与它\
+    "编译器在发布时读取 ## 注释，并从它做类型检查的同一棵语法树渲染页面，因此文档不会与它\
      描述的代码脱节。",
 );
 
