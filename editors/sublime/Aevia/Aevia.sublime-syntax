@@ -1,0 +1,143 @@
+%YAML 1.2
+---
+# Sublime Text syntax for Aevia (spec chapter 1).
+name: Aevia
+file_extensions: [aev]
+first_line_match: '^#!.*\baevia\b'
+scope: source.aevia
+
+variables:
+  ident: '[\p{L}_][\p{L}\p{N}_''₀-₉]*'
+  uident: '[A-Z][\p{L}\p{N}_''₀-₉]*'
+  unit_start: '[\p{L}°µμΩÅ]'
+  unit_char: '[\p{L}\p{N}_°µμΩÅ.]'
+  number: '(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][-+]?[0-9]+)?)'
+  keyword: '\b(?:as|class|derive|dimension|do|else|fn|for|if|import|in|instance|let|match|module|open|private|rec|test|then|type|unit|where|with)\b'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: declarations
+    - match: '@{{ident}}'
+      scope: meta.annotation.aevia entity.other.attribute-name.aevia
+    - include: quantity
+    - include: numbers
+    - match: '{{keyword}}'
+      scope: keyword.control.aevia
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.aevia
+    - match: '(?<![\p{L}\p{N}_])(?:oo|nan)(?![\p{L}\p{N}_])'
+      scope: constant.language.aevia
+    - match: '\b{{uident}}\b'
+      scope: storage.type.aevia entity.name.type.aevia
+    - match: '{{ident}}(?=\()'
+      scope: variable.function.aevia
+    - include: operators
+    - match: '[(\[{]'
+      scope: punctuation.section.group.begin.aevia
+    - match: '[)\]}]'
+      scope: punctuation.section.group.end.aevia
+    - match: '[,;]'
+      scope: punctuation.separator.aevia
+
+  comments:
+    - match: '\A#!.*$'
+      scope: comment.line.shebang.aevia
+    - match: '#-'
+      scope: punctuation.definition.comment.begin.aevia
+      push: block-comment
+    - match: '^\s*(##).*$'
+      scope: comment.line.documentation.aevia
+      captures:
+        1: punctuation.definition.comment.aevia
+    - match: '(#).*$'
+      scope: comment.line.number-sign.aevia
+      captures:
+        1: punctuation.definition.comment.aevia
+
+  block-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.block.aevia
+    - match: '#-'
+      push: block-comment
+    - match: '-#'
+      scope: punctuation.definition.comment.end.aevia
+      pop: true
+
+  strings:
+    - match: 'r"[^"]*"'
+      scope: string.quoted.raw.aevia
+    - match: '"""'
+      scope: punctuation.definition.string.begin.aevia
+      push: triple-string
+    - match: '"'
+      scope: punctuation.definition.string.begin.aevia
+      push: string
+
+  string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.double.aevia
+    - match: '"'
+      scope: punctuation.definition.string.end.aevia
+      pop: true
+    - match: '\n'
+      pop: true
+    - include: string-inner
+
+  triple-string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.triple.aevia
+    - match: '"""'
+      scope: punctuation.definition.string.end.aevia
+      pop: true
+    - include: string-inner
+
+  string-inner:
+    - match: '\\(?:u\{[0-9a-fA-F]+\}|[ntr\\"{}])'
+      scope: constant.character.escape.aevia
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.aevia
+      push: interpolation
+
+  interpolation:
+    - meta_include_prototype: false
+    - meta_scope: meta.interpolation.aevia
+    - match: '\}'
+      scope: punctuation.section.interpolation.end.aevia
+      pop: true
+    - include: main
+
+  declarations:
+    - match: '\b(fn)\b(?:\s+(rec)\b)?\s+({{ident}})'
+      captures:
+        1: keyword.declaration.function.aevia
+        2: keyword.declaration.function.aevia
+        3: entity.name.function.aevia
+    - match: '\b(type|class|instance|dimension)\b\s+({{uident}})'
+      captures:
+        1: keyword.declaration.type.aevia
+        2: entity.name.type.aevia
+    - match: '\b(unit)\b\s+({{unit_start}}{{unit_char}}*)'
+      captures:
+        1: keyword.declaration.unit.aevia
+        2: entity.name.constant.unit.aevia
+    - match: '\b(module|import|open)\b\s+({{uident}}(?:\.{{uident}})*)'
+      captures:
+        1: keyword.control.import.aevia
+        2: entity.name.namespace.aevia
+
+  # spec 1.8.1: a number followed by identifier text is a unit literal.
+  quantity:
+    - match: '(?<![\p{L}\p{N}_.])({{number}})[ \t]*((?:{{unit_start}}{{unit_char}}*|%)(?:\^-?[0-9]+|\^\(-?[0-9]+(?:/[0-9]+)?\)|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?(?:[*·/]{{unit_start}}{{unit_char}}*(?:\^-?[0-9]+|\^\(-?[0-9]+(?:/[0-9]+)?\)|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?)*)(?![\p{L}\p{N}_])'
+      captures:
+        1: constant.numeric.aevia
+        2: constant.other.unit.aevia
+
+  numbers:
+    - match: '(?<![\p{L}\p{N}_]){{number}}'
+      scope: constant.numeric.aevia
+
+  operators:
+    - match: '\|>|<\||->|=>|<-|::|\.\.\.|\.\.=|\.\.|==|!=|<=|>=|&&|\|\||[≤≥≠√]|[-+*/^@!?=<>|·×÷−&:]'
+      scope: keyword.operator.aevia

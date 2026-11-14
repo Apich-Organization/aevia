@@ -1,0 +1,19 @@
+id = "aevia"
+name = "Aevia"
+version = "0.1.0"
+schema_version = 1
+authors = ["The Aevia authors"]
+description = "Aevia language support: syntax highlighting and the aevia-lsp language server."
+repository = "https://github.com/Apich-Organization/aevia"
+
+[language_servers.aevia-lsp]
+name = "Aevia Language Server"
+languages = ["Aevia"]
+
+# The grammar is a plain git repository. For local development run
+# `scripts/prepare-dev.ps1` (or .sh): it commits a throwaway copy of
+# ../tree-sitter-aevia and points this table at it. For publishing, point
+# `repository` at a repository that contains the grammar at its root.
+[grammars.aevia]
+repository = "https://github.com/Apich-Organization/tree-sitter-aevia"
+rev = "0000000000000000000000000000000000000000"

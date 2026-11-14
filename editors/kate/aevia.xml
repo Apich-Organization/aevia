@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE language SYSTEM "language.dtd"
+[
+  <!ENTITY ident "[\p{L}_][\p{L}\p{N}_&apos;₀-₉]*">
+  <!ENTITY uident "[A-Z][\p{L}\p{N}_&apos;₀-₉]*">
+  <!ENTITY number "(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][-+]?[0-9]+)?)">
+  <!ENTITY unitatom "(?:[\p{L}°µμΩÅ][\p{L}\p{N}_°µμΩÅ.]*|&#37;)(?:\^-?[0-9]+|\^\(-?[0-9]+(?:/[0-9]+)?\)|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?">
+]>
+<language name="Aevia" version="1" kateversion="5.0" section="Scientific"
+          extensions="*.aev" mimetype="text/x-aevia" casesensitive="1"
+          author="The Aevia authors" license="Apache-2.0" indenter="normal">
+  <highlighting>
+    <list name="keywords">
+      <item>as</item><item>class</item><item>derive</item><item>dimension</item>
+      <item>do</item><item>else</item><item>fn</item><item>for</item><item>if</item>
+      <item>import</item><item>in</item><item>instance</item><item>let</item>
+      <item>match</item><item>module</item><item>open</item><item>private</item>
+      <item>rec</item><item>test</item><item>then</item><item>type</item>
+      <item>unit</item><item>where</item><item>with</item>
+    </list>
+    <list name="constants">
+      <item>true</item><item>false</item><item>oo</item><item>nan</item>
+    </list>
+
+    <contexts>
+      <context name="Normal" attribute="Normal Text" lineEndContext="#stay">
+        <!-- shebang -->
+        <RegExpr String="^#!.*$" attribute="Comment" column="0"/>
+        <!-- comments: `#-` nests, `##` documents, `#` runs to end of line -->
+        <Detect2Chars char="#" char1="-" attribute="Comment" context="BlockComment" beginRegion="BlockComment"/>
+        <RegExpr String="^\s*##.*$" attribute="Doc Comment"/>
+        <DetectChar char="#" attribute="Comment" context="LineComment"/>
+
+        <!-- strings -->
+        <RegExpr String="r&quot;[^&quot;]*&quot;" attribute="String"/>
+        <StringDetect String="&quot;&quot;&quot;" attribute="String" context="TripleString"/>
+        <DetectChar char="&quot;" attribute="String" context="String"/>
+
+        <!-- declarations -->
+        <RegExpr String="\b(?:fn)\b(?:\s+rec\b)?\s+(?=&ident;)" attribute="Keyword" context="FnName"/>
+        <RegExpr String="\b(?:type|class|instance|dimension)\b\s+(?=&uident;)" attribute="Keyword" context="TypeName"/>
+        <RegExpr String="\b(?:module|import|open)\b\s+(?=&uident;)" attribute="Keyword" context="ModulePath"/>
+        <RegExpr String="@&ident;" attribute="Attribute"/>
+
+        <!-- quantity: number followed by a unit expression (spec 1.8.1) -->
+        <RegExpr String="(?&lt;![\p{L}\p{N}_.])&number;(?=[ \t]*(?!(?:then|else|do|with|in|as|for|where)\b)[\p{L}°µμΩÅ%])" attribute="Number" context="UnitAfterNumber"/>
+        <RegExpr String="(?&lt;![\p{L}\p{N}_])&number;" attribute="Number"/>
+
+        <keyword String="keywords" attribute="Keyword"/>
+        <keyword String="constants" attribute="Constant"/>
+        <RegExpr String="\b&uident;\b" attribute="Type"/>
+        <RegExpr String="&ident;(?=\()" attribute="Function"/>
+        <RegExpr String="\|&gt;|&lt;\||-&gt;|=&gt;|&lt;-|::|\.\.\.|\.\.=|\.\.|==|!=|&lt;=|&gt;=|&amp;&amp;|\|\||[≤≥≠√]|[-+*/^@!?=&lt;&gt;|·×÷−&amp;:]" attribute="Operator"/>
+        <AnyChar String="()[]{}" attribute="Symbol"/>
+      </context>
+
+      <context name="UnitAfterNumber" attribute="Unit" lineEndContext="#pop">
+        <RegExpr String="[ \t]*&unitatom;(?:[*·/][\p{L}°µμΩÅ][\p{L}\p{N}_°µμΩÅ.]*(?:\^-?[0-9]+|\^\(-?[0-9]+(?:/[0-9]+)?\)|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?)*" attribute="Unit" context="#pop"/>
+        <DetectChar char=" " context="#pop"/>
+      </context>
+
+      <context name="FnName" attribute="Function" lineEndContext="#pop">
+        <RegExpr String="&ident;" attribute="Function Name" context="#pop"/>
+      </context>
+      <context name="TypeName" attribute="Type" lineEndContext="#pop">
+        <RegExpr String="&uident;" attribute="Type" context="#pop"/>
+      </context>
+      <context name="ModulePath" attribute="Module" lineEndContext="#pop">
+        <RegExpr String="&uident;(?:\.&uident;)*" attribute="Module" context="#pop"/>
+      </context>
+
+      <context name="LineComment" attribute="Comment" lineEndContext="#pop">
+        <IncludeRules context="##Alerts"/>
+      </context>
+      <context name="BlockComment" attribute="Comment" lineEndContext="#stay">
+        <Detect2Chars char="#" char1="-" attribute="Comment" context="BlockComment" beginRegion="BlockComment"/>
+        <Detect2Chars char="-" char1="#" attribute="Comment" context="#pop" endRegion="BlockComment"/>
+        <IncludeRules context="##Alerts"/>
+      </context>
+
+      <context name="String" attribute="String" lineEndContext="#pop">
+        <RegExpr String="\\(?:u\{[0-9a-fA-F]+\}|[ntr\\&quot;{}])" attribute="Escape"/>
+        <DetectChar char="{" attribute="Interpolation" context="Interpolation"/>
+        <DetectChar char="&quot;" attribute="String" context="#pop"/>
+      </context>
+      <context name="TripleString" attribute="String" lineEndContext="#stay">
+        <RegExpr String="\\(?:u\{[0-9a-fA-F]+\}|[ntr\\&quot;{}])" attribute="Escape"/>
+        <DetectChar char="{" attribute="Interpolation" context="Interpolation"/>
+        <StringDetect String="&quot;&quot;&quot;" attribute="String" context="#pop"/>
+      </context>
+      <context name="Interpolation" attribute="Normal Text" lineEndContext="#stay">
+        <DetectChar char="}" attribute="Interpolation" context="#pop"/>
+        <IncludeRules context="Normal"/>
+      </context>
+    </contexts>
+
+    <itemDatas>
+      <itemData name="Normal Text" defStyleNum="dsNormal"/>
+      <itemData name="Keyword" defStyleNum="dsKeyword" spellChecking="false"/>
+      <itemData name="Constant" defStyleNum="dsConstant" spellChecking="false"/>
+      <itemData name="Type" defStyleNum="dsDataType" spellChecking="false"/>
+      <itemData name="Function" defStyleNum="dsFunction" spellChecking="false"/>
+      <itemData name="Function Name" defStyleNum="dsFunction" bold="1" spellChecking="false"/>
+      <itemData name="Module" defStyleNum="dsImport" spellChecking="false"/>
+      <itemData name="Attribute" defStyleNum="dsAttribute" spellChecking="false"/>
+      <itemData name="Number" defStyleNum="dsFloat" spellChecking="false"/>
+      <itemData name="Unit" defStyleNum="dsSpecialChar" spellChecking="false"/>
+      <itemData name="Operator" defStyleNum="dsOperator" spellChecking="false"/>
+      <itemData name="Symbol" defStyleNum="dsNormal" spellChecking="false"/>
+      <itemData name="String" defStyleNum="dsString"/>
+      <itemData name="Escape" defStyleNum="dsSpecialChar" spellChecking="false"/>
+      <itemData name="Interpolation" defStyleNum="dsSpecialChar" spellChecking="false"/>
+      <itemData name="Comment" defStyleNum="dsComment"/>
+      <itemData name="Doc Comment" defStyleNum="dsComment" italic="1"/>
+    </itemDatas>
+  </highlighting>
+  <general>
+    <comments>
+      <comment name="singleLine" start="#"/>
+      <comment name="multiLine" start="#-" end="-#" region="BlockComment"/>
+    </comments>
+    <keywords casesensitive="1" weakDeliminator="'" additionalDeliminator="°µμ"/>
+  </general>
+</language>

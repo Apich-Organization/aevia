@@ -1,0 +1,141 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Aevia",
+  "scopeName": "source.aevia",
+  "fileTypes": ["aev"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#declarations" },
+    { "include": "#attributes" },
+    { "include": "#quantity" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.shebang.aevia", "match": "\\A#!.*$" },
+        {
+          "name": "comment.block.aevia",
+          "begin": "#-",
+          "end": "-#",
+          "patterns": [{ "include": "#nested-block" }]
+        },
+        { "name": "comment.line.documentation.aevia", "match": "^\\s*##.*$" },
+        { "name": "comment.line.number-sign.aevia", "match": "#.*$" }
+      ]
+    },
+    "nested-block": {
+      "name": "comment.block.aevia",
+      "begin": "#-",
+      "end": "-#",
+      "patterns": [{ "include": "#nested-block" }]
+    },
+    "strings": {
+      "patterns": [
+        { "name": "string.quoted.raw.aevia", "match": "\\br\"[^\"]*\"" },
+        {
+          "name": "string.quoted.triple.aevia",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [{ "include": "#string-inner" }]
+        },
+        {
+          "name": "string.quoted.double.aevia",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "include": "#string-inner" }]
+        }
+      ]
+    },
+    "string-inner": {
+      "patterns": [
+        { "name": "constant.character.escape.aevia", "match": "\\\\(u\\{[0-9a-fA-F]+\\}|[ntr\\\\\"{}])" },
+        {
+          "name": "meta.interpolation.aevia",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.aevia" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.aevia" } },
+          "patterns": [{ "include": "$self" }]
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+(rec\\s+)?([\\p{L}_][\\p{L}\\p{N}_'₀-₉]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.aevia" },
+            "2": { "name": "keyword.declaration.function.aevia" },
+            "3": { "name": "entity.name.function.aevia" }
+          }
+        },
+        {
+          "match": "\\b(type|class|instance|dimension)\\s+([A-Z][\\p{L}\\p{N}_'₀-₉]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.type.aevia" },
+            "2": { "name": "entity.name.type.aevia" }
+          }
+        },
+        {
+          "match": "\\b(unit)\\s+([\\p{L}°µμΩÅ_][\\p{L}\\p{N}_°µμΩÅ]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.unit.aevia" },
+            "2": { "name": "entity.name.unit.aevia" }
+          }
+        },
+        {
+          "match": "\\b(module|import|open)\\s+([A-Z][\\p{L}\\p{N}_'₀-₉]*(?:\\.[A-Z][\\p{L}\\p{N}_'₀-₉]*)*)",
+          "captures": {
+            "1": { "name": "keyword.control.import.aevia" },
+            "2": { "name": "entity.name.namespace.aevia" }
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "match": "@[\\p{L}_][\\p{L}\\p{N}_]*",
+      "name": "entity.other.attribute-name.aevia"
+    },
+    "quantity": {
+      "comment": "spec 1.8.1: a number followed by identifier text is always a unit literal",
+      "match": "(?<![\\p{L}\\p{N}_.])((?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[0-9][0-9_]*(?:\\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9]+)?))[ \\t]*((?:[\\p{L}°µμΩÅ%][\\p{L}\\p{N}_°µμΩÅ.]*|%)(?:(?:\\^-?[0-9]+|\\^\\(-?[0-9]+(?:/[0-9]+)?\\)|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?(?:[*·/](?:[\\p{L}°µμΩÅ][\\p{L}\\p{N}_°µμΩÅ.]*)(?:\\^-?[0-9]+|\\^\\(-?[0-9]+(?:/[0-9]+)?\\)|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+)?)*)?)(?![\\p{L}\\p{N}_])",
+      "captures": {
+        "1": { "name": "constant.numeric.aevia" },
+        "2": { "name": "constant.other.unit.aevia" }
+      }
+    },
+    "numbers": {
+      "match": "(?<![\\p{L}\\p{N}_])(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[0-9][0-9_]*(?:\\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9]+)?)",
+      "name": "constant.numeric.aevia"
+    },
+    "keywords": {
+      "match": "\\b(as|class|derive|dimension|do|else|fn|for|if|import|in|instance|let|match|module|open|private|rec|test|then|type|unit|where|with)\\b",
+      "name": "keyword.control.aevia"
+    },
+    "constants": {
+      "patterns": [
+        { "match": "\\b(true|false)\\b", "name": "constant.language.boolean.aevia" },
+        { "match": "(?<![\\p{L}\\p{N}_])(oo|nan)(?![\\p{L}\\p{N}_])", "name": "constant.language.aevia" }
+      ]
+    },
+    "types": {
+      "match": "\\b[A-Z][\\p{L}\\p{N}_'₀-₉]*\\b",
+      "name": "entity.name.type.aevia"
+    },
+    "operators": {
+      "match": "\\|>|<\\||->|=>|<-|::|\\.\\.\\.|\\.\\.=|\\.\\.|==|!=|<=|>=|&&|\\|\\||[≤≥≠√]|[-+*/^@!?=<>|·×÷−&:]",
+      "name": "keyword.operator.aevia"
+    },
+    "identifiers": {
+      "match": "[\\p{L}_][\\p{L}\\p{N}_'₀-₉]*(?=\\()",
+      "name": "entity.name.function.call.aevia"
+    }
+  }
+}
