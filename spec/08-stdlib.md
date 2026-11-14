@@ -183,41 +183,30 @@ argmax   : Tensor<1, Scalar<ρ,d>> -> Int      # 首个最大值的下标
 argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 ```
 
-**秩的完整性（Revision 16、22）。** 规范里写成 `Tensor<n, …>` 的操作对**任意秩** `n` 都有类型：
-`sum`、`prod`、`mean`、`var`、`std`、`norm`、`normalize`、`map`、`map2`/`zip_with`（同形）、`flatten`（秩 ≥ 2）、
-`transpose`、`sum(a, axis)` 的 keepdims 形式，以及 §8.8 的整个 FFT 族和下面的序列操作。秩不是一等类型参数，所以这些签名是
-**对秩的模板**：类型表里列出秩 1 到 4 的实例（`builtins::schemes`，供悬停与首类函数使用），调用时检查器按实参的秩实例化模板——
-秩 6 的张量调用 `fftn`、`sum`、`filter` 与秩 2 的调用走同一条路径，不再有"秩超过 4 是 `E0302`"的限制。实参的秩与任何实例都不符时仍是
-`E0302`，并带期望/实际类型。`first`/`last` 对空张量给 `None`；`argmax`/`argmin` 对空张量
-是 `E0802`，NaN 不会胜出，相等时取最前的下标。
+**任意秩。** 规范里写成 `Tensor<n, …>` 的操作对**任意秩** `n` 都有类型：`sum`、`prod`、`mean`、`var`、`std`、`norm`、`normalize`、`map`、`map2`/`zip_with`（同形）、
+`flatten`（秩 ≥ 2）、`transpose`、`sum(a, axis)` 的 keepdims 形式、§8.8 的整个 FFT 族和下面的序列操作。秩不是一等类型参数，所以这些签名是**对秩的模板**：类型表列出秩 1 到 4 的实例
+（`builtins::schemes`，供悬停与首类函数使用），调用时检查器按实参的秩实例化模板；实参的秩与任何实例都不符是 `E0302`，并带期望/实际类型。`first`/`last` 对空张量给 `None`；
+`argmax`/`argmin` 对空张量是 `E0802`，NaN 不会胜出，相等时取最前的下标。
 
-**序列操作按第一个轴（Revision 20、22）。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（"行"）的序列（`Tensor<0, a>` 即 `a`，所以
-秩 1 的"行"是元素）：
+**序列操作按第一个轴。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（“行”）的序列（`Tensor<0, a>` 即 `a`，所以秩 1 的“行”是元素）：
 
-- `reverse` 翻转第一个轴，保持形状（此前运行时把矩阵展平成向量，而类型表只有秩 1；展平请显式写 `reverse(flatten(m))`）。
-  `reverse_axis(t, k)` 翻转第 `k` 轴（任意秩，负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
-- `filter(p, m)`：`p` 接受一行（秩 `n−1` 的张量），结果保持秩 `n`，行数为被接受的行数；全部拒绝得到第一轴长度为 0 的同秩张量。
-- `any`/`all`/`find` 对行逐个测试；`find` 返回 `Option<Tensor<n-1, a>>`；`first`/`last` 返回第一行/最后一行的 `Option`。
-- `take(k, m)`/`drop(k, m)` 按行取舍；`concat(a, b)` 沿第一个轴堆叠，其余轴的长度必须一致（否则 `E0802`）。
-- `fold(f, init, m)`/`fold_left`：步进函数 `f(acc, row)` 看到一行，从第一行到最后一行。
-- `zip(a, b)` 逐行配对，长度取较短者，得到 `Tensor<1, (行或元素, 行或元素)>`（两个操作数的秩可以不同：矩阵与向量配对得到
-  `(行, 元素)`）；`enumerate(m)` 给出 `(index, 行)` 的记录序列（字段名 `index`、`value`）。
-- `sort(m)`：行按字典序（逐元素，先比第一个元素）稳定排序，结果与 `m` 同形；元素类型要 `TotalOrd`（`Float` 用 `sort_float`）。
-  `sort_by(cmp, m)` 的比较函数接受两行；`sort_by_key(f, m)` 按 `f(行)` 的 `TotalOrd` 键稳定排序（秩 1 时 `f` 接受元素）；
-  `sort_float(m, nan_last)` 同 `sort`，NaN 前置或后置；`argsort(m)` 返回稳定排序的置换 `Tensor<1, Int>`（秩 1 是元素下标，
-  秩 ≥ 2 是行下标）；`sort_axis(t, k)` 把沿第 `k` 轴的每条一维切片分别排序，形状不变（负轴从末尾数，越界 `E0802`）。
-- **元素级的操作不变：** `map`/`map2`/`zip_with` 是张量的函子，逐元素作用并保持形状（这是数值意义上的 `map`，不是序列意义上的）；
-  `sum`/`prod`/`mean`/`var`/`std`/`norm`/`normalize` 对全部元素归约；`cumsum`/`cumprod`/`argmax`/`argmin` 只对秩 1 定义。
-  需要逐行作用时写 `map` 以外的序列操作，或用 `fold`/`filter` 取行后再计算。
-- **语义变化（Revision 22）：** `fold`/`sort`/`sort_by`/`sort_float`/`zip`/`enumerate` 在秩 ≥ 2 上此前按元素（展平）处理；
-  现在按行。秩 1 不变；要元素级的旧行为，先 `flatten`。
+- `reverse` 翻转第一个轴并保持形状（展平请显式写 `reverse(flatten(m))`）；`reverse_axis(t, k)` 翻转第 `k` 轴（负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
+- `filter(p, m)`：`p` 接受一行（秩 `n−1`），结果保持秩 `n`；全部拒绝得到第一轴长度为 0 的同秩张量。`any`/`all`/`find` 逐行测试，`find`、`first`、`last` 返回 `Option<Tensor<n-1, a>>`。
+- `take(k, m)`/`drop(k, m)` 按行取舍；`concat(a, b)` 沿第一个轴堆叠，其余轴长度必须一致（否则 `E0802`）。
+- `fold(f, init, m)`/`fold_left`：`f(acc, row)` 从第一行到最后一行。
+- `zip(a, b)` 逐行配对，长度取较短者，得到 `Tensor<1, (行或元素, 行或元素)>`（两个操作数的秩可以不同）；`enumerate(m)` 给出字段名为 `index`、`value` 的记录序列。
+- `sort(m)`：行按字典序稳定排序，结果与 `m` 同形；元素类型要 `TotalOrd`（`Float` 用 `sort_float`）。`sort_by(cmp, m)` 的比较函数接受两行；`sort_by_key(f, m)` 按 `f(行)` 的键稳定排序
+  （秩 1 时 `f` 接受元素）；`sort_float(m, nan_last)` 同 `sort`，NaN 前置或后置；`argsort(m)` 返回稳定排序的置换 `Tensor<1, Int>`（秩 1 是元素下标，秩 ≥ 2 是行下标）；
+  `sort_axis(t, k)` 把沿第 `k` 轴的每条一维切片分别排序，形状不变。
+- **元素级操作不变：** `map`/`map2`/`zip_with` 逐元素作用并保持形状；`sum`/`prod`/`mean`/`var`/`std`/`norm`/`normalize` 对全部元素归约；`cumsum`/`cumprod`/`argmax`/`argmin` 只对秩 1 定义。
+  需要元素级的 `fold`/`sort`/`zip`，先 `flatten`。
 
 `length` 对 `String` 和 `Tensor` 重载，由类型类 `Sized` 解析。
 
 `par_map(f, xs)` 并行映射，结果顺序与输入一致（线程数不改变结果）。它
 要求 `Parallel a`：`Int`、`Float[d]` 及其张量可以并行，符号 `Real` 不并行
 （§3.8.4/§6.10）。元素类型由调用点决定，所以约束在调用点检查，而不是一个
-全局实例。
+全局实例。`par_tabulate`、`par_reduce` 与 `rng` 属于同一族；`par_reduce` 的块边界只取决于长度（§9.7.2）。
 
 ### 8.1.5.1 集合
 
@@ -237,9 +226,7 @@ is_subset    : (Set<a>, Set<a>) -> Bool
 `Set<a>`（§3.2、§6.6）是持久有序集合，要求 `TotalOrd a`（`Set<Float>` 是
 `E0310`）。表示是规范的——元素按 `total_compare` 升序且唯一——所以集合的 `==`
 就是集合相等，与插入顺序无关；`show` 打印为 `{1, 2, 3}`，`repr` 打印为
-`set_of([1, 2, 3])`。集合运算是线性归并，`member` 是二分查找。修改不在原处进行：
-`set_insert` 返回新集合，旧值不变（§0.4 原则三）。Revision 13 之前 `Set<τ>` 只有
-类型、没有任何值或操作。
+`set_of([1, 2, 3])`。集合运算是线性归并，`member` 是二分查找。修改不在原处进行：`set_insert` 返回新集合，旧值不变（§0.4 原则三）。
 
 ### 8.1.6 Option / Result
 
@@ -277,12 +264,6 @@ println  : Show a => a -> IO Unit
 eprintln : Show a => a -> IO Unit
 ```
 
-> **实现状态（2026-11-08）**：`par_map`/`par_tabulate`/`par_reduce`/`rng`
-> 已进入 §3.8.4 的内置类表、Prelude 签名与运行时 dispatch；checker 在调用点
-> 检查 `Parallel a`。`par_map` 在工作线程副本上真正并行（§9.7.2）：结果顺序
-> 与输入一致，`par_reduce` 的块边界只取决于长度，线程数不改变任何结果；值
-> 不能跨线程时回退为顺序求值。`spawn`/`await`/`pure` 见 §9.7.3。
-
 ### 8.1.8 程序参数
 
 ```
@@ -294,12 +275,6 @@ args : () -> Tensor<1, String>
 （`length(args()) == 0`，打印 `[]`）。它按位序保留参数的原始字符串，不做
 shell 解析（引号、空格、通配符已由 shell/宿主处理）；值在进程内不变，多次
 调用返回同一组。类型是 `Tensor<1, String>`，因此可以 `map`/索引/`length`。
-
-> **实现状态（2026-11-05）**：已实现——`Interp::set_args` 设置参数向量，
-> builtin 返回 rank-1 `Tensor<1, String>`；`aevia-core` 的
-> `io_taxonomy` 测试 `args_are_the_host_set_vector` 断言空向量（`[]`）与
-> 两个参数（`["one", "two"]`）的情形；CLI 的 `run -- args…` 转发已接线
-> （实测 `aevia run p.aev -- a b` → `args() = [a, b]`，无 `--` 时 `[]`）。
 
 ## 8.2 Math
 
@@ -503,176 +478,76 @@ map_nonzero   : ((Scalar<ρ,d>) -> Scalar<σ,e>, Sparse<F, shape, Scalar<ρ,d>>)
 nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Scalar<ρ,d>)>
 ```
 
-**非对称系统：`gmres_with` 与 `bicgstab_with`。** `cg`/`cg_with` 要求对称正定；
-一般方阵（对流—扩散、非对称离散化）用 `gmres_with(A, b, { tol, maxiter, restart,
-precond })`（重启 GMRES(`restart`)，右预条件，残差范数单调不增，内存
-`O(restart·n)`）或 `bicgstab_with(A, b, { tol, maxiter, precond })`（BiCGSTAB，
-短递推、常数内存，残差历史可能不规则）。两者来自 RSSN 的 Krylov 内核，从零向量
-起步，返回与 `cg_with` 同形的记录（`x`、`iterations`、`residual`、`converged`、
-`precond`）；未达容差是 `converged = false` 而非错误，`restart = 0` 是 `E0802`。
-预条件子取 `Precond`，但对非对称矩阵 `Ic0` 与 `Auto` 都**改用** `Ilu0`（`Auto` 对
-`Bcsr` 先试块 ILU(0)）；分解失败退回 `Jacobi`，`precond` 字段如实报告用了哪一种。
-元素必须是 `Float`；精确元素用 `spsolve`。结果量纲是 `e/d`。直接法仍是
-`spsolve`（对称正定先试 Cholesky，否则 LU）。
+**非对称系统：`gmres_with` 与 `bicgstab_with`。** `cg`/`cg_with` 要求对称正定；一般方阵用 `gmres_with(A, b, { tol, maxiter, restart, precond })`（重启 GMRES，右预条件，残差范数单调不增，
+内存 `O(restart·n)`）或 `bicgstab_with(A, b, { tol, maxiter, precond })`（短递推、常数内存，残差历史可能不规则）。两者来自 rssn 的 Krylov 内核，从零向量起步，返回与 `cg_with` 同形的记录
+（`x`、`iterations`、`residual`、`converged`、`precond`）；未达容差是 `converged = false` 而非错误，`restart = 0` 是 `E0802`。对非对称矩阵，`Ic0` 与 `Auto` 都改用 `Ilu0`（`Auto` 对 `Bcsr`
+先试块 ILU(0)）；分解失败退回 `Jacobi`，`precond` 字段报告实际用的一种。元素必须是 `Float`（精确元素用 `spsolve`），结果量纲是 `e/d`。
 
-**并行与确定性。** `sparse @ dense`（向量或矩阵，含 `Bcsr` 的块内核）在乘加量不小
-于 2^17 时按行分块并行：块大小是常数（256 行，`Bcsr` 为一个块行），每个输出行
-由恰好一个工作项按列序累加，所以结果与线程数无关，且与顺序内核逐位相同。
-Krylov 迭代本身是顺序的（只有 `A @ x` 并行），因此 `cg_with`/`gmres_with`/
-`bicgstab_with` 的迭代序列也与线程数无关。
+**预条件共轭梯度。** `cg_with(A, b, { tol, maxiter, precond })` 是带预条件子的 `cg`（`cg` 本身不变）。`Precond` 是标准库变体（`import LinearAlgebra.Sparse { Precond, Jacobi, cg_with }`）：
+`Identity`（无预条件子；不叫 `None` 是为了不与 `Option` 的 `None` 冲突）、`Jacobi`（对角缩放）、`BlockJacobi`（对角块求逆）、`Ilu0`（保持稀疏模式的不完全 LU）、`Ic0`（不完全 Cholesky）、
+`Auto`（IC(0) → ILU(0) → Jacobi 中第一个能建成的；`Bcsr` 先试块 ILU(0) 再试块 Jacobi）。只接受 `Float`，要求对称正定。某个分解失败（零主元、不定）时退回 Jacobi，结果的 `precond` 字段
+（`"Identity"`、`"Jacobi"`、`"BlockJacobi"`、`"BlockIlu0"`、`"Ilu0"`、`"Ic0"`）报告实际使用的一种。直接法是 `spsolve`：对 `Float` 元素调用 `faer` 的稀疏 LU（COLAMD 排序，不稠密化，
+10^5 阶三对角系统是毫秒级）；对称正定矩阵（先检查严格对称与正对角线）先试稀疏 Cholesky，失败再退回 LU；精确元素（`Int`/`Real`/`Complex`/混合）用稀疏高斯消元，结果保持精确；
+奇异矩阵是 `E0806`。`cg(A, b, tol, maxiter)` 是无预条件版本，返回 `{ x, iterations, residual, converged }`。
 
-**预条件共轭梯度与切片。** `cg_with(A, b, { tol, maxiter, precond })` 是带预条件子的
-`cg`（`cg` 本身不变）。`Precond` 是标准库变体（`import LinearAlgebra.Sparse { Precond,
-Jacobi, cg_with }`）：`Identity`（无预条件子）、`Jacobi`（对角缩放）、`BlockJacobi`
-（对角块求逆，rssn `Bsr::block_jacobi`）、`Ilu0`（保持稀疏模式的不完全 LU）、`Ic0`
-（不完全 Cholesky）、`Auto`（IC(0) → ILU(0) → Jacobi 中第一个能建成的；`Bcsr` 操作数
-先试块 ILU(0) 再试块 Jacobi）。只接受 `Float`，要求对称正定；`Bcsr` 操作数的
-`BlockJacobi`/`Ilu0` 用它自己的方块形状（非方块时自动选方块），其它格式的
-`BlockJacobi` 自动选方块。某个分解失败（零主元、不定）时退回 Jacobi，结果记录的
-`precond` 字段（`"Identity"`、`"Jacobi"`、`"BlockJacobi"`、`"BlockIlu0"`、`"Ilu0"`、
-`"Ic0"`）报告**实际使用**的那一种。`Auto` 之外的构造器之所以没有叫 `None`，是为了不与
-`Option` 的 `None` 冲突，所以无预条件子写作 `Identity`。
+**并行与确定性。** `sparse @ dense`（含 `Bcsr` 的块内核）在乘加量不小于 2^17 时按行分块并行：块大小是常数（256 行，`Bcsr` 为一个块行），每个输出行由恰好一个工作项按列序累加，
+所以结果与线程数无关，且与顺序内核逐位相同。Krylov 迭代本身是顺序的（只有 `A @ x` 并行），迭代序列同样与线程数无关。
 
-`spsolve` 对**对称正定的 `Float` 矩阵**先试 `faer` 稀疏 Cholesky（`A = L Lᵀ`，
-先检查严格对称与正对角线），失败（不定、分解中断）则退回稀疏 LU；结果与 LU 一致。
+**切片与重载。** 稀疏值支持切片：`A[i, :]`、`A[:, j]`、`A[r0..r1, c0..c1]`、`A[::2, 1..]`（语法与稠密张量相同）。整数下标去掉该轴，区间保留该轴并重新编号，所以 `A[i, :]` 是秩 1 的
+`Sparse<Coo, [n], τ>`；结果秩不是 2 时一律是 `Coo`。切片只过滤并重新编址已存储项，**不稠密化**，代价 `O(nnz)`；越界整数下标是 `E0802`，下标个数必须等于秩。另有三个对 `Sparse` 重载的既有名字：
+`sum(A)`、`sum(A, axis)`（结果是稠密张量）和 `get(A, i, j, …)`（也写 `A[i, j, …]`，未存储位置返回**隐式零**）。
 
-稀疏值支持**切片**：`A[i, :]`、`A[:, j]`、`A[r0..r1, c0..c1]`、`A[::2, 1..]`（语法与
-稠密张量相同）。整数下标去掉该轴，区间保留该轴并重新编号，所以 `A[i, :]` 是秩 1 的
-`Sparse<Coo, [n], τ>`，`A[r0..r1, c0..c1]` 是同格式的秩 2 稀疏矩阵；结果秩不是 2 时
-一律是 `Coo`（秩 > 2 的 `Coo` 切片同理）。切片只过滤并重新编址已存储项，
-**不稠密化**，代价 `O(nnz)`；越界整数下标是 `E0802`，区间的规范化与稠密张量一致，
-下标个数必须等于秩。
+**类型与格式。** `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。`Sparse` 是核心类型构造器，`F` 是 `Format` kind；它**不**擦除为 `Tensor`：二者之间没有隐式转换，格式是类型的一部分
+（`Sparse<Csr, …>` 不能当作 `Sparse<Coo, …>` 传递，要用 `convert<G>`）。`from_dense<F>`/`speye<F>`/`spdiag<F>` 的 `F` 缺省为 `Csr`；`convert<G>` 必须写出目标格式。`Csr`/`Csc` 是二维格式，
+`Coo` 是任意秩的稀疏张量。`Block` 是 `Bcsr` 的另一种写法，二者是同一个格式标签，`format_of` 一律报告 `Bcsr`。`Sparse<F, [m,n], τ>` 的细化形状会被检查与传播（`A @ B` 的内维、`A ± B`、
+`spsolve`、`transpose`、`kron` 的 `[m*p, n*q]`、`to_dense`/`from_dense`），不符是编译错误。
 
-另有三个对 `Sparse` 重载的既有名字：`sum(A)`、`sum(A, axis)`（与稠密版同样
-保留被归约的轴，结果是稠密张量）和 `get(A, i, j, …)`（也可写 `A[i, j, …]`，
-返回存储的元素，未存储位置返回**隐式零**）。
+**块压缩稀疏行（`Bcsr`）。** 矩阵被切成 `br × bc` 的稠密小块，只存含非零元素的块，块之间按 CSR 压缩：`ptr` 是块行指针（长 `m/br + 1`），`idx` 是每个已存储块的块列下标（块行内严格递增），
+值缓冲每个块占 `br·bc` 个槽位（块内行主序）。块形状要求 `br | m`、`bc | n`，可用 `block_size(A)` 读回（非 `Bcsr` 格式是 `(1, 1)`）。适用于每个结点带多个未知量的系统（弹性、Navier–Stokes、耦合反应扩散）。
 
-`Csr`/`Csc`/`Coo`/`Block`/`Bcsr` 是内建 `Format` 标签（§3.1），不是值构造器。
-`Sparse` 是核心类型构造器，`F` 是 `Format` kind；它**不**擦除为 `Tensor`：
-`Sparse<F, shape, τ>` 与 `Tensor<shape, τ>` 之间没有隐式转换，格式是类型的一
-部分（`Sparse<Csr, …>` 不能当作 `Sparse<Coo, …>` 传递，要用 `convert<G>`）。
-`from_dense<F>`/`speye<F>`/`spdiag<F>` 的 `F` 缺省为 `Csr`；`convert<G>` 必须
-写出目标格式。`Csr`/`Csc` 是二维（矩阵）格式，`Coo` 是任意秩的**稀疏张量**。
-`Block` 是 `Bcsr`（块压缩稀疏行）在类型里的另一种写法，二者是**同一个**格式
-标签：`Sparse<Block, …>` 与 `Sparse<Bcsr, …>` 是同一个类型，`format_of` 一律报告
-`Bcsr`。
+- **填充。** “已存储项永不等于隐式零”在 `Bcsr` 里只放宽到块内：已存储的**块**至少含一个非零元素，其余槽位可以是零（填充）。填充不是逻辑项：`nnz(A)` 数逻辑非零，`A[i, j]` 在填充处回答隐式零，
+  `nonzeros`、`==`、`show`/`repr`、`to_dense` 与到内核的边界都只看到逻辑非零。其它运算经由按字典序排列的规范项形式进行，该形式跳过填充，因此对 `Bcsr` 的行为与 `Csr` 完全相同；结果保持 `Bcsr`
+  （原块形状——转置时为 `(bc, br)`——仍整除结果形状就沿用，否则按下面的规则重选）。装箱元素的填充是该元素类的零，精确值永不舍入。
+- **块形状。** `to_bcsr(A, br, bc)` 显式指定；`br`/`bc` 为零、不整除 `A` 的形状、或 `A` 的秩不是 2 是 `E0802`。`convert<Bcsr>`、`from_dense<Bcsr>`、`speye<Bcsr>`、`spdiag<Bcsr>` 与需要重选块形状的运算结果
+  按**填充率**自动选取：候选是 `{4, 3, 2, 1}²` 中整除形状的块（方块在前），填充率 = 已存储槽位数 / 逻辑非零数；取面积最大且填充率不超过 `1.5` 者，面积相同取填充率低者，仍相同取靠前者，
+  都不满足则 `(1, 1)`。rssn 内核的 `kernels::bsr::choose_block_size` 用同一规则。
+- **复杂度。** 记 `B = br·bc`，`nb` 为已存储块数：存储 `nb·B + nb + m/br` 个字；`A @ x`（`k` 列）为 `O(nb·B·k)`，且只对非零槽位乘加，结果与同一矩阵的 `Csr` 内核逐位相同；
+  转为规范项形式 `O(nb·B)`；构造 `O(nnz + nb·B)`（自动选取至多 15 趟 `O(nnz)` 扫描）。填充率接近 1 时最省；块太大则浪费，应换小块或用 `Csr`。
 
-**块压缩稀疏行（`Bcsr`，BSR）。** 矩阵（秩 2）被切成 `br × bc` 的稠密小块，只存
-含非零元素的块，块之间按 CSR 方式压缩：`ptr` 是**块行**的指针（长 `m/br + 1`），
-`idx` 是每个已存储块的**块列**下标（块行内严格递增），值缓冲每个块占 `br·bc`
-个槽位，块内行主序、块按 `idx` 顺序连续。块形状要求 `br | m`、`bc | n`（均为正
-整数），可以用 `block_size(A)` 读回（非 `Bcsr` 的格式是 `(1, 1)`）。适用于每个结点
-带多个未知量的系统（弹性、Navier–Stokes、耦合反应扩散）：下标数组缩小为
-`1/(br·bc)`，`@` 变成小稠密块的乘加而不是逐元素的间接寻址。
+**运行时表示。** `Value::Sparse` 是一等运行时值。它保存形状、元素量纲、格式，以及按字典序排列、无重复的已存储项（CSR/CSC 用压缩指针，COO 用平铺坐标，`Bcsr` 用块指针与块列下标）；
+已存储项永不等于隐式零（`Bcsr` 块内填充除外；`SparseData::validate` 在 debug 构建里检查）。元素存储与稠密张量同一规则：当且仅当每个已存储元素都是 `Float`（隐式零也是 `0.0`）时是 `f64`
+缓冲，否则是装箱的 `Int`/`Real`/`Complex`/符号标量，所有运算经语言自己的标量算术，精确值**永不**舍入。隐式零是元素表示与量纲的零。
 
-**填充规则。** "已存储项永不等于隐式零"这条不变量在 `Bcsr` 里**只放宽到块内**：
-一个已存储的**块**至少含一个非零元素，但块内其余槽位可以是零（**填充**）。填充
-不是逻辑项：`nnz(A)` 数的是逻辑非零元素（不含填充），`A[i, j]` 在填充处回答隐式
-零，`nonzeros`、`==`、`show`/`repr`、`to_dense`、到内核的边界（`to_flat_parts`）
-都只看到逻辑非零。所有其它运算（`±`、Hadamard 积、标量积、`transpose`、
-`spsolve`、`cg`、`kron`、`contract`、`map_nonzero`）经由按字典序排列的规范项
-形式进行，该形式跳过填充，因此对 `Bcsr` 的行为与对 `Csr` 完全相同；结果保持
-`Bcsr`（只要原块形状——转置时为 `(bc, br)`——仍整除结果形状就沿用它，否则按下面
-的启发式重选）。装箱（`Int`/`Real`/`Complex`/符号）元素的填充是该元素类的零，
-所有运算仍走语言自己的标量算术，精确值**永不**舍入。
+**构造与校验。** `sparse_coo(shape, indices, values)` 的 `indices` 可以是 `[nnz, rank]` 的 `Int` 矩阵、`Int` 元组列表，秩为 1 时也可以是 `Int` 列表；越界、负下标、长度不符是 `E0802`。
+**重复坐标按求和合并**（有限元装配的语义），合并后等于零的项被丢弃。`sparse_csr(rows, cols, row_ptr, col_indices, values)` 要求 `row_ptr` 长 `rows+1`、以 `0` 开始、单调、以 `nnz` 结束，
+且每行列下标严格递增且小于 `cols`，否则 `E0802`。`from_dense` 丢弃零元素，`to_dense` 填回隐式零；稠密结果的元素个数超过实现上限（10^8）报 `E0802`，所以意外的稠密化被拒绝而不是耗尽内存。
 
-**块形状的选取。** `to_bcsr(A, br, bc)` 显式指定块形状；`br` 或 `bc` 为零、不整除
-`A` 的形状、或 `A` 的秩不是 2，是 `E0802`。`convert<Bcsr>(A)`、
-`from_dense<Bcsr>(M)`、`speye<Bcsr>(n)`、`spdiag<Bcsr>(v)` 以及对 `Bcsr` 运算后
-需要重选块形状的结果按**填充率**自动选取：候选是 `{4, 3, 2, 1}²` 中整除形状的
-块（方块排在前），填充率 = 已存储槽位数 / 逻辑非零数；取**面积最大**且填充率
-不超过 `1.5` 的候选，面积相同取填充率低者，仍相同取靠前（方块）者，都不满足则
-`(1, 1)`（这时 `Bcsr` 退化为逐元素的 CSR，一个标量即一个块）。rssn 内核的
-`kernels::bsr::choose_block_size` 用同一个规则。
-
-**复杂度。** 记 `B = br·bc`，`nb` 为已存储块数，逻辑非零数为 `nnz`：存储
-`nb·B + nb + m/br` 个字；`A @ x`（向量或 `k` 列矩阵）为 `O(nb·B·k)`，且只对非零槽
-位做乘加，结果与同一矩阵的 `Csr` 内核逐位相同；转为规范项形式 `O(nb·B)`；按给定
-块形状构造 `O(nnz + nb·B)`（自动选取再乘以候选数，至多 15 趟 `O(nnz)` 扫描）。
-填充率越接近 1，`Bcsr` 越省内存也越快；填充率很大时（块太大）`Bcsr` 反而浪费，
-应换小块或用 `Csr`。
-
-**运行时表示。** `Value::Sparse` 是一等运行时值，不是记录约定。它保存形状、
-元素量纲、格式，以及按字典序排列、无重复的已存储项（CSR/CSC 用压缩指针，COO 用
-平铺坐标，`Bcsr` 用块指针与块列下标）；**已存储项永不等于隐式零**（`Bcsr` 的
-块内填充除外，见上；构造与每个运算都丢弃零项，
-`SparseData::validate` 在 debug 构建里检查这些不变量）。元素存储与稠密张量
-同一规则：当且仅当每个已存储元素都是 `Float`（隐式零也是 `0.0`）时是 `f64`
-缓冲，否则是装箱的 `Int`/`Real`/`Complex`/符号标量，所有运算都经过语言自己的
-标量算术——精确值**永不**舍入为 `f64`。隐式零是元素表示与量纲的零：`Int` 为 `0`、
-`Real` 为精确的 `0`、`Float` 为 `0.0`、`Complex` 为 `0+0i`。
-
-**构造与校验。** `sparse_coo(shape, indices, values)` 的 `indices` 可以是
-`[nnz, rank]` 的 `Int` 矩阵、`Int` 元组列表（`[(0, 0), (1, 1)]`），秩为 1 时也
-可以是 `Int` 列表；`values` 与 `indices` 等长。越界、负下标、长度不符是 `E0802`。
-**重复坐标按求和合并**（有限元装配的语义），合并后等于零的项被丢弃。
-`sparse_csr(rows, cols, row_ptr, col_indices, values)` 要求 `row_ptr` 长
-`rows+1`、以 `0` 开始、单调、以 `nnz` 结束，且每行的列下标严格递增且小于
-`cols`，否则 `E0802`。`from_dense` 丢弃为零的元素，`to_dense` 填回隐式零；
-稠密结果的元素个数超过实现上限（10^8）报 `E0802`，所以任何意外的稠密化都会被
-拒绝而不是耗尽内存。
-
-**算术与布局分派**（元素量纲的规则与稠密张量完全一致：和要求量纲相等 `E0401`，
-积相乘，`spsolve` 相除）：
+**算术与布局分派**（元素量纲规则与稠密张量完全一致：和要求量纲相等 `E0401`，积相乘，`spsolve` 相除）：
 
 | 运算 | 结果 |
 |---|---|
 | `sparse ± sparse` | `Sparse`，格式取左操作数 |
-| `sparse ± dense`、`dense ± sparse` | 稠密 `Tensor`（混合布局的结果落在能容纳它的布局） |
+| `sparse ± dense`、`dense ± sparse` | 稠密 `Tensor` |
 | `sparse * s`、`s * sparse`、`sparse / s`（`s` 为标量或单位，含带量纲标量） | `Sparse` |
 | `sparse * sparse`、`sparse * dense`、`dense * sparse`（Hadamard 积） | `Sparse`；只遍历已存储项，稠密一侧在未存储位置的值被忽略 |
 | `sparse @ dense`（向量或矩阵）、`dense @ sparse` | 稠密 `Tensor` |
 | `sparse @ sparse`、`matmul`、`kron` | `Sparse<Csr, …>` |
 | `-A`、`transpose(A)` | `Sparse`，格式不变 |
 
-`sparse / sparse`、标量除以稀疏、`sparse + 标量` 没有定义（会稠密化或产生无穷
-零），报 `E0302`；需要时先 `to_dense`。`==`/`!=` 比较两个稀疏值的**逻辑内容**
-（形状相同且已存储项相同，数值按与稠密张量相同的规则比较，所以 `1` 等于 `1.0`），
-**与格式无关**：同一矩阵的 `Csr` 与 `Coo` 相等。`show` 写成
-`sparse(Csr, [3, 3], { (0, 0) = 4.0, … })`（`Bcsr` 写 `sparse(Bcsr, …)`）；`repr` 是能
-重建同一个值的表达式 `convert<Csr>(sparse_coo([3, 3], [(0, 0), …], [4.0, …]))`，
-`Bcsr` 的 `repr` 带上块形状：`to_bcsr(sparse_coo([4, 4], […], […]), 2, 2)`。
+`sparse / sparse`、标量除以稀疏、`sparse + 标量` 没有定义（会稠密化或产生无穷零），报 `E0302`；需要时先 `to_dense`。`==`/`!=` 比较两个稀疏值的**逻辑内容**（形状相同且已存储项相同，数值按与稠密张量
+相同的规则比较，所以 `1` 等于 `1.0`），**与格式无关**。`show` 写成 `sparse(Csr, [3, 3], { (0, 0) = 4.0, … })`；`repr` 是能重建同一个值的表达式 `convert<Csr>(sparse_coo([3, 3], [(0, 0), …], [4.0, …]))`，
+`Bcsr` 的 `repr` 带块形状：`to_bcsr(sparse_coo([4, 4], […], […]), 2, 2)`。
 
-**求解。** `spsolve(A, b)` 对 `Float` 元素调用 `faer` 的稀疏 LU（COLAMD 排序，
-`aevia_std::sparse`），不稠密化——10^5 阶三对角系统是毫秒级；对精确元素
-（`Int`/`Real`/`Complex`/混合）用稀疏高斯消元，结果保持精确（`Int` 系统得到
-精确有理数）。奇异矩阵是 `E0806`。结果量纲是 `e/d`。`cg(A, b, tol, maxiter)`
-是无预条件共轭梯度（要求对称正定的 `Float` 矩阵），返回
-`{ x, iterations, residual, converged }`；未达到容差不是错误而是
-`converged = false`。
+**秩 N 与收缩。** `contract(A, B, axes_a, axes_b)` 是成对张量收缩（`tensordot`）：`axes_a`/`axes_b` 是**列表字面量**（结果的秩由长度静态决定），结果的轴是 `A` 的自由轴再接 `B` 的自由轴。两个稀疏操作数得到
+`Sparse<Coo, …>`；一个稀疏一个稠密得到稠密 `Tensor`；全部轴收缩得到标量；两个都稠密是类型错误。`map_nonzero(f, A)` 只对**已存储项**调用 `f`，因此要求 `f(0) = 0`（返回零的项被丢弃）；
+`nonzeros(A)` 返回 `(下标, 值)` 元组的列表。
 
-**秩 N 与收缩。** `contract(A, B, axes_a, axes_b)` 是成对张量收缩
-（`tensordot`）：`axes_a`/`axes_b` 是**列表字面量**（结果的秩由它们的长度静态
-决定），结果的轴是 `A` 的自由轴再接 `B` 的自由轴。两个稀疏操作数得到
-`Sparse<Coo, …>`；一个稀疏、一个稠密得到稠密 `Tensor`；全部轴都收缩得到标量；
-两个都是稠密是类型错误。`map_nonzero(f, A)` 只对**已存储项**调用 `f`，因此要求
-`f(0) = 0`（对未存储位置不调用，返回零的项被丢弃）；`nonzeros(A)` 返回
-`(下标, 值)` 元组的列表。
+**与内核的边界。** rssn 的 `TypeExpr::Sparse` 只有 `rank`，所以 `Sparse<F, shape, τ>` 在边界降为 rank + 运行时格式；`aevia-rssn` 的 `Val::Sparse` 与 rssn 的 `Value::Sparse` 一一对应，**不稠密化**。
+rssn 的 `term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用重写算子；稀疏运算由 Aevia 自己的布局内核承担，`faer` 负责稀疏 LU。
+用户自定义格式要等 rssn 开放 `Format`（§13.9.5）。
 
-**与内核的边界。** RSSN 的 `TypeExpr::Sparse` 只有 `rank`，所以 Aevia 的
-`Sparse<F, shape, τ>` 在边界降为 rank + 运行时格式；`aevia-rssn` 的
-`Val::Sparse` 与 RSSN 的 `Value::Sparse`（平铺行主序升序索引 + 值）一一对应，
-**不再稠密化**。RSSN 的 `term_of_value` 仍不接受 `Value::Sparse` 进入项图
-（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用
-重写算子；稀疏运算由 Aevia 自己的布局内核承担，`faer`（`sparse-linalg`）负责
-稀疏 LU。用户自定义格式要等 RSSN 开放 `Format`（§13.9.5）。
-
-> **实现状态（2026-11-07）**：以上全部已实现并有测试覆盖
-> （`crates/aevia-core/tests/sparse.rs`）：`Value::Sparse` 运行时值（`Csr`/
-> `Csc`/`Coo`/`Bcsr`，`f64` 与精确两类存储）、checker 中独立的 `Sparse<F, shape, τ>`
-> 类型（不再擦除为 `Tensor`）、`@` 的四种布局分派（AST 与 IR 求值器）、
-> 稀疏 LU/高斯消元/CG、秩 N 收缩与到内核的无稠密化过桥。能力
-> `storage.sparse` 因此**已启用**。`Bcsr` 现在是真实格式
-> （`crates/aevia-core/tests/sparse_block.rs`；`@` 在 `f64` 类用块内核，rssn
-> 侧的块 Jacobi 与块 ILU(0) 经 `cg_with` 接到语言层。预条件 `cg_with`、
-> `spsolve` 的 Cholesky 优先路径与稀疏切片都已实现（`tests/sparse_followup.rs`）。
-> **形状传播（2026-11 核对）**：`Sparse<F, [m,n], τ>` 的细化形状**会**被检查
-> 与传播（`crates/aevia-types/src/check/sparse.rs`）：`A @ B` 的内维、`A @ x`、
-> `A ± B`、`spsolve(A, b)`、`transpose`、`kron`（`[m*p, n*q]`）、`to_dense`/
-> `from_dense` 都对字面量与带 Nat 变量的 extent 做统一，不符是编译错误
-> （`tests/shape_refinement.rs`）。此前这里写的"只检查秩"已过时。
-> **剩余缺口**：稀疏值不能进入 RSSN 的项图；`gmres_with`/`bicgstab_with` 不接受
-> 精确元素；没有稀疏特征值/SVD。
+> **状态**：以上全部已实现（测试 `aevia-core/tests/sparse.rs`、`sparse_block.rs`、`sparse_followup.rs`、`shape_refinement.rs`），能力 `storage.sparse` 已启用。**剩余缺口**：稀疏值不能进入 rssn 的项图；
+> `gmres_with`/`bicgstab_with` 不接受精确元素；没有稀疏特征值/SVD。
 
 ## 8.5 Calculus
 
@@ -865,17 +740,11 @@ sample   : Distribution<d> -> IO Real[d]
 sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ```
 
-`Normal<L>` 的 `pdf` 量纲是 `1/L`；`cdf` 无量纲；`sample` 返回 `Real[L]`。
-`Weibull` uses its `scale` dimension and `Cauchy` uses its `loc`/`scale` dimension.
-`LogNormal` parameters describe the dimensionless logarithm. `NegativeBinomial`
-and `Geometric` count failures before successes, with support `0, 1, ...`.
-All fifteen constructors use the same `pdf`, `cdf`, `sample`, and `sample_n` builtins.
+`Normal<L>` 的 `pdf` 量纲是 `1/L`；`cdf` 无量纲；`sample` 返回 `Real[L]`。`Weibull` 取其 `scale` 的量纲，`Cauchy` 取 `loc`/`scale` 的量纲；`LogNormal` 的参数描述无量纲的对数；
+`NegativeBinomial` 与 `Geometric` 数成功前的失败次数，支撑集为 `0, 1, ...`。十五个构造器共用同一组 `pdf`、`cdf`、`sample`、`sample_n` 内建。
 
-**用户自定义分布不是语言扩展点。** 多参数类被移除（§3.8.1），而“分布参数 →
-量纲”的映射需要类型函数（类似 `RateOf`），这是另一个设计；在没有它之前，
-把 `class Distribution dist d` 留在规范里只会让用户写出无法实例化的代码。
-用户自定义分布列在 §12.8.13 的扩展边界之外；标准库可以为新的分布形态增加
-内建构造器，但那是库的封闭集合，不是语言扩展点。
+**用户自定义分布不是语言扩展点。** 多参数类已被移除（§3.8.1），而“分布参数 → 量纲”的映射需要类型函数（类似 `RateOf`），那是另一个设计。用户自定义分布在 §12.8.13 的扩展边界之外；
+标准库可以为新的分布形态增加内建构造器，但那是库的封闭集合，不是语言扩展点。
 
 ## 8.8 FFT / Interpolate
 
@@ -925,22 +794,16 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 `fft` 不归一化，`ifft` 除以 `N`，因此 `ifft(fft(x)) == x`。需要
 `1/√N` 或其他约定时用 `fft_norm(x, Unitary)`（`import FFT { Unitary }`，或写 `FFT.Unitary`）。
 
-**变换族的完整性（Revision 20）。** 所有正向/逆向变换接受复数、`Float` 或 `Int` 张量（实数、整数按虚部为 0 提升），
-结果总是复数，量纲与样本相同（频率轴的量纲只出现在 `fftfreq`/`rfftfreq` 的结果里，它们取采样间隔 `Float[T]`，
-返回 `Float[1/T]`——`fftfreq(4, 0.5 s)` 的单位是 `Hz`）。多维变换由行列分解实现：沿每个被变换的轴依次做一维变换。
+**变换族。** 所有正向/逆向变换接受复数、`Float` 或 `Int` 张量（实数、整数按虚部为 0 提升），结果总是复数，量纲与样本相同；频率轴的量纲只出现在 `fftfreq`/`rfftfreq` 的结果里（它们取采样间隔
+`Float[T]`，返回 `Float[1/T]`，`fftfreq(4, 0.5 s)` 的单位是 `Hz`）。多维变换由行列分解实现，沿每个被变换的轴依次做一维变换；任意秩都有类型（§8.1.5）。
 
-- `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。
-  轴号从 0 开始，负数从末尾数（`-1` 是最后一轴）；越界或重复的轴是 `E0802`。任意秩都有类型（Revision 22 取消了秩 ≤ 4 的限制）。
-- 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；
-  `Unitary` 两向都是 `1/√N`。（`Forward` 在 Revision 20 之前错用了 `1/√N`，现已按文档修正。）
-- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点；`irfft`/`irfft2`/`irfftn`
-  由半谱重建实数张量，默认原长度为 `2(m − 1)`（偶数），奇数长度用带 `Int` 的形式显式给出；`m` 与长度不相容是 `E0802`。
-- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` 是任意轴子集的实数变换（与 numpy 的 `rfftn(a, axes=…)` 一致）：
-  列表里**最后一个**轴是半谱轴（保留 `n/2 + 1` 个频点），其余轴做完整复数变换；`irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，
-  `n` 是该轴的原长度（缺省 `2(m − 1)`）。`rfftn_axes(t, axes)` 等于 `fftn_axes(t, axes)` 沿最后一个列出的轴截取前 `n/2 + 1` 个频点；
-  列表为空、轴越界或重复是 `E0802`。
-- `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；
-  `*_axis` 形式只移一个轴。
+- `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。轴号从 0 开始，负数从末尾数；越界或重复的轴是 `E0802`。
+- 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；`Unitary` 两向都是 `1/√N`。
+- `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点；`irfft`/`irfft2`/`irfftn` 由半谱重建实数张量，默认原长度为 `2(m − 1)`（偶数），奇数长度用带 `Int`
+  的形式显式给出；`m` 与长度不相容是 `E0802`。
+- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` 是任意轴子集的实数变换（与 numpy 的 `rfftn(a, axes=…)` 一致）：列表里**最后一个**轴是半谱轴，其余轴做完整复数变换；
+  `irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，`n` 是该轴的原长度（缺省 `2(m − 1)`）。列表为空、轴越界或重复是 `E0802`。
+- `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；`*_axis` 形式只移一个轴。
 
 ```
 type Norm = | Backward | Forward | Unitary
@@ -1264,87 +1127,18 @@ Brownian bridge 拒绝/重采（内核）。**所有方法都支持自适应**�
 所以集合成员与执行顺序/线程数无关；`sde_ensemble_diag/general` 在语言层并行运行
 成员（见下）。
 
-**错误表**（不新增 Appendix-B 码）：`E0802` 形状/参数（含 `General` 的
-`m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；
-`E0807` 自适应步长塌缩或步数预算耗尽；`E1001` 保留给真正未实现的能力
-（如 `core.sde`、`sde.events`），当前没有任何方法/结构/步长组合产生它——
-原来的 `sde.noncommutative`、`sde.interpretation`、`sde.general.record`
-三个缺口已关闭。`SdeError` 是不透明错误类型（像 `SimError`），语言层
-不暴露构造器。
+**错误表**：`E0802` 形状/参数（含 `General` 的 `m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；`E0807` 自适应步长塌缩或步数预算耗尽；`E1001` 保留给真正未实现的能力
+（`core.sde`、`sde.events`），当前没有任何方法/结构/步长组合产生它。`SdeError` 是不透明错误类型（像 `SimError`），语言层不暴露构造器。
 
-**v1 明确不做**：用户自定义噪声结构、显式非均匀网格（定步长内核假设均匀步长，报 `E0802`；需要变
-步长时用 `Adaptive`）、求解器 manifest 算子（求解器需要回调，无法越过
-manifest ABI）、Brownian 桥稠密输出（`sde_at` 是线性弦，见上）、在积分**过程中**提前停止
-的终止事件（`sde_events` 是事后截断）。事件与稠密输出已在上面实现（原先此处列为不做）。
+**不提供**：用户自定义噪声结构；显式非均匀网格（定步长内核假设均匀步长，报 `E0802`，变步长用 `Adaptive`）；求解器 manifest 算子（求解器需要回调，无法越过 manifest ABI）；
+Brownian 桥稠密输出（`sde_at` 是线性弦）；在积分**过程中**提前停止的终止事件（`sde_events` 是事后截断）。
 
-> **实现状态（2026-11-08，SDE 非交换/Stratonovich 补全轮）**：运行时与
-> `aevia-std` 的 SDE 求解器已落地，下面的组合也已用源码程序实际跑通（见
-> §8.20 的模块导入注）。可用的组合：
->
-> - **方法**：`EulerMaruyama`、`Milstein`、`MilsteinStratonovich`、
->   `HeunStratonovich`、`SrkPlaten`、`MilsteinNoncommutative`、
->   `MilsteinNoncommutativeStratonovich` 都能积分，且**每个方法在每种结构上
->   都可用**（方法名选方案族和积分约定，结构选可交换/不可交换内核，见上面的
->   分派表）；内核新增 `milstein_noncommutative_stratonovich`、
->   `srk_noncommutative`、`srk_noncommutative_stratonovich`（强阶 1，
->   Kloeden–Platen 11.1.7/11.1.10）与自适应 Stratonovich 求解器
->   `sde_adaptive_stratonovich_with`/
->   `sde_adaptive_noncommutative_stratonovich_with`（精确 Itô 转换）。强收敛
->   斜率由 `rssn/tests/sde_noncommutative.rs` 在 2 维非交换线性 SDE 上实测
->   （> 0.8，EM 约 0.5）；
-> - **结构**：`Diagonal`（标量与记录状态）、`General(m)`、
->   `GeneralNoncommutative(m)` 可用；`sdeint_general` 的状态可以是标量、rank-1
->   张量或**记录**（扩散为带噪声轴的同形状记录，见上）。扩散矩阵 `n×m` 在
->   运行时校验；
-> - **步长**：`Fixed`（`t0`/`dt`/`steps`，均匀网格）与 `Adaptive`
->   （`[t0,t1]`、`rtol`/`atol`、`max_steps`、`cells`），所有方法都支持；
->   Stratonovich 自适应走精确 Itô 转换，不可交换需要的 `terms`/`cells`
->   有默认值。源码验证：`Fixed` 20 步对角路径给出 `steps=20, nfev=40`；
->   两条路径两次运行输出逐位相同（同 seed/同构建）。源码级回归测试在
->   `aevia-core/tests/sde_language.rs`（构造策略并积分、可复现、diffusion
->   量纲检查、缺失字段是静态错误，以及不可交换 Milstein/Strat./SRK、自适应
->   Stratonovich 与记录状态 + 一般噪声的积分与统计检查）；
-> - **两条 RNG 流**：可交换定步长路径消费与 `wiener(seed,m,steps,dt)`/
->   `rng(seed)` 相同的语言 LCG 流；非交换定步长与自适应路径用内核 xoshiro
->   流，由 `seed` 播种；只承诺同构建可复现，不承诺跨平台逐位一致；
-> - **确定性**：`seed` 必填；`sde_ensemble_seed(seed,index)` 是纯函数，成员
->   与执行顺序/线程数无关。**ensemble runner 已接线**（`sde_ensemble_diag`/`sde_ensemble_general`，经并行副本，
->   见上）；
-> - **入口与类型**：`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/
->   `sde_ensemble_seed` 是 Prelude 内建，并由 `Sde` 模块 re-export；
->   `Sde` 模块还声明本节的 `SdeMethod`/`SdeStructure`/`SdeFixedOpts`/
->   `SdeAdaptiveOpts`/`SdeOpts`/`SdePath`。checker 侧 `RateOf<s>` 与
->   `DiffusionOf<s>`（`SdeMethod`/`SdeError` 为不透明类型）已实现，drift /
->   diffusion 的签名按本节检查。**源码级策略构造可用**：`import Sde` 后写
->   `Sde.Fixed({ structure = Sde.Diagonal, method = Sde.EulerMaruyama, … })`
->   （或 `import Sde { Fixed, Diagonal, EulerMaruyama }` 后用短名）能通过
->   检查并运行——本节签名里的构造函数名来自 `Sde` 模块。选项记录由运行时
->   逐字段读取（`method`/`structure`/`seed`/`t0`/`dt`/`steps`/`terms` 等），
->   缺失或类型不对得到 `E0802` 的 `SdeError` 值，不会自动填默认值（`terms`
-与 `cells` 字段必须存在，但值 `0` 表示默认）；
->   透明类型别名（如 `Physics.Ising.Params`）现在也可以经
->   `import { Params }`/`open Physics.Ising` 引入类型名（task-22 已闭合，
->   见 §7.2.2 与 §8.20），不再需要退回限定名。
-> - **manifest**：SDE 面有三个 manifest 算子——两个噪声原语
->   `sde_wiener`/`sde_levy_areas`（overlay 精确签名 + `features.sde`）与
->   方案元数据 `sde_scheme_info(name: String) -> Tensor<1, Real>`（返回
->   `[strong_order, ito, commutative_only, adaptive, levy_areas]`，后四项是
->   1/0 flag；dim rule 是 `NonMetric`；方案名是 snake_case，覆盖 8 个方案：
->   `euler_maruyama` → `[0.5, 1, 0, 0, 0]`、`milstein` → `[1, 1, 1, 0, 0]`、
->   `milstein_stratonovich`、`milstein_noncommutative`、`srk_platen`、
->   `heun_stratonovich`，以及自适应的 `sde_adaptive`/
->   `sde_adaptive_noncommutative`（`adaptive = 1`）；未知名字保持未化简
->   请求）。它是**manifest-only 的元数据算子**，不是求解路径；求解循环仍是
->   Rust-only（host 回调，kernel CO-03）。它只给**强阶**（没有弱阶列），
->   与 §8.9.1 的 `sde_order`/`sde_order_with`（返回 `{strong, weak}` 表）互补：需要弱阶时用
->   `sde_order`，需要 flag/自适应标记时用 `sde_scheme_info`（它的 8 个方案
->   名尚未包含本轮新增的三个内核方案）。生成源是精确的
->   （`(String) -> Tensor<1, Real>`，无 `Dyn` 回退）。
->
-> 数值格式方面：**分数维度指数的打印已修复**（2026-11-05）——`wiener` 的
-> `Float[T^(1/2)]` 元素现在打印成 `s^(1/2)`（`Dim::to_si_symbol_string()`
-> 现在渲染有理指数；同批测试覆盖 `s^(3/2)`、`1/s^(1/2)`、`m/s^2` 和真实
-> `wiener` 值），见 §5.4.3。
+> **状态**：以上全部已实现（`aevia-std::sde`、`aevia-core` 的 `sde_runtime`/`sde_language` 测试；强收敛斜率由 `rssn/tests/sde_noncommutative.rs` 在二维非交换线性 SDE 上实测：Milstein 系 > 0.8，
+> Euler–Maruyama 约 0.5）。每个方法在每种结构上都可用；`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed` 是 Prelude 内建，并由 `Sde` 模块 re-export，`Sde` 同时声明
+> 选项 ADT。源码里写 `Sde.Fixed({ structure = Sde.Diagonal, method = Sde.EulerMaruyama, … })`（或 `import Sde { Fixed, Diagonal, EulerMaruyama }` 后用短名）即可；选项记录由运行时逐字段读取，
+> 缺失或类型不对得到 `E0802` 的 `SdeError`，不会自动填默认值（`terms` 与 `cells` 必须存在，值 `0` 表示默认）。manifest 的 `sde_scheme_info(name: String) -> Tensor<1, Real>` 返回
+> `[strong_order, ito, commutative_only, adaptive, levy_areas]`（后四项为 1/0 flag），是 manifest-only 的元数据查询而不是求解路径；它只给强阶，需要弱阶时用 `sde_order`。
+> `wiener` 的 `Float[T^(1/2)]` 元素打印为 `s^(1/2)`（§5.4.3）。
 
 ## 8.10 PDE
 
@@ -1410,17 +1204,10 @@ CSV 表头可以带单位：`time [s]`、`velocity [m/s]`。`read_csv<ρ>` 解�
 一次防御性校验。没有表头单位时，列被当作无量纲；显式 `ρ` 可以覆盖，
 但运行时校验失败报 `DataError.DimensionMismatch`。
 
-> **实现状态**：`read_csv`/`write_csv`/`read_json`/`write_json` 与
-> Table/column/select/filter/join 已实现。NPY 使用共享本地编解码；
-> `read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 Float
-> 张量。支持 NPY 1.0/2.0/3.0、小端和大端 float32/float64、C 和 Fortran
-> 排列；Fortran 输入转换为 Aevia 的行优先存储，写出使用小端 float64、
-> C 排列。类型参数当前必须为具体自然数，未具体化的泛型秩报 `E0304`。
-> NPY 文件不存在为 `E0901`，非法参数为 `E0902`，损坏、截断、秩不匹配
-> 或大小溢出为 `E0903`，不支持的格式、dtype 或扩展名为 `E0904`；
-> NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
-> IO 错误分类也覆盖本节其他读写入口与 §8.12 绘图（`E0905`）；
-> `aevia-core/tests/io_taxonomy.rs` 断言对应分类。
+> **状态**：`read_csv`/`write_csv`/`read_json`/`write_json` 与 Table/column/select/filter/join 已实现。NPY 使用共享本地编解码：支持 NPY 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列
+> （Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；`read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 `Float` 张量；未具体化的泛型秩报 `E0304`。
+> IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/秩不匹配/大小溢出 `E0903`，不支持的格式、dtype 或扩展名 `E0904`，绘图写出失败 `E0905`；NPY 错误在 IO 动作执行后作为
+> `Err(DataError)` 返回（`aevia-core/tests/io_taxonomy.rs`）。
 
 ## 8.12 Plot
 
@@ -1454,14 +1241,8 @@ xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`。
 （`t / s`、`v / (m/s)`）；`line_with` 接受完整 `PlotOpts`；`label(series,
 "v(t)")` 是设置标签的快捷方式。`plot` 默认写 `plot.html`；`save` 指定文件名。
 
-> **实现状态（2026-11-05）**：当前只有 HTML/SVG-inline 一种渲染器——`plot`
-> 和 `save` 生成同一段 HTML（内含 `<svg>` 元素）；`save` **不按扩展名**
-> 切换格式，写 `.svg` 文件时内容仍是 HTML 文档。**写失败是 `E0905`**
-> （"plot rendering failed"/保存失败），由 `aevia-core/tests/io_taxonomy.rs`
-> 的 `a_failed_plot_write_is_e0905` 断言；`plot`/`save` 仍是 fatal 的 IO
-> 动作（失败以诊断退出，不是 `Result`）。独立 `.svg` 输出与 PNG/JPEG
-> 尚未实现（PNG/JPEG 需要额外依赖，见 kernel 的 IO 缺口），不要把它当作
-> 已支持的格式。
+> **状态**：只有 HTML/SVG-inline 一种渲染器：`plot` 与 `save` 生成同一段 HTML（内含 `<svg>`），`save` **不按扩展名**切换格式（写 `.svg` 文件时内容仍是 HTML 文档）。写失败是 `E0905`；
+> `plot`/`save` 仍是 fatal 的 IO 动作（失败以诊断退出，不是 `Result`）。独立 `.svg` 输出与 PNG/JPEG 尚未实现。
 
 ## 8.13 Test
 
@@ -1501,18 +1282,9 @@ uncertainty : Measurement<d> -> Real[d]
 - `a * b`：值 `v₁·v₂`，不确定度 `√((u₁·v₂)² + (u₂·v₁)²)`（量纲 `d*e`）。
 - `a / b`：值 `v₁/v₂`，不确定度 `√((u₁/v₂)² + (u₂·v₁/v₂²)²)`（量纲 `d/e`）。
 
-相关误差需要协方差矩阵，核心库不提供。`Measurement` 是库类型，不是语言核心；
-checker 把它当普通记录 `{ value, uncertainty }` **结构化识别**（不是新的
-nominal 类型），字段名/顺序因此是边界的一部分：`+`/`-` 要求同量纲
-（否则 `E0401`），`*`/`/` 组合量纲，标量缩放只在 `*`/`/` 一侧。
-**注意**：上面的是**算子**（重载），不是名字；它们不在 §8.20 的 323 条名字
-覆盖表里（名字审计看不到重载）。checker 与运行时**都已实现**这些运算
-（checker 的 `binary_type` 按本节规则检查，运行时的 `apply_binary` 做独立
-误差传播；`aevia-core/tests/measurement.rs` 覆盖）。实现还支持一元 `-` 与
-“测量 ×/÷ 标量”（不确定度乘 `|scalar|`），这些是实现额外项；规范最小集是
-上表四条二元运算。`Measurement + number`（或 `-`）不是运算符，仍是
-`E0302`；只有 `*`/`/` 支持“测量与标量”的混合（`number / measurement` 也被
-拒绝，提示用测量的值相除）。
+相关误差需要协方差矩阵，核心库不提供。`Measurement` 是库类型：checker 把它当普通记录 `{ value, uncertainty }` **结构化识别**（不是新的名义类型），字段名/顺序因此是边界的一部分。
+上面的是**算子**（重载），不是名字，所以不在名字覆盖审计里。checker（`binary_type`）与运行时（`apply_binary`）都已实现（`aevia-core/tests/measurement.rs`）。实现还支持一元 `-` 与“测量 ×/÷ 标量”
+（不确定度乘 `|scalar|`）；`Measurement + number`（或 `-`）仍是 `E0302`，`number / measurement` 也被拒绝（提示用测量的值相除）。
 
 ## 8.15 Complex
 
@@ -1601,21 +1373,11 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 `nbody_gravity`、`kerr_geodesic`。宿主不应手写第二份场景清单：运行时
 从 `rssn::sim::scenario::SCENARIOS` 读。
 
-> **生成的仿真模块（2026-11-13）**：`import Rssn_Sim_<Name>`（如
-> `Rssn_Sim_PoissonMultigrid`、`Rssn_Sim_HeatNd`）在导入时由 rssn 的场景目录
-> （`rssn::sim::schema`）生成类型化模块：`Params`/`Output` 记录、每个方法名
-> 字段一个变体类型（`P.W`、`S.Metropolis`）、`defaults()`（场景自身的默认请求或
-> 内置示例）与 `run(p)`。参数类型与默认值从场景自己的请求类型推断，结果类型
-> 来自一次见证运行，注解表补充推断看不到的部分（可选值、单位、文档）；rssn
-> 新增场景、参数或方法时这里无需手写任何代码。29 个场景全部可生成。参考测试：
-> `tests/sim_catalog.aev`。
-
-> **实现状态（2026-11-04）**：动态入口 `simulate` 已实现（`aevia-std`），
-> `to_json`/`from_json` 已实现并类型化（§8.19 的动态边界）；§8.17 上表的
-> 类型化包装器 `Physics.Ising`/`Physics.Geodesic` 已作为 Aevia 源模块实现
-> （`crates/aevia-std/stdlib/Physics/`），`import Physics.Ising` 经嵌入模块
-> 加载器可直接使用，`Physics.Ising.run` 有 4×4 端到端测试（`magnetization`
-> 在 [-1, 1] 内）。
+> **生成的仿真模块**：`import Rssn_Sim_<Name>`（如 `Rssn_Sim_PoissonMultigrid`、`Rssn_Sim_HeatNd`）在导入时由 rssn 的场景目录（`rssn::sim::schema`）生成类型化模块：`Params`/`Output` 记录、
+> 每个方法名字段一个变体类型（`P.W`、`S.Metropolis`）、`defaults()` 与 `run(p)`。参数类型与默认值从场景自己的请求类型推断，结果类型来自一次见证运行，注解表补充推断看不到的部分；
+> rssn 新增场景、参数或方法时无需手写代码。29 个场景全部可生成（参考测试 `tests/sim_catalog.aev`）。
+>
+> **状态**：`simulate`、`to_json`/`from_json` 与 `Physics.Ising`/`Physics.Geodesic` 包装器（Aevia 源模块，`crates/aevia-std/stdlib/Physics/`）已实现，`import Physics.Ising` 经嵌入模块加载器直接可用。
 
 ## 8.18 Device
 
@@ -1659,93 +1421,36 @@ Rssn.register        : Plugin -> Result<PluginId, PluginError>
 Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 ```
 
-`OpKey` 在 Aevia 侧表示成 `(rule_set, name, signature_hash)`：`call_key`
-收 name + `signature_hash`（32 个 hex 字符），`resolve_overload` 成功时返回
-`"rule_set.name@signature_hash"`，`overloads` 返回渲染后的签名文本。
-`signature_hash` 全零表示该算子没有声明重载。`Rssn.call` 是
-`Rssn.dynamic` 的别名（两者都收短名 + `Value` 数组），保留它是为了让
-“调用一个算子”和“走动态边界”在源码里读起来不同。
+`OpKey` 在 Aevia 侧是 `(rule_set, name, signature_hash)`：`call_key` 收 name + `signature_hash`（32 个 hex 字符，全零表示该算子没有声明重载）；`resolve_overload` 成功时返回
+`"rule_set.name@signature_hash"`；`overloads` 返回渲染后的签名文本。`Rssn.call` 是 `Rssn.dynamic` 的别名（两者都收短名 + `Value` 数组）。
 
-生成的 typed 声明**不**调用 `Rssn.call_key`：它生成内部形式
-`Rssn.invoke(name, signature_hash, args)`，语义同样是钉死 overload，但错误
-通道不同——生成的 `fn` 必须返回声明类型，所以 kernel 失败会 raise 而不是
-返回 `Err`。`Rssn.invoke` 不是 §8.19 的固定入口，是生成器与运行时之间的
-形式。
-
-`Rssn` 的成员由 Kernel Manifest 生成；上面的 `call`/`dynamic`/`call_key`
-是固定入口。`signature_source = Declared | Overlay | Derived` 的算子都生成
-`Rssn.<name>` 类型化声明（每条 overload 一个），并绑定生成时的
-`signature_hash`，调用钉死该 overload；只有 `None`（叶子/无调用）与插件
-算子生成 `dynamic`。别名生成 `Rssn.<alias>`；冲突时用
-`Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。SDE 的三个 manifest
-算子——两个噪声原语 `sde_wiener`/`sde_levy_areas` 与方案元数据
-`sde_scheme_info`——都是 overlay 精确签名，因此 `Rssn.sde_wiener`/
-`Rssn.sde_levy_areas`/`Rssn.sde_scheme_info` 自动是 typed 声明
-（`sde_scheme_info` 是 `(String) -> Tensor<1, Real>`，没有 `Dyn` 回退；
-它是 **manifest-only 的元数据查询**，只给强阶与 flag，不返回弱阶——弱阶
-用宿主侧 `sde_order`，见 §8.9.1）；SDE **求解循环**
-（`sdeint_diag`/`sdeint_general`，§8.9.1）需要 host 回调，
-不是 manifest 算子，也不会出现在 `Rssn` 里——它们由宿主侧实现。
-
-本轮 manifest（`rssn 3.0.0-rc.1`，2026-11-05 实测）：**1382 个算子
-（7 declared + 25 overlay + 1350 derived）、32 个 rule set、82 单位、
-30 常数、overload 1568 条（1201×1 + 178×2 + 2×3 + 1×5）、
-`manifest_hash = 8d2c3764…`**；数字会随 kernel 走，以 live manifest 为准。
-
-`Derived` 是“由注册信息推出”的保守签名：`eval` → `(Real,…) -> Real`
-（谓词 `-> Bool`），非叶子另加 `(Term,…) -> Term`。它不区分
-`Tensor`/`Quantity`/`Int`，所以 IDE 要把它标成“保守推断”。本次测量（rssn
-3.0.0-rc.1，2026-11-05）：1382 个算子里 7 个 declared、25 个 overlay、
-1350 个 derived，32 个 rule set（overload 1201×1 + 178×2 + 2×3 + 1×5 =
-1568 条签名）。这些数字是**测量**，不是常量；以 live manifest 为准。
+`Rssn` 的成员由 Kernel Manifest 生成（规则见 §13.2.2）：`Declared | Overlay | Derived` 的算子生成类型化声明（每条 overload 一个），调用钉死生成时的 `signature_hash`；`None`（叶子/无调用）与插件算子生成
+`dynamic`；别名生成 `Rssn.<alias>`，冲突时用 `Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。生成的声明调用内部形式 `Rssn.invoke(name, signature_hash, args)`（同样钉死 overload，但错误通道不同：
+生成的 `fn` 必须返回声明类型，所以 kernel 失败会 raise 而不是返回 `Err`；它不是固定入口）。manifest 的规模是**测量**，不是常量：`aevia rssn` 给出 live 数字（`rssn 3.0.0-rc.1`：1620 个算子，99 declared +
+103 overlay + 1418 derived，82 单位，30 常数）。`Derived` 是由注册信息推出的保守签名，不区分 `Tensor`/`Quantity`/`Int`，IDE 标“保守推断”（§13.2.2）。SDE 的两个噪声原语 `sde_wiener`/`sde_levy_areas`
+与方案元数据 `sde_scheme_info`（`(String) -> Tensor<1, Real>`，只给强阶与 flag）是 overlay 精确签名的 typed 声明；SDE **求解循环**需要 host 回调，不是 manifest 算子，不出现在 `Rssn` 里（§8.9.1）。
 
 固定入口的可达性与限制：
 
-- `type_rep<T>()` 从具体的检查后类型生成不可伪造的 `TypeRep`；未解析的泛型
-  不能在没有运行时类型字典时反射。`Rssn.typed` 执行动态调用，并用该见证检查
-  返回值；不匹配或证据不足返回 `Err(OpError)`，成功结果仍为不透明 `Value`，
-  需用 `from_value<T>` 验证并转换。可变参数构造的类型见证也可通过别名传递。
-- `to_callback(f)` 对当前 evaluator 会话中的已检查源码闭包验证具体函数类型，
-  构造不透明的 `Callback`。别名和已具体化的泛型函数保留此证据；内建函数或
-  其他 native 函数可先包装在源码 lambda 中。回调桥支持具体数值、`Bool`、
-  `String`，以及由它们递归组成的张量和闭合记录；具体量纲、秩和完整已知形状
-  都会校验。空结构张量需要独立的元素类型及量纲证据，名义类型不能只凭标签推断。
-  各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
-  调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及
-  回调错误均返回错误。空回调列表等价于动态调用。
-- `Rssn.register`/`Rssn.register_plugin` 接受 host `Plugin`；Aevia 源码不持有
-  这种值（运行期 `E0302`，附注指向源码机制）。源码插件经声明发布（§13.5.2）：
-  `@op`/`@rule` 函数在模块加载时注册，`load_plugin(path) : String -> IO
-  (Result<Int, String>)` 在运行期加载一个插件文件。
-- `core.callback` 标记上述受限的回调桥可用；`core.plugin.source` 现为
-  `enabled = true`。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；
-  对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed 别名。
-  别名在调用时认证回调的具体签名，并按实例化结果类型验证返回值；无法证明
-  类型或维度的签名仍只提供动态入口。
+- `type_rep<T>()` 从具体的检查后类型生成不可伪造的 `TypeRep`；未解析的泛型不能在没有运行时类型字典时反射。`Rssn.typed` 执行动态调用并用该见证检查返回值；不匹配或证据不足返回 `Err(OpError)`，
+  成功结果仍为不透明 `Value`，需用 `from_value<T>` 验证并转换。
+- `to_callback(f)` 对当前 evaluator 会话中已检查的源码闭包验证具体函数类型，构造不透明的 `Callback`（别名和已具体化的泛型函数保留此证据；内建函数先包装在源码 lambda 中）。回调桥支持具体数值、
+  `Bool`、`String` 及由它们递归组成的张量和闭合记录；具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
+  调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及回调错误均返回错误；空回调列表等价于动态调用。
+- `Rssn.register`/`Rssn.register_plugin` 接受 host `Plugin`；Aevia 源码不持有这种值（运行期 `E0302`，附注指向源码机制）。源码插件经声明发布（§13.5.2）：`@op`/`@rule` 函数在模块加载时注册，
+  `load_plugin(path) : String -> IO (Result<Int, String>)` 在运行期加载一个插件文件。
+- `core.callback` 标记受限回调桥可用，`core.plugin.source` 标记源码插件可用。生成的高阶绑定保留显式 `(values, callbacks)` 动态接口；对声明精确、回调和结果结构均可认证的单重载，另生成钉住签名的 typed
+  别名，在调用时认证回调的具体签名并按实例化结果类型验证返回值；无法证明类型或维度的签名只提供动态入口。例如 `Rssn_numerical_callback` 的 `num_least_squares` 别名：参数与残差分别具有量纲 `D`、`E`，
+  残差容差用 `E`，其余控制量无量纲，结果带 `converged` 与 `status`（残差/梯度收敛、预算耗尽、停滞）。
 
-`Rssn_numerical_callback` 中 `num_least_squares` 的生成 typed 别名接收初始
-参数向量、残差容差、梯度容差、步长容差、初始阻尼、迭代与求值预算以及
-残差回调。参数与残差分别具有量纲 `D`、`E`；初始向量确定参数长度 `N`，
-回调具体签名可约束残差长度 `M`，否则求解过程中要求实际残差长度保持不变。
-结果保留最佳参数、残差范数、迭代/残差求值/Jacobian 求值及接受/拒绝步数，
-并以 `converged` 和 `status` 区分残差或梯度收敛、预算耗尽和停滞。残差
-容差使用 `E`；其余数值控制量无量纲。回调错误原样传播。typed 别名名称可由
-绑定清单查询，其签名来自 RSSN 声明并固定到对应 overload。
-
-`Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、
-实验性入口都走它。多注册时 RSSN 在运行时按
-`Exact > Widened > Shaped > Generic > No` 选择，并列时报 `E1002`；参数不被
-任何 overload 接受时报 `OpError::Type`（`check_args`）。标准集每个名字只有
-1 个注册，所以这条路径不做注册级评分，但**会**做签名级校验。
-`Rssn.call_key` 则不解析，直接执行 name + `signature_hash` 指定的
-overload。
+`Rssn.dynamic` 是**正式能力**，不是降级路径：插件算子、叶子算子、实验性入口都走它。多注册时 rssn 在运行时按 `Exact > Widened > Shaped > Generic > No` 选择，并列报 `E1002`；参数不被任何 overload 接受报
+`OpError::Type`（`check_args`）。标准集每个名字只有 1 个注册，所以这条路径不做注册级评分，但会做签名级校验。`Rssn.call_key` 则不解析，直接执行 name + `signature_hash` 指定的 overload。
 
 ### 8.19.1 数值域模块 `Rssn_Numeric`
 
 rssn 的 `numeric` 规则集把一批数值内核做成算子（表驱动，只对字面数字求值；符号参数、
 参差列表、被拒绝的参数、不收敛都让调用保持为请求，包装器报告 `Err(NotReduced(..))`）。
-Aevia 把它们归入 `Rssn_Numeric`，其中 67 个有手写的 typed 签名
-（`domains.overlay` 的 `sig`，一律 `Result<_, OpError>`），其余留在 dynamic 档。
+Aevia 把它们归入 `Rssn_Numeric`，其中每个算子都有手写的 typed 签名（`domains.overlay` 的 `sig`，一律 `Result<_, OpError>`；规则见 §10.3.8）。
 `import Rssn_Numeric as N` 之后：
 
 | 组 | 算子（Aevia 签名） |
@@ -1766,27 +1471,18 @@ Aevia 把它们归入 `Rssn_Numeric`，其中 67 个有手写的 typed 签名
 - **方法、小波、统计量用符号命名**，符号在 Aevia 里是 `Real`：
   `let haar = symbol("haar")`，再 `N.dwt_approx(xs, haar)`。**每次** `symbol("haar")` 都造一个新符号
   （`haar#2`、`haar#3`…），内核不认识；所以每个名字只在顶层 `let` 一次再复用。
-- **维度无关，按维数/秩命名**。`heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd` 在内核里不分维度：空间维数就是场数据的嵌套深度
-  （列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体，`u[i][j][k]` 是节点
-  `(x_i, y_j, z_k)`）。一个 Aevia 签名只有一个字面量秩，所以一个内核算子带**多条签名，各用自己的名字**：
-  不带后缀的名字是一维形式（`poisson_fd(f: Tensor<1, Float>, boundary: Float)`），`_2d`/`_3d` 取 `Tensor<2, Float>`/
-  `Tensor<3, Float>` 场（`heat_fd_2d`、`wave_fd_3d`、`poisson_fd_2d`、`advect_fd_3d` …），答案与场同形状；
-  平流速度仍是 `Tensor<1, Float>`，每个空间维一个分量。
-  秩多态的张量算子同理按秩命名：`tensor_norm_<r>`、`tensor_inner_<r>`（r = 1..4）与
-  `tensordot_<ra>_<rb>_<k>`（收缩 k 个轴，`axes_a`/`axes_b: Tensor<1, Int>` 从 0 起，结果秩 ra + rb − 2k，0 时为 `Float`；
-  结果秩至多 4）。分解 `hosvd_<r>`、`hooi_<r>`、`cp_als_<r>`、`tt_svd_<r>`、`tt_dense_<r>`（r = 2、3、4）的结果是记录
-  `Hosvd<r>`、`Hooi<r>`、`CpFit`、`TensorTrain`（字段见 `Rssn_Numeric` 前言；因子表是 `Tensor<1, Tensor<2, Float>>`）；
-  混合列表由通用的列表访问器 `from_value<Tensor<1, Value>>` 拆开再逐部分解码（§10.3.8）。
-  符号 PDE 同样只有一个名字：`solve_heat_equation`、`solve_wave_equation`、`solve_laplace_equation`、
-  `solve_poisson_equation`（维数由方程的变量决定，旧的 `_1d`/`_2d`/`_3d` 是别名）；
-  仿射变换 `translation`、`scaling`、`shear`、`reflection`、`rotation` 同理，归入 `Rssn_Graphics`。
+- **维度无关，按维数/秩命名。** `heat_fd`、`wave_fd`、`poisson_fd`、`advect_fd` 在内核里不分维度：空间维数就是场数据的嵌套深度（列表一维，列表的列表二维，三层三维；定义域是单位区间/方块/立方体）。
+  一个 Aevia 签名只有一个字面量秩，所以一个内核算子带**多条签名，各用自己的名字**：不带后缀的名字是一维形式（`poisson_fd(f: Tensor<1, Float>, boundary: Float)`），`_2d`/`_3d` 取
+  `Tensor<2, Float>`/`Tensor<3, Float>` 场（`heat_fd_2d`、`wave_fd_3d`、`advect_fd_3d` …），答案与场同形状；平流速度仍是 `Tensor<1, Float>`，每个空间维一个分量。秩多态的张量算子同理按秩命名：
+  `tensor_norm_<r>`、`tensor_inner_<r>`（r = 1..4）与 `tensordot_<ra>_<rb>_<k>`（收缩 k 个轴，`axes_a`/`axes_b: Tensor<1, Int>` 从 0 起，结果秩 ra + rb − 2k，0 时为 `Float`；结果秩至多 4）。
+  分解 `hosvd_<r>`、`hooi_<r>`、`cp_als_<r>`、`tt_svd_<r>`、`tt_dense_<r>`（r = 2、3、4）的结果是记录 `Hosvd<r>`、`Hooi<r>`、`CpFit`、`TensorTrain`（因子表是 `Tensor<1, Tensor<2, Float>>`），
+  混合列表由列表访问器 `from_value<Tensor<1, Value>>` 拆开再逐部分解码（§10.3.8）。符号 PDE 只有一个名字：`solve_heat_equation`、`solve_wave_equation`、`solve_laplace_equation`、
+  `solve_poisson_equation`（维数由方程的变量决定，旧的 `_1d`/`_2d`/`_3d` 是别名）；仿射变换 `translation`、`scaling`、`shear`、`reflection`、`rotation` 同理，归入 `Rssn_Graphics`。
 - 参差输入（邻接表、项数不同的多项式方程）没有字面量写法，用 `map(f, range(0, n))` 构造
   `Tensor<1, Tensor<1, Float>>`。
 
-端到端示例与封闭形式核对：`tests/domain_numeric.aev`（45 个 `test`：`mad([1,2,3,4,100]) = 1`、Hann 窗对称、
-`ifft(fft(x)) = x`、小波分解/重构往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
-`tensordot_2_2_1` 对手算矩阵乘、`poisson_fd_2d`/`heat_fd_2d` 的封闭形式、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），
-由 `cargo test -p aevia-rssn --test aev_suites` 经真实驱动运行。
+端到端示例与封闭形式核对：`tests/domain_numeric.aev`（`mad([1,2,3,4,100]) = 1`、`ifft(fft(x)) = x`、小波往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
+`tensordot_2_2_1` 对手算矩阵乘、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），由 `cargo test -p aevia-rssn --test aev_suites` 运行。
 
 ## 8.20 库的组织
 
@@ -1841,50 +1537,17 @@ Physics
 模块名就是路径：`import A.B` 解析 `A/B.aev`（§7），`import Math { sqrt }`
 只引入 `sqrt`，`open Units.SI` 把 `Units.SI` 的导出名放进当前作用域。
 
-> **实现状态（2026-11-04）**：标准库**模块树已落地**。
-> （`crates/aevia-std/stdlib/**.aev`，**38** 个模块，含 §8.9.1 的 `Sde`；
-> 经 `include_str!` 嵌入；`aevia_std::stdlib` 暴露
-> `source`/`is_module_name`/`module_paths`。）
-> 加载器在普通根目录解析不到模块时回退到嵌入模块，因此 `import Math {
-> sqrt }`、`open Units.SI`、`import Data.Csv { read_csv, column, Table }`、
-> `import Physics.Ising` 都能从用户源码直接使用；本地文件仍然优先于嵌入
-> 模块。`Units.Constants` 由 live Kernel Manifest 生成；标准库的名字也仍然
-> 直接作为 Prelude 内建可用。`Units/*` 是文档性模块：单位名本来就是
-> ambient 的 `Unit[d]` 值，导出数量绑定会遮蔽它们并改变 `Tensor / Unit`
-> 的语义，因此不导出（§5.3.4）。`Sde` 模块 re-export §8.9.1 的五个入口
-> （`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed`）
-> 并声明选项 ADT（`SdeMethod`/`SdeStructure`/`SdeFixedOpts`/
-> `SdeAdaptiveOpts`/`SdeOpts`）；`SdePath` 的结果字段由推断访问；`Physics.Ising`/`Physics.Geodesic`
-> 提供 §8.17 的类型化包装器。`spec/11` 的九个完整程序**全部**通过
-> （11.1/11.2/11.3/11.4/11.5/11.6/11.7/11.8/11.10；11.2 的
-> `RateOf<State>` 记录统一与 11.4 的 refined/rank-only shape 统一已在本轮
-> 修复，测试 `spec_programs` 断言这张表）。**第 8 章的声明名已全部闭合**：
-> **323/323** 有实现（`args` 计入后由 322 变 323），`stdlib_coverage` 的
-> `chapter_eight_has_no_capability_gaps` 通过；NPY 也在本轮实现（§8.11）。
-> **注意：323/323 只证明“名字”覆盖**——名字清单看不到参数类型、返回类型
-> 与算子重载。本章声明与 checker scheme 的逐条对照由 `aevia-std` 的
-> `spec_signatures` 审计（309 条声明；机械部分比较 presence/arity/return
-> class，2 条已记录的 loose `sdeint_*` 方案留档，其余 type/order findings
-> 见 `.workbuddy-ai/design/chapter8-signature-audit.md`，会随 task-28/29
-> 的修复更新）；名字通过不代表签名逐字一致。
-> **当前导入状态（task-22 已闭合）**：函数名、`Sde` 的**名义变体构造器**
-> （`import Sde { Milstein, sde_order }`）与**透明类型别名**（`type X =
-> { … }`，例如 `Physics.Ising` 的 `Params`）都可以经 `import { X }`/`open`
-> 引入；源码里可以直接给这类别名类型写注解（`fn make(): Params = …`），
-> 也可以继续用限定名 `Physics.Ising.Params`。SDE 的策略记录本来就是名义
-> 变体，因此不受影响（§8.9.1 验证可写可运行）；§8.17 的包装器结果类型
-> 现在也可以按名字写出来，而不必只靠推断。
+> **状态**：模块树已落地（`crates/aevia-std/stdlib/**.aev`，41 个模块文件，经 `include_str!` 嵌入；`aevia_std::stdlib` 暴露 `source`/`is_module_name`/`module_paths`）。加载器在普通根目录解析不到
+> 模块时回退到嵌入模块，所以 `import Math { sqrt }`、`open Units.SI`、`import Data.Csv { read_csv, column, Table }`、`import Physics.Ising` 都能直接使用；本地文件优先于嵌入模块。标准库的名字也直接
+> 作为 Prelude 内建可用。`Units/*` 是文档性模块：单位名本来就是 ambient 的 `Unit[d]` 值，导出数量绑定会遮蔽它们并改变 `Tensor / Unit` 的语义，因此不导出（§5.3.4）。`Sde` 模块 re-export
+> §8.9.1 的五个入口并声明选项 ADT；`Physics.Ising`/`Physics.Geodesic` 提供 §8.17 的类型化包装器。函数名、`Sde` 的名义变体构造器与透明类型别名（`type X = { … }`，如 `Physics.Ising` 的 `Params`）
+> 都可经 `import { X }`/`open` 引入。
 >
-> **生成模块与 manifest 同步**：`Rssn`/`Units`/`Constants` 是 Kernel
-> Manifest 的生成视图。本轮 manifest（2026-11-05 实测）是 **1382 个算子
-> （7 declared + 25 overlay + 1350 derived，其中 `sde_scheme_info` 是本轮
-> 新增的 manifest-only 元数据算子）、32 个 rule set、82 单位、30 常数、
-> overload 1568 条、`manifest_hash = 8d2c3764…`**。嵌入的
-> `crates/aevia-std/stdlib/Units/Constants.aev` 来自 live manifest；
-> manifest 变化后必须用
-> `cargo run -p aevia-stdlib-gen -- --write`
-> 重新生成，否则 `units_constants_is_the_live_manifest` 会失败（这是
-> 生成视图与 live manifest 的诚实校验）。
+> **一致性审计**：本章每个声明的名字都有实现（`aevia-core` 的 `stdlib_coverage` 测试 `chapter_eight_has_no_capability_gaps`）；`aevia-std` 的 `spec_signatures` 测试把声明与 checker scheme 逐条对照
+> （presence、arity、return class；参数类型与顺序不逐字比较，因为规范与 scheme 的拼写不同，已记录的差异留档）；名字通过不代表签名逐字一致。第 11 章的九个完整程序全部通过检查（`spec_programs`）。
+>
+> **生成模块与 manifest 同步**：`Rssn`/`Units`/`Constants` 是 Kernel Manifest 的生成视图。嵌入的 `Units/Constants.aev` 来自 live manifest；manifest 变化后必须用
+> `cargo run -p aevia-stdlib-gen -- --write` 重新生成，否则 `units_constants_is_the_live_manifest` 会失败。
 
 `Rssn` 是**生成的模块**，不是手写库：构建时从 Kernel Manifest 生成
 `Rssn.<op>` 类型化声明和 `Rssn.dynamic` 动态入口（§13.2）。`Rssn` 的

@@ -1,17 +1,16 @@
 # 02 — 语法
 
-本章定义 Aevia 的声明、表达式、模式和类型语法。完整的 EBNF 在
-[附录 A](appendix-a-grammar.md)；本章解释**为什么**这样写，以及那些容易歧义
-的地方如何解析。
+本章定义声明、表达式、模式和类型的语法，并说明容易歧义处如何解析。完整 EBNF 在
+[附录 A](appendix-a-grammar.md)，本章不重复。
 
-## 2.1 一个源文件的结构
+## 2.1 源文件结构
 
 ```aevia
-module Kinematics            # 可选，必须与文件路径一致
+module Kinematics            # 可选，必须是第一条声明
 
-import Units.SI as SI        # 限定访问；单位字面量仍可用
+import Units.SI as SI        # 限定访问
 import Math { sqrt, pi }     # 选择性打开
-open SI                      # 打开单位值，之后 to(m, x) 可直接用
+open Units.SI                # 打开单位与常量
 
 dimension Currency           # 自定义基量纲
 unit EUR : Currency = 1      # 单位声明
@@ -19,55 +18,30 @@ unit EUR : Currency = 1      # 单位声明
 type Vec2 = { x: Real[L], y: Real[L] }
 
 fn fall_time(h: Float[L]): Float[T] = sqrt(2 * h / g)
-
-fn main(): IO Unit = do
-    ...
 ```
 
-一个文件是**一个模块**。顶层声明按顺序出现，顺序不影响名字解析（除了单位
-声明必须在使用它的单位字面量之前被解析——实现可以在解析完全部声明后统一
-解析单位名）。顶层可以是：
-
-- `module`（最多一次，且必须是第一条非注释声明）；
-- `import` / `open`；
-- `dimension` / `unit`；
-- `type` / `class` / `instance` / `derive`；
-- `fn` / `let`；
-- `test`。
-
-`private` 可以加在 `type`、`dimension`、`unit`、`fn`、`let`、`class` 前，表示不导出。
-默认全部导出。
+一个文件是一个模块。顶层声明的顺序不影响名字解析（单位名在全部声明解析后统一解析）。
+顶层可以是 `module`（至多一次，且第一）、`import`/`open`、`dimension`/`unit`、
+`type`/`class`/`instance`/`derive`、`fn`/`let`、`test`。`private` 可加在 `type`、
+`dimension`、`unit`、`fn`、`let`、`class` 前表示不导出，默认全部导出。`open` 的操作数
+是模块路径，不能是 `import … as` 引入的别名（§7.2）。
 
 ## 2.2 声明
 
-### 2.2.1 函数声明
+### 2.2.1 函数
 
 ```aevia
 fn kinetic_energy(m: Real[M], v: Real[L/T]): Real[M*L^2/T^2] =
     m * v^2 / 2
+
+fn norm((x, y): (Real[L], Real[L])): Real[L] = sqrt(x^2 + y^2)
 ```
 
-```
-fn_decl ::= "fn" IDENT [ type_params ] "(" [ params ] ")" [ ":" type ] "=" expr
-params  ::= param { "," param }
-param   ::= pattern [ ":" type ]
-```
+- 参数可带类型标注，省略时由函数体和调用点推断；参数可以是模式。
+- 返回类型写在 `)` 之后、`=` 之前；函数体是一个表达式，多行时是块（§1.4.4）。
+- 函数声明是递归的：`fn f(x) = e` 是 `let rec f = fn (x) => e` 的语法糖。
 
-- 参数可以有类型标注，也可以省略；省略时由函数体和调用点推断。
-- 参数可以是模式：`fn norm((x, y): (Real[L], Real[L])): Real[L] = sqrt(x^2 + y^2)`。
-- 返回类型标注在 `)` 之后、`=` 之前。
-- 函数体是一个表达式；多行时是一个缩进块：
-
-```aevia
-fn mean<d>(xs: Tensor<1, Real[d]>): Real[d] =
-    let n = length(xs)
-    sum(xs) / n
-```
-
-- 函数声明是**递归**的：函数名在函数体内可见。
-- `fn f(x) = e` 是 `let rec f = fn (x) => e` 的语法糖。
-
-### 2.2.2 值声明
+### 2.2.2 值
 
 ```aevia
 let g = 9.80665 m/s^2
@@ -75,18 +49,12 @@ let (x, y) = (1.0 m, 2.0 m)
 let rec fact = fn (n: Int) => if n == 0 then 1 else n * fact(n - 1)
 ```
 
-```
-let_decl ::= "let" [ "rec" ] pattern [ ":" type ] "=" expr
-```
+- 普通 `let` 不是递归的：`let x = x + 1` 的右侧 `x` 指向外层绑定，没有则 `E0301`。
+  `let rec` 让名字在自身定义中可见。
+- 顶层与局部 `let` 语义相同。模式必须与右侧类型匹配（`E0308`）；构造器模式绑定
+  （`let Some(x) = e`）按不可驳处理。
 
-- 普通 `let` **不是**递归的：`let x = x + 1` 中的 `x` 指向外层同名绑定
-  （若没有则报未定义）。
-- `let rec` 让绑定名在自身定义中可见，主要用于递归 lambda。
-- 顶层 `let` 与局部 `let` 语义相同。
-- 模式绑定要求右侧类型与模式匹配；不匹配是编译错误（除非模式是 irrefutable
-  的，如变量、通配符、记录、元组）。
-
-### 2.2.3 类型声明
+### 2.2.3 类型
 
 ```aevia
 type Vec2 = { x: Real[L], y: Real[L] }
@@ -98,25 +66,12 @@ type Shape =
 type Result<a, e> = | Ok(a) | Err(e)
 ```
 
-```
-type_decl ::= "type" UIDENT [ type_params ] [ "=" type_body ]
-type_body ::= type
-            | "|" constructor { "|" constructor }
-            | NEWLINE INDENT { "|" constructor NEWLINE } DEDENT
-constructor ::= UIDENT [ "(" [ type { "," type } ] ")" ]
-```
-
-- `type Name = T` 是**透明别名**：`Vec2` 与 `{ x: Real[L], y: Real[L] }`
-  完全相同。
-- `type Name`（省略 `= type_body`）是**抽象类型**，只能由标准库/插件提供
-  构造器与操作；用户模块不能凭空实现它。`Table`/`Series`/`PlotSpec` 等
-  内建类型用这种形式声明。
-- `type Name = | C1(...) | C2(...)` 是**名义变体类型**；构造器是值/函数。
-  单行变体 MUST 以 `|` 开头，以便与类型别名区分；缩进形式可以省略首个
-  `|`（但建议保留）。
-- 递归类型允许，但递归出现必须位于函数箭头的右侧、记录字段、元组或构造器
-  参数中（正性检查，§3.6.4）。
-- 构造器名在模块内全局可见；不同模块的同名构造器用 `Module.Ctor` 限定。
+- `type Name = T` 是**透明别名**。
+- `type Name`（无 `=`）是**抽象类型**，构造器与操作由标准库或插件提供。
+- `type Name = | C1(…) | C2(…)` 是**名义变体类型**，构造器是值/函数。单行变体 MUST 以 `|`
+  开头以区别于别名（`type T = A(Int) | B` 是 `E0202`）；缩进形式可省略首个 `|`。
+- 递归类型的递归出现须在函数箭头右侧、记录字段、元组或构造器参数中（正性，§3.6.4）。
+- 构造器名在模块内全局可见；跨模块同名用 `Module.Ctor` 限定。
 
 ### 2.2.4 类型类与实例
 
@@ -127,90 +82,60 @@ class Show a where
 instance Show for Real[d] where
     show(x) = format_quantity(x)
 
-instance Show for Vec2 where
-    show(v) = "({v.x}, {v.y})"
-```
-
-```
-class_decl    ::= "class" UIDENT type_param { type_param } "where"
-                  NEWLINE INDENT { method_sig NEWLINE } DEDENT
-method_sig    ::= IDENT ":" type
-                 | IDENT "(" [ params ] ")" [ ":" type ]
-instance_decl ::= "instance" UIDENT "for" type
-                  [ "where" NEWLINE INDENT { method_def NEWLINE } DEDENT ]
-method_def    ::= IDENT "(" [ params ] ")" [ ":" type ] "=" expr
-```
-
-- 类声明至少有一个类型参数；方法只有签名；默认实现由 `derive` 或插件提供，不在类声明里写。
-- 实例头是 `Class Type`；`Real[d]` 中的 `d` 隐式全称量化。
-- 实例必须满足一致性（coherence）：同一类、同一类型头只能有一个实例；
-  实例必须定义在类型或类所属的模块中（orphan rule，§7.4）。
-- `derive` 为记录/变体自动生成常见实例：
-
-```aevia
 derive Eq, Show for Vec2
 ```
 
-### 2.2.5 单位与量纲声明
+- 类至少有一个类型参数；方法只有签名，默认实现由 `derive` 或插件提供。
+- 实例头是 `instance Class for Type`，`Real[d]` 中的 `d` 隐式全称量化。一致性与孤儿规则
+  见 §7.4。
+- `derive` 为记录和变体生成常见实例。
+
+### 2.2.5 单位与量纲
 
 ```aevia
 dimension Currency
 unit USD : Currency = 1
 unit EUR : Currency = 1.08 USD
-
 unit m : L = 1 prefixable
-unit km : L = 1000 m
 unit degC : Θ = 1 K offset 273.15 K
 ```
 
 语法与语义见第 05 章。
 
-### 2.2.6 测试声明
+### 2.2.6 测试
 
 ```aevia
 test "fall time from 20 m" =
     approx_eq(fall_time(20.0 m), 2.019 s, 0.001 s)
 
 test "energy is positive" =
-    forall(fn (m: Real[M], v: Real[L/T]) =>
-        kinetic_energy(m, v) >= 0 J)
+    forall(fn (v: Real[L/T]) => kinetic_energy(1 kg, v) >= 0 J)
 ```
 
-`test` 的名称是字符串，体是 `Bool` 表达式。`aevia test` 收集并运行所有
-`test`。`forall` 是标准库的属性测试辅助函数，不是语言关键字（§8.13）。
+名称是字符串，体是 `Bool`（或 `Prop`，§8.13）表达式；`aevia test` 收集并运行。`forall`
+是标准库函数，不是关键字，其谓词只有一个参数。
 
 ### 2.2.7 属性
-
-声明和函数可以带属性：
 
 ```aevia
 @stable
 @deprecated("use new_api")
 fn old_api(x: Real[1]): Real[1] = ...
 
-@jit
-fn hot(x: Float[1]): Float[1] = ...
-
 @op("mydomain/softplus")
 fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 ```
 
-```
-attribute ::= "@" IDENT [ "(" [ attr_arg { "," attr_arg } ] ")" ] NEWLINE?
-top_decl  ::= { attribute } [ "private" ] decl
-attr_arg  ::= [ IDENT "=" ] expr
-```
-
-- `@stable`/`@experimental`/`@deprecated` 是稳定性标记（§13.8）。
-- `@jit` 请求 JIT；后端没有 `core.jit` 时报 `E1001`。
-- `@op` 把函数注册为 RSSN 算子；`@rule` 注册重写规则（§13.5）。
-- 未知属性报 `E0210`；属性参数必须是编译期常量。
+- 已知属性：`@stable`、`@experimental`、`@deprecated`（稳定性，§13.8）、`@jit`（请求 JIT；
+  后端没有 `core.jit` 时 `E1001`）、`@op`、`@rule`（注册 RSSN 算子与重写规则，§13.5）、
+  `@bench`（§9.12）。
+- 未知属性是 `E0210`；属性参数必须是编译期常量。
 
 ## 2.3 表达式
 
 ### 2.3.1 块
 
-块是一串 `let`/`fn` 声明后跟一个最终表达式：
+块是 `let`/`fn` 声明序列加一个最终表达式（§1.4.4）；`let` 的作用域延伸到块尾。
 
 ```aevia
 let y =
@@ -219,46 +144,22 @@ let y =
     a + b
 ```
 
-```
-block ::= INDENT { block_stmt } expr DEDENT
-block_stmt ::= let_decl NEWLINE | fn_decl NEWLINE
-```
-
-块的值是最后一个表达式的值。块中 `let` 的作用域延伸到块尾。块必须至少有一个
-最终表达式；只有 `let` 的块是语法错误（`E0201`）。
-
-### 2.3.2 `let ... in`
-
-单行表达式可以用 ML 风格的 `let ... in`：
+### 2.3.2 `let … in`
 
 ```aevia
 let x = let y = 2 in y^2 + 1
 ```
 
-```
-let_expr ::= "let" pattern [ ":" type ] "=" expr "in" expr
-```
-
-`let ... in` 是非递归的。递归用块中的 `let rec` 或 `fn`。
+`let … in` 是非递归的单行形式；递归用块中的 `let rec` 或 `fn`。
 
 ### 2.3.3 `if`
 
 ```aevia
 let s = if x > 0 then "positive" else "non-positive"
-
-let y =
-    if x > 0 then
-        sqrt(x)
-    else
-        -sqrt(-x)
 ```
 
-```
-if_expr ::= "if" expr "then" expr "else" expr
-```
-
-`if` 是表达式，必须有 `else`。两个分支的类型必须统一（量纲也要统一）。
-`else if` 可以连写。
+`if` 是表达式，必须有 `else`，`else if` 可连写；两个分支类型必须统一（量纲也要统一）。
+多行写法的 `else` 与 `if` 同列（§1.4.4）。
 
 ### 2.3.4 `match`
 
@@ -275,80 +176,52 @@ fn sign(x: Real[1]): Int =
     | _ -> -1
 ```
 
-```
-match_expr ::= "match" expr "with" match_body
-match_body ::= NEWLINE INDENT { match_arm } DEDENT
-             | NEWLINE { match_arm }          # 分支与 match 同列
-             | inline_arm { inline_arm }      # 分支写在 `with` 同一行
-match_arm  ::= "|" pattern [ "if" expr ] "->" expr NEWLINE?
-inline_arm ::= "|" pattern [ "if" expr ] "->" expr
-```
+- 分支按顺序尝试；守卫 `if` 在模式匹配成功后求值，必须是 `Bool`；分支体可以是块。
+- 非穷尽是 `E0309`，冗余分支是警告 `W0201`；穷尽性分析见 §2.4。
+- 三种布局：分支缩进在 `match` 之下；分支与 `match` 同列；或**行内**写在 `with` 之后
+  （括号内没有 `NEWLINE`，所以 `println(match o with | Some(v) -> v | None -> 0)` 只能
+  行内）。行内分支的体到下一个 `|` 或外层表达式结束处为止，嵌套的行内 `match` 会吞掉
+  后面的分支，须加括号。格式化器在表达式内部输出行内形式，行尾输出块形式。
 
-- 分支按顺序尝试；`_` 是通配符。
-- 守卫 `if` 在模式匹配成功后求值，必须是 `Bool`。
-- 穷尽性由编译器检查；非穷尽是错误 `E0309`，冗余分支是警告 `W0201`。
-- 分支体可以是块。
-- **行内形式**：分支也可以与 `with` 写在同一行：
-  `match o with | Some(v) -> v | None -> 0`。括号内没有 `NEWLINE`（§1.4），
-  所以 `println(match o with | Some(v) -> v | None -> 0)` 只能用这种形式。
-  行内分支的体在下一个 `|` 或外层表达式结束处结束；嵌套的行内 `match` 会吞掉
-  后面的分支，必要时加括号。格式化器在表达式内部输出行内形式，在行尾输出块形式。
-
-### 2.3.5 `fn` 表达式（lambda）
+### 2.3.5 lambda
 
 ```aevia
 let square = fn (x: Real[L]) => x^2
 let add = fn (x, y) => x + y
-let compose = fn (f, g) => fn (x) => f(g(x))
-```
-
-```
-fn_expr ::= "fn" ( "(" [ params ] ")" | IDENT ) [ ":" type ] "=>" expr
-```
-
-- 参数类型可省略；返回类型可省略。
-- 多行 lambda：
-
-```aevia
+let inc = fn x => x + 1
 let f = fn (x: Real[L]) =>
     let y = x^2
     y + 1
 ```
 
-- 函数是闭包；捕获是词法的。
-- 没有自动柯里化：`fn (x, y) => ...` 接受两个参数，不是 `x -> y -> ...`。
-  需要柯里化时用 `curry`/`uncurry`（§8.3）。
+参数与返回类型可省略；闭包按词法捕获；`fn (x, y) => …` 接受两个参数，没有自动柯里化
+（`curry`/`uncurry`，§8.3）。
 
-### 2.3.6 函数调用与占位符
+### 2.3.6 调用与占位符
 
 ```aevia
-f(x)
 f(x, y)
 g()(x)                 # 调用返回的函数
-map(_, xs)             # 等价于 fn f => map(f, xs)
-map(f, _)              # 等价于 fn xs => map(f, xs)
+map(_, xs)             # fn f => map(f, xs)
+map(f, _)              # fn ys => map(f, ys)
 ```
 
-- 调用必须写括号。`f x` 不是调用。
-- 参数之间用逗号分隔；没有可变参数。
-- `_` 作为实参表示“这里缺一个参数”，整个调用变成 lambda，参数按 `_` 出现
-  的顺序排列。`_` 不能与普通表达式混用在同一参数位置。
-- 调用是左结合的：`f(x)(y)` 先调用 `f(x)`，再调用结果。
+调用必须写括号，实参以逗号分隔，没有可变参数，调用左结合。`_` 作为实参表示缺一个参数，
+整个调用变成 lambda，参数按 `_` 出现顺序排列；`_` 在其他位置是 `E0202`。
 
 ### 2.3.7 运算符与管道
 
 ```aevia
 let y = x |> square |> sqrt          # sqrt(square(x))
-let z = sqrt <| square <| x          # sqrt(square(x))
+let z = sqrt <| square <| x          # 同上
 let w = xs |> map(f, _) |> sum
 ```
 
-- `a |> f` 等价于 `f(a)`；`f <| a` 等价于 `f(a)`。右侧是一个函数值：调用不柯里化，
-  所以多参数函数用占位符写成函数，`xs |> map(f, _)`（§2.3.6），而不是 `map(f)`。
-- `|>` 与 `<|` 同级，混用时按出现顺序左结合；建议只用一种方向。
-- 管道让“数据流”从左到右阅读，适合多步变换。
-- 只有裸运算符 `(+)` 或 lambda 是函数；部分应用 section（如 `(== 1)`、
-  `(* 2)`）报 `E0205`，请写 `fn y => y == 1`。
+- `a |> f` 与 `f <| a` 都等价于 `f(a)`；右侧是函数值，不自动柯里化，多参函数用占位符
+  （`xs |> map(f, _)`）。两者同级，混用时按出现顺序左结合，建议只用一种。
+- 部分应用 section（`(== 1)`、`(* 2)`）是 `E0205`，写 `fn y => y == 1`。
+
+> **状态：** 裸运算符 `(+)` 已能解析，但名字尚未绑定到函数（`E0301`）；现在请写 lambda。
 
 ### 2.3.8 记录
 
@@ -359,28 +232,19 @@ let r = { x, y }                      # 字段 punning
 let a = p.x
 ```
 
-```
-record_expr   ::= "{" [ record_body ] "}"
-record_body   ::= expr "with" field_init { "," field_init }
-                | field_init { "," field_init }
-field_init    ::= IDENT "=" expr | IDENT
-```
-
-- 记录是结构化的；字段顺序不影响类型相等。
-- `{ p with x = ... }` 产生一个新记录，未列出的字段保持不变；可以新增字段。
-- 字段访问 `p.x` 是后缀运算符，优先级最高。
-- 空记录 `{}` 是合法的，类型为 `{}`。
+- 记录是结构化的，字段顺序不影响类型相等；重复字段是 `E0208`；`{}` 是合法的空记录。
+- `{ p with x = … }` 产生新记录，未列字段不变，可新增字段。
+- 字段访问是优先级最高的后缀运算。
 
 ### 2.3.9 变体构造
 
 ```aevia
 let s = Circle(1.0 m)
-let o = Some(3)
 let n = None
 ```
 
-构造器是普通函数/值；`Circle` 的类型是 `Real[L] -> Shape`，`None` 是
-`Option<a>` 的多态值。构造器名必须以大写 `UIDENT` 开头；这是语法要求。
+构造器是普通函数/值：`Circle : Real[L] -> Shape`，`None` 是 `Option<a>` 的多态值。构造器名
+必须以大写字母开头。
 
 ### 2.3.10 张量
 
@@ -388,52 +252,34 @@ let n = None
 let v = [1.0, 2.0, 3.0]              # Tensor<[3], Float>
 let m = [[1.0, 2.0], [3.0, 4.0]]     # Tensor<[2,2], Float>
 let e: Tensor<1, Float> = []         # 空张量需要标注
-let z = zeros(3, 4)                  # 默认 Float；Tensor<2, Float>
-let q = zeros<Int>(3, 4)             # 显式元素类型
+let q = zeros<Int>(3, 4)             # 显式元素类型；默认 Float
 ```
 
-```
-tensor_lit ::= "[" [ expr { "," expr } ] "]"
-```
-
-- 嵌套的方括号字面量构造 rank-n 张量；必须是矩形，否则 `E0203`。
-- 元素类型由所有元素统一推断；`[1, 2.0]` 统一为 `Float`。
-- 空字面量 `[]` 的元素类型和 rank 无法推断，必须有类型标注。
-- 显式类型实参写作 `f<T>(...)`，`<` 必须紧邻函数名，不能有空格；
-  `a < b` 比较运算要求 `<` 前有空格或左侧不是可类型应用的名字。
-- `zeros`、`ones`、`fill` 等构造器在没有约束时默认 `Float`。
+- 嵌套字面量构造 rank-n 张量，必须是矩形，否则 `E0203`；元素类型统一推断
+  （`[1, 2.0]` 为 `Float`）；无标注的 `[]` 是 `E0314`。
+- 显式类型实参写 `f<T>(…)`，`<` 必须紧邻函数名；比较的 `<` 前要有空格（§2.7.2）。
 
 ### 2.3.11 索引与切片
 
 ```aevia
 let x = v[0]                         # 元素
-let row = m[1]                       # rank 2 -> rank 1
+let row = m[1]                       # rank 2 → rank 1
 let a = m[0, 1]                      # 元素
 let col = m[.., 1]                   # 列
 let block = m[0..2, 1..3]            # 子矩阵
-let last = v[-1]                     # 负索引：最后一个
+let last = v[-1]                     # 负索引：末尾
+let ev = v[::2]                      # 步长切片
 ```
 
-```
-index ::= "[" slice { "," slice } "]"
-slice ::= [ expr ] [ ".." [ expr ] | "..=" expr ]
-        | [ expr ] ":" [ expr [ ":" [ expr ] ] ]
-```
-
-- 索引从 0 开始；负索引从末尾计。
-- `..` 是半开区间，`..=` 是闭区间；省略端点表示到边界。
-- `:` 是带步长切片的写法：`a[i:j:s]`。`i`、`j`、`s` 都可省略，省略的 `s`
-  表示 1；`a[i:j]` 与 `a[i..j]` 是同一个节点。
-- `::` 是 cons 运算符（§2.5），所以在表达式之后 `xs[1::2]` 仍解析为
-  `xs[1 :: 2]`。带起始位置和步长的切片要写出终点（`xs[1:5:2]`）；起点之后
-  立即省略终点只在没有起始位置时写作 `xs[::2]`。
-- 在 `[...]` 内 `:` 是切片分隔符，所以带类型标注的下标要加括号：
-  `xs[(i : Int)]`。
-- `a[i]` 在 rank 1 上取元素，在 rank > 1 上取第 i 个切片（rank 减一）。
-- `a[i, j]` 要求 rank 2；更多下标依此类推。
-- 越界是运行时错误 `E0802`；编译器在索引为字面量时可以静态检查。
-- 切片产生新张量（语义上是复制；运行时在可能时共享底层缓冲区）。负步长
-  切片总是视图（§6.6.4.1）。
+- 索引从 0 起，负数从末尾计；`..` 半开、`..=` 闭，省略端点表示到边界；`a[i]` 在 rank 1
+  取元素，在 rank > 1 取第 i 个切片（rank 减一）；`a[i, j]` 要求 rank ≥ 2。
+- `a[i:j:s]` 是带步长的切片，`i`、`j`、`s` 都可省略（`s` 缺省为 1），`a[i:j]` 与 `a[i..j]`
+  是同一节点。
+- `::` 始终是 cons（§2.6），所以 `xs[1::2]` 是 `xs[1 :: 2]`；有起点又要步长时写出终点
+  （`xs[1:5:2]`），省略终点时必须省略起点（`xs[::2]`）。`[...]` 内 `:` 是切片分隔符，
+  带类型标注的下标要加括号：`xs[(i : Int)]`。
+- 越界是运行时 `E0802`；索引是字面量时编译器可静态检查。切片语义上是复制，运行时可共享
+  缓冲区，负步长切片总是视图（§6.6.4.1）。
 
 ### 2.3.12 `do` 与 IO
 
@@ -443,111 +289,74 @@ fn main(): IO Unit = do
     text <- read_file(name)
     let rows = parse_csv(text)
     println("rows = {length(rows)}")
-    return ()
+    pure(())
 ```
 
-```
-do_expr ::= "do" NEWLINE INDENT { do_stmt } DEDENT
-do_stmt ::= "let" pattern [ ":" type ] "=" expr NEWLINE
-          | pattern "<-" expr NEWLINE
-          | expr NEWLINE
-```
-
-- `x <- action` 绑定 `IO` 动作的结果。
-- `let` 是纯绑定。
-- 裸 `IO` 表达式按顺序执行，结果被丢弃（若类型不是 `IO Unit`，警告
-  `W0202`）。
-- `return(e)` 是 Prelude 函数，类型 `a -> IO a`，不是关键字。
-- `do` 块的值是最后一个 `expr` 语句的值；最后一条是 `let` 时是 `()`。
-- `do` 只接受 `IO`；类型检查器拒绝其他 monad。
+- `x <- action` 绑定 `IO` 动作的结果；`let` 是纯绑定；裸 `IO` 表达式依次执行，结果丢弃
+  （类型不是 `IO Unit` 时警告 `W0202`）；非 `IO` 的语句是 `E0701`。
+- `do` 的值是最后一条 `expr` 语句；`do` 语句中不能声明 `fn` 或 `let rec`，需要时先写成块表达式。
+- `pure : a -> IO a` 是 Prelude 函数，不是关键字（§9.7.3）。`do` 只接受 `IO`。
 
 ### 2.3.13 错误传播 `?`
 
-```aevia
-fn load(path: String): IO (Result<Table<Dynamic>, DataError>) =
-    read_csv_dyn(path)
-```
-
-`e?` 要求 `e : Result<T, E>`，所在函数返回 `Result<U, E>`；成功时得到 `T`，
-失败时提前返回 `Err(e)`。`?` 也可以用于 `Option`，所在函数返回 `Option`。
+`e?` 要求 `e : Result<T, E>` 且所在函数返回 `Result<U, E>`：成功得 `T`，失败提前返回
+`Err(e)`。`?` 也可用于 `Option`，所在函数返回 `Option`。
 
 ### 2.3.14 其他表达式
 
 ```aevia
 ()                                   # unit
-(1, 2)                               # tuple
-(1)                                  # 括号，不是 tuple
+(1, 2)                               # 元组
+(1)                                  # 括号，不是元组
 x : Real[L]                          # 类型标注
 x!                                   # 阶乘（Int）
 √x                                   # sqrt(x)
 ```
 
-- 元组用逗号；`(1,)` 是单元素元组（当前规范要求 `(1, ())` 或记录）。
-  为避免歧义，当前规范 **不支持**单元素元组；用记录或直接返回值。
+- 不支持单元素元组（`(1,)` 是 `E0202`），用值本身或记录。
 - 类型标注 `e : T` 优先级最低，作用于整个表达式。
-- `x!` 仅当 `x : Int`；`x!!` 是双阶乘。
-- `√x` 是 `sqrt(x)` 的前缀语法糖。
+- `x!` 的规则见 §2.7.5。`√x` 是 `sqrt(x)` 的前缀写法，操作数类型必须在该处已知
+  （`√x` 对已标注的 `x` 有效，`√4.0` 尚不能推断，写 `sqrt(4.0)`）。
 
 ## 2.4 模式
 
 ```aevia
-fn f(p: (Real[L], Real[L])): Real[L] =
-    let (x, y) = p
-    sqrt(x^2 + y^2)
-
-match shape with
-| Circle(r) -> ...
-| Rect(w, h) if w > h -> ...
-| _ -> ...
-
+let (x, y) = p
 let { x, y } = point
 let [a, b, ..rest] = xs
+
+match shape with
+| Circle(r) -> …
+| Rect(w, h) if w > h -> …
+| _ -> …
 ```
 
-```
-pattern ::= "_" | IDENT | UIDENT | literal
-          | UIDENT [ "(" [ pattern { "," pattern } ] ")" ]
-          | "{" [ field_pat { "," field_pat } ] "}"
-          | "(" pattern { "," pattern } ")"
-          | "[" [ pattern { "," pattern } [ "," ".." IDENT ] ] "]"
-          | pattern "as" IDENT
-          | "(" pattern ":" type ")"
-field_pat ::= IDENT [ "=" pattern ]
-```
+文法见附录 A.4。
 
-- 变量模式绑定名字；`_` 不绑定。
-- **绑定位置中的大写名字是变量。** 在 `let`、`do` 中的 `let`、`<-`、函数与
-  lambda 参数这些绑定位置，不带括号的 `UIDENT`（如 `let A = …`、
-  `fn step(M: Tensor<2, Float>)`）绑定一个变量，而不是构造器模式——科学代码
-  惯用大写命名矩阵与常量（§0.5 的 `let M = …`、§5 的 `let T1 = 25.0 °C`）。
-  绑定位置里的构造器模式必须带参数表（`let Some(x) = …`）；无参构造器只在
-  `match` 分支中按构造器匹配，在那里裸 `UIDENT` 仍然是构造器。
-  绑定的变量遮蔽同名的值（含单位作为值时的名字，如 `A`）；单位字面量
-  `3 A` 由词法决定，不受影响。
-- 构造器模式使用检查器确定的名义类型与构造器序号；裸显示名称相同不表示同一构造器。
-- 记录模式只匹配列出的字段（开放匹配）；`{ x, y }` 绑定同名字段。
-- 张量模式只支持 rank 1 的字面量结构：`[a, b, ..rest]`。
-- 不带 `..rest` 的张量模式要求长度精确相同；带 rest 时只要求长度至少等于前缀。
-  rest 保留元素表示、单位、名义元素 schema，并共享原存储而非复制后缀。
-- 同一个模式中的绑定名必须唯一，包括 record 简写、`as` 和 rest；`_` 不绑定。
-  记录模式仍是开放字段匹配；tuple 模式要求相同元数。
-- 穷尽检查保留多字段之间的相关性；`(true,true)` 与 `(false,false)` 不覆盖
-  `(true,false)`。rank-one `[]` 与 `[head,..tail]` 覆盖所有长度；guard 不参与覆盖。
-  分析有固定工作/深度预算，不能证明穷尽时要求补充 `_`，不假定已经覆盖。
-- `p as x` 在匹配 `p` 的同时把整个值绑定到 `x`。
-- 浮点字面量不能作为模式（NaN 与精确相等的问题）；用守卫。
-- 模式匹配必须穷尽；变量模式是 irrefutable 的，记录模式还要求其子模式均不失败。
+- 变量模式绑定名字；`_` 不绑定；`p as x` 在匹配 `p` 的同时绑定整个值；`(p : T)` 标注。
+- **绑定位置中的大写名字是变量。** 在 `let`、`do` 中的 `let`、`<-`、函数与 lambda 参数中，
+  不带括号的 `UIDENT`（`let A = …`、`fn step(M: Tensor<2, Float>)`）绑定变量，因为科学
+  代码惯用大写命名矩阵和常量。绑定位置的构造器模式必须带参数表（`let Some(x) = …`）；
+  无参构造器只在 `match` 分支中按构造器匹配。绑定的变量遮蔽同名的值（包括单位名），
+  但不影响 `3 A` 这类单位字面量。
+- 构造器模式使用检查器确定的名义类型与构造器序号，显示名相同不代表同一构造器。
+- 记录模式只匹配列出的字段（开放匹配）；`{ x, y }` 绑定同名字段，`{ x = p }` 重命名；
+  元组模式要求元数相同。
+- 张量模式只支持 rank 1：`[a, b, ..rest]`。无 `..rest` 要求长度精确相等；有 `..rest` 要求
+  长度不小于前缀，rest 保留元素表示、单位和名义 schema，并共享原存储。
+- 同一模式内绑定名必须唯一（含简写、`as`、rest），否则 `E0308`。
+- 浮点字面量不是合法模式（`E0204`），用守卫。
+- 穷尽性：保留多字段相关性（`(true,true)` 与 `(false,false)` 不覆盖 `(true,false)`）；
+  `[]` 与 `[head, ..tail]` 覆盖全部长度；守卫不参与覆盖；分析有固定的工作与深度预算，
+  无法证明穷尽时要求补充 `_`，绝不假定已覆盖。
 
 ## 2.5 类型语法
 
 ```aevia
-Real[L]
 Real[L/T]
-Real[M*L^2/T^2]
 Float[1]
 Tensor<2, Float[L]>
-Tensor<n, Real[d]>
-{ x: Real[L], y: Real[L] }
+Tensor<[3, ?], Real[d]>
 { x: Real[L], ...r }
 (a, b) -> c
 forall d. Real[d] -> Real[d^2]
@@ -556,154 +365,99 @@ Result<T, E>
 IO Unit
 ```
 
-```
-type ::= [ "forall" type_param { "," type_param } "." ] fn_type
-fn_type ::= type_postfix [ "->" type ]
-type_postfix ::= type_atom { "[" IDENT "]" }
-type_atom ::= "Int" | "Real" [ "[" dim "]" ] | "Float" [ "[" dim "]" ]
-            | "Complex" [ "[" dim "]" ] | "Bool" | "Prop" | "String" | "()"
-            | "Tensor" "<" shape "," type ">"
-            | "Matrix" "<" nat "," nat "," type ">"
-            | "Sparse" "<" format_name "," shape "," type ">"
-            | "Table" "<" row_type ">"
-            | "Point" "[" dim "]"
-            | "Unit" [ "[" dim "]" ]
-            | "Set" "<" type ">" | "Result" "<" type "," type ">"
-            | "Option" "<" type ">" | "Solutions" "<" type "," dim ">"
-            | "Dyn" "<" rep ">" | "RateOf" "<" type ">"
-            | "SymFun" "<" dim "," dim ">" | "IO" type
-            | "{" [ field_type { "," field_type } [ "," "..." IDENT ] ] "}"
-            | "(" type { "," type } ")"
-            | qname [ "<" type_arg { "," type_arg } ">" ]
-            | IDENT
-            | "(" type ")"
-field_type ::= IDENT ":" type
-qname ::= UIDENT { "." UIDENT }
-format_name ::= IDENT | UIDENT
-shape ::= nat | "[" [ shape_item { "," shape_item } ] "]"
-shape_item ::= nat | "?"
-row_type ::= type { "+" type }
-```
+文法见附录 A.5。要点：
 
-注意：类型级乘积 `A * B` **不**表示元组；元组用 `(A, B)`。`*` 只出现在
-量纲表达式里。
-
-- `Real` 不带方括号等价于 `Real[1]`；`Float`、`Complex` 同理。
-- `Tensor<2, Float>` 的 `2` 是秩（rank shape）；`Tensor<[3,4], Float>` 是细化形状。
-- `Point[Θ]` 是仿射点（§5.6）。
-- `Unit[d]` 是单位值的类型（§5.2）；`Unit` 不带方括号等价于 `()`。
-- 类型参数 `<d: Dim>`、`<n: Nat>`、`<r: Row>` 的 kind 可省略，由使用位置
-  推断。
-- `forall` 通常省略；声明上的 `<...>` 已经隐含全称量化。
+- `Real`、`Float`、`Complex` 不带方括号等价于 `[1]`。
+- `Tensor<2, Float>` 的 `2` 是秩；`Tensor<[3,4], Float>` 是细化形状，`?` 表示该维未知。
+- `Unit[d]` 是单位值的类型（§5.2）；`Unit` 不带方括号是 unit 类型 `()`。
+- 元组类型写 `(A, B)`；`A * B` 不是类型，`*` 只出现在量纲中。
+- `type_param` 的 kind（`Type`、`Dim`、`Nat`、`Row`、`Rep`、`Format`、`Shape`）可省略，
+  由使用位置推断。声明上的 `<…>` 已隐含全称量化，`forall` 通常省略。
+- `IO` 作用于一个原子类型：`IO Unit`、`IO (Result<T, E>)`。
 
 ### 2.5.1 量纲语法
 
-```
-dim ::= dim_term { ("*" | "/" | "·") dim_term }
-dim_term ::= dim_atom [ "^" exponent ]
-dim_atom ::= "1" | UIDENT | IDENT | "(" dim ")"
-exponent ::= ["-"] integer | "(" rational ")"
-```
-
-- `L/T` 左结合：`L/T^2` = `L/(T^2)`。
-- `L^2/T` = `(L^2)/T`。
-- `L^(1/2)` 是 `L` 的平方根量纲；`sqrt` 产生它。
-- `1` 是无量纲。
-- 量纲别名（`Velocity`、`Force`）在类型检查时展开；打印时优先显示别名。
-- 量纲变量 `d` 只能出现在 `[...]` 中；裸写 `d` 是类型变量，不是量纲。
+- `dim` 是 `*`、`/` 连接的因子，因子可带指数 `^n` 或 `^(p/q)`，`1` 是无量纲；`/` 左结合，
+  `L/T^2` = `L/(T^2)`。
+- 首字母大写的名字是基量纲或别名，小写名是量纲变量，只能出现在 `[…]` 中；裸写 `d` 是
+  类型变量。
+- 量纲别名（`Velocity`、`Force`）在检查时展开，打印时优先显示别名。
 
 ## 2.6 运算符优先级与结合性
 
 从低到高：
 
-| 级别 | 运算符 | 结合性 | 说明 |
-|---|---|---|---|
-| 1 | `\|>` `<\|` | 左（混用时按出现顺序） | 管道 |
-| 2 | `\|\|` | 右 | 逻辑或 |
-| 3 | `&&` | 右 | 逻辑与 |
-| 4 | `==` `!=` `<` `<=` `>` `>=` | 非结合 | 比较，不能连写 |
-| 5 | `::` | 右 | cons |
-| 5 | `..` `..=` | 非结合 | 仅索引中使用 |
-| 6 | `+` `-` | 左 | 加、减 |
-| 7 | `*` `/` `@` `·` `×` `÷` | 左 | 乘、除、矩阵乘 |
-| 8 | `-` `+` `!` `√`（前缀） | 前缀 | 一元 |
-| 9 | `^` | 右 | 幂 |
-| 10 | `f(...)` `a[i]` `p.x` `e?` `e!` | 后缀 | 调用/索引/字段/传播/阶乘 |
+| 级别 | 运算符 | 结合性 |
+|---|---|---|
+| 1 | `\|>` `<\|` | 左（混用时按出现顺序） |
+| 2 | `\|\|` | 右 |
+| 3 | `&&` | 右 |
+| 4 | `==` `!=` `<` `<=` `>` `>=` | 非结合（连写是 `E0202`） |
+| 5 | `::` | 右 |
+| 6 | `+` `-` | 左 |
+| 7 | `*` `/` `@` `·` `×` `÷` | 左 |
+| 8 | 前缀 `-` `+` `!` `√` | 前缀 |
+| 9 | `^` | 右 |
+| 10 | 调用、索引、`.field`、`?`、后缀 `!` | 后缀 |
 
-- `-x^2` = `-(x^2)`。
-- `2^3^2` = `2^(3^2)`。
-- `a * b @ c` = `(a * b) @ c`（同级别左结合）。矩阵乘法建议加括号。
-- `x == y == z` 是语法错误；写 `x == y && y == z`。
-- `if`/`match`/`fn`/`let` 的体尽可能向右延伸；用括号或块消除歧义。
-- `|` 只用于 match 分支和变体声明，不是逻辑或。
+`..` 与 `..=` 只出现在索引中。`-x^2` = `-(x^2)`；`2^3^2` = `2^(3^2)`；`a * b @ c` =
+`(a * b) @ c`，矩阵乘建议加括号；`x == y == z` 写作 `x == y && y == z`。`if`/`match`/`fn`/`let`
+的体尽可能向右延伸，用括号消除歧义。`|` 只用于 match 分支和变体声明。
 
-## 2.7 语法歧义与解决
+## 2.7 歧义与解决
 
 ### 2.7.1 数值后的标识符
 
-`3 m` 是单位字面量，不是 `3 * m`。`3 x` 在语法上也是单位字面量；若 `x`
-不是单位，报 `E0501`。要乘以变量，写 `3 * x`。这条规则在词法章已经固定，
-解析器不需要符号表。
+`3 m` 是单位字面量，`3 x` 也是（`x` 非单位则 `E0501`），见 §1.8.1。
 
 ### 2.7.2 类型实参的 `<`
 
-`zeros<Float>(3, 4)` 中 `<` 紧邻 `zeros`，按类型实参解析。`a < b` 中 `<`
-前有空格，按比较解析。解析器 SHOULD 在 `ident<` 后尝试类型实参；若失败，
-回退为比较。这条规则要求格式化器在 `<` 比较前保留空格。
+`zeros<Float>(3, 4)` 中 `<` 紧邻 `zeros`，按类型实参解析；`a < b` 中 `<` 前有空格，按比较
+解析。解析器在 `ident<` 后尝试类型实参，失败则回退为比较，因此格式化器 MUST 在比较的
+`<` 前保留空格。相邻的 `<…>` 只在 callee 是函数名（或其限定名）时合法；`3<Int>(2)`、
+`f()<Int>` 是 `E0207`，提示加空格或给 callee 加括号。
 
-相邻的 `<...>` 只在 callee 是函数名（或其限定名）时是类型应用；
-`3<Int>`、`f()<Int>` 这类歧义报 `E0207`，提示在 `<` 前加空格或给 callee
-加括号。
+### 2.7.3 `{` 是记录，不是块
 
-### 2.7.3 `{` 记录与块
+块只用缩进，`{…}` 永远是记录：`if x then { y = 1 } else { y = 2 }` 是记录表达式。
 
-块只用缩进，不用花括号。`{}` 永远是记录。因此 `if x then { y = 1 } else { y = 2 }`
-是记录表达式，不是块。
+### 2.7.4 `|` 的角色
 
-### 2.7.4 `|` 的多重角色
-
-- `match` 分支：`| pattern -> expr`。
-- 变体声明：`| Ctor(T)`。
-- 逻辑或：`||`（两个字符）。
-- 类型 union？当前规范没有匿名 union；用变体类型。
-
-解析器根据上下文区分；`|` 不会出现在表达式中作为二元运算符。
+`|` 出现在 `match` 分支（`| pattern -> expr`）和变体声明（`| Ctor(T)`）；逻辑或是两个字符
+`||`；没有匿名 union 类型。
 
 ### 2.7.5 `!` 的前缀与后缀
 
-- `!x` 是逻辑非。
-- `x!` 是阶乘，仅当 `x` 是 `Int` 或括号表达式，且后面不跟另一个表达式。
-- `x != y` 是不等号，词法阶段识别为单个 `!=` 记号。
-- `x!!` 是双阶乘；`!!x` 是双重逻辑非（合法但无意义）。
+- 前缀 `!x` 是逻辑非；`x != y` 的 `!=` 是单个记号。
+- 后缀 `x!` 是阶乘，`x!!` 是双阶乘，`!` MUST 紧贴前一个操作数的末尾（无空白），操作数
+  类型为 `Int`；`n !` 是语法错误。后缀 `!` 比前缀 `-` 和 `^` 结合得更紧：`-3!` = `-6`，
+  `2^3!` = `2^6`。需要对复合表达式求阶乘时写 `factorial(n + 1)`。
 
-### 2.7.6 `-` 的一元与二元
+> **状态：** 紧跟右括号的 `(n + 1)!` 目前被解析器拒绝（`E0202`），应写 `factorial(n + 1)`。
 
-标准规则：一元 `-` 优先级低于 `^`，高于 `*`。`-2^2` = `-(4)`；
-`(-2)^2` = `4`。`a - -b` 合法，等价于 `a - (-b)`。
+### 2.7.6 一元 `-`
 
-## 2.8 语法糖与去糖
+一元 `-` 优先级低于 `^`、高于 `*`：`-2^2` = `-4`，`(-2)^2` = `4`；`a - -b` 合法。
+
+## 2.8 去糖
+
+下列去糖形式只用于类型检查和核心 IR（§9.2.2），不是用户语法。
 
 | 语法 | 去糖 |
 |---|---|
 | `fn f(x) = e` | `let rec f = fn (x) => e` |
-| `a \|> f` | `f(a)` |
-| `f <\| a` | `f(a)` |
+| `a \|> f`、`f <\| a` | `f(a)` |
 | `√x` | `sqrt(x)` |
-| `x!` | `factorial(x)` |
-| `x!!` | `double_factorial(x)` |
+| `x!`、`x!!` | `factorial(x)`、`double_factorial(x)` |
 | `a @ b` | `matmul_rank(a, b)`（按秩分派到 matmul/matvec/vecmat/dot） |
 | `a * b`（张量） | `mul_elementwise(a, b)` |
-| `{ p with x = e }` | `{ ...p, x = e }` 的记录更新原语 |
+| `{ p with x = e }` | 记录更新原语 |
 | `f(_, x)` | `fn a => f(a, x)` |
-| `do ...` | `bind`/`return` 链 |
+| `do …` | `bind`/`pure` 链 |
 | `[a, b, c]` | `tensor([a, b, c])` |
-| `a[i, j]` | `index(a, [i, j])` |
-| `a[i..j]` | `slice(a, i, j)` |
-| `a[i:j:s]` | `slice_step(a, i, j, s)` |
+| `a[i, j]`、`a[i..j]`、`a[i:j:s]` | `index(a, [i, j])`、`slice(a, i, j)`、`slice_step(a, i, j, s)` |
 
-去糖后的形式不是用户语法；它用于类型检查和解释器的核心 IR。
-
-## 2.9 一个完整例子
+## 2.9 完整例子
 
 ```aevia
 module Projectile
@@ -748,7 +502,5 @@ fn main(): IO Unit = do
     println("range = {path[-1].x}")
 ```
 
-这个例子用到了：记录、字段访问、单位、量纲推断、`Float` 与 `Real` 的混合、
-张量、ODE 积分、`do` 和字符串插值。第 11 章会逐行解释。
-
-下一章进入类型系统：这些表达式的类型从哪里来，量纲如何参与推断。
+这个例子用到记录、字段访问、单位、量纲推断、`Float` 与 `Real` 混用、张量、ODE 积分、
+`do` 和字符串插值（第 11 章逐行解释）。第 03 章说明这些表达式的类型从何而来。

@@ -1,8 +1,7 @@
 # 11 — 完整示例
 
-这些程序不是片段，而是可以放进 `.aev` 文件、用 `aevia run` 运行或
-`aevia check` 检查的完整模块。每个例子后面解释它用到的语言特性，以及
-类型/量纲是如何推导的。
+这些程序不是片段，而是可以放进 `.aev` 文件、用 `aevia run` 运行或 `aevia check` 检查的完整模块（`aevia-std` 的 `spec_programs` 测试逐个检查它们）。
+每个例子后面解释它用到的语言特性，以及类型/量纲是如何推导的。输出是 `aevia run` 的实际结果。
 
 ## 11.1 自由落体：单位、量纲与 `Float`
 
@@ -25,7 +24,7 @@ fn main(): IO Unit = do
 输出：
 
 ```
-fall time from 20 m = 2.019 s
+fall time from 20.0 m = 2.0196199771025523 s
 ```
 
 推导：
@@ -38,8 +37,7 @@ fall time from 20 m = 2.019 s
 - `sqrt`：指数除以 2，`T^2 → T`。
 - 返回值与 `Float[T]` 统一。
 
-`println` 用 `show`，按显示单位 `m`、`s` 打印。`h` 的显示单位是 `m`，
-`fall_time` 的结果没有显式显示单位，打印时选择 `s`。
+`println` 用 `show`，按显示单位打印：`h` 的显示单位是 `m`，`fall_time` 的结果没有显式显示单位，打印时选择 `s`。
 
 ## 11.2 抛体运动：记录、ODE 与结构化状态
 
@@ -84,7 +82,7 @@ fn trajectory(v0: Float[L/T], angle: Float[1]): Tensor<1, State> =
         vx = v0 * cos(angle),
         vy = v0 * sin(angle),
     }
-    let ts = linspace(0.0 s, 10.0 s, 1000)
+    let ts = linspace(0.0 s, 3.0 s, 1000)
     odeint(rhs, s0, ts)
 
 fn main(): IO Unit = do
@@ -145,15 +143,15 @@ fn main(): IO Unit = do
     println("exp(t) ≈ {s}")
 ```
 
-输出（节选）：
+输出：
 
 ```
 f'(x) = 3*x^2 - 3
 f'(2) = 9
 g'(x) = exp(x)
-roots = {2, 3}
+roots = { variable = Some("x"), roots = [2, 3], multiplicities = [1, 1], conditions = [], complete = true }
 ∫₀¹ t² dt = 1/3
-exp(t) ≈ 1 + t + t^2/2 + t^3/6 + t^4/24 + t^5/120 + O(t^6)
+exp(t) ≈ 1 + x + 1/2*x^2 + 1/6*x^3 + 1/24*x^4 + 1/120*x^5
 ```
 
 要点：
@@ -161,9 +159,8 @@ exp(t) ≈ 1 + t + t^2/2 + t^3/6 + t^4/24 + t^5/120 + O(t^6)
 - `diff` 接受函数，不接受表达式。它创建同量纲的符号，应用函数，求导，
   再代回。因此 `diff(g)` 对任意 `g` 都成立。
 - `df(2)` 是精确的 `9`，类型 `Real[1]`；要浮点，写 `approx(df(2))`。
-- `solve`/`defint` 返回 `Result`，因为可能无解/不可积；`diff` 是 total 的，
-  失败时保持未化简表达式。
-- `series` 的结果带 `O(t^6)`；量纲仍是 `Real[1]`。
+- `solve`/`defint` 返回 `Result`，因为可能无解/不可积；`diff` 是 total 的，失败时保持未化简表达式。`solve` 的结果是 `Solutions` 记录（§8.6）：根、重数、条件与 `complete`。
+- `series` 返回截断到给定阶的多项式（展开变量名由求解器选定），量纲仍是 `Real[1]`。
 
 ## 11.4 欧姆定律：带量纲的线性代数
 
@@ -184,7 +181,7 @@ fn main(): IO Unit = do
     println("P = {sum(p)}")             # 0.27 W
 
     match linsolve(r, v) with
-    | Ok(i2) -> println("I = {i2}")     # 回到 [0.1 A, 0.2 A]
+    | Ok(i2) -> println("I = {i2}")     # 回到 [0.1 A, 0.2 A]（浮点舍入）
     | Err(e) -> println("solve failed: {e}")
 
     # det 只接受无量纲矩阵：
@@ -204,8 +201,7 @@ fn main(): IO Unit = do
 - `det(r)` 被拒绝，因为 `det` 的量纲是 `d^n`，`n` 是运行时阶数；`r / ohm`
   是无量纲矩阵，`det` 合法。
 
-这个例子展示了“单位是编译期尺度”的好处：矩阵元素带单位，矩阵乘法自动
-得到电压，不需要在运行时给每个元素贴标签。
+矩阵元素带单位，矩阵乘法自动得到电压，不需要在运行时给每个元素贴标签。
 
 ## 11.5 温度：仿射点与温差
 
@@ -233,10 +229,10 @@ fn main(): IO Unit = do
 输出：
 
 ```
-T1 = 25 °C
+T1 = 25.0 °C
 T2 = 26.85 °C
-T3 = 35 °C
-ΔT = 1.85 K
+T3 = 35.0 °C
+ΔT = 1.8500000000000227 K
 ```
 
 要点：
@@ -337,7 +333,7 @@ fn linear_fit<d, e>(xs: Tensor<1, Real[d]>, ys: Tensor<1, Real[e]>): { slope: Re
 - `linear_fit`：`slope` 的量纲是 `(d*e)/(d^2) = e/d`；`slope * mx` 是 `e`；
   `my - ...` 是 `e`。返回记录的量纲字段正确。
 
-这些函数对任何量纲都成立；运行时没有单态化，量纲在类型检查后擦除。
+这些函数对任何量纲都成立；运行时没有单态化，量纲在类型检查后擦除。该模块是库（没有 `main`），由 `aevia check` 检查。该模块是库（没有 `main`），由 `aevia check` 检查。
 
 ## 11.9 错误示例：编译器如何拒绝
 
@@ -354,45 +350,39 @@ let bad5 = 1 / (0 m)
 
 ```
 error[E0401]: dimension mismatch
- --> bad.aev:1:12
-  |
-1 | let bad1 = 3 m + 2 s
-  |            ^^^^^^^^^ expected Real[L], found Real[T]
-  = left:  L
-  = right: T
-help: both operands of `+` must have the same dimension
+  --> bad.aev:3:12
+   |
+3 | let bad1 = 3 m + 2 s
+   |            ^^^^^^^^^ expected T, found L
+   |            ^^^ this is L
+   |                  ^^^ this is T
+   |
+   = difference: L/T
 
-error[E0403]: transcendental function requires a dimensionless argument
- --> bad.aev:2:12
-  |
-2 | let bad2 = sin(3 m)
-  |                ^^^ found Real[L]
-help: divide by a unit first, e.g. `sin(3 m / m)`
+error[E0403]: `sin` requires a dimensionless argument, found L
+  --> bad.aev:4:16
+   |
+4 | let bad2 = sin(3 m)
+   |                ^^^
+   |
+help: divide by a unit first, for example `x / 1 m`
 
-error[E0404]: dimensionful base with a runtime exponent
- --> bad.aev:3:12
-  |
-3 | let bad3 = (3 m)^n
-  |            ^^^^^^^ base has dimension L, exponent is Int
-help: use a literal exponent, or `pow_dyn` for a runtime dimension
+error[E0404]: a dimensioned value cannot be raised to a runtime exponent
+  --> bad.aev:5:13
+   |
+5 | let bad3 = (3 m)^n
+   |             ^^^^^^
+   |
+help: use a literal exponent, or `pow_dyn` for a checked dynamic power
 
-error[E0405]: cannot scale an affine point
- --> bad.aev:4:12
-  |
-4 | let bad4 = 25.0 °C * 2.0
-  |            ^^^^^^^^^^^^^ Point[Θ] * Float[1]
-help: scale the temperature difference instead
-
-error[E0801]: division by zero
- --> bad.aev:5:12
-  |
-5 | let bad5 = 1 / (0 m)
-  |            ^^^^^^^^^ exact division by zero
+error[E0405]: affine points cannot be multiplied
+  --> bad.aev:6:12
+   |
+6 | let bad4 = 25.0 °C * 2.0
+   |            ^^^^^^^^^^^^^
 ```
 
-这些错误中，`E0401`–`E0405` 是编译期；`E0801` 是运行时错误，但
-`1/(0 m)` 在常量折叠时就能发现，编译器 MAY 提前报出。错误信息的目标是：
-**指出量纲差异，并给出一个可执行的修正**，而不是只打印类型名。
+`E0401`–`E0405` 是编译期错误（`aevia check` 只报这四个）；`bad5` 的 `E0801`（除以零）是运行时错误，编译器 MAY 在常量折叠时提前报出。错误信息的目标是**指出量纲差异，并在可能时给出可执行的修正**，而不是只打印类型名。
 
 ## 11.10 一个“全特性”程序
 
@@ -415,14 +405,14 @@ fn main(): IO Unit = do
     println("E = {kinetic(m, v)}")
 
     # 2. 符号推导
-    let x = symbol("x")
-    println("f' = {diff(fn t => exp(-t^2))(x)}")
+    let sym = symbol("x")
+    println("f' = {diff(fn t => exp(-t^2))(sym)}")
 
     # 3. 线性代数
-    let m = [[2.0, 1.0], [1.0, 3.0]]
+    let a = [[2.0, 1.0], [1.0, 3.0]]
     let b = [1.0, 2.0]
-    match linsolve(m, b) with
-    | Ok(x) -> println("x = {x}")
+    match linsolve(a, b) with
+    | Ok(sol) -> println("x = {sol}")
     | Err(e) -> println("solve failed: {e}")
 
     # 4. 数据与绘图
@@ -432,8 +422,6 @@ fn main(): IO Unit = do
     plot(combine([spec]))
 ```
 
-这个程序把单位、符号、线性代数、张量、数据、绘图串在一起，展示了 Aevia
-的目标：**一门语言覆盖从公式到图表的整个工作流**，而不是在多个库之间
-搬运字符串。
+这个程序把单位、符号、线性代数、张量和绘图串在一起：**一门语言覆盖从公式到图表的整个工作流**，而不是在多个库之间搬运字符串。
 
 下一章解释这些设计选择的理由、替代方案和已知限制。
