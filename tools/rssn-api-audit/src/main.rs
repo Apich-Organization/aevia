@@ -553,7 +553,7 @@ fn exported() -> Result<BTreeMap<String, Vec<String>>, String> {
 
 fn report(root: &Path) -> Result<String, String> {
     let mut entries = Vec::new();
-    for module in ["kernels", "backend"] {
+    for module in ["kernels", "backend", "sim"] {
         let dir = root.join("src").join(module);
         let path = dir.join("mod.rs");
         let text =
@@ -584,7 +584,7 @@ fn render(
     exports: &BTreeMap<String, Vec<String>>,
 ) -> String {
     let mut out = String::from(
-        "# RSSN public kernel and backend source inventory v1\n# source syntax only; cfg is not evaluated; macros are not expanded; exported is not a runtime capability claim\n# path\tclassification\tabi names\tcfg\tsignature\n",
+        "# RSSN public kernel, backend and simulation source inventory v2\n# source syntax only; cfg is not evaluated; macros are not expanded; exported is not a runtime capability claim\n# path\tclassification\tabi names\tcfg\tsignature\n",
     );
     for e in entries {
         let names = exports.get(&e.path);
@@ -614,6 +614,31 @@ fn check_snapshot(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--codecs-write" | "--codecs-check" | "--codecs-report"))
+    {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
+        let policy = root.join("tools/rssn-api-gen/codec-policy.tsv");
+        let target = root.join("src/rules/numerical_abi/codec_generated.rs");
+        let result =
+            rssn_api_model::codec_codegen::generate(&root, &std::fs::read_to_string(policy)?)?;
+        match args[0].as_str() {
+            | "--codecs-report" => print!("{result}"),
+            | "--codecs-write" => {
+                std::fs::write(&target, result)?;
+                println!("wrote {}", target.display());
+            },
+            | _ => {
+                if std::fs::read_to_string(&target)? != result {
+                    return Err(
+                        "generated codecs changed; review --codecs-report and run --codecs-write"
+                            .into(),
+                    );
+                }
+                println!("generated composable codecs verified");
+            },
+        }
+        return Ok(());
+    }
     if matches!(args.as_slice(), [arg] if matches!(arg.as_str(), "--structured-write" | "--structured-check" | "--structured-report"))
     {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
@@ -659,7 +684,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if args != ["--check"] && args != ["--write"] && args != ["--report"] {
-        return Err("usage: rssn-api-audit --check|--write|--report|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report".into());
+        return Err("usage: rssn-api-audit --check|--write|--report|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report".into());
     }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
     let snapshot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("inventory.tsv");

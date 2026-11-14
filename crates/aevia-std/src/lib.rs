@@ -2,9 +2,9 @@
 //!
 //! Chapter 8 of the specification is the contract: it declares the names, and
 //! this crate holds the numerics behind them. `aevia-core` owns the values and
-//! the dispatch; nothing here knows what a `Value` is, which keeps the
-//! algorithms testable on their own and keeps the runtime free of linear
-//! algebra.
+//! the dispatch; nothing here knows what a `Value` is. RSSN owns numerical
+//! algorithms; this crate validates language contracts, adapts callbacks and
+//! shapes, translates errors, and preserves Aevia exact arithmetic.
 //!
 //! The layering is deliberate:
 //!
@@ -15,7 +15,7 @@
 //!   sources this crate ships, not a second implementation;
 //! * [`linalg`], [`stats`], [`dist`], [`calc`], [`fft`], [`interp`], [`ode`],
 //!   [`sde`], [`pde`], [`complex`], [`number`], [`geom`] and [`table`] are the
-//!   numeric and data kernels, all on `f64`/`BigRational` slices;
+//!   typed adapters over RSSN numerical kernels and exact/data operations;
 //! * `aevia-core` converts between those slices and runtime values.
 //!
 //! Where a result can be exact it is kept exact: `median` of `[1, 2, 4]` is the

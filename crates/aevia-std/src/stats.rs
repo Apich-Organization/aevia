@@ -589,3 +589,368 @@ mod exact_stats_tests {
         assert_eq!(cov_exact(&x, &y, false), Ok(rational(2)));
     }
 }
+
+// ----- hypothesis testing, regression, PCA, rank correlations, KDE, resampling -----
+
+pub use rssn::kernels::stats_ext::BootstrapResult;
+pub use rssn::kernels::stats_ext::JackknifeResult;
+pub use rssn::kernels::stats_ext::LinearRegressionResult;
+pub use rssn::kernels::stats_ext::LogisticRegressionResult;
+pub use rssn::kernels::stats_ext::PcaResult;
+pub use rssn::kernels::stats_ext::TestResult;
+
+fn map_stats_err(err: rssn::kernels::stats_ext::StatsExtError) -> NumericError {
+    match err {
+        | rssn::kernels::stats_ext::StatsExtError::Empty => NumericError::Empty,
+        | rssn::kernels::stats_ext::StatsExtError::ShapeMismatch(s) => {
+            NumericError::ShapeMismatch(s)
+        },
+        | rssn::kernels::stats_ext::StatsExtError::Domain(s) => NumericError::Domain(s),
+        | rssn::kernels::stats_ext::StatsExtError::Singular => NumericError::Singular,
+        | rssn::kernels::stats_ext::StatsExtError::NotConverged => NumericError::NotConverged,
+    }
+}
+
+pub fn t_test_one_sample(
+    sample: &[f64],
+    mu0: f64,
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::t_test_one_sample(sample, mu0).map_err(map_stats_err)
+}
+
+pub fn t_test_two_sample(
+    a: &[f64],
+    b: &[f64],
+    equal_var: bool,
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::t_test_two_sample(a, b, equal_var).map_err(map_stats_err)
+}
+
+pub fn t_test_paired(
+    a: &[f64],
+    b: &[f64],
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::t_test_paired(a, b).map_err(map_stats_err)
+}
+
+pub fn chi_squared_goodness_of_fit(
+    observed: &[f64],
+    expected: &[f64],
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::chi_squared_goodness_of_fit(observed, expected).map_err(map_stats_err)
+}
+
+pub fn chi_squared_independence(
+    rows: usize,
+    cols: usize,
+    table: &[f64],
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::chi_squared_independence(rows, cols, table).map_err(map_stats_err)
+}
+
+pub fn anova_one_way(groups: &[&[f64]]) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::anova_one_way(groups).map_err(map_stats_err)
+}
+
+pub fn ks_test_one_sample(
+    sample: &[f64],
+    cdf: &dyn Fn(f64) -> f64,
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::ks_test_one_sample(sample, cdf).map_err(map_stats_err)
+}
+
+pub fn ks_test_two_sample(
+    a: &[f64],
+    b: &[f64],
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::ks_test_two_sample(a, b).map_err(map_stats_err)
+}
+
+pub fn mann_whitney_u(
+    a: &[f64],
+    b: &[f64],
+) -> Result<TestResult, NumericError> {
+    rssn::kernels::stats_ext::mann_whitney_u(a, b).map_err(map_stats_err)
+}
+
+pub fn ols(
+    rows: usize,
+    cols: usize,
+    x: &[f64],
+    y: &[f64],
+    fit_intercept: bool,
+) -> Result<LinearRegressionResult, NumericError> {
+    rssn::kernels::stats_ext::ols(rows, cols, x, y, fit_intercept).map_err(map_stats_err)
+}
+
+pub fn ridge(
+    rows: usize,
+    cols: usize,
+    x: &[f64],
+    y: &[f64],
+    alpha: f64,
+    fit_intercept: bool,
+) -> Result<LinearRegressionResult, NumericError> {
+    rssn::kernels::stats_ext::ridge(rows, cols, x, y, alpha, fit_intercept).map_err(map_stats_err)
+}
+
+#[allow(clippy::too_many_arguments)] // Preserve matrix shape, data, and convergence controls.
+pub fn lasso(
+    rows: usize,
+    cols: usize,
+    x: &[f64],
+    y: &[f64],
+    alpha: f64,
+    fit_intercept: bool,
+    max_iter: usize,
+    tol: f64,
+) -> Result<LinearRegressionResult, NumericError> {
+    rssn::kernels::stats_ext::lasso(rows, cols, x, y, alpha, fit_intercept, max_iter, tol)
+        .map_err(map_stats_err)
+}
+
+pub fn logistic_regression(
+    rows: usize,
+    cols: usize,
+    x: &[f64],
+    y: &[f64],
+    fit_intercept: bool,
+    max_iter: usize,
+    tol: f64,
+) -> Result<LogisticRegressionResult, NumericError> {
+    rssn::kernels::stats_ext::logistic_regression(rows, cols, x, y, fit_intercept, max_iter, tol)
+        .map_err(map_stats_err)
+}
+
+pub fn pca(
+    rows: usize,
+    cols: usize,
+    data: &[f64],
+    n_components: Option<usize>,
+) -> Result<PcaResult, NumericError> {
+    rssn::kernels::stats_ext::pca(rows, cols, data, n_components).map_err(map_stats_err)
+}
+
+pub fn spearman(
+    x: &[f64],
+    y: &[f64],
+) -> Result<f64, NumericError> {
+    rssn::kernels::stats_ext::spearman(x, y).map_err(map_stats_err)
+}
+
+pub fn kendall(
+    x: &[f64],
+    y: &[f64],
+) -> Result<f64, NumericError> {
+    rssn::kernels::stats_ext::kendall(x, y).map_err(map_stats_err)
+}
+
+pub fn kde(
+    samples: &[f64],
+    eval_points: &[f64],
+    bandwidth: Option<f64>,
+) -> Result<Vec<f64>, NumericError> {
+    rssn::kernels::stats_ext::kde(samples, eval_points, bandwidth).map_err(map_stats_err)
+}
+
+fn map_num_to_stats_err(err: NumericError) -> rssn::kernels::stats_ext::StatsExtError {
+    match err {
+        | NumericError::Empty => rssn::kernels::stats_ext::StatsExtError::Empty,
+        | NumericError::ShapeMismatch(s) => {
+            rssn::kernels::stats_ext::StatsExtError::ShapeMismatch(s)
+        },
+        | NumericError::Domain(s) => rssn::kernels::stats_ext::StatsExtError::Domain(s),
+        | NumericError::Singular => rssn::kernels::stats_ext::StatsExtError::Singular,
+        | NumericError::NotConverged => rssn::kernels::stats_ext::StatsExtError::NotConverged,
+        | other => rssn::kernels::stats_ext::StatsExtError::Domain(format!("{other:?}")),
+    }
+}
+
+pub fn bootstrap(
+    samples: &[f64],
+    n_resamples: usize,
+    statistic: &dyn Fn(&[f64]) -> Result<f64, NumericError>,
+    uniform: &mut dyn FnMut() -> f64,
+) -> Result<BootstrapResult, NumericError> {
+    let wrapped = |s: &[f64]| statistic(s).map_err(map_num_to_stats_err);
+    rssn::kernels::stats_ext::bootstrap(samples, n_resamples, &wrapped, uniform)
+        .map_err(map_stats_err)
+}
+
+pub fn jackknife(
+    samples: &[f64],
+    statistic: &dyn Fn(&[f64]) -> Result<f64, NumericError>,
+) -> Result<JackknifeResult, NumericError> {
+    let wrapped = |s: &[f64]| statistic(s).map_err(map_num_to_stats_err);
+    rssn::kernels::stats_ext::jackknife(samples, &wrapped).map_err(map_stats_err)
+}
+
+#[cfg(test)]
+mod advanced_stats_tests {
+    use super::*;
+    use crate::dist::Distribution;
+
+    fn lcg(seed: u64) -> impl FnMut() -> f64 {
+        let mut state = seed;
+        move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            ((state >> 11) as f64) / ((1u64 << 53) as f64)
+        }
+    }
+
+    #[test]
+    fn t_tests_match_analytical_values() {
+        let s = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let res = t_test_one_sample(&s, 3.0).unwrap();
+        assert!(res.statistic.abs() < 1e-12);
+        assert!((res.p_value - 1.0).abs() < 1e-12);
+        assert_eq!(res.df, Some(4.0));
+
+        let a = [1.0, 2.0, 3.0, 4.0];
+        let b = [10.0, 11.0, 12.0, 13.0];
+        let two = t_test_two_sample(&a, &b, true).unwrap();
+        assert!(two.statistic < -5.0);
+        assert!(two.p_value < 1e-3);
+
+        let paired = t_test_paired(&[1.0, 2.0, 3.0], &[2.0, 4.0, 6.0]).unwrap();
+        assert!(paired.statistic < 0.0);
+        assert_eq!(paired.df, Some(2.0));
+    }
+
+    #[test]
+    fn chi_squared_and_anova_detect_differences() {
+        let gof = chi_squared_goodness_of_fit(&[25.0, 25.0, 25.0, 25.0], &[25.0, 25.0, 25.0, 25.0])
+            .unwrap();
+        assert_eq!(gof.statistic, 0.0);
+        assert!((gof.p_value - 1.0).abs() < 1e-12);
+
+        let ind = chi_squared_independence(2, 2, &[10.0, 20.0, 20.0, 40.0]).unwrap();
+        assert!(ind.statistic.abs() < 1e-12);
+        assert!((ind.p_value - 1.0).abs() < 1e-12);
+
+        let g1 = [1.0, 2.0, 3.0];
+        let g2 = [10.0, 11.0, 12.0];
+        let g3 = [20.0, 21.0, 22.0];
+        let anova = anova_one_way(&[&g1, &g2, &g3]).unwrap();
+        assert!(anova.statistic > 100.0);
+        assert!(anova.p_value < 1e-4);
+    }
+
+    #[test]
+    fn ks_and_mann_whitney_behave_properly() {
+        let u_dist = Distribution::Uniform { lo: 0.0, hi: 1.0 };
+        let sample = [0.1, 0.3, 0.5, 0.7, 0.9];
+        let ks1 = ks_test_one_sample(&sample, &|x| u_dist.cdf(x)).unwrap();
+        assert!((ks1.statistic - 0.1).abs() < 1e-12);
+        assert!(ks1.p_value > 0.5);
+
+        let ks2 = ks_test_two_sample(&[1.0, 2.0, 3.0], &[10.0, 11.0, 12.0]).unwrap();
+        assert!((ks2.statistic - 1.0).abs() < 1e-12);
+
+        let mw = mann_whitney_u(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]).unwrap();
+        assert_eq!(mw.statistic, 0.0);
+        assert!(mw.p_value < 0.1);
+    }
+
+    #[test]
+    fn regression_methods_recover_known_models() {
+        // y = 2*x1 - 3*x2 + 1
+        let x = [1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 1.0, 1.0, 2.0, 2.0, 2.0];
+        let y = [3.0, -2.0, 0.0, 2.0, -3.0, -1.0];
+        let fit = ols(6, 2, &x, &y, true).unwrap();
+        assert!((fit.coefficients[0] - 2.0).abs() < 1e-10);
+        assert!((fit.coefficients[1] + 3.0).abs() < 1e-10);
+        assert!((fit.intercept - 1.0).abs() < 1e-10);
+        assert!((fit.r_squared - 1.0).abs() < 1e-10);
+
+        let r_fit = ridge(6, 2, &x, &y, 0.0, true).unwrap();
+        assert!((r_fit.coefficients[0] - 2.0).abs() < 1e-10);
+        assert!((r_fit.coefficients[1] + 3.0).abs() < 1e-10);
+
+        let l_fit = lasso(6, 2, &x, &y, 0.001, true, 5000, 1e-10).unwrap();
+        assert!((l_fit.coefficients[0] - 2.0).abs() < 0.05);
+        assert!((l_fit.coefficients[1] + 3.0).abs() < 0.05);
+
+        // Non-separable 1D logistic regression (finite unique MLE)
+        let lx = [-2.0, -1.0, -0.5, 0.5, 1.0, 2.0];
+        let ly = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+        let log_fit = logistic_regression(6, 1, &lx, &ly, true, 100, 1e-8).unwrap();
+        assert!(log_fit.coefficients[0] > 0.5);
+        assert!(log_fit.intercept.abs() < 1e-8);
+    }
+
+    #[test]
+    fn pca_captures_dominant_axis() {
+        // Points along y = 2x
+        let data = [-2.0, -4.0, -1.0, -2.0, 0.0, 0.0, 1.0, 2.0, 2.0, 4.0];
+        let res = pca(5, 2, &data, Some(1)).unwrap();
+        assert_eq!(res.n_components, 1);
+        assert!((res.explained_variance_ratio[0] - 1.0).abs() < 1e-12);
+        assert_eq!(res.transformed.len(), 5);
+    }
+
+    #[test]
+    fn rank_correlations_handle_monotone_and_ties() {
+        let x = [1.0, 2.0, 2.0, 4.0];
+        let y = [10.0, 20.0, 20.0, 40.0];
+        assert!((spearman(&x, &y).unwrap() - 1.0).abs() < 1e-12);
+        assert!((kendall(&x, &y).unwrap() - 1.0).abs() < 1e-12);
+
+        let z = [4.0, 3.0, 2.0, 1.0];
+        assert!((spearman(&[1.0, 2.0, 3.0, 4.0], &z).unwrap() + 1.0).abs() < 1e-12);
+        assert!((kendall(&[1.0, 2.0, 3.0, 4.0], &z).unwrap() + 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn kde_evaluates_positive_density() {
+        let samples = [0.0, 0.5, 1.0, 1.5, 2.0];
+        let dens = kde(&samples, &[0.0, 1.0, 10.0], None).unwrap();
+        assert_eq!(dens.len(), 3);
+        assert!(dens[1] > dens[0]);
+        assert!(dens[0] > dens[2]);
+    }
+
+    #[test]
+    fn bootstrap_and_jackknife_estimate_se_of_mean() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut rng = lcg(123);
+        let boot = bootstrap(
+            &data,
+            500,
+            &|s| Ok(s.iter().sum::<f64>() / s.len() as f64),
+            &mut rng,
+        )
+        .unwrap();
+        assert!((boot.estimate - 3.0).abs() < 1e-12);
+        assert!(boot.ci_low < boot.estimate && boot.estimate < boot.ci_high);
+
+        let jack = jackknife(&data, &|s| Ok(s.iter().sum::<f64>() / s.len() as f64)).unwrap();
+        assert!((jack.estimate - 3.0).abs() < 1e-12);
+        assert!(jack.bias.abs() < 1e-12);
+        // True SE of mean for [1,2,3,4,5] is sqrt(2.5 / 5) = sqrt(0.5)
+        assert!((jack.std_error - 0.5_f64.sqrt()).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod kernel_regressions {
+    use super::*;
+
+    #[test]
+    fn nonfinite_samples_and_invalid_cdfs_are_rejected() {
+        assert!(ks_test_two_sample(&[f64::NAN], &[1.0]).is_err());
+        assert!(ks_test_one_sample(&[0.0], &|_| f64::NAN).is_err());
+        assert!(spearman(&[1.0, f64::INFINITY], &[1.0, 2.0]).is_err());
+        assert!(ols(2, 1, &[1.0, f64::NAN], &[1.0, 2.0], false).is_err());
+        assert!(bootstrap(&[1.0, 2.0], 2, &|s| Ok(s[0]), &mut || 1.0).is_err());
+    }
+
+    #[test]
+    fn shape_products_do_not_overflow() {
+        assert!(pca(usize::MAX, 2, &[], None).is_err());
+        assert!(ols(usize::MAX, 2, &[], &[], false).is_err());
+        assert!(chi_squared_independence(usize::MAX, 2, &[]).is_err());
+    }
+}

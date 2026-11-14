@@ -244,3 +244,27 @@ The rssn and aevia repositories share one pipeline design (`.github/workflows`):
 
 The workflows check out rssn next to this repository; the kernel revision is the repository variable
 `RSSN_REF` (default `main`).
+
+## Ownership of numerical extensions
+
+RSSN owns numerical algorithms, including automatic differentiation, quadrature,
+optimization, decompositions, interpolation, transforms, statistics and geometry.
+Time evolution and discretized fields belong to RSSN's `sim` modules. New Aevia
+standard-library APIs adapt values, shapes, callbacks and errors; they must call
+RSSN instead of implementing another solver. Exact Aevia rational semantics and
+language value conversion remain the responsibility of the language layer.
+
+There are two coverage contracts. The live Kernel Manifest is exposed by the
+flat `Rssn` facade and generated `Rssn_<Domain>` modules. Public Rust source APIs
+are inventoried separately because helpers, generics and opaque state are not
+necessarily callable ABI operators. Source-derived composable codecs register
+reviewed raw-number APIs from `rssn/tools/rssn-api-gen/codec-policy.tsv`; record
+schemas come from `structured-policy.tsv`. Rust checks the calls and codec types,
+and the manifest supplies Aevia bindings automatically. Dimension policies are
+explicit semantic choices, not guesses inferred from a function name.
+
+Run `sh tools/sync-kernel.sh` after reviewing kernel API changes. This regenerates
+RSSN bindings, structured codecs, Aevia's source inventory, manifest coverage and
+standard-library files. CI checks these artifacts. Test the changed numerical
+families and the generated-language integration target first; the full scientific
+suite is a separate, expensive validation step.

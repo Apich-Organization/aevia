@@ -12,6 +12,9 @@ type SdeMethod =
     | SrkPlaten
     | MilsteinNoncommutative
     | MilsteinNoncommutativeStratonovich
+    | DriftImplicitEuler
+    | ThetaMaruyama
+    | DriftImplicitMilstein
 
 type SdeStructure =
     | Diagonal

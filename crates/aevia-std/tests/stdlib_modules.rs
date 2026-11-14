@@ -352,3 +352,87 @@ fn main(): IO Unit = do
         "unexpected Ising output: {output}"
     );
 }
+
+/// The constructors must pass through imports, the checker, dispatch and RSSN.
+#[test]
+fn geometric_ode_methods_run_from_language_source() {
+    let package = Package::with_stdlib("geometric-ode-methods");
+    for method in ["StormerVerlet", "Ruth4", "GaussLegendre4", "GaussLegendre6"] {
+        let source = format!(
+            r#"module Probe
+import Ode {{ OdeOpts, {method}, odeint_with }}
+fn rhs(t: Float[T], x: Tensor<1, Float[1]>): Tensor<1, Float[1/T]> = [x[1] / (1.0 s), -x[0] / (1.0 s)]
+fn main(): IO Unit = do
+    let opts: OdeOpts<Tensor<1, Float[1]>> = {{ rtol = 1e-9, atol = 1e-11, method = {method}, steps = Some(64), events = None }}
+    let path = odeint_with(rhs, [1.0, 0.0], [0.0 s, 0.5 s], opts)
+    println(path.y[1][0])
+    println(path.y[1][1])
+"#
+        );
+        let output = run_solver_source(&package, method, &source);
+        let values: Vec<f64> = output
+            .lines()
+            .map(|line| line.trim().parse().expect("numeric oscillator state"))
+            .collect();
+        assert_eq!(values.len(), 2, "{method}: {output}");
+        assert!(
+            (values[0] - 0.5_f64.cos()).abs() < 1e-4,
+            "{method}: {output}"
+        );
+        assert!(
+            (values[1] + 0.5_f64.sin()).abs() < 1e-4,
+            "{method}: {output}"
+        );
+    }
+}
+
+#[test]
+fn drift_implicit_sde_methods_run_from_language_source() {
+    let package = Package::with_stdlib("implicit-sde-methods");
+    for method in [
+        "DriftImplicitEuler",
+        "ThetaMaruyama",
+        "DriftImplicitMilstein",
+    ] {
+        let source = format!(
+            r#"module Probe
+import Sde {{ Fixed, Diagonal, {method}, sdeint_diag }}
+fn drift(t: Float[T], x: Float[1]): Float[1/T] = -1000.0 * x / (1.0 s)
+fn diffusion(t: Float[T], x: Float[1]): Float[1/T^(1/2)] = 0.0 / sqrt(1.0 s)
+fn main(): IO Unit = do
+    let opts = Fixed({{ structure = Diagonal, method = {method}, seed = 7, t0 = 0.0 s, dt = 0.01 s, steps = 3, terms = 0 }})
+    match sdeint_diag(drift, diffusion, 1.0, opts) with
+    | Ok(path) ->
+        match path.method with
+        | {method} -> println(path.y[3])
+        | _ -> println("wrong method")
+    | Err(e) -> println("error = {{e}}")
+"#
+        );
+        let output = run_solver_source(&package, method, &source);
+        let value: f64 = output
+            .trim()
+            .parse()
+            .expect("numeric stiff state and matching method constructor");
+        assert!(value.is_finite() && value.abs() < 1.0, "{method}: {output}");
+    }
+}
+
+fn run_solver_source(
+    package: &Package,
+    name: &str,
+    source: &str,
+) -> String {
+    let program = package.compile_program(name, source);
+    assert!(
+        errors(&program).is_empty(),
+        "{name}: {}",
+        rendered(&program)
+    );
+    let entry = program.entry().expect("entry module");
+    let mut interp = aevia_core::Interp::new(&entry.checked).with_buffer();
+    let diagnostics = aevia_core::driver::run_modules(&mut interp, &program);
+    assert!(!diagnostics.has_errors(), "{name}: {:?}", diagnostics.items);
+    interp.run_main().expect("solver source runs");
+    interp.captured().to_string()
+}

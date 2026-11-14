@@ -167,10 +167,22 @@ mod tests {
     #[test]
     fn constructible_types_follow_the_specification() {
         let spec = std::fs::read_to_string(spec_path()).expect("spec/08-stdlib.md");
-        let changed = spec.replace("| Rk4 | Dopri5", "| Rk4 | NewMethod | Dopri5");
+        let changed = spec.replacen("| Rk4 | Dopri5", "| Rk4 | NewMethod | Dopri5", 1);
+        assert_ne!(
+            changed, spec,
+            "the fixture must insert a new specification constructor"
+        );
         let generated = spec_module_sources(&changed);
         let ode = &generated.iter().find(|(path, _)| path == "Ode").unwrap().1;
-        assert!(ode.contains("| NewMethod |"));
+        // Exercise the generated language contract, independent of whether
+        // variants are emitted on one line or on continuation lines.
+        let probe = format!("{ode}\nlet generated_method: OdeMethod = NewMethod\n");
+        let compilation = aevia_core::compile("generated_solver_type.aev", &probe);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "a constructor inserted into the specification must be usable in generated source: {:?}",
+            compilation.diagnostics.items
+        );
         assert!(ode.contains("type OdeOpts<s>"));
         let sde = &generated.iter().find(|(path, _)| path == "Sde").unwrap().1;
         assert!(sde.contains("    | EulerMaruyama\n    | Milstein\n"));

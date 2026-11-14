@@ -707,3 +707,39 @@ instance Describe for Option<String> where
     assert_eq!(module.instances.len(), 2);
     assert_ne!(module.instances[0].key, module.instances[1].key);
 }
+
+#[test]
+fn sde_paths_retain_the_method_type_of_an_imported_policy() {
+    // The boundary must use the argument's declaration witness, even when a
+    // wrapper chooses different module and type names for its option schema.
+    let library = parsed(
+        r#"module Stochastic
+type ChosenMethod = | EulerMaruyama | DriftImplicitEuler
+type NoiseShape = | Diagonal
+type Policy<T> = | Fixed({ structure: NoiseShape, method: ChosenMethod, seed: Int, t0: Float[T], dt: Float[T], steps: Int, terms: Int })
+let sdeint_diag = sdeint_diag
+"#,
+    );
+    let checked = check_importing(
+        r#"module UsePolicy
+import Stochastic { Fixed, Diagonal, DriftImplicitEuler, sdeint_diag }
+fn drift(t: Float[T], x: Float[1]): Float[1/T] = -x / (1.0 s)
+fn noise(t: Float[T], x: Float[1]): Float[1/T^(1/2)] = 0.0 / sqrt(1.0 s)
+let policy = Fixed({ structure = Diagonal, method = DriftImplicitEuler, seed = 7, t0 = 0.0 s, dt = 0.01 s, steps = 3, terms = 0 })
+let path = sdeint_diag(drift, noise, 1.0, policy)
+fn selected(): Int = match path with
+    | Ok(p) ->
+        match p.method with
+        | DriftImplicitEuler -> 1
+        | _ -> 0
+    | Err(_) -> 0
+"#,
+        vec![("", library.clone())],
+        vec![library],
+    );
+    assert!(
+        !checked.diagnostics.has_errors(),
+        "{:?}",
+        checked.diagnostics.items
+    );
+}

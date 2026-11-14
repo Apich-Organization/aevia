@@ -534,6 +534,377 @@ pub fn krylov_precond(
     })
 }
 
+fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> {
+    if a.rows.checked_add(1) != Some(a.row_ptr.len())
+        || a.col_idx.len() != a.values.len()
+        || a.row_ptr.first() != Some(&0)
+        || a.row_ptr.last() != Some(&a.values.len())
+        || a.row_ptr.windows(2).any(|pair| pair[0] > pair[1])
+        || a.col_idx.iter().any(|&column| column >= a.cols)
+    {
+        return Err(NumericError::ShapeMismatch("invalid CSR arrays".into()));
+    }
+    if a.values.iter().any(|v| !v.is_finite()) {
+        return Err(NumericError::Domain(
+            "sparse matrix contains non-finite entries".into(),
+        ));
+    }
+    Ok(rssn::kernels::krylov::Csr {
+        rows: a.rows,
+        cols: a.cols,
+        indptr: a.row_ptr.to_vec(),
+        indices: a.col_idx.to_vec(),
+        values: a.values.to_vec(),
+    })
+}
+
+/// Minimal Residual (MINRES) method for symmetric indefinite systems `A x = b`
+/// starting from zero (Paige–Saunders algorithm).
+///
+/// # Errors
+/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+pub fn minres(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_iterations: usize,
+) -> Result<CgResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if b.len() != a.rows {
+        return Err(NumericError::ShapeMismatch(format!(
+            "matrix has {} rows, right-hand side has {} entries",
+            a.rows,
+            b.len()
+        )));
+    }
+    if a.rows == 0 {
+        return Ok(CgResult {
+            x: Vec::new(),
+            iterations: 0,
+            residual: 0.0,
+            converged: true,
+        });
+    }
+    let csr = to_rssn_csr(a)?;
+    let result = rssn::kernels::krylov_ext::minres(
+        |x, y| csr.matvec(x, y),
+        |x, y| y.copy_from_slice(x),
+        b,
+        None,
+        tolerance,
+        max_iterations,
+    );
+    Ok(CgResult {
+        x: result.x,
+        iterations: result.iterations,
+        residual: result.residual,
+        converged: result.converged,
+    })
+}
+
+/// Which part of the spectrum a sparse eigensolver targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpectrumPart {
+    /// Eigenvalues of largest modulus.
+    LargestMagnitude,
+    /// Eigenvalues of smallest modulus.
+    SmallestMagnitude,
+    /// Largest real part (largest algebraic for symmetric matrices).
+    LargestReal,
+    /// Smallest real part (smallest algebraic for symmetric matrices).
+    SmallestReal,
+    /// Largest absolute imaginary part.
+    LargestImag,
+}
+
+impl From<SpectrumPart> for rssn::kernels::eigs::Which {
+    fn from(part: SpectrumPart) -> Self {
+        match part {
+            | SpectrumPart::LargestMagnitude => Self::LargestMagnitude,
+            | SpectrumPart::SmallestMagnitude => Self::SmallestMagnitude,
+            | SpectrumPart::LargestReal => Self::LargestReal,
+            | SpectrumPart::SmallestReal => Self::SmallestReal,
+            | SpectrumPart::LargestImag => Self::LargestImag,
+        }
+    }
+}
+
+/// Result of a sparse eigensolver (`eigs_sym`, `eigs`, `eigs_shift_invert`).
+#[derive(Clone, Debug)]
+pub struct SparseEigsResult {
+    /// Eigenvalues `(re, im)`.
+    pub values: Vec<crate::Complex>,
+    /// Real parts of the eigenvectors.
+    pub vectors_re: Vec<Vec<f64>>,
+    /// Imaginary parts of the eigenvectors.
+    pub vectors_im: Vec<Vec<f64>>,
+    /// Residual norms `‖A x − λ x‖`.
+    pub residuals: Vec<f64>,
+    /// Whether all requested eigenpairs converged.
+    pub converged: bool,
+    /// Number of sparse matrix-vector products performed.
+    pub matvecs: usize,
+}
+
+fn map_eigs_result(r: rssn::kernels::eigs::EigsResult) -> SparseEigsResult {
+    SparseEigsResult {
+        values: r
+            .values
+            .into_iter()
+            .map(|(re, im)| crate::Complex::new(re, im))
+            .collect(),
+        vectors_re: r.vectors_re,
+        vectors_im: r.vectors_im,
+        residuals: r.residuals,
+        converged: r.converged,
+        matvecs: r.matvecs,
+    }
+}
+
+/// Thick-restart Lanczos eigensolver for the `k` wanted eigenpairs of a
+/// symmetric sparse matrix (`rssn::kernels::eigs::eigs_sym`).
+///
+/// # Errors
+/// [`NumericError::NotSquare`] or [`NumericError::Domain`] when `k == 0` or `k > rows`.
+pub fn eigs_sym(
+    a: &Csr<'_>,
+    k: usize,
+    which: SpectrumPart,
+    tol: f64,
+    max_restarts: usize,
+) -> Result<SparseEigsResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if k == 0 || k > a.rows {
+        return Err(NumericError::Domain(format!(
+            "eigs_sym requires 1 <= k <= {}, got {k}",
+            a.rows
+        )));
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::eigs::EigsOptions {
+        ncv: 0,
+        tol,
+        max_restarts,
+        seed: 0x5eed,
+    };
+    let res =
+        rssn::kernels::eigs::eigs_sym(|x, y| csr.matvec(x, y), a.rows, k, which.into(), &opts)
+            .map_err(|_| NumericError::NotConverged)?;
+    Ok(map_eigs_result(res))
+}
+
+/// Implicitly restarted Arnoldi eigensolver for the `k` wanted eigenpairs of a
+/// general (possibly nonsymmetric) sparse matrix (`rssn::kernels::eigs::eigs`).
+///
+/// # Errors
+/// [`NumericError::NotSquare`] or [`NumericError::Domain`] when `k == 0` or `k > rows`.
+pub fn eigs(
+    a: &Csr<'_>,
+    k: usize,
+    which: SpectrumPart,
+    tol: f64,
+    max_restarts: usize,
+) -> Result<SparseEigsResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if k == 0 || k > a.rows {
+        return Err(NumericError::Domain(format!(
+            "eigs requires 1 <= k <= {}, got {k}",
+            a.rows
+        )));
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::eigs::EigsOptions {
+        ncv: 0,
+        tol,
+        max_restarts,
+        seed: 0x5eed,
+    };
+    let res = rssn::kernels::eigs::eigs(|x, y| csr.matvec(x, y), a.rows, k, which.into(), &opts)
+        .map_err(|_| NumericError::NotConverged)?;
+    Ok(map_eigs_result(res))
+}
+
+/// Shift-invert sparse eigensolver for the `k` eigenvalues of `A` closest to
+/// `sigma`, factoring `(A − σ I)` with sparse LU.
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::Domain`], or [`NumericError::Singular`]
+/// if `A − σ I` is singular.
+pub fn eigs_shift_invert(
+    a: &Csr<'_>,
+    k: usize,
+    sigma: f64,
+    symmetric: bool,
+    tol: f64,
+    max_restarts: usize,
+) -> Result<SparseEigsResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if k == 0 || k > a.rows {
+        return Err(NumericError::Domain(format!(
+            "eigs_shift_invert requires 1 <= k <= {}, got {k}",
+            a.rows
+        )));
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::eigs::EigsOptions {
+        ncv: 0,
+        tol,
+        max_restarts,
+        seed: 0x5eed,
+    };
+    let res = rssn::kernels::eigs::eigs_csr_shift_invert(&csr, k, sigma, symmetric, &opts)
+        .map_err(|error| {
+            match error {
+                | rssn::kernels::eigs::ShiftInvertError::Invalid => {
+                    NumericError::Domain("invalid shift-invert parameters".into())
+                },
+                | rssn::kernels::eigs::ShiftInvertError::Singular => NumericError::Singular,
+                | rssn::kernels::eigs::ShiftInvertError::Eigen(_) => NumericError::NotConverged,
+            }
+        })?;
+    Ok(map_eigs_result(res))
+}
+
+/// Solves a symmetric positive-definite sparse system `A x = b` using smoothed-aggregation
+/// Algebraic Multigrid (`rssn::kernels::multigrid::Amg`) as a standalone solver.
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`], or
+/// [`NumericError::NotPositiveDefinite`] if AMG setup fails.
+pub fn amg_solve(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_cycles: usize,
+) -> Result<CgResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if b.len() != a.rows {
+        return Err(NumericError::ShapeMismatch(format!(
+            "matrix has {} rows, right-hand side has {} entries",
+            a.rows,
+            b.len()
+        )));
+    }
+    if a.rows == 0 {
+        return Ok(CgResult {
+            x: Vec::new(),
+            iterations: 0,
+            residual: 0.0,
+            converged: true,
+        });
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::multigrid::AmgOptions::default();
+    let amg = rssn::kernels::multigrid::Amg::build(&csr, &opts)
+        .map_err(|_| NumericError::NotPositiveDefinite)?;
+    let res = amg.solve(b, None, tolerance, max_cycles);
+    let residual = res.history.last().copied().unwrap_or(0.0);
+    Ok(CgResult {
+        x: res.x,
+        iterations: res.history.len().saturating_sub(1),
+        residual,
+        converged: res.converged,
+    })
+}
+
+/// Solves a general (possibly nonsymmetric) sparse system `A x = b` using
+/// Ruge–Stüben Algebraic Multigrid (`rssn::kernels::amg_general::AmgGeneral`).
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`], or
+/// [`NumericError::Domain`] if AMG setup fails.
+pub fn amg_general_solve(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_cycles: usize,
+) -> Result<CgResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if b.len() != a.rows {
+        return Err(NumericError::ShapeMismatch(format!(
+            "matrix has {} rows, right-hand side has {} entries",
+            a.rows,
+            b.len()
+        )));
+    }
+    if a.rows == 0 {
+        return Ok(CgResult {
+            x: Vec::new(),
+            iterations: 0,
+            residual: 0.0,
+            converged: true,
+        });
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::amg_general::AmgGeneralOptions::default();
+    let amg = rssn::kernels::amg_general::AmgGeneral::build(&csr, &opts)
+        .map_err(|_| NumericError::Domain("AMG setup requires positive diagonal".to_string()))?;
+    let res = amg.solve(b, None, tolerance, max_cycles);
+    let residual = res.history.last().copied().unwrap_or(0.0);
+    Ok(CgResult {
+        x: res.x,
+        iterations: res.history.len().saturating_sub(1),
+        residual,
+        converged: res.converged,
+    })
+}
+
+/// Conjugate gradients preconditioned with smoothed-aggregation AMG.
+///
+/// # Errors
+/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`], or
+/// [`NumericError::NotPositiveDefinite`] if AMG setup fails.
+pub fn cg_amg(
+    a: &Csr<'_>,
+    b: &[f64],
+    tolerance: f64,
+    max_iterations: usize,
+) -> Result<CgResult, NumericError> {
+    if a.rows != a.cols {
+        return Err(NumericError::NotSquare);
+    }
+    if b.len() != a.rows {
+        return Err(NumericError::ShapeMismatch(format!(
+            "matrix has {} rows, right-hand side has {} entries",
+            a.rows,
+            b.len()
+        )));
+    }
+    if a.rows == 0 {
+        return Ok(CgResult {
+            x: Vec::new(),
+            iterations: 0,
+            residual: 0.0,
+            converged: true,
+        });
+    }
+    let csr = to_rssn_csr(a)?;
+    let opts = rssn::kernels::multigrid::AmgOptions::default();
+    let amg = rssn::kernels::multigrid::Amg::build(&csr, &opts)
+        .map_err(|_| NumericError::NotPositiveDefinite)?;
+    let apply = |x: &[f64], y: &mut [f64]| csr.matvec(x, y);
+    let precondition = |r: &[f64], z: &mut [f64]| amg.precondition(r, z);
+    let res = rssn::kernels::krylov::cg(apply, precondition, b, None, tolerance, max_iterations);
+    Ok(CgResult {
+        x: res.x,
+        iterations: res.iterations,
+        residual: res.residual,
+        converged: res.converged,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -840,5 +1211,126 @@ mod tests {
         )
         .unwrap();
         assert!(!result.converged);
+    }
+
+    #[test]
+    fn minres_solves_symmetric_indefinite_system() {
+        // Diagonal + tridiagonal shifted to be indefinite: diag = [-4, -1, 2, 5, 8] with -0.5 off-diagonals.
+        let n = 5;
+        let (mut ptr, mut idx, mut val) = (vec![0], Vec::new(), Vec::new());
+        let diag = [-4.0, -1.0, 2.0, 5.0, 8.0];
+        for i in 0..n {
+            if i > 0 {
+                idx.push(i - 1);
+                val.push(-0.5);
+            }
+            idx.push(i);
+            val.push(diag[i]);
+            if i + 1 < n {
+                idx.push(i + 1);
+                val.push(-0.5);
+            }
+            ptr.push(idx.len());
+        }
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let b = [1.0, -2.0, 3.0, -1.0, 4.0];
+        let direct = lu_solve(&a, &b).unwrap();
+        let res = minres(&a, &b, 1e-12, 100).unwrap();
+        assert!(res.converged, "minres residual: {}", res.residual);
+        for (p, q) in direct.iter().zip(&res.x) {
+            assert!((p - q).abs() < 1e-8);
+        }
+    }
+
+    #[test]
+    fn sparse_eigs_finds_extremal_and_shifted_eigenvalues() {
+        let n = 20;
+        let (ptr, idx, val) = tridiagonal(n);
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        // Largest eigenvalue of n-point 1D Laplacian is 4 * cos^2(pi / (2*(n+1)))
+        let sym = eigs_sym(&a, 2, SpectrumPart::LargestReal, 1e-9, 200).unwrap();
+        assert!(sym.converged);
+        let expected_max = 4.0
+            * (std::f64::consts::PI / (2.0 * (n as f64 + 1.0)))
+                .cos()
+                .powi(2);
+        assert!((sym.values[0].re - expected_max).abs() < 1e-7);
+
+        let general = eigs(&a, 1, SpectrumPart::LargestMagnitude, 1e-9, 200).unwrap();
+        assert!(general.converged);
+        assert!((general.values[0].re - expected_max).abs() < 1e-7);
+
+        // Shift-invert near 2.0
+        let shifted = eigs_shift_invert(&a, 2, 2.01, true, 1e-9, 200).unwrap();
+        assert!(shifted.converged);
+        assert!((shifted.values[0].re - 2.0).abs() < 0.2);
+    }
+
+    #[test]
+    fn amg_solvers_solve_2d_poisson() {
+        let m = 12;
+        let n = m * m;
+        let (ptr, idx, val) = poisson2d(m);
+        let a = Csr {
+            rows: n,
+            cols: n,
+            row_ptr: &ptr,
+            col_idx: &idx,
+            values: &val,
+        };
+        let b = vec![1.0; n];
+        let direct = cholesky_solve(&a, &b).unwrap();
+
+        let amg = amg_solve(&a, &b, 1e-10, 100).unwrap();
+        assert!(amg.converged);
+        for (p, q) in direct.iter().zip(&amg.x) {
+            assert!((p - q).abs() < 1e-6);
+        }
+
+        let amg_gen = amg_general_solve(&a, &b, 1e-10, 100).unwrap();
+        assert!(amg_gen.converged);
+        for (p, q) in direct.iter().zip(&amg_gen.x) {
+            assert!((p - q).abs() < 1e-6);
+        }
+
+        let pcg_amg = cg_amg(&a, &b, 1e-10, 100).unwrap();
+        assert!(pcg_amg.converged);
+        for (p, q) in direct.iter().zip(&pcg_amg.x) {
+            assert!((p - q).abs() < 1e-6);
+        }
+    }
+    #[test]
+    fn shift_invert_subtracts_shift_once_when_csr_contains_duplicate_diagonals() {
+        let a = Csr {
+            rows: 3,
+            cols: 3,
+            row_ptr: &[0, 2, 3, 4],
+            col_idx: &[0, 0, 1, 2],
+            values: &[1.0, 1.0, 5.0, 9.0],
+        };
+        let result = eigs_shift_invert(&a, 1, 1.8, true, 1e-10, 30).unwrap();
+        assert!(result.converged);
+        assert!((result.values[0].re - 2.0).abs() < 1e-10);
+        assert!(result.residuals[0] < 1e-10);
+        let malformed = Csr {
+            rows: 1,
+            cols: 1,
+            row_ptr: &[0, 2],
+            col_idx: &[0],
+            values: &[1.0],
+        };
+        assert!(minres(&malformed, &[1.0], 1e-8, 10).is_err());
     }
 }

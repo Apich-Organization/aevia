@@ -829,6 +829,12 @@ type Distribution<d> =
     | StudentT(StudentT)
     | Poisson(Poisson)
     | Binomial(Binomial)
+    | LogNormal(LogNormal)
+    | Weibull(Weibull<d>)
+    | Cauchy(Cauchy<d>)
+    | F(F)
+    | NegativeBinomial(NegativeBinomial)
+    | Geometric(Geometric)
 
 type Normal<d>      = { mu: Real[d], sigma: Real[d] }
 type Uniform<d>     = { lo: Real[d], hi: Real[d] }
@@ -839,6 +845,13 @@ type ChiSquared     = { df: Real[1] }
 type StudentT       = { df: Real[1] }
 type Poisson        = { lambda: Real[1] }
 type Binomial       = { n: Int, p: Real[1] }
+type LogNormal       = { mu: Real[1], sigma: Real[1] }
+type Weibull<d>      = { shape: Real[1], scale: Real[d] }
+type Cauchy<d>       = { loc: Real[d], scale: Real[d] }
+type F               = { df1: Real[1], df2: Real[1] }
+type NegativeBinomial = { r: Real[1], p: Real[1] }
+type Geometric       = { p: Real[1] }
+
 ```
 
 这些声明是 `Stats.Distributions` 模块的源码（`open Stats.Distributions` 后
@@ -853,6 +866,10 @@ sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>
 ```
 
 `Normal<L>` 的 `pdf` 量纲是 `1/L`；`cdf` 无量纲；`sample` 返回 `Real[L]`。
+`Weibull` uses its `scale` dimension and `Cauchy` uses its `loc`/`scale` dimension.
+`LogNormal` parameters describe the dimensionless logarithm. `NegativeBinomial`
+and `Geometric` count failures before successes, with support `0, 1, ...`.
+All fifteen constructors use the same `pdf`, `cdf`, `sample`, and `sample_n` builtins.
 
 **用户自定义分布不是语言扩展点。** 多参数类被移除（§3.8.1），而“分布参数 →
 量纲”的映射需要类型函数（类似 `RateOf`），这是另一个设计；在没有它之前，
@@ -937,12 +954,14 @@ type AxisScale = | Linear | Log
 ## 8.9 ODE
 
 ```
-type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
+type OdeMethod =
+    | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
+    | StormerVerlet | Ruth4 | GaussLegendre4 | GaussLegendre6
 type OdeOpts<s> = {
     rtol: Float[1],
     atol: Float[1],
     method: OdeMethod,
-    steps: Option<Int>,                 # Rk4 必填
+    steps: Option<Int>,                 # Rk4 / 几何积分器：定步长子步数
     events: Option<(Float[T], s) -> Float[1]>,
 }
 ```
@@ -976,6 +995,11 @@ RateOf<{ l1: τ1, ..., ln: τn }> = { l1: RateOf<τ1>, ..., ln: RateOf<τn> }
 `solve_fixed_events`）；差别是定步长必须给 `steps`，事件定位精度也随
 步长而定。`odeint_with` 返回实际到达的 `t`/`y`。`odeint` 是默认参数
 （`rtol=1e-8`、`atol=1e-10`、`Dopri5`）的简写。
+
+`StormerVerlet` 与 `Ruth4` 是二阶、四阶定步长辛积分器；展平状态须为偶数长度，
+前半为位置 `q`，后半为动量 `p`，右端满足可分离的正则 Hamilton 系统。
+`GaussLegendre4` 与 `GaussLegendre6` 是四阶、六阶隐式 Gauss–Legendre RK，
+支持一般状态。四种方法使用 `steps` 指定定步长子步数，非线性阶段不收敛时报错。
 
 **展平契约**：桥接层按记录的**字段声明顺序**、深度优先、张量行主序，把
 `s` 展平成 `Vec<f64>`；求解后按同一顺序还原。嵌套记录递归展平；`Tensor<n,
@@ -1078,6 +1102,7 @@ type SdeMethod =
     | EulerMaruyama | Milstein | MilsteinStratonovich
     | HeunStratonovich | SrkPlaten | MilsteinNoncommutative
     | MilsteinNoncommutativeStratonovich
+    | DriftImplicitEuler | ThetaMaruyama | DriftImplicitMilstein
 
 type SdeStructure =
     | Diagonal                     # 每个状态分量一个噪声通道，m = n
