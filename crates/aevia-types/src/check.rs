@@ -8064,14 +8064,48 @@ impl Checker {
                 return Type::Adt(adt::set_id(), vec![self.infer.fresh_type()]);
             }
             // §3.8.4: `sort` needs a total order.
-            if name == "sort"
-                && let Some(arg) = args.first()
+            // The ordering family shares that rule: `sort_axis` and `argsort`
+            // order the elements, `sort_by_key` the keys the function gives.
+            // At rank >= 2 the sequence is the first-axis rows, and a row is
+            // ordered lexicographically by its elements.
+            let ordered_arity = match name.as_str() {
+                | "sort" | "argsort" => Some(1),
+                | "sort_axis" => Some(2),
+                | _ => None,
+            };
+            if let Some(arity) = ordered_arity
+                && args.len() == arity
             {
-                let ty = self.synth(arg);
+                let ty = self.synth(&args[0]);
                 if let Type::Tensor { elem, .. } = self.infer.resolve(&ty) {
                     self.require_instance("TotalOrd", &elem, span);
                 }
-                return ty;
+                if let Some(axis) = args.get(1) {
+                    let axis_ty = self.synth(axis);
+                    if let Err(error) = self.infer.unify(&axis_ty, &Type::int()) {
+                        self.report_unify(error, axis.span);
+                    }
+                }
+                return if name.as_str() == "argsort" {
+                    Type::tensor(Shape::Rank(1), Type::int())
+                } else {
+                    ty
+                };
+            }
+            if name == "sort_by_key" && args.len() == 2 {
+                let ty = self.synth(&args[1]);
+                if let Type::Tensor { shape, elem } = self.infer.resolve(&ty) {
+                    let rank = shape.rank();
+                    let item = if rank <= 1 {
+                        *elem
+                    } else {
+                        Type::tensor(Shape::Rank(rank - 1), *elem)
+                    };
+                    let key = self.infer.fresh_type();
+                    self.check(&args[0], &Type::func(vec![item], key.clone()));
+                    self.require_instance("TotalOrd", &key, span);
+                    return ty;
+                }
             }
             if let Some(candidates) = builtins::schemes(name) {
                 // A call no overload can take by arity may be to a user
@@ -9606,6 +9640,48 @@ impl Checker {
         args: &[Expr],
         span: Span,
     ) -> Type {
+        self.overloaded_call_over(name, candidates, args, span, true)
+    }
+
+    /// The ranks of the tensor-typed, non-lambda arguments of a call, found by
+    /// synthesising them speculatively (everything is rolled back).
+    fn probe_argument_ranks(
+        &mut self,
+        args: &[Expr],
+    ) -> Vec<u32> {
+        let saved = self.infer.clone();
+        let diagnostics_before = self.diagnostics.items.len();
+        let types_before = self.expr_types.len();
+        let mut ranks = Vec::new();
+        for arg in args {
+            if matches!(arg.kind, ExprKind::Lambda { .. }) {
+                continue;
+            }
+            let ty = self.synth(arg);
+            if let Type::Tensor { shape, .. } = self.infer.resolve(&ty) {
+                let rank = shape.rank();
+                if !ranks.contains(&rank) {
+                    ranks.push(rank);
+                }
+            }
+        }
+        self.infer.restore(&saved);
+        self.diagnostics.items.truncate(diagnostics_before);
+        self.truncate_expr_types(types_before);
+        ranks
+    }
+
+    /// Overload resolution over `candidates`. `probe` lets a failed call to a
+    /// rank-generic built-in retry with the signature template instantiated
+    /// at the (above [`builtins::STATIC_RANK`]) rank of its arguments.
+    fn overloaded_call_over(
+        &mut self,
+        name: &str,
+        candidates: &[Scheme],
+        args: &[Expr],
+        span: Span,
+        probe: bool,
+    ) -> Type {
         let saved = self.infer.clone();
         let diagnostics_before = self.diagnostics.items.len();
         let types_before = self.expr_types.len();
@@ -9664,6 +9740,19 @@ impl Checker {
                 // `Int` to `Real` at the call site; an overloaded call must
                 // get the same refinement as a single-scheme one.
                 return self.refine_div_rep_result(name, *ret);
+            }
+        }
+        // The rank-generic built-ins are templates over the rank; the table
+        // enumerates the first few, and a tensor of a higher rank gets the
+        // instantiation at its own rank.
+        if probe {
+            self.infer.restore(&saved);
+            self.diagnostics.items.truncate(diagnostics_before);
+            self.truncate_expr_types(types_before);
+            let ranks = self.probe_argument_ranks(args);
+            let extra = builtins::rank_schemes_for(name, &ranks);
+            if !extra.is_empty() {
+                return self.overloaded_call_over(name, &extra, args, span, false);
             }
         }
         // Every candidate failed. When one failed only inside a lambda body,

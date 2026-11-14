@@ -228,6 +228,14 @@ real and integer tensors and is complete in N dimensions (`fft2`, `fftn`, `fft_a
 used to be rank 1 only, and `reverse` flattened a matrix). The unit "did you mean" prefers the
 smallest edit (`kmm` suggests `km`). The tests are `tests/fft_and_sequences.aev`.
 
+Revision 22 removed the three limits Revision 20 left. The rank-generic built-ins (the FFT
+family, `sum`/`mean`/`norm`/`map`/`flatten`/`reverse_axis`, the sequence operations, ...) are
+templates over the rank, so they work at any rank rather than 1 to 4. `fold`, `sort`,
+`sort_by`, `sort_float`, `zip` and `enumerate` now follow the rows of a tensor of rank 2 or
+more as well (a deliberate change: they used to flatten); `sort_by_key`, `sort_axis` and
+`argsort` are new. `rfftn_axes`/`irfftn_axes` give the real transform over an axes subset.
+The tests are `tests/rank_generic.aev`.
+
 Implemented beyond the core language, each specified in its chapter:
 
 * **Unit systems** (§5.11): `module Hep with units natural` (also `planck`,

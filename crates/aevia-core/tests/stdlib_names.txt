@@ -33,6 +33,7 @@ arg
 argmax
 argmin
 args
+argsort
 asin
 asinh
 assert
@@ -181,6 +182,7 @@ inv
 irfft
 irfft2
 irfftn
+irfftn_axes
 is_err
 is_finite
 is_infinite
@@ -298,6 +300,7 @@ rfft
 rfft2
 rfftfreq
 rfftn
+rfftn_axes
 rng
 root
 round
@@ -341,7 +344,9 @@ solve_poisson
 solve_system
 solve_wave
 sort
+sort_axis
 sort_by
+sort_by_key
 sort_float
 sparse_coo
 sparse_csr

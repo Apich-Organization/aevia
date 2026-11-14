@@ -140,20 +140,30 @@ range    : (Int, Int, Int) -> Tensor<1, Int>
 take     : (Int, Tensor<1, a>) -> Tensor<1, a>
 drop     : (Int, Tensor<1, a>) -> Tensor<1, a>
 reverse  : Tensor<1, a> -> Tensor<1, a>
-reverse  : Tensor<n, a> -> Tensor<n, a>                  # n = 2..4：翻转第一个轴
-reverse_axis : (Tensor<n, a>, Int) -> Tensor<n, a>       # n = 1..4：翻转指定轴
-filter   : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>   # n = 2..4：谓词看一行
-take     : (Int, Tensor<n, a>) -> Tensor<n, a>           # n = 2..4：取前几行
+reverse  : Tensor<n, a> -> Tensor<n, a>                  # n ≥ 2：翻转第一个轴
+reverse_axis : (Tensor<n, a>, Int) -> Tensor<n, a>       # n ≥ 1：翻转指定轴
+filter   : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>   # n ≥ 2：谓词看一行
+take     : (Int, Tensor<n, a>) -> Tensor<n, a>           # n ≥ 2：取前几行
 drop     : (Int, Tensor<n, a>) -> Tensor<n, a>
-concat   : (Tensor<n, a>, Tensor<n, a>) -> Tensor<n, a>  # n = 2..4：沿第一个轴堆叠
+concat   : (Tensor<n, a>, Tensor<n, a>) -> Tensor<n, a>  # n ≥ 2：沿第一个轴堆叠
 any      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
 all      : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool
 find     : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Option<Tensor<n-1, a>>
 first    : Tensor<n, a> -> Option<Tensor<n-1, a>>
 last     : Tensor<n, a> -> Option<Tensor<n-1, a>>
 sort     : TotalOrd a => Tensor<1, a> -> Tensor<1, a>
+sort     : TotalOrd a => Tensor<n, a> -> Tensor<n, a>      # n ≥ 2：行按字典序
 sort_by  : ((a, a) -> Ordering, Tensor<1, a>) -> Tensor<1, a>
+sort_by  : ((Tensor<n-1, a>, Tensor<n-1, a>) -> Ordering, Tensor<n, a>) -> Tensor<n, a>
+sort_by_key : TotalOrd k => ((a -> k), Tensor<1, a>) -> Tensor<1, a>
+sort_by_key : TotalOrd k => ((Tensor<n-1, a> -> k), Tensor<n, a>) -> Tensor<n, a>
 sort_float : (Tensor<1, Float>, Bool) -> Tensor<1, Float>   # NaN last/first
+sort_float : (Tensor<n, Float>, Bool) -> Tensor<n, Float>   # n ≥ 2：行按字典序
+sort_axis : TotalOrd a => (Tensor<n, a>, Int) -> Tensor<n, a>   # 沿一个轴把每条一维切片排序
+argsort  : TotalOrd a => Tensor<n, a> -> Tensor<1, Int>        # 稳定排序的置换（行的下标）
+fold     : ((b, Tensor<n-1, a>) -> b, b, Tensor<n, a>) -> b    # n ≥ 2：累加器看一行
+zip      : (Tensor<n, a>, Tensor<m, b>) -> Tensor<1, (Tensor<n-1, a>, Tensor<m-1, b>)>   # 逐行配对
+enumerate : Tensor<n, a> -> Tensor<1, (Int, Tensor<n-1, a>)>    # n ≥ 2：下标与行
 concat   : (Tensor<1, a>, Tensor<1, a>) -> Tensor<1, a>
 flatten  : Tensor<n, Tensor<m, a>> -> Tensor<n+m, a>   # 仅规则嵌套
 any      : ((a -> Bool), Tensor<1, a>) -> Bool
@@ -173,20 +183,34 @@ argmax   : Tensor<1, Scalar<ρ,d>> -> Int      # 首个最大值的下标
 argmin   : Tensor<1, Scalar<ρ,d>> -> Int
 ```
 
-**秩的完整性（Revision 16）。** 规范里写成 `Tensor<n, …>` 的操作在秩 1 到 4 上都有类型：
-`sum`、`prod`、`mean`、`var`、`std`、`norm`、`normalize`、`map`、`map2`/`zip_with`（同形）以及
-`flatten`（秩 ≥ 2）；`sum(a, axis)` 的 keepdims 形式在秩 1 到 4 上可用。秩不是一等类型参数，
-所以每个秩一个重载，由实参的秩选择。`first`/`last` 对空张量给 `None`；`argmax`/`argmin` 对空张量
+**秩的完整性（Revision 16、22）。** 规范里写成 `Tensor<n, …>` 的操作对**任意秩** `n` 都有类型：
+`sum`、`prod`、`mean`、`var`、`std`、`norm`、`normalize`、`map`、`map2`/`zip_with`（同形）、`flatten`（秩 ≥ 2）、
+`transpose`、`sum(a, axis)` 的 keepdims 形式，以及 §8.8 的整个 FFT 族和下面的序列操作。秩不是一等类型参数，所以这些签名是
+**对秩的模板**：类型表里列出秩 1 到 4 的实例（`builtins::schemes`，供悬停与首类函数使用），调用时检查器按实参的秩实例化模板——
+秩 6 的张量调用 `fftn`、`sum`、`filter` 与秩 2 的调用走同一条路径，不再有"秩超过 4 是 `E0302`"的限制。实参的秩与任何实例都不符时仍是
+`E0302`，并带期望/实际类型。`first`/`last` 对空张量给 `None`；`argmax`/`argmin` 对空张量
 是 `E0802`，NaN 不会胜出，相等时取最前的下标。
 
-**秩 ≥ 2 的序列操作（Revision 20）。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（"行"）的序列：
+**序列操作按第一个轴（Revision 20、22）。** 秩 `n ≥ 2` 的张量是沿第一个轴的 `n−1` 秩切片（"行"）的序列（`Tensor<0, a>` 即 `a`，所以
+秩 1 的"行"是元素）：
 
 - `reverse` 翻转第一个轴，保持形状（此前运行时把矩阵展平成向量，而类型表只有秩 1；展平请显式写 `reverse(flatten(m))`）。
-  `reverse_axis(t, k)` 翻转第 `k` 轴（秩 1 到 4，负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
+  `reverse_axis(t, k)` 翻转第 `k` 轴（任意秩，负数从末尾数，越界 `E0802`）。`f64` 张量上两者都是视图，不复制缓冲区（§9.5）。
 - `filter(p, m)`：`p` 接受一行（秩 `n−1` 的张量），结果保持秩 `n`，行数为被接受的行数；全部拒绝得到第一轴长度为 0 的同秩张量。
 - `any`/`all`/`find` 对行逐个测试；`find` 返回 `Option<Tensor<n-1, a>>`；`first`/`last` 返回第一行/最后一行的 `Option`。
 - `take(k, m)`/`drop(k, m)` 按行取舍；`concat(a, b)` 沿第一个轴堆叠，其余轴的长度必须一致（否则 `E0802`）。
-- 其余元素级操作（`sum`、`map`、`fold`、`sort` 等）仍按元素处理，不受影响。
+- `fold(f, init, m)`/`fold_left`：步进函数 `f(acc, row)` 看到一行，从第一行到最后一行。
+- `zip(a, b)` 逐行配对，长度取较短者，得到 `Tensor<1, (行或元素, 行或元素)>`（两个操作数的秩可以不同：矩阵与向量配对得到
+  `(行, 元素)`）；`enumerate(m)` 给出 `(index, 行)` 的记录序列（字段名 `index`、`value`）。
+- `sort(m)`：行按字典序（逐元素，先比第一个元素）稳定排序，结果与 `m` 同形；元素类型要 `TotalOrd`（`Float` 用 `sort_float`）。
+  `sort_by(cmp, m)` 的比较函数接受两行；`sort_by_key(f, m)` 按 `f(行)` 的 `TotalOrd` 键稳定排序（秩 1 时 `f` 接受元素）；
+  `sort_float(m, nan_last)` 同 `sort`，NaN 前置或后置；`argsort(m)` 返回稳定排序的置换 `Tensor<1, Int>`（秩 1 是元素下标，
+  秩 ≥ 2 是行下标）；`sort_axis(t, k)` 把沿第 `k` 轴的每条一维切片分别排序，形状不变（负轴从末尾数，越界 `E0802`）。
+- **元素级的操作不变：** `map`/`map2`/`zip_with` 是张量的函子，逐元素作用并保持形状（这是数值意义上的 `map`，不是序列意义上的）；
+  `sum`/`prod`/`mean`/`var`/`std`/`norm`/`normalize` 对全部元素归约；`cumsum`/`cumprod`/`argmax`/`argmin` 只对秩 1 定义。
+  需要逐行作用时写 `map` 以外的序列操作，或用 `fold`/`filter` 取行后再计算。
+- **语义变化（Revision 22）：** `fold`/`sort`/`sort_by`/`sort_float`/`zip`/`enumerate` 在秩 ≥ 2 上此前按元素（展平）处理；
+  现在按行。秩 1 不变；要元素级的旧行为，先 `flatten`。
 
 `length` 对 `String` 和 `Tensor` 重载，由类型类 `Sized` 解析。
 
@@ -843,11 +867,11 @@ fft      : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 无归一化；X ∈
 ifft     : Tensor<1, X[d]> -> Tensor<1, Complex[d]>       # 1/N
 fft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
 ifft_norm : (Tensor<1, X[d]>, Norm) -> Tensor<1, Complex[d]>
-fft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>      # 沿一个轴，n = 1..4
+fft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>      # 沿一个轴
 ifft_axis : (Tensor<n, X[d]>, Int) -> Tensor<n, Complex[d]>
-fft2     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 最后两个轴，n = 2..4
+fft2     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 最后两个轴
 ifft2    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
-fftn     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 全部轴，n = 1..4
+fftn     : Tensor<n, X[d]> -> Tensor<n, Complex[d]>             # 全部轴
 ifftn    : Tensor<n, X[d]> -> Tensor<n, Complex[d]>
 fftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>   # 任意轴列表
 ifftn_axes : (Tensor<n, X[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>
@@ -856,13 +880,16 @@ ifftn_norm : (Tensor<n, X[d]>, Norm) -> Tensor<n, Complex[d]>
 rfft     : Tensor<1, Float[d]> -> Tensor<1, Complex[d]>
 irfft    : Tensor<1, Complex[d]> -> Tensor<1, Float[d]>
 irfft    : (Tensor<1, Complex[d]>, Int) -> Tensor<1, Float[d]>  # 显式长度（奇数长度）
-rfft2    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 最后两个轴，n = 2..4
+rfft2    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 最后两个轴
 irfft2   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
 irfft2   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
-rfftn    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 全部轴，n = 1..4
+rfftn    : Tensor<n, Float[d]> -> Tensor<n, Complex[d]>         # 全部轴
 irfftn   : Tensor<n, Complex[d]> -> Tensor<n, Float[d]>
 irfftn   : (Tensor<n, Complex[d]>, Int) -> Tensor<n, Float[d]>
-fftshift : Tensor<n, a> -> Tensor<n, a>                         # 全部轴，n = 1..4
+rfftn_axes : (Tensor<n, Float[d]>, Tensor<1, Int>) -> Tensor<n, Complex[d]>   # 半谱在列表最后一个轴
+irfftn_axes : (Tensor<n, Complex[d]>, Tensor<1, Int>) -> Tensor<n, Float[d]>
+irfftn_axes : (Tensor<n, Complex[d]>, Tensor<1, Int>, Int) -> Tensor<n, Float[d]>   # 显式长度（奇数长度）
+fftshift : Tensor<n, a> -> Tensor<n, a>                         # 全部轴
 ifftshift : Tensor<n, a> -> Tensor<n, a>
 fftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
 ifftshift_axis : (Tensor<n, a>, Int) -> Tensor<n, a>
@@ -886,11 +913,15 @@ chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tenso
 返回 `Float[1/T]`——`fftfreq(4, 0.5 s)` 的单位是 `Hz`）。多维变换由行列分解实现：沿每个被变换的轴依次做一维变换。
 
 - `fft2`/`ifft2` 变换最后两个轴；`fftn`/`ifftn` 变换全部轴；`fft_axis(t, k)` 一个轴；`fftn_axes(t, axes)` 任意轴列表。
-  轴号从 0 开始，负数从末尾数（`-1` 是最后一轴）；越界或重复的轴是 `E0802`。秩 1 到 4 都有类型。
+  轴号从 0 开始，负数从末尾数（`-1` 是最后一轴）；越界或重复的轴是 `E0802`。任意秩都有类型（Revision 22 取消了秩 ≤ 4 的限制）。
 - 归一化按被变换的总点数 `N`（各变换轴长度之积）：`Backward` 正向 1、逆向 `1/N`；`Forward` 正向 `1/N`、逆向 1；
   `Unitary` 两向都是 `1/√N`。（`Forward` 在 Revision 20 之前错用了 `1/√N`，现已按文档修正。）
 - `rfft`/`rfft2`/`rfftn` 取实数输入，最后一个被变换的轴只保留 `n/2 + 1` 个非冗余频点；`irfft`/`irfft2`/`irfftn`
   由半谱重建实数张量，默认原长度为 `2(m − 1)`（偶数），奇数长度用带 `Int` 的形式显式给出；`m` 与长度不相容是 `E0802`。
+- `rfftn_axes(t, axes)`/`irfftn_axes(s, axes)`/`irfftn_axes(s, axes, n)` 是任意轴子集的实数变换（与 numpy 的 `rfftn(a, axes=…)` 一致）：
+  列表里**最后一个**轴是半谱轴（保留 `n/2 + 1` 个频点），其余轴做完整复数变换；`irfftn_axes` 在最后一个列出的轴上做 Hermitian 还原，
+  `n` 是该轴的原长度（缺省 `2(m − 1)`）。`rfftn_axes(t, axes)` 等于 `fftn_axes(t, axes)` 沿最后一个列出的轴截取前 `n/2 + 1` 个频点；
+  列表为空、轴越界或重复是 `E0802`。
 - `fftshift`/`ifftshift` 把零频率移到中间（每个被移位的轴循环平移 `⌊n/2⌋`，逆操作反向），对任意元素类型成立；
   `*_axis` 形式只移一个轴。
 

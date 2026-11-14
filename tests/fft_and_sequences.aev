@@ -2,159 +2,106 @@
 ## Run with: cargo run -p aevia-cli -- test tests/fft_and_sequences.aev
 import FFT { Backward, Forward, Unitary }
 
-fn fl(x: Real): Float =
-    unwrap_or(to_float(x), nan)
+fn fl(x: Real): Float = unwrap_or(to_float(x), nan)
 
-fn near1(a: Tensor<1, Float>, b: Tensor<1, Float>): Bool =
-    norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
+fn near1(a: Tensor<1, Float>, b: Tensor<1, Float>): Bool = norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
 
-fn near2(a: Tensor<2, Float>, b: Tensor<2, Float>): Bool =
-    norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
+fn near2(a: Tensor<2, Float>, b: Tensor<2, Float>): Bool = norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
 
-fn near3(a: Tensor<3, Float>, b: Tensor<3, Float>): Bool =
-    norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
+fn near3(a: Tensor<3, Float>, b: Tensor<3, Float>): Bool = norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
 
-fn real_part1(z: Tensor<1, Complex>): Tensor<1, Float> =
-    map(fn (w) => fl(re(w)), z)
+fn real_part1(z: Tensor<1, Complex>): Tensor<1, Float> = map(fn w => fl(re(w)), z)
 
-fn real_part2(z: Tensor<2, Complex>): Tensor<2, Float> =
-    map(fn (w) => fl(re(w)), z)
+fn real_part2(z: Tensor<2, Complex>): Tensor<2, Float> = map(fn w => fl(re(w)), z)
 
-fn real_part3(z: Tensor<3, Complex>): Tensor<3, Float> =
-    map(fn (w) => fl(re(w)), z)
+fn real_part3(z: Tensor<3, Complex>): Tensor<3, Float> = map(fn w => fl(re(w)), z)
 
-fn imag_part2(z: Tensor<2, Complex>): Tensor<2, Float> =
-    map(fn (w) => fl(im(w)), z)
+fn imag_part2(z: Tensor<2, Complex>): Tensor<2, Float> = map(fn w => fl(im(w)), z)
 
 let grid = [[1.0, 2.0, 0.5, -1.0], [3.0, 4.0, 0.0, 2.5], [-2.0, 1.0, 1.5, 0.25]]
 
 let cube = [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]]
 
 ## ----- fft / ifft accept real and integer input ------------------------------
+test "fft of a real signal" = near1(real_part1(fft([1.0, 0.0, 0.0, 0.0])), [1.0, 1.0, 1.0, 1.0])
 
-test "fft of a real signal" =
-    near1(real_part1(fft([1.0, 0.0, 0.0, 0.0])), [1.0, 1.0, 1.0, 1.0])
+test "fft of an integer signal" = near1(real_part1(fft([1, 1, 1, 1])), [4.0, 0.0, 0.0, 0.0])
 
-test "fft of an integer signal" =
-    near1(real_part1(fft([1, 1, 1, 1])), [4.0, 0.0, 0.0, 0.0])
+test "ifft(fft(x)) returns a real signal" = near1(real_part1(ifft(fft([1.0, 2.0, 3.0, 4.0, 5.0]))), [1.0, 2.0, 3.0, 4.0, 5.0])
 
-test "ifft(fft(x)) returns a real signal" =
-    near1(real_part1(ifft(fft([1.0, 2.0, 3.0, 4.0, 5.0]))), [1.0, 2.0, 3.0, 4.0, 5.0])
-
-test "fft keeps the dimension of the samples" =
-    approx_eq(magnitude(at(fft([1.0 m, 1.0 m]), 0)), 2.0 m, 1e-9 m)
+test "fft keeps the dimension of the samples" = approx_eq(magnitude(at(fft([1.0 m, 1.0 m]), 0)), 2.0 m, 1e-9 m)
 
 ## ----- two-dimensional transforms --------------------------------------------
+test "fft2 of a constant is a single spike" = near2(real_part2(fft2([[1.0, 1.0], [1.0, 1.0]])), [[4.0, 0.0], [0.0, 0.0]])
 
-test "fft2 of a constant is a single spike" =
-    near2(real_part2(fft2([[1.0, 1.0], [1.0, 1.0]])), [[4.0, 0.0], [0.0, 0.0]])
+test "fft2 of a 2x2 matrix" = near2(real_part2(fft2([[1.0, 2.0], [3.0, 4.0]])), [[10.0, -2.0], [-4.0, 0.0]])
 
-test "fft2 of a 2x2 matrix" =
-    near2(real_part2(fft2([[1.0, 2.0], [3.0, 4.0]])), [[10.0, -2.0], [-4.0, 0.0]])
+test "fft2 is the transform along each axis in turn" = near2(real_part2(fft2(grid)), real_part2(fft_axis(fft_axis(grid, 0), 1)))
 
-test "fft2 is the transform along each axis in turn" =
-    near2(real_part2(fft2(grid)), real_part2(fft_axis(fft_axis(grid, 0), 1)))
+test "fft_axis transforms one axis" = near2(real_part2(fft_axis([[1.0, 2.0], [3.0, 4.0]], 0)), [[4.0, 6.0], [-2.0, -2.0]]) && near2(real_part2(fft_axis([[1.0, 2.0], [3.0, 4.0]], 1)), [[3.0, -1.0], [7.0, -1.0]])
 
-test "fft_axis transforms one axis" =
-    near2(real_part2(fft_axis([[1.0, 2.0], [3.0, 4.0]], 0)), [[4.0, 6.0], [-2.0, -2.0]]) && near2(real_part2(fft_axis([[1.0, 2.0], [3.0, 4.0]], 1)), [[3.0, -1.0], [7.0, -1.0]])
+test "a negative axis counts from the back" = near2(real_part2(fft_axis(grid, -1)), real_part2(fft_axis(grid, 1)))
 
-test "a negative axis counts from the back" =
-    near2(real_part2(fft_axis(grid, -1)), real_part2(fft_axis(grid, 1)))
+test "ifft2 undoes fft2 (non-square, odd and even extents)" = near2(real_part2(ifft2(fft2(grid))), grid) && near2(imag_part2(ifft2(fft2(grid))), zip_with(fn (x, y) => 0.0, grid, grid))
 
-test "ifft2 undoes fft2 (non-square, odd and even extents)" =
-    near2(real_part2(ifft2(fft2(grid))), grid) && near2(imag_part2(ifft2(fft2(grid))), zip_with(fn (x, y) => 0.0, grid, grid))
+test "fftn is fft2 on a matrix and the 1-D transform on a vector" = near2(real_part2(fftn(grid)), real_part2(fft2(grid))) && near1(real_part1(fftn([1.0, 0.0, 0.0])), [1.0, 1.0, 1.0])
 
-test "fftn is fft2 on a matrix and the 1-D transform on a vector" =
-    near2(real_part2(fftn(grid)), real_part2(fft2(grid))) && near1(real_part1(fftn([1.0, 0.0, 0.0])), [1.0, 1.0, 1.0])
+test "fftn over a rank-3 tensor" = approx_eq(fl(re(at(at(at(fftn(cube), 0), 0), 0))), 78.0, 1e-9) && near3(real_part3(ifftn(fftn(cube))), cube)
 
-test "fftn over a rank-3 tensor" =
-    approx_eq(fl(re(at(at(at(fftn(cube), 0), 0), 0))), 78.0, 1e-9) && near3(real_part3(ifftn(fftn(cube))), cube)
+test "fftn_axes picks the axes" = near3(real_part3(fftn_axes(cube, [0, 2])), real_part3(fft_axis(fft_axis(cube, 0), 2))) && near3(real_part3(ifftn_axes(fftn_axes(cube, [2, 0]), [0, 2])), cube)
 
-test "fftn_axes picks the axes" =
-    near3(real_part3(fftn_axes(cube, [0, 2])), real_part3(fft_axis(fft_axis(cube, 0), 2))) && near3(real_part3(ifftn_axes(fftn_axes(cube, [2, 0]), [0, 2])), cube)
-
-test "fft2 over the last two axes of a rank-3 tensor" =
-    near3(real_part3(fft2(cube)), real_part3(fftn_axes(cube, [1, 2])))
+test "fft2 over the last two axes of a rank-3 tensor" = near3(real_part3(fft2(cube)), real_part3(fftn_axes(cube, [1, 2])))
 
 ## ----- normalisation ----------------------------------------------------------
+test "Forward scales by 1/N and its inverse not at all" = approx_eq(fl(re(at(fft_norm([2.0, 2.0, 2.0, 2.0], Forward), 0))), 2.0, 1e-9) && near1(real_part1(ifft_norm(fft_norm([1.0, 5.0, 2.0], Forward), Forward)), [1.0, 5.0, 2.0])
 
-test "Forward scales by 1/N and its inverse not at all" =
-    approx_eq(fl(re(at(fft_norm([2.0, 2.0, 2.0, 2.0], Forward), 0))), 2.0, 1e-9) && near1(real_part1(ifft_norm(fft_norm([1.0, 5.0, 2.0], Forward), Forward)), [1.0, 5.0, 2.0])
+test "Unitary preserves energy in N-D" = approx_eq(norm(map(fn w => fl(magnitude(w)), fftn_norm(grid, Unitary))), norm(grid), 1e-9)
 
-test "Unitary preserves energy in N-D" =
-    approx_eq(norm(map(fn (w) => fl(magnitude(w)), fftn_norm(grid, Unitary))), norm(grid), 1e-9)
-
-test "ifftn_norm inverts fftn_norm under every convention" =
-    near2(real_part2(ifftn_norm(fftn_norm(grid, Backward), Backward)), grid) && near2(real_part2(ifftn_norm(fftn_norm(grid, Forward), Forward)), grid) && near2(real_part2(ifftn_norm(fftn_norm(grid, Unitary), Unitary)), grid)
+test "ifftn_norm inverts fftn_norm under every convention" = near2(real_part2(ifftn_norm(fftn_norm(grid, Backward), Backward)), grid) && near2(real_part2(ifftn_norm(fftn_norm(grid, Forward), Forward)), grid) && near2(real_part2(ifftn_norm(fftn_norm(grid, Unitary), Unitary)), grid)
 
 ## ----- real transforms ---------------------------------------------------------
+test "rfft2 keeps n/2 + 1 bins of the last axis" = shape(rfft2(grid)) == [3, 3] && shape(rfft2([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])) == [2, 2]
 
-test "rfft2 keeps n/2 + 1 bins of the last axis" =
-    shape(rfft2(grid)) == [3, 3] && shape(rfft2([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])) == [2, 2]
+test "irfft2 undoes rfft2 for even and odd last axes" = near2(irfft2(rfft2(grid)), grid) && near2(irfft2(rfft2([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]), 3), [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
 
-test "irfft2 undoes rfft2 for even and odd last axes" =
-    near2(irfft2(rfft2(grid)), grid) && near2(irfft2(rfft2([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]), 3), [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+test "rfft2 is the half of fft2" = near2(real_part2(rfft2(grid)), transpose(take(3, transpose(real_part2(fft2(grid))))))
 
-test "rfft2 is the half of fft2" =
-    near2(real_part2(rfft2(grid)), transpose(take(3, transpose(real_part2(fft2(grid))))))
+test "rfftn and irfftn over rank 3" = shape(rfftn(cube)) == [2, 2, 2] && near3(irfftn(rfftn(cube), 3), cube)
 
-test "rfftn and irfftn over rank 3" =
-    shape(rfftn(cube)) == [2, 2, 2] && near3(irfftn(rfftn(cube), 3), cube)
-
-test "irfft takes an explicit length for odd signals" =
-    near1(irfft(rfft([1.0, 2.0, 3.0, 4.0, 5.0]), 5), [1.0, 2.0, 3.0, 4.0, 5.0]) && near1(irfft(rfft([1.0, 2.0, 3.0, 4.0])), [1.0, 2.0, 3.0, 4.0])
+test "irfft takes an explicit length for odd signals" = near1(irfft(rfft([1.0, 2.0, 3.0, 4.0, 5.0]), 5), [1.0, 2.0, 3.0, 4.0, 5.0]) && near1(irfft(rfft([1.0, 2.0, 3.0, 4.0])), [1.0, 2.0, 3.0, 4.0])
 
 ## ----- shifts and frequencies ---------------------------------------------------
+test "fftshift moves zero frequency to the middle" = fftshift([0, 1, 2, 3, 4, 5]) == [3, 4, 5, 0, 1, 2] && fftshift([0, 1, 2, 3, 4]) == [3, 4, 0, 1, 2]
 
-test "fftshift moves zero frequency to the middle" =
-    fftshift([0, 1, 2, 3, 4, 5]) == [3, 4, 5, 0, 1, 2] && fftshift([0, 1, 2, 3, 4]) == [3, 4, 0, 1, 2]
+test "ifftshift undoes fftshift" = ifftshift(fftshift([0, 1, 2, 3, 4])) == [0, 1, 2, 3, 4] && ifftshift(fftshift([[1, 2, 3], [4, 5, 6]])) == [[1, 2, 3], [4, 5, 6]]
 
-test "ifftshift undoes fftshift" =
-    ifftshift(fftshift([0, 1, 2, 3, 4])) == [0, 1, 2, 3, 4] && ifftshift(fftshift([[1, 2, 3], [4, 5, 6]])) == [[1, 2, 3], [4, 5, 6]]
+test "fftshift on a matrix shifts every axis, the _axis form one" = fftshift([[1, 2], [3, 4]]) == [[4, 3], [2, 1]] && fftshift_axis([[1, 2], [3, 4]], 0) == [[3, 4], [1, 2]] && ifftshift_axis([[1, 2, 3], [4, 5, 6]], 1) == [[2, 3, 1], [5, 6, 4]]
 
-test "fftshift on a matrix shifts every axis, the _axis form one" =
-    fftshift([[1, 2], [3, 4]]) == [[4, 3], [2, 1]] && fftshift_axis([[1, 2], [3, 4]], 0) == [[3, 4], [1, 2]] && ifftshift_axis([[1, 2, 3], [4, 5, 6]], 1) == [[2, 3, 1], [5, 6, 4]]
+test "fftshift of fftfreq is increasing" = near1(fftshift(fftfreq(4, 1.0)), [-0.5, -0.25, 0.0, 0.25])
 
-test "fftshift of fftfreq is increasing" =
-    near1(fftshift(fftfreq(4, 1.0)), [-0.5, -0.25, 0.0, 0.25])
-
-test "fftfreq and rfftfreq carry the inverse of the spacing" =
-    at(fftfreq(4, 0.5 s), 1) == 0.5 Hz && at(fftfreq(4, 0.5 s), 2) == -1.0 Hz && at(rfftfreq(4, 0.5 s), 2) == 1.0 Hz && length(rfftfreq(5, 1.0)) == 3
+test "fftfreq and rfftfreq carry the inverse of the spacing" = at(fftfreq(4, 0.5 s), 1) == 0.5 Hz && at(fftfreq(4, 0.5 s), 2) == -1.0 Hz && at(rfftfreq(4, 0.5 s), 2) == 1.0 Hz && length(rfftfreq(5, 1.0)) == 3
 
 ## ----- first-axis sequence operations --------------------------------------------
+test "reverse flips the first axis of a matrix" = reverse([[1, 2], [3, 4], [5, 6]]) == [[5, 6], [3, 4], [1, 2]]
 
-test "reverse flips the first axis of a matrix" =
-    reverse([[1, 2], [3, 4], [5, 6]]) == [[5, 6], [3, 4], [1, 2]]
+test "reverse of a rank-3 tensor keeps its shape" = shape(reverse(cube)) == [2, 2, 3] && reverse([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]) == [[[5, 6], [7, 8]], [[1, 2], [3, 4]]]
 
-test "reverse of a rank-3 tensor keeps its shape" =
-    shape(reverse(cube)) == [2, 2, 3] && reverse([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]) == [[[5, 6], [7, 8]], [[1, 2], [3, 4]]]
+test "reverse of a float matrix shares the buffer view and still reads right" = reverse([[1.0, 2.0], [3.0, 4.0]]) == [[3.0, 4.0], [1.0, 2.0]] && reverse(reverse([[1.0, 2.0], [3.0, 4.0]])) == [[1.0, 2.0], [3.0, 4.0]]
 
-test "reverse of a float matrix shares the buffer view and still reads right" =
-    reverse([[1.0, 2.0], [3.0, 4.0]]) == [[3.0, 4.0], [1.0, 2.0]] && reverse(reverse([[1.0, 2.0], [3.0, 4.0]])) == [[1.0, 2.0], [3.0, 4.0]]
+test "reverse_axis flips the named axis" = reverse_axis([[1, 2, 3], [4, 5, 6]], 1) == [[3, 2, 1], [6, 5, 4]] && reverse_axis([[1, 2, 3], [4, 5, 6]], 0) == [[4, 5, 6], [1, 2, 3]] && reverse_axis([1, 2, 3], 0) == [3, 2, 1] && reverse_axis([[1, 2, 3], [4, 5, 6]], -1) == [[3, 2, 1], [6, 5, 4]]
 
-test "reverse_axis flips the named axis" =
-    reverse_axis([[1, 2, 3], [4, 5, 6]], 1) == [[3, 2, 1], [6, 5, 4]] && reverse_axis([[1, 2, 3], [4, 5, 6]], 0) == [[4, 5, 6], [1, 2, 3]] && reverse_axis([1, 2, 3], 0) == [3, 2, 1] && reverse_axis([[1, 2, 3], [4, 5, 6]], -1) == [[3, 2, 1], [6, 5, 4]]
+test "reverse_axis on a rank-3 tensor and on strided floats" = reverse_axis([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], 2) == [[[2, 1], [4, 3]], [[6, 5], [8, 7]]] && reverse_axis([[1.0, 2.0], [3.0, 4.0]], 1) == [[2.0, 1.0], [4.0, 3.0]]
 
-test "reverse_axis on a rank-3 tensor and on strided floats" =
-    reverse_axis([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], 2) == [[[2, 1], [4, 3]], [[6, 5], [8, 7]]] && reverse_axis([[1.0, 2.0], [3.0, 4.0]], 1) == [[2.0, 1.0], [4.0, 3.0]]
+test "filter keeps the rows a predicate accepts" = filter(fn row => sum(row) > 4, [[1, 2], [3, 4], [0, 1], [5, 5]]) == [[3, 4], [5, 5]]
 
-test "filter keeps the rows a predicate accepts" =
-    filter(fn (row) => sum(row) > 4, [[1, 2], [3, 4], [0, 1], [5, 5]]) == [[3, 4], [5, 5]]
+test "filter on a rank-3 tensor filters first-axis slices" = filter(fn slab => sum(slab) > 40, cube) == [[[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]]
 
-test "filter on a rank-3 tensor filters first-axis slices" =
-    filter(fn (slab) => sum(slab) > 40, cube) == [[[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]]
+test "filter that keeps nothing leaves an empty matrix of the same rank" = rank(filter(fn row => false, [[1, 2], [3, 4]])) == 2 && shape(filter(fn row => false, [[1, 2], [3, 4]])) == [0, 2]
 
-test "filter that keeps nothing leaves an empty matrix of the same rank" =
-    rank(filter(fn (row) => false, [[1, 2], [3, 4]])) == 2 && shape(filter(fn (row) => false, [[1, 2], [3, 4]])) == [0, 2]
+test "any, all and find see rows" = any(fn row => sum(row) == 7, [[1, 2], [3, 4]]) && !all(fn row => sum(row) == 7, [[1, 2], [3, 4]]) && find(fn row => sum(row) > 5, [[1, 2], [3, 4]]) == Some([3, 4])
 
-test "any, all and find see rows" =
-    any(fn (row) => sum(row) == 7, [[1, 2], [3, 4]]) && !all(fn (row) => sum(row) == 7, [[1, 2], [3, 4]]) && find(fn (row) => sum(row) > 5, [[1, 2], [3, 4]]) == Some([3, 4])
+test "first and last of a matrix are rows" = first([[1, 2], [3, 4]]) == Some([1, 2]) && last([[1, 2], [3, 4]]) == Some([3, 4])
 
-test "first and last of a matrix are rows" =
-    first([[1, 2], [3, 4]]) == Some([1, 2]) && last([[1, 2], [3, 4]]) == Some([3, 4])
+test "take, drop and concat act on the first axis" = take(2, [[1, 2], [3, 4], [5, 6]]) == [[1, 2], [3, 4]] && drop(2, [[1, 2], [3, 4], [5, 6]]) == [[5, 6]] && concat([[1, 2]], [[3, 4], [5, 6]]) == [[1, 2], [3, 4], [5, 6]]
 
-test "take, drop and concat act on the first axis" =
-    take(2, [[1, 2], [3, 4], [5, 6]]) == [[1, 2], [3, 4]] && drop(2, [[1, 2], [3, 4], [5, 6]]) == [[5, 6]] && concat([[1, 2]], [[3, 4], [5, 6]]) == [[1, 2], [3, 4], [5, 6]]
-
-test "vector reverse, filter and take are unchanged" =
-    reverse([1, 2, 3]) == [3, 2, 1] && filter(fn (x) => x > 1, [1, 2, 3]) == [2, 3] && take(2, [1, 2, 3]) == [1, 2]
+test "vector reverse, filter and take are unchanged" = reverse([1, 2, 3]) == [3, 2, 1] && filter(fn x => x > 1, [1, 2, 3]) == [2, 3] && take(2, [1, 2, 3]) == [1, 2]

@@ -246,7 +246,7 @@
    shift、频率量纲、行语义的序列操作）；`aevia-std` 的 `fft` 单元测试（N 维对拍、往返、`Forward`/`Unitary`、shift 置换、
    `rfftfreq`）；`aevia-core/tests/stdlib.rs` 的轴/长度错误与秩 3 变换；`aevia-types/tests/unit_suggestions.rs` 与
    `closest_unit` 单元测试。`stdlib_names.txt` 与生成的 `FFT.aev`/`Prelude.aev` 已更新。
-6. **仍缺：** 秩超过 4 的变换与序列操作；`fold`/`sort`/`zip`/`enumerate` 在秩 ≥ 2 上仍是元素级（展平）语义；
+6. **仍缺（均已在 Revision 22 解决）：** 秩超过 4 的变换与序列操作；`fold`/`sort`/`zip`/`enumerate` 在秩 ≥ 2 上仍是元素级（展平）语义；
    `fftn_axes` 没有对应的实数形式（`rfftn` 取全部轴）。
 
 ## 4.8 Revision 21（2026-11-13）：kernel 诊断进入 `Err(OpError)`；`Rssn_Numeric` 补全上一轮算子
@@ -272,6 +272,32 @@
 4. **仍缺：** 只有 `rules::numeric::TABLES` 的算子记录原因，其余重型算子无原因（保持未约化项）；witnessed/dynamic 包装器只给
    参数位置；`poisson_fd_bc` 等的逐轴/逐面数值列表没有 typed 形式；`OpError` 没有 `code(e)`/`message(e)` 访问器
    （需要新的 `Rssn.*` 成员与检查器支持，留待检查器一侧的改动）。
+
+## 4.9 Revision 22（2026-11-13）：秩不再有上限；序列族全部按行；实数的轴子集变换
+
+1. **秩模板（§8.1.5、§8.8）。** 此前 `rank_overloads` 等表对秩 1 到 4 各列一个重载，秩 5 的 `fftn` 或 `sum` 是 `E0302`。秩仍然不是
+   类型语言里的一等变量（`Shape` 没有秩变量，加进去要改动统一、替换、泛化和全部 `Shape::Rank` 的匹配点，风险远大于收益），所以改成
+   **模板**：`builtins.rs` 里每个秩多态操作的签名是一个以秩为参数的函数（`rank_overloads_at`、`first_axis_at`、`fft_schemes_at`、`zip_at`），
+   `builtins::schemes` 仍列出秩 1 到 4 的实例（悬停、首类函数使用、`spec_signatures` 对拍），而 `builtins::rank_schemes_for(name, ranks)`
+   给出高于 `STATIC_RANK` 的实例。检查器的 `overloaded_call` 在表内所有候选都失败时，探测（并回滚）非 lambda 实参的秩，用这些秩的
+   模板实例再试一次——只有失败路径才付出代价，秩 ≤ 4 的程序走原来的路径；失败时报告的是该秩实例的 `E0302`（含期望/实际类型和帮助）。
+   `at`/`set` 也有秩 ≥ 4 的实例，`length` 对任意秩的张量给出行数（此前类型表里只有秩 1，`length(matrix)` 是 `E0302`）。
+2. **序列族一律按行（语义变化）。** `fold`/`fold_left`（累加器看到一行）、`sort`（行按字典序稳定排序）、`sort_by`（比较函数看到两行）、
+   `sort_float`、`zip`（逐行配对，两个操作数的秩可以不同）、`enumerate`（`index`/`value`，`value` 是行）在秩 ≥ 2 上此前是元素级（展平）语义，
+   类型表里秩 ≥ 2 的调用多半是 `E0302`，所以能受影响的只有直接调用运行时的代码；仓库内没有依赖元素级行为的代码或测试。秩 1 不变。
+   `map`/`map2`/`zip_with` 保持元素级（张量的函子，同形），`cumsum`/`cumprod`/`argmax`/`argmin` 只对秩 1 定义，写在 §8.1.5。
+   新增 `sort_by_key(f, t)`（按 `TotalOrd` 键稳定排序）、`sort_axis(t, k)`（沿一个轴分别排序每条切片）、`argsort(t)`（稳定排序的置换，
+   `Tensor<1, Int>`）。`sort_by` 由 O(n²) 的插入排序换成稳定的归并排序（比较函数可以失败，所以不用标准库的排序）。
+   `sort`/`argsort`/`sort_axis` 在调用点要求元素类型有 `TotalOrd`，`sort_by_key` 要求键有 `TotalOrd`（`E0310`）。
+3. **`rfftn_axes`/`irfftn_axes`（§8.8）。** `rfftn_axes(t, axes)`、`irfftn_axes(s, axes)`、`irfftn_axes(s, axes, n)`：列表里最后一个轴是
+   半谱轴，其余轴做完整变换，与 numpy 的 `rfftn(a, axes=…)` 一致；`n` 给出奇数原长度。任意秩，实数与整数输入。
+   列表为空、轴越界或重复、长度与半谱不相容是 `E0802`。`FFT` 模块与 `Prelude` 已重新生成。
+4. **测试。** `tests/rank_generic.aev`（35 个 `test`：秩 5/6 的归约、FFT 族往返、shift、序列操作；fold/sort/sort_by/sort_by_key/sort_float/
+   argsort/sort_axis/zip/enumerate 的行语义；`rfftn_axes` 与 `fftn_axes` 的对拍、往返、奇数长度、秩 5）；`aevia-types/tests/rank_generic.rs`
+   （8 个：秩 6 的类型检查、`E0310`/`E0302`、模板实例个数）；`aevia-core/tests/stdlib.rs` 新增 3 个（轴/长度错误、秩 6 的 `fftn`、排序族）；
+   `stdlib_names.txt`、`overloading_is_visible` 的 `length` 个数已更新。
+5. **仍缺：** 用户自己写的函数仍不能对秩多态（秩不是类型参数）；`cumsum`/`cumprod`/`argmax`/`argmin` 对秩 ≥ 2 没有定义
+   （按轴的形式 `cumsum_axis` 等未做）。
 
 ## 5. 记录在案的未实现边界（Known Gaps）
 

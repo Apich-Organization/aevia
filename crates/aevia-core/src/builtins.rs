@@ -1393,7 +1393,8 @@ pub fn call(
                 .cloned()
                 .ok_or_else(|| arity(name, 3, 1, span))?;
             let tensor = expect_tensor(&args, 2, name, span)?;
-            for element in tensor.elements() {
+            // §8.1.5: the step sees a row of a tensor of rank >= 2.
+            for element in sequence_items(&tensor) {
                 accumulator = interp.apply(function.clone(), vec![accumulator, element], span)?;
             }
             Ok(accumulator)
@@ -1444,10 +1445,66 @@ pub fn call(
             // comparing `as_f64` made a tensor of strings sort as `NaN`, which
             // silently left it in source order.
             let tensor = expect_tensor(&args, 0, name, span)?;
+            // §8.1.5: at rank >= 2 the rows are ordered lexicographically by
+            // their elements; the sort is stable.
+            if tensor.rank() >= 2 {
+                let rows = sequence_items(&tensor);
+                let mut order: Vec<usize> = (0..rows.len()).collect();
+                order.sort_by(|a, b| total_order(&rows[*a], &rows[*b]));
+                return Ok(gather_first_axis(&tensor, &order));
+            }
             let mut elements = tensor.elements();
             elements.sort_by(total_order);
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
+        },
+        | "argsort" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let items = sequence_items(&tensor);
+            let mut order: Vec<usize> = (0..items.len()).collect();
+            order.sort_by(|a, b| total_order(&items[*a], &items[*b]));
+            Ok(index_tensor(&order))
+        },
+        | "sort_axis" => {
+            let tensor = expect_tensor(&args, 0, name, span)?;
+            let axis = axis_argument(&args, 1, tensor.rank(), name, span)?;
+            let extent = tensor.shape[axis];
+            let inner: usize = tensor.shape[axis + 1..].iter().product();
+            let outer: usize = tensor.shape[..axis].iter().product();
+            let mut elements = tensor.elements();
+            for block in 0..outer {
+                for offset in 0..inner {
+                    let positions: Vec<usize> = (0..extent)
+                        .map(|step| (block * extent + step) * inner + offset)
+                        .collect();
+                    let mut lane: Vec<Value> =
+                        positions.iter().map(|at| elements[*at].clone()).collect();
+                    lane.sort_by(total_order);
+                    for (at, value) in positions.into_iter().zip(lane) {
+                        elements[at] = value;
+                    }
+                }
+            }
+            Ok(build_tensor(
+                elements,
+                tensor.shape.clone(),
+                tensor.dim.clone(),
+            ))
+        },
+        | "sort_by_key" => {
+            let function = args
+                .first()
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 0, span))?;
+            let tensor = expect_tensor(&args, 1, name, span)?;
+            let items = sequence_items(&tensor);
+            let mut keys = Vec::with_capacity(items.len());
+            for item in &items {
+                keys.push(interp.apply(function.clone(), vec![item.clone()], span)?);
+            }
+            let mut order: Vec<usize> = (0..items.len()).collect();
+            order.sort_by(|a, b| total_order(&keys[*a], &keys[*b]));
+            Ok(gather_sequence(&tensor, &items, &order))
         },
         | "concat" => {
             match (args.first(), args.get(1)) {
@@ -2437,8 +2494,9 @@ pub fn call(
         // ----- §8.1.5 containers that arrived with the chapter-8 sweep -----
         | "enumerate" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
+            // §8.1.5: at rank >= 2 `value` is a row.
             let mut elements = Vec::with_capacity(tensor.storage.len());
-            for (index, element) in tensor.elements().into_iter().enumerate() {
+            for (index, element) in sequence_items(&tensor).into_iter().enumerate() {
                 elements.push(record_of(vec![
                     (
                         "index",
@@ -2453,8 +2511,12 @@ pub fn call(
         | "zip" => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
+            // §8.1.5: it pairs rows (or scalars) as far as the shorter runs.
             let mut elements = Vec::with_capacity(left.storage.len());
-            for (a, b) in left.elements().into_iter().zip(right.elements()) {
+            for (a, b) in sequence_items(&left)
+                .into_iter()
+                .zip(sequence_items(&right))
+            {
                 elements.push(tuple(vec![a, b]));
             }
             let len = elements.len();
@@ -2470,7 +2532,8 @@ pub fn call(
                 .cloned()
                 .ok_or_else(|| arity(name, 3, 1, span))?;
             let tensor = expect_tensor(&args, 2, name, span)?;
-            for element in tensor.elements() {
+            // §8.1.5: the step sees a row of a tensor of rank >= 2.
+            for element in sequence_items(&tensor) {
                 accumulator = interp.apply(function.clone(), vec![accumulator, element], span)?;
             }
             Ok(accumulator)
@@ -2481,51 +2544,31 @@ pub fn call(
                 .cloned()
                 .ok_or_else(|| arity(name, 2, 0, span))?;
             let tensor = expect_tensor(&args, 1, name, span)?;
-            let mut elements = tensor.elements();
-            // An insertion sort over `Value`s: the comparator is an Aevia
-            // function, so it can fail, and a fallible comparator cannot be
-            // handed to `sort_by`.
-            let mut failure = None;
-            for index in 1..elements.len() {
-                let mut position = index;
-                while position > 0 {
-                    let ordering = interp.apply(
-                        function.clone(),
-                        vec![elements[position - 1].clone(), elements[position].clone()],
-                        span,
-                    );
-                    let ordering = match ordering {
-                        | Ok(Value::Variant(variant)) => variant.index,
-                        | Ok(other) => {
-                            failure = Some(EvalError::new(
-                                "E0302",
-                                format!(
-                                    "a comparator must return an `Ordering`, found {}",
-                                    other.type_name()
-                                ),
-                            ));
-                            break;
-                        },
-                        | Err(error) => {
-                            failure = Some(error);
-                            break;
-                        },
-                    };
-                    if ordering != 2 {
-                        break;
-                    }
-                    elements.swap(position - 1, position);
-                    position -= 1;
+            // §8.1.5: the comparator sees two rows at rank >= 2.
+            let items = sequence_items(&tensor);
+            // A merge sort over indices: the comparator is an Aevia function,
+            // so it can fail, and a fallible comparator cannot be handed to
+            // the standard library's sort. It is stable.
+            let order = merge_sort_indices(items.len(), &mut |left, right| {
+                match interp.apply(
+                    function.clone(),
+                    vec![items[left].clone(), items[right].clone()],
+                    span,
+                )? {
+                    | Value::Variant(variant) => Ok(variant.index == 2),
+                    | other => {
+                        Err(EvalError::new(
+                            "E0302",
+                            format!(
+                                "a comparator must return an `Ordering`, found {}",
+                                other.type_name()
+                            ),
+                        )
+                        .at(span))
+                    },
                 }
-                if failure.is_some() {
-                    break;
-                }
-            }
-            if let Some(error) = failure {
-                return Err(error.at(span));
-            }
-            let len = elements.len();
-            Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
+            })?;
+            Ok(gather_sequence(&tensor, &items, &order))
         },
         | "sort_float" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
@@ -2533,31 +2576,12 @@ pub fn call(
                 .get(1)
                 .map(|value| matches!(value, Value::Bool(true)))
                 .unwrap_or(true);
-            let mut elements = tensor.elements();
-            elements.sort_by(|a, b| {
-                let x = a.as_f64().unwrap_or(f64::NAN);
-                let y = b.as_f64().unwrap_or(f64::NAN);
-                match (x.is_nan(), y.is_nan()) {
-                    | (true, true) => std::cmp::Ordering::Equal,
-                    | (true, false) => {
-                        if nan_last {
-                            std::cmp::Ordering::Greater
-                        } else {
-                            std::cmp::Ordering::Less
-                        }
-                    },
-                    | (false, true) => {
-                        if nan_last {
-                            std::cmp::Ordering::Less
-                        } else {
-                            std::cmp::Ordering::Greater
-                        }
-                    },
-                    | (false, false) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-                }
-            });
-            let len = elements.len();
-            Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
+            // At rank >= 2 the rows are ordered lexicographically with the
+            // same NaN placement.
+            let items = sequence_items(&tensor);
+            let mut order: Vec<usize> = (0..items.len()).collect();
+            order.sort_by(|a, b| float_sequence_order(&items[*a], &items[*b], nan_last));
+            Ok(gather_sequence(&tensor, &items, &order))
         },
 
         // ----- §8.1.1 combinators ----------------------------------------
@@ -3925,13 +3949,14 @@ pub fn call(
                 tensor.dim.clone(),
             ))
         },
-        | "rfft" | "rfft2" | "rfftn" => {
+        | "rfft" | "rfft2" | "rfftn" | "rfftn_axes" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let rank = tensor.shape.len();
             let signal = tensor_values(&tensor)?;
             let axes = match name {
                 | "rfft" => vec![rank.saturating_sub(1)],
                 | "rfft2" => transform_axes_last_two(rank, name, span)?,
+                | "rfftn_axes" => axes_argument(&args, 1, rank, name, span)?,
                 | _ => (0..rank).collect(),
             };
             let (spectrum, shape) = aevia_std::fft::rfft_axes(&signal, &tensor.shape, &axes)
@@ -3940,13 +3965,14 @@ pub fn call(
                 })?;
             Ok(complex_tensor(shape, &spectrum, tensor.dim.clone()))
         },
-        | "irfft" | "irfft2" | "irfftn" => {
+        | "irfft" | "irfft2" | "irfftn" | "irfftn_axes" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let rank = tensor.shape.len();
             let spectrum = complex_values(&tensor)?;
             let axes = match name {
                 | "irfft" => vec![rank.saturating_sub(1)],
                 | "irfft2" => transform_axes_last_two(rank, name, span)?,
+                | "irfftn_axes" => axes_argument(&args, 1, rank, name, span)?,
                 | _ => (0..rank).collect(),
             };
             let last = axes.last().copied().unwrap_or(0);
@@ -3958,8 +3984,13 @@ pub fn call(
                     tensor.dim.clone(),
                 ));
             }
-            let n_last = if args.len() > 1 {
-                usize::try_from(expect_int(&args, 1, name, span)?).map_err(|_| {
+            let length_at = if name == "irfftn_axes" {
+                2
+            } else {
+                1
+            };
+            let n_last = if args.len() > length_at {
+                usize::try_from(expect_int(&args, length_at, name, span)?).map_err(|_| {
                     EvalError::new(
                         "E0802",
                         format!("`{name}`: the length must not be negative"),
@@ -5916,6 +5947,112 @@ fn gather_first_axis(
     let mut shape = tensor.shape.clone();
     shape[0] = indices.len();
     build_tensor(gathered, shape, tensor.dim.clone())
+}
+
+/// The items of a sequence (see [`sequence_items`]) listed in `order`, stacked
+/// back into the tensor kind they came from: rows back onto a first axis at
+/// rank >= 2, elements into a vector at rank 1.
+fn gather_sequence(
+    tensor: &TensorData,
+    items: &[Value],
+    order: &[usize],
+) -> Value {
+    if tensor.rank() >= 2 {
+        return gather_first_axis(tensor, order);
+    }
+    let elements: Vec<Value> = order.iter().map(|index| items[*index].clone()).collect();
+    let len = elements.len();
+    build_tensor(elements, vec![len], tensor.dim.clone())
+}
+
+/// A `Tensor<1, Int>` of indices.
+fn index_tensor(order: &[usize]) -> Value {
+    let elements: Vec<Value> = order
+        .iter()
+        .map(|index| Value::int(i64::try_from(*index).unwrap_or(i64::MAX)))
+        .collect();
+    let len = elements.len();
+    build_tensor(elements, vec![len], Dim::one())
+}
+
+/// A stable merge sort of `0..count` under a fallible "is `left` after
+/// `right`" test (the test of an Aevia comparator can fail).
+fn merge_sort_indices(
+    count: usize,
+    after: &mut dyn FnMut(usize, usize) -> Result<bool, EvalError>,
+) -> Result<Vec<usize>, EvalError> {
+    fn sort(
+        items: &[usize],
+        after: &mut dyn FnMut(usize, usize) -> Result<bool, EvalError>,
+    ) -> Result<Vec<usize>, EvalError> {
+        if items.len() <= 1 {
+            return Ok(items.to_vec());
+        }
+        let (left, right) = items.split_at(items.len() / 2);
+        let (left, right) = (sort(left, after)?, sort(right, after)?);
+        let mut merged = Vec::with_capacity(items.len());
+        let (mut a, mut b) = (0, 0);
+        while a < left.len() && b < right.len() {
+            if after(left[a], right[b])? {
+                merged.push(right[b]);
+                b += 1;
+            } else {
+                merged.push(left[a]);
+                a += 1;
+            }
+        }
+        merged.extend_from_slice(&left[a..]);
+        merged.extend_from_slice(&right[b..]);
+        Ok(merged)
+    }
+    let indices: Vec<usize> = (0..count).collect();
+    sort(&indices, after)
+}
+
+/// The `sort_float` order of two sequence items (scalars, or rows compared
+/// lexicographically by their elements) with NaN placed last or first.
+fn float_sequence_order(
+    left: &Value,
+    right: &Value,
+    nan_last: bool,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let flat = |value: &Value| -> Vec<f64> {
+        match value {
+            | Value::Tensor(tensor) => {
+                tensor
+                    .elements()
+                    .iter()
+                    .map(|element| element.as_f64().unwrap_or(f64::NAN))
+                    .collect()
+            },
+            | other => vec![other.as_f64().unwrap_or(f64::NAN)],
+        }
+    };
+    for (x, y) in flat(left).into_iter().zip(flat(right)) {
+        let ordering = match (x.is_nan(), y.is_nan()) {
+            | (true, true) => Ordering::Equal,
+            | (true, false) => {
+                if nan_last {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            },
+            | (false, true) => {
+                if nan_last {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            },
+            | (false, false) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    Ordering::Equal
 }
 
 /// `reverse_axis`: the tensor with axis `axis` flipped. A dense `f64` tensor

@@ -197,6 +197,8 @@ pub const TREE: &[ModuleDef] = &[
             "ifftn",
             "fftn_axes",
             "ifftn_axes",
+            "rfftn_axes",
+            "irfftn_axes",
             "fftn_norm",
             "ifftn_norm",
             "rfft",

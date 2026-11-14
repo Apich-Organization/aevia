@@ -1,0 +1,99 @@
+## Rank-generic built-ins at ranks above 4, the first-axis sequence family
+## (fold, sort, zip, enumerate, ...) and the real axes-subset transforms.
+## Run with: cargo run -p aevia-cli -- test tests/rank_generic.aev
+fn fl(x: Real): Float = unwrap_or(to_float(x), nan)
+
+fn near1(a: Tensor<1, Float>, b: Tensor<1, Float>): Bool = norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
+
+fn near3(a: Tensor<3, Float>, b: Tensor<3, Float>): Bool = norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
+
+fn near5(a: Tensor<5, Float>, b: Tensor<5, Float>): Bool = norm(zip_with(fn (x, y) => x - y, a, b)) < 1e-9
+
+fn real_part3(z: Tensor<3, Complex>): Tensor<3, Float> = map(fn w => fl(re(w)), z)
+
+fn real_part5(z: Tensor<5, Complex>): Tensor<5, Float> = map(fn w => fl(re(w)), z)
+
+fn near_c3(a: Tensor<3, Complex>, b: Tensor<3, Complex>): Bool = norm(zip_with(fn (x, y) => fl(re(x - y)) * fl(re(x - y)) + fl(im(x - y)) * fl(im(x - y)), a, b)) < 1e-9
+
+let t5 = [[[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]]]
+
+let t6 = [[t5, t5], [t5, t5]]
+
+fn bin(z: Tensor<3, Complex>, i: Int, j: Int, k: Int): Complex = at(at(at(z, i), j), k)
+
+let cube = [[[1.0, 2.0, 0.5], [3.0, 4.0, 0.0]], [[-2.0, 1.0, 1.5], [0.25, -1.0, 2.0]]]
+
+## ----- ranks above 4 -----------------------------------------------------------------
+test "reductions at rank 5 and 6" = sum(t5) == 36.0 && mean(t5) == 4.5 && sum(t6) == 144.0 && norm(t5) > 14.2 && norm(t5) < 14.3
+
+test "keepdims sum and flatten at rank 5" = shape(sum(t5, 4)) == [1, 1, 2, 2, 1] && length(flatten(t5)) == 8
+
+test "map, map2 and zip_with keep a rank-5 shape" = shape(map(fn x => x * 2.0, t5)) == [1, 1, 2, 2, 2] && sum(zip_with(fn (x, y) => x * y, t5, t5)) == 204.0 && shape(map2(fn (x, y) => x + y, t6, t6)) == [2, 2, 1, 1, 2, 2, 2]
+
+test "transpose reverses the axes of a rank-5 tensor" = shape(transpose(t5)) == [2, 2, 2, 1, 1]
+
+test "fftn and ifftn round-trip at rank 5" = near5(real_part5(ifftn(fftn(t5))), t5) && shape(fftn(t5)) == [1, 1, 2, 2, 2]
+
+test "fftn of a rank-5 tensor puts the sum at the origin" = fl(re(at(at(at(at(at(fftn(t5), 0), 0), 0), 0), 0))) == 36.0
+
+test "fft_axis, fftn_axes and fft2 at rank 5" = near5(real_part5(ifft_axis(fft_axis(t5, 3), 3)), t5) && near5(real_part5(ifftn_axes(fftn_axes(t5, [2, 4]), [2, 4])), t5) && shape(fft2(t5)) == [1, 1, 2, 2, 2]
+
+test "real transforms at rank 5" = shape(rfftn(t5)) == [1, 1, 2, 2, 2] && near5(irfftn(rfftn(t5), 2), t5) && shape(rfft2(t5)) == [1, 1, 2, 2, 2]
+
+test "fftshift and reverse_axis at rank 5" = ifftshift(fftshift(t5)) == t5 && reverse_axis(reverse_axis(t5, 4), 4) == t5 && at(at(at(at(reverse_axis(t5, 4), 0), 0), 0), 0) == [2.0, 1.0]
+
+test "first-axis sequence operations at rank 5" = shape(concat(t5, t5)) == [2, 1, 2, 2, 2] && shape(reverse(t6)) == [2, 2, 1, 1, 2, 2, 2] && shape(take(1, t6)) == [1, 2, 1, 1, 2, 2, 2] && any(fn row => sum(row) > 70.0, t6) && all(fn row => sum(row) == 72.0, t6) && first(t6) != None && length(filter(fn row => sum(row) > 0.0, t6)) == 2
+
+test "fold, sort, zip and enumerate at rank 5" = fold(fn (acc, row) => acc + sum(row), 0.0, t6) == 144.0 && shape(sort_float(t6, true)) == [2, 2, 1, 1, 2, 2, 2] && length(zip(t6, t6)) == 2 && length(enumerate(t6)) == 2
+
+test "indexing at rank 5" = shape(at(t5, 0)) == [1, 2, 2, 2]
+
+## ----- fold over rows ------------------------------------------------------------------
+test "fold sees rows of a matrix" = fold(fn (acc, row) => acc + row, [0, 0], [[1, 2], [3, 4], [5, 6]]) == [9, 12] && fold(fn (acc, row) => acc + sum(row), 0, [[1, 2], [3, 4]]) == 10
+
+test "fold at rank 1 is unchanged" = fold(fn (acc, x) => acc + x, 0, [1, 2, 3]) == 6 && fold_left(fn (acc, x) => acc * x, 1, [1, 2, 3, 4]) == 24
+
+test "fold over the slabs of a rank-3 tensor" = fold(fn (acc, slab) => acc + sum(slab), 0.0, cube) == sum(cube) && fold(fn (acc, slab) => acc + slab, [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], cube) == [[-1.0, 3.0, 2.0], [3.25, 3.0, 2.0]]
+
+## ----- sort over rows ------------------------------------------------------------------
+test "sort orders the rows of a matrix lexicographically" = sort([[3, 1], [1, 2], [1, 1]]) == [[1, 1], [1, 2], [3, 1]] && sort([[2, 9], [2, 3], [1, 7]]) == [[1, 7], [2, 3], [2, 9]]
+
+test "sort of strings rows and of a rank-3 tensor" = sort([["b", "a"], ["a", "z"]]) == [["a", "z"], ["b", "a"]] && sort([[[2, 0]], [[1, 5]]]) == [[[1, 5]], [[2, 0]]]
+
+test "sort at rank 1 is unchanged" = sort([3, 1, 2]) == [1, 2, 3]
+
+test "sort_by compares rows" = sort_by(fn (a, b) => total_compare(sum(b), sum(a)), [[1, 1], [5, 5], [2, 2]]) == [[5, 5], [2, 2], [1, 1]] && sort_by(fn (a, b) => total_compare(a, b), [3, 1, 2]) == [1, 2, 3]
+
+test "sort_by_key orders by a key of the row" = sort_by_key(fn row => sum(row), [[3, 3], [0, 1], [1, 1]]) == [[0, 1], [1, 1], [3, 3]] && sort_by_key(fn x => 0 - x, [1, 3, 2]) == [3, 2, 1]
+
+test "sort_by_key is stable" = sort_by_key(fn row => at(row, 0), [[1, 9], [0, 5], [1, 2], [0, 7]]) == [[0, 5], [0, 7], [1, 9], [1, 2]]
+
+test "sort_float orders float rows with NaN last or first" = sort_float([[2.0, 1.0], [1.0, 5.0], [1.0, 2.0]], true) == [[1.0, 2.0], [1.0, 5.0], [2.0, 1.0]] && sort_float([3.0, 1.0, 2.0], true) == [1.0, 2.0, 3.0] && is_nan(at(at(sort_float([[nan, 1.0], [1.0, 2.0]], true), 1), 0)) && is_nan(at(at(sort_float([[nan, 1.0], [1.0, 2.0]], false), 0), 0))
+
+test "argsort gives the stable permutation" = argsort([30, 10, 20]) == [1, 2, 0] && argsort([[2, 1], [1, 9], [2, 0]]) == [1, 2, 0] && argsort([2, 1, 2, 1]) == [1, 3, 0, 2]
+
+test "sort_axis sorts every lane along an axis" = sort_axis([[3, 1, 2], [9, 8, 7]], 1) == [[1, 2, 3], [7, 8, 9]] && sort_axis([[3, 1], [2, 5], [1, 0]], 0) == [[1, 0], [2, 1], [3, 5]] && sort_axis([[3, 1], [2, 5]], -1) == [[1, 3], [2, 5]] && sort_axis([3, 1, 2], 0) == [1, 2, 3]
+
+test "sort_axis on a rank-3 tensor" = sort_axis([[[4, 1], [3, 2]], [[0, 9], [8, 7]]], 2) == [[[1, 4], [2, 3]], [[0, 9], [7, 8]]] && sort_axis([[[4, 1], [3, 2]], [[0, 9], [8, 7]]], 0) == [[[0, 1], [3, 2]], [[4, 9], [8, 7]]]
+
+## ----- zip and enumerate ---------------------------------------------------------------
+test "zip pairs the rows of two matrices" = length(zip([[1, 2], [3, 4]], [[5, 6], [7, 8]])) == 2 && at(zip([[1, 2], [3, 4]], [[5, 6], [7, 8]]), 1) == ([3, 4], [7, 8]) && at(zip([[1, 2], [3, 4]], [[5, 6], [7, 8]]), 0) == ([1, 2], [5, 6])
+
+test "zip pairs a matrix's rows with a vector's elements" = at(zip([[1, 2], [3, 4]], ["a", "b"]), 1) == ([3, 4], "b") && length(zip([1, 2, 3], [4, 5])) == 2 && at(zip([1, 2, 3], [4, 5]), 1) == (2, 5)
+
+test "enumerate yields the index and the row" = length(enumerate([[1, 2], [3, 4], [5, 6]])) == 3 && at(enumerate([[1, 2], [3, 4], [5, 6]]), 2).index == 2 && at(enumerate([[1, 2], [3, 4], [5, 6]]), 2).value == [5, 6] && at(enumerate([7, 8]), 1).value == 8
+
+## ----- rfftn_axes / irfftn_axes ----------------------------------------------------------
+test "rfftn_axes over every axis equals rfftn" = near_c3(rfftn_axes(cube, [0, 1, 2]), rfftn(cube)) && shape(rfftn_axes(cube, [0, 1, 2])) == shape(rfftn(cube))
+
+test "rfftn_axes halves the last listed axis only" = shape(rfftn_axes(cube, [2])) == [2, 2, 2] && shape(rfftn_axes(cube, [0])) == [2, 2, 3] && shape(rfftn_axes(cube, [2, 0])) == [2, 2, 3] && shape(rfftn_axes(cube, [-1])) == [2, 2, 2]
+
+test "rfftn_axes agrees with the complex path on the kept bins" = bin(rfftn_axes(cube, [0, 2]), 1, 1, 1) == bin(fftn_axes(cube, [0, 2]), 1, 1, 1) && bin(rfftn_axes(cube, [0, 2]), 0, 1, 0) == bin(fftn_axes(cube, [0, 2]), 0, 1, 0) && bin(rfftn_axes(cube, [2, 0]), 1, 0, 2) == bin(fftn_axes(cube, [2, 0]), 1, 0, 2) && bin(rfftn_axes(cube, [1]), 1, 1, 2) == bin(fftn_axes(cube, [1]), 1, 1, 2)
+
+test "irfftn_axes inverts rfftn_axes" = near3(irfftn_axes(rfftn_axes(cube, [0, 2]), [0, 2], 3), cube) && near3(irfftn_axes(rfftn_axes(cube, [2]), [2], 3), cube) && near3(irfftn_axes(rfftn_axes(cube, [1, 0]), [1, 0], 2), cube)
+
+test "irfftn_axes defaults to an even length" = shape(irfftn_axes(rfftn_axes(cube, [0]), [0])) == [2, 2, 3] && near1(at(at(irfftn_axes(rfftn_axes(cube, [0]), [0]), 0), 0), [1.0, 2.0, 0.5])
+
+test "rfftn_axes accepts integer input and an odd length round-trips" = shape(rfftn_axes([[1, 2, 3], [4, 5, 6]], [1])) == [2, 2] && near1(at(irfftn_axes(rfftn_axes([[1.0, 2.0, 3.0, 4.0, 5.0]], [1]), [1], 5), 0), [1.0, 2.0, 3.0, 4.0, 5.0])
+
+test "rfftn_axes at rank 5" = near5(irfftn_axes(rfftn_axes(t5, [1, 4]), [1, 4], 2), t5) && shape(rfftn_axes(t5, [0, 3])) == [1, 1, 2, 2, 2]

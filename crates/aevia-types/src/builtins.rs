@@ -394,14 +394,32 @@ fn measurement(dim: Dim) -> Type {
 /// operation listed in [`rank_overloads`] is already rank-agnostic.
 const MAX_RANK: u32 = 4;
 
+/// The highest rank [`schemes`] enumerates. Ranks above it are not missing:
+/// the signatures of the rank-generic operations are templates over the rank
+/// (`rank_overloads_at`, `first_axis_at`, `fft_schemes_at`), and the checker
+/// instantiates them at the rank of the call's arguments through
+/// [`rank_schemes_for`].
+pub const STATIC_RANK: u32 = MAX_RANK;
+
 /// The overloads of the rank-generic operations at ranks 2 through
 /// [`MAX_RANK`] (rank 1, and rank 2 where it predates this table, are in
 /// [`base_schemes`]).
 fn rank_overloads(name: &str) -> Vec<Scheme> {
+    (2..=MAX_RANK)
+        .flat_map(|rank| rank_overloads_at(name, rank))
+        .collect()
+}
+
+/// The rank template of the element-wise tensor operations, instantiated at
+/// `rank`.
+fn rank_overloads_at(
+    name: &str,
+    rank: u32,
+) -> Vec<Scheme> {
     let elem = || scalar(rep_var(0), dim_var(0));
     let square = || dim_var(0).pow(&BigRational::from_integer(2.into()));
     let mut out = Vec::new();
-    for rank in 2..=MAX_RANK {
+    {
         match name {
             | "sum" => {
                 out.push(scheme(1, 1, 0, func(vec![tensor(rank, elem())], elem())));
@@ -549,9 +567,25 @@ fn fft_input_forms(rank: u32) -> [(Type, Type, u32); 3] {
 /// (the frequency axes carry the inverse of the sample spacing only in
 /// `fftfreq`/`rfftfreq`, which take the spacing explicitly).
 fn fft_schemes(name: &str) -> Option<Vec<Scheme>> {
+    fft_schemes_at(name, &(1..=MAX_RANK).collect::<Vec<_>>())
+}
+
+/// [`fft_schemes`] instantiated at exactly the given ranks: the signature of
+/// every transform is a template over the rank.
+fn fft_schemes_at(
+    name: &str,
+    at: &[u32],
+) -> Option<Vec<Scheme>> {
     let mut out = Vec::new();
+    // The requested ranks inside `range`.
+    let within = |range: std::ops::RangeInclusive<u32>| -> Vec<u32> {
+        at.iter()
+            .copied()
+            .filter(|rank| range.contains(rank))
+            .collect()
+    };
     // (ranks, extra arguments) of the complex-to-complex family.
-    let complex_family = |ranks: std::ops::RangeInclusive<u32>, extra: Vec<Type>| {
+    let complex_family = |ranks: Vec<u32>, extra: Vec<Type>| {
         let mut found = Vec::new();
         for rank in ranks {
             for (input, output, dims) in fft_input_forms(rank) {
@@ -564,54 +598,67 @@ fn fft_schemes(name: &str) -> Option<Vec<Scheme>> {
         found
     };
     match name {
-        | "fft" | "ifft" => out = complex_family(1..=1, vec![]),
-        | "fft_norm" | "ifft_norm" => out = complex_family(1..=1, vec![var(0)]),
-        | "fft_axis" | "ifft_axis" => out = complex_family(1..=MAX_RANK, vec![Type::int()]),
-        | "fft2" | "ifft2" => out = complex_family(2..=MAX_RANK, vec![]),
-        | "fftn" | "ifftn" => out = complex_family(1..=MAX_RANK, vec![]),
-        | "fftn_axes" | "ifftn_axes" => {
-            out = complex_family(1..=MAX_RANK, vec![list(Type::int())]);
+        | "fft" | "ifft" => out = complex_family(within(1..=1), vec![]),
+        | "fft_norm" | "ifft_norm" => out = complex_family(within(1..=1), vec![var(0)]),
+        | "fft_axis" | "ifft_axis" => {
+            out = complex_family(within(1..=u32::MAX), vec![Type::int()]);
         },
-        | "fftn_norm" | "ifftn_norm" => out = complex_family(1..=MAX_RANK, vec![var(0)]),
-        | "rfft" | "rfft2" | "rfftn" => {
+        | "fft2" | "ifft2" => out = complex_family(within(2..=u32::MAX), vec![]),
+        | "fftn" | "ifftn" => out = complex_family(within(1..=u32::MAX), vec![]),
+        | "fftn_axes" | "ifftn_axes" => {
+            out = complex_family(within(1..=u32::MAX), vec![list(Type::int())]);
+        },
+        | "fftn_norm" | "ifftn_norm" => {
+            out = complex_family(within(1..=u32::MAX), vec![var(0)]);
+        },
+        | "rfft" | "rfft2" | "rfftn" | "rfftn_axes" => {
             let ranks = match name {
-                | "rfft" => 1..=1,
-                | "rfft2" => 2..=MAX_RANK,
-                | _ => 1..=MAX_RANK,
+                | "rfft" => within(1..=1),
+                | "rfft2" => within(2..=u32::MAX),
+                | _ => within(1..=u32::MAX),
+            };
+            // `rfftn_axes` also takes the list of axes to transform.
+            let extra = || -> Vec<Type> {
+                if name == "rfftn_axes" {
+                    vec![list(Type::int())]
+                } else {
+                    Vec::new()
+                }
             };
             for rank in ranks {
+                let mut real = vec![tensor(rank, Type::float(dim_var(0)))];
+                real.extend(extra());
                 out.push(scheme(
                     0,
                     1,
                     0,
-                    func(
-                        vec![tensor(rank, Type::float(dim_var(0)))],
-                        tensor(rank, Type::complex(dim_var(0))),
-                    ),
+                    func(real, tensor(rank, Type::complex(dim_var(0)))),
                 ));
+                let mut int = vec![tensor(rank, Type::int())];
+                int.extend(extra());
                 out.push(scheme(
                     0,
                     0,
                     0,
-                    func(
-                        vec![tensor(rank, Type::int())],
-                        tensor(rank, Type::complex(one())),
-                    ),
+                    func(int, tensor(rank, Type::complex(one()))),
                 ));
             }
         },
-        | "irfft" | "irfft2" | "irfftn" => {
+        | "irfft" | "irfft2" | "irfftn" | "irfftn_axes" => {
             let ranks = match name {
-                | "irfft" => 1..=1,
-                | "irfft2" => 2..=MAX_RANK,
-                | _ => 1..=MAX_RANK,
+                | "irfft" => within(1..=1),
+                | "irfft2" => within(2..=u32::MAX),
+                | _ => within(1..=u32::MAX),
             };
             for rank in ranks {
                 // The second form names the length of the last axis, which an
                 // odd-length original cannot recover from its half spectrum.
-                for extra in [vec![], vec![Type::int()]] {
+                for tail in [vec![], vec![Type::int()]] {
                     let mut args = vec![tensor(rank, Type::complex(dim_var(0)))];
-                    args.extend(extra);
+                    if name == "irfftn_axes" {
+                        args.push(list(Type::int()));
+                    }
+                    args.extend(tail);
                     out.push(scheme(
                         0,
                         1,
@@ -622,7 +669,7 @@ fn fft_schemes(name: &str) -> Option<Vec<Scheme>> {
             }
         },
         | "fftshift" | "ifftshift" => {
-            for rank in 1..=MAX_RANK {
+            for rank in within(1..=u32::MAX) {
                 out.push(scheme(
                     1,
                     0,
@@ -632,7 +679,7 @@ fn fft_schemes(name: &str) -> Option<Vec<Scheme>> {
             }
         },
         | "fftshift_axis" | "ifftshift_axis" => {
-            for rank in 1..=MAX_RANK {
+            for rank in within(1..=u32::MAX) {
                 out.push(scheme(
                     1,
                     0,
@@ -666,42 +713,144 @@ fn fft_schemes(name: &str) -> Option<Vec<Scheme>> {
 /// `reverse`, `take`, `drop` and `concat` act on the first axis and keep the
 /// rank. Rank 1 is in [`base_schemes`].
 fn first_axis_schemes(name: &str) -> Vec<Scheme> {
-    let mut out = Vec::new();
-    if !matches!(
-        name,
-        "reverse"
-            | "filter"
-            | "take"
-            | "drop"
-            | "concat"
-            | "any"
-            | "all"
-            | "find"
-            | "first"
-            | "last"
-    ) {
-        return out;
+    (2..=MAX_RANK)
+        .flat_map(|rank| first_axis_at(name, rank))
+        .collect()
+}
+
+/// The element a sequence of rank `rank` yields: the scalar of a vector, the
+/// rank-`n-1` slice of anything above (§8.1.5).
+fn sequence_item(
+    rank: u32,
+    elem: Type,
+) -> Type {
+    if rank <= 1 {
+        elem
+    } else {
+        tensor(rank - 1, elem)
     }
-    for rank in 2..=MAX_RANK {
-        let whole = || tensor(rank, var(0));
-        let row = || tensor(rank - 1, var(0));
-        let predicate = || func(vec![row()], Type::bool());
-        out.push(match name {
-            | "reverse" => scheme(1, 0, 0, func(vec![whole()], whole())),
-            | "filter" => scheme(1, 0, 0, func(vec![predicate(), whole()], whole())),
-            | "take" | "drop" => scheme(1, 0, 0, func(vec![Type::int(), whole()], whole())),
-            | "concat" => scheme(1, 0, 0, func(vec![whole(), whole()], whole())),
-            | "any" | "all" => scheme(1, 0, 0, func(vec![predicate(), whole()], Type::bool())),
-            | "find" => {
-                scheme(
-                    1,
-                    0,
-                    0,
-                    func(vec![predicate(), whole()], Type::option(row())),
-                )
-            },
-            | _ => scheme(1, 0, 0, func(vec![whole()], Type::option(row()))),
-        });
+}
+
+/// The first-axis template of the sequence operations, instantiated at
+/// `rank >= 2`, plus the order-by-key and axis operations that exist at every
+/// rank (`reverse_axis`, `sort_axis`, `argsort`, `sort_by_key`), whose rank-1
+/// form is in [`base_schemes`].
+fn first_axis_at(
+    name: &str,
+    rank: u32,
+) -> Vec<Scheme> {
+    let whole = || tensor(rank, var(0));
+    let row = || sequence_item(rank, var(0));
+    let predicate = || func(vec![row()], Type::bool());
+    let comparator = || func(vec![row(), row()], ordering());
+    let one_scheme = |vars: u32, ty: Type| vec![scheme(vars, 0, 0, ty)];
+    if rank < 2 {
+        return Vec::new();
+    }
+    match name {
+        | "reverse" => one_scheme(1, func(vec![whole()], whole())),
+        | "filter" => one_scheme(1, func(vec![predicate(), whole()], whole())),
+        | "take" | "drop" => one_scheme(1, func(vec![Type::int(), whole()], whole())),
+        | "concat" => one_scheme(1, func(vec![whole(), whole()], whole())),
+        | "any" | "all" => one_scheme(1, func(vec![predicate(), whole()], Type::bool())),
+        | "find" => one_scheme(1, func(vec![predicate(), whole()], Type::option(row()))),
+        | "first" | "last" => one_scheme(1, func(vec![whole()], Type::option(row()))),
+        // `fold(f, init, t)`: the step sees the accumulator and a row.
+        | "fold" | "fold_left" => {
+            one_scheme(
+                2,
+                func(
+                    vec![func(vec![var(1), row()], var(1)), var(1), whole()],
+                    var(1),
+                ),
+            )
+        },
+        // The number of rows (§8.1.5).
+        | "length" => one_scheme(1, func(vec![whole()], Type::int())),
+        // Indexing is in the base table up to rank 3.
+        | "at" if rank >= 4 => one_scheme(1, func(vec![whole(), Type::int()], row())),
+        | "set" if rank >= 4 => {
+            one_scheme(1, func(vec![whole(), list(Type::int()), var(0)], whole()))
+        },
+        | "sort_by" => one_scheme(1, func(vec![comparator(), whole()], whole())),
+        | "sort_by_key" => one_scheme(2, func(vec![func(vec![row()], var(1)), whole()], whole())),
+        | "sort_float" => {
+            let floats = || tensor(rank, Type::float(one()));
+            vec![Scheme::mono(func(vec![floats(), Type::bool()], floats()))]
+        },
+        | "sort_axis" | "reverse_axis" => one_scheme(1, func(vec![whole(), Type::int()], whole())),
+        | "argsort" => one_scheme(1, func(vec![whole()], list(Type::int()))),
+        | "enumerate" => {
+            one_scheme(
+                1,
+                func(
+                    vec![whole()],
+                    list(Type::Record(Row::closed([
+                        ("index".to_string(), Type::int()),
+                        ("value".to_string(), row()),
+                    ]))),
+                ),
+            )
+        },
+        | _ => Vec::new(),
+    }
+}
+
+/// `zip` of two sequences of rank `left` and `right`: each pairs the items its
+/// operands yield (a row of a matrix with the matching row or scalar of the
+/// other). Both ranks being 1 is the base scheme.
+fn zip_at(
+    left: u32,
+    right: u32,
+) -> Vec<Scheme> {
+    if left == 1 && right == 1 {
+        return Vec::new();
+    }
+    vec![scheme(
+        2,
+        0,
+        0,
+        func(
+            vec![tensor(left, var(0)), tensor(right, var(1))],
+            list(Type::Record(Row::closed([
+                ("0".to_string(), sequence_item(left, var(0))),
+                ("1".to_string(), sequence_item(right, var(1))),
+            ]))),
+        ),
+    )]
+}
+
+/// The rank-template instantiations a call needs beyond [`schemes`], for the
+/// argument ranks `ranks` it was given. Only ranks above [`STATIC_RANK`] are
+/// produced (everything at or below it is already in [`schemes`]). This is
+/// how the rank-generic built-ins (`Tensor<n, a>` for every `n` in §8) work at
+/// any rank without a rank variable in the type language.
+#[must_use]
+pub fn rank_schemes_for(
+    name: &str,
+    ranks: &[u32],
+) -> Vec<Scheme> {
+    let high: Vec<u32> = ranks
+        .iter()
+        .copied()
+        .filter(|rank| *rank > STATIC_RANK)
+        .collect();
+    let mut out = Vec::new();
+    if let Some(found) = fft_schemes_at(name, &high) {
+        return found;
+    }
+    for rank in &high {
+        out.extend(rank_overloads_at(name, *rank));
+        out.extend(first_axis_at(name, *rank));
+    }
+    if name == "zip" {
+        for left in ranks {
+            for right in ranks {
+                if *left > STATIC_RANK || *right > STATIC_RANK {
+                    out.extend(zip_at(*left, *right));
+                }
+            }
+        }
     }
     out
 }
@@ -718,6 +867,13 @@ pub fn schemes(name: &str) -> Option<Vec<Scheme>> {
     let mut found = base_schemes(name)?;
     found.extend(rank_overloads(name));
     found.extend(first_axis_schemes(name));
+    if name == "zip" {
+        for left in 1..=MAX_RANK {
+            for right in 1..=MAX_RANK {
+                found.extend(zip_at(left, right));
+            }
+        }
+    }
     found.extend(sparse::sparse_overloads(name));
     Some(found)
 }
@@ -1698,21 +1854,27 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
             )]
         },
         | "reverse" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(var(0))))],
-        // §8.1.5: `reverse_axis(t, k)` flips axis `k` of a tensor of any rank.
-        | "reverse_axis" => {
-            (1..=MAX_RANK)
-                .map(|rank| {
-                    scheme(
-                        1,
-                        0,
-                        0,
-                        func(
-                            vec![tensor(rank, var(0)), Type::int()],
-                            tensor(rank, var(0)),
-                        ),
-                    )
-                })
-                .collect()
+        // §8.1.5: `reverse_axis(t, k)` flips axis `k` of a tensor of any rank
+        // (ranks above 1 are the rank template in `first_axis_at`).
+        | "reverse_axis" | "sort_axis" => {
+            vec![scheme(
+                1,
+                0,
+                0,
+                func(vec![list(var(0)), Type::int()], list(var(0))),
+            )]
+        },
+        // `argsort(t)`: the stable permutation that sorts the sequence (its
+        // first-axis rows at rank >= 2); `TotalOrd` is checked at the call.
+        | "argsort" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(Type::int())))],
+        // `sort_by_key(f, t)`: stable sort by a `TotalOrd` key.
+        | "sort_by_key" => {
+            vec![scheme(
+                2,
+                0,
+                0,
+                func(vec![func(vec![var(0)], var(1)), list(var(0))], list(var(0))),
+            )]
         },
         | "sort" => vec![scheme(1, 0, 0, func(vec![list(var(0))], list(var(0))))],
         | "concat" => {
@@ -4224,6 +4386,8 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "fftn",
     "ifftn",
     "fftn_axes",
+    "rfftn_axes",
+    "irfftn_axes",
     "ifftn_axes",
     "fftn_norm",
     "ifftn_norm",
@@ -4240,6 +4404,9 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "fftfreq",
     "rfftfreq",
     "reverse_axis",
+    "sort_axis",
+    "argsort",
+    "sort_by_key",
     "interp1",
     "spline",
     "interp2",
@@ -4331,8 +4498,9 @@ mod tests {
 
     #[test]
     fn overloading_is_visible() {
-        // `length` of a string, a rank-1 tensor and a set (§8.1.5.1).
-        assert_eq!(schemes("length").expect("length").len(), 3);
+        // `length` of a string, a rank-1 tensor and a set (§8.1.5.1), and of a
+        // tensor of each rank 2 to 4 (its number of rows).
+        assert_eq!(schemes("length").expect("length").len(), 6);
         // §8.4 and §8.5 give `sum` the reduction, the keepdims axis form for
         // ranks 1 to 4, the full reduction at ranks 2 to 4, and the calculus
         // summation `sum(f, a, b)`.

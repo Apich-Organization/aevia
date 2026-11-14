@@ -911,3 +911,70 @@ fn an_exact_factorisation_stays_exact() {
         Storage::Dense(_)
     ));
 }
+
+#[test]
+fn the_real_axes_transforms_refuse_bad_axes_and_lengths() {
+    let cube = tensor(vec![2, 2, 3], (0..12).map(f64::from).collect());
+    let axes = |list: Vec<i64>| exact(list);
+    assert_eq!(
+        call_error("rfftn_axes", vec![cube.clone(), axes(vec![3])]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("rfftn_axes", vec![cube.clone(), axes(vec![0, 0])]).code,
+        "E0802"
+    );
+    assert_eq!(
+        call_error("rfftn_axes", vec![cube.clone(), axes(vec![])]).code,
+        "E0802"
+    );
+    let spectrum = call("rfftn_axes", vec![cube.clone(), axes(vec![0, 2])]);
+    assert_eq!(tensor_of(&spectrum).shape, vec![2, 2, 2]);
+    // A half spectrum of 2 bins belongs to a length-2 or length-3 axis only.
+    assert_eq!(
+        call_error(
+            "irfftn_axes",
+            vec![spectrum.clone(), axes(vec![0, 2]), int(5)]
+        )
+        .code,
+        "E0802"
+    );
+    let back = call("irfftn_axes", vec![spectrum, axes(vec![0, 2]), int(3)]);
+    assert_eq!(tensor_of(&back).shape, vec![2, 2, 3]);
+    for (index, element) in tensor_of(&back).elements().iter().enumerate() {
+        assert!((as_f64(element) - index as f64).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn the_transform_family_has_no_rank_limit() {
+    let shape = vec![2, 1, 2, 1, 2, 2];
+    let tensor6 = tensor(shape.clone(), (0..16).map(f64::from).collect());
+    let spectrum = call("fftn", vec![tensor6.clone()]);
+    assert_eq!(tensor_of(&spectrum).shape, shape);
+    let back = call("ifftn", vec![spectrum]);
+    for (index, element) in tensor_of(&back).elements().iter().enumerate() {
+        let Some(NumKind::Complex(re, im)) = element.as_num().map(|n| &n.kind) else {
+            panic!("complex");
+        };
+        assert!((re - index as f64).abs() < 1e-9 && im.abs() < 1e-9);
+    }
+    let half = call("rfftn_axes", vec![tensor6, exact(vec![0, 5])]);
+    assert_eq!(tensor_of(&half).shape, vec![2, 1, 2, 1, 2, 2]);
+}
+
+#[test]
+fn sort_family_follows_rows_at_rank_two() {
+    let matrix = tensor(vec![3, 2], vec![3.0, 1.0, 1.0, 2.0, 1.0, 1.0]);
+    let sorted = call("sort", vec![matrix.clone()]);
+    let values: Vec<f64> = tensor_of(&sorted).elements().iter().map(as_f64).collect();
+    assert_eq!(tensor_of(&sorted).shape, vec![3, 2]);
+    assert_eq!(values, vec![1.0, 1.0, 1.0, 2.0, 3.0, 1.0]);
+    let order = call("argsort", vec![matrix.clone()]);
+    let indices: Vec<f64> = tensor_of(&order).elements().iter().map(as_f64).collect();
+    assert_eq!(indices, vec![2.0, 1.0, 0.0]);
+    let lanes = call("sort_axis", vec![matrix.clone(), int(1)]);
+    let values: Vec<f64> = tensor_of(&lanes).elements().iter().map(as_f64).collect();
+    assert_eq!(values, vec![1.0, 3.0, 1.0, 2.0, 1.0, 1.0]);
+    assert_eq!(call_error("sort_axis", vec![matrix, int(2)]).code, "E0802");
+}

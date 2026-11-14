@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>Aevia Language Specification — Revision 21</title>
+  <title>Aevia Language Specification — Revision 22</title>
   <style>
     /* Default styles provided by pandoc.
     ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -238,10 +238,10 @@
 </head>
 <body>
 <header id="title-block-header">
-<h1 class="title">Aevia Language Specification — Revision 21</h1>
+<h1 class="title">Aevia Language Specification — Revision 22</h1>
 </header>
 <h1 id="aevia-language-specification">Aevia Language Specification</h1>
-<p><strong>Single-file edition — Revision 21</strong></p>
+<p><strong>Single-file edition — Revision 22</strong></p>
 <blockquote>
 <p>本文件由 <code>spec/</code>
 下的章节按顺序合并生成（<code>tools/bundle_spec.py</code>）；章节内的相对链接在单文件版中不再可用。</p>
@@ -7378,20 +7378,30 @@ range    : (Int, Int, Int) -&gt; Tensor&lt;1, Int&gt;
 take     : (Int, Tensor&lt;1, a&gt;) -&gt; Tensor&lt;1, a&gt;
 drop     : (Int, Tensor&lt;1, a&gt;) -&gt; Tensor&lt;1, a&gt;
 reverse  : Tensor&lt;1, a&gt; -&gt; Tensor&lt;1, a&gt;
-reverse  : Tensor&lt;n, a&gt; -&gt; Tensor&lt;n, a&gt;                  # n = 2..4：翻转第一个轴
-reverse_axis : (Tensor&lt;n, a&gt;, Int) -&gt; Tensor&lt;n, a&gt;       # n = 1..4：翻转指定轴
-filter   : ((Tensor&lt;n-1, a&gt; -&gt; Bool), Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;   # n = 2..4：谓词看一行
-take     : (Int, Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;           # n = 2..4：取前几行
+reverse  : Tensor&lt;n, a&gt; -&gt; Tensor&lt;n, a&gt;                  # n ≥ 2：翻转第一个轴
+reverse_axis : (Tensor&lt;n, a&gt;, Int) -&gt; Tensor&lt;n, a&gt;       # n ≥ 1：翻转指定轴
+filter   : ((Tensor&lt;n-1, a&gt; -&gt; Bool), Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;   # n ≥ 2：谓词看一行
+take     : (Int, Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;           # n ≥ 2：取前几行
 drop     : (Int, Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;
-concat   : (Tensor&lt;n, a&gt;, Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;  # n = 2..4：沿第一个轴堆叠
+concat   : (Tensor&lt;n, a&gt;, Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;  # n ≥ 2：沿第一个轴堆叠
 any      : ((Tensor&lt;n-1, a&gt; -&gt; Bool), Tensor&lt;n, a&gt;) -&gt; Bool
 all      : ((Tensor&lt;n-1, a&gt; -&gt; Bool), Tensor&lt;n, a&gt;) -&gt; Bool
 find     : ((Tensor&lt;n-1, a&gt; -&gt; Bool), Tensor&lt;n, a&gt;) -&gt; Option&lt;Tensor&lt;n-1, a&gt;&gt;
 first    : Tensor&lt;n, a&gt; -&gt; Option&lt;Tensor&lt;n-1, a&gt;&gt;
 last     : Tensor&lt;n, a&gt; -&gt; Option&lt;Tensor&lt;n-1, a&gt;&gt;
 sort     : TotalOrd a =&gt; Tensor&lt;1, a&gt; -&gt; Tensor&lt;1, a&gt;
+sort     : TotalOrd a =&gt; Tensor&lt;n, a&gt; -&gt; Tensor&lt;n, a&gt;      # n ≥ 2：行按字典序
 sort_by  : ((a, a) -&gt; Ordering, Tensor&lt;1, a&gt;) -&gt; Tensor&lt;1, a&gt;
+sort_by  : ((Tensor&lt;n-1, a&gt;, Tensor&lt;n-1, a&gt;) -&gt; Ordering, Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;
+sort_by_key : TotalOrd k =&gt; ((a -&gt; k), Tensor&lt;1, a&gt;) -&gt; Tensor&lt;1, a&gt;
+sort_by_key : TotalOrd k =&gt; ((Tensor&lt;n-1, a&gt; -&gt; k), Tensor&lt;n, a&gt;) -&gt; Tensor&lt;n, a&gt;
 sort_float : (Tensor&lt;1, Float&gt;, Bool) -&gt; Tensor&lt;1, Float&gt;   # NaN last/first
+sort_float : (Tensor&lt;n, Float&gt;, Bool) -&gt; Tensor&lt;n, Float&gt;   # n ≥ 2：行按字典序
+sort_axis : TotalOrd a =&gt; (Tensor&lt;n, a&gt;, Int) -&gt; Tensor&lt;n, a&gt;   # 沿一个轴把每条一维切片排序
+argsort  : TotalOrd a =&gt; Tensor&lt;n, a&gt; -&gt; Tensor&lt;1, Int&gt;        # 稳定排序的置换（行的下标）
+fold     : ((b, Tensor&lt;n-1, a&gt;) -&gt; b, b, Tensor&lt;n, a&gt;) -&gt; b    # n ≥ 2：累加器看一行
+zip      : (Tensor&lt;n, a&gt;, Tensor&lt;m, b&gt;) -&gt; Tensor&lt;1, (Tensor&lt;n-1, a&gt;, Tensor&lt;m-1, b&gt;)&gt;   # 逐行配对
+enumerate : Tensor&lt;n, a&gt; -&gt; Tensor&lt;1, (Int, Tensor&lt;n-1, a&gt;)&gt;    # n ≥ 2：下标与行
 concat   : (Tensor&lt;1, a&gt;, Tensor&lt;1, a&gt;) -&gt; Tensor&lt;1, a&gt;
 flatten  : Tensor&lt;n, Tensor&lt;m, a&gt;&gt; -&gt; Tensor&lt;n+m, a&gt;   # 仅规则嵌套
 any      : ((a -&gt; Bool), Tensor&lt;1, a&gt;) -&gt; Bool
@@ -7409,23 +7419,31 @@ cumsum   : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Tensor&lt;1, Scalar&lt;ρ,d
 cumprod  : Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt; -&gt; Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;
 argmax   : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Int      # 首个最大值的下标
 argmin   : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Int</code></pre>
-<p><strong>秩的完整性（Revision 16）。</strong> 规范里写成
-<code>Tensor&lt;n, …&gt;</code> 的操作在秩 1 到 4 上都有类型：
-<code>sum</code>、<code>prod</code>、<code>mean</code>、<code>var</code>、<code>std</code>、<code>norm</code>、<code>normalize</code>、<code>map</code>、<code>map2</code>/<code>zip_with</code>（同形）以及
-<code>flatten</code>（秩 ≥ 2）；<code>sum(a, axis)</code> 的 keepdims
-形式在秩 1 到 4 上可用。秩不是一等类型参数，
-所以每个秩一个重载，由实参的秩选择。<code>first</code>/<code>last</code>
+<p><strong>秩的完整性（Revision 16、22）。</strong> 规范里写成
+<code>Tensor&lt;n, …&gt;</code> 的操作对<strong>任意秩</strong>
+<code>n</code> 都有类型：
+<code>sum</code>、<code>prod</code>、<code>mean</code>、<code>var</code>、<code>std</code>、<code>norm</code>、<code>normalize</code>、<code>map</code>、<code>map2</code>/<code>zip_with</code>（同形）、<code>flatten</code>（秩
+≥ 2）、 <code>transpose</code>、<code>sum(a, axis)</code> 的 keepdims
+形式，以及 §8.8 的整个 FFT
+族和下面的序列操作。秩不是一等类型参数，所以这些签名是
+<strong>对秩的模板</strong>：类型表里列出秩 1 到 4
+的实例（<code>builtins::schemes</code>，供悬停与首类函数使用），调用时检查器按实参的秩实例化模板——
+秩 6 的张量调用 <code>fftn</code>、<code>sum</code>、<code>filter</code>
+与秩 2 的调用走同一条路径，不再有"秩超过 4 是
+<code>E0302</code>"的限制。实参的秩与任何实例都不符时仍是
+<code>E0302</code>，并带期望/实际类型。<code>first</code>/<code>last</code>
 对空张量给 <code>None</code>；<code>argmax</code>/<code>argmin</code>
 对空张量 是 <code>E0802</code>，NaN 不会胜出，相等时取最前的下标。</p>
-<p><strong>秩 ≥ 2 的序列操作（Revision 20）。</strong> 秩
+<p><strong>序列操作按第一个轴（Revision 20、22）。</strong> 秩
 <code>n ≥ 2</code> 的张量是沿第一个轴的 <code>n−1</code>
-秩切片（"行"）的序列：</p>
+秩切片（"行"）的序列（<code>Tensor&lt;0, a&gt;</code> 即
+<code>a</code>，所以 秩 1 的"行"是元素）：</p>
 <ul>
 <li><code>reverse</code>
 翻转第一个轴，保持形状（此前运行时把矩阵展平成向量，而类型表只有秩
 1；展平请显式写 <code>reverse(flatten(m))</code>）。
-<code>reverse_axis(t, k)</code> 翻转第 <code>k</code> 轴（秩 1 到
-4，负数从末尾数，越界 <code>E0802</code>）。<code>f64</code>
+<code>reverse_axis(t, k)</code> 翻转第 <code>k</code>
+轴（任意秩，负数从末尾数，越界 <code>E0802</code>）。<code>f64</code>
 张量上两者都是视图，不复制缓冲区（§9.5）。</li>
 <li><code>filter(p, m)</code>：<code>p</code> 接受一行（秩
 <code>n−1</code> 的张量），结果保持秩
@@ -7438,8 +7456,37 @@ argmin   : Tensor&lt;1, Scalar&lt;ρ,d&gt;&gt; -&gt; Int</code></pre>
 <li><code>take(k, m)</code>/<code>drop(k, m)</code>
 按行取舍；<code>concat(a, b)</code>
 沿第一个轴堆叠，其余轴的长度必须一致（否则 <code>E0802</code>）。</li>
-<li>其余元素级操作（<code>sum</code>、<code>map</code>、<code>fold</code>、<code>sort</code>
-等）仍按元素处理，不受影响。</li>
+<li><code>fold(f, init, m)</code>/<code>fold_left</code>：步进函数
+<code>f(acc, row)</code> 看到一行，从第一行到最后一行。</li>
+<li><code>zip(a, b)</code> 逐行配对，长度取较短者，得到
+<code>Tensor&lt;1, (行或元素, 行或元素)&gt;</code>（两个操作数的秩可以不同：矩阵与向量配对得到
+<code>(行, 元素)</code>）；<code>enumerate(m)</code> 给出
+<code>(index, 行)</code> 的记录序列（字段名
+<code>index</code>、<code>value</code>）。</li>
+<li><code>sort(m)</code>：行按字典序（逐元素，先比第一个元素）稳定排序，结果与
+<code>m</code> 同形；元素类型要
+<code>TotalOrd</code>（<code>Float</code> 用 <code>sort_float</code>）。
+<code>sort_by(cmp, m)</code>
+的比较函数接受两行；<code>sort_by_key(f, m)</code> 按 <code>f(行)</code>
+的 <code>TotalOrd</code> 键稳定排序（秩 1 时 <code>f</code> 接受元素）；
+<code>sort_float(m, nan_last)</code> 同 <code>sort</code>，NaN
+前置或后置；<code>argsort(m)</code> 返回稳定排序的置换
+<code>Tensor&lt;1, Int&gt;</code>（秩 1 是元素下标， 秩 ≥ 2
+是行下标）；<code>sort_axis(t, k)</code> 把沿第 <code>k</code>
+轴的每条一维切片分别排序，形状不变（负轴从末尾数，越界
+<code>E0802</code>）。</li>
+<li><strong>元素级的操作不变：</strong>
+<code>map</code>/<code>map2</code>/<code>zip_with</code>
+是张量的函子，逐元素作用并保持形状（这是数值意义上的
+<code>map</code>，不是序列意义上的）；
+<code>sum</code>/<code>prod</code>/<code>mean</code>/<code>var</code>/<code>std</code>/<code>norm</code>/<code>normalize</code>
+对全部元素归约；<code>cumsum</code>/<code>cumprod</code>/<code>argmax</code>/<code>argmin</code>
+只对秩 1 定义。 需要逐行作用时写 <code>map</code> 以外的序列操作，或用
+<code>fold</code>/<code>filter</code> 取行后再计算。</li>
+<li><strong>语义变化（Revision 22）：</strong>
+<code>fold</code>/<code>sort</code>/<code>sort_by</code>/<code>sort_float</code>/<code>zip</code>/<code>enumerate</code>
+在秩 ≥ 2 上此前按元素（展平）处理； 现在按行。秩 1
+不变；要元素级的旧行为，先 <code>flatten</code>。</li>
 </ul>
 <p><code>length</code> 对 <code>String</code> 和 <code>Tensor</code>
 重载，由类型类 <code>Sized</code> 解析。</p>
@@ -8189,11 +8236,11 @@ sample_n : (Distribution&lt;d&gt;, Int, Option&lt;Int&gt;) -&gt; Tensor&lt;1, Re
 ifft     : Tensor&lt;1, X[d]&gt; -&gt; Tensor&lt;1, Complex[d]&gt;       # 1/N
 fft_norm : (Tensor&lt;1, X[d]&gt;, Norm) -&gt; Tensor&lt;1, Complex[d]&gt;
 ifft_norm : (Tensor&lt;1, X[d]&gt;, Norm) -&gt; Tensor&lt;1, Complex[d]&gt;
-fft_axis : (Tensor&lt;n, X[d]&gt;, Int) -&gt; Tensor&lt;n, Complex[d]&gt;      # 沿一个轴，n = 1..4
+fft_axis : (Tensor&lt;n, X[d]&gt;, Int) -&gt; Tensor&lt;n, Complex[d]&gt;      # 沿一个轴
 ifft_axis : (Tensor&lt;n, X[d]&gt;, Int) -&gt; Tensor&lt;n, Complex[d]&gt;
-fft2     : Tensor&lt;n, X[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;             # 最后两个轴，n = 2..4
+fft2     : Tensor&lt;n, X[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;             # 最后两个轴
 ifft2    : Tensor&lt;n, X[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;
-fftn     : Tensor&lt;n, X[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;             # 全部轴，n = 1..4
+fftn     : Tensor&lt;n, X[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;             # 全部轴
 ifftn    : Tensor&lt;n, X[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;
 fftn_axes : (Tensor&lt;n, X[d]&gt;, Tensor&lt;1, Int&gt;) -&gt; Tensor&lt;n, Complex[d]&gt;   # 任意轴列表
 ifftn_axes : (Tensor&lt;n, X[d]&gt;, Tensor&lt;1, Int&gt;) -&gt; Tensor&lt;n, Complex[d]&gt;
@@ -8202,13 +8249,16 @@ ifftn_norm : (Tensor&lt;n, X[d]&gt;, Norm) -&gt; Tensor&lt;n, Complex[d]&gt;
 rfft     : Tensor&lt;1, Float[d]&gt; -&gt; Tensor&lt;1, Complex[d]&gt;
 irfft    : Tensor&lt;1, Complex[d]&gt; -&gt; Tensor&lt;1, Float[d]&gt;
 irfft    : (Tensor&lt;1, Complex[d]&gt;, Int) -&gt; Tensor&lt;1, Float[d]&gt;  # 显式长度（奇数长度）
-rfft2    : Tensor&lt;n, Float[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;         # 最后两个轴，n = 2..4
+rfft2    : Tensor&lt;n, Float[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;         # 最后两个轴
 irfft2   : Tensor&lt;n, Complex[d]&gt; -&gt; Tensor&lt;n, Float[d]&gt;
 irfft2   : (Tensor&lt;n, Complex[d]&gt;, Int) -&gt; Tensor&lt;n, Float[d]&gt;
-rfftn    : Tensor&lt;n, Float[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;         # 全部轴，n = 1..4
+rfftn    : Tensor&lt;n, Float[d]&gt; -&gt; Tensor&lt;n, Complex[d]&gt;         # 全部轴
 irfftn   : Tensor&lt;n, Complex[d]&gt; -&gt; Tensor&lt;n, Float[d]&gt;
 irfftn   : (Tensor&lt;n, Complex[d]&gt;, Int) -&gt; Tensor&lt;n, Float[d]&gt;
-fftshift : Tensor&lt;n, a&gt; -&gt; Tensor&lt;n, a&gt;                         # 全部轴，n = 1..4
+rfftn_axes : (Tensor&lt;n, Float[d]&gt;, Tensor&lt;1, Int&gt;) -&gt; Tensor&lt;n, Complex[d]&gt;   # 半谱在列表最后一个轴
+irfftn_axes : (Tensor&lt;n, Complex[d]&gt;, Tensor&lt;1, Int&gt;) -&gt; Tensor&lt;n, Float[d]&gt;
+irfftn_axes : (Tensor&lt;n, Complex[d]&gt;, Tensor&lt;1, Int&gt;, Int) -&gt; Tensor&lt;n, Float[d]&gt;   # 显式长度（奇数长度）
+fftshift : Tensor&lt;n, a&gt; -&gt; Tensor&lt;n, a&gt;                         # 全部轴
 ifftshift : Tensor&lt;n, a&gt; -&gt; Tensor&lt;n, a&gt;
 fftshift_axis : (Tensor&lt;n, a&gt;, Int) -&gt; Tensor&lt;n, a&gt;
 ifftshift_axis : (Tensor&lt;n, a&gt;, Int) -&gt; Tensor&lt;n, a&gt;
@@ -8241,7 +8291,8 @@ chebyshev_fit : (Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,
 变换全部轴；<code>fft_axis(t, k)</code>
 一个轴；<code>fftn_axes(t, axes)</code> 任意轴列表。 轴号从 0
 开始，负数从末尾数（<code>-1</code> 是最后一轴）；越界或重复的轴是
-<code>E0802</code>。秩 1 到 4 都有类型。</li>
+<code>E0802</code>。任意秩都有类型（Revision 22 取消了秩 ≤ 4
+的限制）。</li>
 <li>归一化按被变换的总点数
 <code>N</code>（各变换轴长度之积）：<code>Backward</code> 正向 1、逆向
 <code>1/N</code>；<code>Forward</code> 正向 <code>1/N</code>、逆向 1；
@@ -8253,6 +8304,17 @@ chebyshev_fit : (Tensor&lt;1, Scalar&lt;ρ,1&gt;&gt;, Tensor&lt;1, Scalar&lt;ρ,
 由半谱重建实数张量，默认原长度为
 <code>2(m − 1)</code>（偶数），奇数长度用带 <code>Int</code>
 的形式显式给出；<code>m</code> 与长度不相容是 <code>E0802</code>。</li>
+<li><code>rfftn_axes(t, axes)</code>/<code>irfftn_axes(s, axes)</code>/<code>irfftn_axes(s, axes, n)</code>
+是任意轴子集的实数变换（与 numpy 的 <code>rfftn(a, axes=…)</code>
+一致）： 列表里<strong>最后一个</strong>轴是半谱轴（保留
+<code>n/2 + 1</code>
+个频点），其余轴做完整复数变换；<code>irfftn_axes</code>
+在最后一个列出的轴上做 Hermitian 还原， <code>n</code>
+是该轴的原长度（缺省
+<code>2(m − 1)</code>）。<code>rfftn_axes(t, axes)</code> 等于
+<code>fftn_axes(t, axes)</code> 沿最后一个列出的轴截取前
+<code>n/2 + 1</code> 个频点； 列表为空、轴越界或重复是
+<code>E0802</code>。</li>
 <li><code>fftshift</code>/<code>ifftshift</code>
 把零频率移到中间（每个被移位的轴循环平移
 <code>⌊n/2⌋</code>，逆操作反向），对任意元素类型成立；
@@ -15759,7 +15821,7 @@ shift、频率量纲、行语义的序列操作）；<code>aevia-std</code> 的
 变换；<code>aevia-types/tests/unit_suggestions.rs</code> 与
 <code>closest_unit</code> 单元测试。<code>stdlib_names.txt</code>
 与生成的 <code>FFT.aev</code>/<code>Prelude.aev</code> 已更新。</li>
-<li><strong>仍缺：</strong> 秩超过 4
+<li><strong>仍缺（均已在 Revision 22 解决）：</strong> 秩超过 4
 的变换与序列操作；<code>fold</code>/<code>sort</code>/<code>zip</code>/<code>enumerate</code>
 在秩 ≥ 2 上仍是元素级（展平）语义； <code>fftn_axes</code>
 没有对应的实数形式（<code>rfftn</code> 取全部轴）。</li>
@@ -15822,6 +15884,66 @@ overlay
 等的逐轴/逐面数值列表没有 typed 形式；<code>OpError</code> 没有
 <code>code(e)</code>/<code>message(e)</code> 访问器 （需要新的
 <code>Rssn.*</code> 成员与检查器支持，留待检查器一侧的改动）。</li>
+</ol>
+<h2
+id="49-revision-222026-11-13秩不再有上限序列族全部按行实数的轴子集变换">4.9
+Revision
+22（2026-11-13）：秩不再有上限；序列族全部按行；实数的轴子集变换</h2>
+<ol type="1">
+<li><strong>秩模板（§8.1.5、§8.8）。</strong> 此前
+<code>rank_overloads</code> 等表对秩 1 到 4 各列一个重载，秩 5 的
+<code>fftn</code> 或 <code>sum</code> 是 <code>E0302</code>。秩仍然不是
+类型语言里的一等变量（<code>Shape</code>
+没有秩变量，加进去要改动统一、替换、泛化和全部 <code>Shape::Rank</code>
+的匹配点，风险远大于收益），所以改成
+<strong>模板</strong>：<code>builtins.rs</code>
+里每个秩多态操作的签名是一个以秩为参数的函数（<code>rank_overloads_at</code>、<code>first_axis_at</code>、<code>fft_schemes_at</code>、<code>zip_at</code>），
+<code>builtins::schemes</code> 仍列出秩 1 到 4
+的实例（悬停、首类函数使用、<code>spec_signatures</code> 对拍），而
+<code>builtins::rank_schemes_for(name, ranks)</code> 给出高于
+<code>STATIC_RANK</code> 的实例。检查器的 <code>overloaded_call</code>
+在表内所有候选都失败时，探测（并回滚）非 lambda 实参的秩，用这些秩的
+模板实例再试一次——只有失败路径才付出代价，秩 ≤ 4
+的程序走原来的路径；失败时报告的是该秩实例的
+<code>E0302</code>（含期望/实际类型和帮助）。
+<code>at</code>/<code>set</code> 也有秩 ≥ 4 的实例，<code>length</code>
+对任意秩的张量给出行数（此前类型表里只有秩
+1，<code>length(matrix)</code> 是 <code>E0302</code>）。</li>
+<li><strong>序列族一律按行（语义变化）。</strong>
+<code>fold</code>/<code>fold_left</code>（累加器看到一行）、<code>sort</code>（行按字典序稳定排序）、<code>sort_by</code>（比较函数看到两行）、
+<code>sort_float</code>、<code>zip</code>（逐行配对，两个操作数的秩可以不同）、<code>enumerate</code>（<code>index</code>/<code>value</code>，<code>value</code>
+是行）在秩 ≥ 2 上此前是元素级（展平）语义， 类型表里秩 ≥ 2 的调用多半是
+<code>E0302</code>，所以能受影响的只有直接调用运行时的代码；仓库内没有依赖元素级行为的代码或测试。秩
+1 不变。 <code>map</code>/<code>map2</code>/<code>zip_with</code>
+保持元素级（张量的函子，同形），<code>cumsum</code>/<code>cumprod</code>/<code>argmax</code>/<code>argmin</code>
+只对秩 1 定义，写在 §8.1.5。 新增 <code>sort_by_key(f, t)</code>（按
+<code>TotalOrd</code>
+键稳定排序）、<code>sort_axis(t, k)</code>（沿一个轴分别排序每条切片）、<code>argsort(t)</code>（稳定排序的置换，
+<code>Tensor&lt;1, Int&gt;</code>）。<code>sort_by</code> 由 O(n²)
+的插入排序换成稳定的归并排序（比较函数可以失败，所以不用标准库的排序）。
+<code>sort</code>/<code>argsort</code>/<code>sort_axis</code>
+在调用点要求元素类型有 <code>TotalOrd</code>，<code>sort_by_key</code>
+要求键有 <code>TotalOrd</code>（<code>E0310</code>）。</li>
+<li><strong><code>rfftn_axes</code>/<code>irfftn_axes</code>（§8.8）。</strong>
+<code>rfftn_axes(t, axes)</code>、<code>irfftn_axes(s, axes)</code>、<code>irfftn_axes(s, axes, n)</code>：列表里最后一个轴是
+半谱轴，其余轴做完整变换，与 numpy 的 <code>rfftn(a, axes=…)</code>
+一致；<code>n</code> 给出奇数原长度。任意秩，实数与整数输入。
+列表为空、轴越界或重复、长度与半谱不相容是
+<code>E0802</code>。<code>FFT</code> 模块与 <code>Prelude</code>
+已重新生成。</li>
+<li><strong>测试。</strong> <code>tests/rank_generic.aev</code>（35 个
+<code>test</code>：秩 5/6 的归约、FFT
+族往返、shift、序列操作；fold/sort/sort_by/sort_by_key/sort_float/
+argsort/sort_axis/zip/enumerate 的行语义；<code>rfftn_axes</code> 与
+<code>fftn_axes</code> 的对拍、往返、奇数长度、秩
+5）；<code>aevia-types/tests/rank_generic.rs</code> （8 个：秩 6
+的类型检查、<code>E0310</code>/<code>E0302</code>、模板实例个数）；<code>aevia-core/tests/stdlib.rs</code>
+新增 3 个（轴/长度错误、秩 6 的 <code>fftn</code>、排序族）；
+<code>stdlib_names.txt</code>、<code>overloading_is_visible</code> 的
+<code>length</code> 个数已更新。</li>
+<li><strong>仍缺：</strong>
+用户自己写的函数仍不能对秩多态（秩不是类型参数）；<code>cumsum</code>/<code>cumprod</code>/<code>argmax</code>/<code>argmin</code>
+对秩 ≥ 2 没有定义 （按轴的形式 <code>cumsum_axis</code> 等未做）。</li>
 </ol>
 <h2 id="5-记录在案的未实现边界known-gaps">5. 记录在案的未实现边界（Known
 Gaps）</h2>
