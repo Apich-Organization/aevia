@@ -14,7 +14,7 @@ performance boundaries.
 | `aevia-types` | kinds, types, dimension unification, inference, type classes, exhaustiveness, `.aevi` persistence |
 | `aevia-ir` | Core IR and lowering from the checked AST; data only, no dependency on `aevia-core` |
 | `aevia-rssn` | the rssn bridge: `Session`, conversion between the two value models, Kernel Manifest, `Rssn` module generation, JIT pass-through |
-| `aevia-std` / `aevia-stdlib-model` | the standard library (Aevia source plus Rust numeric kernels) / the source of truth for its generation |
+| `aevia-std` / `aevia-stdlib-model` | standard-library source and RSSN adapters / the source of truth for generation |
 | `aevia-core` | values, tensors, closures, IO, the interpreters, built-ins, the symbolic layer, the module loader (`driver`/`manifest`), the disk cache, parallelism, the optional JIT |
 | `aevia-fmt` / `aevia-doc` | the formatter / `##` documentation and doctest extraction |
 | `aevia-analysis` / `aevia-lsp` | editor-independent semantic queries / the LSP adapter (the only crate that knows JSON-RPC) |
@@ -270,16 +270,26 @@ dimension.
   like use Rust `libm` or rssn kernels.
 - `approx` of a `Real` uses `Target::Numeric`; the result carries an error ball and Aevia takes
   the midpoint.
-- `F64` tensor operations use ndarray/faer; `Exact`/`Boxed` use the element-wise scalar path.
+- Tensor numerical algorithms run in RSSN; `Exact`/`Boxed` use host scalar callbacks to preserve language representations and dimensions.
+
+### 9.4.6 Numerical implementation boundary
+
+RSSN owns numerical algorithms, including exact integer/rational arithmetic, complex arithmetic, tensor contractions,
+dense/sparse factorizations, statistics, interpolation and differential-equation stepping. `aevia-std` validates shapes and
+units, adapts callbacks, maps errors and preserves language value representations. The runtime retains scalar language
+arithmetic and collection traversal; numerical iteration and contraction schedules run in RSSN, using host scalar callbacks
+when necessary.
+
+Numerical backend dependencies belong in RSSN. Independent numerical libraries in Aevia are only development dependencies
+for parity tests. Manifest bindings and public Rust API coverage are audited separately (§8.19); this boundary does not
+claim that every native function is exposed.
 
 ## 9.5 Tensor runtime
 
 - Storage: `Arc<TensorData>`; a slice is a view (offset + strides) and `reshape` is a view when
   contiguous and a copy otherwise. There are no writes: `update`/`map` produce new tensors,
   reusing storage in place when the reference is unique. Semantics are in §6.6.
-- Element-wise `F64` loops are unrolled 4/8-way; `sum` uses pairwise/Kahan summation.
-  `matmul`/`solve`/`eig`/`svd`/`qr`/`lu` call rssn's numeric kernels (faer); `fft` calls rustfft;
-  `interp`/`spline` call rssn kernels.
+- Matrix multiplication, decompositions, FFT, interpolation and numerical reductions run in RSSN; backend libraries such as faer and rustfft are encapsulated there.
 - Shape checks run before each operation and errors name both shapes and the operation;
   refined shapes are checked at compile time, rank-only shapes at run time.
 - Devices: a tensor carries `device` metadata; `to_device` and `on(device, ...)` transfer and

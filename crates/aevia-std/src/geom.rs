@@ -329,3 +329,23 @@ mod kernel_regressions {
         assert!(tree.radius_search(&[1.0, 2.0], f64::NAN).is_err());
     }
 }
+
+#[cfg(test)]
+mod bvh_scale_regressions {
+    use super::*;
+    #[test]
+    fn bvh_nearest_distances_do_not_overflow_or_underflow_when_squared() {
+        for scale in [1e-300_f64, 1e300] {
+            let bvh = Bvh::build(&[Aabb {
+                min: [0.0, 0.0, 0.0],
+                max: [scale, scale, scale],
+            }]);
+            let (_, distance) = bvh.nearest_aabb([2.0 * scale, 0.0, 0.0]).unwrap();
+            assert!((distance / scale - 1.0).abs() < 1e-12);
+            assert_eq!(
+                bvh.ray_intersect([-scale, 0.5 * scale, 0.5 * scale], [1e-300, 0.0, 0.0]),
+                vec![0]
+            );
+        }
+    }
+}

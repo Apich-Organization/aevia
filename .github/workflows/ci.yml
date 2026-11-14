@@ -191,6 +191,8 @@ jobs:
         run: cargo run -p rssn-api-audit -- --codecs-check
       - name: Kernel API inventory is current
         run: cargo run -p rssn-api-audit -- --check
+      - name: Every callable kernel source interface has an adapter
+        run: cargo run -p rssn-api-audit -- --coverage-check
       - name: Single-file specification is current
         run: |
           python3 tools/bundle_spec.py --no-html

@@ -1,0 +1,66 @@
+## Native source objects are session capabilities; all mathematical work is in RSSN.
+## Run: cargo run -p aevia-cli -- test examples/native_discrete_objects.aev
+
+test "opaque permutation groups execute exact Schreier Sims" =
+    match Rssn.dynamic("num_native_group_new", [to_value(3), to_value([[1, 0, 2], [1, 2, 0]])]) with
+    | Ok(group) ->
+        match Rssn.dynamic("num_native_group_order", [group]) with
+        | Ok(value) ->
+            match from_value<Int>(value) with
+            | Ok(order) -> order == 6
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "physical graphics points retain their coordinate dimension" =
+    match Rssn.dynamic("num_native_graphics_point3_new", [to_value(1.0 m), to_value(2.0 m), to_value(3.0 m)]) with
+    | Ok(point) ->
+        match Rssn.dynamic("num_native_graphics_point3_components", [point]) with
+        | Ok(value) ->
+            match from_value<Tensor<1, Float[Length]>>(value) with
+            | Ok(coords) -> coords == [1.0 m, 2.0 m, 3.0 m]
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native complex enclosure norms preserve sample units" =
+    match Rssn.dynamic("num_native_cball_point", [to_value(3.0 m), to_value(4.0 m)]) with
+    | Ok(ball) ->
+        match Rssn.dynamic("num_native_cball_modulus_upper", [ball]) with
+        | Ok(value) ->
+            match from_value<Float[Length]>(value) with
+            | Ok(norm) -> approx_eq(norm, 5.0 m, 1e-12 m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native exact root system methods are callable through retained objects" =
+    match Rssn.dynamic("num_native_root_system_new", [to_value([[2, -1], [-1, 2]])]) with
+    | Ok(result) ->
+        match from_value<Option<Value>>(result) with
+        | Ok(Some(root_system)) ->
+            match Rssn.dynamic("num_native_root_system_weyl_dim", [root_system, to_value([1, 0])]) with
+            | Ok(value) ->
+                match from_value<Option<Int>>(value) with
+                | Ok(Some(size)) -> size == 3
+                | _ -> false
+            | Err(_) -> false
+        | _ -> false
+    | Err(_) -> false
+
+test "native random streams are session state rather than seed replays" =
+    match Rssn.dynamic("num_native_rng_new", [to_value(42)]) with
+    | Ok(stream) ->
+        match Rssn.dynamic("num_native_rng_next_u64", [stream]) with
+        | Ok(first) ->
+            match Rssn.dynamic("num_native_rng_next_u64", [stream]) with
+            | Ok(second) ->
+                match from_value<Int>(first) with
+                | Ok(a) ->
+                    match from_value<Int>(second) with
+                    | Ok(b) -> a != b
+                    | Err(_) -> false
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false

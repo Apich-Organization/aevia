@@ -4,12 +4,11 @@
 //! (§8.8). The other conventions are reachable through [`fft_norm`], which is
 //! what `fft_norm(x, Norm.Unitary)` needs.
 //!
-//! The transform itself is `rustfft`'s: it handles every length (including
-//! primes) through Bluestein's algorithm, and it was already in the dependency
-//! graph.
+//! RSSN owns transforms and their numerical dependencies; this module only
+//! converts the public complex representation and preserves result layouts.
 
 use crate::Complex;
-use rustfft::num_complex::Complex64;
+use rssn::kernels::fft::Complex64;
 
 /// Kernel FFT normalization conventions.
 pub use rssn::kernels::fft::Norm;

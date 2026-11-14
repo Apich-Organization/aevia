@@ -3976,7 +3976,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 `nonzeros(A)` 返回 `(下标, 值)` 元组的列表。
 
 **与内核的边界。** rssn 的 `TypeExpr::Sparse` 只有 `rank`，所以 `Sparse<F, shape, τ>` 在边界降为 rank + 运行时格式；`aevia-rssn` 的 `Val::Sparse` 与 rssn 的 `Value::Sparse` 一一对应，**不稠密化**。
-rssn 的 `term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用重写算子；稀疏运算由 Aevia 自己的布局内核承担，`faer` 负责稀疏 LU。
+rssn 的 `term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用重写算子；Aevia 负责布局转换，RSSN 负责稀疏算法与其 `faer` 稀疏 LU 后端。
 用户自定义格式要等 rssn 开放 `Format`（§13.9.5）。
 
 > **状态**：以上全部已实现（测试 `aevia-core/tests/sparse.rs`、`sparse_block.rs`、`sparse_followup.rs`、`shape_refinement.rs`），能力 `storage.sparse` 已启用。**剩余缺口**：稀疏值不能进入 rssn 的项图；
@@ -4253,12 +4253,42 @@ type AxisScale = | Linear | Log
 type OdeMethod =
     | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
     | StormerVerlet | Ruth4 | GaussLegendre4 | GaussLegendre6
+    | ImplicitMidpoint | AdaptiveRk4 | AdaptiveStormerVerlet | AdaptiveRuth4
+    | AdaptiveImplicitMidpoint | AdaptiveGaussLegendre4 | AdaptiveGaussLegendre6
 type OdeOpts<s> = {
     rtol: Float[1],
     atol: Float[1],
     method: OdeMethod,
     steps: Option<Int>,                 # Rk4 / 几何积分器：定步长子步数
     events: Option<(Float[T], s) -> Float[1]>,
+}
+```
+
+```
+type OdeAdaptiveOpts<s> = {
+    rtol: Float[1],
+    atol: Float[1],
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
+}
+
+type OdePhysicalOpts<s> = {
+    rtol: Float[1],
+    atol: s,
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
 }
 ```
 
@@ -4270,6 +4300,18 @@ odeint_with : (((Float[T], s) -> RateOf<s>), s, Tensor<1, Float[T]>, OdeOpts<s>)
 solve_ivp: (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), OdeOpts<s>)
          -> { t: Tensor<1, Float[T]>, y: Tensor<1, s> }
 ```
+
+`odeint_with`、`solve_ivp`、`ode_solve` 也接受 `OdeAdaptiveOpts<s>` 或 `OdePhysicalOpts<s>`。
+`h0 = 0.0 s` 自动选择初步长；`h_min`/`h_max` 限制自适应步长（最终到达端点的截断步可小于 `h_min`）。
+`max_steps` 包括被拒绝的尝试步，`max_evaluations` 限制真实 RHS 调用次数，耗尽时返回数值错误。
+`OdePhysicalOpts<s>` 的 `atol` 必须与初始状态的结构、张量形状和各叶节点量纲完全一致，
+各分量为有限正值；运行时按该分量的容差归一化，使用 `atol_i + rtol * abs(y_i)` 的误差尺度，
+在 RHS、事件与返回值边界恢复物理单位。旧的无量纲标量 `atol` 仍作用于各分量的规范单位数值。
+`AdaptiveRk4`、`AdaptiveStormerVerlet`、`AdaptiveRuth4`、`AdaptiveImplicitMidpoint`、
+`AdaptiveGaussLegendre4`、`AdaptiveGaussLegendre6` 用所选方法的一整步与两半步进行误差控制，
+并检查三次 Hermite 连续扩展的中点缺陷；接受两半步的结果，不切换方法、不进行 Richardson 外推。
+自适应状态依赖步长通常不保持定步长辛映射的长期几何性质。固定方法 `Rk4`、`StormerVerlet`、
+`Ruth4`、`ImplicitMidpoint`、`GaussLegendre4`、`GaussLegendre6` 仍然使用 `steps`。
 
 `RateOf<s>` 是内建类型函数，递归定义：
 
@@ -4294,8 +4336,11 @@ RateOf<{ l1: τ1, ..., ln: τn }> = { l1: RateOf<τ1>, ..., ln: RateOf<τn> }
 
 `StormerVerlet` 与 `Ruth4` 是二阶、四阶定步长辛积分器；展平状态须为偶数长度，
 前半为位置 `q`，后半为动量 `p`，右端满足可分离的正则 Hamilton 系统。
-`GaussLegendre4` 与 `GaussLegendre6` 是四阶、六阶隐式 Gauss–Legendre RK，
-支持一般状态。四种方法使用 `steps` 指定定步长子步数，非线性阶段不收敛时报错。
+`ImplicitMidpoint`、`GaussLegendre4`、`GaussLegendre6` 分别为二、四、六阶隐式 Gauss–Legendre RK，
+支持一般状态。固定方法用 `steps` 指定子步数；非线性阶段不收敛时报错。
+记录状态的各字段保留独立量纲，因此物理 `q`/`p` 可使用异质量纲记录；
+单个数值张量只能有一种元素量纲。高级 `num_ode_*`、`num_dae_*`、`num_dde_*`
+张量接口必须先显式归一化异质量纲分量，不能把不同物理量直接放入同一张量。
 
 **展平契约**：桥接层按记录的**字段声明顺序**、深度优先、张量行主序，把
 `s` 展平成 `Vec<f64>`；求解后按同一顺序还原。嵌套记录递归展平；`Tensor<n,
@@ -4350,12 +4395,9 @@ ode_bvp : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), ((s, s) -> Ten
 `at` 的有效区间随之截断。同一步内的多个命中按时间排序，终止事件之后的命中丢弃。
 `g` 返回有量纲的值是 `E0302`；方向取值不是 -1/0/1 是 `E0802`。
 
-**刚性求解器选择。** `AutoSwitch` 先用 `Dopri5`，且只给它 20000 次尝试步；预算耗尽
-（刚性问题受稳定性限制，步数远超精度所需）就改用 `Radau` 重新积分整个区间，
-`sol.method` 报告最终用的方法（`"Dopri5"` 或 `"Radau"`）。这是**按步数预算**判定，
-不是特征值估计：中等刚性（例如需要几万步）的问题会白白多跑一遍显式方法；
-明知刚性时直接选 `Radau`/`Bdf`/`Rosenbrock23`。`AutoSwitch` 也用于 `odeint_with`、
-`solve_ivp` 和事件积分（同样的规则）。
+**刚性求解器选择。** `AutoSwitch` 先给 `Dopri5` 至多 `min(max_steps, 20000)` 次尝试；该额度耗尽且总预算仍有
+余额时，用剩余尝试步额度从区间起点运行 `Radau`。两次尝试共享回调预算，`sol.method` 报告最终的方法。
+选择依据是步数预算，不是特征值估计；已知刚性时可直接选 `Radau`、`Bdf` 或 `Rosenbrock23`。
 
 **高阶方程。** `odeint_order(f, (y0, y1, …, y_{n-1}), times)` 积分
 `y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)`（`n` 是 `f` 的参数个数减一，`n ≥ 1`），内部化成
@@ -4385,6 +4427,20 @@ let sol = odeint_order(fn (_t, x, v) => -(k / m) * x, (1.0 m, 0.0 m/s), times)
 `import Ode { odeint }`）**保持类型函数语义**：`RateOf<s>`/`DiffusionOf<s>`
 的检查由入口点本身决定，标准库模块只是再导出，不改变签名；只有本地重新
 定义同名函数才会遮蔽它。
+
+**高级回调求解。** 下列 `Rssn_numerical_callback` 入口使用 §8.19 的已认证回调；状态张量同质，
+不同量纲分量须显式归一化。时间、状态、残差量纲分别独立；导数是状态/时间，绝对容差具有所控状态的量纲。
+
+| 入口族 | 方法与限制 |
+|---|---|
+| `num_ode_{rk4,verlet,ruth4,midpoint,gauss4,gauss6}_adaptive_typed` | 所选方法的步长加倍控制；端点、Hermite 历史与明确工作预算 |
+| `num_dae_implicit_adaptive_typed` | 残差 `F(t,y,y') = 0`；BDF1 起步、变步长 BDF2、Newton 与步长加倍；代数初态须一致 |
+| `num_dae_index{1,2}_adaptive_typed` | 半显式约束；时间、状态、代数变量与约束各有正参考尺度 |
+| `num_dde_constant_adaptive_typed` | 正延迟的步进法、Dormand–Prince；步长不超过最小延迟并停在可达不连续点 |
+
+这些入口有步长上下限、试探/回调预算与拒绝计数；预算耗尽或最小步仍不达标即失败，不强行接受。
+DAE/DDE 回调入口不提供事件回调。纯函数 `Rssn_numerical_vector.num_ode_history_eval` 用物理时间、状态、
+导数历史在区间内查询。可运行断言见 `examples/ode_adaptive_{geometric,dae,dde}.aev`。
 
 ## 8.9.1 SDE
 
@@ -4420,7 +4476,7 @@ type SdeAdaptiveOpts<T> = {
     t0: Float[T], t1: Float[T],
     rtol: Float[1], atol: Float[1],
     max_steps: Int,
-    cells: Int,                    # 非交换自适应的 Brownian 网格 cell 数；0 = 默认 4096，可交换噪声忽略
+    cells: Int,                    # 所有自适应方法的最细噪声 cell；向上取二次幂，0 = 4096
     terms: Int,                    # 同上；h 取 cell 宽度 (t1 - t0)/cells
 }
 
@@ -4496,7 +4552,7 @@ sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralD
 `par_tabulate(n, fn i => sdeint_diag(drift, diffusion, y0, <opts 的种子换成 sde_ensemble_seed(seed, i)>))`。
 
 **分派规则**：**方法名选择方案族和积分约定，结构选择可交换还是不可交换
-内核**。因此每个方法名在每种结构上都可用，不再有 `E1001`：
+内核**。本节列出的方法都可用于这些结构：
 
 | method | calculus | 可交换（`Diagonal`、`General`） | 不可交换（`GeneralNoncommutative`） | strong/weak |
 |---|---|---|---|---|
@@ -4507,6 +4563,9 @@ sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralD
 | `SrkPlaten` | Itô | Platen 无导数 SRK | Kloeden–Platen SRK（11.1.7，`srk_noncommutative`）+ Lévy 面积 | 1, 1 |
 | `MilsteinNoncommutative` | Itô | 同下（显式别名，任何结构） | Milstein + Lévy 面积 | 1, 1 |
 | `MilsteinNoncommutativeStratonovich` | Stratonovich | 同下（显式别名，任何结构） | Strat. Milstein + Lévy 面积 | 1, 1 |
+| `DriftImplicitEuler` | Itô | 隐式漂移、显式扩散 | 同左 | 1/2, 1 |
+| `ThetaMaruyama` | Itô | theta = 1/2 的隐式漂移、显式扩散 | 同左 | 1/2, 1 |
+| `DriftImplicitMilstein` | Itô | 隐式漂移、Milstein 交叉项 | 加 Lévy 面积 | 1, 1 |
 
 内核文档明确没有强于一阶的方案，Milstein 系也只是弱一阶，因此不声称弱二阶。
 `sde_order(method)` 给可交换噪声下的阶；`sde_order_with(method, structure)`
@@ -4518,10 +4577,10 @@ SRK 的支持值 `Υ^j = Y + a h + b^j √h`（每个噪声通道一个，每步
 （Stratonovich 版用 `J_jl` 与 Stratonovich 漂移）。
 
 **Lévy 面积的 `terms` 默认值**：需要面积的路径（不可交换结构上的
-`Milstein`/`MilsteinStratonovich`/`SrkPlaten`，以及两个 `*Noncommutative*`
+`Milstein`/`MilsteinStratonovich`/`SrkPlaten`/`DriftImplicitMilstein`，以及两个 `*Noncommutative*`
 方法）在 `terms == 0` 时取 `clamp(ceil(1/√h), 16, 4096)`，`h` 为步长（自适应
 时为 Brownian cell 宽度 `(t1 − t0)/cells`）；显式 `terms > 0` 原样使用。
-`terms` 不再是必填项。
+`terms` 字段必须存在；`0` 选择默认值。
 
 `General`/`GeneralNoncommutative` 的 `m` 是噪声通道数；`sdeint_general` 在
 运行时检查扩散矩阵形状是 `n × m`（`E0802`），`SdePath.noise` 报告实际
@@ -4535,43 +4594,38 @@ SRK 的支持值 `Υ^j = Y + a h + b^j √h`（每个噪声通道一个，每步
 `n × m` 行主序矩阵（标量字段是一行）。例：`{ x: Float, v: Tensor<1, Float> }`
 （`n = 1 + k`）+ `General(2)` 的扩散返回 `{ x: [σx1, σx2], v: Tensor<2> [k×2] }`。
 
-**步长策略**：`Fixed` 是定步长 `dt`、共 `steps` 步（时间网格
-`t0 + k·dt`）；`Adaptive` 在 `[t0, t1]` 上用局部误差 `rtol`/`atol` 控制，
-Brownian bridge 拒绝/重采（内核）。**所有方法都支持自适应**：
+**自适应步长。** `Fixed` 保持均匀网格；`Adaptive` 保留请求的方法，包括三个漂移隐式方案。
+每次用同一条已采样噪声比较一整步与两半步，接受两半步的状态，不把 Euler、SRK 或 Heun 替换成 Milstein。
+所有自适应方法都使用 `cells`：`0` 为 4096，否则向上取二次幂且至少为 2。粗增量由固定的最细独立增量求和，
+迭代积分服从 Chen 关系；拒绝不重采已实现的噪声。最细可耦合区间仍不满足容差时报 `E0807`，不得强行接受。
 
-- Itô 可交换（`EulerMaruyama`/`Milstein`/`SrkPlaten`）：内核的自适应控制器
-  返回 Milstein 解（其误差估计是 EM-vs-Milstein），所以三者给出同一条
-  受控路径，方法名保留请求值；
-- **Stratonovich 自适应 = 精确 Itô 转换**：漂移换成 Itô 等价漂移
-  `ã_i = a_i + ½ Σ_j Σ_k b_kj ∂_k b_ij`（修正项用沿扩散各列方向的中心差分
-  计算，步长标度与 Milstein 项的差分一致），然后在 `(ã, b)` 上跑 Itô 控制器。
-  返回的路径是**等价 Itô SDE 的受控 Itô–Milstein 解**，收敛到原系数的
-  Stratonovich 解（对 `dX = σX∘dW` 收敛到 `X0·exp(σ W_T)`）；
-- 不可交换噪声（以及两个 `*Noncommutative*` 方法）：细 cell 网格 + Chen
-  关系的控制器（`cells`，0 = 默认 4096），Stratonovich 方法同样先转 Itô。
-  单个 cell 仍被拒绝时报 `E0807`，需要更多 `cells`。
+Brownian 误差使用 `sqrt(dt/span)` 的局部二阶矩分配，独立的漂移误差使用 `dt/span`；相对尺度取初值、当前值、
+试探值的分量最大模。这是局部估计，不保证全局误差。`max_steps` 限制试探与接受步；分配/工作上限分别为
+1048576 个最细 cell、8388608 个存储系数/状态值、268435456 次 Lévy 面积更新。
 
-**确定性**：`seed` 必填，没有默认值。定步长可交换路径的增量来自语言 RNG
-流（与 `rng(seed)` 相同的 LCG，正态用 Box–Muller），因此
-`wiener(seed, m, steps, dt)` 与同 seed 的定步长路径消费**同一组数**；同
-构建内可复现，不承诺跨平台逐位相同。非交换定步长与所有自适应路径需要内核
-自己的 xoshiro 流（bridge 拒绝与 Lévy 面积在求解过程中采样），由 `seed`
-播种，同样只承诺同构建可复现。`sde_ensemble_seed` 只依赖 `(seed, index)`，
-所以集合成员与执行顺序/线程数无关；`sde_ensemble_diag/general` 在语言层并行运行
-成员（见下）。
+**跳跃与稳定噪声。** 复合 Poisson 的到达时刻与标记在拒绝前一次采样，连续积分停在每次到达点并记录跳后状态；
+非恒定补偿须提供期望跳跃回调。稳定噪声的粗增量由最细独立增量求和，局部矩阶取 `q = 0.9 alpha`。
+`alpha < 2` 只支持 Euler、漂移隐式 Euler 和 theta；Brownian Milstein/Stratonovich 修正不适用。
+`alpha = 2` 表示 `sqrt(2) W`，可使用所有 Brownian 方案。
 
-**错误表**：`E0802` 形状/参数（含 `General` 的 `m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；`E0807` 自适应步长塌缩或步数预算耗尽；`E1001` 保留给真正未实现的能力
-（`core.sde`、`sde.events`），当前没有任何方法/结构/步长组合产生它。`SdeError` 是不透明错误类型（像 `SimError`），语言层不暴露构造器。
+`Rssn_numerical_callback` 提供 `num_sde_adaptive_{diag,general}_typed`、
+`num_sde_jump_adaptive_{diag,general}_typed`、`num_sde_levy_adaptive_{diag,general}_typed`。
+控制量包括物理端点/参考时间、状态量纲的绝对容差、相对容差、最细网格/试探/回调预算、种子和方法编号
+（`SdeMethod` 声明顺序 0–9）；一般噪声另带通道数和可交换性。Brownian 系数为 `state/sqrt(time)`；
+稳定噪声用无量纲 `L_(t/reference_time)`，系数为状态量纲，不用浮点 `alpha` 构造量纲幂。
 
-**不提供**：用户自定义噪声结构；显式非均匀网格（定步长内核假设均匀步长，报 `E0802`，变步长用 `Adaptive`）；求解器 manifest 算子（求解器需要回调，无法越过 manifest ABI）；
-Brownian 桥稠密输出（`sde_at` 是线性弦）；在积分**过程中**提前停止的终止事件（`sde_events` 是事后截断）。
+**确定性。** 种子必须显式给出；固定/自适应的可交换 Brownian 路径使用语言 LCG/Box–Muller 流，
+需要迭代面积的路径使用内核 xoshiro。种子与最细分辨率固定后，拒绝不改变已采样路径；系综种子只依赖
+`(seed,index)`。只承诺同构建可复现。可运行断言见 `examples/sde_adaptive_*.aev`。
 
-> **状态**：以上全部已实现（`aevia-std::sde`、`aevia-core` 的 `sde_runtime`/`sde_language` 测试；强收敛斜率由 `rssn/tests/sde_noncommutative.rs` 在二维非交换线性 SDE 上实测：Milstein 系 > 0.8，
-> Euler–Maruyama 约 0.5）。每个方法在每种结构上都可用；`sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed` 是 Prelude 内建，并由 `Sde` 模块 re-export，`Sde` 同时声明
-> 选项 ADT。源码里写 `Sde.Fixed({ structure = Sde.Diagonal, method = Sde.EulerMaruyama, … })`（或 `import Sde { Fixed, Diagonal, EulerMaruyama }` 后用短名）即可；选项记录由运行时逐字段读取，
-> 缺失或类型不对得到 `E0802` 的 `SdeError`，不会自动填默认值（`terms` 与 `cells` 必须存在，值 `0` 表示默认）。manifest 的 `sde_scheme_info(name: String) -> Tensor<1, Real>` 返回
-> `[strong_order, ito, commutative_only, adaptive, levy_areas]`（后四项为 1/0 flag），是 manifest-only 的元数据查询而不是求解路径；它只给强阶，需要弱阶时用 `sde_order`。
-> `wiener` 的 `Float[T^(1/2)]` 元素打印为 `s^(1/2)`（§5.4.3）。
+**错误表**：`E0802` 形状/参数（含 `General` 的 `m` 与扩散矩阵不符、非均匀网格、缺失必填项）；`E0806` 状态非有限；`E0807` 自适应步长塌缩或步数预算耗尽；`E1001` 保留给未实现的能力。`SdeError` 是不透明错误类型（像 `SimError`），语言层不暴露构造器。
+
+**不提供**：用户自定义噪声结构、显式非均匀定步长网格、Brownian 桥稠密输出，以及标准
+`sde_events` 在积分过程中的提前停止（它是事后截断）。回调求解器通过 §8.19 的高阶接口调用。
+`Sde` 模块声明选项 ADT 并再导出本节入口；`terms`、`cells` 必须存在，值 `0` 选择默认值。
+`sde_scheme_info` 只查询方案元数据；弱阶使用 `sde_order`/`sde_order_with`。
+
+状态：上述语言入口与列出的回调求解器已实现；原生 Rust API 的可达性由 §8.19 的清单与源码分类分别报告。
 
 ## 8.10 PDE
 
@@ -4588,6 +4642,35 @@ solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>
 `Field` 是 `{ grid: Grid, values: Tensor<n, Float[d]> }`。系数和边界条件的
 量纲在 `Spec` 记录中逐字段标注；求解器在运行时检查网格与系数量纲一致。
 PDE 的完整类型规则见 `Pde` 模块文档；当前不把 PDE 规格放进核心类型系统。
+
+### 8.10.1 清单接口的时间自适应
+
+`Rssn_numerical_callback.num_pde_*_adaptive` 在固定空间离散上比较一整步与两半步，接受所选方法的两半步；
+不替换积分器，不做 Richardson 外推。误差用场量纲的正绝对容差和无量纲相对容差缩放；拒绝的试探丢弃。
+无终止事件时必须到达精确终点。初始/最小/最大步长、接受/拒绝步预算、单步内核调用与串行回调预算显式给出；
+预算耗尽或最小步仍不达标即失败。
+
+| 空间族 | 时间方法 | 空间维数 | 边界范围 |
+|---|---|---|---|
+| 规则差分：热 | 显式 Euler、完整后向 Euler、完整 Crank–Nicolson、Douglas ADI | 1–3 | 成对周期、静态 Dirichlet/Neumann/Robin；检查角点数据 |
+| 规则差分：波 | 速度 Verlet（可重启的变步长 leapfrog） | 1–3 | 同上；位移与速度容差量纲独立 |
+| 规则差分：平流 | 一阶迎风 | 1–3 | 同上；外向通量与多维 CFL 限制 |
+| 单纯形有限元：热/反应 | theta：后向 Euler 或 Crank–Nicolson | 1–3 | 标记边界；ABI 构造结构化 P1/P2 单纯形网格；可选节点源回调 |
+| 标量有限体积 | 迎风/Rusanov、经典 Lax–Friedrichs、MUSCL minmod/van Leer | 1 | 周期或透射；通量/波速回调 |
+| 节点间断 Galerkin：标量平流 | SSPRK3 | 1–2 | 周期 |
+| Fourier 伪谱 | ETDRK4 | 1–3 | 周期；非线性回调返回场/时间 |
+
+Lax–Friedrichs 的空间粘性依赖步长，固定网格下可能无法达到紧时间容差，此时失败，不改变通量。
+FEM 源在 theta 两端串行求值 `(time, coordinates) -> nodal field/time`，再对节点插值应用一致质量矩阵；
+源与事件共享回调预算。DG 多维入口接收各轴单元数、物理盒长、多项式阶与各轴速度。
+空间收敛须单独研究网格；空间细化不是时间自适应。Poisson、静态 Helmholtz/FEM 与椭圆 Chebyshev 求解没有时间步。
+
+坐标、时间、场量纲独立为 `L`、`T`、`U`；扩散率为 `L^2/T`，平流/波速为 `L/T`，反应为 `1/T`，波速度为 `U/T`。
+边界记录的向量字段为 `kind`、`value: U`、`flux: U/L`、`alpha: 1`、`beta: L`、`gamma: U`；
+种类 0–3 为 Dirichlet、Neumann、Robin、周期。单项广播至活动面，否则每轴提供两个面；周期面须成对。
+Robin 表示 `alpha*u + beta*du/dn = gamma`。FVM 通量为 `U*L/T`，特征速度为 `L/T`。
+返回接受的 `times`/`states`、物理 `coordinates`、真实工作计数、最终误差比及可选终止事件时刻；波另返回 `velocities`。
+可运行断言见 `examples/pde_adaptive_{heat,wave_event,advanced}.aev`。
 
 ## 8.11 Data
 
@@ -4857,18 +4940,22 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 `OpKey` 在 Aevia 侧是 `(rule_set, name, signature_hash)`：`call_key` 收 name + `signature_hash`（32 个 hex 字符，全零表示该算子没有声明重载）；`resolve_overload` 成功时返回
 `"rule_set.name@signature_hash"`；`overloads` 返回渲染后的签名文本。`Rssn.call` 是 `Rssn.dynamic` 的别名（两者都收短名 + `Value` 数组）。
 
-`Rssn` 的成员由 Kernel Manifest 生成（规则见 §13.2.2）：`Declared | Overlay | Derived` 的算子生成类型化声明（每条 overload 一个），调用钉死生成时的 `signature_hash`；`None`（叶子/无调用）与插件算子生成
-`dynamic`；别名生成 `Rssn.<alias>`，冲突时用 `Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。生成的声明调用内部形式 `Rssn.invoke(name, signature_hash, args)`（同样钉死 overload，但错误通道不同：
-生成的 `fn` 必须返回声明类型，所以 kernel 失败会 raise 而不是返回 `Err`；它不是固定入口）。manifest 的规模是**测量**，不是常量：`aevia rssn` 给出 live 数字（`rssn 3.0.0-rc.1`：1620 个算子，99 declared +
-103 overlay + 1418 derived，82 单位，30 常数）。`Derived` 是由注册信息推出的保守签名，不区分 `Tensor`/`Quantity`/`Int`，IDE 标“保守推断”（§13.2.2）。SDE 的两个噪声原语 `sde_wiener`/`sde_levy_areas`
-与方案元数据 `sde_scheme_info`（`(String) -> Tensor<1, Real>`，只给强阶与 flag）是 overlay 精确签名的 typed 声明；SDE **求解循环**需要 host 回调，不是 manifest 算子，不出现在 `Rssn` 里（§8.9.1）。
+`Rssn` 的成员由 Kernel Manifest 生成（规则见 §13.2.2）：具有精确 `Declared`/`Overlay` 签名、源码可表达且桥接支持的重载生成类型化声明，调用钉死生成时的 `signature_hash`；`Derived`、`None` 及无法认证的签名保留动态入口；别名生成 `Rssn.<alias>`，冲突时用 `Rssn.<rule_set>.<name>`（命名空间，不是运行时键）。生成的声明调用内部形式 `Rssn.invoke(name, signature_hash, args)`（同样钉死 overload，但错误通道不同：
+生成的 `fn` 必须返回声明类型，所以 kernel 失败会 raise 而不是返回 `Err`；它不是固定入口）。manifest 规模由 `aevia rssn` 实测（§10.8）。`Derived` 是由注册信息推出的保守签名，不区分 `Tensor`/`Quantity`/`Int`，IDE 标“保守推断”（§13.2.2）。SDE 的两个噪声原语 `sde_wiener`/`sde_levy_areas`
+与方案元数据 `sde_scheme_info`（`(String) -> Tensor<1, Real>`，只给强阶与 flag）是 overlay 精确签名的 typed 声明；SDE 回调求解器使用受限高阶 ABI（§8.9.1）；噪声原语与方案元数据不是求解器的替代品。
+
+公开 Rust API 不自动成为清单算子。具体数值函数从源码及逐项量纲策略生成绑定；泛型回调、状态对象和不透明模型需要显式适配。
+清单可达性与原生源码分类分别报告，不据清单覆盖推断全部原生功能已覆盖。
+
+仅当结构变体恰好为无载荷的 `None` 和单载荷的 `Some` 时，生成器递归映射为 `Option<T>`；其他变体保持动态表示。
+载荷仍须通过类型和量纲校验，空 `None` 不提供载荷单位证据；此映射不扩大回调桥可接受的 ADT 签名。
 
 固定入口的可达性与限制：
 
 - `type_rep<T>()` 从具体的检查后类型生成不可伪造的 `TypeRep`；未解析的泛型不能在没有运行时类型字典时反射。`Rssn.typed` 执行动态调用并用该见证检查返回值；不匹配或证据不足返回 `Err(OpError)`，
   成功结果仍为不透明 `Value`，需用 `from_value<T>` 验证并转换。
 - `to_callback(f)` 对当前 evaluator 会话中已检查的源码闭包验证具体函数类型，构造不透明的 `Callback`（别名和已具体化的泛型函数保留此证据；内建函数先包装在源码 lambda 中）。回调桥支持具体数值、
-  `Bool`、`String` 及由它们递归组成的张量和闭合记录；具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
+  `Bool`、`String`、密封宿主类型 `NativeAdVar` 及由它们递归组成的张量和闭合记录；源码同名类型及其他不透明回调类型仍拒绝。具体量纲、秩和完整已知形状都会校验，空结构张量需要独立的元素类型及量纲证据。各算子可进一步限制签名，例如当前数值求解器使用 `Float` 标量与向量。
   调用在原线程同步执行，句柄在外层调用返回后失效；跨线程、同一作用域重入及回调错误均返回错误；空回调列表等价于动态调用。
 - `Rssn.register`/`Rssn.register_plugin` 接受 host `Plugin`；Aevia 源码不持有这种值（运行期 `E0302`，附注指向源码机制）。源码插件经声明发布（§13.5.2）：`@op`/`@rule` 函数在模块加载时注册，
   `load_plugin(path) : String -> IO (Result<Int, String>)` 在运行期加载一个插件文件。
@@ -4916,6 +5003,25 @@ Aevia 把它们归入 `Rssn_Numeric`，其中每个算子都有手写的 typed �
 
 端到端示例与封闭形式核对：`tests/domain_numeric.aev`（`mad([1,2,3,4,100]) = 1`、`ifft(fft(x)) = x`、小波往返、`poisson_fd` 的 `-u'' = 1` 得 `x(1-x)/2`、`heat_fd` 的 `exp(-π²t)` 衰减、
 `tensordot_2_2_1` 对手算矩阵乘、`hosvd_3`/`tt_svd_3` 的重构、`ode_solve` 的 `y' = -2y` 得 `e^-2`、`lambert_w_complex(1,0,0) = 0.5671…` 等），由 `cargo test -p aevia-rssn --test aev_suites` 运行。
+
+### 8.19.2 原生数值模型
+
+以下入口由清单生成；它们调用 RSSN 的关联方法或明确的泛型实例，不在 Aevia 中实现数值算法。
+`D`、`E` 表示独立的元素量纲，`X` 表示坐标量纲。
+
+| 入口族 | 值与量纲契约 |
+|---|---|
+| `Rssn_numerical_matrix.num_matrix_{float,real}_*` | `Matrix<f64>` / 精确有理数实例；记录携带格式版本、后端与元素。`real` 拒绝近似 `Float`，只用 Native 后端；`decompose_*` 使用 Float 实例。`get_mut`、后端更新返回新模型。 |
+| `num_dense_lu_model_*`、`num_sparse_{lu,ilu,ic,auto}_model_*`、`num_csr_model_*` | 保存定义矩阵与因子种类，调用时重建原生因子；`A x = b` 与预条件应用返回 `E/D`。CSR 下标、置换和计数是 `Int`，不是有量纲元素。 |
+| `Rssn_numerical_vector.num_polynomial_model_*` | 系数按降幂排列，具有同一输出量纲；在 `x/coordinate_scale` 上求值。导数与积分分别恢复 `D/X`、`D*X`；二元运算要求相同的物理坐标尺度。 |
+| `num_native_cubic_spline_*`、`num_native_pchip_*`、`num_native_cheb_*`、`num_native_aaa_*` | 坐标与输出量纲独立；第 `k` 阶导数为 `D/X^k`，积分为 `D*X`，根具有坐标量纲。 |
+| `Rssn_numerical_callback.num_native_cheb_{from_fn,adaptive}_typed` | 已认证的串行回调构造同一 Chebyshev 模型；显式次数、求值预算、非有限值与原始回调错误均受检查。 |
+| `Rssn_numerical_matrix.num_backend_*` | 会话持有后端、编译程序和标量句柄；各坐标按正的物理参考值归一化，再乘输出参考值。解释器编译有明确工作界限；不支持的后端报错。进程默认后端变更须显式选择。 |
+| `num_ad_*` / `NativeAdVar` | 会话持有反向 AD tape、变量与梯度；异质量纲坐标使用显式参考尺度，输出量纲为 `E`、输入量纲为 `D` 时梯度为 `E/D`。 |
+
+模型检查格式/版本、字段、形状、下标、有限数据与分配界限；无效定义在调用原生方法前失败。可移植定义不含进程内指针，重复查询可有重建成本。
+行列式返回 `normalized`、`entry_unit`、`order`，表示 `normalized * entry_unit^order`；打包 LU 在规范输入单位下存储混合因子，不能把整个打包数组解释为同一物理量纲。
+会话句柄检查种类、所属会话、存活状态与配额；释放有依赖的对象时先释放依赖句柄，可移植定义不能与会话句柄互换。可运行断言见 `examples/native_algebra_models.aev`；完整入口与当前限制以生成的清单签名和描述为准。
 
 ## 8.20 库的组织
 
@@ -5010,7 +5116,7 @@ Physics
 | `aevia-types` | kind、类型、量纲统一、推断、类型类、穷尽性、`.aevi` 持久化 |
 | `aevia-ir` | Core IR 与从已检查 AST 的降级；只含数据，不依赖 `aevia-core` |
 | `aevia-rssn` | rssn 桥：`Session`、两套值模型的转换、Kernel Manifest、`Rssn` 模块生成、JIT 透传 |
-| `aevia-std` / `aevia-stdlib-model` | 标准库（Aevia 源码 + Rust 数值内核）/ 标准库生成的事实来源 |
+| `aevia-std` / `aevia-stdlib-model` | 标准库源码与 RSSN 适配 / 标准库生成的事实来源 |
 | `aevia-core` | 值、张量、闭包、IO、解释器、内建函数、符号层、模块加载器（`driver`/`manifest`）、磁盘缓存、并行、可选 JIT |
 | `aevia-fmt` / `aevia-doc` | 格式化器 / `##` 文档与 doctest 抽取 |
 | `aevia-analysis` / `aevia-lsp` | 与编辑器无关的语义查询 / LSP 适配层（唯一知道 JSON-RPC 的 crate） |
@@ -5207,14 +5313,22 @@ SymbolicCtx {
 
 - `Float` 标量四则直接走 f64，不进入 rssn；`sin`/`exp` 等走 Rust `libm` 或 rssn 内核。
 - `Real` 的 `approx` 走 `Target::Numeric`，结果带误差球，Aevia 取中点。
-- 张量的 `F64` 运算走 ndarray/faer；`Exact`/`Boxed` 走逐元素标量路径。
+- 张量数值算法走 RSSN；`Exact`/`Boxed` 通过宿主标量回调保持语言表示与量纲。
+
+### 9.4.6 数值实现边界
+
+RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩、稠密/稀疏分解、统计、插值与微分方程步进。
+`aevia-std` 只验证形状/量纲、适配回调、映射错误并保持语言值表示。运行时保留标量语言运算和容器遍历；
+数值迭代与收缩调度在 RSSN 执行，必要时使用宿主提供的标量回调。
+
+数值后端依赖属于 RSSN；Aevia 的独立数值库仅可作一致性测试的开发依赖。清单绑定与公开 Rust API 的覆盖分别审计（§8.19），
+本边界不表示所有原生功能都已暴露。
 
 ## 9.5 张量运行时
 
 - 存储：`Arc<TensorData>`；切片是视图（offset + strides），`reshape` 连续时是视图否则复制。写入不存在：
   `update`/`map` 产生新张量，唯一持有时原地复用。语义见 §6.6。
-- 逐元素 `F64` 循环 4/8 路展开；`sum` 用 pairwise/Kahan。`matmul`/`solve`/`eig`/`svd`/`qr`/`lu` 调 rssn 数值内核
-  （faer）；`fft` 调 rustfft；`interp`/`spline` 调 rssn 内核。
+- `matmul`、分解、FFT、插值与数值归约由 RSSN 执行；后端库（如 faer、rustfft）封装在 RSSN。
 - 形状检查在每次运算前做，错误含两边形状与运算名；细化形状在编译期检查，秩-only 在运行时检查。
 - 设备：张量带 `device` 元数据；`to_device`/`on(device, ...)` 负责传输与作用域执行。CPU 是默认，GPU/分布式是运行时
   目标，不是类型参数。
@@ -7850,6 +7964,9 @@ error[E0802]: matmul requires left columns (2) = right rows (3)
 
 本轮把规范与实现逐章对照，压缩重复、把状态说明移出正文，并新增英文版（`spec/en/`，写作与术语规则见 `spec/STYLE.md`）。机器读取的两章（08、11）保持形态不变，由 `cargo test -p aevia-std --test spec_signatures --test spec_programs` 守住。
 
+- `08-stdlib.md`：合并实际求解器方法、物理容差、预算、回调、严格 `Option` 与原生数值模型契约；修正精确签名/动态入口的界限，并同步英文。
+- `09-runtime.md`：明确 RSSN 数值算法与后端依赖的所有权、Aevia 值/单位适配边界；原生源码覆盖与清单可达性分别报告。
+
 **全书层面**
 
 - 新增英文版：每个中文章节在 `spec/en/<同名>` 有对应英文文件，章节号、锚点、代码块与诊断码与中文一致。
@@ -7964,8 +8081,8 @@ rssn 的 wgpu 设备以双单精度提供 `Dtype::F64`，新增启动融合规�
 
 1. **包依赖**：registry 依赖、SemVer 解析和带校验的本地副本已实现（Revision 15）；`git` 依赖不存在；按包的依赖名字空间、`[patch]` 覆盖、镜像 `[source]` 替换尚未实现。
 2. **设备后端**：`Gpu`/`Distributed` 只是可构造的运行时值；`on`/`to_device`/`@jit(target = Gpu(..))` 报 `E1001("core.gpu")`/`E1001("core.distributed")`；`Device.map` 等批量原语未作为语言原语暴露（§10.6.5）。
-3. **稀疏**：稀疏值不能进入 rssn 项图；用户自定义格式要等 rssn 开放 `Format`；`gmres_with`/`bicgstab_with` 不接受精确元素；没有稀疏特征值/SVD（§8.4.1、§13.9.5）。
-4. **SDE**：Brownian 桥稠密输出与积分中途的终止事件未提供（`sde_at` 是线性弦，`sde_events` 是事后截断）；解释器侧闭包 `!Send`，并行系综回退为顺序（§8.9.1）。
+3. **稀疏**：稀疏值不能进入 rssn 项图；用户自定义格式要等 rssn 开放 `Format`；`gmres_with`/`bicgstab_with` 不接受精确元素；稀疏 SVD 未提供，特征值通过显式 RSSN 适配查询（§8.4.1、§13.9.5）。
+4. **SDE**：Brownian 桥稠密输出与积分中途的终止事件未提供（`sde_at` 是线性弦，`sde_events` 是事后截断）；回调不可跨线程时，系综回退为顺序（§8.9.1）。
 5. **ODE**：多重打靶/配置法 BVP；`AutoSwitch` 按步数预算判定而非特征值估计（§8.9）。
 6. **类型系统**：`Zmod<n>`/`GF<p>` 类型级模数；用户函数对秩多态；符号指数（§12.8.2）。
 7. **Plot**：只有 HTML/SVG-inline 渲染器，无独立 `.svg`/PNG/JPEG 输出（§8.12）。

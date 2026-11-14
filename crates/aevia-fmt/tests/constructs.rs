@@ -298,3 +298,13 @@ fn blank_lines_between_statements_are_kept() {
     assert_eq!(formatted, expected);
     assert_eq!(format_source(&formatted).expect("formats again"), formatted);
 }
+
+#[test]
+fn stochastic_fractional_dimension_powers_round_trip() {
+    round_trip(
+        "fn diffusion(t: Float[Time], y: Float[Length]): Float[Length/Time^(1/2)] = y / sqrt(t)\n",
+    );
+    round_trip(
+        "fn diffusion(t: Float[Time], y: Float[Length]): Float[Length*Time^(-1/2)] = y / sqrt(t)\n",
+    );
+}

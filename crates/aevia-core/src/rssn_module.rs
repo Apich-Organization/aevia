@@ -484,9 +484,18 @@ pub(crate) fn host_dimension_witness(value: &Value) -> aevia_rssn::witness::Dime
         | Value::KernelValue(value) => value.witness.clone(),
         | Value::Num(_) | Value::Dyn(_) => W::Scalar(crate::value::value_dim(value)),
         | Value::Tensor(tensor) => {
-            let nested = tensor
-                .get_flat(0)
-                .is_some_and(|item| matches!(item, Value::Tensor(_) | Value::Record(_)));
+            let nested = (0..tensor.storage.len()).any(|i| {
+                tensor.get_flat(i).is_some_and(|item| {
+                    matches!(
+                        item,
+                        Value::Tensor(_)
+                            | Value::Record(_)
+                            | Value::KernelValue(_)
+                            | Value::Dyn(_)
+                            | Value::Variant(_)
+                    )
+                })
+            });
             let elements = if nested {
                 (0..tensor.storage.len())
                     .filter_map(|i| tensor.get_flat(i))
@@ -535,6 +544,12 @@ pub(crate) fn host_dimension_witness(value: &Value) -> aevia_rssn::witness::Dime
                 element,
                 element_repr,
                 elements,
+            }
+        },
+        | Value::Variant(value) if value.adt == aevia_types::adt::OPTION_ID => {
+            W::Variant {
+                tag: value.name.clone(),
+                fields: value.fields.iter().map(host_dimension_witness).collect(),
             }
         },
         | Value::Record(record) => {
@@ -841,6 +856,25 @@ fn verify_result_witness(
             }
             Ok(())
         },
+        | (SigType::Variant(cases), W::Variant { tag, fields }) => {
+            if aevia_rssn::registry::option_payload(cases).is_none() {
+                return Ok(());
+            }
+            let Some((_, schema)) = cases.iter().find(|(name, _)| name == tag) else {
+                return Err(
+                    EvalError::new("E1004", "kernel returned an invalid Option tag").at(span),
+                );
+            };
+            if schema.len() != fields.len() {
+                return Err(
+                    EvalError::new("E1004", "kernel returned an invalid Option payload").at(span),
+                );
+            }
+            for (field, proof) in schema.iter().zip(fields) {
+                verify_result_witness(field, proof, dims, span)?;
+            }
+            Ok(())
+        },
         | (SigType::Record(fields), W::Record(actual)) => {
             for (name, field) in fields {
                 let Some((_, value)) = actual.iter().find(|(field, _)| field == name) else {
@@ -911,6 +945,17 @@ fn bind_dimensions(
                             dimension: Some(d), ..
                         },
                     ) => bind_witness(elem, &W::Scalar(d.clone()), dims, span),
+                    | (SigType::Variant(cases), W::Variant { tag, fields }) => {
+                        if aevia_rssn::registry::option_payload(cases).is_some()
+                            && let Some((_, schema)) = cases.iter().find(|(name, _)| name == tag)
+                            && schema.len() == fields.len()
+                        {
+                            for (sig, proof) in schema.iter().zip(fields) {
+                                bind_witness(sig, proof, dims, span)?;
+                            }
+                        }
+                        Ok(())
+                    },
                     | (SigType::Record(fields), W::Record(values)) => {
                         for (name, ty) in fields {
                             if let Some((_, w)) = values.iter().find(|(n, _)| n == name) {
@@ -975,6 +1020,21 @@ fn bind_dimensions(
                     },
                 }
             },
+            | (SigType::Variant(cases), Value::Variant(value))
+                if value.adt == aevia_types::adt::OPTION_ID
+                    && aevia_rssn::registry::option_payload(cases).is_some() =>
+            {
+                let Some((_, fields)) = cases.iter().find(|(name, _)| name == &value.name) else {
+                    return Err(EvalError::new("E1003", "invalid Option tag").at(span));
+                };
+                if fields.len() != value.fields.len() {
+                    return Err(EvalError::new("E1003", "invalid Option payload").at(span));
+                }
+                for (field, actual) in fields.iter().zip(&value.fields) {
+                    bind(field, actual, dims, span)?;
+                }
+                Ok(())
+            },
             | (SigType::Record(fields), Value::Record(record)) => {
                 for (name, field) in fields {
                     if let Some(value) = record.fields.get(name) {
@@ -1020,6 +1080,14 @@ fn bind_dimensions(
                 SigType::Tensor { elem, .. } | SigType::Sparse { elem, .. },
                 Type::Tensor { elem: got, .. },
             ) => evidence(elem, got, dims, span),
+            | (SigType::Variant(cases), Type::Adt(id, args))
+                if *id == aevia_types::adt::OPTION_ID && args.len() == 1 =>
+            {
+                if let Some(payload) = aevia_rssn::registry::option_payload(cases) {
+                    evidence(payload, &args[0], dims, span)?;
+                }
+                Ok(())
+            },
             | (SigType::Record(fields), Type::Record(row)) => {
                 for (name, field) in fields {
                     if let Some(got) = row.field(name) {
@@ -1068,6 +1136,45 @@ fn result_with_dimensions(
         }
     };
     match (value, sig) {
+        | (payload, SigType::Opaque(kind)) if kind == aevia_rssn::registry::NATIVE_AD_VAR_KIND => {
+            if !crate::value::is_native_ad_var_payload(payload) {
+                return Err(EvalError::new(
+                    "E1004",
+                    "kernel returned an invalid native AD variable handle",
+                )
+                .at(span));
+            }
+            Ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
+                payload: payload.clone(),
+                witness: aevia_rssn::witness::DimensionWitness::Unknown,
+                host_witness: None,
+            })))
+        },
+        | (Val::Variant { tag, payload }, SigType::Variant(cases))
+            if aevia_rssn::registry::option_payload(cases).is_some() =>
+        {
+            let Some((_, fields)) = cases.iter().find(|(name, _)| name == tag) else {
+                return Err(
+                    EvalError::new("E1004", "kernel returned an invalid Option tag").at(span),
+                );
+            };
+            if fields.len() != payload.len() {
+                return Err(
+                    EvalError::new("E1004", "kernel returned an invalid Option payload").at(span),
+                );
+            }
+            let output = payload
+                .iter()
+                .zip(fields)
+                .map(|(value, field)| result_with_dimensions(value, field, dims, span))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(crate::value::make_variant(
+                aevia_types::adt::OPTION_ID,
+                usize::from(tag == "Some"),
+                tag,
+                output,
+            ))
+        },
         | (Val::Record(values), SigType::Record(fields)) => {
             let mut output = indexmap::IndexMap::new();
             for (name, value) in values {
@@ -1911,7 +2018,41 @@ pub(crate) fn from_kernel_value(
     let Value::KernelValue(value) = value else {
         unreachable!()
     };
-    decode_payload(&value.payload, value.host_witness.as_deref(), expected)
+    decode_payload(
+        &value.payload,
+        &value.witness,
+        value.host_witness.as_deref(),
+        expected,
+    )
+}
+
+// Structural erasure may forget a field/element type without asserting a new
+// type. Nominal identities and nominal type arguments remain unchanged.
+fn erased_schema_compatible(
+    source: &aevia_types::Type,
+    expected: &aevia_types::Type,
+) -> bool {
+    use aevia_types::Type;
+    if *expected == aevia_types::builtins::dynamic_value_type()
+        || crate::host_witness::schema_compatible(source, expected)
+    {
+        return true;
+    }
+    match (source, expected) {
+        | (Type::Tensor { shape: a, elem: x }, Type::Tensor { shape: b, elem: y }) => {
+            a.rank() == b.rank() && erased_schema_compatible(x, y)
+        },
+        | (Type::Record(a), Type::Record(b)) if a.tail_var().is_none() && b.tail_var().is_none() =>
+        {
+            let fields = a.fields();
+            fields.len() == b.fields().len()
+                && fields.iter().all(|(label, ty)| {
+                    b.field(label)
+                        .is_some_and(|expected| erased_schema_compatible(ty, expected))
+                })
+        },
+        | _ => false,
+    }
 }
 
 fn validate_payload(
@@ -1926,6 +2067,11 @@ fn validate_payload(
     use aevia_types::Row;
     use aevia_types::Shape;
     use aevia_types::Type;
+    // Erased Value requests assert no representation, dimension or nominal
+    // identity. Keep its existing evidence for a later checked conversion.
+    if *expected == aevia_types::builtins::dynamic_value_type() {
+        return Ok(());
+    }
     let mismatch = || {
         // A graph-backed operator that cannot reduce its arguments (`invmod(6, 15)`:
         // no inverse) answers with the unreduced call. Say that, and show it,
@@ -1940,7 +2086,7 @@ fn validate_payload(
         }
         format!("kernel value does not prove expected type {expected}")
     };
-    if host.is_some_and(|h| !crate::host_witness::schema_compatible(&h.schema, expected)) {
+    if host.is_some_and(|h| !erased_schema_compatible(&h.schema, expected)) {
         return Err(mismatch());
     }
     let host_scalar = host.is_some_and(|h| matches!(h.node, H::Scalar));
@@ -1953,6 +2099,18 @@ fn validate_payload(
             }
     };
     match (payload, expected) {
+        | (payload, ty)
+            if aevia_types::adt::is_native_ad_var_type(ty)
+                && crate::value::is_native_ad_var_payload(payload) =>
+        {
+            Ok(())
+        },
+        | (Val::Quantity { value, unit }, Type::Scalar(rep, dim)) => {
+            if !unit.dim.is_concrete() || &unit.dim != dim || !proves_dim(dim) {
+                return Err(mismatch());
+            }
+            quantity_scalar(value, unit, *rep).map(|_| ())
+        },
         | (Val::Num(n), Type::Scalar(rep, dim)) => {
             let representation = matches!(
                 (n, rep),
@@ -1976,6 +2134,21 @@ fn validate_payload(
         | (Val::Variant { tag, payload }, Type::Unit) if tag == "Unit" && payload.is_empty() => {
             Ok(())
         },
+        | (Val::Variant { tag, payload }, Type::Adt(id, args))
+            if *id == aevia_types::adt::OPTION_ID && args.len() == 1 && host.is_none() =>
+        {
+            let W::Variant { tag: proven, fields } = witness else {
+                return Err(mismatch());
+            };
+            if proven != tag || fields.len() != payload.len() {
+                return Err(mismatch());
+            }
+            match (tag.as_str(), payload.as_slice(), fields.as_slice()) {
+                | ("None", [], []) => Ok(()),
+                | ("Some", [item], [proof]) => validate_payload(item, proof, None, &args[0]),
+                | _ => Err(mismatch()),
+            }
+        },
         | (Val::Variant { tag, payload }, Type::Adt(expected_id, _)) => {
             let Some(crate::value::HostWitness {
                 node:
@@ -1996,11 +2169,26 @@ fn validate_payload(
             {
                 return Err(mismatch());
             }
-            // The private host witness was minted only after this exact source
-            // constructor's immutable schema, index and arity were checked.
+            // Nominal identity still comes exclusively from the private host
+            // proof. Independently retained kernel evidence follows each field.
             let _ = index;
-            for (item, field) in payload.iter().zip(fields) {
-                validate_payload(item, &W::Unknown, Some(field), &field.schema)?;
+            let proven = match witness {
+                | W::Variant {
+                    tag: actual,
+                    fields: proofs,
+                } => {
+                    if actual != tag || proofs.len() != payload.len() {
+                        return Err(mismatch());
+                    }
+                    Some(proofs)
+                },
+                | _ => None,
+            };
+            for (i, (item, field)) in payload.iter().zip(fields).enumerate() {
+                let proof = proven
+                    .and_then(|proofs| proofs.get(i))
+                    .unwrap_or(&W::Unknown);
+                validate_payload(item, proof, Some(field), &field.schema)?;
             }
             Ok(())
         },
@@ -2166,16 +2354,131 @@ fn validate_payload(
     }
 }
 
+/// Convert a linear quantity in its actual unit, preserving the requested
+/// numeric phase. Affine points cannot be relabelled as ordinary scalars.
+fn quantity_scalar(
+    payload: &Val,
+    unit: &aevia_rssn::UnitVal,
+    rep: aevia_types::Rep,
+) -> Result<crate::value::NumVal, String> {
+    use aevia_types::Rep;
+    use num_traits::Zero;
+    if unit.affine
+        || unit.offset.is_some()
+        || !unit.dim.is_concrete()
+        || unit.scale.rat.denom() <= &num_bigint::BigInt::from(0)
+        || unit.scale.rat <= num_rational::BigRational::zero()
+    {
+        return Err("kernel quantity has an invalid linear unit scale or offset".into());
+    }
+    let mismatch =
+        || "kernel quantity does not preserve the expected scalar representation".to_string();
+    let exact = match payload {
+        | Val::Num(aevia_rssn::Num::Int(n)) => {
+            Some(num_rational::BigRational::from_integer(n.clone()))
+        },
+        | Val::Num(aevia_rssn::Num::Rat(n)) if rep == Rep::Real => Some(n.clone()),
+        | _ => None,
+    };
+    let mut number = match (payload, rep) {
+        | (Val::Num(aevia_rssn::Num::Int(_)), Rep::Int) => {
+            let exact = exact.ok_or_else(mismatch)? * &unit.scale.rat;
+            if unit.scale.pi != 0 || !exact.is_integer() {
+                return Err(mismatch());
+            }
+            let mut value = crate::value::NumVal::int(exact.to_integer());
+            value.dim = unit.dim.clone();
+            value
+        },
+        | (Val::Num(aevia_rssn::Num::Int(_) | aevia_rssn::Num::Rat(_)), Rep::Real) => {
+            let exact = exact.ok_or_else(mismatch)? * &unit.scale.rat;
+            if unit.scale.pi == 0 {
+                crate::value::NumVal::exact(exact, unit.dim.clone())
+            } else {
+                crate::value::NumVal::symbolic(
+                    crate::sym::Term::mul(
+                        crate::sym::Term::Num(exact),
+                        crate::sym::Term::pow(
+                            crate::sym::Term::Sym("pi".into()),
+                            num_rational::BigRational::from_integer(unit.scale.pi.into()),
+                        ),
+                    ),
+                    unit.dim.clone(),
+                )
+            }
+        },
+        | (Val::Symbol(_) | Val::Term(_), Rep::Real) => {
+            let term = bridge::term_of(payload).ok_or_else(mismatch)?;
+            let scale = crate::sym::Term::Num(unit.scale.rat.clone());
+            let scale = if unit.scale.pi == 0 {
+                scale
+            } else {
+                crate::sym::Term::mul(
+                    scale,
+                    crate::sym::Term::pow(
+                        crate::sym::Term::Sym("pi".into()),
+                        num_rational::BigRational::from_integer(unit.scale.pi.into()),
+                    ),
+                )
+            };
+            crate::value::NumVal::symbolic(crate::sym::Term::mul(term, scale), unit.dim.clone())
+        },
+        | (Val::Num(aevia_rssn::Num::Float(value)), Rep::Float) => {
+            let scale = unit.scale.to_f64();
+            if !scale.is_finite() || scale <= 0.0 {
+                return Err("kernel quantity unit scale is not a finite positive Float".into());
+            }
+            crate::value::NumVal::float(value * scale, unit.dim.clone())
+        },
+        | (Val::Complex { re, im }, Rep::Complex) => {
+            let scale = unit.scale.to_f64();
+            if !scale.is_finite() || scale <= 0.0 {
+                return Err("kernel quantity unit scale is not a finite positive Float".into());
+            }
+            crate::value::NumVal {
+                kind: crate::value::NumKind::Complex(re * scale, im * scale),
+                dim: unit.dim.clone(),
+                display: None,
+            }
+        },
+        | _ => return Err(mismatch()),
+    };
+    number.display = Some(Rc::new(unit.to_def()));
+    Ok(number)
+}
+
 fn decode_payload(
     payload: &Val,
+    witness: &aevia_rssn::witness::DimensionWitness,
     host: Option<&crate::value::HostWitness>,
     expected: &aevia_types::Type,
 ) -> Result<Value, String> {
     use crate::value::HostWitnessNode as H;
+    use aevia_rssn::witness::DimensionWitness as W;
     use aevia_types::Rep;
     use aevia_types::Row;
     use aevia_types::Type;
+    if *expected == aevia_types::builtins::dynamic_value_type() {
+        return Ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
+            payload: payload.clone(),
+            witness: witness.clone(),
+            host_witness: host.cloned().map(Rc::new),
+        })));
+    }
     match (payload, expected) {
+        | (payload, ty)
+            if aevia_types::adt::is_native_ad_var_type(ty)
+                && crate::value::is_native_ad_var_payload(payload) =>
+        {
+            Ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
+                payload: payload.clone(),
+                witness: aevia_rssn::witness::DimensionWitness::Unknown,
+                host_witness: None,
+            })))
+        },
+        | (Val::Quantity { value, unit }, Type::Scalar(rep, _)) => {
+            quantity_scalar(value, unit, *rep).map(Value::Num)
+        },
         | (Val::Num(aevia_rssn::Num::Int(n)), Type::Scalar(Rep::Real, dim)) => {
             Ok(Value::Num(crate::value::NumVal::exact(
                 num_rational::BigRational::from_integer(n.clone()),
@@ -2198,6 +2501,16 @@ fn decode_payload(
                 | Some(H::Tensor(items)) => Some(items),
                 | _ => None,
             };
+            let W::Tensor {
+                dimension,
+                element,
+                elements,
+                ..
+            } = witness
+            else {
+                return Err("validated tensor witness disappeared".into());
+            };
+            let uniform = dimension.as_ref().map(|d| W::Scalar(d.clone()));
             let storage = if data.is_empty() {
                 match elem.as_ref() {
                     | Type::Scalar(Rep::Float, _) => {
@@ -2217,7 +2530,17 @@ fn decode_payload(
                     data.iter()
                         .enumerate()
                         .map(|(i, item)| {
-                            decode_payload(item, host_items.and_then(|items| items.get(i)), elem)
+                            let proof = elements
+                                .get(i)
+                                .or(element.as_deref())
+                                .or(uniform.as_ref())
+                                .unwrap_or(&W::Unknown);
+                            decode_payload(
+                                item,
+                                proof,
+                                host_items.and_then(|items| items.get(i)),
+                                elem,
+                            )
                         })
                         .collect::<Result<_, _>>()?,
                 )
@@ -2237,6 +2560,9 @@ fn decode_payload(
                 | Some(H::Record(fields)) => Some(fields),
                 | _ => None,
             };
+            let W::Record(proofs) = witness else {
+                return Err("validated record witness disappeared".into());
+            };
             let mut row = row;
             let mut result = indexmap::IndexMap::new();
             while let Row::Extend { label, ty, tail } = row {
@@ -2246,12 +2572,37 @@ fn decode_payload(
                     .ok_or_else(|| "validated field disappeared".to_string())?;
                 let h =
                     host_fields.and_then(|fs| fs.iter().find(|(n, _)| n == label).map(|(_, h)| h));
-                result.insert(label.clone(), decode_payload(item, h, ty)?);
+                let proof = &proofs
+                    .iter()
+                    .find(|(name, _)| name == label)
+                    .ok_or_else(|| "validated field witness disappeared".to_string())?
+                    .1;
+                result.insert(label.clone(), decode_payload(item, proof, h, ty)?);
                 row = tail;
             }
             Ok(Value::Record(Rc::new(crate::value::RecordValue {
                 fields: result,
             })))
+        },
+        | (Val::Variant { tag, payload }, Type::Adt(id, args))
+            if *id == aevia_types::adt::OPTION_ID && args.len() == 1 && host.is_none() =>
+        {
+            let W::Variant { fields: proofs, .. } = witness else {
+                return Err("validated Option witness disappeared".into());
+            };
+            let (index, fields) = match (tag.as_str(), payload.as_slice()) {
+                | ("None", []) => (0, Vec::new()),
+                | ("Some", [item]) => (1, vec![decode_payload(item, &proofs[0], None, &args[0])?]),
+                | _ => return Err("invalid native Option payload".into()),
+            };
+            let mut result = crate::value::make_variant(*id, index, tag, fields);
+            if let Value::Variant(value) = &mut result {
+                let value = Rc::make_mut(value);
+                value.constructor_origin = true;
+                value.verified_type = Some(expected.clone());
+                value.type_args = Some(args.clone());
+            }
+            Ok(result)
         },
         | (Val::Variant { tag, payload }, Type::Adt(id, args)) => {
             let Some(crate::value::HostWitness {
@@ -2261,10 +2612,20 @@ fn decode_payload(
             else {
                 return Err("missing nominal witness".into());
             };
+            let proofs = match witness {
+                | W::Variant { fields, .. } => Some(fields),
+                | _ => None,
+            };
             let values = payload
                 .iter()
                 .zip(fields)
-                .map(|(item, field)| decode_payload(item, Some(field), &field.schema))
+                .enumerate()
+                .map(|(i, (item, field))| {
+                    let proof = proofs
+                        .and_then(|fields| fields.get(i))
+                        .unwrap_or(&W::Unknown);
+                    decode_payload(item, proof, Some(field), &field.schema)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let mut result = crate::value::make_variant(*id, *index, tag, values);
             if let Value::Variant(variant) = &mut result {
@@ -2405,6 +2766,306 @@ mod opaque_boundary_tests {
         );
         assert!(
             from_kernel_value(&wrapped(payload, witness(Some(SigType::Float))), &expected).is_ok()
+        );
+    }
+}
+
+#[cfg(test)]
+mod native_option_tests {
+    use super::*;
+    use aevia_rssn::witness::DimensionWitness as W;
+    use aevia_types::Type;
+
+    fn wrapped(
+        tag: &str,
+        payload: Vec<Val>,
+        witness: W,
+    ) -> Value {
+        Value::KernelValue(Rc::new(crate::value::KernelValue {
+            payload: Val::Variant {
+                tag: tag.into(),
+                payload,
+            },
+            witness,
+            host_witness: None,
+        }))
+    }
+
+    #[test]
+    fn native_option_requires_exact_tags_arity_and_recursive_units() {
+        let expected = Type::option(Type::float(Dim::base("Length")));
+        let scalar = Val::Num(aevia_rssn::Num::Float(2.0));
+        let some = |fields| {
+            W::Variant {
+                tag: "Some".into(),
+                fields,
+            }
+        };
+        let valid = wrapped(
+            "Some",
+            vec![scalar.clone()],
+            some(vec![W::Scalar(Dim::base("Length"))]),
+        );
+        let Value::Variant(decoded) = from_kernel_value(&valid, &expected).unwrap() else {
+            panic!("Option");
+        };
+        assert_eq!(decoded.adt, aevia_types::adt::OPTION_ID);
+        assert_eq!(
+            crate::value::value_dim(&decoded.fields[0]),
+            Dim::base("Length")
+        );
+        let none = wrapped(
+            "None",
+            vec![],
+            W::Variant {
+                tag: "None".into(),
+                fields: vec![],
+            },
+        );
+        assert!(from_kernel_value(&none, &expected).is_ok());
+        for invalid in [
+            wrapped(
+                "Some",
+                vec![scalar.clone()],
+                some(vec![W::Scalar(Dim::base("Time"))]),
+            ),
+            wrapped("Some", vec![scalar.clone()], some(vec![W::Unknown])),
+            wrapped("Some", vec![], some(vec![])),
+            wrapped(
+                "Some",
+                vec![scalar.clone(), scalar.clone()],
+                some(vec![W::Scalar(Dim::base("Length")); 2]),
+            ),
+            wrapped(
+                "None",
+                vec![scalar],
+                W::Variant {
+                    tag: "None".into(),
+                    fields: vec![W::Scalar(Dim::base("Length"))],
+                },
+            ),
+            wrapped(
+                "Other",
+                vec![],
+                W::Variant {
+                    tag: "Other".into(),
+                    fields: vec![],
+                },
+            ),
+            wrapped("None", vec![], W::Unknown),
+            wrapped(
+                "None",
+                vec![],
+                W::Variant {
+                    tag: "Some".into(),
+                    fields: vec![],
+                },
+            ),
+        ] {
+            assert!(from_kernel_value(&invalid, &expected).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod nested_erased_value_tests {
+    use super::*;
+    use aevia_rssn::witness::DimensionWitness as W;
+    use aevia_types::Row;
+    use aevia_types::Shape;
+    use aevia_types::Type;
+
+    fn wrapped(
+        payload: Val,
+        witness: W,
+    ) -> Value {
+        Value::KernelValue(Rc::new(crate::value::KernelValue {
+            payload,
+            witness,
+            host_witness: None,
+        }))
+    }
+    fn some(proof: W) -> Value {
+        wrapped(
+            Val::Variant {
+                tag: "Some".into(),
+                payload: vec![Val::Num(aevia_rssn::Num::Float(2954.0))],
+            },
+            W::Variant {
+                tag: "Some".into(),
+                fields: vec![proof],
+            },
+        )
+    }
+    #[test]
+    fn option_value_preserves_actual_units_without_promoting_unknown_evidence() {
+        let value_type = aevia_types::builtins::dynamic_value_type();
+        let expected = Type::option(value_type);
+        for (proof, known) in [(W::Scalar(Dim::base("Length")), true), (W::Unknown, false)] {
+            let Value::Variant(decoded) =
+                from_kernel_value(&some(proof.clone()), &expected).unwrap()
+            else {
+                panic!("Option")
+            };
+            let Value::KernelValue(inner) = &decoded.fields[0] else {
+                panic!("erased Value must remain a kernel handle")
+            };
+            assert_eq!(inner.witness, proof);
+            assert_eq!(
+                from_kernel_value(&decoded.fields[0], &Type::float(Dim::base("Length"))).is_ok(),
+                known
+            );
+            assert!(
+                from_kernel_value(&decoded.fields[0], &Type::float(Dim::base("Time"))).is_err()
+            );
+            assert!(from_kernel_value(&decoded.fields[0], &Type::float(Dim::one())).is_err());
+        }
+    }
+    #[test]
+    fn record_and_tensor_erasure_retain_each_actual_leaf_and_private_host_proof() {
+        let d = Dim::base("Length");
+        let value_type = aevia_types::builtins::dynamic_value_type();
+        let raw = wrapped(
+            Val::Record(vec![(
+                "items".into(),
+                Val::Tensor {
+                    shape: vec![1],
+                    data: vec![Val::Num(aevia_rssn::Num::Float(2.0))],
+                },
+            )]),
+            W::Record(vec![(
+                "items".into(),
+                W::Tensor {
+                    dimension: Some(d.clone()),
+                    element: None,
+                    element_repr: Some(SigType::Float),
+                    elements: vec![],
+                },
+            )]),
+        );
+        let expected = Type::Record(Row::closed([(
+            "items".into(),
+            Type::tensor(Shape::Rank(1), value_type.clone()),
+        )]));
+        let Value::Record(record) = from_kernel_value(&raw, &expected).unwrap() else {
+            panic!("record")
+        };
+        let Value::Tensor(items) = &record.fields["items"] else {
+            panic!("tensor")
+        };
+        let item = items.get_flat(0).unwrap();
+        assert!(from_kernel_value(&item, &Type::float(d.clone())).is_ok());
+        assert!(from_kernel_value(&item, &Type::float(Dim::base("Time"))).is_err());
+        let source_type = Type::Record(Row::closed([("value".into(), Type::float(d.clone()))]));
+        let source = Value::Record(Rc::new(crate::value::RecordValue {
+            fields: indexmap::IndexMap::from_iter([(
+                "value".into(),
+                Value::Num(crate::value::NumVal::float(2.0, d.clone())),
+            )]),
+        }));
+        let host = crate::host_witness::capture(&source, &source_type, false).unwrap();
+        let value = Value::KernelValue(Rc::new(crate::value::KernelValue {
+            payload: Val::Record(vec![(
+                "value".into(),
+                Val::Num(aevia_rssn::Num::Float(2.0)),
+            )]),
+            witness: W::Record(vec![("value".into(), W::Scalar(d.clone()))]),
+            host_witness: Some(Rc::new(host)),
+        }));
+        let expected = Type::Record(Row::closed([("value".into(), value_type)]));
+        let Value::Record(decoded) = from_kernel_value(&value, &expected).unwrap() else {
+            panic!("record")
+        };
+        let leaf = &decoded.fields["value"];
+        let Value::KernelValue(proof) = leaf else {
+            panic!("Value")
+        };
+        assert!(proof.host_witness.is_some());
+        assert!(from_kernel_value(leaf, &Type::float(d)).is_ok());
+        assert!(from_kernel_value(leaf, &Type::float(Dim::base("Time"))).is_err());
+    }
+    #[test]
+    fn nested_quantities_use_actual_linear_unit_scales_and_reject_wrong_units_or_phase() {
+        let length = Dim::base("Length");
+        let unit = aevia_rssn::UnitVal::linear(
+            "cm",
+            length.clone(),
+            aevia_dim::Scale::rational(num_rational::BigRational::new(1.into(), 100.into())),
+        );
+        let quantity = |unit: aevia_rssn::UnitVal, value: Val| {
+            wrapped(
+                Val::Record(vec![(
+                    "reference".into(),
+                    Val::Quantity {
+                        value: Box::new(value),
+                        unit,
+                    },
+                )]),
+                W::Record(vec![("reference".into(), W::Scalar(length.clone()))]),
+            )
+        };
+        let expected = Type::Record(Row::closed([(
+            "reference".into(),
+            Type::float(length.clone()),
+        )]));
+        let raw = quantity(unit.clone(), Val::Num(aevia_rssn::Num::Float(200.0)));
+        let Value::Record(record) = from_kernel_value(&raw, &expected).unwrap() else {
+            panic!("record")
+        };
+        let Value::Num(number) = &record.fields["reference"] else {
+            panic!("number")
+        };
+        assert_eq!(number.dim, length);
+        assert_eq!(number.to_f64(), Some(2.0));
+        assert!(
+            from_kernel_value(
+                &raw,
+                &Type::Record(Row::closed([(
+                    "reference".into(),
+                    Type::float(Dim::base("Time"))
+                )]))
+            )
+            .is_err()
+        );
+        for invalid in [
+            aevia_rssn::UnitVal {
+                dim: Dim::base("Time"),
+                ..unit.clone()
+            },
+            aevia_rssn::UnitVal {
+                affine: true,
+                ..unit.clone()
+            },
+            aevia_rssn::UnitVal {
+                offset: Some(aevia_dim::Scale::one()),
+                ..unit.clone()
+            },
+            aevia_rssn::UnitVal {
+                scale: aevia_dim::Scale::rational(num_rational::BigRational::from_integer(
+                    0.into(),
+                )),
+                ..unit.clone()
+            },
+        ] {
+            assert!(
+                from_kernel_value(
+                    &quantity(invalid, Val::Num(aevia_rssn::Num::Float(200.0))),
+                    &expected
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            from_kernel_value(
+                &quantity(
+                    unit,
+                    Val::Num(aevia_rssn::Num::Rat(
+                        num_rational::BigRational::from_integer(200.into())
+                    ))
+                ),
+                &expected
+            )
+            .is_err()
         );
     }
 }

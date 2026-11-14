@@ -8,6 +8,9 @@
 
 本轮把规范与实现逐章对照，压缩重复、把状态说明移出正文，并新增英文版（`spec/en/`，写作与术语规则见 `spec/STYLE.md`）。机器读取的两章（08、11）保持形态不变，由 `cargo test -p aevia-std --test spec_signatures --test spec_programs` 守住。
 
+- `08-stdlib.md`：合并实际求解器方法、物理容差、预算、回调、严格 `Option` 与原生数值模型契约；修正精确签名/动态入口的界限，并同步英文。
+- `09-runtime.md`：明确 RSSN 数值算法与后端依赖的所有权、Aevia 值/单位适配边界；原生源码覆盖与清单可达性分别报告。
+
 **全书层面**
 
 - 新增英文版：每个中文章节在 `spec/en/<同名>` 有对应英文文件，章节号、锚点、代码块与诊断码与中文一致。
@@ -122,8 +125,8 @@ rssn 的 wgpu 设备以双单精度提供 `Dtype::F64`，新增启动融合规�
 
 1. **包依赖**：registry 依赖、SemVer 解析和带校验的本地副本已实现（Revision 15）；`git` 依赖不存在；按包的依赖名字空间、`[patch]` 覆盖、镜像 `[source]` 替换尚未实现。
 2. **设备后端**：`Gpu`/`Distributed` 只是可构造的运行时值；`on`/`to_device`/`@jit(target = Gpu(..))` 报 `E1001("core.gpu")`/`E1001("core.distributed")`；`Device.map` 等批量原语未作为语言原语暴露（§10.6.5）。
-3. **稀疏**：稀疏值不能进入 rssn 项图；用户自定义格式要等 rssn 开放 `Format`；`gmres_with`/`bicgstab_with` 不接受精确元素；没有稀疏特征值/SVD（§8.4.1、§13.9.5）。
-4. **SDE**：Brownian 桥稠密输出与积分中途的终止事件未提供（`sde_at` 是线性弦，`sde_events` 是事后截断）；解释器侧闭包 `!Send`，并行系综回退为顺序（§8.9.1）。
+3. **稀疏**：稀疏值不能进入 rssn 项图；用户自定义格式要等 rssn 开放 `Format`；`gmres_with`/`bicgstab_with` 不接受精确元素；稀疏 SVD 未提供，特征值通过显式 RSSN 适配查询（§8.4.1、§13.9.5）。
+4. **SDE**：Brownian 桥稠密输出与积分中途的终止事件未提供（`sde_at` 是线性弦，`sde_events` 是事后截断）；回调不可跨线程时，系综回退为顺序（§8.9.1）。
 5. **ODE**：多重打靶/配置法 BVP；`AutoSwitch` 按步数预算判定而非特征值估计（§8.9）。
 6. **类型系统**：`Zmod<n>`/`GF<p>` 类型级模数；用户函数对秩多态；符号指数（§12.8.2）。
 7. **Plot**：只有 HTML/SVG-inline 渲染器，无独立 `.svg`/PNG/JPEG 输出（§8.12）。

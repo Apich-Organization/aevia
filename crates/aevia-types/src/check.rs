@@ -12492,6 +12492,9 @@ fn builtin_type(name: &str) -> Option<Type> {
     if name == "Symbol" {
         return Some(Type::Dyn(Rep::Real));
     }
+    if name == "NativeAdVar" {
+        return Some(adt::native_ad_var_type());
+    }
     const OPAQUE: [&str; 20] = [
         "EvalError",
         "MathError",
@@ -12838,7 +12841,15 @@ fn rssn_type(
                 Box::new(rssn_type(ret, infer)),
             )
         },
-        | S::Table | S::Device | S::Opaque(_) | S::Var(_) | S::Variant(_) => dynamic_value_type(),
+        | S::Variant(cases) => {
+            aevia_rssn::registry::option_payload(cases).map_or_else(dynamic_value_type, |payload| {
+                Type::option(rssn_type(payload, infer))
+            })
+        },
+        | S::Opaque(name) if name == aevia_rssn::registry::NATIVE_AD_VAR_KIND => {
+            adt::native_ad_var_type()
+        },
+        | S::Table | S::Device | S::Opaque(_) | S::Var(_) => dynamic_value_type(),
         | S::Dyn | S::Never => Type::Dyn(Rep::Real),
     }
 }

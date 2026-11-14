@@ -3978,7 +3978,7 @@ nonzeros      : Sparse&lt;F, shape, Scalar&lt;ρ,d&gt;&gt; -&gt; Tensor&lt;1, (T
 </table>
 <p><code>sparse / sparse</code>, scalar divided by sparse and <code>sparse + scalar</code> are undefined (they would densify or produce infinite zeros) and give <code>E0302</code>; <code>to_dense</code> first if needed. <code>==</code>/<code>!=</code> compare the <strong>logical content</strong> of two sparse values (same shape and same stored entries, with numbers compared by the dense-tensor rules so <code>1</code> equals <code>1.0</code>), <strong>independent of format</strong>. <code>show</code> writes <code>sparse(Csr, [3, 3], { (0, 0) = 4.0, … })</code>; <code>repr</code> is an expression that rebuilds the same value, <code>convert&lt;Csr&gt;(sparse_coo([3, 3], [(0, 0), …], [4.0, …]))</code>, and for <code>Bcsr</code> it includes the block shape: <code>to_bcsr(sparse_coo([4, 4], […], […]), 2, 2)</code>.</p>
 <p><strong>Rank N and contraction.</strong> <code>contract(A, B, axes_a, axes_b)</code> is pairwise tensor contraction (<code>tensordot</code>): <code>axes_a</code>/<code>axes_b</code> are <strong>list literals</strong> (so the result rank is static), and the result axes are the free axes of <code>A</code> followed by those of <code>B</code>. Two sparse operands give <code>Sparse&lt;Coo, …&gt;</code>; one sparse and one dense give a dense <code>Tensor</code>; contracting all axes gives a scalar; two dense operands are a type error. <code>map_nonzero(f, A)</code> calls <code>f</code> only on <strong>stored entries</strong>, so <code>f(0) = 0</code> is required (entries returning zero are dropped); <code>nonzeros(A)</code> returns a list of <code>(index, value)</code> tuples.</p>
-<p><strong>Boundary with the kernel.</strong> rssn's <code>TypeExpr::Sparse</code> has only a <code>rank</code>, so <code>Sparse&lt;F, shape, τ&gt;</code> is lowered at the boundary to rank plus a run-time format; <code>aevia-rssn</code>'s <code>Val::Sparse</code> corresponds one-to-one to rssn's <code>Value::Sparse</code>, <strong>without densifying</strong>. rssn's <code>term_of_value</code> does not accept <code>Value::Sparse</code> into the term graph (<code>in_term_graph = false</code> in <code>manifest.value_kinds</code>), so a sparse value cannot be fed directly to general rewriting operators; sparse operations are carried by Aevia's own layout kernels, with <code>faer</code> for sparse LU. User-defined formats wait until rssn opens <code>Format</code> (§13.9.5).</p>
+<p><strong>Boundary with the kernel.</strong> rssn's <code>TypeExpr::Sparse</code> has only a <code>rank</code>, so <code>Sparse&lt;F, shape, τ&gt;</code> is lowered at the boundary to rank plus a run-time format; <code>aevia-rssn</code>'s <code>Val::Sparse</code> corresponds one-to-one to rssn's <code>Value::Sparse</code>, <strong>without densifying</strong>. rssn's <code>term_of_value</code> does not accept <code>Value::Sparse</code> into the term graph (<code>in_term_graph = false</code> in <code>manifest.value_kinds</code>), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its <code>faer</code> sparse-LU backend. User-defined formats wait until rssn opens <code>Format</code> (§13.9.5).</p>
 <blockquote>
 <p><strong>Status</strong>: all of the above is implemented (tests <code>aevia-core/tests/sparse.rs</code>, <code>sparse_block.rs</code>, <code>sparse_followup.rs</code>, <code>shape_refinement.rs</code>), and the capability <code>storage.sparse</code> is enabled. <strong>Remaining gaps</strong>: sparse values cannot enter rssn's term graph; <code>gmres_with</code>/<code>bicgstab_with</code> do not accept exact elements; there are no sparse eigenvalues or SVD.</p>
 </blockquote>
@@ -4161,12 +4161,39 @@ type AxisScale = | Linear | Log</code></pre>
 <pre class="code"><code>type OdeMethod =
     | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
     | StormerVerlet | Ruth4 | GaussLegendre4 | GaussLegendre6
+    | ImplicitMidpoint | AdaptiveRk4 | AdaptiveStormerVerlet | AdaptiveRuth4
+    | AdaptiveImplicitMidpoint | AdaptiveGaussLegendre4 | AdaptiveGaussLegendre6
 type OdeOpts&lt;s&gt; = {
     rtol: Float[1],
     atol: Float[1],
     method: OdeMethod,
-    steps: Option&lt;Int&gt;,                 # Rk4 / geometric integrators: fixed sub-steps
+    steps: Option&lt;Int&gt;,                 # Rk4 / 几何积分器：定步长子步数
     events: Option&lt;(Float[T], s) -&gt; Float[1]&gt;,
+}</code></pre>
+<pre class="code"><code>type OdeAdaptiveOpts&lt;s&gt; = {
+    rtol: Float[1],
+    atol: Float[1],
+    method: OdeMethod,
+    steps: Option&lt;Int&gt;,
+    events: Option&lt;(Float[T], s) -&gt; Float[1]&gt;,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
+}
+
+type OdePhysicalOpts&lt;s&gt; = {
+    rtol: Float[1],
+    atol: s,
+    method: OdeMethod,
+    steps: Option&lt;Int&gt;,
+    events: Option&lt;(Float[T], s) -&gt; Float[1]&gt;,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
 }</code></pre>
 <pre class="code"><code>odeint   : (((Float[T], s) -&gt; RateOf&lt;s&gt;), s, Tensor&lt;1, Float[T]&gt;)
          -&gt; Tensor&lt;1, s&gt;
@@ -4174,26 +4201,27 @@ odeint_with : (((Float[T], s) -&gt; RateOf&lt;s&gt;), s, Tensor&lt;1, Float[T]&g
            -&gt; { t: Tensor&lt;1, Float[T]&gt;, y: Tensor&lt;1, s&gt; }
 solve_ivp: (((Float[T], s) -&gt; RateOf&lt;s&gt;), s, (Float[T], Float[T]), OdeOpts&lt;s&gt;)
          -&gt; { t: Tensor&lt;1, Float[T]&gt;, y: Tensor&lt;1, s&gt; }</code></pre>
-<p><code>RateOf&lt;s&gt;</code> is a built-in type function, defined recursively:</p>
+<p><code>odeint_with</code>, <code>solve_ivp</code> and <code>ode_solve</code> also accept <code>OdeAdaptiveOpts&lt;s&gt;</code> or <code>OdePhysicalOpts&lt;s&gt;</code>. <code>h0 = 0.0 s</code> selects startup automatically. <code>h_min</code>/<code>h_max</code> bound adaptive steps; the final clipped step may be smaller. <code>max_steps</code> counts rejected attempts too; <code>max_evaluations</code> bounds actual RHS calls. Exhaustion is an error. Physical <code>atol</code> matches every state leaf's structure, tensor shape and dimension, with finite positive components. Components are normalized to implement <code>atol_i + rtol * abs(y_i)</code>; callbacks, events and results retain physical units. Legacy dimensionless scalar <code>atol</code> applies to canonical component values.</p>
+<p>Each <code>Adaptive*</code> geometric method compares its own full step with two half steps and checks the cubic Hermite midpoint defect. It accepts the two half steps without switching methods or Richardson extrapolation. State-dependent adaptive steps generally lose the long-term geometric properties of a fixed-step symplectic map. Fixed methods use <code>steps</code>; implicit-stage failure is an error.</p>
+<p><code>RateOf&lt;s&gt;</code> is the built-in recursive type function:</p>
 <pre class="code"><code>RateOf&lt;Scalar&lt;ρ,d&gt;&gt;        = Scalar&lt;ρ,d/T&gt;
 RateOf&lt;Tensor&lt;n, τ&gt;&gt;       = Tensor&lt;n, RateOf&lt;τ&gt;&gt;
 RateOf&lt;{ l1: τ1, ..., ln: τn }&gt; = { l1: RateOf&lt;τ1&gt;, ..., ln: RateOf&lt;τn&gt; }</code></pre>
-<p>If <code>s = { x: Float[L], v: Float[L/T] }</code>, then <code>RateOf&lt;s&gt; = { x: Float[L/T], v: Float[L/T^2] }</code>. The <code>RateOf</code> of the scalar state <code>Float[1]</code> is <code>Float[1/T]</code>. A state containing <code>Int</code>, <code>Bool</code> or function fields is invalid (<code>E0302</code>); capture constant parameters in the closure of <code>rhs</code>. The compiler checks field by field; users write no instances and there is no <code>OdeState</code> class. An ODE right-hand side (such as <code>rhs</code>) MUST take two parameters <code>(t, s)</code>; write <code>_</code> for an unused time parameter.</p>
-<p><code>events</code> stops and interpolates when a <code>Float[1]</code> changes sign. <code>Dopri5</code>, <code>Radau</code>, <code>Bdf</code>, <code>Rosenbrock23</code> and the fixed-step <code>Rk4</code> all support events (rssn's <code>solve_fixed_events</code>); the difference is that the fixed-step method needs <code>steps</code>, and event location accuracy also depends on the step. <code>odeint_with</code> returns the <code>t</code>/<code>y</code> actually reached. <code>odeint</code> is shorthand for the defaults (<code>rtol=1e-8</code>, <code>atol=1e-10</code>, <code>Dopri5</code>).</p>
-<p><code>StormerVerlet</code> and <code>Ruth4</code> are second- and fourth-order fixed-step symplectic integrators; the flattened state MUST have even length, with the first half the positions <code>q</code> and the second half the momenta <code>p</code>, and the right-hand side a separable canonical Hamiltonian system. <code>GaussLegendre4</code> and <code>GaussLegendre6</code> are fourth- and sixth-order implicit Gauss–Legendre RK methods and support general states. These four methods take their number of fixed sub-steps from <code>steps</code>, and an unconverged nonlinear stage is an error.</p>
-<p><strong>Flattening contract.</strong> The bridge flattens <code>s</code> into a <code>Vec&lt;f64&gt;</code> in <strong>record field declaration order</strong>, depth first, tensors row-major, and restores it in the same order after solving. Nested records flatten recursively; <code>Tensor&lt;n, Float[d]&gt;</code> flattens row-major. Only <code>Float</code> scalar and tensor fields are supported; a state with <code>Int</code>, <code>Bool</code> or function fields is <code>E0302</code> (capture constants in the <code>rhs</code> closure). <code>Tensor&lt;1, s&gt;</code> uses <code>Boxed</code> storage; numeric kernels see only flat <code>f64</code>, and Aevia boxes and unboxes.</p>
+<p>For <code>{ x: Float[L], v: Float[L/T] }</code>, the rate is <code>{ x: Float[L/T], v: Float[L/T^2] }</code>. States contain only <code>Float</code> scalars, tensors or nested records; <code>Int</code>, <code>Bool</code> and function fields give <code>E0302</code>. The RHS takes exactly <code>(t, s)</code>, even when time is unused. Imported entry points keep these type-function checks. The bridge flattens records in declaration order, depth first, and tensors in row-major order, then restores the same structure and leaf dimensions. A history of record states uses boxed storage.</p>
+<p><code>StormerVerlet</code> and <code>Ruth4</code> are second- and fourth-order partitioned symplectic methods: the flat state has even length, with <code>q</code> first and <code>p</code> second, for a separable canonical Hamiltonian system. <code>ImplicitMidpoint</code>, <code>GaussLegendre4</code> and <code>GaussLegendre6</code> are implicit Gauss–Legendre methods of orders two, four and six and support general states. Physical position and momentum can use independently dimensioned record fields. One numeric tensor is homogeneous; advanced <code>num_ode_*</code>, <code>num_dae_*</code> and <code>num_dde_*</code> tensor APIs require mixed physical components to be normalized.</p>
+<p><code>odeint</code> is shorthand for <code>Dopri5</code>, <code>rtol=1e-8</code>, <code>atol=1e-10</code>. <code>odeint_with</code> returns the times and states actually reached. Its optional event stops at a dimensionless sign crossing; fixed-step event accuracy depends on <code>steps</code>.</p>
 <p><strong>8.9.0 Solution objects, dense output, multiple events, higher-order equations, boundary-value problems</strong></p>
-<p><code>odeint</code>/<code>solve_ivp</code> give only discrete output and one terminal event. For values at <strong>arbitrary times</strong>, several events (with direction, terminal or not), higher-order equations or boundary-value problems, use the entry points below. They share <code>OdeOpts&lt;s&gt;</code>, <code>RateOf&lt;s&gt;</code> and the flattening contract with <code>odeint_with</code>, and have the same shape as the SDE event and dense-output API of §8.9.1 (<code>{ g, terminal, direction }</code>, <code>{ index, t, y }</code>, <code>at</code>).</p>
+<p>Use the following entries for arbitrary-time queries, several directed events or boundary-value problems:</p>
 <pre class="code"><code>type OdeEvent&lt;s&gt; = {
-    g: (Float[T], s) -&gt; Float[1],   # a sign change is an event; must return a dimensionless number
-    terminal: Bool,                 # true: integration stops at the event
-    direction: Int,                 # -1 falling crossings only, 0 both directions, 1 rising crossings only
+    g: (Float[T], s) -&gt; Float[1],   # 变号即事件；必须返回无量纲数
+    terminal: Bool,                 # true：积分在该事件处停止
+    direction: Int,                 # -1 只认下降穿越，0 两个方向，1 只认上升穿越
 }
 type OdeHit&lt;s&gt; = { index: Int, t: Float[T], y: s }
 type OdeSolution&lt;s&gt; = {
-    t: Tensor&lt;1, Float[T]&gt;, y: Tensor&lt;1, s&gt;,        # accepted step nodes
-    at: (Float[T]) -&gt; s,                            # continuous extension: value at any t
-    events: Tensor&lt;1, OdeHit&lt;s&gt;&gt;,                   # events sorted by time
+    t: Tensor&lt;1, Float[T]&gt;, y: Tensor&lt;1, s&gt;,        # 接受的步节点
+    at: (Float[T]) -&gt; s,                            # 连续扩展：任意 t 处取值
+    events: Tensor&lt;1, OdeHit&lt;s&gt;&gt;,                   # 按时间排序的事件
     nfev: Int, rejected: Int, method: String,
 }
 
@@ -4205,14 +4233,41 @@ odeint_order_with : (rhs, (y0, y1, ..., yk), Tensor&lt;1, Float[T]&gt;, OdeOpts&
           -&gt; { t: Tensor&lt;1, Float[T]&gt;, y: Tensor&lt;1, y0&gt;, d: Tensor&lt;1, (y0, y1, ..., yk)&gt; }
 ode_bvp : (((Float[T], s) -&gt; RateOf&lt;s&gt;), s, (Float[T], Float[T]), ((s, s) -&gt; Tensor&lt;1, Float[d]&gt;), OdeOpts&lt;s&gt;)
           -&gt; OdeSolution&lt;s&gt;</code></pre>
-<p><strong>Continuous output.</strong> <code>ode_solve(rhs, y0, (t0, t1), opts, events)</code> integrates over the whole interval (<code>t1 ≥ t0</code>; backward integration is not supported) and keeps the method's own continuous extension; <code>sol.at(t)</code> evaluates at any time in <code>[t0, t_end]</code> (outside the interval is <code>E0802</code>, a dimension other than <code>T</code> is <code>E0401</code>). <code>Dopri5</code> uses rssn's 4th-order continuous extension; <code>Radau</code>/<code>Bdf</code>/<code>Rosenbrock23</code> use their collocation polynomials / backward-difference interpolation; <code>Rk4</code> has no stage data and uses cubic Hermite interpolation on the nodes (interpolation error <code>O(h^4)</code>, fourth-order convergence in the step). Here the <code>steps</code> of <code>Rk4</code> is the <strong>total number of steps over the whole interval</strong> (in <code>odeint_with</code> it is the number of sub-steps per output interval). <code>at</code> is a function value (not data), so a solution containing <code>at</code> cannot be returned across threads; to return one from <code>par_map</code>, take only <code>t</code>/<code>y</code>.</p>
-<p><strong>Events.</strong> <code>events</code> is a list of <code>OdeEvent</code> and may be empty (<code>[]</code>). The <code>g</code> of each event is located by root finding on the continuous extension (<code>Rk4</code>: bisection on re-integration) when it changes sign between accepted steps (<code>g0 &lt; 0 ≤ g1</code> rising, <code>g0 &gt; 0 ≥ g1</code> falling, filtered by <code>direction</code>); a hit is recorded in <code>events</code> (<code>index</code> is the list position); an event with <code>terminal = true</code> ends the integration at that point, so the last node of <code>t</code>/<code>y</code> is the hit and the valid interval of <code>at</code> is truncated accordingly. Several hits in one step are sorted by time and hits after a terminal event are discarded. A <code>g</code> returning a dimensioned value is <code>E0302</code>; a direction other than -1/0/1 is <code>E0802</code>.</p>
-<p><strong>Stiff solver selection.</strong> <code>AutoSwitch</code> starts with <code>Dopri5</code> and gives it only 20000 attempted steps; when the budget is exhausted (a stiff problem limited by stability, needing far more steps than accuracy requires) it re-integrates the whole interval with <code>Radau</code>, and <code>sol.method</code> reports the method finally used (<code>"Dopri5"</code> or <code>"Radau"</code>). The decision is by <strong>step budget</strong>, not an eigenvalue estimate: a moderately stiff problem (needing tens of thousands of steps) wastes one explicit pass; choose <code>Radau</code>/<code>Bdf</code>/<code>Rosenbrock23</code> directly when stiffness is known. <code>AutoSwitch</code> also works in <code>odeint_with</code>, <code>solve_ivp</code> and event integration (same rule).</p>
-<p><strong>Higher-order equations.</strong> <code>odeint_order(f, (y0, y1, …, y_{n-1}), times)</code> integrates <code>y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)</code> (<code>n</code> is the parameter count of <code>f</code> minus one, <code>n ≥ 1</code>), internally reduced to a first-order system on the stacked state <code>z = (y, y′, …, y⁽ⁿ⁻¹⁾)</code> in which every component except <code>y⁽ⁿ⁾ = f</code> is trivial (<code>zₖ′ = zₖ₊₁</code>). <strong>Dimensions are tracked order by order</strong>: the type of the <code>k</code>-th derivative is <code>RateOf</code> applied <code>k</code> times, so for <code>y : Float[L]</code>, <code>y′ : Float[L/T]</code>, <code>y″ : Float[L/T^2]</code> and <code>f</code> MUST return <code>L/T^n</code> (<code>E0401</code>/<code>E0302</code> at check time; at run time the dimension and structure of every initial value is checked again, <code>E0401</code> on a mismatch). <code>y</code> may be a scalar, tensor or record, with the same structure for all derivatives. The returned <code>d</code> is the history of derivative tuples and <code>y</code> is order 0. <code>odeint_order_with</code> takes an extra <code>OdeOpts&lt;y0&gt;</code> (method, tolerances; <code>events</code> MUST be <code>None</code> — for events, reduce the order by hand and use <code>ode_solve</code>). Example (spring <code>x″ = -(k/m) x</code>):</p>
+<p><strong>Dense output.</strong> Integration is forward (<code>t1 ≥ t0</code>). <code>at(t)</code> is valid on <code>[t0,t_end]</code>; an out-of-range query is <code>E0802</code>, and a wrong time dimension is <code>E0401</code>. <code>Dopri5</code> uses its order-four extension; stiff solvers use their collocation or backward-difference extensions. <code>Rk4</code> uses cubic Hermite interpolation with fourth-order convergence. Its <code>steps</code> is the total over <code>ode_solve</code>'s span, versus substeps per output interval in <code>odeint_with</code>. An <code>at</code> closure cannot cross threads; return only <code>t</code>/<code>y</code> from parallel work.</p>
+<p><strong>Events.</strong> <code>events</code> may be empty. Rising crossings satisfy <code>g0 &lt; 0 ≤ g1</code>, falling crossings <code>g0 &gt; 0 ≥ g1</code>; <code>direction</code> is -1/0/1 (<code>E0802</code> otherwise). Roots are located on the continuous extension, or by reintegration for <code>Rk4</code>. Hits are sorted by time; a terminal hit truncates nodes, the dense span and later hits. Dimensioned event values give <code>E0302</code>.</p>
+<p><strong>Stiff selection.</strong> <code>AutoSwitch</code> gives <code>Dopri5</code> at most <code>min(max_steps,20000)</code> attempts. On exhaustion, remaining attempt budget runs <code>Radau</code> again from the interval start. Both attempts share the callback budget. <code>method</code> reports the final solver. Selection uses step counts, not eigenvalue estimates; known stiff problems can select a stiff solver directly.</p>
+<p><strong>Higher order.</strong> <code>odeint_order</code> rewrites order <code>n ≥ 1</code> into the stacked state <code>(y,y',...,y^(n-1))</code>. Every derivative keeps the same structure, with dimension divided by <code>T^k</code>; <code>f</code> returns <code>L/T^n</code> when <code>y</code> has <code>L</code>. The checker and runtime validate structure/dimensions (<code>E0302</code>/<code>E0401</code>). Result <code>d</code> contains all derivative histories and <code>y</code> the zeroth. <code>odeint_order_with</code> requires <code>events=None</code>; reduce manually and use <code>ode_solve</code> for events.</p>
 <pre class="code"><code>let sol = odeint_order(fn (_t, x, v) =&gt; -(k / m) * x, (1.0 m, 0.0 m/s), times)
-# x : Float[L], v : Float[L/T], returns Float[L/T^2]</code></pre>
-<p><strong>Boundary-value problems (single shooting).</strong> <code>ode_bvp(rhs, guess, (t0, t1), bc, opts)</code> solves <code>y′ = rhs(t, y)</code>, <code>bc(y(t0), y(t1)) = 0</code>, where <code>bc</code> returns a residual tensor with as many entries as state components. The algorithm is Newton iteration on the initial state (forward-difference Jacobian, one integration per unknown; backtracking line search); <code>guess</code> is the Newton starting point, convergence is <code>‖r‖∞ ≤ 1e-9 (1 + ‖y0‖∞)</code> with at most 60 iterations; it returns the <code>OdeSolution</code> of the last integration (so <code>at</code> is available). For second-order problems, write the state <code>(y, y′)</code> as in the order reduction of <code>odeint_order</code>. A wrong number of residuals is <code>E0802</code>; a singular Jacobian or non-convergence is <code>NotConverged</code>. <strong>Limitation</strong>: this is single shooting and suits only problems where the sensitivity of <code>y(t1)</code> to <code>y(t0)</code> does not blow up; exponentially unstable (long-interval, stiff) boundary-value problems need multiple shooting or collocation, which are <strong>not</strong> provided.</p>
-<p>Imported <code>odeint</code>/<code>odeint_with</code>/<code>solve_ivp</code> (and <code>sdeint_*</code> of §8.9.1, e.g. <code>import Ode { odeint }</code>) <strong>keep the type-function semantics</strong>: the <code>RateOf&lt;s&gt;</code>/<code>DiffusionOf&lt;s&gt;</code> checks are determined by the entry point itself, the standard-library module merely re-exports and does not change the signature, and only a local redefinition of the same name shadows it.</p>
+# x : Float[L]，v : Float[L/T]，返回值 Float[L/T^2]</code></pre>
+<p><strong>Single shooting.</strong> <code>ode_bvp</code> applies Newton to the initial state, with a forward-difference Jacobian and backtracking, for at most 60 iterations and <code>norm_inf(r) ≤ 1e-9 * (1 + norm_inf(y0))</code>. <code>bc</code> returns one residual per component (<code>E0802</code> otherwise). Singular or nonconverged solves give <code>NotConverged</code>. It returns the final dense solution. Unstable sensitivities require multiple shooting or collocation, which this entry does not provide.</p>
+<p><strong>Advanced callbacks.</strong> The following <code>Rssn_numerical_callback</code> families use certified callbacks (§8.19). Time, state and residual dimensions are independent; derivatives use state/time and absolute accuracy uses state units.</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Method and limits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>num_ode_{rk4,verlet,ruth4,midpoint,gauss4,gauss6}_adaptive_typed</code></td>
+<td>Requested-method step doubling, endpoints, Hermite history and explicit work budgets</td>
+</tr>
+<tr>
+<td><code>num_dae_implicit_adaptive_typed</code></td>
+<td>Residual <code>F(t,y,y') = 0</code>; BDF1 startup, variable-step BDF2, Newton and step doubling; algebraic initial state must be consistent</td>
+</tr>
+<tr>
+<td><code>num_dae_index{1,2}_adaptive_typed</code></td>
+<td>Semi-explicit constraints; positive reference scales for time, state, algebraic variables and constraints</td>
+</tr>
+<tr>
+<td><code>num_dde_constant_adaptive_typed</code></td>
+<td>Positive-delay method of steps with Dormand–Prince; steps respect the minimum delay and reachable discontinuities</td>
+</tr>
+</tbody>
+</table>
+<p>These entries enforce step bounds and attempt/callback budgets, report rejections and fail instead of forcing acceptance. DAE/DDE callback entries do not expose events. Pure <code>Rssn_numerical_vector.num_ode_history_eval</code> queries physical state/rate histories within their span. Runnable assertions are in <code>examples/ode_adaptive_{geometric,dae,dde}.aev</code>.</p>
 <h2 id="08-stdlib--891-sde">8.9.1 SDE</h2>
 <p>SDEs share <code>RateOf</code> and the flattening contract with ODEs (§8.9) but add a noise structure and a stochastic-integration convention. The method name itself encodes the convention: a name containing <code>stratonovich</code> converges to the Stratonovich solution and the rest are Itô; there is no <code>calculus</code> option orthogonal to the method (a scheme whose name does not state its convention is almost always misused).</p>
 <pre class="code"><code>type SdeMethod =
@@ -4222,16 +4277,16 @@ ode_bvp : (((Float[T], s) -&gt; RateOf&lt;s&gt;), s, (Float[T], Float[T]), ((s, 
     | DriftImplicitEuler | ThetaMaruyama | DriftImplicitMilstein
 
 type SdeStructure =
-    | Diagonal                     # one noise channel per state component, m = n
-    | General(Int)                 # (m)；the caller declares the noise commutative
-    | GeneralNoncommutative(Int)   # (m)；non-commutative noise: the method name dispatches to the Lévy-area kernel
+    | Diagonal                     # 每个状态分量一个噪声通道，m = n
+    | General(Int)                 # (m)；调用者声明噪声可交换
+    | GeneralNoncommutative(Int)   # (m)；噪声不可交换：方法名分派到 Lévy 面积内核
 
 type SdeFixedOpts&lt;T&gt; = {
     structure: SdeStructure,
     method: SdeMethod,
     seed: Int,
     t0: Float[T], dt: Float[T], steps: Int,
-    terms: Int,                    # Fourier modes of the Lévy area; 0 = default clamp(ceil(1/√h), 16, 4096), h the step
+    terms: Int,                    # Lévy 面积的 Fourier 模数；0 = 默认 clamp(ceil(1/√h), 16, 4096)，h 为步长
 }
 
 type SdeAdaptiveOpts&lt;T&gt; = {
@@ -4241,8 +4296,8 @@ type SdeAdaptiveOpts&lt;T&gt; = {
     t0: Float[T], t1: Float[T],
     rtol: Float[1], atol: Float[1],
     max_steps: Int,
-    cells: Int,                    # Brownian grid cells for non-commutative adaptive runs; 0 = default 4096, ignored for commutative noise
-    terms: Int,                    # as above; h is the cell width (t1 - t0)/cells
+    cells: Int,                    # 所有自适应方法的最细噪声 cell；向上取二次幂，0 = 4096
+    terms: Int,                    # 同上；h 取 cell 宽度 (t1 - t0)/cells
 }
 
 type SdeOpts&lt;T&gt; = | Fixed(SdeFixedOpts&lt;T&gt;) | Adaptive(SdeAdaptiveOpts&lt;T&gt;)
@@ -4262,20 +4317,20 @@ sdeint_general : (((Float[T], s) -&gt; RateOf&lt;s&gt;),
                   s, SdeOpts&lt;T&gt;) -&gt; Result&lt;SdePath&lt;s&gt;, SdeError&gt;
                   # s = Float[d]       : GeneralDiffusionOf&lt;s&gt; = Tensor&lt;2, Scalar&lt;ρ, d/T^(1/2)&gt;&gt;  (1×m)
                   # s = Tensor&lt;1, τ&gt;   : Tensor&lt;2, DiffusionOf&lt;τ&gt;&gt;                               (n×m)
-                  # s = { l: τ, … }    : { l: GeneralDiffusionOf&lt;τ&gt;, … }(record state, see below)
+                  # s = { l: τ, … }    : { l: GeneralDiffusionOf&lt;τ&gt;, … }（记录状态，见下）
 
 wiener           : (Int, Int, Int, Float[T]) -&gt; Tensor&lt;2, Float[T^(1/2)]&gt;
-                   # (seed, m, steps, dt)；same order as the manifest&#39;s sde_wiener(seed, m, steps, h)
+                   # (seed, m, steps, dt)；与 manifest 的 sde_wiener(seed, m, steps, h) 同序
 sde_order        : SdeMethod -&gt; { strong: Float[1], weak: Float[1] }
-                   # order under commutative noise
+                   # 可交换噪声下的阶
 sde_order_with   : (SdeMethod, SdeStructure) -&gt; { strong: Float[1], weak: Float[1] }
-                   # order by structure: HeunStratonovich has only strong order 1/2 on non-commutative noise
-sde_ensemble_seed: (Int, Int) -&gt; Int     # (seed, index), pure function
+                   # 按结构给阶：HeunStratonovich 在不可交换噪声上只有强 1/2
+sde_ensemble_seed: (Int, Int) -&gt; Int     # (seed, index)，纯函数
 
 type SdeEvent&lt;s&gt; = {
-    g: (Float[T], s) -&gt; Float[1],  # a sign change is an event; dimensionless
-    terminal: Bool,                # true: the path is cut at the first such event
-    direction: Int,                # -1 falling, 0 both directions, 1 rising
+    g: (Float[T], s) -&gt; Float[1],  # 变号即事件，无量纲
+    terminal: Bool,                # true：路径在第一个这样的事件处截断
+    direction: Int,                # -1 下降，0 两个方向，1 上升
 }
 type SdeHit&lt;s&gt; = { index: Int, t: Float[T], y: s }
 
@@ -4351,24 +4406,41 @@ sde_ensemble_general : (((Float[T], s) -&gt; RateOf&lt;s&gt;), ((Float[T], s) -&
 <td>Strat. Milstein + Lévy area</td>
 <td>1, 1</td>
 </tr>
+<tr>
+<td><code>DriftImplicitEuler</code></td>
+<td>Itô</td>
+<td>Implicit drift, explicit diffusion</td>
+<td>Same</td>
+<td>1/2, 1</td>
+</tr>
+<tr>
+<td><code>ThetaMaruyama</code></td>
+<td>Itô</td>
+<td>theta = 1/2 implicit drift, explicit diffusion</td>
+<td>Same</td>
+<td>1/2, 1</td>
+</tr>
+<tr>
+<td><code>DriftImplicitMilstein</code></td>
+<td>Itô</td>
+<td>Implicit drift, Milstein cross terms</td>
+<td>With Lévy areas</td>
+<td>1, 1</td>
+</tr>
 </tbody>
 </table>
 <p>The kernel documentation states there is no scheme stronger than first order, and the Milstein family is only weak order one, so no weak order two is claimed. <code>sde_order(method)</code> gives the orders under commutative noise; <code>sde_order_with(method, structure)</code> gives them by structure (<code>HeunStratonovich</code> has no Lévy-area term and drops to strong 1/2 on non-commutative noise — the call is allowed but the order is reported honestly). Iterated integrals: Itô <code>I_jl = ½ΔW_jΔW_l − ½δ_jl h + A_jl</code>, Stratonovich <code>J_jl = I_jl + ½δ_jl h = ½ΔW_jΔW_l + A_jl</code> (<code>A</code> is the Lévy area). The SRK support values are <code>Υ^j = Y + a h + b^j √h</code> (one per noise channel, <code>m</code> extra diffusion evaluations per step), and <code>Y' = Y + a h + Σ_j b^j ΔW_j + h^(-1/2) Σ_{j,l} (b^l(Υ^j) − b^l(Y)) I_jl</code> (the Stratonovich version uses <code>J_jl</code> and the Stratonovich drift).</p>
-<p><strong>Default <code>terms</code> for the Lévy area.</strong> Paths that need the area (<code>Milstein</code>/<code>MilsteinStratonovich</code>/<code>SrkPlaten</code> on non-commutative structure, and the two <code>*Noncommutative*</code> methods) take <code>clamp(ceil(1/√h), 16, 4096)</code> when <code>terms == 0</code>, with <code>h</code> the step (the Brownian cell width <code>(t1 − t0)/cells</code> for adaptive runs); an explicit <code>terms &gt; 0</code> is used as is. <code>terms</code> is no longer a required value.</p>
+<p><strong>Default <code>terms</code> for the Lévy area.</strong> Paths that need the area (<code>Milstein</code>/<code>MilsteinStratonovich</code>/<code>SrkPlaten</code>/<code>DriftImplicitMilstein</code> on non-commutative structure, and the two <code>*Noncommutative*</code> methods) take <code>clamp(ceil(1/√h), 16, 4096)</code> when <code>terms == 0</code>, with <code>h</code> the step (the Brownian cell width <code>(t1 − t0)/cells</code> for adaptive runs); an explicit <code>terms &gt; 0</code> is used as is. The <code>terms</code> field is required; 0 selects the default.</p>
 <p>For <code>General</code>/<code>GeneralNoncommutative</code>, <code>m</code> is the number of noise channels; <code>sdeint_general</code> checks at run time that the diffusion matrix has shape <code>n × m</code> (<code>E0802</code>), and <code>SdePath.noise</code> reports the actual <code>m</code> (<code>n</code> for diagonal).</p>
 <p><strong>Record state with general noise</strong>: <code>sdeint_general</code> accepts a record state. The diffusion returns a <strong>record of the same shape</strong> in which each scalar field is a <code>Tensor&lt;1, Float[d/T^(1/2)]&gt;</code> of <code>m</code> coefficients and a field of rank <code>r</code> becomes a tensor of rank <code>r+1</code> (one extra trailing noise axis <code>[.., m]</code>): <code>GeneralDiffusionOf&lt;{ l: τ, … }&gt; = { l: GeneralDiffusionOf&lt;τ&gt;, … }</code>. At run time the fields are taken in the <strong>field order of the state record</strong>, depth first and row-major, which is exactly the kernel's <code>n × m</code> row-major matrix (a scalar field is one row). Example: for <code>{ x: Float, v: Tensor&lt;1, Float&gt; }</code> (<code>n = 1 + k</code>) with <code>General(2)</code>, the diffusion returns <code>{ x: [σx1, σx2], v: Tensor&lt;2&gt; [k×2] }</code>.</p>
-<p><strong>Step policy</strong>: <code>Fixed</code> uses a constant step <code>dt</code> for <code>steps</code> steps (time grid <code>t0 + k·dt</code>); <code>Adaptive</code> controls the local error with <code>rtol</code>/<code>atol</code> on <code>[t0, t1]</code>, with Brownian-bridge rejection and resampling (in the kernel). <strong>Every method supports adaptive stepping</strong>:</p>
-<ul>
-<li>Itô commutative (<code>EulerMaruyama</code>/<code>Milstein</code>/<code>SrkPlaten</code>): the kernel's adaptive controller returns the Milstein solution (its error estimate is EM-versus-Milstein), so the three give the same controlled path and the method name keeps the requested value;</li>
-<li><strong>Stratonovich adaptive = exact Itô conversion</strong>: the drift is replaced by the Itô-equivalent drift <code>ã_i = a_i + ½ Σ_j Σ_k b_kj ∂_k b_ij</code> (the correction uses central differences along the diffusion columns, with the step scaled like the Milstein-term differences), and the Itô controller then runs on <code>(ã, b)</code>. The returned path is the <strong>controlled Itô–Milstein solution of the equivalent Itô SDE</strong>, which converges to the Stratonovich solution of the original coefficients (for <code>dX = σX∘dW</code> it converges to <code>X0·exp(σ W_T)</code>);</li>
-<li>non-commutative noise (and the two <code>*Noncommutative*</code> methods): a fine cell grid plus a controller using the Chen relation (<code>cells</code>, 0 = default 4096); Stratonovich methods again convert to Itô first. A single cell that is still rejected is <code>E0807</code> and needs more <code>cells</code>.</li>
-</ul>
-<p><strong>Determinism</strong>: <code>seed</code> is required and has no default. Increments of fixed-step commutative paths come from the language RNG stream (the same LCG as <code>rng(seed)</code>, normals by Box–Muller), so <code>wiener(seed, m, steps, dt)</code> and a fixed-step path with the same seed consume <strong>the same numbers</strong>; reproducible within a build, with no promise of bitwise equality across platforms. Fixed-step non-commutative paths and all adaptive paths need the kernel's own xoshiro stream (bridge rejection and Lévy areas are sampled during the solve), seeded from <code>seed</code>, again reproducible only within a build. <code>sde_ensemble_seed</code> depends only on <code>(seed, index)</code>, so ensemble members are independent of execution order and thread count; <code>sde_ensemble_diag/general</code> run members in parallel at the language level (see above).</p>
-<p><strong>Error table</strong>: <code>E0802</code> shape/argument (including a <code>General</code> <code>m</code> that disagrees with the diffusion matrix, non-uniform grids, missing required fields); <code>E0806</code> non-finite state; <code>E0807</code> adaptive step collapse or exhausted step budget; <code>E1001</code> is reserved for genuinely unimplemented capabilities (<code>core.sde</code>, <code>sde.events</code>), and no combination of method, structure and step policy produces it today. <code>SdeError</code> is an opaque error type (like <code>SimError</code>) and the language exposes no constructors.</p>
-<p><strong>Not provided</strong>: user-defined noise structures; explicit non-uniform grids (the fixed-step kernel assumes a uniform step and reports <code>E0802</code>; use <code>Adaptive</code> for variable steps); solver manifest operators (solvers need callbacks, which cannot cross the manifest ABI); Brownian-bridge dense output (<code>sde_at</code> is a linear chord); terminal events that stop <strong>during</strong> integration (<code>sde_events</code> cuts after the fact).</p>
-<blockquote>
-<p><strong>Status</strong>: all of the above is implemented (<code>aevia-std::sde</code>; the <code>sde_runtime</code> and <code>sde_language</code> tests in <code>aevia-core</code>; strong-convergence slopes are measured by <code>rssn/tests/sde_noncommutative.rs</code> on a two-dimensional non-commutative linear SDE: &gt; 0.8 for the Milstein family, about 0.5 for Euler–Maruyama). Every method works on every structure; <code>sdeint_diag</code>/<code>sdeint_general</code>/<code>wiener</code>/<code>sde_order</code>/<code>sde_ensemble_seed</code> are Prelude built-ins re-exported by the <code>Sde</code> module, which also declares the option ADTs. In source, write <code>Sde.Fixed({ structure = Sde.Diagonal, method = Sde.EulerMaruyama, … })</code> (or <code>import Sde { Fixed, Diagonal, EulerMaruyama }</code> and use short names). The option record is read field by field at run time; a missing or ill-typed field gives an <code>SdeError</code> with <code>E0802</code> and no defaults are filled in (<code>terms</code> and <code>cells</code> MUST be present, with <code>0</code> meaning default). The manifest's <code>sde_scheme_info(name: String) -&gt; Tensor&lt;1, Real&gt;</code> returns <code>[strong_order, ito, commutative_only, adaptive, levy_areas]</code> (the last four are 1/0 flags); it is a manifest-only metadata query, not a solver path, and gives only the strong order — use <code>sde_order</code> for the weak order. <code>Float[T^(1/2)]</code> elements of <code>wiener</code> print as <code>s^(1/2)</code> (§5.4.3).</p>
-</blockquote>
+<p><strong>Adaptive schedule.</strong> <code>Fixed</code> keeps its uniform grid. <code>Adaptive</code> retains the requested scheme, including all three implicit-drift schemes. One full step and two half steps use the same realized noise; accepted half-step states are saved. Euler, SRK and Heun requests are not replaced with Milstein. Every adaptive method uses <code>cells</code>: 0 means 4096; otherwise the count rounds up to a power of two, at least two. Coarse increments sum fixed independent finest increments; iterated integrals obey Chen's relation. Rejection does not resample realized noise. Failure at the finest coupled interval is <code>E0807</code>; acceptance is never forced.</p>
+<p>Brownian defects use a <code>sqrt(dt/span)</code> local second-moment allocation; drift defects independently use <code>dt/span</code>. Relative scales use the largest initial/current/trial component magnitude. These are local estimates, not global bounds. <code>max_steps</code> bounds proposals and accepted steps. Allocation/work limits are 1048576 finest cells, 8388608 stored coefficients/state values and 268435456 Lévy-area updates.</p>
+<p><strong>Jump and stable noise.</strong> Compound Poisson arrivals and marks are sampled once before rejection. Continuous evolution stops at each arrival and records its post-jump state. Nonconstant compensation needs an expected-jump callback. Stable coarse increments sum independent finest increments; local moment order is <code>q = 0.9 alpha</code>. For <code>alpha &lt; 2</code>, only Euler, drift-implicit Euler and theta apply; Brownian Milstein/Stratonovich corrections do not. At <code>alpha = 2</code>, noise means <code>sqrt(2) W</code> and all Brownian schemes apply.</p>
+<p><code>Rssn_numerical_callback</code> exposes <code>num_sde_adaptive_{diag,general}_typed</code>, <code>num_sde_jump_adaptive_{diag,general}_typed</code> and <code>num_sde_levy_adaptive_{diag,general}_typed</code>. Controls include physical endpoints/reference time, state-unit absolute accuracy, relative accuracy, finest-grid, proposal and callback budgets, seed and method code (<code>SdeMethod</code> declaration order 0–9). General noise adds channel count and commutativity. Brownian coefficients use state/sqrt(time). Stable noise uses dimensionless <code>L_(t/reference_time)</code>, so its coefficient has state units without floating-point dimensional powers.</p>
+<p><strong>Determinism.</strong> Seeds are explicit. Fixed/adaptive commutative Brownian paths use the language LCG/Box–Muller stream; iterated-area paths use kernel xoshiro. Seed and finest resolution determine a realization unchanged by rejection. Ensemble seeds depend only on <code>(seed,index)</code>. Reproducibility is within a build. Runnable assertions are in <code>examples/sde_adaptive_*.aev</code>.</p>
+<p><strong>Error table</strong>: <code>E0802</code> shape/argument (including a <code>General</code> <code>m</code> that disagrees with the diffusion matrix, non-uniform grids, missing required fields); <code>E0806</code> non-finite state; <code>E0807</code> adaptive step collapse or exhausted step budget; <code>E1001</code> is reserved for unimplemented capabilities. <code>SdeError</code> is an opaque error type (like <code>SimError</code>) and the language exposes no constructors.</p>
+<p><strong>Not provided</strong>: user-defined noise structures, explicit non-uniform fixed grids, Brownian-bridge dense output, or early stopping during standard <code>sde_events</code> integration (events truncate afterwards). Callback solvers use §8.19. The <code>Sde</code> module declares option ADTs and re-exports these entries. <code>terms</code> and <code>cells</code> are required; 0 selects defaults. <code>sde_scheme_info</code> queries metadata only; use <code>sde_order</code>/<code>sde_order_with</code> for weak order.</p>
+<p>Status: these language entries and the listed callback solvers are implemented; native Rust API reachability is reported separately from manifest coverage (§8.19).</p>
 <h2 id="08-stdlib--810-pde">8.10 PDE</h2>
 <p>PDE solvers take records containing the grid, coefficients and boundary conditions. The signatures are long; here are the entry points:</p>
 <pre class="code"><code>solve_poisson : PoissonSpec -&gt; Result&lt;Field, PdeError&gt;
@@ -4376,6 +4448,64 @@ solve_heat    : HeatSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;
 solve_wave    : WaveSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;
 solve_advection : AdvectionSpec -&gt; Result&lt;Tensor&lt;1, Field&gt;, PdeError&gt;</code></pre>
 <p><code>Field</code> is <code>{ grid: Grid, values: Tensor&lt;n, Float[d]&gt; }</code>. The dimensions of coefficients and boundary conditions are annotated field by field in the <code>Spec</code> records; the solver checks at run time that the grid and coefficient dimensions agree. The full typing rules of PDEs are in the <code>Pde</code> module documentation; PDE specifications are not part of the core type system.</p>
+<h3 id="08-stdlib--8101-temporal-adaptivity-through-the-manifest">8.10.1 Temporal adaptivity through the manifest</h3>
+<p><code>Rssn_numerical_callback.num_pde_*_adaptive</code> compares a full step with two half steps on a fixed spatial discretization. Accepted states use the selected method's half steps without substitution or Richardson extrapolation. Error scaling uses positive field-unit absolute accuracy and dimensionless relative accuracy. Rejected trials are discarded. Without a terminal event, integration reaches the exact endpoint. Initial/minimum/maximum steps and accepted/rejected-step, step-kernel and serial callback budgets are explicit; exhaustion or failure at the minimum step is an error.</p>
+<table>
+<thead>
+<tr>
+<th>Spatial family</th>
+<th>Time methods</th>
+<th>Spatial dimensions</th>
+<th>Boundaries</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Regular differences: heat</td>
+<td>Explicit Euler, full backward Euler, full Crank–Nicolson, Douglas ADI</td>
+<td>1–3</td>
+<td>Paired periodic, static Dirichlet/Neumann/Robin; corner data checked</td>
+</tr>
+<tr>
+<td>Regular differences: wave</td>
+<td>Velocity Verlet, the restartable variable-step leapfrog form</td>
+<td>1–3</td>
+<td>Same; displacement and velocity tolerances have distinct units</td>
+</tr>
+<tr>
+<td>Regular differences: advection</td>
+<td>First-order upwind</td>
+<td>1–3</td>
+<td>Same; outward flux and multidimensional CFL bound</td>
+</tr>
+<tr>
+<td>Simplex FEM: heat/reaction</td>
+<td>theta: backward Euler or Crank–Nicolson</td>
+<td>1–3</td>
+<td>Marker boundaries; ABI builds structured P1/P2 meshes; optional nodal source</td>
+</tr>
+<tr>
+<td>Scalar FVM</td>
+<td>Upwind/Rusanov, classical Lax–Friedrichs, MUSCL minmod/van Leer</td>
+<td>1</td>
+<td>Periodic or transmissive; flux/speed callbacks</td>
+</tr>
+<tr>
+<td>Nodal DG: scalar advection</td>
+<td>SSPRK3</td>
+<td>1–2</td>
+<td>Periodic</td>
+</tr>
+<tr>
+<td>Fourier pseudospectral</td>
+<td>ETDRK4</td>
+<td>1–3</td>
+<td>Periodic; nonlinear callback returns field/time</td>
+</tr>
+</tbody>
+</table>
+<p>Lax–Friedrichs spatial viscosity depends on the step size, so a fixed mesh may prevent tight temporal accuracy; the solver fails rather than changing fluxes. FEM source callbacks evaluate <code>(time, coordinates) -&gt; nodal field/time</code> serially at both theta endpoints; their nodal interpolants use the consistent mass matrix. Sources and events share a callback budget. Multidimensional DG accepts axis element counts, physical box lengths, polynomial degree and per-axis speeds. Spatial convergence needs a separate mesh study; spatial refinement is not temporal adaptivity. Poisson, static Helmholtz/FEM and elliptic Chebyshev solves have no time-stepping mode.</p>
+<p>Coordinate, time and field dimensions are independent <code>L</code>, <code>T</code>, <code>U</code>. Diffusivity is <code>L^2/T</code>, advection/wave speed <code>L/T</code>, reaction <code>1/T</code>, and wave velocity <code>U/T</code>. Boundary vector fields are <code>kind</code>, <code>value: U</code>, <code>flux: U/L</code>, <code>alpha: 1</code>, <code>beta: L</code>, <code>gamma: U</code>. Kinds 0–3 mean Dirichlet, Neumann, Robin, periodic. One entry broadcasts to active faces; otherwise provide two per axis, with paired periodic faces. Robin means <code>alpha*u + beta*du/dn = gamma</code>. FVM flux is <code>U*L/T</code>, speed <code>L/T</code>. Results carry accepted <code>times</code>/<code>states</code>, physical <code>coordinates</code>, actual work counts, final error ratio and optional terminal event time; wave results add <code>velocities</code>. Assertions are in <code>examples/pde_adaptive_{heat,wave_event,advanced}.aev</code>.</p>
 <h2 id="08-stdlib--811-data">8.11 Data</h2>
 <pre class="code"><code>type Table&lt;ρ&gt;                  # row-polymorphic static schema; ρ is a record type
 type Column
@@ -4561,11 +4691,13 @@ Rssn.call_ho_key   : (String, String, Tensor&lt;1, Value&gt;, Tensor&lt;1, Callb
 Rssn.register        : Plugin -&gt; Result&lt;PluginId, PluginError&gt;
 Rssn.register_plugin : Plugin -&gt; Result&lt;PluginId, PluginError&gt;   # alias</code></pre>
 <p><code>OpKey</code> is <code>(rule_set, name, signature_hash)</code> on the Aevia side: <code>call_key</code> takes a name plus a <code>signature_hash</code> (32 hex characters; all zeros means the operator has no declared overloads); on success <code>resolve_overload</code> returns <code>"rule_set.name@signature_hash"</code>; <code>overloads</code> returns the rendered signature text. <code>Rssn.call</code> is an alias of <code>Rssn.dynamic</code> (both take a short name and a <code>Value</code> array).</p>
-<p>The members of <code>Rssn</code> are generated from the Kernel Manifest (rules in §13.2.2): operators with <code>Declared | Overlay | Derived</code> signatures get typed declarations (one per overload) that pin the <code>signature_hash</code> at generation time; <code>None</code> (leaf / non-callable) and plugin operators get <code>dynamic</code>; an alias generates <code>Rssn.&lt;alias&gt;</code> and on a clash <code>Rssn.&lt;rule_set&gt;.&lt;name&gt;</code> is used (a namespace, not a run-time key). Generated declarations call the internal form <code>Rssn.invoke(name, signature_hash, args)</code> (it pins the overload too, but the error channel differs: a generated <code>fn</code> MUST return its declared type, so a kernel failure raises instead of returning <code>Err</code>; it is not a fixed entry point). The size of the manifest is a <strong>measurement</strong>, not a constant: <code>aevia rssn</code> gives live numbers (<code>rssn 3.0.0-rc.1</code>: 1620 operators, 99 declared + 103 overlay + 1418 derived, 82 units, 30 constants). <code>Derived</code> is a conservative signature inferred from registration data that does not distinguish <code>Tensor</code>/<code>Quantity</code>/<code>Int</code>, and IDEs mark it "conservatively inferred" (§13.2.2). The two SDE noise primitives <code>sde_wiener</code>/<code>sde_levy_areas</code> and the scheme metadata <code>sde_scheme_info</code> (<code>(String) -&gt; Tensor&lt;1, Real&gt;</code>, giving only the strong order and flags) are typed declarations with exact overlay signatures; the SDE <strong>solve loop</strong> needs host callbacks, is not a manifest operator and does not appear in <code>Rssn</code> (§8.9.1).</p>
+<p>The members of <code>Rssn</code> are generated from the Kernel Manifest (rules in §13.2.2): overloads with exact <code>Declared</code>/<code>Overlay</code> signatures that source can express and the bridge can authenticate get typed declarations pinned to the generation-time <code>signature_hash</code>; <code>Derived</code>, <code>None</code> and unprovable signatures retain dynamic entry points; an alias generates <code>Rssn.&lt;alias&gt;</code> and on a clash <code>Rssn.&lt;rule_set&gt;.&lt;name&gt;</code> is used (a namespace, not a run-time key). Generated declarations call the internal form <code>Rssn.invoke(name, signature_hash, args)</code> (it pins the overload too, but the error channel differs: a generated <code>fn</code> MUST return its declared type, so a kernel failure raises instead of returning <code>Err</code>; it is not a fixed entry point). Manifest size is measured by <code>aevia rssn</code> (§10.8). <code>Derived</code> is a conservative signature inferred from registration data that does not distinguish <code>Tensor</code>/<code>Quantity</code>/<code>Int</code>, and IDEs mark it "conservatively inferred" (§13.2.2). The two SDE noise primitives <code>sde_wiener</code>/<code>sde_levy_areas</code> and the scheme metadata <code>sde_scheme_info</code> (<code>(String) -&gt; Tensor&lt;1, Real&gt;</code>, giving only the strong order and flags) are typed declarations with exact overlay signatures; SDE callback solvers use the restricted higher-order ABI (§8.9.1); noise primitives and metadata do not replace solvers.</p>
+<p>A public Rust API is not automatically a manifest operator. Concrete numerical functions are bound from source and reviewed dimension policies; generic callbacks, stateful objects and opaque models need explicit adapters. Manifest reachability and native source classifications are reported separately; manifest coverage does not establish complete native coverage.</p>
+<p>The generator recursively maps a structural variant to <code>Option&lt;T&gt;</code> only when it contains exactly a payload-free <code>None</code> and a single-payload <code>Some</code>; other variants stay dynamic. Payload types and dimensions are still checked, and an empty <code>None</code> supplies no payload-unit evidence. This mapping does not expand the callback bridge's accepted ADT schemas.</p>
 <p>Reachability and limits of the fixed entry points:</p>
 <ul>
 <li><code>type_rep&lt;T&gt;()</code> makes an unforgeable <code>TypeRep</code> from a concrete checked type; an unresolved generic cannot be reflected without a run-time type dictionary. <code>Rssn.typed</code> performs the dynamic call and checks the result against that witness; a mismatch or insufficient evidence returns <code>Err(OpError)</code>, and a successful result is still an opaque <code>Value</code> to be validated and converted with <code>from_value&lt;T&gt;</code>.</li>
-<li><code>to_callback(f)</code> checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque <code>Callback</code> (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, <code>Bool</code>, <code>String</code>, and tensors and closed records built recursively from them; concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use <code>Float</code> scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.</li>
+<li><code>to_callback(f)</code> checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque <code>Callback</code> (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, <code>Bool</code>, <code>String</code>, the sealed host type <code>NativeAdVar</code>, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use <code>Float</code> scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.</li>
 <li><code>Rssn.register</code>/<code>Rssn.register_plugin</code> accept a host <code>Plugin</code>; Aevia source does not hold such values (run-time <code>E0302</code>, with a note pointing to the source mechanism). Source plugins are published by declaration (§13.5.2): <code>@op</code>/<code>@rule</code> functions are registered at module load, and <code>load_plugin(path) : String -&gt; IO (Result&lt;Int, String&gt;)</code> loads a plugin file at run time.</li>
 <li><code>core.callback</code> marks the restricted callback bridge as available, and <code>core.plugin.source</code> marks source plugins as available. Generated higher-order bindings keep the explicit <code>(values, callbacks)</code> dynamic interface; for a single overload with an exact declaration whose callbacks and results can be certified, a typed alias pinned to the signature is also generated, which certifies the concrete callback signature at call time and validates the result against the instantiated type; signatures whose type or dimension cannot be proved offer only the dynamic entry. For example the <code>num_least_squares</code> alias of <code>Rssn_numerical_callback</code>: parameters and residuals have dimensions <code>D</code> and <code>E</code>, the residual tolerance uses <code>E</code>, the other controls are dimensionless, and the result carries <code>converged</code> and <code>status</code> (residual/gradient convergence, budget exhausted, stagnation).</li>
 </ul>
@@ -4618,6 +4750,47 @@ Rssn.register_plugin : Plugin -&gt; Result&lt;PluginId, PluginError&gt;   # alia
 <li>Ragged inputs (adjacency lists, polynomial systems with different term counts) have no literal syntax; build a <code>Tensor&lt;1, Tensor&lt;1, Float&gt;&gt;</code> with <code>map(f, range(0, n))</code>.</li>
 </ul>
 <p>End-to-end examples and closed-form checks: <code>tests/domain_numeric.aev</code> (<code>mad([1,2,3,4,100]) = 1</code>, <code>ifft(fft(x)) = x</code>, wavelet round trips, <code>poisson_fd</code> of <code>-u'' = 1</code> giving <code>x(1-x)/2</code>, the <code>exp(-π²t)</code> decay of <code>heat_fd</code>, <code>tensordot_2_2_1</code> against a hand-computed matrix product, reconstruction by <code>hosvd_3</code>/<code>tt_svd_3</code>, <code>ode_solve</code> of <code>y' = -2y</code> giving <code>e^-2</code>, <code>lambert_w_complex(1,0,0) = 0.5671…</code>, and others), run with <code>cargo test -p aevia-rssn --test aev_suites</code>.</p>
+<h3 id="08-stdlib--8192-native-numerical-models">8.19.2 Native numerical models</h3>
+<p>The following manifest-generated entries call RSSN associated methods or explicit generic specializations. Their numerical algorithms remain in RSSN. <code>D</code> and <code>E</code> denote independent element dimensions; <code>X</code> denotes the coordinate dimension.</p>
+<table>
+<thead>
+<tr>
+<th>Entry family</th>
+<th>Value and dimension contract</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Rssn_numerical_matrix.num_matrix_{float,real}_*</code></td>
+<td><code>Matrix&lt;f64&gt;</code> / exact rational specializations; records carry a format version, backend and entries. <code>real</code> rejects approximate <code>Float</code> and uses only the Native backend; <code>decompose_*</code> uses Float. <code>get_mut</code> and backend updates return new models.</td>
+</tr>
+<tr>
+<td><code>num_dense_lu_model_*</code>, <code>num_sparse_{lu,ilu,ic,auto}_model_*</code>, <code>num_csr_model_*</code></td>
+<td>Store defining matrices and factor kinds, reconstructing native factors on use; <code>A x = b</code> and preconditioner application return <code>E/D</code>. CSR indices, permutations and counts are <code>Int</code>, distinct from measured entries.</td>
+</tr>
+<tr>
+<td><code>Rssn_numerical_vector.num_polynomial_model_*</code></td>
+<td>Descending coefficients share one output dimension and are evaluated at <code>x/coordinate_scale</code>. Derivatives and integrals restore <code>D/X</code> and <code>D*X</code>; binary operations require identical physical coordinate scales.</td>
+</tr>
+<tr>
+<td><code>num_native_cubic_spline_*</code>, <code>num_native_pchip_*</code>, <code>num_native_cheb_*</code>, <code>num_native_aaa_*</code></td>
+<td>Coordinates and outputs have independent dimensions; a derivative of order <code>k</code> has <code>D/X^k</code>, an integral has <code>D*X</code>, and roots have coordinate units.</td>
+</tr>
+<tr>
+<td><code>Rssn_numerical_callback.num_native_cheb_{from_fn,adaptive}_typed</code></td>
+<td>Authenticated serial callbacks construct the same Chebyshev model, with explicit degree and evaluation budgets, finite-value checks and original callback errors.</td>
+</tr>
+<tr>
+<td><code>Rssn_numerical_matrix.num_backend_*</code></td>
+<td>Session-owned backend, compiled-program and scalar handles normalize each coordinate by a positive physical reference, then multiply by an output reference. Interpreter compilation has explicit work bounds; unsupported backends error. Changing the process default requires an explicit selection.</td>
+</tr>
+<tr>
+<td><code>num_ad_*</code> / <code>NativeAdVar</code></td>
+<td>Session-owned reverse AD tapes, variables and gradients use explicit reference scales for heterogeneous coordinates; when output and input dimensions are <code>E</code> and <code>D</code>, gradients have <code>E/D</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Models validate format/version, fields, shapes, indices, finite data and allocation bounds before invoking native methods. Portable definitions contain no process-local pointers; repeated queries may incur reconstruction cost. Determinants return <code>normalized</code>, <code>entry_unit</code> and <code>order</code>, representing <code>normalized * entry_unit^order</code>. Packed LU stores mixed factors normalized to canonical input units; its whole packed array must not be interpreted as one physical dimension. Session handles check kind, owning session, lifetime and quotas; release dependent handles before their parents, and do not interchange session handles with portable definitions. Runnable assertions are in <code>examples/native_algebra_models.aev</code>; generated manifest signatures and descriptions define the complete entry set and current limits.</p>
 <h2 id="08-stdlib--820-library-organisation">8.20 Library organisation</h2>
 <pre class="code"><code>Prelude
 Math
@@ -4703,7 +4876,7 @@ Physics
 </tr>
 <tr>
 <td><code>aevia-std</code> / <code>aevia-stdlib-model</code></td>
-<td>the standard library (Aevia source plus Rust numeric kernels) / the source of truth for its generation</td>
+<td>standard-library source and RSSN adapters / the source of truth for generation</td>
 </tr>
 <tr>
 <td><code>aevia-core</code></td>
@@ -4902,12 +5075,15 @@ Physics
 <ul>
 <li><code>Float</code> scalar arithmetic goes straight to f64 without entering rssn; <code>sin</code>, <code>exp</code> and the like use Rust <code>libm</code> or rssn kernels.</li>
 <li><code>approx</code> of a <code>Real</code> uses <code>Target::Numeric</code>; the result carries an error ball and Aevia takes the midpoint.</li>
-<li><code>F64</code> tensor operations use ndarray/faer; <code>Exact</code>/<code>Boxed</code> use the element-wise scalar path.</li>
+<li>Tensor numerical algorithms run in RSSN; <code>Exact</code>/<code>Boxed</code> use host scalar callbacks to preserve language representations and dimensions.</li>
 </ul>
+<h3 id="09-runtime--946-numerical-implementation-boundary">9.4.6 Numerical implementation boundary</h3>
+<p>RSSN owns numerical algorithms, including exact integer/rational arithmetic, complex arithmetic, tensor contractions, dense/sparse factorizations, statistics, interpolation and differential-equation stepping. <code>aevia-std</code> validates shapes and units, adapts callbacks, maps errors and preserves language value representations. The runtime retains scalar language arithmetic and collection traversal; numerical iteration and contraction schedules run in RSSN, using host scalar callbacks when necessary.</p>
+<p>Numerical backend dependencies belong in RSSN. Independent numerical libraries in Aevia are only development dependencies for parity tests. Manifest bindings and public Rust API coverage are audited separately (§8.19); this boundary does not claim that every native function is exposed.</p>
 <h2 id="09-runtime--95-tensor-runtime">9.5 Tensor runtime</h2>
 <ul>
 <li>Storage: <code>Arc&lt;TensorData&gt;</code>; a slice is a view (offset + strides) and <code>reshape</code> is a view when contiguous and a copy otherwise. There are no writes: <code>update</code>/<code>map</code> produce new tensors, reusing storage in place when the reference is unique. Semantics are in §6.6.</li>
-<li>Element-wise <code>F64</code> loops are unrolled 4/8-way; <code>sum</code> uses pairwise/Kahan summation. <code>matmul</code>/<code>solve</code>/<code>eig</code>/<code>svd</code>/<code>qr</code>/<code>lu</code> call rssn's numeric kernels (faer); <code>fft</code> calls rustfft; <code>interp</code>/<code>spline</code> call rssn kernels.</li>
+<li>Matrix multiplication, decompositions, FFT, interpolation and numerical reductions run in RSSN; backend libraries such as faer and rustfft are encapsulated there.</li>
 <li>Shape checks run before each operation and errors name both shapes and the operation; refined shapes are checked at compile time, rank-only shapes at run time.</li>
 <li>Devices: a tensor carries <code>device</code> metadata; <code>to_device</code> and <code>on(device, ...)</code> transfer and scope execution. CPU is the default; GPU and distributed are run-time targets, not type parameters.</li>
 <li>Sparse: <code>Sparse&lt;F,shape,τ&gt;</code> shares <code>@</code> dispatch with dense tensors; the <code>Layout</code> class provides <code>nnz</code>, <code>to_dense</code>, <code>from_dense</code>, <code>matmul</code> and <code>transpose</code>.</li>
@@ -7948,6 +8124,10 @@ help: did you mean `km`?</code></pre>
 <hr />
 <h2 id="appendix-c-changelog--revision-23-2026-11-14-full-review-against-the-implementation-and-an-english-edition">Revision 23 (2026-11-14): full review against the implementation, and an English edition</h2>
 <p>This pass compared the specification with the implementation chapter by chapter, condensed repetition, moved status notes out of the text, and added an English edition (<code>spec/en/</code>; writing and terminology rules in <code>spec/STYLE.md</code>). The two machine-read chapters (08 and 11) keep their shape and are guarded by <code>cargo test -p aevia-std --test spec_signatures --test spec_programs</code>.</p>
+<ul>
+<li><code>08-stdlib.md</code>: reconciled implemented solver methods, physical tolerances, budgets, callbacks, strict <code>Option</code> and native numerical model contracts; corrected the exact-signature/dynamic-entry boundary and synchronized English.</li>
+<li><code>09-runtime.md</code>: specified RSSN ownership of numerical algorithms/backend dependencies and Aevia value/unit adaptation; native source coverage and manifest reachability are reported separately.</li>
+</ul>
 <p><strong>Whole book</strong></p>
 <ul>
 <li>New English edition: every Chinese chapter has a counterpart <code>spec/en/&lt;same name&gt;</code>, with the same section numbers, anchors, code blocks and diagnostic codes.</li>
@@ -8051,8 +8231,8 @@ help: did you mean `km`?</code></pre>
 <ol type="1">
 <li><strong>Package dependencies</strong>: registry dependencies, SemVer resolution and checked local copies are implemented (Revision 15); <code>git</code> dependencies do not exist; per-package dependency namespaces, <code>[patch]</code> overrides and mirror <code>[source]</code> replacement are not implemented.</li>
 <li><strong>Device backends</strong>: <code>Gpu</code>/<code>Distributed</code> are only constructible run-time values; <code>on</code>/<code>to_device</code>/<code>@jit(target = Gpu(..))</code> report <code>E1001("core.gpu")</code>/<code>E1001("core.distributed")</code>; batch primitives such as <code>Device.map</code> are not exposed as language primitives (§10.6.5).</li>
-<li><strong>Sparse</strong>: sparse values cannot enter the rssn term graph; user-defined formats wait for rssn to open <code>Format</code>; <code>gmres_with</code>/<code>bicgstab_with</code> do not accept exact elements; there is no sparse eigenvalue solver or SVD (§8.4.1, §13.9.5).</li>
-<li><strong>SDE</strong>: Brownian-bridge dense output and terminal events that stop in the middle of integration are not provided (<code>sde_at</code> is a linear chord, <code>sde_events</code> cuts after the fact); closures are <code>!Send</code> in the interpreter, so parallel ensembles fall back to sequential (§8.9.1).</li>
+<li><strong>Sparse</strong>: sparse values cannot enter the rssn term graph; user-defined formats wait for rssn to open <code>Format</code>; <code>gmres_with</code>/<code>bicgstab_with</code> do not accept exact elements; sparse SVD is not provided; eigenvalue queries use explicit RSSN adapters (§8.4.1, §13.9.5).</li>
+<li><strong>SDE</strong>: Brownian-bridge dense output and terminal events that stop in the middle of integration are not provided (<code>sde_at</code> is a linear chord, <code>sde_events</code> cuts after the fact); ensembles fall back to sequential execution when callbacks cannot cross threads (§8.9.1).</li>
 <li><strong>ODE</strong>: multiple shooting / collocation for BVPs; <code>AutoSwitch</code> decides by step budget rather than an eigenvalue estimate (§8.9).</li>
 <li><strong>Type system</strong>: type-level moduli for <code>Zmod&lt;n&gt;</code>/<code>GF&lt;p&gt;</code>; rank polymorphism in user functions; symbolic exponents (§12.8.2).</li>
 <li><strong>Plot</strong>: only the HTML/SVG-inline renderer, with no standalone <code>.svg</code>/PNG/JPEG output (§8.12).</li>

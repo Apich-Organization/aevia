@@ -15,5 +15,6 @@ languages = ["Aevia"]
 # ../tree-sitter-aevia and points this table at it. For publishing, point
 # `repository` at a repository that contains the grammar at its root.
 [grammars.aevia]
-repository = "https://github.com/Apich-Organization/tree-sitter-aevia"
-rev = "0000000000000000000000000000000000000000"
+repository = "https://github.com/Apich-Organization/aevia"
+rev = "2e01cd7993672f8d6a476f8e8183ac9e022a9ba7"
+path = "editors/tree-sitter-aevia"

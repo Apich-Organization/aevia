@@ -1,0 +1,52 @@
+## Run: aevia test examples/native_ode_objects.aev
+## Native tapes operate on normalized coordinates. Explicit positive references
+## restore independently measured position and velocity, rather than placing
+## incompatible physical components in a homogeneous numeric tensor.
+open Units.SI
+
+import Rssn_numerical_vector as N
+
+let empty_strings: Tensor<1, String> = []
+
+let empty_values: Tensor<1, Value> = []
+
+let tape = unwrap_or(N.num_native_tape_lower([to_value(["v", "-q"]), to_value(["t", "q", "v"]), to_value(empty_strings), to_value([to_value(1.0 s), to_value(1.0 m), to_value(1.0 m / s)]), to_value(empty_values), to_value([to_value(1.0 m / s), to_value(1.0 m / s / s)])]), to_value(0))
+
+let rhs = unwrap_or(N.num_analysis_ode_rhs_new([tape, to_value(empty_values)]), to_value(0))
+
+let initial = to_value([to_value(1.0 m), to_value(0.0 m / s)])
+
+let options = to_value({ rtol = 1e-7, atol = 1e-9, h0 = 0.01 s, hmin = 0.0 s, hmax = 0.1 s, max_steps = 2000 })
+
+let no_events = to_value(empty_values)
+
+let fixed = unwrap_or(N.num_analysis_ode_fixed([rhs, initial, to_value(0.0 s), to_value(1.0 s), options, to_value([32, 2]), no_events, to_value(500)]), to_value(0))
+
+test "native mixed state preserves position and velocity domains" =
+    match N.num_analysis_ode_last([fixed]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(y) ->
+            match from_value<Float[Length]>(y[0]) with
+            | Ok(q) -> q > 0.5402 m && q < 0.5404 m
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native rate budget errors survive the adapter" =
+    match N.num_analysis_ode_fixed([rhs, initial, to_value(0.0 s), to_value(1.0 s), options, to_value([32, 2]), no_events, to_value(1)]) with
+    | Ok(_) -> false
+    | Err(_) ->
+        ## Release the trajectory, RHS and tape when finished with them.
+        ## Session objects count against the memory budget until released.
+        match Rssn.dynamic("num_native_release", [fixed]) with
+        | Ok(_) ->
+            match Rssn.dynamic("num_native_release", [rhs]) with
+            | Ok(_) ->
+                match Rssn.dynamic("num_native_release", [tape]) with
+                | Ok(_) -> true
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+
+fn main(): IO Unit = println("Native ODE objects preserve independent physical references")

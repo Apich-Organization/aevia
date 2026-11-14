@@ -133,6 +133,7 @@ fn supported_schema(ty: &Type) -> bool {
         return false;
     }
     match ty {
+        | ty if aevia_types::adt::is_native_ad_var_type(ty) => true,
         | Type::Scalar(Rep::Int | Rep::Real | Rep::Float | Rep::Complex, dim) => dim.is_concrete(),
         | Type::Bool | Type::Str => true,
         | Type::Tensor { elem, .. } => supported_schema(elem),
@@ -636,5 +637,54 @@ mod tests {
             })
             .unwrap();
         }
+    }
+    #[test]
+    fn native_ad_handles_are_a_sealed_callback_primitive() {
+        use aevia_types::adt;
+        let native = adt::native_ad_var_type();
+        assert!(supported_schema(&native));
+        let source = adt::allocate_in(
+            aevia_types::keys::ModulePath::new(["User"]),
+            "NativeAdVar",
+            Vec::new(),
+        );
+        assert!(!supported_schema(&Type::Adt(source, Vec::new())));
+        let mut interp = Interp::new(&aevia_types::CheckedModule::default());
+        let function = Value::Native(Rc::new(NativeFn(Box::new(|_, values, _| {
+            Ok(values[0].clone())
+        }))));
+        let callback = Rc::new(CallbackValue {
+            function,
+            schema: Type::func(vec![native.clone()], native),
+        });
+        with_scoped(&mut interp, vec![callback], |handles| {
+            let payload = Val::Opaque {
+                kind: aevia_rssn::registry::NATIVE_AD_VAR_KIND.into(),
+                bytes: vec![1; 16],
+            };
+            let (returned, _) = handles[0]
+                .call(&[payload.clone()], &[DimensionWitness::Unknown])
+                .unwrap();
+            assert_eq!(returned, payload);
+            let forged = Val::Opaque {
+                kind: "User/NativeAdVar".into(),
+                bytes: vec![1; 16],
+            };
+            assert!(
+                handles[0]
+                    .call(&[forged], &[DimensionWitness::Unknown])
+                    .is_err()
+            );
+            let truncated = Val::Opaque {
+                kind: aevia_rssn::registry::NATIVE_AD_VAR_KIND.into(),
+                bytes: Vec::new(),
+            };
+            assert!(
+                handles[0]
+                    .call(&[truncated], &[DimensionWitness::Unknown])
+                    .is_err()
+            );
+        })
+        .unwrap();
     }
 }

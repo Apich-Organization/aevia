@@ -1068,14 +1068,7 @@ impl TensorData {
                 if k != right.shape[0] || k == 0 || m == 0 {
                     return None;
                 }
-                let mut data = vec![0.0; m];
-                for row in 0..m {
-                    let mut total = a[row * k] * b[0];
-                    for inner in 1..k {
-                        total += a[row * k + inner] * b[inner];
-                    }
-                    data[row] = total;
-                }
+                let data = aevia_std::linalg::legacy::matmul(m, k, 1, &a, &b);
                 Some(Value::Tensor(Rc::new(Self {
                     verified_element: None,
                     shape: vec![m],
@@ -1090,14 +1083,7 @@ impl TensorData {
                 if k != k2 || k == 0 || n == 0 {
                     return None;
                 }
-                let mut data = vec![0.0; n];
-                for column in 0..n {
-                    let mut total = a[0] * b[column];
-                    for inner in 1..k {
-                        total += a[inner] * b[inner * n + column];
-                    }
-                    data[column] = total;
-                }
+                let data = aevia_std::linalg::legacy::matmul(1, k, n, &a, &b);
                 Some(Value::Tensor(Rc::new(Self {
                     verified_element: None,
                     shape: vec![n],
@@ -1111,10 +1097,7 @@ impl TensorData {
                 if k != right.shape[0] || k == 0 {
                     return None;
                 }
-                let mut total = a[0] * b[0];
-                for index in 1..k {
-                    total += a[index] * b[index];
-                }
+                let total = aevia_std::linalg::legacy::matmul(1, k, 1, &a, &b)[0];
                 Some(Value::Num(NumVal::float(total, self.dim.mul(&right.dim))))
             },
             | _ => None,
@@ -1536,10 +1519,8 @@ impl TensorData {
 
 /// The sequential `rows × inner` by `inner × cols` product.
 ///
-/// This is the loop `@` ran before the dispatcher existed. It is kept as the
-/// answer for a call `aevia_std::linalg::matmul` declines (a buffer whose
-/// length disagrees with its shape), so a shape this crate cannot express
-/// still produces a value rather than an error.
+/// Delegate the historical accumulation order to RSSN when the optimized
+/// dispatcher declines. Shape and value storage are validated by the caller.
 fn matmul_f64_loop(
     rows: usize,
     inner: usize,
@@ -1547,17 +1528,7 @@ fn matmul_f64_loop(
     a: &[f64],
     b: &[f64],
 ) -> Vec<f64> {
-    let mut data = vec![0.0; rows * cols];
-    for row in 0..rows {
-        for column in 0..cols {
-            let mut total = a[row * inner] * b[column];
-            for step in 1..inner {
-                total += a[row * inner + step] * b[step * cols + column];
-            }
-            data[row * cols + column] = total;
-        }
-    }
-    data
+    aevia_std::linalg::legacy::matmul(rows, inner, cols, a, b)
 }
 
 /// A record value; fields keep their insertion order.
@@ -3281,4 +3252,10 @@ mod tests {
         assert_eq!(repr(&Value::int(3)), "3");
         assert_eq!(repr(&Value::string("a\nb")), "\"a\\nb\"");
     }
+}
+
+/// Whether a payload is a well-formed native AD handle envelope.
+/// RSSN separately authenticates its session token and retained object.
+pub(crate) fn is_native_ad_var_payload(payload: &aevia_rssn::Val) -> bool {
+    matches!(payload, aevia_rssn::Val::Opaque {kind,bytes} if kind == aevia_rssn::registry::NATIVE_AD_VAR_KIND && bytes.len() == 16)
 }

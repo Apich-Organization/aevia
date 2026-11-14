@@ -15,16 +15,11 @@
 //!   `m4/m2^2 - 3` (excess kurtosis), with the population divisor.
 
 use crate::NumericError;
+#[cfg(test)]
 use num_bigint::BigInt;
 use num_rational::BigRational;
+#[cfg(test)]
 use num_traits::One;
-use num_traits::Signed;
-use num_traits::ToPrimitive;
-use num_traits::Zero;
-
-fn sort_exact(values: &mut [BigRational]) {
-    values.sort();
-}
 
 /// The median of an exact sample.
 ///
@@ -32,16 +27,7 @@ fn sort_exact(values: &mut [BigRational]) {
 ///
 /// [`NumericError::Empty`] for an empty sample.
 pub fn median_exact(values: &mut [BigRational]) -> Result<BigRational, NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    sort_exact(values);
-    let len = values.len();
-    if len % 2 == 1 {
-        return Ok(values[len / 2].clone());
-    }
-    Ok((values[len / 2 - 1].clone() + values[len / 2].clone())
-        / BigRational::from_integer(BigInt::from(2)))
+    rssn::kernels::descriptive::median_exact(values).map_err(Into::into)
 }
 
 /// The median of a float sample.
@@ -50,15 +36,7 @@ pub fn median_exact(values: &mut [BigRational]) -> Result<BigRational, NumericEr
 ///
 /// [`NumericError::Empty`] for an empty sample.
 pub fn median(values: &mut [f64]) -> Result<f64, NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    values.sort_by(f64::total_cmp);
-    let len = values.len();
-    if len % 2 == 1 {
-        return Ok(values[len / 2]);
-    }
-    Ok((values[len / 2 - 1] + values[len / 2]) / 2.0)
+    rssn::kernels::descriptive::median(values).map_err(Into::into)
 }
 
 /// The `q`-quantile of a sorted exact sample, `0 ≤ q ≤ 1`.
@@ -71,24 +49,7 @@ pub fn quantile_exact(
     sorted: &[BigRational],
     q: &BigRational,
 ) -> Result<BigRational, NumericError> {
-    if sorted.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    if q.is_negative() || *q > BigRational::one() {
-        return Err(NumericError::Domain(
-            "a quantile needs `0 <= q <= 1`".to_string(),
-        ));
-    }
-    let position = q.clone() * BigRational::from_integer(BigInt::from(sorted.len() - 1));
-    let lower = position.to_f64().unwrap_or(0.0).floor().max(0.0) as usize;
-    let lower = lower.min(sorted.len() - 1);
-    if lower + 1 >= sorted.len() {
-        return Ok(sorted[lower].clone());
-    }
-    let fraction = position - BigRational::from_integer(BigInt::from(lower));
-    let below = sorted[lower].clone();
-    let above = sorted[lower + 1].clone();
-    Ok(below.clone() + fraction * (above - below))
+    rssn::kernels::descriptive::quantile_exact(sorted, q).map_err(Into::into)
 }
 
 /// The `q`-quantile of a float sample, `0 ≤ q ≤ 1`.
@@ -101,23 +62,7 @@ pub fn quantile(
     values: &[f64],
     q: f64,
 ) -> Result<f64, NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    if !(0.0..=1.0).contains(&q) {
-        return Err(NumericError::Domain(
-            "a quantile needs `0 <= q <= 1`".to_string(),
-        ));
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let position = q * (sorted.len() - 1) as f64;
-    let lower = position.floor().max(0.0) as usize;
-    if lower + 1 >= sorted.len() {
-        return Ok(sorted[lower]);
-    }
-    let fraction = position - lower as f64;
-    Ok(sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower]))
+    rssn::kernels::descriptive::quantile(values, q).map_err(Into::into)
 }
 
 /// The sample covariance of two equally long samples.
@@ -131,33 +76,7 @@ pub fn cov(
     right: &[f64],
     population: bool,
 ) -> Result<f64, NumericError> {
-    if left.len() != right.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "cov needs two samples of one length, found {} and {}",
-            left.len(),
-            right.len()
-        )));
-    }
-    let count = left.len();
-    if count == 0 {
-        return Err(NumericError::Empty);
-    }
-    if count == 1 {
-        return Ok(0.0);
-    }
-    let mean_left = left.iter().sum::<f64>() / count as f64;
-    let mean_right = right.iter().sum::<f64>() / count as f64;
-    let total: f64 = left
-        .iter()
-        .zip(right)
-        .map(|(a, b)| (a - mean_left) * (b - mean_right))
-        .sum();
-    let divisor = if population {
-        count as f64
-    } else {
-        (count - 1) as f64
-    };
-    Ok(total / divisor)
+    rssn::kernels::descriptive::cov(left, right, population).map_err(Into::into)
 }
 
 /// The Pearson correlation coefficient of two equally long samples.
@@ -171,35 +90,7 @@ pub fn corr(
     right: &[f64],
     population: bool,
 ) -> Result<f64, NumericError> {
-    let covariance = cov(left, right, population)?;
-    let variance_left = cov(left, left, population)?;
-    let variance_right = cov(right, right, population)?;
-    let denominator = (variance_left * variance_right).sqrt();
-    if denominator == 0.0 || !denominator.is_finite() {
-        return Err(NumericError::Domain(
-            "a correlation needs two samples with a spread".to_string(),
-        ));
-    }
-    Ok((covariance / denominator).clamp(-1.0, 1.0))
-}
-
-/// The moment ratios of a sample: `(mean, m2, m3, m4)`.
-fn moments(values: &[f64]) -> Option<(f64, f64, f64, f64)> {
-    if values.is_empty() {
-        return None;
-    }
-    let count = values.len() as f64;
-    let mean = values.iter().sum::<f64>() / count;
-    let mut m2 = 0.0;
-    let mut m3 = 0.0;
-    let mut m4 = 0.0;
-    for value in values {
-        let deviation = value - mean;
-        m2 += deviation * deviation;
-        m3 += deviation * deviation * deviation;
-        m4 += deviation * deviation * deviation * deviation;
-    }
-    Some((mean, m2 / count, m3 / count, m4 / count))
+    rssn::kernels::descriptive::corr(left, right, population).map_err(Into::into)
 }
 
 /// The skewness `m3 / m2^{3/2}`.
@@ -209,13 +100,7 @@ fn moments(values: &[f64]) -> Option<(f64, f64, f64, f64)> {
 /// [`NumericError::Empty`] for an empty sample, and [`NumericError::Domain`]
 /// when every element is the same (the ratio is undefined).
 pub fn skewness(values: &[f64]) -> Result<f64, NumericError> {
-    let (_, m2, m3, _) = moments(values).ok_or(NumericError::Empty)?;
-    if m2 == 0.0 {
-        return Err(NumericError::Domain(
-            "skewness of a constant sample is undefined".to_string(),
-        ));
-    }
-    Ok(m3 / m2.powf(1.5))
+    rssn::kernels::descriptive::skewness(values).map_err(Into::into)
 }
 
 /// The excess kurtosis `m4 / m2^2 - 3`.
@@ -225,13 +110,7 @@ pub fn skewness(values: &[f64]) -> Result<f64, NumericError> {
 /// [`NumericError::Empty`] for an empty sample, and [`NumericError::Domain`]
 /// when every element is the same.
 pub fn kurtosis(values: &[f64]) -> Result<f64, NumericError> {
-    let (_, m2, _, m4) = moments(values).ok_or(NumericError::Empty)?;
-    if m2 == 0.0 {
-        return Err(NumericError::Domain(
-            "kurtosis of a constant sample is undefined".to_string(),
-        ));
-    }
-    Ok(m4 / (m2 * m2) - 3.0)
+    rssn::kernels::descriptive::kurtosis(values).map_err(Into::into)
 }
 
 /// A uniform histogram with `bins` buckets.
@@ -248,46 +127,7 @@ pub fn histogram(
     values: &[f64],
     bins: usize,
 ) -> Result<(Vec<i64>, Vec<f64>), NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    if bins == 0 {
-        return Err(NumericError::Domain(
-            "a histogram needs a bucket".to_string(),
-        ));
-    }
-    let mut low = f64::INFINITY;
-    let mut high = f64::NEG_INFINITY;
-    for value in values {
-        low = low.min(*value);
-        high = high.max(*value);
-    }
-    if !low.is_finite() || !high.is_finite() {
-        return Err(NumericError::Domain(
-            "a histogram needs finite values".to_string(),
-        ));
-    }
-    let width = if high > low {
-        (high - low) / bins as f64
-    } else {
-        1.0
-    };
-    let start = if high > low { low } else { low - 0.5 };
-    let edges: Vec<f64> = (0..=bins)
-        .map(|index| start + width * index as f64)
-        .collect();
-    let mut counts = vec![0i64; bins];
-    for value in values {
-        let mut index = ((value - start) / width).floor() as isize;
-        if index < 0 {
-            index = 0;
-        }
-        if index >= bins as isize {
-            index = bins as isize - 1;
-        }
-        counts[index as usize] += 1;
-    }
-    Ok((counts, edges))
+    rssn::kernels::descriptive::histogram(values, bins).map_err(Into::into)
 }
 
 /// The most frequent value of an exact sample.
@@ -299,28 +139,7 @@ pub fn histogram(
 ///
 /// [`NumericError::Empty`] for an empty sample.
 pub fn mode_exact(values: &[BigRational]) -> Result<BigRational, NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    let mut sorted = values.to_vec();
-    sort_exact(&mut sorted);
-    let mut best = sorted[0].clone();
-    let mut best_count = 1usize;
-    let mut current = sorted[0].clone();
-    let mut current_count = 1usize;
-    for value in &sorted[1..] {
-        if *value == current {
-            current_count += 1;
-        } else {
-            current = value.clone();
-            current_count = 1;
-        }
-        if current_count > best_count {
-            best_count = current_count;
-            best = current.clone();
-        }
-    }
-    Ok(best)
+    rssn::kernels::descriptive::mode_exact(values).map_err(Into::into)
 }
 
 /// The most frequent value of a float sample; ties go to the smallest.
@@ -329,28 +148,7 @@ pub fn mode_exact(values: &[BigRational]) -> Result<BigRational, NumericError> {
 ///
 /// [`NumericError::Empty`] for an empty sample.
 pub fn mode(values: &[f64]) -> Result<f64, NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let mut best = sorted[0];
-    let mut best_count = 1usize;
-    let mut current = sorted[0];
-    let mut current_count = 1usize;
-    for value in &sorted[1..] {
-        if *value == current {
-            current_count += 1;
-        } else {
-            current = *value;
-            current_count = 1;
-        }
-        if current_count > best_count {
-            best_count = current_count;
-            best = current;
-        }
-    }
-    Ok(best)
+    rssn::kernels::descriptive::mode(values).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -385,6 +183,13 @@ mod tests {
     fn the_median_of_a_float_sample_interpolates() {
         assert!((median(&mut [1.0, 2.0]).unwrap() - 1.5).abs() < 1e-12);
         assert!((median(&mut [5.0, 1.0, 3.0]).unwrap() - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn median_of_extreme_finite_values_avoids_intermediate_overflow() {
+        assert_eq!(median(&mut [f64::MAX, f64::MAX]), Ok(f64::MAX));
+        assert_eq!(median(&mut [-f64::MAX, f64::MAX]), Ok(0.0));
+        assert_eq!(median(&mut [-f64::MAX, -f64::MAX]), Ok(-f64::MAX));
     }
 
     #[test]
@@ -475,13 +280,7 @@ mod tests {
 ///
 /// [`NumericError::Empty`] for an empty sample.
 pub fn mean_exact(values: &[BigRational]) -> Result<BigRational, NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    let total = values
-        .iter()
-        .fold(BigRational::zero(), |acc, value| acc + value.clone());
-    Ok(total / BigRational::from_integer(BigInt::from(values.len())))
+    rssn::kernels::descriptive::mean_exact(values).map_err(Into::into)
 }
 
 /// The variance of an exact sample.
@@ -493,20 +292,7 @@ pub fn var_exact(
     values: &[BigRational],
     population: bool,
 ) -> Result<BigRational, NumericError> {
-    if values.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    let mean = mean_exact(values)?;
-    let total = values.iter().fold(BigRational::zero(), |acc, value| {
-        let deviation = value.clone() - mean.clone();
-        acc + deviation.clone() * deviation
-    });
-    let count = if population || values.len() == 1 {
-        values.len()
-    } else {
-        values.len() - 1
-    };
-    Ok(total / BigRational::from_integer(BigInt::from(count)))
+    rssn::kernels::descriptive::var_exact(values, population).map_err(Into::into)
 }
 
 /// The covariance of two exact samples.
@@ -520,30 +306,7 @@ pub fn cov_exact(
     right: &[BigRational],
     population: bool,
 ) -> Result<BigRational, NumericError> {
-    if left.len() != right.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "cov needs two samples of one length, found {} and {}",
-            left.len(),
-            right.len()
-        )));
-    }
-    if left.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    let mean_left = mean_exact(left)?;
-    let mean_right = mean_exact(right)?;
-    let total = left
-        .iter()
-        .zip(right)
-        .fold(BigRational::zero(), |acc, (a, b)| {
-            acc + (a.clone() - mean_left.clone()) * (b.clone() - mean_right.clone())
-        });
-    let count = if population || left.len() == 1 {
-        left.len()
-    } else {
-        left.len() - 1
-    };
-    Ok(total / BigRational::from_integer(BigInt::from(count)))
+    rssn::kernels::descriptive::cov_exact(left, right, population).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -552,6 +315,17 @@ mod exact_stats_tests {
 
     fn rational(value: i64) -> BigRational {
         BigRational::from_integer(BigInt::from(value))
+    }
+
+    #[test]
+    fn exact_quantile_positions_near_an_integer_do_not_round_through_float() {
+        let denominator = BigInt::one() << 100usize;
+        let q = BigRational::new(&denominator - 1, &denominator * 2);
+        let expected = BigRational::new(&denominator - 1, denominator);
+        assert_eq!(
+            quantile_exact(&[rational(0), rational(1), rational(100)], &q),
+            Ok(expected)
+        );
     }
 
     #[test]

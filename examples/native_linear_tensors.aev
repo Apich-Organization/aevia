@@ -1,0 +1,22 @@
+## Run: cargo run -p aevia-cli -- test examples/native_linear_tensors.aev
+## Normalized samples and physical references stay separate in native tensor models.
+import Rssn_numerical_matrix as N
+
+let a = unwrap_or(N.num_linear_array_new([to_value([2, 2]), to_value([1.0, 2.0, 2.0, 4.0]), to_value(3.0 m)]), to_value(0))
+let train = unwrap_or(N.num_linear_tt_svd([a, to_value(1e-12), to_value(2)]), to_value(0))
+
+test "native train entries retain physical tensor units" =
+    match N.num_linear_train_entry([train, to_value([1, 1])]) with
+    | Ok(value) ->
+        match from_value<Float[Length]>(value) with
+        | Ok(entry) -> approx_eq(entry, 12.0 m, 1e-10 m)
+        | Err(_) -> false
+    | Err(_) -> false
+
+let wrong_units = unwrap_or(N.num_linear_array_new([to_value([2, 2]), to_value([1.0, 2.0, 2.0, 4.0]), to_value(3.0 s)]), to_value(0))
+let wrong_train = unwrap_or(N.num_linear_tt_svd([wrong_units, to_value(1e-12), to_value(2)]), to_value(0))
+
+test "native train addition rejects incompatible physical units" =
+    match N.num_linear_train_add([train, wrong_train]) with
+    | Ok(_) -> false
+    | Err(_) -> true

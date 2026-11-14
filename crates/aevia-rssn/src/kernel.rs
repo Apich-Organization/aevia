@@ -50,12 +50,115 @@ struct CallbackAdapter {
     session: SessionId,
 }
 
+// Native handles carry their unit domain inside the checked session
+// object store. Numeric dimension witnesses are neither required nor inferred
+// for their wire bytes. Validate the precise declared kind, never generic Value.
+fn backend_scalar_handle_tensor(
+    value: &Value,
+    signature: &crate::SigType,
+) -> bool {
+    let crate::SigType::Tensor {
+        rank: Some(rank),
+        shape,
+        elem,
+    } = signature
+    else {
+        return false;
+    };
+    let crate::SigType::Opaque(kind) = elem.as_ref() else {
+        return false;
+    };
+    if !kind.starts_with("rssn/native/") {
+        return false;
+    }
+    let expected_kind = kind;
+    let Value::Tensor(tensor) = value else {
+        return false;
+    };
+    if tensor.shape.len() != *rank
+        || shape
+            .as_ref()
+            .is_some_and(|expected| expected != &tensor.shape)
+        || tensor
+            .shape
+            .iter()
+            .try_fold(1usize, |count, extent| count.checked_mul(*extent))
+            != Some(tensor.data.len())
+        || !matches!(&tensor.elem, rssn::kernel::signature::TypeExpr::Opaque(kind) if kind == expected_kind)
+    {
+        return false;
+    }
+    tensor.data.iter().all(|value| {
+        let Value::Opaque(handle) = value else {
+            return false;
+        };
+        if &handle.kind != expected_kind {
+            return false;
+        }
+        let Ok(bytes) = <&[u8; 16]>::try_from(handle.bytes.as_slice()) else {
+            return false;
+        };
+        // The store independently authenticates the owning scope and live id.
+        bytes[..8].iter().any(|byte| *byte != 0) && bytes[8..].iter().any(|byte| *byte != 0)
+    })
+}
+
+// Closed String/Bool arrays have no physical scalar leaves. Authenticate their
+// actual payload and complete shape rather than inventing a numeric witness.
+fn closed_nonmetric_tensor(
+    value: &Value,
+    signature: &crate::SigType,
+) -> bool {
+    let crate::SigType::Tensor {
+        rank: Some(rank),
+        shape,
+        elem,
+    } = signature
+    else {
+        return false;
+    };
+    if !matches!(elem.as_ref(), crate::SigType::Str | crate::SigType::Bool) {
+        return false;
+    }
+    let Value::Tensor(tensor) = value else {
+        return false;
+    };
+    if tensor.shape.len() != *rank
+        || shape
+            .as_ref()
+            .is_some_and(|expected| expected != &tensor.shape)
+        || tensor
+            .shape
+            .iter()
+            .try_fold(1usize, |count, extent| count.checked_mul(*extent))
+            != Some(tensor.data.len())
+    {
+        return false;
+    }
+    match (elem.as_ref(), &tensor.elem) {
+        | (crate::SigType::Str, rssn::kernel::signature::TypeExpr::String) => {
+            tensor
+                .data
+                .iter()
+                .all(|value| matches!(value, Value::String(_)))
+        },
+        | (crate::SigType::Bool, rssn::kernel::signature::TypeExpr::Bool) => {
+            tensor
+                .data
+                .iter()
+                .all(|value| matches!(value, Value::Bool(_)))
+        },
+        | _ => false,
+    }
+}
+
 /// Public callback implementations supply their own schema. Validate it
 /// before conversion to RSSN TypeExpr: malformed or unsupported metadata must
 /// never be silently weakened into a rank-only or opaque signature.
 fn supported_callback_schema(ty: &crate::SigType) -> bool {
     use crate::SigType as S;
     match ty {
+        | S::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => true,
         | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
         | S::Dim(inner, dim) => {
             dim.is_concrete() && matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex)
@@ -159,6 +262,11 @@ fn callback_schema_proves(
     use crate::SigType as S;
     use crate::witness::DimensionWitness as W;
     match (expected, actual, witness) {
+        | (S::Opaque(expected), S::Opaque(actual), _)
+            if expected == crate::registry::NATIVE_AD_VAR_KIND && actual == expected =>
+        {
+            true
+        },
         | (S::Dim(inner, dim), repr, W::Scalar(actual_dim)) => {
             dim.is_concrete()
                 && dim == actual_dim
@@ -220,10 +328,12 @@ fn callback_schema_proves(
     }
 }
 
-// Input signatures may contain dimension variables. A witness proves the
+// Ordinary higher-order operator arguments may contain native handles; these
+// handles never enter a callback schema. Input signatures may contain dimension
+// variables. A witness proves the
 // actual concrete dimension; RSSN's pinned signature check then enforces all
 // declared relationships between inputs and callback signatures.
-fn callback_input_dimension(
+fn ordinary_input_dimension(
     sig: &crate::SigType,
     witness: &crate::witness::DimensionWitness,
 ) -> bool {
@@ -237,7 +347,7 @@ fn callback_input_dimension(
         | _ => false,
     }
 }
-fn callback_input_schema_proves(
+fn ordinary_input_schema_proves(
     expected: &crate::SigType,
     actual: &crate::SigType,
     witness: &crate::witness::DimensionWitness,
@@ -245,14 +355,19 @@ fn callback_input_schema_proves(
     use crate::SigType as S;
     use crate::witness::DimensionWitness as W;
     match (expected, actual) {
+        | (S::Opaque(expected), S::Opaque(actual))
+            if crate::registry::native_object_kind(expected) && actual == expected =>
+        {
+            true
+        },
         | (S::Dim(inner, _), actual) => {
-            callback_input_dimension(expected, witness)
-                && callback_input_schema_proves(inner, actual, &W::Scalar(aevia_dim::Dim::one()))
+            ordinary_input_dimension(expected, witness)
+                && ordinary_input_schema_proves(inner, actual, &W::Scalar(aevia_dim::Dim::one()))
         },
         | (S::Int, S::Int)
         | (S::Real, S::Int | S::Real)
         | (S::Float, S::Float)
-        | (S::Complex, S::Complex) => callback_input_dimension(expected, witness),
+        | (S::Complex, S::Complex) => ordinary_input_dimension(expected, witness),
         | (S::Bool, S::Bool) | (S::Str, S::Str) => true,
         | (
             S::Tensor {
@@ -280,7 +395,7 @@ fn callback_input_schema_proves(
                     .as_ref()
                     .is_none_or(|shape| actual_shape.as_ref() == Some(shape))
                 && ae.as_ref() == repr
-                && callback_input_schema_proves(ee, ae, element)
+                && ordinary_input_schema_proves(ee, ae, element)
         },
         | (S::Record(expected), S::Record(actual)) => {
             let W::Record(witnesses) = witness else {
@@ -296,7 +411,7 @@ fn callback_input_schema_proves(
                     let mut proofs = witnesses.iter().filter(|(n, _)| n == name);
                     match (fields.next(), fields.next(), proofs.next(), proofs.next()) {
                         | (Some((_, repr)), None, Some((_, proof)), None) => {
-                            callback_input_schema_proves(field, repr, proof)
+                            ordinary_input_schema_proves(field, repr, proof)
                         },
                         | _ => false,
                     }
@@ -305,7 +420,7 @@ fn callback_input_schema_proves(
         | _ => false,
     }
 }
-fn validate_callback_input(
+fn validate_ordinary_callback_input(
     value: &Val,
     witness: &crate::witness::DimensionWitness,
     sig: &crate::SigType,
@@ -333,16 +448,21 @@ fn validate_callback_input(
         )
     };
     match (value, sig) {
+        | (Val::Opaque { kind, bytes }, S::Opaque(name))
+            if name == kind && crate::registry::native_handle_envelope(kind, bytes) =>
+        {
+            Ok(())
+        },
         | (Val::Bool(_), S::Bool) | (Val::Str(_), S::Str) => Ok(()),
         | (
             Val::Num(_) | Val::Complex { .. },
             S::Int | S::Real | S::Float | S::Complex | S::Dim(_, _),
-        ) if scalar_representation(value, sig) && callback_input_dimension(sig, witness) => Ok(()),
+        ) if scalar_representation(value, sig) && ordinary_input_dimension(sig, witness) => Ok(()),
         | (Val::Quantity { value, unit }, S::Dim(inner, _))
             if matches!(witness, W::Scalar(dim) if dim == &unit.dim)
-                && callback_input_dimension(sig, witness) =>
+                && ordinary_input_dimension(sig, witness) =>
         {
-            validate_callback_input(value, &W::Scalar(aevia_dim::Dim::one()), inner)
+            validate_ordinary_callback_input(value, &W::Scalar(aevia_dim::Dim::one()), inner)
         },
         | (
             Val::Tensor { shape, data },
@@ -378,7 +498,7 @@ fn validate_callback_input(
                     .as_ref()
                     .map_or(W::Unknown, |dim| W::Scalar(dim.clone()));
                 let proof = element.as_deref().unwrap_or(&fallback);
-                if callback_input_schema_proves(elem, actual, proof) {
+                if ordinary_input_schema_proves(elem, actual, proof) {
                     return Ok(());
                 }
                 return Err(missing());
@@ -389,7 +509,7 @@ fn validate_callback_input(
             ) {
                 let dim = dimension.as_ref().ok_or_else(missing)?;
                 let proof = W::Scalar(dim.clone());
-                if !callback_input_dimension(elem, &proof) {
+                if !ordinary_input_dimension(elem, &proof) {
                     return Err(missing());
                 }
                 if !elements.is_empty()
@@ -398,7 +518,7 @@ fn validate_callback_input(
                     return Err(missing());
                 }
                 for item in data {
-                    validate_callback_input(item, &proof, elem)?;
+                    validate_ordinary_callback_input(item, &proof, elem)?;
                 }
             } else {
                 if !elements.is_empty() && elements.len() != data.len() {
@@ -409,8 +529,32 @@ fn validate_callback_input(
                         .get(index)
                         .or(element.as_deref())
                         .unwrap_or(&W::Unknown);
-                    validate_callback_input(item, proof, elem)?;
+                    validate_ordinary_callback_input(item, proof, elem)?;
                 }
+            }
+            Ok(())
+        },
+        | (Val::Variant { tag, payload }, S::Variant(cases))
+            if crate::registry::option_payload(cases).is_some() =>
+        {
+            let W::Variant {
+                tag: witnessed_tag,
+                fields,
+            } = witness
+            else {
+                return Err(missing());
+            };
+            let Some((_, declared)) = cases.iter().find(|(name, _)| name == tag) else {
+                return Err(missing());
+            };
+            if witnessed_tag != tag
+                || payload.len() != declared.len()
+                || fields.len() != payload.len()
+            {
+                return Err(missing());
+            }
+            for ((value, proof), ty) in payload.iter().zip(fields).zip(declared) {
+                validate_ordinary_callback_input(value, proof, ty)?;
             }
             Ok(())
         },
@@ -429,7 +573,7 @@ fn validate_callback_input(
                 let mut proofs = witnesses.iter().filter(|(n, _)| n == name);
                 match (values.next(), values.next(), proofs.next(), proofs.next()) {
                     | (Some((_, value)), None, Some((_, proof)), None) => {
-                        validate_callback_input(value, proof, field)?
+                        validate_ordinary_callback_input(value, proof, field)?
                     },
                     | _ => return Err(missing()),
                 }
@@ -470,6 +614,11 @@ fn validate_callback_result(
         )
     };
     match (value, sig) {
+        | (Val::Opaque { kind, bytes }, S::Opaque(name))
+            if kind == crate::registry::NATIVE_AD_VAR_KIND && name == kind && bytes.len() == 16 =>
+        {
+            Ok(())
+        },
         | (_, S::Dim(inner, dim))
             if dim.is_concrete()
                 && scalar(value, inner)
@@ -1030,6 +1179,19 @@ impl Kernel {
                                     elements.iter().all(|w| known(elem, w))
                                 }
                             },
+                            | (crate::SigType::Variant(cases), W::Variant { tag, fields })
+                                if crate::registry::option_payload(cases).is_some() =>
+                            {
+                                cases.iter().find(|(name, _)| name == tag).is_some_and(
+                                    |(_, schema)| {
+                                        schema.len() == fields.len()
+                                            && schema
+                                                .iter()
+                                                .zip(fields)
+                                                .all(|(sig, proof)| known(sig, proof))
+                                    },
+                                )
+                            },
                             | (crate::SigType::Record(fields), W::Record(values)) => {
                                 fields.iter().all(|(name, ty)| {
                                     values
@@ -1047,7 +1209,36 @@ impl Kernel {
                             | _ => true,
                         }
                     }
-                    if !known(param, witness) {
+                    if matches!(param, crate::SigType::Tensor { elem, .. }
+                        if matches!(elem.as_ref(), crate::SigType::Opaque(kind) if kind.starts_with("rssn/native/")))
+                    {
+                        if !backend_scalar_handle_tensor(value, param) {
+                            return Err(KernelError::new(
+                                "E1003",
+                                "native backend scalar tensor has invalid shape, schema or handle cells",
+                            ));
+                        }
+                    } else if matches!(param, crate::SigType::Tensor { elem, .. }
+                        if matches!(elem.as_ref(), crate::SigType::Str | crate::SigType::Bool))
+                    {
+                        // Empty conversion initially has no element representation;
+                        // restore only independently witnessed String/Bool metadata.
+                        crate::witness::attach(value, witness, param)?;
+                        if !closed_nonmetric_tensor(value, param) {
+                            return Err(KernelError::new(
+                                "E1003",
+                                "String/Bool tensor has invalid shape, element schema or actual cells",
+                            ));
+                        }
+                    } else if !known(param, witness)
+                        // There are no leaf unit claims in an empty Value
+                        // tensor. Nonempty erased tensors retain the ordinary
+                        // witness checks; attachment and the native decoder
+                        // still validate shape and rank in the empty case.
+                        && !matches!((&*value, param),
+                            (Value::Tensor(t), crate::SigType::Tensor { elem, .. })
+                            if t.data.is_empty() && matches!(elem.as_ref(), crate::SigType::Dyn))
+                    {
                         return Err(KernelError::capability("dim.dynamic_input_witness"));
                     }
                     crate::witness::attach(value, witness, param)?;
@@ -1070,6 +1261,7 @@ impl Kernel {
                             && elements.iter().all(dimensionless)
                     },
                     | W::Record(fields) => fields.iter().all(|(_, w)| dimensionless(w)),
+                    | W::Variant { fields, .. } => fields.iter().all(dimensionless),
                 }
             }
             if !witnesses.iter().all(dimensionless) {
@@ -1409,7 +1601,7 @@ impl Kernel {
                 .params
                 .get(index)
                 .ok_or_else(|| KernelError::new("E1003", "too many callback operator arguments"))?;
-            validate_callback_input(value, witness, param)?;
+            validate_ordinary_callback_input(value, witness, param)?;
         }
         let mut converted = self.convert(name, args)?;
         for (index, (value, witness)) in converted.iter_mut().zip(witnesses).enumerate() {
@@ -2020,6 +2212,7 @@ fn result_is_dimensionless(
                     && elements.iter().all(known_one)
             },
             | W::Record(fields) => fields.iter().all(|(_, w)| known_one(w)),
+            | W::Variant { fields, .. } => fields.iter().all(known_one),
         }
     }
     // A curated signature (`domains.overlay`) is the overlay's statement that
@@ -2086,8 +2279,10 @@ mod recursive_callback_witness_tests {
     }
     #[test]
     fn callback_input_evidence_is_recursive_and_allows_nonnumeric_unknowns() {
-        assert!(validate_callback_input(&Val::Bool(true), &W::Unknown, &S::Bool).is_ok());
-        assert!(validate_callback_input(&Val::Str("ok".into()), &W::Unknown, &S::Str).is_ok());
+        assert!(validate_ordinary_callback_input(&Val::Bool(true), &W::Unknown, &S::Bool).is_ok());
+        assert!(
+            validate_ordinary_callback_input(&Val::Str("ok".into()), &W::Unknown, &S::Str).is_ok()
+        );
         let length = aevia_dim::Dim::base("Length");
         let schema = S::Record(vec![
             ("flag".into(), S::Bool),
@@ -2110,7 +2305,7 @@ mod recursive_callback_witness_tests {
             ("flag".into(), W::Unknown),
             ("nested".into(), W::Record(vec![("x".into(), W::Unknown)])),
         ]);
-        assert!(validate_callback_input(&value, &missing, &schema).is_err());
+        assert!(validate_ordinary_callback_input(&value, &missing, &schema).is_err());
         let proven = W::Record(vec![
             ("flag".into(), W::Unknown),
             (
@@ -2118,12 +2313,12 @@ mod recursive_callback_witness_tests {
                 W::Record(vec![("x".into(), W::Scalar(length))]),
             ),
         ]);
-        assert!(validate_callback_input(&value, &proven, &schema).is_ok());
+        assert!(validate_ordinary_callback_input(&value, &proven, &schema).is_ok());
         let duplicate = W::Record(vec![
             ("flag".into(), W::Unknown),
             ("flag".into(), W::Unknown),
         ]);
-        assert!(validate_callback_input(&value, &duplicate, &schema).is_err());
+        assert!(validate_ordinary_callback_input(&value, &duplicate, &schema).is_err());
     }
     #[test]
     fn callback_empty_tensor_needs_actual_recursive_schema() {
@@ -2143,7 +2338,7 @@ mod recursive_callback_witness_tests {
             element_repr: None,
             elements: vec![],
         };
-        assert!(validate_callback_input(&value, &unknown, &sig).is_err());
+        assert!(validate_ordinary_callback_input(&value, &unknown, &sig).is_err());
         let proven = W::Tensor {
             dimension: None,
             element: Some(Box::new(W::Record(vec![
@@ -2153,7 +2348,7 @@ mod recursive_callback_witness_tests {
             element_repr: Some(element),
             elements: vec![],
         };
-        assert!(validate_callback_input(&value, &proven, &sig).is_ok());
+        assert!(validate_ordinary_callback_input(&value, &proven, &sig).is_ok());
         let wrong = W::Tensor {
             dimension: None,
             element: Some(Box::new(W::Record(vec![
@@ -2166,7 +2361,7 @@ mod recursive_callback_witness_tests {
             ])),
             elements: vec![],
         };
-        assert!(validate_callback_input(&value, &wrong, &sig).is_err());
+        assert!(validate_ordinary_callback_input(&value, &wrong, &sig).is_err());
     }
     #[test]
     fn nested_record_and_tensor_results_preserve_independent_witnesses() {
@@ -2315,5 +2510,337 @@ mod recursive_callback_witness_tests {
             data: vec![Val::Num(Num::Float(0.0)); 3],
         };
         assert!(validate_callback_result(&payload, &witness, &inner).is_err());
+    }
+}
+
+#[cfg(test)]
+mod backend_scalar_handle_input_tests {
+    use super::backend_scalar_handle_tensor;
+    use crate::Num;
+    use crate::SigType;
+    use crate::Val;
+    use rssn::kernel::signature::TypeExpr;
+    use rssn::kernel::value::OpaqueValue;
+    use rssn::kernel::value::TensorValue;
+    use rssn::kernel::value::Value;
+    const KIND: &str = "rssn/native/backend-scalar/v1";
+    fn handle() -> Value {
+        let mut bytes = 1_u64.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        Value::Opaque(OpaqueValue {
+            kind: KIND.into(),
+            bytes,
+        })
+    }
+    fn signature(rank: usize) -> SigType {
+        SigType::Tensor {
+            rank: Some(rank),
+            shape: None,
+            elem: Box::new(SigType::Opaque(KIND.into())),
+        }
+    }
+    fn tensor(data: Vec<Value>) -> Value {
+        Value::Tensor(TensorValue {
+            shape: vec![data.len()],
+            elem: TypeExpr::Opaque(KIND.into()),
+            data,
+        })
+    }
+    #[test]
+    fn native_scalar_handle_exception_rejects_mixed_numeric_forged_and_malformed_tensors() {
+        let valid = tensor(vec![handle(), handle()]);
+        assert!(backend_scalar_handle_tensor(&valid, &signature(1)));
+        assert!(!backend_scalar_handle_tensor(
+            &tensor(vec![handle(), Value::Float(1.0)]),
+            &signature(1)
+        ));
+        assert!(!backend_scalar_handle_tensor(&valid, &signature(2)));
+        let constrained = SigType::Tensor {
+            rank: Some(1),
+            shape: Some(vec![3]),
+            elem: Box::new(SigType::Opaque(KIND.into())),
+        };
+        assert!(!backend_scalar_handle_tensor(&valid, &constrained));
+        assert!(!backend_scalar_handle_tensor(
+            &valid,
+            &SigType::Tensor {
+                rank: Some(1),
+                shape: None,
+                elem: Box::new(SigType::Dyn)
+            }
+        ));
+        for (kind, bytes) in [
+            ("rssn/native/backend/v1", vec![1; 16]),
+            (KIND, vec![1; 15]),
+            (KIND, vec![0; 16]),
+        ] {
+            assert!(!backend_scalar_handle_tensor(
+                &tensor(vec![Value::Opaque(OpaqueValue {
+                    kind: kind.into(),
+                    bytes
+                })]),
+                &signature(1)
+            ));
+        }
+        let mut wrong_schema = valid.clone();
+        if let Value::Tensor(t) = &mut wrong_schema {
+            t.elem = TypeExpr::Float;
+        }
+        assert!(!backend_scalar_handle_tensor(&wrong_schema, &signature(1)));
+        let mut wrong_shape = valid;
+        if let Value::Tensor(t) = &mut wrong_shape {
+            t.shape = vec![3];
+        }
+        assert!(!backend_scalar_handle_tensor(&wrong_shape, &signature(1)));
+    }
+    #[test]
+    fn checked_bridge_passes_real_opaque_reference_columns_to_native_compilation() {
+        use crate::witness::DimensionWitness as W;
+        let kernel = crate::kernel();
+        let scalar = |value: f64, dim: aevia_dim::Dim| {
+            kernel
+                .call_with_witnesses(
+                    "num_backend_reference",
+                    &[Val::Num(Num::Float(value))],
+                    &[W::Scalar(dim)],
+                )
+                .unwrap()
+                .0
+        };
+        let backend = kernel
+            .call_with_witnesses("num_backend_interpreter", &[], &[])
+            .unwrap()
+            .0;
+        let x = scalar(2.0, aevia_dim::Dim::base("Length"));
+        let output = scalar(3.0, aevia_dim::Dim::base("Time"));
+        let vector_witness = W::Tensor {
+            dimension: Some(aevia_dim::Dim::one()),
+            element: None,
+            element_repr: None,
+            elements: vec![],
+        };
+        let handle_vector_witness = W::Tensor {
+            dimension: Some(aevia_dim::Dim::one()),
+            element: None,
+            element_repr: None,
+            elements: vec![],
+        };
+        let compiled = kernel
+            .call_with_witnesses(
+                "num_backend_compile",
+                &[
+                    backend,
+                    Val::Str("x*x".into()),
+                    Val::list(vec![Val::Str("x".into())]),
+                    Val::list(vec![x]),
+                    output,
+                    Val::Num(Num::Int(1000.into())),
+                ],
+                &[
+                    W::Unknown,
+                    W::Unknown,
+                    vector_witness,
+                    handle_vector_witness.clone(),
+                    W::Unknown,
+                    W::Scalar(aevia_dim::Dim::one()),
+                ],
+            )
+            .unwrap()
+            .0;
+        let point = scalar(4.0, aevia_dim::Dim::base("Length"));
+        let (value, witness) = kernel
+            .call_with_witnesses(
+                "num_backend_call",
+                &[compiled, Val::list(vec![point])],
+                &[W::Unknown, handle_vector_witness],
+            )
+            .unwrap();
+        assert_eq!(value, Val::Num(Num::Float(12.0)));
+        assert_eq!(witness, W::Scalar(aevia_dim::Dim::base("Time")));
+    }
+}
+
+#[cfg(test)]
+mod nonmetric_tensor_input_tests {
+    use super::closed_nonmetric_tensor;
+    use crate::SigType;
+    use rssn::kernel::signature::TypeExpr;
+    use rssn::kernel::value::TensorValue;
+    use rssn::kernel::value::Value;
+    fn signature(elem: SigType) -> SigType {
+        SigType::Tensor {
+            rank: Some(1),
+            shape: Some(vec![2]),
+            elem: Box::new(elem),
+        }
+    }
+    #[test]
+    fn empty_string_schema_comes_from_an_independent_element_witness() {
+        use crate::witness::DimensionWitness as W;
+        let schema = SigType::Tensor {
+            rank: Some(1),
+            shape: Some(vec![0]),
+            elem: Box::new(SigType::Str),
+        };
+        let mut value = Value::Tensor(TensorValue {
+            shape: vec![0],
+            elem: TypeExpr::Real,
+            data: vec![],
+        });
+        assert!(!closed_nonmetric_tensor(&value, &schema));
+        let proof = W::Tensor {
+            dimension: Some(aevia_dim::Dim::one()),
+            element: Some(Box::new(W::Unknown)),
+            element_repr: Some(SigType::Str),
+            elements: vec![],
+        };
+        crate::witness::attach(&mut value, &proof, &schema).unwrap();
+        assert!(closed_nonmetric_tensor(&value, &schema));
+    }
+    #[test]
+    fn closed_primitive_arrays_require_actual_cells_and_exact_schema_shape() {
+        let strings = Value::Tensor(TensorValue {
+            shape: vec![2],
+            elem: TypeExpr::String,
+            data: vec![Value::String("x".into()), Value::String("t".into())],
+        });
+        let boolean = Value::Tensor(TensorValue {
+            shape: vec![2],
+            elem: TypeExpr::Bool,
+            data: vec![Value::Bool(true), Value::Bool(false)],
+        });
+        assert!(closed_nonmetric_tensor(&strings, &signature(SigType::Str)));
+        assert!(closed_nonmetric_tensor(&boolean, &signature(SigType::Bool)));
+        assert!(!closed_nonmetric_tensor(
+            &strings,
+            &signature(SigType::Float)
+        ));
+        assert!(!closed_nonmetric_tensor(&strings, &signature(SigType::Dyn)));
+        assert!(!closed_nonmetric_tensor(
+            &strings,
+            &signature(SigType::Bool)
+        ));
+        let mut mixed = strings.clone();
+        if let Value::Tensor(t) = &mut mixed {
+            t.data[1] = Value::Float(1.0);
+        }
+        assert!(!closed_nonmetric_tensor(&mixed, &signature(SigType::Str)));
+        let mut malformed = strings;
+        if let Value::Tensor(t) = &mut malformed {
+            t.shape = vec![1, 2];
+        }
+        assert!(!closed_nonmetric_tensor(
+            &malformed,
+            &signature(SigType::Str)
+        ));
+        let mut wrong_schema = boolean;
+        if let Value::Tensor(t) = &mut wrong_schema {
+            t.elem = TypeExpr::Float;
+        }
+        assert!(!closed_nonmetric_tensor(
+            &wrong_schema,
+            &signature(SigType::Bool)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod ordinary_native_callback_arguments {
+    use super::supported_callback_schema;
+    use super::validate_ordinary_callback_input;
+    use crate::SigType as S;
+    use crate::Val;
+    use crate::witness::DimensionWitness as W;
+    fn handle(
+        kind: &str,
+        scope: u64,
+        id: u64,
+    ) -> Val {
+        let mut bytes = scope.to_le_bytes().to_vec();
+        bytes.extend(id.to_le_bytes());
+        Val::Opaque {
+            kind: kind.into(),
+            bytes,
+        }
+    }
+    #[test]
+    fn ordinary_native_envelopes_require_exact_kind_shape_and_nonzero_identifiers() {
+        let kind = "rssn/native/analysis/jacobian/v1";
+        let schema = S::Opaque(kind.into());
+        let valid = handle(kind, 1, 2);
+        assert!(validate_ordinary_callback_input(&valid, &W::Unknown, &schema).is_ok());
+        assert!(!supported_callback_schema(&schema));
+        for invalid in [
+            handle(kind, 0, 2),
+            handle(kind, 1, 0),
+            handle("rssn/native/analysis/mass/v1", 1, 2),
+            handle("User/State", 1, 2),
+            Val::Opaque {
+                kind: kind.into(),
+                bytes: vec![1; 15],
+            },
+        ] {
+            assert!(validate_ordinary_callback_input(&invalid, &W::Unknown, &schema).is_err());
+        }
+        let tensor = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![1]),
+            elem: Box::new(schema.clone()),
+        };
+        let proof = W::Tensor {
+            dimension: None,
+            element: None,
+            element_repr: Some(schema.clone()),
+            elements: vec![],
+        };
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![1],
+                    data: vec![valid.clone()]
+                },
+                &proof,
+                &tensor
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![0],
+                    data: vec![valid]
+                },
+                &proof,
+                &tensor
+            )
+            .is_err()
+        );
+        let empty = S::Tensor {
+            rank: Some(1),
+            shape: Some(vec![0]),
+            elem: Box::new(schema),
+        };
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![0],
+                    data: vec![]
+                },
+                &proof,
+                &empty
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_ordinary_callback_input(
+                &Val::Tensor {
+                    shape: vec![0],
+                    data: vec![]
+                },
+                &W::Unknown,
+                &empty
+            )
+            .is_err()
+        );
     }
 }

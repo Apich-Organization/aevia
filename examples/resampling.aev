@@ -1,0 +1,40 @@
+## Run: aevia test examples/resampling.aev
+## Sample units and statistic units are independent; explicit budgets include
+## the statistic on the original sample and on every resample.
+open Units.SI
+
+import Rssn_numerical_callback as N
+
+let samples = [1.0 m, 2.0 m, 3.0 m, 4.0 m, 5.0 m]
+
+fn statistic(values: Tensor<1, Float[Length]>): Float[Time] = mean(values) / 1.0 m * 1.0 s
+
+let boot = N.num_bootstrap_typed(samples, 300, 42, 301, statistic)
+
+let repeat = N.num_bootstrap_typed(samples, 300, 42, 301, statistic)
+
+let jack = N.num_jackknife_typed(samples, 6, statistic)
+
+let exhausted = N.num_bootstrap_typed(samples, 100, 42, 1, statistic)
+
+test "bootstrap keeps independent statistic units and repeats the seeded realization" =
+    match boot with
+    | Ok(result) ->
+        match repeat with
+        | Ok(other) -> result.estimate == 3.0 s && result.replicates == other.replicates && result.ci_low < 3.0 s && result.ci_high > 3.0 s
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "jackknife standard error of the mean matches the closed form" =
+    match jack with
+    | Ok(result) -> result.estimate == 3.0 s && abs(result.bias) < 0.000000001 s && abs(result.std_error - sqrt(0.5) * 1.0 s) < 0.000000001 s
+    | Err(_) -> false
+
+test "an insufficient callback budget is an explicit error" =
+    match exhausted with
+    | Ok(_) -> false
+    | Err(_) -> true
+
+fn main(): IO Unit = do
+    println(boot)
+    println(jack)

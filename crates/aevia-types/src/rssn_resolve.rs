@@ -497,7 +497,16 @@ pub fn classify(ty: &Type) -> aevia_rssn::SigType {
                     .collect(),
             )
         },
-        | Type::Adt(id, _args) => {
+        | Type::Adt(id, args) => {
+            if crate::adt::is_native_ad_var_type(ty) {
+                return S::Opaque(aevia_rssn::registry::NATIVE_AD_VAR_KIND.into());
+            }
+            if *id == crate::adt::OPTION_ID && args.len() == 1 {
+                return S::Variant(vec![
+                    ("None".to_string(), Vec::new()),
+                    ("Some".to_string(), vec![classify(&args[0])]),
+                ]);
+            }
             if *id == crate::adt::ORDERING_ID {
                 return S::Variant(vec![
                     ("Less".to_string(), Vec::new()),
@@ -672,6 +681,14 @@ pub fn instantiate_dimensions(
                     | _ => Ok(()),
                 }
             },
+            | (S::Variant(cases), Type::Adt(id, args))
+                if *id == crate::adt::OPTION_ID && args.len() == 1 =>
+            {
+                if let Some(payload) = aevia_rssn::registry::option_payload(cases) {
+                    constrain(payload, &args[0], infer, dims)?;
+                }
+                Ok(())
+            },
             | (S::Record(fields), Type::Record(row)) => {
                 for (name, field) in fields {
                     if let Some(got) = row.field(name) {
@@ -794,13 +811,21 @@ fn sig_type_to_type(
             }
             Type::func(converted, sig_type_to_type(ret, infer, dims)?)
         },
+        | S::Variant(cases) => {
+            match aevia_rssn::registry::option_payload(cases) {
+                | Some(payload) => Type::option(sig_type_to_type(payload, infer, dims)?),
+                | None => Type::Dyn(Rep::Real),
+            }
+        },
+        | S::Opaque(name) if name == aevia_rssn::registry::NATIVE_AD_VAR_KIND => {
+            crate::adt::native_ad_var_type()
+        },
         // The emitted façade spells every one of these `Dyn<term>`.
         | S::Dyn
         | S::Never
         | S::Table
         | S::Device
         | S::Opaque(_)
-        | S::Variant(_)
         | S::Var(_)
         | S::Tensor { rank: None, .. }
         | S::Sparse { rank: None, .. } => Type::Dyn(Rep::Real),
@@ -859,5 +884,33 @@ mod invoke_tests {
         assert!(!dim.is_one(), "the time exponent survives: {dim}");
         let factors: Vec<_> = dim.factors().collect();
         assert_eq!(factors.len(), 1, "one dimension atom: {dim}");
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+    use aevia_rssn::SigType as S;
+
+    #[test]
+    fn option_payload_dimensions_are_shared_with_parameters_and_result() {
+        let d = Dim::var(12345);
+        let option = |payload| {
+            S::Variant(vec![
+                ("None".into(), vec![]),
+                ("Some".into(), vec![payload]),
+            ])
+        };
+        let signature = aevia_rssn::Sig {
+            params: vec![option(S::Dim(Box::new(S::Float), d.clone()))],
+            ret: option(S::Dim(Box::new(S::Float), d)),
+            variadic: None,
+        };
+        let actual = Type::option(Type::float(Dim::base("Length")));
+        assert!(score_type(&signature.params[0], &classify(&actual)).accepted());
+        let result = instantiate_dimensions(&signature, &[actual], &mut crate::infer::Infer::new())
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, Type::option(Type::float(Dim::base("Length"))));
     }
 }

@@ -10,6 +10,8 @@ repository.workspace = true
 [features]
 default = []
 jit = ["aevia-rssn/jit"]
+gpu-wgpu = ["aevia-rssn/gpu-wgpu"]
+npy = ["aevia-rssn/npy"]
 
 [dependencies]
 aevia-dim.workspace = true

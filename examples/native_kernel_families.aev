@@ -1,0 +1,84 @@
+## Native source-inventory functions now execute through generated adapters.
+## Run: cargo run -p aevia-cli -- test examples/native_kernel_families.aev
+import Rssn_numerical_vector as N
+import Rssn_numerical_stats as S
+
+let inverse = N.num_finite_field_gf256_inv(83)
+test "GF256 operations use checked byte domains" = N.num_finite_field_gf256_mul(83, inverse) == 1
+
+test "CRC32 agrees with the standard ASCII check vector" = N.num_error_correction_crc32_compute_numerical([49, 50, 51, 52, 53, 54, 55, 56, 57]) == 3421780262
+
+let encoded = N.num_error_correction_reed_solomon_encode([1, 2, 3], 4)
+test "Reed-Solomon decoding works on local mutable storage" = N.num_error_correction_reed_solomon_decode(encoded, 4) == encoded
+
+## CSR offsets preserve mixed simplex dimensions without padding vertices.
+let circle = { offsets = [0, 1, 2, 3, 5, 7, 9], indices = [0, 1, 2, 0, 1, 1, 2, 0, 2] }
+test "triangle boundary has one one-dimensional homology class" = N.num_topology_betti_number(circle, 1) == 1 && N.num_topology_euler_characteristic(circle) == 0
+
+let persistence = N.num_topology_persistent_homology_rips([[0.0 m], [2.0 m]], 3.0 m, 1, 100)
+fn birth_length(x: Float[Length]): Bool = x == 0.0 m
+test "persistence radii carry length and essential intervals have explicit masks" = birth_length(at(persistence.births, 0)) && at(persistence.essential, 1) && at(persistence.deaths, 1) == 0.0 m
+
+## These native chaotic maps use normalized, dimensionless coordinates/time.
+let orbit = N.num_fractal_geometry_and_chaos_logistic_map_iterate(0.5, 4.0, 2)
+test "logistic map is evaluated by the native kernel" = orbit == [0.5, 1.0, 0.0]
+
+test "native affine systems round-trip through point tensors" =
+    match N.num_fractal_geometry_and_chaos_barnsley_fern_ifs() with
+    | Ok(fern) ->
+        let points = N.num_fractal_geometry_and_chaos_generate_ifs_fractal(fern.item0, fern.item1, { item0 = 0.0, item1 = 0.0 }, 10, 5)
+        length(points) == 10 && is_finite(points[0, 0])
+    | Err(_) -> false
+
+let density = N.num_robust_kde([0.0 m, 1.0 m, 2.0 m], 1.0 m, 0.5 m, 0)
+test "native robust KDE has inverse sample units" = density > 0.0 m^-1
+
+test "exact polynomial and descriptive kernels avoid float conversion" = decide(N.num_special_exact_legendre_p_exact(2, 1 / 2) == -1 / 8) == Some(true) && decide(N.num_descriptive_mean_exact([1, 2]) == 3 / 2) == Some(true) && decide(S.num_descriptive_median_exact([1, 2]) == 3 / 2) == Some(true)
+
+let fit = S.num_stats_simple_linear_regression([0.0 s, 1.0 s, 2.0 s], [1.0 m, 3.0 m, 5.0 m])
+test "native regression keeps independent predictor and response dimensions" = approx_eq(fit.item0, 2.0 m/s, 1e-12 m/s) && approx_eq(fit.item1, 1.0 m, 1e-12 m)
+
+let anova = S.num_stats_one_way_anova({ offsets = [0, 3, 5], values = [1.0 m, 2.0 m, 3.0 m, 4.0 m, 5.0 m] })
+test "ANOVA accepts independently sized physical groups" = anova.item0 > 0.0 && anova.item1 >= 0.0 && anova.item1 <= 1.0
+
+test "exact sample kernels retain coherent units for prefixed quantities" = decide(N.num_descriptive_mean_exact([100 cm, 3 m]) == 2 m) == Some(true)
+
+let cycles = N.num_permgroup_cycles([1, 0, 2])
+test "native permutation cycles preserve ragged lengths" = cycles.offsets == [0, 2, 3] && cycles.indices == [0, 1, 2] && N.num_permgroup_element_order([1, 0, 2]) == 2
+
+test "native group primitivity uses checked common-degree generators" = N.num_permgroup_is_primitive(3, [[1, 2, 0]])
+
+test "native graphics dot products retain independent vector units" = N.num_computer_graphics_dot_product_nd([1.0 m, 2.0 m], [3.0 s, 4.0 s]) == 11.0 m*s
+
+## Native chain objects stay in this RSSN session. Only checked handles cross
+## the language boundary; no native pointer or mutable matrix is serialized.
+test "opaque circle chains execute exact native homology" =
+    match Rssn.dynamic("num_homology_sphere", [to_value(1)]) with
+    | Ok(complex) ->
+        match Rssn.dynamic("num_homology_complex_chains", [complex]) with
+        | Ok(chains) ->
+            match Rssn.dynamic("num_homology_chain_homology", [chains, to_value(1)]) with
+            | Ok(value) ->
+                match Rssn.dynamic("num_native_release", [chains]) with
+                | Ok(_) ->
+                    match Rssn.dynamic("num_native_release", [complex]) with
+                    | Ok(_) ->
+                        match from_value<{ rank: Int, torsion: Tensor<1, Int> }>(value) with
+                        | Ok(group) -> group.rank == 1 && length(group.torsion) == 0
+                        | Err(_) -> false
+                    | Err(_) -> false
+                | Err(_) -> false
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "opaque filtration witnesses retain physical radius units" =
+    match Rssn.dynamic("num_homology_filtration", [to_value({ radii = [0.0 m, 0.0 m, 2.0 m], simplices = { offsets = [0, 1, 2, 4], indices = [0, 1, 0, 1] } })]) with
+    | Ok(model) ->
+        match Rssn.dynamic("num_homology_persistence_bars", [model, to_value(0)]) with
+        | Ok(value) ->
+            match from_value<Option<{ dimensions: Tensor<1, Int>, births: Tensor<1, Float[Length]>, deaths: Tensor<1, Float[Length]>, essential: Tensor<1, Bool> }>>(value) with
+            | Ok(Some(bars)) -> at(bars.births, 0) == 0.0 m && at(bars.essential, 1) && at(bars.deaths, 1) == 0.0 m
+            | _ -> false
+        | Err(_) -> false
+    | Err(_) -> false

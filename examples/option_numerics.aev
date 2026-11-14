@@ -1,0 +1,37 @@
+## Run: cargo run -p aevia-cli -- test examples/option_numerics.aev
+import Rssn_numerical_stats as S
+
+import Rssn_numerical_vector as V
+
+let samples = [0.0 m, 1.0 m, 2.0 m, 3.0 m]
+
+let density: Tensor<1, Float[1/Length]> = S.num_stats_ext_kde(samples, [1.5 m], Some(0.5 m))
+
+let automatic_density: Tensor<1, Float[1/Length]> = S.num_stats_ext_kde(samples, [1.5 m], None)
+
+let direct_density: Tensor<1, Float[1/Length]> = Rssn.num_stats_ext_kde(samples, [1.5 m], None)
+
+test "Option bandwidth keeps units and automatic None remains generic" = at(density, 0) > 0.0 m^-1 && approx_eq(at(automatic_density, 0), at(direct_density, 0), 1e-12 m^-1)
+
+let comparison = S.num_stats_ext_t_test_one_sample(samples, 1.5 m)
+
+let degrees: Option<Float> = comparison.df
+
+test "Option degrees of freedom is a native source value" =
+    match degrees with
+    | Some(n) -> approx_eq(n, 3.0, 1e-12)
+    | None -> false
+
+let hit: Option<Tensor<[2], Float[Length]>> = V.num_geometry_segment_intersection_2d([0.0 m, 0.0 m], [2.0 m, 2.0 m], [0.0 m, 2.0 m], [2.0 m, 0.0 m])
+
+let missed: Option<Tensor<[2], Float[Length]>> = V.num_geometry_segment_intersection_2d([0.0 m, 0.0 m], [1.0 m, 0.0 m], [0.0 m, 1.0 m], [1.0 m, 1.0 m])
+
+test "geometric Option payload preserves coordinate dimensions" =
+    match hit with
+    | Some(point) -> approx_eq(at(point, 0), 1.0 m, 1e-12 m) && approx_eq(at(point, 1), 1.0 m, 1e-12 m)
+    | None -> false
+
+test "empty geometric Option remains a native None" =
+    match missed with
+    | Some(_) -> false
+    | None -> true

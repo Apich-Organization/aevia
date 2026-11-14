@@ -1,7 +1,7 @@
 //! Special functions (§8.2.2) and the distribution kernels that need them.
 //!
-//! Floating-point evaluation delegates to RSSN. Exact polynomial values remain
-//! in the language adapter to preserve Aevia rational-value semantics.
+//! Floating-point and exact rational polynomial evaluation delegate to RSSN;
+//! this module preserves the language signatures and representation contracts.
 
 #[cfg(test)]
 use std::f64::consts::PI;
@@ -557,13 +557,11 @@ mod tests {
 // polynomials with rational coefficients, so this is exactness the algorithm
 // genuinely permits.
 
+#[cfg(test)]
 use num_bigint::BigInt;
 use num_rational::BigRational;
+#[cfg(test)]
 use num_traits::One;
-
-fn rational(value: i64) -> BigRational {
-    BigRational::from_integer(BigInt::from(value))
-}
 
 /// `P_n(x)` over the rationals.
 #[must_use]
@@ -571,20 +569,7 @@ pub fn legendre_p_exact(
     n: u32,
     x: &BigRational,
 ) -> BigRational {
-    if n == 0 {
-        return BigRational::one();
-    }
-    let mut previous = BigRational::one();
-    let mut current = x.clone();
-    for order in 1..n {
-        let k = rational(i64::from(order));
-        let next = ((rational(2) * k.clone() + BigRational::one()) * x.clone() * current.clone()
-            - k.clone() * previous.clone())
-            / (k + BigRational::one());
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special_exact::legendre_p_exact(n, x)
 }
 
 /// `H_n(x)` over the rationals.
@@ -593,18 +578,7 @@ pub fn hermite_h_exact(
     n: u32,
     x: &BigRational,
 ) -> BigRational {
-    if n == 0 {
-        return BigRational::one();
-    }
-    let mut previous = BigRational::one();
-    let mut current = rational(2) * x.clone();
-    for order in 1..n {
-        let next = rational(2) * x.clone() * current.clone()
-            - rational(2 * i64::from(order)) * previous.clone();
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special_exact::hermite_h_exact(n, x)
 }
 
 /// `L_n(x)` over the rationals.
@@ -613,20 +587,7 @@ pub fn laguerre_l_exact(
     n: u32,
     x: &BigRational,
 ) -> BigRational {
-    if n == 0 {
-        return BigRational::one();
-    }
-    let mut previous = BigRational::one();
-    let mut current = BigRational::one() - x.clone();
-    for order in 1..n {
-        let k = rational(i64::from(order));
-        let next = ((rational(2) * k.clone() + BigRational::one() - x.clone()) * current.clone()
-            - k.clone() * previous.clone())
-            / (k + BigRational::one());
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special_exact::laguerre_l_exact(n, x)
 }
 
 /// `T_n(x)` over the rationals.
@@ -635,17 +596,7 @@ pub fn chebyshev_t_exact(
     n: u32,
     x: &BigRational,
 ) -> BigRational {
-    if n == 0 {
-        return BigRational::one();
-    }
-    let mut previous = BigRational::one();
-    let mut current = x.clone();
-    for _ in 1..n {
-        let next = rational(2) * x.clone() * current.clone() - previous.clone();
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special_exact::chebyshev_t_exact(n, x)
 }
 
 /// `U_n(x)` over the rationals.
@@ -654,17 +605,7 @@ pub fn chebyshev_u_exact(
     n: u32,
     x: &BigRational,
 ) -> BigRational {
-    if n == 0 {
-        return BigRational::one();
-    }
-    let mut previous = BigRational::one();
-    let mut current = rational(2) * x.clone();
-    for _ in 1..n {
-        let next = rational(2) * x.clone() * current.clone() - previous.clone();
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special_exact::chebyshev_u_exact(n, x)
 }
 
 #[cfg(test)]

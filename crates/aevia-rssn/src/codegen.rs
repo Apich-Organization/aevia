@@ -5,6 +5,8 @@
 //! signatures use a value-list dynamic route with an explicit `Result` and
 //! a coverage explanation. `namespace_files` and the flat facade consume the
 //! same binding catalog; no approximate signature is presented as exact.
+//! Native/effectful nullaries are deferred functions with checked Result payloads;
+//! pure graph constants retain value declarations.
 //! Units and constants are generated from the same manifest.
 
 use crate::registry::OpEntry;
@@ -655,15 +657,49 @@ fn declaration(
         let hash = hex(&key.signature_hash);
         let mut dims = DimNames::default();
         if signature.params.is_empty() && signature.variadic.is_none() {
-            // A nullary operator is a constant: `Rssn.E` reads better than
-            // `Rssn.E()` and matches how the manifest names it.
-            let _ = writeln!(
-                out,
-                "let {name}: {ret} = Rssn.invoke(\"{op_name}\", \"{hash}\", [])",
-                name = name,
-                ret = render_with(&mut dims, &signature.ret),
-                op_name = escape(&op.name),
-            );
+            let ret = render_with(&mut dims, &signature.ret);
+            if op.is_value_native()
+                || op.raw.get(index).is_some_and(|signature| {
+                    signature.effects.effects.iter().any(|effect| {
+                        matches!(
+                            effect,
+                            rssn::kernel::signature::Effect::Io
+                                | rssn::kernel::signature::Effect::Stateful
+                                | rssn::kernel::signature::Effect::Diverges
+                        )
+                    })
+                })
+            {
+                // A native constructor/query is an operation, not an import-time
+                // constant. The keyed Result channel also keeps feature-disabled
+                // operators callable without turning Unsupported into an import error.
+                let mut names: Vec<_> = dims.names.values().cloned().collect();
+                names.sort();
+                let generics = if names.is_empty() {
+                    String::new()
+                } else {
+                    format!("<{}>", names.join(", "))
+                };
+                let _ = writeln!(
+                    out,
+                    "## Deferred operation: call `()` to obtain a checked Result."
+                );
+                let _ = writeln!(out, "fn {name}{generics}(): Result<{ret}, OpError> =");
+                let _ = writeln!(
+                    out,
+                    "    match Rssn.call_key(\"{}\", \"{hash}\", []) with",
+                    escape(&op.name)
+                );
+                let _ = writeln!(out, "    | Ok(value) -> from_value<{ret}>(value)");
+                let _ = writeln!(out, "    | Err(error) -> Err(error)");
+            } else {
+                // Pure graph constants retain their established value syntax.
+                let _ = writeln!(
+                    out,
+                    "let {name}: {ret} = Rssn.invoke(\"{}\", \"{hash}\", [])",
+                    escape(&op.name)
+                );
+            }
             continue;
         }
         let mut params: Vec<String> = signature
@@ -813,6 +849,17 @@ fn render_callback_type(
     use rssn::kernel::signature::NatExpr;
     use rssn::kernel::signature::TypeExpr;
     match (ty, raw) {
+        // Eligibility admits these opaque kinds only as ordinary operator
+        // arguments. Value is their authenticated wire carrier; Dyn<term>
+        // would falsely require a numeric payload. Actual callback schemas
+        // still admit only the separately sealed NativeAdVar opaque kind.
+        | (SigType::Opaque(kind), TypeExpr::Opaque(raw_kind))
+            if kind == raw_kind
+                && kind != crate::registry::NATIVE_AD_VAR_KIND
+                && crate::registry::native_object_kind(kind) =>
+        {
+            "Value".to_string()
+        },
         | (
             SigType::Tensor {
                 rank: Some(rank),
@@ -856,6 +903,20 @@ fn render_callback_type(
                 })
                 .collect();
             format!("{{ {} }}", fields.join(", "))
+        },
+        | (SigType::Variant(cases), TypeExpr::Variant(raw_cases)) => {
+            match (
+                crate::registry::option_payload(cases),
+                crate::registry::option_payload(raw_cases),
+            ) {
+                | (Some(payload), Some(raw_payload)) => {
+                    format!(
+                        "Option<{}>",
+                        render_callback_type(dims, nats, payload, raw_payload)
+                    )
+                },
+                | _ => render_with(dims, ty),
+            }
         },
         | (SigType::Func(args, result), TypeExpr::Function(raw_args, raw_result)) => {
             let args: Vec<_> = args
@@ -968,6 +1029,9 @@ fn render_with(
             "Dyn<term>".to_string()
         },
         // A host type has no Aevia spelling; the kernel decides.
+        | SigType::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => {
+            "NativeAdVar".to_string()
+        },
         | SigType::Opaque(_) => "Dyn<term>".to_string(),
         | SigType::Unit(dim) => format!("Unit[{}]", render_dim(dims, dim)),
         | SigType::Point(dim) => format!("Point[{}]", render_dim(dims, dim)),
@@ -985,7 +1049,12 @@ fn render_with(
                 .collect();
             format!("{{ {} }}", items.join(", "))
         },
-        | SigType::Variant(_) => "Dyn<term>".to_string(),
+        | SigType::Variant(cases) => {
+            crate::registry::option_payload(cases).map_or_else(
+                || "Dyn<term>".to_string(),
+                |payload| format!("Option<{}>", render_with(dims, payload)),
+            )
+        },
         | other => render_type(other),
     }
 }
@@ -1191,4 +1260,67 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+#[cfg(test)]
+mod nullary_tests {
+    use super::declaration;
+    use crate::bindings::Binding;
+    use crate::bindings::Coverage;
+    use crate::registry::Source;
+    use rssn::kernel::signature::Effect;
+    use rssn::kernel::signature::EvalKind;
+    use rssn::kernel::signature::OpKey;
+
+    #[test]
+    fn exact_graph_nullaries_keep_values_for_empty_and_explicit_pure_rows() {
+        // The live E registration is derived, so it cannot exercise the exact
+        // declaration branch. Reuse a real exact nullary signature as a fixture
+        // and give it graph evaluation metadata; no registry proof is weakened.
+        let mut op = crate::registry::registry()
+            .op("num_native_jit_target_key")
+            .expect("exact native nullary")
+            .clone();
+        op.name = "pure_graph_fixture".to_string();
+        op.source = Source::Declared;
+        op.eval_kind = EvalKind::Scalar;
+        assert!(op.raw[0].params.is_empty() && op.raw[0].variadic.is_none());
+        for effects in [vec![], vec![Effect::Pure]] {
+            op.raw[0].effects.effects = effects;
+            op.keys = vec![OpKey::new(&op.rule_set, &op.name, Some(&op.raw[0]))];
+            let row = Binding {
+                op: &op,
+                overload: Some(0),
+                name: op.name.clone(),
+                coverage: Coverage::Typed,
+                typed_callback_name: None,
+            };
+            let source = declaration(&op, &[&row]);
+            assert!(
+                source.contains("let pure_graph_fixture: Int = Rssn.invoke("),
+                "{source}"
+            );
+            assert!(!source.contains("match Rssn.call_key("), "{source}");
+        }
+        // Explicit observable effects defer the same graph nullary and retain
+        // the keyed Result error channel, even in the presence of Pure.
+        for effect in [Effect::Io, Effect::Stateful, Effect::Diverges] {
+            op.raw[0].effects.effects = vec![Effect::Pure, effect];
+            op.keys = vec![OpKey::new(&op.rule_set, &op.name, Some(&op.raw[0]))];
+            let row = Binding {
+                op: &op,
+                overload: Some(0),
+                name: op.name.clone(),
+                coverage: Coverage::Typed,
+                typed_callback_name: None,
+            };
+            let source = declaration(&op, &[&row]);
+            assert!(
+                source.contains("fn pure_graph_fixture(): Result<Int, OpError> ="),
+                "{source}"
+            );
+            assert!(source.contains("match Rssn.call_key("), "{source}");
+            assert!(!source.contains("let pure_graph_fixture:"), "{source}");
+        }
+    }
 }

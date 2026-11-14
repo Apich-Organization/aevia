@@ -461,7 +461,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 
 **Rank N and contraction.** `contract(A, B, axes_a, axes_b)` is pairwise tensor contraction (`tensordot`): `axes_a`/`axes_b` are **list literals** (so the result rank is static), and the result axes are the free axes of `A` followed by those of `B`. Two sparse operands give `Sparse<Coo, …>`; one sparse and one dense give a dense `Tensor`; contracting all axes gives a scalar; two dense operands are a type error. `map_nonzero(f, A)` calls `f` only on **stored entries**, so `f(0) = 0` is required (entries returning zero are dropped); `nonzeros(A)` returns a list of `(index, value)` tuples.
 
-**Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; sparse operations are carried by Aevia's own layout kernels, with `faer` for sparse LU. User-defined formats wait until rssn opens `Format` (§13.9.5).
+**Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its `faer` sparse-LU backend. User-defined formats wait until rssn opens `Format` (§13.9.5).
 
 > **Status**: all of the above is implemented (tests `aevia-core/tests/sparse.rs`, `sparse_block.rs`, `sparse_followup.rs`, `shape_refinement.rs`), and the capability `storage.sparse` is enabled. **Remaining gaps**: sparse values cannot enter rssn's term graph; `gmres_with`/`bicgstab_with` do not accept exact elements; there are no sparse eigenvalues or SVD.
 
@@ -689,12 +689,42 @@ type AxisScale = | Linear | Log
 type OdeMethod =
     | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
     | StormerVerlet | Ruth4 | GaussLegendre4 | GaussLegendre6
+    | ImplicitMidpoint | AdaptiveRk4 | AdaptiveStormerVerlet | AdaptiveRuth4
+    | AdaptiveImplicitMidpoint | AdaptiveGaussLegendre4 | AdaptiveGaussLegendre6
 type OdeOpts<s> = {
     rtol: Float[1],
     atol: Float[1],
     method: OdeMethod,
-    steps: Option<Int>,                 # Rk4 / geometric integrators: fixed sub-steps
+    steps: Option<Int>,                 # Rk4 / 几何积分器：定步长子步数
     events: Option<(Float[T], s) -> Float[1]>,
+}
+```
+
+```
+type OdeAdaptiveOpts<s> = {
+    rtol: Float[1],
+    atol: Float[1],
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
+}
+
+type OdePhysicalOpts<s> = {
+    rtol: Float[1],
+    atol: s,
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
 }
 ```
 
@@ -707,7 +737,19 @@ solve_ivp: (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), OdeOpts<s>)
          -> { t: Tensor<1, Float[T]>, y: Tensor<1, s> }
 ```
 
-`RateOf<s>` is a built-in type function, defined recursively:
+`odeint_with`, `solve_ivp` and `ode_solve` also accept `OdeAdaptiveOpts<s>` or `OdePhysicalOpts<s>`.
+`h0 = 0.0 s` selects startup automatically. `h_min`/`h_max` bound adaptive steps; the final clipped step may be smaller.
+`max_steps` counts rejected attempts too; `max_evaluations` bounds actual RHS calls. Exhaustion is an error.
+Physical `atol` matches every state leaf's structure, tensor shape and dimension, with finite positive components.
+Components are normalized to implement `atol_i + rtol * abs(y_i)`; callbacks, events and results retain physical units.
+Legacy dimensionless scalar `atol` applies to canonical component values.
+
+Each `Adaptive*` geometric method compares its own full step with two half steps and checks the cubic Hermite
+midpoint defect. It accepts the two half steps without switching methods or Richardson extrapolation.
+State-dependent adaptive steps generally lose the long-term geometric properties of a fixed-step symplectic map.
+Fixed methods use `steps`; implicit-stage failure is an error.
+
+`RateOf<s>` is the built-in recursive type function:
 
 ```
 RateOf<Scalar<ρ,d>>        = Scalar<ρ,d/T>
@@ -715,29 +757,36 @@ RateOf<Tensor<n, τ>>       = Tensor<n, RateOf<τ>>
 RateOf<{ l1: τ1, ..., ln: τn }> = { l1: RateOf<τ1>, ..., ln: RateOf<τn> }
 ```
 
-If `s = { x: Float[L], v: Float[L/T] }`, then `RateOf<s> = { x: Float[L/T], v: Float[L/T^2] }`. The `RateOf` of the scalar state `Float[1]` is `Float[1/T]`. A state containing `Int`, `Bool` or function fields is invalid (`E0302`); capture constant parameters in the closure of `rhs`. The compiler checks field by field; users write no instances and there is no `OdeState` class. An ODE right-hand side (such as `rhs`) MUST take two parameters `(t, s)`; write `_` for an unused time parameter.
+For `{ x: Float[L], v: Float[L/T] }`, the rate is `{ x: Float[L/T], v: Float[L/T^2] }`.
+States contain only `Float` scalars, tensors or nested records; `Int`, `Bool` and function fields give `E0302`.
+The RHS takes exactly `(t, s)`, even when time is unused. Imported entry points keep these type-function checks.
+The bridge flattens records in declaration order, depth first, and tensors in row-major order, then restores the same
+structure and leaf dimensions. A history of record states uses boxed storage.
 
-`events` stops and interpolates when a `Float[1]` changes sign. `Dopri5`, `Radau`, `Bdf`, `Rosenbrock23` and the fixed-step `Rk4` all support events (rssn's `solve_fixed_events`); the difference is that the fixed-step method needs `steps`, and event location accuracy also depends on the step. `odeint_with` returns the `t`/`y` actually reached. `odeint` is shorthand for the defaults (`rtol=1e-8`, `atol=1e-10`, `Dopri5`).
+`StormerVerlet` and `Ruth4` are second- and fourth-order partitioned symplectic methods: the flat state has even length,
+with `q` first and `p` second, for a separable canonical Hamiltonian system. `ImplicitMidpoint`, `GaussLegendre4` and
+`GaussLegendre6` are implicit Gauss–Legendre methods of orders two, four and six and support general states.
+Physical position and momentum can use independently dimensioned record fields. One numeric tensor is homogeneous;
+advanced `num_ode_*`, `num_dae_*` and `num_dde_*` tensor APIs require mixed physical components to be normalized.
 
-`StormerVerlet` and `Ruth4` are second- and fourth-order fixed-step symplectic integrators; the flattened state MUST have even length, with the first half the positions `q` and the second half the momenta `p`, and the right-hand side a separable canonical Hamiltonian system. `GaussLegendre4` and `GaussLegendre6` are fourth- and sixth-order implicit Gauss–Legendre RK methods and support general states. These four methods take their number of fixed sub-steps from `steps`, and an unconverged nonlinear stage is an error.
-
-**Flattening contract.** The bridge flattens `s` into a `Vec<f64>` in **record field declaration order**, depth first, tensors row-major, and restores it in the same order after solving. Nested records flatten recursively; `Tensor<n, Float[d]>` flattens row-major. Only `Float` scalar and tensor fields are supported; a state with `Int`, `Bool` or function fields is `E0302` (capture constants in the `rhs` closure). `Tensor<1, s>` uses `Boxed` storage; numeric kernels see only flat `f64`, and Aevia boxes and unboxes.
+`odeint` is shorthand for `Dopri5`, `rtol=1e-8`, `atol=1e-10`. `odeint_with` returns the times and states actually reached.
+Its optional event stops at a dimensionless sign crossing; fixed-step event accuracy depends on `steps`.
 
 **8.9.0 Solution objects, dense output, multiple events, higher-order equations, boundary-value problems**
 
-`odeint`/`solve_ivp` give only discrete output and one terminal event. For values at **arbitrary times**, several events (with direction, terminal or not), higher-order equations or boundary-value problems, use the entry points below. They share `OdeOpts<s>`, `RateOf<s>` and the flattening contract with `odeint_with`, and have the same shape as the SDE event and dense-output API of §8.9.1 (`{ g, terminal, direction }`, `{ index, t, y }`, `at`).
+Use the following entries for arbitrary-time queries, several directed events or boundary-value problems:
 
 ```
 type OdeEvent<s> = {
-    g: (Float[T], s) -> Float[1],   # a sign change is an event; must return a dimensionless number
-    terminal: Bool,                 # true: integration stops at the event
-    direction: Int,                 # -1 falling crossings only, 0 both directions, 1 rising crossings only
+    g: (Float[T], s) -> Float[1],   # 变号即事件；必须返回无量纲数
+    terminal: Bool,                 # true：积分在该事件处停止
+    direction: Int,                 # -1 只认下降穿越，0 两个方向，1 只认上升穿越
 }
 type OdeHit<s> = { index: Int, t: Float[T], y: s }
 type OdeSolution<s> = {
-    t: Tensor<1, Float[T]>, y: Tensor<1, s>,        # accepted step nodes
-    at: (Float[T]) -> s,                            # continuous extension: value at any t
-    events: Tensor<1, OdeHit<s>>,                   # events sorted by time
+    t: Tensor<1, Float[T]>, y: Tensor<1, s>,        # 接受的步节点
+    at: (Float[T]) -> s,                            # 连续扩展：任意 t 处取值
+    events: Tensor<1, OdeHit<s>>,                   # 按时间排序的事件
     nfev: Int, rejected: Int, method: String,
 }
 
@@ -751,22 +800,48 @@ ode_bvp : (((Float[T], s) -> RateOf<s>), s, (Float[T], Float[T]), ((s, s) -> Ten
           -> OdeSolution<s>
 ```
 
-**Continuous output.** `ode_solve(rhs, y0, (t0, t1), opts, events)` integrates over the whole interval (`t1 ≥ t0`; backward integration is not supported) and keeps the method's own continuous extension; `sol.at(t)` evaluates at any time in `[t0, t_end]` (outside the interval is `E0802`, a dimension other than `T` is `E0401`). `Dopri5` uses rssn's 4th-order continuous extension; `Radau`/`Bdf`/`Rosenbrock23` use their collocation polynomials / backward-difference interpolation; `Rk4` has no stage data and uses cubic Hermite interpolation on the nodes (interpolation error `O(h^4)`, fourth-order convergence in the step). Here the `steps` of `Rk4` is the **total number of steps over the whole interval** (in `odeint_with` it is the number of sub-steps per output interval). `at` is a function value (not data), so a solution containing `at` cannot be returned across threads; to return one from `par_map`, take only `t`/`y`.
+**Dense output.** Integration is forward (`t1 ≥ t0`). `at(t)` is valid on `[t0,t_end]`; an out-of-range query is `E0802`,
+and a wrong time dimension is `E0401`. `Dopri5` uses its order-four extension; stiff solvers use their collocation or
+backward-difference extensions. `Rk4` uses cubic Hermite interpolation with fourth-order convergence. Its `steps` is the
+total over `ode_solve`'s span, versus substeps per output interval in `odeint_with`. An `at` closure cannot cross threads;
+return only `t`/`y` from parallel work.
 
-**Events.** `events` is a list of `OdeEvent` and may be empty (`[]`). The `g` of each event is located by root finding on the continuous extension (`Rk4`: bisection on re-integration) when it changes sign between accepted steps (`g0 < 0 ≤ g1` rising, `g0 > 0 ≥ g1` falling, filtered by `direction`); a hit is recorded in `events` (`index` is the list position); an event with `terminal = true` ends the integration at that point, so the last node of `t`/`y` is the hit and the valid interval of `at` is truncated accordingly. Several hits in one step are sorted by time and hits after a terminal event are discarded. A `g` returning a dimensioned value is `E0302`; a direction other than -1/0/1 is `E0802`.
+**Events.** `events` may be empty. Rising crossings satisfy `g0 < 0 ≤ g1`, falling crossings `g0 > 0 ≥ g1`;
+`direction` is -1/0/1 (`E0802` otherwise). Roots are located on the continuous extension, or by reintegration for `Rk4`.
+Hits are sorted by time; a terminal hit truncates nodes, the dense span and later hits. Dimensioned event values give `E0302`.
 
-**Stiff solver selection.** `AutoSwitch` starts with `Dopri5` and gives it only 20000 attempted steps; when the budget is exhausted (a stiff problem limited by stability, needing far more steps than accuracy requires) it re-integrates the whole interval with `Radau`, and `sol.method` reports the method finally used (`"Dopri5"` or `"Radau"`). The decision is by **step budget**, not an eigenvalue estimate: a moderately stiff problem (needing tens of thousands of steps) wastes one explicit pass; choose `Radau`/`Bdf`/`Rosenbrock23` directly when stiffness is known. `AutoSwitch` also works in `odeint_with`, `solve_ivp` and event integration (same rule).
+**Stiff selection.** `AutoSwitch` gives `Dopri5` at most `min(max_steps,20000)` attempts. On exhaustion, remaining attempt
+budget runs `Radau` again from the interval start. Both attempts share the callback budget. `method` reports the final
+solver. Selection uses step counts, not eigenvalue estimates; known stiff problems can select a stiff solver directly.
 
-**Higher-order equations.** `odeint_order(f, (y0, y1, …, y_{n-1}), times)` integrates `y⁽ⁿ⁾ = f(t, y, y′, …, y⁽ⁿ⁻¹⁾)` (`n` is the parameter count of `f` minus one, `n ≥ 1`), internally reduced to a first-order system on the stacked state `z = (y, y′, …, y⁽ⁿ⁻¹⁾)` in which every component except `y⁽ⁿ⁾ = f` is trivial (`zₖ′ = zₖ₊₁`). **Dimensions are tracked order by order**: the type of the `k`-th derivative is `RateOf` applied `k` times, so for `y : Float[L]`, `y′ : Float[L/T]`, `y″ : Float[L/T^2]` and `f` MUST return `L/T^n` (`E0401`/`E0302` at check time; at run time the dimension and structure of every initial value is checked again, `E0401` on a mismatch). `y` may be a scalar, tensor or record, with the same structure for all derivatives. The returned `d` is the history of derivative tuples and `y` is order 0. `odeint_order_with` takes an extra `OdeOpts<y0>` (method, tolerances; `events` MUST be `None` — for events, reduce the order by hand and use `ode_solve`). Example (spring `x″ = -(k/m) x`):
+**Higher order.** `odeint_order` rewrites order `n ≥ 1` into the stacked state `(y,y',...,y^(n-1))`.
+Every derivative keeps the same structure, with dimension divided by `T^k`; `f` returns `L/T^n` when `y` has `L`.
+The checker and runtime validate structure/dimensions (`E0302`/`E0401`). Result `d` contains all derivative histories and
+`y` the zeroth. `odeint_order_with` requires `events=None`; reduce manually and use `ode_solve` for events.
 
 ```
 let sol = odeint_order(fn (_t, x, v) => -(k / m) * x, (1.0 m, 0.0 m/s), times)
-# x : Float[L], v : Float[L/T], returns Float[L/T^2]
+# x : Float[L]，v : Float[L/T]，返回值 Float[L/T^2]
 ```
 
-**Boundary-value problems (single shooting).** `ode_bvp(rhs, guess, (t0, t1), bc, opts)` solves `y′ = rhs(t, y)`, `bc(y(t0), y(t1)) = 0`, where `bc` returns a residual tensor with as many entries as state components. The algorithm is Newton iteration on the initial state (forward-difference Jacobian, one integration per unknown; backtracking line search); `guess` is the Newton starting point, convergence is `‖r‖∞ ≤ 1e-9 (1 + ‖y0‖∞)` with at most 60 iterations; it returns the `OdeSolution` of the last integration (so `at` is available). For second-order problems, write the state `(y, y′)` as in the order reduction of `odeint_order`. A wrong number of residuals is `E0802`; a singular Jacobian or non-convergence is `NotConverged`. **Limitation**: this is single shooting and suits only problems where the sensitivity of `y(t1)` to `y(t0)` does not blow up; exponentially unstable (long-interval, stiff) boundary-value problems need multiple shooting or collocation, which are **not** provided.
+**Single shooting.** `ode_bvp` applies Newton to the initial state, with a forward-difference Jacobian and backtracking,
+for at most 60 iterations and `norm_inf(r) ≤ 1e-9 * (1 + norm_inf(y0))`. `bc` returns one residual per component
+(`E0802` otherwise). Singular or nonconverged solves give `NotConverged`. It returns the final dense solution.
+Unstable sensitivities require multiple shooting or collocation, which this entry does not provide.
 
-Imported `odeint`/`odeint_with`/`solve_ivp` (and `sdeint_*` of §8.9.1, e.g. `import Ode { odeint }`) **keep the type-function semantics**: the `RateOf<s>`/`DiffusionOf<s>` checks are determined by the entry point itself, the standard-library module merely re-exports and does not change the signature, and only a local redefinition of the same name shadows it.
+**Advanced callbacks.** The following `Rssn_numerical_callback` families use certified callbacks (§8.19).
+Time, state and residual dimensions are independent; derivatives use state/time and absolute accuracy uses state units.
+
+| Family | Method and limits |
+|---|---|
+| `num_ode_{rk4,verlet,ruth4,midpoint,gauss4,gauss6}_adaptive_typed` | Requested-method step doubling, endpoints, Hermite history and explicit work budgets |
+| `num_dae_implicit_adaptive_typed` | Residual `F(t,y,y') = 0`; BDF1 startup, variable-step BDF2, Newton and step doubling; algebraic initial state must be consistent |
+| `num_dae_index{1,2}_adaptive_typed` | Semi-explicit constraints; positive reference scales for time, state, algebraic variables and constraints |
+| `num_dde_constant_adaptive_typed` | Positive-delay method of steps with Dormand–Prince; steps respect the minimum delay and reachable discontinuities |
+
+These entries enforce step bounds and attempt/callback budgets, report rejections and fail instead of forcing acceptance.
+DAE/DDE callback entries do not expose events. Pure `Rssn_numerical_vector.num_ode_history_eval` queries physical
+state/rate histories within their span. Runnable assertions are in `examples/ode_adaptive_{geometric,dae,dde}.aev`.
 
 ## 8.9.1 SDE
 
@@ -780,16 +855,16 @@ type SdeMethod =
     | DriftImplicitEuler | ThetaMaruyama | DriftImplicitMilstein
 
 type SdeStructure =
-    | Diagonal                     # one noise channel per state component, m = n
-    | General(Int)                 # (m)；the caller declares the noise commutative
-    | GeneralNoncommutative(Int)   # (m)；non-commutative noise: the method name dispatches to the Lévy-area kernel
+    | Diagonal                     # 每个状态分量一个噪声通道，m = n
+    | General(Int)                 # (m)；调用者声明噪声可交换
+    | GeneralNoncommutative(Int)   # (m)；噪声不可交换：方法名分派到 Lévy 面积内核
 
 type SdeFixedOpts<T> = {
     structure: SdeStructure,
     method: SdeMethod,
     seed: Int,
     t0: Float[T], dt: Float[T], steps: Int,
-    terms: Int,                    # Fourier modes of the Lévy area; 0 = default clamp(ceil(1/√h), 16, 4096), h the step
+    terms: Int,                    # Lévy 面积的 Fourier 模数；0 = 默认 clamp(ceil(1/√h), 16, 4096)，h 为步长
 }
 
 type SdeAdaptiveOpts<T> = {
@@ -799,8 +874,8 @@ type SdeAdaptiveOpts<T> = {
     t0: Float[T], t1: Float[T],
     rtol: Float[1], atol: Float[1],
     max_steps: Int,
-    cells: Int,                    # Brownian grid cells for non-commutative adaptive runs; 0 = default 4096, ignored for commutative noise
-    terms: Int,                    # as above; h is the cell width (t1 - t0)/cells
+    cells: Int,                    # 所有自适应方法的最细噪声 cell；向上取二次幂，0 = 4096
+    terms: Int,                    # 同上；h 取 cell 宽度 (t1 - t0)/cells
 }
 
 type SdeOpts<T> = | Fixed(SdeFixedOpts<T>) | Adaptive(SdeAdaptiveOpts<T>)
@@ -820,20 +895,20 @@ sdeint_general : (((Float[T], s) -> RateOf<s>),
                   s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>
                   # s = Float[d]       : GeneralDiffusionOf<s> = Tensor<2, Scalar<ρ, d/T^(1/2)>>  (1×m)
                   # s = Tensor<1, τ>   : Tensor<2, DiffusionOf<τ>>                               (n×m)
-                  # s = { l: τ, … }    : { l: GeneralDiffusionOf<τ>, … }(record state, see below)
+                  # s = { l: τ, … }    : { l: GeneralDiffusionOf<τ>, … }（记录状态，见下）
 
 wiener           : (Int, Int, Int, Float[T]) -> Tensor<2, Float[T^(1/2)]>
-                   # (seed, m, steps, dt)；same order as the manifest's sde_wiener(seed, m, steps, h)
+                   # (seed, m, steps, dt)；与 manifest 的 sde_wiener(seed, m, steps, h) 同序
 sde_order        : SdeMethod -> { strong: Float[1], weak: Float[1] }
-                   # order under commutative noise
+                   # 可交换噪声下的阶
 sde_order_with   : (SdeMethod, SdeStructure) -> { strong: Float[1], weak: Float[1] }
-                   # order by structure: HeunStratonovich has only strong order 1/2 on non-commutative noise
-sde_ensemble_seed: (Int, Int) -> Int     # (seed, index), pure function
+                   # 按结构给阶：HeunStratonovich 在不可交换噪声上只有强 1/2
+sde_ensemble_seed: (Int, Int) -> Int     # (seed, index)，纯函数
 
 type SdeEvent<s> = {
-    g: (Float[T], s) -> Float[1],  # a sign change is an event; dimensionless
-    terminal: Bool,                # true: the path is cut at the first such event
-    direction: Int,                # -1 falling, 0 both directions, 1 rising
+    g: (Float[T], s) -> Float[1],  # 变号即事件，无量纲
+    terminal: Bool,                # true：路径在第一个这样的事件处截断
+    direction: Int,                # -1 下降，0 两个方向，1 上升
 }
 type SdeHit<s> = { index: Int, t: Float[T], y: s }
 
@@ -864,28 +939,57 @@ sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralD
 | `SrkPlaten` | Itô | Platen derivative-free SRK | Kloeden–Platen SRK (11.1.7, `srk_noncommutative`) + Lévy area | 1, 1 |
 | `MilsteinNoncommutative` | Itô | as the next column (explicit alias, any structure) | Milstein + Lévy area | 1, 1 |
 | `MilsteinNoncommutativeStratonovich` | Stratonovich | as the next column (explicit alias, any structure) | Strat. Milstein + Lévy area | 1, 1 |
+| `DriftImplicitEuler` | Itô | Implicit drift, explicit diffusion | Same | 1/2, 1 |
+| `ThetaMaruyama` | Itô | theta = 1/2 implicit drift, explicit diffusion | Same | 1/2, 1 |
+| `DriftImplicitMilstein` | Itô | Implicit drift, Milstein cross terms | With Lévy areas | 1, 1 |
 
 The kernel documentation states there is no scheme stronger than first order, and the Milstein family is only weak order one, so no weak order two is claimed. `sde_order(method)` gives the orders under commutative noise; `sde_order_with(method, structure)` gives them by structure (`HeunStratonovich` has no Lévy-area term and drops to strong 1/2 on non-commutative noise — the call is allowed but the order is reported honestly). Iterated integrals: Itô `I_jl = ½ΔW_jΔW_l − ½δ_jl h + A_jl`, Stratonovich `J_jl = I_jl + ½δ_jl h = ½ΔW_jΔW_l + A_jl` (`A` is the Lévy area). The SRK support values are `Υ^j = Y + a h + b^j √h` (one per noise channel, `m` extra diffusion evaluations per step), and `Y' = Y + a h + Σ_j b^j ΔW_j + h^(-1/2) Σ_{j,l} (b^l(Υ^j) − b^l(Y)) I_jl` (the Stratonovich version uses `J_jl` and the Stratonovich drift).
 
-**Default `terms` for the Lévy area.** Paths that need the area (`Milstein`/`MilsteinStratonovich`/`SrkPlaten` on non-commutative structure, and the two `*Noncommutative*` methods) take `clamp(ceil(1/√h), 16, 4096)` when `terms == 0`, with `h` the step (the Brownian cell width `(t1 − t0)/cells` for adaptive runs); an explicit `terms > 0` is used as is. `terms` is no longer a required value.
+**Default `terms` for the Lévy area.** Paths that need the area (`Milstein`/`MilsteinStratonovich`/`SrkPlaten`/`DriftImplicitMilstein` on non-commutative structure, and the two `*Noncommutative*` methods) take `clamp(ceil(1/√h), 16, 4096)` when `terms == 0`, with `h` the step (the Brownian cell width `(t1 − t0)/cells` for adaptive runs); an explicit `terms > 0` is used as is. The `terms` field is required; 0 selects the default.
 
 For `General`/`GeneralNoncommutative`, `m` is the number of noise channels; `sdeint_general` checks at run time that the diffusion matrix has shape `n × m` (`E0802`), and `SdePath.noise` reports the actual `m` (`n` for diagonal).
 
 **Record state with general noise**: `sdeint_general` accepts a record state. The diffusion returns a **record of the same shape** in which each scalar field is a `Tensor<1, Float[d/T^(1/2)]>` of `m` coefficients and a field of rank `r` becomes a tensor of rank `r+1` (one extra trailing noise axis `[.., m]`): `GeneralDiffusionOf<{ l: τ, … }> = { l: GeneralDiffusionOf<τ>, … }`. At run time the fields are taken in the **field order of the state record**, depth first and row-major, which is exactly the kernel's `n × m` row-major matrix (a scalar field is one row). Example: for `{ x: Float, v: Tensor<1, Float> }` (`n = 1 + k`) with `General(2)`, the diffusion returns `{ x: [σx1, σx2], v: Tensor<2> [k×2] }`.
 
-**Step policy**: `Fixed` uses a constant step `dt` for `steps` steps (time grid `t0 + k·dt`); `Adaptive` controls the local error with `rtol`/`atol` on `[t0, t1]`, with Brownian-bridge rejection and resampling (in the kernel). **Every method supports adaptive stepping**:
+**Adaptive schedule.** `Fixed` keeps its uniform grid. `Adaptive` retains the requested scheme, including all three
+implicit-drift schemes. One full step and two half steps use the same realized noise; accepted half-step states are saved.
+Euler, SRK and Heun requests are not replaced with Milstein. Every adaptive method uses `cells`: 0 means 4096;
+otherwise the count rounds up to a power of two, at least two. Coarse increments sum fixed independent finest increments;
+iterated integrals obey Chen's relation. Rejection does not resample realized noise. Failure at the finest coupled interval
+is `E0807`; acceptance is never forced.
 
-- Itô commutative (`EulerMaruyama`/`Milstein`/`SrkPlaten`): the kernel's adaptive controller returns the Milstein solution (its error estimate is EM-versus-Milstein), so the three give the same controlled path and the method name keeps the requested value;
-- **Stratonovich adaptive = exact Itô conversion**: the drift is replaced by the Itô-equivalent drift `ã_i = a_i + ½ Σ_j Σ_k b_kj ∂_k b_ij` (the correction uses central differences along the diffusion columns, with the step scaled like the Milstein-term differences), and the Itô controller then runs on `(ã, b)`. The returned path is the **controlled Itô–Milstein solution of the equivalent Itô SDE**, which converges to the Stratonovich solution of the original coefficients (for `dX = σX∘dW` it converges to `X0·exp(σ W_T)`);
-- non-commutative noise (and the two `*Noncommutative*` methods): a fine cell grid plus a controller using the Chen relation (`cells`, 0 = default 4096); Stratonovich methods again convert to Itô first. A single cell that is still rejected is `E0807` and needs more `cells`.
+Brownian defects use a `sqrt(dt/span)` local second-moment allocation; drift defects independently use `dt/span`.
+Relative scales use the largest initial/current/trial component magnitude. These are local estimates, not global bounds.
+`max_steps` bounds proposals and accepted steps. Allocation/work limits are 1048576 finest cells, 8388608 stored
+coefficients/state values and 268435456 Lévy-area updates.
 
-**Determinism**: `seed` is required and has no default. Increments of fixed-step commutative paths come from the language RNG stream (the same LCG as `rng(seed)`, normals by Box–Muller), so `wiener(seed, m, steps, dt)` and a fixed-step path with the same seed consume **the same numbers**; reproducible within a build, with no promise of bitwise equality across platforms. Fixed-step non-commutative paths and all adaptive paths need the kernel's own xoshiro stream (bridge rejection and Lévy areas are sampled during the solve), seeded from `seed`, again reproducible only within a build. `sde_ensemble_seed` depends only on `(seed, index)`, so ensemble members are independent of execution order and thread count; `sde_ensemble_diag/general` run members in parallel at the language level (see above).
+**Jump and stable noise.** Compound Poisson arrivals and marks are sampled once before rejection. Continuous evolution
+stops at each arrival and records its post-jump state. Nonconstant compensation needs an expected-jump callback.
+Stable coarse increments sum independent finest increments; local moment order is `q = 0.9 alpha`.
+For `alpha < 2`, only Euler, drift-implicit Euler and theta apply; Brownian Milstein/Stratonovich corrections do not.
+At `alpha = 2`, noise means `sqrt(2) W` and all Brownian schemes apply.
 
-**Error table**: `E0802` shape/argument (including a `General` `m` that disagrees with the diffusion matrix, non-uniform grids, missing required fields); `E0806` non-finite state; `E0807` adaptive step collapse or exhausted step budget; `E1001` is reserved for genuinely unimplemented capabilities (`core.sde`, `sde.events`), and no combination of method, structure and step policy produces it today. `SdeError` is an opaque error type (like `SimError`) and the language exposes no constructors.
+`Rssn_numerical_callback` exposes `num_sde_adaptive_{diag,general}_typed`,
+`num_sde_jump_adaptive_{diag,general}_typed` and `num_sde_levy_adaptive_{diag,general}_typed`.
+Controls include physical endpoints/reference time, state-unit absolute accuracy, relative accuracy, finest-grid,
+proposal and callback budgets, seed and method code (`SdeMethod` declaration order 0–9). General noise adds channel
+count and commutativity. Brownian coefficients use state/sqrt(time). Stable noise uses dimensionless
+`L_(t/reference_time)`, so its coefficient has state units without floating-point dimensional powers.
 
-**Not provided**: user-defined noise structures; explicit non-uniform grids (the fixed-step kernel assumes a uniform step and reports `E0802`; use `Adaptive` for variable steps); solver manifest operators (solvers need callbacks, which cannot cross the manifest ABI); Brownian-bridge dense output (`sde_at` is a linear chord); terminal events that stop **during** integration (`sde_events` cuts after the fact).
+**Determinism.** Seeds are explicit. Fixed/adaptive commutative Brownian paths use the language LCG/Box–Muller stream;
+iterated-area paths use kernel xoshiro. Seed and finest resolution determine a realization unchanged by rejection.
+Ensemble seeds depend only on `(seed,index)`. Reproducibility is within a build. Runnable assertions are in
+`examples/sde_adaptive_*.aev`.
 
-> **Status**: all of the above is implemented (`aevia-std::sde`; the `sde_runtime` and `sde_language` tests in `aevia-core`; strong-convergence slopes are measured by `rssn/tests/sde_noncommutative.rs` on a two-dimensional non-commutative linear SDE: > 0.8 for the Milstein family, about 0.5 for Euler–Maruyama). Every method works on every structure; `sdeint_diag`/`sdeint_general`/`wiener`/`sde_order`/`sde_ensemble_seed` are Prelude built-ins re-exported by the `Sde` module, which also declares the option ADTs. In source, write `Sde.Fixed({ structure = Sde.Diagonal, method = Sde.EulerMaruyama, … })` (or `import Sde { Fixed, Diagonal, EulerMaruyama }` and use short names). The option record is read field by field at run time; a missing or ill-typed field gives an `SdeError` with `E0802` and no defaults are filled in (`terms` and `cells` MUST be present, with `0` meaning default). The manifest's `sde_scheme_info(name: String) -> Tensor<1, Real>` returns `[strong_order, ito, commutative_only, adaptive, levy_areas]` (the last four are 1/0 flags); it is a manifest-only metadata query, not a solver path, and gives only the strong order — use `sde_order` for the weak order. `Float[T^(1/2)]` elements of `wiener` print as `s^(1/2)` (§5.4.3).
+**Error table**: `E0802` shape/argument (including a `General` `m` that disagrees with the diffusion matrix, non-uniform grids, missing required fields); `E0806` non-finite state; `E0807` adaptive step collapse or exhausted step budget; `E1001` is reserved for unimplemented capabilities. `SdeError` is an opaque error type (like `SimError`) and the language exposes no constructors.
+
+**Not provided**: user-defined noise structures, explicit non-uniform fixed grids, Brownian-bridge dense output,
+or early stopping during standard `sde_events` integration (events truncate afterwards). Callback solvers use §8.19.
+The `Sde` module declares option ADTs and re-exports these entries. `terms` and `cells` are required; 0 selects defaults.
+`sde_scheme_info` queries metadata only; use `sde_order`/`sde_order_with` for weak order.
+
+Status: these language entries and the listed callback solvers are implemented; native Rust API reachability is reported
+separately from manifest coverage (§8.19).
 
 ## 8.10 PDE
 
@@ -899,6 +1003,38 @@ solve_advection : AdvectionSpec -> Result<Tensor<1, Field>, PdeError>
 ```
 
 `Field` is `{ grid: Grid, values: Tensor<n, Float[d]> }`. The dimensions of coefficients and boundary conditions are annotated field by field in the `Spec` records; the solver checks at run time that the grid and coefficient dimensions agree. The full typing rules of PDEs are in the `Pde` module documentation; PDE specifications are not part of the core type system.
+
+### 8.10.1 Temporal adaptivity through the manifest
+
+`Rssn_numerical_callback.num_pde_*_adaptive` compares a full step with two half steps on a fixed spatial discretization.
+Accepted states use the selected method's half steps without substitution or Richardson extrapolation. Error scaling uses
+positive field-unit absolute accuracy and dimensionless relative accuracy. Rejected trials are discarded. Without a terminal
+event, integration reaches the exact endpoint. Initial/minimum/maximum steps and accepted/rejected-step, step-kernel and
+serial callback budgets are explicit; exhaustion or failure at the minimum step is an error.
+
+| Spatial family | Time methods | Spatial dimensions | Boundaries |
+|---|---|---|---|
+| Regular differences: heat | Explicit Euler, full backward Euler, full Crank–Nicolson, Douglas ADI | 1–3 | Paired periodic, static Dirichlet/Neumann/Robin; corner data checked |
+| Regular differences: wave | Velocity Verlet, the restartable variable-step leapfrog form | 1–3 | Same; displacement and velocity tolerances have distinct units |
+| Regular differences: advection | First-order upwind | 1–3 | Same; outward flux and multidimensional CFL bound |
+| Simplex FEM: heat/reaction | theta: backward Euler or Crank–Nicolson | 1–3 | Marker boundaries; ABI builds structured P1/P2 meshes; optional nodal source |
+| Scalar FVM | Upwind/Rusanov, classical Lax–Friedrichs, MUSCL minmod/van Leer | 1 | Periodic or transmissive; flux/speed callbacks |
+| Nodal DG: scalar advection | SSPRK3 | 1–2 | Periodic |
+| Fourier pseudospectral | ETDRK4 | 1–3 | Periodic; nonlinear callback returns field/time |
+
+Lax–Friedrichs spatial viscosity depends on the step size, so a fixed mesh may prevent tight temporal accuracy; the solver
+fails rather than changing fluxes. FEM source callbacks evaluate `(time, coordinates) -> nodal field/time` serially at both
+theta endpoints; their nodal interpolants use the consistent mass matrix. Sources and events share a callback budget.
+Multidimensional DG accepts axis element counts, physical box lengths, polynomial degree and per-axis speeds.
+Spatial convergence needs a separate mesh study; spatial refinement is not temporal adaptivity. Poisson, static
+Helmholtz/FEM and elliptic Chebyshev solves have no time-stepping mode.
+
+Coordinate, time and field dimensions are independent `L`, `T`, `U`. Diffusivity is `L^2/T`, advection/wave speed `L/T`,
+reaction `1/T`, and wave velocity `U/T`. Boundary vector fields are `kind`, `value: U`, `flux: U/L`, `alpha: 1`, `beta: L`,
+`gamma: U`. Kinds 0–3 mean Dirichlet, Neumann, Robin, periodic. One entry broadcasts to active faces; otherwise provide
+two per axis, with paired periodic faces. Robin means `alpha*u + beta*du/dn = gamma`. FVM flux is `U*L/T`, speed `L/T`.
+Results carry accepted `times`/`states`, physical `coordinates`, actual work counts, final error ratio and optional terminal
+event time; wave results add `velocities`. Assertions are in `examples/pde_adaptive_{heat,wave_event,advanced}.aev`.
 
 ## 8.11 Data
 
@@ -1118,12 +1254,19 @@ Rssn.register_plugin : Plugin -> Result<PluginId, PluginError>   # alias
 
 `OpKey` is `(rule_set, name, signature_hash)` on the Aevia side: `call_key` takes a name plus a `signature_hash` (32 hex characters; all zeros means the operator has no declared overloads); on success `resolve_overload` returns `"rule_set.name@signature_hash"`; `overloads` returns the rendered signature text. `Rssn.call` is an alias of `Rssn.dynamic` (both take a short name and a `Value` array).
 
-The members of `Rssn` are generated from the Kernel Manifest (rules in §13.2.2): operators with `Declared | Overlay | Derived` signatures get typed declarations (one per overload) that pin the `signature_hash` at generation time; `None` (leaf / non-callable) and plugin operators get `dynamic`; an alias generates `Rssn.<alias>` and on a clash `Rssn.<rule_set>.<name>` is used (a namespace, not a run-time key). Generated declarations call the internal form `Rssn.invoke(name, signature_hash, args)` (it pins the overload too, but the error channel differs: a generated `fn` MUST return its declared type, so a kernel failure raises instead of returning `Err`; it is not a fixed entry point). The size of the manifest is a **measurement**, not a constant: `aevia rssn` gives live numbers (`rssn 3.0.0-rc.1`: 1620 operators, 99 declared + 103 overlay + 1418 derived, 82 units, 30 constants). `Derived` is a conservative signature inferred from registration data that does not distinguish `Tensor`/`Quantity`/`Int`, and IDEs mark it "conservatively inferred" (§13.2.2). The two SDE noise primitives `sde_wiener`/`sde_levy_areas` and the scheme metadata `sde_scheme_info` (`(String) -> Tensor<1, Real>`, giving only the strong order and flags) are typed declarations with exact overlay signatures; the SDE **solve loop** needs host callbacks, is not a manifest operator and does not appear in `Rssn` (§8.9.1).
+The members of `Rssn` are generated from the Kernel Manifest (rules in §13.2.2): overloads with exact `Declared`/`Overlay` signatures that source can express and the bridge can authenticate get typed declarations pinned to the generation-time `signature_hash`; `Derived`, `None` and unprovable signatures retain dynamic entry points; an alias generates `Rssn.<alias>` and on a clash `Rssn.<rule_set>.<name>` is used (a namespace, not a run-time key). Generated declarations call the internal form `Rssn.invoke(name, signature_hash, args)` (it pins the overload too, but the error channel differs: a generated `fn` MUST return its declared type, so a kernel failure raises instead of returning `Err`; it is not a fixed entry point). Manifest size is measured by `aevia rssn` (§10.8). `Derived` is a conservative signature inferred from registration data that does not distinguish `Tensor`/`Quantity`/`Int`, and IDEs mark it "conservatively inferred" (§13.2.2). The two SDE noise primitives `sde_wiener`/`sde_levy_areas` and the scheme metadata `sde_scheme_info` (`(String) -> Tensor<1, Real>`, giving only the strong order and flags) are typed declarations with exact overlay signatures; SDE callback solvers use the restricted higher-order ABI (§8.9.1); noise primitives and metadata do not replace solvers.
+
+A public Rust API is not automatically a manifest operator. Concrete numerical functions are bound from source and reviewed
+dimension policies; generic callbacks, stateful objects and opaque models need explicit adapters. Manifest reachability and
+native source classifications are reported separately; manifest coverage does not establish complete native coverage.
+
+The generator recursively maps a structural variant to `Option<T>` only when it contains exactly a payload-free `None` and a single-payload `Some`; other variants stay dynamic.
+Payload types and dimensions are still checked, and an empty `None` supplies no payload-unit evidence. This mapping does not expand the callback bridge's accepted ADT schemas.
 
 Reachability and limits of the fixed entry points:
 
 - `type_rep<T>()` makes an unforgeable `TypeRep` from a concrete checked type; an unresolved generic cannot be reflected without a run-time type dictionary. `Rssn.typed` performs the dynamic call and checks the result against that witness; a mismatch or insufficient evidence returns `Err(OpError)`, and a successful result is still an opaque `Value` to be validated and converted with `from_value<T>`.
-- `to_callback(f)` checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque `Callback` (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, `Bool`, `String`, and tensors and closed records built recursively from them; concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use `Float` scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.
+- `to_callback(f)` checks the concrete function type of a checked source closure in the current evaluator session and builds an opaque `Callback` (aliases and concretised generic functions keep this evidence; wrap built-in functions in a source lambda first). The callback bridge supports concrete numbers, `Bool`, `String`, the sealed host type `NativeAdVar`, and tensors and closed records built recursively from them; same-named source types and other opaque callback types remain rejected. Concrete dimensions, ranks and fully known shapes are checked, and an empty structured tensor needs independent element-type and dimension evidence. Each operator may restrict signatures further; for example the numeric solvers use `Float` scalars and vectors. The call runs synchronously on the original thread and the handle expires when the outer call returns; calls across threads, re-entry in the same scope and callback errors all return errors; an empty callback list is equivalent to a dynamic call.
 - `Rssn.register`/`Rssn.register_plugin` accept a host `Plugin`; Aevia source does not hold such values (run-time `E0302`, with a note pointing to the source mechanism). Source plugins are published by declaration (§13.5.2): `@op`/`@rule` functions are registered at module load, and `load_plugin(path) : String -> IO (Result<Int, String>)` loads a plugin file at run time.
 - `core.callback` marks the restricted callback bridge as available, and `core.plugin.source` marks source plugins as available. Generated higher-order bindings keep the explicit `(values, callbacks)` dynamic interface; for a single overload with an exact declaration whose callbacks and results can be certified, a typed alias pinned to the signature is also generated, which certifies the concrete callback signature at call time and validates the result against the instantiated type; signatures whose type or dimension cannot be proved offer only the dynamic entry. For example the `num_least_squares` alias of `Rssn_numerical_callback`: parameters and residuals have dimensions `D` and `E`, the residual tolerance uses `E`, the other controls are dimensionless, and the result carries `converged` and `status` (residual/gradient convergence, budget exhausted, stagnation).
 
@@ -1151,6 +1294,25 @@ Conventions and limits:
 - Ragged inputs (adjacency lists, polynomial systems with different term counts) have no literal syntax; build a `Tensor<1, Tensor<1, Float>>` with `map(f, range(0, n))`.
 
 End-to-end examples and closed-form checks: `tests/domain_numeric.aev` (`mad([1,2,3,4,100]) = 1`, `ifft(fft(x)) = x`, wavelet round trips, `poisson_fd` of `-u'' = 1` giving `x(1-x)/2`, the `exp(-π²t)` decay of `heat_fd`, `tensordot_2_2_1` against a hand-computed matrix product, reconstruction by `hosvd_3`/`tt_svd_3`, `ode_solve` of `y' = -2y` giving `e^-2`, `lambert_w_complex(1,0,0) = 0.5671…`, and others), run with `cargo test -p aevia-rssn --test aev_suites`.
+
+### 8.19.2 Native numerical models
+
+The following manifest-generated entries call RSSN associated methods or explicit generic specializations. Their numerical algorithms remain in RSSN.
+`D` and `E` denote independent element dimensions; `X` denotes the coordinate dimension.
+
+| Entry family | Value and dimension contract |
+|---|---|
+| `Rssn_numerical_matrix.num_matrix_{float,real}_*` | `Matrix<f64>` / exact rational specializations; records carry a format version, backend and entries. `real` rejects approximate `Float` and uses only the Native backend; `decompose_*` uses Float. `get_mut` and backend updates return new models. |
+| `num_dense_lu_model_*`, `num_sparse_{lu,ilu,ic,auto}_model_*`, `num_csr_model_*` | Store defining matrices and factor kinds, reconstructing native factors on use; `A x = b` and preconditioner application return `E/D`. CSR indices, permutations and counts are `Int`, distinct from measured entries. |
+| `Rssn_numerical_vector.num_polynomial_model_*` | Descending coefficients share one output dimension and are evaluated at `x/coordinate_scale`. Derivatives and integrals restore `D/X` and `D*X`; binary operations require identical physical coordinate scales. |
+| `num_native_cubic_spline_*`, `num_native_pchip_*`, `num_native_cheb_*`, `num_native_aaa_*` | Coordinates and outputs have independent dimensions; a derivative of order `k` has `D/X^k`, an integral has `D*X`, and roots have coordinate units. |
+| `Rssn_numerical_callback.num_native_cheb_{from_fn,adaptive}_typed` | Authenticated serial callbacks construct the same Chebyshev model, with explicit degree and evaluation budgets, finite-value checks and original callback errors. |
+| `Rssn_numerical_matrix.num_backend_*` | Session-owned backend, compiled-program and scalar handles normalize each coordinate by a positive physical reference, then multiply by an output reference. Interpreter compilation has explicit work bounds; unsupported backends error. Changing the process default requires an explicit selection. |
+| `num_ad_*` / `NativeAdVar` | Session-owned reverse AD tapes, variables and gradients use explicit reference scales for heterogeneous coordinates; when output and input dimensions are `E` and `D`, gradients have `E/D`. |
+
+Models validate format/version, fields, shapes, indices, finite data and allocation bounds before invoking native methods. Portable definitions contain no process-local pointers; repeated queries may incur reconstruction cost.
+Determinants return `normalized`, `entry_unit` and `order`, representing `normalized * entry_unit^order`. Packed LU stores mixed factors normalized to canonical input units; its whole packed array must not be interpreted as one physical dimension.
+Session handles check kind, owning session, lifetime and quotas; release dependent handles before their parents, and do not interchange session handles with portable definitions. Runnable assertions are in `examples/native_algebra_models.aev`; generated manifest signatures and descriptions define the complete entry set and current limits.
 
 ## 8.20 Library organisation
 

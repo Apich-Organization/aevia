@@ -9,5 +9,6 @@ for family in contracts structured bindings codecs; do
 done
 cd "$root"
 cargo run -p rssn-api-audit -- --write
+cargo run -p rssn-api-audit -- --coverage-check
 cargo run -p aevia-stdlib-gen -- --write
 AEVIA_BLESS=1 cargo test -p aevia-rssn --test domains

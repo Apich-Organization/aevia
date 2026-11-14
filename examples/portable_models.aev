@@ -1,0 +1,51 @@
+## Explicit adapters for opaque native Rust APIs.
+## Run: cargo run -p aevia-cli -- test examples/portable_models.aev
+import Rssn_numerical_vector as V
+
+## Opaque models use the generated checked Value interface. Their immutable,
+## versioned payload stores defining data, with separate physical unit witnesses.
+## Query adapters reconstruct and validate the native model, so descriptors can
+## cross the ABI without exposing pointers, lifetimes, or mutable Rust objects.
+test "a portable spatial index returns measured nearest distances" =
+    match V.num_kdtree_build([to_value([[0.0 m, 0.0 m], [2.0 m, 0.0 m], [0.0 m, 2.0 m]])]) with
+    | Ok(model) ->
+        match V.num_kdtree_nearest([model, to_value([1.8 m, 0.0 m]), to_value(1)]) with
+        | Ok(value) ->
+            match from_value<{ indices: Tensor<1, Int>, distances: Tensor<1, Float[Length]> }>(value) with
+            | Ok(r) -> at(r.indices, 0) == 1 && approx_eq(at(r.distances, 0), 0.2 m, 1e-9 m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "fitted B-splines keep independent time and length dimensions" =
+    match V.num_bspline_build([to_value([0.0 s, 1.0 s, 2.0 s]), to_value([0.0 m, 2.0 m, 4.0 m]), to_value(2)]) with
+    | Ok(model) ->
+        match V.num_bspline_query([model, to_value(0.5 s)]) with
+        | Ok(value) ->
+            match from_value<Float[Length]>(value) with
+            | Ok(y) -> approx_eq(y, 1.0 m, 1e-8 m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "RBF interpolation uses an explicit coordinate scale" = approx_eq(V.num_rbf_scaled([[0.0 s], [1.0 s]], [2.0 m, 4.0 m], [0.0 s], "gaussian", 1.0 s), 2.0 m, 1e-8 m)
+
+test "clamped cubic spline takes physical endpoint slopes" = approx_eq(V.num_spline_clamped([0.0 s, 1.0 s], [0.0 m, 1.0 m], 0.5 s, 0.0 m/s, 3.0 m/s), 0.125 m, 1e-9 m)
+
+test "portable BVH boxes keep coordinate units through opaque reconstruction" =
+    match V.num_bvh_build([to_value([[0.0 m, 0.0 m, 0.0 m], [10.0 m, 0.0 m, 0.0 m]]), to_value([[1.0 m, 1.0 m, 1.0 m], [11.0 m, 1.0 m, 1.0 m]])]) with
+    | Ok(model) ->
+        match V.num_bvh_nearest([model, to_value([2.0 m, 0.5 m, 0.5 m])]) with
+        | Ok(value) ->
+            match from_value<{ indices: Tensor<1, Int>, distances: Tensor<1, Float[Length]> }>(value) with
+            | Ok(result) -> at(result.indices, 0) == 0 && approx_eq(at(result.distances, 0), 1.0 m, 1e-12 m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn unitless_direction(value: Float): Bool = is_finite(value)
+fn measured_vertex(value: Float[Length]): Bool = is_finite(value)
+
+test "Voronoi geometry keeps measured vertices and unitless flattened topology" =
+    let diagram = V.num_voronoi_2d([[0.0 m, 0.0 m], [2.0 m, 0.0 m], [2.0 m, 2.0 m], [0.0 m, 2.0 m], [1.0 m, 1.0 m]])
+    length(diagram.cell_offsets) == 6 && at(diagram.cell_offsets, 5) == length(diagram.cell_indices) && measured_vertex(diagram.vertices[0, 0]) && unitless_direction(diagram.ray_directions[0, 0])

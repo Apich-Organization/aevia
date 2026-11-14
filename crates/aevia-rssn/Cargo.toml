@@ -10,6 +10,8 @@ repository.workspace = true
 [features]
 default = []
 jit = ["rssn/jit"]
+gpu-wgpu = ["rssn/gpu-wgpu"]
+npy = ["rssn/npy"]
 
 [dependencies]
 aevia-dim.workspace = true
@@ -24,6 +26,9 @@ rssn ={ path = "../../../rssn", default-features = false }
 unsafe_code = "forbid"
 
 [dev-dependencies]
+# Native kernel conformance tests share the kernel solver types.
+argmin = { version = "0.11", features = ["serde", "serde1"] }
+ndarray = { version = "0.16", features = ["serde"] }
 num-traits.workspace = true
 # Test-only edge: the conformance test feeds the generated modules back through
 # the real parser and the real checker. `aevia-types` depends on this crate, so

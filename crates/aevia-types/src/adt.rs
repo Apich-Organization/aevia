@@ -21,6 +21,25 @@ pub const RESULT_ID: AdtId = 1;
 /// `Ordering`.
 pub const ORDERING_ID: AdtId = 2;
 
+/// The sealed host type of a session-owned native reverse-AD variable.
+/// It has no source constructors; a same-named source declaration is distinct.
+#[must_use]
+pub fn native_ad_var_type() -> Type {
+    Type::Adt(
+        intern(Adt {
+            name: "NativeAdVar".into(),
+            params: Vec::new(),
+            ctors: Vec::new(),
+        }),
+        Vec::new(),
+    )
+}
+/// Whether a type is exactly the sealed native AD host type.
+#[must_use]
+pub fn is_native_ad_var_type(ty: &Type) -> bool {
+    *ty == native_ad_var_type()
+}
+
 /// The defining module of each user-allocated type.
 ///
 /// The module is kept beside the registry rather than inside [`Adt`] because

@@ -15,6 +15,13 @@ type OdeMethod =
     | Ruth4
     | GaussLegendre4
     | GaussLegendre6
+    | ImplicitMidpoint
+    | AdaptiveRk4
+    | AdaptiveStormerVerlet
+    | AdaptiveRuth4
+    | AdaptiveImplicitMidpoint
+    | AdaptiveGaussLegendre4
+    | AdaptiveGaussLegendre6
 
 type OdeOpts<s> = {
     rtol: Float[1],
@@ -22,6 +29,32 @@ type OdeOpts<s> = {
     method: OdeMethod,
     steps: Option<Int>,
     events: Option<(Float[T], s) -> Float[1]>,
+}
+
+type OdeAdaptiveOpts<s> = {
+    rtol: Float[1],
+    atol: Float[1],
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
+}
+
+type OdePhysicalOpts<s> = {
+    rtol: Float[1],
+    atol: s,
+    method: OdeMethod,
+    steps: Option<Int>,
+    events: Option<(Float[T], s) -> Float[1]>,
+    h0: Float[T],
+    h_min: Float[T],
+    h_max: Float[T],
+    max_steps: Int,
+    max_evaluations: Int,
 }
 
 type OdeEvent<s> = {

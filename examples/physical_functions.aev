@@ -1,0 +1,43 @@
+## Run: aevia test examples/physical_functions.aev
+## Fixed SI constants remain in RSSN. Generated contracts check physical inputs
+## and restore result units; sampled functions use separate axis/value vectors.
+open Units.SI
+
+import Rssn_numerical_special as P
+
+import Rssn_numerical_vector as F
+
+import Rssn_numerical_stats as S
+
+let photon = P.num_classical_photon_energy(500.0 nm)
+
+let wavelength = P.num_classical_photon_wavelength(photon)
+
+let pressure = P.num_classical_ideal_gas_pressure(1.0 mol, 300.0 K, 1.0 m^3)
+
+test "fixed SI constants yield energy, wavelength and pressure" = approx_eq(photon, 3.972891714297857e-19 J, 1e-30 J) && approx_eq(wavelength, 500.0 nm, 1e-12 m) && approx_eq(pressure, 2494.3387854 Pa, 0.00001 Pa)
+
+## item0 is the measured sample axis; item1 is the independently measured value.
+let first = { item0 = [0.0 s, 1.0 s, 2.0 s], item1 = [2.0 m, 2.0 m, 2.0 m] }
+
+let second = { item0 = [0.0 s, 1.0 s, 2.0 s], item1 = [3.0 kg, 3.0 kg, 3.0 kg] }
+
+let product = F.num_functional_inner_product(first, second)
+
+let projected = F.num_functional_project(first, second)
+
+let normalized = F.num_functional_normalize(first)
+
+test "functional inner product integrates independent ordinate units over time" = approx_eq(product, 12.0 m*kg*s, 1e-10 m*kg*s)
+
+test "projection restores the first function's units" = approx_eq(projected.item1[1], 2.0 m, 1e-10 m) && projected.item0[2] == 2.0 s
+
+test "L2 normalization returns inverse square-root axis units" = approx_eq(normalized.item1[0], 1.0 / sqrt(2.0 s), 1e-10 / sqrt(1.0 s))
+
+fn main(): IO Unit = println(photon)
+
+let measured_samples = [3.0 m, 1.0 m, 2.0 m]
+
+let median_sample = S.num_stats_percentile(measured_samples, 50.0)
+
+test "mutable native percentile operates on a private copy" = approx_eq(median_sample, 2.0 m, 1e-10 m) && at(measured_samples, 0) == 3.0 m

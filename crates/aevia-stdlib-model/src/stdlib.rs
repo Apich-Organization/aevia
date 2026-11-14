@@ -414,7 +414,15 @@ fn type_declarations(
         | "Ode" => {
             (
                 "8.9",
-                &["OdeMethod", "OdeOpts", "OdeEvent", "OdeHit", "OdeSolution"],
+                &[
+                    "OdeMethod",
+                    "OdeOpts",
+                    "OdeAdaptiveOpts",
+                    "OdePhysicalOpts",
+                    "OdeEvent",
+                    "OdeHit",
+                    "OdeSolution",
+                ],
             )
         },
         // §8.4.1: the preconditioner of `cg_with`.

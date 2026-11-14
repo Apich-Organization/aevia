@@ -27,6 +27,13 @@ pub enum DimensionWitness {
     },
     /// Named field witnesses of a structured result.
     Record(Vec<(String, DimensionWitness)>),
+    /// Actual tagged payload witnesses; tags do not establish nominal ADT identity.
+    Variant {
+        /// Actual payload tag.
+        tag: String,
+        /// One witness for every actual payload field.
+        fields: Vec<DimensionWitness>,
+    },
 }
 fn concrete(dim: &rssn::kernel::signature::DimExpr) -> Option<Dim> {
     let converted = crate::registry::convert_dim(dim);
@@ -41,6 +48,9 @@ fn representation(ty: &TypeExpr) -> Option<SigType> {
         | TypeExpr::Complex => Some(SigType::Complex),
         | TypeExpr::Bool => Some(SigType::Bool),
         | TypeExpr::String => Some(SigType::Str),
+        | TypeExpr::Opaque(kind) if crate::registry::native_object_kind(kind) => {
+            Some(SigType::Opaque(kind.clone()))
+        },
         | TypeExpr::Tensor {
             rank: rssn::kernel::signature::NatExpr::Lit(rank),
             shape,
@@ -170,6 +180,16 @@ pub fn extract(
                 elements,
             }
         },
+        | Value::Variant(v) => {
+            DimensionWitness::Variant {
+                tag: v.tag.clone(),
+                fields: v
+                    .payload
+                    .iter()
+                    .map(|field| extract(field, trusted))
+                    .collect(),
+            }
+        },
         | Value::Record(r) => {
             DimensionWitness::Record(
                 r.fields
@@ -195,34 +215,17 @@ fn scalar_type(sig: &SigType) -> Option<TypeExpr> {
     }
 }
 /// Attach known host dimensions to values before a value-native kernel call.
-/// Empty tensor element representation comes from the checked exact signature.
+/// Empty tensor element representation comes from actual structural evidence.
 pub fn attach(
     value: &mut Value,
     witness: &DimensionWitness,
     signature: &SigType,
 ) -> Result<(), KernelError> {
+    if matches!(signature, SigType::Dyn) || matches!(witness, DimensionWitness::Scalar(_)) {
+        return attach_dynamic(value, witness);
+    }
+
     match (value, witness, signature) {
-        | (value, DimensionWitness::Scalar(dim), _)
-            if !dim.is_one()
-                && matches!(
-                    &*value,
-                    Value::Int(_)
-                        | Value::Real(_)
-                        | Value::Float(_)
-                        | Value::Complex(_)
-                        | Value::Dyn(_)
-                ) =>
-        {
-            if !dim.is_concrete() {
-                return Err(KernelError::capability("dim.input_witness"));
-            }
-            let payload = std::mem::replace(value, Value::Bool(false));
-            let unit = crate::UnitVal::linear("coherent", dim.clone(), Scale::one()).to_rssn();
-            *value = Value::Quantity(QuantityValue {
-                value: Box::new(payload),
-                unit,
-            });
-        },
         | (
             Value::Tensor(t),
             DimensionWitness::Tensor {
@@ -248,7 +251,10 @@ pub fn attach(
                         scalar_type(actual)
                             .ok_or_else(|| KernelError::capability("type.tensor_element_witness"))?
                     } else {
-                        t.elem.clone()
+                        representation(&t.elem)
+                            .as_ref()
+                            .and_then(scalar_type)
+                            .ok_or_else(|| KernelError::capability("type.tensor_element_witness"))?
                     };
                     t.elem = if dim.is_one() {
                         base
@@ -257,12 +263,52 @@ pub fn attach(
                     };
                 }
             }
+            // Preserve actual metadata for an empty native-handle tensor. The
+            // declared signature alone never supplies this evidence.
+            if t.data.is_empty()
+                && let Some(SigType::Opaque(actual)) = element_repr
+                && crate::registry::native_object_kind(actual)
+                && matches!(elem.as_ref(), SigType::Opaque(expected) if expected == actual)
+            {
+                t.elem = TypeExpr::Opaque(actual.clone());
+            }
             for (value, witness) in t.data.iter_mut().zip(elements) {
                 // Scalar leaves inherit the tensor's uniform metadata; do not
                 // wrap each one and duplicate units.
-                if !matches!(witness, DimensionWitness::Scalar(_)) {
+                if let (Some(uniform), DimensionWitness::Scalar(actual)) = (dimension, witness)
+                    && scalar_type(elem).is_some()
+                {
+                    if uniform != actual {
+                        return Err(KernelError::capability("dim.input_witness"));
+                    }
+                    if matches!(value, Value::Quantity(_) | Value::Dyn(_)) {
+                        attach_dynamic(value, witness)?;
+                    }
+                } else {
                     attach(value, witness, elem)?;
                 }
+            }
+        },
+        | (
+            Value::Variant(value),
+            DimensionWitness::Variant { tag, fields },
+            SigType::Variant(cases),
+        ) => {
+            if crate::registry::option_payload(cases).is_none()
+                || value.tag != *tag
+                || value.payload.len() != fields.len()
+            {
+                return Err(KernelError::capability("type.option_witness"));
+            }
+            let (_, schema) = cases
+                .iter()
+                .find(|(name, _)| name == tag)
+                .ok_or_else(|| KernelError::capability("type.option_witness"))?;
+            if schema.len() != value.payload.len() {
+                return Err(KernelError::capability("type.option_witness"));
+            }
+            for ((value, proof), sig) in value.payload.iter_mut().zip(fields).zip(schema) {
+                attach(value, proof, sig)?;
             }
         },
         | (Value::Record(r), DimensionWitness::Record(fields), SigType::Record(schema)) => {
@@ -278,4 +324,364 @@ pub fn attach(
         | _ => {},
     }
     Ok(())
+}
+
+// Reconstruct only types supplied by actual structural/physical evidence.
+// The dynamic signature itself supplies no representation or unit facts.
+fn evidenced_type(
+    repr: &SigType,
+    proof: &DimensionWitness,
+) -> Option<TypeExpr> {
+    use DimensionWitness as W;
+    match (repr, proof) {
+        | (SigType::Int | SigType::Real | SigType::Float | SigType::Complex, W::Scalar(dim))
+            if dim.is_concrete() =>
+        {
+            let base = scalar_type(repr)?;
+            Some(if dim.is_one() {
+                base
+            } else {
+                TypeExpr::Dim(Box::new(base), crate::registry::to_dim_expr(dim))
+            })
+        },
+        | (SigType::Dim(inner, declared), W::Scalar(actual))
+            if declared.is_concrete() && declared == actual =>
+        {
+            evidenced_type(inner, proof)
+        },
+        | (SigType::Bool, W::Unknown) => Some(TypeExpr::Bool),
+        | (SigType::Bool, W::Scalar(dim)) if dim.is_one() => Some(TypeExpr::Bool),
+        | (SigType::Str, W::Unknown) => Some(TypeExpr::String),
+        | (SigType::Str, W::Scalar(dim)) if dim.is_one() => Some(TypeExpr::String),
+        | (SigType::Opaque(kind), W::Unknown) if crate::registry::native_object_kind(kind) => {
+            Some(TypeExpr::Opaque(kind.clone()))
+        },
+        | (SigType::Record(schema), W::Record(fields)) if schema.len() == fields.len() => {
+            let mut names = std::collections::BTreeSet::new();
+            let mut result = Vec::new();
+            for (name, repr) in schema {
+                if !names.insert(name) {
+                    return None;
+                }
+                let mut found = fields.iter().filter(|(n, _)| n == name);
+                let (_, proof) = found.next()?;
+                if found.next().is_some() {
+                    return None;
+                }
+                result.push((name.clone(), evidenced_type(repr, proof)?));
+            }
+            Some(TypeExpr::Record(result))
+        },
+        | (
+            SigType::Tensor {
+                rank: Some(rank),
+                shape,
+                elem,
+            },
+            W::Tensor {
+                dimension,
+                element,
+                element_repr: Some(actual),
+                ..
+            },
+        ) if elem.as_ref() == actual && shape.as_ref().is_none_or(|s| s.len() == *rank) => {
+            let fallback = dimension
+                .as_ref()
+                .map_or(W::Unknown, |d| W::Scalar(d.clone()));
+            let proof = element.as_deref().unwrap_or(&fallback);
+            let shape = match shape {
+                | Some(s) => {
+                    Some(
+                        s.iter()
+                            .map(|n| {
+                                u64::try_from(*n)
+                                    .ok()
+                                    .map(rssn::kernel::signature::NatExpr::Lit)
+                            })
+                            .collect::<Option<Vec<_>>>()?,
+                    )
+                },
+                | None => None,
+            };
+            Some(TypeExpr::Tensor {
+                rank: rssn::kernel::signature::NatExpr::Lit(u64::try_from(*rank).ok()?),
+                shape,
+                elem: Box::new(evidenced_type(elem, proof)?),
+            })
+        },
+        | _ => None,
+    }
+}
+fn attach_dynamic(
+    value: &mut Value,
+    witness: &DimensionWitness,
+) -> Result<(), KernelError> {
+    use DimensionWitness as W;
+    let missing = || KernelError::capability("dim.dynamic_input_witness");
+    match (value, witness) {
+        | (value, W::Scalar(dim)) => {
+            if !dim.is_concrete() {
+                return Err(missing());
+            }
+            let explicit = match &*value {
+                | Value::Quantity(q) => Some(&q.unit.dimension),
+                | Value::Dyn(d) => Some(&d.dim),
+                | _ => None,
+            };
+            if let Some(actual) = explicit {
+                if concrete(actual).as_ref() != Some(dim) {
+                    return Err(missing());
+                }
+                return Ok(());
+            }
+            if !matches!(
+                &*value,
+                Value::Int(_) | Value::Real(_) | Value::Float(_) | Value::Complex(_)
+            ) {
+                return Err(missing());
+            }
+            if !dim.is_one() {
+                let payload = std::mem::replace(value, Value::Bool(false));
+                *value = Value::Quantity(QuantityValue {
+                    value: Box::new(payload),
+                    unit: crate::UnitVal::linear("coherent", dim.clone(), Scale::one()).to_rssn(),
+                });
+            }
+        },
+        | (
+            Value::Tensor(t),
+            W::Tensor {
+                dimension,
+                element,
+                element_repr,
+                elements,
+            },
+        ) => {
+            if t.shape.iter().try_fold(1usize, |n, d| n.checked_mul(*d)) != Some(t.data.len())
+                || (!elements.is_empty() && elements.len() != t.data.len())
+            {
+                return Err(missing());
+            }
+            if dimension.as_ref().is_some_and(|d| !d.is_concrete()) {
+                return Err(missing());
+            }
+            let fallback = dimension
+                .as_ref()
+                .map_or(W::Unknown, |d| W::Scalar(d.clone()));
+            let uniform = element_repr.as_ref().is_some_and(|r| {
+                matches!(
+                    scalar_type(r),
+                    Some(TypeExpr::Int | TypeExpr::Real | TypeExpr::Float | TypeExpr::Complex)
+                )
+            }) && dimension.is_some();
+            if let Some(repr) = element_repr {
+                let proof = element.as_deref().unwrap_or(&fallback);
+                if let Some(ty) = evidenced_type(repr, proof) {
+                    t.elem = ty;
+                } else if t.data.is_empty() {
+                    return Err(missing());
+                }
+            }
+            for (i, v) in t.data.iter_mut().enumerate() {
+                let unknown = W::Unknown;
+                let inherited = if uniform {
+                    &fallback
+                } else {
+                    &unknown
+                };
+                let proof = elements.get(i).or(element.as_deref()).unwrap_or(inherited);
+                if uniform {
+                    let W::Scalar(actual) = proof else {
+                        return Err(missing());
+                    };
+                    if dimension.as_ref() != Some(actual) {
+                        return Err(missing());
+                    }
+                    if matches!(v, Value::Quantity(_) | Value::Dyn(_)) {
+                        attach_dynamic(v, proof)?;
+                    }
+                    let repr = element_repr.as_ref().ok_or_else(missing)?;
+                    let mut payload = &*v;
+                    loop {
+                        match payload {
+                            | Value::Quantity(q) => payload = &q.value,
+                            | Value::Dyn(d) => payload = &d.value,
+                            | _ => break,
+                        }
+                    }
+                    let repr = if let SigType::Dim(inner, _) = repr {
+                        inner.as_ref()
+                    } else {
+                        repr
+                    };
+                    if !matches!(
+                        (payload, repr),
+                        (Value::Int(_), SigType::Int | SigType::Real)
+                            | (Value::Real(_), SigType::Real)
+                            | (Value::Float(_), SigType::Float)
+                            | (Value::Complex(_), SigType::Complex)
+                    ) {
+                        return Err(missing());
+                    }
+                } else if !matches!(proof, W::Unknown) {
+                    attach_dynamic(v, proof)?;
+                }
+            }
+            if !uniform && !t.data.is_empty() {
+                let first = t.data[0].type_expr();
+                t.elem = if t.data.iter().all(|v| v.type_expr() == first) {
+                    first
+                } else {
+                    TypeExpr::Dyn(rssn::kernel::signature::RepExpr {
+                        repr: "term".into(),
+                        dim: None,
+                    })
+                };
+            }
+        },
+        | (Value::Record(r), W::Record(fields)) => {
+            if r.fields.len() != fields.len() {
+                return Err(missing());
+            }
+            let mut names = std::collections::BTreeSet::new();
+            for (name, v) in &mut r.fields {
+                if !names.insert(name.clone()) {
+                    return Err(missing());
+                }
+                let mut found = fields.iter().filter(|(n, _)| n == name);
+                let Some((_, proof)) = found.next() else {
+                    return Err(missing());
+                };
+                if found.next().is_some() {
+                    return Err(missing());
+                }
+                attach_dynamic(v, proof)?;
+            }
+        },
+        | (Value::Variant(v), W::Variant { tag, fields }) => {
+            if &v.tag != tag || v.payload.len() != fields.len() {
+                return Err(missing());
+            }
+            for (v, w) in v.payload.iter_mut().zip(fields) {
+                attach_dynamic(v, w)?;
+            }
+        },
+        | (_, W::Unknown) => {},
+        | _ => return Err(missing()),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod dynamic_input_evidence_tests {
+    use super::DimensionWitness as W;
+    use super::attach;
+    use crate::SigType as S;
+    use aevia_dim::Dim;
+    use rssn::kernel::signature::TypeExpr;
+    use rssn::kernel::value::RecordValue;
+    use rssn::kernel::value::TensorValue;
+    use rssn::kernel::value::Value;
+    fn tensor(data: Vec<Value>) -> Value {
+        Value::Tensor(TensorValue {
+            shape: vec![data.len()],
+            data,
+            elem: TypeExpr::Float,
+        })
+    }
+    fn dimension(value: &Value) -> Dim {
+        match value {
+            | Value::Quantity(q) => crate::registry::convert_dim(&q.unit.dimension),
+            | Value::Dyn(d) => crate::registry::convert_dim(&d.dim),
+            | _ => Dim::one(),
+        }
+    }
+    #[test]
+    fn dynamic_tensors_preserve_uniform_and_independent_physical_axes() {
+        let length = Dim::base("Length");
+        let time = Dim::base("Time");
+        let mut uniform = tensor(vec![Value::Float(2.0), Value::Float(3.0)]);
+        attach(
+            &mut uniform,
+            &W::Tensor {
+                dimension: Some(length.clone()),
+                element: None,
+                element_repr: Some(S::Float),
+                elements: vec![],
+            },
+            &S::Dyn,
+        )
+        .unwrap();
+        let Value::Tensor(t) = &uniform else { panic!() };
+        assert_eq!(
+            t.elem,
+            TypeExpr::Dim(
+                Box::new(TypeExpr::Float),
+                crate::registry::to_dim_expr(&length)
+            )
+        );
+        let mut mixed = tensor(vec![Value::Float(2.0), Value::Float(3.0)]);
+        attach(
+            &mut mixed,
+            &W::Tensor {
+                dimension: Some(Dim::one()),
+                element: None,
+                element_repr: None,
+                elements: vec![W::Scalar(length.clone()), W::Scalar(time.clone())],
+            },
+            &S::Dyn,
+        )
+        .unwrap();
+        let Value::Tensor(t) = &mixed else { panic!() };
+        assert_eq!(dimension(&t.data[0]), length);
+        assert_eq!(dimension(&t.data[1]), time);
+        assert!(matches!(t.elem, TypeExpr::Dyn(_)));
+    }
+    #[test]
+    fn dynamic_records_and_empty_structures_use_actual_nested_evidence() {
+        let length = Dim::base("Length");
+        let time = Dim::base("Time");
+        let fields = vec![
+            ("x".into(), W::Scalar(length.clone())),
+            ("t".into(), W::Scalar(time.clone())),
+        ];
+        let mut record = Value::Record(RecordValue {
+            fields: vec![
+                ("x".into(), Value::Float(2.0)),
+                ("t".into(), Value::Float(3.0)),
+            ],
+        });
+        attach(&mut record, &W::Record(fields.clone()), &S::Dyn).unwrap();
+        let Value::Record(r) = record else { panic!() };
+        assert_eq!(dimension(r.get("x").unwrap()), length);
+        assert_eq!(dimension(r.get("t").unwrap()), time);
+        let mut empty = tensor(vec![]);
+        let proof = W::Tensor {
+            dimension: None,
+            element: Some(Box::new(W::Record(fields))),
+            element_repr: Some(S::Record(vec![
+                ("x".into(), S::Float),
+                ("t".into(), S::Float),
+            ])),
+            elements: vec![],
+        };
+        attach(&mut empty, &proof, &S::Dyn).unwrap();
+        let Value::Tensor(t) = empty else { panic!() };
+        let TypeExpr::Record(fields) = t.elem else {
+            panic!()
+        };
+        assert!(
+            fields
+                .iter()
+                .all(|(_, ty)| matches!(ty, TypeExpr::Dim(_, _)))
+        );
+        let mut empty = tensor(vec![]);
+        let bad = W::Tensor {
+            dimension: None,
+            element: Some(Box::new(W::Record(vec![]))),
+            element_repr: Some(S::Record(vec![("x".into(), S::Float)])),
+            elements: vec![],
+        };
+        assert!(attach(&mut empty, &bad, &S::Dyn).is_err());
+    }
 }

@@ -1,0 +1,66 @@
+## Run: aevia test examples/native_execution.aev
+## Expressions run in normalized coordinates. Each positive reference below
+## declares the physical scale of one coordinate or result.
+open Units.SI
+
+let no_names: Tensor<1, String> = []
+let no_values: Tensor<1, Value> = []
+
+let speed_program = unwrap_or(Rssn.dynamic("num_native_tape_lower", [to_value(["x/y"]), to_value(["x", "y"]), to_value(no_names), to_value([to_value(1.0 m), to_value(1.0 s)]), to_value(no_values), to_value([to_value(1.0 m / s)])]), to_value(0))
+
+let point = to_value([to_value(4.0 m), to_value(2.0 s)])
+
+test "native expression evaluation restores measured speed" =
+    match Rssn.dynamic("num_native_tape_eval", [speed_program, point, to_value(no_values)]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(cells) ->
+            match from_value<Float[Length / Time]>(cells[0]) with
+            | Ok(speed) -> approx_eq(speed, 2.0 m / s, 1e-12 m / s)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "reverse differentiation retains each coordinate unit" =
+    match Rssn.dynamic("num_native_tape_gradient_reverse", [speed_program, to_value(0), point, to_value(no_values)]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(cells) ->
+            match from_value<Float[Length / Time ^ 2]>(cells[1]) with
+            | Ok(derivative) -> approx_eq(derivative, -1.0 m / s / s, 1e-12 m / s / s)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+let cpu = unwrap_or(Rssn.dynamic("num_native_device_cpu", []), to_value(0))
+let kernel = unwrap_or(Rssn.dynamic("num_native_device_kernel_from_tape", [speed_program]), to_value(0))
+let columns = to_value([to_value([8.0 m, 12.0 m]), to_value([2.0 s, 3.0 s])])
+
+test "device batches retain different units for input columns" =
+    match Rssn.dynamic("num_native_device_map_physical", [cpu, kernel, columns, to_value(no_values)]) with
+    | Ok(value) ->
+        match from_value<Tensor<1, Value>>(value) with
+        | Ok(outputs) ->
+            match from_value<Tensor<1, Float[Length / Time]>>(outputs[0]) with
+            | Ok(speeds) -> speeds == [4.0 m / s, 4.0 m / s]
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+## Relativity uses geometrized mass G*M/c^2, spin J/(M*c), and charge lengths.
+## Coordinate and proper time are restored as seconds in physical frames.
+let relativity_frame = unwrap_or(Rssn.dynamic("num_native_relativity_frame", [to_value(1000.0 m)]), to_value(0))
+let metric = unwrap_or(Rssn.dynamic("num_native_relativity_schwarzschild", [relativity_frame, to_value(1477.0 m)]), to_value(0))
+
+test "Schwarzschild horizon has a physical length witness" =
+    match Rssn.dynamic("num_native_relativity_horizon", [metric]) with
+    | Ok(value) ->
+        match from_value<Option<Value>>(value) with
+        | Ok(Some(radius)) ->
+            match from_value<Float[Length]>(radius) with
+            | Ok(r) -> approx_eq(r, 2954.0 m, 1e-9 m)
+            | Err(_) -> false
+        | _ -> false
+    | Err(_) -> false
+
+fn main(): IO Unit = println("RSSN native tapes, derivatives, devices and relativity preserve physical units")

@@ -6,6 +6,33 @@
 //! added to the kernel appears on the next run without a line changing in
 //! this repository.
 
+/// The sole opaque native value admitted to checked AD callbacks.
+/// Session ownership and tape identity are validated by RSSN before use.
+pub const NATIVE_AD_VAR_KIND: &str = "rssn/native/ad/var/v1";
+
+/// Recognize the reserved native-bank handle namespace, not source nominal ADTs.
+pub(crate) fn native_object_kind(kind: &str) -> bool {
+    kind.strip_prefix("rssn/native/").is_some_and(|tail| {
+        !tail.is_empty()
+            && tail.split('/').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+            })
+    })
+}
+/// Check only a native wire envelope; RSSN independently authenticates its live session object.
+pub(crate) fn native_handle_envelope(
+    kind: &str,
+    bytes: &[u8],
+) -> bool {
+    native_object_kind(kind)
+        && bytes.len() == 16
+        && bytes[..8].iter().any(|byte| *byte != 0)
+        && bytes[8..].iter().any(|byte| *byte != 0)
+}
+
 use crate::error::KernelError;
 use aevia_dim::Dim;
 use aevia_dim::Scale;
@@ -121,6 +148,23 @@ pub enum SigType {
     Dyn,
     /// The type of an expression that never returns.
     Never,
+}
+
+/// Recognizes the exact structural encoding of the source `Option<T>` type.
+///
+/// Other tagged unions, duplicate tags, and malformed payload counts retain
+/// their dynamic representation rather than acquiring a source ADT identity.
+#[must_use]
+pub fn option_payload<T>(cases: &[(String, Vec<T>)]) -> Option<&T> {
+    if cases.len() != 2 {
+        return None;
+    }
+    let none = cases.iter().find(|(tag, _)| tag == "None")?;
+    let some = cases.iter().find(|(tag, _)| tag == "Some")?;
+    if !none.1.is_empty() || some.1.len() != 1 {
+        return None;
+    }
+    some.1.first()
 }
 
 /// One overload.

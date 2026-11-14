@@ -1,6 +1,6 @@
 //! Audits public Rust numerical APIs against declared RSSN dynamic exports.
-//! A source inventory is not a count of callable operators: unregistered,
-//! generic, callback and Rust-only shapes remain separate.
+//! Source paths and callable operators are separate inventories. Proven aliases
+//! share coverage; unresolved imports and macros remain review fingerprints.
 use rssn_api_model::numerical_codegen;
 use rssn_api_model::structured_codegen;
 
@@ -14,6 +14,7 @@ use syn::Visibility;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
+    alias_of: Option<String>,
     path: String,
     signature: String,
     cfg: String,
@@ -299,6 +300,159 @@ fn resolve_local_function(
     Ok(None)
 }
 
+/// Resolve public inherent methods of a named local type re-export. External
+/// crates and private declarations remain unresolved; no signature guessing.
+fn resolve_local_methods(
+    items: &[Item],
+    dir: &Path,
+    path: &[String],
+    cfg_so_far: &str,
+    depth: usize,
+    module_depth: usize,
+) -> Result<Vec<(syn::ImplItemFn, syn::Type, String)>, String> {
+    if depth > 32 {
+        return Ok(Vec::new());
+    }
+    let path = if path.first().is_some_and(|p| p == "self") {
+        &path[1..]
+    } else {
+        path
+    };
+    let Some((head, tail)) = path.split_first() else {
+        return Ok(Vec::new());
+    };
+    if tail.is_empty() {
+        let visible = items.iter().any(|i| {
+            match i {
+                | Item::Struct(t) => public(&t.vis) && t.ident == head.as_str(),
+                | Item::Enum(t) => public(&t.vis) && t.ident == head.as_str(),
+                | _ => false,
+            }
+        });
+        if visible {
+            let mut result = Vec::new();
+            for item in items {
+                let Item::Impl(i) = item else { continue };
+                if i.trait_.is_some() {
+                    continue;
+                }
+                let syn::Type::Path(p) = i.self_ty.as_ref() else {
+                    continue;
+                };
+                if p.qself.is_some()
+                    || p.path.segments.len() != 1
+                    || p.path.segments[0].ident != head.as_str()
+                {
+                    continue;
+                }
+                for f in &i.items {
+                    if let syn::ImplItem::Fn(f) = f
+                        && public(&f.vis)
+                    {
+                        let c = [cfg_so_far, &cfg(&i.attrs), &cfg(&f.attrs)]
+                            .join(" ")
+                            .trim()
+                            .to_string();
+                        result.push((f.clone(), *i.self_ty.clone(), c));
+                    }
+                }
+            }
+            return Ok(result);
+        }
+        for item in items {
+            if let Item::Use(u) = item
+                && public(&u.vis)
+            {
+                let mut uses = Vec::new();
+                named_uses(&u.tree, &[], &mut uses);
+                for (target, alias) in uses {
+                    if alias == *head {
+                        let c = [cfg_so_far, &cfg(&u.attrs)].join(" ").trim().to_string();
+                        let found = resolve_local_methods(
+                            items,
+                            dir,
+                            &target,
+                            &c,
+                            depth + 1,
+                            module_depth,
+                        )?;
+                        if !found.is_empty() {
+                            return Ok(found);
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(Vec::new());
+    }
+    for item in items {
+        let Item::Mod(m) = item else { continue };
+        if m.ident != head.as_str() {
+            continue;
+        }
+        if module_depth > 0 && !public(&m.vis) {
+            return Ok(Vec::new());
+        }
+        let c = [cfg_so_far, &cfg(&m.attrs)].join(" ").trim().to_string();
+        if let Some((_, children)) = &m.content {
+            return resolve_local_methods(
+                children,
+                &dir.join(head),
+                tail,
+                &c,
+                depth + 1,
+                module_depth + 1,
+            );
+        }
+        let explicit = m.attrs.iter().find_map(|a| {
+            if a.path().is_ident("path") {
+                a.parse_args::<syn::LitStr>()
+                    .ok()
+                    .map(|x| x.value())
+                    .or_else(|| {
+                        let syn::Meta::NameValue(n) = &a.meta else {
+                            return None;
+                        };
+                        let syn::Expr::Lit(l) = &n.value else {
+                            return None;
+                        };
+                        let syn::Lit::Str(v) = &l.lit else {
+                            return None;
+                        };
+                        Some(v.value())
+                    })
+            } else {
+                None
+            }
+        });
+        let file = if let Some(p) = explicit {
+            dir.parent().unwrap_or(dir).join(p)
+        } else {
+            let direct = dir.join(format!("{head}.rs"));
+            if direct.exists() {
+                direct
+            } else {
+                dir.join(head).join("mod.rs")
+            }
+        };
+        if !file.exists() {
+            return Ok(Vec::new());
+        }
+        let source =
+            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let parsed = syn::parse_file(&source).map_err(|e| format!("{}: {e}", file.display()))?;
+        return resolve_local_methods(
+            &parsed.items,
+            &dir.join(head),
+            tail,
+            &c,
+            depth + 1,
+            module_depth + 1,
+        );
+    }
+    Ok(Vec::new())
+}
+
 fn visit_items(
     items: &[Item],
     prefix: &str,
@@ -321,6 +475,7 @@ fn visit_items(
             | Item::Fn(f) if public(&f.vis) => {
                 let c = [inherited_cfg, &cfg(&f.attrs)].join(" ").trim().to_string();
                 out.push(Entry {
+                    alias_of: None,
                     path: format!("{prefix}::{}", f.sig.ident),
                     signature: compact(&f.sig),
                     cfg: c,
@@ -346,6 +501,7 @@ fn visit_items(
                             type_reason(&f.sig, true)
                         };
                         out.push(Entry {
+                            alias_of: None,
                             path: format!("{prefix}::{ty}::{}", f.sig.ident),
                             signature: compact(&f.sig),
                             cfg: c,
@@ -362,6 +518,7 @@ fn visit_items(
                             .trim()
                             .to_string();
                         out.push(Entry {
+                            alias_of: None,
                             path: format!("{prefix}::{}::{}", t.ident, f.sig.ident),
                             signature: compact(&f.sig),
                             cfg: c,
@@ -380,6 +537,7 @@ fn visit_items(
                 });
                 let c = [inherited_cfg, &cfg(&m.attrs)].join(" ").trim().to_string();
                 out.push(Entry {
+                    alias_of: None,
                     path: format!("{prefix}::<macro:{hash:016x}>"),
                     signature: format!("{} (unexpanded)", compact(&m.mac.path)),
                     cfg: c,
@@ -399,14 +557,56 @@ fn visit_items(
                         resolve_local_function(items, dir, &target, &c, 0, 0)?
                     {
                         out.push(Entry {
+                            alias_of: Some(format!(
+                                "{prefix}::{}",
+                                target
+                                    .iter()
+                                    .filter(|p| p.as_str() != "self")
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join("::")
+                            )),
                             path: format!("{prefix}::{alias}"),
                             reason: type_reason(&signature, false),
                             signature: compact(&signature),
                             cfg: resolved_cfg,
                         });
                     }
+                    for (method, mut self_ty, resolved_cfg) in
+                        resolve_local_methods(items, dir, &target, &c, 0, 0)?
+                    {
+                        let original = compact(&self_ty).replace(' ', "");
+                        let module = target[..target.len() - 1]
+                            .iter()
+                            .filter(|p| p.as_str() != "self")
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let alias_of = Some(format!(
+                            "{prefix}::{}{}::{}",
+                            if module.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{}::", module.join("::"))
+                            },
+                            original,
+                            method.sig.ident
+                        ));
+                        if let syn::Type::Path(p) = &mut self_ty {
+                            p.path.segments[0].ident = syn::parse_str(&alias)
+                                .map_err(|e| format!("invalid type alias: {e}"))?;
+                        }
+                        let name = compact(&self_ty).replace(' ', "");
+                        out.push(Entry {
+                            alias_of,
+                            path: format!("{prefix}::{name}::{}", method.sig.ident),
+                            signature: compact(&method.sig),
+                            cfg: resolved_cfg,
+                            reason: type_reason(&method.sig, true),
+                        });
+                    }
                 }
                 out.push(Entry {
+                    alias_of: None,
                     path: format!("{prefix}::<reexport:{hash:016x}>"),
                     signature: text,
                     cfg: c,
@@ -425,7 +625,24 @@ fn visit_items(
                 } else {
                     let direct = dir.join(format!("{name}.rs"));
                     let nested = dir.join(&name).join("mod.rs");
-                    let file = if direct.exists() {
+                    let explicit = m.attrs.iter().find_map(|attr| {
+                        if !attr.path().is_ident("path") {
+                            return None;
+                        }
+                        let syn::Meta::NameValue(n) = &attr.meta else {
+                            return None;
+                        };
+                        let syn::Expr::Lit(l) = &n.value else {
+                            return None;
+                        };
+                        let syn::Lit::Str(v) = &l.lit else {
+                            return None;
+                        };
+                        Some(v.value())
+                    });
+                    let file = if let Some(p) = explicit {
+                        dir.parent().unwrap_or(dir).join(p)
+                    } else if direct.exists() {
                         direct
                     } else if nested.exists() {
                         nested
@@ -463,10 +680,10 @@ fn visit_items(
                             continue;
                         };
                         let mut implementation = implementation.clone();
-                        implementation.self_ty = Box::new(
-                            syn::parse_str(original)
-                                .map_err(|e| format!("invalid parent type: {e}"))?,
-                        );
+                        let mut receiver = path.clone();
+                        receiver.path.segments[0].ident = syn::parse_str(original)
+                            .map_err(|e| format!("invalid parent type: {e}"))?;
+                        implementation.self_ty = Box::new(syn::Type::Path(receiver));
                         visit_items(&[Item::Impl(implementation)], prefix, dir, &child_cfg, out)?;
                     }
                 }
@@ -570,12 +787,19 @@ fn report(root: &Path) -> Result<String, String> {
     entries.sort_by(|a, b| (&a.path, &a.signature, &a.cfg).cmp(&(&b.path, &b.signature, &b.cfg)));
     let exports = exported()?;
     let present: BTreeSet<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
-    for path in exports.keys() {
-        if !present.contains(path.as_str()) {
-            return Err(format!(
-                "ABI metadata points to missing public kernel function: {path}"
-            ));
-        }
+    let missing: Vec<_> = exports
+        .keys()
+        .filter(|path| !present.contains(path.as_str()))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "ABI metadata points to missing public kernel functions:\n{}",
+            missing
+                .iter()
+                .map(|path| path.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
     }
     Ok(render(entries, &exports))
 }
@@ -586,10 +810,45 @@ fn render(
     let mut out = String::from(
         "# RSSN public kernel, backend and simulation source inventory v2\n# source syntax only; cfg is not evaluated; macros are not expanded; exported is not a runtime capability claim\n# path\tclassification\tabi names\tcfg\tsignature\n",
     );
+    let aliases: BTreeMap<_, _> = entries
+        .iter()
+        .filter_map(|e| e.alias_of.as_ref().map(|a| (e.path.clone(), a.clone())))
+        .collect();
+    fn identity(
+        path: &str,
+        aliases: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        let mut path = path.to_string();
+        let mut seen = BTreeSet::new();
+        while let Some(next) = aliases.get(&path) {
+            if !seen.insert(path.clone()) || seen.len() > 32 {
+                return None;
+            }
+            path = next.clone();
+        }
+        Some(path)
+    }
+    let mut inherited: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (path, names) in exports {
+        if let Some(key) = identity(path, &aliases) {
+            inherited
+                .entry(key)
+                .or_default()
+                .extend(names.iter().cloned());
+        }
+    }
+    for names in inherited.values_mut() {
+        names.sort();
+        names.dedup();
+    }
     for e in entries {
-        let names = exports.get(&e.path);
-        let class = if names.is_some() {
+        let direct = exports.get(&e.path);
+        let key = identity(&e.path, &aliases);
+        let names = direct.or_else(|| key.as_ref().and_then(|key| inherited.get(key)));
+        let class = if direct.is_some() {
             "declared"
+        } else if names.is_some() {
+            "declared-alias"
         } else {
             e.reason
         };
@@ -609,6 +868,38 @@ fn check_snapshot(
         Ok(())
     } else {
         Err("kernel API inventory changed; inspect --report and update with --write")
+    }
+}
+
+/// Enforce callable-source completeness independently of snapshot freshness.
+/// Macro/re-export fingerprints remain review evidence, not callable APIs.
+fn check_complete(report: &str) -> Result<usize, String> {
+    let mut total = 0usize;
+    let mut missing = Vec::new();
+    for row in report
+        .lines()
+        .filter(|row| !row.starts_with('#') && !row.is_empty())
+    {
+        let fields = row.split('\t').collect::<Vec<_>>();
+        if fields.len() != 5 {
+            return Err("malformed source inventory row".into());
+        }
+        if matches!(fields[1], "unexpanded-macro" | "unresolved-reexport") {
+            continue;
+        }
+        total += 1;
+        if !matches!(fields[1], "declared" | "declared-alias") || fields[2].is_empty() {
+            missing.push(fields[0]);
+        }
+    }
+    if missing.is_empty() {
+        Ok(total)
+    } else {
+        Err(format!(
+            "{} of {total} callable source interfaces lack a declared adapter:\n{}",
+            missing.len(),
+            missing.join("\n")
+        ))
     }
 }
 
@@ -683,14 +974,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    if args != ["--check"] && args != ["--write"] && args != ["--report"] {
-        return Err("usage: rssn-api-audit --check|--write|--report|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report".into());
+    if args != ["--check"]
+        && args != ["--write"]
+        && args != ["--report"]
+        && args != ["--coverage-check"]
+    {
+        return Err("usage: rssn-api-audit --check|--write|--report|--coverage-check|--bindings-check|--bindings-write|--bindings-report|--structured-check|--structured-write|--structured-report|--codecs-check|--codecs-write|--codecs-report".into());
     }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rssn");
     let snapshot = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("inventory.tsv");
     let result = report(&root)?;
     match args[0].as_str() {
         | "--report" => print!("{result}"),
+        | "--coverage-check" => {
+            println!(
+                "all {} callable source interfaces have declared adapters",
+                check_complete(&result)?
+            )
+        },
         | "--write" => {
             std::fs::write(&snapshot, &result)?;
             println!("wrote {}", snapshot.display());
@@ -707,6 +1008,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alias_coverage_requires_resolved_item_identity() {
+        let parsed=syn::parse_file(r#"pub mod child{pub struct T;impl T{pub fn method(&self){}}}pub use child::T as Alias;pub fn unrelated(){}"#).unwrap();
+        let mut rows = Vec::new();
+        visit_items(
+            &parsed.items,
+            "crate::kernels",
+            Path::new("."),
+            "",
+            &mut rows,
+        )
+        .unwrap();
+        let exports = BTreeMap::from([(
+            "crate::kernels::child::T::method".into(),
+            vec!["num_method".into()],
+        )]);
+        let report = render(rows, &exports);
+        assert!(report.contains("crate::kernels::Alias::method\tdeclared-alias\tnum_method"));
+        assert!(report.contains("crate::kernels::unrelated\tno-declared-adapter\t"));
+        assert!(check_complete(&report).is_err());
+    }
+
+    #[test]
+    fn reexported_public_type_methods_and_parent_generic_receivers_keep_public_paths() {
+        let source=syn::parse_file(r#"mod hidden {pub struct Model<T>(T);impl<T> Model<T>{pub fn new(x:T)->Self{Self(x)} fn private(){}}}pub use hidden::Model as Public;pub struct Parent<T>(T);mod child{use super::Parent;impl<T> Parent<T>{pub fn value(&self)->&T{&self.0}}}"#).unwrap();
+        let mut rows = Vec::new();
+        visit_items(
+            &source.items,
+            "crate::kernels",
+            Path::new("."),
+            "",
+            &mut rows,
+        )
+        .unwrap();
+        assert!(
+            rows.iter()
+                .any(|r| r.path == "crate::kernels::Public<T>::new")
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.path == "crate::kernels::Parent<T>::value")
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.path.contains("hidden::") || r.path.ends_with("::private"))
+        );
+    }
+
+    #[test]
+    fn completeness_requires_real_declared_adapters_and_ignores_noncallable_fingerprints() {
+        let complete = "# header\ncrate::kernels::f\tdeclared\tnum_f\t\tfn f()\ncrate::kernels::<macro:1>\tunexpanded-macro\t\t\tthread_local\n";
+        assert_eq!(check_complete(complete), Ok(1));
+        assert!(
+            check_complete(&complete.replace("declared\tnum_f", "opaque\t"))
+                .unwrap_err()
+                .contains("crate::kernels::f")
+        );
+        assert!(check_complete(&complete.replace("declared\tnum_f", "declared\t")).is_err());
+    }
 
     #[test]
     fn named_reexports_resolve_only_public_functions_and_detect_cycles() {

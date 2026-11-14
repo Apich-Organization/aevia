@@ -14,6 +14,8 @@ path = "src/main.rs"
 [features]
 default = []
 jit = ["aevia-core/jit"]
+gpu-wgpu = ["aevia-core/gpu-wgpu"]
+npy = ["aevia-core/npy"]
 
 [dependencies]
 aevia-dim.workspace = true

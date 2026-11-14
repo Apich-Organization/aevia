@@ -682,7 +682,11 @@ impl DimAst {
                 if exponent.denom().is_one() {
                     format!("{}^{}", base.to_source(), exponent.numer())
                 } else {
-                    format!("{}^{}", base.to_source(), crate::ast::format_rat(exponent))
+                    format!(
+                        "{}^({})",
+                        base.to_source(),
+                        crate::ast::format_rat(exponent)
+                    )
                 }
             },
             | Self::Paren(inner) => format!("({})", inner.to_source()),

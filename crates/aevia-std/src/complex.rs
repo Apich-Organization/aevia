@@ -5,87 +5,17 @@
 //! modulus of a complex number is `magnitude`, because `abs : Complex[d] ->
 //! Real[d]` would collide with `abs : Scalar<ρ,d> -> Scalar<ρ,d>`.
 
+pub use rssn::kernels::complex_scalar::arg;
+pub use rssn::kernels::complex_scalar::complex;
+pub use rssn::kernels::complex_scalar::cos;
+pub use rssn::kernels::complex_scalar::magnitude;
+pub use rssn::kernels::complex_scalar::norm_squared;
+pub use rssn::kernels::complex_scalar::pow;
+pub use rssn::kernels::complex_scalar::powc;
+pub use rssn::kernels::complex_scalar::sin;
+
+#[cfg(test)]
 use crate::Complex;
-
-/// `re + im i`.
-#[must_use]
-pub fn complex(
-    re: f64,
-    im: f64,
-) -> Complex {
-    Complex::new(re, im)
-}
-
-/// The modulus, `|z|`.
-#[must_use]
-pub fn magnitude(value: Complex) -> f64 {
-    value.abs()
-}
-
-/// The argument, `arg z`, in `(-π, π]`.
-#[must_use]
-pub fn arg(value: Complex) -> f64 {
-    value.arg()
-}
-
-/// `z * conj(z)` is real; this returns that real part, `|z|^2`.
-#[must_use]
-pub fn norm_squared(value: Complex) -> f64 {
-    value.re * value.re + value.im * value.im
-}
-
-/// `z^n` for an integer exponent, by repeated squaring.
-#[must_use]
-pub fn pow(
-    value: Complex,
-    exponent: i64,
-) -> Complex {
-    if exponent == 0 {
-        return Complex::new(1.0, 0.0);
-    }
-    let mut result = Complex::new(1.0, 0.0);
-    let mut base = if exponent < 0 {
-        Complex::new(1.0, 0.0).div(value)
-    } else {
-        value
-    };
-    let mut remaining = exponent.unsigned_abs();
-    while remaining > 0 {
-        if remaining & 1 == 1 {
-            result = result.mul(base);
-        }
-        base = base.mul(base);
-        remaining >>= 1;
-    }
-    result
-}
-
-/// `sin z`.
-#[must_use]
-pub fn sin(value: Complex) -> Complex {
-    Complex::new(
-        value.re.sin() * value.im.cosh(),
-        value.re.cos() * value.im.sinh(),
-    )
-}
-
-/// `cos z`.
-#[must_use]
-pub fn cos(value: Complex) -> Complex {
-    Complex::new(
-        value.re.cos() * value.im.cosh(),
-        -value.re.sin() * value.im.sinh(),
-    )
-}
-
-/// `z^w = exp(w ln z)`.
-#[must_use]
-pub fn powc(
-    base: Complex,
-    exponent: Complex,
-) -> Complex {
-    exponent.mul(base.ln()).exp()
-}
 
 #[cfg(test)]
 mod tests {

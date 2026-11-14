@@ -482,7 +482,7 @@ pub fn solve_spectral_etdrk4<NL>(
     nonlinear_phys: NL,
 ) -> Result<Vec<f64>, NumericError>
 where
-    NL: Fn(f64, &[f64]) -> Vec<f64> + 'static,
+    NL: Fn(f64, &[f64]) -> Vec<f64>,
 {
     rssn::sim::pde_api::solve_spectral_etdrk4(
         extents,
@@ -1128,3 +1128,30 @@ mod tests {
         );
     }
 }
+
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::PdeAdaptiveOptions;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::PdeAdaptiveSolution;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::PdeTerminalEvent;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::advection_adaptive;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::heat_adaptive;
+/// Adaptive PDE controls and kernel entry points; all time-stepping math lives in RSSN.
+pub use rssn::sim::fdm_nd::adaptive::wave_adaptive;
+
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::dg_advection_adaptive;
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::fem_heat_adaptive;
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::fvm_adaptive;
+/// Adaptive FEM, FVM, DG, and Fourier evolution delegated to RSSN.
+pub use rssn::sim::pde_api::adaptive::spectral_etdrk4_adaptive;
+
+/// Adaptive nodal source FEM and native one-/two-dimensional DG kernel interfaces.
+pub use rssn::sim::pde_api::adaptive::dg_advection_nd_adaptive;
+/// Adaptive nodal source FEM and native one-/two-dimensional DG kernel interfaces.
+pub use rssn::sim::pde_api::adaptive::fem_heat_source_adaptive;

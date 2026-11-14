@@ -1,15 +1,11 @@
-//! `f64` kernels for compressed sparse matrices (§8.4.1).
-//!
-//! Everything here takes the CSR arrays of a square-or-rectangular matrix
-//! (`row_ptr`, `col_idx`, `values`) and a dense right-hand side. Nothing is
-//! ever densified: the direct solver hands the entries to `faer`'s sparse LU
-//! (fill-reducing COLAMD ordering, left-looking numeric factorisation), and
-//! the iterative solver only needs the matrix-vector product.
-
+//! Typed CSR adapters to RSSN sparse kernels (§8.4.1).
+//! Matrix products, factorizations, iterations and preconditioners reside in RSSN.
 use crate::NumericError;
-use faer::linalg::solvers::Solve;
-use faer::sparse::SparseColMat;
-use faer::sparse::Triplet;
+pub use native::CgResult;
+pub use native::Krylov;
+pub use native::PrecondCgResult;
+pub use native::PrecondKind;
+use rssn::kernels::sparse_native as native;
 
 /// A borrowed CSR matrix.
 #[derive(Clone, Copy, Debug)]
@@ -27,385 +23,78 @@ pub struct Csr<'a> {
 }
 
 impl Csr<'_> {
-    /// `y = A x`.
+    fn native(&self) -> native::Csr<'_> {
+        native::Csr {
+            rows: self.rows,
+            cols: self.cols,
+            row_ptr: self.row_ptr,
+            col_idx: self.col_idx,
+            values: self.values,
+        }
+    }
+
+    /// Matrix-vector product through the shared CSR kernel.
     ///
     /// # Errors
-    /// [`NumericError::ShapeMismatch`] when `x` does not have `cols` entries.
+    /// Invalid matrix storage or incompatible vector length.
     pub fn matvec(
         &self,
         x: &[f64],
     ) -> Result<Vec<f64>, NumericError> {
-        if x.len() != self.cols {
-            return Err(NumericError::ShapeMismatch(format!(
-                "matrix has {} columns, vector has {} entries",
-                self.cols,
-                x.len()
-            )));
-        }
-        let mut y = vec![0.0; self.rows];
-        for row in 0..self.rows {
-            let mut acc = 0.0;
-            for k in self.row_ptr[row]..self.row_ptr[row + 1] {
-                acc += self.values[k] * x[self.col_idx[k]];
-            }
-            y[row] = acc;
-        }
-        Ok(y)
+        self.native().matvec(x).map_err(Into::into)
     }
 }
 
-/// Solves `A x = b` by sparse LU.
+/// RSSN `lu_solve` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotSquare`], [`NumericError::ShapeMismatch`] for a bad
-/// right-hand side, and [`NumericError::Singular`] when the factorisation
-/// fails or produces a non-finite solution.
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn lu_solve(
     a: &Csr<'_>,
     b: &[f64],
 ) -> Result<Vec<f64>, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    let n = a.rows;
-    if n == 0 {
-        return Ok(Vec::new());
-    }
-    let mut triplets = Vec::with_capacity(a.values.len());
-    for row in 0..n {
-        for k in a.row_ptr[row]..a.row_ptr[row + 1] {
-            triplets.push(Triplet::new(row, a.col_idx[k], a.values[k]));
-        }
-    }
-    let matrix = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &triplets)
-        .map_err(|_| NumericError::Singular)?;
-    let lu = matrix.sp_lu().map_err(|_| NumericError::Singular)?;
-    let rhs = faer::Col::<f64>::from_fn(n, |i| b[i]);
-    let solution = lu.solve(&rhs);
-    let out: Vec<f64> = (0..n).map(|i| solution[i]).collect();
-    if out.iter().any(|value| !value.is_finite()) {
-        return Err(NumericError::Singular);
-    }
-    Ok(out)
+    native::lu_solve(&a.native(), b).map_err(Into::into)
 }
 
-/// The result of [`cg`].
-#[derive(Clone, Debug)]
-pub struct CgResult {
-    /// The final iterate.
-    pub x: Vec<f64>,
-    /// Iterations performed.
-    pub iterations: usize,
-    /// The final relative residual `‖b − A x‖ / ‖b‖` (`‖r‖` when `b = 0`).
-    pub residual: f64,
-    /// Whether the relative residual reached the tolerance.
-    pub converged: bool,
-}
-
-/// Unpreconditioned conjugate gradients for a symmetric positive-definite
-/// matrix, starting from zero.
+/// RSSN `cholesky_solve` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
+pub fn cholesky_solve(
+    a: &Csr<'_>,
+    b: &[f64],
+) -> Result<Vec<f64>, NumericError> {
+    native::cholesky_solve(&a.native(), b).map_err(Into::into)
+}
+
+/// RSSN `solve_auto` adapter with the established Aevia result layout.
+///
+/// # Errors
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
+pub fn solve_auto(
+    a: &Csr<'_>,
+    b: &[f64],
+) -> Result<(Vec<f64>, &'static str), NumericError> {
+    native::solve_auto(&a.native(), b).map_err(Into::into)
+}
+
+/// RSSN `cg` adapter with the established Aevia result layout.
+///
+/// # Errors
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn cg(
     a: &Csr<'_>,
     b: &[f64],
     tolerance: f64,
     max_iterations: usize,
 ) -> Result<CgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    let n = a.rows;
-    let dot = |x: &[f64], y: &[f64]| x.iter().zip(y).map(|(p, q)| p * q).sum::<f64>();
-    let b_norm = dot(b, b).sqrt();
-    let scale = if b_norm > 0.0 { b_norm } else { 1.0 };
-    let mut x = vec![0.0; n];
-    let mut r = b.to_vec();
-    let mut p = r.clone();
-    let mut rs = dot(&r, &r);
-    let mut iterations = 0;
-    while iterations < max_iterations && rs.sqrt() / scale > tolerance {
-        let ap = a.matvec(&p)?;
-        let denominator = dot(&p, &ap);
-        if denominator <= 0.0 || !denominator.is_finite() {
-            return Err(NumericError::NotPositiveDefinite);
-        }
-        let alpha = rs / denominator;
-        for i in 0..n {
-            x[i] += alpha * p[i];
-            r[i] -= alpha * ap[i];
-        }
-        let next = dot(&r, &r);
-        let beta = next / rs;
-        for i in 0..n {
-            p[i] = r[i] + beta * p[i];
-        }
-        rs = next;
-        iterations += 1;
-    }
-    let residual = rs.sqrt() / scale;
-    Ok(CgResult {
-        x,
-        iterations,
-        residual,
-        converged: residual <= tolerance,
-    })
+    native::cg(&a.native(), b, tolerance, max_iterations).map_err(Into::into)
 }
 
-/// Whether `a` is exactly symmetric (pattern and values) with a positive
-/// diagonal: the cheap necessary conditions for a Cholesky attempt.
-fn looks_spd(a: &Csr<'_>) -> bool {
-    if a.rows != a.cols || a.rows == 0 {
-        return false;
-    }
-    let entry = |i: usize, j: usize| -> Option<f64> {
-        let row = &a.col_idx[a.row_ptr[i]..a.row_ptr[i + 1]];
-        row.binary_search(&j)
-            .ok()
-            .map(|p| a.values[a.row_ptr[i] + p])
-    };
-    for i in 0..a.rows {
-        match entry(i, i) {
-            | Some(d) if d > 0.0 => {},
-            | _ => return false,
-        }
-        for k in a.row_ptr[i]..a.row_ptr[i + 1] {
-            let j = a.col_idx[k];
-            if j != i && entry(j, i) != Some(a.values[k]) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// Solves `A x = b` by sparse Cholesky (`A = L Lᵀ`, lower triangle read).
+/// RSSN `cg_precond` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotPositiveDefinite`] when `A` is not symmetric positive
-/// definite (or the factorisation breaks down), plus the shape errors of
-/// [`lu_solve`].
-pub fn cholesky_solve(
-    a: &Csr<'_>,
-    b: &[f64],
-) -> Result<Vec<f64>, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    if !looks_spd(a) {
-        return Err(NumericError::NotPositiveDefinite);
-    }
-    let n = a.rows;
-    let mut triplets = Vec::with_capacity(a.values.len());
-    for row in 0..n {
-        for k in a.row_ptr[row]..a.row_ptr[row + 1] {
-            triplets.push(Triplet::new(row, a.col_idx[k], a.values[k]));
-        }
-    }
-    let matrix = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &triplets)
-        .map_err(|_| NumericError::NotPositiveDefinite)?;
-    let llt = matrix
-        .sp_cholesky(faer::Side::Lower)
-        .map_err(|_| NumericError::NotPositiveDefinite)?;
-    let rhs = faer::Col::<f64>::from_fn(n, |i| b[i]);
-    let solution = llt.solve(&rhs);
-    let out: Vec<f64> = (0..n).map(|i| solution[i]).collect();
-    if out.iter().any(|value| !value.is_finite()) {
-        return Err(NumericError::NotPositiveDefinite);
-    }
-    Ok(out)
-}
-
-/// Solves `A x = b`: sparse Cholesky when `A` is symmetric positive
-/// definite, otherwise (or when the factorisation fails) sparse LU. The
-/// second component names the factorisation used (`"Cholesky"` or `"LU"`).
-///
-/// # Errors
-/// As [`lu_solve`].
-pub fn solve_auto(
-    a: &Csr<'_>,
-    b: &[f64],
-) -> Result<(Vec<f64>, &'static str), NumericError> {
-    if let Ok(x) = cholesky_solve(a, b) {
-        return Ok((x, "Cholesky"));
-    }
-    lu_solve(a, b).map(|x| (x, "LU"))
-}
-
-/// The preconditioner a caller asks [`cg_precond`] for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrecondKind {
-    /// No preconditioner.
-    Identity,
-    /// Diagonal scaling.
-    Jacobi,
-    /// Inverted diagonal blocks (rssn `Bsr::block_jacobi`).
-    BlockJacobi,
-    /// Incomplete LU with the sparsity pattern (block ILU(0) for a block
-    /// operand).
-    Ilu0,
-    /// Incomplete Cholesky with the sparsity pattern.
-    Ic0,
-    /// The strongest factorisation that succeeds.
-    Auto,
-}
-
-/// The result of [`cg_precond`].
-#[derive(Clone, Debug)]
-pub struct PrecondCgResult {
-    /// The final iterate.
-    pub x: Vec<f64>,
-    /// Iterations performed.
-    pub iterations: usize,
-    /// The relative residual `‖b − A x‖ / ‖b‖`.
-    pub residual: f64,
-    /// Whether the tolerance was reached.
-    pub converged: bool,
-    /// The preconditioner actually used: `"Identity"`, `"Jacobi"`,
-    /// `"BlockJacobi"`, `"BlockIlu0"`, `"Ilu0"` or `"Ic0"`.
-    pub precond: &'static str,
-}
-
-enum Built {
-    Identity,
-    Jacobi(Vec<f64>),
-    Block(rssn::kernels::bsr::BlockJacobi),
-    BlockIlu(rssn::kernels::bsr::Bilu0),
-    Ilu(rssn::kernels::krylov::Ilu0),
-    Ic(rssn::kernels::krylov::Ic0),
-}
-
-impl Built {
-    fn apply(
-        &self,
-        r: &[f64],
-        z: &mut [f64],
-    ) {
-        match self {
-            | Self::Identity => z.copy_from_slice(r),
-            | Self::Jacobi(inv) => {
-                for ((zi, ri), di) in z.iter_mut().zip(r).zip(inv) {
-                    *zi = ri * di;
-                }
-            },
-            | Self::Block(p) => p.apply(r, z),
-            | Self::BlockIlu(p) => p.apply(r, z),
-            | Self::Ilu(p) => p.apply(r, z),
-            | Self::Ic(p) => p.apply(r, z),
-        }
-    }
-
-    const fn name(&self) -> &'static str {
-        match self {
-            | Self::Identity => "Identity",
-            | Self::Jacobi(_) => "Jacobi",
-            | Self::Block(_) => "BlockJacobi",
-            | Self::BlockIlu(_) => "BlockIlu0",
-            | Self::Ilu(_) => "Ilu0",
-            | Self::Ic(_) => "Ic0",
-        }
-    }
-}
-
-/// The square block shape the block preconditioners use: the operand's own
-/// block when it is square, else the automatic choice.
-fn square_block(
-    csr: &rssn::kernels::krylov::Csr,
-    hint: Option<(usize, usize)>,
-) -> (usize, usize) {
-    match hint {
-        | Some((r, c)) if r == c && csr.rows.is_multiple_of(r) => (r, c),
-        | _ => rssn::kernels::bsr::choose_block_size(csr, &[(4, 4), (3, 3), (2, 2), (1, 1)]),
-    }
-}
-
-fn build_preconditioner(
-    csr: &rssn::kernels::krylov::Csr,
-    kind: PrecondKind,
-    block: Option<(usize, usize)>,
-) -> Built {
-    use rssn::kernels::bsr::Bsr;
-    let jacobi = || Built::Jacobi(csr.jacobi_inverse());
-    let blocked = || {
-        let (br, bc) = square_block(csr, block);
-        Bsr::from_csr(csr, br, bc).ok()
-    };
-    match kind {
-        | PrecondKind::Identity => Built::Identity,
-        | PrecondKind::Jacobi => jacobi(),
-        | PrecondKind::BlockJacobi => {
-            blocked()
-                .and_then(|b| b.block_jacobi().ok())
-                .map_or_else(jacobi, Built::Block)
-        },
-        | PrecondKind::Ilu0 => {
-            if block.is_some() {
-                blocked()
-                    .and_then(|b| b.bilu0().ok())
-                    .map(Built::BlockIlu)
-                    .or_else(|| csr.ilu0().map(Built::Ilu))
-                    .unwrap_or_else(jacobi)
-            } else {
-                csr.ilu0().map_or_else(jacobi, Built::Ilu)
-            }
-        },
-        | PrecondKind::Ic0 => csr.ic0().map_or_else(jacobi, Built::Ic),
-        | PrecondKind::Auto => {
-            if block.is_some()
-                && let Some(b) = blocked()
-            {
-                if let Ok(p) = b.bilu0() {
-                    return Built::BlockIlu(p);
-                }
-                if let Ok(p) = b.block_jacobi() {
-                    return Built::Block(p);
-                }
-            }
-            let auto = rssn::kernels::krylov::auto_preconditioner(csr);
-            match auto.kind() {
-                | rssn::kernels::krylov::AutoPreconditionerKind::Ic0 => {
-                    csr.ic0().map_or_else(jacobi, Built::Ic)
-                },
-                | rssn::kernels::krylov::AutoPreconditionerKind::Ilu0 => {
-                    csr.ilu0().map_or_else(jacobi, Built::Ilu)
-                },
-                | rssn::kernels::krylov::AutoPreconditionerKind::Jacobi => jacobi(),
-            }
-        },
-    }
-}
-
-/// Preconditioned conjugate gradients from a zero start.
-///
-/// `block` is the block shape of a block-CSR operand (`None` otherwise); it
-/// selects rssn's block Jacobi / block ILU(0) for those kinds. A
-/// factorisation that breaks down falls back to Jacobi, and the kind that was
-/// really applied is reported in the result.
-///
-/// # Errors
-/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn cg_precond(
     a: &Csr<'_>,
     b: &[f64],
@@ -414,67 +103,13 @@ pub fn cg_precond(
     kind: PrecondKind,
     block: Option<(usize, usize)>,
 ) -> Result<PrecondCgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    let csr = rssn::kernels::krylov::Csr {
-        rows: a.rows,
-        cols: a.cols,
-        indptr: a.row_ptr.to_vec(),
-        indices: a.col_idx.to_vec(),
-        values: a.values.to_vec(),
-    };
-    let built = build_preconditioner(&csr, kind, block);
-    let result = rssn::kernels::krylov::cg(
-        |x, y| csr.matvec(x, y),
-        |r, z| built.apply(r, z),
-        b,
-        None,
-        tolerance,
-        max_iterations,
-    );
-    Ok(PrecondCgResult {
-        x: result.x,
-        iterations: result.iterations,
-        residual: result.residual,
-        converged: result.converged,
-        precond: built.name(),
-    })
+    native::cg_precond(&a.native(), b, tolerance, max_iterations, kind, block).map_err(Into::into)
 }
 
-/// Which Krylov method [`krylov_precond`] runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Krylov {
-    /// Restarted GMRES(`restart`) with right preconditioning: any square
-    /// nonsingular matrix; the residual norm never increases.
-    Gmres {
-        /// The restart length (the Krylov basis size before restarting).
-        restart: usize,
-    },
-    /// BiCGSTAB: any square nonsingular matrix, short recurrences (constant
-    /// memory), with a possibly irregular residual history.
-    Bicgstab,
-}
-
-/// Preconditioned GMRES or BiCGSTAB from a zero start, for a **general**
-/// (possibly nonsymmetric) square matrix.
-///
-/// The preconditioners are those of [`cg_precond`] except that `Ic0` and the
-/// symmetric `Auto` choice need a symmetric matrix: here `Ic0` is replaced by
-/// `Ilu0` and `Auto` tries `Ilu0` then `Jacobi`. A factorisation that breaks
-/// down falls back to Jacobi, and the kind actually applied is reported. The
-/// iteration is sequential (rssn's Krylov kernels), so the result does not
-/// depend on the thread count.
+/// RSSN `krylov_precond` adapter with the established Aevia result layout.
 ///
 /// # Errors
-/// [`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+/// Invalid dimensions, sparse data, controls, or numerical factorization failure.
 pub fn krylov_precond(
     a: &Csr<'_>,
     b: &[f64],
@@ -484,54 +119,16 @@ pub fn krylov_precond(
     kind: PrecondKind,
     block: Option<(usize, usize)>,
 ) -> Result<PrecondCgResult, NumericError> {
-    if a.rows != a.cols {
-        return Err(NumericError::NotSquare);
-    }
-    if b.len() != a.rows {
-        return Err(NumericError::ShapeMismatch(format!(
-            "matrix has {} rows, right-hand side has {} entries",
-            a.rows,
-            b.len()
-        )));
-    }
-    let csr = rssn::kernels::krylov::Csr {
-        rows: a.rows,
-        cols: a.cols,
-        indptr: a.row_ptr.to_vec(),
-        indices: a.col_idx.to_vec(),
-        values: a.values.to_vec(),
-    };
-    let kind = match kind {
-        | PrecondKind::Ic0 => PrecondKind::Ilu0,
-        | PrecondKind::Auto if block.is_none() => PrecondKind::Ilu0,
-        | other => other,
-    };
-    let built = build_preconditioner(&csr, kind, block);
-    let apply = |x: &[f64], y: &mut [f64]| csr.matvec(x, y);
-    let precondition = |r: &[f64], z: &mut [f64]| built.apply(r, z);
-    let result = match method {
-        | Krylov::Gmres { restart } => {
-            rssn::kernels::krylov::gmres(
-                apply,
-                precondition,
-                b,
-                None,
-                restart.max(1),
-                tolerance,
-                max_iterations,
-            )
-        },
-        | Krylov::Bicgstab => {
-            rssn::kernels::krylov::bicgstab(apply, precondition, b, None, tolerance, max_iterations)
-        },
-    };
-    Ok(PrecondCgResult {
-        x: result.x,
-        iterations: result.iterations,
-        residual: result.residual,
-        converged: result.converged,
-        precond: built.name(),
-    })
+    native::krylov_precond(
+        &a.native(),
+        b,
+        tolerance,
+        max_iterations,
+        method,
+        kind,
+        block,
+    )
+    .map_err(Into::into)
 }
 
 fn to_rssn_csr(a: &Csr<'_>) -> Result<rssn::kernels::krylov::Csr, NumericError> {
@@ -908,6 +505,42 @@ pub fn cg_amg(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_validates_borrowed_csr_before_indexing_and_zero_block_hints() {
+        let malformed = Csr {
+            rows: 1,
+            cols: 1,
+            row_ptr: &[0, 2],
+            col_idx: &[0],
+            values: &[1.0],
+        };
+        assert!(matches!(
+            malformed.matvec(&[1.0]),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            lu_solve(&malformed, &[1.0]),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+        let valid = Csr {
+            rows: 2,
+            cols: 2,
+            row_ptr: &[0, 1, 2],
+            col_idx: &[0, 1],
+            values: &[2.0, 3.0],
+        };
+        let result = cg_precond(
+            &valid,
+            &[2.0, 3.0],
+            1e-12,
+            10,
+            PrecondKind::BlockJacobi,
+            Some((0, 0)),
+        )
+        .unwrap();
+        assert!(result.converged);
+    }
 
     fn tridiagonal(n: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
         let (mut ptr, mut idx, mut val) = (vec![0], Vec::new(), Vec::new());

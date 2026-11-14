@@ -1,0 +1,47 @@
+## Run: aevia test examples/native_flow_conservation.aev
+## States use explicit reference coordinates; flux outputs carry field*Length/Time.
+import Rssn_numerical_vector as N
+
+import Rssn_numerical_matrix as B
+
+let frame = unwrap_or(N.num_grid_frame_new([to_value(2.0 m), to_value(4.0 s), to_value(3.0 kg)]), to_value(0))
+
+let law = unwrap_or(N.num_dg_advection([frame, to_value([1.0])]), to_value(0))
+
+test "native DG flux restores mass times velocity" =
+    match N.num_dg_flux([law, to_value([2.0]), to_value(0)]) with
+    | Ok(value) ->
+        match from_value<{ component0: Float[Mass*Length/Time] }>(value) with
+        | Ok(flux) -> approx_eq(flux.component0, 3.0 kg*m/s, 1e-12 kg*m/s)
+        | Err(_) -> false
+    | Err(_) -> false
+
+let backend = unwrap_or(B.num_backend_interpreter([]), to_value(0))
+
+let xref = unwrap_or(B.num_backend_reference([to_value(1.0 m)]), to_value(0))
+
+let outref = unwrap_or(B.num_backend_reference([to_value(3.0 kg)]), to_value(0))
+
+let initial = unwrap_or(B.num_backend_compile([backend, to_value("2"), to_value(["x", "y"]), to_value([xref, xref]), outref, to_value(100000)]), to_value(0))
+
+let mesh = unwrap_or(N.num_dg_mesh_line([frame, to_value(2), to_value(0.0), to_value(1.0), to_value(2)]), to_value(0))
+
+let bcs = unwrap_or(N.num_dg_bcs([law, to_value(["Periodic", "Periodic", "Outflow", "Outflow"])]), to_value(0))
+
+let filter_options = to_value({ filter = false, filter_alpha = 36.0, filter_order = 8 })
+
+test "native DG constant solution retains physical integral" =
+    match N.num_solve_dg([mesh, bcs, to_value([initial]), to_value(0.25), to_value(0.2), filter_options, to_value(10000), to_value(100000)]) with
+    | Ok(solution) ->
+        match N.num_dg_integral([solution, to_value(0)]) with
+        | Ok(value) ->
+            match from_value<Float[Mass*Length]>(value) with
+            | Ok(total) -> approx_eq(total, 12.0 kg*m, 1e-10 kg*m)
+            | Err(_) -> false
+        | Err(_) -> false
+    | Err(_) -> false
+
+test "native DG work budget rejects excessive evaluation" =
+    match N.num_solve_dg([mesh, bcs, to_value([initial]), to_value(0.25), to_value(0.2), filter_options, to_value(10000), to_value(1)]) with
+    | Ok(_) -> false
+    | Err(_) -> true

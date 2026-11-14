@@ -1,0 +1,57 @@
+## Run: aevia test examples/native_autodiff.aev
+## Native AD callbacks operate on dimensionless normalized variables. Positive
+## coordinate/output reference quantities restore value E and derivatives E/D.
+## Dual fields are native forward-mode values, never finite-difference samples.
+## Reverse handles exist only during the callback; keep no handles in globals.
+open Units.SI
+
+import Rssn_numerical_vector as V
+
+import Rssn_numerical_callback as C
+
+type Dual = { val: Float, deriv: Float }
+
+type DualVector = { val: Tensor<1, Float>, deriv: Tensor<1, Float> }
+
+fn square(x: Dual): Dual = V.num_dual_mul(x, x)
+
+fn sum_squares(x: DualVector): Dual =
+    let a = { val = x.val[0], deriv = x.deriv[0] }
+    let b = { val = x.val[1], deriv = x.deriv[1] }
+    V.num_dual_add(V.num_dual_mul(a, a), V.num_dual_mul(b, b))
+
+let derivative = C.num_dual_forward_derivative_scaled_typed(2.0 m, 1.0 m, 1.0 s, 10, square)
+
+let gradient = C.num_dual_forward_gradient_scaled_typed([2.0 m, 3.0 m], 1.0 m, 1.0 s, 10, sum_squares)
+
+test "forward dual arithmetic restores independently chosen physical units" =
+    match derivative with
+    | Ok(result) -> result.value == 4.0 s && result.derivative == 4.0 s/m
+    | Err(_) -> false
+
+test "forward sweeps recover every gradient component" =
+    match gradient with
+    | Ok(result) -> result[0] == 4.0 s/m && result[1] == 6.0 s/m
+    | Err(_) -> false
+
+fn reverse_sum_squares(x: Tensor<1, NativeAdVar>): NativeAdVar = V.num_ad_var_add(V.num_ad_var_mul(x[0], x[0]), V.num_ad_var_mul(x[1], x[1]))
+
+let reverse = C.num_native_reverse_gradient_scaled_typed([2.0 m, 3.0 m], 1.0 m, 1.0 s, 10, reverse_sum_squares)
+
+test "scoped native reverse accumulation preserves exact gradient and units" =
+    match reverse with
+    | Ok(result) -> result.value == 13.0 s && result.gradient[0] == 4.0 s/m && result.gradient[1] == 6.0 s/m && result.evaluations == 1
+    | Err(_) -> false
+
+## Changing reference scales changes the normalized function, so describe the
+## same physical function by compensating inside its callback.
+fn rescaled_square(x: Dual): Dual = V.num_dual_mul(V.num_dual_constant(2.0), V.num_dual_mul(x, x))
+
+let rescaled = C.num_dual_forward_derivative_scaled_typed(2.0 m, 2.0 m, 2.0 s, 10, rescaled_square)
+
+test "physical derivatives remain invariant under consistent reference changes" =
+    match rescaled with
+    | Ok(result) -> result.value == 4.0 s && result.derivative == 4.0 s/m
+    | Err(_) -> false
+
+fn main(): IO Unit = println("Native forward and reverse AD with physical derivatives")

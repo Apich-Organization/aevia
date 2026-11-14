@@ -3461,128 +3461,99 @@ impl Interp {
         if let Some(value) = a.dense_matmul(b) {
             return Ok(value);
         }
-        match (a.rank(), b.rank()) {
+        let (rows, inner, other_inner, cols, output_shape, label) = match (a.rank(), b.rank()) {
             | (2, 2) => {
-                let (m, k) = (a.shape[0], a.shape[1]);
-                let (k2, n) = (b.shape[0], b.shape[1]);
-                if k != k2 {
-                    return Err(EvalError::new(
-                        "E0802",
-                        format!(
-                            "shape mismatch in `matmul`: left shape {:?}, right shape {:?}",
-                            a.shape, b.shape
-                        ),
-                    )
-                    .at(span)
-                    .with_note("matmul requires left columns = right rows"));
-                }
-                let mut elements = Vec::with_capacity(m * n);
-                for row in 0..m {
-                    for column in 0..n {
-                        let mut sum: Option<Value> = None;
-                        for inner in 0..k {
-                            let x = a
-                                .get(&[row as isize, inner as isize])
-                                .ok_or_else(|| EvalError::new("E0802", "index out of range"))?;
-                            let y = b
-                                .get(&[inner as isize, column as isize])
-                                .ok_or_else(|| EvalError::new("E0802", "index out of range"))?;
-                            let product = self.arithmetic(BinOp::Mul, x, y, span)?;
-                            sum = Some(match sum {
-                                | None => product,
-                                | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
-                            });
-                        }
-                        elements.push(sum.unwrap_or_else(|| Value::float(0.0)));
-                    }
-                }
-                let dim = elements
-                    .first()
-                    .map_or_else(|| a.dim.mul(&b.dim), value::value_dim);
-                Ok(build_tensor(elements, vec![m, n], dim))
+                (
+                    a.shape[0],
+                    a.shape[1],
+                    b.shape[0],
+                    b.shape[1],
+                    Some(vec![a.shape[0], b.shape[1]]),
+                    "matmul",
+                )
             },
             | (2, 1) => {
-                let (m, k) = (a.shape[0], a.shape[1]);
-                if k != b.shape[0] {
-                    return Err(EvalError::new(
-                        "E0802",
-                        format!(
-                            "shape mismatch in `matvec`: left shape {:?}, right shape {:?}",
-                            a.shape, b.shape
-                        ),
-                    )
-                    .at(span));
-                }
-                let mut elements = Vec::with_capacity(m);
-                for row in 0..m {
-                    let mut sum: Option<Value> = None;
-                    for inner in 0..k {
-                        let x = a
-                            .get(&[row as isize, inner as isize])
-                            .unwrap_or(Value::Unit);
-                        let y = b.get(&[inner as isize]).unwrap_or(Value::Unit);
-                        let product = self.arithmetic(BinOp::Mul, x, y, span)?;
-                        sum = Some(match sum {
-                            | None => product,
-                            | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
-                        });
-                    }
-                    elements.push(sum.unwrap_or_else(|| Value::float(0.0)));
-                }
-                let dim = elements
-                    .first()
-                    .map_or_else(|| a.dim.mul(&b.dim), value::value_dim);
-                Ok(build_tensor(elements, vec![m], dim))
+                (
+                    a.shape[0],
+                    a.shape[1],
+                    b.shape[0],
+                    1,
+                    Some(vec![a.shape[0]]),
+                    "matvec",
+                )
             },
             | (1, 2) => {
-                let k = a.shape[0];
-                let (k2, n) = (b.shape[0], b.shape[1]);
-                if k != k2 {
-                    return Err(EvalError::new("E0802", "shape mismatch in `vecmat`").at(span));
-                }
-                let mut elements = Vec::with_capacity(n);
-                for column in 0..n {
-                    let mut sum: Option<Value> = None;
-                    for inner in 0..k {
-                        let x = a.get(&[inner as isize]).unwrap_or(Value::Unit);
-                        let y = b
-                            .get(&[inner as isize, column as isize])
-                            .unwrap_or(Value::Unit);
-                        let product = self.arithmetic(BinOp::Mul, x, y, span)?;
-                        sum = Some(match sum {
-                            | None => product,
-                            | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
-                        });
-                    }
-                    elements.push(sum.unwrap_or_else(|| Value::float(0.0)));
-                }
-                let dim = elements
-                    .first()
-                    .map_or_else(|| a.dim.mul(&b.dim), value::value_dim);
-                Ok(build_tensor(elements, vec![n], dim))
+                (
+                    1,
+                    a.shape[0],
+                    b.shape[0],
+                    b.shape[1],
+                    Some(vec![b.shape[1]]),
+                    "vecmat",
+                )
             },
-            | (1, 1) => {
-                if a.shape[0] != b.shape[0] {
-                    return Err(EvalError::new("E0802", "shape mismatch in `dot`").at(span));
-                }
-                let mut sum: Option<Value> = None;
-                for index in 0..a.shape[0] {
-                    let x = a.get(&[index as isize]).unwrap_or(Value::Unit);
-                    let y = b.get(&[index as isize]).unwrap_or(Value::Unit);
-                    let product = self.arithmetic(BinOp::Mul, x, y, span)?;
-                    sum = Some(match sum {
-                        | None => product,
-                        | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span)?,
-                    });
-                }
-                Ok(sum.unwrap_or_else(|| Value::float(0.0)))
-            },
+            | (1, 1) => (1, a.shape[0], b.shape[0], 1, None, "dot"),
             | _ => {
-                Err(EvalError::new(
+                return Err(EvalError::new(
                     "E0802",
                     format!("`@` is not defined for ranks {} and {}", a.rank(), b.rank()),
                 )
-                .at(span))
+                .at(span));
+            },
+        };
+        if inner != other_inner {
+            return Err(EvalError::new(
+                "E0802",
+                format!(
+                    "shape mismatch in `{label}`: left shape {:?}, right shape {:?}",
+                    a.shape, b.shape
+                ),
+            )
+            .at(span));
+        }
+        let product_dim = a.dim.mul(&b.dim);
+        let elements = aevia_std::linalg::contract_rectangular(
+            rows,
+            inner,
+            cols,
+            || Value::Num(NumVal::float(0.0, product_dim.clone())),
+            |row, index, column, sum| {
+                let x = if a.rank() == 2 {
+                    a.get(&[row as isize, index as isize])
+                } else {
+                    a.get(&[index as isize])
+                }
+                .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
+                let y = if b.rank() == 2 {
+                    b.get(&[index as isize, column as isize])
+                } else {
+                    b.get(&[index as isize])
+                }
+                .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
+                let product = self.arithmetic(BinOp::Mul, x, y, span)?;
+                match sum {
+                    | None => Ok(product),
+                    | Some(acc) => self.arithmetic(BinOp::Add, acc, product, span),
+                }
+            },
+        )
+        .map_err(|error| {
+            match error {
+                | aevia_std::linalg::ContractionError::Element(error) => error,
+                | aevia_std::linalg::ContractionError::ShapeOverflow => {
+                    EvalError::new("E0802", "matrix product output shape overflows").at(span)
+                },
+            }
+        })?;
+        match output_shape {
+            | Some(shape) => {
+                let dim = elements.first().map_or(product_dim, value::value_dim);
+                Ok(build_tensor(elements, shape, dim))
+            },
+            | None => {
+                elements.into_iter().next().ok_or_else(|| {
+                    EvalError::new("E0802", "missing scalar contraction result").at(span)
+                })
             },
         }
     }

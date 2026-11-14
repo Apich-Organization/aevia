@@ -573,7 +573,7 @@ mod tests {
     /// same. This is the documented contract, asserted so it cannot drift into a
     /// silent scheme substitution either way.
     #[test]
-    fn adaptive_em_and_milstein_are_the_same_controlled_path() {
+    fn adaptive_em_and_milstein_keep_their_requested_scheme() {
         let options = |method| {
             Options::adaptive(
                 method,
@@ -581,19 +581,21 @@ mod tests {
                 123,
                 0.0,
                 0.5,
+                3e-2,
                 1e-3,
-                1e-6,
                 100_000,
                 0,
             )
         };
-        let (drift, diffusion) = ou(2.0, 0.0, 0.3);
+        let (drift, diffusion) = gbm(0.1, 0.3);
         let em = integrate(drift, diffusion, &[1.0], &options(Method::EulerMaruyama))
             .expect("adaptive EM");
-        let (drift, diffusion) = ou(2.0, 0.0, 0.3);
+        let (drift, diffusion) = gbm(0.1, 0.3);
         let milstein = integrate(drift, diffusion, &[1.0], &options(Method::Milstein))
             .expect("adaptive Milstein");
-        assert_eq!(em.y, milstein.y);
+        assert_ne!(em.y, milstein.y);
+        assert_eq!(em.method, Method::EulerMaruyama);
+        assert_eq!(milstein.method, Method::Milstein);
     }
 
     #[test]
@@ -1135,36 +1137,318 @@ mod tests {
     }
 
     #[test]
-    fn extended_sde_solvers_do_not_silently_replace_adaptive_schedules() {
+    fn extended_sde_solvers_control_adaptive_implicit_steps() {
         let options = Options::adaptive(
             Method::DriftImplicitEuler,
             Structure::Diagonal,
             7,
             0.0,
             1.0,
-            1e-5,
-            1e-8,
-            1000,
-            0,
+            0.05,
+            0.001,
+            10000,
+            4096,
         );
-        assert!(
+        let path = integrate(
+            |_, y| Ok(y.to_vec()),
+            |_, _| Ok(vec![0.0]),
+            &[1.0],
+            &options,
+        )
+        .unwrap();
+        assert_eq!(path.t.last(), Some(&1.0));
+        assert!(path.rejected > 0);
+        let explicit = integrate_drift_implicit(
+            |_, y| Ok(y.to_vec()),
+            |_, _| Ok(vec![0.0]),
+            &[1.0],
+            DriftImplicitScheme::BackwardEuler,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(path, explicit);
+    }
+}
+
+#[cfg(test)]
+mod adaptive_extension_tests {
+    use super::*;
+
+    fn options(
+        method: Method,
+        rtol: f64,
+    ) -> Options {
+        Options::adaptive(
+            method,
+            Structure::Diagonal,
+            2718,
+            0.0,
+            1.0,
+            rtol,
+            0.001,
+            20000,
+            16384,
+        )
+    }
+    #[test]
+    fn rejected_implicit_steps_reuse_the_same_brownian_path() {
+        let run = |tol| {
+            integrate(
+                |t, _| Ok(vec![t]),
+                |_, _| Ok(vec![1.0]),
+                &[1.0],
+                &options(Method::DriftImplicitEuler, tol),
+            )
+            .unwrap()
+        };
+        let first = run(0.03);
+        let repeat = run(0.03);
+        let tighter = run(0.01);
+        assert_eq!(first, repeat);
+        assert!(first.rejected > 0 && tighter.rejected > 0);
+        let recovered = |path: &Path| {
+            path.y.last().unwrap()[0]
+                - 1.0
+                - path.t.windows(2).map(|t| t[1] * (t[1] - t[0])).sum::<f64>()
+        };
+        assert!((recovered(&first) - recovered(&tighter)).abs() < 2e-12);
+        assert_eq!(first.t.last(), Some(&1.0));
+        assert_eq!(tighter.t.last(), Some(&1.0));
+        assert!(tighter.steps >= first.steps);
+    }
+    #[test]
+    fn adaptive_implicit_families_are_stable_and_converge_on_stiff_decay() {
+        for method in [
+            Method::DriftImplicitEuler,
+            Method::ThetaMaruyama,
+            Method::DriftImplicitMilstein,
+        ] {
+            let run = |tol| {
+                let mut options = options(method, tol);
+                options.schedule = Schedule::Adaptive {
+                    t1: 0.2,
+                    rtol: tol,
+                    atol: 0.001,
+                    max_steps: 20000,
+                    cells: 16384,
+                };
+                integrate(
+                    |_, y| Ok(vec![-20.0 * y[0]]),
+                    |_, _| Ok(vec![0.0]),
+                    &[1.0],
+                    &options,
+                )
+                .unwrap()
+            };
+            let coarse = run(0.04);
+            let fine = run(0.01);
+            let exact = (-4.0_f64).exp();
+            assert!(fine.rejected > 0);
+            assert_eq!(fine.method, method);
+            assert_eq!(fine.t.last(), Some(&0.2));
+            assert!(
+                (fine.y.last().unwrap()[0] - exact).abs()
+                    <= (coarse.y.last().unwrap()[0] - exact).abs() + 1e-11
+            );
+            assert!((fine.y.last().unwrap()[0] - exact).abs() < 0.01);
+        }
+    }
+    #[test]
+    fn adaptive_noise_resolution_and_work_limits_never_force_acceptance() {
+        let mut options = options(Method::DriftImplicitEuler, 1e-10);
+        options.schedule = Schedule::Adaptive {
+            t1: 1.0,
+            rtol: 1e-10,
+            atol: 0.0,
+            max_steps: 100,
+            cells: 2,
+        };
+        assert!(matches!(
             integrate(
                 |_, y| Ok(y.to_vec()),
                 |_, _| Ok(vec![0.0]),
                 &[1.0],
                 &options
-            )
-            .is_err()
-        );
-        assert!(
-            integrate_drift_implicit(
-                |_, y| Ok(y.to_vec()),
+            ),
+            Err(SdeError::StepLimit(_))
+        ));
+        options.schedule = Schedule::Adaptive {
+            t1: 1.0,
+            rtol: 0.1,
+            atol: 0.001,
+            max_steps: 1,
+            cells: 4096,
+        };
+        assert!(matches!(
+            integrate(|_, _| Ok(vec![0.0]), |_, _| Ok(vec![0.0]), &[1.0], &options),
+            Err(SdeError::StepLimit(_))
+        ));
+        options.schedule = Schedule::Adaptive {
+            t1: 1.0,
+            rtol: 0.1,
+            atol: 0.001,
+            max_steps: 100,
+            cells: usize::MAX,
+        };
+        assert!(matches!(
+            integrate(|_, _| Ok(vec![0.0]), |_, _| Ok(vec![0.0]), &[1.0], &options),
+            Err(SdeError::Invalid(_))
+        ));
+    }
+    #[test]
+    fn adaptive_jump_times_and_marks_survive_changed_rejection_patterns() {
+        let spec = JumpSpec {
+            intensity: 5.0,
+            distribution: JumpDistribution::Constant(vec![0.25]),
+            compensated: false,
+        };
+        let run = |tol| {
+            integrate_jump_diffusion(
+                |t, _| Ok(vec![t]),
                 |_, _| Ok(vec![0.0]),
+                |_, _, z| Ok(z.to_vec()),
                 &[1.0],
-                DriftImplicitScheme::BackwardEuler,
-                &options
+                &spec,
+                &options(Method::DriftImplicitEuler, tol),
             )
-            .is_err()
+            .unwrap()
+        };
+        let coarse = run(0.05);
+        let fine = run(0.005);
+        assert_eq!(fine, run(0.005));
+        assert!(fine.path.rejected > 0);
+        assert_eq!(coarse.total_jumps, fine.total_jumps);
+        assert!(fine.total_jumps > 0);
+        let arrivals = |p: &JumpPath| {
+            p.jump_counts
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| **n > 0)
+                .map(|(i, _)| p.path.t[i + 1])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(arrivals(&coarse), arrivals(&fine));
+        assert_eq!(fine.path.t.last(), Some(&1.0));
+        assert_eq!(fine.jump_counts.iter().sum::<usize>(), fine.total_jumps);
+        let drift_integral: f64 = fine.path.t.windows(2).map(|t| t[1] * (t[1] - t[0])).sum();
+        assert!(
+            (fine.path.y.last().unwrap()[0]
+                - 1.0
+                - drift_integral
+                - 0.25 * fine.total_jumps as f64)
+                .abs()
+                < 2e-12
         );
+    }
+    #[test]
+    fn adaptive_stable_increments_are_shared_and_brownian_only_corrections_are_rejected() {
+        let run = |method, tol| {
+            integrate_levy(
+                |t, _| Ok(vec![t]),
+                |_, _| Ok(vec![0.1]),
+                &[1.0],
+                1.5,
+                0.2,
+                &options(method, tol),
+            )
+            .unwrap()
+        };
+        let a = run(Method::DriftImplicitEuler, 0.04);
+        let b = run(Method::DriftImplicitEuler, 0.01);
+        let noise = |p: &Path| {
+            p.y.last().unwrap()[0] - 1.0 - p.t.windows(2).map(|t| t[1] * (t[1] - t[0])).sum::<f64>()
+        };
+        assert!(a.rejected > 0 && b.rejected > 0);
+        assert!((noise(&a) - noise(&b)).abs() < 2e-12);
+        assert_eq!(b, run(Method::DriftImplicitEuler, 0.01));
+        for method in [Method::EulerMaruyama, Method::ThetaMaruyama] {
+            let p = run(method, 0.04);
+            assert_eq!(p.method, method);
+            assert_eq!(p.t.last(), Some(&1.0));
+        }
+        assert!(matches!(
+            integrate_levy(
+                |_, _| Ok(vec![0.0]),
+                |_, _| Ok(vec![0.1]),
+                &[1.0],
+                1.5,
+                0.0,
+                &options(Method::Milstein, 0.1)
+            ),
+            Err(SdeError::Invalid(_))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod adaptive_method_matrix_tests {
+    use super::*;
+    #[test]
+    fn existing_brownian_methods_cover_fixed_and_adaptive_jump_and_gaussian_stable_paths() {
+        let methods = [
+            Method::EulerMaruyama,
+            Method::Milstein,
+            Method::MilsteinStratonovich,
+            Method::HeunStratonovich,
+            Method::SrkPlaten,
+            Method::MilsteinNoncommutative,
+            Method::MilsteinNoncommutativeStratonovich,
+            Method::DriftImplicitEuler,
+            Method::ThetaMaruyama,
+            Method::DriftImplicitMilstein,
+        ];
+        let structures = [
+            Structure::Diagonal,
+            Structure::General {
+                noise: 2,
+                commutative: true,
+            },
+            Structure::General {
+                noise: 2,
+                commutative: false,
+            },
+        ];
+        let jumps = JumpSpec {
+            intensity: 0.0,
+            distribution: JumpDistribution::Constant(vec![0.1]),
+            compensated: false,
+        };
+        for structure in structures {
+            for method in methods {
+                for adaptive in [false, true] {
+                    let options = if adaptive {
+                        Options::adaptive(method, structure, 19, 0.0, 0.01, 0.1, 0.01, 1000, 32)
+                    } else {
+                        Options::fixed(method, structure, 19, 0.0, 0.005, 2)
+                    }
+                    .with_terms(2);
+                    let drift = |_: f64, y: &[f64]| Ok(y.iter().map(|v| -v).collect::<Vec<_>>());
+                    let diffusion = |_: f64, _: &[f64]| {
+                        Ok(if structure == Structure::Diagonal {
+                            vec![0.05, 0.05]
+                        } else {
+                            vec![0.05, 0.0, 0.0, 0.05]
+                        })
+                    };
+                    let path = integrate_jump_diffusion(
+                        drift,
+                        diffusion,
+                        |_, y, _| Ok(vec![0.0; y.len()]),
+                        &[1.0, 1.0],
+                        &jumps,
+                        &options,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!("{method:?} {structure:?} adaptive={adaptive}: {e}")
+                    });
+                    assert_eq!(path.path.method, method);
+                    assert_eq!(path.path.t.last(), Some(&0.01));
+                    let gaussian =
+                        integrate_levy(drift, diffusion, &[1.0, 1.0], 2.0, 0.0, &options).unwrap();
+                    assert_eq!(gaussian.method, method);
+                    assert_eq!(gaussian.t.last(), Some(&0.01));
+                }
+            }
+        }
     }
 }

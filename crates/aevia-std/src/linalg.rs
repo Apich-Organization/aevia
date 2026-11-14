@@ -10,8 +10,8 @@
 //! Where exactness matters the path does not come near either float backend:
 //! `lu_exact` and `qr_exact` run over `BigRational` so an exact matrix keeps an
 //! exact decomposition, which is the promise `Scalar<ρ,d>` makes when `ρ` is
-//! `Real`. Nothing in this module accepts an exact value — every entry point
-//! takes `&[f64]`, so a `Real` matrix cannot reach `faer` at all.
+//! `Real`. The rational adapters delegate to RSSN's exact dense module;
+//! floating-point adapters accept only `&[f64]`.
 //!
 //! `svd` is the *economy* decomposition: `u` is `rows × k`, `s` has `k` entries
 //! and `vt` is `k × cols` with `k = min(rows, cols)`, so `a = u diag(s) vt`
@@ -21,9 +21,11 @@
 use crate::Complex;
 use crate::NumericError;
 use num_rational::BigRational;
+#[cfg(test)]
 use num_traits::One;
-use num_traits::Signed;
-use num_traits::Zero;
+
+pub use rssn::kernels::contractions::ContractionError;
+pub use rssn::kernels::contractions::contract_rectangular;
 
 mod extended;
 mod faer_backend;
@@ -296,13 +298,7 @@ pub fn tril(
     cols: usize,
     a: &[f64],
 ) -> Vec<f64> {
-    let mut out = vec![0.0; a.len()];
-    for row in 0..rows {
-        for column in 0..cols.min(row + 1) {
-            out[row * cols + column] = a[row * cols + column];
-        }
-    }
-    out
+    dense::reference::tril(rows, cols, a)
 }
 
 /// The upper triangle of a matrix, the rest zeroed.
@@ -312,169 +308,48 @@ pub fn triu(
     cols: usize,
     a: &[f64],
 ) -> Vec<f64> {
-    let mut out = vec![0.0; a.len()];
-    for row in 0..rows {
-        for column in row..cols {
-            out[row * cols + column] = a[row * cols + column];
-        }
-    }
-    out
+    dense::reference::triu(rows, cols, a)
 }
 
 // ----- exact decompositions ------------------------------------------------
 
 /// An exact LU decomposition with partial pivoting: `P A = L U`.
 ///
-/// Exactness is the point: `lu([[1,2],[3,4]])` answers rationals, and a
-/// singular matrix is reported rather than turned into `inf`.
+/// RSSN owns the exact rational arithmetic and returns valid factors even for
+/// singular matrices with zero pivots.
 ///
 /// # Errors
 ///
-/// [`NumericError::NotSquare`] when the matrix is not square.
+/// [`NumericError::ShapeMismatch`] for inconsistent or overflowing dimensions.
 pub fn lu_exact(
     n: usize,
     a: &[BigRational],
 ) -> Result<(Vec<BigRational>, Vec<BigRational>, Vec<BigRational>), NumericError> {
-    if n * n != a.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "{n}x{n} needs {} elements, found {}",
-            n * n,
-            a.len()
-        )));
-    }
-    let mut u: Vec<BigRational> = a.to_vec();
-    let mut l = vec![BigRational::zero(); n * n];
-    let mut p = vec![BigRational::zero(); n * n];
-    for index in 0..n {
-        l[index * n + index] = BigRational::one();
-        p[index * n + index] = BigRational::one();
-    }
-    for column in 0..n {
-        let mut pivot = column;
-        while pivot < n && u[pivot * n + column].is_zero() {
-            pivot += 1;
-        }
-        if pivot == n {
-            // Singular: no pivot in this column. Continue with the identity,
-            // which is what an exact `L U` of a singular matrix is.
-            continue;
-        }
-        if pivot != column {
-            for inner in 0..n {
-                u.swap(pivot * n + inner, column * n + inner);
-                p.swap(pivot * n + inner, column * n + inner);
-            }
-            for inner in 0..column {
-                l.swap(pivot * n + inner, column * n + inner);
-            }
-        }
-        let lead = u[column * n + column].clone();
-        for row in column + 1..n {
-            let factor = u[row * n + column].clone() / &lead;
-            l[row * n + column] = factor.clone();
-            for inner in column..n {
-                let term = factor.clone() * u[column * n + inner].clone();
-                u[row * n + inner] -= term;
-            }
-        }
-    }
-    Ok((p, l, u))
+    dense::exact::lu_exact(n, a).map_err(exact_error)
 }
 
-/// An exact QR decomposition by modified Gram-Schmidt.
+/// Exact rational QR; returns full row-major Q and rectangular R storage.
 ///
 /// # Errors
-///
-/// [`NumericError::ShapeMismatch`] when the matrix is not `rows × cols`.
+/// Invalid dimensions or a norm requiring irrational arithmetic.
 pub fn qr_exact(
     rows: usize,
     cols: usize,
     a: &[BigRational],
 ) -> Result<(Vec<BigRational>, Vec<BigRational>), NumericError> {
-    if rows * cols != a.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "{rows}x{cols} needs {} elements, found {}",
-            rows * cols,
-            a.len()
-        )));
-    }
-    let mut q = vec![BigRational::zero(); rows * rows];
-    let mut r = vec![BigRational::zero(); rows * cols];
-    for column in 0..cols {
-        let mut v: Vec<BigRational> = (0..rows)
-            .map(|row| a[row * cols + column].clone())
-            .collect();
-        for inner in 0..column.min(rows) {
-            let mut dot = BigRational::zero();
-            for row in 0..rows {
-                dot += q[row * rows + inner].clone() * v[row].clone();
-            }
-            r[inner * cols + column] = dot.clone();
-            for row in 0..rows {
-                let term = dot.clone() * q[row * rows + inner].clone();
-                v[row] -= term;
-            }
-        }
-        let norm = v.iter().fold(BigRational::zero(), |acc, value| {
-            acc + value.clone() * value.clone()
-        });
-        if norm.is_zero() {
-            continue;
-        }
-        let Some(length) = exact_sqrt(&norm) else {
-            return Err(NumericError::Domain(
-                "an exact QR of this matrix needs an irrational square root".to_string(),
-            ));
-        };
-        r[column * cols + column] = length.clone();
-        if column < rows {
-            for row in 0..rows {
-                q[row * rows + column] = v[row].clone() / &length;
-            }
-        }
-    }
-    Ok((q, r))
+    dense::exact::qr_exact(rows, cols, a).map_err(exact_error)
 }
 
 /// The exact square root of a non-negative rational, when it has one.
 #[must_use]
 pub fn exact_sqrt(value: &BigRational) -> Option<BigRational> {
-    if value.is_negative() {
-        return None;
-    }
-    let numerator = integer_sqrt(value.numer())?;
-    let denominator = integer_sqrt(value.denom())?;
-    Some(BigRational::new(numerator, denominator))
+    dense::exact::exact_sqrt(value)
 }
 
-/// The integer square root, when the argument is a perfect square.
-fn integer_sqrt(value: &num_bigint::BigInt) -> Option<num_bigint::BigInt> {
-    use num_bigint::BigInt;
-    use num_traits::ToPrimitive;
-    if value.is_zero() {
-        return Some(BigInt::zero());
-    }
-    if value.is_negative() {
-        return None;
-    }
-    // Newton's method on integers: exact, and it never needs a float that
-    // cannot hold the value.
-    let mut guess: BigInt = {
-        let bits = value.bits();
-        BigInt::one() << ((bits as usize).div_ceil(2))
-    };
-    loop {
-        let next = (&guess + value / &guess) >> 1;
-        if next >= guess {
-            break;
-        }
-        guess = next;
-    }
-    if &guess * &guess == *value {
-        let _ = guess.to_u64();
-        Some(guess)
-    } else {
-        None
+fn exact_error(error: dense::exact::ExactError) -> NumericError {
+    match error {
+        | dense::exact::ExactError::Shape => NumericError::ShapeMismatch(error.to_string()),
+        | dense::exact::ExactError::IrrationalNorm => NumericError::Domain(error.to_string()),
     }
 }
 
@@ -680,6 +555,41 @@ mod tests {
             Some(BigRational::new(3.into(), 2.into()))
         );
         assert_eq!(exact_sqrt(&BigRational::from_integer(2.into())), None);
+    }
+
+    #[test]
+    fn exact_kernel_handles_dependent_wide_columns_and_large_squares() {
+        let data: Vec<_> = [0, 3, 0, 0, 0, 4]
+            .into_iter()
+            .map(|value| BigRational::from_integer(value.into()))
+            .collect();
+        let (q, r) = qr_exact(2, 3, &data).unwrap();
+        for row in 0..2 {
+            for column in 0..3 {
+                let rebuilt = (0..2)
+                    .map(|k| &q[row * 2 + k] * &r[k * 3 + column])
+                    .fold(BigRational::from_integer(0.into()), |a, b| a + b);
+                assert_eq!(rebuilt, data[row * 3 + column]);
+            }
+        }
+        let root = num_bigint::BigInt::one() << 200;
+        assert_eq!(
+            exact_sqrt(&BigRational::from_integer(&root * &root)),
+            Some(BigRational::from_integer(root))
+        );
+        assert!(lu_exact(usize::MAX, &[]).is_err());
+        assert!(qr_exact(usize::MAX, 0, &[]).is_err());
+    }
+
+    #[test]
+    fn reference_kernel_retains_signed_zero_and_sequential_accumulation() {
+        let result = legacy::matmul(1, 1, 1, &[-0.0], &[1.0]);
+        assert_eq!(result[0].to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(
+            legacy::matmul(1, 3, 1, &[1e16, 1.0, -1e16], &[1.0; 3]),
+            vec![0.0]
+        );
+        assert_eq!(legacy::qr(3, 0, &[]), Ok((vec![0.0; 9], vec![])));
     }
 
     // --- the `faer` backend against the implementation it replaced ---------

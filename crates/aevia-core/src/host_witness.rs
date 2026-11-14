@@ -71,6 +71,12 @@ pub(crate) fn capture(
         return None;
     }
     let node = match (value, schema) {
+        | (Value::KernelValue(v), ty)
+            if aevia_types::adt::is_native_ad_var_type(ty)
+                && crate::value::is_native_ad_var_payload(&v.payload) =>
+        {
+            HostWitnessNode::Scalar
+        },
         | (Value::Num(number), Type::Scalar(rep, dim)) => {
             let matches = matches!(
                 (&number.kind, rep),
@@ -425,6 +431,9 @@ pub(crate) fn preserve_tensor_schema(
 /// is safe for plain host/HOF apply because it does not consult a call span.
 pub(crate) fn runtime_schema(value: &Value) -> Option<Type> {
     match value {
+        | Value::KernelValue(v) if crate::value::is_native_ad_var_payload(&v.payload) => {
+            Some(aevia_types::adt::native_ad_var_type())
+        },
         | Value::Num(number) => {
             let rep = match &number.kind {
                 | NumKind::Int(_) => Rep::Int,

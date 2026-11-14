@@ -1,0 +1,27 @@
+## Run: aevia test examples/sde_adaptive_levy.aev
+## L is dimensionless at reference_time = 1 s. The coefficient therefore has
+## state units, with no physical dimension raised to a floating-point alpha.
+## Stable increments are sums of one fixed finest grid; rejection never redraws.
+open Units.SI
+
+import Rssn_numerical_callback as N
+
+fn drift(t: Float[Time], _y: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length/Time]> = [t / 1.0 s * (1.0 m / 1.0 s)]
+
+fn stable_coefficient(_t: Float[Time], _y: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length]> = [0.1 m]
+
+fn solve() = N.num_sde_levy_adaptive_diag_typed(0.0 s, 1.0 s, 1.0 s, [1.0 m], 0.001 m, 0.02, 16384, 20000, 2000000, 2718, 7, 1.5, 0.2, drift, stable_coefficient)
+
+let first = solve()
+
+let repeat = solve()
+
+test "adaptive stable noise is reproducible, finite and reaches the endpoint" =
+    match first with
+    | Ok(path) ->
+        match repeat with
+        | Ok(other) -> path.times[length(path.times) - 1] == 1.0 s && path.rejected > 0 && is_finite(path.states[length(path.times) - 1, 0]) && path.states == other.states
+        | Err(_) -> false
+    | Err(_) -> false
+
+fn main(): IO Unit = println(first)

@@ -1,0 +1,41 @@
+## Run: aevia test examples/ode_adaptive_dae.aev
+## Residual-form BDF1/BDF2 uses true step-doubling error control. Its Newton
+## tolerance has residual units, independently of state and derivative units.
+## Semi-explicit systems use explicit physical reference scales so their mixed
+## state/constraint Newton equations are dimensionless. Initial constraints must hold.
+open Units.SI
+
+import Rssn_numerical_callback as N
+
+fn residual(_t: Float[Time], y: Tensor<[1], Float[Length]>, yp: Tensor<[1], Float[Length/Time]>): Tensor<[1], Float[Length/Time]> = yp + y / 1.0 s
+
+let implicit = N.num_dae_implicit_adaptive_typed(0.0 s, 1.0 s, [1.0 m], [-1.0 m / 1.0 s], 0.00000001 m, 0.000001, 0.4 s, 0.000000001 s, 0.5 s, 10000, 1000000, 0.0000000001 m / 1.0 s, 25, residual)
+
+test "implicit residual DAE reaches the endpoint with controlled work" =
+    match implicit with
+    | Ok(path) -> path.times[length(path.times) - 1] == 1.0 s && abs(path.states[length(path.times) - 1, 0] - exp(-1.0) * 1.0 m) < 0.001 m && path.rejected > 0
+    | Err(_) -> false
+
+fn index1_rate(_t: Float[Time], _y: Tensor<[1], Float[Length]>, z: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length/Time]> = -z / 1.0 s
+
+fn index1_constraint(_t: Float[Time], y: Tensor<[1], Float[Length]>, z: Tensor<[1], Float[Length]>): Tensor<[1], Float[Length]> = z - y
+
+let index1 = N.num_dae_index1_adaptive_typed(0.0 s, 1.0 s, [1.0 m], [1.0 m], 1.0 s, 1.0 m, 1.0 m, 1.0 m, 0.00000001, 0.000001, 0.2, 0.000000001, 0.5, 10000, 1000000, 0.0000000001, 25, index1_rate, index1_constraint)
+
+test "scaled index1 DAE preserves the algebraic constraint" =
+    match index1 with
+    | Ok(path) -> abs(path.states[length(path.times) - 1, 0] - path.algebraic[length(path.times) - 1, 0]) < 0.000001 m && abs(path.states[length(path.times) - 1, 0] - exp(-1.0) * 1.0 m) < 0.001 m
+    | Err(_) -> false
+
+fn index2_rate(_t: Float[Time], y: Tensor<[2], Float[Length]>, z: Tensor<[1], Float[Length/Time]>): Tensor<[2], Float[Length/Time]> = [-y[1] / 1.0 s + z[0], y[0] / 1.0 s]
+
+fn index2_constraint(_t: Float[Time], y: Tensor<[2], Float[Length]>): Tensor<[1], Float[Length^2]> = [y[0] ^ 2 + y[1] ^ 2 - 1.0 m^2]
+
+let index2 = N.num_dae_index2_adaptive_typed(0.0 s, 0.5 s, [1.0 m, 0.0 m], [0.0 m / 1.0 s], 1.0 s, 1.0 m, 1.0 m / 1.0 s, 1.0 m^2, 0.0000001, 0.00001, 0.1, 0.000000001, 0.2, 10000, 1000000, 0.0000000001, 25, index2_rate, index2_constraint)
+
+test "scaled index2 projection stays on the constraint manifold" =
+    match index2 with
+    | Ok(path) -> abs(path.states[length(path.times) - 1, 0] ^ 2 + path.states[length(path.times) - 1, 1] ^ 2 - 1.0 m^2) < 0.000001 m^2
+    | Err(_) -> false
+
+fn main(): IO Unit = println(implicit)

@@ -1,0 +1,72 @@
+## Native continuum methods execute in RSSN with retained dimensional references.
+fn continuum_native(name: String, args: Tensor<1, Value>): Option<Value> =
+    match Rssn.dynamic(name, args) with
+    | Ok(value) -> Some(value)
+    | Err(_) -> None
+
+fn continuum_refs(): Option<Value> =
+    continuum_native("num_grid_mechanical_references", [to_value(2.0 m), to_value(4.0 s), to_value(3.0 kg), to_value(1.0 K)])
+
+fn continuum_frame(): Option<Value> =
+    continuum_native("num_grid_frame_new", [to_value(2.0 m), to_value(4.0 s), to_value(3.0 K)])
+
+test "native BEM cube volume retains measured length cubed" =
+    match continuum_frame() with
+    | Some(frame) ->
+        match continuum_native("num_grid_bem_mesh_cube", [frame, to_value(1.0), to_value([0.0, 0.0, 0.0]), to_value(1)]) with
+        | Some(mesh) ->
+            match continuum_native("num_grid_bem_mesh_volume", [mesh]) with
+            | Some(value) ->
+                match from_value<Float[Length^3]>(value) with
+                | Ok(volume) -> approx_eq(volume, 8.0 m^3, 1e-10 m^3)
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+test "native HLLC gas flux carries distinct conserved dimensions" =
+    match continuum_refs() with
+    | Some(refs) ->
+        match continuum_native("num_grid_gas_hllc", [refs, to_value([1.0, 2.0, 1.0]), to_value([1.0, 2.0, 1.0]), to_value(1.4)]) with
+        | Some(value) ->
+            match from_value<{ mass_flux: Float[Mass/Length^2/Time], momentum_flux: Float[Mass/Length/Time^2], energy_flux: Float[Mass/Time^3] }>(value) with
+            | Ok(flux) -> approx_eq(flux.mass_flux, 0.375 kg/m^2/s, 1e-12 kg/m^2/s) && approx_eq(flux.energy_flux, 0.515625 kg/s^3, 1e-12 kg/s^3)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "native hyperelastic Lame parameters preserve physical stress scale" =
+    match continuum_refs() with
+    | Some(refs) ->
+        match continuum_native("num_grid_hyper_material", [refs, to_value("NeoHookean"), to_value(10.0), to_value(0.25), to_value(1.0)]) with
+        | Some(material) ->
+            match continuum_native("num_grid_hyper_lame", [material]) with
+            | Some(value) ->
+                match from_value<{ normalized: Tensor<1, Float>, reference: Float[Mass/Length/Time^2] }>(value) with
+                | Ok(result) -> result.normalized == [4.0, 4.0] && approx_eq(result.reference, 0.09375 kg/m/s^2, 1e-12 kg/m/s^2)
+                | Err(_) -> false
+            | None -> false
+        | None -> false
+    | None -> false
+
+test "native finite element Poisson scenario returns field reference" =
+    match continuum_frame() with
+    | Some(frame) ->
+        match continuum_native("num_grid_fem_legacy_scenario1", [frame]) with
+        | Some(value) ->
+            match from_value<{ shape: Tensor<1, Int>, data: Tensor<1, Float>, length_reference: Float[Length], time_reference: Float[Time], value_reference: Float[Temperature] }>(value) with
+            | Ok(result) -> result.shape == [51] && approx_eq(at(result.data, 25) * result.value_reference, 0.75 K, 1e-8 K)
+            | Err(_) -> false
+        | None -> false
+    | None -> false
+
+test "native quadrilateral stiffness declares force per displacement units" =
+    match continuum_refs() with
+    | Some(refs) ->
+        match continuum_native("num_grid_quad_element", [refs, to_value([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]), to_value(10.0), to_value(0.25)]) with
+        | Some(value) ->
+            match from_value<{ rows: Int, cols: Int, entries: Tensor<1, Float>, entry_reference: Float[Mass/Time^2] }>(value) with
+            | Ok(result) -> decide(result.rows == 8) == Some(true) && decide(result.cols == 8) == Some(true) && approx_eq(result.entry_reference, 0.1875 kg/s^2, 1e-12 kg/s^2)
+            | Err(_) -> false
+        | None -> false
+    | None -> false

@@ -897,6 +897,9 @@ impl Interp {
             | Value::Closure(closure) => {
                 closure.proof.as_ref().map(|proof| proof.signature.clone())
             },
+            | Value::KernelValue(v) if crate::value::is_native_ad_var_payload(&v.payload) => {
+                Some(aevia_types::adt::native_ad_var_type())
+            },
             | Value::KernelValue(_) => Some(aevia_types::builtins::dynamic_value_type()),
             | Value::KernelError(_) => Some(aevia_types::builtins::op_error_type()),
             | Value::Callback(_) => {

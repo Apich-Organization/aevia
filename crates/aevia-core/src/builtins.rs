@@ -4107,7 +4107,7 @@ pub fn call(
                 .ok_or_else(|| arity(name, 3, 1, span))?;
             let times = expect_tensor(&args, 2, name, span)?;
             let grid = tensor_values(&times)?;
-            let options = if name == "odeint_with" {
+            let mut options = if name == "odeint_with" {
                 ode_options(&args, 3, span)?
             } else {
                 aevia_std::ode::Options::default()
@@ -4117,8 +4117,9 @@ pub fn call(
             } else {
                 None
             };
+            let scales = ode_component_scales(&args, 3, &initial, &mut options, span)?;
             let (grid, states) = run_ode(
-                interp, function, &initial, &grid, &times.dim, options, event, name, span,
+                interp, function, &initial, &grid, &times.dim, &scales, options, event, name, span,
             )?;
             let (shape, _) = flatten_state(&initial)?;
             let elements: Vec<Value> = states
@@ -4161,7 +4162,7 @@ pub fn call(
                 .get("1")
                 .and_then(Value::as_f64)
                 .unwrap_or(1.0);
-            let options = ode_options(&args, 3, span)?;
+            let mut options = ode_options(&args, 3, span)?;
             let samples = options.steps.max(2);
             let time_dim = interval
                 .fields
@@ -4171,8 +4172,9 @@ pub fn call(
                 .map(|index| start + (end - start) * index as f64 / (samples - 1) as f64)
                 .collect();
             let event = ode_event(&args, 3, span)?;
+            let scales = ode_component_scales(&args, 3, &initial, &mut options, span)?;
             let (grid, states) = run_ode(
-                interp, function, &initial, &grid, &time_dim, options, event, name, span,
+                interp, function, &initial, &grid, &time_dim, &scales, options, event, name, span,
             )?;
             let (shape, _) = flatten_state(&initial)?;
             let elements: Vec<Value> = states
@@ -7330,26 +7332,95 @@ fn ode_rates(
     }
 }
 
+/// Physical absolute tolerances define a separate reference scale per state
+/// leaf. The native error test then becomes atol_i + rtol * abs(y_i), without
+/// combining unlike physical units in one scalar absolute tolerance.
+fn ode_component_scales(
+    args: &[Value],
+    index: usize,
+    initial: &Value,
+    options: &mut aevia_std::ode::Options,
+    span: Span,
+) -> Result<Vec<f64>, EvalError> {
+    let (shape, flat) = flatten_state(initial)?;
+    let Some(Value::Record(record)) = args.get(index) else {
+        return Ok(vec![1.0; flat.len()]);
+    };
+    let Some(atol) = record.fields.get("atol") else {
+        return Ok(vec![1.0; flat.len()]);
+    };
+    // Legacy dimensionless scalar atol applies to canonical component values.
+    if atol.as_f64().is_some() && crate::value::value_dim(atol).is_one() {
+        return Ok(vec![1.0; flat.len()]);
+    }
+    let mut failure = None;
+    let scales = ode_rates(atol, &shape, &Dim::one(), flat.len(), span, &mut failure);
+    if let Some(error) = failure {
+        return Err(EvalError::new(
+            error.code,
+            "ODE `atol` must be a dimensionless scalar or match every state leaf's shape and physical dimension",
+        ).at(span));
+    }
+    if scales.iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return Err(EvalError::new(
+            "E0802",
+            "every physical ODE absolute tolerance must be finite and positive",
+        )
+        .at(span));
+    }
+    options.atol = 1.0;
+    Ok(scales)
+}
+
+/// Restore physical values before crossing the callback or result boundary.
+fn ode_restore(
+    state: &[f64],
+    scales: &[f64],
+) -> Vec<f64> {
+    state
+        .iter()
+        .zip(scales)
+        .map(|(v, scale)| v * scale)
+        .collect()
+}
+
+/// Normalize physical states/rates with the same per-component reference units.
+fn ode_normalize(
+    state: &[f64],
+    scales: &[f64],
+) -> Vec<f64> {
+    state
+        .iter()
+        .zip(scales)
+        .map(|(v, scale)| v / scale)
+        .collect()
+}
+
 fn run_ode(
     interp: &mut Interp,
     function: Value,
     initial: &Value,
     grid: &[f64],
     time_dim: &Dim,
+    scales: &[f64],
     options: aevia_std::ode::Options,
     event: Option<Value>,
     name: &str,
     span: Span,
 ) -> Result<(Vec<f64>, Vec<Vec<f64>>), EvalError> {
     let (shape, flat) = flatten_state(initial)?;
+    let flat = ode_normalize(&flat, scales);
     let failure = std::cell::RefCell::new(None);
     let interp = std::cell::RefCell::new(interp);
     let mut rhs = |t: f64, state: &[f64]| {
+        if failure.borrow().is_some() {
+            return vec![f64::NAN; state.len()];
+        }
         let args = vec![
             Value::Num(NumVal::float(t, time_dim.clone())),
-            rebuild_state(&shape, state),
+            rebuild_state(&shape, &ode_restore(state, scales)),
         ];
-        match interp.borrow_mut().apply(function.clone(), args, span) {
+        let rate = match interp.borrow_mut().apply(function.clone(), args, span) {
             | Ok(value) => {
                 ode_rates(
                     &value,
@@ -7366,13 +7437,14 @@ fn run_ode(
                 }
                 vec![0.0; state.len()]
             },
-        }
+        };
+        ode_normalize(&rate, scales)
     };
     let solution = if let Some(event) = event {
         let mut event_fn = |t: f64, state: &[f64]| {
             let args = vec![
                 Value::Num(NumVal::float(t, time_dim.clone())),
-                rebuild_state(&shape, state),
+                rebuild_state(&shape, &ode_restore(state, scales)),
             ];
             match interp.borrow_mut().apply(event.clone(), args, span) {
                 | Ok(value) => {
@@ -7408,7 +7480,14 @@ fn run_ode(
     if let Some(error) = failure.into_inner() {
         return Err(error);
     }
-    solution.map_err(|error| numeric_error(name, error, span))
+    solution
+        .map(|(times, states)| {
+            (
+                times,
+                states.iter().map(|v| ode_restore(v, scales)).collect(),
+            )
+        })
+        .map_err(|error| numeric_error(name, error, span))
 }
 
 // ----- §8.9 solutions: dense output, events, higher order, BVP -------------
@@ -7545,6 +7624,7 @@ fn ode_interval(
 fn ode_solution_value(
     solution: aevia_std::ode::Solution,
     shape: &StateShape,
+    scales: &[f64],
     time_dim: &Dim,
     state_dim: Dim,
 ) -> Value {
@@ -7553,7 +7633,7 @@ fn ode_solution_value(
     let states: Vec<Value> = solution
         .y
         .iter()
-        .map(|state| rebuild_state(shape, state))
+        .map(|state| rebuild_state(shape, &ode_restore(state, scales)))
         .collect();
     let hits: Vec<Value> = solution
         .hits
@@ -7562,7 +7642,7 @@ fn ode_solution_value(
             record_of(vec![
                 ("index", Value::int(i64::try_from(hit.index).unwrap_or(0))),
                 ("t", Value::Num(NumVal::float(hit.t, time_dim.clone()))),
-                ("y", rebuild_state(shape, &hit.y)),
+                ("y", rebuild_state(shape, &ode_restore(&hit.y, scales))),
             ])
         })
         .collect();
@@ -7570,6 +7650,7 @@ fn ode_solution_value(
     let at = {
         let solution = Rc::clone(&solution);
         let shape = shape.clone();
+        let scales = scales.to_vec();
         let time_dim = time_dim.clone();
         Value::Native(Rc::new(NativeFn(Box::new(move |_interp, args, span| {
             let Some(Value::Num(time)) = args.first() else {
@@ -7584,7 +7665,7 @@ fn ode_solution_value(
             }
             let t = time.to_f64().unwrap_or(f64::NAN);
             match solution.eval(t) {
-                | Some(state) => Ok(rebuild_state(&shape, &state)),
+                | Some(state) => Ok(rebuild_state(&shape, &ode_restore(&state, &scales))),
                 | None => {
                     let (lo, hi) = solution.span();
                     Err(EvalError::new(
@@ -7625,6 +7706,13 @@ fn ode_solution_value(
                 | aevia_std::ode::Method::Ruth4 => "Ruth4",
                 | aevia_std::ode::Method::GaussLegendre4 => "GaussLegendre4",
                 | aevia_std::ode::Method::GaussLegendre6 => "GaussLegendre6",
+                | aevia_std::ode::Method::ImplicitMidpoint => "ImplicitMidpoint",
+                | aevia_std::ode::Method::AdaptiveRk4 => "AdaptiveRk4",
+                | aevia_std::ode::Method::AdaptiveStormerVerlet => "AdaptiveStormerVerlet",
+                | aevia_std::ode::Method::AdaptiveRuth4 => "AdaptiveRuth4",
+                | aevia_std::ode::Method::AdaptiveImplicitMidpoint => "AdaptiveImplicitMidpoint",
+                | aevia_std::ode::Method::AdaptiveGaussLegendre4 => "AdaptiveGaussLegendre4",
+                | aevia_std::ode::Method::AdaptiveGaussLegendre6 => "AdaptiveGaussLegendre6",
             }),
         ),
     ])
@@ -7641,6 +7729,9 @@ fn ode_rate_value(
     failure: &mut Option<EvalError>,
     span: Span,
 ) -> Vec<f64> {
+    if failure.is_some() {
+        return vec![f64::NAN; state.len()];
+    }
     let args = vec![
         Value::Num(NumVal::float(t, time_dim.clone())),
         rebuild_state(shape, state),
@@ -7672,23 +7763,27 @@ fn ode_solve_call(
         .cloned()
         .ok_or_else(|| arity(name, 5, 1, span))?;
     let (start, end, time_dim) = ode_interval(args.get(2), name, span)?;
-    let options = ode_options(args, 3, span)?;
+    let mut options = ode_options(args, 3, span)?;
+    let scales = ode_component_scales(args, 3, &initial, &mut options, span)?;
     let events = parse_events(args.get(4), name, span)?;
     let (shape, flat) = flatten_state(&initial)?;
+    let flat = ode_normalize(&flat, &scales);
     let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
     let outcome = {
         let cell = std::cell::RefCell::new(&mut *interp);
         let mut rhs = |t: f64, state: &[f64]| {
-            ode_rate_value(
+            let physical = ode_restore(state, &scales);
+            let rate = ode_rate_value(
                 &mut cell.borrow_mut(),
                 &function,
                 &shape,
                 &time_dim,
                 t,
-                state,
+                &physical,
                 &mut failure.borrow_mut(),
                 span,
-            )
+            );
+            ode_normalize(&rate, &scales)
         };
         let specs: Vec<aevia_std::ode::EventSpec> = events
             .iter()
@@ -7706,7 +7801,7 @@ fn ode_solve_call(
                 &shape,
                 &time_dim,
                 t,
-                state,
+                &ode_restore(state, &scales),
                 &mut failure.borrow_mut(),
                 span,
             )
@@ -7720,6 +7815,7 @@ fn ode_solve_call(
     Ok(ode_solution_value(
         solution,
         &shape,
+        &scales,
         &time_dim,
         crate::value::value_dim(&initial),
     ))
@@ -7745,27 +7841,34 @@ fn ode_bvp_call(
         .get(3)
         .cloned()
         .ok_or_else(|| arity(name, 5, 3, span))?;
-    let options = ode_options(args, 4, span)?;
+    let mut options = ode_options(args, 4, span)?;
+    let scales = ode_component_scales(args, 4, &guess, &mut options, span)?;
     let (shape, flat) = flatten_state(&guess)?;
+    let flat = ode_normalize(&flat, &scales);
     let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
     let outcome =
         {
             let cell = std::cell::RefCell::new(&mut *interp);
             let mut rhs = |t: f64, state: &[f64]| {
-                ode_rate_value(
+                let physical = ode_restore(state, &scales);
+                let rate = ode_rate_value(
                     &mut cell.borrow_mut(),
                     &function,
                     &shape,
                     &time_dim,
                     t,
-                    state,
+                    &physical,
                     &mut failure.borrow_mut(),
                     span,
-                )
+                );
+                ode_normalize(&rate, &scales)
             };
             let mut boundary =
                 |left: &[f64], right: &[f64]| -> Vec<f64> {
-                    let arguments = vec![rebuild_state(&shape, left), rebuild_state(&shape, right)];
+                    let arguments = vec![
+                        rebuild_state(&shape, &ode_restore(left, &scales)),
+                        rebuild_state(&shape, &ode_restore(right, &scales)),
+                    ];
                     let residual = cell.borrow_mut().apply(condition.clone(), arguments, span);
                     let outcome = match residual {
                 | Ok(Value::Tensor(tensor)) => tensor_values(&tensor),
@@ -7801,6 +7904,7 @@ fn ode_bvp_call(
     Ok(ode_solution_value(
         solution,
         &shape,
+        &scales,
         &time_dim,
         crate::value::value_dim(&guess),
     ))
@@ -7836,7 +7940,7 @@ fn odeint_order_call(
     let times = expect_tensor(args, 2, name, span)?;
     let grid = tensor_values(&times)?;
     let time_dim = times.dim.clone();
-    let options = if name == "odeint_order_with" {
+    let mut options = if name == "odeint_order_with" {
         if ode_event(args, 3, span)?.is_some() {
             return Err(EvalError::new(
                 "E0302",
@@ -7870,6 +7974,8 @@ fn odeint_order_call(
         shapes.push(shape);
         flat.extend(values);
     }
+    let scales = ode_component_scales(args, 3, &args[1], &mut options, span)?;
+    let flat = ode_normalize(&flat, &scales);
     let width = flat.len() / order;
     // Every derivative has the structure of `y` and the dimension `y / T^k`.
     let mut divisor = Dim::one();
@@ -7919,12 +8025,17 @@ fn odeint_order_call(
             }
         });
         let mut reduced = reduced;
-        aevia_std::ode::integrate(&mut reduced, &flat, &grid, options)
+        let mut normalized = |t: f64, state: &[f64]| {
+            let physical = ode_restore(state, &scales);
+            ode_normalize(&reduced(t, &physical), &scales)
+        };
+        aevia_std::ode::integrate(&mut normalized, &flat, &grid, options)
     };
     if let Some(error) = failure.into_inner() {
         return Err(error);
     }
     let states = outcome.map_err(|error| numeric_error(name, error, span))?;
+    let states: Vec<Vec<f64>> = states.iter().map(|v| ode_restore(v, &scales)).collect();
     let len = states.len();
     let y_dim = crate::value::value_dim(derivatives.fields.get("0").expect("checked above"));
     let ys: Vec<Value> = states
@@ -8990,8 +9101,16 @@ fn ode_options(
     let Some(Value::Record(record)) = args.get(index) else {
         return Ok(options);
     };
-    if let Some(rtol) = record.fields.get("rtol").and_then(Value::as_f64) {
-        options.rtol = rtol;
+    if let Some(value) = record.fields.get("rtol") {
+        if !crate::value::value_dim(value).is_one() {
+            return Err(EvalError::new("E0401", "ODE `rtol` must be dimensionless").at(span));
+        }
+        options.rtol = value
+            .as_f64()
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .ok_or_else(|| {
+                EvalError::new("E0802", "ODE `rtol` must be a finite nonnegative number").at(span)
+            })?;
     }
     if let Some(atol) = record.fields.get("atol").and_then(Value::as_f64) {
         options.atol = atol;
@@ -9028,6 +9147,39 @@ fn ode_options(
             options.steps = steps as usize;
         }
     }
+    for (field, destination) in [
+        ("h0", &mut options.h0),
+        ("h_min", &mut options.h_min),
+        ("h_max", &mut options.h_max),
+    ] {
+        if let Some(value) = record.fields.get(field) {
+            *destination = value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| {
+                EvalError::new("E0302", format!("`{field}` must be a finite time step")).at(span)
+            })?;
+            if crate::value::value_dim(value) != Dim::base("Time") {
+                return Err(
+                    EvalError::new("E0401", format!("`{field}` must have time dimension")).at(span),
+                );
+            }
+        }
+    }
+    for (field, destination) in [
+        ("max_steps", &mut options.max_steps),
+        ("max_evaluations", &mut options.max_evaluations),
+    ] {
+        if let Some(value) = record.fields.get(field) {
+            let n = value
+                .as_f64()
+                .filter(|n| {
+                    n.is_finite() && *n >= 1.0 && n.fract() == 0.0 && *n < usize::MAX as f64
+                })
+                .ok_or_else(|| {
+                    EvalError::new("E0302", format!("`{field}` must be a positive integer"))
+                        .at(span)
+                })?;
+            *destination = n as usize;
+        }
+    }
     let _ = ode_event(args, index, span)?;
     if let Some(Value::Variant(method)) = record.fields.get("method") {
         options.method = match method.name.as_str() {
@@ -9041,6 +9193,14 @@ fn ode_options(
             | "Ruth4" => aevia_std::ode::Method::Ruth4,
             | "GaussLegendre4" => aevia_std::ode::Method::GaussLegendre4,
             | "GaussLegendre6" => aevia_std::ode::Method::GaussLegendre6,
+            | "ImplicitMidpoint" => aevia_std::ode::Method::ImplicitMidpoint,
+            | "AdaptiveRk4" => aevia_std::ode::Method::AdaptiveRk4,
+            | "AdaptiveStormerVerlet" => aevia_std::ode::Method::AdaptiveStormerVerlet,
+            | "AdaptiveRuth4" => aevia_std::ode::Method::AdaptiveRuth4,
+            | "AdaptiveImplicitMidpoint" => aevia_std::ode::Method::AdaptiveImplicitMidpoint,
+            | "AdaptiveGaussLegendre4" => aevia_std::ode::Method::AdaptiveGaussLegendre4,
+            | "AdaptiveGaussLegendre6" => aevia_std::ode::Method::AdaptiveGaussLegendre6,
+
             | other => {
                 return Err(
                     EvalError::new("E0302", format!("`{other}` is not an `OdeMethod`")).at(span),

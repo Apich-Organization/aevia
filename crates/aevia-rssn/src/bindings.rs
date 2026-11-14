@@ -139,10 +139,7 @@ fn typed_callback_eligible(row: &Binding<'_>) -> bool {
     if !callback_nats_anchored(raw) {
         return false;
     }
-    if !raw
-        .params
-        .iter()
-        .all(|ty| callback_raw_source_schema(ty, true))
+    if !raw.params.iter().all(ordinary_callback_raw_source_schema)
         || !callback_raw_source_schema(&raw.ret, false)
     {
         return false;
@@ -154,7 +151,7 @@ fn typed_callback_eligible(row: &Binding<'_>) -> bool {
                     !args.iter().all(callback_source_schema_supported)
                         || !callback_source_schema_supported(ret)
                 },
-                | other => !callback_source_schema_supported(other),
+                | other => !ordinary_callback_source_schema(other),
             }
         })
     {
@@ -164,7 +161,8 @@ fn typed_callback_eligible(row: &Binding<'_>) -> bool {
     // other reason identifies a fact the source signature cannot prove.
     reasons.iter().all(|reason| reason == "higher-order calls use the checked value-list callback ABI"
         || reason == "callbacks use the checked value-list callback ABI; typed generic wrappers require reification"
-        || reason == "tensor extents are not fully concrete in the source facade")
+        || reason == "tensor extents are not fully concrete in the source facade"
+        || reason == "host opaque type has no source facade spelling")
 }
 
 fn classify(
@@ -329,6 +327,11 @@ fn callback_nats_anchored(signature: &rssn::kernel::signature::Signature) -> boo
                     collect(value, out);
                 }
             },
+            | TypeExpr::Variant(cases) => {
+                if let Some(payload) = crate::registry::option_payload(cases) {
+                    collect(payload, out);
+                }
+            },
             | TypeExpr::Function(args, ret) => {
                 for arg in args {
                     collect(arg, out);
@@ -374,6 +377,7 @@ fn callback_raw_source_schema(
         }
     }
     match ty {
+        | TypeExpr::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => true,
         | TypeExpr::Int
         | TypeExpr::Real
         | TypeExpr::Float
@@ -407,6 +411,10 @@ fn callback_raw_source_schema(
                 .iter()
                 .all(|(name, ty)| names.insert(name) && callback_raw_source_schema(ty, false))
         },
+        | TypeExpr::Variant(cases) => {
+            crate::registry::option_payload(cases)
+                .is_some_and(|payload| callback_raw_source_schema(payload, false))
+        },
         | TypeExpr::Function(args, ret) if allow_function => {
             args.iter()
                 .all(|arg| callback_raw_source_schema(arg, false))
@@ -416,11 +424,79 @@ fn callback_raw_source_schema(
     }
 }
 
+// Ordinary operator arguments can carry authenticated native handles as
+// Value/Dyn carriers. Actual function parameter/result schemas stay governed by
+// callback_raw_source_schema and its sealed NativeAdVar exception.
+fn ordinary_callback_raw_source_schema(ty: &TypeExpr) -> bool {
+    if matches!(ty, TypeExpr::Function(..)) {
+        return callback_raw_source_schema(ty, true);
+    }
+    ordinary_callback_raw_value_schema(ty)
+}
+fn ordinary_callback_raw_value_schema(ty: &TypeExpr) -> bool {
+    match ty {
+        | TypeExpr::Opaque(kind) if crate::registry::native_object_kind(kind) => true,
+        | TypeExpr::Tensor { rank, shape, elem } => {
+            let shape_only = TypeExpr::Tensor {
+                rank: rank.clone(),
+                shape: shape.clone(),
+                elem: Box::new(TypeExpr::Bool),
+            };
+            callback_raw_source_schema(&shape_only, false)
+                && ordinary_callback_raw_value_schema(elem)
+        },
+        | TypeExpr::Record(fields) => {
+            let mut names = BTreeSet::new();
+            fields
+                .iter()
+                .all(|(name, ty)| names.insert(name) && ordinary_callback_raw_value_schema(ty))
+        },
+        | TypeExpr::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(ordinary_callback_raw_value_schema)
+        },
+        | TypeExpr::Function(..) => false,
+        | other => callback_raw_source_schema(other, false),
+    }
+}
+fn ordinary_callback_source_schema(ty: &crate::registry::SigType) -> bool {
+    use crate::registry::SigType as S;
+    match ty {
+        | S::Opaque(kind) if crate::registry::native_object_kind(kind) => true,
+        | S::Tensor {
+            rank: Some(rank),
+            shape,
+            elem,
+        } => {
+            shape.as_ref().is_none_or(|shape| shape.len() == *rank)
+                && ordinary_callback_source_schema(elem)
+        },
+        | S::Record(fields) => {
+            // Reuse the source field-spelling/duplicate checks independently
+            // of the field payloads; no numeric or nominal fact is fabricated.
+            let field_names = S::Record(
+                fields
+                    .iter()
+                    .map(|(name, _)| (name.clone(), S::Bool))
+                    .collect(),
+            );
+            callback_source_schema_supported(&field_names)
+                && fields
+                    .iter()
+                    .all(|(_, ty)| ordinary_callback_source_schema(ty))
+        },
+        | S::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(ordinary_callback_source_schema)
+        },
+        | other => callback_source_schema_supported(other),
+    }
+}
+
 // Only schemas the callback bridge and from_value can both authenticate,
 // with record field spellings that can be emitted as source declarations.
 fn callback_source_schema_supported(ty: &crate::registry::SigType) -> bool {
     use crate::registry::SigType as S;
     match ty {
+        | S::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => true,
         | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
         | S::Dim(inner, _) => matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex),
         | S::Tensor {
@@ -430,6 +506,9 @@ fn callback_source_schema_supported(ty: &crate::registry::SigType) -> bool {
         } => {
             shape.as_ref().is_none_or(|extents| extents.len() == *rank)
                 && callback_source_schema_supported(elem)
+        },
+        | S::Variant(cases) => {
+            crate::registry::option_payload(cases).is_some_and(callback_source_schema_supported)
         },
         | S::Record(fields) => {
             let mut names = BTreeSet::new();
@@ -454,6 +533,7 @@ fn callback_parameters_supported(params: &[crate::registry::SigType]) -> bool {
     use crate::registry::SigType as S;
     fn schema(ty: &S) -> bool {
         match ty {
+            | S::Opaque(kind) if kind == crate::registry::NATIVE_AD_VAR_KIND => true,
             | S::Int | S::Real | S::Float | S::Complex | S::Bool | S::Str => true,
             | S::Dim(inner, _) => {
                 matches!(inner.as_ref(), S::Int | S::Real | S::Float | S::Complex)
@@ -503,6 +583,7 @@ fn callback_raw_parameters_supported(params: &[TypeExpr]) -> bool {
     }
     fn schema(ty: &TypeExpr) -> bool {
         match ty {
+            | TypeExpr::Opaque(kind) if kind == crate::registry::NATIVE_AD_VAR_KIND => true,
             | TypeExpr::Int
             | TypeExpr::Real
             | TypeExpr::Float
@@ -673,7 +754,9 @@ fn inspect_type(
             }
         },
         | TypeExpr::Variant(variants) => {
-            dynamic.insert("variant type has no source facade spelling".into());
+            if crate::registry::option_payload(variants).is_none() {
+                dynamic.insert("variant type has no source facade spelling".into());
+            }
             for (_, types) in variants {
                 for ty in types {
                     inspect_type(ty, dynamic, unavailable);
@@ -696,6 +779,7 @@ fn inspect_type(
         | TypeExpr::Device => {
             unavailable.insert("device values cannot cross the kernel ABI".into());
         },
+        | TypeExpr::Opaque(name) if name == crate::registry::NATIVE_AD_VAR_KIND => {},
         | TypeExpr::Opaque(_) => {
             dynamic.insert("host opaque type has no source facade spelling".into());
         },
@@ -753,6 +837,55 @@ mod callback_strategy_tests {
         )]));
         assert!(!callback_parameters_supported(&[S::Float]));
     }
+    #[test]
+    fn callback_transport_accepts_only_the_sealed_native_ad_opaque_kind() {
+        use rssn::kernel::signature::TypeExpr;
+        for kind in [
+            crate::registry::NATIVE_AD_VAR_KIND,
+            "user/NativeAdVar",
+            "rssn/native/ad/tape/v1",
+        ] {
+            let accepted = kind == crate::registry::NATIVE_AD_VAR_KIND;
+            let opaque = S::Opaque(kind.into());
+            assert_eq!(
+                callback_parameters_supported(&[S::Func(vec![opaque.clone()], Box::new(opaque))]),
+                accepted
+            );
+            let opaque = TypeExpr::Opaque(kind.into());
+            assert_eq!(
+                super::callback_raw_parameters_supported(&[TypeExpr::Function(
+                    vec![opaque.clone()],
+                    Box::new(opaque)
+                )]),
+                accepted
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_native_arguments_do_not_relax_the_callback_value_schema() {
+        use rssn::kernel::signature::TypeExpr;
+        let kind = "rssn/native/analysis/jacobian/v1";
+        let native = TypeExpr::Opaque(kind.into());
+        assert!(super::ordinary_callback_raw_source_schema(&native));
+        assert!(super::ordinary_callback_source_schema(&S::Opaque(
+            kind.into()
+        )));
+        assert!(!super::callback_raw_source_schema(&native, false));
+        assert!(!super::callback_source_schema_supported(&S::Opaque(
+            kind.into()
+        )));
+        let visitor = TypeExpr::Function(vec![native.clone()], Box::new(TypeExpr::Bool));
+        assert!(!super::ordinary_callback_raw_source_schema(&visitor));
+        let visitor = TypeExpr::Function(vec![TypeExpr::Float], Box::new(TypeExpr::Bool));
+        assert!(super::ordinary_callback_raw_source_schema(&visitor));
+        let nested = TypeExpr::Record(vec![("f".into(), visitor)]);
+        assert!(!super::ordinary_callback_raw_source_schema(&nested));
+        assert!(!super::ordinary_callback_raw_source_schema(
+            &TypeExpr::Opaque("User/State".into())
+        ));
+    }
+
     #[test]
     fn typed_callback_source_rejects_erased_raw_promises() {
         use super::callback_raw_source_schema as supported;

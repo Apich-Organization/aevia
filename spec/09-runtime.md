@@ -12,7 +12,7 @@
 | `aevia-types` | kind、类型、量纲统一、推断、类型类、穷尽性、`.aevi` 持久化 |
 | `aevia-ir` | Core IR 与从已检查 AST 的降级；只含数据，不依赖 `aevia-core` |
 | `aevia-rssn` | rssn 桥：`Session`、两套值模型的转换、Kernel Manifest、`Rssn` 模块生成、JIT 透传 |
-| `aevia-std` / `aevia-stdlib-model` | 标准库（Aevia 源码 + Rust 数值内核）/ 标准库生成的事实来源 |
+| `aevia-std` / `aevia-stdlib-model` | 标准库源码与 RSSN 适配 / 标准库生成的事实来源 |
 | `aevia-core` | 值、张量、闭包、IO、解释器、内建函数、符号层、模块加载器（`driver`/`manifest`）、磁盘缓存、并行、可选 JIT |
 | `aevia-fmt` / `aevia-doc` | 格式化器 / `##` 文档与 doctest 抽取 |
 | `aevia-analysis` / `aevia-lsp` | 与编辑器无关的语义查询 / LSP 适配层（唯一知道 JSON-RPC 的 crate） |
@@ -209,14 +209,22 @@ SymbolicCtx {
 
 - `Float` 标量四则直接走 f64，不进入 rssn；`sin`/`exp` 等走 Rust `libm` 或 rssn 内核。
 - `Real` 的 `approx` 走 `Target::Numeric`，结果带误差球，Aevia 取中点。
-- 张量的 `F64` 运算走 ndarray/faer；`Exact`/`Boxed` 走逐元素标量路径。
+- 张量数值算法走 RSSN；`Exact`/`Boxed` 通过宿主标量回调保持语言表示与量纲。
+
+### 9.4.6 数值实现边界
+
+RSSN 拥有数值算法，包括精确整数/有理数、复数、张量收缩、稠密/稀疏分解、统计、插值与微分方程步进。
+`aevia-std` 只验证形状/量纲、适配回调、映射错误并保持语言值表示。运行时保留标量语言运算和容器遍历；
+数值迭代与收缩调度在 RSSN 执行，必要时使用宿主提供的标量回调。
+
+数值后端依赖属于 RSSN；Aevia 的独立数值库仅可作一致性测试的开发依赖。清单绑定与公开 Rust API 的覆盖分别审计（§8.19），
+本边界不表示所有原生功能都已暴露。
 
 ## 9.5 张量运行时
 
 - 存储：`Arc<TensorData>`；切片是视图（offset + strides），`reshape` 连续时是视图否则复制。写入不存在：
   `update`/`map` 产生新张量，唯一持有时原地复用。语义见 §6.6。
-- 逐元素 `F64` 循环 4/8 路展开；`sum` 用 pairwise/Kahan。`matmul`/`solve`/`eig`/`svd`/`qr`/`lu` 调 rssn 数值内核
-  （faer）；`fft` 调 rustfft；`interp`/`spline` 调 rssn 内核。
+- `matmul`、分解、FFT、插值与数值归约由 RSSN 执行；后端库（如 faer、rustfft）封装在 RSSN。
 - 形状检查在每次运算前做，错误含两边形状与运算名；细化形状在编译期检查，秩-only 在运行时检查。
 - 设备：张量带 `device` 元数据；`to_device`/`on(device, ...)` 负责传输与作用域执行。CPU 是默认，GPU/分布式是运行时
   目标，不是类型参数。

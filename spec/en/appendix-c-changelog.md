@@ -8,6 +8,9 @@ This appendix records the evolution of the Aevia specification and its implement
 
 This pass compared the specification with the implementation chapter by chapter, condensed repetition, moved status notes out of the text, and added an English edition (`spec/en/`; writing and terminology rules in `spec/STYLE.md`). The two machine-read chapters (08 and 11) keep their shape and are guarded by `cargo test -p aevia-std --test spec_signatures --test spec_programs`.
 
+- `08-stdlib.md`: reconciled implemented solver methods, physical tolerances, budgets, callbacks, strict `Option` and native numerical model contracts; corrected the exact-signature/dynamic-entry boundary and synchronized English.
+- `09-runtime.md`: specified RSSN ownership of numerical algorithms/backend dependencies and Aevia value/unit adaptation; native source coverage and manifest reachability are reported separately.
+
 **Whole book**
 
 - New English edition: every Chinese chapter has a counterpart `spec/en/<same name>`, with the same section numbers, anchors, code blocks and diagnostic codes.
@@ -85,8 +88,8 @@ Still missing: per-package dependency namespaces (same-named import roots pointi
 
 1. **Package dependencies**: registry dependencies, SemVer resolution and checked local copies are implemented (Revision 15); `git` dependencies do not exist; per-package dependency namespaces, `[patch]` overrides and mirror `[source]` replacement are not implemented.
 2. **Device backends**: `Gpu`/`Distributed` are only constructible run-time values; `on`/`to_device`/`@jit(target = Gpu(..))` report `E1001("core.gpu")`/`E1001("core.distributed")`; batch primitives such as `Device.map` are not exposed as language primitives (§10.6.5).
-3. **Sparse**: sparse values cannot enter the rssn term graph; user-defined formats wait for rssn to open `Format`; `gmres_with`/`bicgstab_with` do not accept exact elements; there is no sparse eigenvalue solver or SVD (§8.4.1, §13.9.5).
-4. **SDE**: Brownian-bridge dense output and terminal events that stop in the middle of integration are not provided (`sde_at` is a linear chord, `sde_events` cuts after the fact); closures are `!Send` in the interpreter, so parallel ensembles fall back to sequential (§8.9.1).
+3. **Sparse**: sparse values cannot enter the rssn term graph; user-defined formats wait for rssn to open `Format`; `gmres_with`/`bicgstab_with` do not accept exact elements; sparse SVD is not provided; eigenvalue queries use explicit RSSN adapters (§8.4.1, §13.9.5).
+4. **SDE**: Brownian-bridge dense output and terminal events that stop in the middle of integration are not provided (`sde_at` is a linear chord, `sde_events` cuts after the fact); ensembles fall back to sequential execution when callbacks cannot cross threads (§8.9.1).
 5. **ODE**: multiple shooting / collocation for BVPs; `AutoSwitch` decides by step budget rather than an eigenvalue estimate (§8.9).
 6. **Type system**: type-level moduli for `Zmod<n>`/`GF<p>`; rank polymorphism in user functions; symbolic exponents (§12.8.2).
 7. **Plot**: only the HTML/SVG-inline renderer, with no standalone `.svg`/PNG/JPEG output (§8.12).
