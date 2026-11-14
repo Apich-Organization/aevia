@@ -6,8 +6,8 @@
 - 终结符用 `"..."`；`NEWLINE`、`INDENT`、`DEDENT`、`EOF` 是布局记号
   （§1.4）。
 - `INT`、`FLOAT`、`STRING`、`IDENT`、`UIDENT`、`UNIT_NAME`、`SUPERSCRIPT`、
-  `LT_APP`、`ELLIPSIS` 是词法记号。
-- `IDENT` 首字母小写（或 `_`）；`UIDENT` 首字母大写；`qname` 是限定名。
+  `LT_APP`、`ELLIPSIS` 是词法记号（§1.2）。`UIDENT` 首字符是 ASCII 大写，其余名字是
+  `IDENT`；`qname` 是限定名。
 
 ## A.1 布局
 
@@ -17,10 +17,7 @@ INDENT    ::= 缩进增加时
 DEDENT    ::= 缩进减少时
 ```
 
-- 括号 `()`、`[]`、`{}` 内部不产生 `NEWLINE`/`INDENT`/`DEDENT`。
-- 空行和纯注释行不产生记号。
-- 缩进必须匹配栈中的某一层；否则 `E0102`。
-- 块和续行都由 `NEWLINE INDENT ... DEDENT` 表示：
+布局算法见 §1.4。块与布局组都由 `NEWLINE INDENT … DEDENT` 表示：
 
 ```
 block        ::= NEWLINE INDENT { block_stmt } expr NEWLINE? DEDENT
@@ -28,9 +25,8 @@ layout_group ::= NEWLINE INDENT expr NEWLINE? DEDENT
 block_stmt   ::= let_decl | fn_decl
 ```
 
-`block` 用于 `let`/`fn` 序列；`layout_group` 用于跨行表达式。解析器在
-`NEWLINE INDENT` 后看到 `let`/`fn` 时选 `block`，否则选 `layout_group`。
-`NEWLINE?` 允许内层块已经消费了行尾。
+解析器在 `NEWLINE INDENT` 后看到 `let`/`fn` 选 `block`，否则选 `layout_group`；`NEWLINE?`
+允许内层块已消费行尾。
 
 ## A.2 程序与声明
 
@@ -59,7 +55,7 @@ decl           ::= dimension_decl
                  | let_decl
                  | test_decl
 
-dimension_decl ::= [ "private" ] "dimension" UIDENT [ "=" dim ] NEWLINE
+dimension_decl ::= "dimension" UIDENT [ "=" dim ] NEWLINE
 
 unit_decl      ::= "unit" unit_name ":" dim "=" unit_rhs
                    [ "prefixable" ] NEWLINE
@@ -99,11 +95,10 @@ let_decl       ::= "let" [ "rec" ] pattern [ ":" type ] "=" expr NEWLINE?
 test_decl      ::= "test" STRING "=" expr NEWLINE?
 ```
 
-- `type_body` 的单行变体 MUST 以 `|` 开头，以便与类型别名区分；缩进形式
-  可以省略首个 `|`（但建议保留）。
-- 声明末尾的 `NEWLINE?` 允许表达式是块（块已消费行尾）。
-- `import M { ... }` 是选择性打开；`import M` 只绑定限定名。
-- `open M { ... }` 是选择性打开。
+- `type_body` 的单行变体 MUST 以 `|` 开头以区别于别名；缩进形式可省略首个 `|`。
+- 声明末尾的 `NEWLINE?` 允许表达式是块。
+- `import M` 只绑定限定名；`import M { … }` 与 `open M { … }` 选择性引入名字；`open M` 打开
+  全部导出（§7.2）。
 
 ## A.3 表达式
 
@@ -189,15 +184,14 @@ literal        ::= INT | FLOAT | STRING | "true" | "false" | "(" ")"
 quantity_lit   ::= ( INT | FLOAT ) unit_expr
 ```
 
-**歧义说明**
+**说明**
 
-- `LT_APP` 是紧邻标识符的 `<`（无空格）；`a < b` 的 `<` 前有空格，按比较
-  解析。格式化器 MUST 在比较的 `<` 前保留空格。
-- `record_body` 用 `with` 区分更新与字面量。
-- `quantity_lit` 只在数值字面量后紧跟单位表达式时产生；`3 + 4` 不是。
-- `match_arm`/`do_stmt` 的 `NEWLINE?` 允许块体已消费行尾。
-- `qname` 以 `UIDENT` 开头；`Physics.Ising.run` 解析为 `qname` +
-  `.run` 字段。
+- `LT_APP` 是紧邻标识符的 `<`（§2.7.2）；`record_body` 用 `with` 区分更新与字面量。
+- `quantity_lit` 只在数值字面量后紧跟单位表达式时产生（§1.8.1）。
+- `"_"` 只在调用实参中合法（§2.3.6）；`"(" operator ")"` 能解析，但名字尚未绑定
+  （§2.3.7 状态）。
+- `qname` 以 `UIDENT` 开头；`Physics.Ising.run` 解析为 `qname` 加字段 `.run`。
+- 后缀 `!` 必须紧贴操作数末尾（§2.7.5）。
 
 ## A.4 模式
 
@@ -219,8 +213,8 @@ field_pat      ::= IDENT "=" pattern
 literal_pattern ::= INT | STRING | "true" | "false" | "(" ")"
 ```
 
-- 裸 `UIDENT` 是零参构造器模式；裸 `IDENT` 是绑定。
-- 浮点字面量不是合法模式。
+- `match` 分支中裸 `UIDENT` 是零参构造器模式；绑定位置中的裸 `UIDENT` 是变量（§2.4）。
+- 浮点字面量与负数字面量不是模式（`E0204`），用守卫。
 
 ## A.5 类型
 
@@ -263,19 +257,17 @@ format_name    ::= IDENT | UIDENT
 shape          ::= nat | "[" [ shape_item { "," shape_item } ] "]"
 shape_item     ::= nat | "?"
 row_type       ::= type { "+" type }
-nat            ::= INT | IDENT | nat "+" nat
+nat            ::= nat_term { "+" nat_term }
+nat_term       ::= nat_atom { "*" nat_atom }
+nat_atom       ::= INT | IDENT | "(" nat ")"
 rep            ::= "Int" | "Real" | "Float" | "Complex" | IDENT
 ```
 
-- `Real` 不带方括号等价于 `Real[1]`；`Float`、`Complex` 同理。
-- `Unit` 不带方括号等价于 `()`；`Unit[d]` 是单位值类型。
-- `(A, B)` 是元组类型；`(A, B) -> C` 是多参函数类型。
-- `Tensor` 的第一个参数是 `shape`（秩 `n` 或 `[n1,...,nk]`）；`Dyn` 的参数是
-  `rep`；其他 `type_arg` 按 kind 解析。解析器在歧义时优先按 `shape`/`rep`
-  解析 `Tensor`/`Dyn` 的第一个参数。
-- `A * B` 不是合法类型；`*` 只出现在量纲中。
-- `Tensor<0, τ>` 定义上等于 `τ`。
-- `RateOf<s>` 是内建类型函数（§8.9）。
+- `Real`/`Float`/`Complex` 无方括号等价于 `[1]`；`Unit` 无方括号是 `()`，`Unit[d]` 是单位值
+  类型；`Tensor<0, τ>` 等于 `τ`；`RateOf<s>` 是内建类型函数（§8.9）。
+- `(A, B)` 是元组类型，`(A, B) -> C` 是多参函数类型；`A * B` 不是类型。
+- `Tensor` 的第一个参数按 `shape` 解析，`Dyn` 的参数按 `rep` 解析，其他 `type_arg` 按 kind
+  解析。
 
 ## A.6 量纲与单位
 
@@ -292,34 +284,15 @@ unit_factor    ::= unit_atom [ "^" exponent | SUPERSCRIPT+ ]
 unit_atom      ::= unit_name | "(" unit_expr ")" | "%"
 ```
 
-- `dim` 中 `UIDENT` 是基量纲/别名，`IDENT` 是量纲变量。
-- `L/T^2` 左结合，等价于 `L/(T^2)`。
-- `unit_name` 可以带前缀（`km`）或 `°C`。
-- 单位表达式内不允许数字，指数除外。
-- 仿射单位不能出现在乘积/幂中（语义检查 `E0508`）。
+- `dim` 中 `UIDENT` 是基量纲或别名，`IDENT` 是量纲变量；`/` 左结合（`L/T^2` = `L/(T^2)`）。
+- `·` 在词法阶段归一为 `*`（§1.9）。
+- 单位表达式内不允许数字（指数除外）；`unit_name` 可带前缀或 `°C`（§1.8）。
+- 仿射单位不能出现在乘积或幂中（`E0508`）。
 
 ## A.7 运算符优先级
 
-从低到高：
-
-| 级别 | 运算符 | 结合性 |
-|---|---|---|
-| 1 | `\|>` `<\|` | 左（混用时按出现顺序） |
-| 2 | `\|\|` | 右 |
-| 3 | `&&` | 右 |
-| 4 | `==` `!=` `<` `<=` `>` `>=` | 非结合 |
-| 5 | `::` | 右 |
-| 6 | `+` `-` | 左 |
-| 7 | `*` `/` `·` `×` `÷` `@` | 左 |
-| 8 | 前缀 `-` `+` `!` `√` | 前缀 |
-| 9 | `^` | 右 |
-| 10 | 类型应用、调用、索引、字段、`?`、后缀 `!` | 后缀 |
-
-`..`/`..=` 只在索引中使用，不参与表达式优先级。
-
-`:` 切片（§6.6.4.1）的第三个分量是整数步长：`a[i:j:s]`。`::` 是 cons 运算
-符，所以起点之后的 `::` 不是两个切片冒号——`xs[1::2]` 是 `xs[1 :: 2]`；省略
-终点又要给步长时，起点必须省略（`xs[::2]`）或终点必须写出（`xs[1:5:2]`）。
+见 §2.6。`..`/`..=` 只在索引中使用，不参与表达式优先级；切片中 `:` 的步长写法与 `::` 的
+关系见 §2.3.11。
 
 ## A.8 词法记号（摘要）
 
@@ -341,6 +314,5 @@ INDENT         ::= 由布局算法产生
 DEDENT         ::= 由布局算法产生
 ```
 
-完整词法规则见第 01 章。`for`、`rec`、`in` 是上下文关键字，但仍不能作为
-普通标识符。`forall` 只在类型开头（后跟 type_param 和 `.`）时是关键字；
-它同时是标准库函数名。`return` 是 Prelude 函数，不是关键字。
+完整词法规则见第 01 章。`forall` 是上下文关键字（§1.5.2）；`pure` 是 Prelude 函数，不是
+关键字。

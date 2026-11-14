@@ -793,7 +793,12 @@ fn the_help_lists_the_commands_that_exist() {
     // The doctest and bench protocols are documented where the user looks.
     assert!(text.contains("compile_fail"), "{text}");
     assert!(text.contains("median of N"), "{text}");
-    assert!(text.contains("no registry"), "{text}");
+    assert!(text.contains("aevia publish"), "{text}");
+    assert!(
+        text.contains("registry packages are resolved")
+            || text.contains("Registry packages are resolved"),
+        "{text}"
+    );
 }
 
 #[test]

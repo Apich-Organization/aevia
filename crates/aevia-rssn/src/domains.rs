@@ -748,10 +748,10 @@ fn render(
     // Names the prelude declares are reserved: a generated wrapper must not
     // silently shadow them.
     for line in domain.prelude.lines() {
-        if let Some(rest) = line.strip_prefix("fn ") {
-            if let Some(name) = rest.split(['(', '<']).next() {
-                used.insert(name.trim().to_string());
-            }
+        if let Some(rest) = line.strip_prefix("fn ")
+            && let Some(name) = rest.split(['(', '<']).next()
+        {
+            used.insert(name.trim().to_string());
         }
     }
     for placement in classify(registry, overlay) {

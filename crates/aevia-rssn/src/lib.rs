@@ -2,8 +2,8 @@
 //!
 //! Aevia does not re-implement computer algebra. rssn owns the term
 //! representation, the rewrite engine, the dimension layer and the numeric
-//! kernels; this crate is the only place in the toolchain that names an rssn
-//! type.
+//! kernels; this crate owns the dynamic value bridge and manifest bindings.
+//! `aevia-std` also calls plain RSSN kernels for its typed numerical adapters.
 //!
 //! Three layers live here:
 //!

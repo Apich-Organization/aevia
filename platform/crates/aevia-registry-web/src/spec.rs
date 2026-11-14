@@ -39,10 +39,11 @@ use crate::thousands;
 const TITLE: Msg = Msg::new("language specification", "语言规范");
 const LEDE: Msg = Msg::new(
     "The normative design of Aevia: grammar, typing rules, dimensions, units, \
-     runtime and the rssn backend. Written in Chinese; every chapter carries an \
-     English title and abstract.",
-    "Aevia 的规范设计：文法、类型规则、量纲、单位、运行时与 rssn 后端。正文为中文，\
-     每章附英文标题与摘要。",
+     runtime and the rssn backend. The Chinese text is normative; \
+     English editions are published chapter by chapter, and a chapter without one \
+     carries an English abstract.",
+    "Aevia 的规范设计：文法、类型规则、量纲、单位、运行时与 rssn 后端。以中文为准，\
+     英文版逐章提供；尚无英文版的章节附英文摘要。",
 );
 const SINGLE_PAGE: Msg = Msg::new("read it as one page", "单页阅读全文");
 const BACK_TO_INDEX: Msg = Msg::new("all chapters", "全部章节");
@@ -56,6 +57,11 @@ const PREVIOUS: Msg = Msg::new("previous", "上一章");
 const NEXT: Msg = Msg::new("next", "下一章");
 const CONTENTS: Msg = Msg::new("contents", "目录");
 const REVISION: Msg = Msg::new("revision", "修订版");
+const NO_ENGLISH_YET: Msg = Msg::new(
+    "This chapter has no English edition yet. The Chinese text, which is normative, is shown \
+     below.",
+    "本章尚无英文版。",
+);
 const NOT_NORMATIVE_NOTE: Msg = Msg::new(
     "The Chinese text below is normative. The abstract is a reading aid, not a \
      substitute for it.",
@@ -194,12 +200,17 @@ pub fn spec_page(
     } else {
         view! { <span class="badge badge-quiet">{INFORMATIVE.of(lang)}</span> }.into_any()
     };
+    let english = (lang == Lang::En)
+        .then_some(chapter.html_en.as_ref())
+        .flatten();
     let abstract_block = match (&chapter.summary_en, lang) {
+        | _ if english.is_some() => ().into_any(),
         | (Some(summary), Lang::En) => {
             view! {
                 <aside class="abstract">
                     <h2>{ABSTRACT.of(lang)}</h2>
                     <p>{summary.clone()}</p>
+                    <p class="note">{NO_ENGLISH_YET.of(lang)}</p>
                     <p class="note">{NOT_NORMATIVE_NOTE.of(lang)}</p>
                 </aside>
             }
@@ -207,8 +218,10 @@ pub fn spec_page(
         },
         | _ => ().into_any(),
     };
-    let toc = toc_block(&chapter.toc, lang);
-    let html = chapter.html.clone();
+    let (toc, html) = match english {
+        | Some(html) => (toc_block(&chapter.toc_en, lang), html.clone()),
+        | None => (toc_block(&chapter.toc, lang), chapter.html.clone()),
+    };
     let previous = book.previous(&chapter.slug).map(|chapter| {
         (
             format!("/spec/{}", chapter.slug),
@@ -288,7 +301,10 @@ pub fn spec_all(
             } else {
                 other.to_string()
             };
-            let html = chapter.html.clone();
+            let html = match (lang, &chapter.html_en) {
+                | (Lang::En, Some(html)) => html.clone(),
+                | _ => chapter.html.clone(),
+            };
             view! {
                 <section class="spec-chapter" id=id>
                     <h2>{title}</h2>

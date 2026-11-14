@@ -1,0 +1,78 @@
+{
+  "name": "aevia",
+  "displayName": "Aevia",
+  "description": "Language support for Aevia: syntax highlighting and the aevia-lsp language server (diagnostics, hover, completion, rename, formatting, semantic tokens).",
+  "version": "0.1.0",
+  "publisher": "apich",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/Apich-Organization/aevia" },
+  "engines": { "vscode": "^1.82.0" },
+  "categories": ["Programming Languages", "Formatters", "Linters"],
+  "keywords": ["aevia", "units", "dimensions", "scientific computing"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "aevia",
+        "aliases": ["Aevia", "aevia"],
+        "extensions": [".aev"],
+        "firstLine": "^#!.*\\baevia\\b",
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      { "language": "aevia", "scopeName": "source.aevia", "path": "./syntaxes/aevia.tmLanguage.json" }
+    ],
+    "semanticTokenTypes": [
+      { "id": "dimension", "superType": "type", "description": "A physical dimension (L, T, M, ...)." },
+      { "id": "unit", "superType": "type", "description": "A unit of measure." }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "aevia",
+        "scopes": {
+          "dimension": ["entity.name.type.dimension.aevia", "storage.type.aevia"],
+          "unit": ["constant.other.unit.aevia"],
+          "operator": ["keyword.operator.aevia"]
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Aevia",
+      "properties": {
+        "aevia.server.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `aevia-lsp` executable. Empty: look for `aevia-lsp` on `PATH`, then fall back to `aevia lsp`."
+        },
+        "aevia.server.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments passed to the server (the transport is always stdio)."
+        },
+        "aevia.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace the communication between VS Code and the language server."
+        }
+      }
+    },
+    "commands": [
+      { "command": "aevia.restartServer", "title": "Aevia: Restart Language Server" },
+      { "command": "aevia.showServerLog", "title": "Aevia: Show Language Server Log" }
+    ]
+  },
+  "scripts": {
+    "package": "vsce package",
+    "test": "node test/run.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "3.2.1"
+  }
+}

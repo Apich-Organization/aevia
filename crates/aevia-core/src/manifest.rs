@@ -2001,7 +2001,7 @@ fn parse_dependency(
     if value.starts_with('"') {
         let text = parse_string(value)
             .ok_or_else(|| fail("a version requirement is one quoted string".to_string()))?;
-        let req = parse_requirement(&text).map_err(&fail)?;
+        let req = parse_requirement(&text).map_err(fail)?;
         return Ok(Dependency::Registry {
             package: official_package(key),
             req,
@@ -2019,7 +2019,7 @@ fn parse_dependency(
     let mut path: Option<String> = None;
     let mut package: Option<String> = None;
     let mut version: Option<String> = None;
-    for field in split_fields(inner).map_err(&fail)? {
+    for field in split_fields(inner).map_err(fail)? {
         let field = field.trim();
         if field.is_empty() {
             continue;

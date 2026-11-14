@@ -27,6 +27,14 @@ pub enum Method {
     /// exhausts its step budget (a stiff problem needs far more explicit steps
     /// than its accuracy requires, §8.9 "stiff solver selection").
     Auto,
+    /// Fixed-step second-order Störmer–Verlet symplectic integrator.
+    StormerVerlet,
+    /// Fixed-step fourth-order Ruth (Forest–Ruth / Yoshida) symplectic integrator.
+    Ruth4,
+    /// Fixed-step fourth-order (2-stage) Gauss–Legendre implicit symplectic Runge–Kutta.
+    GaussLegendre4,
+    /// Fixed-step sixth-order (3-stage) Gauss–Legendre implicit symplectic Runge–Kutta.
+    GaussLegendre6,
 }
 
 impl Method {
@@ -39,7 +47,11 @@ impl Method {
             | Self::Radau
             | Self::Bdf
             | Self::Rosenbrock23
-            | Self::Auto => None,
+            | Self::Auto
+            | Self::StormerVerlet
+            | Self::Ruth4
+            | Self::GaussLegendre4
+            | Self::GaussLegendre6 => None,
         }
     }
 }
@@ -134,7 +146,14 @@ pub fn integrate_until_event(
             "the time interval is too large".into(),
         ));
     }
-    if options.method == Method::Auto {
+    if matches!(
+        options.method,
+        Method::Auto
+            | Method::StormerVerlet
+            | Method::Ruth4
+            | Method::GaussLegendre4
+            | Method::GaussLegendre6
+    ) {
         let specs = [EventSpec {
             terminal: true,
             direction: 0,
@@ -235,7 +254,12 @@ pub fn integrate_until_event(
                 | Method::Rosenbrock23 => {
                     ode_adaptive::rosenbrock23_events(f, start, end, y0, &opts, &events)
                 },
-                | Method::Rk4 | Method::Auto => unreachable!(),
+                | Method::Rk4
+                | Method::Auto
+                | Method::StormerVerlet
+                | Method::Ruth4
+                | Method::GaussLegendre4
+                | Method::GaussLegendre6 => unreachable!(),
             }
             .map_err(|_| NumericError::NotConverged);
             solution.and_then(|solution| {
@@ -372,6 +396,26 @@ pub fn integrate(
                 let (state, time) = dopri5(rhs, &y, t, *target, options)?;
                 y = state;
                 t = time;
+            },
+            | Method::StormerVerlet
+            | Method::Ruth4
+            | Method::GaussLegendre4
+            | Method::GaussLegendre6 => {
+                let span = target - t;
+                let steps = options.steps.max(1);
+                let h = span / steps as f64;
+                let mut time = t;
+                for _ in 0..steps {
+                    y = match options.method {
+                        | Method::StormerVerlet => partitioned_verlet_step(rhs, time, &y, h)?.0,
+                        | Method::Ruth4 => partitioned_ruth4_step(rhs, time, &y, h)?.0,
+                        | Method::GaussLegendre4 => gauss_legendre_step(rhs, time, &y, h, 2)?.0,
+                        | Method::GaussLegendre6 => gauss_legendre_step(rhs, time, &y, h, 3)?.0,
+                        | _ => unreachable!(),
+                    };
+                    time += h;
+                }
+                t = *target;
             },
             | Method::Radau | Method::Bdf | Method::Rosenbrock23 | Method::Auto => {
                 unreachable!("handled above")
@@ -638,28 +682,10 @@ fn dopri5(
 // Solutions with dense output and events (§8.9)
 // ---------------------------------------------------------------------------
 
-/// How one event function is watched: a sign change of `g(t, y)` is an event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EventSpec {
-    /// Integration stops at the event.
-    pub terminal: bool,
-    /// `1` rising only, `-1` falling only, `0` both.
-    pub direction: i8,
-}
-
-/// The event functions of [`solve`]: `(index, t, y) -> g`.
+pub use rssn::kernels::ode_geom::EventSpec;
+pub use rssn::kernels::ode_geom::Hit;
+/// Event function callback: `(index, t, y) -> g`.
 pub type Events<'a> = dyn FnMut(usize, f64, &[f64]) -> f64 + 'a;
-
-/// A located event.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Hit {
-    /// Index of the event function.
-    pub index: usize,
-    /// The event time.
-    pub t: f64,
-    /// The state at the event time.
-    pub y: Vec<f64>,
-}
 
 #[derive(Clone, Debug)]
 enum Dense {
@@ -881,13 +907,18 @@ pub fn solve(
     };
     let kernel = |method: Method| -> Result<Solution, NumericError> {
         let solution = match method {
-            | Method::Dopri5 => ode_adaptive::dopri5(&f, start, end, y0, &opts, &kernel_events),
-            | Method::Radau => ode_stiff::radau5_events(&f, start, end, y0, &opts, &kernel_events),
-            | Method::Bdf => ode_stiff::bdf_events(&f, start, end, y0, &opts, 5, &kernel_events),
+            | Method::Dopri5 => ode_adaptive::dopri5(f, start, end, y0, &opts, &kernel_events),
+            | Method::Radau => ode_stiff::radau5_events(f, start, end, y0, &opts, &kernel_events),
+            | Method::Bdf => ode_stiff::bdf_events(f, start, end, y0, &opts, 5, &kernel_events),
             | Method::Rosenbrock23 => {
-                ode_adaptive::rosenbrock23_events(&f, start, end, y0, &opts, &kernel_events)
+                ode_adaptive::rosenbrock23_events(f, start, end, y0, &opts, &kernel_events)
             },
-            | Method::Rk4 | Method::Auto => unreachable!("handled by the caller"),
+            | Method::Rk4
+            | Method::Auto
+            | Method::StormerVerlet
+            | Method::Ruth4
+            | Method::GaussLegendre4
+            | Method::GaussLegendre6 => unreachable!("handled by the caller"),
         }
         .map_err(|_| NumericError::NotConverged)?;
         Ok(Solution {
@@ -904,7 +935,7 @@ pub fn solve(
         match options.method {
             | Method::Rk4 => {
                 let (trajectory, fixed_hits) = ode::solve_fixed_events(
-                    &f,
+                    f,
                     y0,
                     (start, end),
                     options.steps.max(1),
@@ -938,12 +969,27 @@ pub fn solve(
                     y: trajectory.y,
                 })
             },
+            | Method::StormerVerlet
+            | Method::Ruth4
+            | Method::GaussLegendre4
+            | Method::GaussLegendre6 => {
+                solve_fixed_geometric(
+                    &mut *rhs_cell.borrow_mut(),
+                    y0,
+                    (start, end),
+                    options.steps.max(1),
+                    options.method,
+                    specs,
+                    &mut *events_cell.borrow_mut(),
+                    &invalid_event,
+                )
+            },
             | Method::Auto => {
                 let budgeted = OdeOptions {
                     max_steps: AUTO_STEP_BUDGET,
                     ..opts
                 };
-                match ode_adaptive::dopri5(&f, start, end, y0, &budgeted, &kernel_events) {
+                match ode_adaptive::dopri5(f, start, end, y0, &budgeted, &kernel_events) {
                     | Ok(solution) => {
                         Ok(Solution {
                             t: solution.t.clone(),
@@ -1135,6 +1181,324 @@ fn solve_dense(
         return Err(NumericError::Singular);
     }
     Ok(x)
+}
+
+// ---------------------------------------------------------------------------
+// Symplectic and Geometric Integrators
+// ---------------------------------------------------------------------------
+
+/// Symplectic and geometric integration methods for Hamiltonian and
+pub use rssn::kernels::ode_geom::DaeOptions;
+/// Symplectic and geometric integration methods for Hamiltonian and
+pub use rssn::kernels::ode_geom::DaeSolution;
+/// Symplectic and geometric integration methods for Hamiltonian and
+pub use rssn::kernels::ode_geom::DdeOptions;
+/// Symplectic and geometric integration methods for Hamiltonian and
+pub use rssn::kernels::ode_geom::DdeSolution;
+/// Symplectic and geometric integration methods for Hamiltonian and
+pub use rssn::kernels::ode_geom::SymplecticMethod;
+/// Symplectic and geometric integration methods for Hamiltonian and
+pub use rssn::kernels::ode_geom::SymplecticSolution;
+
+fn map_ode_geom_err(err: rssn::kernels::ode_geom::OdeGeomError) -> NumericError {
+    match err {
+        | rssn::kernels::ode_geom::OdeGeomError::Empty => NumericError::Empty,
+        | rssn::kernels::ode_geom::OdeGeomError::ShapeMismatch(s) => NumericError::ShapeMismatch(s),
+        | rssn::kernels::ode_geom::OdeGeomError::Domain(s) => NumericError::Domain(s),
+        | rssn::kernels::ode_geom::OdeGeomError::Singular => NumericError::Singular,
+        | rssn::kernels::ode_geom::OdeGeomError::NotConverged => NumericError::NotConverged,
+    }
+}
+
+pub fn integrate_symplectic<A>(
+    accel: &mut A,
+    q0: &[f64],
+    p0: &[f64],
+    span: (f64, f64),
+    steps: usize,
+    method: SymplecticMethod,
+) -> Result<SymplecticSolution, NumericError>
+where
+    A: FnMut(f64, &[f64]) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::integrate_symplectic(accel, q0, p0, span, steps, method)
+        .map_err(map_ode_geom_err)
+}
+
+pub fn integrate_hamiltonian<FQ, FP>(
+    dq_dt: &mut FQ,
+    dp_dt: &mut FP,
+    q0: &[f64],
+    p0: &[f64],
+    span: (f64, f64),
+    steps: usize,
+    method: SymplecticMethod,
+) -> Result<SymplecticSolution, NumericError>
+where
+    FQ: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+    FP: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::integrate_hamiltonian(dq_dt, dp_dt, q0, p0, span, steps, method)
+        .map_err(map_ode_geom_err)
+}
+
+pub fn gauss_legendre_step(
+    rhs: &mut Rate<'_>,
+    t: f64,
+    y: &[f64],
+    h: f64,
+    stages: usize,
+) -> Result<(Vec<f64>, usize), NumericError> {
+    rssn::kernels::ode_geom::gauss_legendre_step(rhs, t, y, h, stages).map_err(map_ode_geom_err)
+}
+
+fn partitioned_verlet_step(
+    rhs: &mut Rate<'_>,
+    t: f64,
+    y: &[f64],
+    h: f64,
+) -> Result<(Vec<f64>, usize), NumericError> {
+    rssn::kernels::ode_geom::partitioned_verlet_step(rhs, t, y, h).map_err(map_ode_geom_err)
+}
+
+fn partitioned_ruth4_step(
+    rhs: &mut Rate<'_>,
+    t: f64,
+    y: &[f64],
+    h: f64,
+) -> Result<(Vec<f64>, usize), NumericError> {
+    rssn::kernels::ode_geom::partitioned_ruth4_step(rhs, t, y, h).map_err(map_ode_geom_err)
+}
+
+/// # Errors
+///
+/// [`NumericError::Domain`] for invalid inputs, [`NumericError::ShapeMismatch`] for
+/// mismatched dimensions, and [`NumericError::NotConverged`] if Newton iteration fails.
+pub fn solve_gauss_legendre(
+    rhs: &mut Rate<'_>,
+    y0: &[f64],
+    span: (f64, f64),
+    steps: usize,
+    stages: usize,
+) -> Result<Solution, NumericError> {
+    let method = match stages {
+        | 1 | 2 => Method::GaussLegendre4,
+        | 3 => Method::GaussLegendre6,
+        | _ => {
+            return Err(NumericError::Domain(
+                "Gauss-Legendre stages must be 1, 2, or 3".into(),
+            ));
+        },
+    };
+    let invalid_event = std::cell::Cell::new(false);
+    let mut no_events = |_: usize, _: f64, _: &[f64]| 0.0;
+    solve_fixed_geometric_with_stages(
+        rhs,
+        y0,
+        span,
+        steps.max(1),
+        method,
+        Some(stages),
+        &[],
+        &mut no_events,
+        &invalid_event,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn solve_fixed_geometric(
+    rhs: &mut Rate<'_>,
+    y0: &[f64],
+    span: (f64, f64),
+    steps: usize,
+    method: Method,
+    specs: &[EventSpec],
+    events: &mut Events<'_>,
+    invalid_event: &std::cell::Cell<bool>,
+) -> Result<Solution, NumericError> {
+    solve_fixed_geometric_with_stages(
+        rhs,
+        y0,
+        span,
+        steps,
+        method,
+        None,
+        specs,
+        events,
+        invalid_event,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn solve_fixed_geometric_with_stages(
+    rhs: &mut Rate<'_>,
+    y0: &[f64],
+    span: (f64, f64),
+    steps: usize,
+    method: Method,
+    explicit_stages: Option<usize>,
+    specs: &[EventSpec],
+    events: &mut Events<'_>,
+    invalid_event: &std::cell::Cell<bool>,
+) -> Result<Solution, NumericError> {
+    use rssn::kernels::ode_geom::GeometricMethod;
+    use rssn::kernels::ode_geom::{
+        self,
+    };
+    let kernel_method = match method {
+        | Method::StormerVerlet => GeometricMethod::StormerVerlet,
+        | Method::Ruth4 => GeometricMethod::Ruth4,
+        | Method::GaussLegendre4 => GeometricMethod::GaussLegendre4,
+        | Method::GaussLegendre6 => GeometricMethod::GaussLegendre6,
+        | _ => return Err(NumericError::Domain("expected a geometric method".into())),
+    };
+    let solution = ode_geom::solve_fixed_geometric(
+        rhs,
+        y0,
+        span,
+        steps,
+        kernel_method,
+        explicit_stages,
+        specs,
+        events,
+        invalid_event,
+    )
+    .map_err(map_ode_geom_err)?;
+    Ok(Solution {
+        t: solution.t,
+        y: solution.y,
+        hits: solution.hits,
+        nfev: solution.nfev,
+        rejected: solution.rejected,
+        method,
+        dense: Dense::Hermite {
+            rates: solution.rates,
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Differential-Algebraic Equation (DAE) Solvers (Index-1 and Index-2)
+// ---------------------------------------------------------------------------
+
+/// Options for Differential-Algebraic Equation (DAE) solvers.
+pub fn dae_consistent_ic_index1<F, G>(
+    f: &mut F,
+    g: &mut G,
+    t0: f64,
+    y0: &[f64],
+    z0_guess: &[f64],
+    tol: f64,
+    max_iter: usize,
+) -> Result<(Vec<f64>, Vec<f64>), NumericError>
+where
+    F: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+    G: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::dae_consistent_ic_index1(f, g, t0, y0, z0_guess, tol, max_iter)
+        .map_err(map_ode_geom_err)
+}
+
+pub fn solve_dae_index1<F, G>(
+    f: &mut F,
+    g: &mut G,
+    y0: &[f64],
+    z0: &[f64],
+    span: (f64, f64),
+    options: DaeOptions,
+) -> Result<DaeSolution, NumericError>
+where
+    F: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+    G: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::solve_dae_index1(f, g, y0, z0, span, options).map_err(map_ode_geom_err)
+}
+
+pub fn dae_consistent_ic_index2<F, G>(
+    f: &mut F,
+    g: &mut G,
+    t0: f64,
+    y0: &[f64],
+    z0_guess: &[f64],
+    tol: f64,
+    max_iter: usize,
+) -> Result<(Vec<f64>, Vec<f64>), NumericError>
+where
+    F: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+    G: FnMut(f64, &[f64]) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::dae_consistent_ic_index2(f, g, t0, y0, z0_guess, tol, max_iter)
+        .map_err(map_ode_geom_err)
+}
+
+pub fn solve_dae_index2<F, G>(
+    f: &mut F,
+    g: &mut G,
+    y0: &[f64],
+    z0_guess: &[f64],
+    span: (f64, f64),
+    options: DaeOptions,
+) -> Result<DaeSolution, NumericError>
+where
+    F: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+    G: FnMut(f64, &[f64]) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::solve_dae_index2(f, g, y0, z0_guess, span, options)
+        .map_err(map_ode_geom_err)
+}
+
+pub fn solve_dae_implicit<R>(
+    residual: &mut R,
+    y0: &[f64],
+    yp0_guess: &[f64],
+    span: (f64, f64),
+    options: DaeOptions,
+) -> Result<Solution, NumericError>
+where
+    R: FnMut(f64, &[f64], &[f64]) -> Vec<f64> + ?Sized,
+{
+    let sol = rssn::kernels::ode_geom::solve_dae_implicit(residual, y0, yp0_guess, span, options)
+        .map_err(map_ode_geom_err)?;
+    Ok(Solution {
+        t: sol.t,
+        y: sol.y,
+        hits: Vec::new(),
+        nfev: sol.nfev,
+        rejected: sol.rejected,
+        method: Method::Bdf,
+        dense: Dense::Hermite { rates: sol.rates },
+    })
+}
+
+pub fn solve_dde<F, H>(
+    rhs: &mut F,
+    history: &mut H,
+    y0: &[f64],
+    delays: &[f64],
+    span: (f64, f64),
+    options: DdeOptions,
+) -> Result<DdeSolution, NumericError>
+where
+    F: FnMut(f64, &[f64], &[Vec<f64>]) -> Vec<f64> + ?Sized,
+    H: FnMut(f64) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::solve_dde(rhs, history, y0, delays, span, options)
+        .map_err(map_ode_geom_err)
+}
+
+pub fn solve_dde_state_dependent<F, H>(
+    rhs: &mut F,
+    history: &mut H,
+    y0: &[f64],
+    span: (f64, f64),
+    options: DdeOptions,
+) -> Result<DdeSolution, NumericError>
+where
+    F: FnMut(f64, &[f64], &dyn Fn(f64) -> Vec<f64>) -> Vec<f64> + ?Sized,
+    H: FnMut(f64) -> Vec<f64> + ?Sized,
+{
+    rssn::kernels::ode_geom::solve_dde_state_dependent(rhs, history, y0, span, options)
+        .map_err(map_ode_geom_err)
 }
 
 #[cfg(test)]
@@ -1670,5 +2034,253 @@ mod tests {
             &mut |a, _| vec![a[0]],
         );
         assert!(matches!(outcome, Err(NumericError::ShapeMismatch(_))));
+    }
+
+    #[test]
+    fn symplectic_integrators_conserve_hamiltonian_and_achieve_design_order() {
+        // 1D Harmonic Oscillator: q' = p, p' = -q, H(q, p) = 0.5*(q^2 + p^2).
+        // Exact at t = 2*pi: (q, p) = (1, 0).
+        let t_end = 2.0 * std::f64::consts::PI;
+        let mut accel = |_t: f64, q: &[f64]| vec![-q[0]];
+        let energy = |q: &[f64], p: &[f64]| 0.5 * (q[0] * q[0] + p[0] * p[0]);
+
+        let sol_verlet = integrate_symplectic(
+            &mut accel,
+            &[1.0],
+            &[0.0],
+            (0.0, t_end),
+            200,
+            SymplecticMethod::StormerVerlet,
+        )
+        .unwrap();
+        let err_verlet = (sol_verlet.q.last().unwrap()[0] - 1.0).abs();
+        assert!(err_verlet < 1e-3, "verlet error: {err_verlet}");
+        assert!(sol_verlet.max_energy_drift(energy) < 5e-4);
+
+        let sol_ruth3 = integrate_symplectic(
+            &mut accel,
+            &[1.0],
+            &[0.0],
+            (0.0, t_end),
+            200,
+            SymplecticMethod::Ruth3,
+        )
+        .unwrap();
+        let err_ruth3 = (sol_ruth3.q.last().unwrap()[0] - 1.0).abs();
+        assert!(err_ruth3 < 5e-5, "ruth3 error: {err_ruth3}");
+
+        let sol_ruth4 = integrate_symplectic(
+            &mut accel,
+            &[1.0],
+            &[0.0],
+            (0.0, t_end),
+            200,
+            SymplecticMethod::Ruth4,
+        )
+        .unwrap();
+        let err_ruth4 = (sol_ruth4.q.last().unwrap()[0] - 1.0).abs();
+        assert!(err_ruth4 < 5e-6, "ruth4 error: {err_ruth4}");
+        assert!(sol_ruth4.max_energy_drift(energy) < 1e-5);
+
+        let sol_yoshida6 = integrate_symplectic(
+            &mut accel,
+            &[1.0],
+            &[0.0],
+            (0.0, t_end),
+            200,
+            SymplecticMethod::Yoshida6,
+        )
+        .unwrap();
+        let err_y6 = (sol_yoshida6.q.last().unwrap()[0] - 1.0).abs();
+        assert!(err_y6 < 1e-9, "yoshida6 error: {err_y6}");
+
+        // Check Hermite dense output at t = pi/2: q = 0, p = -1
+        let (q_mid, p_mid) = sol_yoshida6.eval(std::f64::consts::FRAC_PI_2).unwrap();
+        assert!(q_mid[0].abs() < 1e-6 && (p_mid[0] + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gauss_legendre_implicit_rk_preserves_quadratic_invariants_to_machine_precision() {
+        // Nonlinear rigid body (Euler's equations):
+        // y1' = (I2 - I3)/(I2*I3) y2 y3
+        // y2' = (I3 - I1)/(I3*I1) y3 y1
+        // y3' = (I1 - I2)/(I1*I2) y1 y2
+        // Casimir invariant C(y) = y1^2 + y2^2 + y3^2 is quadratic and must be
+        // conserved to machine precision by Gauss-Legendre 4 and 6!
+        let (i1, i2, i3) = (2.0, 1.0, 2.0 / 3.0);
+        let mut euler_rigid = |_t: f64, y: &[f64]| {
+            vec![
+                ((i2 - i3) / (i2 * i3)) * y[1] * y[2],
+                ((i3 - i1) / (i3 * i1)) * y[2] * y[0],
+                ((i1 - i2) / (i1 * i2)) * y[0] * y[1],
+            ]
+        };
+        let y0 = [0.8, 0.6, 0.0];
+        let casimir = |y: &[f64]| y[0] * y[0] + y[1] * y[1] + y[2] * y[2];
+        let c0 = casimir(&y0);
+
+        let sol4 = solve_gauss_legendre(&mut euler_rigid, &y0, (0.0, 10.0), 100, 2).unwrap();
+        for yk in &sol4.y {
+            assert!(
+                (casimir(yk) - c0).abs() < 1e-12,
+                "GL4 Casimir drift: {}",
+                (casimir(yk) - c0).abs()
+            );
+        }
+
+        let sol6 = solve_gauss_legendre(&mut euler_rigid, &y0, (0.0, 10.0), 100, 3).unwrap();
+        for yk in &sol6.y {
+            assert!(
+                (casimir(yk) - c0).abs() < 1e-12,
+                "GL6 Casimir drift: {}",
+                (casimir(yk) - c0).abs()
+            );
+        }
+
+        // Also test via Method::GaussLegendre4 and Method::Ruth4 in ode::solve
+        let mut ho = |_t: f64, y: &[f64]| vec![y[1], -y[0]];
+        let sol_m = solve(
+            &mut ho,
+            &[1.0, 0.0],
+            (0.0, 1.0),
+            Options {
+                method: Method::GaussLegendre6,
+                steps: 20,
+                ..Options::default()
+            },
+            &[],
+            &mut |_, _, _| 0.0,
+        )
+        .unwrap();
+        let end = sol_m.y.last().unwrap();
+        assert!((end[0] - 1.0f64.cos()).abs() < 1e-12);
+        assert!((end[1] + 1.0f64.sin()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dae_index1_solver_solves_robertson_and_algebraic_coupled_system() {
+        // Semi-explicit index-1 DAE:
+        // y' = -y + z
+        // 0  = y^2 + z - exp(-2t) - sin(t)
+        // Therefore z(t) = exp(-2t) + sin(t) - y^2.
+        // In particular, for linear algebraic coupling:
+        // y1' = -y1 + z1
+        // 0   = 2*y1 - z1 => z1 = 2*y1 => y1' = y1 => y1(t) = e^t, z1(t) = 2*e^t.
+        let mut f = |_t: f64, y: &[f64], z: &[f64]| vec![-y[0] + z[0]];
+        let mut g = |t: f64, y: &[f64], z: &[f64]| vec![2.0 * y[0] - z[0] + t.sin() - t.sin()];
+        // Give an inconsistent initial guess z0_guess = 0.0 (true z0 = 2.0):
+        let sol = solve_dae_index1(
+            &mut f,
+            &mut g,
+            &[1.0],
+            &[0.0],
+            (0.0, 1.0),
+            DaeOptions::default(),
+        )
+        .unwrap();
+        let y_end = sol.y.last().unwrap()[0];
+        let z_end = sol.z.last().unwrap()[0];
+        let e1 = 1.0f64.exp();
+        assert!((y_end - e1).abs() < 1e-4, "y_end={y_end}, expected {e1}");
+        assert!(
+            (z_end - 2.0 * e1).abs() < 2e-4,
+            "z_end={z_end}, expected {}",
+            2.0 * e1
+        );
+        assert!(sol.max_constraint_violation(&mut g) < 1e-9);
+    }
+
+    #[test]
+    fn dae_index2_solver_solves_constrained_cartesian_pendulum() {
+        // Cartesian pendulum of length L = 1, gravity g = 1:
+        // Differential variables y = [x, y_pos, u, v] (4 vars)
+        // Algebraic variable z = [lambda] (1 var, tension/Lagrange multiplier)
+        // Index-2 position constraint: 0 = x^2 + y_pos^2 - 1
+        // Hidden velocity constraint: 2*x*u + 2*y_pos*v = 0
+        // Hidden index-1 constraint: 2*(u^2 + v^2) + 2*x*(-2*x*lambda) + 2*y_pos*(-2*y_pos*lambda - 1) = 0
+        let mut f = |_t: f64, y: &[f64], z: &[f64]| {
+            let (x, yp, u, v) = (y[0], y[1], y[2], y[3]);
+            let lam = z[0];
+            vec![u, v, -2.0 * x * lam, -2.0 * yp * lam - 1.0]
+        };
+        let mut g = |_t: f64, y: &[f64]| vec![y[0] * y[0] + y[1] * y[1] - 1.0];
+
+        // Start near (x=1, y=0, u=0, v=0) with slightly perturbed initial guess
+        let sol = solve_dae_index2(
+            &mut f,
+            &mut g,
+            &[1.001, 0.0, 0.0, 0.0],
+            &[0.5],
+            (0.0, 1.5),
+            DaeOptions {
+                rtol: 1e-6,
+                atol: 1e-8,
+                ..DaeOptions::default()
+            },
+        )
+        .unwrap();
+
+        // Verify constraint x^2 + y^2 - 1 == 0 and mechanical energy E = 0.5*(u^2 + v^2) + y_pos == 0
+        // along the entire trajectory!
+        for (yk, zk) in sol.y.iter().zip(&sol.z) {
+            let pos_err = (yk[0] * yk[0] + yk[1] * yk[1] - 1.0).abs();
+            let vel_err = (2.0 * yk[0] * yk[2] + 2.0 * yk[1] * yk[3]).abs();
+            assert!(pos_err < 1e-9, "position constraint drift: {pos_err}");
+            assert!(vel_err < 1e-8, "velocity constraint drift: {vel_err}");
+            assert!(zk[0].is_finite());
+        }
+        let end = sol.y.last().unwrap();
+        let energy_end = 0.5 * (end[2] * end[2] + end[3] * end[3]) + end[1];
+        assert!(energy_end.abs() < 1e-3, "energy drift: {energy_end}");
+    }
+
+    #[test]
+    fn dde_solver_matches_exact_method_of_steps_solution() {
+        // y'(t) = -y(t - 1) for t >= 0, with history y(t) = 1 for t <= 0.
+        // Exact analytical solution by Method of Steps:
+        // - For t in [0, 1]: y'(t) = -1 => y(t) = 1 - t
+        // - For t in [1, 2]: y'(t) = -(1 - (t - 1)) = t - 2 => y(t) = 1 - t + (t - 1)^2 / 2
+        // - For t in [2, 3]: y(t) = 1 - t + (t - 1)^2 / 2 - (t - 2)^3 / 6
+        let mut rhs = |_t: f64, _y: &[f64], delayed: &[Vec<f64>]| vec![-delayed[0][0]];
+        let mut history = |_t: f64| vec![1.0];
+
+        let sol = solve_dde(
+            &mut rhs,
+            &mut history,
+            &[1.0],
+            &[1.0],
+            (0.0, 3.0),
+            DdeOptions::default(),
+        )
+        .unwrap();
+
+        let y_05 = sol.eval(0.5).unwrap()[0];
+        assert!((y_05 - 0.5).abs() < 1e-7, "y(0.5) = {y_05}");
+
+        let y_15 = sol.eval(1.5).unwrap()[0];
+        let exact_15 = 1.0 - 1.5 + 0.5 * 0.5 / 2.0; // -0.375
+        assert!(
+            (y_15 - exact_15).abs() < 1e-6,
+            "y(1.5) = {y_15}, exact = {exact_15}"
+        );
+
+        let y_25 = sol.eval(2.5).unwrap()[0];
+        let exact_25 = 1.0 - 2.5 + 1.5 * 1.5 / 2.0 - 0.5f64.powi(3) / 6.0;
+        assert!(
+            (y_25 - exact_25).abs() < 1e-6,
+            "y(2.5) = {y_25}, exact = {exact_25}"
+        );
+
+        // Also test state-dependent DDE API on y'(t) = -y(t - 1)
+        let sol_sd = solve_dde_state_dependent(
+            &mut |t, _y, lag| vec![-lag(t - 1.0)[0]],
+            &mut history,
+            &[1.0],
+            (0.0, 2.0),
+            DdeOptions::default(),
+        )
+        .unwrap();
+        let y_sd_15 = sol_sd.eval(1.5).unwrap()[0];
+        assert!((y_sd_15 - exact_15).abs() < 1e-5);
     }
 }

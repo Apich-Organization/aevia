@@ -25,17 +25,17 @@ use crate::layout;
 // Page headings and body text.
 const TITLE: Msg = Msg::new("documentation", "文档");
 const LEDE: Msg = Msg::new(
-    "Built from `##` comments by the compiler, at publish time.",
-    "由编译器在发布时根据 `##` 注释生成。",
+    "Built from ## comments by the compiler, at publish time.",
+    "由编译器在发布时根据 ## 注释生成。",
 );
 const ABOUT: Msg = Msg::new(
     "A declaration carries its documentation next to it. When a version is \
-     published, the compiler parses the sources, collects the `##` comment above \
+     published, the compiler parses the sources, collects the ## comment above \
      each public declaration and renders the module pages you see here. There is \
      no separate documentation build to run and no second source of truth: the \
      text you read is the text that was compiled.",
     "声明旁边的注释就是它的文档。版本发布时，编译器解析源文件，收集每个公开声明上方的 \
-     `##` 注释，并渲染出这里看到的模块页面。不需要另外跑一次文档构建，也不存在第二份事实来源：\
+     ## 注释，并渲染出这里看到的模块页面。不需要另外跑一次文档构建，也不存在第二份事实来源：\
      你读到的文本就是编译时读到的文本。",
 );
 const EMPTY: Msg = Msg::new(

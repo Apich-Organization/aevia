@@ -390,7 +390,7 @@ fn record_from(
             message,
         }
     };
-    let json = parse_json(line).map_err(&fail)?;
+    let json = parse_json(line).map_err(fail)?;
     if !matches!(json, Json::Object(_)) {
         return Err(fail("a record is a JSON object".to_string()));
     }

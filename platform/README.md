@@ -10,8 +10,8 @@ anywhere in the build.
 crates.io          →  aevia.apich.org/crates
 docs.rs            →  aevia.apich.org/docs
 the design standard →  aevia.apich.org/spec   (bilingual, rendered from spec/*.md)
-cargo login        →  aevia-pkg login          (no token; a key binding)
-cargo publish      →  aevia-pkg publish        (signed statement, not a bearer token)
+cargo login        →  aevia login              (no token; a key binding)
+cargo publish      →  aevia publish            (checks, then a signed statement, not a bearer token)
 ```
 
 The site speaks English and Chinese; the switch is in the top bar and the choice
@@ -79,9 +79,15 @@ credential on disk. A publish is authorised by a signature over a short,
 canonical statement:
 
 ```console
-aevia-pkg login            # binds your key to your account, once
-aevia-pkg publish          # from a package directory with aevia.toml
+aevia login                # binds your key to your account, once
+aevia publish              # from a package directory with aevia.toml
 ```
+
+`aevia publish` runs `aevia check --all` and `aevia fmt --check` first (skip with
+`--no-verify`), then forwards to `aevia-pkg publish`. The other registry commands are
+available at top level too — `aevia search`, `info`, `yank`, `verify`, `key`, `status`,
+`lock` — and `aevia docs owner/name [--open]` prints or opens a package's documentation
+page. The site's `/cli` page maps every command to the page that shows its effect.
 
 (`aevia pkg …` works too: the language CLI forwards to `aevia-pkg`, which it
 finds on `PATH`, beside itself, or at `$AEVIA_PKG`.)
@@ -147,6 +153,10 @@ before its owner exists.
 publish time from the `##` comments in its source by `aevia-doc`, so the site
 shows the API the compiler sees, not a second parser's guess. Pages are stored
 with the version and never rebuilt from a later source tree.
+
+**`/cli`** — the command line guide: install, publish, depend, and a table mapping each `aevia` command to the page that shows its effect.
+
+**`/users/{handle}`** — a publisher's public page; **`/feed.xml`**, **`/sitemap.xml`**, **`/robots.txt`** and **`/badge/{owner}/{name}.svg`** are the machine-facing surfaces.
 
 **`/spec`** — the language specification, rendered from the language
 repository's `spec/*.md` at start-up: one page per chapter with a sticky

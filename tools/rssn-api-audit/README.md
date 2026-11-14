@@ -1,6 +1,6 @@
 # RSSN kernel API inventory
 
-`cargo run -p rssn-api-audit -- --report` lists public kernel and backend source APIs,
+`cargo run -p rssn-api-audit -- --report` lists public kernel, backend and simulation source APIs,
 including conditional declarations. `--check` compares the live inventory with
 the checked-in snapshot; after reviewing intentional source/API changes, run
 `--write` to update it. The check also rejects an ABI descriptor whose declared
@@ -53,3 +53,54 @@ whether the exact-typed flat `Rssn.<op>` facade covers it. It is produced from t
 live Kernel Manifest and `crates/aevia-rssn/domains.overlay`;
 `cargo test -p aevia-rssn --test domains` fails when it is stale or when an
 operator is neither bound nor excluded, and `AEVIA_BLESS=1` rewrites it.
+
+## Source-derived composable bindings
+
+`cargo run -p rssn-api-audit -- --codecs-{report,check,write}` (or RSSN's
+independent `rssn-api-gen` with the same commands) generates
+`rssn/src/rules/numerical_abi/codec_generated.rs` from
+`rssn/tools/rssn-api-gen/codec-policy.tsv`. Each policy row supplies only a
+public Rust path, an ABI name, its existing numerical namespace, and a reviewed
+dimension policy. Parameter names, borrowed slice conversion, arity, argument
+validation, result structure and the actual kernel call come from Rust source
+and shared codecs. Adding a supported function requires one policy row and
+regeneration; Aevia's `Rssn` and domain modules appear from the live manifest.
+No Aevia numerical implementation or dispatch arm is needed.
+
+These additional raw-number exports deliberately accept dimensionless values.
+The existing quantity-aware exports retain their dimensional contracts. A raw
+export does not silently strip quantities. For example,
+`Rssn.num_stats_ext_t_test_one_sample` returns a record with `statistic`,
+`p_value` and optional `df`; `Rssn.num_geometry_convex_hull_2d` takes and returns
+an N-by-2 tensor. Tuple results use named `item0`, `item1`, etc. fields.
+
+Supported codecs include checked signed/unsigned integers, real scalars,
+booleans, integer and real vectors, rectangular matrices, fixed-width point
+arrays, optional results, tuple records and public result records generated
+from `structured-policy.tsv`. Borrowed row slices are reconstructed from owned
+matrices for the duration of the kernel call. Unsupported Rust shapes fail
+compilation or generation; generic closures, stateful handles and callbacks
+continue through their dedicated checked ABI adapters. Do not count an
+unregistered Rust helper or an unbound record codec as language coverage.
+
+CI checks the generated fragments and complete source inventory separately.
+Focused runtime tests in `aevia-rssn/tests/source_generated.rs` exercise actual
+Aevia calls, not just generated-text matching.
+
+Expression AD is exposed as `num_ad_forward_gradient`,
+`num_ad_reverse_gradient`, `num_ad_hessian`, `num_ad_jacobian` and `num_ad_vjp`
+in `Rssn_numerical_vector` (also the flat `Rssn` facade). They take expression
+text, a tensor of variable names, and a point tensor. Jacobian/VJP take a tensor
+of expression strings; VJP also takes output weights. These operations use the
+existing RSSN dual/reverse/hyper-dual tape and have no finite-difference step.
+They reject opaque operations and nonsmooth instructions rather than falling
+back to approximate derivatives. All parameters are dimensionless.
+
+For a controlled verification pass, run the host numerical unit target plus
+`cargo test -p aevia-rssn --test kernel_contracts --test source_generated`.
+`kernel_contracts` runs RSSN's existing safe ABI, AD and callback regression
+sources in Aevia's build profile, avoiding a second scientific-engine build
+under RSSN's differently optimized test profile. The C-pointer manifest test
+remains in RSSN's separate `callbacks_ffi` target, keeping the host tests' unsafe
+code prohibition intact. The complete source inventories now include simulation
+APIs as well as kernels and backends.

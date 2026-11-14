@@ -9,19 +9,10 @@
 //! graph.
 
 use crate::Complex;
-use rustfft::FftPlanner;
 use rustfft::num_complex::Complex64;
 
-/// The normalisation convention of [`fft_norm`] (§8.8).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Norm {
-    /// `1/N` on the forward transform, none on the inverse (the default).
-    Backward,
-    /// `1/N` on the inverse transform, none on the forward one.
-    Forward,
-    /// `1/sqrt(N)` on both.
-    Unitary,
-}
+/// Kernel FFT normalization conventions.
+pub use rssn::kernels::fft::Norm;
 
 fn to_internal(input: &[Complex]) -> Vec<Complex64> {
     input
@@ -40,37 +31,13 @@ fn from_internal(input: Vec<Complex64>) -> Vec<Complex> {
 /// The unnormalised forward transform.
 #[must_use]
 pub fn fft(input: &[Complex]) -> Vec<Complex> {
-    let mut buffer = to_internal(input);
-    let mut planner = FftPlanner::new();
-    let transform = planner.plan_fft_forward(buffer.len());
-    transform.process(&mut buffer);
-    from_internal(buffer)
+    from_internal(rssn::kernels::fft::fft(&to_internal(input)))
 }
 
 /// The inverse transform, scaled by `1/N`.
 #[must_use]
 pub fn ifft(input: &[Complex]) -> Vec<Complex> {
-    let mut buffer = to_internal(input);
-    let len = buffer.len();
-    let mut planner = FftPlanner::new();
-    let transform = planner.plan_fft_inverse(buffer.len());
-    transform.process(&mut buffer);
-    let scale = 1.0 / len.max(1) as f64;
-    from_internal(buffer.into_iter().map(|value| value * scale).collect())
-}
-
-/// The scale a transform over `count` points carries under `norm`.
-fn scale_for(
-    norm: Norm,
-    inverse: bool,
-    count: usize,
-) -> f64 {
-    let count = count.max(1) as f64;
-    match (norm, inverse) {
-        | (Norm::Unitary, _) => 1.0 / count.sqrt(),
-        | (Norm::Backward, false) | (Norm::Forward, true) => 1.0,
-        | (Norm::Backward, true) | (Norm::Forward, false) => 1.0 / count,
-    }
+    from_internal(rssn::kernels::fft::ifft(&to_internal(input)))
 }
 
 /// The forward transform under a chosen normalisation.
@@ -82,11 +49,7 @@ pub fn fft_norm(
     input: &[Complex],
     norm: Norm,
 ) -> Vec<Complex> {
-    let scale = scale_for(norm, false, input.len());
-    fft(input)
-        .into_iter()
-        .map(|value| Complex::new(value.re * scale, value.im * scale))
-        .collect()
+    from_internal(rssn::kernels::fft::fft_norm(&to_internal(input), norm))
 }
 
 /// The inverse transform under a chosen normalisation: `Backward` scales by
@@ -96,33 +59,7 @@ pub fn ifft_norm(
     input: &[Complex],
     norm: Norm,
 ) -> Vec<Complex> {
-    let scale = scale_for(norm, true, input.len());
-    let mut buffer = to_internal(input);
-    let mut planner = FftPlanner::new();
-    planner.plan_fft_inverse(buffer.len()).process(&mut buffer);
-    from_internal(buffer.into_iter().map(|value| value * scale).collect())
-}
-
-fn check_shape(
-    len: usize,
-    shape: &[usize],
-    axes: &[usize],
-) -> Result<(), String> {
-    if shape.iter().product::<usize>() != len {
-        return Err(format!("the shape {shape:?} does not match {len} elements"));
-    }
-    for (position, axis) in axes.iter().enumerate() {
-        if *axis >= shape.len() {
-            return Err(format!(
-                "axis {axis} is out of range for a tensor of rank {}",
-                shape.len()
-            ));
-        }
-        if axes[..position].contains(axis) {
-            return Err(format!("axis {axis} is listed twice"));
-        }
-    }
-    Ok(())
+    from_internal(rssn::kernels::fft::ifft_norm(&to_internal(input), norm))
 }
 
 /// The transform over `axes` of a row-major tensor of the given `shape`,
@@ -139,40 +76,7 @@ pub fn fft_axes(
     inverse: bool,
     norm: Norm,
 ) -> Result<Vec<Complex>, String> {
-    check_shape(input.len(), shape, axes)?;
-    let mut data = to_internal(input);
-    let mut planner = FftPlanner::new();
-    for axis in axes {
-        let extent = shape[*axis];
-        if extent == 0 {
-            continue;
-        }
-        let inner: usize = shape[axis + 1..].iter().product();
-        let outer: usize = shape[..*axis].iter().product();
-        let transform = if inverse {
-            planner.plan_fft_inverse(extent)
-        } else {
-            planner.plan_fft_forward(extent)
-        };
-        let mut lane = vec![Complex64::new(0.0, 0.0); extent];
-        for block in 0..outer {
-            for offset in 0..inner {
-                let base = block * extent * inner + offset;
-                for (index, slot) in lane.iter_mut().enumerate() {
-                    *slot = data[base + index * inner];
-                }
-                transform.process(&mut lane);
-                for (index, slot) in lane.iter().enumerate() {
-                    data[base + index * inner] = *slot;
-                }
-            }
-        }
-    }
-    let count: usize = axes.iter().map(|axis| shape[*axis]).product();
-    let scale = scale_for(norm, inverse, count);
-    Ok(from_internal(
-        data.into_iter().map(|value| value * scale).collect(),
-    ))
+    rssn::kernels::fft::fft_axes(&to_internal(input), shape, axes, inverse, norm).map(from_internal)
 }
 
 /// The half-spectrum transform of a real tensor over `axes`: the last listed
@@ -185,25 +89,8 @@ pub fn rfft_axes(
     shape: &[usize],
     axes: &[usize],
 ) -> Result<(Vec<Complex>, Vec<usize>), String> {
-    let Some(last) = axes.last().copied() else {
-        return Err("a real transform needs at least one axis".to_string());
-    };
-    let complex: Vec<Complex> = input
-        .iter()
-        .map(|value| Complex::new(*value, 0.0))
-        .collect();
-    let full = fft_axes(&complex, shape, axes, false, Norm::Backward)?;
-    let keep = shape[last] / 2 + 1;
-    let inner: usize = shape[last + 1..].iter().product();
-    let mut out_shape = shape.to_vec();
-    out_shape[last] = keep;
-    let mut out = Vec::with_capacity(out_shape.iter().product());
-    for (index, value) in full.into_iter().enumerate() {
-        if (index / inner.max(1)) % shape[last].max(1) < keep {
-            out.push(value);
-        }
-    }
-    Ok((out, out_shape))
+    rssn::kernels::fft::rfft_axes(input, shape, axes)
+        .map(|(data, shape)| (from_internal(data), shape))
 }
 
 /// Rebuilds a real tensor from the half spectrum of [`rfft_axes`]. `shape` is
@@ -218,48 +105,7 @@ pub fn irfft_axes(
     axes: &[usize],
     n_last: usize,
 ) -> Result<(Vec<f64>, Vec<usize>), String> {
-    let Some(last) = axes.last().copied() else {
-        return Err("a real transform needs at least one axis".to_string());
-    };
-    check_shape(input.len(), shape, axes)?;
-    if n_last == 0 || n_last / 2 + 1 != shape[last] {
-        return Err(format!(
-            "a half spectrum of {} bins cannot come from a length-{n_last} axis",
-            shape[last]
-        ));
-    }
-    let mut full_shape = shape.to_vec();
-    full_shape[last] = n_last;
-    let total: usize = full_shape.iter().product();
-    let mut full = vec![Complex::new(0.0, 0.0); total];
-    let rank = shape.len();
-    let mut coordinate = vec![0usize; rank];
-    for (slot, target) in full.iter_mut().enumerate() {
-        let mut rest = slot;
-        for axis in (0..rank).rev() {
-            coordinate[axis] = rest % full_shape[axis];
-            rest /= full_shape[axis];
-        }
-        // Bins past the half spectrum are the conjugates of their mirror
-        // image, mirrored on every transformed axis.
-        let mirrored = coordinate[last] >= shape[last];
-        let mut source = 0usize;
-        for axis in 0..rank {
-            let mut at = coordinate[axis];
-            if mirrored && axes.contains(&axis) {
-                at = (full_shape[axis] - at) % full_shape[axis];
-            }
-            source = source * shape[axis] + at;
-        }
-        let value = input[source];
-        *target = if mirrored {
-            value.conj()
-        } else {
-            value
-        };
-    }
-    let real = fft_axes(&full, &full_shape, axes, true, Norm::Backward)?;
-    Ok((real.into_iter().map(|value| value.re).collect(), full_shape))
+    rssn::kernels::fft::irfft_axes(&to_internal(input), shape, axes, n_last)
 }
 
 /// Where each element goes under `fftshift` (`inverse = false`) or
@@ -273,36 +119,7 @@ pub fn shift_permutation(
     axes: &[usize],
     inverse: bool,
 ) -> Result<Vec<usize>, String> {
-    let total: usize = shape.iter().product();
-    check_shape(total, shape, axes)?;
-    let rank = shape.len();
-    let mut out = Vec::with_capacity(total);
-    let mut coordinate = vec![0usize; rank];
-    for slot in 0..total {
-        let mut rest = slot;
-        for axis in (0..rank).rev() {
-            coordinate[axis] = rest % shape[axis];
-            rest /= shape[axis];
-        }
-        let mut source = 0usize;
-        for axis in 0..rank {
-            let extent = shape[axis];
-            let mut at = coordinate[axis];
-            if axes.contains(&axis) {
-                // `fftshift` rolls by n/2 (zero frequency to the middle);
-                // `ifftshift` is its inverse.
-                let by = if inverse {
-                    extent - extent / 2
-                } else {
-                    extent / 2
-                };
-                at = (at + extent - by % extent) % extent;
-            }
-            source = source * extent + at;
-        }
-        out.push(source);
-    }
-    Ok(out)
+    rssn::kernels::fft::shift_permutation(shape, axes, inverse)
 }
 
 /// The non-negative sample frequencies of a length-`n` real transform,
@@ -312,23 +129,14 @@ pub fn rfftfreq(
     n: usize,
     d: f64,
 ) -> Vec<f64> {
-    if n == 0 || d == 0.0 {
-        return Vec::new();
-    }
-    (0..=n / 2)
-        .map(|index| index as f64 / (n as f64 * d))
-        .collect()
+    rssn::kernels::fft::rfftfreq(n, d)
 }
 
 /// The transform of a real signal: the non-redundant half of the spectrum,
 /// `n/2 + 1` bins.
 #[must_use]
 pub fn rfft(input: &[f64]) -> Vec<Complex> {
-    let spectrum = fft(&input
-        .iter()
-        .map(|value| Complex::new(*value, 0.0))
-        .collect::<Vec<_>>());
-    spectrum.into_iter().take(input.len() / 2 + 1).collect()
+    from_internal(rssn::kernels::fft::rfft(input))
 }
 
 /// Rebuilds a real signal of length `n` from the half spectrum.
@@ -337,16 +145,7 @@ pub fn irfft(
     input: &[Complex],
     n: usize,
 ) -> Vec<f64> {
-    let mut spectrum = vec![Complex::new(0.0, 0.0); n];
-    for (index, value) in input.iter().enumerate() {
-        if index < n {
-            spectrum[index] = *value;
-            if index != 0 && index != n - index && n - index < n {
-                spectrum[n - index] = value.conj();
-            }
-        }
-    }
-    ifft(&spectrum).into_iter().map(|value| value.re).collect()
+    rssn::kernels::fft::irfft(&to_internal(input), n)
 }
 
 /// The sample frequencies of a length-`n` transform with spacing `d`.
@@ -355,19 +154,198 @@ pub fn fftfreq(
     n: usize,
     d: f64,
 ) -> Vec<f64> {
-    let mut out = Vec::with_capacity(n);
-    if n == 0 || d == 0.0 {
-        return out;
-    }
-    let half = n.div_ceil(2);
-    for index in 0..n {
-        if index < half {
-            out.push(index as f64 / (n as f64 * d));
-        } else {
-            out.push((index as f64 - n as f64) / (n as f64 * d));
-        }
-    }
-    out
+    rssn::kernels::fft::fftfreq(n, d)
+}
+
+/// 2D forward FFT of a row-major `rows × cols` complex array.
+///
+/// # Errors
+/// When `input.len() != rows * cols`.
+pub fn fft2(
+    input: &[Complex],
+    rows: usize,
+    cols: usize,
+) -> Result<Vec<Complex>, String> {
+    rssn::kernels::fft::fft2(&to_internal(input), rows, cols).map(from_internal)
+}
+
+/// 2D inverse FFT of a row-major `rows × cols` complex array.
+///
+/// # Errors
+/// When `input.len() != rows * cols`.
+pub fn ifft2(
+    input: &[Complex],
+    rows: usize,
+    cols: usize,
+) -> Result<Vec<Complex>, String> {
+    rssn::kernels::fft::ifft2(&to_internal(input), rows, cols).map(from_internal)
+}
+
+/// N-D forward FFT over all axes of a row-major tensor of `shape`.
+///
+/// # Errors
+/// When `shape.iter().product() != input.len()`.
+pub fn fftn(
+    input: &[Complex],
+    shape: &[usize],
+) -> Result<Vec<Complex>, String> {
+    rssn::kernels::fft::fftn(&to_internal(input), shape).map(from_internal)
+}
+
+/// Shifts zero-frequency component to the center of a 1D slice.
+#[must_use]
+pub fn fftshift(input: &[Complex]) -> Vec<Complex> {
+    from_internal(rssn::kernels::fft::fftshift(&to_internal(input)))
+}
+
+/// Inverse of [`fftshift`] on a 1D slice.
+#[must_use]
+pub fn ifftshift(input: &[Complex]) -> Vec<Complex> {
+    from_internal(rssn::kernels::fft::ifftshift(&to_internal(input)))
+}
+
+/// Orthonormal Type-II Discrete Cosine Transform (`rssn::kernels::signal::dct`).
+#[must_use]
+pub fn dct(x: &[f64]) -> Vec<f64> {
+    rssn::kernels::signal::dct(x)
+}
+
+/// Inverse of [`dct`] (`rssn::kernels::signal::idct`).
+#[must_use]
+pub fn idct(x: &[f64]) -> Vec<f64> {
+    rssn::kernels::signal::idct(x)
+}
+
+/// Orthonormal Type-II Discrete Sine Transform (`rssn::kernels::signal::dst`).
+#[must_use]
+pub fn dst(x: &[f64]) -> Vec<f64> {
+    rssn::kernels::signal::dst(x)
+}
+
+/// Inverse of [`dst`] (`rssn::kernels::signal::idst`).
+#[must_use]
+pub fn idst(x: &[f64]) -> Vec<f64> {
+    rssn::kernels::signal::idst(x)
+}
+
+/// Short-Time Fourier Transform (`rssn::kernels::signal::stft`).
+#[must_use]
+pub fn stft(
+    x: &[f64],
+    window: &[f64],
+    hop: usize,
+) -> Vec<Vec<Complex>> {
+    rssn::kernels::signal::stft(x, window, hop)
+        .into_iter()
+        .map(from_internal)
+        .collect()
+}
+
+/// Power spectrogram `|STFT|^2` (`rssn::kernels::signal::spectrogram`).
+#[must_use]
+pub fn spectrogram(
+    x: &[f64],
+    window: &[f64],
+    hop: usize,
+) -> Vec<Vec<f64>> {
+    rssn::kernels::signal::spectrogram(x, window, hop)
+}
+
+/// Hann window of length `n` (`rssn::kernels::signal::hann_window`).
+#[must_use]
+pub fn hann_window(n: usize) -> Vec<f64> {
+    rssn::kernels::signal::hann_window(n)
+}
+
+/// Hamming window of length `n` (`rssn::kernels::signal::hamming_window`).
+#[must_use]
+pub fn hamming_window(n: usize) -> Vec<f64> {
+    rssn::kernels::signal::hamming_window(n)
+}
+
+/// Blackman window of length `n` (`rssn::kernels::signal::blackman_window`).
+#[must_use]
+pub fn blackman_window(n: usize) -> Vec<f64> {
+    rssn::kernels::signal::blackman_window(n)
+}
+
+/// Kaiser window of length `n` with parameter `beta` (`rssn::kernels::signal::kaiser_window`).
+#[must_use]
+pub fn kaiser_window(
+    n: usize,
+    beta: f64,
+) -> Vec<f64> {
+    rssn::kernels::signal::kaiser_window(n, beta)
+}
+
+/// 1D linear convolution (`rssn::kernels::signal::convolve`).
+#[must_use]
+pub fn conv(
+    a: &[f64],
+    b: &[f64],
+) -> Vec<f64> {
+    rssn::kernels::signal::convolve(a, b)
+}
+
+/// 1D cross-correlation (`rssn::kernels::signal::cross_correlation`).
+#[must_use]
+pub fn xcorr(
+    a: &[f64],
+    b: &[f64],
+) -> Vec<f64> {
+    rssn::kernels::signal::cross_correlation(a, b)
+}
+
+/// Linear FIR/IIR filter (`rssn::kernels::signal::lfilter`).
+#[must_use]
+pub fn lfilter(
+    b: &[f64],
+    a: &[f64],
+    x: &[f64],
+) -> Vec<f64> {
+    rssn::kernels::signal::lfilter(b, a, x)
+}
+
+/// Digital low-pass Butterworth filter `(b, a)` (`rssn::kernels::signal::butterworth_lowpass`).
+#[must_use]
+pub fn butterworth_lowpass(
+    order: usize,
+    cutoff: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    rssn::kernels::signal::butterworth_lowpass(order, cutoff)
+}
+
+/// Savitzky–Golay smoothing filter (`rssn::kernels::signal::savgol_filter`).
+#[must_use]
+pub fn savgol_filter(
+    x: &[f64],
+    window_len: usize,
+    poly_order: usize,
+) -> Vec<f64> {
+    rssn::kernels::signal::savgol_filter(x, window_len, poly_order)
+}
+
+/// Single-level 1D discrete wavelet transform (`rssn::kernels::wavelets::dwt`).
+///
+/// # Errors
+/// When the input is too short for the chosen wavelet.
+pub fn dwt(
+    x: &[f64],
+    wavelet: rssn::kernels::wavelets::Wavelet,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    rssn::kernels::wavelets::dwt(x, wavelet).map_err(|e| format!("{e:?}"))
+}
+
+/// Single-level 1D inverse discrete wavelet transform (`rssn::kernels::wavelets::idwt`).
+///
+/// # Errors
+/// When the coefficient lengths are incompatible.
+pub fn idwt(
+    approx: &[f64],
+    detail: &[f64],
+    wavelet: rssn::kernels::wavelets::Wavelet,
+) -> Result<Vec<f64>, String> {
+    rssn::kernels::wavelets::idwt(approx, detail, wavelet).map_err(|e| format!("{e:?}"))
 }
 
 #[cfg(test)]
@@ -545,5 +523,70 @@ mod tests {
         assert!(close(frequencies[1], 0.25));
         assert!(close(frequencies[2], -0.5));
         assert!(close(frequencies[3], -0.25));
+    }
+
+    #[test]
+    fn extended_signal_and_wavelet_transforms_round_trip() {
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let c = dct(&x);
+        let back = idct(&c);
+        for (a, b) in x.iter().zip(&back) {
+            assert!(close(*a, *b));
+        }
+        let s = dst(&x);
+        let s_back = idst(&s);
+        for (a, b) in x.iter().zip(&s_back) {
+            assert!(close(*a, *b));
+        }
+
+        let w = hann_window(4);
+        assert_eq!(w.len(), 4);
+        assert_eq!(kaiser_window(5, 3.0).len(), 5);
+        let spec = spectrogram(&x, &w, 2);
+        assert_eq!(spec.len(), 3);
+
+        let (b, a) = butterworth_lowpass(2, 0.4);
+        let filt = lfilter(&b, &a, &x);
+        assert_eq!(filt.len(), x.len());
+        let sg = savgol_filter(&x, 5, 2);
+        assert_eq!(sg.len(), x.len());
+
+        let (ca, cd) = dwt(&x, rssn::kernels::wavelets::Wavelet::Haar).unwrap();
+        let rec = idwt(&ca, &cd, rssn::kernels::wavelets::Wavelet::Haar).unwrap();
+        for (u, v) in x.iter().zip(&rec) {
+            assert!(close(*u, *v));
+        }
+    }
+    #[test]
+    fn empty_transforms_and_overflowing_shapes_are_handled() {
+        assert!(fft(&[]).is_empty());
+        assert!(ifft(&[]).is_empty());
+        assert!(fft_norm(&[], Norm::Forward).is_empty());
+        assert!(ifft_norm(&[], Norm::Unitary).is_empty());
+        assert!(fft_axes(&[], &[usize::MAX, 2], &[0], false, Norm::Backward).is_err());
+        assert!(shift_permutation(&[usize::MAX, 2], &[0], false).is_err());
+        assert!(rfft_axes(&[], &[0], &[0]).is_err());
+        assert!(
+            fft_axes(&[], &[0, usize::MAX, 2], &[0], false, Norm::Backward)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn savitzky_golay_coefficients_preserve_polynomial_moments() {
+        let coefficients = rssn::kernels::signal::savgol_coeffs(21, 8);
+        assert_eq!(coefficients.len(), 21);
+        for degree in 0..=8 {
+            let moment: f64 = coefficients
+                .iter()
+                .enumerate()
+                .map(|(i, c)| c * ((i as f64 - 10.0) / 10.0).powi(degree))
+                .sum();
+            let expected = if degree == 0 { 1.0 } else { 0.0 };
+            assert!(
+                (moment - expected).abs() < 1e-10,
+                "degree {degree}: {moment}"
+            );
+        }
     }
 }

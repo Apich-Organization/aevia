@@ -7621,6 +7621,10 @@ fn ode_solution_value(
                 | aevia_std::ode::Method::Bdf => "Bdf",
                 | aevia_std::ode::Method::Rosenbrock23 => "Rosenbrock23",
                 | aevia_std::ode::Method::Auto => "AutoSwitch",
+                | aevia_std::ode::Method::StormerVerlet => "StormerVerlet",
+                | aevia_std::ode::Method::Ruth4 => "Ruth4",
+                | aevia_std::ode::Method::GaussLegendre4 => "GaussLegendre4",
+                | aevia_std::ode::Method::GaussLegendre6 => "GaussLegendre6",
             }),
         ),
     ])
@@ -7744,54 +7748,52 @@ fn ode_bvp_call(
     let options = ode_options(args, 4, span)?;
     let (shape, flat) = flatten_state(&guess)?;
     let failure: std::cell::RefCell<Option<EvalError>> = std::cell::RefCell::new(None);
-    let outcome = {
-        let cell = std::cell::RefCell::new(&mut *interp);
-        let mut rhs = |t: f64, state: &[f64]| {
-            ode_rate_value(
-                &mut cell.borrow_mut(),
-                &function,
-                &shape,
-                &time_dim,
-                t,
-                state,
-                &mut failure.borrow_mut(),
-                span,
-            )
-        };
-        let mut boundary = |left: &[f64], right: &[f64]| -> Vec<f64> {
-            let arguments = vec![rebuild_state(&shape, left), rebuild_state(&shape, right)];
-            let residual = cell.borrow_mut().apply(condition.clone(), arguments, span);
-            let outcome = match residual {
+    let outcome =
+        {
+            let cell = std::cell::RefCell::new(&mut *interp);
+            let mut rhs = |t: f64, state: &[f64]| {
+                ode_rate_value(
+                    &mut cell.borrow_mut(),
+                    &function,
+                    &shape,
+                    &time_dim,
+                    t,
+                    state,
+                    &mut failure.borrow_mut(),
+                    span,
+                )
+            };
+            let mut boundary =
+                |left: &[f64], right: &[f64]| -> Vec<f64> {
+                    let arguments = vec![rebuild_state(&shape, left), rebuild_state(&shape, right)];
+                    let residual = cell.borrow_mut().apply(condition.clone(), arguments, span);
+                    let outcome = match residual {
                 | Ok(Value::Tensor(tensor)) => tensor_values(&tensor),
-                | Ok(Value::Num(number)) => {
-                    number.to_f64().map(|v| vec![v]).ok_or_else(|| {
-                        EvalError::new("E0302", "a boundary residual must be a `Float`").at(span)
-                    })
-                },
-                | Ok(other) => {
-                    Err(EvalError::new(
-                        "E0302",
-                        format!(
-                            "the boundary condition must answer a tensor of residuals, found {}",
-                            other.type_name()
-                        ),
-                    )
-                    .at(span))
-                },
+                | Ok(Value::Num(number)) => number.to_f64().map(|v| vec![v]).ok_or_else(|| {
+                    EvalError::new("E0302", "a boundary residual must be a `Float`").at(span)
+                }),
+                | Ok(other) => Err(EvalError::new(
+                    "E0302",
+                    format!(
+                        "the boundary condition must answer a tensor of residuals, found {}",
+                        other.type_name()
+                    ),
+                )
+                .at(span)),
                 | Err(error) => Err(error),
             };
-            match outcome {
-                | Ok(values) => values,
-                | Err(error) => {
-                    if failure.borrow().is_none() {
-                        *failure.borrow_mut() = Some(error);
+                    match outcome {
+                        | Ok(values) => values,
+                        | Err(error) => {
+                            if failure.borrow().is_none() {
+                                *failure.borrow_mut() = Some(error);
+                            }
+                            Vec::new()
+                        },
                     }
-                    Vec::new()
-                },
-            }
+                };
+            aevia_std::ode::shoot(&mut rhs, &flat, (start, end), options, &mut boundary)
         };
-        aevia_std::ode::shoot(&mut rhs, &flat, (start, end), options, &mut boundary)
-    };
     if let Some(error) = failure.into_inner() {
         return Err(error);
     }
@@ -8379,12 +8381,18 @@ fn sde_method_named(name: &str) -> Option<aevia_std::sde::Method> {
         | "MilsteinNoncommutativeStratonovich" => {
             aevia_std::sde::Method::MilsteinNoncommutativeStratonovich
         },
+        | "DriftImplicitEuler" => aevia_std::sde::Method::DriftImplicitEuler,
+        | "ThetaMaruyama" => aevia_std::sde::Method::ThetaMaruyama,
+        | "DriftImplicitMilstein" => aevia_std::sde::Method::DriftImplicitMilstein,
         | _ => return None,
     })
 }
 
 /// The `SdeMethod` value the `SdePath` record reports.
-fn sde_method_value(method: aevia_std::sde::Method) -> Value {
+fn sde_method_value(
+    method: aevia_std::sde::Method,
+    source_adt: adt::AdtId,
+) -> Value {
     let (index, name) = match method {
         | aevia_std::sde::Method::EulerMaruyama => (0, "EulerMaruyama"),
         | aevia_std::sde::Method::Milstein => (1, "Milstein"),
@@ -8395,13 +8403,13 @@ fn sde_method_value(method: aevia_std::sde::Method) -> Value {
         | aevia_std::sde::Method::MilsteinNoncommutativeStratonovich => {
             (6, "MilsteinNoncommutativeStratonovich")
         },
+        | aevia_std::sde::Method::DriftImplicitEuler => (7, "DriftImplicitEuler"),
+        | aevia_std::sde::Method::ThetaMaruyama => (8, "ThetaMaruyama"),
+        | aevia_std::sde::Method::DriftImplicitMilstein => (9, "DriftImplicitMilstein"),
     };
-    let id = adt::intern(adt::Adt {
-        name: "SdeMethod".to_string(),
-        params: Vec::new(),
-        ctors: Vec::new(),
-    });
-    make_variant(id, index, name, Vec::new())
+    // Preserve the declaration witness from the options; rebuilding an opaque
+    // same-named host type would make a source constructor pattern never match.
+    make_variant(source_adt, index, name, Vec::new())
 }
 
 /// The noise structure a `SdeOpts` record names.
@@ -8491,7 +8499,7 @@ fn sde_dim_field(
 
 /// The `SdeOpts<T>` record as the standard library's `Options`, plus the time
 /// dimension the path's `t` tensor reports.
-fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError> {
+fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim, adt::AdtId), SdeError> {
     let Value::Variant(option) = value else {
         return Err(SdeError::Invalid(
             "the fourth argument must be `SdeOpts`".to_string(),
@@ -8502,11 +8510,12 @@ fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError
             "`SdeOpts` carries an options record".to_string(),
         ));
     };
-    let method = match record.fields.get("method") {
+    let (method, method_adt) = match record.fields.get("method") {
         | Some(Value::Variant(method)) => {
-            sde_method_named(&method.name).ok_or_else(|| {
+            let selected = sde_method_named(&method.name).ok_or_else(|| {
                 SdeError::Invalid(format!("`{}` is not an `SdeMethod`", method.name))
-            })?
+            })?;
+            (selected, method.adt)
         },
         | _ => {
             return Err(SdeError::Invalid(
@@ -8563,7 +8572,7 @@ fn sde_options(value: &Value) -> Result<(aevia_std::sde::Options, Dim), SdeError
             )));
         },
     };
-    Ok((options, time_dim))
+    Ok((options, time_dim, method_adt))
 }
 
 /// An `SdeError` as the opaque error value the `Result` carries.
@@ -8697,7 +8706,7 @@ fn sde_integrate(
         .cloned()
         .ok_or_else(|| arity(name, 4, 3, span))?;
     let general = name == "sdeint_general";
-    let (mut options, time_dim) = match sde_options(&options_value) {
+    let (mut options, time_dim, method_adt) = match sde_options(&options_value) {
         | Ok(pair) => pair,
         | Err(error) => return Ok(err(sde_error_value(&error))),
     };
@@ -8837,7 +8846,7 @@ fn sde_integrate(
                 ("nfev", Value::Num(NumVal::int(BigInt::from(path.nfev)))),
                 ("seed", Value::Num(NumVal::int(BigInt::from(path.seed)))),
                 ("noise", Value::Num(NumVal::int(BigInt::from(noise)))),
-                ("method", sde_method_value(path.method)),
+                ("method", sde_method_value(path.method, method_adt)),
             ])))
         },
         | Err(error) => Ok(err(sde_error_value(&error))),
@@ -9028,6 +9037,10 @@ fn ode_options(
             | "Bdf" => aevia_std::ode::Method::Bdf,
             | "Rosenbrock23" => aevia_std::ode::Method::Rosenbrock23,
             | "AutoSwitch" => aevia_std::ode::Method::Auto,
+            | "StormerVerlet" => aevia_std::ode::Method::StormerVerlet,
+            | "Ruth4" => aevia_std::ode::Method::Ruth4,
+            | "GaussLegendre4" => aevia_std::ode::Method::GaussLegendre4,
+            | "GaussLegendre6" => aevia_std::ode::Method::GaussLegendre6,
             | other => {
                 return Err(
                     EvalError::new("E0302", format!("`{other}` is not an `OdeMethod`")).at(span),
@@ -10067,6 +10080,12 @@ const DISTRIBUTION_CTORS: &[&str] = &[
     "StudentT",
     "Poisson",
     "Binomial",
+    "LogNormal",
+    "Weibull",
+    "Cauchy",
+    "F",
+    "NegativeBinomial",
+    "Geometric",
 ];
 
 /// The parameter record of a distribution argument, and the constructor that
@@ -10135,35 +10154,141 @@ fn distribution_from(
         | (_, Some(Value::Str(text))) => Some(text.to_string()),
         | _ => None,
     };
-    // A constructor fixes the distribution, so its fields must be the ones
-    // that distribution has; the field-name guess below is only for records.
-    let expected: Option<&[&str]> = match ctor {
-        | Some("Normal") => Some(&["mu", "sigma"]),
-        | Some("Uniform") => Some(&["lo", "hi"]),
-        | Some("Exponential") => Some(&["rate"]),
-        | Some("Gamma") => Some(&["shape", "rate"]),
-        | Some("Beta") => Some(&["alpha", "beta"]),
-        | Some("ChiSquared" | "StudentT") => Some(&["df"]),
-        | Some("Poisson") => Some(&["lambda"]),
-        | Some("Binomial") => Some(&["n", "p"]),
-        | _ => None,
-    };
-    if let (Some(ctor), Some(expected)) = (ctor, expected) {
-        if let Some(missing) = expected.iter().find(|field| !has(field)) {
-            return Err(
-                EvalError::new("E0306", format!("`{ctor}` needs a field `{missing}`")).at(span),
-            );
-        }
-        if ctor == "Exponential" {
-            return Ok(Distribution::Exponential {
-                rate: number("rate")?,
-            });
-        }
+    // Nominal constructors fix the distribution, even when parameter records
+    // share fields (Normal/LogNormal, StudentT/ChiSquared).
+    if let Some(ctor) = ctor {
+        let trials = || -> Result<u64, EvalError> {
+            let Some(Value::Num(n)) = record.fields.get("n") else {
+                return Err(
+                    EvalError::new("E0306", "Binomial needs an integer field `n`").at(span),
+                );
+            };
+            let NumKind::Int(n) = &n.kind else {
+                return Err(EvalError::new(
+                    "E0306",
+                    "Binomial trials must be a nonnegative integer",
+                )
+                .at(span));
+            };
+            n.to_u64().ok_or_else(|| {
+                EvalError::new("E0306", "Binomial trials must fit a nonnegative u64").at(span)
+            })
+        };
+        return Ok(match ctor {
+            | "Normal" => {
+                Distribution::Normal {
+                    mu: number("mu")?,
+                    sigma: number("sigma")?,
+                }
+            },
+            | "LogNormal" => {
+                Distribution::LogNormal {
+                    mu: number("mu")?,
+                    sigma: number("sigma")?,
+                }
+            },
+            | "Uniform" => {
+                Distribution::Uniform {
+                    lo: number("lo")?,
+                    hi: number("hi")?,
+                }
+            },
+            | "Exponential" => {
+                Distribution::Exponential {
+                    rate: number("rate")?,
+                }
+            },
+            | "Gamma" => {
+                Distribution::Gamma {
+                    shape: number("shape")?,
+                    rate: number("rate")?,
+                }
+            },
+            | "Beta" => {
+                Distribution::Beta {
+                    alpha: number("alpha")?,
+                    beta: number("beta")?,
+                }
+            },
+            | "ChiSquared" => Distribution::ChiSquared { df: number("df")? },
+            | "StudentT" => Distribution::StudentT { df: number("df")? },
+            | "Poisson" => {
+                Distribution::Poisson {
+                    lambda: number("lambda")?,
+                }
+            },
+            | "Binomial" => {
+                Distribution::Binomial {
+                    n: trials()?,
+                    p: number("p")?,
+                }
+            },
+            | "Weibull" => {
+                Distribution::Weibull {
+                    shape: number("shape")?,
+                    scale: number("scale")?,
+                }
+            },
+            | "Cauchy" => {
+                Distribution::Cauchy {
+                    loc: number("loc")?,
+                    scale: number("scale")?,
+                }
+            },
+            | "F" => {
+                Distribution::F {
+                    df1: number("df1")?,
+                    df2: number("df2")?,
+                }
+            },
+            | "NegativeBinomial" => {
+                Distribution::NegativeBinomial {
+                    r: number("r")?,
+                    p: number("p")?,
+                }
+            },
+            | "Geometric" => Distribution::Geometric { p: number("p")? },
+            | _ => unreachable!("distribution_parts only accepts known constructors"),
+        });
+    }
+    if has("shape") && has("scale") {
+        return Ok(Distribution::Weibull {
+            shape: number("shape")?,
+            scale: number("scale")?,
+        });
+    }
+    if has("loc") && has("scale") {
+        return Ok(Distribution::Cauchy {
+            loc: number("loc")?,
+            scale: number("scale")?,
+        });
+    }
+    if has("df1") && has("df2") {
+        return Ok(Distribution::F {
+            df1: number("df1")?,
+            df2: number("df2")?,
+        });
+    }
+    if has("r") && has("p") {
+        return Ok(Distribution::NegativeBinomial {
+            r: number("r")?,
+            p: number("p")?,
+        });
+    }
+    if has("p") && !has("n") {
+        return Ok(Distribution::Geometric { p: number("p")? });
     }
     if has("mu") && has("sigma") {
-        return Ok(Distribution::Normal {
-            mu: number("mu")?,
-            sigma: number("sigma")?,
+        return Ok(if kind.as_deref() == Some("log_normal") {
+            Distribution::LogNormal {
+                mu: number("mu")?,
+                sigma: number("sigma")?,
+            }
+        } else {
+            Distribution::Normal {
+                mu: number("mu")?,
+                sigma: number("sigma")?,
+            }
         });
     }
     if has("lo") && has("hi") {
@@ -10225,9 +10350,17 @@ fn distribution_dim(
     args: &[Value],
     span: Span,
 ) -> Result<Dim, EvalError> {
-    let Some((record, _)) = distribution_parts(args.first()) else {
+    let Some((record, ctor)) = distribution_parts(args.first()) else {
         return Err(EvalError::new("E0302", "expected a distribution").at(span));
     };
+    if ctor == Some("LogNormal")
+        || matches!(record.fields.get("kind"), Some(Value::Str(kind)) if kind.as_ref() == "log_normal")
+    {
+        return Ok(Dim::one());
+    }
+    if let Some(Value::Num(scale)) = record.fields.get("scale") {
+        return Ok(scale.dim.clone());
+    }
     // `Normal<d>` carries `d` on `mu`; `Exponential<d>` carries `1/d` on `rate`.
     if let Some(Value::Num(mu)) = record.fields.get("mu") {
         return Ok(mu.dim.clone());

@@ -9283,9 +9283,13 @@ impl Checker {
         // 3. Initial state and 4. policy record (the record literal checks its
         // own field types; the policy schema is closed in the standard library).
         self.check(&args[2], &state);
-        self.synth(&args[3]);
+        let policy = self.synth(&args[3]);
+        let policy = self.infer.resolve(&policy);
         let sde_error = builtin_type("SdeError").unwrap_or(Type::Error);
-        let method = builtin_type("SdeMethod").unwrap_or(Type::Error);
+        // Derive the nominal method witness from the actual option type,
+        // rather than guessing the spelling used to import the Sde module.
+        let method = sde_policy_method_type(&policy)
+            .unwrap_or_else(|| builtin_type("SdeMethod").unwrap_or(Type::Error));
         let path = Type::record(vec![
             (
                 "t".to_string(),
@@ -12453,6 +12457,29 @@ fn ctor_scheme(
         materializations: Vec::new(),
         ty,
     }
+}
+
+/// The method field shared by the records carried by a concrete SDE policy.
+/// Source aliases have already been expanded when constructor fields are stored.
+fn sde_policy_method_type(policy: &Type) -> Option<Type> {
+    let Type::Adt(id, params) = policy else {
+        return None;
+    };
+    let definition = adt::get(*id)?;
+    let mut selected = None;
+    for field in definition.ctors.iter().flat_map(|ctor| &ctor.fields) {
+        let Type::Record(row) = field.substitute_params(params) else {
+            continue;
+        };
+        let Some(method @ Type::Adt(_, _)) = row.field("method") else {
+            continue;
+        };
+        if selected.as_ref().is_some_and(|previous| previous != method) {
+            return None;
+        }
+        selected = Some(method.clone());
+    }
+    selected
 }
 
 #[must_use]

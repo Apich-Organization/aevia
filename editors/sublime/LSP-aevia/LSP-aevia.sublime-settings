@@ -1,0 +1,8 @@
+{
+    // The server speaks LSP 3.17 on stdio. If only the CLI is installed use
+    // ["aevia", "lsp", "--stdio"].
+    "command": ["aevia-lsp", "--stdio"],
+    "selector": "source.aevia",
+    "initializationOptions": {},
+    "settings": {},
+}

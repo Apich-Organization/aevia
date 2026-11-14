@@ -1,0 +1,28 @@
+<idea-plugin>
+    <id>dev.aevia.jetbrains</id>
+    <name>Aevia</name>
+    <vendor>The Aevia authors</vendor>
+    <description><![CDATA[
+        Language support for <b>Aevia</b> (<code>.aev</code>): syntax highlighting and the
+        <code>aevia-lsp</code> language server &mdash; diagnostics, hover, completion,
+        go to definition, references, rename, signature help, formatting and semantic tokens.
+        <p>Requires <code>aevia-lsp</code> (or the <code>aevia</code> CLI) on PATH, or the
+        <code>AEVIA_LSP</code> environment variable pointing at the executable.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.textmate</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+
+    <extensions defaultExtensionNs="org.jetbrains.plugins.textmate">
+        <bundleProvider implementation="dev.aevia.jetbrains.AeviaTextMateBundleProvider"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server id="aevia" name="Aevia Language Server"
+                factoryClass="dev.aevia.jetbrains.AeviaLanguageServerFactory">
+            <description><![CDATA[Runs <code>aevia-lsp --stdio</code> for Aevia files.]]></description>
+        </server>
+        <fileNamePatternMapping patterns="*.aev" serverId="aevia" languageId="aevia"/>
+    </extensions>
+</idea-plugin>

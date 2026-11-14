@@ -1,0 +1,4 @@
+{
+  "grammars": [{ "name": "aevia", "camelcase": "Aevia", "scope": "source.aevia", "path": ".", "file-types": ["aev"], "highlights": "queries/highlights.scm" }],
+  "metadata": { "version": "0.1.0", "license": "Apache-2.0", "description": "Lexical tree-sitter grammar for Aevia" }
+}

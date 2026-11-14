@@ -434,6 +434,12 @@ fn type_declarations(
                     "StudentT",
                     "Poisson",
                     "Binomial",
+                    "LogNormal",
+                    "Weibull",
+                    "Cauchy",
+                    "F",
+                    "NegativeBinomial",
+                    "Geometric",
                     "Distribution",
                 ],
             )

@@ -769,6 +769,8 @@ impl<'a> Solver<'a> {
         }
     }
 
+    // Cold failures retain structured blame; boxing would change the internal error contract.
+    #[allow(clippy::result_large_err)]
     fn solve(
         &mut self,
         pending: Vec<Pending>,
@@ -922,6 +924,7 @@ impl<'a> Solver<'a> {
     }
 
     /// Every requirement is met; reject a ring of dependencies.
+    #[allow(clippy::result_large_err)] // Same structured cold failure as `solve`.
     fn finish(&self) -> Result<(), Fail> {
         let count = self.active.len();
         let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); count];

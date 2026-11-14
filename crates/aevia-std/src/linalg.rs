@@ -2,15 +2,10 @@
 //!
 //! Matrices are row-major `&[f64]` with an explicit row and column count.
 //!
-//! The `f64` kernels — `matmul`, `det`, `inv`, `solve`, `lu`, `qr` — run on
-//! [`faer`](https://codeberg.org/sarah-quinones/faer), which is a blocked,
-//! optionally parallel BLAS/LAPACK-class backend; [`legacy`] holds the code
-//! they replaced (`nalgebra` for the factorisations, a triple loop for
-//! `matmul`) and is what answers a shape `faer` cannot express.
-//!
-//! `eig`, `eigvals`, `svd`, `lstsq` and `cholesky` are still `nalgebra`'s.
-//! They are iterative and were not in scope for the backend change; moving
-//! them would have to be justified by a measurement of its own.
+//! Floating-point arithmetic and factorizations run in [`rssn::kernels::dense`].
+//! This module validates and marshals Aevia's shapes and complex values. The
+//! optimized determinant/solve/product family retains its blocked faer backend
+//! in RSSN; eigendecompositions and SVD use RSSN's shared implementations.
 //!
 //! Where exactness matters the path does not come near either float backend:
 //! `lu_exact` and `qr_exact` run over `BigRational` so an exact matrix keeps an
@@ -30,19 +25,50 @@ use num_traits::One;
 use num_traits::Signed;
 use num_traits::Zero;
 
+mod extended;
 mod faer_backend;
 pub mod legacy;
 
-use legacy::matrix;
-use legacy::vector;
+pub use extended::MatrixNorm;
+pub use extended::cond;
+pub use extended::cond_norm;
+pub use extended::eigvals_generalized;
+pub use extended::expm;
+pub use extended::logm;
+pub use extended::lyapunov;
+pub use extended::norm;
+pub use extended::pinv;
+pub use extended::pinv_tol;
+pub use extended::qr_pivoted;
+pub use extended::qz;
+pub use extended::schur;
+pub use extended::sqrtm;
+pub use extended::sylvester;
 
-/// `true` when a dimension is empty, in which case `faer` asserts instead of
-/// answering and [`legacy`] answers.
-fn empty(
+#[cfg(test)]
+use legacy::matrix;
+use rssn::kernels::dense;
+
+fn kernel_matrix(
     rows: usize,
     cols: usize,
-) -> bool {
-    rows == 0 || cols == 0
+    a: &[f64],
+) -> Result<dense::Mat, NumericError> {
+    if rows.checked_mul(cols) != Some(a.len()) {
+        return Err(NumericError::ShapeMismatch(
+            "matrix shape does not match storage".into(),
+        ));
+    }
+    if a.iter().any(|v| !v.is_finite()) {
+        return Err(NumericError::Domain(
+            "matrix contains non-finite entries".into(),
+        ));
+    }
+    Ok(dense::Mat {
+        rows,
+        cols,
+        data: a.to_vec(),
+    })
 }
 
 /// The determinant of a square matrix.
@@ -57,9 +83,6 @@ pub fn det(
 ) -> Result<f64, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
-    }
-    if rows == 0 {
-        return legacy::det(rows, cols, a);
     }
     faer_backend::det(rows, cols, a)
 }
@@ -77,9 +100,6 @@ pub fn inv(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    if rows == 0 {
-        return legacy::inv(rows, cols, a);
-    }
     faer_backend::inv(rows, cols, a)
 }
 
@@ -96,9 +116,6 @@ pub fn solve(
 ) -> Result<Vec<f64>, NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
-    }
-    if rows == 0 {
-        return legacy::solve(rows, cols, a, b);
     }
     faer_backend::solve(rows, cols, a, b)
 }
@@ -125,18 +142,6 @@ pub fn matmul(
     a: &[f64],
     b: &[f64],
 ) -> Result<Vec<f64>, NumericError> {
-    if empty(rows, cols) || inner == 0 {
-        if rows * inner != a.len() || inner * cols != b.len() {
-            return Err(NumericError::ShapeMismatch(format!(
-                "{rows}x{inner} times {inner}x{cols} needs {} and {} elements, found {} and {}",
-                rows * inner,
-                inner * cols,
-                a.len(),
-                b.len()
-            )));
-        }
-        return Ok(legacy::matmul(rows, inner, cols, a, b));
-    }
     faer_backend::matmul(rows, inner, cols, a, b)
 }
 
@@ -155,13 +160,7 @@ pub fn lstsq(
     a: &[f64],
     b: &[f64],
 ) -> Result<Vec<f64>, NumericError> {
-    let matrix = matrix(rows, cols, a)?;
-    let rhs = vector(rows, b)?;
-    let svd = matrix.svd(true, true);
-    let solution = svd
-        .solve(&rhs, 1e-12)
-        .map_err(|_| NumericError::NotConverged)?;
-    Ok(solution.as_slice().to_vec())
+    dense::optimized::lstsq(rows, cols, a, b).map_err(faer_backend::error)
 }
 
 /// The eigenvalues and eigenvectors of a square matrix.
@@ -182,22 +181,19 @@ pub fn eig(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    let matrix = matrix(rows, cols, a)?;
-    let values: Vec<Complex> = matrix
-        .complex_eigenvalues()
-        .into_iter()
-        .map(|value| Complex::new(value.re, value.im))
-        .collect();
-    if values.len() != rows {
-        return Err(NumericError::NotConverged);
-    }
-    let mut vectors = vec![Complex::default(); rows * rows];
-    for (column, value) in values.iter().enumerate() {
-        let vector = eigenvector(rows, a, *value)?;
-        for row in 0..rows {
-            vectors[row * rows + column] = vector[row];
+    let result = dense::eigen(&kernel_matrix(rows, cols, a)?).map_err(faer_backend::error)?;
+    // Marshal RSSN's per-column eigenvectors into Aevia's row-major matrix.
+    let mut vectors = vec![Complex::default(); rows * cols];
+    for (column, vector) in result.vectors.into_iter().enumerate() {
+        for (row, value) in vector.into_iter().enumerate() {
+            vectors[row * cols + column] = Complex::new(value.re, value.im);
         }
     }
+    let values = result
+        .values
+        .into_iter()
+        .map(|(re, im)| Complex::new(re, im))
+        .collect();
     Ok((values, vectors))
 }
 
@@ -214,109 +210,11 @@ pub fn eigvals(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    Ok(matrix(rows, cols, a)?
-        .complex_eigenvalues()
+    Ok(dense::eigenvalues(&kernel_matrix(rows, cols, a)?)
+        .map_err(faer_backend::error)?
         .into_iter()
-        .map(|value| Complex::new(value.re, value.im))
+        .map(|(re, im)| Complex::new(re, im))
         .collect())
-}
-
-/// An eigenvector for `lambda`, from the null space of `A - lambda I`.
-///
-/// The null space is found by complex Gaussian elimination: the reduced matrix
-/// has a free column (the eigenvalue makes it singular), the free variable is
-/// set to one and the rest is back-substituted. When rounding leaves the matrix
-/// non-singular the answer falls back to the last basis vector, which is a
-/// legitimate (if uninteresting) representative and keeps the shape promise.
-fn eigenvector(
-    n: usize,
-    a: &[f64],
-    lambda: Complex,
-) -> Result<Vec<Complex>, NumericError> {
-    let mut m: Vec<Vec<Complex>> = (0..n)
-        .map(|row| {
-            (0..n)
-                .map(|column| {
-                    let entry = a[row * n + column];
-                    if row == column {
-                        Complex::new(entry - lambda.re, -lambda.im)
-                    } else {
-                        Complex::new(entry, 0.0)
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    // Row echelon form with partial pivoting by modulus.
-    let mut pivot_of_row = vec![usize::MAX; n];
-    let mut row = 0;
-    for column in 0..n {
-        let mut best = row;
-        for candidate in row..n {
-            if m[candidate][column].abs() > m[best][column].abs() {
-                best = candidate;
-            }
-        }
-        if m[best][column].abs() < 1e-12 {
-            continue;
-        }
-        m.swap(row, best);
-        let pivot = m[row][column];
-        for inner in column..n {
-            m[row][inner] = m[row][inner].div(pivot);
-        }
-        for other in 0..n {
-            if other == row {
-                continue;
-            }
-            let factor = m[other][column];
-            if factor.abs() == 0.0 {
-                continue;
-            }
-            for inner in column..n {
-                let term = factor.mul(m[row][inner]);
-                m[other][inner] =
-                    Complex::new(m[other][inner].re - term.re, m[other][inner].im - term.im);
-            }
-        }
-        pivot_of_row[row] = column;
-        row += 1;
-        if row == n {
-            break;
-        }
-    }
-    let taken: Vec<usize> = pivot_of_row
-        .iter()
-        .copied()
-        .filter(|&c| c != usize::MAX)
-        .collect();
-    let free = (0..n).find(|column| !taken.contains(column));
-    let Some(free) = free else {
-        // No free column: numerical noise. Any vector is as good as another.
-        let mut vector = vec![Complex::default(); n];
-        vector[n - 1] = Complex::new(1.0, 0.0);
-        return Ok(vector);
-    };
-    let mut vector = vec![Complex::default(); n];
-    vector[free] = Complex::new(1.0, 0.0);
-    for (row, &column) in pivot_of_row.iter().enumerate() {
-        if column == usize::MAX {
-            continue;
-        }
-        vector[column] = Complex::new(-m[row][free].re, -m[row][free].im);
-    }
-    // Normalise so that the vectors of a matrix are comparable across runs.
-    let norm = vector
-        .iter()
-        .map(|value| value.re * value.re + value.im * value.im)
-        .sum::<f64>()
-        .sqrt();
-    if norm > 0.0 {
-        for value in &mut vector {
-            *value = Complex::new(value.re / norm, value.im / norm);
-        }
-    }
-    Ok(vector)
 }
 
 /// The economy singular value decomposition (§8.4).
@@ -332,26 +230,8 @@ pub fn svd(
     cols: usize,
     a: &[f64],
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), NumericError> {
-    let matrix = matrix(rows, cols, a)?;
-    let k = rows.min(cols);
-    let svd = matrix.svd(true, true);
-    let u = svd.u.ok_or(NumericError::NotConverged)?;
-    let vt = svd.v_t.ok_or(NumericError::NotConverged)?;
-    // `nalgebra` returns the thin factors; make the shape promise explicit.
-    let mut u_out = vec![0.0; rows * k];
-    for row in 0..rows {
-        for column in 0..k.min(u.ncols()) {
-            u_out[row * k + column] = u[(row, column)];
-        }
-    }
-    let mut vt_out = vec![0.0; k * cols];
-    for row in 0..k.min(vt.nrows()) {
-        for column in 0..cols {
-            vt_out[row * cols + column] = vt[(row, column)];
-        }
-    }
-    let s: Vec<f64> = svd.singular_values.iter().copied().collect();
-    Ok((u_out, s, vt_out))
+    let factors = dense::svd(&kernel_matrix(rows, cols, a)?).map_err(faer_backend::error)?;
+    Ok((factors.u.data, factors.s, factors.v.transpose().data))
 }
 
 /// The QR decomposition `A = Q R` with `Q` orthonormal.
@@ -367,9 +247,6 @@ pub fn qr(
     cols: usize,
     a: &[f64],
 ) -> Result<(Vec<f64>, Vec<f64>), NumericError> {
-    if empty(rows, cols) {
-        return legacy::qr(rows, cols, a);
-    }
     faer_backend::qr(rows, cols, a)
 }
 
@@ -385,9 +262,6 @@ pub fn lu(
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), NumericError> {
     if rows != cols {
         return Err(NumericError::NotSquare);
-    }
-    if rows == 0 {
-        return legacy::lu(rows, cols, a);
     }
     faer_backend::lu(rows, cols, a)
 }
@@ -405,16 +279,14 @@ pub fn cholesky(
     if rows != cols {
         return Err(NumericError::NotSquare);
     }
-    let matrix = matrix(rows, cols, a)?;
-    let factor = matrix.cholesky().ok_or(NumericError::NotPositiveDefinite)?;
-    let l = factor.l();
-    let mut out = vec![0.0; rows * rows];
-    for row in 0..rows {
-        for column in 0..rows {
-            out[row * rows + column] = l[(row, column)];
-        }
-    }
-    Ok(out)
+    dense::cholesky(&kernel_matrix(rows, cols, a)?)
+        .map(|factor| factor.data)
+        .map_err(|error| {
+            match error {
+                | dense::DenseError::Singular => NumericError::NotPositiveDefinite,
+                | other => faer_backend::error(other),
+            }
+        })
 }
 
 /// The lower triangle of a matrix, the rest zeroed.
@@ -636,6 +508,12 @@ mod tests {
                 unit * 8.0 - 4.0 + 0.25
             })
             .collect()
+    }
+
+    #[test]
+    fn empty_inputs_do_not_hide_overflowing_output_shapes() {
+        assert!(matmul(usize::MAX, 0, 2, &[], &[]).is_err());
+        assert!(qr(usize::MAX, 0, &[]).is_err());
     }
 
     #[test]
@@ -896,8 +774,8 @@ mod tests {
 
     #[test]
     fn an_empty_matrix_is_still_answered() {
-        // `faer` asserts on a zero dimension; the legacy path answers, and the
-        // dispatch sends it there.
+        // The RSSN optimized adapter handles zero dimensions before invoking
+        // a faer factorization.
         assert_eq!(det(0, 0, &[]), Ok(1.0));
         assert_eq!(inv(0, 0, &[]), Ok(Vec::new()));
         assert_eq!(
@@ -918,5 +796,26 @@ mod tests {
             solve(2, 2, &[1.0, 0.0, 0.0, 1.0], &[1.0]),
             Err(NumericError::ShapeMismatch(_))
         ));
+    }
+    #[test]
+    fn shared_kernel_eigenvectors_remain_valid_for_uniformly_tiny_matrices() {
+        let a = [2e-20, 1e-20, 1e-20, 2e-20];
+        let (values, vectors) = eig(2, 2, &a).unwrap();
+        for column in 0..2 {
+            for row in 0..2 {
+                let first = vectors[column].mul(Complex::new(a[row * 2], 0.0));
+                let second = vectors[2 + column].mul(Complex::new(a[row * 2 + 1], 0.0));
+                let rhs = values[column].mul(vectors[row * 2 + column]);
+                assert!(
+                    (first.re + second.re - rhs.re).hypot(first.im + second.im - rhs.im) < 1e-32
+                );
+            }
+        }
+        assert_eq!(
+            lstsq(2, 3, &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[2.0, 3.0]).unwrap(),
+            vec![2.0, 3.0, 0.0]
+        );
+        let (u, s, vt) = svd(0, 3, &[]).unwrap();
+        assert!(u.is_empty() && s.is_empty() && vt.is_empty());
     }
 }

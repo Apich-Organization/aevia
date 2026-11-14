@@ -1,0 +1,14 @@
+node_modules/
+*.vsix
+*.elc
+.vsc-test-*/
+zed/target/
+zed/Cargo.lock
+zed/extension.wasm
+jetbrains/build/
+jetbrains/.gradle/
+jetbrains/.kotlin/
+tree-sitter-aevia/node_modules/
+tree-sitter-aevia/build/
+tree-sitter-aevia/*.so
+tree-sitter-aevia/*.wasm

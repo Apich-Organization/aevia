@@ -11,7 +11,23 @@
 //! different answer.
 
 use crate::NumericError;
-use crate::linalg;
+use rssn::kernels::interp_ext;
+
+mod extended;
+pub use extended::BSpline;
+pub use extended::RbfKernel;
+pub use extended::SplineBc;
+pub use extended::akima;
+pub use extended::bicubic;
+pub use extended::bspline_eval;
+pub use extended::cubic_spline;
+pub use extended::delaunay_linear_2d;
+pub use extended::interpn;
+pub use extended::pade;
+pub use extended::pchip;
+pub use extended::rational_eval;
+pub use extended::rbf_interp;
+pub use extended::shepard_idw;
 
 /// Linear interpolation of `(xs, ys)` at `x`.
 ///
@@ -27,39 +43,7 @@ pub fn interp1(
     ys: &[f64],
     x: f64,
 ) -> Result<f64, NumericError> {
-    if xs.len() != ys.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "interp1 needs two samples of one length, found {} and {}",
-            xs.len(),
-            ys.len()
-        )));
-    }
-    if xs.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    if xs.len() == 1 {
-        return Ok(ys[0]);
-    }
-    // Locate the segment; the samples are assumed sorted, and a scan keeps the
-    // function total when they are not.
-    let mut index = 0;
-    for candidate in 0..xs.len() - 1 {
-        if x >= xs[candidate] && x <= xs[candidate + 1] {
-            index = candidate;
-            break;
-        }
-        if x < xs[0] {
-            index = 0;
-            break;
-        }
-        index = candidate;
-    }
-    let (x0, x1) = (xs[index], xs[index + 1]);
-    let (y0, y1) = (ys[index], ys[index + 1]);
-    if x1 == x0 {
-        return Ok(y0);
-    }
-    Ok(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
+    interp_ext::interp1(xs, ys, x).map_err(extended::map_err)
 }
 
 /// Natural cubic spline interpolation at `x`.
@@ -74,54 +58,7 @@ pub fn spline(
     ys: &[f64],
     x: f64,
 ) -> Result<f64, NumericError> {
-    if xs.len() != ys.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "spline needs two samples of one length, found {} and {}",
-            xs.len(),
-            ys.len()
-        )));
-    }
-    let n = xs.len();
-    if n < 3 {
-        return interp1(xs, ys, x);
-    }
-    // Second derivatives from the tridiagonal system with natural end
-    // conditions (y'' = 0 at both ends).
-    let mut second = vec![0.0; n];
-    let mut u = vec![0.0; n];
-    for index in 1..n - 1 {
-        let sigma = (xs[index] - xs[index - 1]) / (xs[index + 1] - xs[index - 1]);
-        let p = sigma * second[index - 1] + 2.0;
-        second[index] = (sigma - 1.0) / p;
-        u[index] = (ys[index + 1] - ys[index]) / (xs[index + 1] - xs[index])
-            - (ys[index] - ys[index - 1]) / (xs[index] - xs[index - 1]);
-        u[index] = (6.0 * u[index] / (xs[index + 1] - xs[index - 1]) - sigma * u[index - 1]) / p;
-    }
-    for index in (0..n - 1).rev() {
-        second[index] = second[index] * second[index + 1] + u[index];
-    }
-    // Locate the segment, clamping outside the range.
-    let mut lower = 0;
-    let mut upper = n - 1;
-    let mut index = 0;
-    while upper - lower > 1 {
-        let middle = (upper + lower) / 2;
-        if xs[middle] > x {
-            upper = middle;
-        } else {
-            lower = middle;
-        }
-    }
-    index = index.max(lower).min(n - 2);
-    let h = xs[index + 1] - xs[index];
-    if h == 0.0 {
-        return Ok(ys[index]);
-    }
-    let a = (xs[index + 1] - x) / h;
-    let b = (x - xs[index]) / h;
-    Ok(a * ys[index]
-        + b * ys[index + 1]
-        + ((a * a * a - a) * second[index] + (b * b * b - b) * second[index + 1]) * h * h / 6.0)
+    interp_ext::spline(xs, ys, x).map_err(extended::map_err)
 }
 
 /// Bilinear interpolation on a regular grid.
@@ -138,45 +75,7 @@ pub fn interp2(
     x: f64,
     y: f64,
 ) -> Result<f64, NumericError> {
-    let (nx, ny) = (xs.len(), ys.len());
-    if grid.len() != nx * ny {
-        return Err(NumericError::ShapeMismatch(format!(
-            "interp2 needs a {ny}x{nx} grid, found {} values",
-            grid.len()
-        )));
-    }
-    if nx < 2 || ny < 2 {
-        return Err(NumericError::Domain(
-            "interp2 needs at least two points per axis".to_string(),
-        ));
-    }
-    let locate = |axis: &[f64], value: f64| -> (usize, f64) {
-        let last = axis.len() - 1;
-        if value <= axis[0] {
-            return (0, 0.0);
-        }
-        if value >= axis[last] {
-            return (last - 1, 1.0);
-        }
-        for index in 0..last {
-            if value >= axis[index] && value <= axis[index + 1] {
-                let width = axis[index + 1] - axis[index];
-                let fraction = if width == 0.0 {
-                    0.0
-                } else {
-                    (value - axis[index]) / width
-                };
-                return (index, fraction);
-            }
-        }
-        (last - 1, 1.0)
-    };
-    let (column, fx) = locate(xs, x);
-    let (row, fy) = locate(ys, y);
-    let at = |row: usize, column: usize| grid[row * nx + column];
-    let low = at(row, column) * (1.0 - fx) + at(row, column + 1) * fx;
-    let high = at(row + 1, column) * (1.0 - fx) + at(row + 1, column + 1) * fx;
-    Ok(low * (1.0 - fy) + high * fy)
+    interp_ext::interp2(xs, ys, grid, x, y).map_err(extended::map_err)
 }
 
 /// The coefficients of the least-squares polynomial of `degree`, ascending.
@@ -190,29 +89,7 @@ pub fn polyfit(
     ys: &[f64],
     degree: usize,
 ) -> Result<Vec<f64>, NumericError> {
-    if xs.len() != ys.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "polyfit needs two samples of one length, found {} and {}",
-            xs.len(),
-            ys.len()
-        )));
-    }
-    let columns = degree + 1;
-    if xs.len() < columns {
-        return Err(NumericError::Domain(format!(
-            "a degree-{degree} fit needs {columns} points, found {}",
-            xs.len()
-        )));
-    }
-    let mut design = vec![0.0; xs.len() * columns];
-    for (row, x) in xs.iter().enumerate() {
-        let mut power = 1.0;
-        for column in 0..columns {
-            design[row * columns + column] = power;
-            power *= x;
-        }
-    }
-    linalg::lstsq(xs.len(), columns, &design, ys)
+    interp_ext::polyfit(xs, ys, degree).map_err(extended::map_err)
 }
 
 /// Evaluates a polynomial given its coefficients in ascending order.
@@ -221,13 +98,7 @@ pub fn polyval(
     coefficients: &[f64],
     x: f64,
 ) -> f64 {
-    // Horner, from the highest power down.
-    coefficients
-        .iter()
-        .rev()
-        .fold(0.0, |accumulator, coefficient| {
-            accumulator * x + coefficient
-        })
+    interp_ext::polyval(coefficients, x)
 }
 
 /// The monomial coefficients of the polynomial interpolating `(xs, ys)` at
@@ -242,108 +113,7 @@ pub fn chebyshev_fit(
     ys: &[f64],
     degree: usize,
 ) -> Result<Vec<f64>, NumericError> {
-    if xs.len() != ys.len() {
-        return Err(NumericError::ShapeMismatch(format!(
-            "chebyshev_fit needs two samples of one length, found {} and {}",
-            xs.len(),
-            ys.len()
-        )));
-    }
-    if xs.is_empty() {
-        return Err(NumericError::Empty);
-    }
-    let (low, high) = xs
-        .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), x| {
-            (low.min(*x), high.max(*x))
-        });
-    let count = degree + 1;
-    let nodes: Vec<f64> = (0..count)
-        .map(|index| {
-            let angle = std::f64::consts::PI * (index as f64 + 0.5) / count as f64;
-            let mapped = angle.cos();
-            if high > low {
-                0.5 * (low + high) + 0.5 * (high - low) * mapped
-            } else {
-                low
-            }
-        })
-        .collect();
-    // Interpolate at the nodes in the Chebyshev basis, then change basis.
-    let values: Vec<f64> = nodes
-        .iter()
-        .map(|node| interp1(xs, ys, *node))
-        .collect::<Result<_, _>>()?;
-    let scaled: Vec<f64> = nodes
-        .iter()
-        .map(|node| {
-            if high > low {
-                2.0 * (node - low) / (high - low) - 1.0
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    // Solve the Vandermonde system in the Chebyshev basis by Gaussian
-    // elimination; it is small (degree + 1) and well conditioned at these
-    // nodes.
-    let mut matrix = vec![0.0; count * count];
-    for row in 0..count {
-        for column in 0..count {
-            matrix[row * count + column] = crate::special::chebyshev_t(column as i32, scaled[row]);
-        }
-    }
-    let coefficients = linalg::solve(count, count, &matrix, &values)?;
-    // Convert sum c_k T_k(t) with t = (2x - low - high)/(high - low) into
-    // monomial coefficients in x.
-    let mut total = vec![0.0; count];
-    let mut previous: Vec<f64> = vec![1.0]; // T_0
-    let mut current: Vec<f64> = vec![0.0, 1.0]; // T_1 in t
-    for degree_index in 0..count {
-        let polynomial = if degree_index == 0 {
-            previous.clone()
-        } else if degree_index == 1 {
-            current.clone()
-        } else {
-            // T_k = 2 t T_{k-1} - T_{k-2}
-            let mut next = vec![0.0; degree_index + 1];
-            for (power, coefficient) in current.iter().enumerate() {
-                next[power + 1] += 2.0 * coefficient;
-            }
-            for (power, coefficient) in previous.iter().enumerate() {
-                next[power] -= coefficient;
-            }
-            previous = current.clone();
-            current = next.clone();
-            next
-        };
-        for (power, coefficient) in polynomial.iter().enumerate() {
-            total[power] += coefficients[degree_index] * coefficient;
-        }
-    }
-    // `total` is in the scaled variable `t`; substitute t = a x + b by Horner's
-    // rule, one degree at a time.
-    if high > low {
-        let a = 2.0 / (high - low);
-        let b = -(high + low) / (high - low);
-        let mut out: Vec<f64> = vec![0.0];
-        for power in (0..count).rev() {
-            let mut next = vec![0.0; out.len() + 1];
-            for (index, coefficient) in out.iter().enumerate() {
-                next[index] += coefficient * b;
-                next[index + 1] += coefficient * a;
-            }
-            next[0] += total[power];
-            out = next;
-        }
-        out.truncate(count);
-        out.resize(count, 0.0);
-        Ok(out)
-    } else {
-        let mut out = vec![0.0; count];
-        out[0] = total[0];
-        Ok(out)
-    }
+    interp_ext::chebyshev_fit(xs, ys, degree).map_err(extended::map_err)
 }
 
 #[cfg(test)]

@@ -1,16 +1,9 @@
 //! Special functions (§8.2.2) and the distribution kernels that need them.
 //!
-//! Every function here is a real approximation with a documented accuracy
-//! target of about 1e-8 relative, which is the accuracy of the classical
-//! rational approximations they are built from. Nothing is symbolic: `gamma`
-//! of an exact integer is handled by the runtime, because that is where
-//! exactness can be kept.
+//! Floating-point evaluation delegates to RSSN. Exact polynomial values remain
+//! in the language adapter to preserve Aevia rational-value semantics.
 
-// The Bessel approximations carry their published nine-digit constants (for
-// example `0.636_619_772` for `2/pi`): the coefficients were fitted together with
-// them, so replacing one by the exact value would change the approximation.
-#![allow(clippy::approx_constant)]
-
+#[cfg(test)]
 use std::f64::consts::PI;
 
 /// The natural logarithm of the Gamma function, for `x > 0`.
@@ -19,36 +12,13 @@ use std::f64::consts::PI;
 /// over the positive axis; reflection carries it to the negative one.
 #[must_use]
 pub fn ln_gamma(x: f64) -> f64 {
-    if x < 0.5 {
-        // Reflection: Gamma(x) Gamma(1-x) = pi / sin(pi x).
-        return (PI / (PI * x).sin().abs()).ln() - ln_gamma(1.0 - x);
-    }
-    const COEFFICIENTS: [f64; 8] = [
-        676.520_368_121_885_1,
-        -1_259.139_216_722_402_8,
-        771.323_428_777_653_1,
-        -176.615_029_162_140_6,
-        12.507_343_278_686_905,
-        -0.138_571_095_265_720_12,
-        9.984_369_578_019_572e-6,
-        1.505_632_735_149_311_6e-7,
-    ];
-    let shifted = x - 1.0;
-    let mut series = 0.999_999_999_999_809_9;
-    let t = shifted + 7.5;
-    for (index, coefficient) in COEFFICIENTS.iter().enumerate() {
-        series += coefficient / (shifted + index as f64 + 1.0);
-    }
-    0.5 * (2.0 * PI).ln() + (shifted + 0.5) * t.ln() - t + series.ln()
+    rssn::kernels::special::ln_gamma_numerical(x)
 }
 
 /// The Gamma function.
 #[must_use]
 pub fn gamma(x: f64) -> f64 {
-    if x < 0.5 {
-        return PI / ((PI * x).sin() * gamma(1.0 - x));
-    }
-    ln_gamma(x).exp()
+    rssn::kernels::special::gamma_numerical(x)
 }
 
 /// The Beta function `B(a, b)`.
@@ -57,27 +27,19 @@ pub fn beta(
     a: f64,
     b: f64,
 ) -> f64 {
-    (ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)).exp()
+    rssn::kernels::special::beta_numerical(a, b)
 }
 
 /// The error function, through the regularized incomplete Gamma function.
 #[must_use]
 pub fn erf(x: f64) -> f64 {
-    if x == 0.0 {
-        return 0.0;
-    }
-
-    if x > 0.0 {
-        regularized_gamma_p(0.5, x * x)
-    } else {
-        -regularized_gamma_p(0.5, x * x)
-    }
+    rssn::kernels::special::erf_numerical(x)
 }
 
 /// The complementary error function.
 #[must_use]
 pub fn erfc(x: f64) -> f64 {
-    1.0 - erf(x)
+    rssn::kernels::special::erfc_numerical(x)
 }
 
 /// `P(a, x)`: the regularized lower incomplete Gamma function.
@@ -89,49 +51,7 @@ pub fn regularized_gamma_p(
     a: f64,
     x: f64,
 ) -> f64 {
-    if x <= 0.0 || a <= 0.0 {
-        return 0.0;
-    }
-    if x < a + 1.0 {
-        // Series: P(a,x) = x^a e^-x / Gamma(a) * sum x^n / (a(a+1)...(a+n)).
-        let mut term = 1.0 / a;
-        let mut total = term;
-        let mut n = 0.0;
-        for _ in 0..1000 {
-            n += 1.0;
-            term *= x / (a + n);
-            total += term;
-            if term.abs() < total.abs() * 1e-16 {
-                break;
-            }
-        }
-        return total * (-x + a * x.ln() - ln_gamma(a)).exp();
-    }
-    // Continued fraction for Q(a, x), then complement.
-    let mut b = x + 1.0 - a;
-    let mut c = 1.0 / f64::MIN_POSITIVE;
-    let mut d = 1.0 / b;
-    let mut h = d;
-    for index in 1..1000 {
-        let index = index as f64;
-        let an = -index * (index - a);
-        b += 2.0;
-        d = an * d + b;
-        if d.abs() < f64::MIN_POSITIVE {
-            d = f64::MIN_POSITIVE;
-        }
-        c = b + an / c;
-        if c.abs() < f64::MIN_POSITIVE {
-            c = f64::MIN_POSITIVE;
-        }
-        d = 1.0 / d;
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() < 1e-16 {
-            break;
-        }
-    }
-    (1.0 - h * (-x + a * x.ln() - ln_gamma(a)).exp()).clamp(0.0, 1.0)
+    rssn::kernels::special::regularized_lower_gamma(a, x)
 }
 
 /// `Q(a, x)`: the regularized upper incomplete Gamma function.
@@ -140,7 +60,7 @@ pub fn regularized_gamma_q(
     a: f64,
     x: f64,
 ) -> f64 {
-    1.0 - regularized_gamma_p(a, x)
+    rssn::kernels::special::regularized_upper_gamma(a, x)
 }
 
 /// `I_x(a, b)`: the regularized incomplete Beta function.
@@ -150,68 +70,7 @@ pub fn regularized_beta(
     a: f64,
     b: f64,
 ) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let front =
-        (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        front * beta_continued_fraction(x, a, b) / a
-    } else {
-        1.0 - front * beta_continued_fraction(1.0 - x, b, a) / b
-    }
-}
-
-/// Lentz's continued fraction for the incomplete Beta function.
-fn beta_continued_fraction(
-    x: f64,
-    a: f64,
-    b: f64,
-) -> f64 {
-    const TINY: f64 = 1e-300;
-    let mut c = 1.0;
-    let mut d = 1.0 - (a + b) * x / (a + 1.0);
-    if d.abs() < TINY {
-        d = TINY;
-    }
-    d = 1.0 / d;
-    let mut h = d;
-    for index in 1..1000 {
-        let m = index as f64;
-        let m2 = 2.0 * m;
-        // Even step.
-        let mut aa = m * (b - m) * x / ((a + m2 - 1.0) * (a + m2));
-        d = 1.0 + aa * d;
-        if d.abs() < TINY {
-            d = TINY;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < TINY {
-            c = TINY;
-        }
-        d = 1.0 / d;
-        h *= d * c;
-        // Odd step.
-        aa = -(a + m) * (a + b + m) * x / ((a + m2) * (a + m2 + 1.0));
-        d = 1.0 + aa * d;
-        if d.abs() < TINY {
-            d = TINY;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < TINY {
-            c = TINY;
-        }
-        d = 1.0 / d;
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() < 1e-15 {
-            break;
-        }
-    }
-    h
+    rssn::kernels::special::regularized_beta(x, a, b)
 }
 
 /// The Riemann zeta function.
@@ -221,170 +80,31 @@ fn beta_continued_fraction(
 /// number would be a wrong answer that looks right.
 #[must_use]
 pub fn zeta(s: f64) -> f64 {
-    if s == 1.0 {
-        return f64::INFINITY;
-    }
-    if s < 0.0 {
-        // zeta(s) = 2^s pi^(s-1) sin(pi s / 2) Gamma(1-s) zeta(1-s).
-        let reflected = 2f64.powf(s) * PI.powf(s - 1.0) * (PI * s / 2.0).sin() * gamma(1.0 - s);
-        return reflected * zeta(1.0 - s);
-    }
-    if s == 0.0 {
-        return -0.5;
-    }
-    // Euler–Maclaurin: sum to N, then the tail expansion
-    //   sum_k B_2k/(2k)! * s(s+1)…(s+2k-2) * N^(-s-2k+1).
-    let n = 20usize;
-    let mut total = 0.0;
-    for k in 1..n {
-        total += (k as f64).powf(-s);
-    }
-    let n = n as f64;
-    total += n.powf(1.0 - s) / (s - 1.0);
-    total += 0.5 * n.powf(-s);
-    let bernoulli = [
-        1.0 / 6.0,
-        -1.0 / 30.0,
-        1.0 / 42.0,
-        -1.0 / 30.0,
-        5.0 / 66.0,
-        -691.0 / 2730.0,
-    ];
-    let mut rising = s;
-    let mut factorial = 2.0;
-    let mut power = n.powf(-s - 1.0);
-    for (index, coefficient) in bernoulli.iter().enumerate() {
-        total += coefficient * rising / factorial * power;
-        let k = (index + 1) as f64;
-        rising *= (s + 2.0 * k - 1.0) * (s + 2.0 * k);
-        factorial *= (2.0 * k + 1.0) * (2.0 * k + 2.0);
-        power /= n * n;
-    }
-    total
+    rssn::kernels::special::riemann_zeta(s)
 }
 
 /// The Bessel function of the first kind, order zero.
 #[must_use]
 pub fn bessel_j0(x: f64) -> f64 {
-    let ax = x.abs();
-    if ax < 8.0 {
-        let y = x * x;
-        let numerator = 57_568_490_574.0
-            + y * (-13_362_590_354.0
-                + y * (651_619_640.7
-                    + y * (-11_214_424.18 + y * (77_392.330_17 + y * (-184.905_245_6)))));
-        let denominator = 57_568_490_411.0
-            + y * (1_029_532_985.0
-                + y * (9_494_680.718 + y * (59_272.648_53 + y * (267.853_271_2 + y))));
-        numerator / denominator
-    } else {
-        let z = 8.0 / ax;
-        let y = z * z;
-        let xx = ax - 0.785_398_164;
-        let first = 1.0
-            + y * (-0.001_098_628_627
-                + y * (0.000_027_345_104_07
-                    + y * (-0.000_002_073_370_639 + y * 0.000_000_209_388_721_1)));
-        let second = -0.015_624_999_95
-            + y * (0.000_143_048_876_5
-                + y * (-0.000_006_911_147_651
-                    + y * (0.000_000_762_109_516_1 - y * 0.000_000_093_493_515_2)));
-        (0.636_619_772 / ax).sqrt() * (xx.cos() * first - z * xx.sin() * second)
-    }
+    rssn::kernels::special::bessel_j0(x)
 }
 
 /// The Bessel function of the first kind, order one.
 #[must_use]
 pub fn bessel_j1(x: f64) -> f64 {
-    let ax = x.abs();
-    if ax < 8.0 {
-        let y = x * x;
-        let numerator = x
-            * (72_362_614_232.0
-                + y * (-7_895_059_235.0
-                    + y * (242_396_853.1
-                        + y * (-2_972_611.439 + y * (15_704.482_60 + y * (-30.160_366_06))))));
-        let denominator = 144_725_228_442.0
-            + y * (2_300_535_178.0
-                + y * (18_583_304.74 + y * (99_447.433_94 + y * (376.999_139_7 + y))));
-        numerator / denominator
-    } else {
-        let z = 8.0 / ax;
-        let y = z * z;
-        let xx = ax - 2.356_194_491;
-        let first = 1.0
-            + y * (0.001_831_05
-                + y * (-0.000_035_163_964_96
-                    + y * (0.000_002_457_520_174 + y * (-0.000_000_240_337_019))));
-        let second = 0.046_874_999_95
-            + y * (-0.000_200_269_087_3
-                + y * (0.000_008_449_199_096
-                    + y * (-0.000_000_882_289_87 + y * 0.000_000_105_787_412)));
-        let answer = (0.636_619_772 / ax).sqrt() * (xx.cos() * first - z * xx.sin() * second);
-        if x < 0.0 { -answer } else { answer }
-    }
+    rssn::kernels::special::bessel_j1(x)
 }
 
 /// The Bessel function of the second kind, order zero.
 #[must_use]
 pub fn bessel_y0(x: f64) -> f64 {
-    if x < 8.0 {
-        let y = x * x;
-        let numerator = -2_957_821_389.0
-            + y * (7_062_834_065.0
-                + y * (-512_359_803.6
-                    + y * (10_879_881.29 + y * (-86_327.927_57 + y * 228.462_273_3))));
-        let denominator = 40_076_544_269.0
-            + y * (745_249_964.8
-                + y * (7_189_466.438 + y * (47_447.264_70 + y * (226.103_024_4 + y))));
-        numerator / denominator + 0.636_619_772 * bessel_j0(x) * x.ln()
-    } else {
-        let z = 8.0 / x;
-        let y = z * z;
-        let xx = x - 0.785_398_164;
-        let first = 1.0
-            + y * (-0.001_098_628_627
-                + y * (0.000_027_345_104_07
-                    + y * (-0.000_002_073_370_639 + y * 0.000_000_209_388_721_1)));
-        let second = -0.015_624_999_95
-            + y * (0.000_143_048_876_5
-                + y * (-0.000_006_911_147_651
-                    + y * (0.000_000_762_109_516_1 + y * (-0.000_000_093_494_515_2))));
-        (0.636_619_772 / x).sqrt() * (xx.sin() * first + z * xx.cos() * second)
-    }
+    rssn::kernels::special::bessel_y0(x)
 }
 
 /// The Bessel function of the second kind, order one.
 #[must_use]
 pub fn bessel_y1(x: f64) -> f64 {
-    if x < 8.0 {
-        let y = x * x;
-        let numerator = x
-            * (-0.490_060_494_3e13
-                + y * (0.127_527_439_0e13
-                    + y * (-0.515_343_813_9e11
-                        + y * (0.734_926_455_1e9
-                            + y * (-0.423_792_272_6e7 + y * 0.851_193_793_5e4)))));
-        let denominator = 0.249_958_057_0e14
-            + y * (0.424_441_966_4e12
-                + y * (0.373_365_036_7e10
-                    + y * (0.224_590_400_2e8
-                        + y * (0.102_042_605_0e6 + y * (0.354_963_288_5e3 + y)))));
-        numerator / denominator + 0.636_619_772 * (bessel_j1(x) * x.ln() - 1.0 / x)
-    } else {
-        let z = 8.0 / x;
-        let y = z * z;
-        let xx = x - 2.356_194_491;
-        let first = 1.0
-            + y * (0.001_831_05
-                + y * (-0.000_035_163_964_96
-                    + y * (0.000_002_457_520_174 + y * (-0.000_000_240_337_019))));
-        let second = 0.046_874_999_95
-            + y * (-0.000_200_269_087_3
-                + y * (0.000_008_449_199_096
-                    + y * (-0.000_000_882_289_87 + y * 0.000_000_105_787_412)));
-        (0.636_619_772 / x).sqrt() * (xx.sin() * first + z * xx.cos() * second)
-    }
+    rssn::kernels::special::bessel_y1(x)
 }
 
 /// The Bessel function of the first kind, order `n`.
@@ -396,56 +116,7 @@ pub fn bessel_jn(
     n: i32,
     x: f64,
 ) -> f64 {
-    let n = n.unsigned_abs();
-    match n {
-        | 0 => bessel_j0(x),
-        | 1 => bessel_j1(x),
-        | _ => {
-            let ax = x.abs();
-            if ax == 0.0 {
-                return 0.0;
-            }
-            if ax > f64::from(n) {
-                let mut previous = bessel_j0(x);
-                let mut current = bessel_j1(x);
-                for order in 1..n {
-                    let next = 2.0 * f64::from(order) / x * current - previous;
-                    previous = current;
-                    current = next;
-                }
-                current
-            } else {
-                // Miller: start from a large order with an arbitrary seed and
-                // renormalise, which is stable downwards.
-                let start = n + 20 + (ax as u32).min(1_000);
-                let mut next = 0.0;
-                let mut current = 1e-30;
-                let mut previous;
-                let mut answer = 0.0;
-                for order in (1..=start).rev() {
-                    previous = f64::from(order) * 2.0 / ax * current - next;
-                    next = current;
-                    current = previous;
-                    if current.abs() > 1e100 {
-                        current *= 1e-100;
-                        next *= 1e-100;
-                        answer *= 1e-100;
-                    }
-                    if order == n {
-                        answer = next;
-                    }
-                }
-                let scale = bessel_j0(ax) / current;
-                answer
-                    * scale
-                    * if x < 0.0 && n % 2 == 1 {
-                        -1.0
-                    } else {
-                        1.0
-                    }
-            }
-        },
-    }
+    rssn::kernels::special_ext::bessel_jn(n, x)
 }
 
 /// The Bessel function of the second kind, order `n`.
@@ -454,21 +125,7 @@ pub fn bessel_yn(
     n: i32,
     x: f64,
 ) -> f64 {
-    let n = n.unsigned_abs();
-    match n {
-        | 0 => bessel_y0(x),
-        | 1 => bessel_y1(x),
-        | _ => {
-            let mut previous = bessel_y0(x);
-            let mut current = bessel_y1(x);
-            for order in 1..n {
-                let next = 2.0 * f64::from(order) / x * current - previous;
-                previous = current;
-                current = next;
-            }
-            current
-        },
-    }
+    rssn::kernels::special::bessel_y(f64::from(n), x)
 }
 
 /// The Legendre polynomial `P_n(x)`, by the three-term recurrence.
@@ -480,18 +137,7 @@ pub fn legendre_p(
     if n < 0 {
         return f64::NAN;
     }
-    let mut previous = 1.0;
-    if n == 0 {
-        return previous;
-    }
-    let mut current = x;
-    for order in 1..n {
-        let next = ((2.0 * f64::from(order) + 1.0) * x * current - f64::from(order) * previous)
-            / (f64::from(order) + 1.0);
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special::legendre_p(n as u32, x)
 }
 
 /// The physicists' Hermite polynomial `H_n(x)`.
@@ -503,17 +149,7 @@ pub fn hermite_h(
     if n < 0 {
         return f64::NAN;
     }
-    let mut previous = 1.0;
-    if n == 0 {
-        return previous;
-    }
-    let mut current = 2.0 * x;
-    for order in 1..n {
-        let next = 2.0 * x * current - 2.0 * f64::from(order) * previous;
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special::hermite_h(n as u32, x)
 }
 
 /// The Laguerre polynomial `L_n(x)`.
@@ -525,18 +161,7 @@ pub fn laguerre_l(
     if n < 0 {
         return f64::NAN;
     }
-    let mut previous = 1.0;
-    if n == 0 {
-        return previous;
-    }
-    let mut current = 1.0 - x;
-    for order in 1..n {
-        let next = ((2.0 * f64::from(order) + 1.0 - x) * current - f64::from(order) * previous)
-            / (f64::from(order) + 1.0);
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special::laguerre_l(n as u32, x)
 }
 
 /// The Chebyshev polynomial of the first kind `T_n(x)`.
@@ -548,17 +173,7 @@ pub fn chebyshev_t(
     if n < 0 {
         return f64::NAN;
     }
-    let mut previous = 1.0;
-    if n == 0 {
-        return previous;
-    }
-    let mut current = x;
-    for _ in 1..n {
-        let next = 2.0 * x * current - previous;
-        previous = current;
-        current = next;
-    }
-    current
+    rssn::kernels::special::chebyshev_t(n as u32, x)
 }
 
 /// The Chebyshev polynomial of the second kind `U_n(x)`.
@@ -570,17 +185,175 @@ pub fn chebyshev_u(
     if n < 0 {
         return f64::NAN;
     }
-    let mut previous = 1.0;
-    if n == 0 {
-        return previous;
+    rssn::kernels::special::chebyshev_u(n as u32, x)
+}
+
+/// The modified Bessel function of the first kind, order 0: `I_0(x)`.
+#[must_use]
+pub fn bessel_i0(x: f64) -> f64 {
+    rssn::kernels::special::bessel_i0(x)
+}
+
+/// The modified Bessel function of the first kind, order 1: `I_1(x)`.
+#[must_use]
+pub fn bessel_i1(x: f64) -> f64 {
+    rssn::kernels::special::bessel_i1(x)
+}
+
+/// The modified Bessel function of the first kind, integer order `n`: `I_n(x)`.
+#[must_use]
+pub fn bessel_in(
+    n: i32,
+    x: f64,
+) -> f64 {
+    rssn::kernels::special_ext::bessel_in(n, x)
+}
+
+/// The modified Bessel function of the second kind, order 0: `K_0(x)` for `x > 0`.
+#[must_use]
+pub fn bessel_k0(x: f64) -> f64 {
+    rssn::kernels::special::bessel_k0(x)
+}
+
+/// The modified Bessel function of the second kind, order 1: `K_1(x)` for `x > 0`.
+#[must_use]
+pub fn bessel_k1(x: f64) -> f64 {
+    rssn::kernels::special::bessel_k1(x)
+}
+
+/// The modified Bessel function of the second kind, integer order `n`: `K_n(x)` for `x > 0`.
+#[must_use]
+pub fn bessel_kn(
+    n: i32,
+    x: f64,
+) -> f64 {
+    rssn::kernels::special::bessel_k(f64::from(n), x)
+}
+
+/// The Airy function of the first kind `Ai(x)`.
+#[must_use]
+pub fn airy_ai(x: f64) -> f64 {
+    rssn::kernels::special::airy_ai(x)
+}
+
+/// The Airy function of the second kind `Bi(x)`.
+#[must_use]
+pub fn airy_bi(x: f64) -> f64 {
+    rssn::kernels::special::airy_bi(x)
+}
+
+/// The digamma function `psi(x) = Gamma'(x) / Gamma(x)`.
+#[must_use]
+pub fn digamma(x: f64) -> f64 {
+    rssn::kernels::special::digamma_numerical(x)
+}
+
+/// The polygamma function `psi^(n)(x)` of order `n >= 0`.
+#[must_use]
+pub fn polygamma(
+    n: i32,
+    x: f64,
+) -> f64 {
+    if n < 0 || x.is_nan() {
+        return f64::NAN;
     }
-    let mut current = 2.0 * x;
-    for _ in 1..n {
-        let next = 2.0 * x * current - previous;
-        previous = current;
-        current = next;
+    rssn::kernels::special::polygamma_numerical(n as u32, x)
+}
+
+/// Inverse error function `erfinv(y)` for `|y| <= 1`.
+#[must_use]
+pub fn erfinv(y: f64) -> f64 {
+    if y.is_nan() || y.abs() > 1.0 {
+        return f64::NAN;
     }
-    current
+    if y == 1.0 {
+        return f64::INFINITY;
+    }
+    if y == -1.0 {
+        return f64::NEG_INFINITY;
+    }
+    rssn::kernels::special::inverse_erf_numerical(y)
+}
+
+/// Inverse complementary error function `erfcinv(y)` for `0 <= y <= 2`.
+#[must_use]
+pub fn erfcinv(y: f64) -> f64 {
+    rssn::kernels::special::inverse_erfc(y)
+}
+
+/// Principal branch `W_0(x)` of the Lambert W function (`x >= -1/e`).
+#[must_use]
+pub fn lambert_w0(x: f64) -> f64 {
+    rssn::kernels::special::lambert_w(x, true)
+}
+
+/// Secondary real branch `W_{-1}(x)` of the Lambert W function (`-1/e <= x < 0`).
+#[must_use]
+pub fn lambert_wm1(x: f64) -> f64 {
+    rssn::kernels::special::lambert_w(x, false)
+}
+
+/// Complete elliptic integral of the first kind `K(k)` for `|k| < 1`.
+#[must_use]
+pub fn elliptic_k(k: f64) -> f64 {
+    if k.is_nan() || k.abs() > 1.0 {
+        return f64::NAN;
+    }
+    rssn::kernels::special_ext::elliptic_k(k * k)
+}
+
+/// Complete elliptic integral of the second kind `E(k)` for `|k| <= 1`.
+#[must_use]
+pub fn elliptic_e(k: f64) -> f64 {
+    if k.is_nan() || k.abs() > 1.0 {
+        return f64::NAN;
+    }
+    rssn::kernels::special_ext::elliptic_e(k * k)
+}
+
+/// Incomplete elliptic integral of the first kind `F(phi, k)` for `|k| <= 1`.
+#[must_use]
+pub fn elliptic_f(
+    phi: f64,
+    k: f64,
+) -> f64 {
+    if phi.is_nan() || k.is_nan() || k.abs() > 1.0 {
+        return f64::NAN;
+    }
+    rssn::kernels::special_ext::elliptic_f(phi, k * k)
+}
+
+/// Incomplete elliptic integral of the second kind `E(phi, k)` for `|k| <= 1`.
+#[must_use]
+pub fn elliptic_e_inc(
+    phi: f64,
+    k: f64,
+) -> f64 {
+    if phi.is_nan() || k.is_nan() || k.abs() > 1.0 {
+        return f64::NAN;
+    }
+    rssn::kernels::special_ext::elliptic_e_inc(phi, k * k)
+}
+
+/// Kummer's confluent hypergeometric function `M(a, b, z) = 1F1(a; b; z)`.
+#[must_use]
+pub fn hypergeometric_1f1(
+    a: f64,
+    b: f64,
+    z: f64,
+) -> f64 {
+    rssn::kernels::special_ext::hyp1f1(a, b, z)
+}
+
+/// Gauss hypergeometric function `2F1(a, b; c; z)`.
+#[must_use]
+pub fn hypergeometric_2f1(
+    a: f64,
+    b: f64,
+    c: f64,
+    z: f64,
+) -> f64 {
+    rssn::kernels::special_ext::hyp2f1(a, b, c, z)
 }
 
 #[cfg(test)]
@@ -657,6 +430,123 @@ mod tests {
         assert!(close(laguerre_l(2, 0.5), 0.125, 1e-12));
         assert!(close(chebyshev_t(3, 0.5), -1.0, 1e-12));
         assert!(close(chebyshev_u(2, 0.5), 0.0, 1e-12));
+    }
+
+    #[test]
+    fn modified_bessel_functions_match_known_values() {
+        assert!(close(bessel_i0(0.0), 1.0, 1e-8));
+        assert!(close(bessel_i0(1.0), 1.266_065_877_752_008_4, 1e-7));
+        assert!(close(bessel_i1(1.0), 0.565_159_103_992_485, 1e-7));
+        assert!(close(bessel_in(3, 2.0), 0.212_739_959_241_484_6, 1e-6));
+        assert!(close(bessel_i0(5.0), 27.239_871_823_604_442, 1e-6));
+
+        assert!(close(bessel_k0(1.0), 0.421_024_438_240_708_3, 1e-7));
+        assert!(close(bessel_k1(1.0), 0.601_907_230_197_234_6, 1e-7));
+        assert!(close(bessel_kn(2, 1.0), 1.624_838_898_635_177_5, 1e-6));
+        assert!(close(bessel_k0(5.0), 0.003_691_098_334_042_594, 1e-6));
+    }
+
+    #[test]
+    fn airy_functions_match_known_values_and_continuity() {
+        assert!(close(airy_ai(0.0), 0.355_028_053_887_817_2, 1e-12));
+        assert!(close(airy_bi(0.0), 0.614_926_627_446_000_7, 1e-12));
+        assert!(close(airy_ai(1.0), 0.135_292_416_312_881_4, 1e-12));
+        assert!(close(airy_bi(1.0), 1.207_423_594_952_871_3, 1e-12));
+        assert!(close(airy_ai(-2.0), 0.227_407_428_201_685_57, 1e-12));
+        assert!(close(airy_bi(-2.0), -0.412_302_587_956_398_5, 1e-12));
+        // Continuity across |x| = 4.5 boundary (asymptotic vs Taylor).
+        assert!(close(airy_ai(4.499), airy_ai(4.501), 5e-3));
+        assert!(close(airy_ai(6.0), 9.947_694_314_536_517e-6, 1e-8));
+        assert!(close(airy_ai(-6.0), -0.329_145_173_489_739_2, 1e-7));
+    }
+
+    #[test]
+    fn digamma_and_polygamma_match_known_values() {
+        use std::f64::consts::EULER_GAMMA;
+        assert!(close(digamma(1.0), -EULER_GAMMA, 1e-12));
+        assert!(close(digamma(2.0), 1.0 - EULER_GAMMA, 1e-12));
+        assert!(close(digamma(0.5), -EULER_GAMMA - 2.0 * 2.0f64.ln(), 1e-12));
+        // Trigamma at 1 is pi^2 / 6.
+        assert!(close(polygamma(1, 1.0), PI * PI / 6.0, 1e-11));
+        assert!(close(polygamma(1, 0.5), PI * PI / 2.0, 1e-11));
+        // Tetragamma at 1 is -2 * zeta(3).
+        assert!(close(polygamma(2, 1.0), -2.404_113_806_319_188_5, 1e-10));
+        // Reflection for negative non-integer.
+        assert!(close(
+            digamma(-0.5),
+            digamma(1.5) - PI / (-0.5 * PI).tan(),
+            1e-12
+        ));
+    }
+
+    #[test]
+    fn inverse_error_functions_invert_erf_and_erfc() {
+        for x in [-2.5, -1.0, -0.3, 0.0, 0.3, 1.0, 2.5] {
+            let y = erf(x);
+            assert!(close(erfinv(y), x, 1e-10), "erfinv at x={x}");
+        }
+        for x in [-1.5, 0.2, 1.0, 3.0] {
+            let y = erfc(x);
+            assert!(close(erfcinv(y), x, 1e-9), "erfcinv at x={x}");
+        }
+    }
+
+    #[test]
+    fn lambert_w_satisfies_defining_equation() {
+        assert!(close(lambert_w0(0.0), 0.0, 1e-15));
+        assert!(close(lambert_w0(1.0), 0.567_143_290_409_783_8, 1e-14));
+        for x in [-0.3, -0.1, 0.5, 2.0, 10.0, 100.0] {
+            let w = lambert_w0(x);
+            assert!(close(w * w.exp(), x, 1e-12), "W0({x})");
+        }
+        for x in [-0.35, -0.2, -0.05, -1e-6] {
+            let w = lambert_wm1(x);
+            assert!(w <= -1.0);
+            assert!(close(w * w.exp(), x, 1e-12), "W-1({x})");
+        }
+    }
+
+    #[test]
+    fn elliptic_integrals_match_known_values() {
+        assert!(close(elliptic_k(0.0), PI / 2.0, 1e-14));
+        assert!(close(elliptic_e(0.0), PI / 2.0, 1e-14));
+        assert!(close(elliptic_e(1.0), 1.0, 1e-14));
+        let k = 0.5f64.sqrt();
+        assert!(close(elliptic_k(k), 1.854_074_677_301_371_9, 1e-12));
+        assert!(close(elliptic_e(k), 1.350_643_881_047_675_5, 1e-12));
+        // Incomplete integrals at pi/2 agree with complete integrals.
+        assert!(close(elliptic_f(PI / 2.0, k), elliptic_k(k), 1e-12));
+        assert!(close(elliptic_e_inc(PI / 2.0, k), elliptic_e(k), 1e-12));
+        assert!(close(elliptic_f(0.5, 0.0), 0.5, 1e-14));
+    }
+
+    #[test]
+    fn hypergeometric_functions_match_special_cases() {
+        // 1F1(a; a; z) = exp(z).
+        assert!(close(
+            hypergeometric_1f1(2.5, 2.5, 1.5),
+            1.5f64.exp(),
+            1e-12
+        ));
+        assert!(close(
+            hypergeometric_1f1(1.5, 1.5, -3.0),
+            (-3.0f64).exp(),
+            1e-12
+        ));
+        // 2F1(1, 1; 2; z) = -ln(1 - z) / z.
+        for z in [-2.0f64, -0.5, 0.3, 0.85] {
+            let expected = -(1.0 - z).ln() / z;
+            assert!(
+                close(hypergeometric_2f1(1.0, 1.0, 2.0, z), expected, 1e-10),
+                "2F1 at z={z}"
+            );
+        }
+        // Gauss's theorem at z = 1: 2F1(0.5, 0.5; 2.0; 1) = 4 / pi.
+        assert!(close(
+            hypergeometric_2f1(0.5, 0.5, 2.0, 1.0),
+            4.0 / PI,
+            1e-11
+        ));
     }
 }
 
@@ -811,5 +701,29 @@ mod exact_tests {
         );
         assert!(hermite_h_exact(0, &half()).is_one());
         assert!(laguerre_l_exact(0, &half()).is_one());
+    }
+}
+
+#[cfg(test)]
+mod kernel_regressions {
+    use rssn::kernels::special_ext::carlson_rd;
+    use rssn::kernels::special_ext::carlson_rf;
+
+    #[test]
+    fn carlson_invalid_domains_terminate_and_extreme_scales_stay_accurate() {
+        for (x, y, z) in [
+            (-1.0, 1.0, 1.0),
+            (f64::NAN, 1.0, 1.0),
+            (0.0, 0.0, 1.0),
+            (f64::INFINITY, 1.0, 1.0),
+        ] {
+            assert!(carlson_rf(x, y, z).is_nan());
+            assert!(carlson_rd(x, y, z).is_nan());
+        }
+        assert!(carlson_rd(1.0, 1.0, 0.0).is_nan());
+        for x in [1e-300_f64, 1.0, 1e308] {
+            assert!((carlson_rf(x, x, x) * x.sqrt() - 1.0).abs() < 1e-14);
+        }
+        assert!((carlson_rd(1e200, 1e200, 1e200) / 1e-300 - 1.0).abs() < 1e-14);
     }
 }

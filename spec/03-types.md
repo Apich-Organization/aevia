@@ -1,136 +1,76 @@
 # 03 — 类型系统
 
-Aevia 的类型系统是 **HM 推断 + 量纲代数 + 类型类 + 行多态**。它没有完整依赖
-类型，也没有子类型；所有的“灵活”都来自参数多态、量纲多态和行多态。这一章定义
-类型的形式结构、推断规则和默认值策略；量纲代数的细节在第 04 章。
+Aevia 的类型系统是 **HM 推断 + 量纲代数 + 类型类 + 行多态**。没有完整依赖类型，也没有
+子类型；灵活性来自参数多态、量纲多态和行多态。本章定义类型的结构、推断规则和默认值
+策略，量纲代数在第 04 章。
 
-## 3.1 kind
-
-```
-κ ::= Type | Dim | Nat | Row | Rep | Format | Shape
-```
+## 3.1 Kind
 
 | kind | 含义 | 例子 |
 |---|---|---|
 | `Type` | 值类型 | `Int`、`Real[L]`、`Tensor<[3,4], Float>` |
 | `Dim` | 量纲表达式 | `L`、`L/T`、`d` |
-| `Nat` | 类型级自然数 | `0`、`1`、`2`、`n` |
-| `Row` | 记录行 | `{ x: Real[L] \| r }` 中的 `r` |
-| `Rep` | 数值表示 | `Int`、`Real`、`Float`、`Complex` |
-| `Format` | 稀疏格式 | `Csr`、`Csc`、`Coo`、`Block` |
+| `Nat` | 类型级自然数 | `0`、`2`、`n` |
+| `Row` | 记录行 | `{ x: Real[L], ...r }` 中的 `r` |
+| `Rep` | 数值表示，封闭 kind：`Int`、`Real`、`Float`、`Complex` | `ρ` |
+| `Format` | 稀疏格式，封闭：`Csr`、`Csc`、`Coo`、`Block`、`Bcsr` | `Csr` |
 | `Shape` | 类型级形状 | `[3,4]`、`[n,m]`、`[?]` |
 
-`Rep` 是一个封闭的 kind，用户不能扩展。它的四个成员对应四种标量表示：
-
-```
-Rep ::= Int | Real | Float | Complex
-
-Format ::= Csr | Csc | Coo | Block | Bcsr
-```
+用户不能扩展 `Rep` 与 `Format`。
 
 ## 3.2 类型
 
-### 3.2.1 标量：`Scalar<ρ, δ>`
+### 3.2.1 标量 `Scalar<ρ, δ>`
 
-所有数值标量的统一形式是：
+所有数值标量的统一形式是 `Scalar : Rep -> Dim -> Type`，表面语法有四个别名：
 
-```
-Scalar : Rep -> Dim -> Type
-```
-
-表面语法是四个别名：
-
-| 表面写法 | 内部形式 | 含义 |
+| 写法 | 内部形式 | 含义 |
 |---|---|---|
 | `Int` | `Scalar<Int, 1>` | 任意精度整数，无量纲 |
-| `Real[d]` | `Scalar<Real, d>` | 精确实数或**形式符号**表达式 |
-| `Float[d]` | `Scalar<Float, d>` | IEEE-754 binary64，**永不符号化** |
+| `Real[d]` | `Scalar<Real, d>` | 精确实数或形式符号表达式 |
+| `Float[d]` | `Scalar<Float, d>` | IEEE-754 binary64，永不符号化 |
 | `Complex[d]` | `Scalar<Complex, d>` | 复数（精确/符号或 `Complex64`） |
 
-`Real` 不带方括号等价于 `Real[1]`；`Float`、`Complex` 同理。
-
-`Int` **只能**是无量纲的。带量纲的精确整数是 `Real[L]` 中值为整数的那些。
-这样 `Int` 可以安全地用于索引、计数和循环，而不会出现“3 米的整数”这种
-需要额外规则的类型。
-
-`Float` 严格是 f64：一个 `Float` 值只能是具体的 IEEE 数；含符号的浮点
-表达式由 `Real` 承担。`Real + Float` 的结果是 `Real`：`Float` 被精确转换成
-有理数，符号信息保留。要留在浮点路径，显式写 `to_float(x)` 或让所有操作数
-都是 `Float`。这条规则让 `pi + 1.0` 保持精确，`x + 1.0` 也不会把符号项
-伪装成“浮点数”；JIT/IEEE 语义因此是干净的。
+`Real`/`Float`/`Complex` 无方括号等价于 `[1]`。`Int` 只能无量纲：带量纲的精确整数是值为
+整数的 `Real[L]`，所以 `Int` 可安全用于索引和计数。`Float` 严格是 f64；含符号的表达式由
+`Real` 承担，因此 `Real + Float` 是 `Real`（`Float` 被精确转为有理数，符号信息保留，
+`pi + 1.0` 仍是 `pi + 1`）。要留在浮点路径，写 `to_float(x)` 或让所有操作数都是 `Float`。
 
 ### 3.2.2 其他类型构造器
 
 ```
 ()            : Type                         unit 值
-Bool          : Type                        具体布尔
-Prop          : Type                        符号命题（§3.8.6）
+Bool          : Type                         具体布尔
+Prop          : Type                         符号命题（§3.8.6）
 String        : Type
-Tensor        : Shape -> Type -> Type       张量（秩或细化形状）
-Matrix        : Nat -> Nat -> Type -> Type  = Tensor<[n,m], τ>
-Sparse        : Format -> Shape -> Type -> Type  稀疏张量（§13.9.5）
-Point         : Dim -> Type                  仿射点（Float 表示；可作张量元素）
+Tensor        : Shape -> Type -> Type        张量（秩或细化形状）
+Matrix        : Nat -> Nat -> Type -> Type   = Tensor<[n,m], τ>
+Sparse        : Format -> Shape -> Type -> Type   稀疏张量（§13.9.5）
+Point         : Dim -> Type                  仿射点（Float 表示，可作张量元素）
 Unit          : Dim -> Type                  单位值
-Table         : Type -> Type                 行多态表；ρ 是封闭记录类型（§13.9.3）
-Dynamic       : Type                        特殊记录类型：未知 schema（仅用于 Table<Dynamic>）
+Table         : Type -> Type                 行多态表；参数是封闭记录类型（§13.9.3）
+Dynamic       : Type                         未知 schema（仅 Table<Dynamic>）
 Device        : Type                         运行时设备（§13.9.4）
-Set           : Type -> Type
-Option        : Type -> Type
+Set Option    : Type -> Type
 Result        : Type -> Type -> Type
 IO            : Type -> Type
-(->)          : Type -> Type -> Type         多参数函数是元组的糖
+(->)          : 多参数函数类型 (τ1, …, τn) -> τ；() -> τ 是零参函数
 SymFun        : Dim -> Dim -> Type           符号函数（用于 dsolve）
 Dyn           : Rep -> Type                  动态量纲标量（§4.9）
-RateOf        : Type -> Type                  ODE 状态的时间导数类型（§8.9）
-DiffusionOf   : Type -> Type                  SDE 状态的扩散系数类型（§8.9.1）
-Solutions     : Rep -> Dim -> Type            符号解集合（§8.6）
+RateOf        : Type -> Type                 ODE 状态的时间导数类型（§8.9）
+DiffusionOf   : Type -> Type                 SDE 状态的扩散系数类型（§8.9.1）
+Solutions     : Rep -> Dim -> Type           符号解集合（§8.6）
 ```
 
-`DiffusionOf<s>` 与 `RateOf<s>` 同构，但每个叶子的量纲除以 `T^(1/2)`：
-布朗增量 `dW` 的量纲是 `T^(1/2)`，所以 `dX = a dt + G dW` 中 `G` 的每个
-分量比 `X` 多一个 `T^(-1/2)`。
-
-```
-DiffusionOf<Scalar<ρ,d>>             = Scalar<ρ, d/T^(1/2)>
-DiffusionOf<Tensor<n, τ>>            = Tensor<n, DiffusionOf<τ>>
-DiffusionOf<{ l1: τ1, ..., ln: τn }> = { l1: DiffusionOf<τ1>, ..., ln: DiffusionOf<τn> }
-```
-
-若 `s = { x: Float[L] }`，则 `DiffusionOf<s> = { x: Float[L/T^(1/2)] }`；
-标量状态 `Float[1]` 的 `DiffusionOf` 是 `Float[1/T^(1/2)]`。含
-`Int`/`Bool`/函数字段的状态不合法，报 `E0302`（与 `RateOf` 相同）。这是
-**对角**扩散（每个状态分量一个噪声通道）的类型；一般 `n × m` 噪声用
-§8.9.1 的 `sdeint_general`，其扩散参数类型是
-`Tensor<2, Scalar<ρ, d/T^(1/2)>>`（记录状态则是同形状记录、每个叶子多一个噪声轴的
-`GeneralDiffusionOf<s>`，见 §8.9.1）。
-
-常用辅助类型（在 Prelude 或对应库中定义）：
-
-```
-Ordering   ::= Less | Equal | Greater
-DimValue   : Type                  # 运行时量纲值（§4.9）
-DimError   : Type                  # 量纲检查错误
-EvalError  : Type                  # eval/approx 错误
-MathError  : Type                  # 求解/积分错误
-DataError  : Type                  # CSV/JSON/NPY 错误
-LinAlgError: Type                  # 线性代数错误
-Record     : Type                  # 动态表的行（不透明）
-Json       : Type                  # JSON 值（不透明）
-Value      : Type                  # RSSN 动态值（§13.3）
-OpError    : Type                  # 动态调用错误（§13.3）
-Plugin     : Type                  # 插件句柄（§13.5）
-PluginId   : Type                  # 注册后的插件 id（§13.5）
-Callback   : Type                  # 高阶回调（§13.5）
-TypeRep    : Type                  # 运行时类型表示（§13.3）
-TermRef    : Type                  # RSSN 项句柄（§13.3）
-```
-
-- `Tensor<0, τ>` **定义上等于** `τ`。这让索引的类型规则可以统一写成
-  “rank 减一”，而不需要为标量特判。
+- `Tensor<0, τ>` 定义上等于 `τ`，使索引的类型规则统一为“秩减一”。
 - `Point[d]` 只有 `Float` 表示；符号温度用 `Real[Θ]` 的温差（§5.6）。
-- `Unit[d]` 是单位值的类型，不是 `()`；`m : Unit[L]`。
-- 函数类型 `(τ1, ..., τn) -> τ` 是多参数函数；`() -> τ` 是零参函数。
-  没有自动柯里化。
+- `Unit[d]` 是单位值的类型（`m : Unit[L]`），不是 `()`。
+- `DiffusionOf<s>` 与 `RateOf<s>` 同构，但每个叶子的量纲再除以 `T^(1/2)`（布朗增量 `dW`
+  的量纲是 `T^(1/2)`）；含 `Int`/`Bool`/函数字段的状态是 `E0302`。
+- Prelude 与各库还定义 `Ordering`（`Less | Equal | Greater`）和不透明/错误类型
+  `DimValue`、`DimError`、`EvalError`、`MathError`、`DataError`、`LinAlgError`、`Record`、
+  `Json`、`Value`、`OpError`、`Plugin`、`PluginId`、`Callback`、`TypeRep`、`TermRef`
+  （§4.9、§13.3、§13.5）。
 
 ### 3.2.3 记录与行
 
@@ -139,132 +79,73 @@ TermRef    : Type                  # RSSN 项句柄（§13.3）
 { x: Real[L], ...r }                    开放记录，r : Row
 ```
 
-行是字段名到类型的有限映射，带一个“剩余行”变量。记录类型等价于
-`{ l1: τ1, ..., ln: τn | ρ }`，其中 `ρ` 是行变量或空行。字段顺序不重要。
+记录类型是 `{ l1: τ1, …, ln: τn | ρ }`，`ρ` 是行变量或空行，字段顺序无关。
 
 ### 3.2.4 变体
 
-变体是名义类型：
-
-```
-type Shape = | Circle(Real[L]) | Rect(Real[L], Real[L])
-```
-
-`Shape` 与任何结构相同的记录/变体都不相等。构造器 `Circle : Real[L] -> Shape`。
-变体可以有参数：
-
-```
-type Option<a> = | None | Some(a)
-type Result<a, e> = | Ok(a) | Err(e)
-```
+变体是名义类型：`type Shape = | Circle(Real[L]) | Rect(Real[L], Real[L])` 与任何结构相同
+的记录或变体都不相等。构造器可带类型参数：`type Option<a> = | None | Some(a)`。
 
 ### 3.2.5 类型方案
 
-```
-σ ::= ∀a:κ. σ | C => σ | τ
-```
+`σ ::= ∀a:κ. σ | C => σ | τ`。`∀` 量化类型、量纲、自然数、行与表示变量；`C` 包括类约束
+（`Show a`）和数值约束：字面量的表示域、`Join(ρ1, ρ2, ρout)`、`Divide(ρin, ρout)` 以及依赖
+输入的私有字面量读取规则。约束随方案、函数别名和模块接口保存，编译器自动重建，用户无需
+手写。实例化同时重命名约束中的变量；运算产生的中间表示独立实例化，但不成为可显式选择的
+`<…>` 参数。
 
-`∀` 量化类型变量（包括表示变量）、量纲变量、自然数变量和行变量。
-`C` 包括类约束（如 `Show a`）以及数值约束：字面量可取的表示域、
-`Join(ρ1, ρ2, ρout)`、`Divide(ρin, ρout)` 和依赖输入的私有字面量读取规则。
-这些约束随方案、函数别名和模块接口保存；用户无需手写，编译器会重建。
-
-实例化会同时重命名约束中的变量。运算产生的中间表示也需要独立实例，
-但它们是计算结果，不会成为额外的可显式选择的 `<...>` 参数。
-
-## 3.3 类型环境与推断
+## 3.3 环境与推断
 
 ### 3.3.1 环境
 
-```
-Γ ::= ∅ | Γ, x : σ | Γ, α:κ | Γ, C
-```
-
-环境包含值绑定、类型变量、量纲变量和类约束。顶层声明按依赖顺序检查；模块内
-声明可以相互引用（包括递归函数），因此先收集签名再检查体。
+`Γ ::= ∅ | Γ, x : σ | Γ, α:κ | Γ, C`。顶层声明先收集签名再检查体，因此模块内声明可以互相
+引用（含递归）。
 
 ### 3.3.2 双向检查
 
-- **合成（synthesize）** `Γ ⊢ e ⇒ τ`：从表达式推出类型。
-- **检查（check）** `Γ ⊢ e ⇐ τ`：在已知期望类型时检查表达式。
+- **合成** `Γ ⊢ e ⇒ τ`：从表达式推出类型；**检查** `Γ ⊢ e ⇐ τ`：已知期望类型。
+- 字面量合成新鲜类型并带字面量约束；变量实例化其方案；调用合成函数类型并与实参统一；
+  lambda 有期望类型时检查参数，否则给新鲜类型变量；`let` 推断右侧后泛化，`let rec` 先绑定
+  新鲜类型；`if` 要求条件为 `Bool` 并统一两分支；`match` 用 scrutinee 类型检查模式并
+  统一分支体；记录/张量字面量按字段/元素统一；标注 `(e : τ)` 用检查模式。
 
-规则：
+### 3.3.3 泛化与弱变量
 
-1. 字面量合成一个新鲜类型，带字面量约束。
-2. 变量查环境，实例化其类型方案。
-3. 函数调用合成函数类型，和实参类型统一。
-4. lambda 优先用期望类型检查参数；没有期望类型时给参数新鲜类型变量。
-5. `let` 推断右侧，泛化后绑定；`let rec` 先绑定新鲜类型再检查。
-6. `if` 检查条件为 `Bool`，统一两个分支。
-7. `match` 用 scrutinee 类型检查模式，统一分支体。
-8. 记录/张量字面量按字段/元素统一。
-9. 标注 `(e : τ)` 用检查模式。
-
-### 3.3.3 泛化
-
-在 `let` 和顶层声明处，把不在 `Γ` 中自由出现的类型/量纲/行变量全称量化。
-类约束一并量化。例如：
+在 `let` 和顶层声明处，把不在 `Γ` 中自由出现的类型、量纲、行变量连同类约束一起全称
+量化：
 
 ```
 let id = fn (x) => x
 # id : ∀a. a -> a
-
 let mean = fn (xs: Tensor<1, Real[d]>) => sum(xs) / length(xs)
 # mean : ∀d. Tensor<1, Real[d]> -> Real[d]
 ```
 
-**弱变量（weak variables）** 不泛化。它们用于“同一个名字必须在所有使用处
-保持同一量纲”的值：
+**弱变量**不泛化，用于“同一个名字在所有使用处必须是同一个量纲”的值：
 
 ```
 let x = symbol("x")        # x : Real[d]，d 是弱变量
 let a = x + 3 m            # d 统一为 L
-let b = x + 2 s            # error：x 已经是 L，不能又是 T
+let b = x + 2 s            # E0401：x 已经是 L
 ```
 
-如果弱变量在声明结束时仍未解决，默认成 `1` 并给出警告 `W0301`。这比默默
-泛化成 `∀d. Real[d]` 安全：后者会让同一个符号在不同地方被当成不同量纲。
+声明结束时仍未解决的弱变量默认为 `1` 并警告 `W0301`；泛化成 `∀d. Real[d]` 会让同一个符号
+在不同处被当作不同量纲，所以不这样做。
 
-`symfun` 的两个量纲参数也是弱变量。
+- `symbol : String -> Real[d]` 与 `symfun : String -> SymFun<d,e>` 是内建原语，每个**语法
+  调用**分配新鲜弱变量；循环或函数内重复执行时运行时创建新符号，类型仍是同一个弱变量。
+- `let f = symbol` 把 `symbol` 当值传递时，`f` 的所有调用共享一个量纲（符号工厂只有
+  一个量纲）。弱变量带层级，泛化时排除弱变量及其替换中可达的变量，不能经闭包逃逸成
+  多态：`let mk = fn s => symbol(s)` 的 `d` 仍是弱的。
+- 空张量 `[]` 不引入弱变量，必须有期望类型（`E0314`）。
+- Aevia 的 `Symbol` 就是 `Real[δ]`（`δ` 弱）；不存在第五种值类型。生成 `Rssn` façade 时，
+  签名中的 `Symbol` 参数读作新鲜弱 `Real[δ]`，`Real[d]` 参数读作 `Dim(Real, d)`；因此
+  `diff` 的签名 `(Term, Symbol) -> Term` 读作 `(Dyn<term>, Real[δ]) -> Dyn<term>`，弱变量在
+  调用点统一。
 
-**弱变量的分配规则。** `symbol` 和 `symfun` 是内建原语，不是普通多态函数：
+### 3.3.4 值限制
 
-```
-symbol  : String -> Real[d]        # 每次调用分配新鲜弱变量 d
-symfun  : String -> SymFun<d,e>    # 每次调用分配新鲜弱变量 d,e
-```
-
-- 每次**语法调用** `symbol(...)` 分配一个新的弱变量；同一个调用在循环/函数
-  内重复执行时，运行时创建新的符号，但类型仍是同一个弱变量（单态）。
-- `let f = symbol` 把 `symbol` 当值传递时，`f` 的类型固定为一个弱变量；
-  之后 `f("x")` 和 `f("y")` 共享同一量纲。这是刻意的：符号工厂只有一个
-  量纲。
-- 弱变量带层级；泛化时排除弱变量及其替换中可达的变量。弱变量不能通过
-  闭包逃逸成多态：`let mk = fn s => symbol(s)` 的类型是 `String -> Real[d]`
-  且 `d` 弱，`mk` 不能被泛化成 `∀d`。
-- 空张量 `[]` 不引入弱变量；它必须有期望类型，否则 `E0314`。
-
-**`Symbol` 与 `Real[δ]` 的关系。** RSSN 的 `TypeExpr` 有一个独立的
-`Symbol` 变体（自由符号，区别于 `String`），而 Aevia 把 `symbol("x")` 的
-静态类型写成 `Real[δ]`（`δ` 弱）。两者是同一运行时值的两种视图：
-
-- Aevia 的 `Symbol` **就是** `Real[δ]`，`δ` 是该符号的弱量纲变量；不新增
-  第五种 `Symbol` 值类型；
-- 边界上 `Value::Symbol` 对应 `TypeExpr::Symbol`；Aevia 生成 façade 时把
-  RSSN 签名里的 `Symbol` 参数读作 `Real[δ]`（新鲜弱变量），把
-  `Real[d]` 参数读作 `Dim(Real, d)`；
-- 因此 `diff` 的 overlay 签名 `(Term, Symbol) -> Term` 在 Aevia 里读作
-  `(Dyn<term>, Real[δ]) -> Dyn<term>`，弱变量在调用点统一。
-
-`diff`/`solve` 现在正是这样声明的（`signatures.overlay.json` 的 13 条之一），
-所以它们有精确的 `Symbol` 参数；`Symbol` 不再是只能写成 `Var("Symbol")`
-的模糊类型。没有 overlay 的算子仍由 `Derived` 给出保守签名（`(Term,…) ->
-Term`），那也足以生成 typed 声明。
-
-### 3.3.4 值限制？
-
-Aevia 是纯语言，没有可变引用，因此**不需要** ML 的值限制。泛化可以应用于
-任何表达式。唯一的例外是上面说的弱变量，它们不是值限制，而是“名字同一性”
+纯语言没有可变引用，不需要值限制；任何表达式都可泛化。弱变量不是值限制，而是名字同一性
 约束。
 
 ## 3.4 数值塔与提升
@@ -272,431 +153,274 @@ Aevia 是纯语言，没有可变引用，因此**不需要** ML 的值限制。
 ### 3.4.1 提升格
 
 ```
-Int  <  Float  <  Complex
-Int  <  Real   <  Complex
+Int < Float < Complex        Int < Real < Complex
 ```
 
-`Float` 与 `Real` 不可比较；`join` 在两者相遇时选 `Real`（精确优先）。
-
-- `Int` 可以提升为 `Real`、`Float`、`Complex`。
-- `Float` 可以提升为 `Real`（精确转换）或 `Complex`。
-- `Real` 可以提升为 `Complex`。
-- `Complex` 不降级。
-
-提升只在运算需要时发生。`Int → Real` 无损；`Float → Real` 是精确的
-（每个 f64 都是有理数），但可能产生很大的分子/分母；`Real → Float` 只在
-显式 `to_float` 时发生，且可能失败（含自由符号）。`Real + Float` 的结果是
-`Real`，不会在运行时因为符号而失败。
-
-`join` 的定义：
+`Float` 与 `Real` 不可比较，`join` 在两者相遇时选 `Real`（精确优先）。`Int` 可提升为任意
+其他表示；`Float` 可精确提升为 `Real`（每个 f64 都是有理数，但分子分母可能很大）或
+`Complex`；`Real` 可提升为 `Complex`；`Complex` 不降级。`Real → Float` 只在显式
+`to_float` 时发生，且含自由符号时失败。提升只在运算需要时发生。
 
 ```
-join(Int, Int)       = Int
-join(Int, Real)      = Real
-join(Int, Float)     = Float
-join(Int, Complex)   = Complex
-join(Real, Real)     = Real
-join(Real, Float)    = Real        # 精确优先
-join(Real, Complex)  = Complex
-join(Float, Float)   = Float
-join(Float, Complex) = Complex
-join(Complex, _)     = Complex
+join(Int, Int) = Int       join(Int, Real) = Real       join(Int, Float) = Float
+join(Real, Real) = Real    join(Real, Float) = Real     join(Float, Float) = Float
+join(_, Complex) = Complex
 ```
 
-未解决的表示保留有限的算术关系，而不是把结果直接等同于某个输入：
-`Join(ρ1, ρ2, ρout)` 按上述四种具体表示的表约束三者，
-`Divide(ρin, ρout)` 则约束整数除法的提升。普通偏序下界不能替代这些关系。
+未解决的表示保留有限的算术关系而不是直接等同于某个输入：`Join(ρ1, ρ2, ρout)` 按上表约束
+三者，`Divide(ρin, ρout)` 约束整数除法的提升；普通偏序下界不能替代它们。
 
 ```aevia
 fn half<r: Rep>(x: r) = x / 2
-let exact = half<Int>(3)       # Real，精确的 3/2
+let exact = half<Int>(3)        # Real，精确的 3/2
 let floating = half<Float>(3.0) # Float
 ```
 
-`half` 只有输入 `r` 这个显式参数；调用者不能另选一个与除法规则冲突的结果表示。
-关系在检查期和实际闭包的运行时泛型证明中都保留。
+`half` 只有输入 `r` 一个显式参数，调用者不能另选与除法规则冲突的结果表示；这些关系在检查期
+和闭包的运行时泛型证明中都保留。
 
 ### 3.4.2 算术类型规则
 
-设 `ρ = join(ρ1, ρ2)`：
+设 `ρ = join(ρ1, ρ2)`，`ρ' = div_rep(ρ)`（`div_rep(Int) = Real`，其余不变）：
 
-| 表达式 | 左类型 | 右类型 | 结果 |
-|---|---|---|---|
-| `a + b` | `Scalar<ρ1,d>` | `Scalar<ρ2,d>` | `Scalar<ρ,d>` |
-| `a - b` | `Scalar<ρ1,d>` | `Scalar<ρ2,d>` | `Scalar<ρ,d>` |
-| `a * b` | `Scalar<ρ1,d>` | `Scalar<ρ2,e>` | `Scalar<ρ,d*e>` |
-| `a / b` | `Scalar<ρ1,d>` | `Scalar<ρ2,e>` | `Scalar<ρ',d/e>` |
-| `a ^ n` | `Scalar<ρ,d>` | `Int` 字面量 | `Scalar<ρ',d^n>` |
-| `a ^ q` | `Scalar<ρ,d>` | 有理数字面量 | `Scalar<ρ,d^q>` |
-| `-a` | `Scalar<ρ,d>` | — | `Scalar<ρ,d>` |
-| `abs(a)` | `Scalar<ρ,d>` | — | `Scalar<ρ,d>` |
-| `sign(a)` | `Scalar<ρ,d>` | — | `Int` |
-| `min(a,b)` | `Scalar<ρ1,d>` | `Scalar<ρ2,d>` | `Scalar<ρ,d>` |
-| `clamp(x,lo,hi)` | `Scalar<ρ,d>` | 同 `d` | `Scalar<ρ,d>` |
+| 表达式 | 操作数 | 结果 |
+|---|---|---|
+| `a + b`、`a - b`、`min(a,b)` | `Scalar<ρ1,d>`、`Scalar<ρ2,d>` | `Scalar<ρ,d>` |
+| `a * b` | `Scalar<ρ1,d>`、`Scalar<ρ2,e>` | `Scalar<ρ,d*e>` |
+| `a / b` | 同上 | `Scalar<ρ',d/e>` |
+| `a ^ n` | `Scalar<ρ,d>`、整数字面量 | `Scalar<ρ',d^n>` |
+| `a ^ q` | `Scalar<ρ,d>`、有理字面量 | `Scalar<ρ,d^q>` |
+| `-a`、`abs(a)` | `Scalar<ρ,d>` | `Scalar<ρ,d>` |
+| `sign(a)` | `Scalar<ρ,d>` | `Int` |
+| `clamp(x,lo,hi)` | 三者同 `d` | `Scalar<ρ,d>` |
 
-其中：
-
-- `ρ' = div_rep(ρ)`：`div_rep(Int) = Real`，其余 `ρ' = ρ`。除法、负指数、
-  根、求逆都把整数提升为精确有理数。
-- `min`/`max`/`mod`/`rem` 要求 `ρ ≠ Complex`。
-- `abs` 对 `Complex` 不是同一个函数；复数用 `magnitude`（§8.15）。
-
-除法特例：`Int / Int` 的结果是 `Real[1]`（精确有理数），不是 `Int`。整数
-除法用 `div(a,b)` 或 `quot(a,b)`。`2^-1` 是 `Real` 的 `1/2`，不是 `Int`。
+除法、负指数、根、求逆把整数提升为精确有理数：`Int / Int` 是 `Real[1]`（`7 / 2` 是精确
+`7/2`，不能标注为 `Int`），整数除法用 `div(a,b)` 或 `quot(a,b)`；`2^-1` 是 `Real` 的 `1/2`。
+`min`/`max`/`mod`/`rem` 要求 `ρ ≠ Complex`；复数的模用 `magnitude`（§8.15），不是 `abs`。
 
 ### 3.4.3 幂的静态限制
 
-`a ^ n` 的量纲是 `d^n`。如果 `n` 是编译期已知的整数或有理数，指数在类型层
-计算：
+指数是编译期整数或有理数时在类型层计算：`(3 m)^2 : Real[L^2]`，`sqrt(4 m^2) : Real[L]`，
+`(2 m)^(1/2) : Real[L^(1/2)]`。指数是运行时 `Int` 时：
 
-```
-(3 m)^2        : Real[L^2]
-sqrt(4 m^2)    : Real[L]
-(2 m)^(1/2)    : Real[L^(1/2)]
-```
+- 底数无量纲（`Scalar<ρ,1>`）：允许，结果无量纲。
+- 底数量纲 `δ` 是尚未求解的推断变量（如 `diff(fn t => t^t)` 的 `t`）：运行时指数要求底数
+  无量纲，这是约束而非错误，检查器令 `δ = 1`，与 `sin(t)` 让 `t` 无量纲同理。
+- 底数量纲已知且不是 `1`：`E0404`。改用 `pow_dyn(a, n) : Dyn<ρ>`（§4.9），或写成
+  `exp(n * ln(a / unit))`。泛型 `fn f<d>(x: Real[d], n: Int)` 里的 `x^n` 因 `d` 未被约束为
+  `1` 而被拒绝。
 
-如果 `n` 是运行时 `Int`，且 `d ≠ 1`，静态类型无法表达 `d^n`。这时：
-
-- `a : Scalar<ρ,1>`：允许，结果 `Scalar<ρ,1>`（无量纲幂）。
-- `a : Scalar<ρ,δ>`，`δ` 仍是**未求解的推断变量**（例如 `diff(fn t => t^t)` 中
-  lambda 参数 `t` 的量纲）：运行时指数要求底数无量纲，这是一个约束而不是错误，
-  检查器令 `δ = 1` 后按上一条处理。这与 `sin(t)` 让 `t` 无量纲是同一条规则
-  （Revision 13；此前这里报 `E0404`，于是 `diff(fn t => t^t)` 无法书写）。
-- `a : Scalar<ρ,d>` 且 `d` 已知不是 `1`：类型错误 `E0404`。改用：
-  - `pow_dyn(a, n) : Dyn<ρ>`（§4.9），运行时检查；
-  - 或者把公式改写为 `exp(n * ln(a / unit))`，显式提取单位。
-
-这不是实现偷懒，而是静态量纲系统的边界：`d^n` 的指数是运行时值，类型层
-无法表示。`Dyn` 是这个边界的显式出口。对泛型 `fn f<d>(x: Real[d], n: Int)`，
-`d` 未被约束为 `1`，因此 `x^n` 被拒绝；要写成 `fn f(x: Real[1], n: Int)`。
+这是静态量纲系统的边界：`d^n` 的指数是运行时值，类型层无法表示，`Dyn` 是显式出口。
 
 ### 3.4.4 超越函数
 
 | 函数 | 参数 | 结果 |
 |---|---|---|
-| `sin cos tan asin acos atan` | `Scalar<ρ,1>` | `Scalar<ρ,1>` |
-| `sinh cosh tanh asinh acosh atanh` | `Scalar<ρ,1>` | `Scalar<ρ,1>` |
-| `exp ln log log2 log10` | `Scalar<ρ,1>` | `Scalar<ρ,1>` |
-| `atan2(y,x)` | `Scalar<ρ,d>` × 同 `d` | `Scalar<ρ,1>` |
-| `hypot(x,y)` | `Scalar<ρ,d>` × 同 `d` | `Scalar<ρ,d>` |
-| `sqrt(x)` | `Scalar<ρ,d>`（`ρ ∈ {Real,Float}`） | `Scalar<ρ,d^(1/2)>` |
-| `cbrt(x)` | `Scalar<ρ,d>`（`ρ ∈ {Real,Float}`） | `Scalar<ρ,d^(1/3)>` |
-| `floor ceil round trunc` | `Scalar<ρ,d>` | `Scalar<ρ,d>` |
-| `mod(a,b)` | `Scalar<ρ,d>` × 同 `d` | `Scalar<ρ,d>` |
+| `sin cos tan asin acos atan`、`sinh … atanh`、`exp ln log log2 log10` | `Scalar<ρ,1>` | `Scalar<ρ,1>` |
+| `atan2(y,x)` | 同 `d` | `Scalar<ρ,1>` |
+| `hypot(x,y)` | 同 `d` | `Scalar<ρ,d>` |
+| `sqrt(x)` / `cbrt(x)` | `Scalar<ρ,d>`，`ρ ∈ {Real,Float}` | `d^(1/2)` / `d^(1/3)` |
+| `floor ceil round trunc`、`mod(a,b)` | `Scalar<ρ,d>`（`mod` 两者同 `d`） | `Scalar<ρ,d>` |
 
-`sin(3 m)` 是类型错误 `E0403`；`sin(30 deg)` 合法，因为 `deg` 是无量纲的
-角度单位（§5.5）。`atan2` 的两个参数必须有相同量纲，结果是无量纲弧度。
+`sin(3 m)` 是 `E0403`；`sin(30 deg)` 合法，因为 `deg` 无量纲（§5.5）。
 
 ## 3.5 张量类型
 
 ### 3.5.1 秩与形状
 
-张量有两种类型形式：
-
 ```
-Tensor<n, τ>                 # 只带秩；形状存在（existential）
-Tensor<[n1, ..., nk], τ>     # 形状细化（refinement）
+Tensor<n, τ>                 # 只带秩；形状是运行时值
+Tensor<[n1, …, nk], τ>       # 形状细化
 Matrix<n, m, τ>              # = Tensor<[n, m], τ>
 ```
 
-- `Tensor<n, τ>` 的 `n` 是秩；形状是运行时值 `[d1, ..., dn]`。它是
-  `Tensor<[?, ..., ?], τ>`（n 个 `?`）的糖：`n` 是秩，extents 未知。秩错误是编译错误，形状
-  错误在细化类型下是编译错误，否则是运行时 `E0802`。
-- `Tensor<[n1, ..., nk], τ>` 的 `n_i` 是类型级 `Nat`，可用 `?` 表示未知。
-  这是 `Tensor` 的**特殊类型形式**（`Tensor<shape, τ>`），不是把 shape
-  列表当作普通类型参数；字面量自动获得细化形状，`zeros_of<[3,4]>()` 等构造器
-  可显式指定。
-- 类型级 `Nat` 支持字面量、`+` 和「乘以字面量」（`2 * n`）；不做一般
-  递归/证明。形状 extent 中的 `Nat` 变量由 `<n: Nat>`（或未标 kind 的类型
-  参数）绑定，是真正的类型级变量。统一时把等式化为线性形式
-  `Σcᵢ·vᵢ + c = 0`：只有一个变量时解出非负整数（`n + 1 ~ 3` ⇒ `n = 2`，
-  `2·n ~ 6` ⇒ `n = 3`，`n ~ 2·n` ⇒ `n = 0`）；多变量等式保留为待解约束，
-  在后续绑定后重试；常数残差非零报 `E0302`（`type-level equation has no
-  solution`）；两个变量相乘不是线性的，报 `E0304`。秩 `Tensor<n, τ>` 的
-  `n` 仍须是具体整数（否则 `E0304`），refined shape 的 extent 可以是变量。
-  没有 binder 的 shape 变量、以及实例头中的 Nat 变量都报 `E0304`。
-  **多项式形式与刚性变量（Revision 12）。** 等式实际按多项式处理：变量的乘积
-  （`n * m`）是不透明单项式，只与同一乘积相消（`n*m ~ m*n`、`n + m ~ m + n`），
-  一个因子被解出后代回成线性方程（`n = 2` 使 `n*m ~ 6` 解出 `m = 3`）；仍无法
-  解出的乘积在声明末尾报 `E0304`，消息给出 `n * m = 2` 这样的方程。`fn f<n, m>`
-  里**声明的**变量是刚性的：它们可以被字面量或表达式解出（`n + 1 ~ 3`），但两个
-  不同的声明变量不会被合并，`n ~ m` 是 `E0302`（`extents `n` and `m` are different
-  type-level variables`）。泛型被调用方实例化出的变量是推断变量，可与任何表达式
-  消去（`a ~ n + 1`），所以在带符号 extent 的泛型函数里调用另一个泛型函数是合法的。
-  **广播。** 逐元素运算按轴取：相等，或一侧是字面量 `1`（结果取另一侧）；
-  `[3,1] + [1,4]` 是 `[3,4]`，`[n,1] + [1,m]` 是 `[n,m]`；两个都不是 `1` 的符号 extent
-  被统一；rank-only 一侧视为各轴未知（只能是 `1` 或等于另一侧）。秩不同仍不广播。
-  **依形状分支** 用 `refine_shape<[3, ?]>(a) : Option<Tensor<[3, ?], τ>>`（字面量或
-  `?`，§8.4）：`Some` 分支里的张量带静态 extent。
-  这足以表达矩阵乘法、reshape、拼接，不需要完整依赖类型。
-- 细化 → 秩-only 是安全隐式转换；秩-only → 细化用
-  `refine_shape(a) : Option<Tensor<[...],τ>>`（运行时检查）。
-- `reshape<[n1, ..., nk]>(a)` 的签名始终返回
-  `Result<Tensor<shape,τ>, ShapeError>`；形状静态已知时元素数在编译期
-  检查、结果恒为 `Ok`，否则运行时检查。`reshape_dyn` 总是运行时检查。
-- 索引：细化形状 + 字面量索引 → 编译期越界检查；动态索引仍运行时检查。
+- `Tensor<n, τ>` 是 `Tensor<[?, …, ?], τ>`（`n` 个 `?`）的糖：秩错误是编译错误；形状错误在
+  细化类型下是编译错误，否则是运行时 `E0802`。秩 `n` 必须是具体整数（`E0304`）。
+- 细化形状的 extent 是类型级 `Nat`（字面量、变量、`+`、乘以字面量，或 `?`）。字面量自动
+  获得细化形状，`zeros_of<[3,4]>()` 等构造器可显式指定。`Tensor` 的形状参数是特殊类型
+  形式，不是普通类型参数。
+- 细化 → 秩-only 是安全的隐式转换；反方向用 `refine_shape(a) : Option<Tensor<[…],τ>>`
+  做运行时检查，直接标注是 `E0302`。依形状分支用 `refine_shape<[3, ?]>(a)`（§8.4）。
+- `reshape<[n1, …, nk]>(a)` 总返回 `Result<Tensor<shape,τ>, ShapeError>`：形状静态已知时
+  元素数在编译期检查、结果恒为 `Ok`，否则运行时检查；`reshape_dyn` 总是运行时检查。
+- 索引：细化形状加字面量下标在编译期检查 `-n_i <= i < n_i`，动态下标运行时检查。
 
-选择理由：形状细化捕获 `3×4`/`4×3`、矩阵乘法维度、reshape 元素数等错误，
-同时保留 `Tensor<n,τ>` 作为“我不知道形状/从 CSV 来”的擦除形式。它不是
-完整依赖类型：没有一般递归、没有证明项，只有 `Nat` 线性算术。
+**Nat 方程。** 统一把等式化为多项式处理：
+
+- 只有一个变量时解出非负整数：`n + 1 ~ 3` ⇒ `n = 2`；`2·n ~ 6` ⇒ `n = 3`；`n ~ 2·n` ⇒
+  `n = 0`。多变量等式保留为待解约束，后续绑定后重试；常数残差非零是 `E0302`。
+- 变量乘积（`n*m`）是不透明单项式，只与同一乘积相消（`n*m ~ m*n`）；一个因子解出后代回
+  成线性方程。仍无法解出的乘积在声明末尾报 `E0304` 并给出方程。没有 binder 的 shape
+  变量和实例头中的 Nat 变量也是 `E0304`。
+- `fn f<n, m>` 里**声明的**变量是刚性的：可被字面量或表达式解出，但两个不同的声明变量
+  不会被合并，`n ~ m` 是 `E0302`。泛型被调用方实例化出的变量是推断变量，可与任何表达式
+  消去，所以带符号 extent 的泛型函数可以调用另一个泛型函数。
+
+**广播。** 逐元素运算按轴取：相等，或一侧是字面量 `1`（结果取另一侧）；`[3,1] + [1,4]` 是
+`[3,4]`，`[n,1] + [1,m]` 是 `[n,m]`；两个都不是 `1` 的符号 extent 被统一；秩-only 一侧视为各轴
+未知。**秩不同不广播**（`E0302`，提示用 `map` 或 `outer` 显式构造）——结果秩因此始终静态
+可知，也避免 `(3,1) + (1,4)` 这类静默错误。
+
+形状细化在不引入完整依赖类型的前提下捕获 `3×4`/`4×3`、矩阵乘维度和 reshape 元素数错误，
+同时保留 `Tensor<n,τ>` 作为“形状未知/来自 CSV”的擦除形式；它只有 `Nat` 线性算术，没有
+一般递归和证明项。
 
 ### 3.5.2 字面量
 
 ```
 [1, 2, 3]                 : Tensor<[3], Int>
-[1.0, 2.0, 3.0]           : Tensor<[3], Float>
 [[1.0, 2.0], [3.0, 4.0]]  : Tensor<[2, 2], Float>
 [1, 2.0]                  : Tensor<[2], Float>      # 提升
-[]                        : 需要标注（形状可为 `[0]` 或 `[?]`）
+[]                        : 需要标注
 ```
 
-- 嵌套深度决定秩；所有同层子序列长度必须相等，否则 `E0203`。
-- 元素类型统一；`Int` 与 `Float` 统一为 `Float`。
-- 空字面量没有元素可推断，必须由期望类型提供。
+嵌套深度决定秩，同层长度必须相等（`E0203`），元素类型统一，空字面量必须由期望类型提供
+（`E0314`）。
 
 ### 3.5.3 逐元素运算
 
-对 `Tensor<n, Scalar<ρ1,d>>` 和 `Tensor<n, Scalar<ρ2,e>>`：
-
-| 表达式 | 结果 |
-|---|---|
-| `a + b` / `a - b` | `Tensor<n, Scalar<join,d>>`，要求 `d = e` |
-| `a * b` / `a / b` | `Tensor<n, Scalar<join,d*e>>` / `d/e` |
-| `a ^ n` | `Tensor<n, Scalar<ρ,d^n>>`，`n` 为字面量 |
-| `-a` | `Tensor<n, Scalar<ρ,d>>` |
-| `abs(a)` | 同类型 |
-
-标量与张量：
+对 `Tensor<n, Scalar<ρ1,d>>` 与 `Tensor<n, Scalar<ρ2,e>>`：`+`/`-` 要求 `d = e`，结果
+`Scalar<join,d>`；`*`/`/` 得 `d*e`/`d/e`；`a ^ n`（字面量 `n`）得 `d^n`；一元 `-` 与 `abs` 保持
+类型。标量与张量、张量与单位值的混合：
 
 ```
 Scalar<ρ1,d> * Tensor<n, Scalar<ρ2,e>> : Tensor<n, Scalar<join,d*e>>
 Scalar<ρ1,d> + Tensor<n, Scalar<ρ2,e>> : Tensor<n, Scalar<join,d>>，要求 d=e
-Tensor<shape, Scalar<ρ,d>> * Unit[e]  : Tensor<shape, Scalar<ρ,d*e>>
-Tensor<shape, Scalar<ρ,d>> / Unit[e]  : Tensor<shape, Scalar<ρ,d/e>>
-Unit[e] * Tensor<shape, Scalar<ρ,d>>   : Tensor<shape, Scalar<ρ,e*d>>
+Tensor<shape, Scalar<ρ,d>> * Unit[e]   : Tensor<shape, Scalar<ρ,d*e>>
+Tensor<shape, Scalar<ρ,d>> / Unit[e]   : Tensor<shape, Scalar<ρ,d/e>>
 ```
 
-**张量与张量的逐元素运算要求相同秩**。同秩内形状可以相等或某一维为 1
-（广播）。细化类型在编译期检查；秩-only 在运行时检查。不做 NumPy 式跨秩
-广播；这条限制让结果秩始终静态已知，也避免 `(3,1) + (1,4)` 这类静默错误。
+同秩的细化形状与秩-only 形状在运算中互相统一（细化 → 秩-only 隐式转换）。
 
-同秩的 refined shape 与 rank-only shape 在**运算**中互相统一
-（`Tensor<[2], V>` 与 `Tensor<1>, A>` 可以同时出现在 `*`/`+`/`@` 中，
-refined → rank-only 是安全隐式转换）。但把 rank-only 值当作 refined
-**注解**（`let x: Tensor<[3]> = zeros(4)`）仍需 `refine_shape` 的运行时
-检查；直接标注是 `E0302`。
-
-`Point` 元素张量 `Tensor<shape, Point[d]>` 的元素级规则：
-
-```
-Point - Point : Float[d]
-Point + Float[d] : Point
-Point + Point : E0405
-centroid : Tensor<1, Point[d]> -> Point[d]
-```
-
-`mean` 只接受数值张量；点的平均用 `centroid`。
+`Tensor<shape, Point[d]>` 的元素规则：`Point - Point : Float[d]`；`Point + Float[d] : Point`；
+`Point + Point` 是 `E0405`；`mean` 只接受数值张量，点的平均用
+`centroid : Tensor<1, Point[d]> -> Point[d]`。
 
 ### 3.5.3.1 `@` 的秩分派
 
-`@` 不是单一函数，而是按秩分派的矩阵乘法：
+`@` 按秩分派（优先级同 `*`，左结合）：
 
-| 左 | 右 | 结果 | 等价函数 |
+| 左 | 右 | 结果 | 函数 |
 |---|---|---|---|
-| `Tensor<2, Scalar<ρ,d>>` | `Tensor<2, Scalar<ρ,e>>` | `Tensor<2, Scalar<ρ,d*e>>` | `matmul` |
-| `Tensor<2, Scalar<ρ,d>>` | `Tensor<1, Scalar<ρ,e>>` | `Tensor<1, Scalar<ρ,d*e>>` | `matvec` |
-| `Tensor<1, Scalar<ρ,d>>` | `Tensor<2, Scalar<ρ,e>>` | `Tensor<1, Scalar<ρ,d*e>>` | `vecmat` |
-| `Tensor<1, Scalar<ρ,d>>` | `Tensor<1, Scalar<ρ,e>>` | `Scalar<ρ,d*e>` | `dot` |
-| `Tensor<[m,k], Scalar<ρ,d>>` | `Tensor<[k,n], Scalar<ρ,e>>` | `Tensor<[m,n], Scalar<ρ,d*e>>` | `matmul`（细化） |
-| `Tensor<[m,k], Scalar<ρ,d>>` | `Tensor<[k], Scalar<ρ,e>>` | `Tensor<[m], Scalar<ρ,d*e>>` | `matvec`（细化） |
-| `Tensor<[k], Scalar<ρ,d>>` | `Tensor<[k,n], Scalar<ρ,e>>` | `Tensor<[n], Scalar<ρ,d*e>>` | `vecmat`（细化） |
+| `Tensor<2, ·d>` | `Tensor<2, ·e>` | `Tensor<2, ·d*e>` | `matmul` |
+| `Tensor<2, ·d>` | `Tensor<1, ·e>` | `Tensor<1, ·d*e>` | `matvec` |
+| `Tensor<1, ·d>` | `Tensor<2, ·e>` | `Tensor<1, ·d*e>` | `vecmat` |
+| `Tensor<1, ·d>` | `Tensor<1, ·e>` | `Scalar<ρ,d*e>` | `dot` |
 
-`A @ x` 是矩阵乘向量，`x @ A` 是向量乘矩阵，`x @ y` 是点积。细化形状下，
-`m/k/n` 在编译期检查；秩-only 在运行时检查。`@` 的优先级与 `*` 相同，
-左结合；混用时建议加括号。
-
-稀疏矩阵用 `Sparse<F, shape, τ>`；`@` 在 dense/sparse 混合时按布局分派
-（§13.9.5），不隐式互转。
+其中 `·d` 表示 `Scalar<ρ,d>`。细化形状下 `[m,k] @ [k,n] → [m,n]`、`[m,k] @ [k] → [m]`、
+`[k] @ [k,n] → [n]`，`m/k/n` 在编译期检查，秩-only 在运行时检查。稀疏矩阵用
+`Sparse<F, shape, τ>`；dense/sparse 混合按布局分派（§13.9.5），不隐式互转。
 
 ### 3.5.4 索引
 
+`a : Tensor<n, τ>` 的 `n` 必须是已知具体自然数。每个**标量下标**消去一个轴，每个**切片**
+（`..`、`i..j`、`i:j:s`）保留一个轴：
+
 ```
-a : Tensor<n, τ>          n 必须是编译期已知的具体自然数
-a[i]        : Tensor<n-1, τ>      要求 n >= 1
-a[i, j]     : Tensor<n-2, τ>      要求 n >= 2，等价于 a[i][j]
-a[i, ..]    : Tensor<n-1, τ>      取第 i 个切片
-a[.., j]    : Tensor<n-1, τ>      取最后一维的第 j 个切片
-a[i..j, ..] : Tensor<n, τ>        切片保持秩
+a[i]          : Tensor<n-1, τ>      要求 n >= 1
+a[i, j]       : Tensor<n-2, τ>      等价于 a[i][j]
+a[i, ..]      : Tensor<n-1, τ>
+a[.., j]      : Tensor<n-1, τ>
+a[i..j, ..]   : Tensor<n, τ>
+a[i..j, j]    : Tensor<n-1, τ>
 ```
 
-- 索引要求秩已知；秩多态的代码用 `map`/`fold`/`sum`，不要用下标。
-- 细化形状 `Tensor<[n1,...,nk], τ>` 下，字面量索引在编译期检查
-  `-n_i <= i < n_i`；动态索引仍在运行时检查（`E0802`）。
-- `a[i, j]` 只接受**全部是标量下标**；混合下标与切片请写成
-  `a[i][.., j]` 或 `a[i, ..][j]`，避免“结果秩是切片个数”的复杂类型规则。
-- 越界是运行时错误；字面量下标可以静态检查。
+秩多态代码用 `map`/`fold`/`sum` 而非下标。越界是运行时 `E0802`，字面量下标可静态检查。
 
-### 3.5.5 归约与线性代数
+### 3.5.5 归约与线性代数的量纲规则
 
-| 函数 | 类型 |
+完整签名在 §8.4，这里只列量纲与表示的规则：
+
+| 函数 | 结果 |
 |---|---|
-| `sum` | `Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>` |
-| `sum(a, axis)` | `(Tensor<n, Scalar<ρ,d>>, Int) -> Tensor<n, Scalar<ρ,d>>`（keepdims） |
-| `mean` | `Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>` |
-| `var` | `Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>` |
-| `std` | `Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>` |
-| `min/max` | 同上，返回 `Scalar<ρ,d>` |
-| `norm` | `Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>` |
-| `normalize` | `Tensor<n, Scalar<ρ,d>> -> Tensor<n, Scalar<ρ,1>>` |
-| `dot` | `Tensor<1, Scalar<ρ,d>> × Tensor<1, Scalar<ρ,e>> -> Scalar<ρ,d*e>` |
-| `matmul` | `Tensor<2, Scalar<ρ,d>> × Tensor<2, Scalar<ρ,e>> -> Tensor<2, Scalar<ρ,d*e>>` |
-| `matvec` | `Tensor<2, Scalar<ρ,d>> × Tensor<1, Scalar<ρ,e>> -> Tensor<1, Scalar<ρ,d*e>>` |
-| `outer` | `Tensor<1, Scalar<ρ,d>> × Tensor<1, Scalar<ρ,e>> -> Tensor<2, Scalar<ρ,d*e>>` |
-| `det` | `Tensor<2, Scalar<ρ,1>> -> Scalar<ρ,1>` |
-| `inv` | `Tensor<2, Scalar<ρ,d>> -> Result<Tensor<2, Scalar<div_rep(ρ),1/d>>, LinAlgError>` |
-| `linsolve` | `Tensor<2, Scalar<ρ,d>> × Tensor<1, Scalar<ρ,e>> -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>` |
-| `eig` | `Tensor<2, Scalar<ρ,d>> -> (Tensor<1, Complex[d]>, Tensor<2, Complex<1>>)` |
-| `svd` | `Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,1>>)` |
-| `qr` | `Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,d>>)` |
-| `trace` | `Tensor<2, Scalar<ρ,d>> -> Scalar<ρ,d>` |
-| `rank` | `Tensor<2, τ> -> Int` |
-| `at` | `(Tensor<n, τ>, Int) -> Tensor<n-1, τ>`，要求 `n >= 1` |
-| `set` | `(Tensor<n, τ>, Tensor<1, Int>, τ) -> Tensor<n, τ>` |
-| `map_indexed` | `((Int, a) -> b, Tensor<1, a>) -> Tensor<1, b>` |
+| `sum`、`min`、`max`、`norm`、`trace` | `Scalar<ρ,d>` |
+| `sum(a, axis)` | 同 `d`，保持秩（keepdims） |
+| `mean`、`std` | `Scalar<div_rep(ρ),d>` |
+| `var` | `Scalar<div_rep(ρ),d^2>` |
+| `normalize` | 元素无量纲 |
+| `dot`、`matmul`、`matvec`、`outer` | `d*e` |
+| `det`、`prod` | **只接受无量纲**元素 |
+| `inv` | `Result<Tensor<2, Scalar<div_rep(ρ),1/d>>, LinAlgError>` |
+| `linsolve(A, b)` | `Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>` |
+| `eig` | 特征值量纲 `d`，特征向量无量纲 |
+| `svd`、`qr`、`lu` | 奇异值/`R`/`U` 同量纲 `d`，其余因子无量纲 |
 
-`det` 只接受无量纲矩阵，因为 `det` 的量纲是 `d^n`，而 `n` 是运行时形状。
-带量纲的行列式用 `det_unit(a, u) : Dyn<ρ>`（§4.9）；或者先除以单位
-`det(a / u) * u^n`，其中 `n` 由 `shape(a)[0]` 给出，结果用 `Dyn<ρ>` 表达。
-`prod` 同理：只接受无量纲元素，或返回 `Dyn<ρ>`。
-
-`eig` 的特征值量纲与矩阵元素相同；特征向量无量纲。`svd` 的奇异值同量纲，
-左右奇异向量无量纲。`qr` 的 Q 无量纲、R 同量纲。`lu` 的 L 无量纲、U 同
-量纲（§8.4 给出完整签名）。
+`det` 的量纲是 `d^n` 而 `n` 是运行时形状，所以只接受无量纲矩阵；带量纲的行列式用
+`det_unit(a, u) : Dyn<ρ>`（§4.9）。`prod` 同理。
 
 ## 3.6 记录、行与变体
 
 ### 3.6.1 行统一
 
-记录类型 `{ l: τ | ρ }` 的行统一规则：
-
 ```
-{ l: τ1 | ρ1 } ~ { l: τ2 | ρ2 }
-=> τ1 ~ τ2, ρ1 ~ ρ2
-
-{ l: τ | ρ } ~ { l1: τ1, ..., ln: τn | ρ' }
-=> l 与某个 li 匹配（或 l 不在其中，则 ρ 吸收剩余字段）
+{ l: τ1 | ρ1 } ~ { l: τ2 | ρ2 }   ⇒  τ1 ~ τ2, ρ1 ~ ρ2
+{ l: τ | ρ } ~ { l1: τ1, …, ln: τn | ρ' }
+   ⇒ l 与某个 li 匹配，或 l 不在其中而由 ρ 吸收剩余字段
 ```
 
-行统一 MUST 携带 **lacks 约束** `ρ lacks l`：当 `ρ` 吸收字段时，要求 `ρ`
-不包含 `l`，否则会产生重复标签。标准 Rémy 规则：
+行统一采用 Rémy 算法并携带 **lacks 约束**：`ρ lacks l` 时，`ρ` 吸收字段要求其不含 `l`，
+否则会产生重复标签。缺少字段是 `E0306`，重复字段是 `E0208`。记录字面量是封闭行，函数
+参数上的记录标注可以是开放行：
 
-```
-ρ lacks l,  ρ ~ { l1: τ1, ..., ln: τn | ρ' }
-=> ρ' 吸收 { l1: τ1, ..., ln: τn }，且 ρ' lacks l
-```
-
-实现用 Rémy 的行统一；缺少字段是错误 `E0306`，重复字段是 `E0208`。记录
-字面量默认是封闭行；函数参数上的记录标注可以是开放行：
-
-```
+```aevia
 fn norm(p: { x: Real[L], y: Real[L], ...r }): Real[L] =
     sqrt(p.x^2 + p.y^2)
 ```
 
-调用 `norm({ x = 1 m, y = 2 m, z = 3 m })` 合法，`r` 绑定 `{ z: Real[L] }`。
+`norm({ x = 1 m, y = 2 m, z = 3 m })` 合法，`r` 绑定 `{ z: Real[L] }`。
 
 ### 3.6.2 记录更新
 
-```
-{ p with x = 3.0 m }
-```
-
-要求 `p` 有字段 `x`；结果的类型是 `p` 的类型，字段 `x` 换成新类型。可以
-新增字段：
-
-```
-{ p with z = 1.0 m }   # 结果行增加 z，要求 row(p) lacks z
-```
-
-- 若字段已存在，是替换；若不存在，是新增。新增要求 `row(p) lacks z`
-  （§3.6.1），否则报 `E0208`。
-- 更新是纯的：产生新记录，旧记录不变。运行时对唯一拥有的记录做原地更新。
+`{ p with x = 3.0 m }` 要求 `p` 有字段 `x`，结果类型是 `p` 的类型并把 `x` 换成新类型。字段
+不存在时是新增，要求 `row(p) lacks z`（否则 `E0208`）。更新是纯的，旧记录不变；运行时对
+唯一拥有的记录原地更新。
 
 ### 3.6.3 变体与穷尽性
 
-变体构造器的类型是函数或值：
-
-```
-Circle : Real[L] -> Shape
-None   : Option<a>
-Some   : a -> Option<a>
-```
-
-`match` 的穷尽性检查按构造器集合做。记录模式是开放的；变体模式必须覆盖
-所有构造器，或用 `_` 兜底。冗余分支警告 `W0201`。
+构造器是函数或值：`Circle : Real[L] -> Shape`，`None : Option<a>`，`Some : a -> Option<a>`。
+变体 `match` 必须覆盖所有构造器或用 `_` 兜底；记录模式是开放的；冗余分支警告 `W0201`。
+构造器模式的元数不符是 `E0307`，构造器调用的实参数不符是 `E0315`。
 
 ### 3.6.4 递归类型的正性
 
-递归类型允许：
-
-```
-type Tree<a> = | Leaf | Node(Tree<a>, a, Tree<a>)
-```
-
-递归出现不能位于函数箭头的左侧：
-
-```
-type Bad = Bad -> Int        # E0312：非正递归
-```
-
-纯语言 + 一般递归下，非正递归可能破坏强规范化/逻辑一致性；Aevia 不做证明，
-但仍要求正性，保证运行时值的构造是良基的。
+递归类型允许（`type Tree<a> = | Leaf | Node(Tree<a>, a, Tree<a>)`），但递归出现不能在函数
+箭头左侧：`type Bad = | B(Bad -> Int)` 是 `E0312`。Aevia 不做证明，但要求正性以保证运行时
+值的构造是良基的。
 
 ## 3.7 函数、闭包与尾调用
 
 ### 3.7.1 函数类型
 
-```
-(τ1, ..., τn) -> τ
-```
+`(τ1, …, τn) -> τ`：参数按值传递，函数是闭包，可以作参数和返回值。函数相等不可判定，
+`==` 不适用于函数（`E0310`，没有 `Eq` 实例）。
 
-- 参数按值传递；没有引用、没有可变参数。
-- 函数是闭包，捕获词法环境。
-- 函数相等不可判定；`==` 不适用于函数（`Eq` 实例不存在）。
-- 函数可以返回函数、接受函数。
+### 3.7.2 多参数
 
-### 3.7.2 多参与柯里化
+函数是多参的，不自动柯里化：
 
-Aevia 的函数是多参的，不是自动柯里的：
-
-```
+```aevia
 fn add(x: Int, y: Int): Int = x + y
 add(1, 2)          # 3
-add(1)             # 错误：参数数量不匹配
+add(1)             # E0315：参数数量不匹配
 add(1, _)          # fn y => add(1, y)
 ```
 
-需要柯里化时用 `curry`/`uncurry`（§8.3）。`_` 占位符是轻量的部分应用。
+需要柯里化时用 `curry`/`uncurry`（§8.3）；`_` 占位符是轻量的部分应用。
 
 ### 3.7.3 尾调用
 
-- 自递归的尾调用 MUST 在常量栈空间内执行（解释器用 trampoline，编译器
-  生成跳转）。
-- 互递归的尾调用 SHOULD 被优化；自递归与互递归都保证尾调用优化。
-- 非尾递归的深度受运行时栈限制；超过限制报 `E0805`（stack overflow），
-  不会静默崩溃。
-
-数值算法用尾递归 + 累加器表达循环：
+- 自递归的尾调用 MUST 在常量栈空间内执行；互递归的尾调用也被优化。
+- 非尾递归深度受运行时栈限制，超限报 `E0805`（stack overflow），不会静默崩溃。
 
 ```aevia
 fn sum_to(n: Int, acc: Int): Int =
     if n == 0 then acc else sum_to(n - 1, acc + n)
 ```
 
-### 3.7.4 递归与效应
+### 3.7.4 递归与效果
 
-纯函数可以递归；`IO` 动作也可以递归，但 `do` 块内的递归必须通过具名函数，
-不能直接写 `let rec` 动作（当前规范限制）。这避免在 IO 中构造无限动作链。
+`IO` 动作可以递归，但递归必须通过具名函数，`do` 内不能声明 `fn` 或 `let rec`
+（§2.3.12）。
 
 ## 3.8 类型类
 
@@ -710,151 +434,97 @@ instance Show for Real[d] where
     show(x) = format_quantity(x)
 ```
 
-- 类**只有一个**类型参数；多参数类不在语言中（实例头语法无法表达多参数实例，
-  求解器也只支持单参数）。`class Convert a b where ...` 报 `E0317`。
-- 方法只有签名；默认实现由 `derive`、内置结构实现（Prelude 类）或插件提供。
-- 实例头 `Class τ`，`τ` 是类型构造器应用；`Class a` 这样的裸类型变量头非法
-  （`E0317`）。`τ` 中的变量隐式全称量化。
-- 用户类：实例必须覆盖所有方法，缺失的方法在 `E0317` 中列出。
-- Prelude 类（§3.8.4）是**钩子**而非封闭实现：实例可以只覆盖一部分方法，
-  其余由内置结构实现提供（例如记录/元组的打印由内置打印器完成）。
-- 类与实例的身份是**符号化**的：类键 `(定义模块路径, 类名)`，实例键再加规范
-  头类型；`AdtId` 只是进程内见证，不进入模块接口或缓存。`private class` 只在
-  定义模块可见；`private instance` 不允许（实例随模块导出，§7.4）。
+- 类**只有一个**类型参数；`class Convert a b` 是 `E0317`。
+- 方法只有签名；默认实现来自 `derive`、内置结构实现（Prelude 类）或插件。
+- 实例头是类型构造器应用；裸类型变量头 `instance C for a` 是 `E0317`；头中的变量隐式
+  全称量化。
+- 用户类的实例必须覆盖所有方法，缺失的方法在 `E0317` 中列出。Prelude 类是**钩子**：实例
+  可只覆盖部分方法，其余由内置结构实现提供（如记录与元组的打印）。
+- 类与实例的身份是符号化的：类键 `(定义模块路径, 类名)`，实例键再加规范头类型；`AdtId`
+  只是进程内见证，不进入接口或缓存。`private class` 只在定义模块可见；`private instance`
+  不允许（实例随模块导出，§7.4）。
 
 ### 3.8.2 解析
 
-约束 `C τ` 在以下时机解决：
-
-1. 如果 `τ` 是具体类型构造器，查找唯一匹配的实例。
-2. 如果 `τ` 含未解决的类型变量，延迟到变量被解决。
-3. 声明结束时仍无法解决，报 `E0310`（no instance）或 `E0304`
-   （ambiguous）。
-
-实例匹配是**头部匹配**，不做回溯。重叠实例是错误 `E0311`。
+约束 `C τ` 的解决：`τ` 是具体类型构造器时查找唯一匹配的实例；含未解决变量时延迟；声明
+结束仍无法解决则 `E0310`（无实例）或 `E0304`（歧义）。实例匹配是头部匹配，不回溯；重叠
+实例是 `E0311`。
 
 ### 3.8.3 一致性与孤儿规则
 
-- 同一类、同一类型头只能有一个实例。
-- 实例必须定义在类型所属模块或类所属模块中（orphan rule）。标准库的
-  实例定义在标准库；用户不能给 `Int` 添加 `Show` 实例。
-- 这条规则保证单独编译时实例集合是确定的。
+同一类、同一类型头只能有一个实例；实例必须定义在类型所属模块或类所属模块中（orphan
+rule），所以用户不能给 `Int` 添加 `Show`。这保证单独编译时实例集合是确定的。
 
 ### 3.8.4 内置类
 
 | 类 | 方法 | 说明 |
 |---|---|---|
-| `Eq a` | `==`、`!=` | **具体**结构相等；函数无实例；`Real` 无实例 |
-| `Ord a` | `compare`、`<` 等 | 偏序；`compare` 返回 `Option<Ordering>`（NaN 为 `None`） |
-| `TotalOrd a` | `total_compare` | 可用于 `Set`/`sort` 的全序；`Float` 的 NaN 排在最后 |
+| `Eq a` | `==` `!=` | 具体结构相等；函数、`Real` 无实例 |
+| `Ord a` | `compare`、`<` 等 | 偏序；`compare : Option<Ordering>`（NaN 为 `None`） |
+| `TotalOrd a` | `total_compare` | `Set`/`Map`/`sort` 所需的全序；`Float` 无实例 |
 | `Show a` | `show` | 可读表示；字符串插值使用 |
-| `Hash a` | `hash` | 可用于哈希容器；`Map` 需要 `TotalOrd`，不是 `Hash` |
-| `Num a` | `+ - * from_int` | **仅无量纲**用户数值类型 |
-| `Fractional a` | `/`、`from_rational` | 仅无量纲 |
-| `Floating a` | `sqrt exp ln sin ...` | 仅无量纲 |
-| `Container f` | `map`、`fold` | 张量、`Option`、`Set` 等 |
-| `Sized a` | `length` | `String`、`Tensor<n,a>` |
+| `Hash a` | `hash` | 哈希容器 |
+| `Num a` `Fractional a` `Floating a` | 算术/`from_int`/`sqrt` 等 | **仅无量纲**用户数值类型 |
+| `Container f` | `map`、`fold` | 张量、`Option`、`Set` |
+| `Sized a` | `length` | `String`、`Tensor` |
 | `Arbitrary a` | `arbitrary` | 属性测试的随机生成器 |
 | `Parallel a` | `par_map` | 仅 `Int`/`Float[d]` 及其张量；符号 `Real` 不并行 |
 
-**重要**：
+- `Num` 等不适用于带量纲的标量，因为 `*` 会改变量纲，不满足 `a -> a -> a`；带量纲的
+  算术是语言内置规则。
+- `Real` 不是 `Eq`：`x == y` 返回 `Prop`（§3.8.6）；要具体相等用 `decide(x == y)` 或
+  `approx_eq`。`==` 对 `Real` 解析为 `sym_eq`，不经 `Eq`，所以 `Eq a` 约束的泛型代码不会
+  实例化 `Real`。
+- `Float` 是 `Eq`（`NaN != NaN`）但不是 `TotalOrd`，`Set<Float>` 不合法；排序用
+  `sort_float`（NaN 最后）。`Set<a>` 与 `Map<a,b>` 要求 `TotalOrd a`。
+- `solve` 返回 `Solutions<Real,d>`（§8.6），不是 `Set`（符号根没有全序）。
 
-- `Num`/`Fractional`/`Floating` 不适用于带量纲的标量，因为 `*` 会改变
-  量纲，不满足 `a -> a -> a`。带量纲的算术是语言内置规则，不是类型类。
-- `Real` 不是 `Eq`：`x == y` 对 `Real` 返回 `Prop`（§3.8.6），不是 `Bool`。
-  需要具体相等时用 `decide(x == y)` 或 `approx_eq`。
-- `Float` 是 `Eq`（IEEE：`NaN != NaN`），但**不是** `TotalOrd`；`Set<Float>`
-  不合法。需要排序时用 `sort_float`（NaN 最后）或 `TotalFloat` 包装。
-- `Set<a>` 要求 `TotalOrd a`；`Map<a,b>` 要求 `TotalOrd a`。
-- `solve` 不返回 `Set`（符号根没有全序），返回 `Solutions<Real,d>`（§8.6）。
-
-标准库提供的 `Show` 实例包括（不限于）：
-
-```
-Show (Int)                 Show (Real[d])
-Show (Float[d])            Show (Complex[d])
-Show (Tensor<n, a>)        Show (Point[d])
-Show (Solutions<ρ,d>)      Show (Record)        # 动态表行
-```
-
-`Show`/`Eq`/`Ord`/`Hash` 的实例头必须用量纲多态形式（`Float[d]`），
-不能只写无量纲的 `Float`，否则 `20.0 m` 无法打印。
-
-`Show` 对上表的头是**结构性保证**，不是可选优化：没有用户实例时，内置
-打印器直接渲染记录、元组、`Tensor`、`Point`、`Solutions`、`Dyn` 与单位值；
-用户为**自己声明**的名义类型写的实例（或 `derive Show`）优先于内置实现。
-函数没有 `Show` 实例，也没有结构性回退（`E0310`）。
-
-内置类的实例集参与全局一致性（§7.4）。两个实例必须能由**运行时见证**区分
-（§9.2.3）：见证相同即使用户写了两个静态上不同的头，也报 `E0311`。例如
+标准库的 `Show`/`Eq`/`Ord`/`Hash` 实例头必须用量纲多态形式（`Float[d]`），否则 `20.0 m`
+无法打印。`Show` 对记录、元组、`Tensor`、`Point`、`Solutions`、`Dyn` 与单位值是结构性
+保证：无用户实例时由内置打印器渲染；用户为**自己声明**的名义类型写的实例（或 `derive
+Show`）优先。函数没有 `Show` 实例也没有结构性回退（`E0310`）。内置类的实例集参与全局
+一致性（§7.4）：两个实例必须能由运行时见证区分（§9.2.3），见证相同则 `E0311`，例如
 `Tensor<1, Int>` 与 `Tensor<1, Real>` 都是精确存储，不能同时拥有同一类的实例。
 
 ### 3.8.5 派生
 
-```
-derive Eq, Show, Hash for Vec2
-```
-
-`derive` 只对**结构类**开放：`Eq`、`Ord`、`TotalOrd`、`Show`、`Hash`。派生
-其他类（用户类、`Num` 等）报 `E0317`，消息指出失败的类。派生实例在**类型
-所属模块**生成（孤儿规则同样适用，§7.4）。
-
-编译器为记录/变体生成结构化实例。派生 `Ord` 按字段声明顺序做字典序。
-派生不适用于函数字段（没有 `Eq`/`Show`/`Hash` 实例）；失败的字段类型与类名
-出现在 `E0317` 中，而不是笼统的“不能派生”。
+`derive Eq, Show, Hash for Vec2` 只对结构类开放：`Eq`、`Ord`、`TotalOrd`、`Show`、`Hash`；
+派生其他类是 `E0317`。派生实例生成在类型所属模块（受孤儿规则约束），`Ord` 按字段声明
+顺序做字典序；含函数字段时失败，失败的字段类型与类名出现在 `E0317` 中。
 
 ### 3.8.6 命题 `Prop`
 
-`Bool` 只有 `true`/`false` 两个值，`if`、`match`、`assert` 只接受 `Bool`。
-符号比较产生的是**命题** `Prop`，不是 `Bool`：
+`if`、`match`、`assert` 只接受 `Bool`。`Real` 的比较产生命题 `Prop`：
 
 ```
-(==)  : Real[d] -> Real[d] -> Prop
-(!=)  : Real[d] -> Real[d] -> Prop
-(<)   : Real[d] -> Real[d] -> Prop
-(<=)  : Real[d] -> Real[d] -> Prop
-(>)   : Real[d] -> Real[d] -> Prop
-(>=)  : Real[d] -> Real[d] -> Prop
-
-decide  : Prop -> Option<Bool>
-assuming: (Prop, () -> a) -> a
-by_cases: (Prop, () -> Real[d], () -> Real[d]) -> Real[d]
+(==) (!=) (<) (<=) (>) (>=) : Real[d] -> Real[d] -> Prop
+decide   : Prop -> Option<Bool>
+assuming : (Prop, () -> a) -> a
+by_cases : (Prop, () -> Real[d], () -> Real[d]) -> Real[d]
 ```
 
-- `Int`、`Float`、`String`、记录、变体的比较返回 `Bool`（具体、可判定）。
-- `Real` 的比较返回 `Prop`；`x == y` 不会在运行时“猜”一个布尔值。
-- `==` 对 `Real` 解析为 `sym_eq`，不是 `Eq` 类方法；`Eq a` 约束的泛型代码
-  不会实例化 `Real`。这是刻意的 ad-hoc 重载：具体相等用 `Eq`，符号相等
-  用 `Prop`。
-- `Prop` 支持 `&&`、`||`、`!`，结果仍是 `Prop`。
-- `decide(p)` 在能证明/否证时返回 `Some(true/false)`，否则 `None`。
-- `assuming(p, thunk)` 把 `p` 作为假设加入 `thunk` 内的符号计算；`p` 不是
-  具体 `Bool`。如果 `p` 能判定为 `false`，报 `E0804`。当前规范只支持单元谓词
-  （`x > 0`、`x >= 0`、`x != 0`、`x ∈ ℤ`）。
-- `by_cases(p, yes, no)` 在 `p` 可判定时选分支；不可判定时构造符号 `ite`
-  项，用于分段函数的符号推导。
-- `if`/`match` 只接受 `Bool`；要分支符号条件，先 `decide` 或改写为
+- `Int`、`Float`、`String`、记录、变体的比较返回 `Bool`；`Real` 的比较返回 `Prop`，不在
+  运行时“猜”布尔值。`Prop` 支持 `&&`、`||`、`!`，结果仍是 `Prop`。
+- `decide(p)` 能证明或否证时返回 `Some(true/false)`，否则 `None`。
+- `assuming(p, thunk)` 把 `p` 作为假设加入 `thunk` 内的符号计算；`p` 可判定为 `false` 时
+  `E0804`。目前只支持单元谓词（`x > 0`、`x >= 0`、`x != 0`、`x ∈ ℤ`）。
+- `by_cases(p, yes, no)` 在 `p` 可判定时选分支，否则构造符号 `ite` 项（分段函数的符号
+  推导）。
+- 在 `if` 中使用 `Prop` 是 `E0302`（symbolic proposition is not a `Bool`）；先 `decide`，或改写为
   `assuming`/`by_cases`。
 
-这条区分修复了“符号 Bool 伪装成 Bool”的不健全：`Bool` 的穷尽性、`Eq`
-定律和 `if` 的确定性都成立；符号推理走 `Prop`。
+这一区分避免“符号 Bool 伪装成 Bool”：`Bool` 的穷尽性、`Eq` 定律和 `if` 的确定性都成立。
 
 ## 3.9 效果：`IO`
 
 ### 3.9.1 类型
 
-```
-IO : Type -> Type
-return : a -> IO a
-bind   : IO a -> (a -> IO b) -> IO b
-```
+`IO : Type -> Type`，`pure : a -> IO a`；`do` 去糖为 `bind` 链（`bind` 不是用户可调用的
+函数）。`IO` 是单一效果类型；capability（`fs`/`net`/`env`/`rand`/`gpu`）是运行时权限，
+不是类型参数（§13.9.6），标准库签名因此不被 effect row 侵入，而插件与沙箱仍可声明
+所需能力。
 
-`IO` 是单一效果类型；capability（`fs`/`net`/`env`/`rand`/`gpu`）是运行时
-权限，不是类型参数（§13.9.6）。这样标准库签名不被 effect row 侵入，
-同时插件/沙箱仍能声明所需能力。
-
-`IO a` 是一个**动作描述**，不是立即执行的值。只有运行时执行 `main` 时才
-发生副作用。纯函数不能执行 `IO`；`do` 块的类型是 `IO a`。
+`IO a` 是动作**描述**，只有运行时执行 `main` 时才发生副作用。纯函数不能执行 `IO`。
 
 ### 3.9.2 `do` 的类型规则
 
@@ -868,139 +538,101 @@ bind   : IO a -> (a -> IO b) -> IO b
 Γ ⊢ (e; rest) : IO b      （丢弃 e 的结果，警告 W0202）
 ```
 
-`let` 在 `do` 中是纯绑定，不引入 `IO`。
+`do` 内的 `let` 是纯绑定。
 
-### 3.9.3 错误与异常
+### 3.9.3 错误
 
-- 可恢复错误用 `Result<T, E>`；`?` 传播。
-- `Option<T>` 表示可能缺失；`?` 也可用于 `Option`。
-- `panic(msg)` 是不可恢复的运行时错误，终止程序并打印调用栈。
-- 没有 `try/catch`；IO 异常通过 `Result` 返回（例如 `read_file`）。
+可恢复错误用 `Result<T, E>` 与 `?`；可能缺失用 `Option<T>`（`?` 也适用）；IO 失败通过
+`Result` 返回（如 `read_file`）。没有 `try/catch`，也没有用户可调用的 `panic`；不可恢复
+的运行时错误终止程序并打印调用栈（§6.9）。
 
 ### 3.9.4 纯度边界
 
-- 纯函数不能调用 `IO`；类型检查器拒绝 `IO` 出现在纯上下文。
-- `IO` 动作可以捕获纯值，反之不行。
-- `unsafePerformIO` 不存在。
-- `main : IO Unit` 是唯一入口；库模块可以导出 `IO` 动作，由调用者执行。
+纯上下文中出现 `IO` 是 `E0313`；`IO` 动作可以捕获纯值，反之不行；没有 `unsafePerformIO`；
+`main : IO Unit` 是唯一入口，库模块导出的 `IO` 动作由调用者执行。
 
 ## 3.10 字面量与默认值
 
 ### 3.10.1 字面量类型
 
-字面量是**表示多态**的：它们带一个 `Literal` 约束，在期望类型处实例化，
-在声明结束处默认化。
+字面量是**表示多态**的：带 `Literal` 约束，在期望类型处实例化，在声明结束处默认化。
 
-| 字面量 | 默认类型 | 可实例化为 | 备注 |
-|---|---|---|---|
-| `123` | `Int` | `Int`、`Real`、`Float`、`Complex` | 任意精度 |
-| `1.5` | `Float[1]` | `Float[1]`、`Real[1]` | 精确十进制可转 `Real` |
-| `1e3` | `Float[1]` | `Float[1]`、`Real[1]` | 同上 |
-| `3 m` | `Real[L]` | `Real[L]`、`Float[L]`、`Complex[L]` | 单位字面量 |
-| `3.0 m` | `Float[L]` | `Float[L]`、`Real[L]` | 单位字面量 |
-| `25 °C` | `Point[Θ]` | `Point[Θ]` | 仿射，固定 Float |
-| `oo` | `Real[1]` | `Real[1]`、`Float[1]` | 正无穷；`oo m` 是 `Real[L]` |
-| `nan` | `Float[1]` | `Float[1]` | NaN |
-| `"s"` | `String` | `String` | |
-| `true` | `Bool` | `Bool` | |
+| 字面量 | 默认类型 | 可实例化为 |
+|---|---|---|
+| `123` | `Int` | `Int`、`Real`、`Float`、`Complex` |
+| `1.5`、`1e3` | `Float[1]` | `Float[1]`、`Real[1]`（精确十进制） |
+| `3 m` | `Real[L]` | `Real[L]`、`Float[L]`、`Complex[L]` |
+| `3.0 m` | `Float[L]` | `Float[L]`、`Real[L]` |
+| `25 °C` | `Point[Θ]` | 仅 `Point[Θ]`（仿射，固定 Float） |
+| `oo` | `Real[1]` | `Real[1]`、`Float[1]`；带量纲写 `oo * 1 m` |
+| `nan` | `Float[1]` | `Float[1]` |
 
-- 整数字面量在期望 `Real`/`Float` 处自动转换；`df(2)` 中 `2` 是 `Real`。
-- 小数字面量在期望 `Real` 处按**精确十进制**转换：`1.5` 是 `3/2`，不是
-  二进制浮点。这让 `x + 1.5`（`x : Real`）保持精确。
-- 单位字面量的表示由系数决定：整数系数默认 `Real`，小数系数默认 `Float`；
-  期望类型可以覆盖。`fall_time(20 m)` 在 `h : Float[L]` 处把 `20 m` 实例化
-  为 `Float[L]`。
-- `0` **不是**量纲多态的。`0` 默认 `Int`；要写零长度，写 `0 m`；要写
-  零浮点，写 `0.0`。这消除了“零乘任何值”的类型特例（§4.7）。
-- `oo` 是 `Real[1]`，不是量纲多态；`oo m` 是 `Real[L]`。`nan` 是
-  `Float[1]`。
+- 整数字面量在期望 `Real`/`Float` 处自动转换（`df(2)` 中 `2` 是 `Real`）。小数字面量在
+  期望 `Real` 处按**精确十进制**转换：`1.5` 是 `3/2`，因此 `x + 1.5`（`x : Real`）保持精确。
+- 单位字面量的表示由系数决定：整数系数默认 `Real`，小数系数默认 `Float`，期望类型可覆盖
+  （`fall_time(20 m)` 在 `h : Float[L]` 处把 `20 m` 实例化为 `Float[L]`）。
+- `0` 不是量纲多态的，默认 `Int`；零长度写 `0 m`，浮点零写 `0.0`（§4.7）。
 
 ### 3.10.2 默认化
 
-在声明结束时，仍未解决的变量按以下顺序默认：
+声明结束时仍未解决的变量按顺序默认：
 
-1. 由整数字面量产生的 `Rep` 变量 → `Int`。
-2. 由小数字面量产生的 `Rep` 变量 → `Float`。
-3. 单位字面量的 `Rep` 变量 → `Real`（整数系数）或 `Float`（小数系数）。
-4. 其他 `Rep` 变量 → `Real`。
-5. `Dim` 变量 → `1`，并警告 `W0301`。
-6. `Nat` 变量**不**默认成任何值；无法由约束解出时在检查期报 `E0304`
-   （秩或 refined extent 无法推断）。
-7. 行变量 → 空行（封闭记录）。
+1. 整数字面量产生的 `Rep` 变量 → `Int`；2. 小数字面量产生的 → `Float`；3. 单位字面量
+   的 → `Real`（整数系数）或 `Float`（小数系数）；4. 其他 `Rep` 变量 → `Real`；5. `Dim` 变量
+   → `1` 并警告 `W0301`；6. `Nat` 变量**不**默认，无法由约束解出则 `E0304`；7. 行变量 →
+   空行。
 
-默认化只影响未被方案或词法环境量化的变量，并先传播所有数值约束。
-`Literal` 约束选择合法的默认类型，不能把小数字面量读成 `Int`。
-
-函数体的私有字面量若依赖泛型输入，会在这些输入确定后，优先按同一数值
-约束分量中输入的算术 `join` 读取，再尝试其字面量默认表示。无关参数不参与；
-调用者的期望结果也不能反过来另选这个读取。直接使用泛型参数的字面量
-（如 `fn zero<r: Rep>(): r = 0`）保留自己的合法表示域。
-
-实际构造并捕获的数据保持同一类型实例。函数别名传递构造要求，不能通过
-对保存的闭包分别实例化而把同一个捕获数值同时解释成 `Int` 和 `Float`。
+默认化只影响未被方案或词法环境量化的变量，并先传播所有数值约束；`Literal` 约束选择合法的
+默认类型，不能把小数字面量读成 `Int`。函数体里依赖泛型输入的私有字面量，在输入确定后优先
+按同一数值约束分量中输入的算术 `join` 读取，再尝试其字面量默认表示；无关参数不参与，调用
+者的期望结果也不能另选这个读取。直接使用泛型参数的字面量（`fn zero<r: Rep>(): r = 0`）
+保留自己的合法表示域。实际构造并捕获的数据保持同一类型实例，函数别名传递构造要求，不会把
+同一个捕获数值同时解释成 `Int` 和 `Float`。
 
 ### 3.10.3 类型标注优先
 
-如果表达式有期望类型，字面量按期望类型检查，不触发默认化：
+有期望类型时字面量按期望类型检查，不触发默认化：
 
 ```aevia
 let x: Float[L] = 0.0 m    # 零长度，Float
-let n: Int = 0             # 0 是 Int
+let n: Int = 0
 let y = 0                  # 默认 Int
 let z: Real[L] = 0 m       # 零长度，精确
 ```
 
-仅含字面量的 `+`、`-`、`*`、`/` 表达式及正负号也接受这个局部上下文：
-`let exact: Real = 0.1 + 2` 精确等于 `21/10`。这个规则不越过变量或调用；
-已经建立的函数数值关系仍决定调用结果，例如 `fn f(x) = x + 1.0` 的
-`f(1)` 是 `Float`，不能由调用者标注成 `Int`。
+仅含字面量的 `+ - * /` 表达式及正负号也接受这个局部上下文：`let exact: Real = 0.1 + 2`
+精确等于 `21/10`。规则不越过变量或调用：`fn f(x) = x + 1.0` 的 `f(1)` 是 `Float`，不能由
+调用者标注成 `Int`。
 
 ### 3.10.4 字面量折叠
 
-字面量折叠是**编译期求值**，它必须与运行期求值给出同一个值；折叠是优化，
-不是另一套算术。
+折叠是编译期求值，必须与运行期给出同一个值，是优化而不是另一套算术。
 
-1. **一个字面量只舍入一次。** 十进制文本表示一个精确有理数；在 `Float`
-   位置它是离该有理数最近的 f64。单位字面量先在精确算术里乘尺度再舍入：
-   `1.1 km : Float[L]` 是离 `1100` 最近的 f64，而不是 `1.1 * 1000.0` 舍入
-   两次。带 π 的尺度（`deg`）把正确舍入的有理部分乘以 f64 的 `pi^k`。
-2. **闭合的字面量算术树是编译期常量（常量区域）。** 只由字面量、
-   `+ - * /` 与正负号组成的表达式按它的**静态表示**逐步求值一次并按调用点
-   与激活记忆化；全是 `Float` 字面量的无量纲树在 IR 降级时就用同样的 IEEE
-   运算折叠成一个常数（JIT 也看到常数）。因此 `0.1 + 0.2 : Float` 无论写在
-   行内还是经过 `let` 都是 `0.30000000000000004`——等式推理在纯语言里必须
-   成立，不能因为“看起来是常量”而改变结果。
-3. **精确性来自类型，而不是折叠。** `let x: Real = 0.1 + 2` 精确等于
-   `21/10`（§3.10.3）；没有期望类型时 `1.0 + 2` 是 `join(Int, Float) = Float`
-   （§3.4.1），值为 f64 的 `3.0`。小数字面量与精确 `Real` 操作数相遇时按精确
-   十进制读取：`1/3 + 0.1` 是 `13/30`，不是 `1/3` 加上 `0.1` 的二进制展开。
-
-> 这一节取代了附录 C Revision 9 §4 第 1 条记录的偏差（“十进制量字面量在
-> `Float` 静态类型下按精确有理数折叠”）以及 §6.3.2 中“混合字面量默认读成
-> `Real`”的句子：那两条让静态 `Float` 的值在运行期是精确数，是类型健全性
-> 缺陷。现在静态类型与运行期表示总是一致。
+1. **一个字面量只舍入一次。** 十进制文本是精确有理数；在 `Float` 位置取最近的 f64。单位
+   字面量先在精确算术里乘尺度再舍入：`1.1 km : Float[L]` 是最接近 `1100` 的 f64，不是
+   `1.1 * 1000.0` 舍入两次；带 π 的尺度（`deg`）把正确舍入的有理部分乘以 f64 的 `pi^k`。
+2. **闭合的字面量算术树是编译期常量。** 只由字面量、`+ - * /` 和正负号组成的表达式按其
+   静态表示逐步求值一次；全是 `Float` 字面量的无量纲树在 IR 降级时按同样的 IEEE 运算折叠
+   为常数。故 `0.1 + 0.2 : Float` 无论写在行内还是经 `let`，都是 `0.30000000000000004`。
+3. **精确性来自类型，而不是折叠。** `1.0 + 2` 无期望类型时是 `join(Int, Float) = Float`，值
+   为 `3.0`；小数字面量与精确 `Real` 操作数相遇时按精确十进制读取：`1/3 + 0.1` 是 `13/30`。
 
 ## 3.11 动态量纲 `Dyn`（摘要）
 
-静态量纲系统有两类无法表达的情况：
-
-1. 运行时指数：`x^n`，`n : Int`，`x` 带量纲。
-2. 形状相关的量纲：`det(A)` 的 `d^n`，`n` 是矩阵阶数。
-
-Aevia 提供 `Dyn<ρ>` 作为显式逃逸（保留表示）：
+静态量纲无法表达运行时指数 `x^n`（`n : Int`）和形状相关的量纲（`det(A)` 的 `d^n`）。
+`Dyn<ρ>` 是显式逃逸（保留表示）：
 
 ```
-dyn       : Scalar<ρ,d> -> Dyn<ρ>          # d 具体
-check     : Dyn<ρ> -> Result<Scalar<ρ,d>, DimError>   # d 具体
+dyn       : Scalar<ρ,d> -> Dyn<ρ>                       # d 具体
+check     : Dyn<ρ> -> Result<Scalar<ρ,d>, DimError>     # d 具体
 dyn_with  : (Scalar<ρ,d>, DimValue) -> Dyn<ρ>
 check_with: (DimValue, Dyn<ρ>) -> Result<Scalar<ρ,1>, DimError>
 dim_of    : Dyn<ρ> -> DimValue
 ```
 
-`dyn`/`check` 是类型指导原语：调用点的 `d` 必须具体，编译器把 `d` 物化成
-`DimValue`。泛型代码用 `dyn_with`/`check_with` 显式传入运行时量纲。
-`Dyn<ρ>` 的算术在运行时检查量纲；`+` 要求量纲相等，`*` 相加，`^` 乘指数。
-`Dyn<ρ>` 不能隐式转换为 `Scalar<ρ,d>`；必须 `check`。完整规则见 §4.9。
+`dyn`/`check` 是类型指导原语：调用点的 `d` 必须具体，编译器把它物化成 `DimValue`；泛型
+代码用 `dyn_with`/`check_with` 显式传入运行时量纲。`Dyn` 不能隐式转为 `Scalar`，完整规则
+见 §4.9。
 
 ## 3.12 类型错误
 
@@ -1009,56 +641,42 @@ dim_of    : Dyn<ρ> -> DimValue
 | `E0301` | 未绑定名字 |
 | `E0302` | 类型不匹配 |
 | `E0303` | occurs check（无限类型） |
-| `E0304` | 无法推断（ambiguous） |
+| `E0304` | 无法推断 / 歧义 |
 | `E0305` | 不是函数 |
 | `E0306` | 记录缺少字段 |
-| `E0307` | 构造器参数数量不匹配 |
-| `E0308` | 模式与 scrutinee 类型不匹配 |
+| `E0307` | 构造器模式元数不匹配 |
+| `E0308` | 模式与 scrutinee 不匹配，或模式重复绑定 |
 | `E0309` | 非穷尽匹配 |
 | `E0310` | 缺少类型类实例 |
 | `E0311` | 重叠实例 |
 | `E0312` | 非正递归类型 |
 | `E0313` | 纯上下文中出现 `IO` |
-| `E0314` | 秩无法推断（索引/reshape） |
-| `E0315` | 函数参数数量不匹配 |
+| `E0314` | 张量元素类型或秩无法推断 |
+| `E0315` | 调用的参数数量不匹配 |
 | `E0316` | 重复定义 |
-| `E0317` | 无法派生实例 |
+| `E0317` | 类/实例/派生错误 |
 
-量纲错误使用 `E04xx`（第 04 章），单位错误使用 `E05xx`（第 05 章）。
+量纲错误是 `E04xx`（第 04 章），单位错误是 `E05xx`（第 05 章）。
 
-## 3.13 关键推断规则（形式化摘要）
+## 3.13 关键推断规则
 
 ```
-Γ(x) = σ    σ' = inst(σ)
---------------------------------
-Γ ⊢ x ⇒ σ'
+Γ(x) = σ    σ' = inst(σ)        Γ ⊢ e1 ⇒ τ1 -> τ2    Γ ⊢ e2 ⇐ τ1
+-----------------------        --------------------------------
+Γ ⊢ x ⇒ σ'                      Γ ⊢ e1(e2) ⇒ τ2
 
-Γ ⊢ e1 ⇒ τ1 -> τ2    Γ ⊢ e2 ⇐ τ1
---------------------------------
-Γ ⊢ e1(e2) ⇒ τ2
+Γ, x: τ1 ⊢ e ⇐ τ2                Γ ⊢ e1 ⇐ Bool   Γ ⊢ e2 ⇐ τ   Γ ⊢ e3 ⇐ τ
+--------------------------------  ------------------------------------------
+Γ ⊢ (fn (x) => e) ⇐ τ1 -> τ2      Γ ⊢ if e1 then e2 else e3 ⇐ τ
 
-Γ, x: τ1 ⊢ e ⇐ τ2
---------------------------------
-Γ ⊢ (fn (x) => e) ⇐ τ1 -> τ2
-
-Γ ⊢ e1 ⇐ Bool    Γ ⊢ e2 ⇐ τ    Γ ⊢ e3 ⇐ τ
-------------------------------------------
-Γ ⊢ if e1 then e2 else e3 ⇐ τ
-
-Γ ⊢ e ⇒ { l: τ | ρ }
---------------------------------
-Γ ⊢ e.l ⇒ τ
-
-Γ ⊢ e1 ⇐ Scalar<ρ,d>    Γ ⊢ e2 ⇐ Scalar<ρ,d>
---------------------------------------------
-Γ ⊢ e1 + e2 ⇐ Scalar<ρ,d>
+Γ ⊢ e ⇒ { l: τ | ρ }             Γ ⊢ e1 ⇐ Scalar<ρ,d>   Γ ⊢ e2 ⇐ Scalar<ρ,d>
+--------------------             ------------------------------------------
+Γ ⊢ e.l ⇒ τ                      Γ ⊢ e1 + e2 ⇐ Scalar<ρ,d>
 
 Γ ⊢ e1 ⇐ Scalar<ρ1,d>    Γ ⊢ e2 ⇐ Scalar<ρ2,e>
 ------------------------------------------------
 Γ ⊢ e1 * e2 ⇐ Scalar<join(ρ1,ρ2), d*e>
 ```
 
-完整的量纲统一规则见下一章。类型系统的实现顺序是：解析 → 名字解析 →
-收集签名 → 推断/检查 → 默认化 → 导出接口。
-
-下一章把 `d` 从占位符变成真正的代数对象。
+实现顺序：解析 → 名字解析 → 收集签名 → 推断/检查 → 默认化 → 导出接口。量纲统一规则见
+下一章。

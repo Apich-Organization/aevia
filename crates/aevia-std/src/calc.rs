@@ -6,32 +6,46 @@
 //!
 //! The two phases are kept apart on purpose. `numeric_deriv` is a finite
 //! difference on `Float` data and says so; `grad_f`/`jacobian`/`hessian` are
-//! their multi-dimensional forms; `quadrature` is adaptive Simpson with a
-//! Richardson check. Everything iterative reports `NotConverged` rather than a
+//! their multi-dimensional forms; `quadrature` uses adaptive Gauss–Kronrod with an
+//! embedded error estimate. Everything iterative reports `NotConverged` rather than a
 //! plausible-looking wrong answer.
 
 use crate::NumericError;
-use crate::linalg;
+use rssn::kernels::calculus as kcalc;
+use rssn::kernels::optim as koptim;
+use rssn::kernels::rootfind as kroots;
+use std::cell::RefCell;
 
-/// The relative step a finite difference uses.
-///
-/// `eps^(1/3)` balances truncation error (`h^2`) against cancellation
-/// (`eps/h`), which is the optimum for a central difference.
-fn step(x: f64) -> f64 {
-    let scale = x.abs().max(1.0);
-    f64::EPSILON.cbrt() * scale
-}
+pub mod ad;
+mod optim;
+mod quad;
+mod roots;
 
-/// The step a *second* difference uses.
-///
-/// A second difference subtracts three values that nearly cancel, so the
-/// rounding noise is `eps/h^2` while the truncation error is `h^2`: the
-/// balance is at `eps^(1/4)`, which is a hundred times larger than the first
-/// difference's step. Using `eps^(1/3)` here loses the answer in the noise.
-fn second_step(x: f64) -> f64 {
-    let scale = x.abs().max(1.0);
-    f64::EPSILON.sqrt().sqrt() * scale
-}
+pub use ad::Dual;
+pub use ad::Tape;
+pub use ad::Var;
+pub use ad::ad_derivative;
+pub use ad::ad_grad;
+pub use ad::ad_jacobian;
+pub use ad::ad_reverse_grad;
+pub use optim::least_squares_lm;
+pub use optim::linprog;
+pub use optim::minimize_bfgs;
+pub use optim::minimize_box;
+pub use optim::minimize_cg;
+pub use optim::minimize_lbfgs;
+pub use quad::gauss_legendre_nodes_weights;
+pub use quad::quad_clenshaw_curtis;
+pub use quad::quad_gauss_kronrod;
+pub use quad::quad_gauss_legendre;
+pub use quad::quad_improper;
+pub use quad::quad_romberg;
+pub use quad::quad_tanh_sinh;
+pub use roots::poly_roots;
+pub use roots::root_brent;
+pub use roots::root_halley;
+pub use roots::solve_system_broyden;
+pub use roots::solve_system_dogleg;
 
 /// The first derivative of `f` at `x`, by a central difference with one
 /// Richardson extrapolation step.
@@ -42,11 +56,7 @@ pub fn derivative<F>(
 where
     F: FnMut(f64) -> f64,
 {
-    let h = step(x);
-    let coarse = (f(x + h) - f(x - h)) / (2.0 * h);
-    let fine = (f(x + h / 2.0) - f(x - h / 2.0)) / h;
-    // 4/3 * fine - 1/3 * coarse cancels the h^2 term.
-    (4.0 * fine - coarse) / 3.0
+    kcalc::richardson_derivative(f, x)
 }
 
 /// The second derivative of `f` at `x`.
@@ -57,13 +67,10 @@ pub fn second_derivative<F>(
 where
     F: FnMut(f64) -> f64,
 {
-    let h = second_step(x);
-    let coarse = (f(x + h) - 2.0 * f(x) + f(x - h)) / (h * h);
-    let fine = (f(x + h / 2.0) - 2.0 * f(x) + f(x - h / 2.0)) / (h * h / 4.0);
-    (4.0 * fine - coarse) / 3.0
+    kcalc::second_derivative(f, x)
 }
 
-/// Adaptive Simpson quadrature of `f` over `[a, b]`.
+/// Adaptive Gauss–Kronrod quadrature of `f` over `[a, b]`.
 ///
 /// # Errors
 ///
@@ -77,62 +84,7 @@ pub fn quadrature<F>(
 where
     F: FnMut(f64) -> f64,
 {
-    if !a.is_finite() || !b.is_finite() {
-        return Err(NumericError::Domain(
-            "quadrature needs finite bounds".to_string(),
-        ));
-    }
-    if b < a {
-        return Err(NumericError::Domain(
-            "quadrature needs `a <= b`; swap the bounds and negate".to_string(),
-        ));
-    }
-    if a == b {
-        return Ok(0.0);
-    }
-    let mut fa = f(a);
-    let mut fb = f(b);
-    if !fa.is_finite() || !fb.is_finite() {
-        // An endpoint singularity: step inside by a thousandth of the interval.
-        let inset = (b - a) * 1e-6;
-        fa = f(a + inset);
-        fb = f(b - inset);
-        if !fa.is_finite() || !fb.is_finite() {
-            return Err(NumericError::Domain(
-                "the integrand is not finite on the interval".to_string(),
-            ));
-        }
-        return adaptive_simpson(f, a + inset, b - inset, fa, fb, 1e-12, 0);
-    }
-    adaptive_simpson(f, a, b, fa, fb, 1e-12, 0)
-}
-
-fn adaptive_simpson<F>(
-    f: &mut F,
-    a: f64,
-    b: f64,
-    fa: f64,
-    fb: f64,
-    tolerance: f64,
-    depth: u32,
-) -> Result<f64, NumericError>
-where
-    F: FnMut(f64) -> f64,
-{
-    let middle = (a + b) / 2.0;
-    let fm = f(middle);
-    let whole = (b - a) / 6.0 * (fa + 4.0 * fm + fb);
-    let left = (middle - a) / 6.0 * (fa + 4.0 * f(a + (middle - a) / 2.0) + fm);
-    let right = (b - middle) / 6.0 * (fm + 4.0 * f(middle + (b - middle) / 2.0) + fb);
-    if depth >= 40 {
-        return Err(NumericError::NotConverged);
-    }
-    if (left + right - whole).abs() <= 15.0 * tolerance {
-        return Ok(left + right + (left + right - whole) / 15.0);
-    }
-    let left_value = adaptive_simpson(f, a, middle, fa, fm, tolerance / 2.0, depth + 1)?;
-    let right_value = adaptive_simpson(f, middle, b, fm, fb, tolerance / 2.0, depth + 1)?;
-    Ok(left_value + right_value)
+    quad_gauss_kronrod(f, a, b, 1e-12)
 }
 
 /// The gradient of a scalar field at `x`, by central differences.
@@ -143,19 +95,8 @@ pub fn grad<F>(
 where
     F: FnMut(&[f64]) -> f64,
 {
-    let mut out = vec![0.0; x.len()];
-    let mut point = x.to_vec();
-    for index in 0..x.len() {
-        let h = step(x[index]);
-        let original = point[index];
-        point[index] = original + h;
-        let forward = f(&point);
-        point[index] = original - h;
-        let backward = f(&point);
-        point[index] = original;
-        out[index] = (forward - backward) / (2.0 * h);
-    }
-    out
+    let f = RefCell::new(f);
+    kcalc::gradient(|x| (f.borrow_mut())(x), x)
 }
 
 /// The Jacobian of a vector field at `x`: `(rows, cols, row-major entries)`.
@@ -166,26 +107,11 @@ pub fn jacobian<F>(
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
-    let base = f(x);
-    let rows = base.len();
-    let cols = x.len();
-    let mut out = vec![0.0; rows * cols];
-    let mut point = x.to_vec();
-    for column in 0..cols {
-        let h = step(x[column]);
-        let original = point[column];
-        point[column] = original + h;
-        let forward = f(&point);
-        point[column] = original - h;
-        let backward = f(&point);
-        point[column] = original;
-        for row in 0..rows {
-            let ahead = forward.get(row).copied().unwrap_or(0.0);
-            let behind = backward.get(row).copied().unwrap_or(0.0);
-            out[row * cols + column] = (ahead - behind) / (2.0 * h);
-        }
-    }
-    (rows, cols, out)
+    let f = RefCell::new(f);
+    let callback = |x: &[f64]| (f.borrow_mut())(x);
+    let fx = callback(x);
+    let j = kroots::numerical_jacobian(&callback, x, &fx);
+    (j.rows, j.cols, j.data)
 }
 
 /// The Hessian of a scalar field at `x`.
@@ -196,47 +122,8 @@ pub fn hessian<F>(
 where
     F: FnMut(&[f64]) -> f64,
 {
-    let n = x.len();
-    let mut out = vec![0.0; n * n];
-    let mut point = x.to_vec();
-    // Diagonal: a second difference along one axis.
-    for index in 0..n {
-        let h = second_step(x[index]);
-        let original = point[index];
-        point[index] = original + h;
-        let plus = f(&point);
-        point[index] = original - h;
-        let minus = f(&point);
-        point[index] = original;
-        let centre = f(&point);
-        out[index * n + index] = (plus - 2.0 * centre + minus) / (h * h);
-    }
-    // Off-diagonal: a mixed difference, which is symmetric.
-    for row in 0..n {
-        for column in row + 1..n {
-            let h = second_step(x[row]);
-            let k = second_step(x[column]);
-            let (xr, xc) = (point[row], point[column]);
-            point[row] = xr + h;
-            point[column] = xc + k;
-            let plus_plus = f(&point);
-            point[row] = xr + h;
-            point[column] = xc - k;
-            let plus_minus = f(&point);
-            point[row] = xr - h;
-            point[column] = xc + k;
-            let minus_plus = f(&point);
-            point[row] = xr - h;
-            point[column] = xc - k;
-            let minus_minus = f(&point);
-            point[row] = xr;
-            point[column] = xc;
-            let value = (plus_plus - plus_minus - minus_plus + minus_minus) / (4.0 * h * k);
-            out[row * n + column] = value;
-            out[column * n + row] = value;
-        }
-    }
-    out
+    let f = RefCell::new(f);
+    kcalc::hessian(|x| (f.borrow_mut())(x), x)
 }
 
 /// The divergence of a vector field at `x`.
@@ -247,10 +134,8 @@ pub fn divergence<F>(
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
-    let (rows, _, jacobian) = jacobian(f, x);
-    (0..rows.min(x.len()))
-        .map(|index| jacobian[index * x.len() + index])
-        .sum()
+    let f = RefCell::new(f);
+    kcalc::divergence(|x| (f.borrow_mut())(x), x)
 }
 
 /// The curl of a three-dimensional vector field.
@@ -269,16 +154,12 @@ where
 {
     if x.len() != 3 {
         return Err(NumericError::Domain(
-            "`curl` is defined for a three-dimensional field".to_string(),
+            "`curl` requires a three-dimensional field".into(),
         ));
     }
-    let (_, cols, jacobian) = jacobian(f, x);
-    let at = |row: usize, column: usize| jacobian[row * cols + column];
-    Ok(vec![
-        at(2, 1) - at(1, 2),
-        at(0, 2) - at(2, 0),
-        at(1, 0) - at(0, 1),
-    ])
+    let f = RefCell::new(f);
+    kcalc::curl(|x| (f.borrow_mut())(x), x)
+        .ok_or_else(|| NumericError::ShapeMismatch("curl requires three field components".into()))
 }
 
 /// The Laplacian of a scalar field at `x`: the trace of the Hessian.
@@ -289,9 +170,8 @@ pub fn laplacian<F>(
 where
     F: FnMut(&[f64]) -> f64,
 {
-    let n = x.len();
-    let hessian = hessian(f, x);
-    (0..n).map(|index| hessian[index * n + index]).sum()
+    let f = RefCell::new(f);
+    kcalc::laplacian(|x| (f.borrow_mut())(x), x)
 }
 
 /// A root of `f` near `guess`, by Newton's method with a bisection fallback.
@@ -307,106 +187,7 @@ pub fn root<F>(
 where
     F: FnMut(f64) -> f64,
 {
-    let mut x = guess;
-    for _ in 0..100 {
-        let value = f(x);
-        if value == 0.0 {
-            return Ok(x);
-        }
-        let slope = derivative(f, x);
-        if slope.abs() < 1e-14 {
-            break;
-        }
-        let next = x - value / slope;
-        if !next.is_finite() {
-            break;
-        }
-        if (next - x).abs() <= 1e-14 * x.abs().max(1.0) {
-            return Ok(next);
-        }
-        x = next;
-    }
-    // Newton stalled: look for a sign change around the guess.
-    let mut width = 1.0;
-    for _ in 0..60 {
-        let (low, high) = (guess - width, guess + width);
-        let low_value = f(low);
-        let high_value = f(high);
-        if low_value.is_finite() && high_value.is_finite() && low_value * high_value < 0.0 {
-            let mut low = low;
-            let mut high = high;
-            let mut low_value = low_value;
-            for _ in 0..200 {
-                let middle = (low + high) / 2.0;
-                let value = f(middle);
-                if value == 0.0 || (high - low) <= 1e-15 * middle.abs().max(1.0) {
-                    return Ok(middle);
-                }
-                if low_value * value < 0.0 {
-                    high = middle;
-                } else {
-                    low = middle;
-                    low_value = value;
-                }
-            }
-            return Ok((low + high) / 2.0);
-        }
-        width *= 2.0;
-        if width > 1e9 {
-            break;
-        }
-    }
-    // No sign change: the root may be a touching one, where `f` never crosses
-    // zero. Minimise `f^2` instead — `(x - 1)^2` is the standard example.
-    for scale in [1.0, 10.0, 100.0, 1_000.0, 10_000.0] {
-        let mut squared = |value: f64| {
-            let evaluated = f(value);
-            evaluated * evaluated
-        };
-        let candidate = golden_minimum(&mut squared, guess - scale, guess + scale);
-        if f(candidate).abs() <= 1e-9 * (1.0 + candidate.abs()) {
-            return Ok(candidate);
-        }
-    }
-    Err(NumericError::NotConverged)
-}
-
-/// The minimum of a unimodal function on `[low, high]`, by golden-section
-/// search.
-fn golden_minimum<F>(
-    f: &mut F,
-    low: f64,
-    high: f64,
-) -> f64
-where
-    F: FnMut(f64) -> f64,
-{
-    const RATIO: f64 = 0.618_033_988_749_894_9;
-    let mut low = low;
-    let mut high = high;
-    let mut left = high - RATIO * (high - low);
-    let mut right = low + RATIO * (high - low);
-    let mut left_value = f(left);
-    let mut right_value = f(right);
-    for _ in 0..200 {
-        if (high - low).abs() <= 1e-15 * high.abs().max(1.0) {
-            break;
-        }
-        if left_value < right_value {
-            high = right;
-            right = left;
-            right_value = left_value;
-            left = high - RATIO * (high - low);
-            left_value = f(left);
-        } else {
-            low = left;
-            left = right;
-            left_value = right_value;
-            right = low + RATIO * (high - low);
-            right_value = f(right);
-        }
-    }
-    (low + high) / 2.0
+    kroots::root_near(f, guess).map_err(roots::map_root_err)
 }
 
 /// A solution of the square system `f(x) = 0`, by Newton's method.
@@ -422,36 +203,19 @@ pub fn solve_system<F>(
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
-    let n = start.len();
-    let mut x = start.to_vec();
-    for _ in 0..100 {
-        let value = f(&x);
-        if value.len() != n {
-            return Err(NumericError::ShapeMismatch(format!(
-                "the system returns {} value(s) for {n} unknown(s)",
-                value.len()
-            )));
-        }
-        if value.iter().all(|entry| entry.abs() < 1e-14) {
-            return Ok(x);
-        }
-        let (rows, cols, jacobian) = jacobian(f, &x);
-        if rows != n || cols != n {
-            return Err(NumericError::ShapeMismatch(
-                "the system is not square".to_string(),
-            ));
-        }
-        let step = linalg::solve(n, n, &jacobian, &value)?;
-        let mut delta = 0.0f64;
-        for index in 0..n {
-            x[index] -= step[index];
-            delta = delta.max(step[index].abs());
-        }
-        if delta <= 1e-14 * x.iter().fold(1.0f64, |acc, entry| acc.max(entry.abs())) {
-            return Ok(x);
-        }
+    if start.is_empty() {
+        return Err(NumericError::Empty);
     }
-    Err(NumericError::NotConverged)
+    let f = RefCell::new(f);
+    kroots::newton_system::<_, fn(&[f64]) -> rssn::kernels::dense::Mat>(
+        |x| (f.borrow_mut())(x),
+        None,
+        start,
+        1e-12,
+        100,
+    )
+    .map(|s| s.x)
+    .map_err(roots::map_root_err)
 }
 
 /// A local minimum of `f`, by the Nelder–Mead simplex method.
@@ -470,79 +234,15 @@ pub fn minimize<F>(
 where
     F: FnMut(&[f64]) -> f64,
 {
-    let n = start.len();
-    if n == 0 {
+    if start.is_empty() {
         return Err(NumericError::Empty);
     }
-    let mut simplex: Vec<(f64, Vec<f64>)> = Vec::with_capacity(n + 1);
-    simplex.push((f(start), start.to_vec()));
-    for index in 0..n {
-        let mut point = start.to_vec();
-        point[index] += if point[index] == 0.0 {
-            0.000_25
-        } else {
-            0.05 * point[index]
-        };
-        simplex.push((f(&point), point));
-    }
-    let mut iterations = 0;
-    loop {
-        simplex.sort_by(|a, b| a.0.total_cmp(&b.0));
-        iterations += 1;
-        if iterations > 4000 {
-            return Err(NumericError::NotConverged);
-        }
-        let best = simplex[0].0;
-        let spread = simplex
-            .iter()
-            .map(|(value, _)| (value - best).abs())
-            .fold(0.0f64, f64::max);
-        if spread <= 1e-12 * best.abs().max(1.0) {
-            return Ok(simplex[0].1.clone());
-        }
-        // Centroid of everything but the worst vertex.
-        let mut centroid = vec![0.0; n];
-        for (_, point) in simplex.iter().take(n) {
-            for index in 0..n {
-                centroid[index] += point[index] / n as f64;
-            }
-        }
-        let reflected: Vec<f64> = (0..n)
-            .map(|index| centroid[index] + (centroid[index] - simplex[n].1[index]))
-            .collect();
-        let reflected_value = f(&reflected);
-        if reflected_value < simplex[0].0 {
-            let expanded: Vec<f64> = (0..n)
-                .map(|index| centroid[index] + 2.0 * (reflected[index] - centroid[index]))
-                .collect();
-            let expanded_value = f(&expanded);
-            if expanded_value < reflected_value {
-                simplex[n] = (expanded_value, expanded);
-            } else {
-                simplex[n] = (reflected_value, reflected);
-            }
-            continue;
-        }
-        if reflected_value < simplex[n - 1].0 {
-            simplex[n] = (reflected_value, reflected);
-            continue;
-        }
-        let contracted: Vec<f64> = (0..n)
-            .map(|index| centroid[index] + 0.5 * (simplex[n].1[index] - centroid[index]))
-            .collect();
-        let contracted_value = f(&contracted);
-        if contracted_value < simplex[n].0 {
-            simplex[n] = (contracted_value, contracted);
-            continue;
-        }
-        // Shrink towards the best vertex.
-        let best_point = simplex[0].1.clone();
-        for entry in simplex.iter_mut().skip(1) {
-            for index in 0..n {
-                entry.1[index] = best_point[index] + 0.5 * (entry.1[index] - best_point[index]);
-            }
-            entry.0 = f(&entry.1);
-        }
+    let f = RefCell::new(f);
+    let result = koptim::nelder_mead(|x| (f.borrow_mut())(x), start, 0.05, 1e-12, 4000);
+    if result.converged && result.fx.is_finite() {
+        Ok(result.x)
+    } else {
+        Err(NumericError::NotConverged)
     }
 }
 
@@ -558,11 +258,11 @@ pub fn maximize<F>(
 where
     F: FnMut(&[f64]) -> f64,
 {
-    let mut negated = |point: &[f64]| -f(point);
+    let mut negated = |x: &[f64]| -f(x);
     minimize(&mut negated, start)
 }
 
-/// A least-squares solution of `f(x) ≈ 0`, by the Gauss–Newton method.
+/// A least-squares solution of `f(x) ≈ 0`, by Levenberg–Marquardt.
 ///
 /// # Errors
 ///
@@ -574,28 +274,7 @@ pub fn least_squares<F>(
 where
     F: FnMut(&[f64]) -> Vec<f64>,
 {
-    let n = start.len();
-    let mut x = start.to_vec();
-    for _ in 0..200 {
-        let residual = f(&x);
-        let (rows, cols, jacobian) = jacobian(f, &x);
-        if rows == 0 || cols != n {
-            return Err(NumericError::ShapeMismatch(
-                "the residual has the wrong shape".to_string(),
-            ));
-        }
-        // Solve the normal equations through a least-squares solve of `J d = r`.
-        let step = linalg::lstsq(rows, cols, &jacobian, &residual)?;
-        let mut delta = 0.0f64;
-        for index in 0..n {
-            x[index] -= step[index];
-            delta = delta.max(step[index].abs());
-        }
-        if delta <= 1e-14 * x.iter().fold(1.0f64, |acc, entry| acc.max(entry.abs())) {
-            return Ok(x);
-        }
-    }
-    Err(NumericError::NotConverged)
+    least_squares_lm(f, start, 1e-12, 200)
 }
 
 #[cfg(test)]
@@ -747,5 +426,271 @@ mod tests {
         let solution = least_squares(&mut f, &[0.0, 0.0]).unwrap();
         assert!(close(solution[0], 1.0, 1e-8));
         assert!(close(solution[1], 2.0, 1e-8));
+    }
+
+    #[test]
+    fn extended_quadrature_methods_agree() {
+        // Smooth integral: int_0^pi sin(x) dx = 2
+        let mut s = |x: f64| x.sin();
+        let pi = std::f64::consts::PI;
+        assert!(close(
+            quad_gauss_legendre(&mut s, 0.0, pi, 8).unwrap(),
+            2.0,
+            1e-12
+        ));
+        assert!(close(
+            quad_gauss_kronrod(&mut s, 0.0, pi, 1e-12).unwrap(),
+            2.0,
+            1e-12
+        ));
+        assert!(close(
+            quad_clenshaw_curtis(&mut s, 0.0, pi, 16).unwrap(),
+            2.0,
+            1e-12
+        ));
+        assert!(close(
+            quad_romberg(&mut s, 0.0, pi, 1e-12, 12).unwrap(),
+            2.0,
+            1e-11
+        ));
+
+        // Endpoint singularity: int_0^1 1 / sqrt(x) dx = 2
+        let mut sing = |x: f64| 1.0 / x.sqrt();
+        assert!(close(
+            quad_tanh_sinh(&mut sing, 0.0, 1.0, 1e-10, 10).unwrap(),
+            2.0,
+            1e-9
+        ));
+
+        // Improper integrals:
+        // int_0^inf exp(-x) dx = 1
+        let mut exp_neg = |x: f64| (-x).exp();
+        assert!(close(
+            quad_improper(&mut exp_neg, 0.0, f64::INFINITY, 1e-10).unwrap(),
+            1.0,
+            1e-9
+        ));
+        // int_-inf^inf exp(-x^2) dx = sqrt(pi)
+        let mut gauss = |x: f64| (-x * x).exp();
+        assert!(close(
+            quad_improper(&mut gauss, f64::NEG_INFINITY, f64::INFINITY, 1e-9).unwrap(),
+            pi.sqrt(),
+            1e-8
+        ));
+    }
+
+    #[test]
+    fn extended_root_finders_and_poly_roots() {
+        let mut f = |x: f64| x.cos() - x;
+        let r_brent = root_brent(&mut f, 0.0, 1.0, 1e-12, 100).unwrap();
+        assert!(close(r_brent.cos(), r_brent, 1e-12));
+
+        let mut df = |x: f64| -x.sin() - 1.0;
+        let mut d2f = |x: f64| -x.cos();
+        let r_halley = root_halley(&mut f, &mut df, &mut d2f, 0.5, 1e-13, 30).unwrap();
+        assert!(close(r_halley, r_brent, 1e-12));
+
+        // Nonlinear system: x^2 + y^2 = 1, x - y = 0
+        let mut sys = |x: &[f64]| vec![x[0] * x[0] + x[1] * x[1] - 1.0, x[0] - x[1]];
+        let expected = 1.0 / 2.0_f64.sqrt();
+        let broyden = solve_system_broyden(&mut sys, &[0.6, 0.8], 1e-10, 50).unwrap();
+        assert!(close(broyden[0], expected, 1e-9));
+        assert!(close(broyden[1], expected, 1e-9));
+
+        let dogleg = solve_system_dogleg(&mut sys, &[0.6, 0.8], 1e-10, 50).unwrap();
+        assert!(close(dogleg[0], expected, 1e-9));
+        assert!(close(dogleg[1], expected, 1e-9));
+
+        // Polynomial roots: (x - 1)(x - 2)(x^2 + 1) = x^4 - 3x^3 + 3x^2 - 3x + 2
+        let roots = poly_roots(&[2.0, -3.0, 3.0, -3.0, 1.0]).unwrap();
+        assert_eq!(roots.len(), 4);
+        for z in &roots {
+            let p_val = crate::Complex::new(2.0, 0.0);
+            let mut acc = crate::Complex::new(1.0, 0.0);
+            for &c in &[-3.0, 3.0, -3.0] {
+                acc = acc.mul(*z);
+                acc.re += c;
+            }
+            acc = acc.mul(*z);
+            acc.re += p_val.re;
+            assert!(acc.abs() < 1e-11, "non-root: {z:?}, |p(z)| = {}", acc.abs());
+        }
+    }
+
+    #[test]
+    fn extended_optimizers_and_linprog() {
+        // Rosenbrock 2D: min at (1, 1)
+        let mut rosen = |x: &[f64]| (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0] * x[0]).powi(2);
+        let mut rosen_g = |x: &[f64]| {
+            vec![
+                -2.0 * (1.0 - x[0]) - 400.0 * x[0] * (x[1] - x[0] * x[0]),
+                200.0 * (x[1] - x[0] * x[0]),
+            ]
+        };
+
+        let x_bfgs = minimize_bfgs(&mut rosen, &mut rosen_g, &[-1.2, 1.0], 1e-8, 200).unwrap();
+        assert!(close(x_bfgs[0], 1.0, 1e-6) && close(x_bfgs[1], 1.0, 1e-6));
+
+        let x_lbfgs = minimize_lbfgs(&mut rosen, &mut rosen_g, &[-1.2, 1.0], 7, 1e-8, 500).unwrap();
+        assert!(close(x_lbfgs[0], 1.0, 1e-6) && close(x_lbfgs[1], 1.0, 1e-6));
+
+        let x_cg = minimize_cg(&mut rosen, &mut rosen_g, &[-1.2, 1.0], 1e-6, 1000).unwrap();
+        assert!(close(x_cg[0], 1.0, 1e-4) && close(x_cg[1], 1.0, 1e-4));
+
+        // Box constrained: min (x0 - 3)^2 + (x1 + 2)^2 s.t. x in [0, 2] x [-1, 1] -> (2, -1)
+        let mut quad_f = |x: &[f64]| (x[0] - 3.0).powi(2) + (x[1] + 2.0).powi(2);
+        let mut quad_g = |x: &[f64]| vec![2.0 * (x[0] - 3.0), 2.0 * (x[1] + 2.0)];
+        let x_box = minimize_box(
+            &mut quad_f,
+            &mut quad_g,
+            &[0.5, 0.5],
+            &[0.0, -1.0],
+            &[2.0, 1.0],
+            1e-9,
+            100,
+        )
+        .unwrap();
+        assert!(close(x_box[0], 2.0, 1e-8) && close(x_box[1], -1.0, 1e-8));
+
+        // Levenberg-Marquardt: exponential fit y = a * exp(b * t)
+        let ts = [0.0_f64, 1.0, 2.0, 3.0];
+        let ys: Vec<f64> = ts.iter().map(|&t| 2.5 * (-0.4 * t).exp()).collect();
+        let mut res = |p: &[f64]| {
+            ts.iter()
+                .zip(&ys)
+                .map(|(&t, &y)| p[0] * (p[1] * t).exp() - y)
+                .collect()
+        };
+        let p_lm = least_squares_lm(&mut res, &[1.0, -0.1], 1e-10, 100).unwrap();
+        assert!(close(p_lm[0], 2.5, 1e-8) && close(p_lm[1], -0.4, 1e-8));
+
+        // Simplex LP: min -x0 - 2*x1 s.t. x0 + x1 <= 4, x0 <= 2, x1 <= 3, x >= 0
+        // Optimal at (1, 3), obj = -7
+        let (x_lp, obj) = linprog(
+            &[-1.0, -2.0],
+            &[1.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+            &[4.0, 2.0, 3.0],
+        )
+        .unwrap();
+        assert!(close(x_lp[0], 1.0, 1e-10) && close(x_lp[1], 3.0, 1e-10));
+        assert!(close(obj, -7.0, 1e-10));
+    }
+
+    #[test]
+    fn automatic_differentiation_forward_and_reverse() {
+        // Forward 1D: f(x) = sin(x^2) * exp(x), f'(x) = (2x cos(x^2) + sin(x^2)) exp(x)
+        let x = 0.7_f64;
+        let (val, d) = ad_derivative(&mut |z: Dual| (z * z).sin() * z.exp(), x);
+        let exact_val = (x * x).sin() * x.exp();
+        let exact_d = (2.0 * x * (x * x).cos() + (x * x).sin()) * x.exp();
+        assert!(close(val, exact_val, 1e-14));
+        assert!(close(d, exact_d, 1e-14));
+
+        // Forward vs Reverse gradient of f(x, y, z) = x * y + sin(y * z) + exp(x - z)
+        let pt = [1.2, -0.5, 0.8];
+        let g_fwd = ad_grad(
+            &mut |v: &[Dual]| v[0] * v[1] + (v[1] * v[2]).sin() + (v[0] - v[2]).exp(),
+            &pt,
+        )
+        .unwrap();
+        let (r_val, g_rev) = ad_reverse_grad(
+            &mut |v: &[Var]| {
+                let t1 = &v[0] * &v[1];
+                let t2 = (&v[1] * &v[2]).sin();
+                let t3 = (&v[0] - &v[2]).exp();
+                &(&t1 + &t2) + &t3
+            },
+            &pt,
+        )
+        .unwrap();
+        let exact_f = pt[0] * pt[1] + (pt[1] * pt[2]).sin() + (pt[0] - pt[2]).exp();
+        assert!(close(r_val, exact_f, 1e-14));
+        for i in 0..3 {
+            assert!(close(g_fwd[i], g_rev[i], 1e-14));
+        }
+
+        // Forward Jacobian: [x*y, x^2 + sin(y)]
+        let jac = ad_jacobian(
+            &mut |v: &[Dual]| vec![v[0] * v[1], v[0] * v[0] + v[1].sin()],
+            &[2.0, 0.5],
+        )
+        .unwrap();
+        assert!(close(jac[0], 0.5, 1e-14));
+        assert!(close(jac[1], 2.0, 1e-14));
+        assert!(close(jac[2], 4.0, 1e-14));
+        assert!(close(jac[3], 0.5_f64.cos(), 1e-14));
+    }
+    #[test]
+    fn quadrature_rejects_invalid_controls_and_honors_budget() {
+        let mut f = |x: f64| x.exp();
+        for tol in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(matches!(
+                quad_gauss_kronrod(&mut f, 0.0, 1.0, tol),
+                Err(NumericError::Domain(_))
+            ));
+        }
+        assert!(matches!(
+            quad_tanh_sinh(&mut f, 0.0, 1.0, 1e-12, 0),
+            Err(NumericError::NotConverged)
+        ));
+        assert!(quad_improper(&mut f, f64::INFINITY, f64::INFINITY, 1e-10).is_err());
+        assert!(quad_romberg(&mut f, 0.0, 1.0, 1e-10, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn tanh_sinh_integrates_endpoint_singularity_without_truncation() {
+        let mut f = |x: f64| 1.0 / x.sqrt();
+        let value = quad_tanh_sinh(&mut f, 0.0, 1.0, 1e-8, 12).unwrap();
+        assert!((value - 2.0).abs() < 1e-7, "{value}");
+        let mut invalid = |_: f64| f64::NAN;
+        assert!(quad_tanh_sinh(&mut invalid, 0.0, 1.0, 1e-8, 2).is_err());
+    }
+
+    #[test]
+    fn curl_rejects_wrong_output_dimension() {
+        assert!(matches!(
+            curl(&mut |_: &[f64]| vec![0.0; 2], &[0.0; 3]),
+            Err(NumericError::ShapeMismatch(_))
+        ));
+    }
+    #[test]
+    fn optimizer_rejects_malformed_gradient_and_nan_bounds() {
+        let mut f = |x: &[f64]| x.iter().map(|v| v * v).sum();
+        let mut calls = 0;
+        let mut bad = |_: &[f64]| {
+            calls += 1;
+            if calls == 1 {
+                vec![1.0]
+            } else {
+                Vec::new()
+            }
+        };
+        assert!(minimize_bfgs(&mut f, &mut bad, &[1.0], 1e-8, 10).is_err());
+        assert!(
+            minimize_box(
+                &mut f,
+                &mut |x: &[f64]| x.to_vec(),
+                &[0.0],
+                &[f64::NAN],
+                &[1.0],
+                1e-8,
+                10
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn automatic_differentiation_rejects_foreign_output_tape() {
+        let other = Tape::new();
+        let mut foreign = |_: &[Var]| other.var(3.0);
+        assert!(matches!(
+            ad_reverse_grad(&mut foreign, &[1.0]),
+            Err(NumericError::Domain(_))
+        ));
+    }
+    #[test]
+    fn dogleg_does_not_report_a_nonzero_stationary_residual_as_a_root() {
+        assert!(solve_system_dogleg(&mut |_: &[f64]| vec![1.0], &[0.0], 1e-9, 10).is_err());
     }
 }

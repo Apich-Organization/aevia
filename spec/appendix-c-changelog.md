@@ -1,310 +1,130 @@
 # 附录 C — 修订记录与已知实现边界
 
-本附录记录 Aevia 语言规范与实现的演进历程、当前功能支持状态以及明确记录在案的未实现边界。
+本附录记录 Aevia 规范与实现的演进、各章不再保留的“状态故事”，以及明确记录在案的未实现边界。规范正文只说**现在是什么**；历史在这里。本附录是资料性的。
+
+---
+
+## Revision 23（2026-11-14）：规范全面审校与英文版
+
+本轮把规范与实现逐章对照，压缩重复、把状态说明移出正文，并新增英文版（`spec/en/`，写作与术语规则见 `spec/STYLE.md`）。机器读取的两章（08、11）保持形态不变，由 `cargo test -p aevia-std --test spec_signatures --test spec_programs` 守住。
+
+**全书层面**
+
+- 新增英文版：每个中文章节在 `spec/en/<同名>` 有对应英文文件，章节号、锚点、代码块与诊断码与中文一致。
+- 状态说明（“实现状态（日期）”、“Revision N 新增”、“task-NN 已闭合”）从正文移出，归入本附录；正文只保留一行 *状态*。
+- 实测数字（算子数、单位数、测试数）不再散落在各章：manifest 规模在 §10.8 一处给出，其余各章指向 `aevia rssn`。
+
+**本批章节（08、10–13、README、本附录）**
+
+| 文件 | 修正 | 增补 | 删除/移出 |
+|---|---|---|---|
+| `08-stdlib.md` | §8.19/§8.20 的 manifest 计数与“323/323”“309 条”“37 个模块”等过期数字（现为 1620 个算子、41 个模块文件，覆盖由测试断言）；`Rssn_Numeric` 的 typed 计数改为“全部 typed”；§8.7.1 中文段落里夹杂的英文句子 | 稀疏、FFT、序列操作等小节合并为一次叙述，规则不变 | 各节“实现状态”故事（`par_map`、`args`、SDE、稀疏、Plot、NPY、仿真）压缩为一行状态；Revision 号旁注；`.workbuddy-ai` 审计文档的引用 |
+| `10-backend.md` | §10.0/§10.8 的 manifest 数字（1382→1620，`manifest_hash` 变更）；§10.5.1“`par_map` 顺序执行”改为工作线程副本（§9.7.2）；§10.9 “量纲字面量折叠为精确有理数、打印 `sqrt(800000/196133) s`”的偏差说明（现 `fall_time(20.0 m)` 打印 `2.0196199771025523 s`） | §10.3.7 指向生成的 `Rssn_Sim_<Name>` 模块；§10.8 缺口表合并重复项 | task-31/emit_typecheck 的叙述、重复的 SDE 状态段、双语混写的 §10.6.5 英文摘要 |
+| `11-examples.md` | 11.1–11.5 输出改为 `aevia run` 的实际输出；11.2 终点时间改为 3 s（原 10 s 时抛体已落地、高度为负）；11.3 `series` 的结果形态与 `solve` 的 `Solutions` 记录；11.10 的变量遮蔽警告 | 说明 11.8 是库模块（无 `main`） | 重复的“展示了…的好处”段落 |
+| `12-rationale.md` | 12.8.7 并行符号值（`fork/merge` 的说法换成 §9.7.2 的实际行为）；12.10 路线图由工期估算改为实现进展表 | — | M0–M6 的周数、验收清单的重复项 |
+| `13-extensibility.md` | §13.7 registry：此前写“设计完成、实现未开始、依赖报 `E0605`”，实际 `aevia add/update/fetch/tree`、`aevia pkg publish/yank/search/verify` 与解析器已实现（Revision 15）；§13.8.2 capability 表补上 `core.callback`、`core.plugin.source` 并以实际 12 行为准；§13.9.5 稀疏“只检查秩”改为已检查细化形状；删除不存在的 `aevia fix` 与 `tools/gen_rssn_module.aev` | 13.2.2 精度分档表与 §13.4.1 评分规则合并 | manifest hash 变迁（`1920638b…→8ed92a22…→8d2c3764…`）、task-31/task-22 叙述、重复的 SDE 状态、各节“实现状态”长段 |
+| `README.md` | “Revision 13”→23；“1476 operators in 37 rule sets” 等计数改为指向 `aevia rssn`；阅读指南表与章节标题对齐 | 中文版（原先 `spec/README.md` 只有英文） | — |
+| `appendix-c-changelog.md` | §2 的“37 个标准库模块”→41；§5 已知边界清单更新（SDE 事件、形状细化已实现，registry 已实现） | 本条目 | Revision 12–22 的细节压缩为要点 |
+
+**本批章节（01–04、附录 A）**
+
+| 文件 | 修正 | 增补 | 删除/移出 |
+|---|---|---|---|
+| `01-lexical.md` | NFC 只作用于标识符；反引号标识符未实现（E0105，改为状态说明）；`return` 不是 Prelude 函数（应为 `pure`）；`1e`、`1.` 非法字面量；未知转义是 E0105；`_` 只能作调用实参；后缀 `!` 须紧贴操作数 | E0104 空插值 `{}`、E0108/E0209 的 `3 (…)` 情形；µ/Ω/Å/° 特殊字符表与字面量默认类型表 | “Revision 13”旁注；与 §2.6 重复的优先级表 |
+| `02-syntax.md` | `open` 不能打开 `import … as` 别名；`forall` 谓词只有一个参数；`return(())`→`pure(())`；`xs[1::2]` 是 cons；`do` 内不能声明 `fn`/`let rec`；单元素元组是 E0202；`(+)` 能解析但未绑定（状态）；`√x` 需已知操作数类型；浮点/负数字面量不是模式；已知属性集合（含 `@bench`） | E0208、E0314、E0701、E1001；`match` 三种布局 | 全部行内 EBNF（与附录 A 重复）；§2.7.1 重复段落 |
+| `03-types.md` | `Int / Int` 为 `Real`；`Real` 比较得 `Prop`，`if` 中用 `Prop` 是 E0302；索引规则（标量下标消轴、切片保轴，旧“只接受全标量下标”有误）；`oo m` 非法（写 `oo * 1 m`）；`return`/`bind`/`panic` 不是用户函数；`TotalFloat` 未实现；E0307 与 E0315 的区分 | §3.5.5 归约与线性代数的量纲规则表；Nat 方程要点 | “Revision 12/13”与附录 C Revision 9 旁注；重复的签名表（留在 §8.4）；弱变量与 RSSN `Symbol` 的冗长叙述 |
+| `04-dimensions.md` | `L^0.5` 非法（写 `L^(1/2)`）；E0408/E0409 保留未触发；E0411 含义；`Dyn` 不匹配是运行时 E0412 而非 `panic`；删除不存在的 `try_add`/`try_mul`/`unit_pow_dyn`/`lerp`；§4.9.5 示例改为 `det_unit`/`pow_dyn`/`check`；§4.3 统一算法重写 | E0318 与刚性参数入错误表；`pow_dyn`、`det_unit`、`value_of` 签名；`check` 结果类型须标注（E0304） | 与 §3.5.5 重复的张量表；含糊的伪代码；“此前被静默接受”的叙述 |
+| `appendix-a-grammar.md` | `nat` 补 `*` 与括号；负数字面量不是模式；`dimension_decl` 多余的 `private`；`return`/上下文关键字的错误说法 | — | 与 §2.6 重复的优先级表 |
+
+**本批章节（05–07、09、附录 B）**
+
+| 文件 | 修正 | 增补 | 删除/移出 |
+|---|---|---|---|
+| `05-units.md` | `kkm` 为 `E0501`（非 `E0503`）；`E0505` 是重复单位名（同一量纲可有多个尺度 1 单位）；`E0506` 是“尺度对该指数无精确值”（先用后声明为 `E0501`，不存在单位环）；单位全局可见、不能用 `Units.SI.km` 限定；`25.0 °C + 10 K` 合法，仅 `Real` 变量报 `E0302`；`100 u` 示例（`u` 是原子质量单位）；`e_charge` 不存在；`kat` 量纲 | 保留码 `E0502`/`E0503`/`E0507`、`W0501` 无发射点的状态说明；`delta_to` 显示套用偏移的已知缺陷 | 日期实现状态段、单位/常数计数、rssn 3.0.0-rc.1 旁注 |
+| `06-semantics.md` | `decide : Prop -> Option<Bool>`；`dsolve` 示例量纲错误；`point(300.0, K)` 须 `to(°C, …)` 才显示 `26.85 °C`；栈规则（CLI 默认 1024 MiB、深度改由剩余栈限制、库默认 2048、`max_io_depth`）；相位表 | `E0804` 含 `assuming` 为假；`E0811` 入错误表 | `with_budget` 冗述（留作状态）、重复示例 |
+| `07-modules.md` | 清单只读 `[package]`（`name`/`version`/`entry`）与 `[dependencies]`，其余表/键为 `E0605`；`private` 仅限六类声明（`private instance` 为 `E0202`）；`E0603` 仅在同名异类型时；`E0608` 仅嵌入 API，CLI 缺 `main` 无码；单位不依赖 import；`aevia doc` 输出 Markdown | 名义身份规则凝练为要点 | 约 40 行日期实现叙述 |
+| `09-runtime.md` | crate 表；`:dims` 的基量纲名；CLI 清单与 `--help`/源码一致；磁盘缓存状态不再称 registry 客户端未实现；默认栈 1024 MiB | `publish`/`login`/`search`/`info`/`yank`/`verify`/`docs`/`watch`、`aevia-pkg publish` 选项、`AEVIA_PKG`/`AEVIA_REGISTRY`；`--no-cache`/`--out`/`--jobs`；`--help` “no registry” 残句的状态说明 | 日期注记、重复的 registry 文字 |
+| `appendix-b-diagnostics.md` | 各码含义对照实际发射（`E0108`/`E0209`、`E0314`、`E0402`、`E0411`、`E0412`、`E0701`/`E0702`、`E0805`、`E0902`、`E1001`–`E1006`）；示例改为真实输出 | `W0602` 入表；`W0102`/`W0203` 标保留；`E0806`–`E0809` 被内建借用的说明 | 保留 B.1–B.17 编号，无整节删除 |
+
+**审校中发现、不在本批范围的陈旧点**：`09-runtime.md` §9.11 末尾仍写“registry 客户端仍未实现（依赖只有 path 依赖）”，与 §13.7 和 Revision 15 不符，应由该章的批次更正。
 
 ---
 
 ## 1. 规范演进总结
 
-- **Revision 0 (2026-10-31)**：确立语言核心定位（纯函数式、量纲作为类型、静态秩与动态形状张量、符号/数值双相、RSSN 计算内核后端）。
-- **Revisions 1–6 (2026-11-01 ~ 2026-11-04)**：完成双向类型检查、单位推导与仿射温标收敛、行多态与模式匹配、ODE/PDE 统一接口规范、严格诊断码（E0100–E1000）定义。
-- **Revisions 7–10 (2026-11-05 ~ 2026-11-07)**：
-  - **标准库就绪**：实现 §8.20 标准库模块层级（`Math`、`Units.SI`、`Calculus`、`LinearAlgebra`、`Sde` 等 37 个模块），支持全路径与解构导入。
-  - **原生 JIT 支持**：完成 `aevia-core/src/jit.rs`，在 `feature = "jit"` 下将纯 Float/Bool 核心 IR 降译为 RSSN/Cranelift 机器码磁带与循环执行。
-  - **Rayon 并行求值**：在 `aevia-core/src/parallel.rs` 中实现 `par_map` 多工作线程副本（Replica）求值，由 CLI `--jobs N` 设定线程池。
-  - **二进制 I/O**：实现 `read_npy` / `write_npy` 张量数据持久化。
-- **Revision 11 (2026-11-08)**：
-  - 修复 `BigRational` 零底负幂 panic 与十进制超大幂次 DoS 隐患。
-  - 增强词法分析器支持 Unicode 上标括号 `⁽` `⁾` 及严格符号语法。
-  - 修复 LSP 传输层零长度消息死循环及 `did_change` 未跟踪文档解包崩溃。
-  - 强化符号引擎 `0^(-n)` 奇点处理、分数根保护及除法渲染括号包裹。
-  - 修复张量 Cons 维度一致性校验与测量值零除异常。
-  - 完善 RSSN FFI 批量计算 `diagnostic_codes` 机器可读编码及确定性 `bincode-next` 序列化。
-  - 修复稠密特征值求解器 0x0 与 1x1 边界条件。
-- **Revision 12（数值与类型系统缺口，track 3）**：
-  - **形状细化（§3.5.1/§3.5.3）**：`Nat` 求解器由线性形式升级为多项式形式——变量的乘积（`n * m`）作为不透明单项式保留，可与同一乘积相消（`n*m ~ m*n`），一个因子被解出后代回成线性方程；推断变量（泛型被调用方的新实例）可与任意表达式消去（`a ~ n + 1`、`a ~ b`），修复了"泛型函数在另一个带符号 extent 的泛型函数里被调用时报 `E0304`"。**声明的 extent 是刚性的**：两个不同声明变量（`n`、`m`）不会被悄悄合并，报 `E0302`（原来是含糊的 `E0304`）；仍可被字面量或表达式解出（`n + 1 ~ 3`）。逐元素 `+ - * /` 实现规范早已承诺的 1-extent 广播（`[3,1] + [1,4] = [3,4]`、`[n,1] + [1,m] = [n,m]`），此前类型检查器把它当作形状错误。诊断带源码名字（`n + 1 = n`、`shape mismatch: expected [n, 2], found [n, 3]`）。实现 `refine_shape<[..]>(a) : Option<Tensor<..>>`（规范早有，实现缺失）：形状分支的写法。
-  - **稀疏（§8.4.1）**：第一类稀疏值、CSR/CSC/COO/BSR、转换、`@`、转置、加减、Hadamard、标量积、`spsolve`/`cg`/`cg_with` 此前已完备；新增非对称 Krylov 求解器 `gmres_with`/`bicgstab_with`；`sparse @ dense` 按行并行且逐位确定；更正"形状只检查秩"的过时说法。
-  - **ODE（§8.9.0）**：`ode_solve`（连续输出 `at`、多事件含方向与终止）、`odeint_order`（任意阶，逐阶量纲追踪）、`ode_bvp`（单步打靶）、`AutoSwitch`（Dopri5 → Radau 按步数预算切换）。
-  - **SDE（§8.9.1）**：`sde_at`/`sde_resample`/`sde_interp`（线性弦的连续输出与 saveat）、`sde_events`（方向/终止）、`sde_ensemble_diag/general`（确定播种，经并行副本，结果与线程数无关）；原"v1 不做 events、dense output、ensemble runner"改为已实现。
-  - **并行（§9.7.2）**：审计 `par_map`/`par_reduce`/`par_tabulate` 的确定性，把稀疏 `@` 与 SDE 集合接入同一机制。
-  - **遗留缺口**：多重打靶/配置法 BVP；SDE Brownian 桥稠密输出与积分中途的终止事件；`AutoSwitch` 无特征值估计；`gmres/bicgstab` 不支持精确元素。
+- **Revision 0 (2026-10-31)**：确立语言核心定位（纯函数式、量纲作为类型、静态秩与动态形状张量、符号/数值双相、rssn 后端）。
+- **Revisions 1–6 (2026-11-01 ~ 2026-11-04)**：双向类型检查、单位推导与仿射温标、行多态与模式匹配、ODE/PDE 统一接口、诊断码（E0100–E1000）。
+- **Revisions 7–10 (2026-11-05 ~ 2026-11-07)**：标准库模块树（§8.20）；原生 JIT（`aevia-core/src/jit.rs`，`jit` feature）；`par_map` 的工作线程副本求值（`--jobs N`）；`read_npy`/`write_npy`。
+- **Revision 11 (2026-11-08)**：修复 `BigRational` 零底负幂 panic 与超大幂次 DoS；词法支持 Unicode 上标括号；LSP 零长度消息死循环与 `did_change` 崩溃；符号引擎 `0^(-n)` 奇点与分数根保护；张量 Cons 维度校验；测量值零除；RSSN FFI 批量计算的机器可读 `diagnostic_codes`；稠密特征值 0×0/1×1 边界。
 
----
+## 2. 当前实现状态（对齐旧审计文档的过时记录）
 
-## 2. 真实已实现能力与状态对齐
+1. **`par_map` 并行求值**：已实现（Rayon + 独立求值器副本，输入序，`--jobs N`）。
+2. **`@jit`**：已实现（`jit` feature；纯数值分支与自尾递归降为 Cranelift，不支持的结构回退解释器）；默认构建 `core.jit` 关闭。
+3. **标准库模块导入**：已实现，41 个 `.aev` 模块文件在 `crates/aevia-std/stdlib/`。
+4. **NPY 读写**：已实现（静态秩校验）。
 
-针对历史审计文档中可能存在的过时记录，当前真实代码状态说明如下：
+## 3. Revision 12（2026-11-08）：缓存、`Bcsr`、源码算子、非交换 SDE
 
-1. **`par_map` 并行求值**：已实现。通过 Rayon 线程池与独立求值器副本（`Replica`）并行映射，保持确定性输入输出顺序，并通过 `--jobs N` 控制并发度。
-2. **`@jit` 机器码生成**：已实现。在启用 `jit` feature 时，通过 `aevia-core/src/jit.rs` 将纯数值分支与自尾递归循环降级为 Cranelift 机器码执行；不支持的高阶与闭包结构安全回退至解释器。
-3. **标准库模块导入**：已实现。37 个标准库 `.aev` 源码模块位于 `crates/aevia-std/stdlib/`，支持 `import Math { sqrt }` 与 `open Units.SI` 等语法。
-4. **NPY 数据读写**：已实现。支持 `read_npy<rank>` 与 `write_npy` 的静态秩检验与文件数据读取。
+1. **缓存。** rssn `Session` 请求级答案缓存（默认开启；键为请求结点、模板与配置指纹；撞到墙钟上限的运行不缓存；注册插件/单位时整体失效）与子项引理缓存（`CachePolicy::lemmas`，默认关闭）；
+   Aevia 按模块的磁盘接口缓存 `.aevi`（§9.11，`AdtId` 落盘时换成符号键）。
+2. **`Bcsr`（§8.4.1）。** rssn 新增 `kernels::bsr::Bsr`；Aevia 新增 `SparseFormat::Bcsr`、`to_bcsr`/`block_size`、`convert<Bcsr>` 自动选块；`cg_with` 预条件共轭梯度、对称正定的 Cholesky 优先 `spsolve`、稀疏切片。
+   `E1001("storage.sparse.block")` 删除。
+3. **源码算子（§13.5.2）。** `@op` 以检查得到的量纲注册量纲签名；模块绑定换成包装（数值实参执行函数体、符号实参构造算子结点）；`@rule` 在算子之后追踪；规则解析器接受 `ns/name`。
+4. **非交换 SDE（§8.9.1）。** Stratonovich 非交换 Milstein、非交换 SRK、自适应 Stratonovich（精确 Itô 转换）；方法名选格式族与积分解释，噪声结构选内核；`terms`/`cells` 有默认值；记录状态 + 一般噪声。
+5. **使用即报错的功能。** `symfun` 应用构造未定函数项；新增 `dsolve`（§6.4.5）；`@jit(target = Cpu)` 被接受，`Gpu`/`Distributed` 在检查期报 `E1001`；单文件规范改由 `tools/bundle_spec.py` 生成。
+6. **长张量字面量。** 超过 128 个元素的字面量不再 `E0304`：变量链迭代跟随，重复数值约束去重，2000 元素字面量的检查从 ~7 s 降到 0.6 s。
+7. **rssn 极限。** `limit(sqrt(x+1) - sqrt(x), x, oo)` 经 Puiseux 代换求出；修正 l'Hôpital 预判的一个错误（`limit(sqrt(x)*(sqrt(x+1) - sqrt(x)), x, oo)` 应为 1/2）。
 
----
+## 4. Revision 13–22
 
-## 3. Revision 12（2026-11-08）：Alpha 深度完善
+**Revision 13（2026-11-07 ~ 11-09）：信任边界与规则收紧。**
+单位表达式的空白规则（§1.8.1）：空白是单位与算术的分界，`3 m * x` 是 `3 m` 乘 `x`，紧贴的 `3 m*x` 仍是单位表达式；未解出的量纲变量作指数底数时令其为 `1`（§3.4.3）；声明的量纲参数是刚性的，
+违反是 `E0318`（§4.4.1）；`show` 保留 `Float` 的相位（`10.0` 与 `10` 不同，§6.12.3）；`Set<τ>` 有了值与操作（§8.1.5.1）；运行时信任边界（§9.2.3）：运行时执行检查器的证明而不重新证明；
+字面量折叠（§3.10.4）：一个字面量只舍入一次，闭合的字面量算术树是编译期常量；单位制 `module M with units natural|planck|atomic|geometrized`（§5.11，`E0511`/`E0512`）；§9.9 命令与 flag 对齐实际 CLI。
 
-本轮关闭了此前记录的五项缺口中的四项，并修正了多处使用即报错的功能。
+**Revision 14（11-10）：rssn 绑定自动化。** 领域模块 `Rssn_<Domain>`（§10.3.8）：manifest + 声明式 overlay，泛型转换，错误走 `Result`，覆盖检查与报告；维度证据；丰富类型 `Zmod`/`Perm`/`Graph`/`Group`/`PermGroup`。
+仍缺：`Zmod<n>`/`GF<p>` 的类型级模数与运算符重载（§10.3.8 列出所需的语言改动）。
 
-1. **缓存（两层）。**
-   - rssn `Session` 计算缓存（`api::cache`）：**请求级答案缓存**（默认开启；
-     键为哈希共享存储里的请求结点、模板与配置指纹；命中与新运行完全一致；撞到
-     墙钟上限 `Stop::Time` 的运行不缓存；注册插件/单位时整体失效）与**子项级
-     引理缓存**（`CachePolicy::lemmas`，默认关闭：重请求子项 `integral(…)`/
-     `diff(…)` 归约到的闭式在同一语境——除预算外的全部配置——下被记录，之后
-     包含同一子项的请求在运行前就断言该等式）。`Session::cache_stats` 给出命中
-     计数。
-   - Aevia 按模块的磁盘接口缓存 `.aevi`（§9.11）：`AdtId` 不落盘，序列化时
-     换成符号键与声明定义，加载时重新驻留并重映射；键覆盖源码、`FileId`、
-     身份、导入绑定、导入接口摘要、能力集与编译器身份。
-2. **块状稀疏存储 `Bcsr`/`Block`（§8.4.1）。** rssn 新增 `kernels::bsr::Bsr`
-   （与 `Csr` 位级一致的并行 matvec、转置、乘法、块 Jacobi、块 ILU(0)、块大小
-   选择）；Aevia 运行时 `SparseFormat::Bcsr`（块内允许零填充，`nnz` 计逻辑非零），
-   `to_bcsr(A, br, bc)`/`block_size(A)`，`convert<Bcsr>` 等自动选块。
-   `E1001("storage.sparse.block")` 删除。另：`cg_with` 预条件共轭梯度
-   （`Precond`），对称正定矩阵的 `spsolve` 先走稀疏 Cholesky，稀疏切片。
-3. **源码级算子打通（§13.5.2）。** `@op` 函数以检查得到的参数/结果量纲注册
-   **量纲签名**（rssn `DimSignature` + 通用 `signature_rule`，按调用求解量纲
-   变量）；模块绑定换成包装：数值实参执行函数体，符号实参构造算子结点，所以
-   kernel 的 `diff`/化简/`@rule` 看到的是算子本身；`@rule` 在算子注册之后追踪，
-   可以谈论源码算子；rssn 规则解析器接受 `ns/name` 算子名。`Rssn.dynamic` 结果
-   的 `show` 显示所携带的值与量纲。
-4. **非交换 SDE（§8.9.1）。** rssn 新增 Stratonovich 非交换 Milstein、无导数
-   非交换 SRK（Itô/Stratonovich）以及经精确 Itô 漂移换算的自适应 Stratonovich；
-   Aevia 中方法名选格式族与积分解释、噪声结构选交换/非交换内核，任意组合都能
-   运行；Lévy 面积的 `terms`/`cells` 有默认值；`sde_order_with(method, structure)`；
-   记录状态 + 一般噪声（`sde.general.record`）已支持。
-5. **使用即报错的功能。** `symfun` 的应用（原为 `E1001`）构造未定函数项；新增
-   `dsolve(eq, y, t[, 条件])`（§6.4.5 已规定但此前不存在）；`@jit(target = Cpu)`
-   被接受，`Gpu(n)`/`Distributed(..)` 在检查期报 `E1001("core.gpu")` 等而非
-   `E0210`。若干过时文档与帮助文本已修正（rssn API 文档中"无墙钟限制"、
-   §8.20 的稀疏说明、"v1 不支持"措辞等）。单文件规范改由
-   `tools/bundle_spec.py` 生成。
-6. **长张量字面量。** 超过 128 个元素（带单位时 64 个）的张量字面量在运行时报
-   `E0304`：每个元素的表示/量纲变量连成一条链，而解析在深度 128/64 处截断。
-   变量链现在迭代跟随（深度上限只约束结构嵌套），且合并变量后变得相同的数值
-   约束被去重，2000 元素字面量的检查从约 7 s 降到 0.6 s。
-7. **rssn 极限。** `limit(sqrt(x+1) - sqrt(x), x, oo)` 不再停留为请求（`x = t^(-k)`
-   的 Puiseux 代换，并在 `t` 空间数值核验）；同时修正 l'Hôpital 预判把"探针看来非零、
-   实际极限为零"的分母直接相除的错误（此前隐藏地会给出
-   `limit(sqrt(x)*(sqrt(x+1) - sqrt(x)), x, oo) = 0`，正确值为 1/2）。
+**Revision 15（11-10）：包平台与依赖解析。**
+`aevia-resolve`（SemVer 2.0 `Version`/`VersionReq`、带冲突回跳的回溯解析器、稀疏索引读取器，与穷举搜索 2000 轮随机对照）；清单支持 `Units = "^1.2"` 与 `{ package = "owner/name", version = … }`，
+锁文件新增 `checksum`（来源 `registry+aevia`），`E0605` 对 git/未知键仍拒绝；`platform/` 的索引记录 `deps`（`package`/`req`/可选 `import`），发布时校验（无纯 path 依赖、依赖存在且有未 yank 的满足版本），
+发布与 yank 各在一个事务内，`POST /api/v1/resolve`、dependents 端点；客户端 `aevia add/update/fetch/tree`（`--offline`）与 `aevia-pkg` 的 `index`/`vendor`/`lock [--check]`。
+仍缺：按包的依赖名字空间（同名导入根指向不同版本仍是 `E0606`）；`[patch]` 覆盖；`aevia-pkg tree/lock` 只读根清单；镜像 `[source]` 替换；解压后的源树无逐文件摘要。
 
-## 4. Revision 13（2026-11-07 ~ 2026-11-09）：信任边界与规则收紧
+**Revision 16（11-12）：见证式自动类型化（§10.3.8）。** kernel 把引擎的等式判断（请求与答案同处一个等价类）记录为 sort 事实，经重放、聚类、变异探测生成 `signatures.witnessed.json`；Aevia 为没有 `sig` 的算子生成同形的类型化包装器
+（dynamic 档从 1298 降到 871，新增 453 个自动类型化算子）；不透明句柄 `Value`；见证重载的量纲证据；精确/符号稀疏矩阵（`sp_*`）与 D-finite 判定（`holonomic_*`）随之可用。
+仍缺：见证参数名由类型推出；元组与参差列表留在 dynamic 档；多重载以 `_int`/`_real`/`_float` 后缀区分。
 
-本轮改变的是几条语言规则，并把此前只存在于实现中的部分写入规范正文。下列条目
-在对应章节里以“Revision 13”标注。
+**Revision 17（11-12）：数值算子组、维度无关名字、GPU `f64`。** `Rssn_Numeric` 吸收 rssn `numeric` 规则集新增的 73 个算子（稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量、有限差分、复变特殊函数、表达式算子）；
+约定：结果是 `Float`（内核只编码浮点）、方法/小波/统计量是符号（每个名字只 `let` 一次）；维度无关的名字（`heat_fd` 等的空间维数是嵌套深度，符号 PDE 与仿射变换同理）；
+rssn 的 wgpu 设备以双单精度提供 `Dtype::F64`，新增启动融合规划器 `device::plan`（Aevia 侧 `Gpu(n)` 仍报 `E1001`）；见证包装器参数名由类型推出。
 
-1. **单位表达式的空白规则（§1.8.1）。** 此前单位表达式内的运算符一直延续到数字
-   或表达式边界，`3 m * x` 是单位 `m*x`；现在空白是单位与算术的分界，紧贴写法
-   `3 m*x` 仍是单位表达式。规范自己的导览 `70 kg * v^2 / 2` 因此可以通过名字解析。
-2. **未解出的量纲变量作指数的底数（§3.4.3）。** `diff(fn t => t^t)` 中 lambda
-   参数的量纲仍是推断变量时，检查器令其为 `1`（与 `sin(t)` 让 `t` 无量纲同一条
-   规则），不再报 `E0404`。
-3. **声明的量纲参数是刚性的（§4.4.1）。** `fn f<d>` 的函数体不能替调用者选定 `d`；
-   违反时报 `E0318`。
-4. **`show` 保留 `Float` 的相位（§6.12.3）。** 整数值的 `Float` 带小数点（`10.0`），
-   精确的 `10` 与浮点的 `10.0` 不再显示得一样。
-5. **`Set<τ>` 有了值与操作（§8.1.5.1）。** 此前只有类型。`set_insert` 等返回新集合，
-   集合相等与插入顺序无关。
-6. **运行时信任边界（§9.2.3，规范性）。** 运行时执行检查器的证明而不重新证明：
-   已检查的源调用不重新验证实参，已检查的构造器应用不遍历载荷，宿主边界处仍完整
-   验证，字面量按（位置、证据、模块）记忆。结果不变，工作量下降一到两个数量级。
-7. **字面量折叠（§3.10.4）取代 Revision 9 记录的偏差。** 一个字面量只舍入一次，
-   闭合的字面量算术树是编译期常量，`1.0 + 2` 是 `Float`。
-8. **单位制（§5.11）写入规范正文。** `module M with units natural`（还有 `planck`、
-   `atomic`、`geometrized`）按单位制约化模块里写出的量纲，值始终是诚实的 SI 量；
-   `to_system`/`from_system<D>` 显式换算；`E0511`、`E0512`。实现与附录 B 的诊断码早已
-   存在，章节正文此前缺失，现补全。
-9. **文档对齐。** §9.9 的命令与 flag 对齐实际 CLI（`watch`、`lsp`、`rssn`、`pkg`、
-   `--caps`、`--no-cache`、`--jobs` 已实现）；已删除的 `RSSN-INTEGRATION-REQUIREMENTS.md`
-   的引用改指 rssn 仓库的 `docs/KERNEL.md`；`spec/README.md` 的修订号与 kernel 计数更新。
+**Revision 18（11-13）：按秩/维数命名的多签名。** overlay 的 `sig op as name(..)` 可对同一算子重复；`codec Type - from_fn`（只解码类型）；有限差分的 `_2d`/`_3d`；秩多态张量算子 `tensor_norm_<r>`/`tensor_inner_<r>`/`tensordot_<ra>_<rb>_<k>`
+与分解 `hosvd`/`hooi`/`cp_als`/`tt_svd`/`tt_dense`（r = 2–4）；混合列表与列表访问器 `from_value<Tensor<1, Value>>`；`Rssn_Numeric` 全部 typed。
+仍缺：秩超过 4 的张量算子与分解仍走 `Rssn.dynamic`。
 
-## 4.1 Revision 14（2026-11-10）：rssn 绑定自动化
+**Revision 19（11-13）：语言侧补全。** 秩 2–4 的 `sum`/`prod`/`mean`/…/`transpose`（秩 ≥ 2 反转轴序）；`Result` 的 `map`/`and_then`/`unwrap_or`/`is_ok`/`is_err`/`ok`/`ok_or`；`first`/`last`/`cumsum`/`cumprod`/`argmax`/`argmin`、
+`round(x, n)`、`is_nan`/`is_finite`/`is_infinite`；诊断建议（`E0407` 指出 `m` 是单位、拼写建议、记录字段提示）；`aevia fmt` 保留语句间空行。
 
-1. **领域模块（§10.3.8）。** 新增 `Rssn_<Domain>`：manifest 加声明式 overlay
-   （`crates/aevia-rssn/domains.overlay`）按领域生成带类型的模块；转换泛型化，错误走
-   `Result`；覆盖检查在算子既无绑定也无排除时失败；报告
-   `tools/rssn-api-audit/RSSN-COVERAGE.md` 由测试生成并比对。
-2. **维度证据。** 无量纲的 kernel 规则与 overlay `sig` 让派生签名算子的裸数结果可以
-   `from_value<Int>`；`list` 项结果读回为张量；未约化项的错误信息带上该项。
-3. **丰富类型。** `Zmod`、`Perm`（0 起始）、`Graph`、`Group`、`PermGroup`。
-4. **仍缺：** `Zmod<n>`/`GF<p>` 的类型级模数与运算符重载（§10.3.8 列出所需的语言改动）。
+**Revision 20（11-13）：FFT 族与序列操作。** `fft`/`ifft` 接受 `Complex`/`Float`/`Int`；`fft2`/`fftn`/`fft_axis`/`fftn_axes`/`rfft2`/`rfftn`/`irfft*`/`fftshift` 等多维变换（行列分解）；`fft_norm(x, Forward)` 的归一化修正为正向 `1/N`；
+秩 ≥ 2 的 `reverse`/`filter`/`any`/`all`/`find`/`first`/`last`/`take`/`drop`/`concat` 按第一轴的行（`reverse` 的语义变化：不再展平）、`reverse_axis`；单位建议的并列决胜（编辑距离 → 包含最小编辑 → 常用单位 → 字典序）。
 
-## 4.2 Revision 15（2026-11-10）：包平台与依赖解析
+**Revision 21（11-13）：kernel 诊断进入 `Err(OpError)`。** rssn 新增 `Diag`/`DiagKind` 与 `Session::explain`；桥在算子留下自己的未约化调用时取原因，`Rssn.dynamic` 的 `Err` 形如
+`rssn.diag.<kind>: <包装器名>: argument `<参数名>` (#<位置>): <消息>`；类型化调用位置抛出 `E0807`；`Rssn_Numeric` 新增 `poisson_fd_bc`/`heat_fd_bc`/`wave_fd_bc`、`advect_fd_upwind`、`tensor_contract_*`、`tucker_dense_*`、`cp_dense_*`
+等。仍缺：只有 `rules::numeric::TABLES` 的算子记录原因；`OpError` 没有 `code(e)`/`message(e)` 访问器。
 
-1. **`aevia-resolve`（新 crate，§7.5.1.1/§7.5.1.2）。** SemVer 2.0 `Version`（预发布、build、
-   全序）、`VersionReq`（`^ ~ = > >= < <=`、通配、`>=1.2, <2`、预发布规则）、解析器（带冲突导向回跳的回溯，
-   偏好锁定版本再取最高、yank 仅在已锁定时可选、每兼容系列至多一个版本、环检测、确定性、推导树式的失败说明）、
-   registry 稀疏索引读取器（无依赖的严格 JSON 子集）。测试含与穷举搜索的 2000 轮随机对照。
-2. **清单与锁（§7.5.1/§7.5.2）。** `Units = "^1.2"`、`{ package = "owner/name", version = … }`、path+version
-   并存；`E0605` 严格性不变（git/未知键仍拒绝）；锁新增 `checksum`，registry 来源为 `registry+aevia`；
-   仅 path 的锁逐字节不变。解析经本地缓存目录实现（`DirRegistry`），构建只读校验过的本地副本。
-3. **平台（`platform/`）。** 索引的 `deps` 现在记录 `package`/`req`/可选 `import`；发布时校验：不得有纯 path 依赖、
-   不得依赖自身、依赖必须存在且有未 yank 的版本满足需求；版本允许预发布、拒绝 build 元数据；发布与 yank
-   各自在一个事务内（行、依赖行、归档文件、日志链）；索引带 `ETag`；下载校验存储字节的摘要；新增
-   `POST /api/v1/resolve`、`GET /api/v1/crates/{owner}/{name}/dependents` 与包页“被依赖”表。
-4. **客户端。** `aevia add owner/name[@req] [--as]`、`aevia update [owner/name…]`、`aevia fetch`、`aevia tree`
-   （`--offline`）；`aevia-pkg` 新增 `index`、`add@req`、`update`、`vendor`/`fetch`、`tree`、`lock [--check]`。
-5. **仍缺：** 按包的依赖名字空间（同一程序中同名导入根指向不同版本，仍是 `E0606`）；`[patch]` 式覆盖；
-   仅 path 包的传递 registry 依赖由 `aevia` 解析但 `aevia-pkg tree/lock` 只读根清单；
-   `aevia-pkg` 对 registry 以外的镜像没有 `[source]` 替换；解压后的源树只靠校验标记保证完整性（无逐文件摘要）。
-
-## 4.3 Revision 16（2026-11-12）：见证式自动类型化
-
-1. **witnessed 档（§10.3.8）。** 领域模块不再只有"手写 `sig`"与"`Result<Value, OpError>`"两档。
-   rssn 内核把引擎自己的等式判断（请求与答案同处一个等价类）记录为 sort 事实，经完整引擎重放、
-   聚类取并、变异探测后生成 `signatures.witnessed.json`；Aevia 从 manifest 的
-   `overload_sources` / `refinements` 为没有 `sig` 的算子生成同形的类型化包装器。
-   dynamic 档从 1298 个算子降到 871 个，新增 453 个自动类型化算子，没有一条签名是手写的。
-2. **不透明句柄。** 结构化内核对象（图、群、稀疏矩阵等，以构造子为头的项）在见证签名中映射为
-   `Value`：可以传回内核、可以对它做带类型的查询（`sp_rank(s): Result<Int, OpError>`），除此之外不可见。
-3. **量纲证据。** 见证重载在全部参数已知无量纲时给出无量纲结果证据；内核声明为
-   `NonMetric`/`Container` 的见证算子不要求参数证据（句柄没有量纲）。
-4. **新内核能力随之可用**：`Rssn_LinearAlgebra` 中的精确/符号稀疏矩阵（`sp_*`），
-   `Rssn_Calculus` 中的 D-finite 函数判定（`holonomic_zero`、`holonomic_equal`、`holonomic_ode` 等）。
-   端到端示例见 `tests/domain_witnessed.aev`。
-5. **仍缺：** 见证签名的参数名由类型推出而非来自内核；元组与参差列表结果仍留在 dynamic 档；
-   同一算子多个见证重载以 `_int`/`_real`/`_float` 后缀区分，而非类型类重载。
-
-## 4.4 Revision 17（2026-11-12）：数值算子组、维度无关名字、GPU `f64`
-
-1. **`Rssn_Numeric` 的数值算子组（§8.19.1、§10.3.8）。** rssn 的 `numeric` 规则集新增 73 个算子（manifest 从 1502 增至 1590：numeric +73、pde +9、discrete 的仿射名字 +6）。
-   稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量/函数、有限差分求解器、复变特殊函数、表达式算子
-   （`ode_solve`、`ode_symplectic`、`ode_imex`、`ode_etdrk4`、`oscillatory_integral`、`anderson_fixed_point`、
-   `newton_cg_minimize`）进入 `Rssn_Numeric`：67 条手写 `sig`（含原有的 `fftconv`、`interpolate`），8 个 dynamic
-   并写明理由（秩多态张量、返回混合列表的分解）。typed 档由此从 172 增至 239 个算子。
-   两条约定：结果类型是 `Float` 而不是 `Real`（内核只编码浮点；`from_value<Real>` 不接受它）；方法/小波/统计量是
-   符号，类型 `Real`，且每个名字只 `let` 一次（`symbol("db2")` 每次都造新符号）。
-2. **维度无关的名字。** `heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 的空间维数是场数据的嵌套深度；符号 PDE 为
-   `solve_heat_equation`/`solve_wave_equation`/`solve_laplace_equation`/`solve_poisson_equation`；仿射变换为
-   `translation`/`scaling`/`shear`/`reflection`/`rotation`（`_2d`/`_3d` 是别名；`Rssn_Graphics` 认领不带后缀的名字，
-   该域从 38 增至 44 个算子）。有限差分的 typed 包装器是一维形式，二维/三维见 §4.5（`_2d`/`_3d` 形式）。
-3. **GPU `f64`（§10.6.5）。** rssn 的 wgpu 设备以双单精度提供 `Dtype::F64`（约 48 位，`f32` 的指数范围，
-   `DeviceInfo::emulated_f64`）；新增启动融合规划器 `device::plan`（`Plan::fuse`，融合与未融合逐位相同）。
-   Aevia 侧 `Device`/`to_device`/`on` 对 `Gpu(n)` 仍报 `E1001("core.gpu")`，融合规划器尚未暴露为语言原语。
-4. **见证包装器的参数名** 由类型推出（`n`、`x`、`xs`、`m`、`t3`、`flag`、`v`，同类重复时编号），不再是 `a0`、`a1`。
-5. **测试。** 新增 `tests/domain_numeric.aev`（45 个 `test`，封闭形式核对），由 `aev_suites` 与
-   `aevia test` 运行。覆盖报告 `tools/rssn-api-audit/RSSN-COVERAGE.md` 已重新生成。
-6. **仍缺（Revision 18 已补二维/三维与分解）：**
-   dynamic 档的数值结果不能 `from_value` 成 `Float`（无量纲证据）；manifest 里只有一个 `tensor_outer`，属于 `geometry` 规则集（`Rssn_DifferentialGeometry`），`numeric` 的同名实现不在 `Rssn_Numeric` 中出现。
-
-## 4.5 Revision 18（2026-11-13）：按秩/维数命名的多签名，数值算子全部 typed
-
-1. **一个算子多条 `sig`。** `domains.overlay` 的 `sig op as name(..)` 现在可对同一内核算子重复出现，各用自己的 Aevia 名字
-   （`Overlay.sigs` 由 `op -> SigDef` 改为 `op -> Vec<SigDef>`，同名重复报错；渲染、覆盖检查与覆盖报告逐签名处理；
-   只有一条 `sig` 的 overlay 不变）。新增 `codec Type - from_fn`：只解码的类型。
-2. **有限差分的 2D/3D。** `heat_fd`/`wave_fd`/`poisson_fd`/`advect_fd` 保持一维含义，新增 `_2d`/`_3d` 形式
-   （`Tensor<2, Float>`、`Tensor<3, Float>` 场）。
-3. **秩多态张量算子。** `tensor_norm_1..4`、`tensor_inner_1..4`、`tensordot_<ra>_<rb>_<k>`（27 个）；分解 `hosvd_r`、
-   `hooi_r`、`cp_als_r`、`tt_svd_r`、`tt_dense_r`（r = 2、3、4）返回前言里的记录 `Hosvd<r>`、`Hooi<r>`、`CpFit`、`TensorTrain`。
-   `Rssn_Numeric` 的 75 个算子全部是 typed，dynamic 档为空。
-4. **混合列表与列表访问器。** 桥的 `lift_list` 接受由张量和数混合的列表（保留逐元素量纲证据）；`from_value<Tensor<1, Value>>`
-   成为通用访问器，把任何内核列表（或张量的第一个轴）拆成 `Value` 句柄，再逐个 `from_value<T>`。
-5. **测试。** `tests/domain_numeric.aev` 新增 2D/3D 的 poisson、heat、wave、advect 封闭形式核对，`tensordot_2_2_2` 等于 Frobenius
-   内积，秩 3 张量范数，`hosvd_3`/`hooi_3`/`cp_als_3`/`tt_svd_3`+`tt_dense_3` 重构。覆盖报告已重新生成。
-6. **仍缺：** 秩超过 4 的张量算子、`tensordot` 结果秩超过 4 的组合、分解的秩 1 与秩 5–6 形式仍走 `Rssn.dynamic`（结果是句柄，
-   可用 `from_value<Tensor<1, Value>>` 手工拆开）；符号 PDE 名字仍维度无关。
-
-## 4.6 Revision 19（2026-11-13）：语言侧补全——秩完整、Result 组合子、诊断建议、格式化
-
-1. **秩完整的张量操作（§8.1.5、§8.4）。** 规范把 `sum`/`prod`/`mean`/`var`/`std`/`norm`/`normalize`/`map`/`map2`/`zip_with`/
-   `flatten`/`transpose` 写成 `Tensor<n, …>`，而类型表只有秩 1（部分有秩 2）：`sum(matrix)` 是 `E0302`，运行时却早已按秩无关实现。
-   现在秩 2–4 都有重载（`rank_overloads`），`sum(a, axis)` 的 keepdims 形式覆盖秩 1–4；`transpose` 在秩 ≥ 2 上反转轴序
-   （运行时新增秩 ≥ 3 的实现，细化形状同样反转）。
-2. **`Result` 的组合子（§8.1.6）。** `map`、`and_then`、`unwrap_or` 增加 `Result` 重载（此前只对 `Option`，`Result` 只有 `map_err`）；
-   新增 `is_ok`、`is_err`、`ok`（`Result → Option`）、`ok_or`（`Option → Result`）。
-3. **列表与数值辅助。** `first`/`last`（`Option`）、`cumsum`/`cumprod`（保留量纲）、`argmax`/`argmin`；`round(x, n)` 保留 `n` 位小数；
-   `is_nan`/`is_finite`/`is_infinite`（`mean([])` 与 `ln(0) - ln(0)` 产生的 NaN 此前无法判断）。
-4. **诊断建议。** `Float[m]`（把单位写在量纲位置）的 `E0407` 现在指出 `m` 是单位、量纲是 `L`；拼错的量纲、拼错的单位
-   （`E0501`，含带前缀的拼写）给出 "did you mean"；记录没有某个字段（`E0306`）且没有近似名时列出现有字段。
-5. **格式化器保留空行。** `aevia fmt` 此前丢掉 `do`/布局块里语句之间的空行（仓库自己的示例都过不了 `fmt --check` 的原因之一）；
-   现在作者留下的空行折叠为一行并保留，结果稳定。
-6. **测试。** `tests/stdlib_ergonomics.aev`（18 个 `test`）；`aevia-fmt` 的 `blank_lines_between_statements_are_kept`；
-   `aevia-types` 的重载计数断言更新。
-7. **仍缺：** `reverse`/`filter` 等仍只有秩 1（运行时对矩阵 `reverse` 是展平，语义另议）；`fft` 只接受复数张量（实数用 `rfft`）；
-   二维以上的 FFT 没有。（以上三项已在 Revision 20 解决。）
-
-## 4.7 Revision 20（2026-11-13）：FFT 族补全、秩 ≥ 2 的序列操作、单位建议
-
-1. **FFT 族（§8.8）。** `fft`/`ifft`/`fft_norm` 现在接受 `Complex`、`Float`、`Int` 张量（实数、整数提升为虚部 0，结果为复数，
-   量纲保持）。新增多维变换（行列分解，沿每个变换轴逐一做一维变换，秩 1 到 4）：`fft2`/`ifft2`（最后两轴）、`fftn`/`ifftn`
-   （全部轴）、`fft_axis`/`ifft_axis`（一个轴）、`fftn_axes`/`ifftn_axes`（任意轴列表，负轴从末尾数，越界或重复 `E0802`）、
-   `ifft_norm`、`fftn_norm`/`ifftn_norm`；实数变换 `rfft2`/`rfftn` 与 `irfft2`/`irfftn`（`irfft*` 另有带 `Int` 的形式，
-   给出奇数原长度）；`fftshift`/`ifftshift`（任意元素类型）与 `*_axis`；`rfftfreq`。`fftfreq`/`rfftfreq` 的结果量纲仍是
-   采样间隔的倒数（`fftfreq(4, 0.5 s)` 是 `Hz`）。
-2. **归一化修正。** `fft_norm(x, Forward)` 此前错用 `1/√N`（与 `Unitary` 相同）；按文档应为正向 `1/N`、逆向 1。现已修正，
-   并按被变换的总点数计算（N 维时为各轴长度之积）。
-3. **秩 ≥ 2 的序列操作（§8.1.5）。** 秩 `n ≥ 2` 的张量是沿第一轴的"行"序列：`reverse` 翻转第一轴并保持形状（**语义变化**：
-   此前运行时对矩阵 `reverse` 是展平成向量，而类型表只有秩 1，所以该调用在检查期就是 `E0302`，只有直接调用运行时的
-   代码会受影响；仓库内没有依赖展平的代码）。新增 `reverse_axis(t, k)`；`filter` 的谓词接受一行并保持秩；`any`/`all`/`find`、
-   `first`/`last`、`take`/`drop`、`concat`（沿第一轴堆叠，其余轴必须一致）同样按行。秩 1 的行为不变；`f64` 张量上的 `reverse`/
-   `reverse_axis` 仍是视图。
-4. **单位建议的并列决胜。** `kmm` 过去建议 `klm`（千流明），因为 `m` 与 `lm` 同样是一次编辑，按字典序 `lm` 在前。现在先比较编辑
-   距离，再偏好"包含最小"的编辑（候选是输入删去/加上若干字符，`kmm` 是 `km` 多了一个字母），再偏好常用单位，最后才是字典序；
-   纯删除即使只剩一个字符也接受（`mm` → `m`）。
-5. **测试。** `tests/fft_and_sequences.aev`（39 个 `test`：与教科书 2-D DFT 对拍、各轴子集往返、归一化、半谱往返（含奇数长度）、
-   shift、频率量纲、行语义的序列操作）；`aevia-std` 的 `fft` 单元测试（N 维对拍、往返、`Forward`/`Unitary`、shift 置换、
-   `rfftfreq`）；`aevia-core/tests/stdlib.rs` 的轴/长度错误与秩 3 变换；`aevia-types/tests/unit_suggestions.rs` 与
-   `closest_unit` 单元测试。`stdlib_names.txt` 与生成的 `FFT.aev`/`Prelude.aev` 已更新。
-6. **仍缺（均已在 Revision 22 解决）：** 秩超过 4 的变换与序列操作；`fold`/`sort`/`zip`/`enumerate` 在秩 ≥ 2 上仍是元素级（展平）语义；
-   `fftn_axes` 没有对应的实数形式（`rfftn` 取全部轴）。
-
-## 4.8 Revision 21（2026-11-13）：kernel 诊断进入 `Err(OpError)`；`Rssn_Numeric` 补全上一轮算子
-
-1. **诊断通道（§10）。** rssn 新增 `Diag`/`DiagKind` 与 `Session::explain`/`apply_diag`。桥在算子留下自己的未约化调用时用
-   `explain` 取原因（符号参数除外），`KernelError` 新增 `diag` 字段与 `from_diag`/`describe`；`Rssn.dynamic` 的 `Err` 现在是
-   `rssn.diag.<kind>: <包装器名>: argument `<参数名>` (#<位置>): <kernel 的消息>`，包装器名取调用栈最内层帧，参数名取
-   `domains.overlay`（`domains::wrapper_params`）。`OpError` 保持不透明、没有新构造子或 `Rssn.*` 成员，既有 `match` 不变，
-   代码即 `"{e}"` 的前缀。类型化的 `Rssn.<op>(..)` 调用位置抛出 `E0807`，附注为稳定代码。
-2. **新增 `Rssn_Numeric` 签名（11 个新名字族，`Rssn_Numeric` 的 typed 档 75 → 86）。** `poisson_fd_bc`、`heat_fd_bc`、`wave_fd_bc`
-   （各有 `_2d`/`_3d`；边界种类 `kind: Real` 是符号 `dirichlet`/`neumann` 或 `d`/`n` 字母模式，如 `sparse_solve` 的 `method`；
-   `boundary` 是单个数，逐轴/逐面的数值列表走 `Rssn.dynamic`）、`advect_fd_upwind`（`_2d`/`_3d`）、`ifft_abs`、
-   `tensor_contract_2/3/4`、`tucker_dense_2/3/4`、`cp_dense_2/3/4`、`erf_complex`、`fresnel_s_complex`、`fresnel_c_complex`。
-   纯 Neumann 的 `poisson_fd_bc` 数据不平衡时是 `rssn.diag.incompatible`，不会给出错误的场。
-   rssn 签名 overlay 里只有秩变量的返回类型（`tensordot`、`tensor_contract`、`tucker_dense`、`cp_dense`）没有难倒绑定生成器：
-   平铺 `Rssn` 门面把它们留在动态档，域模块由 `sig` 逐秩给出，`emit_typecheck` 等测试全部通过。
-3. **测试。** `crates/aevia-rssn/tests/diagnostics.rs`（5 个：`from_diag`、`describe`、包装器参数名、`tensordot` 轴越界的
-   `rssn.diag.domain` 与参数位置、合法调用不受影响）；`tests/domain_numeric.aev` 新增 14 个 `test`（`poisson_fd_bc` 的
-   Dirichlet 等于 `poisson_fd`、不平衡 Neumann 为 `incompatible`、平衡数据有解、混合模式；`heat_fd_bc`/`wave_fd_bc` 常数场；
-   `advect_fd_upwind`；`advect_fd_2d` 速度长度错误指向 `` `velocity` (#1) ``；`tensordot_2_2_1` 轴越界指向 `` `axes_a` (#3) ``；
-   `tensor_contract`；`tucker_dense_3`/`cp_dense_3` 与 `hosvd_3`/`cp_als_3` 互逆；`ifft_abs`；`erf`/Fresnel）。
-   `tools/rssn-api-audit/RSSN-COVERAGE.md` 已重新生成（manifest 1620 个算子，curated typed 258）。
-4. **仍缺：** 只有 `rules::numeric::TABLES` 的算子记录原因，其余重型算子无原因（保持未约化项）；witnessed/dynamic 包装器只给
-   参数位置；`poisson_fd_bc` 等的逐轴/逐面数值列表没有 typed 形式；`OpError` 没有 `code(e)`/`message(e)` 访问器
-   （需要新的 `Rssn.*` 成员与检查器支持，留待检查器一侧的改动）。
-
-## 4.9 Revision 22（2026-11-13）：秩不再有上限；序列族全部按行；实数的轴子集变换
-
-1. **秩模板（§8.1.5、§8.8）。** 此前 `rank_overloads` 等表对秩 1 到 4 各列一个重载，秩 5 的 `fftn` 或 `sum` 是 `E0302`。秩仍然不是
-   类型语言里的一等变量（`Shape` 没有秩变量，加进去要改动统一、替换、泛化和全部 `Shape::Rank` 的匹配点，风险远大于收益），所以改成
-   **模板**：`builtins.rs` 里每个秩多态操作的签名是一个以秩为参数的函数（`rank_overloads_at`、`first_axis_at`、`fft_schemes_at`、`zip_at`），
-   `builtins::schemes` 仍列出秩 1 到 4 的实例（悬停、首类函数使用、`spec_signatures` 对拍），而 `builtins::rank_schemes_for(name, ranks)`
-   给出高于 `STATIC_RANK` 的实例。检查器的 `overloaded_call` 在表内所有候选都失败时，探测（并回滚）非 lambda 实参的秩，用这些秩的
-   模板实例再试一次——只有失败路径才付出代价，秩 ≤ 4 的程序走原来的路径；失败时报告的是该秩实例的 `E0302`（含期望/实际类型和帮助）。
-   `at`/`set` 也有秩 ≥ 4 的实例，`length` 对任意秩的张量给出行数（此前类型表里只有秩 1，`length(matrix)` 是 `E0302`）。
-2. **序列族一律按行（语义变化）。** `fold`/`fold_left`（累加器看到一行）、`sort`（行按字典序稳定排序）、`sort_by`（比较函数看到两行）、
-   `sort_float`、`zip`（逐行配对，两个操作数的秩可以不同）、`enumerate`（`index`/`value`，`value` 是行）在秩 ≥ 2 上此前是元素级（展平）语义，
-   类型表里秩 ≥ 2 的调用多半是 `E0302`，所以能受影响的只有直接调用运行时的代码；仓库内没有依赖元素级行为的代码或测试。秩 1 不变。
-   `map`/`map2`/`zip_with` 保持元素级（张量的函子，同形），`cumsum`/`cumprod`/`argmax`/`argmin` 只对秩 1 定义，写在 §8.1.5。
-   新增 `sort_by_key(f, t)`（按 `TotalOrd` 键稳定排序）、`sort_axis(t, k)`（沿一个轴分别排序每条切片）、`argsort(t)`（稳定排序的置换，
-   `Tensor<1, Int>`）。`sort_by` 由 O(n²) 的插入排序换成稳定的归并排序（比较函数可以失败，所以不用标准库的排序）。
-   `sort`/`argsort`/`sort_axis` 在调用点要求元素类型有 `TotalOrd`，`sort_by_key` 要求键有 `TotalOrd`（`E0310`）。
-3. **`rfftn_axes`/`irfftn_axes`（§8.8）。** `rfftn_axes(t, axes)`、`irfftn_axes(s, axes)`、`irfftn_axes(s, axes, n)`：列表里最后一个轴是
-   半谱轴，其余轴做完整变换，与 numpy 的 `rfftn(a, axes=…)` 一致；`n` 给出奇数原长度。任意秩，实数与整数输入。
-   列表为空、轴越界或重复、长度与半谱不相容是 `E0802`。`FFT` 模块与 `Prelude` 已重新生成。
-4. **测试。** `tests/rank_generic.aev`（35 个 `test`：秩 5/6 的归约、FFT 族往返、shift、序列操作；fold/sort/sort_by/sort_by_key/sort_float/
-   argsort/sort_axis/zip/enumerate 的行语义；`rfftn_axes` 与 `fftn_axes` 的对拍、往返、奇数长度、秩 5）；`aevia-types/tests/rank_generic.rs`
-   （8 个：秩 6 的类型检查、`E0310`/`E0302`、模板实例个数）；`aevia-core/tests/stdlib.rs` 新增 3 个（轴/长度错误、秩 6 的 `fftn`、排序族）；
-   `stdlib_names.txt`、`overloading_is_visible` 的 `length` 个数已更新。
-5. **仍缺：** 用户自己写的函数仍不能对秩多态（秩不是类型参数）；`cumsum`/`cumprod`/`argmax`/`argmin` 对秩 ≥ 2 没有定义
-   （按轴的形式 `cumsum_axis` 等未做）。
+**Revision 22（11-13）：秩不再有上限。** 秩多态操作的签名是以秩为参数的**模板**（`builtins::rank_schemes_for`），检查器在内置候选全部失败时按实参的秩实例化模板；秩 5、6 的 `fftn`/`sum` 与秩 2 走同一路径；
+`fold`/`fold_left`/`sort`/`sort_by`/`sort_float`/`zip`/`enumerate` 在秩 ≥ 2 上由元素级（展平）改为**按行**（语义变化）；新增 `sort_by_key`、`sort_axis`、`argsort`、`rfftn_axes`/`irfftn_axes`；`sort_by` 换成稳定归并排序。
+仍缺：用户函数不能对秩多态；`cumsum`/`cumprod`/`argmax`/`argmin` 对秩 ≥ 2 没有按轴形式。
 
 ## 5. 记录在案的未实现边界（Known Gaps）
 
-1. **包依赖的边界**：registry 依赖、SemVer 解析和带校验的本地副本已实现（Revision 15）；
-   `git` 依赖不存在；按包的依赖名字空间、`[patch]` 覆盖、镜像 `[source]` 替换尚未实现。
-2. **设备后端**：`Gpu`/`Distributed` 只是可构造的运行时值；`on`/`to_device`/
-   `@jit(target = Gpu(..))` 报 `E1001("core.gpu")`/`E1001("core.distributed")`。
-3. **稀疏值进入 RSSN 项图**与形状细化（只检查秩）仍是空白（§13.9.5）。
-4. **SDE 事件/稠密输出**（`sde.events`）与解释器侧并行系综（闭包 `!Send`）。
-5. **REPL 中 Ctrl-C 取消当前求值**（§9.10）。
+1. **包依赖**：registry 依赖、SemVer 解析和带校验的本地副本已实现（Revision 15）；`git` 依赖不存在；按包的依赖名字空间、`[patch]` 覆盖、镜像 `[source]` 替换尚未实现。
+2. **设备后端**：`Gpu`/`Distributed` 只是可构造的运行时值；`on`/`to_device`/`@jit(target = Gpu(..))` 报 `E1001("core.gpu")`/`E1001("core.distributed")`；`Device.map` 等批量原语未作为语言原语暴露（§10.6.5）。
+3. **稀疏**：稀疏值不能进入 rssn 项图；用户自定义格式要等 rssn 开放 `Format`；`gmres_with`/`bicgstab_with` 不接受精确元素；没有稀疏特征值/SVD（§8.4.1、§13.9.5）。
+4. **SDE**：Brownian 桥稠密输出与积分中途的终止事件未提供（`sde_at` 是线性弦，`sde_events` 是事后截断）；解释器侧闭包 `!Send`，并行系综回退为顺序（§8.9.1）。
+5. **ODE**：多重打靶/配置法 BVP；`AutoSwitch` 按步数预算判定而非特征值估计（§8.9）。
+6. **类型系统**：`Zmod<n>`/`GF<p>` 类型级模数；用户函数对秩多态；符号指数（§12.8.2）。
+7. **Plot**：只有 HTML/SVG-inline 渲染器，无独立 `.svg`/PNG/JPEG 输出（§8.12）。
+8. **REPL**：Ctrl-C 取消当前求值（§9.10）。

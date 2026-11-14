@@ -187,6 +187,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
       - name: Generated standard library is current
         run: cargo run -p aevia-stdlib-gen -- --check
+      - name: Kernel source-derived bindings are current
+        run: cargo run -p rssn-api-audit -- --codecs-check
       - name: Kernel API inventory is current
         run: cargo run -p rssn-api-audit -- --check
       - name: Single-file specification is current

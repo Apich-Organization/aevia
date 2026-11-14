@@ -78,7 +78,7 @@ pub fn init(args: &[String]) -> ExitCode {
     }
     let main = dir.join(&manifest.entry);
     let source = format!(
-        "## {name}\n##\n## `aevia run` runs `main`; `aevia fmt` formats this file.\n\nfn main(): IO Unit = do\n    println(\"hello from {name}\")\n"
+        "## {name}\n##\n## `aevia run` runs `main`; `aevia fmt` formats this file.\nfn main(): IO Unit = do\n    println(\"hello from {name}\")\n"
     );
     for (path, text) in [
         (dir.join("aevia.toml"), manifest.render()),

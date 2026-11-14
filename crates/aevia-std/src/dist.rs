@@ -1,545 +1,181 @@
-//! The ten distributions of §8.7.1.
-//!
-//! A distribution is a plain record at run time, so it is a plain struct here:
-//! `Normal<L>` is `{ mu: Real[L], sigma: Real[L] }` and the runtime reads the
-//! fields before calling [`Distribution::pdf`]. Dimensions are the runtime's
-//! business; these functions work on the coherent values.
-//!
-//! `pdf` and `cdf` are exact where they can be (`Uniform`, `Exponential`) and
-//! use the special functions of [`crate::special`] where they cannot.
-//! `sample` takes a uniform source instead of owning a generator, so the
-//! interpreter's seeded RNG stays the single source of randomness (§6.10).
+//! Probability distributions, backed by `rssn::kernels::distributions`.
 
-use crate::special::ln_gamma;
-use crate::special::regularized_beta;
-use crate::special::regularized_gamma_p;
-use std::f64::consts::PI;
+use crate::NumericError;
+use rssn::kernels::distributions::DistError;
+use rssn::kernels::distributions::Distribution as RssnDist;
+use rssn::kernels::distributions::MultivariateDistribution as RssnMvDist;
 
-/// One of the ten distributions §8.7.1 declares.
+fn map_dist_err(err: DistError) -> NumericError {
+    match err {
+        | DistError::Empty => NumericError::Empty,
+        | DistError::ShapeMismatch(s) => NumericError::ShapeMismatch(s),
+        | DistError::Domain(s) => NumericError::Domain(s),
+        | DistError::NotPositiveDefinite => NumericError::NotPositiveDefinite,
+    }
+}
+
+/// One of the univariate distributions.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Distribution {
     /// `Normal<d> = { mu, sigma }`.
-    Normal {
-        /// The mean.
-        mu: f64,
-        /// The standard deviation.
-        sigma: f64,
-    },
+    Normal { mu: f64, sigma: f64 },
     /// `Uniform<d> = { lo, hi }`.
-    Uniform {
-        /// The lower bound.
-        lo: f64,
-        /// The upper bound.
-        hi: f64,
-    },
+    Uniform { lo: f64, hi: f64 },
     /// `Exponential<d> = { rate }`.
-    Exponential {
-        /// The rate, in events per unit.
-        rate: f64,
-    },
+    Exponential { rate: f64 },
     /// `Gamma<d> = { shape, rate }`.
-    Gamma {
-        /// The shape `k`.
-        shape: f64,
-        /// The rate `λ`.
-        rate: f64,
-    },
+    Gamma { shape: f64, rate: f64 },
     /// `Beta = { alpha, beta }`.
-    Beta {
-        /// The first shape.
-        alpha: f64,
-        /// The second shape.
-        beta: f64,
-    },
+    Beta { alpha: f64, beta: f64 },
     /// `ChiSquared = { df }`.
-    ChiSquared {
-        /// The degrees of freedom.
-        df: f64,
-    },
+    ChiSquared { df: f64 },
     /// `StudentT = { df }`.
-    StudentT {
-        /// The degrees of freedom.
-        df: f64,
-    },
+    StudentT { df: f64 },
     /// `Poisson = { lambda }`.
-    Poisson {
-        /// The mean rate.
-        lambda: f64,
-    },
+    Poisson { lambda: f64 },
     /// `Binomial = { n, p }`.
-    Binomial {
-        /// The number of trials.
-        n: u64,
-        /// The success probability.
-        p: f64,
-    },
+    Binomial { n: u64, p: f64 },
+    /// `LogNormal<d> = { mu, sigma }`.
+    LogNormal { mu: f64, sigma: f64 },
+    /// `Weibull<d> = { shape, scale }`.
+    Weibull { shape: f64, scale: f64 },
+    /// `Cauchy<d> = { loc, scale }`.
+    Cauchy { loc: f64, scale: f64 },
+    /// `F = { df1, df2 }` (Snedecor's F-distribution).
+    F { df1: f64, df2: f64 },
+    /// `NegativeBinomial = { r, p }`.
+    NegativeBinomial { r: f64, p: f64 },
+    /// `Geometric = { p }`.
+    Geometric { p: f64 },
 }
 
 impl Distribution {
-    /// The probability density (or mass) at `x`.
+    fn to_rssn(self) -> RssnDist {
+        match self {
+            | Self::Normal { mu, sigma } => RssnDist::Normal { mu, sigma },
+            | Self::Uniform { lo, hi } => RssnDist::Uniform { lo, hi },
+            | Self::Exponential { rate } => RssnDist::Exponential { rate },
+            | Self::Gamma { shape, rate } => RssnDist::Gamma { shape, rate },
+            | Self::Beta { alpha, beta } => RssnDist::Beta { alpha, beta },
+            | Self::ChiSquared { df } => RssnDist::ChiSquared { df },
+            | Self::StudentT { df } => RssnDist::StudentT { df },
+            | Self::Poisson { lambda } => RssnDist::Poisson { lambda },
+            | Self::Binomial { n, p } => RssnDist::Binomial { n, p },
+            | Self::LogNormal { mu, sigma } => RssnDist::LogNormal { mu, sigma },
+            | Self::Weibull { shape, scale } => RssnDist::Weibull { shape, scale },
+            | Self::Cauchy { loc, scale } => RssnDist::Cauchy { loc, scale },
+            | Self::F { df1, df2 } => RssnDist::F { df1, df2 },
+            | Self::NegativeBinomial { r, p } => RssnDist::NegativeBinomial { r, p },
+            | Self::Geometric { p } => RssnDist::Geometric { p },
+        }
+    }
+
     #[must_use]
     pub fn pdf(
         &self,
         x: f64,
     ) -> f64 {
-        match *self {
-            | Self::Normal { mu, sigma } => {
-                if sigma <= 0.0 {
-                    return f64::NAN;
-                }
-                let z = (x - mu) / sigma;
-                (-0.5 * z * z).exp() / (sigma * (2.0 * PI).sqrt())
-            },
-            | Self::Uniform { lo, hi } => {
-                if hi <= lo {
-                    f64::NAN
-                } else if x >= lo && x <= hi {
-                    1.0 / (hi - lo)
-                } else {
-                    0.0
-                }
-            },
-            | Self::Exponential { rate } => {
-                if rate <= 0.0 {
-                    f64::NAN
-                } else if x < 0.0 {
-                    0.0
-                } else {
-                    rate * (-rate * x).exp()
-                }
-            },
-            | Self::Gamma { shape, rate } => {
-                if shape <= 0.0 || rate <= 0.0 {
-                    return f64::NAN;
-                }
-                if x < 0.0 {
-                    return 0.0;
-                }
-                if x == 0.0 {
-                    return if shape < 1.0 {
-                        f64::INFINITY
-                    } else if shape == 1.0 {
-                        rate
-                    } else {
-                        0.0
-                    };
-                }
-                ((shape - 1.0) * x.ln() - rate * x + shape * rate.ln() - ln_gamma(shape)).exp()
-            },
-            | Self::Beta { alpha, beta } => {
-                if alpha <= 0.0 || beta <= 0.0 {
-                    return f64::NAN;
-                }
-                if !(0.0..=1.0).contains(&x) {
-                    return 0.0;
-                }
-                let log =
-                    (alpha - 1.0) * x.ln() + (beta - 1.0) * (1.0 - x).ln() + ln_gamma(alpha + beta)
-                        - ln_gamma(alpha)
-                        - ln_gamma(beta);
-                log.exp()
-            },
-            | Self::ChiSquared { df } => {
-                if df <= 0.0 {
-                    return f64::NAN;
-                }
-                Self::Gamma {
-                    shape: df / 2.0,
-                    rate: 0.5,
-                }
-                .pdf(x)
-            },
-            | Self::StudentT { df } => {
-                if df <= 0.0 {
-                    return f64::NAN;
-                }
-                (ln_gamma((df + 1.0) / 2.0)
-                    - ln_gamma(df / 2.0)
-                    - 0.5 * (df * PI).ln()
-                    - (df + 1.0) / 2.0 * (1.0 + x * x / df).ln())
-                .exp()
-            },
-            | Self::Poisson { lambda } => {
-                if lambda < 0.0 {
-                    return f64::NAN;
-                }
-                if x < 0.0 || x.fract() != 0.0 {
-                    return 0.0;
-                }
-                if lambda == 0.0 {
-                    return if x == 0.0 { 1.0 } else { 0.0 };
-                }
-                (-lambda + x * lambda.ln() - ln_gamma(x + 1.0)).exp()
-            },
-            | Self::Binomial { n, p } => {
-                if !(0.0..=1.0).contains(&p) {
-                    return f64::NAN;
-                }
-                if x < 0.0 || x.fract() != 0.0 || x > n as f64 {
-                    return 0.0;
-                }
-                let k = x;
-                (ln_gamma(n as f64 + 1.0) - ln_gamma(k + 1.0) - ln_gamma(n as f64 - k + 1.0)
-                    + k * p.ln()
-                    + (n as f64 - k) * (1.0 - p).ln())
-                .exp()
-            },
-        }
+        self.to_rssn().pdf(x)
     }
 
-    /// The cumulative distribution function at `x`.
     #[must_use]
     pub fn cdf(
         &self,
         x: f64,
     ) -> f64 {
-        match *self {
-            | Self::Normal { mu, sigma } => {
-                if sigma <= 0.0 {
-                    return f64::NAN;
-                }
-                let z = (x - mu) / sigma;
-                0.5 * crate::special::erfc(-z / std::f64::consts::SQRT_2)
-            },
-            | Self::Uniform { lo, hi } => {
-                if hi <= lo {
-                    return f64::NAN;
-                }
-                ((x - lo) / (hi - lo)).clamp(0.0, 1.0)
-            },
-            | Self::Exponential { rate } => {
-                if rate <= 0.0 {
-                    return f64::NAN;
-                }
-                if x < 0.0 {
-                    0.0
-                } else {
-                    -(-rate * x).exp_m1()
-                }
-            },
-            | Self::Gamma { shape, rate } => {
-                if shape <= 0.0 || rate <= 0.0 {
-                    return f64::NAN;
-                }
-                if x <= 0.0 {
-                    0.0
-                } else {
-                    regularized_gamma_p(shape, rate * x)
-                }
-            },
-            | Self::Beta { alpha, beta } => regularized_beta(x, alpha, beta),
-            | Self::ChiSquared { df } => {
-                if df <= 0.0 {
-                    return f64::NAN;
-                }
-                if x <= 0.0 {
-                    0.0
-                } else {
-                    regularized_gamma_p(df / 2.0, x / 2.0)
-                }
-            },
-            | Self::StudentT { df } => {
-                if df <= 0.0 {
-                    return f64::NAN;
-                }
-                let tail = 0.5 * regularized_beta(df / (df + x * x), df / 2.0, 0.5);
-                if x >= 0.0 { 1.0 - tail } else { tail }
-            },
-            | Self::Poisson { lambda } => {
-                if lambda < 0.0 {
-                    return f64::NAN;
-                }
-                if x < 0.0 {
-                    return 0.0;
-                }
-                // P(X <= k) = Q(k+1, lambda).
-                1.0 - regularized_gamma_p((x.floor() + 1.0).max(0.0), lambda)
-            },
-            | Self::Binomial { n, p } => {
-                if !(0.0..=1.0).contains(&p) {
-                    return f64::NAN;
-                }
-                if x < 0.0 {
-                    return 0.0;
-                }
-                if x >= n as f64 {
-                    return 1.0;
-                }
-                // P(X <= k) = I_{1-p}(n-k, k+1).
-                regularized_beta(1.0 - p, n as f64 - x.floor(), x.floor() + 1.0)
-            },
-        }
+        self.to_rssn().cdf(x)
     }
 
-    /// The mean, when it exists.
     #[must_use]
     pub fn mean(&self) -> f64 {
-        match *self {
-            | Self::Normal { mu, .. } => mu,
-            | Self::Uniform { lo, hi } => (lo + hi) / 2.0,
-            | Self::Exponential { rate } => 1.0 / rate,
-            | Self::Gamma { shape, rate } => shape / rate,
-            | Self::Beta { alpha, beta } => alpha / (alpha + beta),
-            | Self::ChiSquared { df } => df,
-            | Self::StudentT { df } => {
-                if df > 1.0 {
-                    0.0
-                } else {
-                    f64::NAN
-                }
-            },
-            | Self::Poisson { lambda } => lambda,
-            | Self::Binomial { n, p } => n as f64 * p,
-        }
+        self.to_rssn().mean()
     }
 
-    /// The variance, when it exists.
     #[must_use]
     pub fn variance(&self) -> f64 {
-        match *self {
-            | Self::Normal { sigma, .. } => sigma * sigma,
-            | Self::Uniform { lo, hi } => (hi - lo) * (hi - lo) / 12.0,
-            | Self::Exponential { rate } => 1.0 / (rate * rate),
-            | Self::Gamma { shape, rate } => shape / (rate * rate),
-            | Self::Beta { alpha, beta } => {
-                alpha * beta / ((alpha + beta) * (alpha + beta) * (alpha + beta + 1.0))
-            },
-            | Self::ChiSquared { df } => 2.0 * df,
-            | Self::StudentT { df } => {
-                if df > 2.0 {
-                    df / (df - 2.0)
-                } else {
-                    f64::NAN
-                }
-            },
-            | Self::Poisson { lambda } => lambda,
-            | Self::Binomial { n, p } => n as f64 * p * (1.0 - p),
-        }
+        self.to_rssn().variance()
     }
 
-    /// The `u`-quantile, `0 ≤ u ≤ 1`: the inverse of [`Distribution::cdf`].
-    ///
-    /// This is what `sample` uses at run time, because the interpreter's RNG
-    /// hands out one uniform per action (§6.10) and an inverse-CDF sample needs
-    /// exactly one. Continuous distributions invert by bisection on the CDF,
-    /// which converges to machine precision in sixty steps and needs no
-    /// distribution-specific algebra; discrete ones walk their mass function.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::NumericError::Domain`] when `u` is outside `[0, 1]` or a
-    /// parameter is unusable.
     pub fn quantile(
         &self,
         u: f64,
-    ) -> Result<f64, crate::NumericError> {
-        if !(0.0..=1.0).contains(&u) {
-            return Err(crate::NumericError::Domain(
-                "a quantile needs `0 <= u <= 1`".to_string(),
-            ));
-        }
-        match *self {
-            | Self::Poisson { lambda } => {
-                if lambda < 0.0 {
-                    return Err(crate::NumericError::Domain(
-                        "a Poisson rate cannot be negative".to_string(),
-                    ));
-                }
-                let mut cumulative = 0.0;
-                let mut count = 0.0;
-                // The mass beyond `lambda + 40 sqrt(lambda) + 40` is below any
-                // double, so the walk terminates.
-                let limit = lambda + 40.0 * lambda.sqrt() + 40.0;
-                while count <= limit {
-                    cumulative += self.pdf(count);
-                    if cumulative >= u {
-                        return Ok(count);
-                    }
-                    count += 1.0;
-                }
-                Ok(count)
-            },
-            | Self::Binomial { n, .. } => {
-                let mut cumulative = 0.0;
-                for count in 0..=n {
-                    cumulative += self.pdf(count as f64);
-                    if cumulative >= u {
-                        return Ok(count as f64);
-                    }
-                }
-                Ok(n as f64)
-            },
-            | _ => {
-                let mut low = self.support_low();
-                let mut high = self.support_high();
-                if !low.is_finite() || !high.is_finite() {
-                    // A wide bracket, then bisection: the CDF is monotone, so
-                    // the answer is bracketed as soon as `cdf(high) >= u`.
-                    low = -1.0;
-                    high = 1.0;
-                    let mut guard = 0;
-                    while self.cdf(low) > u && guard < 200 {
-                        low *= 2.0;
-                        guard += 1;
-                    }
-                    guard = 0;
-                    while self.cdf(high) < u && guard < 200 {
-                        high *= 2.0;
-                        guard += 1;
-                    }
-                }
-                for _ in 0..200 {
-                    let middle = (low + high) / 2.0;
-                    if self.cdf(middle) < u {
-                        low = middle;
-                    } else {
-                        high = middle;
-                    }
-                    if (high - low) <= 1e-15 * middle.abs().max(1.0) {
-                        break;
-                    }
-                }
-                Ok((low + high) / 2.0)
-            },
-        }
+    ) -> Result<f64, NumericError> {
+        self.to_rssn().quantile(u).map_err(map_dist_err)
     }
 
-    /// The lower end of the support, or `-inf`.
-    fn support_low(&self) -> f64 {
-        match *self {
-            | Self::Uniform { lo, .. } => lo,
-            | Self::Exponential { .. } | Self::Gamma { .. } | Self::ChiSquared { .. } => 0.0,
-            | Self::Beta { .. } => 0.0,
-            | _ => f64::NEG_INFINITY,
-        }
-    }
-
-    /// The upper end of the support, or `+inf`.
-    fn support_high(&self) -> f64 {
-        match *self {
-            | Self::Uniform { hi, .. } => hi,
-            | Self::Beta { .. } => 1.0,
-            | _ => f64::INFINITY,
-        }
-    }
-
-    /// One sample, from a uniform source on `[0, 1)`.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::NumericError::Domain`] for a parameter the sampler cannot use.
     pub fn sample(
         &self,
-        uniform: &mut dyn FnMut() -> f64,
-    ) -> Result<f64, crate::NumericError> {
-        let one = |u: f64| {
-            if u <= 0.0 {
-                f64::MIN_POSITIVE
-            } else {
-                u
-            }
-        };
-        Ok(match *self {
-            | Self::Normal { mu, sigma } => {
-                // Box-Muller; the second uniform is discarded.
-                let u1 = one(uniform());
-                let u2 = uniform();
-                mu + sigma * (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
-            },
-            | Self::Uniform { lo, hi } => lo + (hi - lo) * uniform(),
-            | Self::Exponential { rate } => -one(uniform()).ln() / rate,
-            | Self::Gamma { shape, rate } => gamma_sample(shape, uniform)? / rate,
-            | Self::Beta { alpha, beta } => {
-                let x = gamma_sample(alpha, uniform)?;
-                let y = gamma_sample(beta, uniform)?;
-                if x + y == 0.0 {
-                    0.5
-                } else {
-                    x / (x + y)
-                }
-            },
-            | Self::ChiSquared { df } => 2.0 * gamma_sample(df / 2.0, uniform)?,
-            | Self::StudentT { df } => {
-                let z = Self::Normal { mu: 0.0, sigma: 1.0 }.sample(uniform)?;
-                let v = Self::ChiSquared { df }.sample(uniform)?;
-                z / (v / df).sqrt()
-            },
-            | Self::Poisson { lambda } => {
-                if lambda <= 0.0 {
-                    0.0
-                } else if lambda < 30.0 {
-                    // Knuth's product of uniforms.
-                    let limit = (-lambda).exp();
-                    let mut product = one(uniform());
-                    let mut count = 0.0;
-                    while product > limit {
-                        count += 1.0;
-                        product *= one(uniform());
-                    }
-                    count
-                } else {
-                    // Normal approximation with a continuity correction.
-                    (Self::Normal {
-                        mu: lambda,
-                        sigma: lambda.sqrt(),
-                    }
-                    .sample(uniform)?)
-                    .round()
-                }
-            },
-            | Self::Binomial { n, p } => {
-                let mut successes = 0.0;
-                for _ in 0..n {
-                    if uniform() < p {
-                        successes += 1.0;
-                    }
-                }
-                successes
-            },
-        })
+        uniforms: &mut impl FnMut() -> f64,
+    ) -> Result<f64, NumericError> {
+        self.to_rssn().sample(uniforms).map_err(map_dist_err)
     }
 }
 
-/// Marsaglia–Tsang for `Gamma(shape, 1)`.
-fn gamma_sample(
-    shape: f64,
-    uniform: &mut dyn FnMut() -> f64,
-) -> Result<f64, crate::NumericError> {
-    if shape <= 0.0 {
-        return Err(crate::NumericError::Domain(
-            "a Gamma shape must be positive".to_string(),
-        ));
-    }
-    if shape < 1.0 {
-        // Boost by one and scale by U^(1/shape).
-        let boosted = gamma_sample(shape + 1.0, uniform)?;
-        let u = uniform().max(f64::MIN_POSITIVE);
-        return Ok(boosted * u.powf(1.0 / shape));
-    }
-    let d = shape - 1.0 / 3.0;
-    let c = 1.0 / (9.0 * d).sqrt();
-    loop {
-        let mut x;
-        let mut v;
-        loop {
-            let normal = Distribution::Normal { mu: 0.0, sigma: 1.0 }.sample(uniform)?;
-            x = normal;
-            v = 1.0 + c * x;
-            if v > 0.0 {
-                break;
-            }
+/// Multivariate probability distributions.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MultivariateDistribution {
+    /// `MultivariateNormal = { mu, cov }`.
+    MultivariateNormal { mu: Vec<f64>, cov: Vec<f64> },
+    /// `Dirichlet = { alpha }`.
+    Dirichlet { alpha: Vec<f64> },
+}
+
+impl MultivariateDistribution {
+    fn to_rssn(&self) -> RssnMvDist {
+        match self {
+            | Self::MultivariateNormal { mu, cov } => {
+                RssnMvDist::MultivariateNormal {
+                    mu: mu.clone(),
+                    cov: cov.clone(),
+                }
+            },
+            | Self::Dirichlet { alpha } => RssnMvDist::Dirichlet { alpha: alpha.clone() },
         }
-        v = v * v * v;
-        let u = uniform().max(f64::MIN_POSITIVE);
-        if u.ln() < 0.5 * x * x + d - d * v + d * v.ln() {
-            return Ok(d * v);
+    }
+
+    #[must_use]
+    pub fn dim(&self) -> usize {
+        match self {
+            | Self::MultivariateNormal { mu, .. } => mu.len(),
+            | Self::Dirichlet { alpha } => alpha.len(),
         }
+    }
+
+    pub fn log_pdf(
+        &self,
+        x: &[f64],
+    ) -> Result<f64, NumericError> {
+        self.to_rssn().log_pdf(x).map_err(map_dist_err)
+    }
+
+    pub fn pdf(
+        &self,
+        x: &[f64],
+    ) -> Result<f64, NumericError> {
+        self.to_rssn().pdf(x).map_err(map_dist_err)
+    }
+
+    pub fn mean(&self) -> Result<Vec<f64>, NumericError> {
+        self.to_rssn().mean().map_err(map_dist_err)
+    }
+
+    /// The row-major covariance matrix.
+    pub fn cov(&self) -> Result<Vec<f64>, NumericError> {
+        self.to_rssn().cov().map_err(map_dist_err)
+    }
+
+    pub fn sample(
+        &self,
+        uniforms: &mut impl FnMut() -> f64,
+    ) -> Result<Vec<f64>, NumericError> {
+        self.to_rssn().sample(uniforms).map_err(map_dist_err)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f64::consts::PI;
 
     fn close(
         a: f64,
@@ -652,6 +288,7 @@ mod tests {
 #[cfg(test)]
 mod quantile_tests {
     use super::*;
+    use std::f64::consts::PI;
 
     #[test]
     fn the_quantile_inverts_the_cdf() {
@@ -669,6 +306,16 @@ mod quantile_tests {
             },
             Distribution::ChiSquared { df: 4.0 },
             Distribution::StudentT { df: 7.0 },
+            Distribution::LogNormal { mu: 0.2, sigma: 0.5 },
+            Distribution::Weibull {
+                shape: 2.0,
+                scale: 1.5,
+            },
+            Distribution::Cauchy {
+                loc: -1.0,
+                scale: 0.7,
+            },
+            Distribution::F { df1: 5.0, df2: 8.0 },
         ];
         for distribution in cases {
             for u in [0.05, 0.3, 0.5, 0.9, 0.99] {
@@ -702,5 +349,174 @@ mod quantile_tests {
         let normal = Distribution::Normal { mu: 0.0, sigma: 1.0 };
         assert!(normal.quantile(1.5).is_err());
         assert!(normal.quantile(-0.1).is_err());
+    }
+
+    #[test]
+    fn lognormal_matches_exp_of_normal() {
+        let ln_dist = Distribution::LogNormal { mu: 0.5, sigma: 0.4 };
+        let normal = Distribution::Normal { mu: 0.5, sigma: 0.4 };
+        for x in [0.5, 1.5, 3.0] {
+            assert!((ln_dist.cdf(x) - normal.cdf(x.ln())).abs() < 1e-12);
+        }
+        assert!((ln_dist.mean() - (0.5 + 0.08_f64).exp()).abs() < 1e-12);
+        assert_eq!(ln_dist.pdf(0.0), 0.0);
+        assert_eq!(ln_dist.cdf(-1.0), 0.0);
+    }
+
+    #[test]
+    fn weibull_shape_one_is_exponential() {
+        let w = Distribution::Weibull {
+            shape: 1.0,
+            scale: 2.0,
+        };
+        let e = Distribution::Exponential { rate: 0.5 };
+        for x in [0.0, 0.5, 2.0, 5.0] {
+            assert!((w.pdf(x) - e.pdf(x)).abs() < 1e-12);
+            assert!((w.cdf(x) - e.cdf(x)).abs() < 1e-12);
+        }
+        assert!((w.mean() - e.mean()).abs() < 1e-10);
+        assert!((w.variance() - e.variance()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn cauchy_has_median_at_loc_and_undefined_moments() {
+        let c = Distribution::Cauchy { loc: 2.0, scale: 3.0 };
+        assert!((c.cdf(2.0) - 0.5).abs() < 1e-12);
+        assert!((c.cdf(5.0) - 0.75).abs() < 1e-12);
+        assert!(c.mean().is_nan());
+        assert!(c.variance().is_nan());
+    }
+
+    #[test]
+    fn f_distribution_df1_one_equals_squared_t() {
+        let f = Distribution::F { df1: 1.0, df2: 5.0 };
+        let t = Distribution::StudentT { df: 5.0 };
+        for x in [0.5, 1.0, 2.5] {
+            let p_f = f.cdf(x);
+            let p_t = 2.0 * t.cdf(x.sqrt()) - 1.0;
+            assert!((p_f - p_t).abs() < 1e-10, "at {x}: {p_f} vs {p_t}");
+        }
+        assert!((f.mean() - 5.0 / 3.0).abs() < 1e-12);
+        assert!((f.variance() - (2.0 * 25.0 * 4.0) / (1.0 * 9.0 * 1.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn negative_binomial_and_geometric_consistency() {
+        let nb = Distribution::NegativeBinomial { r: 1.0, p: 0.3 };
+        let g = Distribution::Geometric { p: 0.3 };
+        for k in 0..8 {
+            assert!((nb.pdf(k as f64) - g.pdf(k as f64)).abs() < 1e-12);
+            assert!((nb.cdf(k as f64) - g.cdf(k as f64)).abs() < 1e-12);
+        }
+        assert!((g.mean() - 0.7 / 0.3).abs() < 1e-12);
+        assert!((g.variance() - 0.7 / 0.09).abs() < 1e-12);
+        let q = nb.quantile(0.6).unwrap();
+        assert!(nb.cdf(q) >= 0.6 - 1e-12);
+        assert!(q == 0.0 || nb.cdf(q - 1.0) < 0.6);
+    }
+
+    #[test]
+    fn multivariate_normal_pdf_and_sampling() {
+        let mvn = MultivariateDistribution::MultivariateNormal {
+            mu: vec![1.0, -2.0],
+            cov: vec![2.0, 0.5, 0.5, 1.0],
+        };
+        assert_eq!(mvn.dim(), 2);
+        assert_eq!(mvn.mean().unwrap(), vec![1.0, -2.0]);
+        let p = mvn.pdf(&[1.0, -2.0]).unwrap();
+        // det = 2*1 - 0.25 = 1.75; 1 / (2*pi*sqrt(1.75))
+        let expected = 1.0 / (2.0 * PI * 1.75_f64.sqrt());
+        assert!((p - expected).abs() < 1e-12);
+
+        let mut state = 42u64;
+        let mut uniform = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            ((state >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        let s = mvn.sample(&mut uniform).unwrap();
+        assert_eq!(s.len(), 2);
+        assert!(s.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn dirichlet_moments_and_simplex_sampling() {
+        let dir = MultivariateDistribution::Dirichlet {
+            alpha: vec![2.0, 3.0, 5.0],
+        };
+        let mean = dir.mean().unwrap();
+        assert!((mean[0] - 0.2).abs() < 1e-12);
+        assert!((mean[1] - 0.3).abs() < 1e-12);
+        assert!((mean[2] - 0.5).abs() < 1e-12);
+
+        // Uniform Dirichlet(1, 1, 1) has density 2! = 2 on the 2-simplex.
+        let unif_dir = MultivariateDistribution::Dirichlet {
+            alpha: vec![1.0, 1.0, 1.0],
+        };
+        assert!((unif_dir.pdf(&[0.2, 0.3, 0.5]).unwrap() - 2.0).abs() < 1e-12);
+        assert_eq!(unif_dir.pdf(&[0.2, 0.3, 0.6]).unwrap(), 0.0);
+
+        let mut state = 7u64;
+        let mut uniform = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            ((state >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        for _ in 0..20 {
+            let s = dir.sample(&mut uniform).unwrap();
+            assert_eq!(s.len(), 3);
+            assert!(s.iter().all(|&v| v >= 0.0));
+            assert!((s.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        }
+    }
+}
+
+#[cfg(test)]
+mod kernel_regressions {
+    use super::*;
+
+    #[test]
+    fn quantiles_preserve_support_endpoints_and_large_discrete_tails() {
+        let normal = Distribution::Normal { mu: 0.0, sigma: 1.0 };
+        assert_eq!(normal.quantile(0.0).unwrap(), f64::NEG_INFINITY);
+        assert_eq!(normal.quantile(1.0).unwrap(), f64::INFINITY);
+        let geometric = Distribution::Geometric { p: 1e-8 };
+        let q = geometric.quantile(0.9).unwrap();
+        assert!(q > 1_000_000.0);
+        assert!(geometric.cdf(q) >= 0.9);
+        assert!(geometric.cdf(q - 1.0) < 0.9);
+        assert_eq!(geometric.quantile(1.0).unwrap(), f64::INFINITY);
+        let beta = Distribution::Beta {
+            alpha: 2.0,
+            beta: 3.0,
+        };
+        assert_eq!(beta.cdf(-1.0), 0.0);
+        assert_eq!(beta.cdf(2.0), 1.0);
+    }
+
+    #[test]
+    fn invalid_parameters_and_covariances_are_rejected() {
+        for distribution in [
+            Distribution::Normal { mu: 0.0, sigma: -1.0 },
+            Distribution::Gamma {
+                shape: f64::NAN,
+                rate: 1.0,
+            },
+            Distribution::NegativeBinomial { r: 2.0, p: f64::NAN },
+        ] {
+            assert!(distribution.quantile(0.5).is_err());
+            assert!(distribution.sample(&mut || 0.5).is_err());
+            assert!(distribution.pdf(1.0).is_nan());
+        }
+        let distribution = MultivariateDistribution::MultivariateNormal {
+            mu: vec![0.0, 0.0],
+            cov: vec![1.0, 10.0, 0.0, 1.0],
+        };
+        assert_eq!(
+            distribution.pdf(&[0.0, 0.0]),
+            Err(NumericError::NotPositiveDefinite)
+        );
     }
 }

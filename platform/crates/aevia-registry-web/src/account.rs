@@ -161,7 +161,7 @@ pub fn account(
         view! {
             <p class="muted">
                 {NO_PACKAGES.of(lang)}
-                <code>"aevia pkg publish"</code>
+                <code>"aevia publish"</code>
                 {NO_PACKAGES_END.of(lang)}
             </p>
         }

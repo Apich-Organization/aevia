@@ -21,6 +21,7 @@ pub mod config;
 pub mod error;
 pub mod http;
 pub mod pages;
+pub mod seo;
 pub mod spec;
 pub mod state;
 pub mod storage;
@@ -68,6 +69,12 @@ pub fn router(state: AppState) -> Router {
         .route("/login", get(pages::login))
         .route("/logout", post(pages::logout))
         .route("/log", get(pages::log))
+        .route("/cli", get(pages::cli))
+        .route("/users/{handle}", get(pages::user))
+        .route("/feed.xml", get(seo::feed))
+        .route("/sitemap.xml", get(seo::sitemap))
+        .route("/robots.txt", get(seo::robots))
+        .route("/badge/{owner}/{name}", get(seo::badge))
         .route("/spec", get(pages::spec_index))
         .route("/spec/all", get(pages::spec_all))
         .route("/spec/{slug}", get(pages::spec_chapter))

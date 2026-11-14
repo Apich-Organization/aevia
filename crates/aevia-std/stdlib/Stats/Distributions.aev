@@ -22,6 +22,18 @@ type Poisson        = { lambda: Real[1] }
 
 type Binomial       = { n: Int, p: Real[1] }
 
+type LogNormal       = { mu: Real[1], sigma: Real[1] }
+
+type Weibull<d>      = { shape: Real[1], scale: Real[d] }
+
+type Cauchy<d>       = { loc: Real[d], scale: Real[d] }
+
+type F               = { df1: Real[1], df2: Real[1] }
+
+type NegativeBinomial = { r: Real[1], p: Real[1] }
+
+type Geometric       = { p: Real[1] }
+
 type Distribution<d> =
     | Normal(Normal<d>)
     | Uniform(Uniform<d>)
@@ -32,6 +44,12 @@ type Distribution<d> =
     | StudentT(StudentT)
     | Poisson(Poisson)
     | Binomial(Binomial)
+    | LogNormal(LogNormal)
+    | Weibull(Weibull<d>)
+    | Cauchy(Cauchy<d>)
+    | F(F)
+    | NegativeBinomial(NegativeBinomial)
+    | Geometric(Geometric)
 
 let cdf = cdf
 let pdf = pdf

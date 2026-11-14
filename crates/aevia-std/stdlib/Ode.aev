@@ -4,7 +4,17 @@
 ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Ode
 
-type OdeMethod = | Rk4 | Dopri5 | Radau | Bdf | Rosenbrock23 | AutoSwitch
+type OdeMethod =
+    | Rk4
+    | Dopri5
+    | Radau
+    | Bdf
+    | Rosenbrock23
+    | AutoSwitch
+    | StormerVerlet
+    | Ruth4
+    | GaussLegendre4
+    | GaussLegendre6
 
 type OdeOpts<s> = {
     rtol: Float[1],

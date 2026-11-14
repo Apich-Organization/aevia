@@ -204,8 +204,21 @@ impl CratePage {
     /// The install line a reader copies.
     #[must_use]
     pub fn install_command(&self) -> String {
-        format!("aevia pkg add {}@{}", self.id, self.selected.version)
+        format!("aevia add {}@{}", self.id, self.selected.version)
     }
+}
+
+/// A publisher's public page.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UserPage {
+    /// Who they are.
+    pub owner: OwnerView,
+    /// When they first signed in, RFC 3339.
+    pub joined_at: String,
+    /// Downloads across everything they publish.
+    pub downloads: i64,
+    /// Their packages, newest change first.
+    pub packages: Vec<CrateCard>,
 }
 
 /// One module in the documentation sidebar.
@@ -377,6 +390,15 @@ pub struct SpecChapter {
     pub toc: Vec<SpecHeading>,
     /// Approximate word count, for the index.
     pub words: usize,
+    /// The English edition's body, rendered, when `spec/en/` has one.
+    #[serde(default)]
+    pub html_en: Option<String>,
+    /// The English edition's headings.
+    #[serde(default)]
+    pub toc_en: Vec<SpecHeading>,
+    /// The English edition's word count.
+    #[serde(default)]
+    pub words_en: usize,
     /// Whether the chapter is normative.
     pub normative: bool,
 }

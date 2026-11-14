@@ -1984,6 +1984,78 @@ pub fn rational(
     Num::Rat(BigRational::new(BigInt::from(numer), BigInt::from(denom)))
 }
 
+/// Whether the kernel's *own dimension rule* makes a bare numeric result
+/// dimensionless.
+///
+/// A `Derived` signature never states a dimension, so before this rule a
+/// derived operator's number could not "prove" `Int` or `Float` at
+/// `from_value`, however obviously dimensionless it was (`invmod`, `binomial`,
+/// `totient`). The manifest does state the rule, though:
+///
+/// * `Dimensionless` says the result is a pure number whatever the arguments;
+/// * `List`, `NonMetric`, `Compare` and `Angle` yield pure numbers only when
+///   every argument is itself *known* to be dimensionless.
+///
+/// Any other rule (`Same`, `Sum`, `Product`, `Custom`, ...) depends on the
+/// arguments' dimensions and is not trusted here, so a dimensioned result is
+/// still never mislabelled.
+fn result_is_dimensionless(
+    entry: &crate::registry::OpEntry,
+    witnesses: &[crate::witness::DimensionWitness],
+) -> bool {
+    use crate::witness::DimensionWitness as W;
+    use rssn::kernel::signature::DimRuleInfo as R;
+    fn known_one(w: &W) -> bool {
+        match w {
+            | W::Unknown => false,
+            | W::Scalar(d) => d.is_one(),
+            | W::Tensor {
+                dimension,
+                element,
+                elements,
+                ..
+            } => {
+                dimension.as_ref().is_none_or(aevia_dim::Dim::is_one)
+                    && element.as_ref().is_none_or(|w| known_one(w))
+                    && elements.iter().all(known_one)
+            },
+            | W::Record(fields) => fields.iter().all(|(_, w)| known_one(w)),
+        }
+    }
+    // A curated signature (`domains.overlay`) is the overlay's statement that
+    // the operator is a pure function of dimensionless arguments, whatever its
+    // (often `Custom`) kernel dimension rule says. Inputs were already checked
+    // dimensionless by the caller.
+    if crate::domains::overlay().sigs.contains_key(&entry.name) {
+        return true;
+    }
+    // A witnessed overload was observed on bare numbers and bare lists and
+    // answered with one: with every argument known to be dimensionless, an
+    // operator whose value is a function of its arguments cannot produce a
+    // dimension. This is what lets the witnessed tier of the domain modules
+    // decode `Int` and `Tensor<_, Int>` results; a dimensioned argument still
+    // gets no such evidence.
+    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
+        && !witnesses.is_empty()
+        && witnesses.iter().all(known_one)
+    {
+        return true;
+    }
+    // The same operators, when the kernel itself says the value is not a
+    // physical scalar (a count, a flag, a structure): an opaque handle among
+    // the arguments carries no dimension witness, and needs none.
+    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
+        && matches!(&entry.dim_rule, Some(R::NonMetric | R::Container))
+    {
+        return true;
+    }
+    match &entry.dim_rule {
+        | Some(R::Dimensionless) => true,
+        | Some(R::List | R::NonMetric | R::Compare | R::Angle) => witnesses.iter().all(known_one),
+        | _ => false,
+    }
+}
+
 #[cfg(test)]
 mod recursive_callback_witness_tests {
     use super::*;
@@ -2243,77 +2315,5 @@ mod recursive_callback_witness_tests {
             data: vec![Val::Num(Num::Float(0.0)); 3],
         };
         assert!(validate_callback_result(&payload, &witness, &inner).is_err());
-    }
-}
-
-/// Whether the kernel's *own dimension rule* makes a bare numeric result
-/// dimensionless.
-///
-/// A `Derived` signature never states a dimension, so before this rule a
-/// derived operator's number could not "prove" `Int` or `Float` at
-/// `from_value`, however obviously dimensionless it was (`invmod`, `binomial`,
-/// `totient`). The manifest does state the rule, though:
-///
-/// * `Dimensionless` says the result is a pure number whatever the arguments;
-/// * `List`, `NonMetric`, `Compare` and `Angle` yield pure numbers only when
-///   every argument is itself *known* to be dimensionless.
-///
-/// Any other rule (`Same`, `Sum`, `Product`, `Custom`, ...) depends on the
-/// arguments' dimensions and is not trusted here, so a dimensioned result is
-/// still never mislabelled.
-fn result_is_dimensionless(
-    entry: &crate::registry::OpEntry,
-    witnesses: &[crate::witness::DimensionWitness],
-) -> bool {
-    use crate::witness::DimensionWitness as W;
-    use rssn::kernel::signature::DimRuleInfo as R;
-    fn known_one(w: &W) -> bool {
-        match w {
-            | W::Unknown => false,
-            | W::Scalar(d) => d.is_one(),
-            | W::Tensor {
-                dimension,
-                element,
-                elements,
-                ..
-            } => {
-                dimension.as_ref().is_none_or(aevia_dim::Dim::is_one)
-                    && element.as_ref().is_none_or(|w| known_one(w))
-                    && elements.iter().all(known_one)
-            },
-            | W::Record(fields) => fields.iter().all(|(_, w)| known_one(w)),
-        }
-    }
-    // A curated signature (`domains.overlay`) is the overlay's statement that
-    // the operator is a pure function of dimensionless arguments, whatever its
-    // (often `Custom`) kernel dimension rule says. Inputs were already checked
-    // dimensionless by the caller.
-    if crate::domains::overlay().sigs.contains_key(&entry.name) {
-        return true;
-    }
-    // A witnessed overload was observed on bare numbers and bare lists and
-    // answered with one: with every argument known to be dimensionless, an
-    // operator whose value is a function of its arguments cannot produce a
-    // dimension. This is what lets the witnessed tier of the domain modules
-    // decode `Int` and `Tensor<_, Int>` results; a dimensioned argument still
-    // gets no such evidence.
-    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
-        && !witnesses.is_empty()
-        && witnesses.iter().all(known_one)
-    {
-        return true;
-    }
-    // The same operators, when the kernel itself says the value is not a
-    // physical scalar (a count, a flag, a structure): an opaque handle among
-    // the arguments carries no dimension witness, and needs none.
-    if (!entry.witnessed.is_empty() || !entry.refinements.is_empty())
-        && matches!(&entry.dim_rule, Some(R::NonMetric | R::Container))
-    {
-        return true;
-    }
-    match &entry.dim_rule {
-        | Some(R::Dimensionless) => true,
-        | Some(R::List | R::NonMetric | R::Compare | R::Angle) => witnesses.iter().all(known_one),
-        | _ => false,
     }
 }

@@ -1,0 +1,24 @@
+# Merge this into ~/.config/helix/languages.toml (%AppData%\helix\languages.toml on Windows),
+# or run `scripts/install.ps1` / `scripts/install.sh`, which does it for you.
+# Then: `hx --grammar fetch` is NOT needed (the grammar is local); run `hx --grammar build`.
+
+[language-server.aevia-lsp]
+command = "aevia-lsp"
+args = ["--stdio"]
+
+[[language]]
+name = "aevia"
+scope = "source.aevia"
+file-types = ["aev"]
+shebangs = ["aevia"]
+roots = ["aevia.toml"]
+comment-tokens = ["#", "##"]
+block-comment-tokens = { start = "#-", end = "-#" }
+indent = { tab-width = 4, unit = "    " }
+language-servers = ["aevia-lsp"]
+auto-format = false
+
+[[grammar]]
+name = "aevia"
+# Replaced by the install script with the absolute path of ../tree-sitter-aevia.
+source = { path = "../tree-sitter-aevia" }

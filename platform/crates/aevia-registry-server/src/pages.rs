@@ -36,6 +36,7 @@ use aevia_registry_core::vm::KeyView;
 use aevia_registry_core::vm::LogEntryView;
 use aevia_registry_core::vm::ModuleLink;
 use aevia_registry_core::vm::OwnerView;
+use aevia_registry_core::vm::UserPage;
 use aevia_registry_core::vm::VersionView;
 use aevia_registry_db::models::PackageSummary;
 use aevia_registry_db::models::Publisher;
@@ -247,6 +248,45 @@ pub(crate) async fn build_crate_page(
         downloads,
         can_manage,
     })
+}
+
+/// `GET /cli`
+pub async fn cli(
+    State(state): State<AppState>,
+    Language(lang): Language,
+    headers: HeaderMap,
+) -> Html<String> {
+    Html(web::cli_page(lang, state.viewer(&headers).await.as_ref()))
+}
+
+/// `GET /users/{handle}`
+///
+/// # Errors
+///
+/// `404` when nobody has that handle, `E_DB` when a read fails.
+pub async fn user(
+    State(state): State<AppState>,
+    Language(lang): Language,
+    Path(handle): Path<String>,
+    headers: HeaderMap,
+) -> PageResult<Html<String>> {
+    let Some(publisher) = repo::publisher_by_any_handle(&state.pool, handle.trim()).await? else {
+        return Err(PageError::not_found(format!(
+            "There is no publisher called {handle}."
+        )));
+    };
+    let packages = repo::packages_for_publisher(&state.pool, publisher.id).await?;
+    let page = UserPage {
+        owner: owner_view(&publisher),
+        joined_at: publisher.created_at.to_rfc3339(),
+        downloads: packages.iter().map(|package| package.downloads).sum(),
+        packages: cards_of(&packages),
+    };
+    Ok(Html(web::user_page(
+        lang,
+        &page,
+        state.viewer(&headers).await.as_ref(),
+    )))
 }
 
 /// `GET /docs`

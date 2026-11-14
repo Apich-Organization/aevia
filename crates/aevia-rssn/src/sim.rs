@@ -68,7 +68,7 @@ const KEYWORDS: &[&str] = &[
 const RESERVED_CTORS: &[&str] = &["None", "Some", "Ok", "Err", "True", "False", "Cpu", "Gpu"];
 
 fn camel(name: &str) -> String {
-    name.split(|c: char| c == '_' || c == '-' || c == ' ')
+    name.split(['_', '-', ' '])
         .filter(|part| !part.is_empty())
         .map(|part| {
             let mut chars = part.chars();
@@ -86,11 +86,12 @@ pub fn module_name(scenario: &str) -> String {
 }
 
 /// The choice types of a module: field name, type name, constructors.
-struct Choices(Vec<(String, String, Vec<(String, String)>)>);
+type Choice = (String, String, Vec<(String, String)>);
+struct Choices(Vec<Choice>);
 
 impl Choices {
     fn collect(schema: &ScenarioSchema) -> Self {
-        let mut out: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+        let mut out: Vec<Choice> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
         let fields = schema.params.iter().chain(&schema.result);
         for field in fields {
@@ -126,7 +127,7 @@ impl Choices {
     fn get(
         &self,
         field: &str,
-    ) -> Option<&(String, String, Vec<(String, String)>)> {
+    ) -> Option<&Choice> {
         self.0.iter().find(|(f, ..)| f == field)
     }
 }
