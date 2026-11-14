@@ -717,3 +717,36 @@ async fn the_language_switch_sets_a_cookie_and_renders_chinese() {
         &page[..page.len().min(400)]
     );
 }
+
+#[tokio::test]
+async fn the_machine_pages_and_the_cli_guide_are_served() {
+    let Some(app) = start().await else {
+        return;
+    };
+
+    let (status, headers, body) = get(&app.app, "/robots.txt").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("Sitemap: "));
+    assert!(
+        headers
+            .get(header::CONTENT_TYPE)
+            .is_some_and(|value| value.to_str().is_ok_and(|v| v.starts_with("text/plain")))
+    );
+
+    let (status, _, body) = get(&app.app, "/sitemap.xml").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("<urlset"));
+
+    let (status, _, body) = get(&app.app, "/feed.xml").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("<feed"));
+
+    let (status, _, body) = get(&app.app, "/cli").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("aevia publish"));
+
+    let (status, _, _) = get(&app.app, "/users/nobody-here").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = get(&app.app, "/badge/nobody/nothing.svg").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

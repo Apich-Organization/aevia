@@ -237,7 +237,20 @@ impl SpecStore {
                 revision = found;
             }
             let slug = slug_of(name);
-            chapters.push(render_chapter(&slug, &text));
+            let mut chapter = render_chapter(&slug, &text);
+            // The English edition sits beside the Chinese one in `en/` and has
+            // the same file name; a chapter without it stays Chinese-only.
+            let english = directory.join("en").join(name);
+            if english.is_file() {
+                let translated = std::fs::read_to_string(&english).map_err(|error| {
+                    Error::new(
+                        E_SPEC,
+                        format!("cannot read `{}`: {error}", english.display()),
+                    )
+                })?;
+                attach_english(&mut chapter, &translated.replace("\r\n", "\n"));
+            }
+            chapters.push(chapter);
         }
         tracing::info!(
             chapters = chapters.len(),
@@ -322,8 +335,35 @@ fn render_chapter(
         words: word_count(text),
         html,
         toc,
+        html_en: None,
+        toc_en: Vec::new(),
+        words_en: 0,
         normative: normative(slug),
     }
+}
+
+/// Adds the English edition of a chapter.
+///
+/// The English heading replaces the hand-written title table: it is the real
+/// title, taken from the file, so the two cannot drift.
+fn attach_english(
+    chapter: &mut SpecChapter,
+    text: &str,
+) {
+    let body = rewrite_links(&strip_first_heading(text));
+    let html = aevia_registry_docs::render_markdown(&body);
+    let (html, toc) = inject_heading_ids(&html);
+    if let Some(heading) = first_heading(text) {
+        // `00 — Overview: what Aevia is` is listed as `Overview`.
+        let short = strip_number(&heading);
+        let short = short.split([':', '：']).next().unwrap_or(&short).trim();
+        if !short.is_empty() {
+            chapter.title_en = short.to_string();
+        }
+    }
+    chapter.words_en = word_count(text);
+    chapter.html_en = Some(html);
+    chapter.toc_en = toc;
 }
 
 /// Drops a leading `00 — ` from a chapter heading.
@@ -574,6 +614,37 @@ fn highest_revision(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_english_edition_replaces_the_title_and_brings_its_own_body() {
+        let mut chapter =
+            render_chapter("00-overview", "# 00 — 总览：定义\n\n## 0.1 定义\n\n正文\n");
+        assert!(chapter.html_en.is_none());
+        attach_english(
+            &mut chapter,
+            "# 00 — Overview: what it is\n\n## 0.1 Definition\n\nBody text\n",
+        );
+        assert_eq!(chapter.title_en, "Overview");
+        let html = chapter.html_en.clone().expect("an English body");
+        assert!(html.contains("Body text"));
+        assert!(chapter.html.contains("正文"), "the Chinese body is untouched");
+        assert_eq!(chapter.toc_en.len(), 1);
+        assert_eq!(chapter.toc_en[0].text, "0.1 Definition");
+    }
+
+    #[test]
+    fn the_repository_spec_loads_with_its_english_chapter() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../spec");
+        if !directory.join("00-overview.md").is_file() {
+            return;
+        }
+        let store = SpecStore::load(&directory).expect("the spec loads");
+        let overview = store.book().chapter("00-overview").expect("chapter 00");
+        if directory.join("en/00-overview.md").is_file() {
+            assert!(overview.html_en.is_some());
+            assert_eq!(overview.title_en, "Overview");
+        }
+    }
 
     #[test]
     fn slugs_and_numbers_come_from_the_file_names() {

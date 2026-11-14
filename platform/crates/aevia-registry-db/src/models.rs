@@ -252,6 +252,23 @@ pub struct Dependent {
     pub req: String,
 }
 
+/// One published version, as the feed lists it.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct Release {
+    /// The owner's handle.
+    pub owner_handle: String,
+    /// The package name, as its author spells it.
+    pub name: String,
+    /// The version.
+    pub version: String,
+    /// The package's sentence.
+    pub description: Option<String>,
+    /// `sha256:<hex>`.
+    pub checksum: String,
+    /// When it was published.
+    pub created_at: DateTime<Utc>,
+}
+
 /// The columns a new version writes.
 pub struct NewVersion<'a> {
     /// The package.

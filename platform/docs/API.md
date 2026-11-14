@@ -264,7 +264,12 @@ seconds; stop on anything but `pending`.
 | Path | What it serves |
 |---|---|
 | `/` | the front page |
-| `/crates?q=&sort=&page=` | search and listing |
+| `/crates?q=&sort=&page=` | search and listing; `q` matches name, description and keywords |
+| `/cli` | how the site and the `aevia` command line fit together, command by command |
+| `/users/{handle}` | a publisher's public page: identity, join date, packages |
+| `/feed.xml` | Atom feed of the 50 newest releases |
+| `/sitemap.xml`, `/robots.txt` | for crawlers; `robots.txt` keeps `/account`, `/auth` and `/api` out |
+| `/badge/{owner}/{name}.svg` | `aevia \| 1.2.0` badge for a README (newest non-yanked version) |
 | `/crates/{owner}/{name}` | package page |
 | `/crates/{owner}/{name}/{version}` | the same page pinned to a version |
 | `POST /crates/{owner}/{name}/yank` | yank from the browser (session auth, form `version`, `yanked`) |

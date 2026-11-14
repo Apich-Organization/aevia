@@ -97,6 +97,51 @@ pub async fn publisher_by_handle(
         .map_err(|error| sql_error("cannot read the publisher", error))
 }
 
+/// A publisher by handle alone, whichever provider it belongs to.
+///
+/// A GitHub login and an ORCID iD cannot collide (an iD is four groups of
+/// digits), so the public profile address `/users/{handle}` needs no kind.
+///
+/// # Errors
+///
+/// `E_DB` when the query fails.
+pub async fn publisher_by_any_handle(
+    pool: &PgPool,
+    handle: &str,
+) -> Result<Option<Publisher>, Error> {
+    sqlx::query_as::<_, Publisher>(
+        "SELECT * FROM publishers WHERE lower(handle) = lower($1) ORDER BY id LIMIT 1",
+    )
+    .bind(handle)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| sql_error("cannot read the publisher", error))
+}
+
+/// The newest releases across the registry, for the feed.
+///
+/// # Errors
+///
+/// `E_DB` when the query fails.
+pub async fn recent_releases(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<crate::models::Release>, Error> {
+    sqlx::query_as::<_, crate::models::Release>(
+        "SELECT o.handle AS owner_handle, p.name AS name, v.version AS version,
+                p.description AS description, v.checksum AS checksum, v.created_at AS created_at
+         FROM versions v
+         JOIN packages p ON p.id = v.package_id
+         JOIN publishers o ON o.id = p.owner_id
+         ORDER BY v.created_at DESC
+         LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| sql_error("cannot read the recent releases", error))
+}
+
 // ---------------------------------------------------------------------- keys
 
 /// Binds a public key to a publisher.
@@ -382,7 +427,8 @@ pub async fn list_packages(
     let sql = format!(
         "SELECT {SUMMARY_COLUMNS}
          FROM packages p JOIN publishers o ON o.id = p.owner_id
-         WHERE (NOT $1 OR p.name ILIKE $2 ESCAPE '\\' OR COALESCE(p.description, '') ILIKE $2 ESCAPE '\\')
+         WHERE (NOT $1 OR p.name ILIKE $2 ESCAPE '\\' OR COALESCE(p.description, '') ILIKE $2 ESCAPE '\\'
+                OR EXISTS (SELECT 1 FROM unnest(p.keywords) k WHERE k ILIKE $2 ESCAPE '\\'))
          ORDER BY {order}
          LIMIT $3 OFFSET $4"
     );
@@ -396,7 +442,8 @@ pub async fn list_packages(
         .map_err(|error| sql_error("cannot list packages", error))?;
     let total: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM packages p
-         WHERE (NOT $1 OR p.name ILIKE $2 ESCAPE '\\' OR COALESCE(p.description, '') ILIKE $2 ESCAPE '\\')",
+         WHERE (NOT $1 OR p.name ILIKE $2 ESCAPE '\\' OR COALESCE(p.description, '') ILIKE $2 ESCAPE '\\'
+                OR EXISTS (SELECT 1 FROM unnest(p.keywords) k WHERE k ILIKE $2 ESCAPE '\\'))",
     )
     .bind(has_query)
     .bind(&pattern)

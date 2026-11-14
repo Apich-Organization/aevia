@@ -85,6 +85,7 @@ const DEPENDENTS: Msg = Msg::new("used by", "被依赖");
 const NO_DEPENDENTS: Msg = Msg::new("No published package depends on this one.", "尚无已发布的包依赖此包。");
 const DOWNLOAD: Msg = Msg::new("download", "下载");
 const NOT_STATED: Msg = Msg::new("not stated", "未声明");
+const KEYWORDS: Msg = Msg::new("keywords", "关键词");
 const OWNERS: Msg = Msg::new("owners", "发布者");
 
 // The version and dependency tables.
@@ -237,7 +238,7 @@ pub fn crate_list(
                 <p>{NO_RESULTS.of(lang)}</p>
                 <p class="muted">
                     {NO_RESULTS_HINT.of(lang)}
-                    <code>"aevia pkg publish"</code>
+                    <code>"aevia publish"</code>
                     {NO_RESULTS_HINT_END.of(lang)}
                 </p>
             </div>
@@ -341,6 +342,20 @@ pub fn crate_page(
         .clone()
         .unwrap_or_else(|| NO_DESCRIPTION.of(lang).to_string());
     let install = page.install_command();
+    let keyword_chips = (!page.keywords.is_empty()).then(|| {
+        let chips: Vec<AnyView> = page
+            .keywords
+            .iter()
+            .map(|keyword| {
+                let href = format!("/crates?q={}", query_param(keyword));
+                view! { <a class="chip" href=href>{keyword.clone()}</a> }.into_any()
+            })
+            .collect();
+        view! {
+            <h2>{KEYWORDS.of(lang)}</h2>
+            <p class="chips">{chips}</p>
+        }
+    });
     let selected_version = page.selected.version.clone();
 
     let docs_button = page.selected.docs.then(|| {
@@ -635,6 +650,7 @@ pub fn crate_page(
                                 <dd class="mono">{downloads}</dd>
                             </div>
                         </dl>
+                        {keyword_chips}
                         <h2>{OWNERS.of(lang)}</h2>
                         <ul class="owners">{owners}</ul>
                         <h2>{format!("{} {selected_version}", VERSION.of(lang))}</h2>
@@ -729,7 +745,7 @@ mod tests {
     #[test]
     fn a_crate_page_shows_the_install_line_versions_and_yank() {
         let html = crate_page(Lang::En, &page(), None);
-        assert!(html.contains("aevia pkg add apich/units-extra@1.2.0"));
+        assert!(html.contains("aevia add apich/units-extra@1.2.0"));
         assert!(html.contains("1.2.0"), "the selected version appears");
         assert!(html.contains("1.1.0"), "every version appears");
         assert!(
@@ -777,7 +793,7 @@ mod tests {
         };
         let html = crate_list(Lang::En, &list, None);
         assert!(html.contains("No packages matched this search."));
-        assert!(html.contains("aevia pkg publish"));
+        assert!(html.contains("aevia publish"));
     }
 
     #[test]

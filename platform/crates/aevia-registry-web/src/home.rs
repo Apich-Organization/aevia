@@ -42,6 +42,7 @@ const LEDE: Msg = Msg::new(
 const COPY_LABEL: Msg = Msg::new("Copy the install command", "复制安装命令");
 const COPY: Msg = Msg::new("copy", "复制");
 const BROWSE: Msg = Msg::new("browse crates", "浏览包");
+const CLI_GUIDE: Msg = Msg::new("command line", "命令行");
 const READ_DOCS: Msg = Msg::new("read the docs", "阅读文档");
 const STAT_PACKAGES: Msg = Msg::new("packages", "包");
 const STAT_VERSIONS: Msg = Msg::new("versions", "版本");
@@ -102,7 +103,7 @@ pub fn home(
                 <h1>{HEADLINE.of(lang)}</h1>
                 <p class="lede">{LEDE.of(lang)}</p>
                 <div class="install">
-                    <code id="install-home">"aevia pkg add <owner>/<name>"</code>
+                    <code id="install-home">"aevia add <owner>/<name>"</code>
                     <button
                         type="button"
                         class="copy"
@@ -115,6 +116,7 @@ pub fn home(
                 <div class="actions">
                     <a class="btn" href="/crates">{BROWSE.of(lang)}</a>
                     <a class="btn btn-ghost" href="/docs">{READ_DOCS.of(lang)}</a>
+                    <a class="btn btn-ghost" href="/cli">{CLI_GUIDE.of(lang)}</a>
                 </div>
             </section>
             <div class="hero-grid">
@@ -177,7 +179,7 @@ mod tests {
     fn the_front_page_shows_the_install_line_and_the_counts() {
         let html = home(Lang::En, &stats(), &[], None);
         assert!(
-            html.contains("aevia pkg add &lt;owner&gt;/&lt;name&gt;"),
+            html.contains("aevia add &lt;owner&gt;/&lt;name&gt;"),
             "the install line is present and escaped"
         );
         assert!(html.contains("1,204"), "package count");
@@ -198,7 +200,7 @@ mod tests {
         assert!(html.contains("最近发布"), "recent section");
         assert!(html.contains("lang=\"zh-CN\""), "document language");
         assert!(
-            html.contains("aevia pkg add &lt;owner&gt;/&lt;name&gt;"),
+            html.contains("aevia add &lt;owner&gt;/&lt;name&gt;"),
             "the command stays untranslated"
         );
     }

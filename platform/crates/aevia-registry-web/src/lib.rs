@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 mod account;
+mod cli;
 mod crates;
 mod docs;
 mod error;
@@ -37,9 +38,11 @@ mod log;
 mod login;
 mod spec;
 mod styles;
+mod user;
 
 pub use account::account;
 pub use account::activate;
+pub use cli::cli_page;
 pub use crates::crate_list;
 pub use crates::crate_page;
 pub use docs::docs_index;
@@ -54,6 +57,7 @@ pub use spec::spec_index;
 pub use spec::spec_page;
 pub use styles::APP_JS;
 pub use styles::SITE_CSS;
+pub use user::user_page;
 
 use aevia_registry_core::Lang;
 use leptos::prelude::Owner;

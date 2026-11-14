@@ -283,6 +283,10 @@ fn run_cli(
         // The registry client is a separate binary; `aevia pkg` forwards to it
         // so the toolchain has one entry point. See `registry.rs`.
         | Some("pkg") => registry::run(&args[1..]),
+        // The commands people reach for most, without the `pkg` prefix.
+        | Some("publish") => registry::publish(&args[1..]),
+        | Some("docs") => registry::docs(&args[1..]),
+        | Some(command) if registry::is_forwarded(command) => registry::run(&args),
         | Some("--version" | "-V") => {
             println!("aevia {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -407,8 +411,15 @@ usage:
                             (the vendored `.aevia/registry` stays unless asked)
   aevia lsp [--stdio]       start the language server on standard input/output
   aevia rssn [--emit] [--out DIR]  audit a Kernel Manifest and generate the Rssn module
-  aevia pkg <command>       publish, yank, search, add and verify registry packages
-                            (forwards to `aevia-pkg`; see `aevia pkg --help`)
+  aevia login               bind a signing key to your registry account (browser)
+  aevia publish [--no-verify] [--dry-run]
+                            check, format-check, sign and upload this package
+  aevia search <query>      search the registry      aevia info <owner/name>  show a package
+  aevia yank <owner/name@version> [--undo]  withdraw or restore a version
+  aevia verify <owner/name@version>         check a download against its signature
+  aevia docs [owner/name[@version]] [--open]  the package's documentation site
+  aevia pkg <command>       every registry client command (`key`, `status`, `lock`, …);
+                            forwards to `aevia-pkg`, see `aevia pkg --help`
   aevia --version           print the version
 
 options (anywhere on the command line):

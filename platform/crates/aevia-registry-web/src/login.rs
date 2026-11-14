@@ -103,7 +103,7 @@ pub fn login(
                 </div>
                 <p class="note">
                     {NOTE.of(lang)}
-                    <code>"aevia-pkg login"</code>
+                    <code>"aevia login"</code>
                     {NOTE_TAIL.of(lang)}
                 </p>
             </section>

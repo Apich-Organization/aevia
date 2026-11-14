@@ -620,6 +620,25 @@ tbody th {
   word-break: break-all;
 }
 
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 1rem;
+}
+
+.chip {
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.chip:hover {
+  text-decoration: underline;
+}
+
 .badge {
   display: inline-block;
   font-size: 0.6875rem;
