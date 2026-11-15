@@ -18,12 +18,18 @@ augroup aevia_lsp
 augroup END
 
 " yegappan/lsp
+let s:yegappan_server = [{
+      \ 'name': 'aevia-lsp',
+      \ 'filetype': ['aevia'],
+      \ 'path': 'aevia-lsp',
+      \ 'args': ['--stdio'],
+      \ 'rootSearch': ['aevia.toml', '.git/'],
+      \ }]
 if exists('*LspAddServer')
-  call LspAddServer([{
-        \ 'name': 'aevia-lsp',
-        \ 'filetype': ['aevia'],
-        \ 'path': 'aevia-lsp',
-        \ 'args': ['--stdio'],
-        \ 'rootSearch': ['aevia.toml', '.git'],
-        \ }])
+  call LspAddServer(s:yegappan_server)
+else
+  augroup aevia_yegappan_lsp
+    autocmd!
+    autocmd User LspSetup call LspAddServer(s:yegappan_server)
+  augroup END
 endif

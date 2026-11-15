@@ -14,8 +14,8 @@
     <depends>org.jetbrains.plugins.textmate</depends>
     <depends>com.redhat.devtools.lsp4ij</depends>
 
-    <extensions defaultExtensionNs="org.jetbrains.plugins.textmate">
-        <bundleProvider implementation="dev.aevia.jetbrains.AeviaTextMateBundleProvider"/>
+    <extensions defaultExtensionNs="com.intellij">
+        <textmate.bundleProvider implementation="dev.aevia.jetbrains.AeviaTextMateBundleProvider"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
