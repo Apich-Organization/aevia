@@ -98,6 +98,8 @@ let sym_ne = sym_ne
 let take = take
 let to_float = to_float
 let to_int = to_int
+## Two-dimensional terminal mathematics; strings and other values remain human-readable.
+let to_pretty = to_pretty
 let to_latex = to_latex
 let to_real = to_real
 let to_typst = to_typst

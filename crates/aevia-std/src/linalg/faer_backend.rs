@@ -5,6 +5,7 @@ use rssn::kernels::dense::optimized;
 
 pub(super) fn error(error: DenseError) -> NumericError {
     match error {
+        | DenseError::Cancelled => NumericError::Cancelled,
         | DenseError::Shape => {
             NumericError::ShapeMismatch("incompatible dense matrix dimensions".into())
         },

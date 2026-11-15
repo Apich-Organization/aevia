@@ -164,6 +164,7 @@ Status: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit
 | `E0809` | internal type/dimension invariant violated | no |
 | `E0810` | IO error | yes |
 | `E0811` | task failure: a result that cannot cross threads, a task awaited twice, or a stopped worker (§9.7.3) | yes |
+| `E0812` | evaluation interrupted by the host / Ctrl-C (§9.8) | yes |
 | `E0899` | panic | no |
 
 Status: a few built-ins borrow `E0806`–`E0809` to report their own argument or internal

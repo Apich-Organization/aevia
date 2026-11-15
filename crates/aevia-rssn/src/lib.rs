@@ -61,6 +61,8 @@ pub use registry::Source;
 pub use registry::UnitInfo;
 pub use registry::registry;
 pub use registry::resolve_key;
+/// Scoped cooperative cancellation shared with the scientific kernels.
+pub use rssn::cancellation;
 pub use rssn::kernel::signature::OpKey;
 
 /// The normalized Fresnel integrals `S(x) = ∫₀ˣ sin(πt²/2) dt` and

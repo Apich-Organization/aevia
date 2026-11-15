@@ -376,6 +376,7 @@ to_float
 to_int
 to_json
 to_latex
+to_pretty
 to_real
 to_table
 to_typst

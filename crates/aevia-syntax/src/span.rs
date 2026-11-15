@@ -175,6 +175,22 @@ impl SourceMap {
         id
     }
 
+    /// Replaces a buffer while retaining its stable source id.
+    /// Hosts that compile successive revisions use this to keep saved spans
+    /// from imported modules distinct from newly opened source files.
+    pub fn replace(
+        &mut self,
+        id: FileId,
+        name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> bool {
+        let Some(file) = self.files.get_mut(id as usize) else {
+            return false;
+        };
+        *file = SourceFile::new(name, text);
+        true
+    }
+
     /// The file with the given id.
     #[must_use]
     pub fn file(

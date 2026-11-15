@@ -3302,6 +3302,7 @@ random   : () -&gt; IO Float[1]</code></pre>
 </ul>
 <h3 id="06-semantics--6123-display">6.12.3 Display</h3>
 <ul>
+<li><code>to_pretty(x)</code> draws two-dimensional terminal mathematics (fractions, radicals, and matrices); other values use human-readable text.</li>
 <li><code>show(x)</code> is human-readable and includes the display unit; <code>repr(x)</code> parses back to the same value and shows internal ids of symbols; <code>to_latex</code> and <code>to_typst</code> typeset mathematics (single-letter symbols in italics, Greek names as letters, products with negative powers as <code>\frac</code>, elementary functions as upright operator names, <code>exp(u)</code> as <code>e^{u}</code>).</li>
 <li>A float prints in its shortest round-trip form and <strong>always keeps its phase</strong>: an integer-valued <code>Float</code> has a decimal point (<code>10.0</code>, <code>-0.0</code>) and large or small magnitudes use an exponent (<code>1e20</code>, <code>1e-9</code>); the exact <code>10</code> and the float <code>10.0</code> look different. An exact <code>Real</code> prints as a fraction or radical; a <code>Complex</code> prints as <code>a + b*i</code> with both parts following the <code>Float</code> rule.</li>
 <li>IEEE infinities print as <code>inf</code>/<code>-inf</code> and NaN as <code>nan</code>; <code>oo</code>/<code>-oo</code> denote only the exact infinities of the <code>Real</code> phase. <code>repr</code> writes a float infinity as <code>(1.0 / 0.0)</code>.</li>
@@ -3334,6 +3335,12 @@ random   : () -&gt; IO Float[1]</code></pre>
 <p>Top-level declarations may refer to one another, including forward references and recursion: the compiler first collects all top-level names and signatures and then checks the bodies. Unit and dimension declarations may also come later; units from other modules are supplied by <code>import</code>.</p>
 <pre class="code" data-lang="aevia"><code><span class="kw">fn</span> f(x: Int): Int = g(x) + <span class="n">1</span>
 <span class="kw">fn</span> g(x: Int): Int = x * <span class="n">2</span></code></pre>
+<p>Repeated top-level <code>let</code> and <code>fn</code> names are valid in scripts and the REPL. Each new declaration overwrites the visible binding for subsequent code and has its own type, so a change of representation or dimension is allowed:</p>
+<pre class="code" data-lang="aevia"><code><span class="kw">let</span> b = <span class="n">1</span> s
+<span class="kw">let</span> earlier = b
+<span class="kw">let</span> b = <span class="n">1</span> km
+<span class="kw">let</span> later = b</code></pre>
+<p><code>earlier</code> remains a time and <code>later</code> is a length. Existing closures and function aliases retain their original bindings and signatures. A non-recursive rebinding's initializer sees the previous binding (<code>let x = x + 1</code>); a recursive declaration sees its own binding. Before the first declaration of a name, a forward reference selects its first definition. The exported name denotes the final visible definition; a final <code>private</code> definition hides that name.</p>
 <h3 id="07-modules--713-exports">7.1.3 Exports</h3>
 <p>All top-level declarations are exported by default; <code>private</code> hides one:</p>
 <pre class="code" data-lang="aevia"><code><span class="kw">private</span> <span class="kw">let</span> internal_scale = <span class="n">1.0e-3</span>
@@ -3775,6 +3782,7 @@ map_err  : ((e -&gt; f), Result&lt;a, e&gt;) -&gt; Result&lt;a, f&gt;</code></pr
 <h3 id="08-stdlib--817-display">8.1.7 Display</h3>
 <pre class="code"><code>show     : Show a =&gt; a -&gt; String
 repr     : Show a =&gt; a -&gt; String
+to_pretty : Show a =&gt; a -&gt; String
 to_latex : Show a =&gt; a -&gt; String
 to_typst : Show a =&gt; a -&gt; String
 print    : Show a =&gt; a -&gt; IO Unit
@@ -5147,11 +5155,14 @@ pure  : a -&gt; IO a</code></pre>
 <li><code>do</code> itself still runs sequentially; concurrency appears only explicitly through tasks.</li>
 </ul>
 <h2 id="09-runtime--98-repl">9.8 REPL</h2>
-<pre class="code"><code>$ aevia repl
-Aevia — dimensions are types. Type `:help` for commands, `:quit` to exit.
-&gt; let g = 9.80665 m/s^2
-&gt; sqrt(2 * 20.0 m / g)
-&gt; :type sqrt
+<p><code>aevia</code> with no command, or <code>aevia repl</code>, opens the interactive session.</p>
+<pre class="code" data-lang="console"><code>$ aevia
+Aevia 0.1.0 — dimensions are types
+Enter an expression, or paste a program (including main). :help shows examples.
+Tab completes names; blank line ends a block; Ctrl-C cancels; Ctrl-D exits.
+aevia&gt; let g = 9.80665 m/s^2
+aevia&gt; sqrt(2 * 20.0 m / g)
+aevia&gt; :type sqrt
 sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</code></pre>
 <table>
 <thead>
@@ -5162,8 +5173,20 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 </thead>
 <tbody>
 <tr>
+<td><code>:help [topic]</code></td>
+<td>guide and examples; topics include <code>paste</code>, <code>main</code>, <code>units</code>, <code>files</code>, and command names (<code>:h</code>, <code>:?</code>)</td>
+</tr>
+<tr>
 <td><code>:type e</code></td>
-<td>show the type</td>
+<td>show the type without evaluating (<code>:t</code>)</td>
+</tr>
+<tr>
+<td><code>:bindings</code></td>
+<td>list user bindings and types (<code>:vars</code>)</td>
+</tr>
+<tr>
+<td><code>:show</code> / <code>:save FILE</code></td>
+<td>show accepted declarations / save them to a new file without overwriting</td>
 </tr>
 <tr>
 <td><code>:dims</code></td>
@@ -5171,23 +5194,55 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 </tr>
 <tr>
 <td><code>:units [d]</code></td>
-<td>list units, optionally for one dimension</td>
+<td>list units, optionally for a valid dimension (e.g. <code>L</code>, <code>L/T</code>)</td>
 </tr>
 <tr>
 <td><code>:ast e</code> / <code>:core e</code></td>
-<td>show the AST / Core IR</td>
+<td>show the AST / Core IR without evaluating</td>
 </tr>
 <tr>
 <td><code>:time e</code></td>
-<td>evaluate and report the time taken</td>
+<td>evaluate once, execute IO, and report elapsed time</td>
 </tr>
 <tr>
-<td><code>:latex e</code></td>
-<td>render the value as LaTeX</td>
+<td><code>:latex e</code> / <code>:typst e</code></td>
+<td>evaluate once and emit LaTeX / Typst mathematics</td>
 </tr>
 <tr>
-<td><code>:load f</code></td>
-<td>load declarations from a file</td>
+<td><code>:pretty e</code> / <code>:pprint e</code></td>
+<td>evaluate once and draw two-dimensional mathematics</td>
+</tr>
+<tr>
+<td><code>:repr e</code> / <code>:print e</code></td>
+<td>source representation / human-readable text</td>
+</tr>
+<tr>
+<td><code>:format [NAME]</code></td>
+<td>select or inspect show, repr, pretty, latex, typst output for normal results and <code>:time</code>; survives <code>:reset</code></td>
+</tr>
+<tr>
+<td><code>:doc ITEM</code> / <code>:help ITEM</code></td>
+<td>signatures and documentation for accepted local/imported items, builtins, types, and units (<code>:?</code>, <code>:h</code>)</td>
+</tr>
+<tr>
+<td><code>:apropos TEXT</code></td>
+<td>search available item names and documentation</td>
+</tr>
+<tr>
+<td><code>:imports</code></td>
+<td>list imported modules and aliases</td>
+</tr>
+<tr>
+<td><code>:load FILE</code></td>
+<td>append declarations with their package/directory imports and run a new <code>main</code> (<code>:l</code>)</td>
+</tr>
+<tr>
+<td><code>:run</code></td>
+<td>execute the loaded <code>main</code> again</td>
+</tr>
+<tr>
+<td><code>:paste</code> / <code>:end</code></td>
+<td>collect an explicit multiline submission; <code>:cancel</code> discards it</td>
 </tr>
 <tr>
 <td><code>:reset</code></td>
@@ -5195,12 +5250,17 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 </tr>
 <tr>
 <td><code>:quit</code></td>
-<td>exit</td>
+<td>exit (<code>:q</code>, or Ctrl-D at the prompt)</td>
 </tr>
 </tbody>
 </table>
-<p>Multi-line input (indented blocks) and Ctrl-D to exit are supported; declarations accumulate in input order and a repeated definition shadows the old one. After re-checking the accumulated source the REPL installs the complete check evidence, keeps a cursor over already executed declarations and initialises only the new ones; constructors of a newly added type use the exact witnesses of that check.</p>
-<p>Status: cancelling the current evaluation with Ctrl-C is <strong>not implemented</strong> (the default console handling terminates the process; cooperative cancellation needs an interrupt flag in the evaluator).</p>
+<p>The terminal editor supports cursor editing, in-memory history, Tab completion, matching brackets, and bracketed paste. Pasted text remains in an editable buffer until Enter. Manual indented blocks end with a blank line; open delimiters and unfinished operators request continuation. Ctrl-C cancels pending input (including explicit paste), running evaluation, or foreground program input and returns to the REPL prompt. History is never saved to disk; program input is not added to it.</p>
+<p>A submission's consecutive declarations are checked together before initialization, allowing forward function references and complete programs with <code>main</code>. Only new declarations initialize; a newly supplied <code>main</code> runs once. Subsequent expressions do not replay old initializers or <code>main</code>. Expressions display their inferred type and value; IO expressions execute immediately. Declarations accumulate in input order and a repeated definition shadows the old one. After re-checking the accumulated source the REPL installs the complete check evidence, keeps a cursor over already executed declarations and initializes only the new ones; constructors of a newly added type use the exact witnesses of that check. Compile and initialization errors preserve previous bindings. Initialization failure rolls back all new batch bindings, instance registrations, symbol allocations, and random state; later initializers do not run. A runtime failure inside <code>main</code> occurs after declarations have loaded, so those bindings remain available for inspection and <code>:run</code>.</p>
+<p>Piped input (<code>aevia &lt; session.aev</code>) omits banners and prompts, preserves declaration groups, separates top-level expressions, and returns failure if any submission fails. <code>:load</code> and pasted declarations support the normal package resolver: prompt imports use the current directory's package and manifest dependencies; new imports in a loaded file use that file's owning package/directory. Aliases, open/selective imports, transitive dependencies, embedded stdlib modules and imported nominal types retain normal program semantics. Each successfully initialized dependency is retained once, with stable source identities and source snapshots until <code>:reset</code>. Failed or interrupted import/declaration batches roll back bindings and initialization state; retrying can observe a corrected source that was never committed. A changed import resolution is rejected with <code>:reset</code> guidance to prevent mixing new nominal types with old runtime values. <code>:imports</code> lists active modules and aliases; qualified names participate in completion. CLI and REPL text respect <code>--color auto|always|never</code>; automatic coloring is per output stream, disabled for redirected output, <code>NO_COLOR</code>, and <code>TERM=dumb</code>. Program output and LSP frames retain their original bytes.</p>
+<p>Interruption is <code>E0812</code>, delivered through a thread-safe cancellation token. AST, Core IR, callback execution, IO scheduling, task waits, parallel workers and supported kernel graph/numeric loops poll it and unwind normal scopes. Canceled workers remain canceled after the next foreground submission starts; unrelated background tasks from an earlier successful submission are not canceled by later work. Interrupting an await also interrupts its awaited task. REPL background workers must read input on the foreground before spawning work rather than consume the interactive terminal.</p>
+<p>Cancellation is cooperative. Compiler work, opaque native library operations, and system calls without checkpoints may finish their current call before interruption is reported. Completed effects are not undone. Canceled kernel results are not cached or reported as successful mathematical results. The REPL disables its optional JIT fast path while a cancellation token is installed, retaining cooperative checks. Standalone <code>aevia run</code> keeps the operating system's normal signal behavior.</p>
+<p>Item help uses accepted declarations and their <code>##</code> comments, checked signatures, and frozen imported source. Lookup never evaluates an expression or reinitializes modules; rejected drafts do not replace documentation. The latest accepted binding wins, including private local declarations and imported aliases. <code>:help :COMMAND</code> explicitly selects a command guide when its name also names a function.</p>
+<p>Output modes share the language renderers <code>show</code>, <code>repr</code>, <code>to_pretty</code>, <code>to_latex</code>, and <code>to_typst</code>. <code>:show EXPR</code> renders a value; <code>:show</code> alone lists source. Direct rendering commands evaluate each expression once and execute IO once. Mode changes do not affect program-authored output. Unsupported mathematical values report an error rather than silently emitting another format; use show/repr for such values.</p>
 <h2 id="09-runtime--99-cli">9.9 CLI</h2>
 <pre class="code"><code>aevia run [--example NAME] [file.aev] [-- args…]   run the package entry, a file or an example (program arguments follow `--`)
 aevia check [--all] [file.aev…]                    type/dimension check without running
@@ -5228,7 +5288,8 @@ aevia verify &lt;owner/name@version&gt;                  check a download agains
 aevia docs [owner/name[@version]] [--open]         print (or open) the address of a package&#39;s documentation site
 aevia pkg &lt;command&gt;                                every registry-client command (`key`, `status`, `lock`, …), forwarded to aevia-pkg
 aevia --version</code></pre>
-<p>Global flags (allowed anywhere on the command line):</p>
+<p>Use <code>aevia --help</code>, <code>aevia COMMAND --help</code>, or <code>aevia help COMMAND</code> for usage, options, examples, and exit status. Help does not load or modify a package.</p>
+<p>Global flags (before the program-argument separator <code>--</code>):</p>
 <table>
 <thead>
 <tr>
@@ -5263,7 +5324,7 @@ aevia --version</code></pre>
 </tr>
 <tr>
 <td><code>--color auto|always|never</code></td>
-<td>diagnostic colouring</td>
+<td>CLI and REPL colouring; automatic mode honors terminal support and <code>NO_COLOR</code></td>
 </tr>
 <tr>
 <td><code>--locked</code></td>
@@ -5271,7 +5332,7 @@ aevia --version</code></pre>
 </tr>
 <tr>
 <td><code>--release</code></td>
-<td>accepted but reported as having no effect (the interpreter has no optimisation profile; JIT: §9.6)</td>
+<td>optimize checked Core IR before execution: fold constant boolean expressions, propagate locally known boolean conditions, and eliminate unreachable constant branches; runtime checks, budgets and numeric representations are preserved (JIT: §9.6)</td>
 </tr>
 </tbody>
 </table>
@@ -5354,7 +5415,7 @@ aevia --version</code></pre>
 <li>Doctests: <code>aevia test --doc [FILE…/DIRS…]</code> extracts every fenced block tagged <code>aevia</code> from <code>##</code> comments and compiles each. The first line of a block may be <code>compile_fail</code> (compilation must fail) or <code>compile_fail EXXXX</code> (it must fail and include that code); without a marker the block must compile. Each snippet is its own synthetic module: the declaring module's <code>import</code>/<code>open</code> lines are copied, imports resolve against the declaring file's package and adjacent directories, and the module's own declarations do not enter the snippet implicitly; snippets use in-memory source and write no temporary file; a failing dependency or inherited import does not satisfy an expected compile failure. <code>--locked</code> checks the package of each checked document, not the caller's working directory. Any failure exits 1; no checkable block, or an empty result after filtering, also exits 1. The extractor is <code>aevia-doc::doctest</code>.</li>
 <li>Compile-failure tests: <code>compile_fail("&lt;source&gt;") : String -&gt; Bool</code> compiles a fragment in an isolated environment (no imports, the Prelude only) and is <code>true</code> when it yields at least one error; it does <strong>not</strong> check the error code, which the doctest marker <code>compile_fail EXXXX</code> asserts.</li>
 <li>Golden tests: snapshots of REPL output and error messages.</li>
-<li>Benchmarks: <code>bench</code> declarations; each reports the median, mean and 95% confidence interval of N iterations (default N=100; <code>--iterations</code>/<code>--warmup</code>). <code>--save-baseline FILE</code> writes JSON (<code>format=1</code>, <code>tool</code>/<code>version</code>, <code>profile=debug|release</code>, <code>iterations</code>, <code>warmup</code>, and per item <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>); <code>--compare-baseline FILE --threshold RATIO</code> (default 0.05, may be written <code>5%</code>) compares medians and, above the threshold, reports <code>REGRESSION</code> and exits 1; a profile mismatch exits 2; a workload present on one side only is reported but not counted as a regression. Protocol: compare only release builds, on the same machine, median of N.</li>
+<li>Benchmarks: <code>bench</code> declarations; each reports the median, mean and 95% confidence interval of N iterations (default N=100; <code>--iterations</code>/<code>--warmup</code>). <code>--save-baseline FILE</code> writes JSON (<code>format=1</code>, <code>tool</code>/<code>version</code>, <code>profile=debug|release</code>, <code>optimized_ir=true|false</code>, <code>iterations</code>, <code>warmup</code>, and per item <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>); <code>--compare-baseline FILE --threshold RATIO</code> (default 0.05, may be written <code>5%</code>) compares medians and, above the threshold, reports <code>REGRESSION</code> and exits 1; a profile mismatch exits 2; a workload present on one side only is reported but not counted as a regression. Protocol: compare only release builds, on the same machine, with the same <code>--release</code> IR optimization setting, median of N. Baselines without <code>optimized_ir</code> predate this option and count as unoptimized.</li>
 </ul>
 <h2 id="09-runtime--913-performance-targets">9.13 Performance targets</h2>
 <table>
@@ -7946,6 +8007,11 @@ DEDENT         ::= produced by the layout algorithm</code></pre>
 <td>yes</td>
 </tr>
 <tr>
+<td><code>E0812</code></td>
+<td>evaluation interrupted by the host / Ctrl-C (§9.8)</td>
+<td>yes</td>
+</tr>
+<tr>
 <td><code>E0899</code></td>
 <td>panic</td>
 <td>no</td>
@@ -8236,7 +8302,7 @@ help: did you mean `km`?</code></pre>
 <li><strong>ODE</strong>: multiple shooting / collocation for BVPs; <code>AutoSwitch</code> decides by step budget rather than an eigenvalue estimate (§8.9).</li>
 <li><strong>Type system</strong>: type-level moduli for <code>Zmod&lt;n&gt;</code>/<code>GF&lt;p&gt;</code>; rank polymorphism in user functions; symbolic exponents (§12.8.2).</li>
 <li><strong>Plot</strong>: only the HTML/SVG-inline renderer, with no standalone <code>.svg</code>/PNG/JPEG output (§8.12).</li>
-<li><strong>REPL</strong>: Ctrl-C cancelling the current evaluation (§9.10).</li>
+<li><strong>REPL</strong>: Ctrl-C cancellation is cooperative; opaque compiler/native/system calls may finish their current call before <code>E0812</code> is reported (§9.8).</li>
 </ol>
 </section></main></div>
 <script>

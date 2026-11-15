@@ -51,6 +51,8 @@ pub mod table;
 /// Why a numeric kernel refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NumericError {
+    /// The embedding host cancelled the computation.
+    Cancelled,
     /// A matrix was expected to be square and was not.
     NotSquare,
     /// The shapes of two operands do not agree.
@@ -72,6 +74,7 @@ impl NumericError {
     #[must_use]
     pub fn constructor(&self) -> &'static str {
         match self {
+            | Self::Cancelled => "Cancelled",
             | Self::NotSquare | Self::ShapeMismatch(_) => "ShapeMismatch",
             | Self::Singular => "Singular",
             | Self::NotPositiveDefinite => "NotPositiveDefinite",
@@ -87,6 +90,7 @@ impl std::fmt::Display for NumericError {
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         match self {
+            | Self::Cancelled => f.write_str("computation cancelled"),
             | Self::NotSquare => f.write_str("the matrix is not square"),
             | Self::ShapeMismatch(detail) => write!(f, "shape mismatch: {detail}"),
             | Self::Singular => f.write_str("the matrix is singular"),

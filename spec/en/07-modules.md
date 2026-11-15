@@ -42,6 +42,24 @@ fn f(x: Int): Int = g(x) + 1
 fn g(x: Int): Int = x * 2
 ```
 
+Repeated top-level `let` and `fn` names are valid in scripts and the REPL. Each
+new declaration overwrites the visible binding for subsequent code and has its own
+type, so a change of representation or dimension is allowed:
+
+```aevia
+let b = 1 s
+let earlier = b
+let b = 1 km
+let later = b
+```
+
+`earlier` remains a time and `later` is a length. Existing closures and function
+aliases retain their original bindings and signatures. A non-recursive rebinding's
+initializer sees the previous binding (`let x = x + 1`); a recursive declaration
+sees its own binding. Before the first declaration of a name, a forward reference
+selects its first definition. The exported name denotes the final visible definition;
+a final `private` definition hides that name.
+
 ### 7.1.3 Exports
 
 All top-level declarations are exported by default; `private` hides one:

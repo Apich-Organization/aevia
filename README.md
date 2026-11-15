@@ -137,6 +137,121 @@ both repositories; separate feature combinations can rebuild the kernel. The
 optional `jit` feature (`cargo build -p aevia-cli --features jit`) lowers pure
 numeric code to machine code through rssn's Cranelift backend.
 
+## Interactive computing and command help
+
+Run `aevia` with no arguments (or `aevia repl`) to open an interactive session.
+Use `aevia --help` for the command overview, `aevia run --help` or
+`aevia help run` for command options and examples, and `:help` inside the REPL.
+
+```aevia
+let distance = 20 m
+distance / 4 s
+:type distance
+```
+
+Expressions display their inferred type and value; IO expressions such as
+`println("hello")` execute immediately. Declarations remain available until
+`:reset`. Repeating a `let` or `fn` name overwrites it for subsequent code,
+including a change of type or dimension. For example, `let b = 1 s` followed by
+`let b = 1 km` is valid. Existing values and closures retain the bindings they
+were checked with; `let x = x + 1` reads the preceding `x`. A pasted group of
+declarations is checked together, so its functions can refer to each other. A newly supplied `main` executes once:
+
+```aevia
+fn double(x: Int): Int = x * 2
+fn main(): IO Unit = do
+    println("answer = {double(21)}")
+```
+
+Bracketed paste stays in one editable buffer: paste, review, then press Enter.
+For manually typed indented blocks, enter a blank line to submit; delimiters
+such as parentheses and tensor brackets must also be closed. On terminals
+without bracketed paste, enter `:paste`, paste your code, then enter `:end` on a
+line of its own. `:cancel` discards an explicit paste. Ctrl-C cancels the current
+input or evaluation and returns to the prompt; Ctrl-D at the prompt exits.
+Interrupted declaration/import batches restore the prior session. Completed IO
+effects remain completed. Cancellation is cooperative: an opaque native library
+or system call without checkpoints finishes its current call before interruption
+is reported (`E0812`).
+
+Use Up/Down for session history, Tab for names and commands, and Tab after
+`:load ` or `:save ` for file paths. History stays in memory. `:bindings` lists
+your names and types, `:show` displays accepted declarations, `:save FILE`
+writes them to a new file, and `:load FILE` appends source and runs its `main`
+when present. Use `:run` to repeat the loaded `main`. `:help main`, `:help units`,
+`:help files`, `:help imports`, and `:help interrupt` give focused examples.
+
+Package and standard-library imports work directly in the REPL:
+
+```aevia
+import Math as M
+M.sqrt(4)
+import MyDependency.Geometry as G
+:imports
+```
+
+Imports at the prompt use the package containing the current directory, with
+its `aevia.toml` dependencies and local source tree. `:load FILE` resolves new
+imports from that file's own package/directory and keeps them available at the
+prompt afterward. Alias, `open`, selective imports, transitive dependencies,
+and imported types use the same resolver as `aevia run`. Use `aevia fetch` first
+for registry sources that are not cached. Tab completes qualified names.
+
+Imported modules initialize once and keep their source snapshots until `:reset`;
+adding an import does not repeat earlier initializers or invalidate stored values.
+A changed source resolution is reported with reset guidance. `:imports` lists
+active modules and aliases. `:reset` starts a fresh session and observes edited
+module files.
+
+Output utilities are available both as language functions and REPL commands:
+
+```console
+:pretty 1/2
+:latex 1/2
+:typst 1/2
+:repr "hello"
+:format pretty
+1/2
+:format show
+```
+
+`:print EXPR` and `:show EXPR` print human-readable text; `:show` alone still
+lists accepted declarations. `:format show|repr|pretty|latex|typst` controls normal
+results and `:time`, and remains selected across `:reset`. Direct rendering
+commands evaluate once, including IO actions. Program `print`/`println` keeps
+its own output. `to_pretty`, `to_latex`, `to_typst`, `show`, and `repr` also work
+in ordinary source code. Pretty output uses two-dimensional fractions, radicals,
+and matrices; LaTeX and Typst commands emit source in the requested syntax.
+
+Use `:help sqrt` or `:doc sqrt` for a signature, documentation, and examples;
+`:help M.function` resolves imported qualified items. `:? NAME` and `:h NAME`
+are aliases. Your `##` comments appear for accepted definitions, including private
+local declarations, and redefining a name updates its help. Looking up help does
+not evaluate code. `:apropos TEXT` searches names and documentation. A leading
+colon selects command help explicitly, for example `:help :show`.
+
+Pipes work without banners or prompts: `aevia < session.aev` evaluates complete
+declaration groups and expressions and exits unsuccessfully if any submission
+fails. Compilation and initialization failures preserve previous bindings; a failed
+declaration batch leaves no new bindings or symbol allocations behind. A runtime
+failure inside main occurs after its declarations have loaded, so those bindings
+remain available for inspection and :run.
+
+`aevia run --release FILE` enables conservative Core IR optimization in the
+runtime, including constant boolean propagation, short-circuit folding, and
+removal of unreachable branches. It works in ordinary builds and applies to
+functions, initializers, REPL submissions, and parallel worker replicas. It
+preserves exact numeric arithmetic, runtime checks, capability restrictions,
+and explicit execution budgets. Build the Rust executable with
+`cargo build --release -p aevia-cli` as well for optimized interpreter code;
+these are separate settings. Native JIT compilation remains an optional feature.
+
+CLI messages, help, diagnostics, prompts, and REPL results use colors on
+supported terminals. Redirected streams stay plain. Set `NO_COLOR=1`,
+`TERM=dumb`, or `--color never` to disable colors; use `--color always` to force
+them when capturing output. Program output and language-server protocol frames
+retain their original bytes.
+
 ## Repository layout
 
 | Path | What it holds |

@@ -571,8 +571,13 @@ fn recipe_id(replica: &Replica) -> usize {
 /// the thread has none (or one of another program).
 fn with_worker<T>(
     replica: &Replica,
+    cancellation: Option<&crate::CancellationToken>,
     job: impl FnOnce(&mut Interp, &ReplicaIndex) -> Option<T>,
 ) -> Option<T> {
+    let _cancellation_scope = crate::cancellation::enter_optional(cancellation.cloned());
+    if cancellation.is_some_and(crate::CancellationToken::is_cancelled) {
+        return None;
+    }
     let id = recipe_id(replica);
     let idle = WORKERS.with(|cell| {
         let mut workers = cell.borrow_mut();
@@ -605,6 +610,8 @@ fn with_worker<T>(
             }
         },
     };
+    worker.interp.cancellation = cancellation.cloned();
+    worker.interp.check_cancelled().ok()?;
     DISPATCHED.fetch_add(1, Ordering::Relaxed);
     let result = job(&mut worker.interp, &worker.index);
     WORKERS.with(|cell| cell.borrow_mut().push(worker));
@@ -699,12 +706,13 @@ impl Interp {
         }
         let pool = pool(self.jobs).or_else(|| fallback("the worker pool did not start"))?;
         let ranges = chunks(inputs.len());
+        let cancellation = self.cancellation_token().map(|token| token.child());
         let results: Option<Vec<Vec<Portable>>> = pool.install(|| {
             use rayon::prelude::*;
             ranges
                 .par_iter()
                 .map(|range| {
-                    with_worker(&replica, |interp, index| {
+                    with_worker(&replica, cancellation.as_ref(), |interp, index| {
                         let function = from_portable(interp, index, function.clone())
                             .or_else(|| fallback("the replica has no such function"))?;
                         let mut out = Vec::with_capacity(range.len());
@@ -716,6 +724,9 @@ impl Interp {
                                 Span::default(),
                             ) {
                                 | Ok(result) => result,
+                                | Err(error) if error.code == crate::cancellation::INTERRUPTED => {
+                                    return None;
+                                },
                                 | Err(error) => {
                                     return fallback(&format!(
                                         "a worker failed ({}: {}); rerunning sequentially",
@@ -765,24 +776,23 @@ impl Interp {
         span: Span,
     ) -> Result<Value, EvalError> {
         let blocks = reduce_blocks(elements.len());
-        let partial = self
-            .parallel_blocks(function, zero, elements, &blocks)
-            .map_or_else(
-                || {
-                    blocks
-                        .iter()
-                        .map(|block| {
-                            let mut acc = zero.clone();
-                            for element in &elements[block.clone()] {
-                                acc =
-                                    self.apply(function.clone(), vec![acc, element.clone()], span)?;
-                            }
-                            Ok(acc)
-                        })
-                        .collect::<Result<Vec<_>, EvalError>>()
-                },
-                Ok,
-            )?;
+        let parallel = self.parallel_blocks(function, zero, elements, &blocks);
+        self.check_cancelled().map_err(|error| error.at(span))?;
+        let partial = parallel.map_or_else(
+            || {
+                blocks
+                    .iter()
+                    .map(|block| {
+                        let mut acc = zero.clone();
+                        for element in &elements[block.clone()] {
+                            acc = self.apply(function.clone(), vec![acc, element.clone()], span)?;
+                        }
+                        Ok(acc)
+                    })
+                    .collect::<Result<Vec<_>, EvalError>>()
+            },
+            Ok,
+        )?;
         let mut acc = zero.clone();
         for value in partial {
             acc = self.apply(function.clone(), vec![acc, value], span)?;
@@ -808,12 +818,13 @@ impl Interp {
             inputs.push(to_portable(&self.file_keys, element)?);
         }
         let pool = pool(self.jobs)?;
+        let cancellation = self.cancellation_token().map(|token| token.child());
         let results: Option<Vec<Portable>> = pool.install(|| {
             use rayon::prelude::*;
             blocks
                 .par_iter()
                 .map(|block| {
-                    with_worker(&replica, |interp, index| {
+                    with_worker(&replica, cancellation.as_ref(), |interp, index| {
                         let function = from_portable(interp, index, function.clone())?;
                         let mut acc = from_portable(interp, index, zero.clone())?;
                         for input in &inputs[block.clone()] {
@@ -847,8 +858,10 @@ impl Interp {
             && let Some(pool) = pool(self.jobs)
         {
             let (sender, receiver) = std::sync::mpsc::channel();
+            let cancellation = self.cancellation_token().map(|token| token.child());
+            let task_cancellation = cancellation.clone();
             pool.spawn(move || {
-                let outcome = with_worker(&replica, |interp, index| {
+                let outcome = with_worker(&replica, cancellation.as_ref(), |interp, index| {
                     let thunk = from_portable(interp, index, portable)?;
                     Some(run_task(interp, thunk))
                 })
@@ -863,6 +876,7 @@ impl Interp {
             });
             return Ok(Value::Task(Rc::new(TaskHandle {
                 state: RefCell::new(TaskState::Running(receiver)),
+                cancellation: task_cancellation,
             })));
         }
         // The thunk cannot cross: run it here, now, with the same buffering.
@@ -880,6 +894,7 @@ impl Interp {
         };
         Ok(Value::Task(Rc::new(TaskHandle {
             state: RefCell::new(TaskState::Local(result, output)),
+            cancellation: None,
         })))
     }
 
@@ -889,11 +904,29 @@ impl Interp {
         task: &TaskHandle,
         span: Span,
     ) -> Result<Value, EvalError> {
+        if let Err(error) = self.check_cancelled() {
+            if let Some(request) = &task.cancellation {
+                request.cancel();
+            }
+            return Err(error.at(span));
+        }
         let state = std::mem::replace(&mut *task.state.borrow_mut(), TaskState::Awaited);
         let (result, output) = match state {
             | TaskState::Local(result, output) => (result, output),
             | TaskState::Running(receiver) => {
-                match receiver.recv() {
+                let outcome = loop {
+                    if let Err(error) = self.check_cancelled() {
+                        if let Some(request) = &task.cancellation {
+                            request.cancel();
+                        }
+                        return Err(error.at(span));
+                    }
+                    match receiver.recv_timeout(std::time::Duration::from_millis(20)) {
+                        | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                        | outcome => break outcome,
+                    }
+                };
+                match outcome {
                     | Ok(TaskOutcome::Done { value, output }) => {
                         let value = self.local(value).ok_or_else(|| {
                             EvalError::new("E0811", "a task result could not be rebuilt").at(span)
@@ -921,6 +954,12 @@ impl Interp {
                 .at(span));
             },
         };
+        if let Err(error) = self.check_cancelled() {
+            if let Some(request) = &task.cancellation {
+                request.cancel();
+            }
+            return Err(error.at(span));
+        }
         if !output.is_empty() {
             self.write_out(&output, false, false);
         }
@@ -1014,6 +1053,7 @@ enum TaskOutcome {
 /// A running or finished task (§9.7.3).
 pub struct TaskHandle {
     state: RefCell<TaskState>,
+    cancellation: Option<crate::CancellationToken>,
 }
 
 impl std::fmt::Debug for TaskHandle {

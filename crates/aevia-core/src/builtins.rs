@@ -72,6 +72,20 @@ pub fn call_typed(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, EvalError> {
+    let _cancellation = interp.cancellation_scope();
+    interp.check_cancelled().map_err(|error| error.at(span))?;
+    let result = call_typed_inner(interp, name, types, args, span);
+    interp.check_cancelled().map_err(|error| error.at(span))?;
+    result
+}
+
+fn call_typed_inner(
+    interp: &mut Interp,
+    name: &str,
+    types: &[Ty],
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, EvalError> {
     let element = types
         .first()
         .map_or_else(|| "Float".to_string(), type_argument_name);
@@ -280,6 +294,21 @@ pub fn call(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, EvalError> {
+    let _cancellation = interp.cancellation_scope();
+    interp.check_cancelled().map_err(|error| error.at(span))?;
+    let result = call_inner(interp, name, args, span);
+    // Cancellation escapes even Result-returning native APIs. It must not
+    // become a mathematical Err value that the source program can continue.
+    interp.check_cancelled().map_err(|error| error.at(span))?;
+    result
+}
+
+fn call_inner(
+    interp: &mut Interp,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, EvalError> {
     if let Some(result) = crate::sparse::call(interp, name, &args, span) {
         return result;
     }
@@ -301,14 +330,14 @@ pub fn call(
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(Value::string(crate::value::repr(value)))
         },
-        | "to_latex" | "to_typst" => {
+        | "to_pretty" | "to_latex" | "to_typst" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
-            let syntax = if name == "to_latex" {
-                crate::value::MathSyntax::Latex
-            } else {
-                crate::value::MathSyntax::Typst
+            let format = match name {
+                | "to_pretty" => crate::display::Format::Pretty,
+                | "to_latex" => crate::display::Format::Latex,
+                | _ => crate::display::Format::Typst,
             };
-            crate::value::to_math(value, syntax)
+            crate::display::render(value, format)
                 .map(Value::string)
                 .map_err(|reason| {
                     EvalError::new(
@@ -517,13 +546,7 @@ pub fn call(
         },
         | "factorial" | "double_factorial" => {
             let n = expect_int(&args, 0, name, span)?;
-            let step = if name == "factorial" { 1 } else { 2 };
-            let mut result = BigInt::one();
-            let mut current = n;
-            while current > 0 {
-                result *= BigInt::from(current);
-                current -= step;
-            }
+            let result = crate::eval::factorial(interp, n, name == "double_factorial", span)?;
             Ok(Value::Num(NumVal::int(result)))
         },
         | "to_float" => {
@@ -672,6 +695,9 @@ pub fn call(
             let mut values = Vec::new();
             let mut current = start;
             while (step > 0 && current < end) || (step < 0 && current > end) {
+                if values.len() % 256 == 0 {
+                    interp.check_cancelled().map_err(|error| error.at(span))?;
+                }
                 values.push(BigRational::from_integer(BigInt::from(current)));
                 current += step;
             }
@@ -1171,7 +1197,9 @@ pub fn call(
             // §9.7: on worker replicas when the function and the elements
             // can cross threads; otherwise (and on any worker failure) the
             // sequential map, which gives the same value or the same error.
-            let elements = match interp.par_map_values(&function, &inputs) {
+            let parallel = interp.par_map_values(&function, &inputs);
+            interp.check_cancelled().map_err(|error| error.at(span))?;
+            let elements = match parallel {
                 | Some(elements) => elements,
                 | None => {
                     let mut elements = Vec::with_capacity(inputs.len());
@@ -1205,7 +1233,9 @@ pub fn call(
             let inputs: Vec<Value> = (0..count)
                 .map(|index| Value::Num(NumVal::int(BigInt::from(index))))
                 .collect();
-            let elements = match interp.par_map_values(&function, &inputs) {
+            let parallel = interp.par_map_values(&function, &inputs);
+            interp.check_cancelled().map_err(|error| error.at(span))?;
+            let elements = match parallel {
                 | Some(elements) => elements,
                 | None => {
                     let mut elements = Vec::with_capacity(count);
@@ -3096,10 +3126,11 @@ pub fn call(
                 .at(span));
             }
             let dim = vector.dim.div(&matrix.dim);
-            Ok(lin_result(
+            lin_result(
                 aevia_std::linalg::lstsq(rows, cols, &entries, &rhs)
                     .map(|solution| float_tensor(vec![cols], solution, dim)),
-            ))
+                span,
+            )
         },
         | "eig" => {
             let matrix = expect_tensor(&args, 0, name, span)?;
@@ -3187,10 +3218,11 @@ pub fn call(
             let dim = matrix
                 .dim
                 .pow(&BigRational::new(BigInt::one(), BigInt::from(2)));
-            Ok(lin_result(
+            lin_result(
                 aevia_std::linalg::cholesky(rows, rows, &entries)
                     .map(|l| float_tensor(vec![rows, rows], l, dim)),
-            ))
+                span,
+            )
         },
         | "tril" | "triu" => {
             let tensor = expect_tensor(&args, 0, name, span)?;
@@ -8391,7 +8423,9 @@ fn sde_ensemble_call(
     let inputs: Vec<Value> = (0..count)
         .map(|index| Value::int(i64::try_from(index).unwrap_or(0)))
         .collect();
-    let results = match interp.par_map_values(&member, &inputs) {
+    let parallel = interp.par_map_values(&member, &inputs);
+    interp.check_cancelled().map_err(|error| error.at(span))?;
+    let results = match parallel {
         | Some(results) => results,
         | None => {
             let mut results = Vec::with_capacity(count);
@@ -9932,6 +9966,7 @@ fn numeric_error(
     span: Span,
 ) -> EvalError {
     let code = match &error {
+        | aevia_std::NumericError::Cancelled => crate::cancellation::INTERRUPTED,
         | aevia_std::NumericError::Domain(_) => "E0806",
         | aevia_std::NumericError::NotConverged => "E0807",
         | _ => "E0802",
@@ -9966,10 +10001,16 @@ fn linalg_error_value(error: &aevia_std::NumericError) -> Value {
 }
 
 /// Wraps a kernel result in `Result<_, LinAlgError>`.
-fn lin_result(result: Result<Value, aevia_std::NumericError>) -> Value {
+fn lin_result(
+    result: Result<Value, aevia_std::NumericError>,
+    span: Span,
+) -> Result<Value, EvalError> {
     match result {
-        | Ok(value) => ok(value),
-        | Err(error) => err(linalg_error_value(&error)),
+        | Err(aevia_std::NumericError::Cancelled) => {
+            Err(EvalError::new(crate::cancellation::INTERRUPTED, "evaluation interrupted").at(span))
+        },
+        | Ok(value) => Ok(ok(value)),
+        | Err(error) => Ok(err(linalg_error_value(&error))),
     }
 }
 
@@ -10684,6 +10725,13 @@ mod tests {
     #[test]
     fn numeric_kernel_failures_keep_their_documented_codes() {
         let code = |error| numeric_error("probe", error, Span::default()).code;
+        assert_eq!(code(aevia_std::NumericError::Cancelled), "E0812");
+        assert_eq!(
+            super::lin_result(Err(aevia_std::NumericError::Cancelled), Span::default())
+                .unwrap_err()
+                .code,
+            "E0812"
+        );
         assert_eq!(code(aevia_std::NumericError::NotConverged), "E0807");
         assert_eq!(code(aevia_std::NumericError::Domain("x".into())), "E0806");
         assert_eq!(

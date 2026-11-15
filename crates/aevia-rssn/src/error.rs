@@ -422,6 +422,9 @@ fn classify(error: &OpError) -> KernelError {
 pub fn from_compute_error(error: &rssn::api::ComputeError) -> KernelError {
     use rssn::api::ComputeError;
     match error {
+        | ComputeError::Cancelled => {
+            KernelError::of("E0812", Failure::Other, "computation cancelled")
+        },
         | ComputeError::Dimension(dimension) => {
             KernelError::of(
                 "E0401",

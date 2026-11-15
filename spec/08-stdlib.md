@@ -257,6 +257,7 @@ map_err  : ((e -> f), Result<a, e>) -> Result<a, f>
 ```
 show     : Show a => a -> String
 repr     : Show a => a -> String
+to_pretty : Show a => a -> String
 to_latex : Show a => a -> String
 to_typst : Show a => a -> String
 print    : Show a => a -> IO Unit

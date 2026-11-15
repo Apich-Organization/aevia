@@ -1457,6 +1457,38 @@ pub fn term_to_math(
     render_math(term, latex, 2)
 }
 
+/// Typesets a term while authenticating foreign kernel handles and retaining
+/// their structure and precedence, including when nested in local arithmetic.
+///
+/// # Errors
+/// A stale kernel handle or a kernel rendering failure.
+pub fn term_to_math_checked(
+    term: &Term,
+    latex: bool,
+) -> Result<String, String> {
+    fn contains_foreign(term: &Term) -> bool {
+        match term {
+            | Term::Foreign { .. } => true,
+            | Term::Add(items) | Term::Mul(items) | Term::Fun(_, items) => {
+                items.iter().any(contains_foreign)
+            },
+            | Term::Pow(base, _) => contains_foreign(base),
+            | _ => false,
+        }
+    }
+    if !contains_foreign(term) {
+        return Ok(term_to_math(term, latex));
+    }
+    let value = crate::kernel::term_val(term).map_err(|error| error.message)?;
+    let kernel = aevia_rssn::kernel();
+    (if latex {
+        kernel.to_latex(&value)
+    } else {
+        kernel.to_typst(&value)
+    })
+    .map_err(|error| error.message)
+}
+
 fn render_math(
     term: &Term,
     latex: bool,
@@ -1520,12 +1552,18 @@ fn math_symbol(
         };
     }
     if name.chars().count() == 1 || name.chars().all(|c| c.is_ascii_digit()) {
-        return name.to_string();
+        return if latex {
+            crate::value::escape_latex_text(name)
+        } else if name.chars().all(char::is_alphanumeric) {
+            name.to_string()
+        } else {
+            crate::value::quote_typst_text(name)
+        };
     }
     if latex {
-        format!(r"\mathrm{{{name}}}")
+        format!(r"\mathrm{{{}}}", crate::value::escape_latex_text(name))
     } else {
-        format!("\"{name}\"")
+        crate::value::quote_typst_text(name)
     }
 }
 
@@ -1685,12 +1723,21 @@ fn math_parts(
                         if known {
                             (format!(r"\{name}{arguments}"), 0)
                         } else {
-                            (format!(r"\operatorname{{{name}}}{arguments}"), 0)
+                            (
+                                format!(
+                                    r"\operatorname{{{}}}{arguments}",
+                                    crate::value::escape_latex_text(name)
+                                ),
+                                0,
+                            )
                         }
                     } else if known {
                         (format!("{name}{arguments}"), 0)
                     } else {
-                        (format!("op(\"{name}\"){arguments}"), 0)
+                        (
+                            format!("op({}){arguments}", crate::value::quote_typst_text(name)),
+                            0,
+                        )
                     }
                 },
             }

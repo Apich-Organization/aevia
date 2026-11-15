@@ -449,6 +449,7 @@ layer).
 
 ### 6.12.3 Display
 
+- `to_pretty(x)` draws two-dimensional terminal mathematics (fractions, radicals, and matrices); other values use human-readable text.
 - `show(x)` is human-readable and includes the display unit; `repr(x)` parses back to the same
   value and shows internal ids of symbols; `to_latex` and `to_typst` typeset mathematics
   (single-letter symbols in italics, Greek names as letters, products with negative powers as

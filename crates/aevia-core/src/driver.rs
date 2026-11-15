@@ -95,6 +95,612 @@ impl Program {
     }
 }
 
+/// A package-aware checked revision of an interactive source buffer.
+/// The ordinary compilation facade keeps expression inspection APIs reusable.
+pub struct ReplCompilation {
+    pub compilation: crate::Compilation,
+    pub program: Program,
+    contexts: HashMap<(u32, u32, String), (Roots, ResolvedModule)>,
+    overlays: SourceOverlays,
+    roots: Option<Roots>,
+}
+
+impl std::ops::Deref for ReplCompilation {
+    type Target = crate::Compilation;
+
+    fn deref(&self) -> &Self::Target {
+        &self.compilation
+    }
+}
+
+/// A stable virtual entry with real package, registry and embedded-stdlib imports.
+/// Imported source snapshots are committed only after a successful submission;
+/// reset constructs a new compiler to observe changed files explicitly.
+pub struct ReplCompiler {
+    entry: PathBuf,
+    identity: crate::source::SourceIdentity,
+    sources: SourceMap,
+    source_ids: HashMap<ModuleKey, FileId>,
+    source_identities: HashMap<ModuleKey, aevia_types::keys::ModulePath>,
+    overlays: SourceOverlays,
+    contexts: HashMap<(u32, u32, String), (Roots, ResolvedModule)>,
+    roots: Option<Roots>,
+    resolutions: HashMap<Span, ModuleKey>,
+    cache: std::rc::Rc<std::cell::RefCell<CheckCache>>,
+    imports: Vec<String>,
+    imported_names: Vec<String>,
+}
+
+impl ReplCompiler {
+    pub fn new(
+        directory: &Path,
+        identity: crate::source::SourceIdentity,
+    ) -> Self {
+        Self {
+            entry: crate::source::canonical_path(directory).join(".aevia-repl.aev"),
+            identity,
+            sources: SourceMap::new(),
+            source_ids: HashMap::new(),
+            source_identities: HashMap::new(),
+            overlays: SourceOverlays::new(),
+            contexts: HashMap::new(),
+            roots: None,
+            resolutions: HashMap::new(),
+            cache: std::rc::Rc::new(std::cell::RefCell::new(CheckCache::new())),
+            imports: Vec::new(),
+            imported_names: Vec::new(),
+        }
+    }
+
+    pub fn imports(&self) -> &[String] {
+        &self.imports
+    }
+
+    pub fn imported_names(&self) -> &[String] {
+        &self.imported_names
+    }
+
+    pub fn compile(
+        &mut self,
+        source: &str,
+        origin: Option<&Path>,
+    ) -> ReplCompilation {
+        let roots = match self
+            .roots
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| repl_roots(&self.entry))
+        {
+            | Ok(roots) => roots,
+            | Err(error) => return self.failure(source, error),
+        };
+        let explicit_origin = origin;
+        let origin = origin.unwrap_or(&self.entry);
+        let origin_roots = match explicit_origin
+            .map(repl_roots)
+            .unwrap_or_else(|| Ok(roots.clone()))
+        {
+            | Ok(roots) => roots,
+            | Err(error) => return self.failure(source, error),
+        };
+        let mut contexts = self.contexts.clone();
+        let entry_file = self
+            .source_ids
+            .get(&ModuleKey::physical(&roots.entry_module(&self.entry)))
+            .copied()
+            .unwrap_or(0);
+        let mut entry_import_roots = HashMap::new();
+        if let Ok(tokens) = lex(entry_file, source) {
+            let (module, _) = parse_module(entry_file, source, &tokens);
+            for declaration in &module.decls {
+                if matches!(declaration.kind, DeclKind::Import { .. }) {
+                    let key = (
+                        declaration.span.start,
+                        declaration.span.end,
+                        source
+                            .get(declaration.span.start as usize..declaration.span.end as usize)
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    let context = contexts
+                        .entry(key)
+                        .or_insert_with(|| {
+                            (origin_roots.clone(), origin_roots.entry_module(origin))
+                        })
+                        .clone();
+                    entry_import_roots.insert(declaration.span, context);
+                }
+            }
+        }
+        let mut overlays = self.overlays.clone();
+        overlays.insert(&self.entry, source);
+        let entry_key = ModuleKey::physical(&roots.entry_module(&self.entry));
+        let mut loader = Loader {
+            roots: Some(roots.clone()),
+            sources: self.sources.clone(),
+            source_ids: self.source_ids.clone(),
+            source_identities: self.source_identities.clone(),
+            entry_identity: Some((entry_key, self.identity.clone())),
+            entry_import_roots,
+            options: CheckOptions::default(),
+            overlay: overlays.clone(),
+            cache: Some(self.cache.clone()),
+            ..Loader::default()
+        };
+        let root = loader.load_entry(&self.entry);
+        self.source_ids = loader.source_ids.clone();
+        let (modules, sources, mut diagnostics, dependencies) = loader.finish(root);
+        // Text snapshots also retain the selected import instance. A retargeted
+        // symlink or a new higher-priority candidate must not silently pair old
+        // runtime values with a newly resolved nominal module.
+        for (site, target) in repl_resolutions(&modules, &self.source_ids) {
+            if self
+                .resolutions
+                .get(&site)
+                .is_some_and(|previous| previous != &target)
+            {
+                diagnostics.push(Diagnostic::error("E0607", "an imported module resolves to a different source than this session initialized", site)
+                    .with_help("use :reset to reload imports from the current package/filesystem"));
+            }
+        }
+        self.sources = sources.clone();
+        let compilation = crate::Compilation {
+            module: modules.last().map(|module| module.module.clone()),
+            checked: modules
+                .last()
+                .map(|module| module.checked.clone())
+                .unwrap_or_default(),
+            diagnostics: diagnostics.clone(),
+            sources: sources.clone(),
+        };
+        ReplCompilation {
+            compilation,
+            program: Program {
+                modules,
+                sources,
+                diagnostics,
+                dependencies,
+            },
+            contexts,
+            overlays,
+            roots: Some(roots),
+        }
+    }
+
+    pub fn interrupted(
+        &self,
+        source: &str,
+    ) -> ReplCompilation {
+        self.failure_with_code(source, "E0812", "evaluation interrupted".to_string())
+    }
+
+    fn failure(
+        &self,
+        source: &str,
+        message: String,
+    ) -> ReplCompilation {
+        self.failure_with_code(source, "E0605", message)
+    }
+
+    fn failure_with_code(
+        &self,
+        source: &str,
+        code: &str,
+        message: String,
+    ) -> ReplCompilation {
+        let mut sources = SourceMap::new();
+        let file = sources.add("<repl>", source);
+        let mut diagnostics = Diagnostics::new();
+        diagnostics.push(Diagnostic::error(code, message, Span::new(file, 0, 0)));
+        ReplCompilation {
+            compilation: crate::Compilation {
+                module: None,
+                checked: CheckedModule::default(),
+                diagnostics: diagnostics.clone(),
+                sources: sources.clone(),
+            },
+            program: Program {
+                modules: Vec::new(),
+                sources,
+                diagnostics,
+                dependencies: Vec::new(),
+            },
+            contexts: self.contexts.clone(),
+            overlays: self.overlays.clone(),
+            roots: self.roots.clone(),
+        }
+    }
+
+    pub fn commit(
+        &mut self,
+        compilation: &ReplCompilation,
+    ) {
+        self.contexts = compilation.contexts.clone();
+        self.overlays = compilation.overlays.clone();
+        self.roots = compilation.roots.clone();
+        self.resolutions = repl_resolutions(&compilation.program.modules, &self.source_ids);
+        self.imports.clear();
+        self.imported_names.clear();
+        let entry_file = compilation.program.entry().map(|module| module.file);
+        for module in &compilation.program.modules {
+            if Some(module.file) == entry_file {
+                continue;
+            }
+            if let Some((key, _)) = self
+                .source_ids
+                .iter()
+                .find(|(_, file)| **file == module.file)
+            {
+                self.source_identities
+                    .insert(key.clone(), module.checked.module_path());
+            }
+            if let Some(source) = compilation.sources.file(module.file)
+                && !source.name.starts_with("stdlib://")
+                && !source.name.starts_with("rssn://")
+            {
+                self.overlays
+                    .insert(&module.source.path, source.text.clone());
+            }
+        }
+        if let Some(entry) = compilation.program.entry() {
+            for import in &entry.imports {
+                let Some(module) = compilation
+                    .program
+                    .modules
+                    .iter()
+                    .find(|module| module.file == import.file)
+                else {
+                    continue;
+                };
+                let selection = import
+                    .names
+                    .as_ref()
+                    .map(|names| format!(" {{ {} }}", names.join(", ")))
+                    .unwrap_or_default();
+                self.imports.push(format!(
+                    "{}{}{}",
+                    module.path.join("."),
+                    if import.prefix.is_empty() {
+                        " (open)".to_string()
+                    } else {
+                        format!(" as {}", import.prefix)
+                    },
+                    selection
+                ));
+                for name in module.checked.exports.keys() {
+                    if import
+                        .names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(name))
+                    {
+                        self.imported_names.push(if import.prefix.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{name}", import.prefix)
+                        });
+                    }
+                }
+            }
+        }
+        self.imports.sort();
+        self.imports.dedup();
+        self.imported_names.sort();
+        self.imported_names.dedup();
+    }
+}
+
+fn repl_resolutions(
+    modules: &[LoadedModule],
+    ids: &HashMap<ModuleKey, FileId>,
+) -> HashMap<Span, ModuleKey> {
+    let mut resolutions = HashMap::new();
+    for module in modules {
+        for (declaration, edge) in module
+            .module
+            .decls
+            .iter()
+            .filter(|decl| matches!(decl.kind, DeclKind::Import { .. }))
+            .zip(&module.imports)
+        {
+            if let Some((key, _)) = ids.iter().find(|(_, file)| **file == edge.file) {
+                resolutions.insert(declaration.span, key.clone());
+            }
+        }
+    }
+    resolutions
+}
+
+fn repl_local_names(module: &Module) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let mut patterns = Vec::new();
+    for declaration in &module.decls {
+        match &declaration.kind {
+            | DeclKind::Fn { name, .. } => {
+                names.insert(name.clone());
+            },
+            | DeclKind::Let { pattern, .. } => patterns.push(pattern),
+            | _ => {},
+        }
+    }
+    while let Some(pattern) = patterns.pop() {
+        use aevia_syntax::PatKind;
+        match &pattern.kind {
+            | PatKind::Var(name) => {
+                names.insert(name.clone());
+            },
+            | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => patterns.extend(args),
+            | PatKind::Record(fields) => {
+                for (name, value) in fields {
+                    if let Some(value) = value {
+                        patterns.push(value);
+                    } else {
+                        names.insert(name.clone());
+                    }
+                }
+            },
+            | PatKind::Tensor { items, rest } => {
+                patterns.extend(items);
+                if let Some(name) = rest {
+                    names.insert(name.clone());
+                }
+            },
+            | PatKind::As { pattern, name } => {
+                patterns.push(pattern);
+                names.insert(name.clone());
+            },
+            | PatKind::Annot { pattern, .. } => patterns.push(pattern),
+            | _ => {},
+        }
+    }
+    names
+}
+
+fn repl_roots(origin: &Path) -> Result<Roots, String> {
+    let parent = origin.parent().unwrap_or_else(|| Path::new("."));
+    match crate::manifest::Package::find(parent).map_err(|error| error.render())? {
+        | Some(package) => {
+            package
+                .roots()
+                .map(|roots| roots.with_local(parent))
+                .map_err(|error| error.render())
+        },
+        | None => Ok(Roots::adjacent(origin)),
+    }
+}
+
+/// Runtime import instances retained for the lifetime of one REPL interpreter.
+#[derive(Default)]
+pub struct ReplRuntime {
+    scopes: HashMap<FileId, std::rc::Rc<crate::value::Scope>>,
+    exports: HashMap<FileId, HashMap<String, crate::Value>>,
+}
+
+impl ReplRuntime {
+    /// Atomically initialize new imports and the new entry declarations. A
+    /// failed or interrupted submission neither consumes dependency initializers
+    /// nor leaves a runtime module checked against a different source snapshot.
+    pub fn synchronize(
+        &mut self,
+        interp: &mut crate::Interp,
+        compilation: &ReplCompilation,
+        loaded: usize,
+        limit: usize,
+    ) -> Diagnostics {
+        if compilation.diagnostics.has_errors() {
+            return compilation.diagnostics.clone();
+        }
+        let checkpoint = (
+            interp.globals.clone(),
+            interp.symbol_counts.clone(),
+            interp.seed,
+            interp.constants_seeded,
+            interp.instance_methods.clone(),
+            interp.method_classes.clone(),
+            interp.class_keys.clone(),
+            interp.aliases.clone(),
+            interp.adts.clone(),
+            interp.module_scopes.clone(),
+            interp.file_scopes.clone(),
+            interp.file_keys.clone(),
+            interp.units.clone(),
+            interp.dims.clone(),
+            interp.context.clone(),
+            interp.active_scope.clone(),
+            interp.bindings.clone(),
+            interp.next_instance_export,
+            interp.current_module.clone(),
+            interp.current_constructors.clone(),
+            interp.instance_exports.clone(),
+            interp.instance_sites.clone(),
+            interp.module_units.clone(),
+            interp.expr_types.clone(),
+            interp.literal_reps.clone(),
+            interp.constant_regions.clone(),
+            interp.rssn_calls.clone(),
+            interp.rssn_call_sites.clone(),
+            interp.dictionaries.clone(),
+            interp.dictionary_sites.clone(),
+            interp.dyn_calls.clone(),
+            interp.registrations.clone(),
+            interp.method_refs.clone(),
+            interp.exports.clone(),
+        );
+        let old_instances = interp.context.instances.borrow().clone();
+        let old_scopes = self.scopes.clone();
+        let old_exports = self.exports.clone();
+        let mut diagnostics = self.prepare_imports(interp, &compilation.program);
+        if !diagnostics.has_errors()
+            && let Some(entry) = compilation.program.entry()
+        {
+            let limit = limit.min(entry.module.decls.len());
+            let loaded = loaded.min(limit);
+            if loaded < limit {
+                if let Err((_, error)) = interp.load_incremental_declarations(
+                    &entry.checked,
+                    &entry.module.decls[..loaded],
+                    &entry.module.decls[loaded..limit],
+                ) {
+                    diagnostics.push(error.diagnostic());
+                }
+            } else {
+                interp.prepare_incremental_module(&entry.checked, &entry.module.decls[..loaded]);
+            }
+        }
+        if !diagnostics.has_errors()
+            && let Err(error) = interp.check_cancelled()
+        {
+            diagnostics.push(error.diagnostic());
+        }
+        if diagnostics.has_errors() {
+            (
+                interp.globals,
+                interp.symbol_counts,
+                interp.seed,
+                interp.constants_seeded,
+                interp.instance_methods,
+                interp.method_classes,
+                interp.class_keys,
+                interp.aliases,
+                interp.adts,
+                interp.module_scopes,
+                interp.file_scopes,
+                interp.file_keys,
+                interp.units,
+                interp.dims,
+                interp.context,
+                interp.active_scope,
+                interp.bindings,
+                interp.next_instance_export,
+                interp.current_module,
+                interp.current_constructors,
+                interp.instance_exports,
+                interp.instance_sites,
+                interp.module_units,
+                interp.expr_types,
+                interp.literal_reps,
+                interp.constant_regions,
+                interp.rssn_calls,
+                interp.rssn_call_sites,
+                interp.dictionaries,
+                interp.dictionary_sites,
+                interp.dyn_calls,
+                interp.registrations,
+                interp.method_refs,
+                interp.exports,
+            ) = checkpoint;
+            *interp.context.instances.borrow_mut() = old_instances;
+            self.scopes = old_scopes;
+            self.exports = old_exports;
+        }
+        diagnostics
+    }
+
+    /// Initialize dependencies once and publish only the entry's explicit imports.
+    pub fn prepare_imports(
+        &mut self,
+        interp: &mut crate::Interp,
+        program: &Program,
+    ) -> Diagnostics {
+        let mut diagnostics = Diagnostics::new();
+        let Some(entry) = program.entry() else {
+            return diagnostics;
+        };
+        for module in &program.modules {
+            if module.file == entry.file {
+                break;
+            }
+            if let Err(error) = interp.check_cancelled() {
+                diagnostics.push(error.diagnostic());
+                return diagnostics;
+            }
+            if self.scopes.contains_key(&module.file) {
+                continue;
+            }
+            interp.prepare_module(&module.checked);
+            let imported = module
+                .imports
+                .iter()
+                .filter_map(|import| self.scopes.get(&import.file).cloned())
+                .collect();
+            let scope = interp.module_scope(imported);
+            self.bind_imports(module, &scope);
+            diagnostics.extend(interp.load_into(&module.module, &scope));
+            if diagnostics.has_errors() {
+                return diagnostics;
+            }
+            let values = module
+                .checked
+                .exports
+                .keys()
+                .filter_map(|name| scope.lookup(name).map(|value| (name.clone(), value)))
+                .collect();
+            self.exports.insert(module.file, values);
+            self.scopes.insert(module.file, scope.clone());
+            interp.file_scopes.insert(module.file, scope);
+            interp.file_keys.insert(
+                module.file,
+                std::sync::Arc::from(format!(
+                    "{}|{:?}|{:?}",
+                    module.path.join("."),
+                    module.source.path,
+                    module.source.owner
+                )),
+            );
+        }
+        if let Err(error) = interp.check_cancelled() {
+            diagnostics.push(error.diagnostic());
+            return diagnostics;
+        }
+        let locals = repl_local_names(&entry.module);
+        for import in &entry.imports {
+            if let Some(values) = self.exports.get(&import.file) {
+                for (name, value) in values {
+                    if import
+                        .names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(name))
+                    {
+                        let key = if import.prefix.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{name}", import.prefix)
+                        };
+                        if !(locals.contains(&key) && interp.globals.contains_key(&key)) {
+                            interp.globals.insert(key, value.clone());
+                        }
+                    }
+                }
+            }
+        }
+        diagnostics
+    }
+
+    fn bind_imports(
+        &self,
+        module: &LoadedModule,
+        scope: &std::rc::Rc<crate::value::Scope>,
+    ) {
+        for import in &module.imports {
+            if let Some(values) = self.exports.get(&import.file) {
+                for (name, value) in values {
+                    if import
+                        .names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(name))
+                    {
+                        let key = if import.prefix.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{name}", import.prefix)
+                        };
+                        scope.vars.borrow_mut().insert(key, value.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// What a single-pass load of many entry files did.
 ///
 /// `checks` is the number of modules the checker ran on: a package-wide
@@ -298,6 +904,14 @@ struct Loader {
     /// dependencies, or the entry file's directory for a standalone file.
     roots: Option<Roots>,
     sources: SourceMap,
+    /// Interactive hosts reserve source ids across changes to the import graph.
+    source_ids: HashMap<ModuleKey, FileId>,
+    source_identities: HashMap<ModuleKey, aevia_types::keys::ModulePath>,
+    /// A virtual entry keeps its host identity independently of its disk anchor.
+    entry_identity: Option<(ModuleKey, crate::source::SourceIdentity)>,
+    /// A loaded REPL fragment can resolve imports from another package/directory.
+    entry_import_roots: HashMap<Span, (Roots, ResolvedModule)>,
+    context_roots: HashMap<ModuleKey, Roots>,
     diagnostics: Diagnostics,
     /// Parsed modules by owning package and canonical source, in post-order.
     order: Vec<ModuleKey>,
@@ -546,6 +1160,13 @@ impl AsRef<Path> for ModuleKey {
 }
 
 impl Loader {
+    fn roots_for(
+        &self,
+        key: &ModuleKey,
+    ) -> Option<&Roots> {
+        self.context_roots.get(key).or(self.roots.as_ref())
+    }
+
     fn watch(
         &mut self,
         path: &Path,
@@ -600,7 +1221,7 @@ impl Loader {
         if let Some(parsed) = self.parsed.get(&canonical) {
             if !expected.is_empty()
                 && parsed.module.name.is_some()
-                && self.roots.as_ref().is_some_and(|roots| {
+                && self.roots_for(&canonical).is_some_and(|roots| {
                     !roots.resolved_name_matches(context, &parsed.path, expected)
                 })
             {
@@ -690,7 +1311,23 @@ impl Loader {
                     .unwrap_or_else(|| canonical.display().to_string())
             },
         };
-        let file = self.sources.add(display, &source);
+        let display = if self
+            .entry_identity
+            .as_ref()
+            .is_some_and(|(entry, _)| entry == &canonical)
+        {
+            "<repl>".to_string()
+        } else {
+            display
+        };
+        let file = if let Some(file) = self.source_ids.get(&canonical).copied() {
+            self.sources.replace(file, display, &source);
+            file
+        } else {
+            let file = self.sources.add(display, &source);
+            self.source_ids.insert(canonical.clone(), file);
+            file
+        };
         let lexed = match lex(file, &source) {
             | Ok(lexed) => lexed,
             | Err(errors) => {
@@ -722,13 +1359,21 @@ impl Loader {
             // The entry file failed to parse; there is nothing to import.
         }
 
-        let path = module_path(&module, &canonical);
+        let path = if let Some((entry, identity)) = &self.entry_identity
+            && entry == &canonical
+        {
+            identity.module_path(module.name.as_deref()).0
+        } else {
+            module_path(&module, &canonical)
+        };
         // §2.2.5 / appendix B: a module's declared name must match the path it
         // is imported by, or `import A.B` would name a module called `C`. The
         // entry file is exempt because it is not imported by a path.
-        let declared_matches = self.roots.as_ref().map_or(path == expected, |roots| {
-            roots.resolved_name_matches(context, &path, expected)
-        });
+        let declared_matches = self
+            .roots_for(&canonical)
+            .map_or(path == expected, |roots| {
+                roots.resolved_name_matches(context, &path, expected)
+            });
         if !expected.is_empty() && module.name.is_some() && !declared_matches {
             self.diagnostics.push(
                 Diagnostic::error(
@@ -760,9 +1405,23 @@ impl Loader {
             else {
                 continue;
             };
-            let candidates = self.roots.as_ref().map_or_else(Vec::new, |roots| {
-                roots.module_candidates(context, import_path)
-            });
+            let (import_roots, importer) = self
+                .entry_import_roots
+                .get(&decl.span)
+                .cloned()
+                .or_else(|| {
+                    self.context_roots
+                        .get(&canonical)
+                        .cloned()
+                        .map(|roots| (roots, context.clone()))
+                })
+                .unwrap_or_else(|| {
+                    (
+                        self.roots.as_ref().expect("loader roots").clone(),
+                        context.clone(),
+                    )
+                });
+            let candidates = import_roots.module_candidates(&importer, import_path);
             let resolved = candidates
                 .into_iter()
                 .find(|candidate| self.watch(&candidate.path));
@@ -807,11 +1466,7 @@ impl Loader {
                             owner: None,
                         }
                     } else {
-                        let candidates = self
-                            .roots
-                            .as_ref()
-                            .map(|roots| roots.module_candidates(context, import_path))
-                            .unwrap_or_default();
+                        let candidates = import_roots.module_candidates(&importer, import_path);
                         let expected = candidates
                             .iter()
                             .map(|candidate| format!("`{}`", candidate.path.display()))
@@ -848,6 +1503,17 @@ impl Loader {
                     }
                 },
             };
+            let target_key = if self.stdlib.contains_key(&target.path)
+                || self.kernel_modules.contains_key(&target.path)
+            {
+                ModuleKey {
+                    path: target.path.clone(),
+                    owner: None,
+                }
+            } else {
+                ModuleKey::physical(&target)
+            };
+            self.context_roots.entry(target_key).or_insert(import_roots);
             if let Some(resolved) = self.load_file(&target, import_path) {
                 imports.push((
                     resolved,
@@ -1026,13 +1692,18 @@ impl Loader {
                     })
                     .collect()
             };
-            let identity = if self.stdlib.contains_key(&path.path)
+            let identity = if let Some(identity) = self.source_identities.get(&path) {
+                Some(identity.clone())
+            } else if let Some((entry, identity)) = &self.entry_identity
+                && entry == &path
+            {
+                Some(identity.module_path(parsed.module.name.as_deref()))
+            } else if self.stdlib.contains_key(&path.path)
                 || self.kernel_modules.contains_key(&path.path)
             {
                 None
             } else {
-                self.roots
-                    .as_ref()
+                self.roots_for(&path)
                     .map(|roots| roots.resolved_module_identity(&parsed.context, &parsed.path))
             };
             let cache_key = format!("{path:?}");

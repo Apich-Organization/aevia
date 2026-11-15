@@ -51,6 +51,7 @@ fn to_rssn_mat(
 
 fn map_dense_err(err: DenseError) -> NumericError {
     match err {
+        | DenseError::Cancelled => NumericError::Cancelled,
         | DenseError::Shape => NumericError::NotSquare,
         | DenseError::Singular => NumericError::Singular,
         | DenseError::NonFinite => {

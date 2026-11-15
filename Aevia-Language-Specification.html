@@ -3298,6 +3298,7 @@ random   : () -&gt; IO Float[1]</code></pre>
 <li><code>Real</code> 与张量没有 <code>Ord</code>；张量需要时用 <code>lexicographic</code> 或 <code>norm</code>。</li>
 </ul>
 <h3 id="06-semantics--6123-显示">6.12.3 显示</h3>
+<p><code>to_pretty(x)</code> 提供二维终端数学排版（分数、根号、矩阵）；其他值使用人类可读文本。</p>
 <ul>
 <li><code>show(x)</code> 人类可读并带显示单位；<code>repr(x)</code> 可解析回同一值，符号带内部 id；<code>to_latex</code>、<code>to_typst</code> 做数学排版（单字母符号斜体，希腊字母名转字母，负幂积写 <code>\frac</code>，初等函数用直立算子名，<code>exp(u)</code> 写 <code>e^{u}</code>）。</li>
 <li>浮点用最短往返表示并<strong>总是保留相位</strong>：整数值的 <code>Float</code> 带小数点（<code>10.0</code>、<code>-0.0</code>），大/小量级用指数 （<code>1e20</code>、<code>1e-9</code>）；精确 <code>10</code> 与浮点 <code>10.0</code> 看起来不同。<code>Real</code> 精确值用分数/根式；<code>Complex</code> 用 <code>a + b*i</code>，两个分量按 <code>Float</code> 规则打印。</li>
@@ -3331,6 +3332,12 @@ random   : () -&gt; IO Float[1]</code></pre>
 <p>顶层声明可以相互引用（含前向引用与递归）：编译器先收集所有顶层名字与签名，再检查函数体。单位与量纲 声明同样可以后置；跨模块的单位通过 <code>import</code> 提供。</p>
 <pre class="code" data-lang="aevia"><code><span class="kw">fn</span> f(x: Int): Int = g(x) + <span class="n">1</span>
 <span class="kw">fn</span> g(x: Int): Int = x * <span class="n">2</span></code></pre>
+<p>脚本与 REPL 都允许重复的顶层 <code>let</code>、<code>fn</code> 名称。新声明覆盖后续代码可见的绑定，并独立检查类型， 因此可以改变表示或量纲：</p>
+<pre class="code" data-lang="aevia"><code><span class="kw">let</span> b = <span class="n">1</span> s
+<span class="kw">let</span> earlier = b
+<span class="kw">let</span> b = <span class="n">1</span> km
+<span class="kw">let</span> later = b</code></pre>
+<p><code>earlier</code> 仍是时间，<code>later</code> 是长度；已有闭包及函数别名保留原绑定与签名。非递归的覆盖声明在初始化式中 读取前一绑定（如 <code>let x = x + 1</code>），递归声明读取自身绑定。名字首次声明之前的前向引用选择它的第一个 定义。导出名称指向最终可见的定义；最终声明若为 <code>private</code>，则隐藏该名称。</p>
 <h3 id="07-modules--713-导出">7.1.3 导出</h3>
 <p>默认所有顶层声明导出；<code>private</code> 隐藏：</p>
 <pre class="code" data-lang="aevia"><code><span class="kw">private</span> <span class="kw">let</span> internal_scale = <span class="n">1.0e-3</span>
@@ -3772,6 +3779,7 @@ map_err  : ((e -&gt; f), Result&lt;a, e&gt;) -&gt; Result&lt;a, f&gt;</code></pr
 <h3 id="08-stdlib--817-显示">8.1.7 显示</h3>
 <pre class="code"><code>show     : Show a =&gt; a -&gt; String
 repr     : Show a =&gt; a -&gt; String
+to_pretty : Show a =&gt; a -&gt; String
 to_latex : Show a =&gt; a -&gt; String
 to_typst : Show a =&gt; a -&gt; String
 print    : Show a =&gt; a -&gt; IO Unit
@@ -5145,11 +5153,14 @@ pure  : a -&gt; IO a</code></pre>
 <li><code>do</code> 本身仍顺序执行；并发只经由任务显式出现。</li>
 </ul>
 <h2 id="09-runtime--98-repl">9.8 REPL</h2>
-<pre class="code"><code>$ aevia repl
-Aevia — dimensions are types. Type `:help` for commands, `:quit` to exit.
-&gt; let g = 9.80665 m/s^2
-&gt; sqrt(2 * 20.0 m / g)
-&gt; :type sqrt
+<p>直接运行 <code>aevia</code>（无子命令）或 <code>aevia repl</code> 进入交互会话。</p>
+<pre class="code" data-lang="console"><code>$ aevia
+Aevia 0.1.0 — dimensions are types
+Enter an expression, or paste a program (including main). :help shows examples.
+Tab completes names; blank line ends a block; Ctrl-C cancels; Ctrl-D exits.
+aevia&gt; let g = 9.80665 m/s^2
+aevia&gt; sqrt(2 * 20.0 m / g)
+aevia&gt; :type sqrt
 sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</code></pre>
 <table>
 <thead>
@@ -5160,8 +5171,20 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 </thead>
 <tbody>
 <tr>
+<td><code>:help [topic]</code></td>
+<td>指南与示例；主题包括 <code>paste</code>、<code>main</code>、<code>units</code>、<code>files</code> 和命令名（<code>:h</code>、<code>:?</code>）</td>
+</tr>
+<tr>
 <td><code>:type e</code></td>
-<td>显示类型</td>
+<td>只检查类型，不求值（<code>:t</code>）</td>
+</tr>
+<tr>
+<td><code>:bindings</code></td>
+<td>列出用户绑定与类型（<code>:vars</code>）</td>
+</tr>
+<tr>
+<td><code>:show</code> / <code>:save FILE</code></td>
+<td>显示已接受的声明 / 保存到新文件，绝不覆盖已有文件</td>
 </tr>
 <tr>
 <td><code>:dims</code></td>
@@ -5169,23 +5192,55 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 </tr>
 <tr>
 <td><code>:units [d]</code></td>
-<td>列出单位，可限定量纲</td>
+<td>列出单位，可限定合法量纲（如 <code>L</code>、<code>L/T</code>）</td>
 </tr>
 <tr>
 <td><code>:ast e</code> / <code>:core e</code></td>
-<td>显示 AST / Core IR</td>
+<td>不求值，显示 AST / Core IR</td>
 </tr>
 <tr>
 <td><code>:time e</code></td>
-<td>求值并报告耗时</td>
+<td>求值一次、执行 IO 并报告耗时</td>
 </tr>
 <tr>
-<td><code>:latex e</code></td>
-<td>把值渲染为 LaTeX</td>
+<td><code>:latex e</code> / <code>:typst e</code></td>
+<td>求值一次并输出 LaTeX / Typst 数学源码</td>
 </tr>
 <tr>
-<td><code>:load f</code></td>
-<td>加载文件中的声明</td>
+<td><code>:pretty e</code> / <code>:pprint e</code></td>
+<td>求值一次并绘制二维终端数学排版</td>
+</tr>
+<tr>
+<td><code>:repr e</code> / <code>:print e</code></td>
+<td>源码表示 / 人类可读文本</td>
+</tr>
+<tr>
+<td><code>:format [NAME]</code></td>
+<td>选择或查看普通结果和 <code>:time</code> 的 show、repr、pretty、latex、typst 格式；<code>:reset</code> 后保留</td>
+</tr>
+<tr>
+<td><code>:doc ITEM</code> / <code>:help ITEM</code></td>
+<td>已接受的本地/导入条目、内建函数、类型和单位的签名及文档（<code>:?</code>、<code>:h</code>）</td>
+</tr>
+<tr>
+<td><code>:apropos TEXT</code></td>
+<td>搜索可用条目的名称及文档</td>
+</tr>
+<tr>
+<td><code>:imports</code></td>
+<td>列出已导入的模块与别名</td>
+</tr>
+<tr>
+<td><code>:load FILE</code></td>
+<td>按文件所属包/目录解析导入，追加声明并执行新 <code>main</code>（<code>:l</code>）</td>
+</tr>
+<tr>
+<td><code>:run</code></td>
+<td>再次执行已加载的 <code>main</code></td>
+</tr>
+<tr>
+<td><code>:paste</code> / <code>:end</code></td>
+<td>显式收集多行输入；<code>:cancel</code> 丢弃该输入</td>
 </tr>
 <tr>
 <td><code>:reset</code></td>
@@ -5193,12 +5248,16 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 </tr>
 <tr>
 <td><code>:quit</code></td>
-<td>退出</td>
+<td>退出（<code>:q</code> 或在提示符处 Ctrl-D）</td>
 </tr>
 </tbody>
 </table>
-<p>支持多行输入（缩进块）与 Ctrl-D 退出；声明按输入顺序累积，重复定义遮蔽旧定义。复检累计源码后安装完整的 检查证据，保持已执行声明的游标，只初始化新增声明；新增类型的构造器用该次检查的确切见证。</p>
-<p>状态：Ctrl-C 取消当前求值<strong>尚未实现</strong>（默认控制台处理会终止进程；协作式取消需要求值器中的中断标志）。</p>
+<p>终端编辑器支持光标编辑、内存历史、Tab 补全、括号匹配及括号粘贴。粘贴文本保留在可编辑缓冲区中，按 Enter 提交。手工输入缩进块时，以空行结束；尚未闭合的分隔符或运算符请求续行。Ctrl-C 取消当前输入，包括显式 粘贴；Ctrl-C 也可中断当前求值或前台程序输入并返回提示符。历史不写入磁盘，程序输入不加入 REPL 历史。</p>
+<p>同一提交中的连续声明整体检查后再初始化，支持前向函数引用及含 <code>main</code> 的完整程序；只初始化新增声明， 新提交的 <code>main</code> 自动执行一次。之后的表达式不重复执行旧声明或 <code>main</code>。表达式显示类型与值，IO 表达式立即 执行。声明按输入顺序累积，重复定义遮蔽旧定义。复检累计源码后安装完整的检查证据，保持已执行声明的游标； 新增类型的构造器使用该次检查的确切见证。编译与初始化错误均保留旧绑定；一批声明初始化中途失败时， 回滚该批全部新绑定、实例注册、符号分配与随机状态，不执行剩余初始化。<code>main</code> 内的运行时错误发生在声明 加载之后，因此已加载绑定仍可用于检查与 <code>:run</code>。</p>
+<p>管道输入（<code>aevia &lt; session.aev</code>）不输出横幅或提示符，连续声明整体处理，顶层表达式分别执行；任一提交失败时 退出码非零。<code>:load</code> 与粘贴支持正常的包解析器：提示符处使用当前目录所属包及其清单依赖，加载文件的新导入使用该文件所属包/目录。 别名、open/选择性导入、传递依赖、内置标准库与名义类型均遵循正常程序语义。成功初始化的依赖只运行一次， 源码快照与身份保留至 <code>:reset</code>。失败或中断的声明/导入批次回滚绑定与初始化状态；此前未接受的模块修复后可重试。 导入解析目标改变时给出 <code>:reset</code> 提示，避免旧运行时值与新名义类型混用。<code>:imports</code> 列出活动模块与别名，Tab 补全限定名称。 CLI 与 REPL 共同遵循 <code>--color auto|always|never</code>：自动模式分别检查输出流，重定向、<code>NO_COLOR</code>、<code>TERM=dumb</code> 时禁用颜色。 用户程序输出与 LSP 协议字节保持原样。</p>
+<p>中断使用线程安全的取消令牌并报告 <code>E0812</code>。AST、Core IR、回调、IO 调度、任务等待、并行工作线程及支持的 内核图/数值循环在检查点停止并正常展开作用域。被取消的工作线程不会因下一次输入清除前台令牌而复活； 先前成功提交产生的独立后台任务不受后来求值的取消影响。中断 await 会取消正在等待的任务。REPL 后台工作线程 不能抢占交互终端，应在前台读取输入后再启动工作。</p>
+<p>取消是协作式的：没有检查点的编译器工作、外部数值库操作或系统调用可能先完成当前调用，再报告中断； 已完成的效果不会撤销。被取消的内核结果不会缓存或作为成功数学结果返回。REPL 安装取消令牌期间禁用可选 JIT 快速路径以保留检查点；独立 <code>aevia run</code> 保持操作系统默认的信号行为。</p>
+<p>条目帮助使用已接受声明的 <code>##</code> 文档、推导签名及已冻结的导入源码，不执行表达式。<code>:help :COMMAND</code> 显式查询命令帮助；<code>:apropos TEXT</code> 搜索条目。<code>:format show|repr|pretty|latex|typst</code> 控制普通结果和 <code>:time</code>，在 <code>:reset</code> 后保留；渲染命令对表达式和 IO 仅执行一次。</p>
 <h2 id="09-runtime--99-cli">9.9 CLI</h2>
 <pre class="code"><code>aevia run [--example NAME] [file.aev] [-- args…]   运行包入口/文件/示例（`--` 之后是程序参数）
 aevia check [--all] [file.aev…]                    类型/量纲检查，不运行
@@ -5226,7 +5285,8 @@ aevia verify &lt;owner/name@version&gt;                  对照签名校验下�
 aevia docs [owner/name[@version]] [--open]         打印（或打开）包文档站点的地址
 aevia pkg &lt;command&gt;                                注册表客户端的全部命令（`key`、`status`、`lock`、…），转发给 aevia-pkg
 aevia --version</code></pre>
-<p>全局 flag（可出现在命令行任意位置）：</p>
+<p>可用 <code>aevia --help</code>、<code>aevia COMMAND --help</code> 或 <code>aevia help COMMAND</code> 查看用法、选项与示例； 帮助不会加载或修改包。</p>
+<p>全局 flag（程序参数分隔符 <code>--</code> 之前）：</p>
 <table>
 <thead>
 <tr>
@@ -5261,7 +5321,7 @@ aevia --version</code></pre>
 </tr>
 <tr>
 <td><code>--color auto|always|never</code></td>
-<td>诊断着色</td>
+<td>CLI 与 REPL 着色；自动模式遵循终端支持与 <code>NO_COLOR</code></td>
 </tr>
 <tr>
 <td><code>--locked</code></td>
@@ -5269,7 +5329,7 @@ aevia --version</code></pre>
 </tr>
 <tr>
 <td><code>--release</code></td>
-<td>接受，但报告“无效果”（解释器没有优化档位；JIT 见 §9.6）</td>
+<td>执行前优化已检查的 Core IR：折叠常量布尔表达式、传播局部已知布尔条件并消除不可达分支；保留运行时检查、执行预算和数值表示（JIT 见 §9.6）</td>
 </tr>
 </tbody>
 </table>
@@ -5352,7 +5412,7 @@ aevia --version</code></pre>
 <li>Doctest：<code>aevia test --doc [FILE…/DIRS…]</code> 抽取 <code>##</code> 注释中所有标 <code>aevia</code> 的围栏块并逐个编译。块首行可写 <code>compile_fail</code>（要求编译失败）或 <code>compile_fail EXXXX</code>（要求失败且含该代码）；不写标记要求编译通过。每个片段是独立合成 模块：声明模块的 <code>import</code>/<code>open</code> 行被复制，导入按声明文件的包与相邻目录解析，模块自身声明不隐式进入片段；片段使用内存 源码，不写临时文件；依赖或继承导入失败不满足预期编译失败。<code>--locked</code> 检查每个被检查文档所属包而非调用者工作目录。 任何失败退出码为 1；没有可检查的块或过滤后为空也退出 1。抽取器在 <code>aevia-doc::doctest</code>。</li>
 <li>编译失败测试：<code>compile_fail("&lt;source&gt;") : String -&gt; Bool</code> 在隔离环境（无导入、仅 Prelude）编译片段，至少一个错误时为 <code>true</code>；它<strong>不</strong>检查错误码，错误码由 doctest 的 <code>compile_fail EXXXX</code> 断言。</li>
 <li>黄金测试：REPL 输出/错误信息快照。</li>
-<li>基准：<code>bench</code> 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，<code>--iterations</code>/<code>--warmup</code>）。 <code>--save-baseline FILE</code> 写 JSON（<code>format=1</code>、<code>tool</code>/<code>version</code>、<code>profile=debug|release</code>、<code>iterations</code>、<code>warmup</code>、每项 <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>）；<code>--compare-baseline FILE --threshold RATIO</code>（默认 0.05，可写 <code>5%</code>）按中位数比较， 超出阈值报 <code>REGRESSION</code> 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较 release 构建、同机、median of N。</li>
+<li>基准：<code>bench</code> 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，<code>--iterations</code>/<code>--warmup</code>）。 <code>--save-baseline FILE</code> 写 JSON（<code>format=1</code>、<code>tool</code>/<code>version</code>、<code>profile=debug|release</code>、<code>optimized_ir=true|false</code>、<code>iterations</code>、<code>warmup</code>、每项 <code>median_ns</code>/<code>mean_ns</code>/<code>ci_ns</code>）；<code>--compare-baseline FILE --threshold RATIO</code>（默认 0.05，可写 <code>5%</code>）按中位数比较， 超出阈值报 <code>REGRESSION</code> 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较 release 构建、同机、相同的 <code>--release</code> IR 优化设置、median of N。旧基线若没有 <code>optimized_ir</code> 字段，视为未优化。</li>
 </ul>
 <h2 id="09-runtime--913-性能目标">9.13 性能目标</h2>
 <table>
@@ -7944,6 +8004,11 @@ DEDENT         ::= 由布局算法产生</code></pre>
 <td>是</td>
 </tr>
 <tr>
+<td><code>E0812</code></td>
+<td>宿主 / Ctrl-C 中断求值（§9.8）</td>
+<td>是</td>
+</tr>
+<tr>
 <td><code>E0899</code></td>
 <td>panic</td>
 <td>否</td>
@@ -8319,7 +8384,7 @@ help: did you mean `km`?</code></pre>
 <li><strong>ODE</strong>：多重打靶/配置法 BVP；<code>AutoSwitch</code> 按步数预算判定而非特征值估计（§8.9）。</li>
 <li><strong>类型系统</strong>：<code>Zmod&lt;n&gt;</code>/<code>GF&lt;p&gt;</code> 类型级模数；用户函数对秩多态；符号指数（§12.8.2）。</li>
 <li><strong>Plot</strong>：只有 HTML/SVG-inline 渲染器，无独立 <code>.svg</code>/PNG/JPEG 输出（§8.12）。</li>
-<li><strong>REPL</strong>：Ctrl-C 取消当前求值（§9.10）。</li>
+<li><strong>REPL</strong>：Ctrl-C 已支持取消当前求值；取消是协作式的，没有检查点的编译器、原生库或系统调用可能在当前调用结束后才报告 <code>E0812</code>（§9.8）。</li>
 </ol>
 </section></main></div>
 <script>

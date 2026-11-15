@@ -574,15 +574,16 @@ fn locked_refuses_an_out_of_date_lock_instead_of_rewriting_it() {
 }
 
 #[test]
-fn the_flags_with_no_effect_are_reported_rather_than_dropped() {
-    // §9.9 lists `--release` and `--jobs`. There is no code generator and no
-    // parallel phase, so the flags are accepted and the user is told so.
+fn release_and_jobs_flags_are_accepted() {
     let scratch = Scratch::new("flags");
     scratch.write("a.aev", "let x = 1\n");
     let output = aevia(scratch.path(), &["check", "--release", "a.aev"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stderr(&output).contains("--release"), "{}", stderr(&output));
-    assert!(stderr(&output).contains("no effect"), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("no effect"),
+        "{}",
+        stderr(&output)
+    );
 
     // `--jobs` sizes the parallel-evaluation worker pool (§9.7): no note.
     let output = aevia(scratch.path(), &["check", "--jobs", "4", "a.aev"]);
@@ -1102,6 +1103,54 @@ fn bench_profile() -> &'static str {
     } else {
         "release"
     }
+}
+
+#[test]
+fn benchmark_baselines_require_matching_runtime_optimization() {
+    let scratch = Scratch::new("bench-release-setting");
+    scratch.write(
+        "bench.aev",
+        "@bench\nfn sample(): Int = if true then 42 else 0\n",
+    );
+    let output = aevia(
+        scratch.path(),
+        &[
+            "bench",
+            "--release",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--save-baseline",
+            "baseline.json",
+            "bench.aev",
+        ],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(scratch.path().join("baseline.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["optimized_ir"], true);
+    let output = aevia(
+        scratch.path(),
+        &[
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--compare-baseline",
+            "baseline.json",
+            "bench.aev",
+        ],
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("IR optimization settings"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

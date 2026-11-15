@@ -29,6 +29,7 @@
 #![allow(clippy::large_enum_variant, clippy::too_many_arguments)]
 
 pub mod lower;
+pub mod optimize;
 
 use aevia_dim::UnitExpr;
 use aevia_syntax::Span;

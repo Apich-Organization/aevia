@@ -1192,6 +1192,14 @@ struct FnGenerics {
     binders: Vec<GenericBinder>,
 }
 
+/// An imported binding retained while a local declaration reserves its name.
+#[derive(Clone)]
+struct InheritedValue {
+    scheme: Scheme,
+    headers: Option<Vec<GenericBinder>>,
+    callable: Option<CallableProjection>,
+}
+
 /// The names a declaration body uses in each kind position (§2 kind inference).
 #[derive(Default)]
 struct ParamUsage {
@@ -2331,10 +2339,38 @@ impl Checker {
             }
         }
 
+        // Keep imported values available inside a first nonrecursive
+        // initializer that shadows them. Everywhere else forward references
+        // must select the new local reservation and its own evidence.
+        let inherited_values: HashMap<String, InheritedValue> = module
+            .decls
+            .iter()
+            .filter_map(|decl| {
+                if let DeclKind::Let { pattern, .. } = &decl.kind
+                    && let PatKind::Var(name) = &pattern.kind
+                    && let Some(scheme) = self.globals.get(name)
+                {
+                    Some((
+                        name.clone(),
+                        InheritedValue {
+                            scheme: scheme.clone(),
+                            headers: self.generic_bindings.get(name).cloned(),
+                            callable: self.global_callables.get(name).cloned(),
+                        },
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         // Pass B: signatures at level 1, so they can be generalised at level 0.
         self.infer.enter_level();
         let mut pending: Vec<(String, Span)> = Vec::new();
-        let mut seen_fns: HashSet<String> = HashSet::new();
+        let mut seeded_values: HashSet<String> = HashSet::new();
+        let mut let_signatures: HashMap<Span, Type> = HashMap::new();
+        let mut function_signatures: HashMap<Span, (Type, FnGenerics, CallableProjection)> =
+            HashMap::new();
         for (index, decl) in module.decls.iter().enumerate() {
             match &decl.kind {
                 | DeclKind::Fn {
@@ -2345,14 +2381,6 @@ impl Checker {
                     body,
                     ..
                 } => {
-                    if !seen_fns.insert(name.clone()) {
-                        self.error_help(
-                            "E0316",
-                            format!("`{name}` is defined more than once"),
-                            decl.span,
-                            "rename one of the two functions",
-                        );
-                    }
                     self.callable_ids.insert(
                         decl.span,
                         CallableId::new(
@@ -2362,25 +2390,32 @@ impl Checker {
                         ),
                     );
                     let (ty, generics) = self.fn_signature(params, args, ret.as_ref());
-                    self.global_callables.insert(
-                        name.clone(),
-                        CallableProjection {
-                            origin: self
-                                .callable_ids
-                                .get(&decl.span)
-                                .expect("seeded callable identity")
-                                .clone(),
-                            arguments: generics.binders.clone(),
-                            selected: false,
-                            forwarded_parameter: forwarded_parameter(args, body),
-                        },
+                    let projection = CallableProjection {
+                        origin: self
+                            .callable_ids
+                            .get(&decl.span)
+                            .expect("seeded callable identity")
+                            .clone(),
+                        arguments: generics.binders.clone(),
+                        selected: false,
+                        forwarded_parameter: forwarded_parameter(args, body),
+                    };
+                    function_signatures.insert(
+                        decl.span,
+                        (ty.clone(), generics.clone(), projection.clone()),
                     );
-                    self.generic_bindings
-                        .insert(name.clone(), generics.binders.clone());
+                    let scheme = Scheme::mono(ty.clone());
+                    // Forward references see the first declaration. Later
+                    // declarations with this name become visible in pass C,
+                    // each with their own signature and callable identity.
+                    if seeded_values.insert(name.clone()) {
+                        self.global_callables.insert(name.clone(), projection);
+                        self.generic_bindings
+                            .insert(name.clone(), generics.binders.clone());
+                        self.globals.insert(name.clone(), scheme.clone());
+                    }
                     self.fn_generics.insert(name.clone(), generics);
-                    self.fn_signatures.insert(name.clone(), ty.clone());
-                    let scheme = Scheme::mono(ty);
-                    self.globals.insert(name.clone(), scheme.clone());
+                    self.fn_signatures.insert(name.clone(), ty);
                     // §7.1.3: `private` keeps a name out of the interface.
                     if !decl.private {
                         self.checked.exports.insert(
@@ -2391,6 +2426,8 @@ impl Checker {
                                 arity: args.len(),
                             },
                         );
+                    } else {
+                        self.checked.exports.shift_remove(name);
                     }
                     pending.push((name.clone(), decl.span));
                 },
@@ -2404,9 +2441,16 @@ impl Checker {
                         | Some(ty) => self.convert_type(ty),
                         | None => self.infer.fresh_type(),
                     };
-                    self.top_lets.insert(name.clone(), value_ty.clone());
+                    let_signatures.insert(decl.span, value_ty.clone());
+                    self.top_lets
+                        .entry(name.clone())
+                        .or_insert_with(|| value_ty.clone());
                     let scheme = Scheme::mono(value_ty);
-                    self.globals.insert(name.clone(), scheme.clone());
+                    if seeded_values.insert(name.clone()) {
+                        self.globals.insert(name.clone(), scheme.clone());
+                        self.generic_bindings.remove(name);
+                        self.global_callables.remove(name);
+                    }
                     if !decl.private {
                         self.checked.exports.insert(
                             name.clone(),
@@ -2416,6 +2460,8 @@ impl Checker {
                                 arity: 0,
                             },
                         );
+                    } else {
+                        self.checked.exports.shift_remove(name);
                     }
                     pending.push((name.clone(), decl.span));
                 },
@@ -2423,18 +2469,59 @@ impl Checker {
             }
         }
 
-        // Pass C: bodies.
+        // Pass C: bodies. A repeated name shadows its earlier declaration,
+        // rather than unifying their types. Preserve the preceding environment
+        // while checking a non-recursive rebinding's initializer.
+        let mut initialized_values = HashSet::new();
+        let mut binding_schemes: HashMap<Span, Scheme> = HashMap::new();
         for decl in &module.decls {
             match &decl.kind {
                 | DeclKind::Fn { name, args, body, .. } => {
-                    self.check_fn_body(name, args, body, decl.span)
+                    if let Some((signature, generics, projection)) =
+                        function_signatures.get(&decl.span).cloned()
+                    {
+                        self.fn_signatures.insert(name.clone(), signature.clone());
+                        self.fn_generics.insert(name.clone(), generics.clone());
+                        self.generic_bindings.insert(name.clone(), generics.binders);
+                        self.global_callables.insert(name.clone(), projection);
+                        self.globals.insert(name.clone(), Scheme::mono(signature));
+                    }
+                    self.check_fn_body(name, args, body, decl.span);
+                    initialized_values.insert(name.clone());
                 },
                 | DeclKind::Let {
                     pattern,
                     ty,
                     value,
                     rec,
-                } => self.check_top_let_body(pattern, ty.as_ref(), value, *rec, decl.span),
+                } => {
+                    let shadowing = if let PatKind::Var(name) = &pattern.kind {
+                        if let Some(signature) = let_signatures.get(&decl.span) {
+                            self.top_lets.insert(name.clone(), signature.clone());
+                        }
+                        !initialized_values.insert(name.clone())
+                    } else {
+                        false
+                    };
+                    self.check_top_let_body(
+                        pattern,
+                        ty.as_ref(),
+                        value,
+                        *rec,
+                        decl.span,
+                        shadowing,
+                        if !shadowing {
+                            if let PatKind::Var(name) = &pattern.kind {
+                                inherited_values.get(name).cloned()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        },
+                    );
+                    collect_pattern_bindings(pattern, &mut initialized_values);
+                },
                 | DeclKind::Test { name, body } => {
                     let ty = self.synth(body);
                     self.expect_bool(&ty, body.span);
@@ -2443,6 +2530,12 @@ impl Checker {
                 | DeclKind::Instance { .. } => self.check_instance(decl),
                 | DeclKind::Derive { .. } => self.check_derive(decl),
                 | _ => {},
+            }
+            if matches!(decl.kind, DeclKind::Fn { .. } | DeclKind::Let { .. })
+                && let Some(name) = declaration_name(decl)
+                && let Some(scheme) = self.globals.get(&name)
+            {
+                binding_schemes.insert(decl.span, scheme.clone());
             }
             // §3.10.2 rule 6 / §3.5.1: a type-level equation that still has
             // several unknowns after the declaration cannot be expressed in its
@@ -2476,66 +2569,43 @@ impl Checker {
         // left. Defaulting *after* generalisation is what keeps `<d>`
         // polymorphic functions polymorphic (§3.10.2).
         self.infer.leave_level();
-        for (name, _) in &pending {
-            let Some(scheme) = self.globals.get(name).cloned() else {
-                continue;
-            };
-            let generalised = self.generalize_scheme(&scheme);
-            self.globals.insert(name.clone(), generalised.clone());
-            if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
-                *scheme = generalised;
+        let latest_bindings: HashMap<String, Span> = pending
+            .iter()
+            .map(|(name, site)| (name.clone(), *site))
+            .collect();
+        // Keep every declaration's own scheme: the current name table only
+        // retains the last shadowing declaration and cannot finalize old code.
+        for (_, site) in &pending {
+            if let Some(scheme) = binding_schemes.get(site).cloned() {
+                let generalized = self.generalize_scheme(&scheme);
+                binding_schemes.insert(*site, generalized);
             }
         }
-        // A constraint whose type is one of this binding's quantified
-        // variables belongs to the binding's scheme (§3.2.5): that is how
-        // `fn f(x) = show(x)` becomes `Show a => a -> String`.
-        for (name, _) in &pending {
-            let Some(scheme) = self.globals.get(name).cloned() else {
-                continue;
-            };
-            if scheme.vars.is_empty() {
-                continue;
-            }
-            let mut attached: Vec<Constraint> = Vec::new();
-            self.deferred_constraints.retain(|(class, ty, _)| {
-                let resolved = self.infer.resolve(ty);
-                if mentions_any(&resolved, &scheme.vars) {
-                    attached.push(Constraint::new(class.clone(), vec![resolved]));
-                    false
-                } else {
-                    true
-                }
-            });
-            if attached.is_empty() {
-                continue;
-            }
-            let mut combined = scheme.constraints.clone();
-            for constraint in attached {
-                if !combined.contains(&constraint) {
-                    combined.push(constraint);
-                }
-            }
-            let constrained = scheme.constrained(combined);
-            self.globals.insert(name.clone(), constrained.clone());
-            if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
-                *scheme = constrained;
+        for (_, site) in &pending {
+            if let Some(scheme) = binding_schemes.get_mut(site) {
+                self.attach_deferred_scheme_constraints(scheme);
             }
         }
-        for (name, span) in &pending {
-            let Some(scheme) = self.globals.get(name).cloned() else {
+        for (name, site) in &pending {
+            let Some(scheme) = binding_schemes.get(site) else {
                 continue;
             };
-            let (defaulted, warnings) = self.infer.default_scheme(&scheme);
+            let (defaulted, warnings) = self.infer.default_scheme(scheme);
             for _ in warnings {
                 self.warn(
                     "W0301",
                     format!("the dimension of `{name}` is unresolved; it defaults to 1"),
-                    *span,
+                    *site,
                 );
             }
-            self.globals.insert(name.clone(), defaulted.clone());
-            if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
-                *scheme = defaulted;
+            if let Some(function) = self.checked.functions.get_mut(site) {
+                function.scheme = defaulted.clone();
+            }
+            if latest_bindings.get(name) == Some(site) {
+                self.globals.insert(name.clone(), defaulted.clone());
+                if let Some(Export::Value { scheme, .. }) = self.checked.exports.get_mut(name) {
+                    *scheme = defaulted;
+                }
             }
         }
         // A constraint that only ever appeared in a discarded expression still
@@ -3013,8 +3083,19 @@ impl Checker {
         self.checked.stability = self.stability.clone();
         let mut registrations = self.registrations.clone();
         for registration in &mut registrations {
-            if let Some(scheme) = self.globals.get(&registration.function)
-                && let Type::Fn(params, result) = self.infer.resolve(&scheme.ty)
+            // An operator's contract belongs to its attributed declaration,
+            // even when a later declaration reuses the source-visible name.
+            let function = module
+                .decls
+                .iter()
+                .find(|decl| {
+                    decl.attrs
+                        .iter()
+                        .any(|attribute| attribute.span == registration.span)
+                })
+                .and_then(|decl| self.checked.functions.get(&decl.span));
+            if let Some(function) = function
+                && let Type::Fn(params, result) = self.infer.resolve(&function.scheme.ty)
             {
                 for ((_, dim), ty) in registration.params.iter_mut().zip(params.iter()) {
                     if let Type::Scalar(_, found) = self.infer.resolve(ty) {
@@ -3117,6 +3198,29 @@ impl Checker {
         sites.sort_by_key(|(span, _)| (span.file, span.start, span.end));
         sites.dedup_by_key(|(span, _)| *span);
         sites
+    }
+
+    /// Move requirements on quantified variables into their binding before a
+    /// later declaration instantiates it or shadows its source-visible name.
+    fn attach_deferred_scheme_constraints(
+        &mut self,
+        scheme: &mut Scheme,
+    ) {
+        if scheme.vars.is_empty() {
+            return;
+        }
+        self.deferred_constraints.retain(|(class, ty, _)| {
+            let resolved = self.infer.resolve(ty);
+            if mentions_any(&resolved, &scheme.vars) {
+                let constraint = Constraint::new(class.clone(), vec![resolved]);
+                if !scheme.constraints.contains(&constraint) {
+                    scheme.constraints.push(constraint);
+                }
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Generalises a scheme, keeping the class constraints of the declaration
@@ -5089,6 +5193,7 @@ impl Checker {
             binders = inferred_binders(&generalised);
         }
         quantify_binders(&mut generalised, &binders, &self.infer);
+        self.attach_deferred_scheme_constraints(&mut generalised);
         let forwarded = self
             .global_callables
             .get(name)
@@ -5238,6 +5343,8 @@ impl Checker {
         value: &Expr,
         rec: bool,
         span: Span,
+        shadowing: bool,
+        inherited: Option<InheritedValue>,
     ) {
         let PatKind::Var(name) = &pattern.kind else {
             self.check_let_body(pattern, annotation, value, rec, span);
@@ -5259,7 +5366,36 @@ impl Checker {
         };
         self.note_type(pattern.span, &target);
         if rec {
+            self.globals
+                .insert(name.clone(), Scheme::mono(target.clone()));
+            self.generic_bindings.remove(name);
+            self.global_callables.remove(name);
             self.check(value, &target);
+        } else if shadowing {
+            self.check(value, &target);
+        } else if let Some(inherited) = inherited {
+            self.globals.insert(name.clone(), inherited.scheme);
+            if let Some(headers) = inherited.headers {
+                self.generic_bindings.insert(name.clone(), headers);
+            } else {
+                self.generic_bindings.remove(name);
+            }
+            if let Some(callable) = inherited.callable {
+                self.global_callables.insert(name.clone(), callable);
+            } else {
+                self.global_callables.remove(name);
+            }
+            // Imported constructors/methods also need their nominal reference
+            // evidence. Hide the local reservation only for this initializer.
+            let local_let = self.top_lets.remove(name);
+            let local_function = self.fn_signatures.remove(name);
+            self.check(value, &target);
+            if let Some(signature) = local_let {
+                self.top_lets.insert(name.clone(), signature);
+            }
+            if let Some(signature) = local_function {
+                self.fn_signatures.insert(name.clone(), signature);
+            }
         } else {
             let saved = self.globals.remove(name);
             self.check(value, &target);
@@ -5285,6 +5421,9 @@ impl Checker {
             self.generic_bindings.remove(name);
             self.global_callables.remove(name);
         }
+        self.attach_deferred_scheme_constraints(&mut scheme);
+        self.fn_signatures.remove(name);
+        self.fn_generics.remove(name);
         self.globals.insert(name.clone(), scheme.clone());
         if let Some(Export::Value {
             scheme: export_scheme,
@@ -5342,6 +5481,14 @@ impl Checker {
             }
         } else {
             self.bind_pattern(pattern, &scheme.ty);
+            let mut names = HashSet::new();
+            collect_pattern_bindings(pattern, &mut names);
+            for name in names {
+                self.fn_signatures.remove(&name);
+                self.fn_generics.remove(&name);
+                self.global_callables.remove(&name);
+                self.generic_bindings.remove(&name);
+            }
         }
     }
 
@@ -7515,6 +7662,22 @@ impl Checker {
             .any(|scope| scope.contains_key(name))
     }
 
+    /// A source callable imported from another module is a genuine binding,
+    /// while a primitive re-export (for example `let odeint = odeint`) still
+    /// needs its type-function dispatcher rather than its deliberately loose
+    /// HM facade. Callable provenance distinguishes these cases.
+    fn shadows_builtin(
+        &self,
+        name: &str,
+    ) -> bool {
+        self.is_locally_defined(name)
+            || self.global_callables.contains_key(name)
+            || self
+                .globals
+                .get(name)
+                .is_some_and(|scheme| !matches!(scheme.ty, Type::Fn(..) | Type::UnitOf(_)))
+    }
+
     fn synth_call(
         &mut self,
         callee: &Expr,
@@ -7609,18 +7772,19 @@ impl Checker {
                 if matches!(
                     name.as_str(),
                     "reshape" | "zeros_of" | "ones_of" | "refine_shape"
-                ) {
+                ) && !self.shadows_builtin(name)
+                {
                     return self.shape_constructor(name, type_args, args, span);
                 }
                 // §4.9.4: `check<d>(x)` names the dimension to materialise. A
                 // `dyn` takes no type argument: its `d` comes from the argument.
-                if name == "check" {
+                if name == "check" && !self.shadows_builtin(name) {
                     return self.check_call(args, type_args.first(), span);
                 }
-                if name == "from_system" && !self.is_locally_defined(name) {
+                if name == "from_system" && !self.shadows_builtin(name) {
                     return self.system_call(false, args, type_args.first(), span);
                 }
-                if builtins::takes_format_argument(name) && !self.is_locally_defined(name) {
+                if builtins::takes_format_argument(name) && !self.shadows_builtin(name) {
                     return self.sparse_format_call(name, type_args, args, span);
                 }
             }
@@ -7721,11 +7885,10 @@ impl Checker {
                 self.synth(callee);
                 return self.tensor_constructor(intrinsic, &[], args, span);
             }
-            // A *local* declaration shadows a built-in entry point (so
-            // `let odeint = …` wins); an import does not — the module tree
-            // re-exports `odeint`, `sdeint_diag`, … with their loose HM
-            // schemes, while the type-function typing lives here (§8.9).
-            let shadowed = self.is_locally_defined(name);
+            // Locals and imported source functions shadow a builtin. Bare
+            // primitive re-exports retain their type-function dispatcher
+            // (§8.9), which their loose HM facade cannot express.
+            let shadowed = self.shadows_builtin(name);
             if shadowed {
                 let callee_ty = self.synth(callee);
                 return self.call_with_type(callee_ty, args, span);
@@ -7796,9 +7959,7 @@ impl Checker {
             if name == "check" {
                 return self.check_call(args, None, span);
             }
-            if matches!(name.as_str(), "to_system" | "from_system")
-                && !self.is_locally_defined(name)
-            {
+            if matches!(name.as_str(), "to_system" | "from_system") && !self.shadows_builtin(name) {
                 return self.system_call(name == "to_system", args, None, span);
             }
             // §8.1: `min_all`/`max_all` reduce a whole tensor of any rank to
@@ -12559,6 +12720,43 @@ fn shapes_are_ragged(
             | _ => false,
         }
     })
+}
+
+/// Names introduced by a pattern, including destructured top-level bindings.
+fn collect_pattern_bindings(
+    pattern: &Pat,
+    names: &mut HashSet<String>,
+) {
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match &pattern.kind {
+            | PatKind::Var(name) => {
+                names.insert(name.clone());
+            },
+            | PatKind::Ctor { args, .. } | PatKind::Tuple(args) => pending.extend(args),
+            | PatKind::Record(fields) => {
+                for (name, pattern) in fields {
+                    if let Some(pattern) = pattern {
+                        pending.push(pattern);
+                    } else {
+                        names.insert(name.clone());
+                    }
+                }
+            },
+            | PatKind::Tensor { items, rest } => {
+                pending.extend(items);
+                if let Some(name) = rest {
+                    names.insert(name.clone());
+                }
+            },
+            | PatKind::As { pattern, name } => {
+                names.insert(name.clone());
+                pending.push(pattern);
+            },
+            | PatKind::Annot { pattern, .. } => pending.push(pattern),
+            | _ => {},
+        }
+    }
 }
 
 /// The name a declaration introduces, when it introduces one.

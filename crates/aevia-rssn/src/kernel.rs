@@ -2075,6 +2075,59 @@ impl Kernel {
         Ok(Sym::new(self.id.0, term.id()))
     }
 
+    /// Renders a structured value as a multi-line Unicode mathematical drawing.
+    ///
+    /// # Errors
+    /// A stale symbolic handle or a value without a mathematical term form.
+    pub fn to_pretty(
+        &self,
+        val: &Val,
+    ) -> Result<String, KernelError> {
+        let sym = self.term_of(val)?;
+        Ok(self.term(sym)?.to_pretty())
+    }
+
+    /// Renders a structured value as LaTeX math without parsing display text.
+    ///
+    /// # Errors
+    /// A stale symbolic handle or a value without a mathematical term form.
+    pub fn to_latex(
+        &self,
+        val: &Val,
+    ) -> Result<String, KernelError> {
+        let sym = self.term_of(val)?;
+        // RSSN's symbol printer assumes identifier-like names. Aevia's
+        // generated identity suffix uses '#'; keep it literal in LaTeX rather
+        // than emitting a TeX parameter/comment/math-delimiter token.
+        let rendered = self.term(sym)?.to_latex();
+        let mut out = String::with_capacity(rendered.len());
+        let mut escaped = false;
+        for ch in rendered.chars() {
+            if ch == '\\' {
+                escaped = !escaped;
+            } else {
+                if !escaped && matches!(ch, '#' | '%' | '$') {
+                    out.push('\\');
+                }
+                escaped = false;
+            }
+            out.push(ch);
+        }
+        Ok(out)
+    }
+
+    /// Renders a structured value as Typst math without parsing display text.
+    ///
+    /// # Errors
+    /// A stale symbolic handle or a value without a mathematical term form.
+    pub fn to_typst(
+        &self,
+        val: &Val,
+    ) -> Result<String, KernelError> {
+        let sym = self.term_of(val)?;
+        Ok(self.term(sym)?.to_typst())
+    }
+
     /// The value of a term.
     ///
     /// # Errors

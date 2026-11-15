@@ -331,31 +331,72 @@ pure  : a -> IO a
 
 ## 9.8 REPL
 
-```
-$ aevia repl
-Aevia — dimensions are types. Type `:help` for commands, `:quit` to exit.
-> let g = 9.80665 m/s^2
-> sqrt(2 * 20.0 m / g)
-> :type sqrt
+直接运行 `aevia`（无子命令）或 `aevia repl` 进入交互会话。
+
+```console
+$ aevia
+Aevia 0.1.0 — dimensions are types
+Enter an expression, or paste a program (including main). :help shows examples.
+Tab completes names; blank line ends a block; Ctrl-C cancels; Ctrl-D exits.
+aevia> let g = 9.80665 m/s^2
+aevia> sqrt(2 * 20.0 m / g)
+aevia> :type sqrt
 sqrt : forall t0, d0. Scalar<ρ0, d0> -> Scalar<ρ0, d0^(1/2)>
 ```
 
 | 命令 | 作用 |
 |---|---|
-| `:type e` | 显示类型 |
+| `:help [topic]` | 指南与示例；主题包括 `paste`、`main`、`units`、`files` 和命令名（`:h`、`:?`） |
+| `:type e` | 只检查类型，不求值（`:t`） |
+| `:bindings` | 列出用户绑定与类型（`:vars`） |
+| `:show` / `:save FILE` | 显示已接受的声明 / 保存到新文件，绝不覆盖已有文件 |
 | `:dims` | 列出基量纲（`Length`、`Mass`、`Time`、`Current`、`Temperature`、`Amount`、`Luminosity`） |
-| `:units [d]` | 列出单位，可限定量纲 |
-| `:ast e` / `:core e` | 显示 AST / Core IR |
-| `:time e` | 求值并报告耗时 |
-| `:latex e` | 把值渲染为 LaTeX |
-| `:load f` | 加载文件中的声明 |
+| `:units [d]` | 列出单位，可限定合法量纲（如 `L`、`L/T`） |
+| `:ast e` / `:core e` | 不求值，显示 AST / Core IR |
+| `:time e` | 求值一次、执行 IO 并报告耗时 |
+| `:latex e` / `:typst e` | 求值一次并输出 LaTeX / Typst 数学源码 |
+| `:pretty e` / `:pprint e` | 求值一次并绘制二维终端数学排版 |
+| `:repr e` / `:print e` | 源码表示 / 人类可读文本 |
+| `:format [NAME]` | 选择或查看普通结果和 `:time` 的 show、repr、pretty、latex、typst 格式；`:reset` 后保留 |
+| `:doc ITEM` / `:help ITEM` | 已接受的本地/导入条目、内建函数、类型和单位的签名及文档（`:?`、`:h`） |
+| `:apropos TEXT` | 搜索可用条目的名称及文档 |
+| `:imports` | 列出已导入的模块与别名 |
+| `:load FILE` | 按文件所属包/目录解析导入，追加声明并执行新 `main`（`:l`） |
+| `:run` | 再次执行已加载的 `main` |
+| `:paste` / `:end` | 显式收集多行输入；`:cancel` 丢弃该输入 |
 | `:reset` | 清空会话（开始新的会话身份，§7.3） |
-| `:quit` | 退出 |
+| `:quit` | 退出（`:q` 或在提示符处 Ctrl-D） |
 
-支持多行输入（缩进块）与 Ctrl-D 退出；声明按输入顺序累积，重复定义遮蔽旧定义。复检累计源码后安装完整的
-检查证据，保持已执行声明的游标，只初始化新增声明；新增类型的构造器用该次检查的确切见证。
+终端编辑器支持光标编辑、内存历史、Tab 补全、括号匹配及括号粘贴。粘贴文本保留在可编辑缓冲区中，按 Enter
+提交。手工输入缩进块时，以空行结束；尚未闭合的分隔符或运算符请求续行。Ctrl-C 取消当前输入，包括显式
+粘贴；Ctrl-C 也可中断当前求值或前台程序输入并返回提示符。历史不写入磁盘，程序输入不加入 REPL 历史。
 
-状态：Ctrl-C 取消当前求值**尚未实现**（默认控制台处理会终止进程；协作式取消需要求值器中的中断标志）。
+同一提交中的连续声明整体检查后再初始化，支持前向函数引用及含 `main` 的完整程序；只初始化新增声明，
+新提交的 `main` 自动执行一次。之后的表达式不重复执行旧声明或 `main`。表达式显示类型与值，IO 表达式立即
+执行。声明按输入顺序累积，重复定义遮蔽旧定义。复检累计源码后安装完整的检查证据，保持已执行声明的游标；
+新增类型的构造器使用该次检查的确切见证。编译与初始化错误均保留旧绑定；一批声明初始化中途失败时，
+回滚该批全部新绑定、实例注册、符号分配与随机状态，不执行剩余初始化。`main` 内的运行时错误发生在声明
+加载之后，因此已加载绑定仍可用于检查与 `:run`。
+
+管道输入（`aevia < session.aev`）不输出横幅或提示符，连续声明整体处理，顶层表达式分别执行；任一提交失败时
+退出码非零。`:load` 与粘贴支持正常的包解析器：提示符处使用当前目录所属包及其清单依赖，加载文件的新导入使用该文件所属包/目录。
+别名、open/选择性导入、传递依赖、内置标准库与名义类型均遵循正常程序语义。成功初始化的依赖只运行一次，
+源码快照与身份保留至 `:reset`。失败或中断的声明/导入批次回滚绑定与初始化状态；此前未接受的模块修复后可重试。
+导入解析目标改变时给出 `:reset` 提示，避免旧运行时值与新名义类型混用。`:imports` 列出活动模块与别名，Tab 补全限定名称。
+CLI 与 REPL 共同遵循
+`--color auto|always|never`：自动模式分别检查输出流，重定向、`NO_COLOR`、`TERM=dumb` 时禁用颜色。
+用户程序输出与 LSP 协议字节保持原样。
+
+中断使用线程安全的取消令牌并报告 `E0812`。AST、Core IR、回调、IO 调度、任务等待、并行工作线程及支持的
+内核图/数值循环在检查点停止并正常展开作用域。被取消的工作线程不会因下一次输入清除前台令牌而复活；
+先前成功提交产生的独立后台任务不受后来求值的取消影响。中断 await 会取消正在等待的任务。REPL 后台工作线程
+不能抢占交互终端，应在前台读取输入后再启动工作。
+
+取消是协作式的：没有检查点的编译器工作、外部数值库操作或系统调用可能先完成当前调用，再报告中断；
+已完成的效果不会撤销。被取消的内核结果不会缓存或作为成功数学结果返回。REPL 安装取消令牌期间禁用可选 JIT
+快速路径以保留检查点；独立 `aevia run` 保持操作系统默认的信号行为。
+
+条目帮助使用已接受声明的 `##` 文档、推导签名及已冻结的导入源码，不执行表达式。`:help :COMMAND` 显式查询命令帮助；`:apropos TEXT` 搜索条目。`:format show|repr|pretty|latex|typst` 控制普通结果和 `:time`，在 `:reset` 后保留；渲染命令对表达式和 IO 仅执行一次。
 
 ## 9.9 CLI
 
@@ -388,7 +429,10 @@ aevia pkg <command>                                注册表客户端的全部�
 aevia --version
 ```
 
-全局 flag（可出现在命令行任意位置）：
+可用 `aevia --help`、`aevia COMMAND --help` 或 `aevia help COMMAND` 查看用法、选项与示例；
+帮助不会加载或修改包。
+
+全局 flag（程序参数分隔符 `--` 之前）：
 
 | flag | 作用 |
 |---|---|
@@ -398,9 +442,9 @@ aevia --version
 | `--jobs N` | 并行求值的工作线程数（§9.7.2） |
 | `--no-cache` | `check`/`run` 既不读也不写磁盘缓存（§9.11） |
 | `--out PATH` | 输出路径（`rssn --emit`、`doc`） |
-| `--color auto\|always\|never` | 诊断着色 |
+| `--color auto\|always\|never` | CLI 与 REPL 着色；自动模式遵循终端支持与 `NO_COLOR` |
 | `--locked` | 拒绝改写过期的 `aevia.lock`（`update`/`add`/…） |
-| `--release` | 接受，但报告“无效果”（解释器没有优化档位；JIT 见 §9.6） |
+| `--release` | 执行前优化已检查的 Core IR：折叠常量布尔表达式、传播局部已知布尔条件并消除不可达分支；保留运行时检查、执行预算和数值表示（JIT 见 §9.6） |
 
 - **程序参数**：`aevia run [file] -- args…` 只把 `--` **之后**的字符串交给程序，程序用 `args()` 读取
   （§8.1.8，返回 `Tensor<1, String>`；无参数为 `[]`）。`check`/`test`/`bench` 不转发参数。
@@ -540,10 +584,10 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
   `true`；它**不**检查错误码，错误码由 doctest 的 `compile_fail EXXXX` 断言。
 - 黄金测试：REPL 输出/错误信息快照。
 - 基准：`bench` 声明；每项报告 N 次迭代的中位数、均值与 95% 置信区间（默认 N=100，`--iterations`/`--warmup`）。
-  `--save-baseline FILE` 写 JSON（`format=1`、`tool`/`version`、`profile=debug|release`、`iterations`、`warmup`、每项
+  `--save-baseline FILE` 写 JSON（`format=1`、`tool`/`version`、`profile=debug|release`、`optimized_ir=true|false`、`iterations`、`warmup`、每项
   `median_ns`/`mean_ns`/`ci_ns`）；`--compare-baseline FILE --threshold RATIO`（默认 0.05，可写 `5%`）按中位数比较，
   超出阈值报 `REGRESSION` 并退出 1；profile 不一致退出 2；只在一侧出现的 workload 被报告但不计为回归。协议：只比较
-  release 构建、同机、median of N。
+  release 构建、同机、相同的 `--release` IR 优化设置、median of N。旧基线若没有 `optimized_ir` 字段，视为未优化。
 
 ## 9.13 性能目标
 

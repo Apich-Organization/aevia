@@ -187,3 +187,73 @@ fn softplus_neg(x: Real[1]) = (softplus(-x), softplus(x) - x)
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
+
+#[test]
+fn source_operator_wrappers_pin_their_own_declaration_across_rebinding() {
+    let source = r#"
+@op("demo/rebound_area")
+fn area(r: Real[L]): Real[L^2] = r * r
+let old_area = area
+fn area(text: String): String = text
+let original_node = old_area(symbol("r") * 1 m)
+let latest_area = area("latest")
+
+@op("demo/rebound_first")
+fn transform(x: Real[1]): Real[1] = x + 1
+let old_transform = transform
+@op("demo/rebound_second")
+fn transform(x: Real[1]): Real[1] = x * 2
+let first_node = old_transform(symbol("x"))
+let second_node = transform(symbol("x"))
+let first_number = old_transform(3)
+let second_number = transform(3)
+"#;
+    for (mode, optimized) in [
+        (aevia_core::Mode::Ast, false),
+        (aevia_core::Mode::Ir, false),
+        (aevia_core::Mode::Ir, true),
+    ] {
+        let compilation = aevia_core::compile("rebound-plugin.aev", source);
+        assert!(
+            !compilation.diagnostics.has_errors(),
+            "{:?}",
+            compilation.diagnostics.items
+        );
+        let mut interp = Interp::new(&compilation.checked)
+            .with_mode(mode)
+            .with_buffer();
+        interp.optimize_ir = optimized;
+        let diagnostics = interp.load(compilation.module.as_ref().unwrap());
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        let node = interp.eval_toplevel("original_node").unwrap();
+        assert!(aevia_core::show(&node).contains("demo/rebound_area"));
+        let Value::Num(node) = node else {
+            panic!("expected symbolic numeric operator node");
+        };
+        assert_eq!(node.dim.to_plain_string(), "Length^2");
+        assert_eq!(
+            aevia_core::show(&interp.eval_toplevel("latest_area").unwrap()),
+            "latest"
+        );
+        assert!(
+            aevia_core::show(&interp.eval_toplevel("first_node").unwrap())
+                .contains("demo/rebound_first")
+        );
+        assert!(
+            aevia_core::show(&interp.eval_toplevel("second_node").unwrap())
+                .contains("demo/rebound_second")
+        );
+        assert_eq!(
+            aevia_core::show(&interp.eval_toplevel("first_number").unwrap()),
+            "4"
+        );
+        assert_eq!(
+            aevia_core::show(&interp.eval_toplevel("second_number").unwrap()),
+            "6"
+        );
+    }
+}

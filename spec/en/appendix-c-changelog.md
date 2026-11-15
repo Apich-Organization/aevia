@@ -93,4 +93,4 @@ Still missing: per-package dependency namespaces (same-named import roots pointi
 5. **ODE**: multiple shooting / collocation for BVPs; `AutoSwitch` decides by step budget rather than an eigenvalue estimate (§8.9).
 6. **Type system**: type-level moduli for `Zmod<n>`/`GF<p>`; rank polymorphism in user functions; symbolic exponents (§12.8.2).
 7. **Plot**: only the HTML/SVG-inline renderer, with no standalone `.svg`/PNG/JPEG output (§8.12).
-8. **REPL**: Ctrl-C cancelling the current evaluation (§9.10).
+8. **REPL**: Ctrl-C cancellation is cooperative; opaque compiler/native/system calls may finish their current call before `E0812` is reported (§9.8).

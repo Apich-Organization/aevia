@@ -550,6 +550,14 @@ pub struct Interp {
     pub max_nodes: usize,
     /// Which evaluator runs: the typed AST, or the Core IR.
     pub mode: Mode,
+    /// Apply conservative Core IR control-flow optimizations when loading
+    /// modules and incremental declarations. Runtime checks, numeric
+    /// representations and resource budgets are preserved.
+    pub optimize_ir: bool,
+    /// Cooperative foreground/worker interruption, installed by the host.
+    pub(crate) cancellation: Option<crate::CancellationToken>,
+    /// Optional terminal-aware reader for program IO.
+    pub(crate) line_reader: Option<Rc<dyn Fn() -> Result<String, EvalError>>>,
     /// Calls in progress, the quantity `max_depth` bounds.
     pub(crate) depth: usize,
     /// Expression nodes in progress, the quantity `max_nodes` bounds.
@@ -821,6 +829,9 @@ impl Interp {
             } else {
                 Mode::Ir
             },
+            optimize_ir: false,
+            cancellation: crate::cancellation::inherited_token(),
+            line_reader: None,
             depth: 0,
             nodes: 0,
             frames: Vec::new(),
@@ -1481,6 +1492,9 @@ impl Interp {
         env: &Rc<Scope>,
         escaping: bool,
     ) -> Result<Value, EvalError> {
+        let _cancellation = self.cancellation_scope();
+        self.check_cancelled()
+            .map_err(|error| error.at(expr.span))?;
         let previous = self.enter_scope(env)?;
         self.nodes += 1;
         if self.nodes > self.max_nodes {
@@ -1526,6 +1540,8 @@ impl Interp {
         });
         self.nodes -= 1;
         self.restore_context(previous);
+        self.check_cancelled()
+            .map_err(|error| error.at(expr.span))?;
         result
     }
 
@@ -2005,8 +2021,10 @@ impl Interp {
                     return Ok(crate::rssn_module::member(name));
                 }
                 if let Some(qualified) = qualified_name(base, name)
-                    && self.globals.contains_key(&qualified)
+                    && (env.lookup(&qualified).is_some() || self.globals.contains_key(&qualified))
                 {
+                    // Dependency aliases live in their defining lexical scope;
+                    // a REPL need not publish them into ambient globals.
                     return self.lookup(&qualified, env, expr.span);
                 }
                 match self.eval(base, env)? {
@@ -2066,7 +2084,9 @@ impl Interp {
                         );
                     },
                 };
-                Ok(Value::Num(NumVal::int(factorial(n, *double))))
+                Ok(Value::Num(NumVal::int(factorial(
+                    self, n, *double, expr.span,
+                )?)))
             },
         }
     }
@@ -2077,8 +2097,16 @@ impl Interp {
         env: &Rc<Scope>,
         span: Span,
     ) -> Result<Value, EvalError> {
-        if let Some(value) = env.lookup(name) {
-            return Ok(value);
+        match env.lookup_at(name, span) {
+            | Ok(Some(value)) => return Ok(value),
+            | Err(value::SourceLookupFailure::Uninitialized) => {
+                return Err(EvalError::new(
+                    "E0301",
+                    format!("unbound name `{name}` at this source position"),
+                )
+                .at(span));
+            },
+            | Ok(None) | Err(value::SourceLookupFailure::Prelude) => {},
         }
         self.lookup_global(name, Some(env), span)
     }
@@ -2101,9 +2129,23 @@ impl Interp {
         if !self.constants_seeded && matches!(name, "pi" | "oo" | "e" | "nan" | "i") {
             self.seed_constants();
         }
-        if let Some(scope) = scope
-            && let Some(value) = scope.lookup(name)
-        {
+        let prelude_only = if let Some(scope) = scope {
+            match scope.lookup_at(name, span) {
+                | Ok(Some(value)) => return Ok(value),
+                | Err(value::SourceLookupFailure::Uninitialized) => {
+                    return Err(EvalError::new(
+                        "E0301",
+                        format!("unbound name `{name}` at this source position"),
+                    )
+                    .at(span));
+                },
+                | Err(value::SourceLookupFailure::Prelude) => true,
+                | Ok(None) => false,
+            }
+        } else {
+            false
+        };
+        if prelude_only && let Some(value) = prelude_constant(name) {
             return Ok(value);
         }
         if let Some(reference) = self
@@ -2122,7 +2164,7 @@ impl Interp {
                     .unwrap_or_else(|| self.root()),
             ));
         }
-        if let Some(value) = self.globals.get(name) {
+        if !prelude_only && let Some(value) = self.globals.get(name) {
             return Ok(value.clone());
         }
         // §3.8.1: a class method is a value, so `map(pretty, xs)` and
@@ -4170,6 +4212,8 @@ impl Interp {
         span: Span,
         instance: Option<Rc<crate::generics::FunctionProof>>,
     ) -> Result<Value, EvalError> {
+        let _cancellation = self.cancellation_scope();
+        self.check_cancelled().map_err(|error| error.at(span))?;
         // §9.3.2: the depth limit counts *calls*, not AST nodes. Counting nodes
         // rejected a legal flat `a + a + …` chain of 2100 terms while letting
         // an unbounded call chain through, which is the opposite of the rule.
@@ -4197,6 +4241,8 @@ impl Interp {
         }
         let result = self.apply_inner(function, args, span, instance);
         self.depth -= 1;
+        self.check_cancelled()
+            .map_err(|error| error.at(span).with_stack(self.frames.clone()))?;
         match result {
             | Ok(value) => Ok(value),
             | Err(error) => Err(error.with_stack(self.frames.clone())),
@@ -5074,11 +5120,14 @@ impl Interp {
         &mut self,
         action: &Rc<IoAction>,
     ) -> Result<Value, EvalError> {
+        let _cancellation = self.cancellation_scope();
+        self.check_cancelled()?;
         // A failure inside a `with_cap` block must not leave the session
         // sandboxed (the REPL runs the next line in the same interpreter).
         let saved_capabilities = self.capabilities;
         let result = self.run_io_steps(action);
         self.capabilities = saved_capabilities;
+        self.check_cancelled()?;
         result
     }
 
@@ -5137,6 +5186,8 @@ impl Interp {
         let mut steps = 0usize;
         let mut last = Value::Unit;
         while let Some(work) = pending.pop() {
+            self.check_cancelled()
+                .map_err(|error| error.at(work.span()))?;
             if work.continuation() {
                 continuations -= 1;
             }
@@ -5401,6 +5452,18 @@ impl Interp {
                     last = self.await_task(task, Span::default())?;
                 },
                 | IoAction::ReadLine => {
+                    if self.on_worker && self.cancellation.is_some() && self.line_reader.is_none() {
+                        return Err(EvalError::new(
+                            "E0811",
+                            "read input on the foreground REPL before spawning work; a background task cannot read terminal input safely",
+                        ));
+                    }
+                    if let Some(reader) = self.line_reader.clone() {
+                        let line = reader()?;
+                        self.check_cancelled()?;
+                        last = Value::string(line.trim_end_matches(['\n', '\r']));
+                        continue;
+                    }
                     let mut line = String::new();
                     std::io::stdin()
                         .read_line(&mut line)
@@ -5629,21 +5692,24 @@ fn combine_units(
     }
 }
 
-fn factorial(
+pub(crate) fn factorial(
+    interp: &Interp,
     n: i64,
     double: bool,
-) -> BigInt {
+    span: Span,
+) -> Result<BigInt, EvalError> {
     let mut result = BigInt::one();
     if n <= 0 {
-        return result;
+        return Ok(result);
     }
     let step = if double { 2 } else { 1 };
     let mut current = n;
     while current > 0 {
+        interp.check_cancelled().map_err(|error| error.at(span))?;
         result *= BigInt::from(current);
         current -= step;
     }
-    result
+    Ok(result)
 }
 
 fn normalize_index(
@@ -7396,5 +7462,24 @@ pub(crate) fn rounded_coherent(
             }
         },
         | None => value.as_f64() * scale.to_f64(),
+    }
+}
+
+/// Resolve a hidden first-initializer constant without consulting published
+/// source globals, which may contain another module's same-named binding.
+fn prelude_constant(name: &str) -> Option<Value> {
+    let one = aevia_dim::Dim::one();
+    match name {
+        | "pi" | "oo" => crate::kernel::call(name, &[], one).ok(),
+        | "e" => crate::kernel::call("exp", &[Value::Num(NumVal::int(1.into()))], one).ok(),
+        | "nan" => Some(Value::Num(NumVal::float(f64::NAN, one))),
+        | "i" => {
+            Some(Value::Num(NumVal {
+                kind: NumKind::Complex(0.0, 1.0),
+                dim: one,
+                display: None,
+            }))
+        },
+        | _ => None,
     }
 }

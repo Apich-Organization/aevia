@@ -3503,6 +3503,7 @@ layer).
 
 ### 6.12.3 Display
 
+- `to_pretty(x)` draws two-dimensional terminal mathematics (fractions, radicals, and matrices); other values use human-readable text.
 - `show(x)` is human-readable and includes the display unit; `repr(x)` parses back to the same
   value and shows internal ids of symbols; `to_latex` and `to_typst` typeset mathematics
   (single-letter symbols in italics, Greek names as letters, products with negative powers as
@@ -3585,6 +3586,24 @@ Unit and dimension declarations may also come later; units from other modules ar
 fn f(x: Int): Int = g(x) + 1
 fn g(x: Int): Int = x * 2
 ```
+
+Repeated top-level `let` and `fn` names are valid in scripts and the REPL. Each
+new declaration overwrites the visible binding for subsequent code and has its own
+type, so a change of representation or dimension is allowed:
+
+```aevia
+let b = 1 s
+let earlier = b
+let b = 1 km
+let later = b
+```
+
+`earlier` remains a time and `later` is a length. Existing closures and function
+aliases retain their original bindings and signatures. A non-recursive rebinding's
+initializer sees the previous binding (`let x = x + 1`); a recursive declaration
+sees its own binding. Before the first declaration of a name, a forward reference
+selects its first definition. The exported name denotes the final visible definition;
+a final `private` definition hides that name.
 
 ### 7.1.3 Exports
 
@@ -4142,6 +4161,7 @@ map_err  : ((e -> f), Result<a, e>) -> Result<a, f>
 ```
 show     : Show a => a -> String
 repr     : Show a => a -> String
+to_pretty : Show a => a -> String
 to_latex : Show a => a -> String
 to_typst : Show a => a -> String
 print    : Show a => a -> IO Unit
@@ -5730,36 +5750,106 @@ pure  : a -> IO a
 
 ## 9.8 REPL
 
-```
-$ aevia repl
-Aevia — dimensions are types. Type `:help` for commands, `:quit` to exit.
-> let g = 9.80665 m/s^2
-> sqrt(2 * 20.0 m / g)
-> :type sqrt
+`aevia` with no command, or `aevia repl`, opens the interactive session.
+
+```console
+$ aevia
+Aevia 0.1.0 — dimensions are types
+Enter an expression, or paste a program (including main). :help shows examples.
+Tab completes names; blank line ends a block; Ctrl-C cancels; Ctrl-D exits.
+aevia> let g = 9.80665 m/s^2
+aevia> sqrt(2 * 20.0 m / g)
+aevia> :type sqrt
 sqrt : forall t0, d0. Scalar<ρ0, d0> -> Scalar<ρ0, d0^(1/2)>
 ```
 
 | Command | Effect |
 |---|---|
-| `:type e` | show the type |
+| `:help [topic]` | guide and examples; topics include `paste`, `main`, `units`, `files`, and command names (`:h`, `:?`) |
+| `:type e` | show the type without evaluating (`:t`) |
+| `:bindings` | list user bindings and types (`:vars`) |
+| `:show` / `:save FILE` | show accepted declarations / save them to a new file without overwriting |
 | `:dims` | list the base dimensions (`Length`, `Mass`, `Time`, `Current`, `Temperature`, `Amount`, `Luminosity`) |
-| `:units [d]` | list units, optionally for one dimension |
-| `:ast e` / `:core e` | show the AST / Core IR |
-| `:time e` | evaluate and report the time taken |
-| `:latex e` | render the value as LaTeX |
-| `:load f` | load declarations from a file |
+| `:units [d]` | list units, optionally for a valid dimension (e.g. `L`, `L/T`) |
+| `:ast e` / `:core e` | show the AST / Core IR without evaluating |
+| `:time e` | evaluate once, execute IO, and report elapsed time |
+| `:latex e` / `:typst e` | evaluate once and emit LaTeX / Typst mathematics |
+| `:pretty e` / `:pprint e` | evaluate once and draw two-dimensional mathematics |
+| `:repr e` / `:print e` | source representation / human-readable text |
+| `:format [NAME]` | select or inspect show, repr, pretty, latex, typst output for normal results and `:time`; survives `:reset` |
+| `:doc ITEM` / `:help ITEM` | signatures and documentation for accepted local/imported items, builtins, types, and units (`:?`, `:h`) |
+| `:apropos TEXT` | search available item names and documentation |
+| `:imports` | list imported modules and aliases |
+| `:load FILE` | append declarations with their package/directory imports and run a new `main` (`:l`) |
+| `:run` | execute the loaded `main` again |
+| `:paste` / `:end` | collect an explicit multiline submission; `:cancel` discards it |
 | `:reset` | clear the session (starts a new session identity, §7.3) |
-| `:quit` | exit |
+| `:quit` | exit (`:q`, or Ctrl-D at the prompt) |
 
-Multi-line input (indented blocks) and Ctrl-D to exit are supported; declarations accumulate in
-input order and a repeated definition shadows the old one. After re-checking the accumulated
-source the REPL installs the complete check evidence, keeps a cursor over already executed
-declarations and initialises only the new ones; constructors of a newly added type use the
-exact witnesses of that check.
+The terminal editor supports cursor editing, in-memory history, Tab completion,
+matching brackets, and bracketed paste. Pasted text remains in an editable buffer
+until Enter. Manual indented blocks end with a blank line; open delimiters and
+unfinished operators request continuation. Ctrl-C cancels pending input (including
+explicit paste), running evaluation, or foreground program input and returns to
+the REPL prompt. History is never saved to disk; program input is not added to it.
 
-Status: cancelling the current evaluation with Ctrl-C is **not implemented** (the default
-console handling terminates the process; cooperative cancellation needs an interrupt flag in the
-evaluator).
+A submission's consecutive declarations are checked together before initialization,
+allowing forward function references and complete programs with `main`. Only new
+declarations initialize; a newly supplied `main` runs once. Subsequent expressions
+do not replay old initializers or `main`. Expressions display their inferred type
+and value; IO expressions execute immediately. Declarations accumulate in input
+order and a repeated definition shadows the old one. After re-checking the
+accumulated source the REPL installs the complete check evidence, keeps a cursor
+over already executed declarations and initializes only the new ones; constructors
+of a newly added type use the exact witnesses of that check. Compile and initialization errors preserve
+previous bindings. Initialization failure rolls back all new batch bindings,
+instance registrations, symbol allocations, and random state; later initializers
+do not run. A runtime failure inside `main` occurs after declarations have loaded,
+so those bindings remain available for inspection and `:run`.
+
+Piped input (`aevia < session.aev`) omits banners and prompts, preserves declaration
+groups, separates top-level expressions, and returns failure if any submission fails.
+`:load` and pasted declarations support the normal package resolver: prompt imports
+use the current directory's package and manifest dependencies; new imports in a
+loaded file use that file's owning package/directory. Aliases, open/selective imports,
+transitive dependencies, embedded stdlib modules and imported nominal types retain
+normal program semantics. Each successfully initialized dependency is retained once,
+with stable source identities and source snapshots until `:reset`. Failed or
+interrupted import/declaration batches roll back bindings and initialization state;
+retrying can observe a corrected source that was never committed. A changed import
+resolution is rejected with `:reset` guidance to prevent mixing new nominal types
+with old runtime values. `:imports` lists active modules and aliases; qualified names
+participate in completion. CLI and REPL text respect `--color auto|always|never`; automatic
+coloring is per output stream, disabled for redirected output, `NO_COLOR`, and
+`TERM=dumb`. Program output and LSP frames retain their original bytes.
+
+Interruption is `E0812`, delivered through a thread-safe cancellation token. AST,
+Core IR, callback execution, IO scheduling, task waits, parallel workers and supported
+kernel graph/numeric loops poll it and unwind normal scopes. Canceled workers remain
+canceled after the next foreground submission starts; unrelated background tasks
+from an earlier successful submission are not canceled by later work. Interrupting
+an await also interrupts its awaited task. REPL background workers must read input
+on the foreground before spawning work rather than consume the interactive terminal.
+
+Cancellation is cooperative. Compiler work, opaque native library operations, and
+system calls without checkpoints may finish their current call before interruption
+is reported. Completed effects are not undone. Canceled kernel results are not
+cached or reported as successful mathematical results. The REPL disables its optional
+JIT fast path while a cancellation token is installed, retaining cooperative checks.
+Standalone `aevia run` keeps the operating system's normal signal behavior.
+
+
+Item help uses accepted declarations and their `##` comments, checked signatures,
+and frozen imported source. Lookup never evaluates an expression or reinitializes
+modules; rejected drafts do not replace documentation. The latest accepted binding
+wins, including private local declarations and imported aliases. `:help :COMMAND`
+explicitly selects a command guide when its name also names a function.
+
+Output modes share the language renderers `show`, `repr`, `to_pretty`, `to_latex`,
+and `to_typst`. `:show EXPR` renders a value; `:show` alone lists source. Direct
+rendering commands evaluate each expression once and execute IO once. Mode changes
+do not affect program-authored output. Unsupported mathematical values report an
+error rather than silently emitting another format; use show/repr for such values.
 
 ## 9.9 CLI
 
@@ -5792,7 +5882,10 @@ aevia pkg <command>                                every registry-client command
 aevia --version
 ```
 
-Global flags (allowed anywhere on the command line):
+Use `aevia --help`, `aevia COMMAND --help`, or `aevia help COMMAND` for usage,
+options, examples, and exit status. Help does not load or modify a package.
+
+Global flags (before the program-argument separator `--`):
 
 | Flag | Effect |
 |---|---|
@@ -5802,9 +5895,9 @@ Global flags (allowed anywhere on the command line):
 | `--jobs N` | worker threads for parallel evaluation (§9.7.2) |
 | `--no-cache` | `check`/`run` neither read nor write the disk caches (§9.11) |
 | `--out PATH` | output path (`rssn --emit`, `doc`) |
-| `--color auto\|always\|never` | diagnostic colouring |
+| `--color auto\|always\|never` | CLI and REPL colouring; automatic mode honors terminal support and `NO_COLOR` |
 | `--locked` | refuse to rewrite an out-of-date `aevia.lock` (`update`/`add`/…) |
-| `--release` | accepted but reported as having no effect (the interpreter has no optimisation profile; JIT: §9.6) |
+| `--release` | optimize checked Core IR before execution: fold constant boolean expressions, propagate locally known boolean conditions, and eliminate unreachable constant branches; runtime checks, budgets and numeric representations are preserved (JIT: §9.6) |
 
 - **Program arguments**: `aevia run [file] -- args…` hands only the strings **after** `--` to the
   program, which reads them with `args()` (§8.1.8, a `Tensor<1, String>`; `[]` when there are
@@ -6003,11 +6096,11 @@ capacity limit.
 - Golden tests: snapshots of REPL output and error messages.
 - Benchmarks: `bench` declarations; each reports the median, mean and 95% confidence interval of
   N iterations (default N=100; `--iterations`/`--warmup`). `--save-baseline FILE` writes JSON
-  (`format=1`, `tool`/`version`, `profile=debug|release`, `iterations`, `warmup`, and per item
+  (`format=1`, `tool`/`version`, `profile=debug|release`, `optimized_ir=true|false`, `iterations`, `warmup`, and per item
   `median_ns`/`mean_ns`/`ci_ns`); `--compare-baseline FILE --threshold RATIO` (default 0.05, may
   be written `5%`) compares medians and, above the threshold, reports `REGRESSION` and exits 1; a
   profile mismatch exits 2; a workload present on one side only is reported but not counted as
-  a regression. Protocol: compare only release builds, on the same machine, median of N.
+  a regression. Protocol: compare only release builds, on the same machine, with the same `--release` IR optimization setting, median of N. Baselines without `optimized_ir` predate this option and count as unoptimized.
 
 ## 9.13 Performance targets
 
@@ -8022,6 +8115,7 @@ Status: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit
 | `E0809` | internal type/dimension invariant violated | no |
 | `E0810` | IO error | yes |
 | `E0811` | task failure: a result that cannot cross threads, a task awaited twice, or a stopped worker (§9.7.3) | yes |
+| `E0812` | evaluation interrupted by the host / Ctrl-C (§9.8) | yes |
 | `E0899` | panic | no |
 
 Status: a few built-ins borrow `E0806`–`E0809` to report their own argument or internal
@@ -8219,5 +8313,5 @@ Still missing: per-package dependency namespaces (same-named import roots pointi
 5. **ODE**: multiple shooting / collocation for BVPs; `AutoSwitch` decides by step budget rather than an eigenvalue estimate (§8.9).
 6. **Type system**: type-level moduli for `Zmod<n>`/`GF<p>`; rank polymorphism in user functions; symbolic exponents (§12.8.2).
 7. **Plot**: only the HTML/SVG-inline renderer, with no standalone `.svg`/PNG/JPEG output (§8.12).
-8. **REPL**: Ctrl-C cancelling the current evaluation (§9.10).
+8. **REPL**: Ctrl-C cancellation is cooperative; opaque compiler/native/system calls may finish their current call before `E0812` is reported (§9.8).
 

@@ -363,7 +363,8 @@ pub fn bench(
     if cfg!(debug_assertions) {
         // A release build is 10-20× faster for interpreter loops; reporting
         // debug numbers without saying so invites a comparison that means
-        // nothing. The §9.9 `--release` flag is not this: it has no effect.
+        // nothing. The runtime `--release` flag optimizes IR; it cannot rebuild
+        // the Rust interpreter binary.
         eprintln!(
             "aevia bench: note: this is a debug build; the timings are not representative. \
              Build with `cargo build --release` for comparable numbers (§9.9's `--release` flag \
@@ -450,12 +451,12 @@ pub fn bench(
     );
     println!(
         "protocol: compare only release builds (`cargo build --release`), on the same machine, \
-         from the median of N iterations; timings include interpreter allocation but allocations \
+         with the same `--release` IR optimization setting, from the median of N iterations; timings include interpreter allocation but allocations \
          are not counted"
     );
     let mut recorded = 0usize;
     if let Some(path) = &save_baseline_path {
-        match save_baseline(path, &rows, iterations, warmup) {
+        match save_baseline(path, &rows, iterations, warmup, options.release) {
             | Ok(saved) => {
                 println!(
                     "wrote baseline `{}` ({saved} workload(s), profile `{}`)",
@@ -471,7 +472,7 @@ pub fn bench(
         }
     }
     if let Some(path) = &compare_baseline_path {
-        match compare_baseline(path, &rows, threshold) {
+        match compare_baseline(path, &rows, threshold, options.release) {
             | Ok(comparison) => {
                 let percent = threshold * 100.0;
                 println!(
@@ -550,6 +551,7 @@ fn save_baseline(
     rows: &[Row],
     iterations: usize,
     warmup: usize,
+    optimized_ir: bool,
 ) -> Result<usize, String> {
     let mut benchmarks = serde_json::Map::new();
     for row in rows {
@@ -574,6 +576,7 @@ fn save_baseline(
         "tool": "aevia bench",
         "version": env!("CARGO_PKG_VERSION"),
         "profile": profile(),
+        "optimized_ir": optimized_ir,
         "iterations": iterations,
         "warmup": warmup,
         "benchmarks": benchmarks,
@@ -603,6 +606,7 @@ fn compare_baseline(
     path: &Path,
     rows: &[Row],
     threshold: f64,
+    optimized_ir: bool,
 ) -> Result<Comparison, (ExitCode, String)> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         (
@@ -630,6 +634,19 @@ fn compare_baseline(
                 stored_profile.unwrap_or("unknown"),
                 profile()
             ),
+        ));
+    }
+    // Baselines predating the runtime optimizer were always unoptimized.
+    let stored_optimized = document
+        .get("optimized_ir")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if stored_optimized != optimized_ir {
+        return Err((
+            ExitCode::from(2),
+            "the baseline and this run use different `--release` IR optimization settings; \
+             use matching settings or re-save the baseline"
+                .to_string(),
         ));
     }
     let benchmarks = document

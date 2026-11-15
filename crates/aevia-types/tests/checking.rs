@@ -662,8 +662,8 @@ fn a_dimensioned_determinant_needs_dyn() {
 }
 
 #[test]
-fn a_duplicate_function_name_is_e0316() {
-    expect_error("fn f(): Int = 1\nfn f(): String = \"s\"\n", "E0316");
+fn a_redefined_function_can_change_its_result_type() {
+    expect_ok("fn f(): Int = 1\nfn f(): String = \"s\"\n");
 }
 
 #[test]

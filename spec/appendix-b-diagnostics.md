@@ -154,6 +154,7 @@ error[E0401]: dimension mismatch
 | `E0809` | internal type/dimension invariant violated | 否 |
 | `E0810` | IO error | 是 |
 | `E0811` | task failure: a result that cannot cross threads, a task awaited twice, or a stopped worker（§9.7.3） | 是 |
+| `E0812` | 宿主 / Ctrl-C 中断求值（§9.8） | 是 |
 | `E0899` | panic | 否 |
 
 状态：个别内建函数借用 `E0806`–`E0809` 报告自己的参数/内部失败（例如 `approx_map`、`degree`），码的类别以上表为准，消息以内建

@@ -48,7 +48,6 @@ use aevia_ir::Tail;
 use aevia_syntax::Span;
 use aevia_syntax::ast::BinOp;
 use indexmap::IndexMap;
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -99,6 +98,8 @@ pub fn eval_top(
     nslots: u32,
     scope: &Rc<Scope>,
 ) -> Result<Value, EvalError> {
+    let _cancellation = interp.cancellation_scope();
+    interp.check_cancelled()?;
     let previous = interp.enter_scope(scope)?;
     let env = Rc::new(IrEnv {
         slots: RefCell::new(Vec::new()),
@@ -107,6 +108,7 @@ pub fn eval_top(
     let mut frame = vec![Value::Unit; usize::try_from(nslots).unwrap_or(0)];
     let result = eval_block(interp, block, &mut frame, &env).and_then(|flow| force(interp, flow));
     interp.restore_context(previous);
+    interp.check_cancelled()?;
     result
 }
 
@@ -123,6 +125,8 @@ pub(crate) fn run_closure(
     span: Span,
     instance: Option<Rc<crate::generics::FunctionProof>>,
 ) -> Result<Value, EvalError> {
+    let _cancellation = interp.cancellation_scope();
+    interp.check_cancelled().map_err(|error| error.at(span))?;
     let (ClosureBody::Ir(first), ClosureEnv::Ir(first_env)) = (&closure.body, &closure.env) else {
         return Err(EvalError::new("E0809", "not an IR closure").at(span));
     };
@@ -158,6 +162,9 @@ pub(crate) fn run_closure(
     // a million allocations.
     let mut frame: Vec<Value> = interp.take_buffer(usize::try_from(function.nslots).unwrap_or(0));
     let outcome = 'run: loop {
+        if let Err(error) = interp.check_cancelled() {
+            break 'run Err(error.at(function.span));
+        }
         if let Some(scope) = &env.scope
             && let Err(error) = interp.enter_scope(scope)
         {
@@ -248,45 +255,56 @@ pub(crate) fn run_closure(
                     | _ => None,
                 }
             });
-            let outcome = expected
-                .zip(literals.as_deref())
-                .and_then(|(expected, literals)| {
-                    crate::jit::run_with(&function, &args, remaining, literals, expected, |ask| {
-                        let callee_span = match ask {
-                            | crate::jit::Ask::Builtin(name) => {
-                                // The global must reach the builtin: no
-                                // scope, global or class method shadows it.
-                                return env
-                                    .scope
-                                    .as_ref()
-                                    .is_none_or(|scope| scope.lookup(name).is_none())
-                                    && !interp.globals.contains_key(name)
-                                    && !interp.method_classes.contains_key(name)
-                                    && aevia_types::builtins::is_builtin(name);
-                            },
-                            | crate::jit::Ask::IsSelf(span) => span,
-                        };
-                        // Native code may loop only while this name still points to the
-                        // same canonical closure and the actual recursive source call
-                        // preserves every selected generic binding.
-                        let Ok(target) = eval_atom(
-                            interp,
-                            &Atom::Global(function.name.to_string()),
-                            &mut frame,
-                            &env,
-                            function.span,
-                        ) else {
-                            return false;
-                        };
-                        interp.self_specialization_matches(
-                            &current_closure,
-                            current_instance.as_ref(),
-                            &target,
-                            callee_span,
+            let outcome = if interp.cancellation.is_some() {
+                None
+            } else {
+                expected
+                    .zip(literals.as_deref())
+                    .and_then(|(expected, literals)| {
+                        crate::jit::run_with(
+                            &function,
                             &args,
+                            remaining,
+                            literals,
+                            expected,
+                            |ask| {
+                                let callee_span = match ask {
+                                    | crate::jit::Ask::Builtin(name) => {
+                                        // The global must reach the builtin: no
+                                        // scope, global or class method shadows it.
+                                        return env
+                                            .scope
+                                            .as_ref()
+                                            .is_none_or(|scope| scope.lookup(name).is_none())
+                                            && !interp.globals.contains_key(name)
+                                            && !interp.method_classes.contains_key(name)
+                                            && aevia_types::builtins::is_builtin(name);
+                                    },
+                                    | crate::jit::Ask::IsSelf(span) => span,
+                                };
+                                // Native code may loop only while this name still points to the
+                                // same canonical closure and the actual recursive source call
+                                // preserves every selected generic binding.
+                                let Ok(target) = eval_atom(
+                                    interp,
+                                    &Atom::Global(function.name.to_string()),
+                                    &mut frame,
+                                    &env,
+                                    function.span,
+                                ) else {
+                                    return false;
+                                };
+                                interp.self_specialization_matches(
+                                    &current_closure,
+                                    current_instance.as_ref(),
+                                    &target,
+                                    callee_span,
+                                    &args,
+                                )
+                            },
                         )
                     })
-                });
+            };
             match outcome {
                 | Some(crate::jit::Outcome::Value(value)) => Some(Flow::Value(value)),
                 | Some(crate::jit::Outcome::Tail { args, span, consumed }) => {
@@ -469,7 +487,9 @@ fn eval_block_in(
     env: &Rc<IrEnv>,
     exit: bool,
 ) -> Result<Flow, EvalError> {
+    interp.check_cancelled()?;
     for stmt in &block.stmts {
+        interp.check_cancelled()?;
         match stmt {
             | Stmt::Let(item) => {
                 let value = eval_rhs(interp, &item.rhs, frame, env, item.span)?;
@@ -489,6 +509,7 @@ fn eval_block_in(
             },
         }
     }
+    interp.check_cancelled()?;
     eval_tail(interp, &block.tail, frame, env, exit)
 }
 
@@ -1004,7 +1025,11 @@ fn eval_rhs_rest(
             name,
         } => {
             if let Some(qualified) = qualified
-                && interp.globals.contains_key(qualified)
+                && (env
+                    .scope
+                    .as_ref()
+                    .is_some_and(|scope| scope.lookup(qualified).is_some())
+                    || interp.globals.contains_key(qualified))
             {
                 return interp.lookup_global(qualified, env.scope.as_ref(), span);
             }
@@ -1207,7 +1232,8 @@ fn eval_rhs_rest(
                     return Err(EvalError::new("E0302", "factorial expects an Int").at(span));
                 },
             };
-            Ok(Value::Num(NumVal::int(factorial(n, *double))))
+            let result = crate::eval::factorial(interp, n, *double, span)?;
+            Ok(Value::Num(NumVal::int(result)))
         },
         | Rhs::Do(plan) => build_do(interp, plan, frame, env),
     }
@@ -1268,24 +1294,6 @@ pub(crate) fn bind_do_pattern(
         )
         .at(span))
     }
-}
-
-fn factorial(
-    n: i64,
-    double: bool,
-) -> BigInt {
-    use num_traits::One;
-    let mut result = BigInt::one();
-    if n <= 0 {
-        return result;
-    }
-    let step = if double { 2 } else { 1 };
-    let mut current = n;
-    while current > 0 {
-        result *= BigInt::from(current);
-        current -= step;
-    }
-    result
 }
 
 /// Matches a pattern, writing its binders into the frame's slots.

@@ -183,7 +183,7 @@ impl Interp {
         let mut signatures = Vec::new();
         let mut rewrites = Vec::new();
         let mut published = Vec::new();
-        let mut replaced: Vec<(String, Value)> = Vec::new();
+        let mut replaced: Vec<(String, aevia_syntax::Span, Value)> = Vec::new();
         let fail =
             |diagnostics: &mut Diagnostics, registration: &HostRegistration, reason: String| {
                 diagnostics.push(Diagnostic::error(
@@ -203,7 +203,11 @@ impl Interp {
             .iter()
             .filter(|registration| registration.kind == HostRegistrationKind::Rule);
         for registration in ops {
-            let Some(function) = scope.lookup(&registration.function) else {
+            let Some(function) = scope
+                .lookup_at(&registration.function, registration.span)
+                .ok()
+                .flatten()
+            else {
                 fail(
                     &mut diagnostics,
                     registration,
@@ -224,11 +228,8 @@ impl Interp {
                         result: aevia_rssn::registry::to_dim_expr(&registration.result),
                     });
                     let wrapper = operator_wrapper(registration, function.clone());
-                    scope
-                        .vars
-                        .borrow_mut()
-                        .insert(registration.function.clone(), wrapper);
-                    replaced.push((registration.function.clone(), function));
+                    scope.replace_source_at(&registration.function, registration.span, wrapper);
+                    replaced.push((registration.function.clone(), registration.span, function));
                     published.push(registration);
                 },
                 | Err(reason) => fail(&mut diagnostics, registration, reason),
@@ -272,15 +273,19 @@ impl Interp {
         {
             // The kernel has no such operators: calls must keep running the
             // Aevia bodies rather than build nodes nobody can reduce.
-            for (function, original) in replaced {
-                scope.vars.borrow_mut().insert(function, original);
+            for (function, site, original) in replaced {
+                scope.replace_source_at(&function, site, original);
             }
             refuse(&mut diagnostics, &published, &reason);
             published.clear();
         }
         let mut rule_registrations = Vec::new();
         for registration in rules {
-            let Some(function) = scope.lookup(&registration.function) else {
+            let Some(function) = scope
+                .lookup_at(&registration.function, registration.span)
+                .ok()
+                .flatten()
+            else {
                 fail(
                     &mut diagnostics,
                     registration,

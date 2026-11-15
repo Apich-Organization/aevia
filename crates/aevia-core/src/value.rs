@@ -1625,6 +1625,13 @@ impl DynValue {
     }
 }
 
+/// A reserved source name either awaits initialization or intentionally hides
+/// its first nonrecursive initializer's own binding in favor of the Prelude.
+pub(crate) enum SourceLookupFailure {
+    Uninitialized,
+    Prelude,
+}
+
 /// A lexical environment: a persistent chain of scopes.
 ///
 /// The bindings are behind a `RefCell` so that a recursive function can be
@@ -1635,6 +1642,12 @@ pub struct Scope {
     pub parent: Option<Rc<Scope>>,
     /// Bindings introduced here.
     pub vars: RefCell<crate::fxhash::FxHashMap<String, Value>>,
+    /// Top-level source revisions, including reserved forward declarations.
+    /// `None` spans hold bindings inherited from an earlier incremental batch.
+    source_revisions:
+        RefCell<crate::fxhash::FxHashMap<String, Vec<(Option<aevia_syntax::Span>, Option<Value>)>>>,
+    /// Ranges whose first nonrecursive initializer hides its own reservation.
+    source_initializers: RefCell<crate::fxhash::FxHashMap<String, Vec<aevia_syntax::Span>>>,
     /// Exact checked revision used by this lexical environment.
     pub(crate) context: Option<Rc<crate::evidence::ModuleContext>>,
     /// Imported module environments retain their own implementation revision.
@@ -1676,6 +1689,8 @@ impl Scope {
         Rc::new(Self {
             parent: Some(parent.clone()),
             vars: RefCell::default(),
+            source_revisions: RefCell::default(),
+            source_initializers: RefCell::default(),
             context: parent.context.clone(),
             imports: Vec::new(),
             types: parent.types.clone(),
@@ -1689,6 +1704,8 @@ impl Scope {
         Rc::new(Self {
             parent: None,
             vars: RefCell::default(),
+            source_revisions: RefCell::default(),
+            source_initializers: RefCell::default(),
             context: Some(context),
             imports,
             types: None,
@@ -1702,10 +1719,176 @@ impl Scope {
         Rc::new(Self {
             parent: Some(parent.clone()),
             vars: RefCell::default(),
+            source_revisions: RefCell::default(),
+            source_initializers: RefCell::default(),
             context: parent.context.clone(),
             imports: Vec::new(),
             types,
         })
+    }
+
+    /// Reserve every declaration before initialization so a deferred forward
+    /// reference cannot accidentally resolve to another revision of the name.
+    pub(crate) fn reserve_source(
+        &self,
+        name: &str,
+        visible: aevia_syntax::Span,
+    ) {
+        let mut revisions = self.source_revisions.borrow_mut();
+        let entries = revisions.entry(name.to_string()).or_insert_with(|| {
+            self.vars
+                .borrow()
+                .get(name)
+                .cloned()
+                .map(|value| vec![(None, Some(value))])
+                .unwrap_or_default()
+        });
+        if !entries.iter().any(|(site, _)| *site == Some(visible)) {
+            entries.push((Some(visible), None));
+        }
+    }
+
+    pub(crate) fn reserve_initializer(
+        &self,
+        name: &str,
+        initializer: aevia_syntax::Span,
+    ) {
+        let mut initializers = self.source_initializers.borrow_mut();
+        let ranges = initializers.entry(name.to_string()).or_default();
+        if !ranges.contains(&initializer) {
+            ranges.push(initializer);
+        }
+    }
+
+    /// Install a source revision, keeping the public table ordered by source
+    /// position even when deferred initializers complete out of order.
+    pub(crate) fn bind_source(
+        &self,
+        name: &str,
+        value: Value,
+        visible: aevia_syntax::Span,
+    ) {
+        self.reserve_source(name, visible);
+        let mut revisions = self.source_revisions.borrow_mut();
+        let entries = revisions.get_mut(name).expect("reserved source binding");
+        let entry = entries
+            .iter_mut()
+            .find(|(site, _)| *site == Some(visible))
+            .expect("reserved source site");
+        entry.1 = Some(value);
+        let latest = entries
+            .iter()
+            .filter(|(_, value)| value.is_some())
+            .max_by_key(|(site, _)| site.map(|span| (span.file, span.start)));
+        if let Some((_, Some(value))) = latest {
+            self.vars
+                .borrow_mut()
+                .insert(name.to_string(), value.clone());
+        }
+    }
+
+    /// Replace the declaration visible at `reference`, retaining all other
+    /// revisions. Source plugins use their attribute site so a later function
+    /// with the same name cannot steal the registration or its wrapper.
+    pub(crate) fn replace_source_at(
+        &self,
+        name: &str,
+        reference: aevia_syntax::Span,
+        replacement: Value,
+    ) -> Option<Value> {
+        let mut revisions = self.source_revisions.borrow_mut();
+        if let Some(entries) = revisions.get_mut(name) {
+            let preceding = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, (site, _))| {
+                    site.is_some_and(|span| {
+                        span.file == reference.file && span.start <= reference.start
+                    })
+                })
+                .max_by_key(|(_, (site, _))| site.map(|span| span.start))
+                .map(|(index, _)| index);
+            let baseline = entries.iter().position(|(site, _)| site.is_none());
+            let first = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, (site, _))| site.is_some_and(|span| span.file == reference.file))
+                .min_by_key(|(_, (site, _))| site.map(|span| span.start))
+                .map(|(index, _)| index);
+            if let Some(index) = preceding.or(baseline).or(first) {
+                let original = entries[index].1.replace(replacement);
+                if let Some((_, Some(latest))) = entries
+                    .iter()
+                    .filter(|(_, value)| value.is_some())
+                    .max_by_key(|(site, _)| site.map(|span| (span.file, span.start)))
+                {
+                    self.vars
+                        .borrow_mut()
+                        .insert(name.to_string(), latest.clone());
+                }
+                return original;
+            }
+        }
+        self.vars.borrow_mut().insert(name.to_string(), replacement)
+    }
+
+    /// Resolve top-level references at their lexical source site. Local
+    /// scopes retain ordinary lexical shadowing. An unavailable selected
+    /// revision asks module initialization to defer, rather than falling back
+    /// to a differently typed revision from the public globals table.
+    pub(crate) fn lookup_at(
+        self: &Rc<Self>,
+        name: &str,
+        reference: aevia_syntax::Span,
+    ) -> Result<Option<Value>, SourceLookupFailure> {
+        let mut scope: &Scope = self;
+        loop {
+            {
+                let revisions = scope.source_revisions.borrow();
+                if let Some(entries) = revisions.get(name) {
+                    let same_file = |site: &Option<aevia_syntax::Span>| {
+                        site.is_some_and(|span| span.file == reference.file)
+                    };
+                    let preceding = entries
+                        .iter()
+                        .filter(|(site, _)| {
+                            same_file(site)
+                                && site.is_some_and(|span| span.start <= reference.start)
+                        })
+                        .max_by_key(|(site, _)| site.map(|span| span.start));
+                    let baseline = entries.iter().find(|(site, _)| site.is_none());
+                    let first = entries
+                        .iter()
+                        .filter(|(site, _)| same_file(site))
+                        .min_by_key(|(site, _)| site.map(|span| span.start));
+                    // The checker hides the first nonrecursive definition
+                    // while checking its initializer. Its own references may
+                    // therefore denote a Prelude function/constant, while a
+                    // forward reference outside it still selects this source
+                    // reservation. Repeated definitions see the preceding one.
+                    if preceding.is_none()
+                        && baseline.is_none()
+                        && let Some((Some(first_site), _)) = first
+                        && self_initializes(scope, name, *first_site, reference)
+                    {
+                        return Err(SourceLookupFailure::Prelude);
+                    }
+                    if let Some((_, value)) = preceding.or(baseline).or(first) {
+                        return value
+                            .clone()
+                            .map(Some)
+                            .ok_or(SourceLookupFailure::Uninitialized);
+                    }
+                }
+            }
+            if let Some(value) = scope.vars.borrow().get(name) {
+                return Ok(Some(value.clone()));
+            }
+            let Some(parent) = scope.parent.as_deref() else {
+                return Ok(None);
+            };
+            scope = parent;
+        }
     }
 
     /// Looks a name up through the chain.
@@ -1724,6 +1907,26 @@ impl Scope {
             scope = scope.parent.as_deref()?;
         }
     }
+}
+
+fn self_initializes(
+    scope: &Scope,
+    name: &str,
+    visible: aevia_syntax::Span,
+    reference: aevia_syntax::Span,
+) -> bool {
+    scope
+        .source_initializers
+        .borrow()
+        .get(name)
+        .is_some_and(|initializers| {
+            initializers.iter().any(|initializer| {
+                initializer.file == reference.file
+                    && initializer.start <= reference.start
+                    && reference.end <= initializer.end
+                    && initializer.end == visible.start
+            })
+        })
 }
 
 /// What a closure runs.
@@ -2751,9 +2954,9 @@ pub fn to_math(
 ) -> Result<String, String> {
     let latex = syntax == MathSyntax::Latex;
     match value {
-        | Value::Num(num) => Ok(math_scalar(num, syntax)),
-        | Value::Str(text) if latex => Ok(format!("\\text{{{text}}}")),
-        | Value::Str(text) => Ok(format!("\"{text}\"")),
+        | Value::Num(num) => math_scalar(num, syntax),
+        | Value::Str(text) if latex => Ok(format!("\\text{{{}}}", escape_latex_text(text))),
+        | Value::Str(text) => Ok(quote_typst_text(text)),
         | Value::Bool(flag) => {
             Ok(match (latex, *flag) {
                 | (true, true) => "\\mathrm{true}".to_string(),
@@ -2775,9 +2978,19 @@ pub fn to_math(
                     out.push_str(if latex { " \\\\ " } else { ", " });
                 }
                 if latex {
-                    let _ = write!(out, "\\mathrm{{{name}}} &= {}", to_math(value, syntax)?);
+                    let _ = write!(
+                        out,
+                        "\\mathrm{{{}}} &= {}",
+                        escape_latex_text(name),
+                        to_math(value, syntax)?
+                    );
                 } else {
-                    let _ = write!(out, "{name} &= {}", to_math(value, syntax)?);
+                    let _ = write!(
+                        out,
+                        "{} &= {}",
+                        quote_typst_text(name),
+                        to_math(value, syntax)?
+                    );
                 }
             }
             out.push_str(if latex { "\\end{cases}" } else { ")" });
@@ -2785,9 +2998,9 @@ pub fn to_math(
         },
         | Value::Variant(variant) if variant.fields.is_empty() => {
             Ok(if latex {
-                format!("\\mathrm{{{}}}", variant.name)
+                format!("\\mathrm{{{}}}", escape_latex_text(&variant.name))
             } else {
-                variant.name.clone()
+                quote_typst_text(&variant.name)
             })
         },
         | Value::Variant(_) => Err("variant payloads have no mathematical form".to_string()),
@@ -2797,21 +3010,53 @@ pub fn to_math(
         | Value::Ctor { .. } => Err("a constructor has no mathematical form".to_string()),
         | Value::UnitOf(unit) => {
             Ok(if latex {
-                format!("\\mathrm{{{}}}", unit.display)
+                format!("\\mathrm{{{}}}", escape_latex_text(&unit.display))
             } else {
-                unit.display.clone()
+                format!("upright({})", quote_typst_text(&unit.display))
             })
         },
         | Value::Sparse(_) => {
             Err("a sparse tensor has no mathematical form; use `to_dense`".to_string())
         },
         | Value::Io(_) => Err("an IO action has no mathematical form".to_string()),
-        | Value::Prop(prop) => Ok(prop.text.clone()),
-        | Value::Dyn(dynamic) => Ok(math_scalar(&dynamic.as_scalar(), syntax)),
-        | Value::KernelValue(_)
-        | Value::KernelError(_)
-        | Value::TypeRep(_)
-        | Value::Callback(_) => Err("an opaque kernel value has no mathematical form".to_string()),
+        | Value::Prop(prop) => {
+            if let Some(comparison) = &prop.comparison {
+                let relation = match (syntax, comparison.op) {
+                    | (_, BinOp::Eq) => "=",
+                    | (MathSyntax::Latex, BinOp::Ne) => "\\ne",
+                    | (MathSyntax::Latex, BinOp::Le) => "\\le",
+                    | (MathSyntax::Latex, BinOp::Ge) => "\\ge",
+                    | (_, BinOp::Lt) => "<",
+                    | (_, BinOp::Gt) => ">",
+                    | (MathSyntax::Typst, BinOp::Ne) => "!=",
+                    | (MathSyntax::Typst, BinOp::Le) => "<=",
+                    | (MathSyntax::Typst, BinOp::Ge) => ">=",
+                    | _ => return Err("this proposition has no mathematical relation".into()),
+                };
+                Ok(format!(
+                    "{} {relation} {}",
+                    to_math(&comparison.left, syntax)?,
+                    to_math(&comparison.right, syntax)?
+                ))
+            } else if latex {
+                Ok(format!("\\text{{{}}}", escape_latex_text(&prop.text)))
+            } else {
+                Ok(quote_typst_text(&prop.text))
+            }
+        },
+        | Value::Dyn(dynamic) => math_scalar(&dynamic.as_scalar(), syntax),
+        | Value::KernelValue(payload) => {
+            let kernel = aevia_rssn::kernel();
+            (if latex {
+                kernel.to_latex(&payload.payload)
+            } else {
+                kernel.to_typst(&payload.payload)
+            })
+            .map_err(|error| error.message)
+        },
+        | Value::KernelError(_) | Value::TypeRep(_) | Value::Callback(_) => {
+            Err("an opaque kernel value has no mathematical form".to_string())
+        },
         | Value::Task(_) => Err("a task has no mathematical form".to_string()),
         | Value::Error => Err("an error value has no mathematical form".to_string()),
     }
@@ -2820,9 +3065,11 @@ pub fn to_math(
 fn math_scalar(
     num: &NumVal,
     syntax: MathSyntax,
-) -> String {
+) -> Result<String, String> {
     let body = match &num.kind {
-        | NumKind::Sym(term) => crate::sym::term_to_math(term, syntax == MathSyntax::Latex),
+        | NumKind::Sym(term) => {
+            crate::sym::term_to_math_checked(term, syntax == MathSyntax::Latex)?
+        },
         | NumKind::Int(value) => value.to_string(),
         | NumKind::Exact(value) => {
             if value.denom().is_one() {
@@ -2833,24 +3080,108 @@ fn math_scalar(
                 format!("frac({}, {})", value.numer(), value.denom())
             }
         },
-        | NumKind::Float(value) => format_float(*value),
+        | NumKind::Float(value) => math_float(*value, syntax),
         | NumKind::Complex(re, im) => {
             let sign = if *im < 0.0 { "-" } else { "+" };
-            format!("{}{} {} i", format_float(*re), sign, format_float(im.abs()))
+            format!(
+                "{} {sign} {} i",
+                math_float(*re, syntax),
+                math_float(im.abs(), syntax)
+            )
         },
     };
     let suffix = si_unit_text(&num.dim);
-    if suffix.is_empty() {
+    Ok(if suffix.is_empty() {
         body
+    } else if syntax == MathSyntax::Latex {
+        format!("{body}\\ \\mathrm{{{}}}", escape_latex_text(&suffix))
     } else {
-        format!("{body}\\ \\mathrm{{{suffix}}}")
+        format!("{body} thin upright({})", quote_typst_text(&suffix))
+    })
+}
+
+/// Numeric mathematical output uses the target's scientific notation and
+/// non-finite constants rather than source-language exponent identifiers.
+fn math_float(
+    value: f64,
+    syntax: MathSyntax,
+) -> String {
+    let latex = syntax == MathSyntax::Latex;
+    if value.is_nan() {
+        return if latex {
+            r"\mathrm{NaN}".into()
+        } else {
+            "upright(\"NaN\")".into()
+        };
     }
+    if value.is_infinite() {
+        let sign = if value.is_sign_negative() {
+            "-"
+        } else {
+            ""
+        };
+        return format!("{sign}{}", if latex { r"\infty" } else { "oo" });
+    }
+    let text = format_float(value);
+    if let Some((mantissa, exponent)) = text.split_once('e') {
+        if latex {
+            format!(r"{mantissa} \times 10^{{{exponent}}}")
+        } else {
+            format!("{mantissa} times 10^({exponent})")
+        }
+    } else {
+        text
+    }
+}
+
+/// Escapes literal text used inside LaTeX text/roman/operator labels.
+pub(crate) fn escape_latex_text(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        match ch {
+            | '\\' => out.push_str(r"\textbackslash{}"),
+            | '{' => out.push_str(r"\{"),
+            | '}' => out.push_str(r"\}"),
+            | '$' => out.push_str(r"\$"),
+            | '&' => out.push_str(r"\&"),
+            | '#' => out.push_str(r"\#"),
+            | '%' => out.push_str(r"\%"),
+            | '_' => out.push_str(r"\_"),
+            | '^' => out.push_str(r"\textasciicircum{}"),
+            | '~' => out.push_str(r"\textasciitilde{}"),
+            | other => out.push(other),
+        }
+    }
+    out
+}
+
+/// A quoted Typst math text literal. It never enters Typst markup mode.
+pub(crate) fn quote_typst_text(text: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in text.chars() {
+        match ch {
+            | '\\' => out.push_str(r"\\"),
+            | '"' => out.push_str("\\\""),
+            | '\n' => out.push_str(r"\n"),
+            | '\r' => out.push_str(r"\r"),
+            | '\t' => out.push_str(r"\t"),
+            | other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn math_tensor(
     tensor: &TensorData,
     syntax: MathSyntax,
 ) -> Result<String, String> {
+    if tensor.rank() == 0 {
+        let cell = tensor
+            .get_flat(0)
+            .ok_or_else(|| "scalar tensor has no element".to_string())?;
+        return to_math(&cell, syntax);
+    }
     if tensor.rank() > 2 {
         return Err("only rank 1 and 2 tensors have a matrix form".to_string());
     }

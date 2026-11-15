@@ -2112,7 +2112,7 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
 
         // ----- display and IO --------------------------------------------
-        | "show" | "repr" | "to_latex" | "to_typst" => {
+        | "show" | "repr" | "to_pretty" | "to_latex" | "to_typst" => {
             vec![scheme(1, 0, 0, func(vec![var(0)], Type::string()))]
         },
         | "print" | "println" | "eprintln" => {
@@ -4216,6 +4216,7 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "map_err",
     "show",
     "repr",
+    "to_pretty",
     "to_latex",
     "to_typst",
     "print",
