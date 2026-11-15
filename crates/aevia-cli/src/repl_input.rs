@@ -278,6 +278,7 @@ impl Completer for ReplHelper {
                 ":cancel",
                 ":run",
                 ":show",
+                ":source",
                 ":save",
                 "let",
                 "fn",
@@ -831,6 +832,20 @@ pub fn split_submissions(source: &str) -> Vec<String> {
             }
             continue;
         }
+        // :cancel is an input boundary, even if an unfinished bracket or
+        // conditional would otherwise absorb later commands into source.
+        // A completed prior statement is retained; only the pending draft is
+        // discarded. Literal/comment contents are never interpreted as control.
+        if trimmed == ":cancel" && !inside_paste_literal(&current) {
+            if !current.trim().is_empty()
+                && !lexical_continuation(&current)
+                && !missing_else(&current)
+            {
+                units.push(std::mem::take(&mut current));
+            }
+            current.clear();
+            continue;
+        }
         let top = !line.starts_with(char::is_whitespace) && !trimmed.is_empty();
         if trimmed.starts_with(':') && !lexical_continuation(&current) {
             if !current.trim().is_empty() {
@@ -1090,6 +1105,33 @@ mod tests {
             split_submissions(":paste\nlet text = \"\"\"\n:end"),
             [":paste-unfinished"]
         );
+    }
+
+    #[test]
+    fn standalone_cancel_discards_incomplete_input_before_following_commands() {
+        let units =
+            split_submissions("let accepted = 2\nlet broken = [1,\n:cancel\n:help\naccepted + 1\n");
+        assert_eq!(units.len(), 3, "{units:?}");
+        assert_eq!(units[0].trim(), "let accepted = 2");
+        assert_eq!(units[1], ":help");
+        assert_eq!(units[2].trim(), "accepted + 1");
+        assert_eq!(
+            split_submissions("if true then 1\n:cancel\n:help\n"),
+            [":help"]
+        );
+        assert_eq!(
+            split_submissions("let accepted = 2\n:cancel\n"),
+            ["let accepted = 2\n"]
+        );
+    }
+
+    #[test]
+    fn standalone_cancel_inside_multiline_strings_and_comments_is_not_control() {
+        let source =
+            "let text = \"\"\"\n:cancel\n\"\"\"\n#- comment\n:cancel\n-#\nlet accepted = 2\n";
+        let units = split_submissions(source);
+        assert_eq!(units.len(), 1, "{units:?}");
+        assert_eq!(units[0], source);
     }
 
     #[test]

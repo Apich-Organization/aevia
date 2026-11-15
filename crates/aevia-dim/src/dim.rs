@@ -1207,21 +1207,24 @@ impl<'a> DimTextParser<'a> {
         }
         let start = self.pos;
         while let Some(c) = self.peek() {
-            if c.is_ascii_digit() {
+            if c.is_ascii_digit() || matches!(c, '.' | '_') {
                 self.bump();
             } else {
                 break;
             }
         }
-        let text = &self.text[start..self.pos];
-        if text.is_empty() {
-            return Err(DimParseError::BadExponent(text.to_string()));
+        if matches!(self.peek(), Some('e' | 'E')) {
+            self.bump();
+            if matches!(self.peek(), Some('+' | '-')) {
+                self.bump();
+            }
+            while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
+                self.bump();
+            }
         }
-        let value = BigInt::from(
-            text.parse::<i64>()
-                .map_err(|_| DimParseError::BadExponent(text.to_string()))?,
-        );
-        let value = BigRational::from_integer(value);
+        let text = &self.text[start..self.pos];
+        let value =
+            parse_decimal(text).ok_or_else(|| DimParseError::BadExponent(text.to_string()))?;
         Ok(if negative { -value } else { value })
     }
 }
@@ -1445,6 +1448,27 @@ mod tests {
             env.parse("Energy").unwrap(),
             env.parse("M*L^2/T^2").unwrap()
         );
+    }
+
+    #[test]
+    fn decimal_exponents_in_dimension_text_are_exact() {
+        let env = env();
+        for (decimal, rational) in [
+            ("L^1.5/T^-0.25", "L^(3/2)*T^(1/4)"),
+            ("L^1e-1", "L^(1/10)"),
+            ("L^1_0.0", "L^10"),
+            ("L^(0.5/0.25)", "L^2"),
+            ("L^9007199254740993.0", "L^9007199254740993"),
+        ] {
+            assert_eq!(env.parse(decimal).unwrap(), env.parse(rational).unwrap());
+        }
+        assert_ne!(
+            env.parse("L^0.333333").unwrap(),
+            env.parse("L^(1/3)").unwrap()
+        );
+        for invalid in ["L^1e", "L^1.2.3", "L^1e-9223372036854775808", "L^(1/0.0)"] {
+            assert!(env.parse(invalid).is_err(), "{invalid}");
+        }
     }
 
     #[test]

@@ -180,6 +180,8 @@ dependencies = [
  "serde",
  "unicode-ident",
  "unicode-normalization",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

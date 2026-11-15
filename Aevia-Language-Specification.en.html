@@ -437,7 +437,7 @@ float_lit ::= dec_int &quot;.&quot; dec_int [ exponent ] | dec_int exponent
 exponent  ::= (&quot;e&quot; | &quot;E&quot;) [&quot;+&quot; | &quot;-&quot;] dec_int</code></pre>
 <ul>
 <li>Underscores only group digits; they cannot lead, trail or repeat (<code>E0106</code>). <code>1_000</code> is valid; <code>1__0</code> and <code>1_</code> are not.</li>
-<li>A decimal integer is an <code>Int</code>; a literal with a point or exponent is a <code>Float</code>. <code>0755</code> is decimal 755. There are no numeric suffixes, and <code>1.</code> and <code>.5</code> are invalid.</li>
+<li>In value expressions, a decimal integer is an <code>Int</code>; a literal with a point or exponent is a <code>Float</code>. <code>0755</code> is decimal 755. There are no numeric suffixes, and <code>1.</code> and <code>.5</code> are invalid.</li>
 <li><code>oo</code>, <code>-oo</code> and <code>nan</code> are predefined constants, not literals. <code>i</code> is the predefined imaginary unit; write a complex number as <code>3 + 4 * i</code>.</li>
 <li><code>0</code> is not dimension-polymorphic: it defaults to <code>Int</code>. Write zero metres as <code>0 m</code> and a floating zero as <code>0.0</code> (§4.7).</li>
 </ul>
@@ -476,11 +476,12 @@ unit_expr    ::= unit_factor { (&quot;*&quot; | &quot;·&quot; | &quot;/&quot;) 
 unit_factor  ::= unit_atom [ &quot;^&quot; exponent | SUPERSCRIPT+ ]
 unit_atom    ::= unit_name | &quot;(&quot; unit_expr &quot;)&quot; | &quot;%&quot;
 unit_name    ::= UNIT_NAME | IDENT | qname
-exponent     ::= [&quot;-&quot;] integer | &quot;(&quot; rational &quot;)&quot;</code></pre>
+exponent     ::= [&quot;-&quot;] (number | &quot;(&quot; rational &quot;)&quot;)
+rational     ::= [&quot;-&quot;] number [&quot;/&quot; [&quot;-&quot;] number]</code></pre>
 <ul>
 <li><code>number</code> is an <code>INT</code> or <code>FLOAT</code> of §1.6. A unit literal starts when the numeric literal is immediately followed by an <code>IDENT</code>, a <code>UNIT_NAME</code> (<code>°C</code>), <code>%</code> or <code>(</code>.</li>
 <li><code>*</code> and <code>·</code> are synonyms; <code>/</code> is left-associative: <code>kg*m^2/s^3</code> = <code>(kg*m^2)/s^3</code>.</li>
-<li>An exponent MUST be an integer literal or a parenthesised rational: <code>m^2</code>, <code>s^-1</code>, <code>m^(1/2)</code>. Variable exponents are not allowed (use <code>Dyn</code>, §4.9). Superscripts <code>m²</code>, <code>s⁻¹</code>, <code>m³·s⁻²</code> are equivalent to <code>^n</code> (<code>E0107</code>: invalid sequence).</li>
+<li>Exponents are exact rational literals: <code>m^2</code>, <code>s^-1</code>, <code>m^(1/2)</code>, <code>m^1.5</code> (= <code>m^(3/2)</code>). Decimal/scientific notation is read exactly from its spelling, never rounded through <code>Float</code>. Variable exponents are not allowed (use <code>Dyn</code>, §4.9). Superscripts <code>m²</code>, <code>s⁻¹</code>, <code>m³·s⁻²</code> are equivalent to <code>^n</code> (<code>E0107</code>: invalid sequence).</li>
 <li>Juxtaposition inside a unit expression is not allowed: <code>kg m^2</code> is not <code>kg*m^2</code>.</li>
 <li><strong>Inside a unit expression, <code>*</code> <code>·</code> <code>/</code> MUST touch both neighbours.</strong> A <code>*</code> or <code>/</code> with whitespace on either side ends the unit literal and is ordinary arithmetic: <code>9.81 m/s^2 * mass</code> = <code>(9.81 m/s^2) * mass</code>; <code>70 kg * v^2 / 2</code> = <code>((70 kg) * v^2) / 2</code>; <code>3 m * x</code> = <code>(3 m) * x</code>. The tight <code>3 m*x</code> is still a unit expression and is <code>E0501</code> when <code>x</code> is not a unit. The formatter always prints units tight and arithmetic operators spaced, so formatting never changes meaning.</li>
 <li>Numbers are not allowed inside a unit expression: <code>3 m/2 s</code> is <code>(3 m) / (2 s)</code>; <code>1/2 m</code> is <code>1 / (2 m)</code> with type <code>Real[1/L]</code>; write "half a metre" as <code>(1/2) m</code>.</li>
@@ -1882,7 +1883,7 @@ dimension SolidAngle    = 1</code></pre>
 <p><code>Angle = 1</code> is deliberate: in SI the radian is dimensionless, <code>sin</code> accepts a dimensionless argument, and <code>deg</code> and <code>rad</code> are dimensionless units with scales (<code>π/180</code>, <code>1</code>) (§5.5). An <code>Angle</code> base dimension would break <code>exp(i*θ)</code>, <code>sin(ω*t)</code> and many other formulas. Aliases affect printing only: <code>Real[M*L^2/T^2]</code> and <code>Real[Energy]</code> are the same type, and printing prefers the shortest known alias.</p>
 <h2 id="04-dimensions--42-dimension-expressions">4.2 Dimension expressions</h2>
 <pre class="code"><code>δ ::= 1 | b | d | δ * δ | δ / δ | δ ^ q</code></pre>
-<p><code>b</code> is a base dimension, <code>d</code> a dimension variable (kind <code>Dim</code>) and <code>q</code> a rational literal (<code>2</code>, <code>-1</code>, <code>(1/2)</code>, <code>(-3/4)</code>; the decimal <code>0.5</code> is invalid). <strong>The exponent of a static dimension is always a compile-time rational:</strong> when <code>n</code> is a run-time value the type level cannot represent <code>d^n</code>, and such cases use <code>Dyn</code> (§4.9). rssn's <code>graph::dim</code> supports a single symbolic exponent on the term graph; Aevia's static types do not.</p>
+<p><code>b</code> is a base dimension, <code>d</code> a dimension variable (kind <code>Dim</code>) and <code>q</code> a rational literal (<code>2</code>, <code>-1</code>, <code>(1/2)</code>, <code>(-3/4)</code>; decimal notation is exact, e.g. <code>0.5</code> = <code>1/2</code>). <strong>The exponent of a static dimension is always a compile-time rational:</strong> when <code>n</code> is a run-time value the type level cannot represent <code>d^n</code>, and such cases use <code>Dyn</code> (§4.9). rssn's <code>graph::dim</code> supports a single symbolic exponent on the term graph; Aevia's static types do not. This notation extension applies only to unit/dimension syntax; value-level <code>Float</code> powers are unchanged. Printed exponents remain canonical rationals; <code>0.333333</code> is not <code>1/3</code>.</p>
 <h3 id="04-dimensions--421-canonical-form">4.2.1 Canonical form</h3>
 <p>A dimension is normalised to a finite map <code>δ̂ : (Base ∪ DimVar) → Q</code> keeping only generators with non-zero exponent: multiplication adds exponents, division subtracts, a power multiplies, zero entries are dropped, and generators are sorted in a fixed order (SI order, user bases, then variable names lexicographically). For example <code>L * T^-1 ⇒ {L:1, T:-1}</code>, <code>L / L ⇒ {}</code>, <code>(L^2)^(1/2) ⇒ {L:1}</code>. <strong>Two dimensions are equal if and only if their canonical forms are equal:</strong> <code>L/T</code> and <code>L*T^-1</code>, or <code>L^2</code> and <code>L^(4/2)</code>, are the same dimension.</p>
 <p>Exponents are arbitrary-precision rationals, supporting at least <code>i64</code> numerators and denominators; <code>1/2</code>, <code>1/3</code>, <code>-1</code> and <code>2</code> MUST be exact. <code>sqrt</code> yields <code>1/2</code> and <code>cbrt</code> yields <code>1/3</code>.</p>
@@ -2390,7 +2391,7 @@ unit_scale     ::= number [ &quot;/&quot; number ] | &quot;pi&quot; [ &quot;/&qu
 unit_factor ::= unit_atom [ &quot;^&quot; exponent ]
 unit_atom   ::= unit_name | &quot;(&quot; unit_expr &quot;)&quot; | &quot;%&quot;</code></pre>
 <ul>
-<li><code>*</code> and <code>·</code> are synonyms; <code>/</code> is left-associative. An exponent is an integer literal or a parenthesised rational: <code>m^2</code>, <code>s^-1</code>, <code>m^(1/2)</code>.</li>
+<li><code>*</code> and <code>·</code> are synonyms; <code>/</code> is left-associative. Exponents are exact rationals, including decimal notation: <code>m^2</code>, <code>s^-1</code>, <code>m^(1/2)</code>, <code>m^1.5</code> (§1.8).</li>
 <li>Numbers (other than exponents) and juxtaposition by whitespace are not allowed inside a unit expression.</li>
 <li>An affine unit may appear only alone; in a product or power it is <code>E0508</code> (§5.6.4).</li>
 </ul>
@@ -5229,6 +5230,10 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 <td>search available item names and documentation</td>
 </tr>
 <tr>
+<td><code>:source [N]</code></td>
+<td>list original accepted inputs, or inspect the snapshot named <code>&lt;repl #N&gt;</code></td>
+</tr>
+<tr>
 <td><code>:imports</code></td>
 <td>list imported modules and aliases</td>
 </tr>
@@ -5261,6 +5266,7 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 <p>Cancellation is cooperative. Compiler work, opaque native library operations, and system calls without checkpoints may finish their current call before interruption is reported. Completed effects are not undone. Canceled kernel results are not cached or reported as successful mathematical results. The REPL disables its optional JIT fast path while a cancellation token is installed, retaining cooperative checks. Standalone <code>aevia run</code> keeps the operating system's normal signal behavior.</p>
 <p>Item help uses accepted declarations and their <code>##</code> comments, checked signatures, and frozen imported source. Lookup never evaluates an expression or reinitializes modules; rejected drafts do not replace documentation. The latest accepted binding wins, including private local declarations and imported aliases. <code>:help :COMMAND</code> explicitly selects a command guide when its name also names a function.</p>
 <p>Output modes share the language renderers <code>show</code>, <code>repr</code>, <code>to_pretty</code>, <code>to_latex</code>, and <code>to_typst</code>. <code>:show EXPR</code> renders a value; <code>:show</code> alone lists source. Direct rendering commands evaluate each expression once and execute IO once. Mode changes do not affect program-authored output. Unsupported mathematical values report an error rather than silently emitting another format; use show/repr for such values.</p>
+<p>REPL diagnostics show entered source, never generated expression bindings. Current lines are relative to the submission; earlier definitions use <code>&lt;repl #N&gt;</code>, and <code>:load</code> preserves file names/lines. <code>:source [N]</code> inspects these snapshots. Parser recovery preserves independent errors; malformed modules and their dependents are not type-checked in the REPL. Accepted-history warnings are not replayed. A standalone <code>:cancel</code> also discards incomplete piped input outside strings/comments.</p>
 <h2 id="09-runtime--99-cli">9.9 CLI</h2>
 <pre class="code"><code>aevia run [--example NAME] [file.aev] [-- args…]   run the package entry, a file or an example (program arguments follow `--`)
 aevia check [--all] [file.aev…]                    type/dimension check without running
@@ -7447,8 +7453,8 @@ rep            ::= &quot;Int&quot; | &quot;Real&quot; | &quot;Float&quot; | &quo
 dim_factor     ::= dim_atom [ &quot;^&quot; exponent ]
 dim_atom       ::= &quot;1&quot; | UIDENT | IDENT | &quot;(&quot; dim &quot;)&quot;
 
-exponent       ::= [ &quot;-&quot; ] INT
-                 | &quot;(&quot; [ &quot;-&quot; ] INT &quot;/&quot; INT &quot;)&quot;
+exponent       ::= [ &quot;-&quot; ] (INT | FLOAT | &quot;(&quot; rational &quot;)&quot;)
+rational       ::= [ &quot;-&quot; ] (INT | FLOAT) [ &quot;/&quot; [ &quot;-&quot; ] (INT | FLOAT) ]
 
 unit_expr      ::= unit_factor { ( &quot;*&quot; | &quot;·&quot; | &quot;/&quot; ) unit_factor }
 unit_factor    ::= unit_atom [ &quot;^&quot; exponent | SUPERSCRIPT+ ]
@@ -7465,8 +7471,8 @@ unit_atom      ::= unit_name | &quot;(&quot; unit_expr &quot;)&quot; | &quot;%&q
 <pre class="code"><code>IDENT          ::= lower XID_Continue { XID_Continue | &quot;&#39;&quot; | &quot;₀&quot;..&quot;₉&quot; }
 UIDENT         ::= upper XID_Continue { XID_Continue | &quot;&#39;&quot; | &quot;₀&quot;..&quot;₉&quot; }
 INT            ::= dec_int | &quot;0x&quot; hex { hex } | &quot;0o&quot; oct { oct } | &quot;0b&quot; bin { bin }
-FLOAT          ::= dec_int &quot;.&quot; dec_int [ exponent ]
-                 | dec_int exponent
+FLOAT          ::= dec_int &quot;.&quot; dec_int [ decimal_exponent ] | dec_int decimal_exponent
+decimal_exponent ::= (&quot;e&quot; | &quot;E&quot;) [&quot;+&quot; | &quot;-&quot;] dec_int
 STRING         ::= &#39;&quot;&#39; { char | escape | &quot;{&quot; expr &quot;}&quot; } &#39;&quot;&#39;
                  | &#39;r&quot;&#39; { char } &#39;&quot;&#39;
                  | &#39;&quot;&quot;&quot;&#39; ... &#39;&quot;&quot;&quot;&#39;
@@ -7492,7 +7498,7 @@ DEDENT         ::= produced by the layout algorithm</code></pre>
 <ul>
 <li>The first line is <code>severity[code]: message</code>; <code>--&gt;</code> gives file:line:column; then come the source line and underline labels (kept short).</li>
 <li><code>=</code> lines are notes (canonical forms, differences, related declarations); <code>help:</code> is a fix, at most two, ordered by confidence.</li>
-<li>An error with several locations uses several underline labels or a <code>= note:</code> pointing at the definition.</li>
+<li>Same-line labels share an excerpt; other locations have <code>:::</code> excerpts. Columns count Unicode characters; carets align to display cells (tabs expand to four-column stops). Long excerpts use explicit <code>...</code> omissions and keep the error location visible.</li>
 </ul>
 <h2 id="appendix-b-diagnostics--b2-severity">B.2 Severity</h2>
 <table>
@@ -8117,7 +8123,7 @@ DEDENT         ::= produced by the layout algorithm</code></pre>
 <li><strong>Give the difference.</strong> A dimension error lists the canonical forms <code>left</code>, <code>right</code> and <code>difference</code>.</li>
 <li><strong>Give one fix.</strong> Offer <code>help</code> only with high confidence; do not list five guesses.</li>
 <li><strong>Do not repeat.</strong> Report one error once and point to the primary location with <code>note</code>.</li>
-<li><strong>Preserve source.</strong> A source line in a message does not truncate operators; wrap if needed.</li>
+<li><strong>Preserve context.</strong> Mark omitted lines/columns with <code>...</code> and keep the error location visible.</li>
 <li><strong>Be parseable.</strong> Codes and positions are stable, for IDE and CI parsing.</li>
 </ol>
 <h2 id="appendix-b-diagnostics--b14-example-type-error">B.14 Example: type error</h2>

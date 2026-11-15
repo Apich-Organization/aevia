@@ -78,7 +78,8 @@ pub struct App {
     about = "Publish, fetch and verify signed Aevia packages",
     long_about = "Publish, fetch and verify signed Aevia packages.\n\n\
                   There are no API tokens: every authenticated action is a signature made \
-                  with your own OpenPGP or SSH key.",
+                  with your own OpenPGP (GPG) or SSH (`ssh-ed25519`) key. OpenPGP keys \
+                  (especially backed by a hardware key) are preferred and recommended.",
     disable_help_subcommand = true
 )]
 struct Cli {

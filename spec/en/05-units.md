@@ -108,8 +108,8 @@ unit_factor ::= unit_atom [ "^" exponent ]
 unit_atom   ::= unit_name | "(" unit_expr ")" | "%"
 ```
 
-- `*` and `·` are synonyms; `/` is left-associative. An exponent is an integer literal or a
-  parenthesised rational: `m^2`, `s^-1`, `m^(1/2)`.
+- `*` and `·` are synonyms; `/` is left-associative. Exponents are exact rationals,
+  including decimal notation: `m^2`, `s^-1`, `m^(1/2)`, `m^1.5` (§1.8).
 - Numbers (other than exponents) and juxtaposition by whitespace are not allowed inside a unit
   expression.
 - An affine unit may appear only alone; in a product or power it is `E0508` (§5.6.4).

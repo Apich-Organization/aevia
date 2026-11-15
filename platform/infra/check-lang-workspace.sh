@@ -24,7 +24,7 @@ status=0
 
 # 1. Every key a mirrored crate inherits must exist in the mirror with the same
 #    value as in the real root.
-for crate in aevia-doc aevia-syntax aevia-fmt aevia-dim; do
+for crate in aevia-doc aevia-syntax aevia-fmt aevia-dim aevia-resolve; do
     manifest="$language_repo/crates/$crate/Cargo.toml"
     [ -f "$manifest" ] || { echo "check-lang-workspace: no $manifest" >&2; exit 2; }
     keys=$(sed -n 's/^\([a-zA-Z0-9_-]*\)\.workspace = true$/\1/p' "$manifest")

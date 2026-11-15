@@ -40,6 +40,7 @@ mod registry;
 mod repl_doc;
 mod repl_input;
 mod repl_interrupt;
+mod repl_source;
 mod tooling;
 
 use aevia_core::Interp;
@@ -1437,6 +1438,8 @@ struct Session {
     completion_cache: Vec<String>,
     documentation: repl_doc::Catalog,
     output_format: aevia_core::display::Format,
+    source_history: repl_source::History,
+    input_source: Option<repl_source::Input>,
 }
 
 fn repl_source_identity() -> aevia_core::source::SourceIdentity {
@@ -1468,6 +1471,8 @@ impl Session {
             completion_cache: Vec::new(),
             documentation: repl_doc::Catalog::default(),
             output_format: aevia_core::display::Format::Show,
+            source_history: repl_source::History::default(),
+            input_source: None,
             identity,
         }
     }
@@ -1486,23 +1491,64 @@ impl Session {
         self.source_origin = None;
         self.completion_cache.clear();
         self.documentation = repl_doc::Catalog::default();
+        self.source_history = repl_source::History::default();
     }
 
     fn compile(
         &self,
         source: &str,
-    ) -> aevia_core::driver::ReplCompilation {
-        if self.cancellation.is_cancelled() {
-            return self.compiler.borrow().interrupted(source);
-        }
-        let compilation = self
-            .compiler
-            .borrow_mut()
-            .compile(source, self.source_origin.as_deref());
-        if self.cancellation.is_cancelled() {
-            return self.compiler.borrow().interrupted(source);
-        }
-        compilation
+    ) -> repl_source::Compilation {
+        let current = source
+            .strip_prefix(&self.declarations)
+            .filter(|tail| !tail.is_empty())
+            .map(|tail| {
+                let entered = tail.strip_suffix('\n').unwrap_or(tail);
+                let input = self.input_source.clone().unwrap_or_else(|| {
+                    self.source_history
+                        .input(entered, self.source_origin.as_deref())
+                });
+                repl_source::Region::declaration(
+                    self.declarations.len(),
+                    source.len(),
+                    entered.len(),
+                    input,
+                )
+            });
+        self.compile_mapped(source, current)
+    }
+
+    fn compile_mapped(
+        &self,
+        source: &str,
+        current: Option<repl_source::Region>,
+    ) -> repl_source::Compilation {
+        let raw = if self.cancellation.is_cancelled() {
+            self.compiler.borrow().interrupted(source)
+        } else {
+            let compilation = self
+                .compiler
+                .borrow_mut()
+                .compile(source, self.source_origin.as_deref());
+            if self.cancellation.is_cancelled() {
+                self.compiler.borrow().interrupted(source)
+            } else {
+                compilation
+            }
+        };
+        let view = self
+            .source_history
+            .view(current, self.input_source.as_ref());
+        repl_source::Compilation { raw, view }
+    }
+
+    fn expression_input(
+        &self,
+        expression: &str,
+    ) -> repl_source::Input {
+        self.input_source
+            .as_ref()
+            .and_then(|input| input.argument(expression))
+            .unwrap_or_else(|| self.source_history.input(expression, None))
     }
 
     /// Set a temporary resolution origin for a :load fragment; restore the
@@ -1530,14 +1576,14 @@ impl Session {
     /// evaluated by [`Session::evaluate`] instead of being loaded.
     fn sync(
         &mut self,
-        compilation: &aevia_core::driver::ReplCompilation,
+        compilation: &repl_source::Compilation,
     ) -> Result<(), String> {
         self.sync_to(compilation, usize::MAX)
     }
 
     fn sync_to(
         &mut self,
-        compilation: &aevia_core::driver::ReplCompilation,
+        compilation: &repl_source::Compilation,
         limit: usize,
     ) -> Result<(), String> {
         let Some(module) = &compilation.module else {
@@ -1555,12 +1601,15 @@ impl Session {
             .import_runtime
             .synchronize(interp, compilation, self.loaded, limit);
         if diagnostics.has_errors() {
-            return Err(diagnostics
-                .render_with(&compilation.sources, style(self.options))
+            return Err(compilation
+                .render(&diagnostics, style(self.options))
                 .trim_end()
                 .to_string());
         }
         self.loaded = limit;
+        if limit == module.decls.len() {
+            self.source_history.accept(&compilation.view);
+        }
         self.compiler.borrow_mut().commit(compilation);
         self.completion_cache = compilation
             .checked
@@ -1582,7 +1631,7 @@ impl Session {
     /// Evaluates an expression against the session's bindings.
     fn evaluate(
         &mut self,
-        compilation: &aevia_core::driver::ReplCompilation,
+        compilation: &repl_source::Compilation,
         expression: &aevia_syntax::Expr,
     ) -> Result<aevia_core::value::Value, String> {
         let declarations = compilation
@@ -1598,7 +1647,7 @@ impl Session {
 
 fn evaluate_repl_expression(
     interp: &mut Interp,
-    compilation: &aevia_core::Compilation,
+    compilation: &repl_source::Compilation,
     expression: &aevia_syntax::Expr,
     options: Options,
 ) -> Result<aevia_core::value::Value, String> {
@@ -1676,6 +1725,8 @@ fn repl(options: Options) -> ExitCode {
                 return ExitCode::from(1);
             },
         };
+        let original_input = session.source_history.input(&source, None);
+        session.input_source = Some(original_input.clone());
         if let Some(command) = trimmed.strip_prefix(':') {
             if matches!(
                 handle_repl_command(command, &mut session),
@@ -1685,13 +1736,21 @@ fn repl(options: Options) -> ExitCode {
             }
             failed |= session.command_failed;
         } else {
+            let mut offset = 0;
             for unit in repl_input::split_submissions(&source) {
+                if let Some(start) = source[offset..].find(&unit).map(|start| offset + start) {
+                    session.input_source = Some(original_input.select(start..start + unit.len()));
+                    offset = start + unit.len();
+                } else {
+                    session.input_source = None;
+                }
                 if !submit_repl(&mut session, &unit, interactive) {
                     failed = true;
                     break;
                 }
             }
         }
+        session.input_source = None;
         if !session.cancellation.is_cancelled() {
             let names = session.completion_names();
             if !session.cancellation.is_cancelled() {
@@ -1714,6 +1773,28 @@ fn submit_repl(
     input: &str,
     interactive: bool,
 ) -> bool {
+    let previous = session.input_source.take();
+    session.input_source = Some(
+        previous
+            .as_ref()
+            .filter(|source| source.text() == input)
+            .cloned()
+            .unwrap_or_else(|| {
+                session
+                    .source_history
+                    .input(input, session.source_origin.as_deref())
+            }),
+    );
+    let result = submit_repl_input(session, input, interactive);
+    session.input_source = previous;
+    result
+}
+
+fn submit_repl_input(
+    session: &mut Session,
+    input: &str,
+    interactive: bool,
+) -> bool {
     if input.trim().is_empty() {
         return true;
     }
@@ -1728,11 +1809,7 @@ fn submit_repl(
     if repl_input::declaration(input) {
         let candidate = format!("{}{input}\n", session.declarations);
         let compilation = session.compile(&candidate);
-        if report(
-            &compilation.diagnostics,
-            &compilation.sources,
-            style(session.options),
-        ) {
+        if repl_report(&compilation, session.options) {
             return false;
         }
         let new_main =
@@ -1758,7 +1835,9 @@ fn submit_repl(
             return false;
         }
         session.declarations = candidate;
-        session.documentation = repl_doc::Catalog::from_compilation(&compilation);
+        let origins = compilation.view.origins(&compilation.sources);
+        session.documentation =
+            repl_doc::Catalog::with_origins(&compilation, &|span| origins.location(span));
         if new_main {
             return run_repl_main(session);
         }
@@ -1774,11 +1853,7 @@ fn submit_repl(
                 return false;
             },
         };
-        report(
-            &compilation.diagnostics,
-            &compilation.sources,
-            style(session.options),
-        );
+        repl_report(&compilation, session.options);
         let ty = compilation
             .checked
             .exports
@@ -1845,7 +1920,7 @@ fn repl_module_fragment(
     };
     let start = first.span.start as usize;
     let end = input[start..]
-        .find('\n')
+        .find(['\r', '\n'])
         .map_or(input.len(), |end| start + end);
     if lexed.tokens.iter().any(|token| {
         (token.span.start as usize) < end && matches!(token.kind, TokenKind::Keyword(Keyword::With))
@@ -1861,7 +1936,7 @@ fn repl_module_fragment(
 
 fn repl_runtime_error(
     error: aevia_core::EvalError,
-    compilation: &aevia_core::Compilation,
+    compilation: &repl_source::Compilation,
     options: Options,
 ) -> String {
     if error.code == aevia_core::cancellation::INTERRUPTED {
@@ -1869,10 +1944,21 @@ fn repl_runtime_error(
     }
     let mut diagnostics = Diagnostics::new();
     diagnostics.push(error.diagnostic());
-    diagnostics
-        .render_with(&compilation.sources, style(options))
+    compilation
+        .render(&diagnostics, style(options))
         .trim_end()
         .to_string()
+}
+
+fn repl_report(
+    compilation: &repl_source::Compilation,
+    options: Options,
+) -> bool {
+    let message = compilation.render(&compilation.diagnostics, style(options));
+    if !message.is_empty() {
+        eprint!("{message}");
+    }
+    compilation.diagnostics.has_errors()
 }
 
 fn run_repl_main(session: &mut Session) -> bool {
@@ -1962,6 +2048,12 @@ fn handle_repl_command(
                 | _ => repl_parse_format(name).expect("renderer command"),
             };
             match repl_render(session, name, argument, format) {
+                | Ok(text) => println!("{text}"),
+                | Err(message) => eprintln!("{message}"),
+            }
+        },
+        | "source" => {
+            match session.source_history.source(argument) {
                 | Ok(text) => println!("{text}"),
                 | Err(message) => eprintln!("{message}"),
             }
@@ -2068,24 +2160,25 @@ fn handle_repl_command(
                 eprintln!("usage: :type EXPRESSION — for example :type 3 m / 2 s");
                 return ReplControl::Continue;
             }
-            let candidate = format!("{}let __repl_type = {argument}\n", session.declarations);
-            let compilation = session.compile(&candidate);
-            if compilation.diagnostics.has_errors() {
-                session.command_failed = report(
-                    &compilation.diagnostics,
-                    &compilation.sources,
-                    style(session.options),
-                );
-            } else if let Some(aevia_types::Export::Value { scheme, .. }) =
-                compilation.checked.exports.get("__repl_type")
-            {
-                println!("{}", terminal::paint(&scheme.ty.to_string(), "36", false));
+            match compile_repl_expression(session, "type", argument) {
+                | Err(message) => eprintln!("{message}"),
+                | Ok(compilation) => {
+                    if let Some(aevia_types::Export::Value { scheme, .. }) =
+                        compilation.checked.exports.get("__repl_type")
+                    {
+                        println!("{}", terminal::paint(&scheme.ty.to_string(), "36", false));
+                    }
+                },
             }
         },
         // The three inspection commands parse or type-check the expression but
         // never evaluate it, so they leave the session exactly as it was.
         | "ast" => {
-            match repl_ast(argument) {
+            match repl_ast_with_input(
+                argument,
+                session.expression_input(argument),
+                style(session.options),
+            ) {
                 | Ok(text) => println!("{text}"),
                 | Err(message) => eprintln!("{message}"),
             }
@@ -2171,6 +2264,7 @@ fn repl_item_help(
                 "paste"
                     | "main"
                     | "files"
+                    | "source"
                     | "load"
                     | "save"
                     | "show"
@@ -2247,6 +2341,7 @@ Session commands:
   :type EXPR     inspect a type without running the expression (:t alias)
   :bindings      list user bindings and types (:vars alias)
   :show          show accepted declarations
+  :source [N]    list original accepted inputs or inspect <repl #N> source
   :imports       list imported modules and aliases
   :load FILE     append a source file; resolve its package imports; run a new main (:l alias)
   :save FILE     save declarations to a new file (never overwrites)
@@ -2282,6 +2377,11 @@ Use :run to repeat main; expressions entered later do not repeat it.
 For explicit paste, enter :paste, paste the code, and enter :end on its own line.
 Use :cancel before :end to discard the block."
             )
+        },
+        | "source" => {
+            println!(
+                "usage: :source [N]\nList accepted input numbers, or show the exact input for <repl #N>.\nLoaded file snapshots keep their original names and text. :reset clears this source history."
+            );
         },
         | "files" | "load" | "save" | "show" => {
             println!(
@@ -2369,44 +2469,41 @@ before reporting interruption. Ctrl-D at the prompt exits; :reset clears the ses
     true
 }
 
-/// The text the REPL prints for a message, with the trailing newline removed.
-fn rendered(
-    diagnostics: &aevia_syntax::Diagnostics,
-    sources: &aevia_syntax::SourceMap,
-) -> String {
-    diagnostics.render(sources).trim_end().to_string()
-}
-
 /// `:ast e` — parse `e` and render the tree.
 ///
 /// Only the parser runs here: `:ast` answers "how did the parser read this
 /// text", which is true even when the expression would not type-check. The
 /// session's declarations are deliberately not prepended — the question is
 /// about the expression alone, and an unbound name is not a syntax error.
+#[cfg(test)]
 fn repl_ast(expression: &str) -> Result<String, String> {
     if expression.is_empty() {
         return Err("`:ast` expects an expression, as in `:ast f(1) + 2`".to_string());
     }
-    let candidate = format!("let __repl_ast = {expression}\n");
-    let lexed = aevia_syntax::lex(0, &candidate).map_err(|diagnostics| {
-        let mut sources = aevia_syntax::SourceMap::new();
-        sources.add("<repl>", &candidate);
-        rendered(&diagnostics, &sources)
-    })?;
-    let (module, diagnostics) = aevia_syntax::parse_module(0, &candidate, &lexed);
-    if diagnostics.has_errors() {
-        let mut sources = aevia_syntax::SourceMap::new();
-        sources.add("<repl>", &candidate);
-        return Err(rendered(&diagnostics, &sources));
+    let history = repl_source::History::default();
+    repl_ast_with_input(expression, history.input(expression, None), Style::Plain)
+}
+
+fn repl_ast_with_input(
+    expression: &str,
+    input: repl_source::Input,
+    output_style: Style,
+) -> Result<String, String> {
+    if expression.is_empty() {
+        return Err("usage: :ast EXPRESSION".into());
     }
-    let Some(decl) = module.decls.last() else {
-        return Err("the expression did not parse".to_string());
-    };
-    let DeclKind::Let { value, .. } = &decl.kind else {
-        return Err("the expression did not parse".to_string());
-    };
+    let mut sources = aevia_syntax::SourceMap::new();
+    sources.add("<repl>", expression);
+    let history = repl_source::History::default();
+    let region = repl_source::Region::expression(0, 0, expression.len(), input.clone());
+    let view = history.view(Some(region), Some(&input));
+    let value = aevia_syntax::parse_expression(0, expression).map_err(|diagnostics| {
+        view.render(&diagnostics, &sources, output_style)
+            .trim_end()
+            .to_string()
+    })?;
     let mut out = String::new();
-    print_ast(&ast_node(value), "", true, &mut out);
+    print_ast(&ast_node(&value), "", true, &mut out);
     Ok(out.trim_end().to_string())
 }
 
@@ -2540,16 +2637,20 @@ fn compile_repl_expression(
     session: &Session,
     label: &str,
     expression: &str,
-) -> Result<aevia_core::driver::ReplCompilation, String> {
-    let candidate = format!(
-        "{}let __repl_{label} = {expression}\n",
-        session.declarations
+) -> Result<repl_source::Compilation, String> {
+    let prefix = format!("let __repl_{label} = ");
+    let candidate = format!("{}{prefix}{expression}\n", session.declarations);
+    let input = session.expression_input(expression);
+    let region = repl_source::Region::expression(
+        session.declarations.len(),
+        prefix.len(),
+        candidate.len(),
+        input,
     );
-    let compilation = session.compile(&candidate);
+    let compilation = session.compile_mapped(&candidate, Some(region));
     if compilation.diagnostics.has_errors() {
         return Err(compilation
-            .diagnostics
-            .render_with(&compilation.sources, style(session.options))
+            .render(&compilation.diagnostics, style(session.options))
             .trim_end()
             .to_string());
     }
@@ -2572,7 +2673,7 @@ fn repl_expression(compilation: &aevia_core::Compilation) -> Result<&aevia_synta
 /// Evaluates the synthetic expression declaration against the session.
 fn repl_value(
     session: &mut Session,
-    compilation: &aevia_core::driver::ReplCompilation,
+    compilation: &repl_source::Compilation,
 ) -> Result<aevia_core::value::Value, String> {
     let options = session.options;
     let expression = repl_expression(compilation)?.clone();

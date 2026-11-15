@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: Containerfile.postgres
       args:
-        POSTGRES_IMAGE: postgres:18-trixie
+        POSTGRES_IMAGE: docker.io/library/postgres:18-trixie
     image: localhost/aevia/postgres:18-trixie
     restart: unless-stopped
     env_file:
@@ -87,7 +87,7 @@ services:
   caddy:
     # Official image; the binary is a static Go build, so its Debian base is
     # irrelevant to the registry's glibc requirements.
-    image: caddy:2
+    image: docker.io/library/caddy:2
     restart: unless-stopped
     ports:
       - "80:80"        # ACME HTTP-01 challenge and the HTTP->HTTPS redirect

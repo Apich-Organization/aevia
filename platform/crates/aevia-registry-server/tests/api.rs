@@ -82,9 +82,9 @@ async fn start() -> Option<TestApp> {
         | _ => {
             eprintln!(
                 "skipping: set AEVIA_TEST_DATABASE_URL to run the integration tests, e.g. \
-                 `docker run -d --name aevia-tests-db -e POSTGRES_USER=aevia -e \
+                 `podman run -d --name aevia-tests-db -e POSTGRES_USER=aevia -e \
                  POSTGRES_PASSWORD=aevia -e POSTGRES_DB=aevia -p 55433:5432 \
-                 postgres:18-trixie` and then \
+                 docker.io/library/postgres:18-trixie` and then \
                  AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55433/aevia"
             );
             return None;
@@ -401,15 +401,16 @@ fn gpg(
 /// Using [`tarball::pack_dir`] rather than hand-rolling a tar means the test
 /// exercises the real archive format: if the packer and the server's unpacker
 /// ever disagree, this fails.
-fn fixture(
+fn fixture_with_manifest(
     name: &str,
     version: &str,
+    extra_package_lines: &str,
 ) -> (tempfile::TempDir, Vec<u8>, String) {
     let directory = tempfile::tempdir().expect("a temporary package");
     std::fs::create_dir_all(directory.path().join("src")).expect("src/");
     std::fs::write(
         directory.path().join("aevia.toml"),
-        format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\n"),
+        format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\n{extra_package_lines}"),
     )
     .expect("aevia.toml");
     std::fs::write(
@@ -426,6 +427,17 @@ fn fixture(
     let archive = tarball::pack_dir(directory.path(), &manifest).expect("the fixture packs");
     let checksum = tarball::checksum(&archive);
     (directory, archive, checksum)
+}
+
+fn fixture(
+    name: &str,
+    version: &str,
+) -> (tempfile::TempDir, Vec<u8>, String) {
+    fixture_with_manifest(
+        name,
+        version,
+        "edition = \"2026\"\nauthors = [\"Test Publisher\"]\ndescription = \"Integration test package\"\nlicense = \"Apache-2.0\"\nrepository = \"https://github.com/apich/demo\"\nhomepage = \"https://aevia.org/demo\"\ndocumentation = \"https://docs.aevia.org/demo\"\nkeywords = [\"demo\", \"test\"]\ncategories = [\"mathematics\"]\n",
+    )
 }
 
 /// Writes the publisher and key rows a successful browser sign-in would have
@@ -625,6 +637,21 @@ async fn a_signed_publish_round_trips_and_cannot_be_replayed() {
         Some(checksum.as_str())
     );
 
+    // The package page and API record all Cargo-style metadata fields.
+    let (status, _, body) = get(&app.app, "/api/v1/crates/tester/demo").await;
+    assert_eq!(status, StatusCode::OK);
+    let detail: serde_json::Value =
+        serde_json::from_slice(&body).expect("the crate detail is JSON");
+    assert_eq!(detail["edition"], "2026");
+    assert_eq!(detail["authors"], serde_json::json!(["Test Publisher"]));
+    assert_eq!(detail["description"], "Integration test package");
+    assert_eq!(detail["license"], "Apache-2.0");
+    assert_eq!(detail["repository"], "https://github.com/apich/demo");
+    assert_eq!(detail["homepage"], "https://aevia.org/demo");
+    assert_eq!(detail["documentation"], "https://docs.aevia.org/demo");
+    assert_eq!(detail["keywords"], serde_json::json!(["demo", "test"]));
+    assert_eq!(detail["categories"], serde_json::json!(["mathematics"]));
+
     // The package page renders.
     let (status, _, body) = get(&app.app, "/crates/tester/demo").await;
     assert_eq!(status, StatusCode::OK);
@@ -749,4 +776,258 @@ async fn the_machine_pages_and_the_cli_guide_are_served() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _, _) = get(&app.app, "/badge/nobody/nothing.svg").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn publish_enforces_required_metadata_and_accepts_license_file() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let Some(signer) = Signer::detect() else {
+        return;
+    };
+    let fingerprint = SignerKey::detect(&signer.armored)
+        .expect("the exported key parses")
+        .fingerprint()
+        .expect("the exported key has a fingerprint");
+    seed_publisher(&app.pool, "tester", &fingerprint, &signer.armored).await;
+
+    // Missing `description` and `license` / `license-file` must fail cleanly.
+    let (_dir, archive, checksum) = fixture_with_manifest(
+        "incomplete",
+        "0.1.0",
+        "description = \"\"\nlicense = \"\"\n",
+    );
+    let (status, body) = challenge(&app.app, "tester/incomplete", "0.1.0", &checksum).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let issued: serde_json::Value = serde_json::from_slice(&body).expect("challenge");
+    let statement = issued["statement"].as_str().expect("statement").to_string();
+    let envelope = serde_json::json!({
+        "statement": statement,
+        "signature": signer.sign(&statement),
+        "key": { "kind": "openpgp", "armored": signer.armored },
+    })
+    .to_string();
+    let (content_type, body) = multipart(&envelope, &archive);
+    let (status, _, answer) = post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&answer), "E_MANIFEST");
+
+    // Providing `description` + `license-file` present in the archive succeeds.
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src")).expect("src/");
+    std::fs::write(
+        dir.path().join("aevia.toml"),
+        "[package]\nname = \"with_license_file\"\nversion = \"0.1.0\"\ndescription = \"Custom licensed crate\"\nlicense-file = \"LICENCE-CUSTOM\"\n",
+    )
+    .expect("aevia.toml");
+    std::fs::write(
+        dir.path().join("src/main.aev"),
+        "fn main(): IO Unit = do\n    println(\"ok\")\n",
+    )
+    .expect("main.aev");
+    std::fs::write(dir.path().join("LICENCE-CUSTOM"), "Custom Terms v1").expect("license file");
+    let manifest = PackageManifest::load(dir.path()).expect("manifest parses");
+    let archive = tarball::pack_dir(dir.path(), &manifest).expect("packs");
+    let checksum = tarball::checksum(&archive);
+
+    let (status, body) =
+        challenge(&app.app, "tester/with_license_file", "0.1.0", &checksum).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let issued: serde_json::Value = serde_json::from_slice(&body).expect("challenge");
+    let statement = issued["statement"].as_str().expect("statement").to_string();
+    let envelope = serde_json::json!({
+        "statement": statement,
+        "signature": signer.sign(&statement),
+        "key": { "kind": "openpgp", "armored": signer.armored },
+    })
+    .to_string();
+    let (content_type, body) = multipart(&envelope, &archive);
+    let (status, _, answer) = post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&answer)
+    );
+}
+
+#[tokio::test]
+async fn ssh_keys_register_publish_yank_and_emit_pgp_warnings() {
+    let Some(app) = start().await else {
+        return;
+    };
+
+    // Refuse non-ed25519 SSH keys cleanly on device start.
+    let (status, _, body) = post_json(
+        &app.app,
+        "/api/v1/auth/device",
+        &serde_json::json!({
+            "kind": "ssh",
+            "public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ== tester@host",
+            "label": "rsa",
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(error_code(&body), "E_KEY");
+
+    // Generate a real temporary ssh-ed25519 keypair with `ssh-keygen`.
+    let keydir = tempfile::tempdir().expect("tempdir");
+    let key_path = keydir.path().join("id_ed25519");
+    let keygen = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-C", "tester@aevia", "-f"])
+        .arg(&key_path)
+        .output();
+    let Ok(output) = keygen else {
+        eprintln!("skipping ssh publish test: `ssh-keygen` not available");
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "`ssh-keygen` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pub_key = std::fs::read_to_string(keydir.path().join("id_ed25519.pub"))
+        .expect("read ssh pubkey")
+        .trim()
+        .to_string();
+
+    // Registering an ssh-ed25519 key succeeds and warns to prefer OpenPGP / hardware keys.
+    let (status, _, body) = post_json(
+        &app.app,
+        "/api/v1/auth/device",
+        &serde_json::json!({
+            "kind": "ssh",
+            "public_key": pub_key,
+            "label": "ed25519 laptop",
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let device: serde_json::Value = serde_json::from_slice(&body).expect("device JSON");
+    let device_warnings = device["warnings"].as_array().expect("device warnings");
+    assert!(
+        device_warnings
+            .iter()
+            .filter_map(|v| v.as_str())
+            .any(|w| w.contains("OpenPGP") && w.contains("hardware")),
+        "expected OpenPGP/hardware warning on SSH device start, got: {device}"
+    );
+
+    // Seed the publisher and SSH signing key directly (mirroring browser approval).
+    let parsed_key = SignerKey::detect(&pub_key).expect("ssh pubkey parses");
+    assert_eq!(parsed_key.kind, aevia_registry_core::signature::KeyKind::Ssh);
+    let fingerprint = parsed_key.fingerprint().expect("ssh fingerprint");
+    let publisher_id: i64 = sqlx::query_scalar(
+        "INSERT INTO publishers (kind, handle, display_name)
+         VALUES ('github', 'sshuser', 'SSH Publisher')
+         RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("seed publisher");
+    sqlx::query(
+        "INSERT INTO signing_keys (publisher_id, kind, fingerprint, public_key, label)
+         VALUES ($1, 'ssh', $2, $3, 'ed25519 laptop')",
+    )
+    .bind(publisher_id)
+    .bind(&fingerprint)
+    .bind(&pub_key)
+    .execute(&app.pool)
+    .await
+    .expect("seed ssh key");
+
+    let sign_with_ssh = |statement: &str, name: &str| -> String {
+        let msg_path = keydir.path().join(name);
+        std::fs::write(&msg_path, statement).expect("write statement");
+        let sig_out = Command::new("ssh-keygen")
+            .args(["-Y", "sign", "-f"])
+            .arg(&key_path)
+            .args(["-n", aevia_registry_core::signature::SSH_NAMESPACE])
+            .arg(&msg_path)
+            .output()
+            .expect("run ssh-keygen -Y sign");
+        assert!(
+            sig_out.status.success(),
+            "`ssh-keygen -Y sign` failed: {}",
+            String::from_utf8_lossy(&sig_out.stderr)
+        );
+        std::fs::read_to_string(keydir.path().join(format!("{name}.sig"))).expect("read .sig")
+    };
+
+    // Publish with an SSH signature succeeds and emits the OpenPGP/hardware warning.
+    let (_pkg_dir, archive, checksum) = fixture("ssh_demo", "0.1.0");
+    let (status, body) = challenge(&app.app, "sshuser/ssh_demo", "0.1.0", &checksum).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let issued: serde_json::Value = serde_json::from_slice(&body).expect("challenge JSON");
+    let statement = issued["statement"].as_str().expect("statement").to_string();
+    let envelope = serde_json::json!({
+        "statement": statement,
+        "signature": sign_with_ssh(&statement, "publish.stmt"),
+        "key": { "kind": "ssh", "armored": pub_key },
+    })
+    .to_string();
+    let (content_type, body) = multipart(&envelope, &archive);
+    let (status, _, answer) = post_multipart(&app.app, "/api/v1/publish", &content_type, body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&answer)
+    );
+    let published: serde_json::Value = serde_json::from_slice(&answer).expect("publish JSON");
+    let publish_warnings = published["warnings"].as_array().expect("publish warnings");
+    assert!(
+        publish_warnings
+            .iter()
+            .filter_map(|v| v.as_str())
+            .any(|w| w.contains("OpenPGP") && w.contains("hardware")),
+        "expected OpenPGP/hardware warning on SSH publish, got: {published}"
+    );
+
+    // Download records the SSH fingerprint in its header.
+    let (status, headers, _) = get(&app.app, "/api/v1/download/sshuser/ssh_demo/0.1.0").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("x-aevia-signature-fingerprint")
+            .and_then(|value| value.to_str().ok()),
+        Some(fingerprint.as_str())
+    );
+
+    // Yank signed with the same SSH key succeeds.
+    let (status, _, body) = post_json(
+        &app.app,
+        "/api/v1/yank/challenge",
+        &serde_json::json!({
+            "name": "sshuser/ssh_demo",
+            "version": "0.1.0",
+            "yanked": true,
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let issued: serde_json::Value = serde_json::from_slice(&body).expect("yank challenge");
+    let statement = issued["statement"].as_str().expect("yank statement").to_string();
+    let (status, _, body) = post_json(
+        &app.app,
+        "/api/v1/yank",
+        &serde_json::json!({
+            "statement": statement,
+            "signature": sign_with_ssh(&statement, "yank.stmt"),
+            "key": { "kind": "ssh", "armored": pub_key },
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
 }

@@ -203,6 +203,13 @@ A changed source resolution is reported with reset guidance. `:imports` lists
 active modules and aliases. `:reset` starts a fresh session and observes edited
 module files.
 
+Diagnostics show the input you entered, with lines numbered within that submission.
+Earlier definitions use `<repl #N>`; `:source N` shows their original input and
+`:source` lists saved source snapshots. Loaded files keep their paths and line
+numbers. Runtime errors include relevant call sites. Syntax recovery keeps
+independent errors, avoids follow-on type errors from malformed code, and lets
+later submissions proceed. Warnings from accepted history are shown once.
+
 Output utilities are available both as language functions and REPL commands:
 
 ```console

@@ -30,10 +30,13 @@ const INSTALL_BODY: Msg = Msg::new(
 const FIRST_PUBLISH: Msg = Msg::new("Publish a package", "发布一个包");
 const FIRST_PUBLISH_BODY: Msg = Msg::new(
     "There are no tokens. login binds a key you already own to your account once; after that \
-     each publish is a signature. publish type-checks and format-checks the package first, so \
-     a broken package never reaches the signing prompt.",
-    "没有令牌。login 把你已有的密钥一次性绑定到账户；此后每次发布都是一次签名。publish \
-     会先做类型检查和格式检查，所以有问题的包不会走到签名提示这一步。",
+     each publish is a signature. OpenPGP (gpg) keys are preferred, and hardware-backed keys \
+     (such as a YubiKey or OpenPGP smartcard) are recommended; ssh-ed25519 SSH keys are also \
+     supported (with a warning). publish type-checks and format-checks the package first, so a \
+     broken package never reaches the signing prompt.",
+    "没有令牌。login 把你已有的密钥一次性绑定到账户；此后每次发布都是一次签名。系统优先选择并推荐使用 \
+     OpenPGP（gpg）密钥及硬件密钥（如 YubiKey 或 OpenPGP 智能卡）；同时也支持 ssh-ed25519 SSH 密钥（并给出推荐警告）。\
+     publish 会先做类型检查和格式检查，所以有问题的包不会走到签名提示这一步。",
 );
 const USE_PACKAGE: Msg = Msg::new("Use a package", "使用一个包");
 const USE_PACKAGE_BODY: Msg = Msg::new(

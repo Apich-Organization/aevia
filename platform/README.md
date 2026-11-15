@@ -34,9 +34,9 @@ so a link can name its language.
 ## Quick start
 
 ```console
-# 1. A database. Any PostgreSQL 14+ will do; the container in infra/ is one way.
+# 1. A database. PostgreSQL 18+ is required; the container in infra/ is one way.
 podman run -d --name aevia-db -e POSTGRES_USER=aevia -e POSTGRES_PASSWORD=aevia \
-    -e POSTGRES_DB=aevia -p 55432:5432 postgres:18-trixie
+    -e POSTGRES_DB=aevia -p 55432:5432 docker.io/library/postgres:18-trixie
 
 # 2. The server. It applies the schema itself on first start.
 export DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55432/aevia
@@ -95,7 +95,10 @@ finds on `PATH`, beside itself, or at `$AEVIA_PKG`.)
 `login` prints a code and a URL. You open the URL, sign in with GitHub or ORCID,
 and confirm the key's fingerprint; the terminal polls until the binding exists.
 After that, `publish` needs only the private key — which never leaves
-`gpg-agent` or `ssh-agent`.
+`gpg-agent` or `ssh-agent`. OpenPGP (GPG) keys — ideally backed by a hardware
+security key — are preferred and chosen automatically over SSH keys when both
+are present; `ssh-ed25519` keys are also supported for registration and
+signing, with warnings recommending an OpenPGP or hardware key instead.
 
 ```
 aevia-publish-v1
@@ -107,7 +110,7 @@ expires: 1794000300
 ```
 
 The server issues that text (nonce and expiry included), the client signs the
-exact bytes with `gpg --detach-sign --armor` or `ssh-keygen -Y sign`, and the
+exact bytes with `gpg --detach-sign --armor` (preferred) or `ssh-keygen -Y sign -n aevia`, and the
 server verifies it before anything is written. A captured signature names one
 archive and dies in five minutes, so replaying it publishes nothing — the
 registry spends the nonce and refuses the second attempt.
@@ -210,9 +213,9 @@ The tests come in three layers:
   unless `AEVIA_TEST_DATABASE_URL` is set:
 
   ```console
-  docker run -d --name aevia-tests-db \
+  podman run -d --name aevia-tests-db \
       -e POSTGRES_USER=aevia -e POSTGRES_PASSWORD=aevia \
-      -e POSTGRES_DB=aevia -p 55433:5432 postgres:18-trixie
+      -e POSTGRES_DB=aevia -p 55433:5432 docker.io/library/postgres:18-trixie
   AEVIA_TEST_DATABASE_URL=postgres://aevia:aevia@127.0.0.1:55433/aevia cargo test --workspace
   ```
 

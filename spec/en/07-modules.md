@@ -186,7 +186,17 @@ Earlier steps shadow later ones; a clash is `E0603` only inside step 3.
 [package]
 name = "kinematics"
 version = "0.1.0"
+edition = "2026"
 entry = "src/main.aev"      # optional; default src/main.aev
+authors = ["Your Name <you@example.com>"]
+description = "Kinematics solvers"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/apich/kinematics"
+homepage = "https://aevia.org"
+documentation = "https://docs.aevia.org"
+keywords = ["physics"]
+categories = ["science"]
 
 [dependencies]
 Units = "^1.2"                                        # official scope: aevia/units
@@ -195,12 +205,14 @@ Kinematics = { path = "../kinematics" }               # local path package
 Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # path for local work, version once published
 ```
 
-Status: the manifest reader reads **only** `[package]` (keys `name`, `version`, `entry`) and
-`[dependencies]`. Other tables (`[compat]`, `[capabilities]`, `[build]`, `[profile.*]`) and
-other `[package]` keys (`edition`, `authors`, `description`) are `E0605`. Description, licence,
-keywords and repository are supplied as options to `aevia publish` (§9.13). Capability
-declarations have no run-time permission check; only `--caps` exists (§9.14). There is no
-`git` dependency (`E0605`).
+Status: the manifest reader reads `[package]` (`name`, `version`, `edition`, `entry`, `authors`,
+`description`, `license`, `license-file`, `readme`, `repository`, `homepage`, `documentation`,
+`keywords`, `categories`) and `[dependencies]`. Other tables (`[compat]`, `[capabilities]`,
+`[build]`, `[profile.*]`) and unknown keys are `E0605`. Publishing requires a non-empty
+`description` and either a non-empty `license` or a non-empty `license-file` inside the archive;
+options to `aevia publish` (§9.13) and `aevia-pkg.toml` may also override metadata fields.
+Capability declarations have no run-time permission check; only `--caps` exists (§9.14). There is
+no `git` dependency (`E0605`).
 
 - `name` is the package name; `version` is SemVer 2.0 `major.minor.patch`, optionally with
   `-pre-release`; a published version MUST NOT carry `+build` (two versions differing only in

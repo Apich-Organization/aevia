@@ -14,7 +14,9 @@
 use chrono::DateTime;
 use chrono::Utc;
 use sha2::Digest as _;
+use sqlx::FromRow as _;
 use sqlx::PgPool;
+use sqlx::Row as _;
 
 use aevia_registry_core::Error;
 use aevia_registry_core::vm::SiteStats;
@@ -326,6 +328,9 @@ async fn publisher_by_handle_any(
 
 /// Creates a package row.
 ///
+/// `name_key` is populated automatically by PostgreSQL 18 as a virtual
+/// generated column (`lower(name)`).
+///
 /// # Errors
 ///
 /// `E_CONFLICT` when the owner already has a package with that name.
@@ -333,17 +338,40 @@ pub async fn create_package(
     pool: &PgPool,
     owner_id: i64,
     name: &str,
-    name_key: &str,
 ) -> Result<Package, Error> {
     sqlx::query_as::<_, Package>(
-        "INSERT INTO packages (owner_id, name, name_key) VALUES ($1, $2, $3) RETURNING *",
+        "INSERT INTO packages (owner_id, name) VALUES ($1, $2) RETURNING NEW.*",
     )
     .bind(owner_id)
     .bind(name)
-    .bind(name_key)
     .fetch_one(pool)
     .await
     .map_err(|error| sql_error("cannot create the package", error))
+}
+
+/// Cargo-style package metadata recorded during a publish.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PackageMetaUpdate<'a> {
+    /// Language edition (`aevia.toml` `[package] edition`).
+    pub edition: Option<&'a str>,
+    /// Package authors (`aevia.toml` `[package] authors`).
+    pub authors: &'a [String],
+    /// Short description.
+    pub description: Option<&'a str>,
+    /// SPDX license expression.
+    pub license: Option<&'a str>,
+    /// Path to a custom license file inside the package.
+    pub license_file: Option<&'a str>,
+    /// Source repository URL.
+    pub repository: Option<&'a str>,
+    /// Project homepage URL.
+    pub homepage: Option<&'a str>,
+    /// Documentation URL.
+    pub documentation: Option<&'a str>,
+    /// Up to five search keywords.
+    pub keywords: &'a [String],
+    /// Up to five registry categories.
+    pub categories: &'a [String],
 }
 
 /// Records the metadata a publish supplied.
@@ -354,24 +382,33 @@ pub async fn create_package(
 pub async fn update_package_meta<'e, E: sqlx::PgExecutor<'e>>(
     pool: E,
     id: i64,
-    description: Option<&str>,
-    license: Option<&str>,
-    repository: Option<&str>,
-    keywords: &[String],
+    meta: &PackageMetaUpdate<'_>,
 ) -> Result<(), Error> {
     sqlx::query(
         "UPDATE packages
-         SET description = COALESCE($2, description),
-             license = COALESCE($3, license),
-             repository = COALESCE($4, repository),
-             keywords = CASE WHEN cardinality($5::text[]) > 0 THEN $5 ELSE keywords END
+         SET edition = COALESCE($2, edition),
+             authors = CASE WHEN cardinality($3::text[]) > 0 THEN $3 ELSE authors END,
+             description = COALESCE($4, description),
+             license = COALESCE($5, license),
+             license_file = COALESCE($6, license_file),
+             repository = COALESCE($7, repository),
+             homepage = COALESCE($8, homepage),
+             documentation = COALESCE($9, documentation),
+             keywords = CASE WHEN cardinality($10::text[]) > 0 THEN $10 ELSE keywords END,
+             categories = CASE WHEN cardinality($11::text[]) > 0 THEN $11 ELSE categories END
          WHERE id = $1",
     )
     .bind(id)
-    .bind(description)
-    .bind(license)
-    .bind(repository)
-    .bind(keywords)
+    .bind(meta.edition)
+    .bind(meta.authors)
+    .bind(meta.description)
+    .bind(meta.license)
+    .bind(meta.license_file)
+    .bind(meta.repository)
+    .bind(meta.homepage)
+    .bind(meta.documentation)
+    .bind(meta.keywords)
+    .bind(meta.categories)
     .execute(pool)
     .await
     .map_err(|error| sql_error("cannot update the package", error))?;
@@ -404,6 +441,11 @@ const SUMMARY_COLUMNS: &str = "p.id, p.owner_id, o.handle AS owner_handle, o.kin
     EXISTS (SELECT 1 FROM versions v
              WHERE v.package_id = p.id AND v.docs_status = 'built') AS has_docs";
 
+const PACKAGE_SEARCH_WHERE: &str = "(NOT $1 OR p.name ILIKE $2 ESCAPE '\\'
+    OR COALESCE(p.description, '') ILIKE $2 ESCAPE '\\'
+    OR EXISTS (SELECT 1 FROM unnest(p.keywords) k WHERE k ILIKE $2 ESCAPE '\\')
+    OR EXISTS (SELECT 1 FROM unnest(p.categories) c WHERE c ILIKE $2 ESCAPE '\\'))";
+
 /// A page of packages, with the total count.
 ///
 /// # Errors
@@ -427,8 +469,7 @@ pub async fn list_packages(
     let sql = format!(
         "SELECT {SUMMARY_COLUMNS}
          FROM packages p JOIN publishers o ON o.id = p.owner_id
-         WHERE (NOT $1 OR p.name ILIKE $2 ESCAPE '\\' OR COALESCE(p.description, '') ILIKE $2 ESCAPE '\\'
-                OR EXISTS (SELECT 1 FROM unnest(p.keywords) k WHERE k ILIKE $2 ESCAPE '\\'))
+         WHERE {PACKAGE_SEARCH_WHERE}
          ORDER BY {order}
          LIMIT $3 OFFSET $4"
     );
@@ -440,16 +481,13 @@ pub async fn list_packages(
         .fetch_all(pool)
         .await
         .map_err(|error| sql_error("cannot list packages", error))?;
-    let total: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM packages p
-         WHERE (NOT $1 OR p.name ILIKE $2 ESCAPE '\\' OR COALESCE(p.description, '') ILIKE $2 ESCAPE '\\'
-                OR EXISTS (SELECT 1 FROM unnest(p.keywords) k WHERE k ILIKE $2 ESCAPE '\\'))",
-    )
-    .bind(has_query)
-    .bind(&pattern)
-    .fetch_one(pool)
-    .await
-    .map_err(|error| sql_error("cannot count packages", error))?;
+    let count_sql = format!("SELECT count(*) FROM packages p WHERE {PACKAGE_SEARCH_WHERE}");
+    let total: i64 = sqlx::query_scalar(&count_sql)
+        .bind(has_query)
+        .bind(&pattern)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| sql_error("cannot count packages", error))?;
     Ok((items, total))
 }
 
@@ -655,6 +693,42 @@ pub async fn latest_version(
     .map_err(|error| sql_error("cannot read the latest version", error))
 }
 
+/// Sets or clears the yank flag, returning the updated version and whether the
+/// state actually changed (via PostgreSQL 18 `RETURNING OLD` / `NEW`).
+///
+/// # Errors
+///
+/// `E_DB` when the query fails.
+pub async fn set_yanked_with_changed<'e, E: sqlx::PgExecutor<'e>>(
+    pool: E,
+    package_id: i64,
+    version: &str,
+    yanked: bool,
+) -> Result<Option<(Version, bool)>, Error> {
+    let row = sqlx::query(
+        "UPDATE versions
+         SET yanked = $3, yanked_at = CASE WHEN $3 THEN now() ELSE NULL END
+         WHERE package_id = $1 AND version = $2
+         RETURNING (OLD.yanked IS DISTINCT FROM NEW.yanked) AS changed, NEW.*",
+    )
+    .bind(package_id)
+    .bind(version)
+    .bind(yanked)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| sql_error("cannot change the yank flag", error))?;
+
+    row.map(|row| {
+        let changed: bool = row
+            .try_get("changed")
+            .map_err(|error| sql_error("cannot read yank transition flag", error))?;
+        let version = Version::from_row(&row)
+            .map_err(|error| sql_error("cannot decode yanked version", error))?;
+        Ok((version, changed))
+    })
+    .transpose()
+}
+
 /// Sets or clears the yank flag.
 ///
 /// # Errors
@@ -666,18 +740,9 @@ pub async fn set_yanked<'e, E: sqlx::PgExecutor<'e>>(
     version: &str,
     yanked: bool,
 ) -> Result<Option<Version>, Error> {
-    sqlx::query_as::<_, Version>(
-        "UPDATE versions
-         SET yanked = $3, yanked_at = CASE WHEN $3 THEN now() ELSE NULL END
-         WHERE package_id = $1 AND version = $2
-         RETURNING *",
-    )
-    .bind(package_id)
-    .bind(version)
-    .bind(yanked)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| sql_error("cannot change the yank flag", error))
+    Ok(set_yanked_with_changed(pool, package_id, version, yanked)
+        .await?
+        .map(|(version, _)| version))
 }
 
 /// Records the outcome of building documentation.
@@ -997,26 +1062,25 @@ pub async fn approve_device(
     device_code: &str,
     publisher_id: i64,
 ) -> Result<bool, Error> {
-    let device = device_by_code(pool, device_code).await?;
-    let Some(device) = device else {
-        return Ok(false);
-    };
     let mut transaction = pool
         .begin()
         .await
         .map_err(|error| sql_error("cannot start the approval transaction", error))?;
-    let updated = sqlx::query(
+    // Claim the pending code and read its key fields atomically in one query
+    // using PostgreSQL 18 `RETURNING NEW.*` rather than a separate pre-read.
+    let approved: Option<(String, String, String, Option<String>)> = sqlx::query_as(
         "UPDATE device_codes SET status = 'approved', publisher_id = $2
-         WHERE device_code = $1 AND status = 'pending' AND expires_at > now()",
+         WHERE device_code = $1 AND status = 'pending' AND expires_at > now()
+         RETURNING NEW.key_kind, NEW.fingerprint, NEW.public_key, NEW.label",
     )
     .bind(device_code)
     .bind(publisher_id)
-    .execute(&mut *transaction)
+    .fetch_optional(&mut *transaction)
     .await
     .map_err(|error| sql_error("cannot approve the device code", error))?;
-    if updated.rows_affected() == 0 {
+    let Some((key_kind, fingerprint, public_key, label)) = approved else {
         return Ok(false);
-    }
+    };
     sqlx::query(
         "INSERT INTO signing_keys (publisher_id, kind, fingerprint, public_key, label)
          VALUES ($1, $2, $3, $4, $5)
@@ -1025,10 +1089,10 @@ pub async fn approve_device(
             WHERE signing_keys.publisher_id = EXCLUDED.publisher_id",
     )
     .bind(publisher_id)
-    .bind(&device.key_kind)
-    .bind(&device.fingerprint)
-    .bind(&device.public_key)
-    .bind(&device.label)
+    .bind(&key_kind)
+    .bind(&fingerprint)
+    .bind(&public_key)
+    .bind(label.as_deref())
     .execute(&mut *transaction)
     .await
     .map_err(|error| sql_error("cannot bind the key", error))?;

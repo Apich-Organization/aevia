@@ -276,8 +276,8 @@ dim            ::= dim_factor { ( "*" | "/" | "·" ) dim_factor }
 dim_factor     ::= dim_atom [ "^" exponent ]
 dim_atom       ::= "1" | UIDENT | IDENT | "(" dim ")"
 
-exponent       ::= [ "-" ] INT
-                 | "(" [ "-" ] INT "/" INT ")"
+exponent       ::= [ "-" ] (INT | FLOAT | "(" rational ")")
+rational       ::= [ "-" ] (INT | FLOAT) [ "/" [ "-" ] (INT | FLOAT) ]
 
 unit_expr      ::= unit_factor { ( "*" | "·" | "/" ) unit_factor }
 unit_factor    ::= unit_atom [ "^" exponent | SUPERSCRIPT+ ]
@@ -300,8 +300,8 @@ See §2.6. `..`/`..=` occur only in indices and take no part in expression prece
 IDENT          ::= lower XID_Continue { XID_Continue | "'" | "₀".."₉" }
 UIDENT         ::= upper XID_Continue { XID_Continue | "'" | "₀".."₉" }
 INT            ::= dec_int | "0x" hex { hex } | "0o" oct { oct } | "0b" bin { bin }
-FLOAT          ::= dec_int "." dec_int [ exponent ]
-                 | dec_int exponent
+FLOAT          ::= dec_int "." dec_int [ decimal_exponent ] | dec_int decimal_exponent
+decimal_exponent ::= ("e" | "E") ["+" | "-"] dec_int
 STRING         ::= '"' { char | escape | "{" expr "}" } '"'
                  | 'r"' { char } '"'
                  | '"""' ... '"""'

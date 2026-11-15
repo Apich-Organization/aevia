@@ -169,14 +169,32 @@ pub struct DependentView {
 pub struct CratePage {
     /// `owner/name`.
     pub id: PackageId,
+    /// Language edition declared in `aevia.toml`.
+    #[serde(default)]
+    pub edition: Option<String>,
+    /// Package authors declared in `aevia.toml`.
+    #[serde(default)]
+    pub authors: Vec<String>,
     /// One sentence.
     pub description: Option<String>,
     /// An SPDX identifier.
     pub license: Option<String>,
+    /// License file path inside the package archive when `license-file` is set.
+    #[serde(default)]
+    pub license_file: Option<String>,
     /// Where the source lives.
     pub repository: Option<String>,
+    /// Project homepage URL.
+    #[serde(default)]
+    pub homepage: Option<String>,
+    /// Documentation URL.
+    #[serde(default)]
+    pub documentation: Option<String>,
     /// Up to five keywords.
     pub keywords: Vec<String>,
+    /// Up to five registry categories.
+    #[serde(default)]
+    pub categories: Vec<String>,
     /// The README, rendered.
     pub readme_html: Option<String>,
     /// Newest first.

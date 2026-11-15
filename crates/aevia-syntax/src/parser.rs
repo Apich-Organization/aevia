@@ -268,10 +268,7 @@ impl<'a> Parser<'a> {
         if self.eat_punct(punct) {
             return true;
         }
-        self.error_here(
-            "E0202",
-            format!("expected `{punct}`, found {}", self.describe()),
-        );
+        self.expectation(format!("expected `{punct}`, found {}", self.describe()));
         false
     }
 
@@ -282,10 +279,7 @@ impl<'a> Parser<'a> {
         if self.eat_kw(keyword) {
             return true;
         }
-        self.error_here(
-            "E0202",
-            format!("expected `{keyword}`, found {}", self.describe()),
-        );
+        self.expectation(format!("expected `{keyword}`, found {}", self.describe()));
         false
     }
 
@@ -302,10 +296,10 @@ impl<'a> Parser<'a> {
         if self.line_end_consumed() {
             return;
         }
-        self.error_here(
-            "E0202",
-            format!("expected end of line, found {}", self.describe()),
-        );
+        if self.physical_declaration_boundary() {
+            return;
+        }
+        self.expectation(format!("expected end of line, found {}", self.describe()));
         // Skip the rest of the line: one mistake, one diagnostic, and the next
         // declaration starts from a known place.
         self.recover();
@@ -349,7 +343,135 @@ impl<'a> Parser<'a> {
         expected: &str,
     ) {
         let found = self.describe();
-        self.error_here("E0202", format!("expected {expected}, found {found}"));
+        self.expectation(format!("expected {expected}, found {found}"));
+    }
+
+    /// Nested parsers often fail at the same unconsumed separator. The first
+    /// expectation explains the missing operand; repeated closers/line-end
+    /// expectations at that very cursor are consequences of that error.
+    fn expectation(
+        &mut self,
+        message: impl Into<String>,
+    ) {
+        let span = self.span();
+        if self
+            .diagnostics
+            .items
+            .last()
+            .is_some_and(|diagnostic| diagnostic.span == span)
+        {
+            return;
+        }
+        self.error("E0202", message, span);
+    }
+
+    /// These tokens belong to the caller of an operand/type/pattern parser.
+    /// Leaving them in place lets that caller consume its own closer instead
+    /// of turning one missing operand into several missing delimiters.
+    fn operand_boundary(&self) -> bool {
+        matches!(
+            self.kind(),
+            TokenKind::Eof
+                | TokenKind::Newline
+                | TokenKind::Dedent
+                | TokenKind::Punct(
+                    Punct::RParen
+                        | Punct::RBracket
+                        | Punct::RBrace
+                        | Punct::Comma
+                        | Punct::Equals
+                        | Punct::Colon
+                        | Punct::FatArrow
+                        | Punct::Arrow
+                )
+                | TokenKind::Keyword(Keyword::Else | Keyword::Then | Keyword::In | Keyword::With)
+        )
+    }
+
+    /// An unclosed delimiter suppresses lexer NEWLINE tokens. Recover a
+    /// subsequent declaration from its physical source line in that case.
+    fn physical_declaration_boundary(&self) -> bool {
+        let declaration = match self.kind() {
+            | TokenKind::Keyword(Keyword::Let) => !self.let_has_in(),
+            | TokenKind::Keyword(Keyword::Fn) => self.is_fn_decl_start(),
+            | TokenKind::Keyword(
+                Keyword::Type
+                | Keyword::Unit
+                | Keyword::Dimension
+                | Keyword::Import
+                | Keyword::Open
+                | Keyword::Test
+                | Keyword::Class
+                | Keyword::Instance
+                | Keyword::Derive
+                | Keyword::Private,
+            ) => true,
+            | _ => false,
+        };
+        if !declaration || self.pos == 0 {
+            return false;
+        }
+        let previous = self.previous_span().end as usize;
+        let current = self.span().start as usize;
+        self.source
+            .get(previous..current)
+            .is_some_and(|between| between.contains('\n'))
+    }
+
+    /// Synchronize a failed item locally, preserving a comma, an owning
+    /// closer, a layout boundary, or a new declaration. Nested junk is skipped
+    /// as a unit so its internal commas do not end the outer recovery region.
+    fn recover_item(&mut self) {
+        self.recover_delimited(true);
+    }
+
+    fn recover_group(&mut self) {
+        self.recover_delimited(false);
+    }
+
+    fn recover_delimited(
+        &mut self,
+        comma_boundary: bool,
+    ) {
+        let mut nested = Vec::new();
+        while !self.at_eof() && !self.at_newline() && !self.at_dedent() {
+            if nested.is_empty()
+                && ((comma_boundary && self.operand_boundary())
+                    || matches!(
+                        self.kind(),
+                        TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace)
+                    )
+                    || self.physical_declaration_boundary())
+            {
+                break;
+            }
+            match self.kind() {
+                | TokenKind::Punct(Punct::LParen) => nested.push(Punct::RParen),
+                | TokenKind::Punct(Punct::LBracket) => nested.push(Punct::RBracket),
+                | TokenKind::Punct(Punct::LBrace) => nested.push(Punct::RBrace),
+                | TokenKind::Punct(close @ (Punct::RParen | Punct::RBracket | Punct::RBrace)) => {
+                    if nested.last() == Some(close) {
+                        nested.pop();
+                    } else {
+                        break;
+                    }
+                },
+                | _ => {},
+            }
+            self.bump();
+        }
+    }
+
+    fn close_item(
+        &mut self,
+        close: Punct,
+        failed: bool,
+    ) {
+        if failed {
+            self.eat_punct(close);
+        } else {
+            self.expect_punct(close);
+        }
     }
 
     fn take_doc(
@@ -452,6 +574,9 @@ impl<'a> Parser<'a> {
     fn recover(&mut self) {
         // Skip to the end of the line, then let `module` skip the newline.
         while !self.at_eof() && !self.at_newline() && !self.at_dedent() {
+            if self.physical_declaration_boundary() {
+                break;
+            }
             self.bump();
         }
         self.eat_newline();
@@ -1179,7 +1304,9 @@ impl<'a> Parser<'a> {
         if !self.expect_punct(Punct::LParen) {
             return params;
         }
+        let mut failed = false;
         while !self.at_punct(Punct::RParen) && !self.at_eof() {
+            let before = self.diagnostics.items.len();
             let start = self.span();
             let pattern = self.binding_pattern();
             let ty = if self.eat_punct(Punct::Colon) {
@@ -1187,6 +1314,10 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+            if self.diagnostics.items.len() > before {
+                failed = true;
+                self.recover_item();
+            }
             params.push(Param {
                 pattern,
                 ty,
@@ -1196,14 +1327,20 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        self.expect_punct(Punct::RParen);
+        self.close_item(Punct::RParen, failed);
         params
     }
 
     fn let_decl(&mut self) -> Option<DeclKind> {
         self.bump();
         let rec = self.eat_kw(Keyword::Rec);
+        let before = self.diagnostics.items.len();
         let pattern = self.binding_pattern();
+        if self.diagnostics.items.len() > before {
+            // The declaration owner performs recovery once. Recovering here
+            // as well would skip the following valid declaration.
+            return None;
+        }
         let ty = if self.eat_punct(Punct::Colon) {
             Some(self.ty())
         } else {
@@ -1949,13 +2086,19 @@ impl<'a> Parser<'a> {
             if self.at_punct(Punct::LParen) {
                 self.bump();
                 let mut args = Vec::new();
+                let mut failed = false;
                 while !self.at_punct(Punct::RParen) && !self.at_eof() {
+                    let before = self.diagnostics.items.len();
                     args.push(self.expr());
+                    if self.diagnostics.items.len() > before {
+                        failed = true;
+                        self.recover_item();
+                    }
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
                 }
-                self.expect_punct(Punct::RParen);
+                self.close_item(Punct::RParen, failed);
                 let span = expr.span.join(self.previous_span());
                 expr = Expr::new(
                     ExprKind::Call {
@@ -1969,13 +2112,19 @@ impl<'a> Parser<'a> {
             if self.at_punct(Punct::LBracket) {
                 self.bump();
                 let mut indices = Vec::new();
+                let mut failed = false;
                 while !self.at_punct(Punct::RBracket) && !self.at_eof() {
+                    let before = self.diagnostics.items.len();
                     indices.push(self.slice());
+                    if self.diagnostics.items.len() > before {
+                        failed = true;
+                        self.recover_item();
+                    }
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
                 }
-                self.expect_punct(Punct::RBracket);
+                self.close_item(Punct::RBracket, failed);
                 let span = expr.span.join(self.previous_span());
                 expr = Expr::new(
                     ExprKind::Index {
@@ -2217,6 +2366,22 @@ impl<'a> Parser<'a> {
 
     fn primary(&mut self) -> Expr {
         let start = self.span();
+        if self.physical_declaration_boundary() {
+            // A missing operand inside an unclosed delimiter must not parse
+            // the following `let` as a let-in expression and swallow that
+            // declaration. Point at the insertion site after the operator.
+            let insertion = self.previous_span().end;
+            self.error(
+                "E0202",
+                "expected an expression before the next declaration",
+                Span {
+                    file: self.file,
+                    start: insertion,
+                    end: insertion,
+                },
+            );
+            return Expr::new(ExprKind::Error, start);
+        }
         match self.kind().clone() {
             | TokenKind::Int(value) => {
                 self.bump();
@@ -2290,20 +2455,28 @@ impl<'a> Parser<'a> {
             | TokenKind::Punct(Punct::LBracket) => {
                 self.bump();
                 let mut items = Vec::new();
+                let mut failed = false;
                 while !self.at_punct(Punct::RBracket) && !self.at_eof() {
+                    let before = self.diagnostics.items.len();
                     items.push(self.expr());
+                    if self.diagnostics.items.len() > before {
+                        failed = true;
+                        self.recover_item();
+                    }
                     if !self.eat_punct(Punct::Comma) {
                         break;
                     }
                 }
-                self.expect_punct(Punct::RBracket);
+                self.close_item(Punct::RBracket, failed);
                 Expr::new(ExprKind::Tensor(items), start.join(self.previous_span()))
             },
             | _ => {
                 // A recovery node, so the checker does not invent a second
                 // error for an expression the parser already rejected.
                 self.unexpected("an expression");
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 Expr::new(ExprKind::Error, start)
             },
         }
@@ -2424,18 +2597,28 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
         }
+        let before = self.diagnostics.items.len();
         let first = self.expr();
+        let mut failed = self.diagnostics.items.len() > before;
+        if failed {
+            self.recover_item();
+        }
         if self.at_punct(Punct::Comma) {
             let mut items = vec![first];
             while self.eat_punct(Punct::Comma) {
                 if self.at_punct(Punct::RParen) {
                     break;
                 }
+                let before = self.diagnostics.items.len();
                 items.push(self.expr());
+                if self.diagnostics.items.len() > before {
+                    failed = true;
+                    self.recover_item();
+                }
             }
-            self.expect_punct(Punct::RParen);
+            self.close_item(Punct::RParen, failed);
             let span = start.join(self.previous_span());
-            if items.len() == 1 {
+            if items.len() == 1 && !failed {
                 // §2.3.14: single-element tuples are not supported.
                 self.error(
                     "E0202",
@@ -2445,7 +2628,7 @@ impl<'a> Parser<'a> {
             }
             return Expr::new(ExprKind::Tuple(items), span);
         }
-        self.expect_punct(Punct::RParen);
+        self.close_item(Punct::RParen, failed);
         first
     }
 
@@ -2501,7 +2684,12 @@ impl<'a> Parser<'a> {
                 },
             };
             let value = if self.eat_punct(Punct::Equals) {
-                self.expr()
+                let before = self.diagnostics.items.len();
+                let value = self.expr();
+                if self.diagnostics.items.len() > before {
+                    self.recover_item();
+                }
+                value
             } else {
                 let span = self.span();
                 Expr::new(ExprKind::Var(name.clone()), span)
@@ -2727,7 +2915,9 @@ impl<'a> Parser<'a> {
                     self.error_here("E0204", format!("invalid pattern: {found}"));
                 }
                 let span = self.span();
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 Pat::new(PatKind::Error, span)
             },
         }
@@ -2907,7 +3097,9 @@ impl<'a> Parser<'a> {
             },
             | _ => {
                 self.unexpected("a type");
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 Ty::new(TyKind::Unit, start)
             },
         }
@@ -3292,13 +3484,22 @@ impl<'a> Parser<'a> {
             },
             | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
+                let before = self.diagnostics.items.len();
                 let inner = self.dim();
-                self.expect_punct(Punct::RParen);
+                if !self.eat_punct(Punct::RParen) {
+                    if self.diagnostics.items.len() == before {
+                        self.expect_punct(Punct::RParen);
+                    }
+                    self.recover_group();
+                    self.eat_punct(Punct::RParen);
+                }
                 DimAst::Paren(Box::new(inner))
             },
             | _ => {
                 self.unexpected("a dimension");
-                self.bump();
+                if !self.operand_boundary() && !self.physical_declaration_boundary() {
+                    self.bump();
+                }
                 DimAst::One
             },
         }
@@ -3307,35 +3508,55 @@ impl<'a> Parser<'a> {
     fn exponent(&mut self) -> BigRational {
         let negative = self.eat_punct(Punct::Minus);
         if self.eat_punct(Punct::LParen) {
-            let numerator = self.signed_int();
-            let mut value = BigRational::from_integer(numerator);
+            let before = self.diagnostics.items.len();
+            let mut value = self.exponent_number();
             if self.eat_punct(Punct::Slash) {
-                let denominator = self.signed_int();
-                if denominator == BigInt::from(0) {
-                    self.error_here("E0202", "zero denominator in exponent");
+                let denominator_span = self.span();
+                let denominator = self.exponent_number();
+                if denominator.is_zero() {
+                    self.error("E0202", "zero denominator in exponent", denominator_span);
                 } else {
-                    value /= BigRational::from_integer(denominator);
+                    value /= denominator;
                 }
             }
-            self.expect_punct(Punct::RParen);
+            let failed = self.diagnostics.items.len() > before;
+            if failed {
+                self.recover_group();
+            }
+            self.close_item(Punct::RParen, failed);
             return if negative { -value } else { value };
         }
-        let value = BigRational::from_integer(self.signed_int());
+        if self.at_punct(Punct::Minus) {
+            self.unexpected("a single signed exponent (for example `-2` or `(-1/2)`)");
+            return BigRational::from_integer(BigInt::from(1));
+        }
+        let value = self.exponent_number();
         if negative { -value } else { value }
     }
 
-    fn signed_int(&mut self) -> BigInt {
+    fn exponent_number(&mut self) -> BigRational {
         let negative = self.eat_punct(Punct::Minus);
-        match self.kind().clone() {
-            | TokenKind::Int(value) => {
-                self.bump();
-                if negative { -value } else { value }
-            },
-            | _ => {
-                self.unexpected("an integer");
-                BigInt::from(1)
-            },
+        let span = self.span();
+        if !matches!(self.kind(), TokenKind::Int(_) | TokenKind::Float(_)) {
+            self.unexpected("an integer or decimal exponent (for example `2` or `(1/2)`)");
+            return BigRational::from_integer(BigInt::from(1));
         }
+        // Use the original decimal spelling, never the lexer's rounded f64.
+        let value = self
+            .number_text()
+            .and_then(|text| {
+                let value = aevia_dim::parse_decimal(&text);
+                if value.is_none() {
+                    self.error(
+                        "E0202",
+                        "decimal exponent exceeds the supported exact decimal range",
+                        span,
+                    );
+                }
+                value
+            })
+            .unwrap_or_else(|| BigRational::from_integer(BigInt::from(1)));
+        if negative { -value } else { value }
     }
 
     fn starts_unit_atom(&self) -> bool {
@@ -3416,8 +3637,15 @@ impl<'a> Parser<'a> {
             },
             | TokenKind::Punct(Punct::LParen) => {
                 self.bump();
+                let before = self.diagnostics.items.len();
                 let inner = self.unit_expr()?;
-                self.expect_punct(Punct::RParen);
+                if !self.eat_punct(Punct::RParen) {
+                    if self.diagnostics.items.len() == before {
+                        self.error_here("E0209", "expected `)` after the unit expression");
+                    }
+                    self.recover_group();
+                    self.eat_punct(Punct::RParen);
+                }
                 Some(UnitExpr::Paren(Box::new(inner)))
             },
             | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
@@ -3582,6 +3810,166 @@ mod tests {
         };
         assert!(value.is_decimal());
         assert_eq!(unit.to_source(), "m/s^2");
+    }
+
+    #[test]
+    fn malformed_expression_regions_report_one_primary_error() {
+        for source in [
+            "f(1 + )",
+            "f(, 2)",
+            "f(1,,2)",
+            "f(@ bad)",
+            "[1 + , 2]",
+            "xs[1 + ]",
+            "(1 + )",
+            "(1 + @ bad)",
+            "f([1 + ])",
+            "f(1 + ]",
+            "if true then",
+            "1 m^oops",
+            "1 m^(oops)",
+            "1 m^(1/)",
+            "1 m^(1/0)",
+            "1 m^(1/0",
+            "f(,",
+            "{ first = @ bad }",
+            "3 (m/)",
+            "f(3 (m, s), 1)",
+            "3 (m^oops)",
+            "1 m^--2",
+            "1 m^(1,,2)",
+        ] {
+            let diagnostics = parse_expression(0, source).unwrap_err();
+            assert_eq!(
+                diagnostics.items.len(),
+                1,
+                "{source}: {:?}",
+                diagnostics.items
+            );
+        }
+    }
+
+    #[test]
+    fn argument_and_declaration_boundaries_keep_independent_errors() {
+        let diagnostics = parse_expression(0, "f(1 + , 2 + )").unwrap_err();
+        assert_eq!(diagnostics.items.len(), 2, "{:?}", diagnostics.items);
+        let source = "let first = f(1 + )\nlet second = g(, 2)\nlet good = 7\n";
+        let lexed = lex(0, source).unwrap();
+        let (module, diagnostics) = parse_module(0, source, &lexed);
+        assert_eq!(diagnostics.items.len(), 2, "{:?}", diagnostics.items);
+        assert!(module.decls.iter().any(|decl| {
+            matches!(&decl.kind, DeclKind::Let { pattern, .. }
+            if matches!(&pattern.kind, PatKind::Var(name) if name == "good"))
+        }));
+        assert!(
+            diagnostics
+                .items
+                .iter()
+                .all(|error| error.message.contains("an expression"))
+        );
+    }
+
+    #[test]
+    fn recovery_after_missing_closers_preserves_later_physical_declarations() {
+        for source in [
+            "let first = f(1\nlet second = @\nlet good = 7\n",
+            "let first = f(1 +\nlet second = @\nlet good = 7\n",
+        ] {
+            let lexed = lex(0, source).unwrap();
+            let (module, diagnostics) = parse_module(0, source, &lexed);
+            assert_eq!(diagnostics.items.len(), 2, "{:?}", diagnostics.items);
+            assert!(
+                diagnostics.items[0].message.contains("expected `)`")
+                    || diagnostics.items[0]
+                        .message
+                        .contains("expected an expression")
+            );
+            assert!(module.decls.iter().any(|decl| {
+                matches!(&decl.kind, DeclKind::Let { pattern, .. }
+            if matches!(&pattern.kind, PatKind::Var(name) if name == "good"))
+            }));
+        }
+    }
+
+    #[test]
+    fn malformed_bindings_types_and_units_recover_at_their_owner() {
+        for source in [
+            "let =\nlet good = 7\n",
+            "fn f(: Int): Int = 1\nlet good = 7\n",
+            "let x: = 1\nlet good = 7\n",
+            "unit bad: Length = nope\nlet good = 7\n",
+            "not a declaration\nlet good = 7\n",
+        ] {
+            let lexed = lex(0, source).unwrap();
+            let (module, diagnostics) = parse_module(0, source, &lexed);
+            assert_eq!(
+                diagnostics.items.len(),
+                1,
+                "{source}: {:?}",
+                diagnostics.items
+            );
+            assert!(module.decls.iter().any(|decl| {
+                matches!(&decl.kind, DeclKind::Let { pattern, .. }
+                if matches!(&pattern.kind, PatKind::Var(name) if name == "good"))
+            }));
+        }
+        let source = "1 m^(1/0)";
+        let diagnostics = parse_expression(0, source).unwrap_err();
+        assert_eq!(
+            &source
+                [diagnostics.items[0].span.start as usize..diagnostics.items[0].span.end as usize],
+            "0"
+        );
+    }
+
+    #[test]
+    fn decimal_unit_exponents_normalize_without_float_rounding() {
+        for (exponent, expected) in [
+            ("1.5", "m^(3/2)"),
+            ("-0.25", "m^(-1/4)"),
+            ("(1.5)", "m^(3/2)"),
+            ("(0.5/0.25)", "m^2"),
+            ("1.5e+1", "m^15"),
+            ("1e-1", "m^(1/10)"),
+            ("1_0.0_0", "m^10"),
+            ("9007199254740993.0", "m^9007199254740993"),
+        ] {
+            let expression = parse_expression(0, &format!("1 m^{exponent}")).unwrap();
+            let ExprKind::Quantity { unit, .. } = expression.kind else {
+                panic!("expected quantity");
+            };
+            assert_eq!(unit.to_source(), expected, "{exponent}");
+        }
+        let expression = parse_expression(0, "1 m^1e-400").unwrap();
+        let ExprKind::Quantity {
+            unit: UnitExpr::Pow(_, exponent),
+            ..
+        } = expression.kind
+        else {
+            panic!("expected unit power");
+        };
+        assert_eq!(
+            exponent,
+            BigRational::new(BigInt::from(1), BigInt::from(10).pow(400))
+        );
+    }
+
+    #[test]
+    fn invalid_decimal_exponents_report_errors_instead_of_panicking() {
+        for source in [
+            "1 m^1e999999999",
+            "1 m^1e-9223372036854775808",
+            "1 m^(1.5/0.0)",
+        ] {
+            let diagnostics = parse_expression(0, source).unwrap_err();
+            assert_eq!(
+                diagnostics.items.len(),
+                1,
+                "{source}: {:?}",
+                diagnostics.items
+            );
+            assert_eq!(diagnostics.items[0].code, "E0202");
+        }
     }
 
     #[test]

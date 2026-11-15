@@ -357,6 +357,23 @@ fn exponentiation_requires_literal_exponents_for_dimensions() {
     expect_error("fn f(x: Real[L], n: Int): Real[L] = x^n\n", "E0404");
 }
 
+#[test]
+fn decimal_dimension_notation_preserves_exact_type_equality() {
+    expect_ok(
+        r#"
+let root: Float[L^0.75] = sqrt(17.0 m^1.5)
+let same: Float[L^(3/4)] = root
+let tenth: Real[L^(1/10)] = 1 m^0.1
+fn large(x: Real[L^9007199254740993.0]): Real[L^9007199254740993] = x
+fn half<d>(x: Float[d^3]): Float[d^1.5] = sqrt(x)
+let applied: Float[L^1.5] = half(4.0 m^3)
+"#,
+    );
+    expect_error("let x: Real[L^(1/3)] = 1 m^0.333333\n", "E0401");
+    expect_error("let x = (17.0 m)^1.5\n", "E0404");
+    expect_error("fn f(x: Float[L], p: Float) = x^p\n", "E0404");
+}
+
 // --- regressions found by review -------------------------------------------
 
 #[test]

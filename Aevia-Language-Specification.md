@@ -510,7 +510,7 @@ exponent  ::= ("e" | "E") ["+" | "-"] dec_int
 
 - 下划线只用于分组，不能在开头、结尾或连续出现（`E0106`）；`1_000` 合法，`1__0`、
   `1_` 不合法。
-- 十进制整数是 `Int`；带小数点或指数的是 `Float`。`0755` 是十进制 755；没有数字后缀；
+- 在值表达式中，十进制整数是 `Int`；带小数点或指数的是 `Float`。`0755` 是十进制 755；没有数字后缀；
   `1.` 与 `.5` 不合法。
 - `oo`、`-oo`、`nan` 是预置常量，不是字面量；`i` 是预置虚数单位，复数写 `3 + 4 * i`。
 - `0` 不是量纲多态的，默认 `Int`；写零米要写 `0 m`，浮点零写 `0.0`（§4.7）。
@@ -565,13 +565,15 @@ unit_expr    ::= unit_factor { ("*" | "·" | "/") unit_factor }
 unit_factor  ::= unit_atom [ "^" exponent | SUPERSCRIPT+ ]
 unit_atom    ::= unit_name | "(" unit_expr ")" | "%"
 unit_name    ::= UNIT_NAME | IDENT | qname
-exponent     ::= ["-"] integer | "(" rational ")"
+exponent     ::= ["-"] (number | "(" rational ")")
+rational     ::= ["-"] number ["/" ["-"] number]
 ```
 
 - `number` 是 §1.6 的 `INT` 或 `FLOAT`。数值字面量后紧邻 `IDENT`、`UNIT_NAME`（`°C`）、
   `%` 或 `(` 时进入单位字面量。
 - `*` 与 `·` 同义；`/` 左结合：`kg*m^2/s^3` = `(kg*m^2)/s^3`。
-- 指数必须是整数字面量或括号中的有理数：`m^2`、`s^-1`、`m^(1/2)`。变量指数不允许
+- 指数为精确有理数字面量：`m^2`、`s^-1`、`m^(1/2)`、`m^1.5`（即 `m^(3/2)`）。
+  小数/科学记数法按原始拼写精确读取，不经过 `Float` 舍入。变量指数不允许
   （用 `Dyn`，§4.9）。上标 `m²`、`s⁻¹`、`m³·s⁻²` 是 `^n` 的等价写法（`E0107`：非法序列）。
 - 单位表达式内不允许空白并置：`kg m^2` 不是 `kg*m^2`。
 - **单位表达式内的 `*` `·` `/` 必须紧贴两侧。** 任一侧有空白的 `*`/`/` 结束单位字面量，
@@ -1910,9 +1912,10 @@ dimension SolidAngle    = 1
 ```
 
 `b` 是基量纲，`d` 是量纲变量（kind `Dim`），`q` 是有理数字面量（`2`、`-1`、`(1/2)`、
-`(-3/4)`；小数 `0.5` 不合法）。**静态量纲的指数只能是编译期有理数**：`n` 是运行时值时类型
+`(-3/4)`；小数记法精确，例如 `0.5` = `1/2`）。**静态量纲的指数只能是编译期有理数**：`n` 是运行时值时类型
 层无法表示 `d^n`，这类情况走 `Dyn`（§4.9）。rssn 的 `graph::dim` 在项图上支持单个符号
-指数，Aevia 的静态类型不支持。
+指数，Aevia 的静态类型不支持。 此扩展仅是单位/量纲的记法，不改变值级 `Float` 乘幂；
+输出仍用规范有理数，`0.333333` 不等于 `1/3`。
 
 ### 4.2.1 规范形
 
@@ -2352,7 +2355,7 @@ unit_factor ::= unit_atom [ "^" exponent ]
 unit_atom   ::= unit_name | "(" unit_expr ")" | "%"
 ```
 
-- `*` 与 `·` 同义；`/` 左结合。指数是整数字面量或括号中的有理数：`m^2`、`s^-1`、`m^(1/2)`。
+- `*` 与 `·` 同义；`/` 左结合。指数是精确有理数，支持小数记法：`m^2`、`s^-1`、`m^(1/2)`、`m^1.5`（§1.8）。
 - 表达式内不允许数字（指数除外），不允许空白并置。
 - 仿射单位只能单独出现，出现在乘积/幂中报 `E0508`（§5.6.5）。
 
@@ -5481,6 +5484,7 @@ sqrt : forall t0, d0. Scalar<ρ0, d0> -> Scalar<ρ0, d0^(1/2)>
 | `:format [NAME]` | 选择或查看普通结果和 `:time` 的 show、repr、pretty、latex、typst 格式；`:reset` 后保留 |
 | `:doc ITEM` / `:help ITEM` | 已接受的本地/导入条目、内建函数、类型和单位的签名及文档（`:?`、`:h`） |
 | `:apropos TEXT` | 搜索可用条目的名称及文档 |
+| `:source [N]` | 列出原始输入，或查看 `<repl #N>` 对应的源码快照 |
 | `:imports` | 列出已导入的模块与别名 |
 | `:load FILE` | 按文件所属包/目录解析导入，追加声明并执行新 `main`（`:l`） |
 | `:run` | 再次执行已加载的 `main` |
@@ -5518,6 +5522,10 @@ CLI 与 REPL 共同遵循
 快速路径以保留检查点；独立 `aevia run` 保持操作系统默认的信号行为。
 
 条目帮助使用已接受声明的 `##` 文档、推导签名及已冻结的导入源码，不执行表达式。`:help :COMMAND` 显式查询命令帮助；`:apropos TEXT` 搜索条目。`:format show|repr|pretty|latex|typst` 控制普通结果和 `:time`，在 `:reset` 后保留；渲染命令对表达式和 IO 仅执行一次。
+
+REPL 诊断显示原始输入，不显示生成的表达式绑定。当前输入按提交内行号定位，旧定义标记为 `<repl #N>`，
+`:load` 保留文件名与行号；`:source [N]` 查看对应快照。语法恢复保留独立错误；REPL 不检查语法损坏模块及其依赖者的类型，
+也不重复已接受源码的警告。单独的 `:cancel` 可丢弃未完成的管道输入（字符串/注释内除外）。
 
 ## 9.9 CLI
 
@@ -7717,8 +7725,8 @@ dim            ::= dim_factor { ( "*" | "/" | "·" ) dim_factor }
 dim_factor     ::= dim_atom [ "^" exponent ]
 dim_atom       ::= "1" | UIDENT | IDENT | "(" dim ")"
 
-exponent       ::= [ "-" ] INT
-                 | "(" [ "-" ] INT "/" INT ")"
+exponent       ::= [ "-" ] (INT | FLOAT | "(" rational ")")
+rational       ::= [ "-" ] (INT | FLOAT) [ "/" [ "-" ] (INT | FLOAT) ]
 
 unit_expr      ::= unit_factor { ( "*" | "·" | "/" ) unit_factor }
 unit_factor    ::= unit_atom [ "^" exponent | SUPERSCRIPT+ ]
@@ -7741,8 +7749,8 @@ unit_atom      ::= unit_name | "(" unit_expr ")" | "%"
 IDENT          ::= lower XID_Continue { XID_Continue | "'" | "₀".."₉" }
 UIDENT         ::= upper XID_Continue { XID_Continue | "'" | "₀".."₉" }
 INT            ::= dec_int | "0x" hex { hex } | "0o" oct { oct } | "0b" bin { bin }
-FLOAT          ::= dec_int "." dec_int [ exponent ]
-                 | dec_int exponent
+FLOAT          ::= dec_int "." dec_int [ decimal_exponent ] | dec_int decimal_exponent
+decimal_exponent ::= ("e" | "E") ["+" | "-"] dec_int
 STRING         ::= '"' { char | escape | "{" expr "}" } '"'
                  | 'r"' { char } '"'
                  | '"""' ... '"""'
@@ -7782,7 +7790,8 @@ error[E0401]: dimension mismatch
 
 - 第一行 `severity[code]: message`；`-->` 给出文件:行:列；其后是源码行与下划线标签（尽量短）。
 - `=`：附注（规范形、差异、相关声明）；`help:`：修正建议，至多两条，按置信度排序。
-- 多位置错误用多个下划线标签或 `= note:` 指向定义处。
+- 同行标签共用源码片段，其他位置用 `:::` 展示。列号按 Unicode 字符计数，箭头按显示宽度对齐；制表符按四列展开。
+  长片段用 `...` 明示省略，保留错误位置。
 
 ## B.2 严重级别
 
@@ -7960,7 +7969,7 @@ error[E0401]: dimension mismatch
 3. **给差异。** 量纲错误列出 `left`、`right`、`difference` 的规范形。
 4. **给一个修正。** 只在置信度高时给 `help`，不列五个猜测。
 5. **不要重复。** 同一错误只报一次，其余用 `note` 指向主位置。
-6. **保留源码。** 错误信息中的源码行不截断运算符，必要时换行。
+6. **保留上下文。** 省略的行/列用 `...` 标明，保留错误位置。
 7. **可解析。** 代码和位置稳定，便于 IDE/CI 解析。
 
 ## B.14 示例：类型错误

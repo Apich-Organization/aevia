@@ -72,32 +72,63 @@ require_env() {
 	esac
 }
 
-# First implementation that actually works wins: `podman compose` is a shim that
-# exists even when no provider is installed, hence the `version` probe.
-detect_compose() {
+# First implementation that actually works wins, preferring Podman (the
+# production runtime): `podman compose` is a shim that exists even when no
+# provider is installed, hence the `version` probe.
+# Set AEVIA_CONTAINER_ENGINE=podman|docker to force a specific engine.
+try_detect_compose() {
 	if [ -n "$COMPOSE_BIN" ]; then
 		return 0
 	fi
-	if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
-		COMPOSE_BIN=podman
-		COMPOSE_SUB=compose
-		RUNTIME=podman
-	elif command -v podman-compose >/dev/null 2>&1; then
-		COMPOSE_BIN=podman-compose
-		COMPOSE_SUB=""
-		RUNTIME=podman
-	elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-		COMPOSE_BIN=docker
-		COMPOSE_SUB=compose
-		RUNTIME=docker
+	pref=${AEVIA_CONTAINER_ENGINE:-podman}
+	if [ "$pref" = "podman" ]; then
+		if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+			COMPOSE_BIN=podman
+			COMPOSE_SUB=compose
+			RUNTIME=podman
+		elif command -v podman-compose >/dev/null 2>&1; then
+			COMPOSE_BIN=podman-compose
+			COMPOSE_SUB=""
+			RUNTIME=podman
+		elif [ -z "${AEVIA_CONTAINER_ENGINE:-}" ] && command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+			COMPOSE_BIN=docker
+			COMPOSE_SUB=compose
+			RUNTIME=docker
+		else
+			return 1
+		fi
+	elif [ "$pref" = "docker" ]; then
+		if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+			COMPOSE_BIN=docker
+			COMPOSE_SUB=compose
+			RUNTIME=docker
+		else
+			return 1
+		fi
 	else
-		die "no compose implementation found (tried: podman compose, podman-compose, docker compose)"
+		die "unknown AEVIA_CONTAINER_ENGINE='$pref' (expected podman or docker)"
 	fi
 	printf 'using: %s %s\n' "$COMPOSE_BIN" "$COMPOSE_SUB" >&2
+	return 0
+}
+
+detect_compose() {
+	try_detect_compose || die "no compose implementation found (tried: podman compose, podman-compose, docker compose)"
 }
 
 detect_builder() {
 	if [ -n "$BUILDER" ]; then
+		return 0
+	fi
+	if [ -n "${AEVIA_CONTAINER_ENGINE:-}" ]; then
+		command -v "$AEVIA_CONTAINER_ENGINE" >/dev/null 2>&1 || die "$AEVIA_CONTAINER_ENGINE not found"
+		BUILDER=$AEVIA_CONTAINER_ENGINE
+		return 0
+	fi
+	# Keep the builder aligned with whichever compose runtime `up` will use
+	# so images are not built into Podman and then looked up in Docker.
+	if try_detect_compose 2>/dev/null; then
+		BUILDER=$RUNTIME
 		return 0
 	fi
 	if command -v podman >/dev/null 2>&1; then

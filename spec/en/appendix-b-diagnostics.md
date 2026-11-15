@@ -24,8 +24,9 @@ error[E0401]: dimension mismatch
   source line and underline labels (kept short).
 - `=` lines are notes (canonical forms, differences, related declarations); `help:` is a fix,
   at most two, ordered by confidence.
-- An error with several locations uses several underline labels or a `= note:` pointing at the
-  definition.
+- Same-line labels share an excerpt; other locations have `:::` excerpts. Columns count Unicode
+  characters; carets align to display cells (tabs expand to four-column stops). Long excerpts
+  use explicit `...` omissions and keep the error location visible.
 
 ## B.2 Severity
 
@@ -210,7 +211,7 @@ AST cannot represent an unreachable statement. `W0501` currently has no emission
    `difference`.
 4. **Give one fix.** Offer `help` only with high confidence; do not list five guesses.
 5. **Do not repeat.** Report one error once and point to the primary location with `note`.
-6. **Preserve source.** A source line in a message does not truncate operators; wrap if needed.
+6. **Preserve context.** Mark omitted lines/columns with `...` and keep the error location visible.
 7. **Be parseable.** Codes and positions are stable, for IDE and CI parsing.
 
 ## B.14 Example: type error

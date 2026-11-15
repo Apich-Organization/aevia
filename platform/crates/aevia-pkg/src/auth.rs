@@ -53,7 +53,10 @@ pub async fn login(
     if let Some(reason) = local.unsupported_reason() {
         return Err(
             CliError::new(format!("`{}` cannot be bound: {reason}", local.fingerprint))
-                .with_next_step("generate an `ssh-ed25519` key with `ssh-keygen -t ed25519`"),
+                .with_next_step(
+                    "prefer an OpenPGP (GPG) key backed by a hardware key, or generate an \
+                     `ssh-ed25519` key with `ssh-keygen -t ed25519`",
+                ),
         );
     }
 
@@ -65,6 +68,7 @@ pub async fn login(
         .client
         .device_start(local.kind.as_str(), &armored, &label)
         .await?;
+    keys::warn_key_preference(local.kind, app.quiet, &start.warnings);
 
     // The code and the URL are the command's output, so they go to stdout; the
     // polling chatter goes to stderr, where a `--json` pipe cannot see it.

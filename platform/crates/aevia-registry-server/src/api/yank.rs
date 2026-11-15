@@ -150,7 +150,7 @@ pub async fn yank(
             error,
         ))
     })?;
-    let Some(row) = repo::set_yanked(
+    let Some((row, changed)) = repo::set_yanked_with_changed(
         &mut *transaction,
         package.id,
         &statement.version,
@@ -163,28 +163,30 @@ pub async fn yank(
             statement.name, statement.version
         )));
     };
-    repo::touch_package(&mut *transaction, package.id).await?;
-    let verb = if statement.yanked {
-        "yanked"
-    } else {
-        "restored"
-    };
-    repo::append_log_in(
-        &mut transaction,
-        "yank",
-        &format!(
-            "{} {verb} {} {}",
-            authorised.publisher.handle, statement.name, row.version
-        ),
-        serde_json::json!({
-            "name": statement.name.to_string(),
-            "version": row.version,
-            "yanked": statement.yanked,
-            "fingerprint": authorised.fingerprint,
-            "publisher": authorised.publisher.handle,
-        }),
-    )
-    .await?;
+    if changed {
+        repo::touch_package(&mut *transaction, package.id).await?;
+        let verb = if statement.yanked {
+            "yanked"
+        } else {
+            "restored"
+        };
+        repo::append_log_in(
+            &mut transaction,
+            "yank",
+            &format!(
+                "{} {verb} {} {}",
+                authorised.publisher.handle, statement.name, row.version
+            ),
+            serde_json::json!({
+                "name": statement.name.to_string(),
+                "version": row.version,
+                "yanked": statement.yanked,
+                "fingerprint": authorised.fingerprint,
+                "publisher": authorised.publisher.handle,
+            }),
+        )
+        .await?;
+    }
     transaction.commit().await.map_err(|error| {
         ApiError::from_core(aevia_registry_db::sql_error(
             "cannot commit the yank",

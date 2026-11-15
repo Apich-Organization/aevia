@@ -105,10 +105,18 @@ impl SourceFile {
     ) -> Self {
         let text = text.into();
         let mut line_starts = vec![0];
-        for (index, byte) in text.bytes().enumerate() {
-            if byte == b'\n' {
+        let bytes = text.as_bytes();
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] == b'\r' {
+                if bytes.get(index + 1) == Some(&b'\n') {
+                    index += 1;
+                }
+                line_starts.push(index + 1);
+            } else if bytes[index] == b'\n' {
                 line_starts.push(index + 1);
             }
+            index += 1;
         }
         Self {
             name: name.into(),
@@ -123,14 +131,49 @@ impl SourceFile {
         &self,
         offset: u32,
     ) -> (usize, usize) {
-        let offset = usize::try_from(offset).unwrap_or(0).min(self.text.len());
+        let offset = self.floor_boundary(usize::try_from(offset).unwrap_or(0));
         let line = match self.line_starts.binary_search(&offset) {
             | Ok(index) => index,
             | Err(index) => index.saturating_sub(1),
         };
         let start = self.line_starts.get(line).copied().unwrap_or(0);
-        let column = self.text[start..offset].chars().count() + 1;
+        // Both bytes of CRLF denote the same end-of-line insertion point.
+        // Offsets supplied by external hosts may be inside a UTF-8 scalar.
+        let content_end = start + self.line_text(line + 1).len();
+        let column = self.text[start..offset.min(content_end)].chars().count() + 1;
         (line + 1, column)
+    }
+
+    pub(crate) fn floor_boundary(
+        &self,
+        offset: usize,
+    ) -> usize {
+        let mut offset = offset.min(self.text.len());
+        while !self.text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
+    }
+
+    pub(crate) fn ceil_boundary(
+        &self,
+        offset: usize,
+    ) -> usize {
+        let mut offset = offset.min(self.text.len());
+        while !self.text.is_char_boundary(offset) {
+            offset += 1;
+        }
+        offset
+    }
+
+    pub(crate) fn line_start(
+        &self,
+        line: usize,
+    ) -> usize {
+        self.line_starts
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or(self.text.len())
     }
 
     /// The text of a 1-based line, without its terminator.
@@ -147,7 +190,9 @@ impl SourceFile {
             .get(line)
             .copied()
             .unwrap_or(self.text.len());
-        self.text[start..end].trim_end_matches(['\n', '\r'])
+        let text = &self.text[start..end];
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        text.strip_suffix('\r').unwrap_or(text)
     }
 }
 
@@ -271,6 +316,34 @@ fn strip_verbatim(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_breaks_match_the_lexer_for_cr_lf_and_crlf() {
+        let file = SourceFile::new("mixed.aev", "one\rtwo\r\n三\n");
+        assert_eq!(file.line_col(4), (2, 1));
+        assert_eq!(file.line_col(7), (2, 4));
+        assert_eq!(file.line_col(8), (2, 4));
+        assert_eq!(file.line_col(9), (3, 1));
+        assert_eq!(file.line_col(10), (3, 1));
+        assert_eq!(file.line_col(13), (4, 1));
+        assert_eq!(file.line_text(1), "one");
+        assert_eq!(file.line_text(2), "two");
+        assert_eq!(file.line_text(3), "三");
+        assert_eq!(file.line_text(4), "");
+    }
+
+    #[test]
+    fn byte_locations_clamp_to_utf8_boundaries_and_crlf_content() {
+        let file = SourceFile::new("unicode.aev", "界x\r\nα");
+        assert_eq!(file.line_col(1), (1, 1));
+        assert_eq!(file.line_col(2), (1, 1));
+        assert_eq!(file.line_col(3), (1, 2));
+        assert_eq!(file.line_col(4), (1, 3));
+        assert_eq!(file.line_col(5), (1, 3));
+        assert_eq!(file.line_col(6), (2, 1));
+        assert_eq!(file.line_col(7), (2, 1));
+        assert_eq!(file.line_col(u32::MAX), (2, 2));
+    }
 
     #[test]
     fn verbatim_prefixes_are_not_shown() {

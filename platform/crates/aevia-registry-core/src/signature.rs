@@ -37,6 +37,14 @@ use crate::error::E_SIGNATURE;
 use crate::error::Error;
 use crate::error::Result;
 
+/// The SSHSIG namespace expected on signatures made for this registry.
+pub const SSH_NAMESPACE: &str = "aevia";
+
+/// Warning surfaced when an SSH key is registered or used instead of OpenPGP.
+pub const SSH_PREFERENCE_WARNING: &str = "SSH keys are supported, but OpenPGP (GPG) keys are \
+    preferred; for stronger release security, we recommend using an OpenPGP key backed by a \
+    hardware key (such as a YubiKey or OpenPGP smartcard).";
+
 /// Which signature system a key belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -66,6 +74,16 @@ impl KeyKind {
             | "openpgp" | "pgp" | "gpg" => Some(Self::OpenPgp),
             | "ssh" => Some(Self::Ssh),
             | _ => None,
+        }
+    }
+
+    /// Policy warning shown when a key kind other than OpenPGP is registered or
+    /// used to sign a release.
+    #[must_use]
+    pub const fn preference_warning(self) -> Option<&'static str> {
+        match self {
+            | Self::OpenPgp => None,
+            | Self::Ssh => Some(SSH_PREFERENCE_WARNING),
         }
     }
 }
@@ -125,6 +143,26 @@ impl SignerKey {
                 Ok(ssh_fingerprint(&blob))
             },
         }
+    }
+
+    /// Checks that this key is valid and supported for signing and verifying
+    /// releases (any valid OpenPGP key, or an `ssh-ed25519` SSH key).
+    ///
+    /// # Errors
+    ///
+    /// `E_KEY` when the key cannot be parsed or uses an unsupported SSH
+    /// algorithm.
+    pub fn validate(&self) -> Result<()> {
+        match self.kind {
+            | KeyKind::OpenPgp => {
+                let _ = openpgp_key(&self.armored)?;
+            },
+            | KeyKind::Ssh => {
+                let blob = ssh_key_blob(&self.armored)?;
+                let _ = ssh_ed25519_verifying_key(&blob)?;
+            },
+        }
+        Ok(())
     }
 }
 
@@ -221,6 +259,7 @@ fn ssh_fingerprint(blob: &[u8]) -> String {
 struct SshSignature {
     public_key: Vec<u8>,
     namespace: String,
+    reserved: Vec<u8>,
     hash_algorithm: String,
     signature: Vec<u8>,
 }
@@ -247,7 +286,7 @@ fn parse_ssh_signature(armored: &str) -> Result<SshSignature> {
         })?;
     let mut reader = SshReader::new(&bytes);
     let magic = reader
-        .string()
+        .raw(6)
         .ok_or_else(|| Error::new(E_SIGNATURE, "the SSHSIG block is too short"))?;
     if magic != b"SSHSIG" {
         return Err(Error::new(E_SIGNATURE, "the SSHSIG magic is missing"));
@@ -268,7 +307,10 @@ fn parse_ssh_signature(armored: &str) -> Result<SshSignature> {
     let namespace = reader
         .utf8()
         .ok_or_else(|| Error::new(E_SIGNATURE, "the SSHSIG block has no namespace"))?;
-    let _reserved = reader.string();
+    let reserved = reader
+        .string()
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| Error::new(E_SIGNATURE, "the SSHSIG block has no reserved field"))?;
     let hash_algorithm = reader
         .utf8()
         .ok_or_else(|| Error::new(E_SIGNATURE, "the SSHSIG block has no hash algorithm"))?;
@@ -279,9 +321,28 @@ fn parse_ssh_signature(armored: &str) -> Result<SshSignature> {
     Ok(SshSignature {
         public_key,
         namespace,
+        reserved,
         hash_algorithm,
         signature,
     })
+}
+
+fn ssh_ed25519_verifying_key(blob: &[u8]) -> Result<ed25519_dalek::VerifyingKey> {
+    let (algorithm, key_material) = split_ssh_key(blob)?;
+    if algorithm != "ssh-ed25519" {
+        return Err(Error::new(
+            E_KEY,
+            format!(
+                "`{algorithm}` SSH keys are not supported; register an OpenPGP (GPG) key \
+                 (recommended) or an `ssh-ed25519` SSH key"
+            ),
+        ));
+    }
+    let key_bytes: [u8; 32] = key_material
+        .try_into()
+        .map_err(|_| Error::new(E_KEY, "the Ed25519 public key is not 32 bytes"))?;
+    ed25519_dalek::VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|error| Error::new(E_KEY, format!("the Ed25519 key is invalid: {error}")))
 }
 
 fn verify_ssh(
@@ -290,6 +351,16 @@ fn verify_ssh(
     message: &[u8],
 ) -> Result<()> {
     let signature = parse_ssh_signature(armored_signature)?;
+    if signature.namespace != SSH_NAMESPACE {
+        return Err(Error::new(
+            E_SIGNATURE,
+            format!(
+                "the SSHSIG namespace is `{}`, expected `{SSH_NAMESPACE}`; sign with \
+                 `ssh-keygen -Y sign -n {SSH_NAMESPACE}`",
+                signature.namespace
+            ),
+        ));
+    }
     let key_blob = ssh_key_blob(armored_key)?;
     if signature.public_key != key_blob {
         return Err(Error::new(
@@ -297,29 +368,15 @@ fn verify_ssh(
             "the signature was made by a different key than the one presented",
         ));
     }
-    let (algorithm, key_material) = split_ssh_key(&key_blob)?;
-    if algorithm != "ssh-ed25519" {
-        return Err(Error::new(
-            E_KEY,
-            format!(
-                "`{algorithm}` keys are not supported yet; the registry verifies `ssh-ed25519` \
-                 keys, and OpenPGP keys of any kind"
-            ),
-        ));
-    }
-    let key_bytes: [u8; 32] = key_material
-        .try_into()
-        .map_err(|_| Error::new(E_KEY, "the Ed25519 public key is not 32 bytes"))?;
-    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&key_bytes)
-        .map_err(|error| Error::new(E_KEY, format!("the Ed25519 key is invalid: {error}")))?;
+    let verifying_key = ssh_ed25519_verifying_key(&key_blob)?;
 
-    // `PROTOCOL.sshsig` §3: the signed data is the magic, the namespace, the
-    // reserved field, the hash algorithm and the hash of the message, each as
-    // an SSH string.
+    // `PROTOCOL.sshsig` §3: the signed data is the raw 6-byte magic preamble
+    // `"SSHSIG"` followed by the namespace, the reserved field, the hash
+    // algorithm and the hash of the message, each as an SSH string.
     let mut signed = Vec::new();
-    push_ssh_string(&mut signed, b"SSHSIG");
+    signed.extend_from_slice(b"SSHSIG");
     push_ssh_string(&mut signed, signature.namespace.as_bytes());
-    push_ssh_string(&mut signed, b"");
+    push_ssh_string(&mut signed, &signature.reserved);
     push_ssh_string(&mut signed, signature.hash_algorithm.as_bytes());
     let digest: Vec<u8> = match signature.hash_algorithm.as_str() {
         | "sha256" => sha2::Sha256::digest(message).to_vec(),
@@ -383,6 +440,16 @@ struct SshReader<'a> {
 impl<'a> SshReader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
+    }
+
+    fn raw(
+        &mut self,
+        len: usize,
+    ) -> Option<&'a [u8]> {
+        let end = self.offset.checked_add(len)?;
+        let slice = self.bytes.get(self.offset..end)?;
+        self.offset = end;
+        Some(slice)
     }
 
     fn u32(&mut self) -> Option<u32> {
@@ -459,5 +526,30 @@ mod tests {
     fn the_ssh_reader_rejects_truncated_input() {
         let mut reader = SshReader::new(&[0, 0, 0, 9, b'a']);
         assert_eq!(reader.string(), None);
+    }
+
+    #[test]
+    fn ssh_validation_accepts_ed25519_and_refuses_rsa_and_warns() {
+        let ed = SignerKey::detect(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl \
+             apich@laptop",
+        )
+        .expect("detected");
+        ed.validate().expect("ed25519 validates");
+        assert!(KeyKind::Ssh.preference_warning().is_some());
+        assert!(KeyKind::OpenPgp.preference_warning().is_none());
+
+        // An SSH-RSA key parses as OpenSSH line format, then validation refuses it cleanly.
+        let mut rsa_blob = Vec::new();
+        push_ssh_string(&mut rsa_blob, b"ssh-rsa");
+        push_ssh_string(&mut rsa_blob, &[1, 0, 1]);
+        let rsa_line = format!(
+            "ssh-rsa {} apich@rsa",
+            base64::engine::general_purpose::STANDARD.encode(&rsa_blob)
+        );
+        let rsa = SignerKey::detect(&rsa_line).expect("detected");
+        let err = rsa.validate().expect_err("rsa refused at validation");
+        assert_eq!(err.code, E_KEY);
+        assert!(err.message.contains("ssh-ed25519"), "{}", err.message);
     }
 }

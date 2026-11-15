@@ -73,6 +73,10 @@ pub struct DeviceResponse {
     pub expires_at: String,
     /// How often to poll, in seconds.
     pub interval: i64,
+    /// Policy recommendations (for example preferring OpenPGP + hardware keys
+    /// when registering an SSH key).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -104,6 +108,7 @@ pub async fn start(
     Json(request): Json<DeviceRequest>,
 ) -> ApiResult<Json<DeviceResponse>> {
     let key = SignerKey::detect(&request.public_key).map_err(ApiError::from_core)?;
+    key.validate().map_err(ApiError::from_core)?;
     if let Some(kind) = aevia_registry_core::signature::KeyKind::parse(&request.kind)
         && kind != key.kind
     {
@@ -141,12 +146,19 @@ pub async fn start(
         expires_at,
     )
     .await?;
+    let warnings: Vec<String> = key
+        .kind
+        .preference_warning()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     Ok(Json(DeviceResponse {
         device_code,
         user_code: user_code.clone(),
         verification_uri: state.config.url(&format!("/activate?code={user_code}")),
         expires_at: expires_at.to_rfc3339(),
         interval: POLL_SECONDS,
+        warnings,
     }))
 }
 

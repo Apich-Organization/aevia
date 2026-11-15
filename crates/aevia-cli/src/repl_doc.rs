@@ -35,7 +35,10 @@ pub(crate) struct Catalog {
 }
 
 impl Catalog {
-    pub(crate) fn from_compilation(compilation: &ReplCompilation) -> Self {
+    pub(crate) fn with_origins(
+        compilation: &ReplCompilation,
+        location: &dyn Fn(Span) -> String,
+    ) -> Self {
         let Some(entry) = compilation.program.entry() else {
             return Self::default();
         };
@@ -67,7 +70,7 @@ impl Catalog {
                     }
                 }
             }
-            modules.insert(module.file, local_items(module, sources, imports));
+            modules.insert(module.file, local_items(module, sources, imports, location));
         }
         for edge in &entry.imports {
             let Some(module) = compilation
@@ -308,6 +311,7 @@ fn local_items(
     module: &LoadedModule,
     sources: &aevia_syntax::SourceMap,
     mut items: BTreeMap<String, Item>,
+    location: &dyn Fn(Span) -> String,
 ) -> BTreeMap<String, Item> {
     for (index, declaration) in module.module.decls.iter().enumerate() {
         for (name, span) in declaration_names(declaration) {
@@ -359,7 +363,7 @@ fn local_items(
                 kind,
                 signature,
                 ty,
-                origin: sources.location(declaration.span),
+                origin: location(declaration.span),
                 doc: declaration.doc.clone(),
                 alias: None,
                 builtin: None,

@@ -19,10 +19,10 @@
 //! file and a diff always means something changed.
 //!
 //! The reader is a deliberately small subset of TOML: `[table]` headers,
-//! `key = "string"` and inline tables `{ path = "...", version = "..." }`, with
-//! `#` comments and blank lines. Anything outside that subset is `E0605` with
-//! the line number — a manifest the tool only half-understands is worse than
-//! one it rejects.
+//! `key = "string"`, `key = ["a", "b"]`, and inline tables
+//! `{ path = "...", version = "..." }`, with `#` comments and blank lines.
+//! Anything outside that subset is `E0605` with the line number — a manifest
+//! the tool only half-understands is worse than one it rejects.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -134,20 +134,54 @@ pub struct Manifest {
     pub name: String,
     /// `[package] version` — SemVer, `major.minor.patch[-pre]`.
     pub version: String,
+    /// `[package] edition` — language edition (e.g. `"2026"`).
+    pub edition: Option<String>,
     /// `[package] entry` — the executable entry, relative to the package root.
     pub entry: String,
+    /// `[package] authors` — package authors.
+    pub authors: Vec<String>,
+    /// `[package] description` — short summary of the package.
+    pub description: Option<String>,
+    /// `[package] license` — SPDX license expression (e.g. `"Apache-2.0"`).
+    pub license: Option<String>,
+    /// `[package] license-file` — path to a custom license file in the package.
+    pub license_file: Option<String>,
+    /// `[package] readme` — path to the README file (e.g. `"README.md"`).
+    pub readme: Option<String>,
+    /// `[package] repository` — source repository URL.
+    pub repository: Option<String>,
+    /// `[package] homepage` — project homepage URL.
+    pub homepage: Option<String>,
+    /// `[package] documentation` — documentation URL.
+    pub documentation: Option<String>,
+    /// `[package] keywords` — up to five search keywords.
+    pub keywords: Vec<String>,
+    /// `[package] categories` — up to five registry categories.
+    pub categories: Vec<String>,
     /// `[dependencies]` — import root to dependency, sorted by key.
     pub dependencies: BTreeMap<String, Dependency>,
 }
 
 impl Manifest {
-    /// A manifest for a new package.
+    /// A manifest for a new package, pre-populated with Cargo-style `[package]`
+    /// metadata fields.
     #[must_use]
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
             version: "0.1.0".to_string(),
+            edition: Some("2026".to_string()),
             entry: "src/main.aev".to_string(),
+            authors: Vec::new(),
+            description: Some(String::new()),
+            license: Some(String::new()),
+            license_file: None,
+            readme: Some("README.md".to_string()),
+            repository: Some(String::new()),
+            homepage: Some(String::new()),
+            documentation: Some(String::new()),
+            keywords: Vec::new(),
+            categories: Vec::new(),
             dependencies: BTreeMap::new(),
         }
     }
@@ -169,7 +203,30 @@ impl Manifest {
         out.push_str("[package]\n");
         let _ = writeln!(out, "name = \"{}\"", self.name);
         let _ = writeln!(out, "version = \"{}\"", self.version);
+        if let Some(edition) = &self.edition {
+            let _ = writeln!(out, "edition = \"{edition}\"");
+        }
         let _ = writeln!(out, "entry = \"{}\"", self.entry);
+        let _ = writeln!(out, "authors = {}", format_string_array(&self.authors));
+        for (key, value) in [
+            ("description", &self.description),
+            ("license", &self.license),
+            ("license-file", &self.license_file),
+            ("readme", &self.readme),
+            ("repository", &self.repository),
+            ("homepage", &self.homepage),
+            ("documentation", &self.documentation),
+        ] {
+            if let Some(text) = value {
+                let _ = writeln!(out, "{key} = \"{text}\"");
+            }
+        }
+        let _ = writeln!(out, "keywords = {}", format_string_array(&self.keywords));
+        let _ = writeln!(
+            out,
+            "categories = {}",
+            format_string_array(&self.categories)
+        );
         out.push('\n');
         out.push_str("[dependencies]\n");
         for (key, dependency) in &self.dependencies {
@@ -217,7 +274,18 @@ impl Manifest {
         let mut table = String::new();
         let mut name: Option<String> = None;
         let mut version: Option<String> = None;
+        let mut edition: Option<String> = None;
         let mut entry: Option<String> = None;
+        let mut authors: Vec<String> = Vec::new();
+        let mut description: Option<String> = None;
+        let mut license: Option<String> = None;
+        let mut license_file: Option<String> = None;
+        let mut readme: Option<String> = None;
+        let mut repository: Option<String> = None;
+        let mut homepage: Option<String> = None;
+        let mut documentation: Option<String> = None;
+        let mut keywords: Vec<String> = Vec::new();
+        let mut categories: Vec<String> = Vec::new();
         let mut dependencies: BTreeMap<String, Dependency> = BTreeMap::new();
         for (index, raw) in text.lines().enumerate() {
             let line = strip_comment(raw).trim();
@@ -254,22 +322,55 @@ impl Manifest {
             let value = value.trim();
             match table.as_str() {
                 | "package" => {
-                    let text = parse_string(value).ok_or_else(|| {
-                        ManifestError::new(
-                            "E0605",
-                            format!("{origin}:{number}: `{key}` expects a quoted string"),
-                        )
-                    })?;
                     match key {
-                        | "name" => name = Some(text),
-                        | "version" => version = Some(text),
-                        | "entry" => entry = Some(text),
+                        | "authors" | "keywords" | "categories" => {
+                            let items = parse_string_array(value).ok_or_else(|| {
+                                ManifestError::new(
+                                    "E0605",
+                                    format!(
+                                        "{origin}:{number}: `{key}` expects an array of quoted \
+                                         strings"
+                                    ),
+                                )
+                            })?;
+                            match key {
+                                | "authors" => authors = items,
+                                | "keywords" => keywords = items,
+                                | _ => categories = items,
+                            }
+                        },
+                        | "name" | "version" | "edition" | "entry" | "description" | "license"
+                        | "license-file" | "readme" | "repository" | "homepage"
+                        | "documentation" => {
+                            let text = parse_string(value).ok_or_else(|| {
+                                ManifestError::new(
+                                    "E0605",
+                                    format!("{origin}:{number}: `{key}` expects a quoted string"),
+                                )
+                            })?;
+                            match key {
+                                | "name" => name = Some(text),
+                                | "version" => version = Some(text),
+                                | "edition" => edition = Some(text),
+                                | "entry" => entry = Some(text),
+                                | "description" => description = Some(text),
+                                | "license" => license = Some(text),
+                                | "license-file" => license_file = Some(text),
+                                | "readme" => readme = Some(text),
+                                | "repository" => repository = Some(text),
+                                | "homepage" => homepage = Some(text),
+                                | _ => documentation = Some(text),
+                            }
+                        },
                         | other => {
                             return Err(ManifestError::new(
                                 "E0605",
                                 format!(
                                     "{origin}:{number}: unknown key `{other}` in `[package]`; \
-                                     this tool reads `name`, `version` and `entry`"
+                                     supported keys are `name`, `version`, `edition`, `entry`, \
+                                     `authors`, `description`, `license`, `license-file`, \
+                                     `readme`, `repository`, `homepage`, `documentation`, \
+                                     `keywords`, and `categories`"
                                 ),
                             ));
                         },
@@ -330,7 +431,18 @@ impl Manifest {
         Ok(Self {
             name,
             version,
+            edition,
             entry: entry.unwrap_or_else(|| "src/main.aev".to_string()),
+            authors,
+            description,
+            license,
+            license_file,
+            readme,
+            repository,
+            homepage,
+            documentation,
+            keywords,
+            categories,
             dependencies,
         })
     }
@@ -1947,6 +2059,28 @@ fn parse_string(value: &str) -> Option<String> {
     Some(inner.to_string())
 }
 
+fn parse_string_array(value: &str) -> Option<Vec<String>> {
+    let inner = value.trim().strip_prefix('[')?.strip_suffix(']')?;
+    let fields = split_fields(inner).ok()?;
+    let mut items = Vec::new();
+    for field in fields {
+        let item = field.trim();
+        if item.is_empty() {
+            continue;
+        }
+        items.push(parse_string(item)?);
+    }
+    Some(items)
+}
+
+fn format_string_array(items: &[String]) -> String {
+    if items.is_empty() {
+        return "[]".to_string();
+    }
+    let rendered: Vec<String> = items.iter().map(|item| format!("\"{item}\"")).collect();
+    format!("[{}]", rendered.join(", "))
+}
+
 /// Cuts a trailing `# comment` that is not inside a quoted string.
 fn strip_comment(line: &str) -> &str {
     let mut quoted = false;
@@ -2343,6 +2477,42 @@ UnitsExtra = { path = "../units-extra" }
         let again = Manifest::parse(&rendered, "aevia.toml").expect("re-parses");
         assert_eq!(manifest, again);
         assert_eq!(rendered, again.render());
+    }
+
+    #[test]
+    fn new_manifest_includes_cargo_metadata_fields_and_round_trips() {
+        let manifest = Manifest::new("kinematics");
+        assert_eq!(manifest.edition.as_deref(), Some("2026"));
+        assert_eq!(manifest.readme.as_deref(), Some("README.md"));
+        let rendered = manifest.render();
+        for needle in [
+            "edition = \"2026\"",
+            "authors = []",
+            "description = \"\"",
+            "license = \"\"",
+            "readme = \"README.md\"",
+            "repository = \"\"",
+            "homepage = \"\"",
+            "documentation = \"\"",
+            "keywords = []",
+            "categories = []",
+        ] {
+            assert!(
+                rendered.contains(needle),
+                "missing `{needle}` in:\n{rendered}"
+            );
+        }
+        let parsed = Manifest::parse(&rendered, "aevia.toml").expect("re-parses");
+        assert_eq!(parsed, manifest);
+
+        let populated = "[package]\nname = \"units\"\nversion = \"0.2.0\"\nedition = \"2026\"\nentry = \"src/lib.aev\"\nauthors = [\"Smith, Alice <alice@example.com>\", \"Bob\"]\ndescription = \"Physical units\"\nlicense = \"Apache-2.0\"\nreadme = \"README.md\"\nrepository = \"https://github.com/apich/units\"\nhomepage = \"https://aevia.org\"\ndocumentation = \"https://docs.aevia.org\"\nkeywords = [\"units\", \"physics\"]\ncategories = [\"science\", \"simulation\"]\n";
+        let full = Manifest::parse(populated, "aevia.toml").expect("full parses");
+        assert_eq!(full.authors, ["Smith, Alice <alice@example.com>", "Bob"]);
+        assert_eq!(full.description.as_deref(), Some("Physical units"));
+        assert_eq!(full.license.as_deref(), Some("Apache-2.0"));
+        assert_eq!(full.keywords, ["units", "physics"]);
+        assert_eq!(full.categories, ["science", "simulation"]);
+        assert_eq!(Manifest::parse(&full.render(), "aevia.toml").unwrap(), full);
     }
 
     #[test]

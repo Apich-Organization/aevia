@@ -222,6 +222,7 @@ impl ReplCompiler {
             source_identities: self.source_identities.clone(),
             entry_identity: Some((entry_key, self.identity.clone())),
             entry_import_roots,
+            skip_malformed_checks: true,
             options: CheckOptions::default(),
             overlay: overlays.clone(),
             cache: Some(self.cache.clone()),
@@ -912,6 +913,9 @@ struct Loader {
     /// A loaded REPL fragment can resolve imports from another package/directory.
     entry_import_roots: HashMap<Span, (Roots, ResolvedModule)>,
     context_roots: HashMap<ModuleKey, Roots>,
+    /// Interactive diagnostics stop at syntax errors; editor loads retain
+    /// their historical recovery-AST analysis by leaving this disabled.
+    skip_malformed_checks: bool,
     diagnostics: Diagnostics,
     /// Parsed modules by owning package and canonical source, in post-order.
     order: Vec<ModuleKey>,
@@ -1113,6 +1117,7 @@ struct Parsed {
     context: ResolvedModule,
     file: FileId,
     module: Module,
+    syntax_failed: bool,
     path: Vec<String>,
     imports: Vec<(
         ModuleKey,
@@ -1345,6 +1350,7 @@ impl Loader {
                             decls: Vec::new(),
                             file,
                         },
+                        syntax_failed: true,
                         path: Vec::new(),
                         imports: Vec::new(),
                     },
@@ -1354,6 +1360,7 @@ impl Loader {
             },
         };
         let (module, parse_diagnostics) = parse_module(file, &source, &lexed);
+        let syntax_failed = parse_diagnostics.has_errors();
         self.diagnostics.extend(parse_diagnostics);
         if self.diagnostics.has_errors() && self.stack.is_empty() {
             // The entry file failed to parse; there is nothing to import.
@@ -1513,8 +1520,20 @@ impl Loader {
             } else {
                 ModuleKey::physical(&target)
             };
-            self.context_roots.entry(target_key).or_insert(import_roots);
-            if let Some(resolved) = self.load_file(&target, import_path) {
+            self.context_roots
+                .entry(target_key.clone())
+                .or_insert(import_roots);
+            let resolved = self.load_file(&target, import_path).or_else(|| {
+                // Keep a failed lexical dependency edge so only its importers
+                // are stage-blocked; independent modules remain checkable.
+                (self.skip_malformed_checks
+                    && self
+                        .parsed
+                        .get(&target_key)
+                        .is_some_and(|parsed| parsed.syntax_failed))
+                .then_some(target_key)
+            });
+            if let Some(resolved) = resolved {
                 imports.push((
                     resolved,
                     import_path.clone(),
@@ -1532,6 +1551,7 @@ impl Loader {
                 context: context.clone(),
                 file,
                 module,
+                syntax_failed,
                 path,
                 imports,
             },
@@ -1572,6 +1592,7 @@ impl Loader {
             }
         }
         let mut modules: Vec<LoadedModule> = Vec::new();
+        let mut syntax_blocked = std::collections::HashSet::new();
         // The interface digest of each module already resolved (`None` when it
         // could not be digested), for the on-disk cache keys.
         let mut digests: HashMap<FileId, Option<Digest>> = HashMap::new();
@@ -1583,6 +1604,33 @@ impl Loader {
             let Some(parsed) = self.parsed.remove(&path) else {
                 continue;
             };
+            if self.skip_malformed_checks
+                && (parsed.syntax_failed
+                    || parsed
+                        .imports
+                        .iter()
+                        .any(|(target, ..)| syntax_blocked.contains(target)))
+            {
+                syntax_blocked.insert(path);
+                let checked = CheckedModule {
+                    name: parsed.module.name.clone(),
+                    anonymous_file: parsed.file,
+                    errors: 1,
+                    ..CheckedModule::default()
+                };
+                // Retain the recovered AST and its slot in dependency order,
+                // but do not cache or type-check a syntax-recovery program.
+                modules.push(LoadedModule {
+                    path: parsed.path,
+                    file: parsed.file,
+                    source: parsed.context,
+                    module: parsed.module,
+                    checked,
+                    aliases: Vec::new(),
+                    imports: Vec::new(),
+                });
+                continue;
+            }
             // The imports of this module, as the checker wants them: one entry
             // per resolved module, with the prefix its names are reachable
             // under.

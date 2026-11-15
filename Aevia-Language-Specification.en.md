@@ -557,7 +557,7 @@ exponent  ::= ("e" | "E") ["+" | "-"] dec_int
 
 - Underscores only group digits; they cannot lead, trail or repeat (`E0106`). `1_000` is
   valid; `1__0` and `1_` are not.
-- A decimal integer is an `Int`; a literal with a point or exponent is a `Float`. `0755` is
+- In value expressions, a decimal integer is an `Int`; a literal with a point or exponent is a `Float`. `0755` is
   decimal 755. There are no numeric suffixes, and `1.` and `.5` are invalid.
 - `oo`, `-oo` and `nan` are predefined constants, not literals. `i` is the predefined imaginary
   unit; write a complex number as `3 + 4 * i`.
@@ -618,14 +618,15 @@ unit_expr    ::= unit_factor { ("*" | "·" | "/") unit_factor }
 unit_factor  ::= unit_atom [ "^" exponent | SUPERSCRIPT+ ]
 unit_atom    ::= unit_name | "(" unit_expr ")" | "%"
 unit_name    ::= UNIT_NAME | IDENT | qname
-exponent     ::= ["-"] integer | "(" rational ")"
+exponent     ::= ["-"] (number | "(" rational ")")
+rational     ::= ["-"] number ["/" ["-"] number]
 ```
 
 - `number` is an `INT` or `FLOAT` of §1.6. A unit literal starts when the numeric literal is
   immediately followed by an `IDENT`, a `UNIT_NAME` (`°C`), `%` or `(`.
 - `*` and `·` are synonyms; `/` is left-associative: `kg*m^2/s^3` = `(kg*m^2)/s^3`.
-- An exponent MUST be an integer literal or a parenthesised rational: `m^2`, `s^-1`,
-  `m^(1/2)`. Variable exponents are not allowed (use `Dyn`, §4.9). Superscripts `m²`, `s⁻¹`,
+- Exponents are exact rational literals: `m^2`, `s^-1`, `m^(1/2)`, `m^1.5` (= `m^(3/2)`).
+  Decimal/scientific notation is read exactly from its spelling, never rounded through `Float`. Variable exponents are not allowed (use `Dyn`, §4.9). Superscripts `m²`, `s⁻¹`,
   `m³·s⁻²` are equivalent to `^n` (`E0107`: invalid sequence).
 - Juxtaposition inside a unit expression is not allowed: `kg m^2` is not `kg*m^2`.
 - **Inside a unit expression, `*` `·` `/` MUST touch both neighbours.** A `*` or `/` with
@@ -2117,10 +2118,12 @@ prefers the shortest known alias.
 ```
 
 `b` is a base dimension, `d` a dimension variable (kind `Dim`) and `q` a rational literal (`2`,
-`-1`, `(1/2)`, `(-3/4)`; the decimal `0.5` is invalid). **The exponent of a static dimension is
+`-1`, `(1/2)`, `(-3/4)`; decimal notation is exact, e.g. `0.5` = `1/2`). **The exponent of a static dimension is
 always a compile-time rational:** when `n` is a run-time value the type level cannot represent
 `d^n`, and such cases use `Dyn` (§4.9). rssn's `graph::dim` supports a single symbolic exponent
-on the term graph; Aevia's static types do not.
+on the term graph; Aevia's static types do not. This notation extension applies only to unit/dimension syntax;
+value-level `Float` powers are unchanged. Printed exponents remain canonical rationals;
+`0.333333` is not `1/3`.
 
 ### 4.2.1 Canonical form
 
@@ -2624,8 +2627,8 @@ unit_factor ::= unit_atom [ "^" exponent ]
 unit_atom   ::= unit_name | "(" unit_expr ")" | "%"
 ```
 
-- `*` and `·` are synonyms; `/` is left-associative. An exponent is an integer literal or a
-  parenthesised rational: `m^2`, `s^-1`, `m^(1/2)`.
+- `*` and `·` are synonyms; `/` is left-associative. Exponents are exact rationals,
+  including decimal notation: `m^2`, `s^-1`, `m^(1/2)`, `m^1.5` (§1.8).
 - Numbers (other than exponents) and juxtaposition by whitespace are not allowed inside a unit
   expression.
 - An affine unit may appear only alone; in a product or power it is `E0508` (§5.6.4).
@@ -5779,6 +5782,7 @@ sqrt : forall t0, d0. Scalar<ρ0, d0> -> Scalar<ρ0, d0^(1/2)>
 | `:format [NAME]` | select or inspect show, repr, pretty, latex, typst output for normal results and `:time`; survives `:reset` |
 | `:doc ITEM` / `:help ITEM` | signatures and documentation for accepted local/imported items, builtins, types, and units (`:?`, `:h`) |
 | `:apropos TEXT` | search available item names and documentation |
+| `:source [N]` | list original accepted inputs, or inspect the snapshot named `<repl #N>` |
 | `:imports` | list imported modules and aliases |
 | `:load FILE` | append declarations with their package/directory imports and run a new `main` (`:l`) |
 | `:run` | execute the loaded `main` again |
@@ -5850,6 +5854,13 @@ and `to_typst`. `:show EXPR` renders a value; `:show` alone lists source. Direct
 rendering commands evaluate each expression once and execute IO once. Mode changes
 do not affect program-authored output. Unsupported mathematical values report an
 error rather than silently emitting another format; use show/repr for such values.
+
+REPL diagnostics show entered source, never generated expression bindings. Current
+lines are relative to the submission; earlier definitions use `<repl #N>`, and
+`:load` preserves file names/lines. `:source [N]` inspects these snapshots. Parser
+recovery preserves independent errors; malformed modules and their dependents are
+not type-checked in the REPL. Accepted-history warnings are not replayed. A standalone
+`:cancel` also discards incomplete piped input outside strings/comments.
 
 ## 9.9 CLI
 
@@ -7905,8 +7916,8 @@ dim            ::= dim_factor { ( "*" | "/" | "·" ) dim_factor }
 dim_factor     ::= dim_atom [ "^" exponent ]
 dim_atom       ::= "1" | UIDENT | IDENT | "(" dim ")"
 
-exponent       ::= [ "-" ] INT
-                 | "(" [ "-" ] INT "/" INT ")"
+exponent       ::= [ "-" ] (INT | FLOAT | "(" rational ")")
+rational       ::= [ "-" ] (INT | FLOAT) [ "/" [ "-" ] (INT | FLOAT) ]
 
 unit_expr      ::= unit_factor { ( "*" | "·" | "/" ) unit_factor }
 unit_factor    ::= unit_atom [ "^" exponent | SUPERSCRIPT+ ]
@@ -7929,8 +7940,8 @@ See §2.6. `..`/`..=` occur only in indices and take no part in expression prece
 IDENT          ::= lower XID_Continue { XID_Continue | "'" | "₀".."₉" }
 UIDENT         ::= upper XID_Continue { XID_Continue | "'" | "₀".."₉" }
 INT            ::= dec_int | "0x" hex { hex } | "0o" oct { oct } | "0b" bin { bin }
-FLOAT          ::= dec_int "." dec_int [ exponent ]
-                 | dec_int exponent
+FLOAT          ::= dec_int "." dec_int [ decimal_exponent ] | dec_int decimal_exponent
+decimal_exponent ::= ("e" | "E") ["+" | "-"] dec_int
 STRING         ::= '"' { char | escape | "{" expr "}" } '"'
                  | 'r"' { char } '"'
                  | '"""' ... '"""'
@@ -7975,8 +7986,9 @@ error[E0401]: dimension mismatch
   source line and underline labels (kept short).
 - `=` lines are notes (canonical forms, differences, related declarations); `help:` is a fix,
   at most two, ordered by confidence.
-- An error with several locations uses several underline labels or a `= note:` pointing at the
-  definition.
+- Same-line labels share an excerpt; other locations have `:::` excerpts. Columns count Unicode
+  characters; carets align to display cells (tabs expand to four-column stops). Long excerpts
+  use explicit `...` omissions and keep the error location visible.
 
 ## B.2 Severity
 
@@ -8161,7 +8173,7 @@ AST cannot represent an unreachable statement. `W0501` currently has no emission
    `difference`.
 4. **Give one fix.** Offer `help` only with high confidence; do not list five guesses.
 5. **Do not repeat.** Report one error once and point to the primary location with `note`.
-6. **Preserve source.** A source line in a message does not truncate operators; wrap if needed.
+6. **Preserve context.** Mark omitted lines/columns with `...` and keep the error location visible.
 7. **Be parseable.** Codes and positions are stable, for IDE and CI parsing.
 
 ## B.14 Example: type error

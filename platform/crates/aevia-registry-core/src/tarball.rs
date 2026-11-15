@@ -90,6 +90,25 @@ pub fn pack_dir(
             collect(&root, name, &mut files)?;
         }
     }
+    if let Some(readme) = crate::manifest::non_empty_trimmed(manifest.readme.as_deref()) {
+        let rel = crate::manifest::validate_relative_path(&readme, "readme")?;
+        let path = dir.join(&rel);
+        if path.is_file() {
+            files.insert(rel, path);
+        }
+    }
+    if let Some(license_file) = crate::manifest::non_empty_trimmed(manifest.license_file.as_deref())
+    {
+        let rel = crate::manifest::validate_relative_path(&license_file, "license-file")?;
+        let path = dir.join(&rel);
+        if !path.is_file() {
+            return Err(Error::new(
+                E_TARBALL,
+                format!("the license file `{rel}` named by `[package] license-file` is missing"),
+            ));
+        }
+        files.insert(rel, path);
+    }
     // The entry file must exist, or the package cannot run.
     let entry = manifest.entry_path(dir);
     if !entry.is_file() {

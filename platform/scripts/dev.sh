@@ -17,7 +17,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
 container=aevia-dev-db
-image=postgres:18-trixie
+image=docker.io/library/postgres:18-trixie
 port=55432
 
 if command -v podman >/dev/null 2>&1; then

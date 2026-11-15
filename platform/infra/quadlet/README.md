@@ -27,7 +27,7 @@ cp ../Caddyfile ~/.config/aevia/Caddyfile
 
 # 3. Build the two local images (Quadlet never builds; it only runs).
 podman build --build-context lang="$PWD/../../../crates" \
-    -f ../Containerfile.server -t localhost/aevia/registry:0.1.0 ../../..
+    -f ../Containerfile.server -t localhost/aevia/registry:0.1.0 ../..
 podman build -f ../Containerfile.postgres -t localhost/aevia/postgres:18-trixie ..
 
 # 4. Generate the systemd units from the Quadlet files.
@@ -62,11 +62,11 @@ apply to it:
 
 ```sh
 podman build --build-context lang="$PWD/../../../crates" \
-    -f ../Containerfile.server -t localhost/aevia/registry:0.1.0 ../../..
+    -f ../Containerfile.server -t localhost/aevia/registry:0.1.0 ../..
 systemctl --user restart aevia-registry.service
 ```
 
-Caddy tracks `caddy:2` from Docker Hub. `AutoUpdate=registry` makes it eligible
+Caddy tracks `docker.io/library/caddy:2` from Docker Hub. `AutoUpdate=registry` makes it eligible
 for `podman auto-update`, which needs a timer:
 
 ```sh

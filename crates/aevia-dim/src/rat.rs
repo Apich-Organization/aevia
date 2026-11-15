@@ -63,8 +63,8 @@ pub fn parse_decimal(text: &str) -> Option<BigRational> {
     if negative {
         value = -value;
     }
-    let scale = exponent - i64::try_from(frac_part.len()).ok()?;
-    if scale.abs() > 10_000 {
+    let scale = exponent.checked_sub(i64::try_from(frac_part.len()).ok()?)?;
+    if scale.unsigned_abs() > 10_000 {
         return None;
     }
     let ten = BigInt::from(10);
@@ -197,6 +197,8 @@ mod tests {
         assert_eq!(parse_decimal("-2.5e2"), Some(ratio(-250, 1)));
         assert_eq!(parse_decimal("1_000"), Some(ratio(1000, 1)));
         assert_eq!(parse_decimal("abc"), None);
+        assert_eq!(parse_decimal("1e-9223372036854775808"), None);
+        assert_eq!(parse_decimal("1.5e-9223372036854775808"), None);
     }
 
     #[test]

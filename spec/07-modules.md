@@ -147,7 +147,17 @@ import Data.Csv { read_csv, Table }
 [package]
 name = "kinematics"
 version = "0.1.0"
+edition = "2026"
 entry = "src/main.aev"      # 可选；默认 src/main.aev
+authors = ["Your Name <you@example.com>"]
+description = "Kinematics solvers"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/apich/kinematics"
+homepage = "https://aevia.org"
+documentation = "https://docs.aevia.org"
+keywords = ["physics"]
+categories = ["science"]
 
 [dependencies]
 Units = "^1.2"                                        # 官方作用域：aevia/units
@@ -156,10 +166,12 @@ Kinematics = { path = "../kinematics" }               # 本地路径包
 Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # 本地开发用路径，发布后按版本
 ```
 
-状态：清单读取器**只**读 `[package]`（键 `name`、`version`、`entry`）与 `[dependencies]`；其他表
-（`[compat]`、`[capabilities]`、`[build]`、`[profile.*]`）与其他 `[package]` 键（`edition`、`authors`、
-`description`）都是 `E0605`。说明、许可证、关键字、仓库地址在发布时由 `aevia publish` 的选项给出
-（§9.9）。能力声明目前没有运行时权限检查，只有 `--caps`（§9.14）。`git` 依赖不存在（`E0605`）。
+状态：清单读取器读 `[package]`（`name`、`version`、`edition`、`entry`、`authors`、`description`、`license`、
+`license-file`、`readme`、`repository`、`homepage`、`documentation`、`keywords`、`categories`）与
+`[dependencies]`；其他表（`[compat]`、`[capabilities]`、`[build]`、`[profile.*]`）与未知键都是 `E0605`。
+发布到 registry 时强制要求非空的 `description`，以及非空的 `license` 或打包在归档内的非空 `license-file`；
+`aevia publish` 的选项（§9.9）和 `aevia-pkg.toml` 也可覆盖这些元数据。能力声明目前没有运行时权限检查，
+只有 `--caps`（§9.14）。`git` 依赖不存在（`E0605`）。
 
 - `name` 是包名，`version` 是 SemVer 2.0 的 `major.minor.patch`，可带 `-pre-release`；发布版本不得带
   `+build`（两个仅 build 不同的版本优先级相同，registry 无法区分）。

@@ -28,6 +28,10 @@
 
 use aevia_registry_core::PackageId;
 use aevia_registry_core::manifest::PackageMetadata;
+use aevia_registry_core::manifest::non_empty_trimmed;
+use aevia_registry_core::manifest::normalize_tag_list;
+use aevia_registry_core::manifest::validate_relative_path;
+use aevia_registry_core::manifest::validate_required_publish_metadata;
 use aevia_registry_core::signature::SignerKey;
 use aevia_registry_core::statement::PublishStatement;
 use aevia_registry_core::statement::YankStatement;
@@ -107,8 +111,12 @@ pub async fn run(
             "`{}` cannot be used to publish: {reason}",
             local.fingerprint
         ))
-        .with_next_step("generate an `ssh-ed25519` key, or publish with an OpenPGP key"));
+        .with_next_step(
+            "prefer an OpenPGP (GPG) key (hardware-backed recommended), or generate an \
+             `ssh-ed25519` SSH key",
+        ));
     }
+    keys::warn_key_preference(local.kind, app.quiet, &[]);
 
     // Ask who this key speaks for *before* building anything. The owner of a
     // package is the account the key is bound to, so this is also how the
@@ -142,20 +150,44 @@ pub async fn run(
     }
 
     let metadata = PackageMetadata::discover(&package.root);
-    let description = options
-        .description
-        .map(str::to_string)
-        .or(metadata.description);
-    let license = options.license.map(str::to_string).or(metadata.license);
-    let repository = options
-        .repository
-        .map(str::to_string)
+    let manifest = &package.manifest;
+    let edition = non_empty_trimmed(manifest.edition.as_deref());
+    let authors = normalize_tag_list(&manifest.authors, false, 64, "authors")?;
+    let description = non_empty_trimmed(options.description)
+        .or_else(|| non_empty_trimmed(manifest.description.as_deref()))
+        .or_else(|| non_empty_trimmed(metadata.declared.description.as_deref()));
+    let license = non_empty_trimmed(options.license)
+        .or_else(|| non_empty_trimmed(manifest.license.as_deref()))
+        .or_else(|| non_empty_trimmed(metadata.declared.license.as_deref()));
+    let license_file = non_empty_trimmed(manifest.license_file.as_deref())
+        .map(|path| validate_relative_path(&path, "license-file"))
+        .transpose()?;
+    let license_file_present = license_file.as_deref().is_some_and(|rel| {
+        std::fs::read_to_string(package.root.join(rel))
+            .is_ok_and(|contents| !contents.trim().is_empty())
+    });
+    validate_required_publish_metadata(
+        description.as_deref(),
+        license.as_deref(),
+        license_file_present,
+    )
+    .map_err(|error| {
+        CliError::from(error)
+            .with_next_step("fill `[package] description` and `license` (or `license-file`) in `aevia.toml`, or pass `--description` and `--license`")
+    })?;
+    let repository = non_empty_trimmed(options.repository)
+        .or_else(|| non_empty_trimmed(manifest.repository.as_deref()))
         .or(metadata.repository);
-    let keywords = if options.keywords.is_empty() {
-        metadata.declared.keywords
-    } else {
+    let homepage = non_empty_trimmed(manifest.homepage.as_deref());
+    let documentation = non_empty_trimmed(manifest.documentation.as_deref());
+    let keywords = if !options.keywords.is_empty() {
         normalize_keywords(options.keywords)
+    } else if !manifest.keywords.is_empty() {
+        normalize_tag_list(&manifest.keywords, true, MAX_KEYWORDS, "keywords")?
+    } else {
+        metadata.declared.keywords
     };
+    let categories = normalize_tag_list(&manifest.categories, true, MAX_KEYWORDS, "categories")?;
 
     let archive = package::pack(&package)?;
     let checksum = tarball::checksum(&archive);
@@ -210,10 +242,16 @@ pub async fn run(
         statement: &challenge.statement,
         signature: &signature,
         key: &signer,
+        edition: edition.as_deref(),
+        authors: &authors,
         description: description.as_deref(),
         license: license.as_deref(),
+        license_file: license_file.as_deref(),
         keywords: &keywords,
+        categories: &categories,
         repository: repository.as_deref(),
+        homepage: homepage.as_deref(),
+        documentation: documentation.as_deref(),
     };
     let envelope = serde_json::to_string(&envelope).map_err(|error| {
         CliError::new(format!("cannot serialise the publish envelope: {error}"))
@@ -223,6 +261,17 @@ pub async fn run(
         eprintln!("aevia-pkg: uploading {} bytes", archive.len());
     }
     let accepted = app.client.publish(&envelope, &archive).await?;
+    let extra_warnings: Vec<String> = accepted
+        .warnings
+        .iter()
+        .filter(|warning| local.kind.preference_warning() != Some(warning.as_str()))
+        .cloned()
+        .collect();
+    if !app.quiet {
+        for warning in &extra_warnings {
+            eprintln!("aevia-pkg: warning: {warning}");
+        }
+    }
 
     println!(
         "published {} {} ({})",
@@ -379,6 +428,7 @@ pub async fn yank(
     let yanked = !undo;
 
     let local = keys::resolve(&keys::discover(None)?, None, &app.config)?;
+    keys::warn_key_preference(local.kind, app.quiet, &[]);
     let status = app.client.key_status(&local.fingerprint).await?;
     if !status.registered {
         return Err(CliError::new(format!(
@@ -458,12 +508,28 @@ struct Envelope<'a> {
     signature: &'a str,
     key: &'a SignerKey,
     #[serde(skip_serializing_if = "Option::is_none")]
+    edition: Option<&'a str>,
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    authors: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     license: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    license_file: Option<&'a str>,
     keywords: &'a [String],
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    categories: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
     repository: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    homepage: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documentation: Option<&'a str>,
+}
+
+const fn slice_is_empty(items: &&[String]) -> bool {
+    items.is_empty()
 }
 
 #[cfg(test)]

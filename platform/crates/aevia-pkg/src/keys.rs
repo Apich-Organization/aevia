@@ -34,18 +34,11 @@ use std::process::Command;
 use std::process::Stdio;
 
 use aevia_registry_core::signature::KeyKind;
+pub use aevia_registry_core::signature::SSH_NAMESPACE;
 use aevia_registry_core::signature::SignerKey;
 
 use crate::config::Config;
 use crate::error::CliError;
-
-/// The SSH signature namespace, matching the registry's verifier.
-///
-/// The namespace is part of what is signed (`PROTOCOL.sshsig` §3), so a
-/// signature made for one purpose cannot be replayed as another. `aevia` here
-/// and `aevia` on the server are the same constant written twice because the
-/// wire format requires both sides to agree.
-pub const SSH_NAMESPACE: &str = "aevia";
 
 /// Where a key's secret half lives.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -360,13 +353,34 @@ fn ssh_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".ssh"))
 }
 
+/// Emits a policy warning on `stderr` when using a non-OpenPGP key (such as an
+/// SSH key), recommending OpenPGP (GPG) and hardware-backed keys.
+pub fn warn_key_preference(
+    kind: KeyKind,
+    quiet: bool,
+    extra_server_warnings: &[String],
+) {
+    if quiet {
+        return;
+    }
+    let local_warning = kind.preference_warning();
+    if let Some(warning) = local_warning {
+        eprintln!("aevia-pkg: warning: {warning}");
+    }
+    for warning in extra_server_warnings {
+        if local_warning != Some(warning.as_str()) {
+            eprintln!("aevia-pkg: warning: {warning}");
+        }
+    }
+}
+
 /// Picks the key a command should use.
 ///
-/// The order is explicit flag, then the config's default, then the only key on
-/// the machine. Two or more candidates without a default is an error rather
-/// than a guess: publishing under the wrong identity is not recoverable (the
-/// registry binds a version to whoever signed it), so the client asks instead
-/// of choosing.
+/// The order is explicit flag, then the config's default, then automatic
+/// selection preferring OpenPGP (GPG) keys over SSH keys. If a single usable
+/// OpenPGP key exists on the machine, it is chosen automatically even when SSH
+/// keys are present; if multiple OpenPGP keys (or multiple SSH keys with no
+/// OpenPGP key) exist, the client asks rather than guessing.
 ///
 /// # Errors
 ///
@@ -393,27 +407,44 @@ pub fn resolve(
             .with_next_step("run `aevia-pkg login` to bind a key that is")
         });
     }
-    match keys {
+    let usable_gpg: Vec<&LocalKey> = keys
+        .iter()
+        .filter(|key| key.supported && key.kind == KeyKind::OpenPgp)
+        .collect();
+    if let [only_gpg] = usable_gpg.as_slice() {
+        return Ok((*only_gpg).clone());
+    }
+    if usable_gpg.len() > 1 {
+        return Err(ambiguous_keys_error(&usable_gpg));
+    }
+    let usable_ssh: Vec<&LocalKey> = keys
+        .iter()
+        .filter(|key| key.supported && key.kind == KeyKind::Ssh)
+        .collect();
+    match usable_ssh.as_slice() {
         | [] => Err(CliError::new(
-            "no signing key found; `aevia-pkg` signs every publish with a key you hold",
+            "no supported signing key found; `aevia-pkg` signs every publish with a key you hold",
         )
         .with_next_step(
-            "create one with `gpg --quick-generate-key \"You <you@example.com>\" ed25519 sign 2y`, \
-             then run `aevia-pkg login`",
+            "create an OpenPGP (GPG) key (recommended, hardware-backed preferred) with \
+             `gpg --quick-generate-key \"You <you@example.com>\" ed25519 sign 2y`, or use an \
+             `ssh-ed25519` key with `aevia-pkg login --ssh ~/.ssh/id_ed25519`",
         )),
-        | [only] => Ok(only.clone()),
-        | many => {
-            let mut message =
-                String::from("several keys are available; choose one with `--key FINGERPRINT`:");
-            for key in many {
-                message.push_str("\n  ");
-                message.push_str(&key.label());
-            }
-            Err(CliError::usage(message).with_next_step(
-                "or run `aevia-pkg login --key FINGERPRINT` to make it the default",
-            ))
-        },
+        | [only_ssh] => Ok((*only_ssh).clone()),
+        | many_ssh => Err(ambiguous_keys_error(many_ssh)),
     }
+}
+
+fn ambiguous_keys_error(candidates: &[&LocalKey]) -> CliError {
+    let mut message =
+        String::from("several keys are available; choose one with `--key FINGERPRINT`:");
+    for key in candidates {
+        message.push_str("\n  ");
+        message.push_str(&key.label());
+    }
+    CliError::usage(message).with_next_step(
+        "or run `aevia-pkg login --key FINGERPRINT` to make it the default",
+    )
 }
 
 /// Finds a key by fingerprint, full or trailing key id.
@@ -837,6 +868,29 @@ fpr:::::::::BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB:
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn openpgp_is_preferred_when_both_gpg_and_ssh_keys_exist() {
+        let gpg = key("AAAA1111");
+        let ssh = LocalKey {
+            kind: KeyKind::Ssh,
+            fingerprint: "SHA256:example".to_string(),
+            identity: "apich@laptop".to_string(),
+            origin: KeyOrigin::Ssh {
+                public_path: PathBuf::from("id_ed25519.pub"),
+                private_path: PathBuf::from("id_ed25519"),
+            },
+            supported: true,
+        };
+        let chosen = resolve(&[ssh.clone(), gpg.clone()], None, &Config::default())
+            .expect("gpg preferred over ssh");
+        assert_eq!(chosen.kind, KeyKind::OpenPgp);
+        assert_eq!(chosen.fingerprint, "AAAA1111");
+
+        // When no GPG key exists, a single usable SSH key is chosen.
+        let ssh_only = resolve(&[ssh], None, &Config::default()).expect("ssh chosen when alone");
+        assert_eq!(ssh_only.kind, KeyKind::Ssh);
     }
 
     #[test]

@@ -72,10 +72,12 @@ prefers the shortest known alias.
 ```
 
 `b` is a base dimension, `d` a dimension variable (kind `Dim`) and `q` a rational literal (`2`,
-`-1`, `(1/2)`, `(-3/4)`; the decimal `0.5` is invalid). **The exponent of a static dimension is
+`-1`, `(1/2)`, `(-3/4)`; decimal notation is exact, e.g. `0.5` = `1/2`). **The exponent of a static dimension is
 always a compile-time rational:** when `n` is a run-time value the type level cannot represent
 `d^n`, and such cases use `Dyn` (§4.9). rssn's `graph::dim` supports a single symbolic exponent
-on the term graph; Aevia's static types do not.
+on the term graph; Aevia's static types do not. This notation extension applies only to unit/dimension syntax;
+value-level `Float` powers are unchanged. Printed exponents remain canonical rationals;
+`0.333333` is not `1/3`.
 
 ### 4.2.1 Canonical form
 

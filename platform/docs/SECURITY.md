@@ -145,12 +145,19 @@ Named rather than hidden:
   deployment expects a proxy in front. Adding a token bucket keyed by client IP
   is the obvious next step, and `AEVIA_TRUST_PROXY` already exists so the key
   would be meaningful.
+* **OpenPGP keys (preferably hardware-backed) are strongly preferred over SSH.**
+  Developers may register and sign releases with `ssh-ed25519` keys, and the
+  client prefers an OpenPGP key automatically when both exist. Whenever an SSH
+  key is registered, listed, or used to publish, the registry and CLI emit a
+  warning recommending an OpenPGP (PGP) key — ideally backed by a hardware
+  security key (such as a YubiKey or Nitrokey) — instead.
 * **OpenPGP key expiry is not enforced.** A signature made by a key that has
   since expired still verifies, because the registry checks the signature and
   the binding, not the key's own validity period. Revocation *is* enforced:
   a revoked key cannot sign.
 * **SSH signatures are Ed25519 only.** RSA and ECDSA SSH keys are refused with a
-  message rather than accepted without checking.
+  message rather than accepted without checking, and `SSHSIG` signatures must
+  use the `"aevia"` namespace.
 * **No package content analysis.** The registry stores what was signed; it does
   not scan for malicious code, and the signature proves provenance, not intent.
 * **No account recovery.** Losing every bound key means losing the ability to

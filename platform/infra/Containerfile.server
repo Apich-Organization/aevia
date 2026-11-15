@@ -4,13 +4,13 @@
 #
 # Build context is the platform repository root (this file lives in infra/):
 #
-#   docker build -f infra/Containerfile.server \
+#   podman build -f infra/Containerfile.server \
 #       --build-context lang=../crates \
 #       -t localhost/aevia/registry:0.1.0 .
 #
 # The extra `lang` context is mandatory, not a convenience. The workspace's
-# crates/aevia-registry-docs depends on `../crates/aevia-doc` and
-# `../crates/aevia-syntax`, i.e. on the language repository that is checked out
+# crates depend on `../crates/aevia-doc`, `../crates/aevia-syntax`, and
+# `../crates/aevia-resolve`, i.e. on the language repository that is checked out
 # *next to* this one. Paths outside the main context cannot be COPYed, so the
 # language crates/ tree is supplied as a second, read-only context. compose.yaml
 # (additional_contexts) and deploy.sh pass it for you.
@@ -22,9 +22,10 @@
 ARG RUST_VERSION=1.97
 
 # --- builder ---------------------------------------------------------------
-# rust:1.97-slim-trixie is the pinned toolchain (workspace rust-version = 1.97)
-# on Debian 13. It ships gcc and libc6-dev, which the `ring` assembly needs.
-FROM rust:${RUST_VERSION}-slim-trixie AS builder
+# docker.io/library/rust:1.97-slim-trixie is the pinned toolchain (workspace
+# rust-version = 1.97) on Debian 13. It ships gcc and libc6-dev, which the
+# `ring` assembly needs.
+FROM docker.io/library/rust:${RUST_VERSION}-slim-trixie AS builder
 
 # Never let cargo write an incremental cache: it doubles the layer size and the
 # build is a one-shot.
@@ -43,12 +44,13 @@ COPY crates/aevia-registry-web/Cargo.toml    crates/aevia-registry-web/Cargo.tom
 COPY crates/aevia-registry-server/Cargo.toml crates/aevia-registry-server/Cargo.toml
 COPY crates/aevia-pkg/Cargo.toml             crates/aevia-pkg/Cargo.toml
 
-# Layer 1b — the language crates pulled in by the `compiler` feature of
-# aevia-registry-docs. Only their manifests are needed to resolve the graph.
-COPY --from=lang aevia-doc/Cargo.toml    /build/crates/aevia-doc/Cargo.toml
-COPY --from=lang aevia-syntax/Cargo.toml /build/crates/aevia-syntax/Cargo.toml
-COPY --from=lang aevia-fmt/Cargo.toml    /build/crates/aevia-fmt/Cargo.toml
-COPY --from=lang aevia-dim/Cargo.toml    /build/crates/aevia-dim/Cargo.toml
+# Layer 1b — the language crates pulled in by the platform workspace (`aevia-doc`
+# + transitive crates, and `aevia-resolve`). Only manifests are needed here.
+COPY --from=lang aevia-doc/Cargo.toml     /build/crates/aevia-doc/Cargo.toml
+COPY --from=lang aevia-syntax/Cargo.toml  /build/crates/aevia-syntax/Cargo.toml
+COPY --from=lang aevia-fmt/Cargo.toml     /build/crates/aevia-fmt/Cargo.toml
+COPY --from=lang aevia-dim/Cargo.toml     /build/crates/aevia-dim/Cargo.toml
+COPY --from=lang aevia-resolve/Cargo.toml /build/crates/aevia-resolve/Cargo.toml
 
 # The language crates inherit version/edition/license and their external
 # dependencies from the language workspace root (`../Cargo.toml`), which lives
@@ -68,7 +70,7 @@ RUN set -eux; \
     for c in aevia-registry-server aevia-pkg; do \
         mkdir -p "crates/$c/src"; echo 'fn main() {}' > "crates/$c/src/main.rs"; \
     done; \
-    for c in aevia-doc aevia-syntax aevia-fmt aevia-dim; do \
+    for c in aevia-doc aevia-syntax aevia-fmt aevia-dim aevia-resolve; do \
         mkdir -p "/build/crates/$c/src"; : > "/build/crates/$c/src/lib.rs"; \
     done
 
@@ -83,10 +85,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # Layer 3 — real sources. Everything above is cached; only the workspace crates
 # are recompiled here.
 COPY crates ./crates
-COPY --from=lang aevia-doc    /build/crates/aevia-doc
-COPY --from=lang aevia-syntax /build/crates/aevia-syntax
-COPY --from=lang aevia-fmt    /build/crates/aevia-fmt
-COPY --from=lang aevia-dim    /build/crates/aevia-dim
+COPY --from=lang aevia-doc     /build/crates/aevia-doc
+COPY --from=lang aevia-syntax  /build/crates/aevia-syntax
+COPY --from=lang aevia-fmt     /build/crates/aevia-fmt
+COPY --from=lang aevia-dim     /build/crates/aevia-dim
+COPY --from=lang aevia-resolve /build/crates/aevia-resolve
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --release -p aevia-registry-server ${CARGO_LOCKED} && \
@@ -97,7 +100,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # No toolchain, no cargo registry, no source tree: the final image carries a
 # stripped binary and two shared libraries' worth of Debian. Nothing in the
 # image can be used to rebuild or to read the build's intermediate state.
-FROM debian:trixie-slim AS runtime
+FROM docker.io/library/debian:trixie-slim AS runtime
 
 # ca-certificates: outbound TLS to github.com and orcid.org for the OAuth flows.
 # curl: the healthcheck below. It is ~1.5 MB with its dependencies and is the

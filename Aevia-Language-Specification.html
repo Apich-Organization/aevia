@@ -434,7 +434,7 @@ float_lit ::= dec_int &quot;.&quot; dec_int [ exponent ] | dec_int exponent
 exponent  ::= (&quot;e&quot; | &quot;E&quot;) [&quot;+&quot; | &quot;-&quot;] dec_int</code></pre>
 <ul>
 <li>下划线只用于分组，不能在开头、结尾或连续出现（<code>E0106</code>）；<code>1_000</code> 合法，<code>1__0</code>、 <code>1_</code> 不合法。</li>
-<li>十进制整数是 <code>Int</code>；带小数点或指数的是 <code>Float</code>。<code>0755</code> 是十进制 755；没有数字后缀； <code>1.</code> 与 <code>.5</code> 不合法。</li>
+<li>在值表达式中，十进制整数是 <code>Int</code>；带小数点或指数的是 <code>Float</code>。<code>0755</code> 是十进制 755；没有数字后缀； <code>1.</code> 与 <code>.5</code> 不合法。</li>
 <li><code>oo</code>、<code>-oo</code>、<code>nan</code> 是预置常量，不是字面量；<code>i</code> 是预置虚数单位，复数写 <code>3 + 4 * i</code>。</li>
 <li><code>0</code> 不是量纲多态的，默认 <code>Int</code>；写零米要写 <code>0 m</code>，浮点零写 <code>0.0</code>（§4.7）。</li>
 </ul>
@@ -473,11 +473,12 @@ unit_expr    ::= unit_factor { (&quot;*&quot; | &quot;·&quot; | &quot;/&quot;) 
 unit_factor  ::= unit_atom [ &quot;^&quot; exponent | SUPERSCRIPT+ ]
 unit_atom    ::= unit_name | &quot;(&quot; unit_expr &quot;)&quot; | &quot;%&quot;
 unit_name    ::= UNIT_NAME | IDENT | qname
-exponent     ::= [&quot;-&quot;] integer | &quot;(&quot; rational &quot;)&quot;</code></pre>
+exponent     ::= [&quot;-&quot;] (number | &quot;(&quot; rational &quot;)&quot;)
+rational     ::= [&quot;-&quot;] number [&quot;/&quot; [&quot;-&quot;] number]</code></pre>
 <ul>
 <li><code>number</code> 是 §1.6 的 <code>INT</code> 或 <code>FLOAT</code>。数值字面量后紧邻 <code>IDENT</code>、<code>UNIT_NAME</code>（<code>°C</code>）、 <code>%</code> 或 <code>(</code> 时进入单位字面量。</li>
 <li><code>*</code> 与 <code>·</code> 同义；<code>/</code> 左结合：<code>kg*m^2/s^3</code> = <code>(kg*m^2)/s^3</code>。</li>
-<li>指数必须是整数字面量或括号中的有理数：<code>m^2</code>、<code>s^-1</code>、<code>m^(1/2)</code>。变量指数不允许 （用 <code>Dyn</code>，§4.9）。上标 <code>m²</code>、<code>s⁻¹</code>、<code>m³·s⁻²</code> 是 <code>^n</code> 的等价写法（<code>E0107</code>：非法序列）。</li>
+<li>指数为精确有理数字面量：<code>m^2</code>、<code>s^-1</code>、<code>m^(1/2)</code>、<code>m^1.5</code>（即 <code>m^(3/2)</code>）。 小数/科学记数法按原始拼写精确读取，不经过 <code>Float</code> 舍入。变量指数不允许 （用 <code>Dyn</code>，§4.9）。上标 <code>m²</code>、<code>s⁻¹</code>、<code>m³·s⁻²</code> 是 <code>^n</code> 的等价写法（<code>E0107</code>：非法序列）。</li>
 <li>单位表达式内不允许空白并置：<code>kg m^2</code> 不是 <code>kg*m^2</code>。</li>
 <li><strong>单位表达式内的 <code>*</code> <code>·</code> <code>/</code> 必须紧贴两侧。</strong> 任一侧有空白的 <code>*</code>/<code>/</code> 结束单位字面量， 是普通算术：<code>9.81 m/s^2 * mass</code> = <code>(9.81 m/s^2) * mass</code>；<code>70 kg * v^2 / 2</code> = <code>((70 kg) * v^2) / 2</code>；<code>3 m * x</code> = <code>(3 m) * x</code>。紧贴的 <code>3 m*x</code> 仍是单位表达式，<code>x</code> 不是单位时 <code>E0501</code>。格式化器总是紧贴输出单位、在算术运算符两侧加空格，所以格式化 不改变含义。</li>
 <li>单位表达式内不允许数字：<code>3 m/2 s</code> 是 <code>(3 m) / (2 s)</code>；<code>1/2 m</code> 是 <code>1 / (2 m)</code>，类型 <code>Real[1/L]</code>，“半米”写 <code>(1/2) m</code>。</li>
@@ -1879,7 +1880,7 @@ dimension SolidAngle    = 1</code></pre>
 <p><code>Angle = 1</code> 是刻意的：SI 中弧度无量纲，<code>sin</code> 接受无量纲参数，<code>deg</code>/<code>rad</code> 是带尺度 （<code>π/180</code>、<code>1</code>）的无量纲单位（§5.5）。引入 <code>Angle</code> 基量纲会破坏 <code>exp(i*θ)</code>、<code>sin(ω*t)</code> 等大量公式。别名只影响打印：<code>Real[M*L^2/T^2]</code> 与 <code>Real[Energy]</code> 是同一类型，打印时优先 选择最短的已知别名。</p>
 <h2 id="04-dimensions--42-量纲表达式">4.2 量纲表达式</h2>
 <pre class="code"><code>δ ::= 1 | b | d | δ * δ | δ / δ | δ ^ q</code></pre>
-<p><code>b</code> 是基量纲，<code>d</code> 是量纲变量（kind <code>Dim</code>），<code>q</code> 是有理数字面量（<code>2</code>、<code>-1</code>、<code>(1/2)</code>、 <code>(-3/4)</code>；小数 <code>0.5</code> 不合法）。<strong>静态量纲的指数只能是编译期有理数</strong>：<code>n</code> 是运行时值时类型 层无法表示 <code>d^n</code>，这类情况走 <code>Dyn</code>（§4.9）。rssn 的 <code>graph::dim</code> 在项图上支持单个符号 指数，Aevia 的静态类型不支持。</p>
+<p><code>b</code> 是基量纲，<code>d</code> 是量纲变量（kind <code>Dim</code>），<code>q</code> 是有理数字面量（<code>2</code>、<code>-1</code>、<code>(1/2)</code>、 <code>(-3/4)</code>；小数记法精确，例如 <code>0.5</code> = <code>1/2</code>）。<strong>静态量纲的指数只能是编译期有理数</strong>：<code>n</code> 是运行时值时类型 层无法表示 <code>d^n</code>，这类情况走 <code>Dyn</code>（§4.9）。rssn 的 <code>graph::dim</code> 在项图上支持单个符号 指数，Aevia 的静态类型不支持。 此扩展仅是单位/量纲的记法，不改变值级 <code>Float</code> 乘幂； 输出仍用规范有理数，<code>0.333333</code> 不等于 <code>1/3</code>。</p>
 <h3 id="04-dimensions--421-规范形">4.2.1 规范形</h3>
 <p>量纲规范化为有限映射 <code>δ̂ : (Base ∪ DimVar) → Q</code>，只保留指数非零的生成元：乘法指数相加， 除法相减，幂相乘，去掉零项，按固定顺序排序（SI 顺序、用户基、变量名字典序）。例如 <code>L * T^-1 ⇒ {L:1, T:-1}</code>，<code>L / L ⇒ {}</code>，<code>(L^2)^(1/2) ⇒ {L:1}</code>。<strong>两个量纲相等当且仅当规范形 相等</strong>：<code>L/T</code> 与 <code>L*T^-1</code>、<code>L^2</code> 与 <code>L^(4/2)</code> 是同一个量纲。</p>
 <p>指数用任意精度有理数表示，至少支持 <code>i64</code> 范围的分子分母；<code>1/2</code>、<code>1/3</code>、<code>-1</code>、<code>2</code> 必须精确， <code>sqrt</code> 产生 <code>1/2</code>，<code>cbrt</code> 产生 <code>1/3</code>。</p>
@@ -2387,7 +2388,7 @@ unit_scale     ::= number [ &quot;/&quot; number ] | &quot;pi&quot; [ &quot;/&qu
 unit_factor ::= unit_atom [ &quot;^&quot; exponent ]
 unit_atom   ::= unit_name | &quot;(&quot; unit_expr &quot;)&quot; | &quot;%&quot;</code></pre>
 <ul>
-<li><code>*</code> 与 <code>·</code> 同义；<code>/</code> 左结合。指数是整数字面量或括号中的有理数：<code>m^2</code>、<code>s^-1</code>、<code>m^(1/2)</code>。</li>
+<li><code>*</code> 与 <code>·</code> 同义；<code>/</code> 左结合。指数是精确有理数，支持小数记法：<code>m^2</code>、<code>s^-1</code>、<code>m^(1/2)</code>、<code>m^1.5</code>（§1.8）。</li>
 <li>表达式内不允许数字（指数除外），不允许空白并置。</li>
 <li>仿射单位只能单独出现，出现在乘积/幂中报 <code>E0508</code>（§5.6.5）。</li>
 </ul>
@@ -5227,6 +5228,10 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 <td>搜索可用条目的名称及文档</td>
 </tr>
 <tr>
+<td><code>:source [N]</code></td>
+<td>列出原始输入，或查看 <code>&lt;repl #N&gt;</code> 对应的源码快照</td>
+</tr>
+<tr>
 <td><code>:imports</code></td>
 <td>列出已导入的模块与别名</td>
 </tr>
@@ -5258,6 +5263,7 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 <p>中断使用线程安全的取消令牌并报告 <code>E0812</code>。AST、Core IR、回调、IO 调度、任务等待、并行工作线程及支持的 内核图/数值循环在检查点停止并正常展开作用域。被取消的工作线程不会因下一次输入清除前台令牌而复活； 先前成功提交产生的独立后台任务不受后来求值的取消影响。中断 await 会取消正在等待的任务。REPL 后台工作线程 不能抢占交互终端，应在前台读取输入后再启动工作。</p>
 <p>取消是协作式的：没有检查点的编译器工作、外部数值库操作或系统调用可能先完成当前调用，再报告中断； 已完成的效果不会撤销。被取消的内核结果不会缓存或作为成功数学结果返回。REPL 安装取消令牌期间禁用可选 JIT 快速路径以保留检查点；独立 <code>aevia run</code> 保持操作系统默认的信号行为。</p>
 <p>条目帮助使用已接受声明的 <code>##</code> 文档、推导签名及已冻结的导入源码，不执行表达式。<code>:help :COMMAND</code> 显式查询命令帮助；<code>:apropos TEXT</code> 搜索条目。<code>:format show|repr|pretty|latex|typst</code> 控制普通结果和 <code>:time</code>，在 <code>:reset</code> 后保留；渲染命令对表达式和 IO 仅执行一次。</p>
+<p>REPL 诊断显示原始输入，不显示生成的表达式绑定。当前输入按提交内行号定位，旧定义标记为 <code>&lt;repl #N&gt;</code>， <code>:load</code> 保留文件名与行号；<code>:source [N]</code> 查看对应快照。语法恢复保留独立错误；REPL 不检查语法损坏模块及其依赖者的类型， 也不重复已接受源码的警告。单独的 <code>:cancel</code> 可丢弃未完成的管道输入（字符串/注释内除外）。</p>
 <h2 id="09-runtime--99-cli">9.9 CLI</h2>
 <pre class="code"><code>aevia run [--example NAME] [file.aev] [-- args…]   运行包入口/文件/示例（`--` 之后是程序参数）
 aevia check [--all] [file.aev…]                    类型/量纲检查，不运行
@@ -7444,8 +7450,8 @@ rep            ::= &quot;Int&quot; | &quot;Real&quot; | &quot;Float&quot; | &quo
 dim_factor     ::= dim_atom [ &quot;^&quot; exponent ]
 dim_atom       ::= &quot;1&quot; | UIDENT | IDENT | &quot;(&quot; dim &quot;)&quot;
 
-exponent       ::= [ &quot;-&quot; ] INT
-                 | &quot;(&quot; [ &quot;-&quot; ] INT &quot;/&quot; INT &quot;)&quot;
+exponent       ::= [ &quot;-&quot; ] (INT | FLOAT | &quot;(&quot; rational &quot;)&quot;)
+rational       ::= [ &quot;-&quot; ] (INT | FLOAT) [ &quot;/&quot; [ &quot;-&quot; ] (INT | FLOAT) ]
 
 unit_expr      ::= unit_factor { ( &quot;*&quot; | &quot;·&quot; | &quot;/&quot; ) unit_factor }
 unit_factor    ::= unit_atom [ &quot;^&quot; exponent | SUPERSCRIPT+ ]
@@ -7462,8 +7468,8 @@ unit_atom      ::= unit_name | &quot;(&quot; unit_expr &quot;)&quot; | &quot;%&q
 <pre class="code"><code>IDENT          ::= lower XID_Continue { XID_Continue | &quot;&#39;&quot; | &quot;₀&quot;..&quot;₉&quot; }
 UIDENT         ::= upper XID_Continue { XID_Continue | &quot;&#39;&quot; | &quot;₀&quot;..&quot;₉&quot; }
 INT            ::= dec_int | &quot;0x&quot; hex { hex } | &quot;0o&quot; oct { oct } | &quot;0b&quot; bin { bin }
-FLOAT          ::= dec_int &quot;.&quot; dec_int [ exponent ]
-                 | dec_int exponent
+FLOAT          ::= dec_int &quot;.&quot; dec_int [ decimal_exponent ] | dec_int decimal_exponent
+decimal_exponent ::= (&quot;e&quot; | &quot;E&quot;) [&quot;+&quot; | &quot;-&quot;] dec_int
 STRING         ::= &#39;&quot;&#39; { char | escape | &quot;{&quot; expr &quot;}&quot; } &#39;&quot;&#39;
                  | &#39;r&quot;&#39; { char } &#39;&quot;&#39;
                  | &#39;&quot;&quot;&quot;&#39; ... &#39;&quot;&quot;&quot;&#39;
@@ -7489,7 +7495,7 @@ DEDENT         ::= 由布局算法产生</code></pre>
 <ul>
 <li>第一行 <code>severity[code]: message</code>；<code>--&gt;</code> 给出文件:行:列；其后是源码行与下划线标签（尽量短）。</li>
 <li><code>=</code>：附注（规范形、差异、相关声明）；<code>help:</code>：修正建议，至多两条，按置信度排序。</li>
-<li>多位置错误用多个下划线标签或 <code>= note:</code> 指向定义处。</li>
+<li>同行标签共用源码片段，其他位置用 <code>:::</code> 展示。列号按 Unicode 字符计数，箭头按显示宽度对齐；制表符按四列展开。 长片段用 <code>...</code> 明示省略，保留错误位置。</li>
 </ul>
 <h2 id="appendix-b-diagnostics--b2-严重级别">B.2 严重级别</h2>
 <table>
@@ -8114,7 +8120,7 @@ DEDENT         ::= 由布局算法产生</code></pre>
 <li><strong>给差异。</strong> 量纲错误列出 <code>left</code>、<code>right</code>、<code>difference</code> 的规范形。</li>
 <li><strong>给一个修正。</strong> 只在置信度高时给 <code>help</code>，不列五个猜测。</li>
 <li><strong>不要重复。</strong> 同一错误只报一次，其余用 <code>note</code> 指向主位置。</li>
-<li><strong>保留源码。</strong> 错误信息中的源码行不截断运算符，必要时换行。</li>
+<li><strong>保留上下文。</strong> 省略的行/列用 <code>...</code> 标明，保留错误位置。</li>
 <li><strong>可解析。</strong> 代码和位置稳定，便于 IDE/CI 解析。</li>
 </ol>
 <h2 id="appendix-b-diagnostics--b14-示例类型错误">B.14 示例：类型错误</h2>

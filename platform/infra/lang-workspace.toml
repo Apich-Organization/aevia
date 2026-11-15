@@ -1,7 +1,7 @@
 # Mirror of the language workspace root (`../Cargo.toml` in the language
-# repository), reduced to the four crates aevia-registry-docs pulls in through
-# its default `compiler` feature: aevia-doc -> aevia-syntax, aevia-fmt;
-# aevia-fmt -> aevia-syntax, aevia-dim; aevia-syntax -> aevia-dim.
+# repository), reduced to the five crates pulled from the language repo:
+# aevia-doc -> aevia-syntax, aevia-fmt; aevia-fmt -> aevia-syntax, aevia-dim;
+# aevia-syntax -> aevia-dim; and aevia-resolve (version/dependency resolution).
 #
 # It exists because those crates inherit `version`/`edition`/`rust-version`/
 # `license`/`repository` and their external dependencies via `.workspace = true`,
@@ -21,6 +21,7 @@ members = [
     "crates/aevia-syntax",
     "crates/aevia-fmt",
     "crates/aevia-doc",
+    "crates/aevia-resolve",
 ]
 
 [workspace.package]
@@ -35,6 +36,7 @@ aevia-dim = { path = "crates/aevia-dim" }
 aevia-syntax = { path = "crates/aevia-syntax" }
 aevia-fmt = { path = "crates/aevia-fmt" }
 aevia-doc = { path = "crates/aevia-doc" }
+aevia-resolve = { path = "crates/aevia-resolve" }
 
 indexmap = { version = "2", features = ["serde"] }
 num-bigint = { version = "0.4", features = ["serde"] }

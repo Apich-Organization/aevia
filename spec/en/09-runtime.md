@@ -467,6 +467,7 @@ sqrt : forall t0, d0. Scalar<ρ0, d0> -> Scalar<ρ0, d0^(1/2)>
 | `:format [NAME]` | select or inspect show, repr, pretty, latex, typst output for normal results and `:time`; survives `:reset` |
 | `:doc ITEM` / `:help ITEM` | signatures and documentation for accepted local/imported items, builtins, types, and units (`:?`, `:h`) |
 | `:apropos TEXT` | search available item names and documentation |
+| `:source [N]` | list original accepted inputs, or inspect the snapshot named `<repl #N>` |
 | `:imports` | list imported modules and aliases |
 | `:load FILE` | append declarations with their package/directory imports and run a new `main` (`:l`) |
 | `:run` | execute the loaded `main` again |
@@ -539,6 +540,13 @@ rendering commands evaluate each expression once and execute IO once. Mode chang
 do not affect program-authored output. Unsupported mathematical values report an
 error rather than silently emitting another format; use show/repr for such values.
 
+REPL diagnostics show entered source, never generated expression bindings. Current
+lines are relative to the submission; earlier definitions use `<repl #N>`, and
+`:load` preserves file names/lines. `:source [N]` inspects these snapshots. Parser
+recovery preserves independent errors; malformed modules and their dependents are
+not type-checked in the REPL. Accepted-history warnings are not replayed. A standalone
+`:cancel` also discards incomplete piped input outside strings/comments.
+
 ## 9.9 CLI
 
 ```
@@ -600,9 +608,12 @@ Global flags (before the program-argument separator `--`):
 - **Options of `aevia-pkg publish`**: `--key FINGERPRINT`, `--description TEXT`, `--license SPDX`,
   `--keyword K` (up to five), `--repository URL`, `--dry-run` (print the statement and the
   checksum, sign nothing) and `--allow-dirty`. There are no API tokens: every authenticated
-  action is a detached signature, made with the publisher's own OpenPGP or SSH key, over a
-  short-lived server-issued statement that names one archive, carries a single-use nonce and is
-  valid for five minutes.
+  action is a detached signature, made with the publisher's own OpenPGP (GPG) or SSH
+  (`ssh-ed25519`) key, over a short-lived server-issued statement that names one archive, carries
+  a single-use nonce and is valid for five minutes. Developers may register and sign releases with
+  `ssh-ed25519` keys, but the client and registry always **prefer OpenPGP keys** automatically and
+  emit a warning recommending OpenPGP (PGP) keys — preferably backed by a hardware security key —
+  whenever an SSH key is registered, listed or used.
 - `aevia docs` only prints the documentation address
   (`<registry>/docs[/<owner>/<name>[/<version>]]`; the registry comes from `--registry`,
   `AEVIA_REGISTRY` or the default `https://aevia.apich.org`); `--open` opens a browser when

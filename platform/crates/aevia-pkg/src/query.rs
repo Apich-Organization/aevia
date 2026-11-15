@@ -126,14 +126,31 @@ fn print_page(page: &CratePage) {
         println!("{description}");
     }
     println!();
+    if let Some(edition) = &page.edition {
+        println!("edition     {edition}");
+    }
+    if !page.authors.is_empty() {
+        println!("authors     {}", page.authors.join(", "));
+    }
     if let Some(license) = &page.license {
         println!("license     {license}");
+    } else if let Some(license_file) = &page.license_file {
+        println!("license     file:{license_file}");
     }
     if let Some(repository) = &page.repository {
         println!("repository  {repository}");
     }
+    if let Some(homepage) = &page.homepage {
+        println!("homepage    {homepage}");
+    }
+    if let Some(documentation) = &page.documentation {
+        println!("docs        {documentation}");
+    }
     if !page.keywords.is_empty() {
         println!("keywords    {}", page.keywords.join(", "));
+    }
+    if !page.categories.is_empty() {
+        println!("categories  {}", page.categories.join(", "));
     }
     println!(
         "downloads   {} across {} version{}",
@@ -217,6 +234,8 @@ pub fn key_list(app: &App) -> Result<(), CliError> {
         }
         if let Some(reason) = key.unsupported_reason() {
             println!("    unusable: {reason}");
+        } else if let Some(warning) = key.kind.preference_warning() {
+            println!("    note: {warning}");
         }
     }
     Ok(())
@@ -252,6 +271,8 @@ pub async fn key_show(
     println!("default     {}", if is_default { "yes" } else { "no" });
     if let Some(reason) = local.unsupported_reason() {
         println!("usable      no: {reason}");
+    } else if let Some(warning) = local.kind.preference_warning() {
+        println!("warning     {warning}");
     }
 
     // Registration is a network question, so a failure here is reported as an
@@ -293,18 +314,12 @@ pub async fn status(app: &App) -> Result<(), CliError> {
             .map(|manifest| (root, manifest))
     });
     let keys = keys::discover(None).unwrap_or_default();
-    let default = app
-        .config
-        .default_key
-        .as_deref()
-        .and_then(|fingerprint| keys::find(&keys, fingerprint))
-        .map(|key| key.fingerprint.clone())
-        .or_else(|| {
-            match keys.as_slice() {
-                | [only] => Some(only.fingerprint.clone()),
-                | _ => None,
-            }
-        });
+    let default_key = keys::resolve(&keys, None, &app.config).ok();
+    let default = default_key.as_ref().map(|key| key.fingerprint.clone());
+    let default_kind = default_key
+        .as_ref()
+        .map(|key| key.kind)
+        .or(app.config.default_key_kind);
 
     // `None` means "no key was chosen at all", which is a different answer from
     // "the registry could not be asked", and a publisher reading `status` needs
@@ -326,7 +341,7 @@ pub async fn status(app: &App) -> Result<(), CliError> {
             "registry": app.client.base(),
             "config": app.home.join("config.toml").display().to_string(),
             "default_key": default,
-            "default_key_kind": app.config.default_key_kind.map(|kind| kind.as_str()),
+            "default_key_kind": default_kind.map(|kind| kind.as_str()),
             "registered": match &registration {
                 | Some(Ok(status)) => serde_json::Value::Bool(status.registered),
                 | _ => serde_json::Value::Null,
@@ -359,13 +374,15 @@ pub async fn status(app: &App) -> Result<(), CliError> {
         | Some(fingerprint) => {
             println!(
                 "default key  {fingerprint}{}",
-                app.config
-                    .default_key_kind
+                default_kind
                     .map(|kind| format!(" ({})", kind.as_str()))
                     .unwrap_or_default()
             )
         },
         | None => println!("default key  none — run `aevia-pkg login`"),
+    }
+    if let Some(kind) = default_kind {
+        keys::warn_key_preference(kind, app.quiet, &[]);
     }
     match &registration {
         | Some(Ok(status)) if status.registered => {

@@ -349,11 +349,24 @@ impl EvalError {
         notes
     }
 
-    /// Converts to a compiler diagnostic.
+    /// Converts to a compiler diagnostic, retaining a bounded set of recent
+    /// distinct source callsites as secondary labels on every reporting path.
     #[must_use]
     pub fn diagnostic(&self) -> Diagnostic {
         let span = self.span.unwrap_or_default();
         let mut diagnostic = Diagnostic::error(self.code, self.message.clone(), span);
+        let mut callsites = Vec::with_capacity(5);
+        for frame in self.stack.iter().rev() {
+            if frame.span.is_empty() || frame.span == span || callsites.contains(&frame.span) {
+                continue;
+            }
+            diagnostic =
+                diagnostic.with_label(frame.span, format!("called `{}` here", frame.function));
+            callsites.push(frame.span);
+            if callsites.len() == 5 {
+                break;
+            }
+        }
         for note in &self.notes {
             diagnostic = diagnostic.with_note(note.clone());
         }

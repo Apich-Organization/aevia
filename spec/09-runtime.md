@@ -360,6 +360,7 @@ sqrt : forall t0, d0. Scalar<ρ0, d0> -> Scalar<ρ0, d0^(1/2)>
 | `:format [NAME]` | 选择或查看普通结果和 `:time` 的 show、repr、pretty、latex、typst 格式；`:reset` 后保留 |
 | `:doc ITEM` / `:help ITEM` | 已接受的本地/导入条目、内建函数、类型和单位的签名及文档（`:?`、`:h`） |
 | `:apropos TEXT` | 搜索可用条目的名称及文档 |
+| `:source [N]` | 列出原始输入，或查看 `<repl #N>` 对应的源码快照 |
 | `:imports` | 列出已导入的模块与别名 |
 | `:load FILE` | 按文件所属包/目录解析导入，追加声明并执行新 `main`（`:l`） |
 | `:run` | 再次执行已加载的 `main` |
@@ -397,6 +398,10 @@ CLI 与 REPL 共同遵循
 快速路径以保留检查点；独立 `aevia run` 保持操作系统默认的信号行为。
 
 条目帮助使用已接受声明的 `##` 文档、推导签名及已冻结的导入源码，不执行表达式。`:help :COMMAND` 显式查询命令帮助；`:apropos TEXT` 搜索条目。`:format show|repr|pretty|latex|typst` 控制普通结果和 `:time`，在 `:reset` 后保留；渲染命令对表达式和 IO 仅执行一次。
+
+REPL 诊断显示原始输入，不显示生成的表达式绑定。当前输入按提交内行号定位，旧定义标记为 `<repl #N>`，
+`:load` 保留文件名与行号；`:source [N]` 查看对应快照。语法恢复保留独立错误；REPL 不检查语法损坏模块及其依赖者的类型，
+也不重复已接受源码的警告。单独的 `:cancel` 可丢弃未完成的管道输入（字符串/注释内除外）。
 
 ## 9.9 CLI
 
@@ -455,8 +460,10 @@ aevia --version
   `AEVIA_PKG` 指向二进制，或 `cargo install --path platform/crates/aevia-pkg`。
 - **`aevia-pkg publish` 的选项**：`--key FINGERPRINT`、`--description TEXT`、`--license SPDX`、
   `--keyword K`（至多 5 个）、`--repository URL`、`--dry-run`（只打印声明与校验和，不签名）、`--allow-dirty`。
-  没有 API token：每个需认证的动作都是用发布者自己的 OpenPGP/SSH 密钥对一份服务器签发的短时声明做的分离签名，
-  声明指名一个归档并带一次性 nonce，五分钟内有效。
+  没有 API token：每个需认证的动作都是用发布者自己的 OpenPGP（GPG）或 SSH（`ssh-ed25519`）密钥对一份
+  服务器签发的短时声明做的分离签名，声明指名一个归档并带一次性 nonce，五分钟内有效。支持注册并使用
+  `ssh-ed25519` 密钥发布/撤回，但客户端与注册表始终**优先选用 OpenPGP 密钥**，并在注册、列出或使用
+  SSH 密钥时发出警告，建议改用 OpenPGP（PGP）密钥及硬件安全密钥。
 - `aevia docs` 只打印文档地址（`<registry>/docs[/<owner>/<name>[/<version>]]`，registry 取 `--registry`、
   `AEVIA_REGISTRY`、默认 `https://aevia.apich.org`）；`--open` 在终端中打开浏览器。
 

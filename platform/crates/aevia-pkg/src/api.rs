@@ -59,6 +59,10 @@ pub struct PublishAccepted {
     /// The transparency-log entry the publish appended.
     #[serde(default)]
     pub log: Option<LogPosition>,
+    /// Policy warnings returned by the server (e.g. preferring OpenPGP +
+    /// hardware keys over SSH).
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// A position in the transparency log.
@@ -107,6 +111,10 @@ pub struct DeviceStart {
     /// How often to poll, in seconds.
     #[serde(default)]
     pub interval: u64,
+    /// Policy warnings returned by the server (e.g. preferring OpenPGP +
+    /// hardware keys over SSH).
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 impl DeviceStart {
@@ -724,6 +732,7 @@ mod tests {
             verification_uri: "https://aevia.apich.org/activate".to_string(),
             expires_at: String::new(),
             interval: 0,
+            warnings: Vec::new(),
         };
         assert_eq!(start.interval(), Duration::from_secs(5));
     }

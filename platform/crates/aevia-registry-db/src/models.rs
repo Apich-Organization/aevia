@@ -58,14 +58,26 @@ pub struct Package {
     pub name: String,
     /// `lower(name)`.
     pub name_key: String,
+    /// Language edition declared in `aevia.toml`.
+    pub edition: Option<String>,
+    /// Package authors declared in `aevia.toml`.
+    pub authors: Vec<String>,
     /// One sentence.
     pub description: Option<String>,
     /// An SPDX identifier.
     pub license: Option<String>,
+    /// Custom license file path when `license-file` is used.
+    pub license_file: Option<String>,
     /// Where the source lives.
     pub repository: Option<String>,
+    /// Project homepage URL.
+    pub homepage: Option<String>,
+    /// Documentation URL.
+    pub documentation: Option<String>,
     /// Up to five keywords.
     pub keywords: Vec<String>,
+    /// Up to five registry categories.
+    pub categories: Vec<String>,
     /// When the package first appeared.
     pub created_at: DateTime<Utc>,
     /// When it last changed.

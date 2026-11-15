@@ -167,7 +167,7 @@ exponent  ::= ("e" | "E") ["+" | "-"] dec_int
 
 - Underscores only group digits; they cannot lead, trail or repeat (`E0106`). `1_000` is
   valid; `1__0` and `1_` are not.
-- A decimal integer is an `Int`; a literal with a point or exponent is a `Float`. `0755` is
+- In value expressions, a decimal integer is an `Int`; a literal with a point or exponent is a `Float`. `0755` is
   decimal 755. There are no numeric suffixes, and `1.` and `.5` are invalid.
 - `oo`, `-oo` and `nan` are predefined constants, not literals. `i` is the predefined imaginary
   unit; write a complex number as `3 + 4 * i`.
@@ -228,14 +228,15 @@ unit_expr    ::= unit_factor { ("*" | "·" | "/") unit_factor }
 unit_factor  ::= unit_atom [ "^" exponent | SUPERSCRIPT+ ]
 unit_atom    ::= unit_name | "(" unit_expr ")" | "%"
 unit_name    ::= UNIT_NAME | IDENT | qname
-exponent     ::= ["-"] integer | "(" rational ")"
+exponent     ::= ["-"] (number | "(" rational ")")
+rational     ::= ["-"] number ["/" ["-"] number]
 ```
 
 - `number` is an `INT` or `FLOAT` of §1.6. A unit literal starts when the numeric literal is
   immediately followed by an `IDENT`, a `UNIT_NAME` (`°C`), `%` or `(`.
 - `*` and `·` are synonyms; `/` is left-associative: `kg*m^2/s^3` = `(kg*m^2)/s^3`.
-- An exponent MUST be an integer literal or a parenthesised rational: `m^2`, `s^-1`,
-  `m^(1/2)`. Variable exponents are not allowed (use `Dyn`, §4.9). Superscripts `m²`, `s⁻¹`,
+- Exponents are exact rational literals: `m^2`, `s^-1`, `m^(1/2)`, `m^1.5` (= `m^(3/2)`).
+  Decimal/scientific notation is read exactly from its spelling, never rounded through `Float`. Variable exponents are not allowed (use `Dyn`, §4.9). Superscripts `m²`, `s⁻¹`,
   `m³·s⁻²` are equivalent to `^n` (`E0107`: invalid sequence).
 - Juxtaposition inside a unit expression is not allowed: `kg m^2` is not `kg*m^2`.
 - **Inside a unit expression, `*` `·` `/` MUST touch both neighbours.** A `*` or `/` with

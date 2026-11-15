@@ -4,17 +4,18 @@
 //!
 //! `aevia_core::manifest` owns the real parser, but `aevia-core` links the RSSN
 //! kernel: a registry that depended on it would build three million lines of
-//! symbolic algebra to read four keys. So the subset is duplicated here — and
-//! deliberately duplicated *exactly*, including its refusals. The toolchain
+//! symbolic algebra to read package metadata. So the subset is duplicated here —
+//! and deliberately duplicated *exactly*, including its refusals. The toolchain
 //! rejects an unknown key in `[package]` with `E0605`; this reader rejects it
 //! too, which is what makes "the registry accepted it" mean "`aevia check`
 //! accepts it". A registry that quietly tolerates metadata the toolchain
 //! refuses would let an author publish a package nobody can build.
 //!
-//! The consequence for authors: `description`, `license` and `keywords` do
-//! **not** go in `aevia.toml`. They are passed on the command line, read from
-//! `README.md`/`LICENSE`, or recorded in the registry's own
-//! `aevia-pkg.toml` (see [`RegistryMeta`]), which the toolchain never reads.
+//! `aevia.toml` carries Cargo-style package metadata under `[package]`
+//! (`edition`, `authors`, `description`, `license`, `license-file`, `readme`,
+//! `repository`, `homepage`, `documentation`, `keywords`, `categories`), while
+//! `aevia-pkg.toml` (`RegistryMeta`) and publish CLI flags remain supported as
+//! overrides.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -71,8 +72,30 @@ pub struct PackageManifest {
     pub name: String,
     /// `[package] version`, always `major.minor.patch`.
     pub version: String,
+    /// `[package] edition`, e.g. `"2026"`.
+    pub edition: Option<String>,
     /// `[package] entry`, relative to the package root.
     pub entry: String,
+    /// `[package] authors`.
+    pub authors: Vec<String>,
+    /// `[package] description`.
+    pub description: Option<String>,
+    /// `[package] license` (SPDX expression).
+    pub license: Option<String>,
+    /// `[package] license-file`, relative to the package root.
+    pub license_file: Option<String>,
+    /// `[package] readme`, relative to the package root.
+    pub readme: Option<String>,
+    /// `[package] repository` URL.
+    pub repository: Option<String>,
+    /// `[package] homepage` URL.
+    pub homepage: Option<String>,
+    /// `[package] documentation` URL.
+    pub documentation: Option<String>,
+    /// `[package] keywords` (up to five).
+    pub keywords: Vec<String>,
+    /// `[package] categories` (up to five).
+    pub categories: Vec<String>,
     /// `[dependencies]`, sorted by import root.
     pub dependencies: Vec<ManifestDependency>,
 }
@@ -91,7 +114,18 @@ impl PackageManifest {
         let mut table = String::new();
         let mut name = None;
         let mut version = None;
+        let mut edition = None;
         let mut entry = None;
+        let mut authors = Vec::new();
+        let mut description = None;
+        let mut license = None;
+        let mut license_file = None;
+        let mut readme = None;
+        let mut repository = None;
+        let mut homepage = None;
+        let mut documentation = None;
+        let mut keywords = Vec::new();
+        let mut categories = Vec::new();
         let mut dependencies = Vec::new();
         for (index, raw) in text.lines().enumerate() {
             let number = index + 1;
@@ -115,8 +149,7 @@ impl PackageManifest {
                             number,
                             format!(
                                 "unknown table `[{other}]`; the toolchain reads `[package]` and \
-                                 `[dependencies]` only, so registry metadata goes in \
-                                 `aevia-pkg.toml`"
+                                 `[dependencies]` only"
                             ),
                         ));
                     },
@@ -134,22 +167,46 @@ impl PackageManifest {
             let value = value.trim();
             match table.as_str() {
                 | "package" => {
-                    let text = parse_string(value).ok_or_else(|| {
-                        fail(origin, number, format!("`{key}` expects a quoted string"))
-                    })?;
                     match key {
-                        | "name" => name = Some(text),
-                        | "version" => version = Some(text),
-                        | "entry" => entry = Some(text),
+                        | "authors" | "keywords" | "categories" => {
+                            let items = parse_array(value).ok_or_else(|| {
+                                fail(
+                                    origin,
+                                    number,
+                                    format!("`{key}` expects an array of quoted strings"),
+                                )
+                            })?;
+                            match key {
+                                | "authors" => authors = items,
+                                | "keywords" => keywords = items,
+                                | _ => categories = items,
+                            }
+                        },
+                        | "name" | "version" | "edition" | "entry" | "description" | "license"
+                        | "license-file" | "readme" | "repository" | "homepage"
+                        | "documentation" => {
+                            let text = parse_string(value).ok_or_else(|| {
+                                fail(origin, number, format!("`{key}` expects a quoted string"))
+                            })?;
+                            match key {
+                                | "name" => name = Some(text),
+                                | "version" => version = Some(text),
+                                | "edition" => edition = Some(text),
+                                | "entry" => entry = Some(text),
+                                | "description" => description = Some(text),
+                                | "license" => license = Some(text),
+                                | "license-file" => license_file = Some(text),
+                                | "readme" => readme = Some(text),
+                                | "repository" => repository = Some(text),
+                                | "homepage" => homepage = Some(text),
+                                | _ => documentation = Some(text),
+                            }
+                        },
                         | other => {
                             return Err(fail(
                                 origin,
                                 number,
-                                format!(
-                                    "unknown key `{other}` in `[package]`; the toolchain reads \
-                                     `name`, `version` and `entry` — put the description in \
-                                     `aevia-pkg.toml`"
-                                ),
+                                format!("unknown key `{other}` in `[package]`"),
                             ));
                         },
                     }
@@ -209,7 +266,18 @@ impl PackageManifest {
         Ok(Self {
             name,
             version,
+            edition,
             entry: entry.unwrap_or_else(|| "src/main.aev".to_string()),
+            authors,
+            description,
+            license,
+            license_file,
+            readme,
+            repository,
+            homepage,
+            documentation,
+            keywords,
+            categories,
             dependencies,
         })
     }
@@ -683,7 +751,7 @@ fn parse_string(value: &str) -> Option<String> {
 fn parse_array(value: &str) -> Option<Vec<String>> {
     let inner = value.strip_prefix('[')?.strip_suffix(']')?;
     let mut items = Vec::new();
-    for item in inner.split(',') {
+    for item in split_fields(inner)? {
         let item = item.trim();
         if item.is_empty() {
             continue;
@@ -691,6 +759,157 @@ fn parse_array(value: &str) -> Option<Vec<String>> {
         items.push(parse_string(item)?);
     }
     Some(items)
+}
+
+/// Returns `Some(trimmed)` when `value` contains non-whitespace characters.
+#[must_use]
+pub fn non_empty_trimmed(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+/// Trims and validates a list of string tags (`keywords` or `categories`),
+/// dropping empty entries and failing with `E_MANIFEST` if more than `max`
+/// items remain.
+///
+/// # Errors
+///
+/// `E_MANIFEST` when the normalized list exceeds `max` entries.
+pub fn normalize_tag_list(
+    items: &[String],
+    lowercase: bool,
+    max: usize,
+    field: &str,
+) -> Result<Vec<String>> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let normalized = if lowercase {
+            trimmed.to_ascii_lowercase()
+        } else {
+            trimmed.to_string()
+        };
+        if !out.contains(&normalized) {
+            out.push(normalized);
+        }
+    }
+    if out.len() > max {
+        return Err(Error::new(
+            E_MANIFEST,
+            format!("`[package] {field}` allows at most {max} items (got {})", out.len()),
+        ));
+    }
+    Ok(out)
+}
+
+/// Validates that a package metadata URL (`repository`, `homepage`,
+/// `documentation`) uses `http://` or `https://` and contains no whitespace.
+///
+/// # Errors
+///
+/// `E_MANIFEST` when the URL has an unsupported scheme or contains whitespace.
+pub fn validate_http_url(
+    url: &str,
+    field: &str,
+) -> Result<String> {
+    let trimmed = url.trim();
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(Error::new(
+            E_MANIFEST,
+            format!("`[package] {field}` URL must not contain whitespace"),
+        ));
+    }
+    let valid_scheme = trimmed.starts_with("https://") || trimmed.starts_with("http://");
+    let host_part = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or("");
+    if !valid_scheme || host_part.is_empty() || host_part.starts_with('/') {
+        return Err(Error::new(
+            E_MANIFEST,
+            format!("`[package] {field}` must be an `http://` or `https://` URL"),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Validates a relative path inside a package (`readme`, `license-file`),
+/// rejecting absolute paths, backslashes, and `..` traversal components.
+///
+/// # Errors
+///
+/// `E_MANIFEST` when the path is empty, absolute, or escapes the package root.
+pub fn validate_relative_path(
+    path: &str,
+    field: &str,
+) -> Result<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed.starts_with('/') || trimmed.contains('\\') {
+        return Err(Error::new(
+            E_MANIFEST,
+            format!("`[package] {field}` must be a safe relative path inside the package"),
+        ));
+    }
+    let mut parts = Vec::new();
+    for component in std::path::Path::new(trimmed).components() {
+        match component {
+            | std::path::Component::Normal(segment) => {
+                parts.push(segment.to_string_lossy().into_owned());
+            },
+            | _ => {
+                return Err(Error::new(
+                    E_MANIFEST,
+                    format!("`[package] {field}` must be a safe relative path inside the package"),
+                ));
+            },
+        }
+    }
+    if parts.is_empty() {
+        return Err(Error::new(
+            E_MANIFEST,
+            format!("`[package] {field}` must not be empty"),
+        ));
+    }
+    Ok(parts.join("/"))
+}
+
+/// Enforces the mandatory Cargo-style publish metadata fields:
+/// a non-empty `description`, plus either a non-empty `license` expression or a
+/// `license-file` present and non-empty in the published archive.
+///
+/// # Errors
+///
+/// `E_MANIFEST` naming the missing metadata field(s) and how to set them in
+/// `aevia.toml`.
+pub fn validate_required_publish_metadata(
+    description: Option<&str>,
+    license: Option<&str>,
+    license_file_in_archive: bool,
+) -> Result<()> {
+    let has_description = non_empty_trimmed(description).is_some();
+    let has_license = non_empty_trimmed(license).is_some() || license_file_in_archive;
+    let mut missing = Vec::new();
+    if !has_description {
+        missing.push("`description`");
+    }
+    if !has_license {
+        missing.push("`license` (or a non-empty `license-file` in the package)");
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(Error::new(
+        E_MANIFEST,
+        format!(
+            "cannot publish package without {} in `[package]` of `aevia.toml`",
+            missing.join(" and ")
+        ),
+    ))
 }
 
 /// Cuts a trailing `# comment` that is not inside a quoted string.
@@ -875,6 +1094,83 @@ fn is_module_segment(text: &str) -> bool {
     characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
+fn format_array(items: &[String]) -> String {
+    let inner: Vec<String> = items.iter().map(|item| format!("\"{item}\"")).collect();
+    format!("[{}]", inner.join(", "))
+}
+
+impl PackageManifest {
+    /// Renders this manifest in canonical `aevia.toml` form.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        out.push_str("[package]\n");
+        let _ = writeln!(out, "name = \"{}\"", self.name);
+        let _ = writeln!(out, "version = \"{}\"", self.version);
+        if let Some(edition) = &self.edition {
+            let _ = writeln!(out, "edition = \"{edition}\"");
+        }
+        let _ = writeln!(out, "entry = \"{}\"", self.entry);
+        if !self.authors.is_empty() {
+            let _ = writeln!(out, "authors = {}", format_array(&self.authors));
+        }
+        for (key, value) in [
+            ("description", &self.description),
+            ("license", &self.license),
+            ("license-file", &self.license_file),
+            ("readme", &self.readme),
+            ("repository", &self.repository),
+            ("homepage", &self.homepage),
+            ("documentation", &self.documentation),
+        ] {
+            if let Some(text) = value {
+                let _ = writeln!(out, "{key} = \"{text}\"");
+            }
+        }
+        if !self.keywords.is_empty() {
+            let _ = writeln!(out, "keywords = {}", format_array(&self.keywords));
+        }
+        if !self.categories.is_empty() {
+            let _ = writeln!(out, "categories = {}", format_array(&self.categories));
+        }
+        if !self.dependencies.is_empty() {
+            out.push_str("\n[dependencies]\n");
+            for dependency in &self.dependencies {
+                let key = &dependency.import;
+                let official = official_package(key);
+                let package = dependency.package.as_deref().unwrap_or("");
+                match (&dependency.path, &dependency.req) {
+                    | (Some(path), None) => {
+                        let _ = writeln!(out, "{key} = {{ path = \"{path}\" }}");
+                    },
+                    | (None, Some(req)) if package == official => {
+                        let _ = writeln!(out, "{key} = \"{req}\"");
+                    },
+                    | (None, Some(req)) => {
+                        let _ = writeln!(
+                            out,
+                            "{key} = {{ package = \"{package}\", version = \"{req}\" }}"
+                        );
+                    },
+                    | (Some(path), Some(req)) if package == official => {
+                        let _ =
+                            writeln!(out, "{key} = {{ path = \"{path}\", version = \"{req}\" }}");
+                    },
+                    | (Some(path), Some(req)) => {
+                        let _ = writeln!(
+                            out,
+                            "{key} = {{ path = \"{path}\", package = \"{package}\", version = \
+                             \"{req}\" }}"
+                        );
+                    },
+                    | (None, None) => {},
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Renders a manifest the way the toolchain writes it.
 ///
 /// `aevia-pkg` uses this only for its own generated fixtures; publishing never
@@ -886,45 +1182,24 @@ pub fn render(
     entry: &str,
     dependencies: &[ManifestDependency],
 ) -> String {
-    let mut out = String::new();
-    out.push_str("[package]\n");
-    let _ = writeln!(out, "name = \"{name}\"");
-    let _ = writeln!(out, "version = \"{version}\"");
-    let _ = writeln!(out, "entry = \"{entry}\"");
-    if !dependencies.is_empty() {
-        out.push_str("\n[dependencies]\n");
-        for dependency in dependencies {
-            let key = &dependency.import;
-            let official = official_package(key);
-            let package = dependency.package.as_deref().unwrap_or("");
-            match (&dependency.path, &dependency.req) {
-                | (Some(path), None) => {
-                    let _ = writeln!(out, "{key} = {{ path = \"{path}\" }}");
-                },
-                | (None, Some(req)) if package == official => {
-                    let _ = writeln!(out, "{key} = \"{req}\"");
-                },
-                | (None, Some(req)) => {
-                    let _ = writeln!(
-                        out,
-                        "{key} = {{ package = \"{package}\", version = \"{req}\" }}"
-                    );
-                },
-                | (Some(path), Some(req)) if package == official => {
-                    let _ = writeln!(out, "{key} = {{ path = \"{path}\", version = \"{req}\" }}");
-                },
-                | (Some(path), Some(req)) => {
-                    let _ = writeln!(
-                        out,
-                        "{key} = {{ path = \"{path}\", package = \"{package}\", version = \
-                         \"{req}\" }}"
-                    );
-                },
-                | (None, None) => {},
-            }
-        }
+    PackageManifest {
+        name: name.to_string(),
+        version: version.to_string(),
+        edition: None,
+        entry: entry.to_string(),
+        authors: Vec::new(),
+        description: None,
+        license: None,
+        license_file: None,
+        readme: None,
+        repository: None,
+        homepage: None,
+        documentation: None,
+        keywords: Vec::new(),
+        categories: Vec::new(),
+        dependencies: dependencies.to_vec(),
     }
-    out
+    .render()
 }
 
 #[cfg(test)]
@@ -1047,14 +1322,68 @@ mod tests {
     }
 
     #[test]
-    fn metadata_in_package_is_refused_exactly_as_the_toolchain_refuses_it() {
-        let text = "[package]\nname = \"a\"\nversion = \"1.0.0\"\ndescription = \"hi\"\n";
-        let error = PackageManifest::parse(text, "aevia.toml").expect_err("refused");
+    fn cargo_style_metadata_in_package_parses_and_unknown_keys_are_refused() {
+        let text = "\
+[package]
+name = \"a\"
+version = \"1.0.0\"
+edition = \"2026\"
+entry = \"src/main.aev\"
+authors = [\"Doe, Jane\", \"Aevia Team\"]
+description = \"Symbolic units helper\"
+license = \"MIT\"
+license-file = \"COPYING.custom\"
+readme = \"docs/README.md\"
+repository = \"https://github.com/apich/a\"
+homepage = \"https://aevia.org/a\"
+documentation = \"https://docs.aevia.org/a\"
+keywords = [\"units\", \"math\"]
+categories = [\"science\", \"mathematics\"]
+";
+        let parsed = PackageManifest::parse(text, "aevia.toml").expect("parses");
+        assert_eq!(parsed.edition.as_deref(), Some("2026"));
+        assert_eq!(parsed.authors, ["Doe, Jane", "Aevia Team"]);
+        assert_eq!(parsed.description.as_deref(), Some("Symbolic units helper"));
+        assert_eq!(parsed.license.as_deref(), Some("MIT"));
+        assert_eq!(parsed.license_file.as_deref(), Some("COPYING.custom"));
+        assert_eq!(parsed.readme.as_deref(), Some("docs/README.md"));
+        assert_eq!(parsed.repository.as_deref(), Some("https://github.com/apich/a"));
+        assert_eq!(parsed.homepage.as_deref(), Some("https://aevia.org/a"));
+        assert_eq!(
+            parsed.documentation.as_deref(),
+            Some("https://docs.aevia.org/a")
+        );
+        assert_eq!(parsed.keywords, ["units", "math"]);
+        assert_eq!(parsed.categories, ["science", "mathematics"]);
+        let rerendered = PackageManifest::parse(&parsed.render(), "aevia.toml").expect("re-parses");
+        assert_eq!(rerendered, parsed);
+
+        let unknown = "[package]\nname = \"a\"\nversion = \"1.0.0\"\nunknown-key = \"hi\"\n";
+        let error = PackageManifest::parse(unknown, "aevia.toml").expect_err("refused");
         assert_eq!(error.code, E_MANIFEST);
-        assert!(
-            error.message.contains("aevia-pkg.toml"),
-            "{}",
-            error.message
+        assert!(error.message.contains("unknown key"), "{}", error.message);
+    }
+
+    #[test]
+    fn required_publish_metadata_and_safety_helpers_enforce_rules() {
+        let err = validate_required_publish_metadata(Some("   "), Some("MIT"), false)
+            .expect_err("empty description refused");
+        assert_eq!(err.code, E_MANIFEST);
+        assert!(err.message.contains("description"), "{}", err.message);
+
+        let err = validate_required_publish_metadata(Some("Helpful"), Some(""), false)
+            .expect_err("missing license refused");
+        assert_eq!(err.code, E_MANIFEST);
+        assert!(err.message.contains("license"), "{}", err.message);
+
+        validate_required_publish_metadata(Some("Helpful"), None, true)
+            .expect("license-file satisfies license requirement");
+        assert!(validate_http_url("javascript:alert(1)", "homepage").is_err());
+        assert!(validate_http_url("https://aevia.org", "homepage").is_ok());
+        assert!(validate_relative_path("../secret", "readme").is_err());
+        assert_eq!(
+            validate_relative_path("docs/README.md", "readme").expect("valid path"),
+            "docs/README.md"
         );
     }
 

@@ -657,6 +657,15 @@ tbody th {
   background: var(--warn-bg);
 }
 
+.notice-warn {
+  margin: 12px 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--warn-fg);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  font-size: 0.875rem;
+}
+
 /* Pagination */
 
 .pager {

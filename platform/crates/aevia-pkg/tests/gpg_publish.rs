@@ -158,7 +158,7 @@ fn write_package(root: &Path) {
     let _ = std::fs::create_dir_all(root.join("src"));
     let _ = std::fs::write(
         root.join("aevia.toml"),
-        "[package]\nname = \"units-extra\"\nversion = \"0.2.0\"\nentry = \"src/main.aev\"\n",
+        "[package]\nname = \"units-extra\"\nversion = \"0.2.0\"\nentry = \"src/main.aev\"\ndescription = \"Units extra test\"\nlicense = \"Apache-2.0\"\n",
     );
     let _ = std::fs::write(
         root.join("src/main.aev"),

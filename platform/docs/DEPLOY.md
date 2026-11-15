@@ -33,12 +33,10 @@ built natively.
 **On x86_64** you can still build and run the arm64 image through emulation:
 
 ```sh
-# one-off, needs root; registers the binfmt handlers
-docker run --privileged --rm tonistiigi/binfmt --install arm64
-# or, on a Podman host
+# one-off, needs root; registers the binfmt handlers on a Podman host
 sudo podman run --privileged --rm docker.io/tonistiigi/binfmt --install arm64
 
-docker buildx build --platform linux/arm64 \
+podman build --platform linux/arm64 \
     --build-context lang=../crates \
     -f infra/Containerfile.server .
 ```
@@ -49,13 +47,13 @@ runners.
 
 ### The build context has a second half
 
-The workspace's `crates/aevia-registry-docs` depends on `../crates/aevia-doc` and
-`../crates/aevia-syntax` — the *language* repository, checked out next to this
+The workspace depends on `../crates/aevia-doc`, `../crates/aevia-syntax`, and
+`../crates/aevia-resolve` — the *language* repository, checked out next to this
 one. A path outside the build context cannot be `COPY`ed, so the image build
 takes a second, read-only build context named `lang`:
 
 ```sh
-docker build -f infra/Containerfile.server \
+podman build -f infra/Containerfile.server \
     --build-context lang=../crates \
     -t localhost/aevia/registry:0.1.0 .
 ```
@@ -63,8 +61,8 @@ docker build -f infra/Containerfile.server \
 `deploy.sh build` and `compose.yaml` (`additional_contexts`) pass it for you.
 `infra/lang-workspace.toml` reproduces the two tables those crates inherit from
 the language workspace root; if the language repository adds a
-`.workspace = true` dependency to `aevia-doc`, `aevia-syntax`, `aevia-fmt` or
-`aevia-dim`, add the key there too.
+`.workspace = true` dependency to `aevia-doc`, `aevia-syntax`, `aevia-fmt`,
+`aevia-dim` or `aevia-resolve`, add the key there too.
 
 ---
 

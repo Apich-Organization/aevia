@@ -199,7 +199,7 @@ Sign the `statement` bytes as they are. Do not re-render them.
 
 ```json
 {"statement": "<the exact text>", "signature": "<armoured detached signature>",
- "key": {"kind": "openpgp", "armored": "<armoured public key>"},
+ "key": {"kind": "openpgp" | "ssh", "armored": "<armoured GPG or ssh-ed25519 public key>"},
  "description": "optional", "license": "Apache-2.0", "keywords": ["units"], "repository": "https://…"}
 ```
 
@@ -207,8 +207,13 @@ Sign the `statement` bytes as they are. Do not re-render them.
 
 ```json
 {"name": "apich/units-extra", "version": "0.2.0", "checksum": "sha256:…",
- "docs_url": "/docs/apich/units-extra/0.2.0", "log": {"seq": 1, "hash": "…"}}
+ "docs_url": "/docs/apich/units-extra/0.2.0", "log": {"seq": 1, "hash": "…"},
+ "warnings": []}
 ```
+
+When signed with an `ssh` (`ssh-ed25519`) key, `warnings` includes a non-fatal
+recommendation to switch to an OpenPGP (PGP) key, ideally hardware-backed. OpenPGP
+signatures return `warnings: []` (or omit empty warnings).
 
 The envelope's metadata is optional: the server falls back to `aevia-pkg.toml`
 inside the archive, then to the README.
@@ -226,7 +231,7 @@ Challenge: `{"name", "version", "yanked": true|false}` → same shape as the
 publish challenge. Then:
 
 ```json
-{"statement": "<the exact text>", "signature": "<armoured>", "key": {"kind": "openpgp", "armored": "…"}}
+{"statement": "<the exact text>", "signature": "<armoured>", "key": {"kind": "openpgp" | "ssh", "armored": "…"}}
 ```
 
 `204` on success. Yanking is reversible: `"yanked": false` restores. The flag and
@@ -238,13 +243,18 @@ unchanged.
 ### `POST /api/v1/auth/device`
 
 ```json
-{"kind": "openpgp", "public_key": "<armoured>", "label": "work laptop"}
+{"kind": "openpgp" | "ssh", "public_key": "<armoured GPG or ssh-ed25519>", "label": "work laptop"}
 ```
+
+`kind: "openpgp"` (preferably hardware-backed) is recommended. When `kind` is
+`"ssh"`, only `ssh-ed25519` keys are accepted (`403` `E_KEY` otherwise) and
+`warnings` includes a recommendation to prefer OpenPGP and hardware keys:
 
 ```json
 {"device_code": "…", "user_code": "ABCD-EFGH",
  "verification_uri": "https://aevia.apich.org/activate?code=ABCD-EFGH",
- "expires_at": "2026-11-08T12:15:00Z", "interval": 5}
+ "expires_at": "2026-11-08T12:15:00Z", "interval": 5,
+ "warnings": []}
 ```
 
 `409` if the key is already bound to an account.

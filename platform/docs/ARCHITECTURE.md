@@ -278,8 +278,14 @@ names them:
 * **Versions are `major.minor.patch` only.** `aevia.toml` cannot express a
   pre-release, so the registry refuses one rather than accepting a version the
   toolchain cannot install.
+* **OpenPGP (preferably hardware-backed) is preferred over SSH.** Developers may
+  register and sign releases with `ssh-ed25519` keys; when both GPG and SSH keys
+  exist locally, `aevia-pkg` automatically prefers an OpenPGP key, and whenever
+  an SSH key is registered, listed, or used, both client and server emit a
+  warning recommending an OpenPGP (PGP) key and hardware security key.
 * **SSH signatures are Ed25519 only.** RSA and ECDSA SSH keys are rejected with
-  a message saying so; OpenPGP keys of any kind work.
+  a message saying so, and signatures must use the `"aevia"` namespace;
+  OpenPGP keys of any kind work.
 * **No rate limiting.** The API has none yet; the deployment is expected to sit
   behind a proxy that can add it.
 * **A module's `##` comment is attached to its first declaration** by

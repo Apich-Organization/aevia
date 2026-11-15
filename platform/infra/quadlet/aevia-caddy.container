@@ -5,7 +5,7 @@ After=aevia-registry.container aevia.network
 
 [Container]
 ContainerName=aevia-caddy
-Image=caddy:2
+Image=docker.io/library/caddy:2
 # The only unit whose image comes from a registry, so the only one where
 # `podman auto-update` means something. Caddy publishes patch releases for TLS
 # and ACME issues; picking them up unattended is worth more than the churn.

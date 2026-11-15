@@ -230,10 +230,16 @@ pub(crate) async fn build_crate_page(
             .collect();
     Ok(CratePage {
         id: package_id,
+        edition: package.edition.clone(),
+        authors: package.authors.clone(),
         description: package.description.clone(),
         license: package.license.clone(),
+        license_file: package.license_file.clone(),
         repository: package.repository.clone(),
+        homepage: package.homepage.clone(),
+        documentation: package.documentation.clone(),
         keywords: package.keywords.clone(),
+        categories: package.categories.clone(),
         readme_html: selected
             .readme
             .as_deref()
@@ -510,6 +516,7 @@ pub async fn account_add_key(
         return Err(PageError::forbidden("Sign in before adding a key."));
     };
     let key = aevia_registry_core::signature::SignerKey::detect(&form.armored)?;
+    key.validate()?;
     let fingerprint = key.fingerprint()?;
     repo::add_signing_key(
         &state.pool,
