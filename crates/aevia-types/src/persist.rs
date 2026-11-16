@@ -57,10 +57,25 @@ impl fmt::Display for PersistError {
 
 impl std::error::Error for PersistError {}
 
-impl From<bincode::Error> for PersistError {
-    fn from(error: bincode::Error) -> Self {
+impl From<bincode::error::EncodeError> for PersistError {
+    fn from(error: bincode::error::EncodeError) -> Self {
         Self(error.to_string())
     }
+}
+
+impl From<bincode::error::DecodeError> for PersistError {
+    fn from(error: bincode::error::DecodeError) -> Self {
+        Self(error.to_string())
+    }
+}
+
+fn encode_bincode<T: Serialize>(value: &T) -> Result<Vec<u8>, bincode::error::EncodeError> {
+    bincode::serde::encode_to_vec(value, bincode::config::standard())
+}
+
+fn decode_bincode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError> {
+    let (value, _read) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())?;
+    Ok(value)
 }
 
 #[derive(Default)]
@@ -312,7 +327,7 @@ struct Payload {
 
 fn record_of(id: AdtId) -> Result<AdtRecord, PersistError> {
     let adt = adt::get(id).ok_or_else(|| PersistError(format!("unregistered ADT #{id}")))?;
-    let ctors = bincode::serialize(&adt.ctors)?;
+    let ctors = encode_bincode(&adt.ctors)?;
     Ok(AdtRecord {
         key: adt::key_of(id),
         module: adt::module_of(id),
@@ -339,7 +354,7 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistError> {
         Ok(())
     })?;
     let _scope = Scope(|| ENCODE.with(|cell| *cell.borrow_mut() = None));
-    let body = bincode::serialize(value)?;
+    let body = encode_bincode(value)?;
     let mut adts = Vec::new();
     let mut next = 0;
     loop {
@@ -352,7 +367,7 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistError> {
         adts.push(record_of(id)?);
         next += 1;
     }
-    Ok(bincode::serialize(&Payload { adts, body })?)
+    Ok(encode_bincode(&Payload { adts, body })?)
 }
 
 /// Decodes bytes written by [`encode`], re-interning every ADT first.
@@ -381,7 +396,7 @@ fn decode_with<T: DeserializeOwned>(
     bytes: &[u8],
     reuse: bool,
 ) -> Result<T, PersistError> {
-    let payload: Payload = bincode::deserialize(bytes)?;
+    let payload: Payload = decode_bincode(bytes)?;
     // Phase 1: resolve or allocate every type, so the map is complete before
     // any constructor field (which may name any entry, or itself) is read.
     let mut map = Vec::with_capacity(payload.adts.len());
@@ -398,12 +413,12 @@ fn decode_with<T: DeserializeOwned>(
     // Phase 2: constructors of the types this process did not already have.
     for position in fresh {
         let record = &payload.adts[position];
-        let ctors: Vec<Ctor> = bincode::deserialize(&record.ctors)?;
+        let ctors: Vec<Ctor> = decode_bincode(&record.ctors)?;
         if record.complete || !ctors.is_empty() {
             adt::set_ctors(map[position], ctors);
         }
     }
-    Ok(bincode::deserialize(&payload.body)?)
+    Ok(decode_bincode(&payload.body)?)
 }
 
 /// The id for one record, and whether this process had to create it.
@@ -451,7 +466,7 @@ macro_rules! default_delta {
             thread_local! {
                 static BASE: (Vec<u8>, $ty) = {
                     let base: $ty = $base;
-                    (bincode::serialize(&base).unwrap_or_default(), base)
+                    (encode_bincode(&base).unwrap_or_default(), base)
                 };
             }
 
@@ -463,7 +478,7 @@ macro_rules! default_delta {
                 value: &$ty,
                 serializer: S,
             ) -> Result<S::Ok, S::Error> {
-                let bytes = bincode::serialize(value).map_err(S::Error::custom)?;
+                let bytes = encode_bincode(value).map_err(S::Error::custom)?;
                 let is_base = BASE.with(|(base, _)| !base.is_empty() && *base == bytes);
                 if is_base {
                     Option::<&$ty>::None.serialize(serializer)

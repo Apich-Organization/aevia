@@ -21,9 +21,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-rc.1"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.100"
 license = "Apache-2.0"
 repository = "https://github.com/Apich-Organization/aevia"
 
@@ -43,7 +43,7 @@ unicode-segmentation = "1"
 serde_json = "1"
 # The `.aevi` checked-module cache (spec 9.11): serde types, compact binary codec.
 serde = { version = "1", features = ["derive", "rc"] }
-bincode = "1"
+bincode = { package = "bincode-next", version = "3.1", features = ["serde"] }
 
 aevia-dim = { path = "crates/aevia-dim" }
 aevia-syntax = { path = "crates/aevia-syntax" }
@@ -58,9 +58,15 @@ aevia-analysis = { path = "crates/aevia-analysis" }
 aevia-lsp = { path = "crates/aevia-lsp" }
 
 [profile.release]
-opt-level = 3
-lto = "thin"
+lto = true
 codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = true
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = true
 
 # Keep source locations in test backtraces without copying full dependency
 # variable/type debug information into every integration-test executable.
@@ -80,7 +86,7 @@ debug = "line-tables-only"
 # still the ones to quote.
 [profile.profiling]
 inherits = "release"
-lto = false
+lto = "thin"
 codegen-units = 16
 incremental = true
 debug = "line-tables-only"

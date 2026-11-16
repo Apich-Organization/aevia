@@ -246,6 +246,10 @@ pub fn interface_digest(interface: &ModuleInterface) -> Option<Digest> {
     Some(hasher.finish())
 }
 
+fn bincode_bytes<T: serde::Serialize + ?Sized>(value: &T) -> Option<Vec<u8>> {
+    bincode::serde::encode_to_vec(value, bincode::config::standard()).ok()
+}
+
 impl DiskCache {
     /// A cache stored in `dir` (created on the first write).
     #[must_use]
@@ -282,11 +286,11 @@ impl DiskCache {
         hasher.field(compiler_identity().as_bytes());
         hasher.field(inputs.text.as_bytes());
         hasher.field(&inputs.file.to_le_bytes());
-        hasher.field(&bincode::serialize(inputs.path).ok()?);
-        hasher.field(&bincode::serialize(inputs.identity).ok()?);
-        hasher.field(&bincode::serialize(inputs.bindings).ok()?);
-        hasher.field(&bincode::serialize(inputs.prefixes).ok()?);
-        hasher.field(&bincode::serialize(inputs.options).ok()?);
+        hasher.field(&bincode_bytes(inputs.path)?);
+        hasher.field(&bincode_bytes(inputs.identity)?);
+        hasher.field(&bincode_bytes(inputs.bindings)?);
+        hasher.field(&bincode_bytes(inputs.prefixes)?);
+        hasher.field(&bincode_bytes(inputs.options)?);
         for digest in inputs.interfaces {
             hasher.field(digest);
         }
