@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+pub(crate) mod codec;
 pub mod dim;
 pub mod rat;
 pub mod systems;

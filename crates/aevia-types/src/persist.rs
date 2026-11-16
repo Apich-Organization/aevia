@@ -32,7 +32,6 @@ use crate::keys::AdtKey;
 use crate::keys::ModulePath;
 use serde::Deserialize;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde::de::Error as _;
 use serde::ser::Error as _;
 use std::cell::RefCell;
@@ -57,25 +56,75 @@ impl fmt::Display for PersistError {
 
 impl std::error::Error for PersistError {}
 
-impl From<bincode::error::EncodeError> for PersistError {
-    fn from(error: bincode::error::EncodeError) -> Self {
+impl From<bincode_next::error::EncodeError> for PersistError {
+    fn from(error: bincode_next::error::EncodeError) -> Self {
         Self(error.to_string())
     }
 }
 
-impl From<bincode::error::DecodeError> for PersistError {
-    fn from(error: bincode::error::DecodeError) -> Self {
+impl From<bincode_next::error::DecodeError> for PersistError {
+    fn from(error: bincode_next::error::DecodeError) -> Self {
         Self(error.to_string())
     }
 }
 
-fn encode_bincode<T: Serialize>(value: &T) -> Result<Vec<u8>, bincode::error::EncodeError> {
-    bincode::serde::encode_to_vec(value, bincode::config::standard())
-}
+/// The single `bincode-next` codec configuration shared across persistence and disk caches.
+pub mod codec {
+    use bincode_next::Decode;
+    use bincode_next::Encode;
+    use bincode_next::Fingerprint;
+    use bincode_next::config;
+    use bincode_next::error::DecodeError;
+    use bincode_next::error::EncodeError;
 
-fn decode_bincode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError> {
-    let (value, _read) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())?;
-    Ok(value)
+    /// Stable codec identifier recorded in `.aevi` headers.
+    pub const CODEC_ID: &str = "bincode-next/3.2.0/standard-deterministic-fingerprint";
+
+    /// The pinned `bincode-next` configuration: standard varint + deterministic + 64-bit schema fingerprint.
+    pub type CodecConfig = config::Configuration<
+        config::LittleEndian,
+        config::Varint,
+        config::NoLimit,
+        config::SkipBitPacking,
+        config::LsbFirst,
+        config::FingerprintEnabled<0>,
+        config::BincodeDeterministicFormat,
+    >;
+
+    /// Returns the pinned `bincode-next` configuration.
+    #[must_use]
+    pub const fn config() -> CodecConfig {
+        config::standard()
+            .with_deterministic_bincode()
+            .with_fingerprint()
+    }
+
+    /// Encodes `value` with schema/config fingerprinting and deterministic ordering.
+    ///
+    /// # Errors
+    /// Propagates any `EncodeError`.
+    pub fn encode<T: Encode + Fingerprint<CodecConfig> + ?Sized>(
+        value: &T
+    ) -> Result<Vec<u8>, EncodeError> {
+        bincode_next::encode_to_vec(value, config())
+    }
+
+    /// Decodes `bytes`, verifying the schema/config fingerprint and rejecting trailing bytes.
+    ///
+    /// # Errors
+    /// Propagates any `DecodeError` or returns an error when trailing bytes remain.
+    pub fn decode<T: Decode<()> + Fingerprint<CodecConfig>>(
+        bytes: &[u8]
+    ) -> Result<T, DecodeError> {
+        let (value, read) = bincode_next::decode_from_slice(bytes, config())?;
+        if read != bytes.len() {
+            return Err(DecodeError::OtherString(format!(
+                "trailing bytes after bincode payload: {} unread",
+                bytes.len() - read
+            )));
+        }
+        Ok(value)
+    }
 }
 
 #[derive(Default)]
@@ -125,6 +174,78 @@ fn decoded_id(index: u32) -> Option<AdtId> {
             .get(usize::try_from(index - RESERVED).ok()?)
             .copied()
     })
+}
+
+pub(crate) fn encode_adt_id(id: AdtId) -> Result<u32, String> {
+    encoded_index(id).ok_or_else(|| "an AdtId was serialized outside persist::encode".to_string())
+}
+
+pub(crate) fn decode_adt_id(index: u32) -> Result<AdtId, String> {
+    decoded_id(index).ok_or_else(|| "unknown ADT index in cache entry".to_string())
+}
+
+pub(crate) const fn mix_hash(
+    acc: u64,
+    label: &[u8],
+    child: u64,
+) -> u64 {
+    let acc = bincode_next::rapidhash::v3::rapidhash_v3_seeded(
+        label,
+        &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(acc),
+    );
+    bincode_next::rapidhash::v3::rapidhash_v3_seeded(
+        &child.to_le_bytes(),
+        &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(acc),
+    )
+}
+
+pub(crate) const fn index_map_schema_hash<
+    C: bincode_next::config::Config,
+    K: bincode_next::Fingerprint<C>,
+    V: bincode_next::Fingerprint<C>,
+>() -> u64 {
+    let h = bincode_next::rapidhash::v3::rapidhash_v3_seeded(
+        b"IndexMap",
+        &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(C::CONFIG_HASH),
+    );
+    mix_hash(mix_hash(h, b"K", K::SCHEMA_HASH), b"V", V::SCHEMA_HASH)
+}
+
+pub(crate) fn encode_index_map<K, V, E>(
+    map: &indexmap::IndexMap<K, V>,
+    encoder: &mut E,
+) -> Result<(), bincode_next::error::EncodeError>
+where
+    K: bincode_next::Encode,
+    V: bincode_next::Encode,
+    E: bincode_next::enc::Encoder,
+{
+    use bincode_next::Encode as _;
+    map.len().encode(encoder)?;
+    for (k, v) in map {
+        k.encode(encoder)?;
+        v.encode(encoder)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn decode_index_map<Context, K, V, D>(
+    decoder: &mut D
+) -> Result<indexmap::IndexMap<K, V>, bincode_next::error::DecodeError>
+where
+    K: bincode_next::Decode<Context> + Eq + std::hash::Hash,
+    V: bincode_next::Decode<Context>,
+    D: bincode_next::de::Decoder<Context = Context>,
+{
+    use bincode_next::Decode as _;
+    let len = usize::decode(decoder)?;
+    let mut map = indexmap::IndexMap::with_capacity(len.min(1024));
+    for _ in 0..len {
+        let k = K::decode(decoder)?;
+        let v = V::decode(decoder)?;
+        map.insert(k, v);
+    }
+    Ok(map)
 }
 
 /// Serde adapter for a bare `AdtId` field.
@@ -307,7 +428,9 @@ pub mod sorted_adt_pair_map {
 }
 
 /// One entry of the ADT table.
-#[derive(Serialize, Deserialize)]
+#[derive(
+    Serialize, Deserialize, bincode_next::Encode, bincode_next::Decode, bincode_next::Fingerprint,
+)]
 struct AdtRecord {
     key: AdtKey,
     module: ModulePath,
@@ -319,7 +442,9 @@ struct AdtRecord {
     ctors: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(
+    Serialize, Deserialize, bincode_next::Encode, bincode_next::Decode, bincode_next::Fingerprint,
+)]
 struct Payload {
     adts: Vec<AdtRecord>,
     body: Vec<u8>,
@@ -327,7 +452,7 @@ struct Payload {
 
 fn record_of(id: AdtId) -> Result<AdtRecord, PersistError> {
     let adt = adt::get(id).ok_or_else(|| PersistError(format!("unregistered ADT #{id}")))?;
-    let ctors = encode_bincode(&adt.ctors)?;
+    let ctors = codec::encode(&adt.ctors)?;
     Ok(AdtRecord {
         key: adt::key_of(id),
         module: adt::module_of(id),
@@ -344,7 +469,9 @@ fn record_of(id: AdtId) -> Result<AdtRecord, PersistError> {
 /// # Errors
 ///
 /// Fails when a mentioned type is not registered or the codec rejects the value.
-pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistError> {
+pub fn encode<T: bincode_next::Encode + bincode_next::Fingerprint<codec::CodecConfig>>(
+    value: &T
+) -> Result<Vec<u8>, PersistError> {
     ENCODE.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.is_some() {
@@ -354,7 +481,7 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistError> {
         Ok(())
     })?;
     let _scope = Scope(|| ENCODE.with(|cell| *cell.borrow_mut() = None));
-    let body = encode_bincode(value)?;
+    let body = codec::encode(value)?;
     let mut adts = Vec::new();
     let mut next = 0;
     loop {
@@ -367,7 +494,7 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistError> {
         adts.push(record_of(id)?);
         next += 1;
     }
-    Ok(encode_bincode(&Payload { adts, body })?)
+    Ok(codec::encode(&Payload { adts, body })?)
 }
 
 /// Decodes bytes written by [`encode`], re-interning every ADT first.
@@ -376,7 +503,9 @@ pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistError> {
 ///
 /// Fails on malformed bytes; the registry may keep types allocated for a
 /// partially decoded entry, which is harmless (ids are never reused).
-pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, PersistError> {
+pub fn decode<T: bincode_next::Decode<()> + bincode_next::Fingerprint<codec::CodecConfig>>(
+    bytes: &[u8]
+) -> Result<T, PersistError> {
     decode_with(bytes, true)
 }
 
@@ -388,15 +517,17 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, PersistError> {
 /// # Errors
 ///
 /// Fails on malformed bytes.
-pub fn decode_fresh<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, PersistError> {
+pub fn decode_fresh<T: bincode_next::Decode<()> + bincode_next::Fingerprint<codec::CodecConfig>>(
+    bytes: &[u8]
+) -> Result<T, PersistError> {
     decode_with(bytes, false)
 }
 
-fn decode_with<T: DeserializeOwned>(
+fn decode_with<T: bincode_next::Decode<()> + bincode_next::Fingerprint<codec::CodecConfig>>(
     bytes: &[u8],
     reuse: bool,
 ) -> Result<T, PersistError> {
-    let payload: Payload = decode_bincode(bytes)?;
+    let payload: Payload = codec::decode(bytes)?;
     // Phase 1: resolve or allocate every type, so the map is complete before
     // any constructor field (which may name any entry, or itself) is read.
     let mut map = Vec::with_capacity(payload.adts.len());
@@ -413,12 +544,12 @@ fn decode_with<T: DeserializeOwned>(
     // Phase 2: constructors of the types this process did not already have.
     for position in fresh {
         let record = &payload.adts[position];
-        let ctors: Vec<Ctor> = decode_bincode(&record.ctors)?;
+        let ctors: Vec<Ctor> = codec::decode(&record.ctors)?;
         if record.complete || !ctors.is_empty() {
             adt::set_ctors(map[position], ctors);
         }
     }
-    Ok(decode_bincode(&payload.body)?)
+    Ok(codec::decode(&payload.body)?)
 }
 
 /// The id for one record, and whether this process had to create it.
@@ -466,8 +597,33 @@ macro_rules! default_delta {
             thread_local! {
                 static BASE: (Vec<u8>, $ty) = {
                     let base: $ty = $base;
-                    (encode_bincode(&base).unwrap_or_default(), base)
+                    (codec::encode(&base).unwrap_or_default(), base)
                 };
+            }
+
+            pub(crate) fn encode_bincode<E: bincode_next::enc::Encoder>(
+                value: &$ty,
+                encoder: &mut E,
+            ) -> Result<(), bincode_next::error::EncodeError> {
+                use bincode_next::Encode as _;
+                let bytes = codec::encode(value)?;
+                let is_base = BASE.with(|(base, _)| !base.is_empty() && *base == bytes);
+                if is_base {
+                    Option::<&$ty>::None.encode(encoder)
+                } else {
+                    Some(value).encode(encoder)
+                }
+            }
+
+            pub(crate) fn decode_bincode<
+                Context,
+                D: bincode_next::de::Decoder<Context = Context>,
+            >(
+                decoder: &mut D
+            ) -> Result<$ty, bincode_next::error::DecodeError> {
+                use bincode_next::Decode as _;
+                let value = Option::<$ty>::decode(decoder)?;
+                Ok(value.unwrap_or_else(|| BASE.with(|(_, base)| base.clone())))
             }
 
             /// Serializes `value` (`None` when it is the default).
@@ -478,7 +634,7 @@ macro_rules! default_delta {
                 value: &$ty,
                 serializer: S,
             ) -> Result<S::Ok, S::Error> {
-                let bytes = encode_bincode(value).map_err(S::Error::custom)?;
+                let bytes = codec::encode(value).map_err(S::Error::custom)?;
                 let is_base = BASE.with(|(base, _)| !base.is_empty() && *base == bytes);
                 if is_base {
                     Option::<&$ty>::None.serialize(serializer)

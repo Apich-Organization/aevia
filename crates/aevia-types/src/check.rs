@@ -71,7 +71,7 @@ use std::collections::HashSet;
 mod sparse;
 
 /// What a name exported by a module denotes.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, bincode_next::Fingerprint)]
 pub enum Export {
     /// A function or value binding.
     Value {
@@ -129,12 +129,141 @@ pub enum Export {
     },
 }
 
+impl bincode_next::Encode for Export {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        match self {
+            | Self::Value { scheme, decl, arity } => {
+                0u8.encode(encoder)?;
+                scheme.encode(encoder)?;
+                decl.encode(encoder)?;
+                arity.encode(encoder)
+            },
+            | Self::Ctor { adt, index, scheme } => {
+                1u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*adt)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)?;
+                index.encode(encoder)?;
+                scheme.encode(encoder)
+            },
+            | Self::TypeCtor { adt, index, scheme } => {
+                2u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*adt)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)?;
+                index.encode(encoder)?;
+                scheme.encode(encoder)
+            },
+            | Self::Type { adt } => {
+                3u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*adt)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)
+            },
+            | Self::Alias { params } => {
+                4u8.encode(encoder)?;
+                params.encode(encoder)
+            },
+            | Self::Unit { def } => {
+                5u8.encode(encoder)?;
+                def.encode(encoder)
+            },
+            | Self::Dimension { dim, is_base } => {
+                6u8.encode(encoder)?;
+                dim.encode(encoder)?;
+                is_base.encode(encoder)
+            },
+        }
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for Export {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        match u8::decode(decoder)? {
+            | 0 => {
+                Ok(Self::Value {
+                    scheme: Scheme::decode(decoder)?,
+                    decl: usize::decode(decoder)?,
+                    arity: usize::decode(decoder)?,
+                })
+            },
+            | 1 => {
+                let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                Ok(Self::Ctor {
+                    adt,
+                    index: usize::decode(decoder)?,
+                    scheme: Scheme::decode(decoder)?,
+                })
+            },
+            | 2 => {
+                let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                Ok(Self::TypeCtor {
+                    adt,
+                    index: usize::decode(decoder)?,
+                    scheme: Scheme::decode(decoder)?,
+                })
+            },
+            | 3 => {
+                let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                Ok(Self::Type { adt })
+            },
+            | 4 => {
+                Ok(Self::Alias {
+                    params: usize::decode(decoder)?,
+                })
+            },
+            | 5 => {
+                Ok(Self::Unit {
+                    def: UnitDef::decode(decoder)?,
+                })
+            },
+            | 6 => {
+                Ok(Self::Dimension {
+                    dim: Dim::decode(decoder)?,
+                    is_base: bool::decode(decoder)?,
+                })
+            },
+            | tag => {
+                Err(bincode_next::error::DecodeError::UnexpectedVariant {
+                    type_name: "Export",
+                    allowed: &bincode_next::error::AllowedEnumVariants::Range { min: 0, max: 6 },
+                    found: u32::from(tag),
+                })
+            },
+        }
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for Export {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
 /// One statically resolved `Rssn.<op>` call.
 ///
 /// The checker picks the overload; the runtime must execute this key and never
 /// resolve again, or a program would run a different overload than it was
 /// typed against.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct RssnCall {
     /// Where the call is written.
     pub span: Span,
@@ -147,7 +276,17 @@ pub struct RssnCall {
 }
 
 /// What a class-method call site should execute (round-2 decision 1c).
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum DictTarget {
     /// The exact instance the checker proved, identified symbolically.
     Instance(InstanceKey),
@@ -169,7 +308,18 @@ pub enum DictTarget {
 }
 
 /// A builtin operation the runtime already implements structurally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum BuiltinDispatch {
     /// The structural `Show` printer (records, `Dyn`, unit values, …).
     ShowStructural,
@@ -182,7 +332,15 @@ pub enum BuiltinDispatch {
 ///
 /// `aevia-core` must dispatch `method` on `head` to the body of the instance
 /// this record names (`target`), instead of to a global of the same name.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct DictionaryUse {
     /// Where the call is written.
     pub span: Span,
@@ -197,7 +355,15 @@ pub struct DictionaryUse {
 }
 
 /// A method used as a value, resolved at its defining source reference.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct ClassMethodRef {
     /// Full nominal class identity, independent of its visible spelling.
     pub class: ClassKey,
@@ -206,7 +372,17 @@ pub struct ClassMethodRef {
 }
 
 /// One explicitly ordered generic binder on a source function.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum GenericBinder {
     Type(Type),
     Representation(Rep),
@@ -256,7 +432,19 @@ impl GenericBinder {
 }
 
 /// The lexical boundary exited by a source `?` operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum TryBoundary {
     /// A real source function/lambda (never an implementation thunk).
     Function(Span),
@@ -264,14 +452,30 @@ pub enum TryBoundary {
     Do(Span),
 }
 /// The checked destination and result container of one source `?`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct TryTarget {
     pub boundary: TryBoundary,
     pub result: Type,
 }
 
 /// The checked signature that belongs to the actual source function body.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct FunctionEvidence {
     /// Source return boundary, retained independently of callable identity.
     pub site: Span,
@@ -445,7 +649,15 @@ fn constructor_binders(scheme: &Scheme) -> Vec<GenericBinder> {
 }
 
 /// One class exported with a module's interface (§7.1.3/§7.4).
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct ClassExport {
     /// The symbolic identity.
     pub key: ClassKey,
@@ -456,7 +668,15 @@ pub struct ClassExport {
 }
 
 /// One instance exported with a module's interface.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct InstanceExport {
     /// The symbolic identity: module + class key + canonical head.
     pub key: InstanceKey,
@@ -472,7 +692,18 @@ pub struct InstanceExport {
 
 /// The kind of one parameter of a generic declaration (§2: the annotation may
 /// be omitted and the kind then inferred from the body).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum AliasParamKind {
     /// A type parameter (`type Pair<a, b>`).
     Type,
@@ -489,7 +720,15 @@ pub enum AliasParamKind {
 /// `Export::Alias` carries only the arity today; an importer cannot expand an
 /// alias without the body, which is why `type Vec2` was `E0301` from another
 /// module (§7.4). This is the definition the interface carries.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct AliasExport {
     /// The number of parameters.
     pub params: usize,
@@ -522,8 +761,98 @@ pub struct ModuleInterface {
     pub callable_exports: IndexMap<String, CallableProjection>,
 }
 
+impl bincode_next::Encode for ModuleInterface {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        self.name.encode(encoder)?;
+        crate::persist::encode_index_map(&self.exports, encoder)?;
+        crate::persist::encode_index_map(&self.classes, encoder)?;
+        self.instances.encode(encoder)?;
+        crate::persist::encode_index_map(&self.aliases, encoder)?;
+        crate::persist::encode_index_map(&self.function_headers, encoder)?;
+        crate::persist::encode_index_map(&self.callable_exports, encoder)
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for ModuleInterface {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        Ok(Self {
+            name: ModulePath::decode(decoder)?,
+            exports: crate::persist::decode_index_map(decoder)?,
+            classes: crate::persist::decode_index_map(decoder)?,
+            instances: Vec::<InstanceExport>::decode(decoder)?,
+            aliases: crate::persist::decode_index_map(decoder)?,
+            function_headers: crate::persist::decode_index_map(decoder)?,
+            callable_exports: crate::persist::decode_index_map(decoder)?,
+        })
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for ModuleInterface {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for ModuleInterface {
+    const SCHEMA_HASH: u64 = {
+        let h = crate::persist::mix_hash(
+            C::CONFIG_HASH,
+            b"ModuleInterface:name",
+            <ModulePath as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:exports",
+            crate::persist::index_map_schema_hash::<C, String, Export>(),
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:classes",
+            crate::persist::index_map_schema_hash::<C, ClassKey, ClassExport>(),
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:instances",
+            <Vec<InstanceExport> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:aliases",
+            crate::persist::index_map_schema_hash::<C, String, AliasExport>(),
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:function_headers",
+            crate::persist::index_map_schema_hash::<C, String, Vec<GenericBinder>>(),
+        );
+        crate::persist::mix_hash(
+            h,
+            b"ModuleInterface:callable_exports",
+            crate::persist::index_map_schema_hash::<C, String, CallableProjection>(),
+        )
+    };
+}
+
 /// The two type-directed `Dyn` primitives of §3.11/§4.9.4.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum DynPrimitive {
     /// `dyn(x)`: the static dimension `d` is materialised into the value.
     Dyn,
@@ -541,7 +870,15 @@ pub enum DynPrimitive {
 /// materialisation is redundant but harmless); for `check` it is the answer the
 /// runtime must compare against — without it `check` cannot fail and `E0412`
 /// is unreachable.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct DynCall {
     /// Where the call is written.
     pub span: Span,
@@ -552,7 +889,17 @@ pub struct DynCall {
 }
 
 /// The stability marker of a declaration (§13.8.1).
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum Stability {
     /// Stable within a major version.
     Stable,
@@ -563,7 +910,18 @@ pub enum Stability {
 }
 
 /// Which host extension a [`HostRegistration`] is (§13.5.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum HostRegistrationKind {
     /// `@op("name")`: an Aevia function exposed as an RSSN operator.
     Op,
@@ -575,7 +933,15 @@ pub enum HostRegistrationKind {
 ///
 /// The checker proves the declaration and names the operator; publishing it to
 /// the kernel is a runtime/bridge step (the Aevia function is a host callback).
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct HostRegistration {
     /// Where the attribute is written.
     pub span: Span,
@@ -720,6 +1086,188 @@ pub struct CheckedModule {
     pub errors: usize,
 }
 
+impl bincode_next::Encode for CheckedModule {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        self.name.encode(encoder)?;
+        self.identity.encode(encoder)?;
+        self.constructors.len().encode(encoder)?;
+        for (key, (adt, index)) in &self.constructors {
+            key.encode(encoder)?;
+            crate::persist::encode_adt_id(*adt)
+                .map_err(bincode_next::error::EncodeError::OtherString)?
+                .encode(encoder)?;
+            index.encode(encoder)?;
+        }
+        self.constructor_refs.len().encode(encoder)?;
+        let mut refs: Vec<_> = self.constructor_refs.iter().collect();
+        refs.sort_by(|a, b| a.0.cmp(b.0));
+        for (span, (adt, index)) in refs {
+            span.encode(encoder)?;
+            crate::persist::encode_adt_id(*adt)
+                .map_err(bincode_next::error::EncodeError::OtherString)?
+                .encode(encoder)?;
+            index.encode(encoder)?;
+        }
+        self.functions.encode(encoder)?;
+        crate::persist::encode_index_map(&self.function_headers, encoder)?;
+        crate::persist::encode_index_map(&self.callable_exports, encoder)?;
+        self.generic_refs.encode(encoder)?;
+        self.callable_refs.encode(encoder)?;
+        self.try_targets.encode(encoder)?;
+        self.anonymous_file.encode(encoder)?;
+        crate::persist::encode_index_map(&self.exports, encoder)?;
+        crate::persist::default_units::encode_bincode(&self.units, encoder)?;
+        crate::persist::default_dims::encode_bincode(&self.dims, encoder)?;
+        self.tests.encode(encoder)?;
+        self.rssn_calls.encode(encoder)?;
+        self.dyn_calls.encode(encoder)?;
+        self.system_calls.encode(encoder)?;
+        crate::persist::encode_index_map(&self.stability, encoder)?;
+        self.registrations.encode(encoder)?;
+        self.dictionaries.encode(encoder)?;
+        crate::persist::encode_index_map(&self.classes, encoder)?;
+        crate::persist::encode_index_map(&self.local_classes, encoder)?;
+        self.instance_sites.encode(encoder)?;
+        self.method_refs.encode(encoder)?;
+        self.instances.encode(encoder)?;
+        crate::persist::encode_index_map(&self.alias_defs, encoder)?;
+        crate::persist::encode_index_map(&self.aliases, encoder)?;
+        self.literal_reps.encode(encoder)?;
+        self.constant_regions.encode(encoder)?;
+        self.unit_system.encode(encoder)?;
+        self.expr_types.encode(encoder)?;
+        self.errors.encode(encoder)
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for CheckedModule {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        let name = Option::<Vec<String>>::decode(decoder)?;
+        let identity = Option::<ModulePath>::decode(decoder)?;
+        let ctors_len = usize::decode(decoder)?;
+        let mut constructors = IndexMap::with_capacity(ctors_len.min(1024));
+        for _ in 0..ctors_len {
+            let key = String::decode(decoder)?;
+            let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                .map_err(bincode_next::error::DecodeError::OtherString)?;
+            let index = usize::decode(decoder)?;
+            constructors.insert(key, (adt, index));
+        }
+        let refs_len = usize::decode(decoder)?;
+        let mut constructor_refs = HashMap::with_capacity(refs_len.min(1024));
+        for _ in 0..refs_len {
+            let span = Span::decode(decoder)?;
+            let adt = crate::persist::decode_adt_id(u32::decode(decoder)?)
+                .map_err(bincode_next::error::DecodeError::OtherString)?;
+            let index = usize::decode(decoder)?;
+            constructor_refs.insert(span, (adt, index));
+        }
+        Ok(Self {
+            name,
+            identity,
+            constructors,
+            constructor_refs,
+            functions: HashMap::decode(decoder)?,
+            function_headers: crate::persist::decode_index_map(decoder)?,
+            callable_exports: crate::persist::decode_index_map(decoder)?,
+            generic_refs: HashMap::decode(decoder)?,
+            callable_refs: HashMap::decode(decoder)?,
+            try_targets: HashMap::decode(decoder)?,
+            anonymous_file: FileId::decode(decoder)?,
+            exports: crate::persist::decode_index_map(decoder)?,
+            units: crate::persist::default_units::decode_bincode(decoder)?,
+            dims: crate::persist::default_dims::decode_bincode(decoder)?,
+            tests: Vec::decode(decoder)?,
+            rssn_calls: Vec::decode(decoder)?,
+            dyn_calls: Vec::decode(decoder)?,
+            system_calls: HashMap::decode(decoder)?,
+            stability: crate::persist::decode_index_map(decoder)?,
+            registrations: Vec::decode(decoder)?,
+            dictionaries: Vec::decode(decoder)?,
+            classes: crate::persist::decode_index_map(decoder)?,
+            local_classes: crate::persist::decode_index_map(decoder)?,
+            instance_sites: HashMap::decode(decoder)?,
+            method_refs: HashMap::decode(decoder)?,
+            instances: Vec::decode(decoder)?,
+            alias_defs: crate::persist::decode_index_map(decoder)?,
+            aliases: crate::persist::decode_index_map(decoder)?,
+            literal_reps: HashMap::decode(decoder)?,
+            constant_regions: HashMap::decode(decoder)?,
+            unit_system: Option::decode(decoder)?,
+            expr_types: HashMap::decode(decoder)?,
+            errors: usize::decode(decoder)?,
+        })
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for CheckedModule {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for CheckedModule {
+    const SCHEMA_HASH: u64 = {
+        let mut h = crate::persist::mix_hash(
+            C::CONFIG_HASH,
+            b"CheckedModule:name",
+            <Option<Vec<String>> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:identity",
+            <Option<ModulePath> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:constructors",
+            crate::persist::index_map_schema_hash::<C, String, (adt::AdtId, usize)>(),
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:constructor_refs",
+            <HashMap<Span, (adt::AdtId, usize)> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:functions",
+            <HashMap<Span, FunctionEvidence> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:exports",
+            crate::persist::index_map_schema_hash::<C, String, Export>(),
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:units",
+            <UnitTable as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:dims",
+            <DimEnv as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        h = crate::persist::mix_hash(
+            h,
+            b"CheckedModule:expr_types",
+            <HashMap<Span, Type> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        crate::persist::mix_hash(
+            h,
+            b"CheckedModule:errors",
+            <usize as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        )
+    };
+}
+
 impl CheckedModule {
     /// The complete interface of §7.1.3/§7.4: names **and** the classes,
     /// instances and alias definitions an importer needs.
@@ -760,7 +1308,18 @@ impl CheckedModule {
 /// host-extension attributes need the plugin ABI. The set is a plain list of
 /// names so `aevia-types` stays independent of the manifest's shape; a caller
 /// fills it from the kernel's own table ([`CheckOptions::default`] does).
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Capabilities {
     names: std::collections::BTreeSet<String>,
 }
@@ -833,7 +1392,15 @@ impl Capabilities {
 }
 
 /// Options for one check.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct CheckOptions {
     /// The backend capabilities to check against (§13.8.2).
     pub capabilities: Capabilities,
@@ -904,7 +1471,9 @@ pub fn check_module_with_interfaces(
 
 /// The visible binding of one direct imported interface. Nominal identities
 /// remain on its types and keys; `prefix` is only a source lookup name.
-#[derive(Debug, serde::Serialize)]
+#[derive(
+    Debug, serde::Serialize, bincode_next::Encode, bincode_next::Decode, bincode_next::Fingerprint,
+)]
 pub struct InterfaceBinding {
     pub module: ModulePath,
     pub prefix: String,

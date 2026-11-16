@@ -36,6 +36,46 @@ pub struct Scale {
     pub pi: i32,
 }
 
+impl bincode_next::Encode for Scale {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        crate::codec::encode_rational(&self.rat, encoder)?;
+        self.pi.encode(encoder)
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for Scale {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        let rat = crate::codec::decode_rational(decoder)?;
+        let pi = i32::decode(decoder)?;
+        Ok(Self { rat, pi })
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for Scale {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Scale {
+    const SCHEMA_HASH: u64 = crate::codec::mix_hash(
+        crate::codec::mix_hash(
+            C::CONFIG_HASH,
+            b"Scale:rat",
+            crate::codec::rational_schema_hash::<C>(),
+        ),
+        b"Scale:pi",
+        <i32 as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+    );
+}
+
 impl Scale {
     /// The scale `1`.
     #[must_use]
@@ -198,7 +238,15 @@ impl fmt::Display for Scale {
 }
 
 /// One unit definition.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct UnitDef {
     /// The canonical spelling, e.g. `m`.
     pub name: String,
@@ -467,7 +515,15 @@ const PREFIXES: &[(&str, i32)] = &[
 ];
 
 /// The registry of units visible to a compilation.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct UnitTable {
     defs: Vec<UnitDef>,
     #[serde(serialize_with = "sorted_index")]

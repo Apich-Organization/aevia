@@ -141,8 +141,11 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 
 - Known attributes: `@stable`, `@experimental`, `@deprecated` (stability, §13.8); `@jit`
   (request JIT; `E1001` if the backend lacks `core.jit`); `@op` and `@rule` (register an RSSN
-  operator and a rewrite rule, §13.5); `@bench` (§9.12).
-- An unknown attribute is `E0210`. Attribute arguments MUST be compile-time constants.
+  operator and a rewrite rule, §13.5); `@bench` (§9.12); `@allow`, `@warn`, `@deny`, `@forbid`
+  (lint levels, taking one or more lint/group names and an optional `reason = "..."`).
+- An unknown attribute is `E0210`. Attribute arguments MUST be compile-time constants (with
+  lint-attribute targets permitting bare lint/group names such as `unused-variable`); lowering a
+  `forbid` lint is `E0211`, and an unknown lint or group name is `E0212`.
 
 ## 2.3 Expressions
 

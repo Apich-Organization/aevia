@@ -128,8 +128,8 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 
 - 已知属性：`@stable`、`@experimental`、`@deprecated`（稳定性，§13.8）、`@jit`（请求 JIT；
   后端没有 `core.jit` 时 `E1001`）、`@op`、`@rule`（注册 RSSN 算子与重写规则，§13.5）、
-  `@bench`（§9.12）。
-- 未知属性是 `E0210`；属性参数必须是编译期常量。
+  `@bench`（§9.12）、`@allow`/`@warn`/`@deny`/`@forbid`（lint 级别，接收一个或多个 lint/组名与可选 `reason = "..."`）。
+- 未知属性是 `E0210`；属性参数必须是编译期常量（lint 属性允许直接写 `unused-variable` 等 lint/组名）；试图降低 `forbid` 级别是 `E0211`，未知 lint/组名是 `E0212`。
 
 ## 2.3 表达式
 

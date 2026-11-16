@@ -38,6 +38,7 @@ aevia-fmt = { path = "crates/aevia-fmt" }
 aevia-doc = { path = "crates/aevia-doc" }
 aevia-resolve = { path = "crates/aevia-resolve" }
 
+bincode-next = { version = "3.2", features = ["serde"] }
 indexmap = { version = "2", features = ["serde"] }
 num-bigint = { version = "0.4", features = ["serde"] }
 num-integer = "0.1"

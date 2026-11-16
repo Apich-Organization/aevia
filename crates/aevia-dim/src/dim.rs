@@ -27,7 +27,18 @@ use std::fmt;
 /// nominal owner and declaration name, independent of import/display aliases.
 /// Variables use a numeric id allocated by the type checker.
 #[derive(
-    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub enum Atom {
     /// An SI or host base dimension such as `Length` or a host-defined `Currency`.
@@ -42,7 +53,15 @@ pub enum Atom {
 ///
 /// Ownership and declaration name determine equality, order and hashing. An
 /// import may change the display hint without creating a new generator.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct NominalBase {
     owner: Box<str>,
     name: Box<str>,
@@ -242,6 +261,56 @@ impl<'de> serde::Deserialize<'de> for Dim {
         let factors: Vec<(Atom, BigRational)> = serde::Deserialize::deserialize(deserializer)?;
         Ok(Self::from_factors(factors))
     }
+}
+
+impl bincode_next::Encode for Dim {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        let slice = self.slice();
+        slice.len().encode(encoder)?;
+        for (atom, exp) in slice {
+            atom.encode(encoder)?;
+            crate::codec::encode_rational(exp, encoder)?;
+        }
+        Ok(())
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for Dim {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        let len = usize::decode(decoder)?;
+        let mut factors = Vec::with_capacity(len.min(1024));
+        for _ in 0..len {
+            let atom = Atom::decode(decoder)?;
+            let exp = crate::codec::decode_rational(decoder)?;
+            factors.push((atom, exp));
+        }
+        Ok(Self::from_factors(factors))
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for Dim {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Dim {
+    const SCHEMA_HASH: u64 = crate::codec::mix_hash(
+        crate::codec::mix_hash(
+            C::CONFIG_HASH,
+            b"Dim:Atom",
+            <Atom as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        ),
+        b"Dim:Exp",
+        crate::codec::rational_schema_hash::<C>(),
+    );
 }
 
 impl PartialEq for Dim {
@@ -823,6 +892,65 @@ pub struct DimEnv {
     base_values: IndexMap<String, Dim>,
     short: IndexMap<String, String>,
     aliases: IndexMap<String, Dim>,
+}
+
+impl bincode_next::Encode for DimEnv {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        self.bases.encode(encoder)?;
+        crate::codec::encode_index_map(&self.base_values, encoder)?;
+        crate::codec::encode_index_map(&self.short, encoder)?;
+        crate::codec::encode_index_map(&self.aliases, encoder)?;
+        Ok(())
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for DimEnv {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        Ok(Self {
+            bases: Vec::<String>::decode(decoder)?,
+            base_values: crate::codec::decode_index_map(decoder)?,
+            short: crate::codec::decode_index_map(decoder)?,
+            aliases: crate::codec::decode_index_map(decoder)?,
+        })
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for DimEnv {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for DimEnv {
+    const SCHEMA_HASH: u64 = {
+        let h = crate::codec::mix_hash(
+            C::CONFIG_HASH,
+            b"DimEnv:bases",
+            <Vec<String> as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::codec::mix_hash(
+            h,
+            b"DimEnv:base_values",
+            crate::codec::index_map_schema_hash::<C, String, Dim>(),
+        );
+        let h = crate::codec::mix_hash(
+            h,
+            b"DimEnv:short",
+            crate::codec::index_map_schema_hash::<C, String, String>(),
+        );
+        crate::codec::mix_hash(
+            h,
+            b"DimEnv:aliases",
+            crate::codec::index_map_schema_hash::<C, String, Dim>(),
+        )
+    };
 }
 
 impl Default for DimEnv {

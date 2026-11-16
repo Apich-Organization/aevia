@@ -45,7 +45,17 @@ const BASES: [&str; 7] = [
 ];
 
 /// One quantity a system sets to one.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Unity {
     /// The constant's symbol (`hbar`).
     pub symbol: String,
@@ -58,7 +68,17 @@ pub struct Unity {
 }
 
 /// One generator of the representatives.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Generator {
     /// What it measures (`Energy`).
     pub name: String,
@@ -69,7 +89,17 @@ pub struct Generator {
 }
 
 /// A unit system.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct UnitSystem {
     /// The name a module selects it by (`natural`).
     pub name: String,

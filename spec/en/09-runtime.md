@@ -551,7 +551,9 @@ not type-checked in the REPL. Accepted-history warnings are not replayed. A stan
 
 ```
 aevia run [--example NAME] [file.aev] [-- args…]   run the package entry, a file or an example (program arguments follow `--`)
-aevia check [--all] [file.aev…]                    type/dimension check without running
+aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  type/dimension check without running
+aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
+                                                   run compiler, correctness, style, and pedantic lints (`--list`, `--explain`)
 aevia watch [file] [--once | --runs N]             check repeatedly, re-checking only changed modules (§9.11.1)
 aevia test [--filter PAT] [file.aev]               run `test` declarations
 aevia test --doc [--filter PAT] [files…]           compile the aevia blocks of `##` docs (§9.12)

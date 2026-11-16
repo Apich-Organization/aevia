@@ -13,7 +13,17 @@ use crate::ty::Type;
 
 /// Numeric requirements transported with a type scheme. Literal constraints
 /// also cover type-kinded parameters that have not yet been forced to Scalar.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum NumericConstraint {
     Literal {
         ty: Type,
@@ -77,7 +87,19 @@ impl NumericConstraint {
 }
 
 /// A finite subset of the concrete numeric representations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct RepDomain(u8);
 
 impl RepDomain {
@@ -140,7 +162,19 @@ impl RepDomain {
 }
 
 /// A relation retained with a generic numeric signature.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum RepRelation {
     Domain { rep: Rep, allowed: RepDomain },
     AtLeast { upper: Rep, lower: Rep },

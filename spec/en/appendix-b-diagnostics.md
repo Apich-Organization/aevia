@@ -63,6 +63,8 @@ error[E0401]: dimension mismatch
 | `E0208` | duplicate field | delete the duplicate |
 | `E0209` | invalid unit literal (including `3 (2)`: the parentheses do not hold a unit expression) | check the unit expression |
 | `E0210` | unknown attribute | check the attribute name or arguments |
+| `E0211` | cannot lower forbidden lint | remove the inner `@allow`/`@warn`/`@deny` or lower the outer `@forbid` |
+| `E0212` | unknown lint or group name | run `aevia lint --list` for valid names |
 
 ## B.5 Type errors (E03xx)
 
@@ -187,7 +189,7 @@ message is whatever the built-in states.
 | Code | Message |
 |---|---|
 | `W0101` | unused variable |
-| `W0102` | unused import (reserved) |
+| `W0102` | unused import (`aevia lint`) |
 | `W0103` | shadowed binding |
 | `W0201` | redundant match arm |
 | `W0202` | discarded IO result |
@@ -198,10 +200,21 @@ message is whatever the built-in states.
 | `W0501` | display unit dropped (no emission site yet, §5.4.2) |
 | `W0601` | unused private declaration |
 | `W0602` | deprecated name used: `@deprecated("...")` on the declaration (§2.2.7/§13.8.1) |
+| `W0701` | non-`snake_case` function or variable (`aevia lint`) |
+| `W0702` | non-`UpperCamelCase` type, class, or constructor (`aevia lint`) |
+| `W0703` | missing `##` documentation on public item (`aevia lint`, pedantic) |
+| `W0704` | redundant type annotation (`aevia lint`, pedantic) |
+| `W0705` | binding shadows a prelude builtin (`aevia lint`) |
+| `W0706` | strict `==`/`!=` comparison on `Float` values (`aevia lint`) |
+| `W0707` | bare zero literal coerced to a dimensioned quantity (`aevia lint`) |
+| `W0708` | comparing an expression to itself (`aevia lint`) |
+| `W0709` | redundant `if` expression (`aevia lint`) |
+| `W0710` | module is imported more than once (`aevia lint`) |
 
-Status: `W0102` and `W0203` are reserved. The checker sees only a flattened name table, so a
-selective import cannot be told from `open M`; the language has no `return` or `break`, so the
-AST cannot represent an unreachable statement. `W0501` currently has no emission site.
+Status: `W0203` is reserved (the language has no `return` or `break`, so the AST cannot represent an
+unreachable statement). `W0501` currently has no emission site. `W0102` and `W0701`–`W0710` are
+emitted by `aevia lint` (and `aevia-analysis`); compiler lints and extra lints share `[lints]` in
+`aevia.toml`, `-A/-W/-D/-F`, and `@allow/@warn/@deny/@forbid`.
 
 ## B.13 Writing messages
 

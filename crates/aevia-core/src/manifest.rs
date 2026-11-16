@@ -127,6 +127,53 @@ impl Dependency {
     }
 }
 
+/// Configured level for a lint or lint group in `[lints]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LintLevel {
+    /// Suppress the lint.
+    Allow,
+    /// Emit as a warning (exit 0 unless promoted).
+    Warn,
+    /// Emit as an error (exit 1).
+    Deny,
+    /// Emit as an error that cannot be lowered by inner attributes or flags.
+    Forbid,
+}
+
+impl LintLevel {
+    /// Parses `"allow"`, `"warn"`, `"deny"`, or `"forbid"`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            | "allow" => Some(Self::Allow),
+            | "warn" => Some(Self::Warn),
+            | "deny" => Some(Self::Deny),
+            | "forbid" => Some(Self::Forbid),
+            | _ => None,
+        }
+    }
+
+    /// Lowercase canonical spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            | Self::Allow => "allow",
+            | Self::Warn => "warn",
+            | Self::Deny => "deny",
+            | Self::Forbid => "forbid",
+        }
+    }
+}
+
+/// One entry in `[lints]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LintSetting {
+    /// Configured severity level.
+    pub level: LintLevel,
+    /// Optional human explanation.
+    pub reason: Option<String>,
+}
+
 /// The contents of `aevia.toml`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Manifest {
@@ -160,6 +207,8 @@ pub struct Manifest {
     pub categories: Vec<String>,
     /// `[dependencies]` — import root to dependency, sorted by key.
     pub dependencies: BTreeMap<String, Dependency>,
+    /// `[lints]` — lint or group name to configured level, sorted by key.
+    pub lints: BTreeMap<String, LintSetting>,
 }
 
 impl Manifest {
@@ -183,6 +232,7 @@ impl Manifest {
             keywords: Vec::new(),
             categories: Vec::new(),
             dependencies: BTreeMap::new(),
+            lints: BTreeMap::new(),
         }
     }
 
@@ -258,6 +308,20 @@ impl Manifest {
                 },
             }
         }
+        if !self.lints.is_empty() {
+            out.push_str("\n[lints]\n");
+            for (key, setting) in &self.lints {
+                if let Some(reason) = &setting.reason {
+                    let _ = writeln!(
+                        out,
+                        "{key} = {{ level = \"{}\", reason = \"{reason}\" }}",
+                        setting.level.as_str()
+                    );
+                } else {
+                    let _ = writeln!(out, "{key} = \"{}\"", setting.level.as_str());
+                }
+            }
+        }
         out
     }
 
@@ -287,6 +351,7 @@ impl Manifest {
         let mut keywords: Vec<String> = Vec::new();
         let mut categories: Vec<String> = Vec::new();
         let mut dependencies: BTreeMap<String, Dependency> = BTreeMap::new();
+        let mut lints: BTreeMap<String, LintSetting> = BTreeMap::new();
         for (index, raw) in text.lines().enumerate() {
             let line = strip_comment(raw).trim();
             let number = index + 1;
@@ -300,12 +365,12 @@ impl Manifest {
                         format!("{origin}:{number}: unterminated table header `{line}`"),
                     ));
                 };
-                if !matches!(header, "package" | "dependencies") {
+                if !matches!(header, "package" | "dependencies" | "lints") {
                     return Err(ManifestError::new(
                         "E0605",
                         format!(
                             "{origin}:{number}: unknown table `[{header}]`; this tool reads \
-                             `[package]` and `[dependencies]`"
+                             `[package]`, `[dependencies]` and `[lints]`"
                         ),
                     ));
                 }
@@ -395,6 +460,15 @@ impl Manifest {
                         ));
                     }
                 },
+                | "lints" => {
+                    let setting = parse_lint_setting(value, origin, number)?;
+                    if lints.insert(key.to_string(), setting).is_some() {
+                        return Err(ManifestError::new(
+                            "E0605",
+                            format!("{origin}:{number}: lint `{key}` is configured twice"),
+                        ));
+                    }
+                },
                 | _ => {
                     return Err(ManifestError::new(
                         "E0605",
@@ -444,6 +518,7 @@ impl Manifest {
             keywords,
             categories,
             dependencies,
+            lints,
         })
     }
 
@@ -2048,6 +2123,60 @@ fn is_package_name(name: &str) -> bool {
         | _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn parse_lint_setting(
+    value: &str,
+    origin: &str,
+    number: usize,
+) -> Result<LintSetting, ManifestError> {
+    let fail =
+        |message: String| ManifestError::new("E0605", format!("{origin}:{number}: {message}"));
+    let value = value.trim();
+    if let Some(level_str) = parse_string(value) {
+        let level = LintLevel::parse(&level_str).ok_or_else(|| {
+            fail(format!(
+                "unknown lint level `{level_str}`; expected `allow`, `warn`, `deny` or `forbid`"
+            ))
+        })?;
+        return Ok(LintSetting { level, reason: None });
+    }
+    let Some(inner) = value.strip_prefix('{').and_then(|s| s.strip_suffix('}')) else {
+        return Err(fail(
+            "lint setting must be a level string or `{ level = \"...\" }`".to_string(),
+        ));
+    };
+    let mut level: Option<LintLevel> = None;
+    let mut reason: Option<String> = None;
+    for field in split_fields(inner).map_err(fail)? {
+        let field = field.trim();
+        if field.is_empty() {
+            continue;
+        }
+        let Some((k, v)) = field.split_once('=') else {
+            return Err(fail(format!("expected `key = value`, found `{field}`")));
+        };
+        let k = k.trim();
+        let text = parse_string(v).ok_or_else(|| fail(format!("`{k}` expects a quoted string")))?;
+        match k {
+            | "level" => {
+                level = Some(LintLevel::parse(&text).ok_or_else(|| {
+                    fail(format!(
+                        "unknown lint level `{text}`; expected `allow`, `warn`, `deny` or `forbid`"
+                    ))
+                })?);
+            },
+            | "reason" => reason = Some(text),
+            | other => {
+                return Err(fail(format!(
+                    "unknown key `{other}` in `[lints]` entry; expected `level` or `reason`"
+                )));
+            },
+        }
+    }
+    let level =
+        level.ok_or_else(|| fail("`[lints]` table entry is missing `level`".to_string()))?;
+    Ok(LintSetting { level, reason })
 }
 
 fn parse_string(value: &str) -> Option<String> {

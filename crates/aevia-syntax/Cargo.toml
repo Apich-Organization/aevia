@@ -18,6 +18,7 @@ unicode-segmentation.workspace = true
 unicode-width = "0.2"
 indexmap.workspace = true
 serde.workspace = true
+bincode-next.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

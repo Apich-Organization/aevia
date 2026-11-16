@@ -23,7 +23,19 @@ pub type AdtId = u32;
 ///
 /// `Rep::Var` is a representation variable: `sqrt` and `+` are polymorphic in
 /// it, and it is resolved by unification or by the defaulting rules of §3.10.2.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum Rep {
     /// Arbitrary-precision integer; always dimensionless.
     Int,
@@ -156,7 +168,18 @@ impl fmt::Display for Rep {
 /// Literals are representation-polymorphic (§3.10.1): `1` can become `Int`,
 /// `Real`, `Float` or `Complex` depending on context, but never a dimensioned
 /// scalar — for that you write `1 m`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum LiteralKind {
     /// An integer literal: default `Int`, dimensionless only.
     Int,
@@ -197,7 +220,17 @@ impl LiteralKind {
 /// [`crate::infer::Infer::unify_nat`] when a linear equation isolates it
 /// (`n + 1 ~ 3` ⇒ `n = 2`, `2 * n ~ 6` ⇒ `n = 3`).
 #[derive(
-    Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
 )]
 pub enum Nat {
     /// A concrete extent.
@@ -209,6 +242,13 @@ pub enum Nat {
     /// `a * b`. Only a constant factor makes the equation linear; a product of
     /// two variables is rejected (`E0304`).
     Mul(Box<Nat>, Box<Nat>),
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Nat {
+    const SCHEMA_HASH: u64 = bincode_next::rapidhash::v3::rapidhash_v3_seeded(
+        b"Nat:v1:Lit(usize)|Var(u32)|Add|Mul",
+        &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(C::CONFIG_HASH),
+    );
 }
 
 impl Nat {
@@ -356,7 +396,18 @@ impl fmt::Display for Nat {
 /// requires it, §3.5.4), the extents are not. `Refined` is
 /// `Tensor<[n1, ..., nk], τ>` with `None` for `?`; each extent is a type-level
 /// [`Nat`], so `reshape<[n + 1, 2]>` is expressible.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum Shape {
     /// Only the rank is known.
     Rank(u32),
@@ -472,7 +523,17 @@ impl fmt::Display for Shape {
 }
 
 /// A record row: labels in order, terminated by an empty row or a row variable.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+)]
 pub enum Row {
     /// The closed empty row.
     Empty,
@@ -641,7 +702,19 @@ impl fmt::Display for Row {
 }
 
 /// A rank-polymorphic tensor constructor, preserved across value aliases.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum TensorIntrinsic {
     /// Construct a tensor of zeros.
     Zeros,
@@ -675,7 +748,19 @@ impl TensorIntrinsic {
 }
 
 /// The callable identity and optional explicitly selected element representation.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct TensorIntrinsicType {
     /// The constructor's operation.
     pub kind: TensorIntrinsic,
@@ -735,6 +820,191 @@ pub enum Type {
     Param(u32),
     /// The type of an expression that already failed to check.
     Error,
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Row {
+    const SCHEMA_HASH: u64 = bincode_next::rapidhash::v3::rapidhash_v3_seeded(
+        b"Row:v1:Empty|Extend(String,Type,Row)|Var(u32)",
+        &bincode_next::rapidhash::v3::RapidSecrets::seed_cpp(C::CONFIG_HASH),
+    );
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for Type {
+    const SCHEMA_HASH: u64 = {
+        let h = crate::persist::mix_hash(
+            C::CONFIG_HASH,
+            b"Type:v1:Dim",
+            <Dim as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"Type:v1:Rep",
+            <Rep as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        let h = crate::persist::mix_hash(
+            h,
+            b"Type:v1:Shape",
+            <Shape as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        );
+        crate::persist::mix_hash(
+            h,
+            b"Type:v1:Row",
+            <Row as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        )
+    };
+}
+
+impl bincode_next::Encode for Type {
+    fn encode<E: bincode_next::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode_next::error::EncodeError> {
+        match self {
+            | Self::Scalar(rep, dim) => {
+                0u8.encode(encoder)?;
+                rep.encode(encoder)?;
+                dim.encode(encoder)
+            },
+            | Self::Bool => 1u8.encode(encoder),
+            | Self::Prop => 2u8.encode(encoder),
+            | Self::Str => 3u8.encode(encoder),
+            | Self::Unit => 4u8.encode(encoder),
+            | Self::Tensor { shape, elem } => {
+                5u8.encode(encoder)?;
+                shape.encode(encoder)?;
+                elem.encode(encoder)
+            },
+            | Self::Point(dim) => {
+                6u8.encode(encoder)?;
+                dim.encode(encoder)
+            },
+            | Self::UnitOf(dim) => {
+                7u8.encode(encoder)?;
+                dim.encode(encoder)
+            },
+            | Self::TensorIntrinsic(t) => {
+                8u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::TypeRepIntrinsic(t) => {
+                9u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::FromValueIntrinsic(t) => {
+                10u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::ReadNpyIntrinsic(t) => {
+                11u8.encode(encoder)?;
+                t.encode(encoder)
+            },
+            | Self::WriteNpyIntrinsic => 12u8.encode(encoder),
+            | Self::ToCallbackIntrinsic => 13u8.encode(encoder),
+            | Self::Fn(params, ret) => {
+                14u8.encode(encoder)?;
+                params.encode(encoder)?;
+                ret.encode(encoder)
+            },
+            | Self::Record(row) => {
+                15u8.encode(encoder)?;
+                row.encode(encoder)
+            },
+            | Self::Adt(id, args) => {
+                16u8.encode(encoder)?;
+                crate::persist::encode_adt_id(*id)
+                    .map_err(bincode_next::error::EncodeError::OtherString)?
+                    .encode(encoder)?;
+                args.encode(encoder)
+            },
+            | Self::Io(inner) => {
+                17u8.encode(encoder)?;
+                inner.encode(encoder)
+            },
+            | Self::Dyn(rep) => {
+                18u8.encode(encoder)?;
+                rep.encode(encoder)
+            },
+            | Self::Var(v) => {
+                19u8.encode(encoder)?;
+                v.encode(encoder)
+            },
+            | Self::Param(p) => {
+                20u8.encode(encoder)?;
+                p.encode(encoder)
+            },
+            | Self::Error => 21u8.encode(encoder),
+        }
+    }
+}
+
+impl<Context> bincode_next::Decode<Context> for Type {
+    fn decode<D: bincode_next::de::Decoder<Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        match u8::decode(decoder)? {
+            | 0 => Ok(Self::Scalar(Rep::decode(decoder)?, Dim::decode(decoder)?)),
+            | 1 => Ok(Self::Bool),
+            | 2 => Ok(Self::Prop),
+            | 3 => Ok(Self::Str),
+            | 4 => Ok(Self::Unit),
+            | 5 => {
+                Ok(Self::Tensor {
+                    shape: Shape::decode(decoder)?,
+                    elem: Box::<Self>::decode(decoder)?,
+                })
+            },
+            | 6 => Ok(Self::Point(Dim::decode(decoder)?)),
+            | 7 => Ok(Self::UnitOf(Dim::decode(decoder)?)),
+            | 8 => Ok(Self::TensorIntrinsic(TensorIntrinsicType::decode(decoder)?)),
+            | 9 => {
+                Ok(Self::TypeRepIntrinsic(Option::<Box<Self>>::decode(
+                    decoder,
+                )?))
+            },
+            | 10 => {
+                Ok(Self::FromValueIntrinsic(Option::<Box<Self>>::decode(
+                    decoder,
+                )?))
+            },
+            | 11 => Ok(Self::ReadNpyIntrinsic(Option::<u32>::decode(decoder)?)),
+            | 12 => Ok(Self::WriteNpyIntrinsic),
+            | 13 => Ok(Self::ToCallbackIntrinsic),
+            | 14 => {
+                Ok(Self::Fn(
+                    Vec::<Self>::decode(decoder)?,
+                    Box::<Self>::decode(decoder)?,
+                ))
+            },
+            | 15 => Ok(Self::Record(Row::decode(decoder)?)),
+            | 16 => {
+                let index = u32::decode(decoder)?;
+                let id = crate::persist::decode_adt_id(index)
+                    .map_err(bincode_next::error::DecodeError::OtherString)?;
+                let args = Vec::<Self>::decode(decoder)?;
+                Ok(Self::Adt(id, args))
+            },
+            | 17 => Ok(Self::Io(Box::<Self>::decode(decoder)?)),
+            | 18 => Ok(Self::Dyn(Rep::decode(decoder)?)),
+            | 19 => Ok(Self::Var(u32::decode(decoder)?)),
+            | 20 => Ok(Self::Param(u32::decode(decoder)?)),
+            | 21 => Ok(Self::Error),
+            | tag => {
+                Err(bincode_next::error::DecodeError::UnexpectedVariant {
+                    type_name: "Type",
+                    allowed: &bincode_next::error::AllowedEnumVariants::Range { min: 0, max: 21 },
+                    found: u32::from(tag),
+                })
+            },
+        }
+    }
+}
+
+impl<'de, Context> bincode_next::BorrowDecode<'de, Context> for Type {
+    fn borrow_decode<D: bincode_next::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D
+    ) -> Result<Self, bincode_next::error::DecodeError> {
+        bincode_next::Decode::decode(decoder)
+    }
 }
 
 impl Type {
@@ -1189,7 +1459,18 @@ fn render_dim(dim: &Dim) -> String {
 ///
 /// Constraints live only in the type language: an instance set is resolved
 /// statically, so a scheme never carries a runtime dictionary.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Constraint {
     /// The class name.
     pub class: String,
@@ -1225,7 +1506,15 @@ impl fmt::Display for Constraint {
 }
 
 /// A polymorphic type scheme.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Scheme {
     /// Quantified type variables.
     pub vars: Vec<u32>,

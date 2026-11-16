@@ -157,7 +157,18 @@ pub fn set_module(
 
 /// The kind of one declared parameter of a variant type (§2: the kind may be
 /// omitted and inferred from the constructor fields, or written `<d: Dim>`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum ParamKind {
     /// A type parameter (`type Tree<a>`).
     Type,
@@ -198,7 +209,15 @@ pub fn param_kinds_of(id: AdtId) -> Vec<ParamKind> {
 }
 
 /// One constructor of a variant type.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Ctor {
     /// The constructor name.
     pub name: String,
@@ -207,7 +226,15 @@ pub struct Ctor {
 }
 
 /// A nominal variant type.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Adt {
     /// The type name.
     pub name: String,

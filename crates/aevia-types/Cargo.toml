@@ -16,7 +16,7 @@ num-rational.workspace = true
 num-traits.workspace = true
 indexmap.workspace = true
 serde.workspace = true
-bincode.workspace = true
+bincode-next.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

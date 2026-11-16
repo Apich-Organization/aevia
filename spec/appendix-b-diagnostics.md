@@ -57,6 +57,8 @@ error[E0401]: dimension mismatch
 | `E0208` | duplicate field | 删除重复字段 |
 | `E0209` | invalid unit literal（含 `3 (2)`：括号内不是单位表达式） | 检查单位表达式 |
 | `E0210` | unknown attribute | 检查属性名/参数 |
+| `E0211` | cannot lower forbidden lint | 移除内层 `@allow`/`@warn`/`@deny` 或放宽外层 `@forbid` |
+| `E0212` | unknown lint or group name | 运行 `aevia lint --list` 查看可用名称 |
 
 ## B.5 类型错误（E03xx）
 
@@ -176,7 +178,7 @@ error[E0401]: dimension mismatch
 | 代码 | 消息 |
 |---|---|
 | `W0101` | unused variable |
-| `W0102` | unused import（保留码） |
+| `W0102` | unused import（`aevia lint`） |
 | `W0103` | shadowed binding |
 | `W0201` | redundant match arm |
 | `W0202` | discarded IO result |
@@ -187,9 +189,20 @@ error[E0401]: dimension mismatch
 | `W0501` | display unit dropped（尚无发射点，§5.4.2） |
 | `W0601` | unused private declaration |
 | `W0602` | deprecated name used：声明上的 `@deprecated("...")`（§2.2.7/§13.8.1） |
+| `W0701` | 函数/变量名未使用 `snake_case`（`aevia lint`） |
+| `W0702` | 类型/类/构造器名未使用 `UpperCamelCase`（`aevia lint`） |
+| `W0703` | 公开声明缺少 `##` 文档注释（`aevia lint`，pedantic） |
+| `W0704` | 冗余类型标注（`aevia lint`，pedantic） |
+| `W0705` | 绑定遮蔽预置函数名（`aevia lint`） |
+| `W0706` | 对 `Float` 值使用严格相等 `==`/`!=`（`aevia lint`） |
+| `W0707` | 裸零字面量被隐式赋予量纲（`aevia lint`） |
+| `W0708` | 将表达式与其自身进行比较（`aevia lint`） |
+| `W0709` | 冗余的 `if` 表达式（`aevia lint`） |
+| `W0710` | 重复导入同一模块（`aevia lint`） |
 
-状态：`W0102` 与 `W0203` 是保留码——检查器只看到打平的名字表，选择性导入与 `open M` 无法区分；语言没有 `return`/`break`，AST 无法表示
-不可达语句。`W0501` 目前没有发射点。
+状态：`W0203` 是保留码（语言没有 `return`/`break`，AST 无法表示不可达语句）；`W0501` 目前没有发射点。
+`W0102` 与 `W0701`–`W0710` 由 `aevia lint`（及 `aevia-analysis`）发射；编译器警告与 lint 检查共同遵循
+`aevia.toml [lints]`、`-A/-W/-D/-F` 与 `@allow/@warn/@deny/@forbid`。
 
 ## B.13 消息写作规范
 

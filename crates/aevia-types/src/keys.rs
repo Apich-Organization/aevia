@@ -39,13 +39,27 @@ use std::fmt;
     Default,
     serde::Serialize,
     serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub struct ModulePath(pub Vec<String>, Option<ModuleOrigin>);
 
 /// The source identity of a module in a path package. Lookup aliases and
 /// declared names are deliberately absent: neither may merge nominal types.
 #[derive(
-    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub struct ModuleOrigin {
     /// Canonical package directory, including its declared name and version.
@@ -138,7 +152,18 @@ impl fmt::Display for ModulePath {
 
 /// `(defining module, type name)` — the nominal identity of a type.
 #[derive(
-    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub struct AdtKey {
     /// The complete declaration schema, when this is a finalized source type.
@@ -179,7 +204,18 @@ impl fmt::Display for AdtKey {
 
 /// `(defining module, class name)`.
 #[derive(
-    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub struct ClassKey {
     /// The module that declares the class.
@@ -227,7 +263,19 @@ impl fmt::Display for ClassKey {
 /// A representation, spelled out so the key does not depend on `Rep`'s internal
 /// numbering.
 #[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub enum RepKind {
     /// Arbitrary-precision integer.
@@ -275,7 +323,19 @@ impl fmt::Display for RepKind {
 /// witness cannot tell `Tensor<1, Int>` from `Tensor<1, Real>`. Two instances
 /// whose witnesses collide are rejected (`E0311`) instead of guessed at.
 #[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub enum StorageClass {
     /// Exact rational elements (`Int` and `Real`).
@@ -318,7 +378,17 @@ impl fmt::Display for StorageClass {
 /// Option<a>`): a wildcard head cannot be dispatched by exact key, only by
 /// witness.
 #[derive(
-    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
 )]
 pub enum HeadKey {
     /// A concrete scalar representation.
@@ -356,6 +426,18 @@ pub enum HeadKey {
     Io(Box<HeadKey>),
     /// An open position (`a` in `instance C for Option<a>`).
     Wildcard,
+}
+
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for HeadKey {
+    const SCHEMA_HASH: u64 = crate::persist::mix_hash(
+        crate::persist::mix_hash(
+            C::CONFIG_HASH,
+            b"HeadKey:v1:RepKind",
+            <RepKind as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+        ),
+        b"HeadKey:v1:AdtKey",
+        <AdtKey as bincode_next::Fingerprint<C>>::SCHEMA_HASH,
+    );
 }
 
 impl fmt::Display for HeadKey {
@@ -532,7 +614,18 @@ fn row_labels(row: &Row) -> Vec<String> {
 /// `(defining module, class key, canonical head)` — the identity of an
 /// instance.
 #[derive(
-    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub struct InstanceKey {
     /// The module that declares the instance.

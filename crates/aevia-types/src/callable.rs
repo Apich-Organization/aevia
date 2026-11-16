@@ -8,7 +8,18 @@ use std::sync::Arc;
 /// Owned declaration and checked creation-contract identity. Source owners and
 /// complete span-free syntax remain stable during append-only rechecks; the
 /// resolved contract distinguishes semantic changes hidden behind aliases.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct CallableId(Arc<str>);
 impl CallableId {
     pub(crate) fn new(
@@ -42,7 +53,17 @@ impl CallableId {
 
 /// The complete selection of an actual source declaration's binders, in its
 /// original order, expressed in the current scheme/activation universe.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct CallableProjection {
     /// Defining source declaration and immutable checked contract.
     pub origin: CallableId,

@@ -15,6 +15,7 @@ aevia-syntax.workspace = true
 aevia-types.workspace = true
 aevia-core.workspace = true
 aevia-fmt.workspace = true
+aevia-lint.workspace = true
 aevia-rssn.workspace = true
 unicode-ident.workspace = true
 

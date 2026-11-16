@@ -29,8 +29,6 @@ use aevia_types::check::CheckOptions;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::ModuleInterface;
 use aevia_types::persist;
-use serde::Deserialize;
-use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,7 +37,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 /// The `.aevi` layout version; bump it with any change to the encoded types.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 const MAGIC: &[u8; 4] = b"AEVI";
 const HEADER_LEN: usize = 40;
@@ -129,8 +127,9 @@ fn compiler_identity() -> &'static str {
             .map(|meta| format!("{}|{:?}", meta.len(), meta.modified().ok()))
             .unwrap_or_default();
         format!(
-            "aevia-core {}|aevi-format {FORMAT_VERSION}|rssn {}|exe {exe}",
+            "aevia-core {}|aevi-format {FORMAT_VERSION}|codec {}|rssn {}|exe {exe}",
             env!("CARGO_PKG_VERSION"),
+            persist::codec::CODEC_ID,
             aevia_rssn::registry().manifest_hash
         )
     })
@@ -191,7 +190,7 @@ pub struct Key {
     prefix: String,
 }
 
-#[derive(Serialize)]
+#[derive(bincode_next::Encode)]
 struct EntryRef<'a> {
     file: FileId,
     interface: Digest,
@@ -199,7 +198,11 @@ struct EntryRef<'a> {
     module: &'a CheckedModule,
 }
 
-#[derive(Deserialize)]
+impl<C: bincode_next::config::Config> bincode_next::Fingerprint<C> for EntryRef<'_> {
+    const SCHEMA_HASH: u64 = <Entry as bincode_next::Fingerprint<C>>::SCHEMA_HASH;
+}
+
+#[derive(bincode_next::Decode, bincode_next::Fingerprint)]
 struct Entry {
     file: FileId,
     interface: Digest,
@@ -246,8 +249,12 @@ pub fn interface_digest(interface: &ModuleInterface) -> Option<Digest> {
     Some(hasher.finish())
 }
 
-fn bincode_bytes<T: serde::Serialize + ?Sized>(value: &T) -> Option<Vec<u8>> {
-    bincode::serde::encode_to_vec(value, bincode::config::standard()).ok()
+fn bincode_bytes<T: bincode_next::Encode + ?Sized>(value: &T) -> Option<Vec<u8>> {
+    bincode_next::encode_to_vec(
+        value,
+        bincode_next::config::standard().with_deterministic_bincode(),
+    )
+    .ok()
 }
 
 impl DiskCache {
@@ -410,5 +417,85 @@ impl DiskCache {
         for (_, path) in files.into_iter().skip(KEEP_PER_MODULE) {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aevia_syntax::Diagnostic;
+    use aevia_syntax::Span;
+
+    #[test]
+    fn round_trip_and_corruption_handling() {
+        let dir =
+            std::env::temp_dir().join(format!("aevia-disk-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = DiskCache::at(&dir);
+
+        let options = CheckOptions::default();
+        let path = vec!["Demo".to_string()];
+        let key = cache
+            .key(&KeyInputs {
+                text: "let x = 1\n",
+                file: 0,
+                path: &path,
+                identity: &None,
+                bindings: &[],
+                prefixes: &[],
+                options: &options,
+                interfaces: &[],
+            })
+            .expect("key");
+
+        let module = CheckedModule::default();
+        let digest = interface_digest(&module.interface()).expect("interface digest");
+        let mut diagnostics = Diagnostics::new();
+        diagnostics.push(Diagnostic::warning("W0101", "unused", Span::new(0, 4, 5)));
+
+        assert!(cache.store(&key, 0, digest, &diagnostics, &module));
+        let hit = cache.load(&key, 0).expect("cache hit");
+        assert_eq!(hit.interface, digest);
+        assert_eq!(hit.diagnostics.items.len(), 1);
+        assert_eq!(hit.diagnostics.items[0].code, "W0101");
+
+        // Corrupt a byte in the stored file and confirm load fails closed.
+        let file = dir.join(&key.file_name);
+        let mut raw = std::fs::read(&file).expect("read cached file");
+        let last = raw.len() - 1;
+        raw[last] ^= 0xff;
+        std::fs::write(&file, &raw).expect("write corrupt");
+        assert!(cache.load(&key, 0).is_none());
+
+        // Wrong FORMAT_VERSION must also fail closed.
+        raw[4..8].copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
+        std::fs::write(&file, &raw).expect("write stale version");
+        assert!(cache.load(&key, 0).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codec_rejects_trailing_bytes_and_matches_rssn_deterministic_encoding() {
+        let sample = vec![("alpha".to_string(), 1u64), ("beta".to_string(), 2u64)];
+        let encoded = persist::codec::encode(&sample).expect("encode");
+        let decoded: Vec<(String, u64)> = persist::codec::decode(&encoded).expect("decode");
+        assert_eq!(decoded, sample);
+
+        let mut with_trailing = encoded;
+        with_trailing.push(0x00);
+        assert!(persist::codec::decode::<Vec<(String, u64)>>(&with_trailing).is_err());
+
+        // Verify deterministic encoding matches plain standard deterministic config for OpKey.
+        let op = aevia_rssn::OpKey::new("core", "add", None);
+        let det = bincode_next::encode_to_vec(
+            &op,
+            bincode_next::config::standard().with_deterministic_bincode(),
+        )
+        .expect("deterministic encode");
+        let fp = persist::codec::encode(&op).expect("fingerprinted encode");
+        // Fingerprinted payload has an 8-byte schema hash prefix followed by identical deterministic bytes.
+        assert_eq!(fp.len(), det.len() + 8);
+        assert_eq!(&fp[8..], &det[..]);
     }
 }

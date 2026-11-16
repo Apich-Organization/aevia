@@ -13,7 +13,18 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// How serious a diagnostic is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub enum Severity {
     /// The program cannot be compiled or run.
     Error,
@@ -34,7 +45,15 @@ impl Severity {
 }
 
 /// A secondary span with its own message.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Label {
     /// Where the label points.
     pub span: Span,
@@ -43,7 +62,15 @@ pub struct Label {
 }
 
 /// A compiler diagnostic.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Diagnostic {
     /// Error or warning.
     pub severity: Severity,
@@ -492,7 +519,16 @@ fn append_grapheme(
 }
 
 /// A list of diagnostics produced by one phase.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
+)]
 pub struct Diagnostics {
     /// The diagnostics, in source order.
     pub items: Vec<Diagnostic>,

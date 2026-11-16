@@ -1,0 +1,21 @@
+[package]
+name = "aevia-lint"
+description = "Lint driver, configuration, passes, and fixes for Aevia"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aevia-dim.workspace = true
+aevia-syntax.workspace = true
+aevia-types.workspace = true
+aevia-core.workspace = true
+bincode-next.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

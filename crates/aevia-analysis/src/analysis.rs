@@ -379,12 +379,50 @@ impl<'a> Analysis<'a> {
     /// keeps the editor's squiggles identical to `aevia check`'s report.
     #[must_use]
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        let mut diagnostics: Vec<Diagnostic> = self
-            .compiler_diagnostics()
-            .items
-            .iter()
-            .filter_map(|item| diagnostic::convert(item, self.file, self.document))
-            .collect();
+        let mut diagnostics: Vec<Diagnostic> = if let Some(module) = self.module() {
+            let manifest_lints = self
+                .sources()
+                .file(self.file)
+                .and_then(|f| {
+                    aevia_core::manifest::Package::find(
+                        std::path::Path::new(&f.name)
+                            .parent()
+                            .unwrap_or_else(|| std::path::Path::new(".")),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .map(|pkg| pkg.manifest.lints)
+                .unwrap_or_default();
+            let store = aevia_lint::LintStore::with_builtins();
+            let config = aevia_lint::LintConfig {
+                manifest_lints,
+                cli_overrides: Vec::new(),
+                run_extra_lints: true,
+            };
+            let result = aevia_lint::Driver::run_module(
+                self.sources(),
+                module,
+                Some(self.checked_module()),
+                self.compiler_diagnostics(),
+                self.file,
+                &store,
+                &config,
+                true,
+            );
+            result
+                .diagnostics
+                .items
+                .iter()
+                .filter_map(|item| diagnostic::convert(item, self.file, self.document))
+                .collect()
+        } else {
+            self.compiler_diagnostics()
+                .items
+                .iter()
+                .filter_map(|item| diagnostic::convert(item, self.file, self.document))
+                .collect()
+        };
         // Source order, so two runs over the same text produce the same list.
         diagnostics
             .sort_by_key(|diagnostic| (diagnostic.range.start.line, diagnostic.range.start.column));

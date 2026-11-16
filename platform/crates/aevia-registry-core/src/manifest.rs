@@ -142,14 +142,14 @@ impl PackageManifest {
                     ));
                 };
                 match header.trim() {
-                    | "package" | "dependencies" => table = header.trim().to_string(),
+                    | "package" | "dependencies" | "lints" => table = header.trim().to_string(),
                     | other => {
                         return Err(fail(
                             origin,
                             number,
                             format!(
-                                "unknown table `[{other}]`; the toolchain reads `[package]` and \
-                                 `[dependencies]` only"
+                                "unknown table `[{other}]`; the toolchain reads `[package]`, \
+                                 `[dependencies]` and `[lints]` only"
                             ),
                         ));
                     },
@@ -228,6 +228,10 @@ impl PackageManifest {
                         return Err(fail(origin, number, format!("`{key}` is declared twice")));
                     }
                     dependencies.push(parse_dependency(key, value, origin, number)?);
+                },
+                | "lints" => {
+                    // Validated by the compiler toolchain (`aevia-core` / `aevia-lint`).
+                    let _ = (key, value);
                 },
                 | _ => {
                     return Err(fail(

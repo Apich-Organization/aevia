@@ -407,7 +407,9 @@ REPL 诊断显示原始输入，不显示生成的表达式绑定。当前输入
 
 ```
 aevia run [--example NAME] [file.aev] [-- args…]   运行包入口/文件/示例（`--` 之后是程序参数）
-aevia check [--all] [file.aev…]                    类型/量纲检查，不运行
+aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  类型/量纲检查，不运行
+aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
+                                                   运行编译器/正确性/风格/pedantic lint（支持 `--list`、`--explain`）
 aevia watch [file] [--once | --runs N]             反复检查，只重检变化的模块（§9.11.1）
 aevia test [--filter PAT] [file.aev]               运行 `test` 声明
 aevia test --doc [--filter PAT] [files…]           编译 `##` 文档中的 aevia 代码块（§9.12）

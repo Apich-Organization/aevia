@@ -32,6 +32,7 @@ macro_rules! eprintln {
 }
 
 mod help;
+mod lint_cmd;
 mod terminal;
 
 mod doctest;
@@ -283,6 +284,7 @@ fn run_cli(
     match args.first().map(String::as_str) {
         | Some("run") => run_command(options, &args[1..]),
         | Some("check") => check_command(options, &args[1..]),
+        | Some("lint") => lint_cmd::run(options, &args[1..]),
         | Some("watch") => watch_command(options, &args[1..]),
         | Some("test") => test_command(options, &args[1..]),
         | Some("repl") if args.len() == 1 => repl(options),
@@ -336,7 +338,7 @@ fn run_cli(
 fn locked_precheck(args: &[String]) -> Result<(), ExitCode> {
     match args.first().map(String::as_str) {
         | Some("test") if args.iter().any(|arg| arg == "--doc") => Ok(()),
-        | Some("run" | "check" | "test" | "fmt" | "doc" | "bench") => verify_lock(),
+        | Some("run" | "check" | "lint" | "test" | "fmt" | "doc" | "bench") => verify_lock(),
         // They handle `--locked` themselves: they may legitimately decide
         // whether a change is allowed.
         | Some("update" | "add") => Ok(()),
@@ -466,17 +468,13 @@ fn entry_path(
     }
 }
 
-/// Loads a program, resolving its imports in its package when it has one.
+/// Loads a program, resolving its imports in its package when it has one,
+/// optionally through the per-module `.aevi` cache (§9.11) that lives in
+/// `.aevia/cache/modules/` next to the entry file.
 ///
 /// A file that is not under a package's `src/` keeps the older resolution —
 /// the entry file's directory — so `aevia run examples/modules/main.aev` still
 /// reads `examples/modules/Geometry/Shapes.aev`.
-fn load_at(path: &Path) -> Program {
-    load_at_with(path, false)
-}
-
-/// [`load_at`], optionally through the per-module `.aevi` cache (§9.11) that
-/// lives in `.aevia/cache/modules/` next to the entry file.
 fn load_at_with(
     path: &Path,
     cached: bool,
@@ -736,21 +734,26 @@ fn check_command(
     options: Options,
     args: &[String],
 ) -> ExitCode {
-    let all = args.iter().any(|argument| argument == "--all");
-    let no_cache = args.iter().any(|argument| argument == "--no-cache");
-    let files: Vec<String> = args
+    let (cli_overrides, rest) = match lint_cmd::parse_lint_flags(args, "check") {
+        | Ok(pair) => pair,
+        | Err(code) => return code,
+    };
+    let all = rest.iter().any(|argument| argument == "--all");
+    let no_cache = rest.iter().any(|argument| argument == "--no-cache");
+    let files: Vec<String> = rest
         .iter()
         .filter(|argument| argument.as_str() != "--all" && argument.as_str() != "--no-cache")
         .cloned()
         .collect();
     if let Some(unknown) = files.iter().find(|argument| argument.starts_with('-')) {
         eprintln!(
-            "aevia check: unknown option `{unknown}` (the options are `--all` and `--no-cache`; a file is optional)"
+            "aevia check: unknown option `{unknown}` (the options are `--all`, `--no-cache`, \
+             and `-A/-W/-D/-F LINT`; a file is optional)"
         );
         return ExitCode::from(2);
     }
     if all {
-        return check_all(options, &files);
+        return check_all(options, &files, cli_overrides);
     }
     // Expand a pattern the shell did not expand (`examples/*.aev` under
     // PowerShell), then check each file it named.
@@ -759,26 +762,40 @@ fn check_command(
         .map(|path| path.display().to_string())
         .collect();
     if files.len() > 1 {
-        return check_files(options, &files);
+        return check_files(options, &files, cli_overrides, no_cache);
     }
     let path = match entry_path(&files, "check") {
         | Ok(path) => path,
         | Err(code) => return code,
     };
-    let cache = (!no_cache).then(|| check_cache::Entry::for_entry(&path, style(options)));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let start_dir = path.parent().unwrap_or(&cwd);
+    let lint_config = aevia_lint::LintConfig {
+        manifest_lints: lint_cmd::load_manifest_lints(start_dir),
+        cli_overrides,
+        run_extra_lints: false,
+    };
+    let has_lint_overrides =
+        !lint_config.manifest_lints.is_empty() || !lint_config.cli_overrides.is_empty();
+    let cache = (!no_cache && !has_lint_overrides)
+        .then(|| check_cache::Entry::for_entry(&path, style(options)));
     if let Some(Some(hit)) = cache.as_ref().map(check_cache::Entry::replay) {
         return hit;
     }
     let program = load_at_with(&path, !no_cache);
-    let rendered = if program.diagnostics.is_empty() {
+    let store = aevia_lint::LintStore::with_builtins();
+    let root_files: Option<Vec<aevia_syntax::FileId>> = program.entry().map(|m| vec![m.file]);
+    let lint_report =
+        aevia_lint::Driver::run_program(&program, &store, &lint_config, root_files.as_deref());
+    let rendered = if lint_report.diagnostics.is_empty() {
         String::new()
     } else {
-        program
+        lint_report
             .diagnostics
             .render_with(&program.sources, style(options))
     };
     eprint!("{rendered}");
-    let failed = program.diagnostics.has_errors();
+    let failed = lint_report.diagnostics.has_errors();
     let summary = if failed {
         String::new()
     } else {
@@ -1018,12 +1035,25 @@ fn watch_command(
 fn check_files(
     options: Options,
     files: &[String],
+    cli_overrides: Vec<aevia_lint::CliOverride>,
+    no_cache: bool,
 ) -> ExitCode {
+    let store = aevia_lint::LintStore::with_builtins();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut failed = 0usize;
     for name in files {
         let path = PathBuf::from(name);
-        let program = load_at(&path);
-        if report(&program.diagnostics, &program.sources, style(options)) {
+        let start_dir = path.parent().unwrap_or(&cwd);
+        let lint_config = aevia_lint::LintConfig {
+            manifest_lints: lint_cmd::load_manifest_lints(start_dir),
+            cli_overrides: cli_overrides.clone(),
+            run_extra_lints: false,
+        };
+        let program = load_at_with(&path, !no_cache);
+        let root_files: Option<Vec<aevia_syntax::FileId>> = program.entry().map(|m| vec![m.file]);
+        let lint_report =
+            aevia_lint::Driver::run_program(&program, &store, &lint_config, root_files.as_deref());
+        if report(&lint_report.diagnostics, &program.sources, style(options)) {
             failed += 1;
         } else {
             println!("{}: ok", path.display());
@@ -1045,6 +1075,7 @@ fn check_files(
 fn check_all(
     options: Options,
     files: &[String],
+    cli_overrides: Vec<aevia_lint::CliOverride>,
 ) -> ExitCode {
     if let Some(extra) = files.first() {
         eprintln!(
@@ -1087,9 +1118,12 @@ fn check_all(
     // and checked once, not once per entry.
     let (program, stats) =
         driver::load_all_with_roots(&paths, roots, &aevia_types::check::CheckOptions::default());
-    // The loader names each physical source by its canonical path (on Windows
-    // a verbatim UNC-style path), so each entry maps through that same
-    // canonical spelling to the file id its diagnostics carry.
+    let store = aevia_lint::LintStore::with_builtins();
+    let lint_config = aevia_lint::LintConfig {
+        manifest_lints: package.manifest.lints.clone(),
+        cli_overrides,
+        run_extra_lints: false,
+    };
     let mut ids: std::collections::HashMap<String, aevia_syntax::FileId> =
         std::collections::HashMap::new();
     let mut file: aevia_syntax::FileId = 0;
@@ -1097,6 +1131,15 @@ fn check_all(
         ids.entry(source.name.clone()).or_insert(file);
         file = file.saturating_add(1);
     }
+    let root_ids: Vec<aevia_syntax::FileId> = paths
+        .iter()
+        .filter_map(|p| {
+            ids.get(&aevia_core::source::canonical_path(p).display().to_string())
+                .copied()
+        })
+        .collect();
+    let lint_report =
+        aevia_lint::Driver::run_program(&program, &store, &lint_config, Some(&root_ids));
     let mut failed = 0usize;
     let mut shown: std::collections::HashSet<aevia_syntax::FileId> =
         std::collections::HashSet::new();
@@ -1111,7 +1154,7 @@ fn check_all(
             continue;
         };
         let mut own = Diagnostics::new();
-        for item in &program.diagnostics.items {
+        for item in &lint_report.diagnostics.items {
             if item.span.file == id {
                 own.push(item.clone());
             }
@@ -1126,7 +1169,7 @@ fn check_all(
     // A diagnostic in a file that is not one of the package's own modules (a
     // dependency's source) is still part of the run; show it once.
     let mut imported = Diagnostics::new();
-    for item in &program.diagnostics.items {
+    for item in &lint_report.diagnostics.items {
         if !shown.contains(&item.span.file) {
             imported.push(item.clone());
         }

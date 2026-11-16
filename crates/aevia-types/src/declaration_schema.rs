@@ -18,7 +18,18 @@ use std::sync::Arc;
 /// An immutable, canonical declaration schema. This is a local interface format,
 /// not a versioned registry or serialized `.aevi` protocol.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    bincode_next::Encode,
+    bincode_next::Decode,
+    bincode_next::Fingerprint,
 )]
 pub struct DeclarationSchemaKey(pub(crate) Arc<str>);
 
