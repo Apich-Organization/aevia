@@ -102,8 +102,8 @@ pub fn walk_decl<'ast, V: Visitor<'ast>>(
             }
         },
         | DeclKind::Class { methods, .. } => {
-            for (_, ty) in methods {
-                visitor.visit_ty(ty);
+            for method in methods {
+                visitor.visit_ty(&method.ty);
             }
         },
         | DeclKind::Instance { ty, methods, .. } => {

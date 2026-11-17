@@ -8,8 +8,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aevia-rssn.workspace = true
+aevia-std = { path = "../aevia-std" }
 aevia-syntax.workspace = true
 aevia-fmt.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -459,8 +459,21 @@ fn stack_budget_exhausted() -> Option<usize> {
     (base.abs_diff(here) > usable).then_some(usable)
 }
 
+/// One entry of [`Interp::global_cache`].
+pub(crate) struct GlobalCacheEntry {
+    epoch: u64,
+    span: Span,
+    name: Box<str>,
+    scope: std::rc::Weak<Scope>,
+    context: std::rc::Weak<crate::evidence::ModuleContext>,
+    value: Value,
+}
+
 /// The interpreter state for one program.
 pub struct Interp {
+    /// Inline cache of global references, by IR site; see
+    /// [`Interp::lookup_global_at`].
+    pub(crate) global_cache: crate::fxhash::FxHashMap<usize, GlobalCacheEntry>,
     pub(crate) tensor_inputs: crate::generics::TensorInputCache,
     pub(crate) call_proofs: crate::generics::CallProofCache,
     /// Literal values per (site, bindings, module); see
@@ -513,6 +526,10 @@ pub struct Interp {
     pub(crate) module_scopes: HashMap<keys::ModulePath, Rc<Scope>>,
     pub(crate) bindings: Option<Rc<crate::generics::CallBindings>>,
     /// Top-level bindings.
+    ///
+    /// Global references are resolved through an inline cache, so code that
+    /// changes this table directly must call
+    /// [`crate::value::bump_environment`] (or use [`Interp::define_global`]).
     pub globals: HashMap<String, Value>,
     /// The unit registry.
     pub units: UnitTable,
@@ -811,6 +828,7 @@ impl Interp {
             active_scope: None,
             module_scopes: HashMap::new(),
             bindings: None,
+            global_cache: crate::fxhash::FxHashMap::default(),
             globals: HashMap::new(),
             units: checked.units.clone(),
             dims: checked.dims.clone(),
@@ -923,6 +941,7 @@ impl Interp {
         let one = aevia_dim::Dim::one();
         for name in ["pi", "oo"] {
             if let Ok(value) = crate::kernel::call(name, &[], one.clone()) {
+                crate::value::bump_environment();
                 self.globals.insert(name.to_string(), value);
             }
         }
@@ -931,13 +950,16 @@ impl Interp {
         if !self.globals.contains_key("e") {
             let one_value = Value::Num(NumVal::int(num_bigint::BigInt::from(1)));
             if let Ok(value) = crate::kernel::call("exp", &[one_value], one.clone()) {
+                crate::value::bump_environment();
                 self.globals.insert("e".to_string(), value);
             }
         }
+        crate::value::bump_environment();
         self.globals.insert(
             "nan".to_string(),
             Value::Num(NumVal::float(f64::NAN, one.clone())),
         );
+        crate::value::bump_environment();
         self.globals.insert(
             "i".to_string(),
             Value::Num(NumVal {
@@ -1164,7 +1186,9 @@ impl Interp {
                     name: name.clone(),
                 }),
             });
+        crate::value::bump_environment();
         self.globals.insert(name.clone(), closure);
+        crate::value::bump_environment();
         self.method_classes
             .insert(method.name.clone(), class.to_string());
         self.instance_methods
@@ -1471,6 +1495,7 @@ impl Interp {
         // REPL closures capture the bindings already checked at their lexical
         // definition, including implementation globals. Later revisions may
         // replace the public inspection table without changing old closures.
+        crate::value::bump_environment();
         scope.vars.borrow_mut().extend(self.globals.clone());
         scope
     }
@@ -1917,6 +1942,7 @@ impl Interp {
                             Some(name.clone()),
                             decl.span,
                         );
+                        crate::value::bump_environment();
                         next.vars.borrow_mut().insert(name.clone(), closure);
                         scope = next;
                     }
@@ -2130,6 +2156,79 @@ impl Interp {
     /// the unit table, constructors, class methods and the builtin names, in
     /// the order the AST path uses. The IR passes the module scope explicitly
     /// because its lexical chain is a slot vector rather than a `Scope`.
+    /// Binds (or rebinds) a top-level name, invalidating cached lookups.
+    pub fn define_global(
+        &mut self,
+        name: impl Into<String>,
+        value: Value,
+    ) {
+        crate::value::bump_environment();
+        self.globals.insert(name.into(), value);
+    }
+
+    /// [`Interp::lookup_global`] for the reference at IR site `site`,
+    /// through an inline cache.
+    ///
+    /// Resolving a global by name walks the scope chain, the checker's
+    /// span-indexed tables and the builtin table, and a builtin reference
+    /// (`mod`, `map`) then allocates its constructor value; a loop paid that
+    /// on every reference. An entry is reused only while nothing the lookup
+    /// reads has changed: the environment epoch
+    /// ([`crate::value::bump_environment`]) is the same, and the scope and
+    /// module context are the very ones it was filled for (held weakly, so a
+    /// freed scope whose address is reused cannot match). References without
+    /// a scope and class-method values (a fresh dispatcher each time) are not
+    /// cached.
+    pub(crate) fn lookup_global_at(
+        &mut self,
+        site: usize,
+        name: &str,
+        scope: Option<&Rc<Scope>>,
+        span: Span,
+    ) -> Result<Value, EvalError> {
+        let Some(scope) = scope else {
+            return self.lookup_global(name, None, span);
+        };
+        let epoch = crate::value::environment_epoch();
+        if let Some(entry) = self.global_cache.get(&site)
+            && entry.epoch == epoch
+            && entry.span == span
+            && *entry.name == *name
+            && std::ptr::eq(entry.scope.as_ptr(), Rc::as_ptr(scope))
+            && std::ptr::eq(entry.context.as_ptr(), Rc::as_ptr(&self.context))
+            && entry.scope.strong_count() > 0
+        {
+            return Ok(entry.value.clone());
+        }
+        let value = self.lookup_global(name, Some(scope), span)?;
+        let cacheable = crate::value::environment_epoch() == epoch
+            && self.constants_seeded_for(name)
+            && !self.method_classes.contains_key(name);
+        if cacheable {
+            self.global_cache.insert(
+                site,
+                GlobalCacheEntry {
+                    epoch,
+                    span,
+                    name: name.into(),
+                    scope: Rc::downgrade(scope),
+                    context: Rc::downgrade(&self.context),
+                    value: value.clone(),
+                },
+            );
+        }
+        Ok(value)
+    }
+
+    /// Whether a lookup of `name` no longer depends on the lazy seeding of
+    /// the kernel constants.
+    fn constants_seeded_for(
+        &self,
+        name: &str,
+    ) -> bool {
+        self.constants_seeded || !matches!(name, "pi" | "oo" | "e" | "nan" | "i")
+    }
+
     pub(crate) fn lookup_global(
         &mut self,
         name: &str,
@@ -4573,6 +4672,7 @@ impl Interp {
         else {
             return Ok(false);
         };
+        crate::value::bump_environment();
         let mut variables = scope.vars.borrow_mut();
         for binding in bindings {
             if let crate::pattern::Binding::Name(name, value) = binding {
@@ -5297,6 +5397,10 @@ impl Interp {
                 | IoAction::WriteFile { .. }
                 | IoAction::ReadNpy { .. }
                 | IoAction::WriteNpy { .. }
+                | IoAction::ReadSvg(_)
+                | IoAction::WriteSvg { .. }
+                | IoAction::ReadGif(_)
+                | IoAction::WriteGif { .. }
                 | IoAction::Plot(_)
                 | IoAction::Save { .. } => crate::value::caps::FS,
                 | IoAction::Random => crate::value::caps::RAND,
@@ -5311,7 +5415,11 @@ impl Interp {
                     | IoAction::ReadFile(_)
                     | IoAction::WriteFile { .. }
                     | IoAction::ReadNpy { .. }
-                    | IoAction::WriteNpy { .. } => {
+                    | IoAction::WriteNpy { .. }
+                    | IoAction::ReadSvg(_)
+                    | IoAction::WriteSvg { .. }
+                    | IoAction::ReadGif(_)
+                    | IoAction::WriteGif { .. } => {
                         last = make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)]);
                         continue;
                     },
@@ -5482,6 +5590,122 @@ impl Interp {
                         .read_line(&mut line)
                         .map_err(|error| EvalError::new("E0810", error.to_string()))?;
                     last = Value::string(line.trim_end_matches(['\n', '\r']));
+                },
+                | IoAction::Input(prompt) => {
+                    if self.on_worker && self.cancellation.is_some() && self.line_reader.is_none() {
+                        return Err(EvalError::new(
+                            "E0811",
+                            "read input on the foreground REPL before spawning work; a background task cannot read terminal input safely",
+                        ));
+                    }
+                    self.write_out(prompt, false, false);
+                    if matches!(self.output, Output::Console) {
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                    if let Some(reader) = self.line_reader.clone() {
+                        let line = reader()?;
+                        self.check_cancelled()?;
+                        last = Value::string(line.trim_end_matches(['\n', '\r']));
+                        continue;
+                    }
+                    let mut line = String::new();
+                    std::io::stdin()
+                        .read_line(&mut line)
+                        .map_err(|error| EvalError::new("E0810", error.to_string()))?;
+                    last = Value::string(line.trim_end_matches(['\n', '\r']));
+                },
+                | IoAction::ReadSvg(path) => {
+                    let file_path = std::path::Path::new(path);
+                    last = match rssn::io::read_svg_file(file_path).and_then(|_| {
+                        std::fs::read_to_string(file_path)
+                            .map_err(|error| format!("{}: {error}", io_error_code(&error)))
+                    }) {
+                        | Ok(contents) => {
+                            make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::string(contents)])
+                        },
+                        | Err(message) => {
+                            make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)])
+                        },
+                    };
+                },
+                | IoAction::WriteSvg { path, contents } => {
+                    last = match rssn::io::write_svg_file(std::path::Path::new(path), contents) {
+                        | Ok(()) => make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::Unit]),
+                        | Err(message) => {
+                            make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)])
+                        },
+                    };
+                },
+                | IoAction::ReadGif(path) => {
+                    last = match rssn::io::read_gif_file(std::path::Path::new(path)) {
+                        | Ok(anim) => {
+                            let frames: Vec<Value> = anim
+                                .frames
+                                .into_iter()
+                                .map(|frame| {
+                                    let rgba: Vec<Value> = frame
+                                        .rgba
+                                        .into_iter()
+                                        .map(|byte| Value::Num(NumVal::int(BigInt::from(byte))))
+                                        .collect();
+                                    let mut fields = IndexMap::new();
+                                    fields.insert(
+                                        "delay_cs".to_string(),
+                                        Value::Num(NumVal::int(BigInt::from(frame.delay_cs))),
+                                    );
+                                    fields.insert(
+                                        "rgba".to_string(),
+                                        Value::Tensor(Rc::new(TensorData::new(
+                                            vec![rgba.len()],
+                                            crate::value::Storage::Boxed(rgba),
+                                            Dim::one(),
+                                            None,
+                                        ))),
+                                    );
+                                    Value::Record(Rc::new(crate::value::RecordValue { fields }))
+                                })
+                                .collect();
+                            let mut fields = IndexMap::new();
+                            fields.insert(
+                                "width".to_string(),
+                                Value::Num(NumVal::int(BigInt::from(anim.width))),
+                            );
+                            fields.insert(
+                                "height".to_string(),
+                                Value::Num(NumVal::int(BigInt::from(anim.height))),
+                            );
+                            fields.insert(
+                                "loop_count".to_string(),
+                                Value::Num(NumVal::int(BigInt::from(anim.loop_count))),
+                            );
+                            fields.insert(
+                                "frames".to_string(),
+                                Value::Tensor(Rc::new(TensorData::new(
+                                    vec![frames.len()],
+                                    crate::value::Storage::Boxed(frames),
+                                    Dim::one(),
+                                    None,
+                                ))),
+                            );
+                            make_variant(
+                                adt::RESULT_ID,
+                                0,
+                                "Ok",
+                                vec![Value::Record(Rc::new(crate::value::RecordValue { fields }))],
+                            )
+                        },
+                        | Err(message) => {
+                            make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)])
+                        },
+                    };
+                },
+                | IoAction::WriteGif { path, animation } => {
+                    last = match rssn::io::write_gif_file(std::path::Path::new(path), animation) {
+                        | Ok(()) => make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::Unit]),
+                        | Err(message) => {
+                            make_variant(adt::RESULT_ID, 1, "Err", vec![Value::string(message)])
+                        },
+                    };
                 },
                 | IoAction::Bind { action, func } => {
                     push(

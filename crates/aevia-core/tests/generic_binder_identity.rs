@@ -107,7 +107,7 @@ fn a_same_shape_different_origin_cannot_borrow_phantom_selection() {
     for mode in [Mode::Ast, Mode::Ir] {
         let mut interp = install(&compiled, mode);
         let replacement = interp.eval_toplevel("second").unwrap();
-        interp.globals.insert("alias".into(), replacement);
+        interp.define_global("alias", replacement);
         let selected = interp
             .eval(&selected_expr(&compiled, "selected"), &Scope::root())
             .unwrap();

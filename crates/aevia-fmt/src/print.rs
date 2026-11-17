@@ -139,11 +139,19 @@ impl Printer {
         module: &Module,
     ) -> Result<String, String> {
         if let Some(name) = &module.name {
+            let prefix = if module.private {
+                "private "
+            } else {
+                ""
+            };
             match &module.unit_system {
                 | Some((system, _)) => {
-                    self.line(&format!("module {} with units {system}", name.join(".")));
+                    self.line(&format!(
+                        "{prefix}module {} with units {system}",
+                        name.join(".")
+                    ));
                 },
-                | None => self.line(&format!("module {}", name.join("."))),
+                | None => self.line(&format!("{prefix}module {}", name.join("."))),
             }
             self.blank();
         }
@@ -332,9 +340,11 @@ impl Printer {
                 alias,
                 names,
                 open,
+                export,
             } => {
                 let mut text = format!(
-                    "{} {}",
+                    "{}{} {}",
+                    if *export { "export " } else { "" },
                     if *open { "open" } else { "import" },
                     path.join(".")
                 );
@@ -396,7 +406,12 @@ impl Printer {
                     | TypeBody::Variants(variants) => {
                         text.push_str(" =");
                         for variant in variants {
-                            let _ = write!(text, " | {}", variant.name);
+                            let priv_kw = if variant.private {
+                                "private "
+                            } else {
+                                ""
+                            };
+                            let _ = write!(text, " | {priv_kw}{}", variant.name);
                             if !variant.args.is_empty() {
                                 let args = variant
                                     .args
@@ -429,9 +444,14 @@ impl Printer {
                 text.push_str(" where");
                 self.line(&text);
                 self.indent += 1;
-                for (method, ty) in methods {
-                    let rendered = self.ty_text(ty);
-                    self.line(&format!("{method}: {rendered}"));
+                for method in methods {
+                    let rendered = self.ty_text(&method.ty);
+                    let priv_kw = if method.private {
+                        "private "
+                    } else {
+                        ""
+                    };
+                    self.line(&format!("{priv_kw}{}: {rendered}", method.name));
                 }
                 self.indent -= 1;
             },
@@ -445,7 +465,12 @@ impl Printer {
                 self.indent += 1;
                 for method in methods {
                     let params = self.params(&method.params);
-                    let mut text = format!("{}({params})", method.name);
+                    let priv_kw = if method.private {
+                        "private "
+                    } else {
+                        ""
+                    };
+                    let mut text = format!("{priv_kw}{}({params})", method.name);
                     if let Some(ret) = &method.ret {
                         let rendered = self.ty_text(ret);
                         let _ = write!(text, ": {rendered}");

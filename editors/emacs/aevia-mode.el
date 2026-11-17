@@ -53,6 +53,10 @@ When nil, use `aevia-lsp --stdio' if it is on `exec-path', else
 `aevia lsp --stdio'."
   :type '(choice (const :tag "Auto-detect" nil) (repeat string)))
 
+(defcustom aevia-cli-command "aevia"
+  "Path or name of the `aevia' CLI executable used to run and test files."
+  :type 'string)
+
 (defun aevia-lsp-server-command ()
   "The command list used to start the language server."
   (or aevia-lsp-server-command
@@ -198,7 +202,37 @@ The opening and closing `#' become generic comment fences."
     (indent-line-to next)
     (when (and at-text (< (current-column) next)) (back-to-indentation))))
 
+;;;; Running & Testing
+
+(defun aevia--run-subcommand (subcommand)
+  "Run `aevia SUBCOMMAND' on the current buffer's file via `compile'."
+  (unless buffer-file-name
+    (user-error "Buffer is not visiting a file; save it first"))
+  (when (buffer-modified-p)
+    (save-buffer))
+  (let ((cli (or (executable-find aevia-cli-command) aevia-cli-command)))
+    (compile (mapconcat #'shell-quote-argument
+                        (list cli subcommand buffer-file-name)
+                        " "))))
+
+(defun aevia-run-file ()
+  "Run the current `.aev' file with `aevia run'."
+  (interactive)
+  (aevia--run-subcommand "run"))
+
+(defun aevia-test-file ()
+  "Run tests in the current `.aev' file with `aevia test'."
+  (interactive)
+  (aevia--run-subcommand "test"))
+
 ;;;; Mode
+
+(defvar aevia-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-r") #'aevia-run-file)
+    (define-key map (kbd "C-c C-t") #'aevia-test-file)
+    map)
+  "Keymap for `aevia-mode'.")
 
 ;;;###autoload
 (define-derived-mode aevia-mode prog-mode "Aevia"

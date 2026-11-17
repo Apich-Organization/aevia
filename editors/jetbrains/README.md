@@ -6,6 +6,13 @@
   JetBrains IDE (Community editions included), unlike the native LSP API of the paid ones.
 
 The server is `$AEVIA_LSP` if set, else `aevia-lsp --stdio` from `PATH`, else `aevia lsp --stdio`.
+Hover documentation, diagnostics, completion, formatting, and semantic tokens are provided by `aevia-lsp`.
+
+## Running & Testing `.aev` Files
+
+* **Run Aevia File** (`aevia run <file>`): *Run → Run Aevia File*, editor context menu, or `Ctrl+Alt+R`.
+* **Test Aevia File** (`aevia test <file>`): *Run → Test Aevia File*, editor context menu, or `Ctrl+Alt+T`.
+* The `aevia` CLI is resolved from `$AEVIA_CLI`, then `PATH`, then `~/.cargo/bin` / `~/.local/bin` / `target/`.
 
 ## Build
 

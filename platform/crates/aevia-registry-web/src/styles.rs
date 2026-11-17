@@ -1654,6 +1654,74 @@ a.provider:hover {
   margin: 20px 0 28px;
 }
 
+/* Stacked toolchain install one-liners on the front page. */
+.install-stack {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+  max-width: 680px;
+}
+
+.install-stack .install {
+  margin: 0;
+  max-width: none;
+}
+
+.install-tag {
+  padding: 10px 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+  align-self: center;
+  user-select: none;
+}
+
+/* Standard library documentation items. */
+.stdlib-items {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.stdlib-item {
+  border: 1px solid var(--line);
+  padding: 16px 18px;
+  background: var(--bg);
+}
+
+.stdlib-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.stdlib-kind {
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  padding: 1px 6px;
+}
+
+.stdlib-sig {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.stdlib-examples h4 {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 12px 0 6px;
+}
+
 "#;
 
 /// The script served inline at the end of every page.

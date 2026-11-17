@@ -84,7 +84,13 @@ pub async fn home(
     let (recent, _) = repo::list_packages(&state.pool, "", "recent", 6, 0).await?;
     let cards = cards_of(&recent);
     let viewer = state.viewer(&headers).await;
-    Ok(Html(web::home(lang, &stats, &cards, viewer.as_ref())))
+    Ok(Html(web::home(
+        lang,
+        &stats,
+        &cards,
+        &state.config.base_url,
+        viewer.as_ref(),
+    )))
 }
 
 /// The query of `/crates`.
@@ -642,8 +648,9 @@ pub async fn spec_index(
     Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
+    let spec = state.spec.read().await.clone();
     Ok(Html(web::spec_index(
-        state.spec.book(),
+        spec.book(),
         lang,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -659,8 +666,9 @@ pub async fn spec_all(
     Language(lang): Language,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
+    let spec = state.spec.read().await.clone();
     Ok(Html(web::spec_all(
-        state.spec.book(),
+        spec.book(),
         lang,
         state.viewer(&headers).await.as_ref(),
     )))
@@ -677,7 +685,8 @@ pub async fn spec_chapter(
     Path(slug): Path<String>,
     headers: HeaderMap,
 ) -> PageResult<Html<String>> {
-    let book = state.spec.book();
+    let spec = state.spec.read().await.clone();
+    let book = spec.book();
     let Some(chapter) = book.chapter(&slug) else {
         return Err(
             PageError::not_found(format!("The specification has no chapter `{slug}`."))
@@ -690,6 +699,119 @@ pub async fn spec_chapter(
         lang,
         state.viewer(&headers).await.as_ref(),
     )))
+}
+
+// ------------------------------------------------------------------- stdlib
+
+/// `GET /stdlib`
+///
+/// # Errors
+///
+/// Never fails: a deployment without stdlib docs renders the explanation of
+/// how to mount them.
+pub async fn stdlib_index(
+    State(state): State<AppState>,
+    Language(lang): Language,
+    headers: HeaderMap,
+) -> PageResult<Html<String>> {
+    let stdlib = state.stdlib_docs.read().await.clone();
+    Ok(Html(web::stdlib_index(
+        stdlib.book(),
+        lang,
+        state.viewer(&headers).await.as_ref(),
+    )))
+}
+
+/// `GET /stdlib/{module}`
+///
+/// # Errors
+///
+/// `404` when no such stdlib module exists.
+pub async fn stdlib_module(
+    State(state): State<AppState>,
+    Language(lang): Language,
+    Path(module): Path<String>,
+    headers: HeaderMap,
+) -> PageResult<Html<String>> {
+    let stdlib = state.stdlib_docs.read().await.clone();
+    let book = stdlib.book();
+    let Some(found) = book.module(&module) else {
+        return Err(
+            PageError::not_found(format!("The standard library has no module `{module}`."))
+                .in_lang(lang),
+        );
+    };
+    Ok(Html(web::stdlib_module(
+        book,
+        found,
+        lang,
+        state.viewer(&headers).await.as_ref(),
+    )))
+}
+
+// ---------------------------------------------------------- install scripts
+
+const EMBEDDED_INSTALL_SH: &str = include_str!("../../../install.sh");
+const EMBEDDED_INSTALL_PS1: &str = include_str!("../../../install.ps1");
+
+/// `GET /install.sh`
+pub async fn install_sh(State(state): State<AppState>) -> impl IntoResponse {
+    let path = state.config.install_dir.join("install.sh");
+    let body = tokio::fs::read_to_string(&path)
+        .await
+        .unwrap_or_else(|_| EMBEDDED_INSTALL_SH.to_string());
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=60"),
+        ],
+        body,
+    )
+}
+
+/// `GET /install.ps1`
+pub async fn install_ps1(State(state): State<AppState>) -> impl IntoResponse {
+    let path = state.config.install_dir.join("install.ps1");
+    let body = tokio::fs::read_to_string(&path)
+        .await
+        .unwrap_or_else(|_| EMBEDDED_INSTALL_PS1.to_string());
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=60"),
+        ],
+        body,
+    )
+}
+
+/// `POST /internal/reload` — triggers an immediate reload of `spec` and `stdlib` docs.
+pub async fn internal_reload(State(state): State<AppState>) -> Response {
+    match tokio::try_join!(state.reload_spec(), state.reload_stdlib_docs()) {
+        | Ok((spec_chapters, stdlib_modules)) => {
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({
+                    "reloaded": true,
+                    "spec_chapters": spec_chapters,
+                    "stdlib_modules": stdlib_modules,
+                })),
+            )
+                .into_response()
+        },
+        | Err(error) => {
+            tracing::warn!(error = %error.render(), "internal reload failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({
+                    "reloaded": false,
+                    "error": error.render(),
+                })),
+            )
+                .into_response()
+        },
+    }
 }
 
 /// `GET /lang/{code}` — remembers a language and returns to the page.

@@ -38,6 +38,7 @@ const SPEC_COMMIT: &str = "aevia-spec 0.1";
 const SKIP: Msg = Msg::new("skip to content", "跳到正文");
 const NAV_CRATES: Msg = Msg::new("crates", "包");
 const NAV_DOCS: Msg = Msg::new("docs", "文档");
+const NAV_STDLIB: Msg = Msg::new("stdlib", "标准库");
 const NAV_CLI: Msg = Msg::new("cli", "命令行");
 const NAV_SPEC: Msg = Msg::new("spec", "语言规范");
 const NAV_PRIMARY: Msg = Msg::new("Primary", "主导航");
@@ -80,6 +81,7 @@ where
                     <nav class="topnav" aria-label=NAV_PRIMARY.of(lang)>
                         {nav_link(lang, "/crates", NAV_CRATES, here)}
                         {nav_link(lang, "/docs", NAV_DOCS, here)}
+                        {nav_link(lang, "/stdlib", NAV_STDLIB, here)}
                         {nav_link(lang, "/cli", NAV_CLI, here)}
                         {nav_link(lang, "/spec", NAV_SPEC, here)}
                         <a href="https://github.com/Apich-Organization/aevia" rel="noreferrer">

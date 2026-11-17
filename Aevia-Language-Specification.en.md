@@ -21,11 +21,10 @@
 11. [09 — Runtime](#ch-09-runtime)
 12. [10 — The rssn backend mapping](#ch-10-backend)
 13. [11 — Complete examples](#ch-11-examples)
-14. [12 — Design trade-offs, limits and roadmap](#ch-12-rationale)
+14. [12 — Design trade-offs and limits](#ch-12-rationale)
 15. [13 — Extensibility and the rssn integration](#ch-13-extensibility)
 16. [Appendix A — Complete grammar](#ch-appendix-a-grammar)
 17. [Appendix B — Diagnostic catalogue](#ch-appendix-b-diagnostics)
-18. [Appendix C — Revision log and known implementation limits](#ch-appendix-c-changelog)
 
 ---
 
@@ -59,11 +58,10 @@ The language is built on the `rssn` computer-algebra and scientific-computing en
 | [09 — Runtime](#ch-09-runtime) | Pipeline, interpreter, REPL, CLI, LSP, performance | Yes (architecture) |
 | [10 — The rssn backend mapping](#ch-10-backend) | Mapping to rssn, bridge design, gaps and risks | Yes |
 | [11 — Complete examples](#ch-11-examples) | Worked programs from kinematics to simulation | No |
-| [12 — Design trade-offs, limits and roadmap](#ch-12-rationale) | Alternatives, trade-offs, design boundaries, implementation progress | No |
+| [12 — Design trade-offs and limits](#ch-12-rationale) | Alternatives, trade-offs, design boundaries | No |
 | [13 — Extensibility and the rssn integration](#ch-13-extensibility) | rssn reflection, generated `Rssn`, plugins, registry, shape/device/sparse decisions | Yes |
 | [Appendix A — Grammar](#ch-appendix-a-grammar) | Complete EBNF | Yes |
 | [Appendix B — Diagnostics](#ch-appendix-b-diagnostics) | Error codes and message format | Yes |
-| [Appendix C — Changelog](#ch-appendix-c-changelog) | Revision history and known gaps | Informative |
 
 The backend interface contract is in the rssn repository's `docs/KERNEL.md` (Kernel Manifest, dynamic-call ABI, plugins, units and dimensions) and `docs/DIMENSIONS.md`; it is a precondition of this specification, not an optional implementation detail. The division of the implementation into crates is in [ARCHITECTURE.md](https://github.com/Apich-Organization/aevia/blob/main/ARCHITECTURE.md) at the repository root. Every chapter also has a Chinese edition (the source text); authoring and terminology rules are in `spec/STYLE.md`.
 
@@ -73,7 +71,7 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT** a
 
 ## Design status
 
-This is a **design standard**, not a frozen implementation. Chapters marked normative are intended to be implemented as written; [appendix C](#ch-appendix-c-changelog) records every revision and the known gaps. The current text is **Revision 23**, aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`). The size of the manifest is a measurement, not a constant; the live output of `aevia rssn` is authoritative (at that version: 1620 operators, 82 units, 30 constants). Dispatch and extension follow the boundary stated in chapter 13: no run-time multimethods, no multi-parameter classes, no per-type monomorphisation; instances are selected statically or by canonical witnesses.
+This is a **design standard**, not a frozen implementation. Chapters marked normative are intended to be implemented as written. The current text is **Revision 23**, aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`). The size of the manifest is a measurement, not a constant; the live output of `aevia rssn` is authoritative (at that version: 1620 operators, 82 units, 30 constants). Dispatch and extension follow the boundary stated in chapter 13: no run-time multimethods, no multi-parameter classes, no per-type monomorphisation; instances are selected statically or by canonical witnesses.
 
 There is **no v1/v2 language split**: every capability is designed in; a backend that does not yet implement one reports a capability diagnostic (`E1001`) instead of removing the language feature.
 
@@ -855,8 +853,11 @@ fn softplus(x: Real[1]): Real[1] = ln(1 + exp(x))
 
 - Known attributes: `@stable`, `@experimental`, `@deprecated` (stability, §13.8); `@jit`
   (request JIT; `E1001` if the backend lacks `core.jit`); `@op` and `@rule` (register an RSSN
-  operator and a rewrite rule, §13.5); `@bench` (§9.12).
-- An unknown attribute is `E0210`. Attribute arguments MUST be compile-time constants.
+  operator and a rewrite rule, §13.5); `@bench` (§9.12); `@allow`, `@warn`, `@deny`, `@forbid`
+  (lint levels, taking one or more lint/group names and an optional `reason = "..."`).
+- An unknown attribute is `E0210`. Attribute arguments MUST be compile-time constants (with
+  lint-attribute targets permitting bare lint/group names such as `unused-variable`); lowering a
+  `forbid` lint is `E0211`, and an unknown lint or group name is `E0212`.
 
 ## 2.3 Expressions
 
@@ -3734,7 +3735,17 @@ Earlier steps shadow later ones; a clash is `E0603` only inside step 3.
 [package]
 name = "kinematics"
 version = "0.1.0"
+edition = "2026"
 entry = "src/main.aev"      # optional; default src/main.aev
+authors = ["Your Name <you@example.com>"]
+description = "Kinematics solvers"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/apich/kinematics"
+homepage = "https://aevia.org"
+documentation = "https://docs.aevia.org"
+keywords = ["physics"]
+categories = ["science"]
 
 [dependencies]
 Units = "^1.2"                                        # official scope: aevia/units
@@ -3743,12 +3754,14 @@ Kinematics = { path = "../kinematics" }               # local path package
 Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # path for local work, version once published
 ```
 
-Status: the manifest reader reads **only** `[package]` (keys `name`, `version`, `entry`) and
-`[dependencies]`. Other tables (`[compat]`, `[capabilities]`, `[build]`, `[profile.*]`) and
-other `[package]` keys (`edition`, `authors`, `description`) are `E0605`. Description, licence,
-keywords and repository are supplied as options to `aevia publish` (§9.13). Capability
-declarations have no run-time permission check; only `--caps` exists (§9.14). There is no
-`git` dependency (`E0605`).
+The manifest reader reads `[package]` (`name`, `version`, `edition`, `entry`, `authors`,
+`description`, `license`, `license-file`, `readme`, `repository`, `homepage`, `documentation`,
+`keywords`, `categories`) and `[dependencies]`. Other tables (`[compat]`, `[capabilities]`,
+`[build]`, `[profile.*]`) and unknown keys are `E0605`. Publishing requires a non-empty
+`description` and either a non-empty `license` or a non-empty `license-file` inside the archive;
+options to `aevia publish` (§9.13) and `aevia-pkg.toml` may also override metadata fields.
+Capability declarations are not checked as run-time permissions; permissions are controlled via `--caps` (§9.14). There is
+no `git` dependency (`E0605`).
 
 - `name` is the package name; `version` is SemVer 2.0 `major.minor.patch`, optionally with
   `-pre-release`; a published version MUST NOT carry `+build` (two versions differing only in
@@ -3852,9 +3865,7 @@ hash = "fnv1a64:…"           # digest of manifest + source tree + entry
   ordinary I/O failure restores the original manifest, and a failed resolution rewrites
   nothing.
 
-Status: the resolver lets incompatible series of one package coexist, but giving each package
-its own dependency namespace (a per-package `Roots` lookup) is not implemented, so coexistence
-requires distinct import roots.
+The resolver lets incompatible series of one package coexist, provided each uses a distinct import root.
 
 ### 7.5.3 Directory layout
 
@@ -4398,7 +4409,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 
 **Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its `faer` sparse-LU backend. User-defined formats wait until rssn opens `Format` (§13.9.5).
 
-> **Status**: all of the above is implemented (tests `aevia-core/tests/sparse.rs`, `sparse_block.rs`, `sparse_followup.rs`, `shape_refinement.rs`), and the capability `storage.sparse` is enabled. **Remaining gaps**: sparse values cannot enter rssn's term graph; `gmres_with`/`bicgstab_with` do not accept exact elements; there are no sparse eigenvalues or SVD.
+Note: `storage.sparse` enables sparse operations; `gmres_with`/`bicgstab_with` accept floating-point elements only; sparse eigenvalues and SVD are not provided.
 
 ## 8.5 Calculus
 
@@ -4923,8 +4934,7 @@ or early stopping during standard `sde_events` integration (events truncate afte
 The `Sde` module declares option ADTs and re-exports these entries. `terms` and `cells` are required; 0 selects defaults.
 `sde_scheme_info` queries metadata only; use `sde_order`/`sde_order_with` for weak order.
 
-Status: these language entries and the listed callback solvers are implemented; native Rust API reachability is reported
-separately from manifest coverage (§8.19).
+Native Rust API reachability is reported separately from manifest coverage (§8.19).
 
 ## 8.10 PDE
 
@@ -5006,7 +5016,7 @@ The rank of `read_npy` cannot be inferred statically from the file and MUST be w
 
 CSV headers may carry units: `time [s]`, `velocity [m/s]`. `read_csv<ρ>` parses the header units; `column(t, "time")` is checked at compile time against the field types of `ρ` and validated defensively again at run time. Without header units, columns are dimensionless; an explicit `ρ` can override this, but a run-time validation failure is `DataError.DimensionMismatch`.
 
-> **Status**: `read_csv`/`write_csv`/`read_json`/`write_json` and Table/column/select/filter/join are implemented. NPY uses a shared local codec: NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs (`aevia-core/tests/io_taxonomy.rs`).
+NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs.
 
 ## 8.12 Plot
 
@@ -5035,7 +5045,7 @@ default_plot_opts : PlotOpts
 
 `PlotOpts` is a full record: `{ label: Option<String>, color: Option<String>, xunit: Option<String>, yunit: Option<String>, xscale: AxisScale, yscale: AxisScale, xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`. `line(x, y)` uses the defaults and generates axis labels automatically from the dimensions of `x` and `y` (`t / s`, `v / (m/s)`); `line_with` takes a full `PlotOpts`; `label(series, "v(t)")` is the shortcut for setting a label. `plot` writes `plot.html` by default; `save` gives the file name.
 
-> **Status**: there is one renderer, HTML with inline SVG: `plot` and `save` produce the same HTML (containing an `<svg>` element), and `save` does **not** switch format by extension (writing a `.svg` file still produces an HTML document). A write failure is `E0905`; `plot`/`save` remain fatal IO actions (failure exits with a diagnostic and is not a `Result`). Standalone `.svg` output and PNG/JPEG are not implemented.
+`plot` and `save` use an HTML renderer with inline `<svg>` and produce the same HTML format; `save` does **not** switch format by extension (writing a `.svg` file still produces an HTML document). A write failure is `E0905`, and `plot`/`save` are fatal IO actions (failure exits with a diagnostic and is not a `Result`).
 
 ## 8.13 Test
 
@@ -5142,9 +5152,7 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 
 `simulate` is the dynamic entry point and takes an rssn scenario name and JSON; the typed wrappers are in `Physics.*` and annotate dimensions field by field. Scenario names follow rssn's live `SCENARIOS` list (29 at the time of writing): `ising`, `ising_wolff`, `geodesic`, `gpe`, `schrodinger`, `fdtd`, `elasticity`, `lid_driven_cavity`, `channel_flow`, `sod_shock_tube`, `kepler_symplectic`, `poisson_multigrid`, `heat_nd`, `wave_nd`, `euler_fv`, `dg_conservation`, `acoustics_pml`, `yee_fdtd`, `navier_stokes_mac`, `split_step`, `fem_simplex`, `elasticity_fem`, `bem_laplace`, `sph`, `dpd`, `md_lj`, `spin_model`, `nbody_gravity`, `kerr_geodesic`. A host MUST NOT keep a second hand-written scenario list; the run time reads `rssn::sim::scenario::SCENARIOS`.
 
-> **Generated simulation modules**: `import Rssn_Sim_<Name>` (e.g. `Rssn_Sim_PoissonMultigrid`, `Rssn_Sim_HeatNd`) generates a typed module on import from rssn's scenario catalogue (`rssn::sim::schema`): the `Params`/`Output` records, one variant type per method-name field (`P.W`, `S.Metropolis`), `defaults()` and `run(p)`. Parameter types and defaults are inferred from the scenario's own request type, the result type comes from a witness run, and an annotation table supplies what inference cannot see; no hand-written code is needed when rssn adds scenarios, parameters or methods. All 29 scenarios can be generated (reference test `tests/sim_catalog.aev`).
->
-> **Status**: `simulate`, `to_json`/`from_json` and the `Physics.Ising`/`Physics.Geodesic` wrappers (Aevia source modules, `crates/aevia-std/stdlib/Physics/`) are implemented; `import Physics.Ising` works directly through the embedded module loader.
+> **Generated simulation modules**: `import Rssn_Sim_<Name>` (e.g. `Rssn_Sim_PoissonMultigrid`, `Rssn_Sim_HeatNd`) generates a typed module on import from rssn's scenario catalogue (`rssn::sim::schema`): the `Params`/`Output` records, one variant type per method-name field (`P.W`, `S.Metropolis`), `defaults()` and `run(p)`. Parameter types and defaults are inferred from the scenario's own request type, the result type comes from a witness run, and an annotation table supplies what inference cannot see; no hand-written code is needed when rssn adds scenarios, parameters or methods.
 
 ## 8.18 Device
 
@@ -5298,13 +5306,7 @@ Physics
   ...
 ```
 
-The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope.
-
-> **Status**: the module tree is in place (`crates/aevia-std/stdlib/**.aev`, 41 module files, embedded with `include_str!`; `aevia_std::stdlib` exposes `source`/`is_module_name`/`module_paths`). When the loader cannot resolve a module in the ordinary roots it falls back to the embedded modules, so `import Math { sqrt }`, `open Units.SI`, `import Data.Csv { read_csv, column, Table }` and `import Physics.Ising` all work directly; local files take precedence over embedded modules. Standard-library names are also directly available as Prelude built-ins. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.
->
-> **Conformance audit**: every name declared in this chapter has an implementation (the `aevia-core` test `chapter_eight_has_no_capability_gaps` in `stdlib_coverage`); the `aevia-std` test `spec_signatures` compares each declaration with the checker scheme (presence, arity and return class; parameter types and order are not compared literally because the spec and the schemes spell them differently, and the recorded differences are kept on file). Passing on names does not mean signatures match word for word. All nine complete programs of chapter 11 type-check (`spec_programs`).
->
-> **Generated modules and manifest sync**: `Rssn`/`Units`/`Constants` are generated views of the Kernel Manifest. The embedded `Units/Constants.aev` comes from the live manifest; after the manifest changes it MUST be regenerated with `cargo run -p aevia-stdlib-gen -- --write`, otherwise the test `units_constants_is_the_live_manifest` fails.
+The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope. Local files take precedence over embedded standard-library modules. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.
 
 `Rssn` is a **generated module**, not a hand-written library: at build time `Rssn.<op>` typed declarations and the `Rssn.dynamic` dynamic entry are generated from the Kernel Manifest (§13.2). The content of `Rssn` varies with the rssn version, and Aevia source hard-codes no operator list. `Sparse` provides the format tags `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` and all the sparse built-ins of §8.4.1 (`nnz`/`to_dense`/`from_dense`/`convert`, sparse `matmul`/`transpose`/`kron`, layout dispatch of `@`, `spsolve`/`cg`); `Layout` remains a set of built-in functions rather than an instantiable type class (§13.9.5); `Device` provides `Cpu`/`Gpu`/`Distributed` and `on`/`to_device` (§13.9.4, `E1001` without `core.gpu`).
 
@@ -5866,7 +5868,9 @@ not type-checked in the REPL. Accepted-history warnings are not replayed. A stan
 
 ```
 aevia run [--example NAME] [file.aev] [-- args…]   run the package entry, a file or an example (program arguments follow `--`)
-aevia check [--all] [file.aev…]                    type/dimension check without running
+aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  type/dimension check without running
+aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
+                                                   run compiler, correctness, style, and pedantic lints (`--list`, `--explain`)
 aevia watch [file] [--once | --runs N]             check repeatedly, re-checking only changed modules (§9.11.1)
 aevia test [--filter PAT] [file.aev]               run `test` declarations
 aevia test --doc [--filter PAT] [files…]           compile the aevia blocks of `##` docs (§9.12)
@@ -5923,9 +5927,12 @@ Global flags (before the program-argument separator `--`):
 - **Options of `aevia-pkg publish`**: `--key FINGERPRINT`, `--description TEXT`, `--license SPDX`,
   `--keyword K` (up to five), `--repository URL`, `--dry-run` (print the statement and the
   checksum, sign nothing) and `--allow-dirty`. There are no API tokens: every authenticated
-  action is a detached signature, made with the publisher's own OpenPGP or SSH key, over a
-  short-lived server-issued statement that names one archive, carries a single-use nonce and is
-  valid for five minutes.
+  action is a detached signature, made with the publisher's own OpenPGP (GPG) or SSH
+  (`ssh-ed25519`) key, over a short-lived server-issued statement that names one archive, carries
+  a single-use nonce and is valid for five minutes. Developers may register and sign releases with
+  `ssh-ed25519` keys, but the client and registry always **prefer OpenPGP keys** automatically and
+  emit a warning recommending OpenPGP (PGP) keys — preferably backed by a hardware security key —
+  whenever an SSH key is registered, listed or used.
 - `aevia docs` only prints the documentation address
   (`<registry>/docs[/<owner>/<name>[/<version>]]`; the registry comes from `--registry`,
   `AEVIA_REGISTRY` or the default `https://aevia.apich.org`); `--open` opens a browser when
@@ -6420,7 +6427,7 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 ### 10.6.2 Caching
 
-- `Config` is cached per rule set / assumptions / mode; terms are cached by structural hash; compiled functions by term hash + input names; the unit table and dimension aliases are compile-time constants. rssn also has a request-level answer cache and an optional sub-term lemma cache (appendix C, Revision 12).
+- `Config` is cached per rule set / assumptions / mode; terms are cached by structural hash; compiled functions by term hash + input names; the unit table and dimension aliases are compile-time constants. rssn also has a request-level answer cache and an optional sub-term lemma cache.
 ### 10.6.3 Batching
 
 - Do not use `compute_all` for element-wise symbolic tensor operations (one request per element is costly): build terms with `map` and `simplify` once at the end.
@@ -6951,9 +6958,9 @@ The next chapter explains the reasons for these design choices, the alternatives
 
 <a id="ch-12-rationale"></a>
 
-# 12 — Design trade-offs, limits and roadmap
+# 12 — Design trade-offs and limits
 
-This chapter explains why Aevia looks the way it does, how it differs from existing approaches, what is deliberately left out, and how far the implementation has come. It is informative.
+This chapter explains why Aevia looks the way it does, how it differs from existing approaches, and what is deliberately left out. It is informative.
 
 ## 12.1 Why dimensions are types
 
@@ -7063,23 +7070,7 @@ These are final decisions; implementation may proceed in stages, but the languag
 | 19 | Uncertainty? | `Measurement`/`Covariance` standard-library types |
 | 20 | Operator integration? | Reflection first: Kernel Manifest + dynamic `Value` + generated façade; no hand-written bindings |
 
-## 12.10 Implementation progress
-
-Implementation proceeds in dependency order and is not a language version; every stage keeps the manifest and dynamic-call contract of chapter 13. History by revision is in appendix C.
-
-| Stage | Contents | Status |
-|---|---|---|
-| M0 | lexing, layout, parsing; name resolution; type and dimension algebra; shape refinement; diagnostics and formatter | implemented; all nine complete programs of chapter 11 check |
-| M1 | Core IR, interpreter, closures/records/variants/pattern matching; Kernel Manifest and `Rssn` generation; the rssn bridge; units and `Point` | implemented |
-| M2 | tensor storage/broadcasting/slicing; linear-algebra kernels; `Sparse` | implemented (`Bcsr`, Krylov solvers, slicing) |
-| M3 | `diff`/`antiderivative`/`defint`/`limit`/`series`/`solve`/`sum`/`product`; budgets and error mapping | implemented |
-| M4 | modules/packages/lock files; registry protocol and client; REPL/CLI/formatter; LSP | implemented; gaps in appendix C, Revision 15 |
-| M5 | CSV/NPY/JSON; `Table<ρ>`; Plot; `Device`; `simulate` and `Physics.*` | implemented (Plot has only the HTML/SVG renderer; no GPU backend is wired in) |
-| M6 | JIT (`jit` feature); plugin operators; benchmarks | partial: the JIT is off by default; see §9.6 |
-
-**Acceptance criteria for a first stable release**: every example of chapter 11 checks and runs; every dimension error is a compile-time error (except at `Dyn` and data boundaries); operators in the manifest need no hand-written bindings; conformance tests against rssn pass; `rssn::dim`/`UnitRegistry` round-trip consistently; plugins and the registry work; shape refinement, `Point` tensors, `Table<ρ>`, `Sparse` and `Device` each have an end-to-end example; at least one real ODE/PDE/statistics project runs end to end.
-
-## 12.11 Success criteria
+## 12.10 Success criteria
 
 1. A physics, engineering or data-science user can write, in a day, a program with units, symbolic derivation and numeric solving;
 2. dimension errors are caught at compile time, and the messages guide the fix;
@@ -7087,7 +7078,7 @@ Implementation proceeds in dependency order and is not a language version; every
 4. symbolic computation covers common calculus, equations and linear algebra;
 5. the code is readable, like mathematics rather than like configuration.
 
-The next chapter covers extensibility and the rssn integration; after it come the complete grammar, the diagnostics catalogue and the revision log.
+The next chapter covers extensibility and the rssn integration; after it come the complete grammar and the diagnostics catalogue.
 
 
 <a id="ch-13-extensibility"></a>
@@ -7454,8 +7445,7 @@ In the template, the `DimArena` is an `Arc<RwLock>` that `Graph::clone` **shares
 ## 13.7 The central package registry
 
 The registry is a package index that is **content-addressed, signed and capability-declaring**. The service is implemented in `platform/` (`aevia-registry-*` and `aevia-pkg`) and deployed as `aevia.apich.org`.
-
-**Status**: implemented — `aevia add owner/name[@req]`, `aevia update`, `aevia fetch`, `aevia tree` (all with `--offline`) and `aevia pkg publish/yank/search/verify`; dependency resolution is done by `aevia-resolve` (SemVer 2.0, backtracking solver, lock files with `checksum`, §7.5.1/§7.5.2); git dependencies and unknown manifest keys remain `E0605`. Known gaps are in appendix C, Revision 15.
+The CLI provides `aevia add owner/name[@req]`, `aevia update`, `aevia fetch`, `aevia tree` (all with `--offline`) and `aevia pkg publish/yank/search/verify`; dependency resolution uses SemVer 2.0 and lock-file checksums (§7.5.1/§7.5.2), and git dependencies and unknown manifest keys report `E0605`.
 
 ### 13.7.1 Package manifest
 
@@ -8025,6 +8015,8 @@ error[E0401]: dimension mismatch
 | `E0208` | duplicate field | delete the duplicate |
 | `E0209` | invalid unit literal (including `3 (2)`: the parentheses do not hold a unit expression) | check the unit expression |
 | `E0210` | unknown attribute | check the attribute name or arguments |
+| `E0211` | cannot lower forbidden lint | remove the inner `@allow`/`@warn`/`@deny` or lower the outer `@forbid` |
+| `E0212` | unknown lint or group name | run `aevia lint --list` for valid names |
 
 ## B.5 Type errors (E03xx)
 
@@ -8066,11 +8058,10 @@ error[E0401]: dimension mismatch
 | `E0411` | incompatible tensor element types or dimensions | unify the element type or dimension |
 | `E0412` | `Dyn`/kernel dimension check failed (run time) | check the run-time dimensions |
 
-Status: `E0408` and `E0409` are reserved and unreachable in the implementation. Dimension
+Note: `E0408` and `E0409` are reserved. Dimension
 unification is exponent-linear unification over a free abelian group; a residual with a
 non-zero coefficient on a variable is always solvable, so the only failure is a non-zero
-constant residual, which is `E0401`, and no occurs state arises (proof in
-`aevia-types/tests/diagnostics_coverage.rs`).
+constant residual (`E0401`), and no occurs state arises.
 
 ## B.7 Unit errors (E05xx)
 
@@ -8089,7 +8080,7 @@ constant residual, which is `E0401`, and no occurs state arises (proof in
 | `E0511` | unit has no exact scale in the module's unit system (§5.11.4) | write the number in system units, or `to_system` |
 | `E0512` | unknown unit system (§5.11.1) | use a name the kernel provides (natural, planck, atomic, geometrized) |
 
-Status: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit namespace
+Note: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit namespace
 (§5.9), so the corresponding states do not exist.
 
 ## B.8 Module errors (E06xx)
@@ -8130,7 +8121,7 @@ Status: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit
 | `E0812` | evaluation interrupted by the host / Ctrl-C (§9.8) | yes |
 | `E0899` | panic | no |
 
-Status: a few built-ins borrow `E0806`–`E0809` to report their own argument or internal
+Note: a few built-ins borrow `E0806`–`E0809` to report their own argument or internal
 failures (for example `approx_map`, `degree`); the class of the code is as in the table and the
 message is whatever the built-in states.
 
@@ -8149,7 +8140,7 @@ message is whatever the built-in states.
 | Code | Message |
 |---|---|
 | `W0101` | unused variable |
-| `W0102` | unused import (reserved) |
+| `W0102` | unused import (`aevia lint`) |
 | `W0103` | shadowed binding |
 | `W0201` | redundant match arm |
 | `W0202` | discarded IO result |
@@ -8160,10 +8151,21 @@ message is whatever the built-in states.
 | `W0501` | display unit dropped (no emission site yet, §5.4.2) |
 | `W0601` | unused private declaration |
 | `W0602` | deprecated name used: `@deprecated("...")` on the declaration (§2.2.7/§13.8.1) |
+| `W0701` | non-`snake_case` function or variable (`aevia lint`) |
+| `W0702` | non-`UpperCamelCase` type, class, or constructor (`aevia lint`) |
+| `W0703` | missing `##` documentation on public item (`aevia lint`, pedantic) |
+| `W0704` | redundant type annotation (`aevia lint`, pedantic) |
+| `W0705` | binding shadows a prelude builtin (`aevia lint`) |
+| `W0706` | strict `==`/`!=` comparison on `Float` values (`aevia lint`) |
+| `W0707` | bare zero literal coerced to a dimensioned quantity (`aevia lint`) |
+| `W0708` | comparing an expression to itself (`aevia lint`) |
+| `W0709` | redundant `if` expression (`aevia lint`) |
+| `W0710` | module is imported more than once (`aevia lint`) |
 
-Status: `W0102` and `W0203` are reserved. The checker sees only a flattened name table, so a
-selective import cannot be told from `open M`; the language has no `return` or `break`, so the
-AST cannot represent an unreachable statement. `W0501` currently has no emission site.
+Note: `W0203` is reserved (the language has no `return` or `break`, so the syntax cannot represent an
+unreachable statement), and `W0501` is reserved. `W0102` and `W0701`–`W0710` are
+emitted by `aevia lint`; compiler lints and extra lints share `[lints]` in
+`aevia.toml`, `-A/-W/-D/-F`, and `@allow/@warn/@deny/@forbid`.
 
 ## B.13 Writing messages
 
@@ -8224,106 +8226,4 @@ error[E0802]: matmul requires left columns (2) = right rows (3)
 These are **environment/backend** errors, not type errors in the user's program; a diagnostic
 MUST offer an actionable alternative (for example "install an RSSN with `core.gpu`" or "use
 `Rssn.dynamic`").
-
-The next appendix records the specification's revision history.
-
-
-<a id="ch-appendix-c-changelog"></a>
-
-# Appendix C — Revision log and known implementation limits
-
-This appendix records the evolution of the Aevia specification and its implementation, the "status stories" the chapters no longer carry, and the limits that are explicitly on record as unimplemented. The normative chapters say only **what is true now**; history lives here. This appendix is informative.
-
----
-
-## Revision 23 (2026-11-14): full review against the implementation, and an English edition
-
-This pass compared the specification with the implementation chapter by chapter, condensed repetition, moved status notes out of the text, and added an English edition (`spec/en/`; writing and terminology rules in `spec/STYLE.md`). The two machine-read chapters (08 and 11) keep their shape and are guarded by `cargo test -p aevia-std --test spec_signatures --test spec_programs`.
-
-- `08-stdlib.md`: reconciled implemented solver methods, physical tolerances, budgets, callbacks, strict `Option` and native numerical model contracts; corrected the exact-signature/dynamic-entry boundary and synchronized English.
-- `09-runtime.md`: specified RSSN ownership of numerical algorithms/backend dependencies and Aevia value/unit adaptation; native source coverage and manifest reachability are reported separately.
-
-**Whole book**
-
-- New English edition: every Chinese chapter has a counterpart `spec/en/<same name>`, with the same section numbers, anchors, code blocks and diagnostic codes.
-- Status notes ("implementation status (date)", "added in Revision N", "task-NN closed") moved out of the chapters into this appendix; a chapter keeps one line of *Status*.
-- Measured figures (operator, unit and test counts) no longer scatter across chapters: the manifest size is given once, in §10.8, and the other chapters point to `aevia rssn`.
-
-**This batch (08, 10–13, README, this appendix)**
-
-| File | Corrections | Additions | Removals / moved out |
-|---|---|---|---|
-| `08-stdlib.md` | Stale figures in §8.19/§8.20 such as the manifest counts, "323/323", "309 declarations", "37 modules" (now 1620 operators and 41 module files, with coverage asserted by tests); the typed count of `Rssn_Numeric` became "all typed"; an English sentence inside a Chinese paragraph in §8.7.1 | Sparse, FFT and sequence-operation subsections merged into one narrative with the rules unchanged | "Implementation status" stories (`par_map`, `args`, SDE, sparse, Plot, NPY, simulation) compressed into one line of status; Revision-number asides; references to the `.workbuddy-ai` audit document |
-| `10-backend.md` | Manifest figures in §10.0/§10.8 (1382 → 1620, new `manifest_hash`); §10.5.1 "`par_map` runs sequentially" became worker-thread replicas (§9.7.2); the §10.9 deviation note ("dimensioned literals fold to exact rationals, printing `sqrt(800000/196133) s`"; `fall_time(20.0 m)` now prints `2.0196199771025523 s`) | §10.3.7 points to the generated `Rssn_Sim_<Name>` modules; the gap list of §10.8 merged duplicates | The task-31/`emit_typecheck` narrative, a duplicated SDE status paragraph, the English summary mixed into §10.6.5 |
-| `11-examples.md` | The outputs of 11.1–11.5 now match `aevia run`; the end time of 11.2 is 3 s (at 10 s the projectile had landed and the height was negative); the shape of `series` and the `Solutions` record of `solve` in 11.3; the diagnostics of 11.9 match `aevia check`; shadowing warnings in 11.10 | A note that 11.8 is a library module (no `main`) | Repeated "this shows the benefit of…" paragraphs |
-| `12-rationale.md` | 12.8.7, parallel symbolic values (the `fork/merge` wording replaced by the actual behaviour of §9.7.2); 12.10, the roadmap changed from effort estimates to a progress table | — | The week counts of M0–M6, duplicated acceptance items |
-| `13-extensibility.md` | §13.7 registry: it said "design complete, implementation not started, dependencies report `E0605`", whereas `aevia add/update/fetch/tree`, `aevia pkg publish/yank/search/verify` and the resolver are implemented (Revision 15); the capability table of §13.8.2 gains `core.callback` and `core.plugin.source`, with the actual twelve rows authoritative; "sparse checks only the rank" in §13.9.5 became "refined shapes are checked"; the non-existent `aevia fix` and `tools/gen_rssn_module.aev` removed | The precision-tier table of 13.2.2 merged with the scoring rules of §13.4.1 | The history of manifest hashes (`1920638b…→8ed92a22…→8d2c3764…`), task-31/task-22 narratives, repeated SDE status, long "implementation status" paragraphs of several sections |
-| `README.md` | "Revision 13" → 23; counts such as "1476 operators in 37 rule sets" replaced by a pointer to `aevia rssn`; the reading-guide table aligned with chapter titles | A Chinese edition (`spec/README.md` used to be English only) | — |
-| `appendix-c-changelog.md` | "37 standard-library modules" → 41 in §2; the known-limits list of §5 updated (SDE events and shape refinement are implemented, the registry is implemented) | This entry | Revisions 12–22 condensed to key points |
-
-**Other chapters (01–07, 09, appendices A/B)**: per-chapter records are collected by spec-batch-a (01, 02, appendix A) and spec-batch-b (03–07, 09, appendix B) and will be added here once their final reports arrive.
-
-**Stale points found in review, outside this batch**: the end of §9.11 in `09-runtime.md` still says "the registry client is still unimplemented (dependencies are path-only)", which contradicts §13.7 and Revision 15; it should be corrected by that chapter's batch.
-
----
-
-## 1. Summary of the specification's evolution
-
-- **Revision 0 (2026-10-31)**: fixed the language core (pure functional, dimensions as types, static rank with dynamic-shape tensors, symbolic/numeric phases, the rssn backend).
-- **Revisions 1–6 (2026-11-01 ~ 2026-11-04)**: bidirectional type checking, unit derivation and affine temperature scales, row polymorphism and pattern matching, a unified ODE/PDE interface, diagnostic codes (E0100–E1000).
-- **Revisions 7–10 (2026-11-05 ~ 2026-11-07)**: the standard-library module tree (§8.20); native JIT (`aevia-core/src/jit.rs`, the `jit` feature); worker-replica evaluation of `par_map` (`--jobs N`); `read_npy`/`write_npy`.
-- **Revision 11 (2026-11-08)**: fixed a `BigRational` panic for a negative power of zero and a DoS on huge exponents; Unicode superscript brackets in the lexer; a zero-length-message loop and a `did_change` crash in the LSP; the `0^(-n)` singularity and fractional-root guards in the symbolic engine; tensor Cons dimension checks; measurement division by zero; machine-readable `diagnostic_codes` for RSSN FFI batch computation; 0×0/1×1 boundary cases of the dense eigenvalue solver.
-
-## 2. Current implementation status (correcting stale audit records)
-
-1. **`par_map` parallel evaluation**: implemented (Rayon + independent evaluator replicas, input order, `--jobs N`).
-2. **`@jit`**: implemented (the `jit` feature; pure numeric branches and self tail-recursive loops are lowered to Cranelift, unsupported constructs fall back to the interpreter); the default build has `core.jit` off.
-3. **Standard-library module import**: implemented; 41 `.aev` module files in `crates/aevia-std/stdlib/`.
-4. **NPY reading and writing**: implemented (with a static rank check).
-
-## 3. Revision 12 (2026-11-08): caching, `Bcsr`, source operators, non-commutative SDE
-
-1. **Caching.** rssn's `Session` request-level answer cache (on by default; keyed by the request node, template and configuration fingerprint; runs that hit the wall-clock limit are not cached; invalidated wholesale when a plugin or unit is registered) and a sub-term lemma cache (`CachePolicy::lemmas`, off by default); Aevia's per-module on-disk interface cache `.aevi` (§9.11; `AdtId`s are replaced by symbol keys when written).
-2. **`Bcsr` (§8.4.1).** rssn gained `kernels::bsr::Bsr`; Aevia gained `SparseFormat::Bcsr`, `to_bcsr`/`block_size`, and automatic block choice in `convert<Bcsr>`; preconditioned `cg_with`, Cholesky-first `spsolve` for symmetric positive definite matrices, and sparse slicing. `E1001("storage.sparse.block")` was removed.
-3. **Source operators (§13.5.2).** `@op` registers a dimension signature from the checked dimensions; the module binding is replaced by a wrapper (numeric arguments run the body, symbolic arguments build an operator node); `@rule` is traced after the operators; the rule parser accepts `ns/name`.
-4. **Non-commutative SDE (§8.9.1).** Stratonovich non-commutative Milstein, non-commutative SRK, adaptive Stratonovich (exact Itô conversion); the method name selects the scheme family and interpretation, the noise structure selects the kernel; `terms`/`cells` have defaults; record state with general noise.
-5. **Features that errored on use.** `symfun` application builds an undefined-function term; `dsolve` was added (§6.4.5); `@jit(target = Cpu)` is accepted and `Gpu`/`Distributed` report `E1001` at check time; the single-file specification is built by `tools/bundle_spec.py`.
-6. **Long tensor literals.** Literals over 128 elements no longer give `E0304`: variable chains are followed iteratively and duplicate numeric constraints are deduplicated, taking the check of a 2000-element literal from ~7 s to 0.6 s.
-7. **rssn limits.** `limit(sqrt(x+1) - sqrt(x), x, oo)` is now found by a Puiseux substitution; fixed an error in the l'Hôpital pre-check (`limit(sqrt(x)*(sqrt(x+1) - sqrt(x)), x, oo)` should be 1/2).
-
-## 4. Revisions 13–22
-
-**Revision 13 (2026-11-07 ~ 11-09): trust boundary and tightened rules.**
-Whitespace rule for unit expressions (§1.8.1): whitespace separates a unit from arithmetic, so `3 m * x` is `3 m` times `x` while the tight `3 m*x` is still a unit expression; an unresolved dimension variable used as the base of an exponent is made `1` (§3.4.3); declared dimension parameters are rigid and a violation is `E0318` (§4.4.1); `show` keeps the phase of a `Float` (`10.0` differs from `10`, §6.12.3); `Set<τ>` gained values and operations (§8.1.5.1); the run-time trust boundary (§9.2.3): the run time executes the checker's proof and does not re-prove it; literal folding (§3.10.4): a literal is rounded only once, and a closed tree of literal arithmetic is a compile-time constant; unit systems `module M with units natural|planck|atomic|geometrized` (§5.11, `E0511`/`E0512`); the commands and flags of §9.9 aligned with the actual CLI.
-
-**Revision 14 (11-10): automating rssn bindings.** Domain modules `Rssn_<Domain>` (§10.3.8): manifest + declarative overlay, generic conversions, errors through `Result`, a coverage check and report; dimension evidence; rich types `Zmod`/`Perm`/`Graph`/`Group`/`PermGroup`. Still missing: type-level moduli and operator overloading for `Zmod<n>`/`GF<p>` (§10.3.8 lists the language changes needed).
-
-**Revision 15 (11-10): package platform and dependency resolution.**
-`aevia-resolve` (SemVer 2.0 `Version`/`VersionReq`, a backtracking solver with conflict-directed backjumping, a sparse-index reader, cross-checked against exhaustive search over 2000 random rounds); manifests accept `Units = "^1.2"` and `{ package = "owner/name", version = … }`, lock files gain `checksum` (source `registry+aevia`), and `E0605` still rejects git and unknown keys; the `platform/` index records `deps` (`package`/`req`/optional `import`) and checks on publish (no path-only dependencies, dependencies exist and have a non-yanked satisfying version), publish and yank each run in one transaction, with `POST /api/v1/resolve` and a dependents endpoint; client commands `aevia add/update/fetch/tree` (`--offline`) and `aevia-pkg` `index`/`vendor`/`lock [--check]`.
-Still missing: per-package dependency namespaces (same-named import roots pointing to different versions remain `E0606`); `[patch]` overrides; `aevia-pkg tree/lock` read only the root manifest; `[source]` replacement for mirrors; no per-file digests for unpacked source trees.
-
-**Revision 16 (11-12): witnessed automatic typing (§10.3.8).** The kernel records the engine's equality judgements (a request and its answer in one equivalence class) as sort facts, and replay, clustering and mutation probing produce `signatures.witnessed.json`; Aevia generates same-shape typed wrappers for operators with no `sig` (the dynamic tier fell from 1298 to 871 operators, adding 453 automatically typed ones); opaque `Value` handles; dimension evidence for witnessed overloads; exact/symbolic sparse matrices (`sp_*`) and D-finite decision (`holonomic_*`) became available. Still missing: witnessed parameter names are inferred from types; tuples and ragged lists stay in the dynamic tier; several overloads are told apart by `_int`/`_real`/`_float` suffixes.
-
-**Revision 17 (11-12): numeric operator groups, dimension-independent names, GPU `f64`.** `Rssn_Numeric` absorbed the 73 operators newly added to rssn's `numeric` rule set (robust statistics, windows and spectra, wavelets, Krylov/sparse/low-rank/tensor, finite differences, complex special functions, expression operators); conventions: results are `Float` (the kernel encodes only floats) and method/wavelet/statistic names are symbols (bind each name once with `let`); dimension-independent names (the spatial dimension of `heat_fd` etc. is the nesting depth, likewise symbolic PDEs and affine transforms); rssn's wgpu device provides `Dtype::F64` as double-single, and a launch-fusion planner `device::plan` was added (on the Aevia side `Gpu(n)` still reports `E1001`); parameter names of witnessed wrappers are inferred from types.
-
-**Revision 18 (11-13): multiple signatures named by rank/dimension.** An overlay's `sig op as name(..)` may repeat for one operator; `codec Type - from_fn` (decode-only types); `_2d`/`_3d` finite differences; rank-polymorphic tensor operators `tensor_norm_<r>`/`tensor_inner_<r>`/`tensordot_<ra>_<rb>_<k>` and decompositions `hosvd`/`hooi`/`cp_als`/`tt_svd`/`tt_dense` (r = 2–4); mixed lists and the list accessor `from_value<Tensor<1, Value>>`; `Rssn_Numeric` fully typed. Still missing: tensor operators and decompositions beyond rank 4 still go through `Rssn.dynamic`.
-
-**Revision 19 (11-13): language-side completion.** `sum`/`prod`/`mean`/…/`transpose` at ranks 2–4 (`transpose` reverses axes for rank ≥ 2); `Result` `map`/`and_then`/`unwrap_or`/`is_ok`/`is_err`/`ok`/`ok_or`; `first`/`last`/`cumsum`/`cumprod`/`argmax`/`argmin`, `round(x, n)`, `is_nan`/`is_finite`/`is_infinite`; diagnostic suggestions (`E0407` says `m` is a unit, spelling suggestions, record-field hints); `aevia fmt` keeps blank lines between statements.
-
-**Revision 20 (11-13): the FFT family and sequence operations.** `fft`/`ifft` accept `Complex`/`Float`/`Int`; multi-dimensional transforms `fft2`/`fftn`/`fft_axis`/`fftn_axes`/`rfft2`/`rfftn`/`irfft*`/`fftshift` etc. (row–column decomposition); the normalisation of `fft_norm(x, Forward)` was fixed to `1/N` forward; `reverse`/`filter`/`any`/`all`/`find`/`first`/`last`/`take`/`drop`/`concat` at rank ≥ 2 act on rows along the first axis (a semantic change for `reverse`: it no longer flattens), plus `reverse_axis`; tie-breaking of unit suggestions (edit distance → minimal-containing edit → common unit → lexicographic).
-
-**Revision 21 (11-13): kernel diagnostics enter `Err(OpError)`.** rssn gained `Diag`/`DiagKind` and `Session::explain`; when an operator leaves its own unreduced call, the bridge fetches the reason, and the `Err` of `Rssn.dynamic` has the form `rssn.diag.<kind>: <wrapper name>: argument `<parameter name>` (#<position>): <message>`; a typed call site raises `E0807`; `Rssn_Numeric` gained `poisson_fd_bc`/`heat_fd_bc`/`wave_fd_bc`, `advect_fd_upwind`, `tensor_contract_*`, `tucker_dense_*`, `cp_dense_*` and others. Still missing: only operators of `rules::numeric::TABLES` record reasons; `OpError` has no `code(e)`/`message(e)` accessors.
-
-**Revision 22 (11-13): rank has no upper limit.** The signatures of rank-polymorphic operations are **templates** over the rank (`builtins::rank_schemes_for`), instantiated by the checker at the rank of the argument when every built-in candidate fails; `fftn`/`sum` at rank 5 and 6 take the same path as rank 2; `fold`/`fold_left`/`sort`/`sort_by`/`sort_float`/`zip`/`enumerate` at rank ≥ 2 changed from element-wise (flattened) to **row-wise** (a semantic change); added `sort_by_key`, `sort_axis`, `argsort`, `rfftn_axes`/`irfftn_axes`; `sort_by` became a stable merge sort. Still missing: user functions cannot be rank-polymorphic; `cumsum`/`cumprod`/`argmax`/`argmin` have no per-axis forms at rank ≥ 2.
-
-## 5. Known limits on record
-
-1. **Package dependencies**: registry dependencies, SemVer resolution and checked local copies are implemented (Revision 15); `git` dependencies do not exist; per-package dependency namespaces, `[patch]` overrides and mirror `[source]` replacement are not implemented.
-2. **Device backends**: `Gpu`/`Distributed` are only constructible run-time values; `on`/`to_device`/`@jit(target = Gpu(..))` report `E1001("core.gpu")`/`E1001("core.distributed")`; batch primitives such as `Device.map` are not exposed as language primitives (§10.6.5).
-3. **Sparse**: sparse values cannot enter the rssn term graph; user-defined formats wait for rssn to open `Format`; `gmres_with`/`bicgstab_with` do not accept exact elements; sparse SVD is not provided; eigenvalue queries use explicit RSSN adapters (§8.4.1, §13.9.5).
-4. **SDE**: Brownian-bridge dense output and terminal events that stop in the middle of integration are not provided (`sde_at` is a linear chord, `sde_events` cuts after the fact); ensembles fall back to sequential execution when callbacks cannot cross threads (§8.9.1).
-5. **ODE**: multiple shooting / collocation for BVPs; `AutoSwitch` decides by step budget rather than an eigenvalue estimate (§8.9).
-6. **Type system**: type-level moduli for `Zmod<n>`/`GF<p>`; rank polymorphism in user functions; symbolic exponents (§12.8.2).
-7. **Plot**: only the HTML/SVG-inline renderer, with no standalone `.svg`/PNG/JPEG output (§8.12).
-8. **REPL**: Ctrl-C cancellation is cooperative; opaque compiler/native/system calls may finish their current call before `E0812` is reported (§9.8).
 

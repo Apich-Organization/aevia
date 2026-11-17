@@ -286,6 +286,7 @@ fn a_different_capability_set_is_a_miss() {
 
     let bare = CheckOptions {
         capabilities: Capabilities::from_names(Vec::<String>::new()),
+        ..CheckOptions::default()
     };
     let (program, stats) = load_with(&entry, &disk, &bare);
     assert!(!program.diagnostics.has_errors());

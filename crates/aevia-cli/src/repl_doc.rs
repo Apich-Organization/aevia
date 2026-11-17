@@ -476,7 +476,11 @@ fn declaration_names(declaration: &Decl) -> Vec<(String, Span)> {
         },
         | DeclKind::Class { name, methods, .. } => {
             std::iter::once((name.clone(), declaration.span))
-                .chain(methods.iter().map(|(name, ty)| (name.clone(), ty.span)))
+                .chain(
+                    methods
+                        .iter()
+                        .map(|method| (method.name.clone(), method.ty.span)),
+                )
                 .collect()
         },
         | _ => Vec::new(),

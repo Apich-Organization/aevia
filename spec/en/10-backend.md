@@ -249,7 +249,7 @@ A `Term<'s>` is borrowed only during a `compute` call and converted to a `u32` i
 
 ### 10.6.2 Caching
 
-- `Config` is cached per rule set / assumptions / mode; terms are cached by structural hash; compiled functions by term hash + input names; the unit table and dimension aliases are compile-time constants. rssn also has a request-level answer cache and an optional sub-term lemma cache (appendix C, Revision 12).
+- `Config` is cached per rule set / assumptions / mode; terms are cached by structural hash; compiled functions by term hash + input names; the unit table and dimension aliases are compile-time constants. rssn also has a request-level answer cache and an optional sub-term lemma cache.
 ### 10.6.3 Batching
 
 - Do not use `compute_all` for element-wise symbolic tensor operations (one request per element is costly): build terms with `map` and `simplify` once at the end.

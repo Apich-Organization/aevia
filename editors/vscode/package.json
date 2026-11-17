@@ -57,12 +57,59 @@
           "enum": ["off", "messages", "verbose"],
           "default": "off",
           "description": "Trace the communication between VS Code and the language server."
+        },
+        "aevia.cli.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `aevia` CLI executable used to run and test `.aev` files. Empty: look for `aevia` on `PATH`."
         }
       }
     },
     "commands": [
+      { "command": "aevia.runFile", "title": "Aevia: Run Current File", "icon": "$(play)" },
+      { "command": "aevia.testFile", "title": "Aevia: Test Current File", "icon": "$(beaker)" },
       { "command": "aevia.restartServer", "title": "Aevia: Restart Language Server" },
       { "command": "aevia.showServerLog", "title": "Aevia: Show Language Server Log" }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "aevia.runFile",
+          "when": "editorLangId == aevia",
+          "group": "navigation"
+        },
+        {
+          "command": "aevia.testFile",
+          "when": "editorLangId == aevia",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "aevia.runFile",
+          "when": "editorLangId == aevia",
+          "group": "1_modification"
+        },
+        {
+          "command": "aevia.testFile",
+          "when": "editorLangId == aevia",
+          "group": "1_modification"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "aevia.runFile",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
+        "when": "editorLangId == aevia"
+      },
+      {
+        "command": "aevia.testFile",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t",
+        "when": "editorLangId == aevia"
+      }
     ]
   },
   "scripts": {

@@ -1632,6 +1632,27 @@ pub(crate) enum SourceLookupFailure {
     Prelude,
 }
 
+thread_local! {
+    static ENVIRONMENT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Records that a binding table name resolution reads (a scope's variables or
+/// source revisions, the interpreter's globals or method classes) changed.
+///
+/// Global references are resolved through an inline cache
+/// (`Interp::lookup_global_at`) whose entries are only valid for the epoch
+/// they were filled in; every mutation of such a table calls this first.
+/// Scopes are `Rc` and never cross threads, so a thread-local counter covers
+/// every table a thread's interpreter can read.
+pub fn bump_environment() {
+    ENVIRONMENT.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+}
+
+/// The current environment epoch; see [`bump_environment`].
+pub(crate) fn environment_epoch() -> u64 {
+    ENVIRONMENT.with(std::cell::Cell::get)
+}
+
 /// A lexical environment: a persistent chain of scopes.
 ///
 /// The bindings are behind a `RefCell` so that a recursive function can be
@@ -1734,6 +1755,7 @@ impl Scope {
         name: &str,
         visible: aevia_syntax::Span,
     ) {
+        crate::value::bump_environment();
         let mut revisions = self.source_revisions.borrow_mut();
         let entries = revisions.entry(name.to_string()).or_insert_with(|| {
             self.vars
@@ -1753,6 +1775,7 @@ impl Scope {
         name: &str,
         initializer: aevia_syntax::Span,
     ) {
+        crate::value::bump_environment();
         let mut initializers = self.source_initializers.borrow_mut();
         let ranges = initializers.entry(name.to_string()).or_default();
         if !ranges.contains(&initializer) {
@@ -1769,6 +1792,7 @@ impl Scope {
         visible: aevia_syntax::Span,
     ) {
         self.reserve_source(name, visible);
+        crate::value::bump_environment();
         let mut revisions = self.source_revisions.borrow_mut();
         let entries = revisions.get_mut(name).expect("reserved source binding");
         let entry = entries
@@ -1796,6 +1820,7 @@ impl Scope {
         reference: aevia_syntax::Span,
         replacement: Value,
     ) -> Option<Value> {
+        crate::value::bump_environment();
         let mut revisions = self.source_revisions.borrow_mut();
         if let Some(entries) = revisions.get_mut(name) {
             let preceding = entries
@@ -1829,6 +1854,7 @@ impl Scope {
                 return original;
             }
         }
+        crate::value::bump_environment();
         self.vars.borrow_mut().insert(name.to_string(), replacement)
     }
 
@@ -2112,6 +2138,26 @@ pub enum IoAction {
     },
     /// Reads one line from stdin.
     ReadLine,
+    /// Prints a prompt without a newline, flushes stdout, and reads one line from stdin.
+    Input(String),
+    /// Reads and validates an SVG file, returning its XML source.
+    ReadSvg(String),
+    /// Writes an SVG string to a file.
+    WriteSvg {
+        /// The path.
+        path: String,
+        /// The SVG contents.
+        contents: String,
+    },
+    /// Reads and decodes an animated GIF file.
+    ReadGif(String),
+    /// Encodes and writes an animated GIF file.
+    WriteGif {
+        /// The path.
+        path: String,
+        /// The animation frames and metadata.
+        animation: rssn::io::GifAnimation,
+    },
     /// Loads a source plugin (§13.5.2) and publishes its registrations.
     LoadPlugin(String),
     /// Starts `thunk()` as a concurrent task (§9.7.3); produces a `Task`.

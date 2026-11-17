@@ -37,14 +37,13 @@ Never translate identifiers, signatures or code inside those tables; translate o
    a claim the implementation does not honour either moves to *Status* (a short "implemented /
    partial / planned" note) or is removed. Diagnostic codes must exist in appendix B.
 3. Fill genuine gaps: a rule that is implemented but unwritten, an edge case a test covers.
-4. Record what changed in appendix C (one line per chapter), not inside the chapter.
 
 ## Condensing
 
 The target is roughly **one third shorter** without losing a rule.
 
 - State each rule once, where it belongs; elsewhere link with `§N.M`.
-- Move *why* to chapter 12 and history to appendix C. Normative chapters say what, not why
+- Move *why* to chapter 12. Normative chapters say what, not why
   (except one sentence of motivation per principle).
 - Prefer a table or a typing rule to a paragraph; delete examples that restate another example.
 - No "revision N added" asides, no "see the audit". Status is a line, not a story.

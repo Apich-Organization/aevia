@@ -6,6 +6,7 @@
 
 use aevia_analysis::CodeAction;
 use aevia_analysis::CodeActionKind;
+use aevia_analysis::CodeLens;
 use aevia_analysis::Completion;
 use aevia_analysis::CompletionKind;
 use aevia_analysis::Diagnostic;
@@ -476,6 +477,26 @@ pub fn semantic_tokens_json(tokens: &[SemanticToken]) -> Value {
     json!({ "data": data })
 }
 
+/// Formats code lenses for `textDocument/codeLens`.
+#[must_use]
+pub fn code_lens_json(lenses: &[CodeLens]) -> Value {
+    Value::Array(
+        lenses
+            .iter()
+            .map(|lens| {
+                json!({
+                    "range": range_json(lens.range),
+                    "command": {
+                        "title": lens.title,
+                        "command": lens.command,
+                        "arguments": lens.arguments,
+                    },
+                })
+            })
+            .collect(),
+    )
+}
+
 /// The capabilities this server actually implements.
 ///
 /// Advertised from what the code does, not from what a client is: every field
@@ -498,6 +519,10 @@ pub fn capabilities() -> Value {
         "documentSymbolProvider": true,
         "documentFormattingProvider": true,
         "codeActionProvider": true,
+        "codeLensProvider": { "resolveProvider": false },
+        "executeCommandProvider": {
+            "commands": ["aevia.runFile", "aevia.testFile"],
+        },
         "workspaceSymbolProvider": true,
         "referencesProvider": true,
         "renameProvider": { "prepareProvider": true },
@@ -653,6 +678,11 @@ mod tests {
         assert_eq!(capabilities["positionEncoding"], "utf-16");
         assert_eq!(capabilities["completionProvider"]["resolveProvider"], false);
         assert_eq!(capabilities["codeActionProvider"], true);
+        assert_eq!(capabilities["codeLensProvider"]["resolveProvider"], false);
+        assert_eq!(
+            capabilities["executeCommandProvider"]["commands"],
+            serde_json::json!(["aevia.runFile", "aevia.testFile"])
+        );
         assert_eq!(capabilities["typeDefinitionProvider"], true);
         assert_eq!(capabilities["workspaceSymbolProvider"], true);
         assert_eq!(capabilities["referencesProvider"], true);

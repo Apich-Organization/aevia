@@ -360,8 +360,7 @@ In the template, the `DimArena` is an `Arc<RwLock>` that `Graph::clone` **shares
 ## 13.7 The central package registry
 
 The registry is a package index that is **content-addressed, signed and capability-declaring**. The service is implemented in `platform/` (`aevia-registry-*` and `aevia-pkg`) and deployed as `aevia.apich.org`.
-
-**Status**: implemented — `aevia add owner/name[@req]`, `aevia update`, `aevia fetch`, `aevia tree` (all with `--offline`) and `aevia pkg publish/yank/search/verify`; dependency resolution is done by `aevia-resolve` (SemVer 2.0, backtracking solver, lock files with `checksum`, §7.5.1/§7.5.2); git dependencies and unknown manifest keys remain `E0605`. Known gaps are in appendix C, Revision 15.
+The CLI provides `aevia add owner/name[@req]`, `aevia update`, `aevia fetch`, `aevia tree` (all with `--offline`) and `aevia pkg publish/yank/search/verify`; dependency resolution uses SemVer 2.0 and lock-file checksums (§7.5.1/§7.5.2), and git dependencies and unknown manifest keys report `E0605`.
 
 ### 13.7.1 Package manifest
 

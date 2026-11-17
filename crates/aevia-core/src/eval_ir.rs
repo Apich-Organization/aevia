@@ -830,7 +830,10 @@ fn eval_atom(
                     .at(span)
                 })?
         },
-        | Atom::Global(name) => interp.lookup_global(name, env.scope.as_ref(), span)?,
+        | Atom::Global(name) => {
+            let site = std::ptr::from_ref(atom) as usize;
+            interp.lookup_global_at(site, name, env.scope.as_ref(), span)?
+        },
         | Atom::Int(value) => Value::Num(NumVal::int(value.clone())),
         | Atom::Exact(value) => Value::Num(NumVal::exact(value.clone(), aevia_dim::Dim::one())),
         | Atom::Float(value) => Value::Num(NumVal::float(*value, aevia_dim::Dim::one())),

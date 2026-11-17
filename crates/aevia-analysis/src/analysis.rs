@@ -34,6 +34,7 @@ use crate::position::Range;
 use crate::prelude;
 use crate::tokens;
 use crate::types::CodeAction;
+use crate::types::CodeLens;
 use crate::types::Completion;
 use crate::types::CompletionKind;
 use crate::types::FileEdit;
@@ -1155,6 +1156,64 @@ impl<'a> Analysis<'a> {
         self.document.range_of(span.start, span.end)
     }
 
+    /// Code lenses for runnable `fn main` and `test "..."` declarations.
+    #[must_use]
+    pub fn code_lens(
+        &self,
+        uri: &str,
+    ) -> Vec<CodeLens> {
+        let Some(module) = self.module() else {
+            return Vec::new();
+        };
+        let mut lenses = Vec::new();
+        for decl in &module.decls {
+            match &decl.kind {
+                | DeclKind::Fn { name, .. } if name == "main" => {
+                    lenses.push(CodeLens {
+                        range: self.range(decl.span),
+                        title: "▶ Run".to_string(),
+                        command: "aevia.runFile".to_string(),
+                        arguments: vec![uri.to_string()],
+                    });
+                },
+                | DeclKind::Test { name, .. } => {
+                    lenses.push(CodeLens {
+                        range: self.range(decl.span),
+                        title: "▶ Test".to_string(),
+                        command: "aevia.testFile".to_string(),
+                        arguments: vec![uri.to_string(), name.clone()],
+                    });
+                },
+                | _ => {},
+            }
+        }
+        lenses
+    }
+
+    /// The `##` documentation for a local declaration, respecting `@hidden` / `@doc(hidden)`.
+    fn local_doc(
+        &self,
+        name: &str,
+    ) -> Option<String> {
+        let module = self.module()?;
+        find_decl_doc(module, self.document.text(), name)
+    }
+
+    /// The `##` documentation for a declaration in a loaded module, respecting `@hidden` / `@doc(hidden)`.
+    fn module_doc(
+        &self,
+        module_index: usize,
+        name: &str,
+    ) -> Option<String> {
+        let program = self.program()?;
+        let loaded = program.modules.get(module_index)?;
+        let text = program
+            .sources
+            .file(loaded.file)
+            .map_or("", |source| source.text.as_str());
+        find_decl_doc(&loaded.module, text, name)
+    }
+
     /// The hover text for an occurrence, or `None` when nothing is known.
     fn describe(
         &self,
@@ -1180,46 +1239,78 @@ impl<'a> Analysis<'a> {
                 if let Some(export) = checked.exports.get(name) {
                     let text = describe_export(name, export)?;
                     let polymorphic = export_is_polymorphic(export);
-                    return Some(self.with_use_type(text, occurrence.span, polymorphic));
+                    let mut text = self.with_use_type(text, occurrence.span, polymorphic);
+                    if let Some(doc) = self.local_doc(name) {
+                        text.push_str("\n\n");
+                        text.push_str(&doc);
+                    }
+                    return Some(text);
                 }
                 // A name an `open` brought in from another module.
-                if let Some((_, export)) = self.resolve_opened(name) {
+                if let Some((index, export)) = self.resolve_opened(name) {
                     let text = describe_export(name, export)?;
                     let polymorphic = export_is_polymorphic(export);
                     let text = format!("{text}\n\nimported");
-                    return Some(self.with_use_type(text, occurrence.span, polymorphic));
+                    let mut text = self.with_use_type(text, occurrence.span, polymorphic);
+                    if let Some(doc) = self.module_doc(index, name) {
+                        text.push_str("\n\n");
+                        text.push_str(&doc);
+                    }
+                    return Some(text);
                 }
                 let mut schemes = builtins::schemes(name)?;
                 let scheme = schemes.drain(..).next()?;
                 let polymorphic = !scheme.vars.is_empty() || !scheme.dims.is_empty();
                 let text = format!("```aevia\n{name}: {scheme}\n```\n\nprelude");
-                Some(self.with_use_type(text, occurrence.span, polymorphic))
+                let mut text = self.with_use_type(text, occurrence.span, polymorphic);
+                if let Some(doc) = prelude::doc(name) {
+                    text.push_str("\n\n");
+                    text.push_str(doc);
+                }
+                Some(text)
             },
             | Role::Constructor(name) => {
                 if let Some(export) = checked.exports.get(name) {
-                    return describe_export(name, export);
+                    let mut text = describe_export(name, export)?;
+                    if let Some(doc) = self.local_doc(name) {
+                        text.push_str("\n\n");
+                        text.push_str(&doc);
+                    }
+                    return Some(text);
                 }
-                let (_, export) = self.resolve_opened(name)?;
-                describe_export(name, export)
+                let (index, export) = self.resolve_opened(name)?;
+                let mut text = describe_export(name, export)?;
+                if let Some(doc) = self.module_doc(index, name) {
+                    text.push_str("\n\n");
+                    text.push_str(&doc);
+                }
+                Some(text)
             },
             | Role::TypeName(name) => {
-                let export = checked
-                    .exports
-                    .get(name)
-                    .or_else(|| self.resolve_opened(name).map(|(_, export)| export))?;
-                match export {
-                    | Export::Type { .. } => Some(format!("type `{name}`")),
+                let (export, doc) = if let Some(export) = checked.exports.get(name) {
+                    (export, self.local_doc(name))
+                } else {
+                    let (index, export) = self.resolve_opened(name)?;
+                    (export, self.module_doc(index, name))
+                };
+                let mut text = match export {
+                    | Export::Type { .. } => format!("type `{name}`"),
                     | Export::Alias { params } => {
-                        Some(format!("type alias `{name}` with {params} parameter(s)"))
+                        format!("type alias `{name}` with {params} parameter(s)")
                     },
                     | Export::TypeCtor { adt, .. } => {
-                        Some(format!(
+                        format!(
                             "type `{name}`\n\nconstructor `{name}` of `{}`",
                             aevia_types::adt::name_of(*adt)
-                        ))
+                        )
                     },
-                    | other => describe_export(name, other),
+                    | other => describe_export(name, other)?,
+                };
+                if let Some(doc) = doc {
+                    text.push_str("\n\n");
+                    text.push_str(&doc);
                 }
+                Some(text)
             },
             | Role::Method { name, class } => {
                 Some(format!("**method** `{name}`\n\nclass `{class}`"))
@@ -1375,6 +1466,12 @@ impl<'a> Analysis<'a> {
             {
                 text.push_str(&format!("\n\nimported from `{}`", module.path.join(".")));
             }
+            if let Some(member) = path.last()
+                && let Some(doc) = self.module_doc(index, member)
+            {
+                text.push_str("\n\n");
+                text.push_str(&doc);
+            }
             return Some(text);
         }
         let [root, op] = path else {
@@ -1383,24 +1480,45 @@ impl<'a> Analysis<'a> {
         if root != "Rssn" {
             return None;
         }
-        let call = self.checked_module().rssn_calls.iter().find(|call| {
+        let entry = aevia_rssn::registry().op(op);
+        if let Some(call) = self.checked_module().rssn_calls.iter().find(|call| {
             call.name.as_str() == op.as_str()
                 && call.span.start <= span.start
                 && span.end <= call.span.end
-        })?;
-        let entry = aevia_rssn::registry().op(op);
-        let overloads = entry.map_or(0, |entry| entry.signatures.len());
-        let mut text = format!(
-            "**kernel operator** `Rssn.{op}`\n\npinned overload {} of {overloads} · `{}`",
-            call.overload + 1,
-            call.key
-        );
-        if let Some(signature) = entry.and_then(|entry| entry.signatures.get(call.overload)) {
-            text.push_str(&format!("\n\n```aevia\n{}\n```", signature.render()));
+        }) {
+            let overloads = entry.map_or(0, |entry| entry.signatures.len());
+            let mut text = format!(
+                "**kernel operator** `Rssn.{op}`\n\npinned overload {} of {overloads} · `{}`",
+                call.overload + 1,
+                call.key
+            );
+            if let Some(signature) = entry.and_then(|entry| entry.signatures.get(call.overload)) {
+                text.push_str(&format!("\n\n```aevia\n{}\n```", signature.render()));
+            }
+            if let Some(entry) = entry
+                && !entry.doc.is_empty()
+            {
+                text.push_str(&format!("\n\n{}", entry.doc));
+            }
+            return Some(text);
         }
-        if let Some(entry) = entry
-            && !entry.doc.is_empty()
-        {
+        let entry = entry?;
+        let mut text = format!(
+            "**kernel operator** `Rssn.{op}`\n\n{} overload(s) · `{}`",
+            entry.signatures.len(),
+            entry.rule_set
+        );
+        if !entry.signatures.is_empty() {
+            text.push_str("\n\n```aevia\n");
+            for (i, sig) in entry.signatures.iter().enumerate() {
+                if i > 0 {
+                    text.push('\n');
+                }
+                text.push_str(&sig.render());
+            }
+            text.push_str("\n```");
+        }
+        if !entry.doc.is_empty() {
             text.push_str(&format!("\n\n{}", entry.doc));
         }
         Some(text)
@@ -1572,13 +1690,13 @@ impl<'a> SymbolContext<'a> {
                     detail: None,
                     children: methods
                         .iter()
-                        .map(|(method, ty)| {
+                        .map(|method| {
                             Symbol {
-                                name: method.clone(),
+                                name: method.name.clone(),
                                 kind: SymbolKind::Method,
                                 range: whole,
-                                selection: self.name_range(decl.span, method),
-                                detail: Some(self.text_of(ty.span)),
+                                selection: self.name_range(decl.span, &method.name),
+                                detail: Some(self.text_of(method.ty.span)),
                                 children: Vec::new(),
                             }
                         })
@@ -3196,24 +3314,61 @@ fn dictionary_signature(
     })
 }
 
+/// The `##` documentation for a declaration named `name` in `module`,
+/// respecting `@hidden` and `@doc(hidden)`.
+fn find_decl_doc(
+    module: &Module,
+    text: &str,
+    name: &str,
+) -> Option<String> {
+    for decl in &module.decls {
+        let matches = match &decl.kind {
+            | DeclKind::Fn { name: declared, .. }
+            | DeclKind::Dimension { name: declared, .. }
+            | DeclKind::Unit { name: declared, .. } => declared == name,
+            | DeclKind::Let { pattern, .. } => {
+                matches!(&pattern.kind, PatKind::Var(bound) if bound == name)
+            },
+            | DeclKind::Type {
+                name: declared, body, ..
+            } => {
+                if declared == name {
+                    true
+                } else if let TypeBody::Variants(ctors) = body {
+                    ctors.iter().any(|ctor| ctor.name == name)
+                } else {
+                    false
+                }
+            },
+            | DeclKind::Class {
+                name: declared,
+                methods,
+                ..
+            } => declared == name || methods.iter().any(|method| method.name == name),
+            | DeclKind::Import { .. }
+            | DeclKind::Instance { .. }
+            | DeclKind::Derive { .. }
+            | DeclKind::Test { .. } => false,
+        };
+        if matches {
+            if decl.is_doc_hidden() {
+                return None;
+            }
+            return decl
+                .doc
+                .clone()
+                .or_else(|| doc_before(text, decl.span.start));
+        }
+    }
+    None
+}
+
 /// The `##` documentation immediately above a declaration.
 fn declaration_doc(
     view: &ModuleView<'_>,
     name: &str,
 ) -> Option<String> {
-    for decl in &view.module.decls {
-        let matches = match &decl.kind {
-            | DeclKind::Fn { name: declared, .. } => declared == name,
-            | DeclKind::Let { pattern, .. } => {
-                matches!(&pattern.kind, PatKind::Var(bound) if bound == name)
-            },
-            | _ => false,
-        };
-        if matches {
-            return doc_before(view.text, decl.span.start);
-        }
-    }
-    None
+    find_decl_doc(view.module, view.text, name)
 }
 
 /// The `##` documentation immediately above a type declaration.
@@ -3225,7 +3380,13 @@ fn type_declaration_doc(
         if let DeclKind::Type { name: declared, .. } = &decl.kind
             && declared == name
         {
-            return doc_before(view.text, decl.span.start);
+            if decl.is_doc_hidden() {
+                return None;
+            }
+            return decl
+                .doc
+                .clone()
+                .or_else(|| doc_before(view.text, decl.span.start));
         }
     }
     None

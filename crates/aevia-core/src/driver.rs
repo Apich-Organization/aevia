@@ -61,6 +61,8 @@ pub struct ResolvedImport {
     pub prefix: String,
     /// Selected export names, or every exported name when absent.
     pub names: Option<Vec<String>>,
+    /// Whether `export import` / `export open` re-exports these names.
+    pub export: bool,
 }
 
 /// A whole program.
@@ -629,11 +631,33 @@ impl ReplRuntime {
             if diagnostics.has_errors() {
                 return diagnostics;
             }
-            let values = module
+            let values: HashMap<String, crate::Value> = module
                 .checked
                 .exports
                 .keys()
-                .filter_map(|name| scope.lookup(name).map(|value| (name.clone(), value)))
+                .filter_map(|name| {
+                    scope
+                        .lookup(name)
+                        .or_else(|| {
+                            module
+                                .imports
+                                .iter()
+                                .filter(|import| import.export)
+                                .filter(|import| {
+                                    import
+                                        .names
+                                        .as_ref()
+                                        .is_none_or(|names| names.contains(name))
+                                })
+                                .find_map(|import| {
+                                    self.exports
+                                        .get(&import.file)
+                                        .and_then(|exports| exports.get(name))
+                                        .cloned()
+                                })
+                        })
+                        .map(|value| (name.clone(), value))
+                })
                 .collect();
             self.exports.insert(module.file, values);
             self.scopes.insert(module.file, scope.clone());
@@ -667,6 +691,7 @@ impl ReplRuntime {
                             format!("{}.{name}", import.prefix)
                         };
                         if !(locals.contains(&key) && interp.globals.contains_key(&key)) {
+                            crate::value::bump_environment();
                             interp.globals.insert(key, value.clone());
                         }
                     }
@@ -694,6 +719,7 @@ impl ReplRuntime {
                         } else {
                             format!("{}.{name}", import.prefix)
                         };
+                        crate::value::bump_environment();
                         scope.vars.borrow_mut().insert(key, value.clone());
                     }
                 }
@@ -1125,6 +1151,7 @@ struct Parsed {
         Option<String>,
         bool,
         Option<Vec<String>>,
+        bool,
     )>,
 }
 
@@ -1346,6 +1373,7 @@ impl Loader {
                         file,
                         module: Module {
                             name: None,
+                            private: false,
                             unit_system: None,
                             decls: Vec::new(),
                             file,
@@ -1408,6 +1436,7 @@ impl Loader {
                 alias,
                 names,
                 open,
+                export,
             } = &decl.kind
             else {
                 continue;
@@ -1534,12 +1563,27 @@ impl Loader {
                 .then_some(target_key)
             });
             if let Some(resolved) = resolved {
+                if self
+                    .parsed
+                    .get(&resolved)
+                    .is_some_and(|parsed| parsed.module.private && context.owner != target.owner)
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        "E0607",
+                        format!(
+                            "module `{}` is private to its package",
+                            import_path.join(".")
+                        ),
+                        decl.span,
+                    ));
+                }
                 imports.push((
                     resolved,
                     import_path.clone(),
                     alias.clone(),
                     *open,
                     names.clone(),
+                    *export,
                 ));
             }
         }
@@ -1579,7 +1623,7 @@ impl Loader {
         // Every prefix each module is imported under, across all importers.
         let mut prefixes: HashMap<ModuleKey, Vec<String>> = HashMap::new();
         for parsed in self.parsed.values() {
-            for (target, import_path, alias, open, names) in &parsed.imports {
+            for (target, import_path, alias, open, names, _) in &parsed.imports {
                 let prefix = if *open || names.is_some() {
                     String::new()
                 } else {
@@ -1638,9 +1682,10 @@ impl Loader {
             // needs them: a module restored from disk never clones its
             // dependencies' export tables.
             let mut import_specs: Vec<(String, usize, Option<Vec<String>>)> = Vec::new();
+            let mut reexports: Vec<(usize, Option<Vec<String>>)> = Vec::new();
             let mut runtime_imports = Vec::new();
             let mut bindings = Vec::new();
-            for (target, import_path, alias, open, names) in &parsed.imports {
+            for (target, import_path, alias, open, names, export) in &parsed.imports {
                 let Some((other_index, other)) = self
                     .order
                     .iter()
@@ -1703,10 +1748,14 @@ impl Loader {
                     }
                     expanded
                 });
+                if *export {
+                    reexports.push((other_index, runtime_names.clone()));
+                }
                 runtime_imports.push(ResolvedImport {
                     file: other.file,
                     prefix: prefix.clone(),
                     names: runtime_names,
+                    export: *export,
                 });
                 import_specs.push((prefix, other_index, names.clone()));
             }
@@ -1845,7 +1894,7 @@ impl Loader {
                     }
                 },
             };
-            let checked = match restored {
+            let mut checked = match restored {
                 | Some(checked) => {
                     if from_memory && let Some(cache) = &self.cache {
                         cache.borrow_mut().reused += 1;
@@ -1869,6 +1918,33 @@ impl Loader {
                     checked
                 },
             };
+            for (other_index, selected) in &reexports {
+                let other = &modules[*other_index].checked;
+                for (name, export) in &other.exports {
+                    if selected.as_ref().is_some_and(|names| !names.contains(name)) {
+                        continue;
+                    }
+                    checked
+                        .module
+                        .exports
+                        .entry(name.clone())
+                        .or_insert_with(|| export.clone());
+                    if let Some(proj) = other.callable_exports.get(name) {
+                        checked
+                            .module
+                            .callable_exports
+                            .entry(name.clone())
+                            .or_insert_with(|| proj.clone());
+                    }
+                    if let Some(alias_def) = other.alias_defs.get(name) {
+                        checked
+                            .module
+                            .alias_defs
+                            .entry(name.clone())
+                            .or_insert_with(|| alias_def.clone());
+                    }
+                }
+            }
             if self.disk.is_some() {
                 if own_digest.is_none() {
                     own_digest = crate::disk_cache::interface_digest(&checked.module.interface());
@@ -1946,6 +2022,7 @@ fn publish_constructors(
             continue;
         };
         let qualified = format!("{}.{name}", module.path.join("."));
+        crate::value::bump_environment();
         interp.globals.insert(qualified, value.clone());
         for alias in &module.aliases {
             let key = if alias.is_empty() {
@@ -1953,6 +2030,7 @@ fn publish_constructors(
             } else {
                 format!("{alias}.{name}")
             };
+            crate::value::bump_environment();
             interp.globals.insert(key, value.clone());
         }
     }
@@ -2028,6 +2106,7 @@ pub fn run_modules(
                     } else {
                         format!("{}.{name}", import.prefix)
                     };
+                    crate::value::bump_environment();
                     scope.vars.borrow_mut().insert(key, value.clone());
                 }
             }
@@ -2037,7 +2116,24 @@ pub fn run_modules(
         let names = crate::top_level_names(&module.module);
         let mut values = HashMap::new();
         for name in module.checked.exports.keys() {
-            if let Some(value) = scope.lookup(name) {
+            if let Some(value) = scope.lookup(name).or_else(|| {
+                module
+                    .imports
+                    .iter()
+                    .filter(|import| import.export)
+                    .filter(|import| {
+                        import
+                            .names
+                            .as_ref()
+                            .is_none_or(|names| names.contains(name))
+                    })
+                    .find_map(|import| {
+                        exports
+                            .get(&import.file)
+                            .and_then(|imported| imported.get(name))
+                            .cloned()
+                    })
+            }) {
                 values.insert(name.clone(), value);
             }
         }
@@ -2048,6 +2144,7 @@ pub fn run_modules(
                 } else {
                     format!("{}.{name}", module.path.join("."))
                 };
+                crate::value::bump_environment();
                 interp.globals.insert(key, value);
             }
         }
@@ -2085,6 +2182,7 @@ pub fn run_modules(
                 } else {
                     format!("{prefix}.{name}")
                 };
+                crate::value::bump_environment();
                 interp.globals.insert(to, value);
             }
         }

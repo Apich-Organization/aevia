@@ -17,5 +17,6 @@ let line = line
 let line_with = line_with
 let plot = plot
 let save = save
+let save_gif = plot_save_gif
 let scatter = scatter
 let scatter_with = scatter_with

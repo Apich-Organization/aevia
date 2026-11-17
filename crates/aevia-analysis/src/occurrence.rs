@@ -435,8 +435,8 @@ impl Collector<'_> {
             } => {
                 self.declare(decl.span, name, Role::TypeName(name.clone()));
                 let _ = params;
-                for (_, ty) in methods {
-                    self.ty(ty);
+                for method in methods {
+                    self.ty(&method.ty);
                 }
             },
             | DeclKind::Instance { class, ty, methods } => {

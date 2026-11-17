@@ -812,8 +812,18 @@ fn docs(
     tier: &str,
 ) {
     let _ = writeln!(out, "## `{}.{}` ({tier})", op.rule_set, op.name);
-    for line in op.doc.lines().take(6) {
+    for line in op.doc.lines() {
         let _ = writeln!(out, "## {}", line.trim_end());
+    }
+    if !op.examples.is_empty() {
+        let _ = writeln!(out, "## Examples:");
+        for ex in &op.examples {
+            if ex.note.is_empty() {
+                let _ = writeln!(out, "##   `{}` => `{}`", ex.input, ex.output);
+            } else {
+                let _ = writeln!(out, "##   `{}` => `{}` ({})", ex.input, ex.output, ex.note);
+            }
+        }
     }
 }
 

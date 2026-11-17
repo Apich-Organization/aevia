@@ -166,12 +166,12 @@ Kinematics = { path = "../kinematics" }               # 本地路径包
 Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # 本地开发用路径，发布后按版本
 ```
 
-状态：清单读取器读 `[package]`（`name`、`version`、`edition`、`entry`、`authors`、`description`、`license`、
+清单读取器读 `[package]`（`name`、`version`、`edition`、`entry`、`authors`、`description`、`license`、
 `license-file`、`readme`、`repository`、`homepage`、`documentation`、`keywords`、`categories`）与
 `[dependencies]`；其他表（`[compat]`、`[capabilities]`、`[build]`、`[profile.*]`）与未知键都是 `E0605`。
 发布到 registry 时强制要求非空的 `description`，以及非空的 `license` 或打包在归档内的非空 `license-file`；
-`aevia publish` 的选项（§9.9）和 `aevia-pkg.toml` 也可覆盖这些元数据。能力声明目前没有运行时权限检查，
-只有 `--caps`（§9.14）。`git` 依赖不存在（`E0605`）。
+`aevia publish` 的选项（§9.9）和 `aevia-pkg.toml` 也可覆盖这些元数据。能力声明不作运行时权限检查，
+权限通过 `--caps`（§9.14）控制。不支持 `git` 依赖（`E0605`）。
 
 - `name` 是包名，`version` 是 SemVer 2.0 的 `major.minor.patch`，可带 `-pre-release`；发布版本不得带
   `+build`（两个仅 build 不同的版本优先级相同，registry 无法区分）。
@@ -252,8 +252,7 @@ hash = "fnv1a64:…"           # 清单 + 源树 + 入口的摘要
   `aevia clean` 保留 `.aevia/registry`，`aevia clean --registry` 才删除。
 - `aevia add` 先解析完整候选图再暂存清单与锁；普通 I/O 失败会恢复原清单，失败的解析不改写输入。
 
-状态：解析层允许同一包的不兼容系列共存，但每个包拥有各自依赖名字空间（按包的 `Roots` 查找）尚未实现，
-所以共存须用不同导入根。
+解析层允许同一包的不兼容系列共存，但共存须使用不同的导入根。
 
 ### 7.5.3 目录布局
 

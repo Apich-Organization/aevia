@@ -2131,6 +2131,73 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
             ))]
         },
         | "read_line" => vec![Scheme::mono(func(vec![unit_ty()], io(Type::string())))],
+        | "input" => {
+            vec![Scheme::mono(func(vec![Type::string()], io(Type::string())))]
+        },
+        | "read_svg" => {
+            vec![Scheme::mono(func(
+                vec![Type::string()],
+                io(Type::result(Type::string(), error_type("IOError"))),
+            ))]
+        },
+        | "write_svg" => {
+            vec![Scheme::mono(func(
+                vec![Type::string(), Type::string()],
+                io(Type::result(unit_ty(), error_type("IOError"))),
+            ))]
+        },
+        | "read_gif" => {
+            let frame_ty = Type::record(vec![
+                ("delay_cs".to_string(), Type::int()),
+                ("rgba".to_string(), list(Type::int())),
+            ]);
+            let gif_ty = Type::record(vec![
+                ("width".to_string(), Type::int()),
+                ("height".to_string(), Type::int()),
+                ("loop_count".to_string(), Type::int()),
+                ("frames".to_string(), list(frame_ty)),
+            ]);
+            vec![Scheme::mono(func(
+                vec![Type::string()],
+                io(Type::result(gif_ty, error_type("IOError"))),
+            ))]
+        },
+        | "write_gif" => {
+            let frame_ty = Type::record(vec![
+                ("delay_cs".to_string(), Type::int()),
+                ("rgba".to_string(), list(Type::int())),
+            ]);
+            let gif_ty = Type::record(vec![
+                ("width".to_string(), Type::int()),
+                ("height".to_string(), Type::int()),
+                ("loop_count".to_string(), Type::int()),
+                ("frames".to_string(), list(frame_ty)),
+            ]);
+            vec![Scheme::mono(func(
+                vec![Type::string(), gif_ty],
+                io(Type::result(unit_ty(), error_type("IOError"))),
+            ))]
+        },
+        | "plot_save_gif" => {
+            let plot_spec = Type::Adt(
+                adt::intern(Adt {
+                    name: "PlotSpec".to_string(),
+                    params: Vec::new(),
+                    ctors: Vec::new(),
+                }),
+                Vec::new(),
+            );
+            vec![
+                Scheme::mono(func(
+                    vec![Type::string(), list(plot_spec.clone()), Type::int()],
+                    io(Type::result(unit_ty(), error_type("IOError"))),
+                )),
+                Scheme::mono(func(
+                    vec![Type::string(), list(plot_spec)],
+                    io(Type::result(unit_ty(), error_type("IOError"))),
+                )),
+            ]
+        },
         // §13.5.2: loads an Aevia source file at run time and publishes its
         // `@op`/`@rule` functions to the kernel; the count of published
         // registrations, or the diagnostics as text.
@@ -4225,6 +4292,12 @@ pub const PRELUDE_NAMES: &[&str] = &[
     "read_file",
     "write_file",
     "read_line",
+    "input",
+    "read_svg",
+    "write_svg",
+    "read_gif",
+    "write_gif",
+    "plot_save_gif",
     "time_now",
     "random",
     "read_csv_dyn",

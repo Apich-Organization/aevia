@@ -185,6 +185,8 @@ pub struct Manifest {
     pub edition: Option<String>,
     /// `[package] entry` — the executable entry, relative to the package root.
     pub entry: String,
+    /// `[lib] entry` — optional library entry, relative to the package root.
+    pub lib_entry: Option<String>,
     /// `[package] authors` — package authors.
     pub authors: Vec<String>,
     /// `[package] description` — short summary of the package.
@@ -221,6 +223,7 @@ impl Manifest {
             version: "0.1.0".to_string(),
             edition: Some("2026".to_string()),
             entry: "src/main.aev".to_string(),
+            lib_entry: None,
             authors: Vec::new(),
             description: Some(String::new()),
             license: Some(String::new()),
@@ -277,6 +280,10 @@ impl Manifest {
             "categories = {}",
             format_string_array(&self.categories)
         );
+        if let Some(lib_entry) = &self.lib_entry {
+            out.push_str("\n[lib]\n");
+            let _ = writeln!(out, "entry = \"{lib_entry}\"");
+        }
         out.push('\n');
         out.push_str("[dependencies]\n");
         for (key, dependency) in &self.dependencies {
@@ -340,6 +347,7 @@ impl Manifest {
         let mut version: Option<String> = None;
         let mut edition: Option<String> = None;
         let mut entry: Option<String> = None;
+        let mut lib_entry: Option<String> = None;
         let mut authors: Vec<String> = Vec::new();
         let mut description: Option<String> = None;
         let mut license: Option<String> = None;
@@ -365,12 +373,12 @@ impl Manifest {
                         format!("{origin}:{number}: unterminated table header `{line}`"),
                     ));
                 };
-                if !matches!(header, "package" | "dependencies" | "lints") {
+                if !matches!(header, "package" | "lib" | "dependencies" | "lints") {
                     return Err(ManifestError::new(
                         "E0605",
                         format!(
                             "{origin}:{number}: unknown table `[{header}]`; this tool reads \
-                             `[package]`, `[dependencies]` and `[lints]`"
+                             `[package]`, `[lib]`, `[dependencies]` and `[lints]`"
                         ),
                     ));
                 }
@@ -436,6 +444,28 @@ impl Manifest {
                                      `authors`, `description`, `license`, `license-file`, \
                                      `readme`, `repository`, `homepage`, `documentation`, \
                                      `keywords`, and `categories`"
+                                ),
+                            ));
+                        },
+                    }
+                },
+                | "lib" => {
+                    match key {
+                        | "entry" | "path" => {
+                            let text = parse_string(value).ok_or_else(|| {
+                                ManifestError::new(
+                                    "E0605",
+                                    format!("{origin}:{number}: `{key}` expects a quoted string"),
+                                )
+                            })?;
+                            lib_entry = Some(text);
+                        },
+                        | other => {
+                            return Err(ManifestError::new(
+                                "E0605",
+                                format!(
+                                    "{origin}:{number}: unknown key `{other}` in `[lib]`; \
+                                     supported keys are `entry` and `path`"
                                 ),
                             ));
                         },
@@ -507,6 +537,7 @@ impl Manifest {
             version,
             edition,
             entry: entry.unwrap_or_else(|| "src/main.aev".to_string()),
+            lib_entry,
             authors,
             description,
             license,
@@ -624,7 +655,8 @@ impl Package {
         let owns = ["src", "tests", "examples"]
             .iter()
             .any(|tree| file.starts_with(normalise(&package.dir.join(tree))))
-            || file == normalise(&package.entry_path());
+            || file == normalise(&package.entry_path())
+            || file == normalise(&package.lib_entry_path());
         if owns {
             Ok(Some(package))
         } else {
@@ -642,6 +674,15 @@ impl Package {
     #[must_use]
     pub fn entry_path(&self) -> PathBuf {
         self.dir.join(&self.manifest.entry)
+    }
+
+    /// The library entry file, `[lib] entry` if configured, otherwise [`Self::entry_path`].
+    #[must_use]
+    pub fn lib_entry_path(&self) -> PathBuf {
+        self.manifest
+            .lib_entry
+            .as_ref()
+            .map_or_else(|| self.entry_path(), |entry| self.dir.join(entry))
     }
 
     /// Resolves the manifest's dependencies, transitively, into import roots.
@@ -696,7 +737,9 @@ impl Package {
         for (alias, identity) in &graph.aliases {
             let package = &graph.packages[identity];
             roots.packages.insert(alias.clone(), package.source_dir());
-            roots.entries.insert(alias.clone(), package.entry_path());
+            roots
+                .entries
+                .insert(alias.clone(), package.lib_entry_path());
         }
         for (identity, package) in &graph.packages {
             roots.scopes.insert(
@@ -2439,6 +2482,10 @@ fn hash_package(package: &Package) -> Result<String, ManifestError> {
     let entry = package.entry_path();
     if entry.is_file() && !files.contains(&entry) {
         files.push(entry);
+    }
+    let lib_entry = package.lib_entry_path();
+    if lib_entry.is_file() && !files.contains(&lib_entry) {
+        files.push(lib_entry);
     }
     files.sort();
     let mut hash = 0xcbf2_9ce4_8422_2325u64;

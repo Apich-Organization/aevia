@@ -547,8 +547,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 rssn 的 `term_of_value` 不接受 `Value::Sparse` 进入项图（`manifest.value_kinds` 里 `in_term_graph = false`），所以稀疏值不能直接喂给通用重写算子；Aevia 负责布局转换，RSSN 负责稀疏算法与其 `faer` 稀疏 LU 后端。
 用户自定义格式要等 rssn 开放 `Format`（§13.9.5）。
 
-> **状态**：以上全部已实现（测试 `aevia-core/tests/sparse.rs`、`sparse_block.rs`、`sparse_followup.rs`、`shape_refinement.rs`），能力 `storage.sparse` 已启用。**剩余缺口**：稀疏值不能进入 rssn 的项图；
-> `gmres_with`/`bicgstab_with` 不接受精确元素；没有稀疏特征值/SVD。
+注：`storage.sparse` 能力启用稀疏运算；`gmres_with`/`bicgstab_with` 仅接受浮点元素；标准库不提供稀疏特征值与 SVD。
 
 ## 8.5 Calculus
 
@@ -1193,7 +1192,7 @@ Brownian 误差使用 `sqrt(dt/span)` 的局部二阶矩分配，独立的漂移
 `Sde` 模块声明选项 ADT 并再导出本节入口；`terms`、`cells` 必须存在，值 `0` 选择默认值。
 `sde_scheme_info` 只查询方案元数据；弱阶使用 `sde_order`/`sde_order_with`。
 
-状态：上述语言入口与列出的回调求解器已实现；原生 Rust API 的可达性由 §8.19 的清单与源码分类分别报告。
+原生 Rust API 的可达性由 §8.19 的清单与源码分类分别报告。
 
 ## 8.10 PDE
 
@@ -1288,10 +1287,8 @@ CSV 表头可以带单位：`time [s]`、`velocity [m/s]`。`read_csv<ρ>` 解�
 一次防御性校验。没有表头单位时，列被当作无量纲；显式 `ρ` 可以覆盖，
 但运行时校验失败报 `DataError.DimensionMismatch`。
 
-> **状态**：`read_csv`/`write_csv`/`read_json`/`write_json` 与 Table/column/select/filter/join 已实现。NPY 使用共享本地编解码：支持 NPY 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列
-> （Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；`read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 `Float` 张量；未具体化的泛型秩报 `E0304`。
-> IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/秩不匹配/大小溢出 `E0903`，不支持的格式、dtype 或扩展名 `E0904`，绘图写出失败 `E0905`；NPY 错误在 IO 动作执行后作为
-> `Err(DataError)` 返回（`aevia-core/tests/io_taxonomy.rs`）。
+NPY 支持 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列（Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；`read_npy<n>` 保存并验证具体秩，`write_npy` 接受任意秩的无量纲 `Float` 张量；未具体化的泛型秩报 `E0304`。
+IO 错误码：文件不存在 `E0901`，非法参数 `E0902`，损坏/截断/秩不匹配/大小溢出 `E0903`，不支持的格式、dtype 或扩展名 `E0904`，绘图写出失败 `E0905`；NPY 错误在 IO 动作执行后作为 `Err(DataError)` 返回。
 
 ## 8.12 Plot
 
@@ -1325,8 +1322,7 @@ xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`。
 （`t / s`、`v / (m/s)`）；`line_with` 接受完整 `PlotOpts`；`label(series,
 "v(t)")` 是设置标签的快捷方式。`plot` 默认写 `plot.html`；`save` 指定文件名。
 
-> **状态**：只有 HTML/SVG-inline 一种渲染器：`plot` 与 `save` 生成同一段 HTML（内含 `<svg>`），`save` **不按扩展名**切换格式（写 `.svg` 文件时内容仍是 HTML 文档）。写失败是 `E0905`；
-> `plot`/`save` 仍是 fatal 的 IO 动作（失败以诊断退出，不是 `Result`）。独立 `.svg` 输出与 PNG/JPEG 尚未实现。
+`plot` 与 `save` 使用内嵌 `<svg>` 的 HTML 渲染器，生成同一格式的 HTML 文档，`save` **不按扩展名**切换格式（写 `.svg` 文件时内容仍是 HTML 文档）。写失败报 `E0905`，`plot`/`save` 为致命 IO 动作（失败以诊断退出，不返回 `Result`）。
 
 ## 8.13 Test
 
@@ -1459,9 +1455,7 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 
 > **生成的仿真模块**：`import Rssn_Sim_<Name>`（如 `Rssn_Sim_PoissonMultigrid`、`Rssn_Sim_HeatNd`）在导入时由 rssn 的场景目录（`rssn::sim::schema`）生成类型化模块：`Params`/`Output` 记录、
 > 每个方法名字段一个变体类型（`P.W`、`S.Metropolis`）、`defaults()` 与 `run(p)`。参数类型与默认值从场景自己的请求类型推断，结果类型来自一次见证运行，注解表补充推断看不到的部分；
-> rssn 新增场景、参数或方法时无需手写代码。29 个场景全部可生成（参考测试 `tests/sim_catalog.aev`）。
->
-> **状态**：`simulate`、`to_json`/`from_json` 与 `Physics.Ising`/`Physics.Geodesic` 包装器（Aevia 源模块，`crates/aevia-std/stdlib/Physics/`）已实现，`import Physics.Ising` 经嵌入模块加载器直接可用。
+> rssn 新增场景、参数或方法时无需手写代码。
 
 ## 8.18 Device
 
@@ -1642,19 +1636,10 @@ Physics
 
 标准库的模块在 `aevia-std` 包中；Prelude 自动导入，其他按需 `import`。
 模块名就是路径：`import A.B` 解析 `A/B.aev`（§7），`import Math { sqrt }`
-只引入 `sqrt`，`open Units.SI` 把 `Units.SI` 的导出名放进当前作用域。
-
-> **状态**：模块树已落地（`crates/aevia-std/stdlib/**.aev`，41 个模块文件，经 `include_str!` 嵌入；`aevia_std::stdlib` 暴露 `source`/`is_module_name`/`module_paths`）。加载器在普通根目录解析不到
-> 模块时回退到嵌入模块，所以 `import Math { sqrt }`、`open Units.SI`、`import Data.Csv { read_csv, column, Table }`、`import Physics.Ising` 都能直接使用；本地文件优先于嵌入模块。标准库的名字也直接
-> 作为 Prelude 内建可用。`Units/*` 是文档性模块：单位名本来就是 ambient 的 `Unit[d]` 值，导出数量绑定会遮蔽它们并改变 `Tensor / Unit` 的语义，因此不导出（§5.3.4）。`Sde` 模块 re-export
-> §8.9.1 的五个入口并声明选项 ADT；`Physics.Ising`/`Physics.Geodesic` 提供 §8.17 的类型化包装器。函数名、`Sde` 的名义变体构造器与透明类型别名（`type X = { … }`，如 `Physics.Ising` 的 `Params`）
-> 都可经 `import { X }`/`open` 引入。
->
-> **一致性审计**：本章每个声明的名字都有实现（`aevia-core` 的 `stdlib_coverage` 测试 `chapter_eight_has_no_capability_gaps`）；`aevia-std` 的 `spec_signatures` 测试把声明与 checker scheme 逐条对照
-> （presence、arity、return class；参数类型与顺序不逐字比较，因为规范与 scheme 的拼写不同，已记录的差异留档）；名字通过不代表签名逐字一致。第 11 章的九个完整程序全部通过检查（`spec_programs`）。
->
-> **生成模块与 manifest 同步**：`Rssn`/`Units`/`Constants` 是 Kernel Manifest 的生成视图。嵌入的 `Units/Constants.aev` 来自 live manifest；manifest 变化后必须用
-> `cargo run -p aevia-stdlib-gen -- --write` 重新生成，否则 `units_constants_is_the_live_manifest` 会失败。
+只引入 `sqrt`，`open Units.SI` 把 `Units.SI` 的导出名放进当前作用域。本地文件优先于嵌入标准库模块。
+`Units/*` 是文档性模块：单位名本来就是 ambient 的 `Unit[d]` 值，导出数量绑定会遮蔽它们并改变 `Tensor / Unit` 的语义，因此不导出（§5.3.4）。`Sde` 模块再导出
+§8.9.1 的五个入口并声明选项 ADT；`Physics.Ising`/`Physics.Geodesic` 提供 §8.17 的类型化包装器。函数名、`Sde` 的名义变体构造器与透明类型别名（`type X = { … }`，如 `Physics.Ising` 的 `Params`）
+都可经 `import { X }`/`open` 引入。
 
 `Rssn` 是**生成的模块**，不是手写库：构建时从 Kernel Manifest 生成
 `Rssn.<op>` 类型化声明和 `Rssn.dynamic` 动态入口（§13.2）。`Rssn` 的

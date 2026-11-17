@@ -24,6 +24,7 @@ pub mod pages;
 pub mod seo;
 pub mod spec;
 pub mod state;
+pub mod stdlib;
 pub mod storage;
 
 use std::time::Duration;
@@ -78,6 +79,11 @@ pub fn router(state: AppState) -> Router {
         .route("/spec", get(pages::spec_index))
         .route("/spec/all", get(pages::spec_all))
         .route("/spec/{slug}", get(pages::spec_chapter))
+        .route("/stdlib", get(pages::stdlib_index))
+        .route("/stdlib/{module}", get(pages::stdlib_module))
+        .route("/install.sh", get(pages::install_sh))
+        .route("/install.ps1", get(pages::install_ps1))
+        .route("/internal/reload", post(pages::internal_reload))
         .route("/lang/{code}", get(pages::set_language))
         .route(
             "/activate",
@@ -197,4 +203,101 @@ async fn not_found(
         viewer.as_ref(),
     );
     (StatusCode::NOT_FOUND, Html(html)).into_response()
+}
+
+/// Spawns a background task that polls `AEVIA_SPEC_DIR` and
+/// `AEVIA_STDLIB_DOCS_DIR` every 2 seconds and hot-reloads them on change.
+pub fn spawn_reloader(state: AppState) {
+    tokio::spawn(async move {
+        let mut spec_fp = dir_fingerprint(&state.config.spec_dir, true);
+        let mut stdlib_fp = dir_fingerprint(&state.config.stdlib_docs_dir, false);
+
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        // Consume the immediate first tick.
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+
+            let next_spec_fp = dir_fingerprint(&state.config.spec_dir, true);
+            if next_spec_fp != spec_fp {
+                spec_fp = next_spec_fp;
+                match state.reload_spec().await {
+                    | Ok(chapters) => {
+                        tracing::info!(chapters, "hot-reloaded language specification");
+                    },
+                    | Err(error) => {
+                        tracing::warn!(error = %error.render(), "failed to hot-reload specification");
+                    },
+                }
+            }
+
+            let next_stdlib_fp = dir_fingerprint(&state.config.stdlib_docs_dir, false);
+            if next_stdlib_fp != stdlib_fp {
+                stdlib_fp = next_stdlib_fp;
+                match state.reload_stdlib_docs().await {
+                    | Ok(modules) => {
+                        tracing::info!(modules, "hot-reloaded stdlib documentation");
+                    },
+                    | Err(error) => {
+                        tracing::warn!(error = %error.render(), "failed to hot-reload stdlib docs");
+                    },
+                }
+            }
+        }
+    });
+}
+
+fn dir_fingerprint(
+    path: &std::path::Path,
+    include_en: bool,
+) -> Vec<(String, u64, u128)> {
+    let mut entries = Vec::new();
+    collect_file_stats(path, "", &mut entries);
+    if include_en {
+        collect_file_stats(&path.join("en"), "en/", &mut entries);
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn collect_file_stats(
+    path: &std::path::Path,
+    prefix: &str,
+    out: &mut Vec<(String, u64, u128)>,
+) {
+    if path.is_file() {
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            out.push((path.to_string_lossy().into_owned(), meta.len(), mtime));
+        }
+        return;
+    }
+    let Ok(read_dir) = std::fs::read_dir(path) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let entry_path = entry.path();
+        if !entry_path.is_file() {
+            continue;
+        }
+        let ext = entry_path.extension().and_then(|e| e.to_str());
+        if !matches!(ext, Some("md" | "json")) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos());
+        let name = entry.file_name().to_string_lossy().into_owned();
+        out.push((format!("{prefix}{name}"), meta.len(), mtime));
+    }
 }

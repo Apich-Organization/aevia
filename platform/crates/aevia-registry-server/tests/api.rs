@@ -51,6 +51,7 @@ use aevia_registry::config::Config;
 use aevia_registry::router;
 use aevia_registry::spec::SpecStore;
 use aevia_registry::state::AppState;
+use aevia_registry::stdlib::StdlibDocStore;
 use aevia_registry::storage::Storage;
 use aevia_registry_core::manifest::PackageManifest;
 use aevia_registry_core::signature::SignerKey;
@@ -117,12 +118,15 @@ async fn start() -> Option<TestApp> {
 
     let storage = tempfile::tempdir().expect("a temporary storage directory");
     let spec_dir = tempfile::tempdir().expect("a temporary specification directory");
+    let stdlib_dir = tempfile::tempdir().expect("a temporary stdlib docs directory");
     let config = Config {
         bind: "127.0.0.1:0".parse().expect("a socket address"),
         base_url: "http://127.0.0.1:8080".to_string(),
         database_url: url,
         storage_dir: storage.path().to_path_buf(),
         spec_dir: spec_dir.path().to_path_buf(),
+        stdlib_docs_dir: stdlib_dir.path().to_path_buf(),
+        install_dir: std::path::PathBuf::from("."),
         // A fixed secret: the tests do not restart, and a random one would make
         // a failure impossible to reproduce from the log.
         session_secret: vec![0x5a; 32],
@@ -134,7 +138,9 @@ async fn start() -> Option<TestApp> {
     };
     let store = Storage::open(storage.path()).expect("open the archive store");
     let spec = Arc::new(SpecStore::load(spec_dir.path()).expect("load the specification"));
-    let state = AppState::new(pool.clone(), Arc::new(config), store, spec);
+    let stdlib_docs =
+        Arc::new(StdlibDocStore::load(stdlib_dir.path()).expect("load the stdlib docs"));
+    let state = AppState::new(pool.clone(), Arc::new(config), store, spec, stdlib_docs);
     Some(TestApp {
         app: router(state),
         pool,

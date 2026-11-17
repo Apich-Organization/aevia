@@ -103,6 +103,7 @@ pub use position::Position;
 pub use position::Range;
 pub use types::CodeAction;
 pub use types::CodeActionKind;
+pub use types::CodeLens;
 pub use types::Completion;
 pub use types::CompletionKind;
 pub use types::FileEdit;

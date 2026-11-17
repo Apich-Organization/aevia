@@ -498,8 +498,30 @@ impl<'a> Parser<'a> {
     fn module(&mut self) -> Module {
         let file = self.file;
         let mut name = None;
+        let mut private = false;
         let mut unit_system = None;
         self.skip_newlines();
+        if self.at_kw(Keyword::Private)
+            && matches!(self.kind_at(1), TokenKind::Keyword(Keyword::Module))
+        {
+            self.bump();
+            private = true;
+        } else if self.at_punct(Punct::At)
+            && (matches!(self.kind_at(1), TokenKind::Keyword(Keyword::Private))
+                || matches!(self.kind_at(1), TokenKind::Ident(attr) if attr == "private"))
+        {
+            let mut look = 2;
+            while matches!(self.kind_at(look), TokenKind::Newline) {
+                look += 1;
+            }
+            if matches!(self.kind_at(look), TokenKind::Keyword(Keyword::Module)) {
+                self.bump();
+                self.bump();
+                self.eat_newline();
+                self.skip_newlines();
+                private = true;
+            }
+        }
         if self.at_kw(Keyword::Module) {
             self.bump();
             name = Some(self.module_path());
@@ -543,6 +565,7 @@ impl<'a> Parser<'a> {
         }
         Module {
             name,
+            private,
             unit_system,
             decls,
             file,
@@ -595,9 +618,18 @@ impl<'a> Parser<'a> {
         }
         let private_span = self.span();
         let private = self.eat_kw(Keyword::Private);
+        let export = !private
+            && (self.ident_is("export") || self.ident_is("pub"))
+            && matches!(
+                self.kind_at(1),
+                TokenKind::Keyword(Keyword::Import | Keyword::Open)
+            );
+        if export {
+            self.bump();
+        }
         let kind = match self.kind().clone() {
-            | TokenKind::Keyword(Keyword::Import) => self.import_decl(false)?,
-            | TokenKind::Keyword(Keyword::Open) => self.import_decl(true)?,
+            | TokenKind::Keyword(Keyword::Import) => self.import_decl(false, export)?,
+            | TokenKind::Keyword(Keyword::Open) => self.import_decl(true, export)?,
             | TokenKind::Keyword(Keyword::Dimension) => self.dimension_decl()?,
             | TokenKind::Keyword(Keyword::Unit) => self.unit_decl()?,
             | TokenKind::Keyword(Keyword::Type) => self.type_decl()?,
@@ -662,6 +694,14 @@ impl<'a> Parser<'a> {
             "rule",
             // §9.12: a `bench` declaration is a function `aevia bench` times.
             "bench",
+            "doc",
+            "hidden",
+            "private",
+            "allow",
+            "warn",
+            "deny",
+            "forbid",
+            "relax_result",
         ];
         if !KNOWN.contains(&attr.name.as_str()) {
             self.error(
@@ -686,6 +726,10 @@ impl<'a> Parser<'a> {
             | TokenKind::Ident(name) | TokenKind::UpperIdent(name) => {
                 self.bump();
                 name
+            },
+            | TokenKind::Keyword(Keyword::Private) => {
+                self.bump();
+                "private".to_string()
             },
             | _ => {
                 self.unexpected("an attribute name");
@@ -730,6 +774,7 @@ impl<'a> Parser<'a> {
     fn import_decl(
         &mut self,
         open: bool,
+        export: bool,
     ) -> Option<DeclKind> {
         self.bump(); // import / open
         let path = self.module_path();
@@ -769,6 +814,7 @@ impl<'a> Parser<'a> {
             alias,
             names,
             open,
+            export,
         })
     }
 
@@ -1030,6 +1076,7 @@ impl<'a> Parser<'a> {
 
     fn constructor(&mut self) -> Constructor {
         let start = self.span();
+        let private = self.eat_kw(Keyword::Private);
         let name = match self.kind().clone() {
             | TokenKind::UpperIdent(name) => {
                 self.bump();
@@ -1051,6 +1098,7 @@ impl<'a> Parser<'a> {
             self.expect_punct(Punct::RParen);
         }
         Constructor {
+            private,
             name,
             args,
             span: start.join(self.previous_span()),
@@ -1133,6 +1181,7 @@ impl<'a> Parser<'a> {
                 if self.at_dedent() || self.at_eof() {
                     break;
                 }
+                let private = self.eat_kw(Keyword::Private);
                 let method_name = match self.kind().clone() {
                     | TokenKind::Ident(name) => {
                         self.bump();
@@ -1158,7 +1207,11 @@ impl<'a> Parser<'a> {
                     self.expect_punct(Punct::Colon);
                     self.ty()
                 };
-                methods.push((method_name, ty));
+                methods.push(ClassMethod {
+                    private,
+                    name: method_name,
+                    ty,
+                });
                 self.expect_newline();
             }
             self.expect_dedent();
@@ -1206,6 +1259,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 let start = self.span();
+                let private = self.eat_kw(Keyword::Private);
                 let name = match self.kind().clone() {
                     | TokenKind::Ident(name) => {
                         self.bump();
@@ -1222,6 +1276,7 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::Equals);
                 let body = self.expr();
                 methods.push(InstanceMethod {
+                    private,
                     name,
                     params,
                     ret,
@@ -4268,5 +4323,109 @@ mod tests {
         let lexed = lex(0, source).expect("lexes");
         let (_, diagnostics) = parse_module(0, source, &lexed);
         assert!(diagnostics.has_errors());
+    }
+
+    #[test]
+    fn parses_new_attributes_and_doc_hidden() {
+        let source = "\
+@doc(hidden)
+@allow(unused)
+@warn(shadow)
+@deny(dead_code)
+@forbid(unsafe_op)
+@relax_result
+fn a(): Int = 1
+
+@hidden
+@private
+fn b(): Int = 2
+";
+        let module = parse(source);
+        assert_eq!(module.decls.len(), 2);
+        assert!(module.decls[0].is_doc_hidden());
+        assert!(module.decls[0].has_attribute("relax_result"));
+        assert!(module.decls[1].is_doc_hidden());
+        assert!(module.decls[1].has_attribute("private"));
+    }
+
+    #[test]
+    fn parses_visibility_and_reexports() {
+        let m1 = parse("private module Secret\n");
+        assert!(m1.private);
+        assert_eq!(m1.name, Some(vec!["Secret".to_string()]));
+
+        let m2 = parse("@private\nmodule HiddenMod\n");
+        assert!(m2.private);
+        assert_eq!(m2.name, Some(vec!["HiddenMod".to_string()]));
+
+        let m3 = parse(
+            "\
+export import Math { sin }
+pub import Units.SI as SI
+export open Core
+import Plain
+
+type Box = | private Inner(Int) | Public
+
+class C a where
+    private helper(x: a): a
+    show(x: a): String
+
+instance C for Int where
+    private helper(x: Int): Int = x
+    show(x: Int): String = \"0\"
+",
+        );
+        assert!(matches!(
+            &m3.decls[0].kind,
+            DeclKind::Import {
+                export: true,
+                open: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &m3.decls[1].kind,
+            DeclKind::Import {
+                export: true,
+                open: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &m3.decls[2].kind,
+            DeclKind::Import {
+                export: true,
+                open: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &m3.decls[3].kind,
+            DeclKind::Import {
+                export: false,
+                open: false,
+                ..
+            }
+        ));
+        let DeclKind::Type {
+            body: TypeBody::Variants(variants),
+            ..
+        } = &m3.decls[4].kind
+        else {
+            panic!("expected variants");
+        };
+        assert!(variants[0].private);
+        assert!(!variants[1].private);
+        let DeclKind::Class { methods, .. } = &m3.decls[5].kind else {
+            panic!("expected class");
+        };
+        assert!(methods[0].private);
+        assert!(!methods[1].private);
+        let DeclKind::Instance { methods, .. } = &m3.decls[6].kind else {
+            panic!("expected instance");
+        };
+        assert!(methods[0].private);
+        assert!(!methods[1].private);
     }
 }

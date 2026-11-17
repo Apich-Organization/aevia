@@ -28,11 +28,10 @@ Aevia 是一门面向科学计算的纯函数式语言，**量纲是类型系统
 | [09 — 运行时](09-runtime.md) | 流水线、解释器、REPL、CLI、LSP、性能 | 是（架构） |
 | [10 — rssn 后端映射](10-backend.md) | 与 rssn 的映射、桥接设计、缺口与风险 | 是 |
 | [11 — 完整示例](11-examples.md) | 从运动学到仿真的完整程序 | 否 |
-| [12 — 设计取舍、限制与路线图](12-rationale.md) | 替代方案、取舍、设计边界、实现进展 | 否 |
+| [12 — 设计取舍与限制](12-rationale.md) | 替代方案、取舍、设计边界 | 否 |
 | [13 — 可扩展性与 RSSN 集成](13-extensibility.md) | rssn 反射、生成的 `Rssn`、插件、registry、形状/设备/稀疏决定 | 是 |
 | [附录 A — 完整文法](appendix-a-grammar.md) | 完整 EBNF | 是 |
 | [附录 B — 诊断目录](appendix-b-diagnostics.md) | 错误码与消息格式 | 是 |
-| [附录 C — 修订记录](appendix-c-changelog.md) | 修订历史与已知边界 | 资料性 |
 
 后端接口契约在 rssn 仓库的 `docs/KERNEL.md`（Kernel Manifest、动态调用 ABI、插件、单位与量纲）和 `docs/DIMENSIONS.md` 中；这是 Aevia 规范成立的前提，不是可选的实现细节。
 实现的 crate 划分见仓库根目录的 [ARCHITECTURE.md](../ARCHITECTURE.md)。每章另有英文版（`spec/en/`），写作与术语规则见 `spec/STYLE.md`。
@@ -44,7 +43,7 @@ Aevia 是一门面向科学计算的纯函数式语言，**量纲是类型系统
 
 ## 设计状态
 
-这是**设计标准**，不是冻结的实现。标为规范性的章节意在按文实现；[附录 C](appendix-c-changelog.md) 记录每次修订与已知缺口。当前文本是 **Revision 23**，对齐 **`rssn 3.0.0-rc.1`**
+这是**设计标准**，不是冻结的实现。标为规范性的章节意在按文实现。当前文本是 **Revision 23**，对齐 **`rssn 3.0.0-rc.1`**
 （`api_version = 2`）。manifest 的规模是测量而不是常量，以 `aevia rssn` 的 live 输出为准（该版本为 1620 个算子、82 个单位、30 个常数）。分派与扩展遵循第 13 章的边界：没有运行时多方法、
 没有多参数类、没有按类型的单态化；实例在检查期静态选定或由规范见证选定。
 

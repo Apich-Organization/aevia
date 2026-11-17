@@ -239,6 +239,8 @@ pub struct OpEntry {
     pub stability: Stability,
     /// Documentation.
     pub doc: String,
+    /// Worked examples from the kernel manifest.
+    pub examples: Vec<rssn::kernel::signature::Example>,
     /// Accepted argument counts.
     pub arity: (usize, Option<usize>),
     /// Whether it takes a function argument.
@@ -736,6 +738,7 @@ impl Registry {
                 backend_support: op.backend_support,
                 stability: op.stability,
                 doc: op.doc.clone(),
+                examples: op.examples.clone(),
                 arity: (usize::from(op.arity.min), op.arity.max.map(usize::from)),
                 higher_order: op.higher_order,
             };

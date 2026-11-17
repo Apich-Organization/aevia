@@ -100,8 +100,8 @@ error[E0401]: dimension mismatch
 | `E0411` | incompatible tensor element types or dimensions | 统一元素类型/量纲 |
 | `E0412` | `Dyn`/kernel dimension check failed（运行时） | 检查运行时量纲 |
 
-状态：`E0408`、`E0409` 是保留码，实现中不可达：量纲统一是自由阿贝尔群上的指数线性统一，含非零系数变量的残差总可解，唯一的失败是
-非零常量残差，即 `E0401`；也不会出现 occurs 状态（证明见 `aevia-types/tests/diagnostics_coverage.rs`）。
+注：`E0408`、`E0409` 为保留码：量纲统一是自由阿贝尔群上的指数线性统一，含非零系数变量的残差总可解，唯一的失败是
+非零常量残差（`E0401`），也不会出现 occurs 状态。
 
 ## B.7 单位错误（E05xx）
 
@@ -120,7 +120,7 @@ error[E0401]: dimension mismatch
 | `E0511` | unit has no exact scale in the module's unit system（§5.11.4） | 写单位制的数，或 `to_system` |
 | `E0512` | unknown unit system（§5.11.1） | 用 kernel 提供的名字（natural、planck、atomic、geometrized） |
 
-状态：`E0502`、`E0503`、`E0507` 是保留码：没有模块级单位命名空间（§5.9），对应状态不存在。
+注：`E0502`、`E0503`、`E0507` 为保留码：没有模块级单位命名空间（§5.9），对应状态不存在。
 
 ## B.8 模块错误（E06xx）
 
@@ -160,7 +160,7 @@ error[E0401]: dimension mismatch
 | `E0812` | 宿主 / Ctrl-C 中断求值（§9.8） | 是 |
 | `E0899` | panic | 否 |
 
-状态：个别内建函数借用 `E0806`–`E0809` 报告自己的参数/内部失败（例如 `approx_map`、`degree`），码的类别以上表为准，消息以内建
+注：个别内建函数借用 `E0806`–`E0809` 报告自己的参数/内部失败（例如 `approx_map`、`degree`），码的类别以上表为准，消息以内建
 自述为准。
 
 ## B.11 IO 错误（E09xx）
@@ -200,8 +200,8 @@ error[E0401]: dimension mismatch
 | `W0709` | 冗余的 `if` 表达式（`aevia lint`） |
 | `W0710` | 重复导入同一模块（`aevia lint`） |
 
-状态：`W0203` 是保留码（语言没有 `return`/`break`，AST 无法表示不可达语句）；`W0501` 目前没有发射点。
-`W0102` 与 `W0701`–`W0710` 由 `aevia lint`（及 `aevia-analysis`）发射；编译器警告与 lint 检查共同遵循
+注：`W0203` 为保留码（语言没有 `return`/`break`，语法无法表示不可达语句）；`W0501` 为保留码。
+`W0102` 与 `W0701`–`W0710` 由 `aevia lint` 发射；编译器警告与 lint 检查共同遵循
 `aevia.toml [lints]`、`-A/-W/-D/-F` 与 `@allow/@warn/@deny/@forbid`。
 
 ## B.13 消息写作规范
@@ -261,5 +261,3 @@ error[E0802]: matmul requires left columns (2) = right rows (3)
 
 这些是**环境/后端**错误，不是用户程序的类型错误；诊断必须给出可执行的替代方案（例如“安装带 `core.gpu` 的 RSSN”或“用
 `Rssn.dynamic`”）。
-
-下一附录记录规范的修订历史。

@@ -181,6 +181,10 @@ impl Server {
                 self.require_running()?;
                 Ok(self.workspace_symbols(params))
             },
+            | "workspace/executeCommand" => {
+                self.require_running()?;
+                self.execute_command(params)
+            },
             | _ => {
                 self.require_running()?;
                 self.document_request(method, params)
@@ -223,6 +227,7 @@ impl Server {
                 | "textDocument/documentSymbol"
                 | "textDocument/formatting"
                 | "textDocument/codeAction"
+                | "textDocument/codeLens"
                 | "textDocument/semanticTokens/full"
                 | "textDocument/typeDefinition"
                 | "textDocument/references"
@@ -283,6 +288,7 @@ impl Server {
                     .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no valid `range`"))?;
                 crate::protocol::code_actions_json(uri, &analysis.code_actions(range))
             },
+            | "textDocument/codeLens" => crate::protocol::code_lens_json(&analysis.code_lens(uri)),
             | "textDocument/semanticTokens/full" => {
                 crate::protocol::semantic_tokens_json(&analysis.semantic_tokens())
             },
@@ -561,6 +567,66 @@ fn text_document_uri(params: &Value) -> Option<&str> {
 }
 
 impl Server {
+    /// Executes a server-advertised workspace command (`aevia.runFile` / `aevia.testFile`).
+    fn execute_command(
+        &self,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
+        let command = params
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "no `command`"))?;
+        let args = params.get("arguments").and_then(Value::as_array);
+        let uri = args
+            .and_then(|items| items.first())
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "expected a document URI argument"))?;
+        let path = aevia_analysis::physical_source_path_from_uri(uri)
+            .unwrap_or_else(|| std::path::PathBuf::from(uri));
+        let mut cmd = std::process::Command::new(aevia_executable());
+        match command {
+            | "aevia.runFile" => {
+                cmd.arg("run").arg(&path);
+            },
+            | "aevia.testFile" => {
+                cmd.arg("test").arg(&path);
+                if let Some(filter) = args
+                    .and_then(|items| items.get(1))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    cmd.arg("--filter").arg(filter);
+                }
+            },
+            | other => {
+                return Err(RpcError::new(
+                    INVALID_PARAMS,
+                    format!("unknown command `{other}`"),
+                ));
+            },
+        }
+        let output = cmd.output().map_err(|error| {
+            RpcError::new(
+                REQUEST_FAILED,
+                format!("failed to run `{command}`: {error}"),
+            )
+        })?;
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if !stdout.is_empty() {
+            eprintln!("[{command}] stdout:\n{stdout}");
+        }
+        if !stderr.is_empty() {
+            eprintln!("[{command}] stderr:\n{stderr}");
+        }
+        Ok(json!({
+            "success": output.status.success(),
+            "exitCode": output.status.code(),
+            "stdout": stdout,
+            "stderr": stderr,
+        }))
+    }
+
     /// Answers from the opened documents' programs: every declaration of every
     /// module they load, filtered by `query`.
     fn workspace_symbols(
@@ -680,4 +746,25 @@ impl Server {
             | None => Analysis::new(document),
         }
     }
+}
+
+/// Locates the `aevia` CLI binary, preferring the current executable when
+/// running as `aevia lsp` or a sibling `aevia` binary next to `aevia-lsp`.
+fn aevia_executable() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        let stem = exe.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        if stem.eq_ignore_ascii_case("aevia") {
+            return exe;
+        }
+        let sibling_name = if cfg!(windows) {
+            "aevia.exe"
+        } else {
+            "aevia"
+        };
+        let sibling = exe.with_file_name(sibling_name);
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+    std::path::PathBuf::from("aevia")
 }

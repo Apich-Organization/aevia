@@ -1,6 +1,6 @@
-# 12 — Design trade-offs, limits and roadmap
+# 12 — Design trade-offs and limits
 
-This chapter explains why Aevia looks the way it does, how it differs from existing approaches, what is deliberately left out, and how far the implementation has come. It is informative.
+This chapter explains why Aevia looks the way it does, how it differs from existing approaches, and what is deliberately left out. It is informative.
 
 ## 12.1 Why dimensions are types
 
@@ -110,23 +110,7 @@ These are final decisions; implementation may proceed in stages, but the languag
 | 19 | Uncertainty? | `Measurement`/`Covariance` standard-library types |
 | 20 | Operator integration? | Reflection first: Kernel Manifest + dynamic `Value` + generated façade; no hand-written bindings |
 
-## 12.10 Implementation progress
-
-Implementation proceeds in dependency order and is not a language version; every stage keeps the manifest and dynamic-call contract of chapter 13. History by revision is in appendix C.
-
-| Stage | Contents | Status |
-|---|---|---|
-| M0 | lexing, layout, parsing; name resolution; type and dimension algebra; shape refinement; diagnostics and formatter | implemented; all nine complete programs of chapter 11 check |
-| M1 | Core IR, interpreter, closures/records/variants/pattern matching; Kernel Manifest and `Rssn` generation; the rssn bridge; units and `Point` | implemented |
-| M2 | tensor storage/broadcasting/slicing; linear-algebra kernels; `Sparse` | implemented (`Bcsr`, Krylov solvers, slicing) |
-| M3 | `diff`/`antiderivative`/`defint`/`limit`/`series`/`solve`/`sum`/`product`; budgets and error mapping | implemented |
-| M4 | modules/packages/lock files; registry protocol and client; REPL/CLI/formatter; LSP | implemented; gaps in appendix C, Revision 15 |
-| M5 | CSV/NPY/JSON; `Table<ρ>`; Plot; `Device`; `simulate` and `Physics.*` | implemented (Plot has only the HTML/SVG renderer; no GPU backend is wired in) |
-| M6 | JIT (`jit` feature); plugin operators; benchmarks | partial: the JIT is off by default; see §9.6 |
-
-**Acceptance criteria for a first stable release**: every example of chapter 11 checks and runs; every dimension error is a compile-time error (except at `Dyn` and data boundaries); operators in the manifest need no hand-written bindings; conformance tests against rssn pass; `rssn::dim`/`UnitRegistry` round-trip consistently; plugins and the registry work; shape refinement, `Point` tensors, `Table<ρ>`, `Sparse` and `Device` each have an end-to-end example; at least one real ODE/PDE/statistics project runs end to end.
-
-## 12.11 Success criteria
+## 12.10 Success criteria
 
 1. A physics, engineering or data-science user can write, in a day, a program with units, symbolic derivation and numeric solving;
 2. dimension errors are caught at compile time, and the messages guide the fix;
@@ -134,4 +118,4 @@ Implementation proceeds in dependency order and is not a language version; every
 4. symbolic computation covers common calculus, equations and linear algebra;
 5. the code is readable, like mathematics rather than like configuration.
 
-The next chapter covers extensibility and the rssn integration; after it come the complete grammar, the diagnostics catalogue and the revision log.
+The next chapter covers extensibility and the rssn integration; after it come the complete grammar and the diagnostics catalogue.

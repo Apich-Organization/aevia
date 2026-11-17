@@ -94,7 +94,7 @@ pub fn fmt(
     ExitCode::SUCCESS
 }
 
-/// `aevia doc [--out DIR] [--open] [files…]`
+/// `aevia doc [--out DIR] [--open] [--stdlib] [--json] [files…]`
 pub fn doc(
     _options: Options,
     args: &[String],
@@ -102,6 +102,8 @@ pub fn doc(
     let mut out: Option<PathBuf> = None;
     let mut files: Vec<String> = Vec::new();
     let mut open = false;
+    let mut stdlib = false;
+    let mut json = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -114,9 +116,11 @@ pub fn doc(
                 out = Some(PathBuf::from(value));
             },
             | "--open" => open = true,
+            | "--stdlib" => stdlib = true,
+            | "--json" => json = true,
             | other if other.starts_with('-') => {
                 eprintln!(
-                    "aevia doc: unknown option `{other}` (the options are `--out DIR` and `--open`)"
+                    "aevia doc: unknown option `{other}` (the options are `--out DIR`, `--open`, `--stdlib`, and `--json`)"
                 );
                 return ExitCode::from(2);
             },
@@ -124,10 +128,6 @@ pub fn doc(
         }
         index += 1;
     }
-    let paths = match inputs(&files) {
-        | Ok(paths) => paths,
-        | Err(code) => return code,
-    };
     let package = aevia_core::manifest::Package::find(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     )
@@ -139,6 +139,86 @@ pub fn doc(
             | None => PathBuf::from("docs"),
         }
     });
+    if stdlib {
+        if !files.is_empty() {
+            eprintln!("aevia doc: `--stdlib` does not accept file arguments");
+            return ExitCode::from(2);
+        }
+        let bundle = match aevia_doc::generate_stdlib_docs() {
+            | Ok(bundle) => bundle,
+            | Err(message) => {
+                eprintln!("aevia doc: {message}");
+                return ExitCode::from(1);
+            },
+        };
+        if let Err(error) = std::fs::create_dir_all(&directory) {
+            eprintln!(
+                "aevia doc: cannot create `{}`: {error}",
+                directory.display()
+            );
+            return ExitCode::from(1);
+        }
+        for module in &bundle.modules {
+            let path = directory.join(module.page());
+            if let Err(error) = std::fs::write(&path, aevia_doc::render_module(module)) {
+                eprintln!("aevia doc: cannot write `{}`: {error}", path.display());
+                return ExitCode::from(1);
+            }
+            println!("wrote {}", path.display());
+        }
+        let index_path = directory.join("index.md");
+        if let Err(error) = std::fs::write(
+            &index_path,
+            aevia_doc::render_index("Aevia Standard Library", &bundle.modules),
+        ) {
+            eprintln!(
+                "aevia doc: cannot write `{}`: {error}",
+                index_path.display()
+            );
+            return ExitCode::from(1);
+        }
+        println!("wrote {}", index_path.display());
+        let markdown_path = directory.join("stdlib.md");
+        if let Err(error) = std::fs::write(&markdown_path, bundle.to_markdown()) {
+            eprintln!(
+                "aevia doc: cannot write `{}`: {error}",
+                markdown_path.display()
+            );
+            return ExitCode::from(1);
+        }
+        println!("wrote {}", markdown_path.display());
+        if json {
+            let json_path = directory.join("stdlib-docs.json");
+            let encoded = match bundle.to_json() {
+                | Ok(encoded) => encoded,
+                | Err(error) => {
+                    eprintln!("aevia doc: cannot serialize stdlib docs: {error}");
+                    return ExitCode::from(1);
+                },
+            };
+            if let Err(error) = std::fs::write(&json_path, encoded) {
+                eprintln!("aevia doc: cannot write `{}`: {error}", json_path.display());
+                return ExitCode::from(1);
+            }
+            println!("wrote {}", json_path.display());
+        }
+        println!(
+            "{} stdlib module(s) and {} RSSN operator(s)",
+            bundle.modules.len(),
+            bundle.operators.len()
+        );
+        if open {
+            match absolute(&index_path) {
+                | Ok(path) => open_documentation(&path),
+                | Err(message) => eprintln!("aevia doc: --open: {message}"),
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+    let paths = match inputs(&files) {
+        | Ok(paths) => paths,
+        | Err(code) => return code,
+    };
     let name = package.as_ref().map_or_else(
         || "Aevia".to_string(),
         |package| package.manifest.name.clone(),
@@ -202,6 +282,21 @@ pub fn doc(
         return ExitCode::from(1);
     }
     println!("wrote {}", index_path.display());
+    if json {
+        let json_path = directory.join("docs.json");
+        let encoded = match serde_json::to_string_pretty(&docs) {
+            | Ok(encoded) => encoded,
+            | Err(error) => {
+                eprintln!("aevia doc: cannot serialize docs: {error}");
+                return ExitCode::from(1);
+            },
+        };
+        if let Err(error) = std::fs::write(&json_path, encoded) {
+            eprintln!("aevia doc: cannot write `{}`: {error}", json_path.display());
+            return ExitCode::from(1);
+        }
+        println!("wrote {}", json_path.display());
+    }
     let declarations: usize = docs.iter().map(|doc| doc.decls.len()).sum();
     let undocumented: usize = docs
         .iter()

@@ -751,6 +751,7 @@ fn a_structured_result_needs_its_capability() {
         backend_support: rssn::kernel::signature::BackendSupport::default(),
         stability: rssn::kernel::signature::Stability::Stable,
         doc: String::new(),
+        examples: Vec::new(),
         arity: (0, Some(0)),
         higher_order: false,
     };

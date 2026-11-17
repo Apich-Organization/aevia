@@ -21,6 +21,7 @@ use aevia_registry::config::Config;
 use aevia_registry::router;
 use aevia_registry::spec::SpecStore;
 use aevia_registry::state::AppState;
+use aevia_registry::stdlib::StdlibDocStore;
 use aevia_registry::storage::Storage;
 
 #[tokio::main]
@@ -76,8 +77,23 @@ async fn main() -> std::process::ExitCode {
         );
     }
 
+    let stdlib_docs = match StdlibDocStore::load(&config.stdlib_docs_dir) {
+        | Ok(stdlib_docs) => Arc::new(stdlib_docs),
+        | Err(error) => {
+            eprintln!("aevia-registry: {}", error.render());
+            return std::process::ExitCode::from(1);
+        },
+    };
+    if stdlib_docs.is_empty() {
+        tracing::warn!(
+            directory = %stdlib_docs.directory().display(),
+            "/stdlib has no modules; set AEVIA_STDLIB_DOCS_DIR to the output of `aevia doc --stdlib`"
+        );
+    }
+
     let bind = config.bind;
-    let state = AppState::new(pool.clone(), Arc::new(config), storage, spec);
+    let state = AppState::new(pool.clone(), Arc::new(config), storage, spec, stdlib_docs);
+    aevia_registry::spawn_reloader(state.clone());
 
     // Housekeeping: expired nonces and sessions are dead weight, and a table
     // that only grows is a slow leak. Hourly is often enough for a registry

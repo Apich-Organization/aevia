@@ -70,7 +70,7 @@ fn cancellation_during_ast_ir_and_release_initializers_rolls_back_the_batch() {
         let token = CancellationToken::new();
         let mut interp = Interp::new(&compilation.checked).with_mode(mode);
         interp.optimize_ir = optimized;
-        interp.globals.insert("saved".into(), Value::int(42));
+        interp.define_global("saved", Value::int(42));
         interp.set_cancellation_token(token.clone());
         let counts = interp.symbol_counts.clone();
         let interrupt = interrupt_later(token.clone());

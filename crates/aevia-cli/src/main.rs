@@ -300,6 +300,7 @@ fn run_cli(
         | Some("bench") => tooling::bench(options, &args[1..]),
         | Some("clean") => package::clean(&args[1..]),
         | Some("lsp") => lsp_command(&args[1..]),
+        | Some("completions") => completions_command(&args[1..]),
         | Some("init") => package::init(&args[1..]),
         | Some("add") => package::add(&args[1..], options.locked),
         | Some("update") => package::update(&args[1..], options.locked),
@@ -396,6 +397,130 @@ fn verify_package_lock(package: &Package) -> Result<(), ExitCode> {
 }
 
 /// `aevia lsp [--stdio]` — the §9.10 server on standard I/O.
+fn completions_command(args: &[String]) -> ExitCode {
+    if args.len() != 1 {
+        eprintln!("aevia completions: expected <bash|zsh|fish|powershell|elvish>");
+        return ExitCode::from(2);
+    }
+    let shell = args[0].to_ascii_lowercase();
+    let commands = "run check lint watch test repl fmt doc bench clean lsp completions init add update fetch tree rssn pkg publish docs login search info yank verify help";
+    let script = match shell.as_str() {
+        | "bash" => {
+            format!(
+                "_aevia_completions() {{\n\
+             \x20   local cur prev\n\
+             \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
+             \x20   prev=\"${{COMP_WORDS[COMP_CWORD-1]}}\"\n\
+             \x20   if [[ $COMP_CWORD -eq 1 ]]; then\n\
+             \x20       COMPREPLY=( $(compgen -W \"{commands}\" -- \"$cur\") )\n\
+             \x20       return 0\n\
+             \x20   fi\n\
+             \x20   case \"${{COMP_WORDS[1]}}\" in\n\
+             \x20       completions)\n\
+             \x20           COMPREPLY=( $(compgen -W \"bash zsh fish powershell elvish\" -- \"$cur\") )\n\
+             \x20           return 0\n\
+             \x20           ;;\n\
+             \x20       doc)\n\
+             \x20           COMPREPLY=( $(compgen -W \"--out --open --stdlib --json\" -- \"$cur\") )\n\
+             \x20           return 0\n\
+             \x20           ;;\n\
+             \x20       run|check|test)\n\
+             \x20           COMPREPLY=( $(compgen -W \"--relax-result --no-cache --help\" -f -- \"$cur\") )\n\
+             \x20           return 0\n\
+             \x20           ;;\n\
+             \x20   esac\n\
+             \x20   COMPREPLY=( $(compgen -f -- \"$cur\") )\n\
+             }}\n\
+             complete -F _aevia_completions aevia\n"
+            )
+        },
+        | "zsh" => {
+            format!(
+                "#compdef aevia\n\
+             _aevia() {{\n\
+             \x20   local -a commands\n\
+             \x20   commands=(\n\
+             \x20       'run:Compile and run a program'\n\
+             \x20       'check:Type-check without evaluating'\n\
+             \x20       'lint:Run compiler and style lints'\n\
+             \x20       'watch:Recheck when dependencies change'\n\
+             \x20       'test:Run tests or doc examples'\n\
+             \x20       'repl:Interactive session'\n\
+             \x20       'fmt:Format Aevia source'\n\
+             \x20       'doc:Generate API documentation'\n\
+             \x20       'bench:Measure benchmarks'\n\
+             \x20       'clean:Remove generated build products'\n\
+             \x20       'lsp:Start the language server'\n\
+             \x20       'completions:Generate shell completions'\n\
+             \x20       'init:Create a package'\n\
+             \x20       'add:Add a dependency'\n\
+             \x20       'update:Update lock file'\n\
+             \x20       'fetch:Download locked dependencies'\n\
+             \x20       'tree:Display dependency tree'\n\
+             \x20       'rssn:Inspect the scientific kernel'\n\
+             \x20       'pkg:Run the registry client'\n\
+             \x20       'publish:Publish a package'\n\
+             \x20       'docs:Locate package documentation'\n\
+             \x20       'help:Show command help'\n\
+             \x20   )\n\
+             \x20   if (( CURRENT == 2 )); then\n\
+             \x20       _describe 'command' commands\n\
+             \x20   else\n\
+             \x20       _files\n\
+             \x20   fi\n\
+             }}\n\
+             _aevia \"$@\"\n"
+            )
+        },
+        | "fish" => {
+            let mut out = String::from("# Fish completions for aevia\n");
+            for cmd in commands.split_whitespace() {
+                out.push_str(&format!(
+                    "complete -c aevia -n '__fish_use_subcommand' -a '{cmd}'\n"
+                ));
+            }
+            out.push_str("complete -c aevia -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish powershell elvish'\n");
+            out.push_str("complete -c aevia -n '__fish_seen_subcommand_from doc' -l stdlib -l json -l open -l out\n");
+            out.push_str("complete -c aevia -n '__fish_seen_subcommand_from run check test' -l relax-result\n");
+            out
+        },
+        | "powershell" => {
+            format!(
+                "Register-ArgumentCompleter -Native -CommandName aevia -ScriptBlock {{\n\
+             \x20   param($wordToComplete, $commandAst, $cursorPosition)\n\
+             \x20   $commands = @({})\n\
+             \x20   $commands | Where-Object {{ $_ -like \"$wordToComplete*\" }} | ForEach-Object {{\n\
+             \x20       [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)\n\
+             \x20   }}\n\
+             }}\n",
+                commands
+                    .split_whitespace()
+                    .map(|c| format!("'{c}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
+        | "elvish" => {
+            format!(
+                "set edit:completion:arg-completer[aevia] = {{|@args|\n\
+             \x20   if (== (count $args) 2) {{\n\
+             \x20       put {}\n\
+             \x20   }}\n\
+             }}\n",
+                commands
+            )
+        },
+        | other => {
+            eprintln!(
+                "aevia completions: unsupported shell `{other}` (expected bash, zsh, fish, powershell, or elvish)"
+            );
+            return ExitCode::from(2);
+        },
+    };
+    print!("{script}");
+    ExitCode::SUCCESS
+}
+
 fn lsp_command(args: &[String]) -> ExitCode {
     if let Some(unknown) = args.iter().find(|argument| argument.as_str() != "--stdio") {
         eprintln!(
@@ -424,6 +549,24 @@ fn report(
     }
     eprint!("{}", diagnostics.render_with(sources, style));
     diagnostics.has_errors()
+}
+
+fn report_with_relax(
+    diagnostics: &Diagnostics,
+    sources: &aevia_syntax::SourceMap,
+    style: Style,
+    relax_result: bool,
+) -> bool {
+    if !relax_result {
+        return report(diagnostics, sources, style);
+    }
+    let mut filtered = Diagnostics::new();
+    for item in &diagnostics.items {
+        if item.code != "W0202" {
+            filtered.push(item.clone());
+        }
+    }
+    report(&filtered, sources, style)
 }
 
 /// The file a command works on: the argument, or the package's entry.
@@ -530,6 +673,7 @@ fn run_command(
     let mut example: Option<String> = None;
     let mut program_args: Vec<String> = Vec::new();
     let mut no_cache = false;
+    let mut relax_result = false;
     let mut index = 0;
     while index < args.len() {
         let argument = args[index].as_str();
@@ -539,6 +683,7 @@ fn run_command(
         }
         match argument {
             | "--no-cache" => no_cache = true,
+            | "--relax-result" => relax_result = true,
             | "--example" => {
                 index += 1;
                 let Some(name) = args.get(index) else {
@@ -549,7 +694,7 @@ fn run_command(
             },
             | other if other.starts_with('-') => {
                 eprintln!(
-                    "aevia run: unknown option `{other}` (the options are `--example NAME` and `--no-cache`; \
+                    "aevia run: unknown option `{other}` (the options are `--example NAME`, `--no-cache`, and `--relax-result`; \
                      program arguments go after `--`)"
                 );
                 return ExitCode::from(2);
@@ -585,7 +730,12 @@ fn run_command(
         | Ok(program) => program,
         | Err(code) => return code,
     };
-    if report(&program.diagnostics, &program.sources, style(options)) {
+    if report_with_relax(
+        &program.diagnostics,
+        &program.sources,
+        style(options),
+        relax_result,
+    ) {
         return ExitCode::from(1);
     }
     let Some(entry) = program.entry() else {
@@ -734,21 +884,32 @@ fn check_command(
     options: Options,
     args: &[String],
 ) -> ExitCode {
-    let (cli_overrides, rest) = match lint_cmd::parse_lint_flags(args, "check") {
+    let (mut cli_overrides, rest) = match lint_cmd::parse_lint_flags(args, "check") {
         | Ok(pair) => pair,
         | Err(code) => return code,
     };
     let all = rest.iter().any(|argument| argument == "--all");
     let no_cache = rest.iter().any(|argument| argument == "--no-cache");
+    let relax_result = rest.iter().any(|argument| argument == "--relax-result");
+    if relax_result {
+        cli_overrides.push(aevia_lint::CliOverride {
+            level: aevia_lint::Level::Allow,
+            target: "W0202".to_string(),
+        });
+    }
     let files: Vec<String> = rest
         .iter()
-        .filter(|argument| argument.as_str() != "--all" && argument.as_str() != "--no-cache")
+        .filter(|argument| {
+            argument.as_str() != "--all"
+                && argument.as_str() != "--no-cache"
+                && argument.as_str() != "--relax-result"
+        })
         .cloned()
         .collect();
     if let Some(unknown) = files.iter().find(|argument| argument.starts_with('-')) {
         eprintln!(
             "aevia check: unknown option `{unknown}` (the options are `--all`, `--no-cache`, \
-             and `-A/-W/-D/-F LINT`; a file is optional)"
+             `--relax-result`, and `-A/-W/-D/-F LINT`; a file is optional)"
         );
         return ExitCode::from(2);
     }
@@ -1195,6 +1356,7 @@ fn test_command(
     let mut filter: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
     let mut doc = false;
+    let mut relax_result = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -1208,10 +1370,11 @@ fn test_command(
             },
             // §7.5.5/§9.12: compile the ```aevia blocks of the `##` docs.
             | "--doc" => doc = true,
+            | "--relax-result" => relax_result = true,
             | other if other.starts_with('-') => {
                 eprintln!(
-                    "aevia test: unknown option `{other}` (the options are `--filter PAT` and \
-                     `--doc`)"
+                    "aevia test: unknown option `{other}` (the options are `--filter PAT`, \
+                     `--doc`, and `--relax-result`)"
                 );
                 return ExitCode::from(2);
             },
@@ -1230,7 +1393,12 @@ fn test_command(
         | Ok(program) => program,
         | Err(code) => return code,
     };
-    if report(&program.diagnostics, &program.sources, style(options)) {
+    if report_with_relax(
+        &program.diagnostics,
+        &program.sources,
+        style(options),
+        relax_result,
+    ) {
         return ExitCode::from(1);
     }
     let Some(entry) = program.entry() else {

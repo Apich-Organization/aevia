@@ -52,7 +52,6 @@ ORDER = [
     "13-extensibility.md",
     "appendix-a-grammar.md",
     "appendix-b-diagnostics.md",
-    "appendix-c-changelog.md",
 ]
 KEYWORDS = (
     "as class derive dimension do else false fn for if import in instance let match "
@@ -129,10 +128,6 @@ def short(heading: str) -> str:
 def detect_revision(explicit):
     if explicit:
         return explicit
-    changelog = read(SPEC / "appendix-c-changelog.md")
-    found = re.findall(r"Revision (\d+)", changelog)
-    if found:
-        return max(found, key=int)
     readme = read(SPEC / "README.md")
     found = re.search(r"Revision (\d+)", readme)
     return found.group(1) if found else "1"

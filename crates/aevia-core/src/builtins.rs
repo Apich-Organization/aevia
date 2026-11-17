@@ -2275,6 +2275,10 @@ fn call_inner(
             })))
         },
         | "read_line" => Ok(Value::Io(Rc::new(crate::value::IoAction::ReadLine))),
+        | "input" => {
+            let prompt = expect_str(&args, 0, name, span)?;
+            Ok(Value::Io(Rc::new(crate::value::IoAction::Input(prompt))))
+        },
         | "load_plugin" => {
             let path = match args.first() {
                 | Some(Value::Str(path)) => path.to_string(),
@@ -2480,16 +2484,66 @@ fn call_inner(
         },
         | "plot" | "save" => {
             let spec = args.last().cloned().unwrap_or(Value::Unit);
-            let html = render_plot(&spec);
             if name == "plot" {
+                let html = render_plot(&spec);
                 Ok(Value::Io(Rc::new(crate::value::IoAction::Plot(html))))
             } else {
                 let path = expect_str(&args, 0, name, span)?;
+                let clean_path = path.split(['?', '#']).next().unwrap_or(&path);
+                let html = if clean_path.to_ascii_lowercase().ends_with(".svg") {
+                    render_plot_svg(&spec)
+                } else {
+                    render_plot(&spec)
+                };
                 Ok(Value::Io(Rc::new(crate::value::IoAction::Save {
                     path,
                     html,
                 })))
             }
+        },
+        | "plot_save_gif" => {
+            let path = expect_str(&args, 0, name, span)?;
+            let Some(Value::Tensor(specs)) = args.get(1) else {
+                return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                    Value::string("E0902: `save_gif` needs a list of plot specs"),
+                )))));
+            };
+            let delay_cs = match args.get(2) {
+                | Some(value) => {
+                    let Some(num) = value.as_num() else {
+                        return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                            Value::string("E0902: `save_gif` delay_cs must be an Int"),
+                        )))));
+                    };
+                    let Some(delay) = num.to_f64().map(|v| v.round() as i64) else {
+                        return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                            Value::string("E0902: `save_gif` delay_cs must be a non-negative Int"),
+                        )))));
+                    };
+                    u16::try_from(delay.max(0)).unwrap_or(u16::MAX)
+                },
+                | None => 10,
+            };
+            let frames: Vec<rssn::io::GifFrame> = specs
+                .elements()
+                .iter()
+                .map(|spec| render_plot_rgba_frame(spec, delay_cs))
+                .collect();
+            if frames.is_empty() {
+                return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                    Value::string("E0902: `save_gif` requires at least one plot frame"),
+                )))));
+            }
+            let animation = rssn::io::GifAnimation {
+                width: 800,
+                height: 400,
+                loop_count: 0,
+                frames,
+            };
+            Ok(Value::Io(Rc::new(crate::value::IoAction::WriteGif {
+                path,
+                animation,
+            })))
         },
 
         // ----- §8.2 constants ---------------------------------------------
@@ -4401,6 +4455,42 @@ fn call_inner(
                     Ok(Value::Io(Rc::new(crate::value::IoAction::WriteNpy {
                         path,
                         bytes,
+                    })))
+                },
+                | Err(message) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
+                        Value::string(message),
+                    )))))
+                },
+            }
+        },
+        | "read_svg" => {
+            let path = expect_str(&args, 0, name, span)?;
+            Ok(Value::Io(Rc::new(crate::value::IoAction::ReadSvg(path))))
+        },
+        | "write_svg" => {
+            let path = expect_str(&args, 0, name, span)?;
+            let contents = expect_str(&args, 1, name, span)?;
+            Ok(Value::Io(Rc::new(crate::value::IoAction::WriteSvg {
+                path,
+                contents,
+            })))
+        },
+        | "read_gif" => {
+            let path = expect_str(&args, 0, name, span)?;
+            Ok(Value::Io(Rc::new(crate::value::IoAction::ReadGif(path))))
+        },
+        | "write_gif" => {
+            let path = expect_str(&args, 0, name, span)?;
+            let value = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| arity(name, 2, 1, span))?;
+            match gif_animation_from_value(&value) {
+                | Ok(animation) => {
+                    Ok(Value::Io(Rc::new(crate::value::IoAction::WriteGif {
+                        path,
+                        animation,
                     })))
                 },
                 | Err(message) => {
@@ -7203,7 +7293,7 @@ fn symbol_name(num: &NumVal) -> Option<String> {
     }
 }
 
-fn render_plot(spec: &Value) -> String {
+fn render_plot_svg(spec: &Value) -> String {
     let mut polylines = String::new();
     if let Value::Record(record) = spec
         && let Some(Value::Tensor(series)) = record.fields.get("series")
@@ -7235,11 +7325,170 @@ fn render_plot(spec: &Value) -> String {
         }
     }
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Aevia plot</title></head>\
-<body><svg viewBox=\"0 0 800 400\" width=\"800\" height=\"400\" style=\"background:#fff\">\
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 800 400\" width=\"800\" height=\"400\" style=\"background:#fff\">\
 <rect x=\"40\" y=\"20\" width=\"720\" height=\"340\" fill=\"none\" stroke=\"#ccc\"/>\
-{polylines}</svg></body></html>"
+{polylines}</svg>"
     )
+}
+
+fn render_plot(spec: &Value) -> String {
+    let svg = render_plot_svg(spec);
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Aevia plot</title></head>\
+<body>{svg}</body></html>"
+    )
+}
+
+fn gif_animation_from_value(value: &Value) -> Result<rssn::io::GifAnimation, String> {
+    let Value::Record(record) = value else {
+        return Err(format!(
+            "E0902: `write_gif` needs a GIF record, found {}",
+            value.type_name()
+        ));
+    };
+    let read_u16 = |record: &RecordValue, key: &str| -> Result<u16, String> {
+        let Some(field) = record.fields.get(key) else {
+            return Err(format!("E0902: GIF record is missing `{key}`"));
+        };
+        let Some(num) = field.as_num() else {
+            return Err(format!("E0902: GIF `{key}` must be an Int"));
+        };
+        let Some(raw) = num.to_f64().map(|v| v.round() as i64) else {
+            return Err(format!("E0902: GIF `{key}` must be a finite Int"));
+        };
+        u16::try_from(raw).map_err(|_| format!("E0902: GIF `{key}` out of u16 range: {raw}"))
+    };
+    let width = read_u16(record, "width")?;
+    let height = read_u16(record, "height")?;
+    let loop_count = read_u16(record, "loop_count")?;
+    let Some(Value::Tensor(frame_list)) = record.fields.get("frames") else {
+        return Err("E0902: GIF record is missing `frames` list".to_string());
+    };
+    let mut frames = Vec::with_capacity(frame_list.storage.len());
+    for item in frame_list.elements() {
+        let Value::Record(frame_rec) = item else {
+            return Err("E0902: each GIF frame must be a record".to_string());
+        };
+        let delay_cs = read_u16(&frame_rec, "delay_cs")?;
+        let Some(Value::Tensor(rgba_list)) = frame_rec.fields.get("rgba") else {
+            return Err("E0902: GIF frame is missing `rgba` list".to_string());
+        };
+        let mut rgba = Vec::with_capacity(rgba_list.storage.len());
+        for byte_val in rgba_list.elements() {
+            let Some(num) = byte_val.as_num() else {
+                return Err("E0902: GIF `rgba` elements must be Ints".to_string());
+            };
+            let Some(raw) = num.to_f64().map(|v| v.round() as i64) else {
+                return Err("E0902: GIF `rgba` elements must be finite Ints".to_string());
+            };
+            let byte = u8::try_from(raw)
+                .map_err(|_| format!("E0902: GIF `rgba` byte out of range: {raw}"))?;
+            rgba.push(byte);
+        }
+        frames.push(rssn::io::GifFrame {
+            width,
+            height,
+            delay_cs,
+            rgba,
+        });
+    }
+    Ok(rssn::io::GifAnimation {
+        width,
+        height,
+        loop_count,
+        frames,
+    })
+}
+
+fn render_plot_rgba_frame(
+    spec: &Value,
+    delay_cs: u16,
+) -> rssn::io::GifFrame {
+    const W: usize = 800;
+    const H: usize = 400;
+    let mut rgba = vec![255u8; W * H * 4];
+    let set_pixel = |buf: &mut [u8], x: i32, y: i32, color: [u8; 4]| {
+        if x >= 0 && y >= 0 && (x as usize) < W && (y as usize) < H {
+            let idx = (y as usize * W + x as usize) * 4;
+            buf[idx..idx + 4].copy_from_slice(&color);
+        }
+    };
+    let draw_line = |buf: &mut [u8], mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: [u8; 4]| {
+        let dx = (x1 - x0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let dy = -(y1 - y0).abs();
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+        loop {
+            set_pixel(buf, x0, y0, color);
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    };
+    // Border matching SVG rect (40, 20, 720, 340).
+    let border = [204, 204, 204, 255];
+    draw_line(&mut rgba, 40, 20, 760, 20, border);
+    draw_line(&mut rgba, 760, 20, 760, 360, border);
+    draw_line(&mut rgba, 760, 360, 40, 360, border);
+    draw_line(&mut rgba, 40, 360, 40, 20, border);
+
+    if let Value::Record(record) = spec
+        && let Some(Value::Tensor(series)) = record.fields.get("series")
+    {
+        let stroke = [192, 57, 43, 255];
+        for item in series.elements() {
+            if let Value::Record(series) = item
+                && let (Some(Value::Tensor(xs)), Some(Value::Tensor(ys))) =
+                    (series.fields.get("x"), series.fields.get("y"))
+            {
+                let pts: Vec<(f64, f64)> = xs
+                    .elements()
+                    .iter()
+                    .zip(ys.elements())
+                    .filter_map(|(x, y)| Some((x.as_f64()?, y.as_f64()?)))
+                    .filter(|(x, y)| x.is_finite() && y.is_finite())
+                    .collect();
+                if pts.len() >= 2 {
+                    let (mut xmin, mut xmax) = (f64::INFINITY, f64::NEG_INFINITY);
+                    let (mut ymin, mut ymax) = (f64::INFINITY, f64::NEG_INFINITY);
+                    for &(x, y) in &pts {
+                        xmin = xmin.min(x);
+                        xmax = xmax.max(x);
+                        ymin = ymin.min(y);
+                        ymax = ymax.max(y);
+                    }
+                    let xr = (xmax - xmin).max(1e-12);
+                    let yr = (ymax - ymin).max(1e-12);
+                    let map_pt = |(x, y): (f64, f64)| -> (i32, i32) {
+                        let px = 40.0 + ((x - xmin) / xr) * 720.0;
+                        let py = 360.0 - ((y - ymin) / yr) * 340.0;
+                        (px.round() as i32, py.round() as i32)
+                    };
+                    for pair in pts.windows(2) {
+                        let (x0, y0) = map_pt(pair[0]);
+                        let (x1, y1) = map_pt(pair[1]);
+                        draw_line(&mut rgba, x0, y0, x1, y1, stroke);
+                    }
+                }
+            }
+        }
+    }
+    rssn::io::GifFrame {
+        width: W as u16,
+        height: H as u16,
+        delay_cs,
+        rgba,
+    }
 }
 
 /// A tensor's elements as complex numbers.

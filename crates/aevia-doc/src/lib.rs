@@ -19,7 +19,7 @@ use aevia_syntax::parse_module;
 use std::fmt::Write as _;
 
 /// One documented declaration.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct DeclDoc {
     /// `fn`, `let`, `type`, `unit`, `dimension`, `class`, `instance`, `derive`.
     pub kind: String,
@@ -31,10 +31,12 @@ pub struct DeclDoc {
     pub doc: Option<String>,
     /// Whether the declaration is not exported.
     pub private: bool,
+    /// Whether the declaration is hidden from documentation (`@hidden` or `@doc(hidden)`).
+    pub doc_hidden: bool,
 }
 
 /// One module's documentation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ModuleDoc {
     /// The module path, `Kinematics` or `Thermo.IdealGas`.
     pub path: String,
@@ -106,6 +108,7 @@ pub fn module_doc(
             signature,
             doc: decl.doc.clone(),
             private: decl.private,
+            doc_hidden: decl.is_doc_hidden(),
         });
     }
     Ok(ModuleDoc {
@@ -175,8 +178,18 @@ fn signature(decl: &Decl) -> (String, String, String) {
                 let _ = write!(text, " {names}");
             }
             text.push_str(" where");
-            for (method, ty) in methods {
-                let _ = write!(text, "\n    {method}: {}", type_text(ty));
+            for method in methods {
+                let prefix = if method.private {
+                    "private "
+                } else {
+                    ""
+                };
+                let _ = write!(
+                    text,
+                    "\n    {prefix}{}: {}",
+                    method.name,
+                    type_text(&method.ty)
+                );
             }
             (name.clone(), text)
         },
@@ -298,17 +311,32 @@ fn plural(
     }
 }
 
-/// Renders one module's page.
+/// Renders one module's public API page, omitting `private` and `@hidden` / `@doc(hidden)` items.
 #[must_use]
 pub fn render_module(doc: &ModuleDoc) -> String {
+    render_module_with_options(doc, false, false)
+}
+
+/// Renders one module's page with explicit control over hidden and private items.
+#[must_use]
+pub fn render_module_with_options(
+    doc: &ModuleDoc,
+    include_hidden: bool,
+    include_private: bool,
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# `{}`\n", doc.path);
     let _ = writeln!(out, "Source: `{}`\n", doc.file);
-    if doc.decls.is_empty() {
+    let visible: Vec<&DeclDoc> = doc
+        .decls
+        .iter()
+        .filter(|decl| (include_hidden || !decl.doc_hidden) && (include_private || !decl.private))
+        .collect();
+    if visible.is_empty() {
         out.push_str("This module declares nothing.\n");
         return out;
     }
-    for decl in &doc.decls {
+    for decl in visible {
         let private = if decl.private {
             " (private)"
         } else {
@@ -324,6 +352,105 @@ pub fn render_module(doc: &ModuleDoc) -> String {
         }
     }
     out
+}
+
+/// Documentation for one RSSN kernel operator, with full untruncated prose and examples.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct OperatorDoc {
+    /// The operator's name.
+    pub name: String,
+    /// The rule set that registered it.
+    pub rule_set: String,
+    /// Rendered overload signatures.
+    pub signatures: Vec<String>,
+    /// Stability level.
+    pub stability: String,
+    /// Full, untruncated operator documentation.
+    pub doc: String,
+    /// Recorded call examples `(call, result_sort)`.
+    pub examples: Vec<(String, String)>,
+}
+
+/// Combined documentation bundle for the Aevia standard library and RSSN kernel operators.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct StdlibDocBundle {
+    /// Parsed `aevia-std/stdlib/*.aev` module documentation.
+    pub modules: Vec<ModuleDoc>,
+    /// Full, untruncated `aevia_rssn::registry()` operator documentation.
+    pub operators: Vec<OperatorDoc>,
+}
+
+impl StdlibDocBundle {
+    /// Serializes the documentation bundle to pretty-printed JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `serde_json::Error` if serialization fails.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Renders the documentation bundle as a combined Markdown document.
+    #[must_use]
+    pub fn to_markdown(&self) -> String {
+        let mut out = render_index("Aevia Standard Library", &self.modules);
+        for module in &self.modules {
+            out.push('\n');
+            out.push_str(&render_module(module));
+        }
+        out.push_str("\n# RSSN Kernel Operators\n\n");
+        for op in &self.operators {
+            let _ = writeln!(out, "## `{}.{}` ({})\n", op.rule_set, op.name, op.stability);
+            if !op.signatures.is_empty() {
+                out.push_str("```aevia\n");
+                for sig in &op.signatures {
+                    let _ = writeln!(out, "{sig}");
+                }
+                out.push_str("```\n\n");
+            }
+            if !op.doc.trim().is_empty() {
+                let _ = writeln!(out, "{}\n", op.doc.trim_end());
+            }
+            if !op.examples.is_empty() {
+                out.push_str("### Examples\n\n");
+                for (call, sort) in &op.examples {
+                    let _ = writeln!(out, "- `{call}` → `{sort}`");
+                }
+                out.push('\n');
+            }
+        }
+        out
+    }
+}
+
+/// Generates the full standard-library documentation bundle, combining
+/// `aevia-std/stdlib/*.aev` module docs with untruncated `aevia_rssn::registry()`
+/// operator docs and examples.
+///
+/// # Errors
+///
+/// Returns an error if any embedded stdlib `.aev` module fails to parse.
+pub fn generate_stdlib_docs() -> Result<StdlibDocBundle, String> {
+    let mut modules = Vec::new();
+    for entry in aevia_std::stdlib::modules() {
+        let file = format!("stdlib/{}.aev", entry.path);
+        let fallback = entry.path.replace('/', ".");
+        modules.push(module_doc(entry.source, &file, &fallback)?);
+    }
+    let operators = aevia_rssn::registry::registry()
+        .ops()
+        .map(|op| {
+            OperatorDoc {
+                name: op.name.clone(),
+                rule_set: op.rule_set.clone(),
+                signatures: op.signatures.iter().map(aevia_rssn::Sig::render).collect(),
+                stability: format!("{:?}", op.stability),
+                doc: op.doc.clone(),
+                examples: op.witnesses.clone(),
+            }
+        })
+        .collect();
+    Ok(StdlibDocBundle { modules, operators })
 }
 
 /// Renders the index page.
@@ -420,5 +547,51 @@ private fn hidden(): Int = 1
     fn a_file_that_does_not_parse_is_refused() {
         let error = module_doc("fn f( = 1\n", "a.aev", "A").expect_err("refuses");
         assert!(error.contains("line 1"), "{error}");
+    }
+
+    #[test]
+    fn doc_hidden_and_private_items_are_filtered_unless_requested() {
+        let source = "\
+## Public item.
+fn visible(): Int = 1
+
+@hidden
+fn attr_hidden(): Int = 2
+
+@doc(hidden)
+fn doc_attr_hidden(): Int = 3
+
+private fn secret(): Int = 4
+";
+        let doc = module_doc(source, "src/vis.aev", "Vis").expect("parses");
+        assert!(!doc.decls[0].doc_hidden);
+        assert!(doc.decls[1].doc_hidden);
+        assert!(doc.decls[2].doc_hidden);
+        assert!(doc.decls[3].private);
+
+        let public_page = render_module(&doc);
+        assert!(public_page.contains("visible"));
+        assert!(!public_page.contains("attr_hidden"));
+        assert!(!public_page.contains("doc_attr_hidden"));
+        assert!(!public_page.contains("secret"));
+
+        let full_page = render_module_with_options(&doc, true, true);
+        assert!(full_page.contains("visible"));
+        assert!(full_page.contains("attr_hidden"));
+        assert!(full_page.contains("doc_attr_hidden"));
+        assert!(full_page.contains("secret"));
+    }
+
+    #[test]
+    fn stdlib_doc_bundle_combines_modules_and_untruncated_operators() {
+        let bundle = generate_stdlib_docs().expect("generates stdlib docs");
+        assert!(!bundle.modules.is_empty());
+        assert!(!bundle.operators.is_empty());
+        let json = bundle.to_json().expect("serializes to json");
+        assert!(json.contains("\"modules\""));
+        assert!(json.contains("\"operators\""));
+        let md = bundle.to_markdown();
+        assert!(md.contains("# Aevia Standard Library"));
+        assert!(md.contains("# RSSN Kernel Operators"));
     }
 }

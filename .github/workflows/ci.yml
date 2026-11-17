@@ -187,6 +187,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y fontconfig libfontconfig1-dev
       - name: Generated standard library is current
         run: cargo run -p aevia-stdlib-gen -- --check
+      - name: Standard library documentation renders cleanly
+        run: cargo run -p aevia-cli -- doc --out "${{ runner.temp }}/aevia-stdlib-docs" crates/aevia-std/stdlib/*.aev
       - name: Kernel source-derived bindings are current
         run: cargo run -p rssn-api-audit -- --codecs-check
       - name: Kernel API inventory is current

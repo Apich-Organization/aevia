@@ -17,6 +17,7 @@ fn codes(
     assert!(!parse.has_errors(), "{:?}", parse.items);
     let options = CheckOptions {
         capabilities: Capabilities::from_names(capabilities.iter().copied()),
+        ..CheckOptions::default()
     };
     let result = check_module_with_options(0, &module, &[], &options);
     result

@@ -16,7 +16,29 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <textmate.bundleProvider implementation="dev.aevia.jetbrains.AeviaTextMateBundleProvider"/>
+        <notificationGroup id="Aevia" displayType="BALLOON"/>
     </extensions>
+
+    <actions>
+        <action id="Aevia.RunFile"
+                class="dev.aevia.jetbrains.AeviaRunFileAction"
+                text="Run Aevia File"
+                description="Run the current .aev file with aevia run"
+                icon="AllIcons.Actions.Execute">
+            <add-to-group group-id="RunMenu" anchor="first"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt R"/>
+        </action>
+        <action id="Aevia.TestFile"
+                class="dev.aevia.jetbrains.AeviaTestFileAction"
+                text="Test Aevia File"
+                description="Run tests in the current .aev file with aevia test"
+                icon="AllIcons.RunConfigurations.TestState.Run">
+            <add-to-group group-id="RunMenu" anchor="after" relative-to-action="Aevia.RunFile"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="Aevia.RunFile"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt T"/>
+        </action>
+    </actions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
         <server id="aevia" name="Aevia Language Server"

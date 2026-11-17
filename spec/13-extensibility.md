@@ -412,9 +412,7 @@ pub struct ConstantValue {
 ## 13.7 中心包 registry
 
 registry 是**内容寻址 + 签名 + 能力声明**的包索引，服务实现在 `platform/`（`aevia-registry-*` 与 `aevia-pkg`），部署为 `aevia.apich.org`。
-
-**状态**：已实现——`aevia add owner/name[@req]`、`aevia update`、`aevia fetch`、`aevia tree`（均支持 `--offline`）与 `aevia pkg publish/yank/search/verify`；依赖解析由
-`aevia-resolve`（SemVer 2.0、回溯求解、锁文件带 `checksum`，§7.5.1/§7.5.2）完成；git 依赖与未知清单键仍是 `E0605`。已知缺口见附录 C Revision 15。
+CLI 提供 `aevia add owner/name[@req]`、`aevia update`、`aevia fetch`、`aevia tree`（均支持 `--offline`）与 `aevia pkg publish/yank/search/verify`；依赖解析使用 SemVer 2.0 与锁文件校验（§7.5.1/§7.5.2），git 依赖与未知清单键报 `E0605`。
 
 ### 13.7.1 包清单
 

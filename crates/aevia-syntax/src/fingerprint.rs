@@ -17,6 +17,9 @@ use std::fmt::Write as _;
 #[must_use]
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
+    if module.private {
+        out.push_str("private ");
+    }
     out.push_str("module");
     match &module.name {
         | Some(path) => {
@@ -52,6 +55,9 @@ pub fn declaration(decl: &Decl) -> String {
 #[must_use]
 pub fn method(method: &InstanceMethod) -> String {
     let mut out = String::new();
+    if method.private {
+        out.push_str("private ");
+    }
     let _ = write!(out, "method:{}(", method.name);
     for param in &method.params {
         param_into(&mut out, param);
@@ -90,7 +96,11 @@ fn decl_into(
             alias,
             names,
             open,
+            export,
         } => {
+            if *export {
+                out.push_str("export ");
+            }
             let _ = write!(
                 out,
                 "{}({} as {} names {:?})",
@@ -149,6 +159,9 @@ fn decl_into(
                 | TypeBody::Variants(variants) => {
                     out.push_str("variants ");
                     for variant in variants {
+                        if variant.private {
+                            out.push_str("private ");
+                        }
                         let _ = write!(out, "{}(", variant.name);
                         for arg in &variant.args {
                             ty_into(out, arg);
@@ -169,9 +182,12 @@ fn decl_into(
             out.push_str(name);
             type_params_into(out, params);
             out.push_str(" where ");
-            for (method, ty) in methods {
-                let _ = write!(out, "{method}: ");
-                ty_into(out, ty);
+            for method in methods {
+                if method.private {
+                    out.push_str("private ");
+                }
+                let _ = write!(out, "{}: ", method.name);
+                ty_into(out, &method.ty);
                 out.push(';');
             }
         },
@@ -180,6 +196,9 @@ fn decl_into(
             ty_into(out, ty);
             out.push_str(" where ");
             for method in methods {
+                if method.private {
+                    out.push_str("private ");
+                }
                 let _ = write!(out, "{}(", method.name);
                 for param in &method.params {
                     param_into(out, param);

@@ -1404,6 +1404,9 @@ impl Capabilities {
 pub struct CheckOptions {
     /// The backend capabilities to check against (§13.8.2).
     pub capabilities: Capabilities,
+    /// When true, `Result`/`Option` exhaustiveness and `?` unwrap checks are
+    /// relaxed to warnings (`W0309`, `W0702`, `W0203`).
+    pub relax_result: bool,
 }
 
 impl Default for CheckOptions {
@@ -1414,6 +1417,7 @@ impl Default for CheckOptions {
         // `@jit` on the build they are actually linked against.
         Self {
             capabilities: Capabilities::from_names(aevia_rssn::registry().capabilities.names()),
+            relax_result: false,
         }
     }
 }
@@ -1493,6 +1497,8 @@ pub fn check_module_with_identity(
 ) -> CheckResult {
     let mut checker = Checker::new(file, options.clone());
     checker.checked.identity = identity;
+    checker.imported_exports = imports.to_vec();
+    checker.imported_interfaces = interfaces.to_vec();
     checker.add_imports(imports);
     for interface in interfaces {
         let explicit_bindings = !bindings.is_empty();
@@ -1947,6 +1953,15 @@ struct Checker {
     /// Classes declared `private` in this module (§7.1.3): usable locally,
     /// absent from the exported interface.
     private_classes: HashSet<String>,
+    /// Class methods declared `private`: `(class_name, method_name)`.
+    private_class_methods: HashSet<(String, String)>,
+    /// Instance methods declared `private`: `(instance_key, method_name)`.
+    private_instance_methods: HashSet<(InstanceKey, String)>,
+    /// Raw imports and interfaces passed to the checker, used for `export import`/`export open`.
+    imported_exports: Vec<Import>,
+    imported_interfaces: Vec<ModuleInterface>,
+    /// Whether relaxed `Result`/`Option` mode is active.
+    relax_result: bool,
     instance_declarations: HashMap<Span, InstanceKey>,
     method_bindings: HashMap<String, ClassMethodRef>,
     constructor_bindings: HashMap<String, (adt::AdtId, usize)>,
@@ -2071,6 +2086,7 @@ impl Checker {
         file: FileId,
         options: CheckOptions,
     ) -> Self {
+        let relax_result = options.relax_result;
         let mut checker = Self {
             file,
             module_path: ModulePath::new([format!("<file{file}>")]),
@@ -2079,6 +2095,11 @@ impl Checker {
             stability: IndexMap::new(),
             registrations: Vec::new(),
             private_classes: HashSet::new(),
+            private_class_methods: HashSet::new(),
+            private_instance_methods: HashSet::new(),
+            imported_exports: Vec::new(),
+            imported_interfaces: Vec::new(),
+            relax_result,
             instance_declarations: HashMap::new(),
             method_bindings: HashMap::new(),
             constructor_bindings: HashMap::new(),
@@ -2262,6 +2283,171 @@ impl Checker {
                         self.dims.define_alias(&key, dim.with_display_name(&key));
                     },
                 }
+            }
+        }
+    }
+
+    /// Re-exports bindings, types, classes, and units from an `export import` or
+    /// `export open` declaration (§7.1).
+    fn reexport_import(
+        &mut self,
+        path: &[String],
+        alias: Option<&str>,
+        names: Option<&[String]>,
+        open: bool,
+    ) {
+        let dotted = path.join(".");
+        if let Some(interface) = self
+            .imported_interfaces
+            .iter()
+            .find(|iface| iface.name.dotted() == dotted)
+            .cloned()
+        {
+            match names {
+                | Some(selected) => {
+                    for name in selected {
+                        if let Some(export) = interface.exports.get(name) {
+                            self.checked.exports.insert(name.clone(), export.clone());
+                            if let Export::Type { adt } = export {
+                                for (ctor_name, ctor_export) in &interface.exports {
+                                    if matches!(
+                                        ctor_export,
+                                        Export::Ctor { adt: id, .. }
+                                            | Export::TypeCtor { adt: id, .. }
+                                            if id == adt
+                                    ) {
+                                        self.checked
+                                            .exports
+                                            .insert(ctor_name.clone(), ctor_export.clone());
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(alias_def) = interface.aliases.get(name) {
+                            self.checked
+                                .alias_defs
+                                .insert(name.clone(), alias_def.clone());
+                        }
+                        if let Some(headers) = interface.function_headers.get(name) {
+                            self.checked
+                                .function_headers
+                                .insert(name.clone(), headers.clone());
+                        }
+                        if let Some(callable) = interface.callable_exports.get(name) {
+                            self.checked
+                                .callable_exports
+                                .insert(name.clone(), callable.clone());
+                        }
+                        for (class_key, class_export) in &interface.classes {
+                            if class_key.name == *name {
+                                self.checked
+                                    .classes
+                                    .insert(class_key.clone(), class_export.clone());
+                            }
+                        }
+                    }
+                },
+                | None if open => {
+                    for (name, export) in &interface.exports {
+                        self.checked.exports.insert(name.clone(), export.clone());
+                    }
+                    for (name, alias_def) in &interface.aliases {
+                        self.checked
+                            .alias_defs
+                            .insert(name.clone(), alias_def.clone());
+                    }
+                    for (name, headers) in &interface.function_headers {
+                        self.checked
+                            .function_headers
+                            .insert(name.clone(), headers.clone());
+                    }
+                    for (name, callable) in &interface.callable_exports {
+                        self.checked
+                            .callable_exports
+                            .insert(name.clone(), callable.clone());
+                    }
+                    for (class_key, class_export) in &interface.classes {
+                        self.checked
+                            .classes
+                            .insert(class_key.clone(), class_export.clone());
+                    }
+                },
+                | None => {
+                    for (name, export) in &interface.exports {
+                        self.checked.exports.insert(name.clone(), export.clone());
+                    }
+                    for (name, alias_def) in &interface.aliases {
+                        self.checked
+                            .alias_defs
+                            .insert(name.clone(), alias_def.clone());
+                    }
+                    for (class_key, class_export) in &interface.classes {
+                        self.checked
+                            .classes
+                            .insert(class_key.clone(), class_export.clone());
+                    }
+                },
+            }
+            return;
+        }
+        let expected_prefix = if open || names.is_some() {
+            ""
+        } else {
+            alias.unwrap_or(&dotted)
+        };
+        for (prefix, exports) in &self.imported_exports.clone() {
+            if prefix != expected_prefix {
+                continue;
+            }
+            match names {
+                | Some(selected) => {
+                    for name in selected {
+                        if let Some(export) = exports.get(name) {
+                            self.checked.exports.insert(name.clone(), export.clone());
+                            if let Export::Type { adt } = export {
+                                for (ctor_name, ctor_export) in exports {
+                                    if matches!(
+                                        ctor_export,
+                                        Export::Ctor { adt: id, .. }
+                                            | Export::TypeCtor { adt: id, .. }
+                                            if id == adt
+                                    ) {
+                                        self.checked
+                                            .exports
+                                            .insert(ctor_name.clone(), ctor_export.clone());
+                                    }
+                                }
+                            }
+                            if matches!(export, Export::Alias { .. })
+                                && let Some(alias_def) = self.aliases.get(name)
+                            {
+                                let canonical = self.canonical_alias_export(alias_def);
+                                self.checked.alias_defs.insert(name.clone(), canonical);
+                            }
+                        }
+                        if let Some(class_def) = self.classes.class(name) {
+                            self.checked.classes.insert(
+                                class_def.key.clone(),
+                                ClassExport {
+                                    key: class_def.key.clone(),
+                                    params: class_def.params,
+                                    methods: class_def.methods.clone(),
+                                },
+                            );
+                        }
+                    }
+                },
+                | None => {
+                    for (name, export) in exports {
+                        self.checked.exports.insert(name.clone(), export.clone());
+                        if matches!(export, Export::Alias { .. })
+                            && let Some(alias_def) = self.aliases.get(name)
+                        {
+                            let canonical = self.canonical_alias_export(alias_def);
+                            self.checked.alias_defs.insert(name.clone(), canonical);
+                        }
+                    }
+                },
             }
         }
     }
@@ -2891,7 +3077,20 @@ impl Checker {
         // Units are collected before anything else resolves a unit literal, so
         // a declaration may be written after its first use (§7.1.2).
         for decl in &module.decls {
+            let saved_relax = self.relax_result;
+            if decl.has_attribute("relax_result") {
+                self.relax_result = true;
+            }
             match &decl.kind {
+                | DeclKind::Import {
+                    path,
+                    alias,
+                    names,
+                    open,
+                    export: true,
+                } => {
+                    self.reexport_import(path, alias.as_deref(), names.as_deref(), *open);
+                },
                 | DeclKind::Dimension { name, value } => {
                     self.declare_dimension(name, value.as_ref(), decl.span, decl.private);
                 },
@@ -2906,6 +3105,7 @@ impl Checker {
                 } => self.declare_class(name, params, methods, decl.span, decl.private),
                 | _ => {},
             }
+            self.relax_result = saved_relax;
         }
 
         // Keep imported values available inside a first nonrecursive
@@ -3044,6 +3244,10 @@ impl Checker {
         let mut initialized_values = HashSet::new();
         let mut binding_schemes: HashMap<Span, Scheme> = HashMap::new();
         for decl in &module.decls {
+            let saved_relax = self.relax_result;
+            if decl.has_attribute("relax_result") {
+                self.relax_result = true;
+            }
             match &decl.kind {
                 | DeclKind::Fn { name, args, body, .. } => {
                     if let Some((signature, generics, projection)) =
@@ -3100,6 +3304,7 @@ impl Checker {
                 | DeclKind::Derive { .. } => self.check_derive(decl),
                 | _ => {},
             }
+            self.relax_result = saved_relax;
             if matches!(decl.kind, DeclKind::Fn { .. } | DeclKind::Let { .. })
                 && let Some(name) = declaration_name(decl)
                 && let Some(scheme) = self.globals.get(&name)
@@ -3619,7 +3824,23 @@ impl Checker {
                 .local_classes
                 .insert(class.key.clone(), exported.clone());
             if !self.private_classes.contains(&class.key.name) {
-                self.checked.classes.insert(class.key.clone(), exported);
+                let public_methods = exported
+                    .methods
+                    .into_iter()
+                    .filter(|(method_name, _)| {
+                        !self
+                            .private_class_methods
+                            .contains(&(class.key.name.clone(), method_name.clone()))
+                    })
+                    .collect();
+                self.checked.classes.insert(
+                    class.key.clone(),
+                    ClassExport {
+                        key: exported.key,
+                        params: exported.params,
+                        methods: public_methods,
+                    },
+                );
             }
         }
         for instance in self.classes.instances_declared_in(&self.module_path) {
@@ -3635,7 +3856,24 @@ impl Checker {
                 }
             }
             if !self.private_classes.contains(&instance.class) {
-                self.checked.instances.push(exported);
+                let public_methods = exported
+                    .methods
+                    .into_iter()
+                    .filter(|(method_name, _)| {
+                        !self
+                            .private_instance_methods
+                            .contains(&(instance.key.clone(), method_name.clone()))
+                            && !self
+                                .private_class_methods
+                                .contains(&(instance.class.clone(), method_name.clone()))
+                    })
+                    .collect();
+                self.checked.instances.push(InstanceExport {
+                    key: exported.key,
+                    head: exported.head,
+                    methods: public_methods,
+                    derived: exported.derived,
+                });
             }
         }
         // Alias bodies are already resolved templates: public aliases may
@@ -4578,7 +4816,7 @@ impl Checker {
                         self.constructor_bindings
                             .insert(ctor.name.clone(), (id, index));
                         self.globals.insert(ctor.name.clone(), scheme.clone());
-                        if private {
+                        if private || ctors[index].private {
                             continue;
                         }
                         // `type P2 = | P2(...)` names the type and the
@@ -4682,7 +4920,7 @@ impl Checker {
         &mut self,
         name: &str,
         params: &[TypeParam],
-        methods: &[(String, Ty)],
+        methods: &[ClassMethod],
         span: Span,
         private: bool,
     ) {
@@ -4716,16 +4954,20 @@ impl Checker {
             ));
         }
         let mut converted = Vec::new();
-        for (method, ty) in methods {
-            let method_ty = self.convert_type(ty);
-            converted.push((method.clone(), method_ty.clone()));
+        for method in methods {
+            let method_ty = self.convert_type(&method.ty);
+            converted.push((method.name.clone(), method_ty.clone()));
+            if method.private {
+                self.private_class_methods
+                    .insert((name.to_string(), method.name.clone()));
+            }
             let scheme = crate::class::method_scheme(name, params.len().max(1), method_ty);
-            self.globals.insert(method.clone(), scheme);
+            self.globals.insert(method.name.clone(), scheme);
             self.method_bindings.insert(
-                method.clone(),
+                method.name.clone(),
                 ClassMethodRef {
                     class: ClassKey::new(self.module_path.clone(), name),
-                    method: method.clone(),
+                    method: method.name.clone(),
                 },
             );
         }
@@ -4938,6 +5180,12 @@ impl Checker {
             class_is_local,
         ) {
             Ok(key) => {
+                for instance_method in methods {
+                    if instance_method.private {
+                        self.private_instance_methods
+                            .insert((key.clone(), instance_method.name.clone()));
+                    }
+                }
                 self.instance_declarations.insert(decl.span, key.clone());
                 // The body is reachable under a name no program can write, so
                 // it cannot shadow the class method. The name is derived from
@@ -6751,6 +6999,15 @@ impl Checker {
                         },
                     };
                     self.infer.leave_level();
+                    if self.relax_result
+                        && matches!(pattern.kind, PatKind::Wildcard)
+                        && matches!(
+                            self.infer.resolve(&value_ty),
+                            Type::Adt(id, _) if id == adt::RESULT_ID
+                        )
+                    {
+                        self.warn("W0203", "discarded `Result` value", value.span);
+                    }
                     self.bind_local(pattern, &value_ty, *span, value.span);
                 },
                 | BlockStmt::Fn(decl) => {
@@ -11183,6 +11440,17 @@ impl Checker {
                     .map(|(site, ty)| (TryBoundary::Function(*site), ty.clone()))
             });
         let Some((boundary, target)) = destination else {
+            if self.relax_result {
+                self.warn(
+                    "W0702",
+                    "implicit Result/Option unwrap in relaxed mode",
+                    span,
+                );
+                return match inner_ty {
+                    | Type::Adt(_, args) => args[0].clone(),
+                    | other => other,
+                };
+            }
             self.error(
                 "E0702",
                 "`?` requires an enclosing function or IO do boundary",
@@ -11203,6 +11471,17 @@ impl Checker {
         // An inferred return is constrained immediately. Error conversion is
         // never fabricated: concrete error types must agree as well.
         if let Err(error) = self.infer.unify(&target, &output) {
+            if self.relax_result {
+                self.warn(
+                    "W0702",
+                    "implicit Result/Option unwrap in relaxed mode",
+                    span,
+                );
+                return match inner_ty {
+                    | Type::Adt(_, args) => args[0].clone(),
+                    | other => other,
+                };
+            }
             self.error_help(
                 "E0702",
                 format!("`?` does not match its enclosing return container: {error}"),
@@ -11248,6 +11527,15 @@ impl Checker {
                         },
                         | None => self.synth(value),
                     };
+                    if self.relax_result
+                        && matches!(pattern.kind, PatKind::Wildcard)
+                        && matches!(
+                            self.infer.resolve(&value_ty),
+                            Type::Adt(id, _) if id == adt::RESULT_ID
+                        )
+                    {
+                        self.warn("W0203", "discarded `Result` value", value.span);
+                    }
                     self.bind_pattern(pattern, &value_ty);
                     last_ty = Type::Unit;
                 },
@@ -11264,6 +11552,15 @@ impl Checker {
                             Type::Error
                         },
                     };
+                    if self.relax_result
+                        && matches!(pattern.kind, PatKind::Wildcard)
+                        && matches!(
+                            self.infer.resolve(&inner),
+                            Type::Adt(id, _) if id == adt::RESULT_ID
+                        )
+                    {
+                        self.warn("W0203", "discarded `Result` value", value.span);
+                    }
                     self.bind_pattern(pattern, &inner);
                     last_ty = Type::Unit;
                 },
@@ -11273,11 +11570,21 @@ impl Checker {
                         | Type::Io(inner) => {
                             // The last statement's result is the block's.
                             if !inner.is_unit() && !is_last {
-                                self.warn(
-                                    "W0202",
-                                    "this IO action's result is discarded",
-                                    expr.span,
-                                );
+                                let inner_resolved = self.infer.resolve(&inner);
+                                if self.relax_result
+                                    && matches!(
+                                        inner_resolved,
+                                        Type::Adt(id, _) if id == adt::RESULT_ID
+                                    )
+                                {
+                                    self.warn("W0203", "discarded `Result` value", expr.span);
+                                } else {
+                                    self.warn(
+                                        "W0202",
+                                        "this IO action's result is discarded",
+                                        expr.span,
+                                    );
+                                }
                             }
                             last_ty = *inner;
                         },
@@ -11574,12 +11881,25 @@ impl Checker {
             return;
         }
         let missing = self.missing_pattern(unguarded, subject, 0);
-        self.error_help(
-            "E0309",
-            format!("non-exhaustive match: missing {missing}"),
-            span,
-            "add the missing arm or a `_` arm",
+        let resolved_subject = self.infer.resolve(subject);
+        let is_result_or_option = matches!(
+            resolved_subject,
+            Type::Adt(id, _) if id == adt::RESULT_ID || id == adt::OPTION_ID
         );
+        if self.relax_result && is_result_or_option {
+            self.warn(
+                "W0309",
+                format!("non-exhaustive match: missing {missing}"),
+                span,
+            );
+        } else {
+            self.error_help(
+                "E0309",
+                format!("non-exhaustive match: missing {missing}"),
+                span,
+                "add the missing arm or a `_` arm",
+            );
+        }
     }
 
     // ----- patterns ------------------------------------------------------

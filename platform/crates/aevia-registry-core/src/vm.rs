@@ -475,6 +475,84 @@ impl SpecBook {
     }
 }
 
+/// One documented item (function, operator, type, unit, etc.) in a stdlib module.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StdlibItem {
+    /// `fn`, `operator`, `let`, `type`, `unit`, `dimension`, `class`, `instance`.
+    #[serde(default)]
+    pub kind: String,
+    /// The item's name or operator symbol.
+    #[serde(default)]
+    pub name: String,
+    /// The full signature.
+    #[serde(default)]
+    pub signature: String,
+    /// The raw `##` documentation text, if any.
+    #[serde(default)]
+    pub doc: Option<String>,
+    /// The rendered HTML for the documentation.
+    #[serde(default)]
+    pub doc_html: String,
+    /// Code examples associated with this item.
+    #[serde(default)]
+    pub examples: Vec<String>,
+}
+
+/// One module of the standard library documentation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StdlibModule {
+    /// The module's display name, e.g. `Prelude` or `Linalg`.
+    #[serde(default)]
+    pub name: String,
+    /// The URL slug, e.g. `Prelude` or `Math.Trig`.
+    #[serde(default)]
+    pub slug: String,
+    /// A short summary of the module.
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Pre-rendered HTML for module-level prose (or a Markdown-sourced module page).
+    #[serde(default)]
+    pub html: String,
+    /// Documented items in this module.
+    #[serde(default)]
+    pub items: Vec<StdlibItem>,
+}
+
+/// The complete standard library documentation book.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StdlibBook {
+    /// Optional version or revision label.
+    #[serde(default)]
+    pub version: String,
+    /// The modules, in display order.
+    #[serde(default)]
+    pub modules: Vec<StdlibModule>,
+}
+
+impl StdlibBook {
+    /// Looks up a module by slug (exact or ASCII case-insensitive).
+    #[must_use]
+    pub fn module(
+        &self,
+        slug: &str,
+    ) -> Option<&StdlibModule> {
+        self.modules
+            .iter()
+            .find(|module| module.slug == slug)
+            .or_else(|| {
+                self.modules
+                    .iter()
+                    .find(|module| module.slug.eq_ignore_ascii_case(slug))
+            })
+    }
+
+    /// Total documented items across all modules.
+    #[must_use]
+    pub fn total_items(&self) -> usize {
+        self.modules.iter().map(|module| module.items.len()).sum()
+    }
+}
+
 /// Formats a byte count the way a person reads it.
 #[must_use]
 pub fn human_bytes(bytes: u64) -> String {

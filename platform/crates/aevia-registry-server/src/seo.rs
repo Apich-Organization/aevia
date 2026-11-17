@@ -57,7 +57,7 @@ pub async fn sitemap(State(state): State<AppState>) -> PageResult<Response> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
     );
-    for path in ["/", "/crates", "/docs", "/cli", "/spec", "/log"] {
+    for path in ["/", "/crates", "/docs", "/stdlib", "/cli", "/spec", "/log"] {
         xml.push_str(&format!("  <url><loc>{}{path}</loc></url>\n", xml_escape(&base)));
     }
     for package in &packages {

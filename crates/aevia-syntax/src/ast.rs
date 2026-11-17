@@ -816,6 +816,24 @@ impl Decl {
     ) -> bool {
         self.attribute(name).is_some()
     }
+
+    /// True when `@hidden` or `@doc(hidden)` is present.
+    #[must_use]
+    pub fn is_doc_hidden(&self) -> bool {
+        if self.has_attribute("hidden") {
+            return true;
+        }
+        self.attrs.iter().any(|attr| {
+            attr.name == "doc"
+                && attr.args.iter().any(|arg| {
+                    match (&arg.name, &arg.value.kind) {
+                        | (None, ExprKind::Var(name)) => name == "hidden",
+                        | (Some(name), ExprKind::Bool(true)) => name == "hidden",
+                        | _ => false,
+                    }
+                })
+        })
+    }
 }
 
 /// The shape of a declaration.
@@ -831,6 +849,8 @@ pub enum DeclKind {
         names: Option<Vec<String>>,
         /// True for `open`.
         open: bool,
+        /// True for `export import` / `pub import` / `export open`.
+        export: bool,
     },
     /// `dimension Currency` or `dimension Area = L^2`
     Dimension {
@@ -870,7 +890,7 @@ pub enum DeclKind {
         /// Its parameters.
         params: Vec<TypeParam>,
         /// The method signatures.
-        methods: Vec<(String, Ty)>,
+        methods: Vec<ClassMethod>,
     },
     /// `instance Show for Vec2 where ...`
     Instance {
@@ -921,9 +941,22 @@ pub enum DeclKind {
     },
 }
 
+/// A method signature inside a type class.
+#[derive(Clone, Debug)]
+pub struct ClassMethod {
+    /// Whether `private` was written.
+    pub private: bool,
+    /// The method name.
+    pub name: String,
+    /// The method type signature.
+    pub ty: Ty,
+}
+
 /// A method definition inside an instance.
 #[derive(Clone, Debug)]
 pub struct InstanceMethod {
+    /// Whether `private` was written.
+    pub private: bool,
     /// The method name.
     pub name: String,
     /// Its parameters.
@@ -950,6 +983,8 @@ pub enum TypeBody {
 /// One variant constructor.
 #[derive(Clone, Debug)]
 pub struct Constructor {
+    /// Whether `private` was written.
+    pub private: bool,
     /// The constructor name.
     pub name: String,
     /// Its argument types.
@@ -963,6 +998,8 @@ pub struct Constructor {
 pub struct Module {
     /// The declared module name, if any.
     pub name: Option<Vec<String>>,
+    /// Whether `private` or `@private` was written on the module header.
+    pub private: bool,
     /// The module's unit system (§5.11), from `module M with units natural`.
     pub unit_system: Option<(String, crate::span::Span)>,
     /// The declarations, in source order.

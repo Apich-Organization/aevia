@@ -205,13 +205,13 @@ Kinematics = { path = "../kinematics" }               # local path package
 Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # path for local work, version once published
 ```
 
-Status: the manifest reader reads `[package]` (`name`, `version`, `edition`, `entry`, `authors`,
+The manifest reader reads `[package]` (`name`, `version`, `edition`, `entry`, `authors`,
 `description`, `license`, `license-file`, `readme`, `repository`, `homepage`, `documentation`,
 `keywords`, `categories`) and `[dependencies]`. Other tables (`[compat]`, `[capabilities]`,
 `[build]`, `[profile.*]`) and unknown keys are `E0605`. Publishing requires a non-empty
 `description` and either a non-empty `license` or a non-empty `license-file` inside the archive;
 options to `aevia publish` (§9.13) and `aevia-pkg.toml` may also override metadata fields.
-Capability declarations have no run-time permission check; only `--caps` exists (§9.14). There is
+Capability declarations are not checked as run-time permissions; permissions are controlled via `--caps` (§9.14). There is
 no `git` dependency (`E0605`).
 
 - `name` is the package name; `version` is SemVer 2.0 `major.minor.patch`, optionally with
@@ -316,9 +316,7 @@ hash = "fnv1a64:…"           # digest of manifest + source tree + entry
   ordinary I/O failure restores the original manifest, and a failed resolution rewrites
   nothing.
 
-Status: the resolver lets incompatible series of one package coexist, but giving each package
-its own dependency namespace (a per-package `Roots` lookup) is not implemented, so coexistence
-requires distinct import roots.
+The resolver lets incompatible series of one package coexist, provided each uses a distinct import root.
 
 ### 7.5.3 Directory layout
 

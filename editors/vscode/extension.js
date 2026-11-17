@@ -4,7 +4,7 @@
 'use strict';
 
 const vscode = require('vscode');
-const cp = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 
@@ -17,7 +17,7 @@ function onPath(name) {
     for (const ext of exts) {
       const candidate = path.join(dir, name + ext);
       try {
-        if (require('fs').statSync(candidate).isFile()) return candidate;
+        if (fs.statSync(candidate).isFile()) return candidate;
       } catch (_) { /* keep looking */ }
     }
   }
@@ -72,8 +72,71 @@ async function stop() {
   }
 }
 
+/** Resolves the `aevia` CLI executable: `aevia.cli.path`, PATH, or sibling of `aevia.server.path`. */
+function resolveCli() {
+  const cfg = vscode.workspace.getConfiguration('aevia');
+  const configured = (cfg.get('cli.path', '') || '').trim();
+  if (configured) return configured;
+  const cli = onPath('aevia');
+  if (cli) return cli;
+  const serverPath = (cfg.get('server.path', '') || '').trim();
+  if (serverPath) {
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    const sibling = path.join(path.dirname(serverPath), 'aevia' + ext);
+    try {
+      if (fs.statSync(sibling).isFile()) return sibling;
+    } catch (_) { /* ignore */ }
+  }
+  return undefined;
+}
+
+/** Runs `aevia <subcommand> <file>` in a VS Code task terminal. */
+async function runAeviaSubcommand(subcommand) {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== 'aevia') {
+    vscode.window.showInformationMessage('Aevia: open an .aev file to run or test.');
+    return;
+  }
+  if (editor.document.isUntitled) {
+    vscode.window.showErrorMessage('Aevia: save the file before running.');
+    return;
+  }
+  if (editor.document.isDirty) {
+    await editor.document.save();
+  }
+  const cli = resolveCli();
+  if (!cli) {
+    const pick = await vscode.window.showErrorMessage(
+      'Aevia: `aevia` CLI was not found on PATH.',
+      'Set aevia.cli.path',
+    );
+    if (pick) vscode.commands.executeCommand('workbench.action.openSettings', 'aevia.cli.path');
+    return;
+  }
+  const filePath = editor.document.uri.fsPath;
+  const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+  const cwd = folder ? folder.uri.fsPath : path.dirname(filePath);
+  const label = `${subcommand === 'test' ? 'Test' : 'Run'} ${path.basename(filePath)}`;
+  const execution = new vscode.ProcessExecution(cli, [subcommand, filePath], { cwd });
+  const task = new vscode.Task(
+    { type: 'aevia', command: subcommand },
+    folder || vscode.TaskScope.Workspace,
+    label,
+    'aevia',
+    execution,
+  );
+  task.presentationOptions = {
+    reveal: vscode.TaskRevealKind.Always,
+    panel: vscode.TaskPanelKind.Shared,
+    clear: false,
+  };
+  await vscode.tasks.executeTask(task);
+}
+
 async function activate(context) {
   context.subscriptions.push(
+    vscode.commands.registerCommand('aevia.runFile', () => runAeviaSubcommand('run')),
+    vscode.commands.registerCommand('aevia.testFile', () => runAeviaSubcommand('test')),
     vscode.commands.registerCommand('aevia.restartServer', async () => {
       await stop();
       await start(context);

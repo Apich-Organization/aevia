@@ -4,6 +4,15 @@
 ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Pde
 
+type AdaptiveStepOpts = {
+    rtol: Float[1],
+    atol: Float[1],
+}
+
+type StepMode =
+    | Fixed(Float[1])
+    | Adaptive(AdaptiveStepOpts)
+
 let solve_advection = solve_advection
 let solve_heat = solve_heat
 let solve_poisson = solve_poisson

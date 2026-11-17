@@ -32,14 +32,11 @@ impl Interp {
         if success {
             return Ok(variant.fields[0].clone());
         }
-        let target = self
-            .context
-            .evidence
-            .try_targets
-            .get(&span)
-            .ok_or_else(|| {
-                EvalError::new("E0702", "`?` has no checked return boundary").at(span)
-            })?;
+        let Some(target) = self.context.evidence.try_targets.get(&span) else {
+            return Err(EvalError::new("E0702", relaxed_try_error(variant))
+                .at(span)
+                .with_stack(self.frames.clone()));
+        };
         let expected = self
             .bindings
             .as_ref()
@@ -55,8 +52,15 @@ impl Interp {
                 |bindings| bindings.values.apply(&target.result),
             );
         let Type::Adt(id, _) = &expected else {
-            return Err(EvalError::new("E0702", "invalid checked `?` return container").at(span));
+            return Err(EvalError::new("E0702", relaxed_try_error(variant))
+                .at(span)
+                .with_stack(self.frames.clone()));
         };
+        if *id != adt::RESULT_ID && *id != adt::OPTION_ID {
+            return Err(EvalError::new("E0702", relaxed_try_error(variant))
+                .at(span)
+                .with_stack(self.frames.clone()));
+        }
         if *id != variant.adt {
             return Err(
                 EvalError::new("E0702", "`?` cannot cross Result/Option families").at(span),
@@ -108,6 +112,14 @@ pub(crate) fn finish_function(
                 .ok_or_else(|| EvalError::new("E0809", "try return is missing its payload"))
         },
         | outcome => outcome,
+    }
+}
+
+fn relaxed_try_error(variant: &value::VariantValue) -> String {
+    if variant.adt == adt::RESULT_ID && variant.index == 1 {
+        format!("`?` failed with `Err({})`", value::show(&variant.fields[0]))
+    } else {
+        "`?` failed on `None`".to_string()
     }
 }
 

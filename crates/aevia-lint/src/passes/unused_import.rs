@@ -50,11 +50,12 @@ impl SyntaxPass for UnusedImportPass {
                 alias,
                 names,
                 open,
+                export,
             } = &decl.kind
             else {
                 continue;
             };
-            if *open {
+            if *open || *export {
                 continue;
             }
             if let Some(selective) = names {

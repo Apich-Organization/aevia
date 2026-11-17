@@ -571,6 +571,7 @@ fn every_frontend_code_is_actually_produced() {
                         &str,
                     >(
                     )),
+                    ..aevia_types::check::CheckOptions::default()
                 };
                 let checked =
                     aevia_types::check::check_module_with_options(0, &module, &[], &options);

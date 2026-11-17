@@ -52,7 +52,6 @@ const ORDER: &[&str] = &[
     "13-extensibility.md",
     "appendix-a-grammar.md",
     "appendix-b-diagnostics.md",
-    "appendix-c-changelog.md",
 ];
 
 /// The English title of each chapter, for the bilingual navigation.
@@ -79,7 +78,6 @@ fn english_title(slug: &str) -> &'static str {
         | "13-extensibility" => "Extensibility and RSSN integration",
         | "appendix-a-grammar" => "Appendix A — Grammar",
         | "appendix-b-diagnostics" => "Appendix B — Diagnostics",
-        | "appendix-c-changelog" => "Appendix C — Changelog",
         | _ => "",
     }
 }
@@ -177,10 +175,6 @@ fn english_summary(slug: &str) -> Option<&'static str> {
             "The diagnostic catalogue: error codes, severities, the message format, \
              and the requirement that every error carry at least one actionable fix."
         },
-        | "appendix-c-changelog" => {
-            "The audit history: what each revision changed, which review round \
-             produced it, and the implementation boundaries that are still open."
-        },
         | _ => return None,
     };
     Some(summary)
@@ -188,12 +182,9 @@ fn english_summary(slug: &str) -> Option<&'static str> {
 
 /// Whether a chapter is normative.
 fn normative(slug: &str) -> bool {
-    // The index states the rules; the examples, the rationale and the changelog
-    // are explanation. Everything else is the standard.
-    !matches!(
-        slug,
-        "index" | "11-examples" | "12-rationale" | "appendix-c-changelog"
-    )
+    // The index states the rules; the examples and the rationale are
+    // explanation. Everything else is the standard.
+    !matches!(slug, "index" | "11-examples" | "12-rationale")
 }
 
 /// The specification, rendered once.

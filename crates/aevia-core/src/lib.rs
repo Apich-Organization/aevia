@@ -181,6 +181,7 @@ impl Interp {
         // `eval_toplevel` and the REPL expect.
         for name in top_level_names(module) {
             if let Some(value) = root.lookup(&name) {
+                crate::value::bump_environment();
                 self.globals.insert(name, value);
             }
         }
@@ -206,6 +207,7 @@ impl Interp {
         if path.is_empty() {
             for name in names {
                 if let Some(value) = scope.lookup(&name) {
+                    crate::value::bump_environment();
                     self.globals.insert(name, value);
                 }
             }
@@ -214,6 +216,7 @@ impl Interp {
         let prefix = path.join(".");
         for name in names {
             if let Some(value) = scope.lookup(&name) {
+                crate::value::bump_environment();
                 self.globals.insert(format!("{prefix}.{name}"), value);
             }
         }
@@ -454,7 +457,9 @@ impl Interp {
                 })),
                 scope: Rc::downgrade(env),
             });
+        crate::value::bump_environment();
         self.globals.insert(name.clone(), closure);
+        crate::value::bump_environment();
         self.method_classes
             .insert(method.to_string(), class.to_string());
         self.instance_methods
@@ -543,11 +548,13 @@ impl Interp {
         self.prepare_incremental_module(checked, loaded);
         let result = self.load_incremental_declarations_in(declarations);
         if result.is_err() {
+            crate::value::bump_environment();
             self.globals = globals;
             self.symbol_counts = symbol_counts;
             self.seed = seed;
             self.constants_seeded = constants_seeded;
             self.instance_methods = instance_methods;
+            crate::value::bump_environment();
             self.method_classes = method_classes;
             self.class_keys = class_keys;
             self.aliases = aliases;
@@ -583,6 +590,7 @@ impl Interp {
         }
         // Instance registration also publishes mangled implementation
         // globals. Preserve these in this batch's lexical snapshot.
+        crate::value::bump_environment();
         root.vars.borrow_mut().extend(self.globals.clone());
         let mut pending: Vec<usize> = declarations
             .iter()
@@ -606,6 +614,7 @@ impl Interp {
                         self.symbol_counts = symbol_counts;
                         self.seed = seed;
                         self.constants_seeded = constants_seeded;
+                        crate::value::bump_environment();
                         self.globals = globals;
                         deferred.push((index, error));
                     },
@@ -658,6 +667,7 @@ impl Interp {
                 if let Some(&(adt, index)) = self.current_constructors.get(&ctor.name)
                     && let Some(value) = crate::eval::source_ctor_value_at(adt, index)
                 {
+                    crate::value::bump_environment();
                     root.vars
                         .borrow_mut()
                         .insert(ctor.name.clone(), value.clone());
@@ -694,6 +704,7 @@ impl Interp {
                 );
                 root.bind_source(name, closure, source_visibility(decl));
                 if let Some(latest) = root.lookup(name) {
+                    crate::value::bump_environment();
                     self.globals.insert(name.clone(), latest);
                 }
                 Ok(())
@@ -727,6 +738,7 @@ impl Interp {
                 let closure = crate::eval_ir::module_closure(&decl.function, root);
                 root.bind_source(&decl.name, closure, visible);
                 if let Some(latest) = root.lookup(&decl.name) {
+                    crate::value::bump_environment();
                     self.globals.insert(decl.name, latest);
                 }
                 Ok(())
@@ -819,6 +831,7 @@ impl Interp {
     ) {
         for name in source_pattern_names(pattern) {
             if let Some(value) = scope.lookup(&name) {
+                crate::value::bump_environment();
                 self.globals.insert(name, value);
             }
         }
@@ -921,6 +934,7 @@ fn bind_module_constructors(
             if let Some(&(adt, index)) = interp.current_constructors.get(&ctor.name)
                 && let Some(value) = crate::eval::source_ctor_value_at(adt, index)
             {
+                crate::value::bump_environment();
                 root.vars.borrow_mut().insert(ctor.name.clone(), value);
             }
         }

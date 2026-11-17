@@ -240,6 +240,19 @@ pub struct CodeAction {
     pub edits: Vec<TextEdit>,
 }
 
+/// An inline action displayed above a declaration (e.g. `▶ Run` or `▶ Test`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodeLens {
+    /// The declaration's range in the document.
+    pub range: Range,
+    /// The label shown to the user.
+    pub title: String,
+    /// The command identifier to execute.
+    pub command: String,
+    /// Arguments passed to the command.
+    pub arguments: Vec<String>,
+}
+
 /// What a highlighted token is.
 ///
 /// The set is deliberately the one §9.10 names — types, dimensions, units and

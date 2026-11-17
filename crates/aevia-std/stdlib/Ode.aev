@@ -23,6 +23,15 @@ type OdeMethod =
     | AdaptiveGaussLegendre4
     | AdaptiveGaussLegendre6
 
+type AdaptiveStepOpts = {
+    rtol: Float[1],
+    atol: Float[1],
+}
+
+type StepMode =
+    | Fixed(Float[1])
+    | Adaptive(AdaptiveStepOpts)
+
 type OdeOpts<s> = {
     rtol: Float[1],
     atol: Float[1],
@@ -78,4 +87,6 @@ let odeint = odeint
 let odeint_order = odeint_order
 let odeint_order_with = odeint_order_with
 let odeint_with = odeint_with
+let solve = ode_solve
 let solve_ivp = solve_ivp
+let solve_with = ode_solve

@@ -37,6 +37,7 @@ mod layout;
 mod log;
 mod login;
 mod spec;
+mod stdlib;
 mod styles;
 mod user;
 
@@ -55,6 +56,8 @@ pub use login::login;
 pub use spec::spec_all;
 pub use spec::spec_index;
 pub use spec::spec_page;
+pub use stdlib::stdlib_index;
+pub use stdlib::stdlib_module;
 pub use styles::APP_JS;
 pub use styles::SITE_CSS;
 pub use user::user_page;

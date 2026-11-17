@@ -13,6 +13,9 @@
 
 use crate::NumericError;
 
+pub use rssn::kernels::ode::OdeStepMode;
+pub use rssn::kernels::ode::OdeStepMode as StepMode;
+
 /// A regular rectangular grid with spacing `h` on both axes.
 pub use rssn::sim::fdm_nd::AdvectionSpec;
 /// A regular rectangular grid with spacing `h` on both axes.
@@ -52,6 +55,49 @@ fn map_fdm_err(err: rssn::sim::fdm_nd::FdmError) -> NumericError {
         | rssn::sim::fdm_nd::FdmError::Singular => NumericError::Singular,
         | rssn::sim::fdm_nd::FdmError::NotConverged => NumericError::NotConverged,
     }
+}
+
+fn to_fdm_err(err: NumericError) -> rssn::sim::fdm_nd::FdmError {
+    match err {
+        | NumericError::Empty => rssn::sim::fdm_nd::FdmError::Empty,
+        | NumericError::ShapeMismatch(s) => rssn::sim::fdm_nd::FdmError::ShapeMismatch(s),
+        | NumericError::Domain(s) => rssn::sim::fdm_nd::FdmError::Domain(s),
+        | NumericError::Singular => rssn::sim::fdm_nd::FdmError::Singular,
+        | NumericError::NotConverged => rssn::sim::fdm_nd::FdmError::NotConverged,
+        | other => rssn::sim::fdm_nd::FdmError::Domain(other.to_string()),
+    }
+}
+
+/// Unified time-dependent PDE evolution driver supporting both [`StepMode::Fixed`]
+/// and [`StepMode::Adaptive`] via `rssn::sim::pde_api::solve_pde`.
+///
+/// # Errors
+///
+/// Returns [`NumericError`] for invalid time spans, step sizes, tolerances,
+/// CFL violations, non-finite states, or step-budget exhaustion.
+pub fn solve_pde<S, C>(
+    initial: &[f64],
+    t_span: (f64, f64),
+    order: usize,
+    step_mode: StepMode,
+    mut step_fn: S,
+    mut cfl_cap: C,
+    event: Option<&mut PdeTerminalEvent<'_>>,
+) -> Result<PdeAdaptiveSolution, NumericError>
+where
+    S: FnMut(f64, &[f64], f64) -> Result<Vec<f64>, NumericError>,
+    C: FnMut(f64, &[f64]) -> Result<f64, NumericError>,
+{
+    rssn::sim::pde_api::solve_pde(
+        initial,
+        t_span,
+        order,
+        step_mode,
+        |t, state, dt| step_fn(t, state, dt).map_err(to_fdm_err),
+        |t, state| cfl_cap(t, state).map_err(to_fdm_err),
+        event,
+    )
+    .map_err(map_fdm_err)
 }
 
 pub fn solve_poisson(spec: &PoissonSpec) -> Result<Field, NumericError> {
@@ -1126,6 +1172,39 @@ mod tests {
             wave.iter()
                 .all(|field| field.values.iter().all(|v| (*v - 1.0).abs() < 1e-12))
         );
+    }
+
+    #[test]
+    fn unified_solve_pde_supports_fixed_and_adaptive_step_modes() {
+        // du/dt = -u via exact exponential step u(t + dt) = u(t) * exp(-dt)
+        let fixed = solve_pde(
+            &[1.0, 2.0],
+            (0.0, 1.0),
+            1,
+            StepMode::fixed(0.1),
+            |_t, state, dt| Ok(state.iter().map(|&u| u * (-dt).exp()).collect()),
+            |_t, _state| Ok(f64::INFINITY),
+            None,
+        )
+        .unwrap();
+        assert_eq!(fixed.accepted, 10);
+        let end_f = fixed.states.last().unwrap();
+        assert!((end_f[0] - (-1.0f64).exp()).abs() < 1e-12);
+        assert!((end_f[1] - 2.0 * (-1.0f64).exp()).abs() < 1e-12);
+
+        let adaptive = solve_pde(
+            &[1.0, 2.0],
+            (0.0, 1.0),
+            1,
+            StepMode::adaptive(1e-6, 1e-8),
+            |_t, state, dt| Ok(state.iter().map(|&u| u * (-dt).exp()).collect()),
+            |_t, _state| Ok(f64::INFINITY),
+            None,
+        )
+        .unwrap();
+        let end_a = adaptive.states.last().unwrap();
+        assert!((end_a[0] - (-1.0f64).exp()).abs() < 1e-6);
+        assert!((end_a[1] - 2.0 * (-1.0f64).exp()).abs() < 1e-6);
     }
 }
 

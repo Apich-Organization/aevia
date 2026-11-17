@@ -1506,7 +1506,10 @@ fn check_with_capabilities(
         0,
         &module,
         &[],
-        &CheckOptions { capabilities },
+        &CheckOptions {
+            capabilities,
+            ..CheckOptions::default()
+        },
     );
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
@@ -1545,6 +1548,7 @@ fn jit_needs_the_core_jit_capability() {
         &[],
         &CheckOptions {
             capabilities: Capabilities::from_names(std::iter::empty::<&str>()),
+            ..CheckOptions::default()
         },
     );
     let detail = result

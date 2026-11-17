@@ -26,11 +26,10 @@ The language is built on the `rssn` computer-algebra and scientific-computing en
 | [09 — Runtime](09-runtime.md) | Pipeline, interpreter, REPL, CLI, LSP, performance | Yes (architecture) |
 | [10 — The rssn backend mapping](10-backend.md) | Mapping to rssn, bridge design, gaps and risks | Yes |
 | [11 — Complete examples](11-examples.md) | Worked programs from kinematics to simulation | No |
-| [12 — Design trade-offs, limits and roadmap](12-rationale.md) | Alternatives, trade-offs, design boundaries, implementation progress | No |
+| [12 — Design trade-offs and limits](12-rationale.md) | Alternatives, trade-offs, design boundaries | No |
 | [13 — Extensibility and the rssn integration](13-extensibility.md) | rssn reflection, generated `Rssn`, plugins, registry, shape/device/sparse decisions | Yes |
 | [Appendix A — Grammar](appendix-a-grammar.md) | Complete EBNF | Yes |
 | [Appendix B — Diagnostics](appendix-b-diagnostics.md) | Error codes and message format | Yes |
-| [Appendix C — Changelog](appendix-c-changelog.md) | Revision history and known gaps | Informative |
 
 The backend interface contract is in the rssn repository's `docs/KERNEL.md` (Kernel Manifest, dynamic-call ABI, plugins, units and dimensions) and `docs/DIMENSIONS.md`; it is a precondition of this specification, not an optional implementation detail. The division of the implementation into crates is in [ARCHITECTURE.md](../ARCHITECTURE.md) at the repository root. Every chapter also has a Chinese edition (the source text); authoring and terminology rules are in `spec/STYLE.md`.
 
@@ -40,7 +39,7 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT** a
 
 ## Design status
 
-This is a **design standard**, not a frozen implementation. Chapters marked normative are intended to be implemented as written; [appendix C](appendix-c-changelog.md) records every revision and the known gaps. The current text is **Revision 23**, aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`). The size of the manifest is a measurement, not a constant; the live output of `aevia rssn` is authoritative (at that version: 1620 operators, 82 units, 30 constants). Dispatch and extension follow the boundary stated in chapter 13: no run-time multimethods, no multi-parameter classes, no per-type monomorphisation; instances are selected statically or by canonical witnesses.
+This is a **design standard**, not a frozen implementation. Chapters marked normative are intended to be implemented as written. The current text is **Revision 23**, aligned with **`rssn 3.0.0-rc.1`** (`api_version = 2`). The size of the manifest is a measurement, not a constant; the live output of `aevia rssn` is authoritative (at that version: 1620 operators, 82 units, 30 constants). Dispatch and extension follow the boundary stated in chapter 13: no run-time multimethods, no multi-parameter classes, no per-type monomorphisation; instances are selected statically or by canonical witnesses.
 
 There is **no v1/v2 language split**: every capability is designed in; a backend that does not yet implement one reports a capability diagnostic (`E1001`) instead of removing the language feature.
 

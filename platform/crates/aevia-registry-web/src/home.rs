@@ -41,6 +41,9 @@ const LEDE: Msg = Msg::new(
 );
 const COPY_LABEL: Msg = Msg::new("Copy the install command", "复制安装命令");
 const COPY: Msg = Msg::new("copy", "复制");
+const INSTALL_UNIX: Msg = Msg::new("macOS / Linux", "macOS / Linux");
+const INSTALL_WINDOWS: Msg = Msg::new("Windows PowerShell", "Windows PowerShell");
+const INSTALL_PKG: Msg = Msg::new("package", "安装包");
 const BROWSE: Msg = Msg::new("browse crates", "浏览包");
 const CLI_GUIDE: Msg = Msg::new("command line", "命令行");
 const READ_DOCS: Msg = Msg::new("read the docs", "阅读文档");
@@ -80,6 +83,7 @@ pub fn home(
     lang: Lang,
     stats: &SiteStats,
     recent: &[CrateCard],
+    base_url: &str,
     viewer: Option<&Viewer>,
 ) -> String {
     let cards: Vec<AnyView> = recent
@@ -92,6 +96,9 @@ pub fn home(
     let versions = thousands(stats.versions);
     let downloads = thousands(stats.downloads);
     let publishers = thousands(stats.publishers);
+    let base = base_url.trim_end_matches('/');
+    let sh_install = format!("curl -fsSL {base}/install.sh | sh");
+    let ps_install = format!("irm {base}/install.ps1 | iex");
 
     layout::page(
         lang,
@@ -102,16 +109,43 @@ pub fn home(
             <section class="hero">
                 <h1>{HEADLINE.of(lang)}</h1>
                 <p class="lede">{LEDE.of(lang)}</p>
-                <div class="install">
-                    <code id="install-home">"aevia add <owner>/<name>"</code>
-                    <button
-                        type="button"
-                        class="copy"
-                        data-copy="#install-home"
-                        aria-label=COPY_LABEL.of(lang)
-                    >
-                        {COPY.of(lang)}
-                    </button>
+                <div class="install-stack">
+                    <div class="install">
+                        <span class="install-tag">{INSTALL_UNIX.of(lang)}</span>
+                        <code id="install-sh">{sh_install}</code>
+                        <button
+                            type="button"
+                            class="copy"
+                            data-copy="#install-sh"
+                            aria-label=COPY_LABEL.of(lang)
+                        >
+                            {COPY.of(lang)}
+                        </button>
+                    </div>
+                    <div class="install">
+                        <span class="install-tag">{INSTALL_WINDOWS.of(lang)}</span>
+                        <code id="install-ps">{ps_install}</code>
+                        <button
+                            type="button"
+                            class="copy"
+                            data-copy="#install-ps"
+                            aria-label=COPY_LABEL.of(lang)
+                        >
+                            {COPY.of(lang)}
+                        </button>
+                    </div>
+                    <div class="install">
+                        <span class="install-tag">{INSTALL_PKG.of(lang)}</span>
+                        <code id="install-home">"aevia add <owner>/<name>"</code>
+                        <button
+                            type="button"
+                            class="copy"
+                            data-copy="#install-home"
+                            aria-label=COPY_LABEL.of(lang)
+                        >
+                            {COPY.of(lang)}
+                        </button>
+                    </div>
                 </div>
                 <div class="actions">
                     <a class="btn" href="/crates">{BROWSE.of(lang)}</a>
@@ -177,7 +211,15 @@ mod tests {
 
     #[test]
     fn the_front_page_shows_the_install_line_and_the_counts() {
-        let html = home(Lang::En, &stats(), &[], None);
+        let html = home(Lang::En, &stats(), &[], "https://aevia.apich.org", None);
+        assert!(
+            html.contains("curl -fsSL https://aevia.apich.org/install.sh | sh"),
+            "the Unix install one-liner is present"
+        );
+        assert!(
+            html.contains("irm https://aevia.apich.org/install.ps1 | iex"),
+            "the PowerShell install one-liner is present"
+        );
         assert!(
             html.contains("aevia add &lt;owner&gt;/&lt;name&gt;"),
             "the install line is present and escaped"
@@ -195,7 +237,7 @@ mod tests {
 
     #[test]
     fn the_chinese_front_page_is_chinese() {
-        let html = home(Lang::Zh, &stats(), &[], None);
+        let html = home(Lang::Zh, &stats(), &[], "https://aevia.apich.org", None);
         assert!(html.contains("为 Aevia 语言提供带签名的包"), "headline");
         assert!(html.contains("最近发布"), "recent section");
         assert!(html.contains("lang=\"zh-CN\""), "document language");
@@ -219,7 +261,7 @@ mod tests {
                 }
             })
             .collect();
-        let html = home(Lang::En, &stats(), &items, None);
+        let html = home(Lang::En, &stats(), &items, "https://aevia.apich.org", None);
         assert_eq!(html.matches("class=\"card\"").count(), 6);
         assert!(html.contains("apich/pkg5"));
         assert!(!html.contains("apich/pkg6"));

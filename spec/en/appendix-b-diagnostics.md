@@ -106,11 +106,10 @@ error[E0401]: dimension mismatch
 | `E0411` | incompatible tensor element types or dimensions | unify the element type or dimension |
 | `E0412` | `Dyn`/kernel dimension check failed (run time) | check the run-time dimensions |
 
-Status: `E0408` and `E0409` are reserved and unreachable in the implementation. Dimension
+Note: `E0408` and `E0409` are reserved. Dimension
 unification is exponent-linear unification over a free abelian group; a residual with a
 non-zero coefficient on a variable is always solvable, so the only failure is a non-zero
-constant residual, which is `E0401`, and no occurs state arises (proof in
-`aevia-types/tests/diagnostics_coverage.rs`).
+constant residual (`E0401`), and no occurs state arises.
 
 ## B.7 Unit errors (E05xx)
 
@@ -129,7 +128,7 @@ constant residual, which is `E0401`, and no occurs state arises (proof in
 | `E0511` | unit has no exact scale in the module's unit system (§5.11.4) | write the number in system units, or `to_system` |
 | `E0512` | unknown unit system (§5.11.1) | use a name the kernel provides (natural, planck, atomic, geometrized) |
 
-Status: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit namespace
+Note: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit namespace
 (§5.9), so the corresponding states do not exist.
 
 ## B.8 Module errors (E06xx)
@@ -170,7 +169,7 @@ Status: `E0502`, `E0503` and `E0507` are reserved: there is no module-level unit
 | `E0812` | evaluation interrupted by the host / Ctrl-C (§9.8) | yes |
 | `E0899` | panic | no |
 
-Status: a few built-ins borrow `E0806`–`E0809` to report their own argument or internal
+Note: a few built-ins borrow `E0806`–`E0809` to report their own argument or internal
 failures (for example `approx_map`, `degree`); the class of the code is as in the table and the
 message is whatever the built-in states.
 
@@ -211,9 +210,9 @@ message is whatever the built-in states.
 | `W0709` | redundant `if` expression (`aevia lint`) |
 | `W0710` | module is imported more than once (`aevia lint`) |
 
-Status: `W0203` is reserved (the language has no `return` or `break`, so the AST cannot represent an
-unreachable statement). `W0501` currently has no emission site. `W0102` and `W0701`–`W0710` are
-emitted by `aevia lint` (and `aevia-analysis`); compiler lints and extra lints share `[lints]` in
+Note: `W0203` is reserved (the language has no `return` or `break`, so the syntax cannot represent an
+unreachable statement), and `W0501` is reserved. `W0102` and `W0701`–`W0710` are
+emitted by `aevia lint`; compiler lints and extra lints share `[lints]` in
 `aevia.toml`, `-A/-W/-D/-F`, and `@allow/@warn/@deny/@forbid`.
 
 ## B.13 Writing messages
@@ -275,5 +274,3 @@ error[E0802]: matmul requires left columns (2) = right rows (3)
 These are **environment/backend** errors, not type errors in the user's program; a diagnostic
 MUST offer an actionable alternative (for example "install an RSSN with `core.gpu`" or "use
 `Rssn.dynamic`").
-
-The next appendix records the specification's revision history.

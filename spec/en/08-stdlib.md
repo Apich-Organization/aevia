@@ -464,7 +464,7 @@ nonzeros      : Sparse<F, shape, Scalar<ρ,d>> -> Tensor<1, (Tensor<1, Int>, Sca
 
 **Boundary with the kernel.** rssn's `TypeExpr::Sparse` has only a `rank`, so `Sparse<F, shape, τ>` is lowered at the boundary to rank plus a run-time format; `aevia-rssn`'s `Val::Sparse` corresponds one-to-one to rssn's `Value::Sparse`, **without densifying**. rssn's `term_of_value` does not accept `Value::Sparse` into the term graph (`in_term_graph = false` in `manifest.value_kinds`), so a sparse value cannot be fed directly to general rewriting operators; Aevia converts layouts; RSSN owns sparse algorithms and its `faer` sparse-LU backend. User-defined formats wait until rssn opens `Format` (§13.9.5).
 
-> **Status**: all of the above is implemented (tests `aevia-core/tests/sparse.rs`, `sparse_block.rs`, `sparse_followup.rs`, `shape_refinement.rs`), and the capability `storage.sparse` is enabled. **Remaining gaps**: sparse values cannot enter rssn's term graph; `gmres_with`/`bicgstab_with` do not accept exact elements; there are no sparse eigenvalues or SVD.
+Note: `storage.sparse` enables sparse operations; `gmres_with`/`bicgstab_with` accept floating-point elements only; sparse eigenvalues and SVD are not provided.
 
 ## 8.5 Calculus
 
@@ -989,8 +989,7 @@ or early stopping during standard `sde_events` integration (events truncate afte
 The `Sde` module declares option ADTs and re-exports these entries. `terms` and `cells` are required; 0 selects defaults.
 `sde_scheme_info` queries metadata only; use `sde_order`/`sde_order_with` for weak order.
 
-Status: these language entries and the listed callback solvers are implemented; native Rust API reachability is reported
-separately from manifest coverage (§8.19).
+Native Rust API reachability is reported separately from manifest coverage (§8.19).
 
 ## 8.10 PDE
 
@@ -1072,7 +1071,7 @@ The rank of `read_npy` cannot be inferred statically from the file and MUST be w
 
 CSV headers may carry units: `time [s]`, `velocity [m/s]`. `read_csv<ρ>` parses the header units; `column(t, "time")` is checked at compile time against the field types of `ρ` and validated defensively again at run time. Without header units, columns are dimensionless; an explicit `ρ` can override this, but a run-time validation failure is `DataError.DimensionMismatch`.
 
-> **Status**: `read_csv`/`write_csv`/`read_json`/`write_json` and Table/column/select/filter/join are implemented. NPY uses a shared local codec: NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs (`aevia-core/tests/io_taxonomy.rs`).
+NPY supports NPY 1.0/2.0/3.0, little- and big-endian float32/float64, C and Fortran order (Fortran input is converted to row-major storage; output is little-endian float64, C order); `read_npy<n>` stores and verifies a concrete rank, `write_npy` accepts dimensionless `Float` tensors of any rank; an unresolved generic rank is `E0304`. IO error codes: missing file `E0901`, invalid argument `E0902`, corrupt/truncated/rank mismatch/size overflow `E0903`, unsupported format, dtype or extension `E0904`, failed plot write `E0905`; NPY errors are returned as `Err(DataError)` after the IO action runs.
 
 ## 8.12 Plot
 
@@ -1101,7 +1100,7 @@ default_plot_opts : PlotOpts
 
 `PlotOpts` is a full record: `{ label: Option<String>, color: Option<String>, xunit: Option<String>, yunit: Option<String>, xscale: AxisScale, yscale: AxisScale, xlim: Option<(Float, Float)>, ylim: Option<(Float, Float)> }`. `line(x, y)` uses the defaults and generates axis labels automatically from the dimensions of `x` and `y` (`t / s`, `v / (m/s)`); `line_with` takes a full `PlotOpts`; `label(series, "v(t)")` is the shortcut for setting a label. `plot` writes `plot.html` by default; `save` gives the file name.
 
-> **Status**: there is one renderer, HTML with inline SVG: `plot` and `save` produce the same HTML (containing an `<svg>` element), and `save` does **not** switch format by extension (writing a `.svg` file still produces an HTML document). A write failure is `E0905`; `plot`/`save` remain fatal IO actions (failure exits with a diagnostic and is not a `Result`). Standalone `.svg` output and PNG/JPEG are not implemented.
+`plot` and `save` use an HTML renderer with inline `<svg>` and produce the same HTML format; `save` does **not** switch format by extension (writing a `.svg` file still produces an HTML document). A write failure is `E0905`, and `plot`/`save` are fatal IO actions (failure exits with a diagnostic and is not a `Result`).
 
 ## 8.13 Test
 
@@ -1208,9 +1207,7 @@ fn run(p: Params): Result<IsingResult, SimError> = ...
 
 `simulate` is the dynamic entry point and takes an rssn scenario name and JSON; the typed wrappers are in `Physics.*` and annotate dimensions field by field. Scenario names follow rssn's live `SCENARIOS` list (29 at the time of writing): `ising`, `ising_wolff`, `geodesic`, `gpe`, `schrodinger`, `fdtd`, `elasticity`, `lid_driven_cavity`, `channel_flow`, `sod_shock_tube`, `kepler_symplectic`, `poisson_multigrid`, `heat_nd`, `wave_nd`, `euler_fv`, `dg_conservation`, `acoustics_pml`, `yee_fdtd`, `navier_stokes_mac`, `split_step`, `fem_simplex`, `elasticity_fem`, `bem_laplace`, `sph`, `dpd`, `md_lj`, `spin_model`, `nbody_gravity`, `kerr_geodesic`. A host MUST NOT keep a second hand-written scenario list; the run time reads `rssn::sim::scenario::SCENARIOS`.
 
-> **Generated simulation modules**: `import Rssn_Sim_<Name>` (e.g. `Rssn_Sim_PoissonMultigrid`, `Rssn_Sim_HeatNd`) generates a typed module on import from rssn's scenario catalogue (`rssn::sim::schema`): the `Params`/`Output` records, one variant type per method-name field (`P.W`, `S.Metropolis`), `defaults()` and `run(p)`. Parameter types and defaults are inferred from the scenario's own request type, the result type comes from a witness run, and an annotation table supplies what inference cannot see; no hand-written code is needed when rssn adds scenarios, parameters or methods. All 29 scenarios can be generated (reference test `tests/sim_catalog.aev`).
->
-> **Status**: `simulate`, `to_json`/`from_json` and the `Physics.Ising`/`Physics.Geodesic` wrappers (Aevia source modules, `crates/aevia-std/stdlib/Physics/`) are implemented; `import Physics.Ising` works directly through the embedded module loader.
+> **Generated simulation modules**: `import Rssn_Sim_<Name>` (e.g. `Rssn_Sim_PoissonMultigrid`, `Rssn_Sim_HeatNd`) generates a typed module on import from rssn's scenario catalogue (`rssn::sim::schema`): the `Params`/`Output` records, one variant type per method-name field (`P.W`, `S.Metropolis`), `defaults()` and `run(p)`. Parameter types and defaults are inferred from the scenario's own request type, the result type comes from a witness run, and an annotation table supplies what inference cannot see; no hand-written code is needed when rssn adds scenarios, parameters or methods.
 
 ## 8.18 Device
 
@@ -1364,13 +1361,7 @@ Physics
   ...
 ```
 
-The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope.
-
-> **Status**: the module tree is in place (`crates/aevia-std/stdlib/**.aev`, 41 module files, embedded with `include_str!`; `aevia_std::stdlib` exposes `source`/`is_module_name`/`module_paths`). When the loader cannot resolve a module in the ordinary roots it falls back to the embedded modules, so `import Math { sqrt }`, `open Units.SI`, `import Data.Csv { read_csv, column, Table }` and `import Physics.Ising` all work directly; local files take precedence over embedded modules. Standard-library names are also directly available as Prelude built-ins. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.
->
-> **Conformance audit**: every name declared in this chapter has an implementation (the `aevia-core` test `chapter_eight_has_no_capability_gaps` in `stdlib_coverage`); the `aevia-std` test `spec_signatures` compares each declaration with the checker scheme (presence, arity and return class; parameter types and order are not compared literally because the spec and the schemes spell them differently, and the recorded differences are kept on file). Passing on names does not mean signatures match word for word. All nine complete programs of chapter 11 type-check (`spec_programs`).
->
-> **Generated modules and manifest sync**: `Rssn`/`Units`/`Constants` are generated views of the Kernel Manifest. The embedded `Units/Constants.aev` comes from the live manifest; after the manifest changes it MUST be regenerated with `cargo run -p aevia-stdlib-gen -- --write`, otherwise the test `units_constants_is_the_live_manifest` fails.
+The standard-library modules live in the `aevia-std` package; the Prelude is imported automatically and the rest on demand with `import`. A module name is its path: `import A.B` resolves `A/B.aev` (§7), `import Math { sqrt }` brings in only `sqrt`, and `open Units.SI` puts the exports of `Units.SI` into the current scope. Local files take precedence over embedded standard-library modules. `Units/*` are documentation modules: unit names are already ambient `Unit[d]` values, and exporting quantity bindings would shadow them and change the semantics of `Tensor / Unit`, so they are not exported (§5.3.4). The `Sde` module re-exports the five entry points of §8.9.1 and declares the option ADTs; `Physics.Ising`/`Physics.Geodesic` provide the typed wrappers of §8.17. Function names, the nominal variant constructors of `Sde` and transparent type aliases (`type X = { … }`, e.g. `Params` of `Physics.Ising`) can all be brought in with `import { X }`/`open`.
 
 `Rssn` is a **generated module**, not a hand-written library: at build time `Rssn.<op>` typed declarations and the `Rssn.dynamic` dynamic entry are generated from the Kernel Manifest (§13.2). The content of `Rssn` varies with the rssn version, and Aevia source hard-codes no operator list. `Sparse` provides the format tags `Csr`/`Csc`/`Coo`/`Block`/`Bcsr` and all the sparse built-ins of §8.4.1 (`nnz`/`to_dense`/`from_dense`/`convert`, sparse `matmul`/`transpose`/`kron`, layout dispatch of `@`, `spsolve`/`cg`); `Layout` remains a set of built-in functions rather than an instantiable type class (§13.9.5); `Device` provides `Cpu`/`Gpu`/`Distributed` and `on`/`to_device` (§13.9.4, `E1001` without `core.gpu`).
 
