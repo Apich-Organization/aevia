@@ -3319,7 +3319,11 @@ impl Interp {
                 | BinOp::Add => Some(a + b),
                 | BinOp::Sub => Some(a - b),
                 | BinOp::Mul => Some(a * b),
-                | BinOp::Pow => b.as_i64().and_then(|e| u32::try_from(e).ok()).map(|e| a.pow(e)),
+                | BinOp::Pow => {
+                    b.as_i64()
+                        .and_then(|e| u32::try_from(e).ok())
+                        .map(|e| a.pow(e))
+                },
                 | _ => None,
             };
             if let Some(value) = value {
@@ -3581,9 +3585,7 @@ impl Interp {
         num: &NumVal,
     ) -> crate::sym::Term {
         match &num.kind {
-            | NumKind::Int(value) => {
-                crate::sym::Term::Num(value.to_rational())
-            },
+            | NumKind::Int(value) => crate::sym::Term::Num(value.to_rational()),
             | NumKind::Exact(value) => crate::sym::Term::Num(value.as_ref().clone()),
             | NumKind::Float(value) => {
                 crate::sym::Term::Num(
@@ -4066,9 +4068,7 @@ impl Interp {
                     Ok(Value::TypeRep(Rc::new(witness)))
                 }))));
             }
-            if adt == u32::MAX
-                && index == usize::MAX
-                && crate::builtins::takes_type_argument(name)
+            if adt == u32::MAX && index == usize::MAX && crate::builtins::takes_type_argument(name)
             {
                 let name = name.clone();
                 let types = self.canonical_tensor_types(&name, types, span);
@@ -5694,9 +5694,7 @@ impl Interp {
                     // Read once, then validate the text that is returned.
                     let read = std::fs::read_to_string(file_path)
                         .map_err(|error| format!("{}: {error}", io_error_code(&error)))
-                        .and_then(|contents| {
-                            rssn::io::parse_svg(&contents).map(|_| contents)
-                        });
+                        .and_then(|contents| rssn::io::parse_svg(&contents).map(|_| contents));
                     last = match read {
                         | Ok(contents) => {
                             make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::string(contents)])

@@ -32,7 +32,9 @@ fn sources() -> Vec<(String, String)> {
 fn the_generator_notice_is_not_documentation() {
     for (name, source) in sources() {
         assert!(
-            !source.lines().any(|line| line.starts_with("## Generated standard library")),
+            !source
+                .lines()
+                .any(|line| line.starts_with("## Generated standard library")),
             "{name}: the notice must be a plain `#` comment, not a `##` doc line"
         );
     }
@@ -53,7 +55,10 @@ fn every_reexported_name_is_documented() {
             let Some(rest) = line.strip_prefix("let ") else {
                 continue;
             };
-            if rest.split_once(" = ").is_none_or(|(left, right)| left != right) {
+            if rest
+                .split_once(" = ")
+                .is_none_or(|(left, right)| left != right)
+            {
                 continue;
             }
             bindings += 1;
@@ -85,10 +90,25 @@ fn an_operator_entry_has_signature_kernel_signature_dimensions_and_prose() {
         .find(|(name, _)| name == "Calculus.aev")
         .expect("Calculus.aev")
         .1;
-    let start = calculus.find("let diff = diff").expect("diff is re-exported");
-    let block: Vec<&str> = calculus[..start].lines().rev().take_while(|l| l.starts_with("##")).collect();
+    let start = calculus
+        .find("let diff = diff")
+        .expect("diff is re-exported");
+    let block: Vec<&str> = calculus[..start]
+        .lines()
+        .rev()
+        .take_while(|l| l.starts_with("##"))
+        .collect();
     let text = block.into_iter().rev().collect::<Vec<_>>().join("\n");
-    for needle in ["Symbolic derivative", "**Signature:** `diff :", "**Kernel signature**", "**Dimensions:**", "*Source: rssn operator"] {
-        assert!(text.contains(needle), "diff's documentation lacks `{needle}`:\n{text}");
+    for needle in [
+        "Symbolic derivative",
+        "**Signature:** `diff :",
+        "**Kernel signature**",
+        "**Dimensions:**",
+        "*Source: rssn operator",
+    ] {
+        assert!(
+            text.contains(needle),
+            "diff's documentation lacks `{needle}`:\n{text}"
+        );
     }
 }

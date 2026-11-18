@@ -157,8 +157,10 @@ fn module_header(source: &str) -> Option<String> {
             return None;
         }
     }
-    let text = lines.join("
-");
+    let text = lines.join(
+        "
+",
+    );
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
 }

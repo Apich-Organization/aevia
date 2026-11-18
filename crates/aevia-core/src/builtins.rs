@@ -2530,7 +2530,9 @@ fn call_inner(
                     };
                     let Some(delay) = num.to_f64().map(|v| v.round() as i64) else {
                         return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                            Value::string("E0902: `plot_save_gif` delay_cs must be a non-negative Int"),
+                            Value::string(
+                                "E0902: `plot_save_gif` delay_cs must be a non-negative Int",
+                            ),
                         )))));
                     };
                     u16::try_from(delay.max(0)).unwrap_or(u16::MAX)
@@ -9272,10 +9274,7 @@ fn sde_integrate(
                     build_tensor(states, vec![len], crate::value::value_dim(&initial)),
                 ),
                 ("steps", Value::Num(NumVal::int(path.steps))),
-                (
-                    "rejected",
-                    Value::Num(NumVal::int(path.rejected)),
-                ),
+                ("rejected", Value::Num(NumVal::int(path.rejected))),
                 ("nfev", Value::Num(NumVal::int(path.nfev))),
                 ("seed", Value::Num(NumVal::int(path.seed))),
                 ("noise", Value::Num(NumVal::int(noise))),

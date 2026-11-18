@@ -2652,9 +2652,7 @@ fn format_scalar_in(
     let (text, unit) = match (&num.kind, &num.display) {
         | (kind, Some(unit)) => {
             let text = match kind {
-                | NumKind::Int(value) => {
-                    display_exact(&value.to_rational(), unit, repr)
-                },
+                | NumKind::Int(value) => display_exact(&value.to_rational(), unit, repr),
                 | NumKind::Exact(value) => display_exact(value, unit, repr),
                 | NumKind::Float(value) => {
                     let shown = float_in_display_unit(*value, unit);

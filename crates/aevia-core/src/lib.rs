@@ -42,9 +42,9 @@ pub mod eval;
 pub mod eval_ir;
 mod evidence;
 pub mod fxhash;
-pub mod int;
 mod generics;
 mod host_witness;
+pub mod int;
 pub mod io_do;
 #[cfg(feature = "jit")]
 mod jit;

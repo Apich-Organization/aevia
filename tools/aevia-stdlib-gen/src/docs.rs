@@ -88,7 +88,11 @@ fn entry(
                 let _ = write!(kernel, "\n- `{name} : {text}`");
             }
             if op.signatures.len() > 4 {
-                let _ = write!(kernel, "\n- ... and {} more overloads", op.signatures.len() - 4);
+                let _ = write!(
+                    kernel,
+                    "\n- ... and {} more overloads",
+                    op.signatures.len() - 4
+                );
             }
         }
         if let Some(rule) = &op.dim_rule {
@@ -103,7 +107,9 @@ fn entry(
                 let _ = write!(examples, "\n- `{input}` returns a `{output}`");
             }
             if !examples.is_empty() {
-                examples = format!("{examples}\n  (recorded kernel calls; the result is shown as its sort)");
+                examples = format!(
+                    "{examples}\n  (recorded kernel calls; the result is shown as its sort)"
+                );
             }
         }
         let how = if format!("{:?}", op.doc_source) == "RustName" {
@@ -113,7 +119,10 @@ fn entry(
         };
         let origin = match &op.doc_path {
             | Some(path) => {
-                format!("rssn operator `{}.{name}`; rustdoc of `{path}` ({how})", op.rule_set)
+                format!(
+                    "rssn operator `{}.{name}`; rustdoc of `{path}` ({how})",
+                    op.rule_set
+                )
             },
             | None => format!("rssn operator `{}.{name}`", op.rule_set),
         };
@@ -229,7 +238,10 @@ fn dim_rule(rule: &impl std::fmt::Debug) -> String {
                 .split(|c: char| !c.is_ascii_digit())
                 .filter_map(|part| part.parse().ok())
                 .collect();
-            let (f, x) = (digits.first().copied().unwrap_or(0) + 1, digits.get(1).copied().unwrap_or(1) + 1);
+            let (f, x) = (
+                digits.first().copied().unwrap_or(0) + 1,
+                digits.get(1).copied().unwrap_or(1) + 1,
+            );
             if other.starts_with("Diff") {
                 format!("argument {f} divided by argument {x}")
             } else {

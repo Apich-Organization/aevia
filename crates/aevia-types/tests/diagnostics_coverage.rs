@@ -151,8 +151,8 @@ fn documented_codes() -> Vec<&'static str> {
     push!("E0901", "E0902", "E0903", "E0904", "E0905");
     // B.12 warnings.
     push!(
-        "W0101", "W0102", "W0103", "W0201", "W0202", "W0203", "W0204", "W0205", "W0206", "W0301", "W0302", "W0303", "W0501",
-        "W0601",
+        "W0101", "W0102", "W0103", "W0201", "W0202", "W0203", "W0204", "W0205", "W0206", "W0301",
+        "W0302", "W0303", "W0501", "W0601",
     );
     // B.17 extension/backend.
     push!("E1001", "E1002", "E1003", "E1004", "E1005", "E1006");
@@ -481,26 +481,32 @@ fn table() -> Vec<(&'static str, Cover)> {
         ),
         (
             "W0204",
-            Front("@relax_result
+            Front(
+                "@relax_result
 fn f(): Result<Int, String> = Ok(1)
 @relax_result
 fn g(): Int =
     let _ = f()
     1
-"),
+",
+            ),
         ),
         (
             "W0205",
-            Front("@relax_result
+            Front(
+                "@relax_result
 fn f(r: Result<Int, String>): Int = r?
-"),
+",
+            ),
         ),
         (
             "W0206",
-            Front("@relax_result
+            Front(
+                "@relax_result
 fn f(o: Option<Int>): Int = match o with
     | Some(a) -> a
-"),
+",
+            ),
         ),
         ("W0301", Front("let x = symbol(\"x\")\n")),
         (

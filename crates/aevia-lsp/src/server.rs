@@ -602,9 +602,7 @@ impl Server {
         }
         let path = aevia_analysis::physical_source_path_from_uri(uri)
             .filter(|path| path.is_absolute())
-            .ok_or_else(|| {
-                RpcError::new(INVALID_PARAMS, "the document is not a `file:` URI")
-            })?;
+            .ok_or_else(|| RpcError::new(INVALID_PARAMS, "the document is not a `file:` URI"))?;
         // The CLI reads `--` as the start of program arguments, so the path is
         // not fenced with it; an absolute path can never be mistaken for a flag.
         let mut cmd = std::process::Command::new(aevia_executable());
@@ -774,14 +772,16 @@ fn spawn_command(
     std::thread::spawn(move || {
         let message = match run_with_timeout(job.process, COMMAND_TIMEOUT) {
             | Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            | Err(error) => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": {
-                    "code": REQUEST_FAILED,
-                    "message": format!("failed to run `{}`: {error}", job.command),
-                },
-            }),
+            | Err(error) => {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": REQUEST_FAILED,
+                        "message": format!("failed to run `{}`: {error}", job.command),
+                    },
+                })
+            },
         };
         let _ = out.send(message);
     });

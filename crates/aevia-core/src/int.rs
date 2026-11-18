@@ -28,10 +28,10 @@ pub enum Int {
 }
 
 impl Int {
-    /// Zero.
-    pub const ZERO: Self = Self::Small(0);
     /// One.
     pub const ONE: Self = Self::Small(1);
+    /// Zero.
+    pub const ZERO: Self = Self::Small(0);
 
     /// The canonical form of a big integer.
     #[must_use]
@@ -115,9 +115,10 @@ impl Int {
     pub fn abs(&self) -> Self {
         match self {
             | Self::Small(value) => {
-                value
-                    .checked_abs()
-                    .map_or_else(|| Self::from_big(num_traits::Signed::abs(&BigInt::from(*value))), Self::Small)
+                value.checked_abs().map_or_else(
+                    || Self::from_big(num_traits::Signed::abs(&BigInt::from(*value))),
+                    Self::Small,
+                )
             },
             | Self::Big(value) => Self::from_big(num_traits::Signed::abs(&**value)),
         }

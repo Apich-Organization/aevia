@@ -48,9 +48,9 @@ fn every_manifest_operator_has_a_wrapper_in_its_rule_set_namespace() {
         .ops()
         .filter(|op| {
             let header = format!("## Kernel rule set: {}.", op.rule_set);
-            !namespaces.iter().any(|(_, source)| {
-                source.starts_with(&header) && mentions(source, &op.name)
-            })
+            !namespaces
+                .iter()
+                .any(|(_, source)| source.starts_with(&header) && mentions(source, &op.name))
         })
         .map(|op| format!("{}:{}", op.rule_set, op.name))
         .collect();
@@ -68,9 +68,7 @@ fn every_manifest_operator_has_a_wrapper_in_a_domain_module() {
     let files = domains::domain_files(registry);
     let reachable: BTreeSet<&str> = registry
         .ops()
-        .filter(|op| {
-            files.iter().any(|(_, source)| mentions(source, &op.name))
-        })
+        .filter(|op| files.iter().any(|(_, source)| mentions(source, &op.name)))
         .map(|op| op.name.as_str())
         .collect();
     let unreachable: Vec<String> = registry
@@ -90,7 +88,10 @@ fn every_manifest_operator_has_a_wrapper_in_a_domain_module() {
         .keys()
         .filter(|name| reachable.contains(name.as_str()))
         .collect();
-    assert!(stale.is_empty(), "excluded operators that are bound anyway: {stale:?}");
+    assert!(
+        stale.is_empty(),
+        "excluded operators that are bound anyway: {stale:?}"
+    );
     assert!(
         overlay.excluded.len() <= 3,
         "{} operators are excluded from the domain modules; bridge them (dynamic wrappers need no signature)",
