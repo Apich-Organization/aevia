@@ -3,6 +3,7 @@
 # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Physics.Ising
 
+## The parameters of the `ising` simulation, one field per setting.
 type Params = {
     width: Int,
     height: Int,
@@ -11,11 +12,13 @@ type Params = {
     seed: Option<Int>,
 }
 
+## What the `ising` simulation returns.
 type IsingResult = {
     spins: Tensor<2, Int>,
     magnetization: Float[1],
 }
 
+## Runs the `ising` simulation with the given parameters and returns its result, or `Err(SimError)` if the parameters are rejected.
 fn run(p: Params): Result<IsingResult, SimError> =
     match simulate("ising", to_json(p)) with
     | Ok(json) -> from_json(json)

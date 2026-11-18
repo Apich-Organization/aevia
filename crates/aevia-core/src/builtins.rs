@@ -1,10 +1,14 @@
 //! Built-in functions.
 //!
-//! Dispatch is by name, which keeps values cheap to clone and lets a builtin be
-//! passed as a value (`xs |> map(f)`). The type checker owns the signatures;
-//! this module owns the behaviour, and the two lists are kept in step by the
-//! conformance tests.
+//! A builtin is *named* by a string, which keeps values cheap to clone and lets
+//! a builtin be passed as a value (`xs |> map(f)`), but it is *dispatched* by a
+//! [`BuiltinId`](crate::builtin_ids::BuiltinId): the name is resolved once per
+//! call and the `match` in `call_inner` is then a jump table. The type checker
+//! owns the signatures; this module owns the behaviour, and the two lists are
+//! kept in step by the conformance tests.
 
+use crate::builtin_ids::BuiltinId as B;
+use crate::builtin_ids::BuiltinId;
 use crate::eval::EvalError;
 use crate::eval::Interp;
 use crate::eval::build_tensor;
@@ -309,28 +313,35 @@ fn call_inner(
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, EvalError> {
-    if let Some(result) = crate::sparse::call(interp, name, &args, span) {
+    let Some(id) = BuiltinId::from_name(name) else {
+        return Err(EvalError::new(
+            "E1001",
+            format!("builtin `{name}` is typed but not implemented yet"),
+        )
+        .at(span));
+    };
+    if let Some(result) = crate::sparse::call(interp, id, name, &args, span) {
         return result;
     }
-    match name {
+    match id {
         // ----- output -----------------------------------------------------
-        | "print" => io_print(interp, &args, false, false, span),
-        | "println" => io_print(interp, &args, true, false, span),
-        | "eprintln" => io_print(interp, &args, true, true, span),
+        | B::Print => io_print(interp, &args, false, false, span),
+        | B::Println => io_print(interp, &args, true, false, span),
+        | B::Eprintln => io_print(interp, &args, true, true, span),
         // §6.12.3: four renderers, four jobs. `repr` is round-trippable and
         // `to_latex`/`to_typst` emit their own syntax; aliasing them to `show`
         // is what let every test believe `3`, `3/1` and `3.0` were one value.
-        | "show" => {
+        | B::Show => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(Value::string(crate::value::show(
                 &interp.system_display(value.clone()),
             )))
         },
-        | "repr" => {
+        | B::Repr => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(Value::string(crate::value::repr(value)))
         },
-        | "to_pretty" | "to_latex" | "to_typst" => {
+        | B::ToPretty | B::ToLatex | B::ToTypst => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             let format = match name {
                 | "to_pretty" => crate::display::Format::Pretty,
@@ -349,30 +360,30 @@ fn call_inner(
         },
 
         // ----- elementary functions --------------------------------------
-        | "sqrt" => unary_math(interp, name, &args, span, MathKind::Root(2)),
-        | "cbrt" => unary_math(interp, name, &args, span, MathKind::Root(3)),
-        | "exp" => unary_math(interp, name, &args, span, MathKind::Float(f64::exp)),
-        | "ln" | "log" => unary_math(interp, name, &args, span, MathKind::Float(f64::ln)),
-        | "log2" => unary_math(interp, name, &args, span, MathKind::Float(f64::log2)),
-        | "log10" => unary_math(interp, name, &args, span, MathKind::Float(f64::log10)),
-        | "sin" => unary_math(interp, name, &args, span, MathKind::Float(f64::sin)),
-        | "cos" => unary_math(interp, name, &args, span, MathKind::Float(f64::cos)),
-        | "tan" => unary_math(interp, name, &args, span, MathKind::Float(f64::tan)),
-        | "asin" => unary_math(interp, name, &args, span, MathKind::Float(f64::asin)),
-        | "acos" => unary_math(interp, name, &args, span, MathKind::Float(f64::acos)),
-        | "atan" => unary_math(interp, name, &args, span, MathKind::Float(f64::atan)),
-        | "sinh" => unary_math(interp, name, &args, span, MathKind::Float(f64::sinh)),
-        | "cosh" => unary_math(interp, name, &args, span, MathKind::Float(f64::cosh)),
-        | "tanh" => unary_math(interp, name, &args, span, MathKind::Float(f64::tanh)),
-        | "asinh" => unary_math(interp, name, &args, span, MathKind::Float(f64::asinh)),
-        | "acosh" => unary_math(interp, name, &args, span, MathKind::Float(f64::acosh)),
-        | "atanh" => unary_math(interp, name, &args, span, MathKind::Float(f64::atanh)),
-        | "gamma" => gamma(interp, name, &args, span),
-        | "erf" => unary_math(interp, name, &args, span, MathKind::Float(erf)),
-        | "erfc" => unary_math(interp, name, &args, span, MathKind::Float(|x| 1.0 - erf(x))),
+        | B::Sqrt => unary_math(interp, name, &args, span, MathKind::Root(2)),
+        | B::Cbrt => unary_math(interp, name, &args, span, MathKind::Root(3)),
+        | B::Exp => unary_math(interp, name, &args, span, MathKind::Float(f64::exp)),
+        | B::Ln | B::Log => unary_math(interp, name, &args, span, MathKind::Float(f64::ln)),
+        | B::Log2 => unary_math(interp, name, &args, span, MathKind::Float(f64::log2)),
+        | B::Log10 => unary_math(interp, name, &args, span, MathKind::Float(f64::log10)),
+        | B::Sin => unary_math(interp, name, &args, span, MathKind::Float(f64::sin)),
+        | B::Cos => unary_math(interp, name, &args, span, MathKind::Float(f64::cos)),
+        | B::Tan => unary_math(interp, name, &args, span, MathKind::Float(f64::tan)),
+        | B::Asin => unary_math(interp, name, &args, span, MathKind::Float(f64::asin)),
+        | B::Acos => unary_math(interp, name, &args, span, MathKind::Float(f64::acos)),
+        | B::Atan => unary_math(interp, name, &args, span, MathKind::Float(f64::atan)),
+        | B::Sinh => unary_math(interp, name, &args, span, MathKind::Float(f64::sinh)),
+        | B::Cosh => unary_math(interp, name, &args, span, MathKind::Float(f64::cosh)),
+        | B::Tanh => unary_math(interp, name, &args, span, MathKind::Float(f64::tanh)),
+        | B::Asinh => unary_math(interp, name, &args, span, MathKind::Float(f64::asinh)),
+        | B::Acosh => unary_math(interp, name, &args, span, MathKind::Float(f64::acosh)),
+        | B::Atanh => unary_math(interp, name, &args, span, MathKind::Float(f64::atanh)),
+        | B::Gamma => gamma(interp, name, &args, span),
+        | B::Erf => unary_math(interp, name, &args, span, MathKind::Float(erf)),
+        | B::Erfc => unary_math(interp, name, &args, span, MathKind::Float(|x| 1.0 - erf(x))),
         // DLMF 7.2.7; exact arguments stay symbolic as the kernel's
         // `fresnels`/`fresnelc`, which it differentiates and integrates.
-        | "fresnel_s" => {
+        | B::FresnelS => {
             unary_math(
                 interp,
                 name,
@@ -381,7 +392,7 @@ fn call_inner(
                 MathKind::Float(aevia_rssn::fresnel_s),
             )
         },
-        | "fresnel_c" => {
+        | B::FresnelC => {
             unary_math(
                 interp,
                 name,
@@ -390,7 +401,7 @@ fn call_inner(
                 MathKind::Float(aevia_rssn::fresnel_c),
             )
         },
-        | "atan2" => {
+        | B::Atan2 => {
             let y = expect_num(&args, 0, name, span)?;
             let x = expect_num(&args, 1, name, span)?;
             Ok(Value::Num(NumVal::float(
@@ -400,7 +411,7 @@ fn call_inner(
                 Dim::one(),
             )))
         },
-        | "hypot" => {
+        | B::Hypot => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             Ok(Value::Num(NumVal::float(
@@ -412,7 +423,7 @@ fn call_inner(
         },
 
         // ----- numeric ----------------------------------------------------
-        | "abs" => {
+        | B::Abs => {
             map_scalar(&args, name, span, |num| {
                 let kind = match num.kind {
                     | NumKind::Int(value) => NumKind::Int(value.abs()),
@@ -430,7 +441,7 @@ fn call_inner(
                 }
             })
         },
-        | "sign" => {
+        | B::Sign => {
             map_scalar(&args, name, span, |num| {
                 let value = num.to_f64().unwrap_or(f64::NAN);
                 NumVal::int(BigInt::from(if value > 0.0 {
@@ -442,7 +453,7 @@ fn call_inner(
                 }))
             })
         },
-        | "min" | "max" => {
+        | B::Min | B::Max => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             let (x, y) = (
@@ -456,7 +467,7 @@ fn call_inner(
             };
             Ok(Value::Num(if take_a { a } else { b }))
         },
-        | "clamp" => {
+        | B::Clamp => {
             let x = expect_num(&args, 0, name, span)?;
             let lo = expect_num(&args, 1, name, span)?;
             let hi = expect_num(&args, 2, name, span)?;
@@ -466,7 +477,7 @@ fn call_inner(
             let clamped = value.max(low).min(high);
             Ok(Value::Num(NumVal::float(clamped, x.dim)))
         },
-        | "is_nan" | "is_finite" | "is_infinite" => {
+        | B::IsNan | B::IsFinite | B::IsInfinite => {
             let num = expect_num(&args, 0, name, span)?;
             // An exact (`Int`, rational) number is finite and never `NaN`.
             let value = num.to_f64().unwrap_or(0.0);
@@ -476,7 +487,7 @@ fn call_inner(
                 | _ => value.is_infinite(),
             }))
         },
-        | "round" if args.len() == 2 => {
+        | B::Round if args.len() == 2 => {
             let num = expect_num(&args, 0, name, span)?;
             let digits = expect_int(&args, 1, name, span)?;
             let value = num.to_f64().unwrap_or(f64::NAN);
@@ -492,7 +503,7 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::float(rounded, num.dim)))
         },
-        | "floor" | "ceil" | "round" | "trunc" => {
+        | B::Floor | B::Ceil | B::Round | B::Trunc => {
             map_scalar(&args, name, span, |num| {
                 let value = num.to_f64().unwrap_or(f64::NAN);
                 let rounded = match name {
@@ -504,7 +515,7 @@ fn call_inner(
                 NumVal::float(rounded, num.dim)
             })
         },
-        | "mod" | "rem" => {
+        | B::Mod | B::Rem => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             if b.is_zero() {
@@ -519,7 +530,7 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::float(value, a.dim)))
         },
-        | "div" | "quot" => {
+        | B::Div | B::Quot => {
             let a = expect_int(&args, 0, name, span)?;
             let b = expect_int(&args, 1, name, span)?;
             if b == 0 {
@@ -532,7 +543,7 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::int(value)))
         },
-        | "gcd" | "lcm" => {
+        | B::Gcd | B::Lcm => {
             let a = expect_int(&args, 0, name, span)?;
             let b = expect_int(&args, 1, name, span)?;
             let value = if name == "gcd" {
@@ -544,33 +555,33 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::int(value)))
         },
-        | "factorial" | "double_factorial" => {
+        | B::Factorial | B::DoubleFactorial => {
             let n = expect_int(&args, 0, name, span)?;
             let result = crate::eval::factorial(interp, n, name == "double_factorial", span)?;
             Ok(Value::Num(NumVal::int(result)))
         },
-        | "to_float" => {
+        | B::ToFloat => {
             let num = expect_num(&args, 0, name, span)?;
             match num.to_f64() {
                 | Some(value) => Ok(ok(Value::Num(NumVal::float(value, num.dim)))),
                 | None => Ok(err(Value::string("the value has free symbols"))),
             }
         },
-        | "to_real" => {
+        | B::ToReal => {
             let num = expect_num(&args, 0, name, span)?;
             Ok(Value::Num(match num.to_rational() {
                 | Some(value) => NumVal::exact(value, num.dim),
                 | None => num,
             }))
         },
-        | "to_int" => {
+        | B::ToInt => {
             let num = expect_num(&args, 0, name, span)?;
             let value = num.to_f64().unwrap_or(f64::NAN).trunc();
             Ok(Value::Num(NumVal::int(BigInt::from(value as i64))))
         },
 
         // ----- units ------------------------------------------------------
-        | "to" | "delta_to" => {
+        | B::To | B::DeltaTo => {
             let unit = expect_unit(&args, 0, name, span)?;
             let mut num = expect_num(&args, 1, name, span)?;
             if num.dim != unit.dim {
@@ -584,10 +595,20 @@ fn call_inner(
                 )
                 .at(span));
             }
+            // A difference uses the unit's scale only: `delta_to(°C, 10.0 K)`
+            // is a 10 °C rise, not the point -263.15 °C.
+            let unit = if name == "delta_to" && unit.offset.is_some() {
+                let mut linear = (*unit).clone();
+                linear.offset = None;
+                linear.affine = false;
+                Rc::new(linear)
+            } else {
+                unit
+            };
             num.display = Some(unit);
             Ok(Value::Num(num))
         },
-        | "value_in" => {
+        | B::ValueIn => {
             let unit = expect_unit(&args, 0, name, span)?;
             let num = expect_num(&args, 1, name, span)?;
             if num.dim != unit.dim {
@@ -611,12 +632,12 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::float(value, Dim::one())))
         },
-        | "base" => {
+        | B::Base => {
             let mut num = expect_num(&args, 0, name, span)?;
             num.display = None;
             Ok(Value::Num(num))
         },
-        | "point" => {
+        | B::Point => {
             let coefficient = expect_float(&args, 0, name, span)?;
             let unit = expect_unit(&args, 1, name, span)?;
             let scale = unit.scale.to_f64();
@@ -627,7 +648,7 @@ fn call_inner(
         },
 
         // ----- tensors ----------------------------------------------------
-        | "zeros" | "ones" => {
+        | B::Zeros | B::Ones => {
             let mut shape = Vec::with_capacity(args.len());
             for index in 0..args.len() {
                 shape.push(expect_int(&args, index, name, span)?.max(0) as usize);
@@ -645,7 +666,7 @@ fn call_inner(
                 display: None,
             })))
         },
-        | "fill" => {
+        | B::Fill => {
             let first = args
                 .first()
                 .cloned()
@@ -658,7 +679,7 @@ fn call_inner(
             let dim = crate::value::value_dim(&first);
             Ok(build_tensor(vec![first; count], shape, dim))
         },
-        | "linspace" => {
+        | B::Linspace => {
             let start = expect_num(&args, 0, name, span)?;
             let end = expect_num(&args, 1, name, span)?;
             let count = expect_int(&args, 2, name, span)?.max(0) as usize;
@@ -681,7 +702,7 @@ fn call_inner(
                 display: None,
             })))
         },
-        | "range" => {
+        | B::Range => {
             let start = expect_int(&args, 0, name, span)?;
             let end = expect_int(&args, 1, name, span)?;
             let step = if args.len() > 2 {
@@ -710,7 +731,7 @@ fn call_inner(
                 display: None,
             })))
         },
-        | "length" => {
+        | B::Length => {
             match args.first() {
                 // §8.1.4: a string's length counts grapheme clusters.
                 | Some(Value::Str(text)) => {
@@ -731,7 +752,7 @@ fn call_inner(
                 | _ => Err(arity(name, 1, args.len(), span)),
             }
         },
-        | "shape" => {
+        | B::Shape => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let shape: Vec<BigRational> = tensor
                 .shape
@@ -747,11 +768,11 @@ fn call_inner(
                 display: None,
             })))
         },
-        | "rank" => {
+        | B::Rank => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             Ok(Value::Num(NumVal::int(BigInt::from(tensor.rank()))))
         },
-        | "sum" => {
+        | B::Sum => {
             // §8.5: `sum(f, a, b)` is the calculus overload. Without this arm
             // the only `sum` was the tensor reduction, so every summation over
             // a range was `E0302`.
@@ -808,7 +829,7 @@ fn call_inner(
                 Value::Num(NumVal::exact(BigRational::zero(), tensor.dim.clone()))
             }))
         },
-        | "mean" => {
+        | B::Mean => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §6.6.6: the mean of an empty `Float` tensor is `NaN` (IEEE), and
             // the mean of an empty `Real` tensor is `E0802` — `Real` has no
@@ -843,7 +864,7 @@ fn call_inner(
                 tensor.dim.clone(),
             )))
         },
-        | "var" | "std" => {
+        | B::Var | B::Std => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let count = tensor.storage.len();
             let population = args
@@ -903,7 +924,7 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::float(value, dim)))
         },
-        | "min_all" | "max_all" => {
+        | B::MinAll | B::MaxAll => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §8.1: `min`/`max` are the *binary* functions; the tensor reduction
             // is only the whole-tensor `min_all`/`max_all` (no axis form and no
@@ -958,7 +979,7 @@ fn call_inner(
             }
             best.ok_or_else(|| EvalError::new("E0802", "empty tensor").at(span))
         },
-        | "norm" => {
+        | B::Norm => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let order = if args.len() > 1 {
                 expect_int(&args, 1, name, span)?
@@ -978,7 +999,7 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::float(norm, tensor.dim.clone())))
         },
-        | "normalize" => {
+        | B::Normalize => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let norm = tensor
                 .elements()
@@ -998,7 +1019,7 @@ fn call_inner(
                 .collect::<Vec<_>>();
             Ok(build_tensor(elements, tensor.shape.clone(), Dim::one()))
         },
-        | "dot" | "matmul" | "matvec" | "vecmat" | "outer" => {
+        | B::Dot | B::Matmul | B::Matvec | B::Vecmat | B::Outer => {
             let left = args
                 .first()
                 .cloned()
@@ -1014,7 +1035,7 @@ fn call_inner(
                 | _ => unreachable!(),
             }
         },
-        | "transpose" => {
+        | B::Transpose => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() < 2 {
                 return Err(EvalError::new(
@@ -1061,7 +1082,7 @@ fn call_inner(
             let result = build_tensor(elements, vec![columns, rows], tensor.dim.clone());
             Ok(crate::host_witness::preserve_tensor_schema(result, &tensor))
         },
-        | "trace" => {
+        | B::Trace => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() != 2 {
                 return Err(EvalError::new("E0802", "trace expects a rank-2 tensor").at(span));
@@ -1079,10 +1100,10 @@ fn call_inner(
             }
             Ok(total.unwrap_or_else(|| Value::float(0.0)))
         },
-        | "det" => determinant(interp, &args, span),
-        | "inv" => inverse(&args, span),
-        | "linsolve" => linsolve(interp, &args, span),
-        | "eye" => {
+        | B::Det => determinant(interp, &args, span),
+        | B::Inv => inverse(&args, span),
+        | B::Linsolve => linsolve(interp, &args, span),
+        | B::Eye => {
             let n = expect_int(&args, 0, name, span)?.max(0) as usize;
             let mut values = vec![0.0; n * n];
             for index in 0..n {
@@ -1096,7 +1117,7 @@ fn call_inner(
                 display: None,
             })))
         },
-        | "diag" => {
+        | B::Diag => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() == 1 {
                 let n = tensor.shape[0];
@@ -1133,14 +1154,14 @@ fn call_inner(
                 })))
             }
         },
-        | "flatten" => {
+        | B::Flatten => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let elements = tensor.elements();
             let len = elements.len();
             let result = build_tensor(elements, vec![len], tensor.dim.clone());
             Ok(crate::host_witness::preserve_tensor_schema(result, &tensor))
         },
-        | "at" => {
+        | B::At => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let index = expect_int(&args, 1, name, span)?;
             let extent = tensor.shape.first().copied().unwrap_or(0);
@@ -1184,7 +1205,7 @@ fn call_inner(
         // interpreter is `!Send`, so a worker cannot borrow it — which is a
         // documented deviation from §9.7.2's rayon wording, not from its
         // result.
-        | "par_map" => {
+        | B::ParMap => {
             let function = args
                 .first()
                 .cloned()
@@ -1216,7 +1237,7 @@ fn call_inner(
             Ok(build_tensor(elements, vec![len], dim))
         },
         // §8.3: `par_tabulate(n, f)` is `par_map(f, [0, …, n-1])`.
-        | "par_tabulate" => {
+        | B::ParTabulate => {
             let count = expect_num(&args, 0, name, span)?;
             let NumKind::Int(count) = &count.kind else {
                 return Err(
@@ -1252,7 +1273,7 @@ fn call_inner(
         },
         // §8.3: an associative reduction over fixed blocks (see
         // `parallel::Interp::par_reduce_values` for the determinism rule).
-        | "par_reduce" => {
+        | B::ParReduce => {
             let function = args
                 .first()
                 .cloned()
@@ -1270,7 +1291,7 @@ fn call_inner(
             let inputs: Vec<Value> = tensor.elements();
             interp.par_reduce_values(&function, &zero, &inputs, span)
         },
-        | "pure" => {
+        | B::Pure => {
             let value = args
                 .first()
                 .cloned()
@@ -1278,14 +1299,14 @@ fn call_inner(
             Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(value))))
         },
         // §9.7.3: concurrent tasks are IO actions.
-        | "spawn" => {
+        | B::Spawn => {
             let thunk = args
                 .first()
                 .cloned()
                 .ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::Spawn(thunk))))
         },
-        | "await" => {
+        | B::Await => {
             match args.first() {
                 | Some(Value::Task(task)) => {
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Await(
@@ -1302,7 +1323,7 @@ fn call_inner(
                 | None => Err(arity(name, 1, 0, span)),
             }
         },
-        | "map" => {
+        | B::Map => {
             let function = args
                 .first()
                 .cloned()
@@ -1340,7 +1361,7 @@ fn call_inner(
                 | _ => Err(arity(name, 2, args.len(), span)),
             }
         },
-        | "map2" | "zip_with" => {
+        | B::Map2 | B::ZipWith => {
             let function = args
                 .first()
                 .cloned()
@@ -1359,7 +1380,7 @@ fn call_inner(
                 .map_or_else(Dim::one, crate::value::value_dim);
             Ok(build_tensor(elements, a.shape.clone(), dim))
         },
-        | "filter" => {
+        | B::Filter => {
             let function = args
                 .first()
                 .cloned()
@@ -1413,7 +1434,7 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
         },
-        | "fold" => {
+        | B::Fold => {
             let function = args
                 .first()
                 .cloned()
@@ -1429,7 +1450,7 @@ fn call_inner(
             }
             Ok(accumulator)
         },
-        | "take" | "drop" => {
+        | B::Take | B::Drop => {
             let count = expect_int(&args, 0, name, span)?.max(0) as usize;
             let tensor = expect_tensor(&args, 1, name, span)?;
             if tensor.rank() >= 2 {
@@ -1450,7 +1471,7 @@ fn call_inner(
             let len = selected.len();
             Ok(build_tensor(selected, vec![len], tensor.dim.clone()))
         },
-        | "reverse" => {
+        | B::Reverse => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §9.5: reversing an `f64` tensor is a view — the same buffer
             // walked backwards — so `xs[::-1]` allocates nothing and still
@@ -1464,12 +1485,12 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
         },
-        | "reverse_axis" => {
+        | B::ReverseAxis => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let axis = axis_argument(&args, 1, tensor.rank(), name, span)?;
             Ok(flip_axis(&tensor, axis))
         },
-        | "sort" => {
+        | B::Sort => {
             // §3.8.4: `sort` needs `TotalOrd`, and the checker rejects a type
             // without one. The order must therefore be the *total* one —
             // comparing `as_f64` made a tensor of strings sort as `NaN`, which
@@ -1488,14 +1509,14 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], tensor.dim.clone()))
         },
-        | "argsort" => {
+        | B::Argsort => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let items = sequence_items(&tensor);
             let mut order: Vec<usize> = (0..items.len()).collect();
             order.sort_by(|a, b| total_order(&items[*a], &items[*b]));
             Ok(index_tensor(&order))
         },
-        | "sort_axis" => {
+        | B::SortAxis => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let axis = axis_argument(&args, 1, tensor.rank(), name, span)?;
             let extent = tensor.shape[axis];
@@ -1521,7 +1542,7 @@ fn call_inner(
                 tensor.dim.clone(),
             ))
         },
-        | "sort_by_key" => {
+        | B::SortByKey => {
             let function = args
                 .first()
                 .cloned()
@@ -1536,7 +1557,7 @@ fn call_inner(
             order.sort_by(|a, b| total_order(&keys[*a], &keys[*b]));
             Ok(gather_sequence(&tensor, &items, &order))
         },
-        | "concat" => {
+        | B::Concat => {
             match (args.first(), args.get(1)) {
                 | (Some(Value::Str(a)), Some(Value::Str(b))) => {
                     Ok(Value::string(format!("{a}{b}")))
@@ -1570,7 +1591,7 @@ fn call_inner(
                 | _ => Err(arity(name, 2, args.len(), span)),
             }
         },
-        | "any" | "all" => {
+        | B::Any | B::All => {
             let function = args
                 .first()
                 .cloned()
@@ -1592,7 +1613,7 @@ fn call_inner(
             }
             Ok(Value::Bool(result))
         },
-        | "find" => {
+        | B::Find => {
             let function = args
                 .first()
                 .cloned()
@@ -1608,7 +1629,7 @@ fn call_inner(
             }
             Ok(make_variant(adt::OPTION_ID, 0, "None", Vec::new()))
         },
-        | "prod" => {
+        | B::Prod => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §6.6.6: the empty product is 1, in the phase the elements would
             // have had.
@@ -1627,7 +1648,7 @@ fn call_inner(
             }
             Ok(total.unwrap_or_else(|| Value::Num(NumVal::int(BigInt::one()))))
         },
-        | "centroid" => {
+        | B::Centroid => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let count = tensor.storage.len();
             let mut total = 0.0;
@@ -1641,7 +1662,7 @@ fn call_inner(
         },
 
         // ----- strings ----------------------------------------------------
-        | "join" => {
+        | B::Join => {
             // §8.11 overloads `join` on tables; the first argument decides.
             if matches!(args.first(), Some(Value::Record(_))) {
                 return join_tables(&args, name, span);
@@ -1660,7 +1681,7 @@ fn call_inner(
                 .collect();
             Ok(Value::string(parts.join(&separator)))
         },
-        | "split" => {
+        | B::Split => {
             let text = expect_str(&args, 0, name, span)?;
             let separator = expect_str(&args, 1, name, span)?;
             let parts: Vec<Value> = if separator.is_empty() {
@@ -1673,24 +1694,24 @@ fn call_inner(
             let len = parts.len();
             Ok(build_tensor(parts, vec![len], Dim::one()))
         },
-        | "replace" => {
+        | B::Replace => {
             let text = expect_str(&args, 0, name, span)?;
             let from = expect_str(&args, 1, name, span)?;
             let to = expect_str(&args, 2, name, span)?;
             Ok(Value::string(text.replace(&from, &to)))
         },
-        | "trim" => Ok(Value::string(expect_str(&args, 0, name, span)?.trim())),
-        | "upper" => {
+        | B::Trim => Ok(Value::string(expect_str(&args, 0, name, span)?.trim())),
+        | B::Upper => {
             Ok(Value::string(
                 expect_str(&args, 0, name, span)?.to_uppercase(),
             ))
         },
-        | "lower" => {
+        | B::Lower => {
             Ok(Value::string(
                 expect_str(&args, 0, name, span)?.to_lowercase(),
             ))
         },
-        | "contains" | "starts_with" | "ends_with" => {
+        | B::Contains | B::StartsWith | B::EndsWith => {
             let text = expect_str(&args, 0, name, span)?;
             let pattern = expect_str(&args, 1, name, span)?;
             let value = match name {
@@ -1700,28 +1721,28 @@ fn call_inner(
             };
             Ok(Value::Bool(value))
         },
-        | "parse_int" => {
+        | B::ParseInt => {
             let text = expect_str(&args, 0, name, span)?;
             match text.trim().parse::<BigInt>() {
                 | Ok(value) => Ok(ok(Value::Num(NumVal::int(value)))),
                 | Err(error) => Ok(err(Value::string(error.to_string()))),
             }
         },
-        | "parse_float" => {
+        | B::ParseFloat => {
             let text = expect_str(&args, 0, name, span)?;
             match text.trim().parse::<f64>() {
                 | Ok(value) => Ok(ok(Value::Num(NumVal::float(value, Dim::one())))),
                 | Err(error) => Ok(err(Value::string(error.to_string()))),
             }
         },
-        | "chars" => {
+        | B::Chars => {
             use unicode_segmentation::UnicodeSegmentation as _;
             let text = expect_str(&args, 0, name, span)?;
             let parts: Vec<Value> = text.graphemes(true).map(Value::string).collect();
             let len = parts.len();
             Ok(build_tensor(parts, vec![len], Dim::one()))
         },
-        | "format" => {
+        | B::Format => {
             let template = expect_str(&args, 0, name, span)?;
             let tensor = expect_tensor(&args, 1, name, span)?;
             let parts: Vec<String> = tensor
@@ -1738,7 +1759,7 @@ fn call_inner(
         },
 
         // ----- Option / Result -------------------------------------------
-        | "and_then" => {
+        | B::AndThen => {
             let function = args
                 .first()
                 .cloned()
@@ -1763,7 +1784,7 @@ fn call_inner(
                 | _ => Err(arity(name, 2, args.len(), span)),
             }
         },
-        | "unwrap_or" => {
+        | B::UnwrapOr => {
             let fallback = args.get(1).cloned().unwrap_or(Value::Unit);
             match args.first() {
                 | Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
@@ -1783,7 +1804,7 @@ fn call_inner(
                 | _ => Ok(fallback),
             }
         },
-        | "is_some" | "is_none" => {
+        | B::IsSome | B::IsNone => {
             match args.first() {
                 | Some(Value::Variant(variant)) => {
                     Ok(Value::Bool(if name == "is_some" {
@@ -1795,7 +1816,7 @@ fn call_inner(
                 | _ => Err(arity(name, 1, args.len(), span)),
             }
         },
-        | "is_ok" | "is_err" => {
+        | B::IsOk | B::IsErr => {
             match args.first() {
                 | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
                     Ok(Value::Bool((variant.index == 0) == (name == "is_ok")))
@@ -1803,7 +1824,7 @@ fn call_inner(
                 | _ => Err(arity(name, 1, args.len(), span)),
             }
         },
-        | "ok" => {
+        | B::Ok => {
             match args.first() {
                 | Some(Value::Variant(variant)) if variant.adt == adt::RESULT_ID => {
                     if variant.index == 0 {
@@ -1816,7 +1837,7 @@ fn call_inner(
                 | _ => Err(arity(name, 1, args.len(), span)),
             }
         },
-        | "ok_or" => {
+        | B::OkOr => {
             let error = args.get(1).cloned().unwrap_or(Value::Unit);
             match args.first() {
                 | Some(Value::Variant(variant)) if variant.adt == adt::OPTION_ID => {
@@ -1829,7 +1850,7 @@ fn call_inner(
                 | _ => Err(arity(name, 2, args.len(), span)),
             }
         },
-        | "first" | "last" => {
+        | B::First | B::Last => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let extent = tensor.shape.first().copied().unwrap_or(0);
             if extent == 0 {
@@ -1849,7 +1870,7 @@ fn call_inner(
                 .ok_or_else(|| EvalError::new("E0802", "index out of range").at(span))?;
             Ok(make_variant(adt::OPTION_ID, 1, "Some", vec![element]))
         },
-        | "cumsum" | "cumprod" => {
+        | B::Cumsum | B::Cumprod => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let operator = if name == "cumsum" { "+" } else { "*" };
             let mut elements = Vec::with_capacity(tensor.storage.len());
@@ -1868,7 +1889,7 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], dim))
         },
-        | "argmax" | "argmin" => {
+        | B::Argmax | B::Argmin => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let mut best: Option<(usize, f64)> = None;
             for (index, element) in tensor.elements().iter().enumerate() {
@@ -1902,7 +1923,7 @@ fn call_inner(
             })?;
             Ok(Value::Num(NumVal::int(index)))
         },
-        | "map_err" => {
+        | B::MapErr => {
             let function = args
                 .first()
                 .cloned()
@@ -1922,7 +1943,7 @@ fn call_inner(
         },
 
         // ----- symbolic ---------------------------------------------------
-        | "symbol" => {
+        | B::Symbol => {
             let display = expect_str(&args, 0, name, span)?;
             let count = interp.symbol_counts.entry(display.clone()).or_insert(0);
             *count += 1;
@@ -1938,7 +1959,7 @@ fn call_inner(
                 Dim::one(),
             )))
         },
-        | "symfun" => {
+        | B::Symfun => {
             // §6.4.5: an unknown function symbol. Its application is the
             // kernel's undetermined-function node `apply(y, t)`, so `diff`
             // keeps `diff(y(t), t)` as a closed form and `dsolve` can solve
@@ -1957,8 +1978,8 @@ fn call_inner(
             };
             Ok(symfun_value(internal))
         },
-        | "dsolve" => dsolve(interp, &args, span),
-        | "diff" => {
+        | B::Dsolve => dsolve(interp, &args, span),
+        | B::Diff => {
             let function = args
                 .first()
                 .cloned()
@@ -1989,7 +2010,7 @@ fn call_inner(
                 },
             )))))
         },
-        | "diff_at" => {
+        | B::DiffAt => {
             let function = args
                 .first()
                 .cloned()
@@ -2002,7 +2023,7 @@ fn call_inner(
             interp.apply(derivative, vec![at], span)
         },
         // ----- calculus, algebra and equations (rssn) ----------------------
-        | "antiderivative" => {
+        | B::Antiderivative => {
             // The argument is not known yet, so the integral is built against a
             // dimensionless variable and the dimension is recovered when the
             // returned function is applied (`e*d`, §8.6).
@@ -2033,7 +2054,7 @@ fn call_inner(
                 },
             )))))
         },
-        | "defint" => {
+        | B::Defint => {
             let lower = args
                 .get(1)
                 .cloned()
@@ -2053,7 +2074,7 @@ fn call_inner(
                 dim,
             ))
         },
-        | "limit" => {
+        | B::Limit => {
             let at = args
                 .get(1)
                 .cloned()
@@ -2065,7 +2086,7 @@ fn call_inner(
             let dim = crate::value::value_dim(&applied);
             math_result(bridge::call("limit", &[applied, symbol, at], dim))
         },
-        | "series" => {
+        | B::Series => {
             let at = args
                 .get(1)
                 .cloned()
@@ -2081,7 +2102,7 @@ fn call_inner(
             let dim = crate::value::value_dim(&applied);
             bridge::call("taylor", &[applied, symbol, at, order], dim)
         },
-        | "solve" => {
+        | B::Solve => {
             // No argument fixes the variable's dimension, so the roots stay
             // dimensionless at run time; the static type is `Solutions<Real,d>`.
             let (variable, applied) = apply_to_fresh(interp, name, &args, span, Dim::one())?;
@@ -2091,7 +2112,7 @@ fn call_inner(
                 | Err(error) => Ok(err(Value::string(error.message))),
             }
         },
-        | "nsolve" => {
+        | B::Nsolve => {
             let start = args
                 .get(1)
                 .cloned()
@@ -2110,7 +2131,7 @@ fn call_inner(
                 dim,
             ))
         },
-        | "eval" | "simplify" => {
+        | B::Eval | B::Simplify => {
             let value = args
                 .first()
                 .cloned()
@@ -2127,7 +2148,7 @@ fn call_inner(
                 .map_err(|failure| bridge::error(&failure))?;
             Ok(bridge::from_val(&computed.val, dim))
         },
-        | "approx" => {
+        | B::Approx => {
             let value = args
                 .first()
                 .cloned()
@@ -2189,7 +2210,7 @@ fn call_inner(
                 },
             }
         },
-        | "subst" => {
+        | B::Subst => {
             let symbol = expect_num(&args, 0, name, span)?;
             let replacement = args
                 .get(1)
@@ -2214,7 +2235,7 @@ fn call_inner(
             }
             Ok(Value::Num(NumVal::symbolic(substituted, dim)))
         },
-        | "to_value" => {
+        | B::ToValue => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             let payload = bridge::to_val(value)?;
             let host_witness = match value {
@@ -2240,7 +2261,7 @@ fn call_inner(
                 host_witness,
             })))
         },
-        | "to_callback" => {
+        | B::ToCallback => {
             if args.len() != 1 {
                 return Err(arity(name, 1, args.len(), span));
             }
@@ -2257,7 +2278,7 @@ fn call_inner(
                 schema,
             })))
         },
-        | "from_value" => {
+        | B::FromValue => {
             // Plain host or higher-order application carries no authenticated source call evidence.
             let result: Result<Value, String> =
                 Err("missing concrete result type evidence".to_string());
@@ -2266,15 +2287,15 @@ fn call_inner(
                 | Err(reason) => err(crate::rssn_module::value_error("TypeMismatch", reason)),
             })
         },
-        | "decide" => Ok(decide(&args, span)),
-        | "assuming" | "by_cases" => branch_on(interp, name, &args, span),
+        | B::Decide => Ok(decide(&args, span)),
+        | B::Assuming | B::ByCases => branch_on(interp, name, &args, span),
 
         // ----- IO ---------------------------------------------------------
-        | "read_file" => {
+        | B::ReadFile => {
             let path = expect_str(&args, 0, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::ReadFile(path))))
         },
-        | "write_file" => {
+        | B::WriteFile => {
             let path = expect_str(&args, 0, name, span)?;
             let contents = expect_str(&args, 1, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::WriteFile {
@@ -2282,12 +2303,12 @@ fn call_inner(
                 contents,
             })))
         },
-        | "read_line" => Ok(Value::Io(Rc::new(crate::value::IoAction::ReadLine))),
-        | "input" => {
+        | B::ReadLine => Ok(Value::Io(Rc::new(crate::value::IoAction::ReadLine))),
+        | B::Input => {
             let prompt = expect_str(&args, 0, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::Input(prompt))))
         },
-        | "load_plugin" => {
+        | B::LoadPlugin => {
             let path = match args.first() {
                 | Some(Value::Str(path)) => path.to_string(),
                 | _ => return Err(arity(name, 1, args.len(), span)),
@@ -2296,7 +2317,7 @@ fn call_inner(
         },
         // §9.12: the program arguments the host set with `Interp::set_args`,
         // as a rank-1 `Tensor<1, String>`.
-        | "args" => {
+        | B::Args => {
             if !args.is_empty() {
                 return Err(arity(name, 0, args.len(), span));
             }
@@ -2311,11 +2332,11 @@ fn call_inner(
         // §6.8.2: the clock is read when the action runs, and `random` advances
         // the RNG then too — building the description must not consume a value
         // from the sequence (§6.10).
-        | "time_now" => Ok(Value::Io(Rc::new(crate::value::IoAction::TimeNow))),
+        | B::TimeNow => Ok(Value::Io(Rc::new(crate::value::IoAction::TimeNow))),
         // §9.14 / §13.9.6: `with_cap("fs,rand", thunk)` describes running the
         // thunk's action with only those capabilities left; the narrowing
         // happens when the action runs, and nested blocks intersect.
-        | "with_cap" => {
+        | B::WithCap => {
             let list = expect_str(&args, 0, name, span)?;
             let allowed = crate::value::caps::parse(&list).map_err(|unknown| {
                 EvalError::new(
@@ -2342,12 +2363,12 @@ fn call_inner(
                 action,
             })))
         },
-        | "random" => Ok(Value::Io(Rc::new(crate::value::IoAction::Random))),
+        | B::Random => Ok(Value::Io(Rc::new(crate::value::IoAction::Random))),
         // §6.10: the pure, seeded generator. `rng(seed)` answers `() -> Float`,
         // a closure over its own LCG state, so the same seed always produces
         // the same stream and nothing is consumed from the session's RNG — the
         // purity the standard asks for ("rng(seed) 是纯的、确定的").
-        | "rng" => {
+        | B::Rng => {
             let seed = expect_int(&args, 0, name, span)?;
             let state = Rc::new(std::cell::RefCell::new(seed as u64));
             Ok(Value::Native(Rc::new(NativeFn(Box::new(
@@ -2359,7 +2380,7 @@ fn call_inner(
         },
 
         // ----- testing ----------------------------------------------------
-        | "assert" => {
+        | B::Assert => {
             match args.first() {
                 | Some(Value::Bool(true)) => {
                     Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(
@@ -2396,7 +2417,7 @@ fn call_inner(
                 | _ => Err(arity(name, 1, args.len(), span)),
             }
         },
-        | "assert_eq" => {
+        | B::AssertEq => {
             let a = args.first().cloned().unwrap_or(Value::Unit);
             let b = args.get(1).cloned().unwrap_or(Value::Unit);
             // §6.12.1: equality is structural. Comparing renderings passed
@@ -2420,7 +2441,7 @@ fn call_inner(
                 | Err(reason) => Err(EvalError::new("E0302", reason.to_string()).at(span)),
             }
         },
-        | "approx_eq" => {
+        | B::ApproxEq => {
             let a = expect_num(&args, 0, name, span)?;
             let b = expect_num(&args, 1, name, span)?;
             let tolerance = expect_num(&args, 2, name, span)?;
@@ -2460,10 +2481,10 @@ fn call_inner(
             let limit = tolerance.to_rational().unwrap_or_else(BigRational::zero);
             Ok(Value::Bool(difference <= limit))
         },
-        | "forall" => forall(interp, &args, span),
+        | B::Forall => forall(interp, &args, span),
 
         // ----- plotting ---------------------------------------------------
-        | "line" | "scatter" => {
+        | B::Line | B::Scatter => {
             let x = args.first().cloned().unwrap_or(Value::Unit);
             let y = args.get(1).cloned().unwrap_or(Value::Unit);
             let mut fields = IndexMap::new();
@@ -2473,7 +2494,7 @@ fn call_inner(
             fields.insert("label".to_string(), Value::string(""));
             Ok(Value::Record(Rc::new(RecordValue { fields })))
         },
-        | "label" => {
+        | B::Label => {
             let mut series = match args.first().cloned() {
                 | Some(Value::Record(record)) => (*record).clone(),
                 | _ => return Err(arity(name, 2, args.len(), span)),
@@ -2484,13 +2505,13 @@ fn call_inner(
                 .insert("label".to_string(), Value::string(text));
             Ok(Value::Record(Rc::new(series)))
         },
-        | "combine" => {
+        | B::Combine => {
             let series = args.first().cloned().unwrap_or(Value::Unit);
             let mut fields = IndexMap::new();
             fields.insert("series".to_string(), series);
             Ok(Value::Record(Rc::new(RecordValue { fields })))
         },
-        | "plot" | "save" => {
+        | B::Plot | B::Save => {
             let spec = args.last().cloned().unwrap_or(Value::Unit);
             if name == "plot" {
                 let html = render_plot(&spec);
@@ -2514,7 +2535,7 @@ fn call_inner(
                 })))
             }
         },
-        | "plot_save_gif" => {
+        | B::PlotSaveGif => {
             let path = expect_str(&args, 0, name, span)?;
             let Some(Value::Tensor(specs)) = args.get(1) else {
                 return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
@@ -2566,22 +2587,22 @@ fn call_inner(
         // where a bare `pi` is found. These arms exist so that reaching the
         // builtin table — `map(pi, xs)`, or a call through `apply` — gives the
         // same value instead of "typed but not implemented".
-        | "pi" | "e" | "oo" => {
+        | B::Pi | B::E | B::Oo => {
             if name == "e" {
                 let one_value = Value::Num(NumVal::int(BigInt::one()));
                 return crate::kernel::call("exp", &[one_value], Dim::one());
             }
             crate::kernel::call(name, &[], Dim::one())
         },
-        | "nan" => Ok(Value::Num(NumVal::float(f64::NAN, Dim::one()))),
-        | "i" => {
+        | B::Nan => Ok(Value::Num(NumVal::float(f64::NAN, Dim::one()))),
+        | B::I => {
             Ok(Value::Num(NumVal {
                 kind: NumKind::Complex(0.0, 1.0),
                 dim: Dim::one(),
                 display: None,
             }))
         },
-        | "lgamma" => {
+        | B::Lgamma => {
             let num = expect_num(&args, 0, name, span)?;
             let value = num.to_f64().unwrap_or(f64::NAN);
             Ok(Value::Num(NumVal::float(
@@ -2591,7 +2612,7 @@ fn call_inner(
         },
 
         // ----- §8.1.5 containers that arrived with the chapter-8 sweep -----
-        | "enumerate" => {
+        | B::Enumerate => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             // §8.1.5: at rank >= 2 `value` is a row.
             let mut elements = Vec::with_capacity(tensor.storage.len());
@@ -2607,7 +2628,7 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
         },
-        | "zip" => {
+        | B::Zip => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
             // §8.1.5: it pairs rows (or scalars) as far as the shorter runs.
@@ -2621,7 +2642,7 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
         },
-        | "fold_left" => {
+        | B::FoldLeft => {
             let function = args
                 .first()
                 .cloned()
@@ -2637,7 +2658,7 @@ fn call_inner(
             }
             Ok(accumulator)
         },
-        | "sort_by" => {
+        | B::SortBy => {
             let function = args
                 .first()
                 .cloned()
@@ -2669,7 +2690,7 @@ fn call_inner(
             })?;
             Ok(gather_sequence(&tensor, &items, &order))
         },
-        | "sort_float" => {
+        | B::SortFloat => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let nan_last = args
                 .get(1)
@@ -2684,9 +2705,9 @@ fn call_inner(
         },
 
         // ----- §8.1.1 combinators ----------------------------------------
-        | "id" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
-        | "const" => Ok(args.first().cloned().unwrap_or(Value::Unit)),
-        | "apply" => {
+        | B::Id => Ok(args.first().cloned().unwrap_or(Value::Unit)),
+        | B::Const => Ok(args.first().cloned().unwrap_or(Value::Unit)),
+        | B::Apply => {
             let function = args
                 .first()
                 .cloned()
@@ -2697,7 +2718,7 @@ fn call_inner(
                 .ok_or_else(|| arity(name, 2, 1, span))?;
             interp.apply(function, vec![argument], span)
         },
-        | "compose" => {
+        | B::Compose => {
             let outer = args
                 .first()
                 .cloned()
@@ -2711,7 +2732,7 @@ fn call_inner(
                 interp.apply(outer.clone(), vec![value], span)
             }))
         },
-        | "flip" => {
+        | B::Flip => {
             let function = args
                 .first()
                 .cloned()
@@ -2723,7 +2744,7 @@ fn call_inner(
                 interp.apply(function.clone(), call_args, span)
             }))
         },
-        | "curry" => {
+        | B::Curry => {
             let function = args
                 .first()
                 .cloned()
@@ -2738,7 +2759,7 @@ fn call_inner(
                 }))
             }))
         },
-        | "uncurry" => {
+        | B::Uncurry => {
             let function = args
                 .first()
                 .cloned()
@@ -2755,7 +2776,7 @@ fn call_inner(
                 Ok(current)
             }))
         },
-        | "partial" => {
+        | B::Partial => {
             let function = args
                 .first()
                 .cloned()
@@ -2772,7 +2793,7 @@ fn call_inner(
         },
 
         // ----- §8.1.2 booleans and comparisons ----------------------------
-        | "not" => {
+        | B::Not => {
             match args.first() {
                 | Some(Value::Bool(flag)) => Ok(Value::Bool(!flag)),
                 | other => {
@@ -2787,13 +2808,13 @@ fn call_inner(
                 },
             }
         },
-        | "xor" => {
+        | B::Xor => {
             match (args.first(), args.get(1)) {
                 | (Some(Value::Bool(a)), Some(Value::Bool(b))) => Ok(Value::Bool(a != b)),
                 | _ => Err(EvalError::new("E0302", "`xor` expects two Bools").at(span)),
             }
         },
-        | "compare" => {
+        | B::Compare => {
             let left = args
                 .first()
                 .cloned()
@@ -2807,7 +2828,7 @@ fn call_inner(
                 | None => Ok(none()),
             }
         },
-        | "partial_compare" => {
+        | B::PartialCompare => {
             let left = expect_float(&args, 0, name, span)?;
             let right = expect_float(&args, 1, name, span)?;
             if left.is_nan() || right.is_nan() {
@@ -2819,7 +2840,7 @@ fn call_inner(
                 )))
             }
         },
-        | "total_compare" => {
+        | B::TotalCompare => {
             let left = args
                 .first()
                 .cloned()
@@ -2832,7 +2853,7 @@ fn call_inner(
         },
         // §3.8.4: `hash` is the `Hash` class method. The checker proves a
         // prelude instance, so the runtime applies the structural hash.
-        | "hash" => {
+        | B::Hash => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             hash_value(value).map_or_else(
                 || {
@@ -2845,7 +2866,7 @@ fn call_inner(
                 |hash| Ok(Value::int(i64::from_ne_bytes(hash.to_ne_bytes()))),
             )
         },
-        | "sym_eq" | "sym_ne" | "sym_lt" => {
+        | B::SymEq | B::SymNe | B::SymLt => {
             let left = args
                 .first()
                 .cloned()
@@ -2867,39 +2888,39 @@ fn call_inner(
         // from the static type, so the runtime value is dimensionless; adding
         // it to a dimensioned value needs the representation to be passed at
         // run time (see the report).
-        | "zero" => Ok(Value::Num(NumVal::exact(BigRational::zero(), Dim::one()))),
+        | B::Zero => Ok(Value::Num(NumVal::exact(BigRational::zero(), Dim::one()))),
 
         // ----- §8.2.2 special functions -----------------------------------
-        | "beta" => {
+        | B::Beta => {
             let a = expect_float(&args, 0, name, span)?;
             let b = expect_float(&args, 1, name, span)?;
             Ok(Value::float(aevia_std::special::beta(a, b)))
         },
-        | "zeta" => {
+        | B::Zeta => {
             let x = expect_float(&args, 0, name, span)?;
             Ok(Value::float(aevia_std::special::zeta(x)))
         },
-        | "bessel_j0" => {
+        | B::BesselJ0 => {
             Ok(Value::float(aevia_std::special::bessel_j0(expect_float(
                 &args, 0, name, span,
             )?)))
         },
-        | "bessel_j1" | "j1" => {
+        | B::BesselJ1 | B::J1 => {
             Ok(Value::float(aevia_std::special::bessel_j1(expect_float(
                 &args, 0, name, span,
             )?)))
         },
-        | "bessel_y0" => {
+        | B::BesselY0 => {
             Ok(Value::float(aevia_std::special::bessel_y0(expect_float(
                 &args, 0, name, span,
             )?)))
         },
-        | "bessel_y1" | "y1" => {
+        | B::BesselY1 | B::Y1 => {
             Ok(Value::float(aevia_std::special::bessel_y1(expect_float(
                 &args, 0, name, span,
             )?)))
         },
-        | "bessel_jn" | "bessel_yn" => {
+        | B::BesselJn | B::BesselYn => {
             let order = expect_int(&args, 0, name, span)?;
             let x = expect_float(&args, 1, name, span)?;
             let order = i32::try_from(order).unwrap_or(0);
@@ -2909,12 +2930,12 @@ fn call_inner(
                 aevia_std::special::bessel_yn(order, x)
             }))
         },
-        | "legendre_p" | "hermite_h" | "laguerre_l" | "chebyshev_t" | "chebyshev_u" => {
+        | B::LegendreP | B::HermiteH | B::LaguerreL | B::ChebyshevT | B::ChebyshevU => {
             classical_polynomial(&args, name, span)
         },
 
         // ----- §8.15 complex ----------------------------------------------
-        | "complex" => {
+        | B::Complex => {
             let re = expect_float(&args, 0, name, span)?;
             let im = expect_float(&args, 1, name, span)?;
             Ok(Value::Num(NumVal {
@@ -2923,7 +2944,7 @@ fn call_inner(
                 display: None,
             }))
         },
-        | "re" | "im" | "conj" | "magnitude" | "arg" => {
+        | B::Re | B::Im | B::Conj | B::Magnitude | B::Arg => {
             let num = expect_num(&args, 0, name, span)?;
             let NumKind::Complex(re, im) = num.kind else {
                 return Err(
@@ -2944,7 +2965,7 @@ fn call_inner(
                 | _ => Value::Num(NumVal::float(im.atan2(re), Dim::one())),
             })
         },
-        | "complex_sqrt" | "complex_exp" | "complex_ln" | "complex_sin" | "complex_cos" => {
+        | B::ComplexSqrt | B::ComplexExp | B::ComplexLn | B::ComplexSin | B::ComplexCos => {
             let num = expect_num(&args, 0, name, span)?;
             let NumKind::Complex(re, im) = num.kind else {
                 return Err(
@@ -2973,7 +2994,7 @@ fn call_inner(
         },
 
         // ----- §8.16 number theory, combinatorics, geometry ---------------
-        | "factor"
+        | B::Factor
             if args.first().is_some_and(|value| {
                 !matches!(
                     value,
@@ -2986,18 +3007,18 @@ fn call_inner(
         {
             algebra("factor", &args, span)
         },
-        | "expand" | "cancel" | "together" | "apart" | "collect" => algebra(name, &args, span),
-        | "set_of" => {
+        | B::Expand | B::Cancel | B::Together | B::Apart | B::Collect => algebra(name, &args, span),
+        | B::SetOf => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             Ok(make_set(tensor.elements()))
         },
-        | "elements" => {
+        | B::Elements => {
             let items = expect_set(&args, 0, name, span)?;
             let dim = items.first().map_or_else(Dim::one, crate::value::value_dim);
             let len = items.len();
             Ok(build_tensor(items.to_vec(), vec![len], dim))
         },
-        | "member" => {
+        | B::Member => {
             let needle = args.first().ok_or_else(|| arity(name, 2, 0, span))?;
             let items = expect_set(&args, 1, name, span)?;
             Ok(Value::Bool(
@@ -3006,7 +3027,7 @@ fn call_inner(
                     .is_ok(),
             ))
         },
-        | "set_insert" | "set_remove" => {
+        | B::SetInsert | B::SetRemove => {
             let items = expect_set(&args, 0, name, span)?;
             let item = args.get(1).ok_or_else(|| arity(name, 2, 1, span))?;
             let mut next = items.to_vec();
@@ -3022,7 +3043,7 @@ fn call_inner(
             }
             Ok(set_value(next))
         },
-        | "union" | "intersection" | "difference" | "is_subset" => {
+        | B::Union | B::Intersection | B::Difference | B::IsSubset => {
             let left = expect_set(&args, 0, name, span)?;
             let right = expect_set(&args, 1, name, span)?;
             let (mut i, mut j) = (0, 0);
@@ -3063,7 +3084,7 @@ fn call_inner(
             }
             Ok(set_value(out))
         },
-        | "degree" => {
+        | B::Degree => {
             let value = algebra("degree", &args, span)?;
             match value {
                 | Value::Num(NumVal {
@@ -3082,7 +3103,7 @@ fn call_inner(
                 },
             }
         },
-        | "factor" => {
+        | B::Factor => {
             let n = expect_int(&args, 0, name, span)?;
             let factors = aevia_std::number::factor(n);
             let elements: Vec<Value> = factors
@@ -3094,12 +3115,12 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
         },
-        | "is_prime" => {
+        | B::IsPrime => {
             Ok(Value::Bool(aevia_std::number::is_prime(
                 u64::try_from(expect_int(&args, 0, name, span)?).unwrap_or(0),
             )))
         },
-        | "primes" => {
+        | B::Primes => {
             let limit = expect_int(&args, 0, name, span)?;
             let values = aevia_std::number::primes(limit);
             let len = values.len();
@@ -3117,16 +3138,16 @@ fn call_inner(
                 display: None,
             })))
         },
-        | "binomial" => {
+        | B::Binomial => {
             let n = expect_int(&args, 0, name, span)?;
             let k = expect_int(&args, 1, name, span)?;
             Ok(Value::Num(NumVal::int(aevia_std::number::binomial(n, k))))
         },
-        | "permutations" => {
+        | B::Permutations => {
             let n = expect_int(&args, 0, name, span)?;
             Ok(Value::Num(NumVal::int(aevia_std::number::permutations(n))))
         },
-        | "polygon_area" => {
+        | B::PolygonArea => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let points = tensor_values(&tensor)?;
             let area = aevia_std::geom::polygon_area(&points);
@@ -3135,7 +3156,7 @@ fn call_inner(
                 tensor.dim.pow(&BigRational::from_integer(BigInt::from(2))),
             )))
         },
-        | "distance" => {
+        | B::Distance => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
             let distance =
@@ -3145,7 +3166,7 @@ fn call_inner(
         },
 
         // ----- §8.14 measurement ------------------------------------------
-        | "measure" => {
+        | B::Measure => {
             let value = expect_num(&args, 0, name, span)?;
             let uncertainty = expect_num(&args, 1, name, span)?;
             if value.dim != uncertainty.dim {
@@ -3160,7 +3181,7 @@ fn call_inner(
                 ("uncertainty", Value::Num(uncertainty)),
             ]))
         },
-        | "value" | "uncertainty" => {
+        | B::Value | B::Uncertainty => {
             let Some(Value::Record(measurement)) = args.first() else {
                 return Err(
                     EvalError::new("E0302", format!("`{name}` expects a measurement")).at(span),
@@ -3172,14 +3193,14 @@ fn call_inner(
         },
 
         // ----- §8.13 testing ----------------------------------------------
-        | "compile_fail" => {
+        | B::CompileFail => {
             let source = expect_str(&args, 0, name, span)?;
             let compilation = crate::compile("compile_fail.aev", &source);
             Ok(Value::Bool(compilation.diagnostics.has_errors()))
         },
 
         // ----- §8.4 decompositions and shape operations -------------------
-        | "lstsq" => {
+        | B::Lstsq => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let vector = expect_tensor(&args, 1, name, span)?;
@@ -3201,7 +3222,7 @@ fn call_inner(
                 span,
             )
         },
-        | "eig" => {
+        | B::Eig => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, _, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -3212,7 +3233,7 @@ fn call_inner(
                 complex_tensor(vec![rows, rows], &vectors, Dim::one()),
             ]))
         },
-        | "eigvals" => {
+        | B::Eigvals => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, _, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -3220,7 +3241,7 @@ fn call_inner(
                 .map_err(|error| numeric_error(name, error, span))?;
             Ok(complex_tensor(vec![values.len()], &values, dim))
         },
-        | "svd" => {
+        | B::Svd => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -3233,7 +3254,7 @@ fn call_inner(
                 float_tensor(vec![k, cols], vt, Dim::one()),
             ]))
         },
-        | "qr" => {
+        | B::Qr => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -3257,7 +3278,7 @@ fn call_inner(
                 float_tensor(vec![rows, cols], r, dim),
             ]))
         },
-        | "lu" => {
+        | B::Lu => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, cols, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix.dim.clone();
@@ -3281,7 +3302,7 @@ fn call_inner(
                 float_tensor(vec![rows, cols], u, dim),
             ]))
         },
-        | "cholesky" => {
+        | B::Cholesky => {
             let matrix = expect_tensor(&args, 0, name, span)?;
             let (rows, _, entries) = tensor_matrix(&matrix, name, span)?;
             let dim = matrix
@@ -3293,7 +3314,7 @@ fn call_inner(
                 span,
             )
         },
-        | "tril" | "triu" => {
+        | B::Tril | B::Triu => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if tensor.rank() != 2 {
                 return Err(
@@ -3323,14 +3344,14 @@ fn call_inner(
         // `reshape`/`zeros_of`/`ones_of` read their shape from the type
         // argument (`call_typed`). Reaching this arm means the call was
         // written without one, and the runtime has no shape to build.
-        | "reshape" | "zeros_of" | "ones_of" | "refine_shape" => {
+        | B::Reshape | B::ZerosOf | B::OnesOf | B::RefineShape => {
             Err(EvalError::new(
                 "E0310",
                 format!("`{name}` needs its shape type argument, as in `{name}<[3, 2]>(…)`"),
             )
             .at(span))
         },
-        | "reshape_dyn" => {
+        | B::ReshapeDyn => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let shape_tensor = expect_tensor(&args, 1, name, span)?;
             let mut shape = Vec::new();
@@ -3363,7 +3384,7 @@ fn call_inner(
                 display: tensor.display.clone(),
             })))
         },
-        | "set" => {
+        | B::Set => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let indices = expect_tensor(&args, 1, name, span)?;
             let value = args
@@ -3395,7 +3416,7 @@ fn call_inner(
                 tensor.dim.clone(),
             ))
         },
-        | "map_indexed" => {
+        | B::MapIndexed => {
             let function = args
                 .first()
                 .cloned()
@@ -3411,7 +3432,7 @@ fn call_inner(
                 .map_or_else(Dim::one, crate::value::value_dim);
             Ok(build_tensor(elements, tensor.shape.clone(), dim))
         },
-        | "approx_map" => {
+        | B::ApproxMap => {
             let function = args
                 .first()
                 .cloned()
@@ -3434,7 +3455,7 @@ fn call_inner(
             let dim = tensor.dim.clone();
             Ok(float_tensor(vec![values.len()], values, dim))
         },
-        | "det_unit" => {
+        | B::DetUnit => {
             // §4.9.5: `det_unit(A, u)` answers with a `Dyn`, because the
             // determinant of an `n × n` matrix over `d` has dimension `d^n`
             // and `n` is only known at run time.
@@ -3458,18 +3479,18 @@ fn call_inner(
         // value's own dimension is the one that travels — which is what makes
         // `dim_of` and `value_of` total, and `check` exact for a value that
         // has never left the program.
-        | "dyn" => {
+        | B::Dyn => {
             let num = expect_num(&args, 0, name, span)?;
             Ok(Value::Dyn(Rc::new(DynValue::new(&num))))
         },
-        | "dyn_with" => {
+        | B::DynWith => {
             let num = expect_num(&args, 0, name, span)?;
             let dim = expect_dim_value(&args, 1, name, span)?;
             let mut dynamic = DynValue::new(&num);
             dynamic.dim = dim;
             Ok(Value::Dyn(Rc::new(dynamic)))
         },
-        | "check" => {
+        | B::Check => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             // §4.9.4: `check<d>(x)` is type-directed — the concrete `d` never
             // reaches the runtime in the argument list, so the checker records
@@ -3484,7 +3505,7 @@ fn call_inner(
             Ok(ok(Value::Num(dynamic.as_scalar())))
         },
         // §5.11.5: the checker recorded the system and the SI dimension.
-        | "to_system" | "from_system" => {
+        | B::ToSystem | B::FromSystem => {
             let num = expect_num(&args, 1, name, span)?;
             let (system_name, si) = interp
                 .context
@@ -3508,7 +3529,7 @@ fn call_inner(
                 .map(Value::Num)
                 .map_err(|message| EvalError::new("E0302", message).at(span))
         },
-        | "check_with" => {
+        | B::CheckWith => {
             let dim = expect_dim_value(&args, 0, name, span)?;
             let dynamic = expect_dyn(&args, 1, name, span)?;
             if dynamic.dim == dim {
@@ -3517,15 +3538,15 @@ fn call_inner(
                 Ok(err(dim_error(&dim, &dynamic.dim)))
             }
         },
-        | "dim_of" => {
+        | B::DimOf => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             Ok(dim_value(&dynamic.dim))
         },
-        | "value_of" => {
+        | B::ValueOf => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             Ok(Value::Num(dynamic.payload()))
         },
-        | "pow_dyn" => {
+        | B::PowDyn => {
             let dynamic = expect_dyn(&args, 0, name, span)?;
             let exponent = expect_int(&args, 1, name, span)?;
             let payload = interp.apply_binary(
@@ -3549,7 +3570,7 @@ fn call_inner(
             })))
         },
         // ----- §8.7 statistics --------------------------------------------
-        | "median" | "mode" => {
+        | B::Median | B::Mode => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             if let Some(mut exact) = exact_values(&tensor) {
                 let value = if name == "median" {
@@ -3569,7 +3590,7 @@ fn call_inner(
             .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, tensor.dim.clone())))
         },
-        | "quantile" => {
+        | B::Quantile => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let fraction = expect_num(&args, 1, name, span)?;
             if let (Some(mut exact), Some(q)) = (exact_values(&tensor), fraction.to_rational()) {
@@ -3585,7 +3606,7 @@ fn call_inner(
                 .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, tensor.dim.clone())))
         },
-        | "cov" => {
+        | B::Cov => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
             let dim = left.dim.mul(&right.dim);
@@ -3599,7 +3620,7 @@ fn call_inner(
                     .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, dim)))
         },
-        | "corr" => {
+        | B::Corr => {
             let left = expect_tensor(&args, 0, name, span)?;
             let right = expect_tensor(&args, 1, name, span)?;
             let value =
@@ -3607,7 +3628,7 @@ fn call_inner(
                     .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, Dim::one())))
         },
-        | "skewness" | "kurtosis" => {
+        | B::Skewness | B::Kurtosis => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let values = tensor_values(&tensor)?;
             let value = if name == "skewness" {
@@ -3618,7 +3639,7 @@ fn call_inner(
             .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, Dim::one())))
         },
-        | "histogram" => {
+        | B::Histogram => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let bins = expect_int(&args, 1, name, span)?.max(1) as usize;
             let (counts, edges) = aevia_std::stats::histogram(&tensor_values(&tensor)?, bins)
@@ -3633,7 +3654,7 @@ fn call_inner(
         },
 
         // ----- §8.5 numeric calculus --------------------------------------
-        | "numeric_deriv" => {
+        | B::NumericDeriv => {
             let function = args
                 .first()
                 .cloned()
@@ -3662,7 +3683,7 @@ fn call_inner(
                 Ok(Value::Num(NumVal::float(slope, dim)))
             }))
         },
-        | "quadrature" => {
+        | B::Quadrature => {
             let function = args
                 .first()
                 .cloned()
@@ -3690,7 +3711,7 @@ fn call_inner(
                 | Err(error) => err(Value::string(error.to_string())),
             })
         },
-        | "product" | "product_dyn" => {
+        | B::Product | B::ProductDyn => {
             let function = args
                 .first()
                 .cloned()
@@ -3727,7 +3748,7 @@ fn call_inner(
             }
             Ok(total)
         },
-        | "sum_f" => {
+        | B::SumF => {
             let function = args
                 .first()
                 .cloned()
@@ -3763,7 +3784,7 @@ fn call_inner(
                 crate::value::value_dim(&codomain),
             )))
         },
-        | "grad" | "grad_f" => {
+        | B::Grad | B::GradF => {
             let function = args
                 .first()
                 .cloned()
@@ -3784,7 +3805,7 @@ fn call_inner(
             let dim = crate::value::value_dim(&codomain).div(&point.dim);
             Ok(float_tensor(vec![gradient.len()], gradient, dim))
         },
-        | "jacobian" => {
+        | B::Jacobian => {
             let function = args
                 .first()
                 .cloned()
@@ -3805,7 +3826,7 @@ fn call_inner(
                 Dim::one().div(&point.dim),
             ))
         },
-        | "hessian" | "laplacian" => {
+        | B::Hessian | B::Laplacian => {
             let function = args
                 .first()
                 .cloned()
@@ -3835,7 +3856,7 @@ fn call_inner(
             let n = x.len();
             Ok(float_tensor(vec![n, n], entries, dim))
         },
-        | "divergence" | "curl" => {
+        | B::Divergence | B::Curl => {
             let function = args
                 .first()
                 .cloned()
@@ -3863,7 +3884,7 @@ fn call_inner(
         },
 
         // ----- §8.6 solving and optimisation ------------------------------
-        | "solve_complex" => {
+        | B::SolveComplex => {
             let (variable, applied) = apply_to_fresh(interp, name, &args, span, Dim::one())?;
             let symbol = symbolic_variable(&variable, Dim::one());
             match solve("solve_complex", &applied, &symbol) {
@@ -3871,7 +3892,7 @@ fn call_inner(
                 | Err(error) => Ok(err(Value::string(error.message))),
             }
         },
-        | "nsolve_f" | "root" => {
+        | B::NsolveF | B::Root => {
             let function = args
                 .first()
                 .cloned()
@@ -3890,7 +3911,7 @@ fn call_inner(
                 | Err(error) => err(Value::string(error.to_string())),
             })
         },
-        | "solve_system" | "least_squares" => {
+        | B::SolveSystem | B::LeastSquares => {
             let function = args
                 .first()
                 .cloned()
@@ -3920,7 +3941,7 @@ fn call_inner(
                 | Err(error) => err(Value::string(error.to_string())),
             })
         },
-        | "minimize" | "maximize" | "minimize_f" => {
+        | B::Minimize | B::Maximize | B::MinimizeF => {
             let function = args
                 .first()
                 .cloned()
@@ -3951,7 +3972,7 @@ fn call_inner(
         },
 
         // ----- §8.7.1 distributions ---------------------------------------
-        | "pdf" | "cdf" => {
+        | B::Pdf | B::Cdf => {
             let distribution = distribution_from(&args, name, span)?;
             let point = expect_num(&args, 1, name, span)?;
             let x = point.to_f64().ok_or_else(|| {
@@ -3976,7 +3997,7 @@ fn call_inner(
             };
             Ok(Value::Num(NumVal::float(value, dim)))
         },
-        | "sample" => {
+        | B::Sample => {
             let distribution = distribution_from(&args, name, span)?;
             let dim = distribution_dim(&args, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::Bind {
@@ -3994,7 +4015,7 @@ fn call_inner(
                 }),
             })))
         },
-        | "sample_n" => {
+        | B::SampleN => {
             let distribution = distribution_from(&args, name, span)?;
             let count = expect_int(&args, 1, name, span)?.max(0) as usize;
             let dim = distribution_dim(&args, span)?;
@@ -4020,9 +4041,20 @@ fn call_inner(
         },
 
         // ----- §8.8 FFT and interpolation ---------------------------------
-        | "fft" | "ifft" | "fft_norm" | "ifft_norm" | "fft_axis" | "ifft_axis" | "fft2"
-        | "ifft2" | "fftn" | "ifftn" | "fftn_axes" | "ifftn_axes" | "fftn_norm"
-        | "ifftn_norm" => {
+        | B::Fft
+        | B::Ifft
+        | B::FftNorm
+        | B::IfftNorm
+        | B::FftAxis
+        | B::IfftAxis
+        | B::Fft2
+        | B::Ifft2
+        | B::Fftn
+        | B::Ifftn
+        | B::FftnAxes
+        | B::IfftnAxes
+        | B::FftnNorm
+        | B::IfftnNorm => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let rank = tensor.shape.len();
             let input = complex_values(&tensor)?;
@@ -4050,7 +4082,7 @@ fn call_inner(
                 tensor.dim.clone(),
             ))
         },
-        | "rfft" | "rfft2" | "rfftn" | "rfftn_axes" => {
+        | B::Rfft | B::Rfft2 | B::Rfftn | B::RfftnAxes => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let rank = tensor.shape.len();
             let signal = tensor_values(&tensor)?;
@@ -4066,7 +4098,7 @@ fn call_inner(
                 })?;
             Ok(complex_tensor(shape, &spectrum, tensor.dim.clone()))
         },
-        | "irfft" | "irfft2" | "irfftn" | "irfftn_axes" => {
+        | B::Irfft | B::Irfft2 | B::Irfftn | B::IrfftnAxes => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let rank = tensor.shape.len();
             let spectrum = complex_values(&tensor)?;
@@ -4107,7 +4139,7 @@ fn call_inner(
                 )?;
             Ok(float_tensor(shape, signal, tensor.dim.clone()))
         },
-        | "fftshift" | "ifftshift" | "fftshift_axis" | "ifftshift_axis" => {
+        | B::Fftshift | B::Ifftshift | B::FftshiftAxis | B::IfftshiftAxis => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let rank = tensor.shape.len();
             let axes = if name.ends_with("_axis") {
@@ -4131,7 +4163,7 @@ fn call_inner(
                 tensor.dim.clone(),
             ))
         },
-        | "fftfreq" | "rfftfreq" => {
+        | B::Fftfreq | B::Rfftfreq => {
             let count = expect_int(&args, 0, name, span)?.max(0) as usize;
             let spacing = expect_num(&args, 1, name, span)?;
             let d = spacing.to_f64().unwrap_or(1.0);
@@ -4143,7 +4175,7 @@ fn call_inner(
             let len = frequencies.len();
             Ok(float_tensor(vec![len], frequencies, spacing.dim.inverse()))
         },
-        | "interp1" | "spline" => {
+        | B::Interp1 | B::Spline => {
             let xs = expect_tensor(&args, 0, name, span)?;
             let ys = expect_tensor(&args, 1, name, span)?;
             let at = expect_num(&args, 2, name, span)?;
@@ -4156,7 +4188,7 @@ fn call_inner(
             let value = outcome.map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, ys.dim.clone())))
         },
-        | "interp2" => {
+        | B::Interp2 => {
             let xs = expect_tensor(&args, 0, name, span)?;
             let ys = expect_tensor(&args, 1, name, span)?;
             let grid = expect_tensor(&args, 2, name, span)?;
@@ -4172,7 +4204,7 @@ fn call_inner(
             .map_err(|error| numeric_error(name, error, span))?;
             Ok(Value::Num(NumVal::float(value, grid.dim.clone())))
         },
-        | "polyfit" | "chebyshev_fit" => {
+        | B::Polyfit | B::ChebyshevFit => {
             let xs = expect_tensor(&args, 0, name, span)?;
             let ys = expect_tensor(&args, 1, name, span)?;
             let degree = expect_int(&args, 2, name, span)?.max(0) as usize;
@@ -4185,7 +4217,7 @@ fn call_inner(
             let len = coefficients.len();
             Ok(float_tensor(vec![len], coefficients, ys.dim.clone()))
         },
-        | "polyval" => {
+        | B::Polyval => {
             let coefficients = expect_tensor(&args, 0, name, span)?;
             let at = expect_num(&args, 1, name, span)?;
             let values = tensor_values(&coefficients)?;
@@ -4197,7 +4229,7 @@ fn call_inner(
         },
 
         // ----- §8.9 ODE ---------------------------------------------------
-        | "odeint" | "odeint_with" => {
+        | B::Odeint | B::OdeintWith => {
             let function = args
                 .first()
                 .cloned()
@@ -4239,7 +4271,7 @@ fn call_inner(
                 ("y", build_tensor(elements, vec![len], dim)),
             ]))
         },
-        | "solve_ivp" => {
+        | B::SolveIvp => {
             let function = args
                 .first()
                 .cloned()
@@ -4291,22 +4323,26 @@ fn call_inner(
         },
 
         // ----- §8.9 dense output, events, higher order, BVP ----------------
-        | "ode_solve" => ode_solve_call(interp, &args, span),
-        | "ode_bvp" => ode_bvp_call(interp, &args, span),
-        | "odeint_order" | "odeint_order_with" => odeint_order_call(interp, name, &args, span),
+        | B::OdeSolve => ode_solve_call(interp, &args, span),
+        | B::OdeBvp => ode_bvp_call(interp, &args, span),
+        | B::OdeintOrder | B::OdeintOrderWith => odeint_order_call(interp, name, &args, span),
 
         // ----- §8.9.1 stochastic differential equations -------------------
-        | "wiener" | "sde_order" | "sde_order_with" | "sde_ensemble_seed" | "sdeint_diag"
-        | "sdeint_general" => sde_call(interp, name, &args, span),
-        | "sde_at" | "sde_resample" | "sde_interp" | "sde_events" => {
+        | B::Wiener
+        | B::SdeOrder
+        | B::SdeOrderWith
+        | B::SdeEnsembleSeed
+        | B::SdeintDiag
+        | B::SdeintGeneral => sde_call(interp, name, &args, span),
+        | B::SdeAt | B::SdeResample | B::SdeInterp | B::SdeEvents => {
             sde_path_call(interp, name, &args, span)
         },
-        | "sde_ensemble_diag" | "sde_ensemble_general" => {
+        | B::SdeEnsembleDiag | B::SdeEnsembleGeneral => {
             sde_ensemble_call(interp, name, &args, span)
         },
         // One ensemble member; only reached through `sde_ensemble_*` (and a
         // worker replica applying the partially applied builtin).
-        | "sde_member" => {
+        | B::SdeMember => {
             let (Some(Value::Str(base)), Some(index)) = (args.first(), args.get(5)) else {
                 return Err(EvalError::new("E0302", "`sde_member` is internal").at(span));
             };
@@ -4315,7 +4351,7 @@ fn call_inner(
         },
 
         // ----- §8.10 PDE --------------------------------------------------
-        | "solve_poisson" => {
+        | B::SolvePoisson => {
             let Some(Value::Record(spec)) = args.first() else {
                 return Err(
                     EvalError::new("E0302", "`solve_poisson` expects a spec record").at(span),
@@ -4354,7 +4390,7 @@ fn call_inner(
                 | Err(error) => err(pde_error_value(&error)),
             })
         },
-        | "solve_heat" | "solve_wave" | "solve_advection" => {
+        | B::SolveHeat | B::SolveWave | B::SolveAdvection => {
             let Some(Value::Record(spec)) = args.first() else {
                 return Err(
                     EvalError::new("E0302", format!("`{name}` expects a spec record")).at(span),
@@ -4426,14 +4462,14 @@ fn call_inner(
         },
 
         // ----- §8.11 data -------------------------------------------------
-        | "read_npy" => {
+        | B::ReadNpy => {
             Err(EvalError::new(
                 "E0314",
                 "`read_npy` requires an explicit rank, for example `read_npy<2>`",
             )
             .at(span))
         },
-        | "write_npy" => {
+        | B::WriteNpy => {
             let path = expect_str(&args, 0, name, span)?;
             let clean_path = path.split(['?', '#']).next().unwrap_or(&path);
             let extension = std::path::Path::new(clean_path)
@@ -4479,11 +4515,11 @@ fn call_inner(
                 },
             }
         },
-        | "read_svg" => {
+        | B::ReadSvg => {
             let path = expect_str(&args, 0, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::ReadSvg(path))))
         },
-        | "write_svg" => {
+        | B::WriteSvg => {
             let path = expect_str(&args, 0, name, span)?;
             let contents = expect_str(&args, 1, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::WriteSvg {
@@ -4491,11 +4527,11 @@ fn call_inner(
                 contents,
             })))
         },
-        | "read_gif" => {
+        | B::ReadGif => {
             let path = expect_str(&args, 0, name, span)?;
             Ok(Value::Io(Rc::new(crate::value::IoAction::ReadGif(path))))
         },
-        | "write_gif" => {
+        | B::WriteGif => {
             let path = expect_str(&args, 0, name, span)?;
             let value = args
                 .get(1)
@@ -4515,7 +4551,7 @@ fn call_inner(
                 },
             }
         },
-        | "read_csv" | "read_csv_dyn" => {
+        | B::ReadCsv | B::ReadCsvDyn => {
             let path = expect_str(&args, 0, name, span)?;
             // Appendix B E0904: an extension this reader cannot decode is a
             // typed `Err`, not a generic parse failure later.
@@ -4588,7 +4624,7 @@ fn call_inner(
                 }),
             })))
         },
-        | "write_csv" => {
+        | B::WriteCsv => {
             let path = expect_str(&args, 0, name, span)?;
             let table = table_from(&args, 1, name, span)?;
             let text = aevia_std::table::write_csv(&table);
@@ -4620,15 +4656,15 @@ fn call_inner(
         // `to_json`/`from_json` are the identity over that representation.
         // Returning JSON *text* here would make `simulate("ising", to_json(p))`
         // send a JSON string literal instead of the object.
-        | "to_json" => args.first().cloned().ok_or_else(|| arity(name, 1, 0, span)),
-        | "from_json" => {
+        | B::ToJson => args.first().cloned().ok_or_else(|| arity(name, 1, 0, span)),
+        | B::FromJson => {
             let value = args
                 .first()
                 .cloned()
                 .ok_or_else(|| arity(name, 1, 0, span))?;
             Ok(ok(value))
         },
-        | "read_json" => {
+        | B::ReadJson => {
             let path = expect_str(&args, 0, name, span)?;
             let clean_path = path.split(['?', '#']).next().unwrap_or(&path);
             let extension = std::path::Path::new(clean_path)
@@ -4695,7 +4731,7 @@ fn call_inner(
                 }),
             })))
         },
-        | "write_json" => {
+        | B::WriteJson => {
             let path = expect_str(&args, 0, name, span)?;
             let value = args
                 .get(1)
@@ -4723,7 +4759,7 @@ fn call_inner(
                 }),
             })))
         },
-        | "column" | "column_dyn" => {
+        | B::Column | B::ColumnDyn => {
             let table = table_from(&args, 0, name, span)?;
             let column = expect_str(&args, 1, name, span)?;
             let cells = match table.column(&column) {
@@ -4752,7 +4788,7 @@ fn call_inner(
             };
             Ok(ok(tensor))
         },
-        | "row" => {
+        | B::Row => {
             let table = table_from(&args, 0, name, span)?;
             let index = expect_int(&args, 1, name, span)?;
             let normalized = if index < 0 {
@@ -4765,7 +4801,7 @@ fn call_inner(
             }
             Ok(ok(row_value(&table, normalized as usize)))
         },
-        | "select" => {
+        | B::Select => {
             let table = table_from(&args, 0, name, span)?;
             let names = expect_tensor(&args, 1, name, span)?;
             let mut selected = Vec::new();
@@ -4800,7 +4836,7 @@ fn call_inner(
                 rows,
             }))
         },
-        | "schema" => {
+        | B::Schema => {
             let table = table_from(&args, 0, name, span)?;
             let mut elements = Vec::with_capacity(table.columns.len());
             for (index, column) in table.columns.iter().enumerate() {
@@ -4826,7 +4862,7 @@ fn call_inner(
             let len = elements.len();
             Ok(build_tensor(elements, vec![len], Dim::one()))
         },
-        | "to_table" => {
+        | B::ToTable => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let mut columns: Vec<String> = Vec::new();
             let mut rows: Vec<Vec<String>> = Vec::new();
@@ -4855,14 +4891,20 @@ fn call_inner(
                 rows,
             })))
         },
-        | "to_dynamic" => {
+        | B::ToDynamic => {
             let table = table_from(&args, 0, name, span)?;
             Ok(table_value(&table))
         },
 
         // ----- §8.12 plotting ---------------------------------------------
-        | "line_with" | "scatter_with" | "hist" | "hist_with" | "heatmap" | "heatmap_with"
-        | "errorbar" | "errorbar_with" => {
+        | B::LineWith
+        | B::ScatterWith
+        | B::Hist
+        | B::HistWith
+        | B::Heatmap
+        | B::HeatmapWith
+        | B::Errorbar
+        | B::ErrorbarWith => {
             let mut fields = IndexMap::new();
             fields.insert("kind".to_string(), Value::string(name));
             match name {
@@ -4902,7 +4944,7 @@ fn call_inner(
             fields.insert("label".to_string(), Value::string(""));
             Ok(Value::Record(Rc::new(RecordValue { fields })))
         },
-        | "default_plot_opts" => {
+        | B::DefaultPlotOpts => {
             Ok(record_of(vec![
                 ("label", none()),
                 ("color", none()),
@@ -4940,7 +4982,7 @@ fn call_inner(
         },
 
         // ----- §8.17 simulation -------------------------------------------
-        | "simulate" => {
+        | B::Simulate => {
             let scenario = expect_str(&args, 0, name, span)?;
             let value = args.get(1).cloned().unwrap_or(Value::Unit);
             let json = json_from_value(&value).map_err(|error| error.at(span))?;
@@ -4957,7 +4999,7 @@ fn call_inner(
         },
 
         // ----- §8.18 device -----------------------------------------------
-        | "device_of" => {
+        | B::DeviceOf => {
             let _ = expect_tensor(&args, 0, name, span)?;
             Ok(make_variant(
                 adt::intern(adt::Adt {
@@ -4970,7 +5012,7 @@ fn call_inner(
                 Vec::new(),
             ))
         },
-        | "to_device" => {
+        | B::ToDevice => {
             let tensor = expect_tensor(&args, 0, name, span)?;
             let device = args.get(1).cloned().unwrap_or(Value::Unit);
             let name_of_device = match &device {
@@ -4991,7 +5033,7 @@ fn call_inner(
             )
             .at(span))
         },
-        | "on" => {
+        | B::On => {
             let device = args.first().cloned().unwrap_or(Value::Unit);
             let thunk = args
                 .get(1)
@@ -5016,7 +5058,7 @@ fn call_inner(
         },
 
         // ----- §8.19 dynamic boundary -------------------------------------
-        | "type_rep" => {
+        | B::TypeRep => {
             Err(EvalError::new("E0304", "type_rep requires concrete type evidence").at(span))
         },
         | _ => {

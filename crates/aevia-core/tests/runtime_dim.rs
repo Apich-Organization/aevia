@@ -562,3 +562,19 @@ fn an_ode_rhs_with_the_wrong_rate_count_is_an_error() {
         error.message
     );
 }
+
+/// `delta_to` shows a difference with the unit's scale only (§5.4.1): the
+/// offset of an affine unit applies to points, not to differences.
+#[test]
+fn delta_to_displays_a_temperature_difference_without_the_offset() {
+    let shown = match value(
+        "let shown = show(delta_to(degC, 10.0 K))
+",
+        "shown",
+    ) {
+        | Value::Str(text) => text.to_string(),
+        | other => panic!("expected a string, found {}", other.type_name()),
+    };
+    assert!(shown.contains("10"), "{shown}");
+    assert!(!shown.contains("263"), "{shown}");
+}

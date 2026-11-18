@@ -133,6 +133,20 @@ fn entry(
         body = rest;
         footer = String::from("*Source: Rust documentation of the `aevia-std` function.*");
     }
+    // The guide is written for the Aevia caller, so it replaces whatever
+    // prose the kernel manifest or the Rust sources have for the same name.
+    // The kernel signatures and the dimension rule stay: they are facts about
+    // the operator, not prose.
+    if let Some(guide) = aevia_stdlib_model::guides::guide(name) {
+        let (first, rest) = split_summary(guide.description, name);
+        summary = first;
+        body = rest;
+        examples = String::new();
+        footer = String::from("*Source: Aevia standard library guide.*");
+        if !guide.example.trim().is_empty() {
+            let _ = write!(examples, "\n```text\n{}\n```", guide.example.trim_end());
+        }
+    }
     let mut out = String::new();
     if !summary.is_empty() {
         out.push_str(&summary);
@@ -213,7 +227,13 @@ fn split_summary(
         summary = summary[at + 3..].to_owned();
     }
     let mut summary = summary.trim().to_owned();
-    if let Some(first) = summary.get(..1) {
+    // A sentence that opens with a call, `defint(f, a, b) is ...`, keeps its
+    // spelling: upper-casing would misname the function.
+    let word_end = summary
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(summary.len());
+    let opens_with_call = summary[word_end..].starts_with('(');
+    if !opens_with_call && let Some(first) = summary.get(..1) {
         summary = format!("{}{}", first.to_uppercase(), &summary[1..]);
     }
     let rest = text[sentence_end..].trim().to_owned();

@@ -612,14 +612,68 @@ fn special_body(path: &str) -> Option<String> {
     };
     let mut out = String::new();
     for (name, fields) in [("Params", fields), (result_name, result_fields)] {
+        let what = if name == "Params" {
+            format!("The parameters of the `{scenario}` simulation, one field per setting.")
+        } else {
+            format!("What the `{scenario}` simulation returns.")
+        };
+        push_doc_text(&mut out, &what);
         out.push_str(&format!("type {name} = {{\n"));
         for (field, ty) in fields {
             out.push_str(&format!("    {field}: {ty},\n"));
         }
         out.push_str("}\n\n");
     }
+    push_doc_text(
+        &mut out,
+        &format!(
+            "Runs the `{scenario}` simulation with the given parameters and returns its result, \
+             or `Err(SimError)` if the parameters are rejected."
+        ),
+    );
     out.push_str(&format!("fn run(p: Params): Result<{result_name}, SimError> =\n    match simulate(\"{scenario}\", to_json(p)) with\n    | Ok(json) -> from_json(json)\n    | Err(error) -> Err(error)\n"));
     Some(out)
+}
+
+/// Writes `text` as a `##` documentation block.
+fn push_doc_text(
+    out: &mut String,
+    text: &str,
+) {
+    for line in text.lines() {
+        if line.is_empty() {
+            out.push_str("##\n");
+        } else {
+            out.push_str("## ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+}
+
+/// Documents the type `name` from its guide, when it has one.
+fn push_doc(
+    out: &mut String,
+    name: &str,
+) {
+    if let Some(guide) = crate::guides::guide(name) {
+        push_doc_text(out, guide.description);
+    }
+}
+
+/// Documents a `type Name ...` declaration copied from the specification.
+fn push_type_doc(
+    out: &mut String,
+    declaration: &str,
+) {
+    let name = declaration
+        .strip_prefix("type ")
+        .and_then(|rest| {
+            rest.split(|c: char| c == '<' || c == '=' || c.is_whitespace())
+                .next()
+        })
+        .unwrap_or("");
+    push_doc(out, name);
 }
 
 /// Renders one generated module: a header, the `module` declaration, one
@@ -643,6 +697,7 @@ fn render_module(
         module.path.replace('/', ".")
     ));
     for declaration in type_declarations(module.path, spec_source) {
+        push_type_doc(&mut out, &declaration);
         out.push_str(&declaration);
         out.push_str("\n\n");
     }
@@ -664,15 +719,7 @@ fn render_module(
         }
         let found = signatures.get(*name).map_or(&[][..], Vec::as_slice);
         if let Some(text) = docs(module.path, name, found) {
-            for line in text.lines() {
-                if line.is_empty() {
-                    out.push_str("##\n");
-                } else {
-                    out.push_str("## ");
-                    out.push_str(line);
-                    out.push('\n');
-                }
-            }
+            push_doc_text(&mut out, &text);
         }
         out.push_str(&format!("let {name} = {name}\n"));
     }
@@ -680,6 +727,7 @@ fn render_module(
         let params: Vec<String> = (0..*arity)
             .map(|index| format!("{}", (b'a' + u8::try_from(index).unwrap_or(0)) as char))
             .collect();
+        push_doc(&mut out, name);
         if params.is_empty() {
             out.push_str(&format!("type {name} = {name}\n"));
         } else {

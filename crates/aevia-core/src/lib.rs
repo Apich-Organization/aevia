@@ -32,6 +32,7 @@
     clippy::too_many_arguments
 )]
 
+mod builtin_ids;
 pub mod builtins;
 mod callback;
 pub mod cancellation;

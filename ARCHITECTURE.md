@@ -54,7 +54,7 @@ else follows from keeping that boundary narrow.
 | `aevia-rssn` | The kernel bridge: the live `Session`, conversion between the two value models, the Kernel Manifest indexed (`registry`), `Rssn` module generation (`codegen`), pinned-key bindings, JIT passthrough. | `rssn`, `aevia-dim`, `aevia-syntax` |
 | `aevia-types` | `Scalar<ρ, δ>`, tensors, records with rows, nominal variants, type classes, Hindley–Milner inference with dimension unification, literal defaulting, exhaustiveness, resolution of `Rssn.*` signatures, `.aevi` persistence. | `aevia-dim`, `aevia-syntax`, `aevia-rssn` |
 | `aevia-ir` | The Core IR of §9.2.2 (ANF, closure conversion, tail positions, spans, call sites) and lowering from the typed AST. Data only; it must not depend on `aevia-core`. | `aevia-dim`, `aevia-syntax`, `aevia-types` |
-| `aevia-stdlib-model` | The source of truth for standard-library generation, independent of generated files. | — |
+| `aevia-stdlib-model` | The source of truth for standard-library generation, independent of generated files. Also holds `guides`: the Aevia-facing description and example of every standard-library name, shared by the REPL's `:doc` and the generated modules' `##` documentation. | — |
 | `aevia-std` | The standard library: embedded §8.20 module tree (`stdlib/*.aev`), and the numerics behind chapter 8 (linear algebra on `faer`, statistics, distributions, FFT, interpolation, ODE/SDE/PDE, sparse, tables, geometry, special functions). Knows nothing about runtime values. | `aevia-stdlib-model`, `rssn` |
 | `aevia-core` | Values, tensors, closures, IO actions; the interpreters; built-ins; the symbolic layer on top of rssn (`sym`); the module loader (`driver`, `manifest`); the `Rssn` module (`rssn_module`); source plugins (`@op`/`@rule`, `plugin_source`); the disk cache; parallel evaluation (`parallel`); the optional JIT (feature `jit`). | `aevia-dim`, `aevia-syntax`, `aevia-types`, `aevia-ir`, `aevia-rssn`, `aevia-std` |
 | `aevia-fmt` | A formatter over the AST whose output is re-parsed and compared by fingerprint (semantics-preserving) and re-formatted (idempotent); on failure the file is left untouched. | `aevia-syntax`, `aevia-dim` |
@@ -114,7 +114,10 @@ the single-file specification.
    arbitrary precision. Exact rationals (`NumKind::Exact`) and constructor values
    (`Value::Ctor`, which also represents a builtin referenced as a value) are
    behind an `Rc`, which keeps `Value` small and makes cloning a builtin
-   reference a counter increment. Dense `Float` tensor arithmetic picks the
+   reference a counter increment. Builtins are called by name, but the name is
+   resolved once to a `BuiltinId` (`aevia-core::builtin_ids`, cached per name
+   address and checked by content), so the dispatch in `builtins::call` is a jump
+   table rather than a chain of string comparisons. Dense `Float` tensor arithmetic picks the
    operator once per call, so each elementwise loop vectorises, and splits
    buffers of 2^17 elements or more across threads; every element is still one
    IEEE operation, so results are bit-identical to the scalar loop.

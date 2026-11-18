@@ -1,9 +1,10 @@
 //! The generated standard library carries real documentation.
 //!
-//! Every re-exported name is documented with at least the signature chapter 8
-//! states for it; names that have a kernel operator or a documented
-//! `aevia-std` function also carry its description, and the generator's
-//! notice appears once per file as a plain comment, never as documentation.
+//! Every re-exported name is documented with the signature chapter 8 states
+//! for it and a description written for the Aevia caller (the guide in
+//! `aevia-stdlib-model`), every declared type and function has a `##` block,
+//! and the generator's notice appears once per file as a plain comment, never
+//! as documentation.
 use std::path::Path;
 
 fn stdlib_dir() -> std::path::PathBuf {
@@ -77,9 +78,9 @@ fn every_reexported_name_is_documented() {
         }
     }
     assert!(bindings > 300, "only {bindings} documented bindings found");
-    assert!(
-        described > 100,
-        "only {described} of {bindings} names carry a kernel or Rust description"
+    assert_eq!(
+        described, bindings,
+        "every re-exported name must carry a description, not just its signature"
     );
 }
 
@@ -100,15 +101,109 @@ fn an_operator_entry_has_signature_kernel_signature_dimensions_and_prose() {
         .collect();
     let text = block.into_iter().rev().collect::<Vec<_>>().join("\n");
     for needle in [
-        "Symbolic derivative",
+        "derivative",
         "**Signature:** `diff :",
         "**Kernel signature**",
         "**Dimensions:**",
-        "*Source: rssn operator",
+        "*Source: Aevia standard library guide.*",
     ] {
         assert!(
             text.contains(needle),
             "diff's documentation lacks `{needle}`:\n{text}"
         );
     }
+}
+
+/// Every `type`, `fn` and `let` declaration of a generated module, with the
+/// `##` block above it (empty when there is none).
+fn declarations(source: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut found = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let is_declaration = ["type ", "fn ", "let "]
+            .iter()
+            .any(|keyword| line.starts_with(keyword));
+        if !is_declaration {
+            continue;
+        }
+        let mut at = index;
+        while at > 0 && lines[at - 1].starts_with("##") {
+            at -= 1;
+        }
+        found.push((line.to_string(), lines[at..index].join("\n")));
+    }
+    found
+}
+
+#[test]
+fn every_declaration_of_a_generated_module_has_a_description() {
+    let mut missing = Vec::new();
+    for (name, source) in sources() {
+        // Unit and constant modules document each constant from the
+        // manifest's own tables.
+        if source.contains("module Units.") {
+            continue;
+        }
+        for (declaration, docs) in declarations(&source) {
+            if docs.trim_start_matches("##").trim().is_empty() {
+                missing.push(format!("{name}: {declaration}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "declarations with no `##` description:\n{}",
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn a_description_is_more_than_its_signature() {
+    let mut thin = Vec::new();
+    for (name, source) in sources() {
+        if source.contains("module Units.") {
+            continue;
+        }
+        for (declaration, docs) in declarations(&source) {
+            let prose = docs
+                .lines()
+                .map(|line| line.trim_start_matches('#').trim())
+                .filter(|line| !line.is_empty() && !line.starts_with("**Signature:**"))
+                .count();
+            if prose == 0 {
+                thin.push(format!("{name}: {declaration}"));
+            }
+        }
+    }
+    assert!(
+        thin.is_empty(),
+        "declarations documented by a signature alone:\n{}",
+        thin.join("\n")
+    );
+}
+
+#[test]
+fn the_documentation_does_not_speak_rust() {
+    let mut offences = Vec::new();
+    for (name, source) in sources() {
+        if source.contains("module Units.") {
+            continue;
+        }
+        for (declaration, docs) in declarations(&source) {
+            // Kernel signatures list the kernel's own type names; only the
+            // prose is checked.
+            let prose: Vec<&str> = docs
+                .lines()
+                .filter(|line| !line.contains("**Kernel signature") && !line.contains("- `"))
+                .collect();
+            if let Some(word) = aevia_stdlib_model::guides::find_rust_ism(&prose.join(" ")) {
+                offences.push(format!("{name}: {declaration} mentions `{word}`"));
+            }
+        }
+    }
+    assert!(
+        offences.is_empty(),
+        "documentation written for Rust developers:\n{}",
+        offences.join("\n")
+    );
 }

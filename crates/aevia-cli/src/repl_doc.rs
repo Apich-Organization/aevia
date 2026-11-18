@@ -790,196 +790,11 @@ fn kernel_help(name: &str) -> Option<String> {
     None
 }
 
+/// The description and example for a standard-library name, written for the
+/// person calling it from Aevia. The prose lives in `aevia_stdlib_model::guides`
+/// so the generated standard-library modules print the same text.
 fn builtin_guide(name: &str) -> Option<(&'static str, &'static str)> {
-    Some(match name {
-        | "println" => {
-            (
-                "Print a value to standard output followed by a newline. This returns IO Unit; the REPL executes the action once. String interpolation is useful for labels and mixed values.",
-                "println(\"answer: {6 * 7}\")\nprintln([1, 2, 3])",
-            )
-        },
-        | "print" => {
-            (
-                "Print a value to standard output without a trailing newline. This returns IO Unit and executes when the REPL runs the IO expression.",
-                "print(\"answer: \")\nprintln(42)",
-            )
-        },
-        | "eprintln" => {
-            (
-                "Print a value followed by a newline to standard error. Useful for progress and diagnostics while standard output carries results.",
-                "eprintln(\"checking inputs\")",
-            )
-        },
-        | "show" => {
-            (
-                "Convert a value to display text without printing it. Use println to emit that text, or interpolate the value directly. For phase-preserving source notation use repr.",
-                "show(3 m)\nprintln(\"distance: {3 m}\")",
-            )
-        },
-        | "repr" => {
-            (
-                "Return a source representation that preserves numeric phase, unlike display-oriented show. It does not print by itself.",
-                "repr(1.0)\nprintln(repr(1.0))",
-            )
-        },
-        | "to_latex" => {
-            (
-                "Render a value as LaTeX text. Use println to print the markup, or :latex EXPR to inspect it in the REPL.",
-                "to_latex(1/2)\n:latex 1/2",
-            )
-        },
-        | "to_pretty" => {
-            (
-                "Return formatted, multiline text for structured values without printing it. Use println to emit the resulting String, or :pretty EXPR in the REPL.",
-                "println(to_pretty([[1, 2], [3, 4]]))",
-            )
-        },
-        | "concat" => {
-            (
-                "Concatenate two strings or two compatible rank-1 collections. String interpolation is useful when combining labels and values.",
-                "concat(\"hello \", \"world\")",
-            )
-        },
-        | "measure" => {
-            (
-                "Construct a measurement record containing a value and an uncertainty with the same physical dimension.",
-                "measure(3 m, 0.1 m)",
-            )
-        },
-        | "to_typst" => {
-            (
-                "Render a value as Typst markup text; this does not print or render a document by itself.",
-                "println(to_typst(1/2))",
-            )
-        },
-        | "format" => {
-            (
-                "Build formatted text from a template and arguments. The template uses positional or sequential placeholders.",
-                "format(r\"answer: {}\", [\"42\"])",
-            )
-        },
-        | "sqrt" => {
-            (
-                "Compute a square root. Exact inputs may remain exact or symbolic; Float inputs produce numerical results. A quantity's dimension is raised to one half.",
-                "sqrt(16.0)\nsqrt(9 m^2)",
-            )
-        },
-        | "sin" | "cos" | "tan" => {
-            (
-                "Trigonometric function. Its argument must be dimensionless; angle units such as deg carry an exact conversion scale.",
-                "sin(30 deg)\ncos(0.0)",
-            )
-        },
-        | "exp" | "ln" | "log" | "log2" | "log10" => {
-            (
-                "Exponential or logarithmic function on a dimensionless input. Domain failures and unresolved symbolic values are distinct from a numerical approximation.",
-                "exp(1)\nln(2.0)",
-            )
-        },
-        | "pi" => {
-            (
-                "The exact symbolic constant pi. It is not a pre-rounded Float; use approx for a numerical approximation.",
-                "pi\napprox(pi)",
-            )
-        },
-        | "map" => {
-            (
-                "Apply a function to collection elements, preserving their order. The function receives a row for supported higher-rank tensor overloads.",
-                "map(fn (x) => x * x, [1, 2, 3])",
-            )
-        },
-        | "fold" | "fold_left" => {
-            (
-                "Combine a collection with an initial accumulator, from left to right. The combining function receives the accumulator and the next element.",
-                "fold(fn (a, x) => a + x, 0, [1, 2, 3])",
-            )
-        },
-        | "range" => {
-            (
-                "Construct an integer sequence with an exclusive end. An optional step may be positive or negative and cannot be zero.",
-                "range(0, 5)\nrange(5, 0, -1)",
-            )
-        },
-        | "sum" => {
-            (
-                "Sum tensor elements, or use the function-and-bounds overload for a finite summation. Empty tensor reductions return a phase-appropriate zero.",
-                "sum([1, 2, 3])",
-            )
-        },
-        | "shape" => {
-            (
-                "Inspect the extents of a tensor. Shapes are checked separately from the dimensions carried by its elements.",
-                "shape([[1, 2], [3, 4]])",
-            )
-        },
-        | "length" => {
-            (
-                "Return the collection length. For strings, count Unicode grapheme clusters rather than UTF-8 bytes.",
-                "length([1, 2, 3])\nlength(\"hello\")",
-            )
-        },
-        | "read_line" => {
-            (
-                "Create an IO action that reads one line of terminal input. In the REPL, Ctrl-C cancels the read and returns to the prompt.",
-                "let ask = do\n    line <- read_line()\n    println(\"you typed: {line}\")\nask",
-            )
-        },
-        | "read_file" => {
-            (
-                "Create an IO action to read a UTF-8 file. The action returns a Result and requires the fs capability.",
-                "read_file(\"data.txt\")",
-            )
-        },
-        | "args" => {
-            (
-                "Return the program arguments supplied after -- on the command line. In an interactive session the list is normally empty.",
-                "args()",
-            )
-        },
-        | "pure" => {
-            (
-                "Wrap a value in an IO action without performing an effect. Useful as the final expression in a do block.",
-                "pure(42)",
-            )
-        },
-        | "spawn" => {
-            (
-                "Start an IO thunk as a task. Its buffered output is emitted when awaited. Work that cannot cross threads runs locally.",
-                "let job = spawn(fn () => pure(42))\njob",
-            )
-        },
-        | "await" => {
-            (
-                "Wait for a Task and obtain its result once. Ctrl-C cancels the current wait; background tasks cannot read the REPL terminal.",
-                "let example = do\n    task <- spawn(fn () => pure(42))\n    await(task)\nexample",
-            )
-        },
-        | "dyn" => {
-            (
-                "Erase the static dimension of a quantity into a runtime-checked Dyn value. Use check<dimension> to recover a static dimension safely.",
-                "dyn(3 m)\ncheck<L>(dyn(3 m))",
-            )
-        },
-        | "check" => {
-            (
-                "Check a Dyn quantity against a requested static dimension and return Ok(value) or Err(error).",
-                "check<L>(dyn(3 m))",
-            )
-        },
-        | "value_in" => {
-            (
-                "Inspect a quantity numerically in a chosen unit without changing its physical value. Unit and quantity dimensions must agree.",
-                "value_in(km, 3000 m)",
-            )
-        },
-        | "to" => {
-            (
-                "Choose the display unit for a quantity, preserving its coherent value. The target unit must measure the same dimension.",
-                "to(km, 3000 m)",
-            )
-        },
-        | _ => return None,
-    })
+    aevia_stdlib_model::guides::guide(name).map(|guide| (guide.description, guide.example))
 }
 
 fn edit_distance(
@@ -1104,31 +919,56 @@ mod tests {
 
     #[test]
     fn bundled_examples_typecheck_without_running_any_effects() {
-        for name in aevia_types::builtins::PRELUDE_NAMES.iter().copied() {
-            let Some((_, example)) = builtin_guide(name) else {
+        // Every guide, not only the Prelude's: the generated standard-library
+        // modules print the same examples.
+        for guide in aevia_stdlib_model::guides::GUIDES {
+            let (name, example) = (guide.name, guide.example);
+            if example.is_empty() {
                 continue;
-            };
+            }
             let mut source = String::new();
             for (index, line) in example.lines().enumerate() {
                 if line.starts_with(':') {
                     continue;
                 }
                 if line.starts_with(char::is_whitespace)
-                    || line.starts_with("let ")
-                    || line.starts_with("fn ")
+                    || ["let ", "fn ", "import ", "open "]
+                        .iter()
+                        .any(|keyword| line.starts_with(keyword))
                 {
                     let _ = writeln!(source, "{line}");
                 } else {
                     let _ = writeln!(source, "let __guide_{index} = {line}");
                 }
             }
-            let compilation = aevia_core::compile("item-help-example.aev", &source);
+            // Examples may import standard-library modules, so they are loaded
+            // as a module rather than compiled as a bare source.
+            let entry = std::env::temp_dir().join("aevia-item-help-example.aev");
+            let compilation = aevia_core::driver::load_with_roots_and_source(
+                &entry,
+                aevia_core::manifest::Roots::adjacent(&entry),
+                &source,
+                &aevia_types::check::CheckOptions::default(),
+            );
             assert!(
                 !compilation.diagnostics.has_errors(),
                 "{name}: {source}\n{:?}",
                 compilation.diagnostics.items
             );
         }
+    }
+
+    #[test]
+    fn every_prelude_name_has_a_guide() {
+        let missing: Vec<&str> = aevia_types::builtins::PRELUDE_NAMES
+            .iter()
+            .copied()
+            .filter(|name| builtin_guide(name).is_none())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these Prelude names have no description in aevia-stdlib-model/src/guides.rs: {missing:?}"
+        );
     }
 
     #[test]

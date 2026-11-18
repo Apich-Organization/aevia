@@ -2749,7 +2749,7 @@ For a separate `Information` base dimension, declare `dimension Information` (th
 | `Units.Constants` | physical constants (§5.8) |
 | `Units.Natural`, `Units.Planck`, `Units.Atomic`, `Units.Geometrized` | constant modules under a unit system (§5.11.1) |
 
-Status: all of these modules can be `open`ed. Their contents are generated from the kernel
+All of these modules can be `open`ed. Their contents are generated from the kernel
 manifest (`manifest.units`, `manifest.constants`, `manifest.unit_systems`); every `UnitValue`
 carries `aliases`, `prefixable`, `category` and `since`. Units are **session-private**: a unit
 added with `Session::register_unit` appears only in that session's manifest.
@@ -2775,8 +2775,7 @@ let g = base(d)             # value 3200.0, display unit removed
   `value_in(°C, 298.15 K)` is an error. Display a difference with `delta_to(°C, dT)`, which
   uses the scale and ignores the offset.
 
-Status: `delta_to(°C, 10.0 K)` currently prints `-263.15 °C` (the offset is still applied),
-which contradicts the semantics above. This is a known defect.
+For example `delta_to(°C, 10.0 K)` displays as `10 °C`, not as the point `-263.15 °C`.
 
 ### 5.4.2 Display-unit propagation
 
@@ -2791,7 +2790,7 @@ At run time each scalar may carry an optional display unit:
 A display unit is **metadata**: it takes no part in equality, typing or serialisation.
 `3.2 km == 3200 m` is `true`.
 
-Status: the warning `W0501` (display unit dropped) has no emission site yet.
+`W0501` (display unit dropped) is a reserved code; the language never emits it.
 
 ### 5.4.3 Printing
 
@@ -2941,7 +2940,7 @@ type ConstantInfo = {
 | `E0510` | affine display of a temperature difference |
 | `E0511`/`E0512` | unit-system errors (§5.11) |
 
-Status: `E0502`, `E0503` and `E0507` are reserved and currently unreachable. The unit table is
+`E0502`, `E0503` and `E0507` are reserved and unreachable. The unit table is
 the whole kernel table plus local declarations and has no module-level unit namespace, so the
 states "not imported", "prefix forbidden" and "prefix/explicit conflict" do not exist; the
 compiler does not substitute another error for them.
@@ -8151,7 +8150,7 @@ message is whatever the built-in states.
 | `W0301` | unresolved dimension defaulted to 1 |
 | `W0302` | `Real`/`Float` mix uses the exact `Real` path |
 | `W0303` | unused symbol |
-| `W0501` | display unit dropped (no emission site yet, §5.4.2) |
+| `W0501` | display unit dropped (reserved, §5.4.2) |
 | `W0601` | unused private declaration |
 | `W0602` | deprecated name used: `@deprecated("...")` on the declaration (§2.2.7/§13.8.1) |
 | `W0701` | non-`snake_case` function or variable (`aevia lint`) |

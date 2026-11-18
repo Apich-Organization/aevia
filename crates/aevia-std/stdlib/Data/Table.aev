@@ -3,28 +3,122 @@
 # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Data.Table
 
+## Extracts one column of a Table as a vector: column(table, "time").
+##
 ## **Signature:** `column : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>`
+##
+## The name must be a string literal so the compiler can check that the column exists and give the vector the right element type and dimension. Returns Err(DataError) if the check cannot be made at run time. For a name computed at run time use column_dyn.
+##
+## **Examples:**
+## ```text
+## fn times(t: Table<{ time: Float[T] }>) = column(t, "time")
+## ```
+##
+## *Source: Aevia standard library guide.*
 let column = column
+## Extracts a column by a name computed at run time, as a vector of dynamically typed values.
+##
 ## **Signature:** `column_dyn : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>`
+##
+## Returns Err(DataError) for an unknown column.
+##
+## **Examples:**
+## ```text
+## fn pick(t: Table<Dynamic>, name: String) = column_dyn(t, name)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let column_dyn = column_dyn
+## Keeps the elements for which the predicate is true, in order.
+##
 ## **Signature:** `filter : ((a -> Bool), Tensor<1, a>) -> Tensor<1, a>`
 ##
 ## **Signature:** `filter : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>`
 ##
 ## **Signature:** `filter : ((ρ -> Bool), Table<ρ>) -> Table<ρ>`
+##
+## On a matrix the predicate sees one row at a time; on a Table it sees one row record.
+##
+## **Examples:**
+## ```text
+## filter(fn x => x > 1, [1, 2, 3])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let filter = filter
+## join(sep, parts) glues a vector of strings together with sep between them.
+##
 ## **Signature:** `join : (String, Tensor<1, String>) -> String`
 ##
 ## **Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>`
+##
+## It is the inverse of split.
+##
+## **Examples:**
+## ```text
+## join(", ", ["a", "b", "c"])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let join = join
+## The i-th row of a Table as a record, counting from 0.
+##
 ## **Signature:** `row : (Table<ρ>, Int) -> Result<ρ, DataError>`
+##
+## Returns Err(DataError) when i is out of range.
+##
+## **Examples:**
+## ```text
+## fn first_row(t: Table<{ x: Float }>) = row(t, 0)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let row = row
+## Describes a Table's columns as a vector of records with each column's name, type name and optional unit.
+##
 ## **Signature:** `schema : Table<ρ> -> Tensor<1, ColumnInfo>`
+##
+## **Examples:**
+## ```text
+## fn describe(t: Table<{ x: Float }>) = schema(t)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let schema = schema
+## Keeps only the named columns of a Table: select(table, ["time", "speed"]).
+##
 ## **Signature:** `select : (Table<ρ>, Tensor<1, String>) -> Table<σ>`
+##
+## **Examples:**
+## ```text
+## fn narrow(t: Table<{ time: Float, speed: Float, note: String }>) = select(t, ["time", "speed"])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let select = select
+## Forgets a Table's static column types, giving a Table<Dynamic> that you read with column_dyn.
+##
 ## **Signature:** `to_dynamic : Table<ρ> -> Table<Dynamic>`
+##
+## **Examples:**
+## ```text
+## fn loosen(t: Table<{ x: Float }>) = to_dynamic(t)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let to_dynamic = to_dynamic
+## Builds a Table from a vector of records, checking at run time that they all have the shape of the row type.
+##
 ## **Signature:** `to_table : Tensor<1, ρ> -> Result<Table<ρ>, DataError>`
+##
+## Returns Ok(table) or Err(DataError).
+##
+## **Examples:**
+## ```text
+## to_table([{ x = 1.0 }, { x = 2.0 }])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let to_table = to_table
+## A table of rows with named, typed columns, as read from a CSV file. The type argument is the record type of one row, so Table<{ time: Float[T], speed: Float[L/T] }> has a time column in seconds and a speed column in metres per second. Use column to get a column as a vector, filter and select to cut it down, and write_csv to save it.
 type Table<a> = Table<a>

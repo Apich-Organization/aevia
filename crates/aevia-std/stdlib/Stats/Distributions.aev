@@ -3,36 +3,52 @@
 # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Stats.Distributions
 
+## The normal (Gaussian) distribution with mean mu and standard deviation sigma, both in the dimension of the variable.
 type Normal<d>      = { mu: Real[d], sigma: Real[d] }
 
+## The continuous uniform distribution on the interval from lo to hi, both in the dimension of the variable.
 type Uniform<d>     = { lo: Real[d], hi: Real[d] }
 
+## The exponential distribution with the given rate, whose dimension is the reciprocal of the variable's. Its mean is 1/rate.
 type Exponential<d> = { rate: Real[1/d] }
 
+## The gamma distribution with a dimensionless shape and a rate whose dimension is the reciprocal of the variable's.
 type Gamma<d>       = { shape: Real[1], rate: Real[1/d] }
 
+## The beta distribution on the interval from 0 to 1 with dimensionless shape parameters alpha and beta.
 type Beta           = { alpha: Real[1], beta: Real[1] }
 
+## The chi-squared distribution with df degrees of freedom.
 type ChiSquared     = { df: Real[1] }
 
+## Student's t distribution with df degrees of freedom.
 type StudentT       = { df: Real[1] }
 
+## The Poisson distribution of counts with mean lambda.
 type Poisson        = { lambda: Real[1] }
 
+## The binomial distribution: the number of successes in n independent trials that each succeed with probability p.
 type Binomial       = { n: Int, p: Real[1] }
 
+## The log-normal distribution: the variable's logarithm is normal with mean mu and standard deviation sigma, both dimensionless.
 type LogNormal       = { mu: Real[1], sigma: Real[1] }
 
+## The Weibull distribution with a dimensionless shape and a scale in the dimension of the variable.
 type Weibull<d>      = { shape: Real[1], scale: Real[d] }
 
+## The Cauchy distribution with location loc and scale, both in the dimension of the variable. It has no mean or variance.
 type Cauchy<d>       = { loc: Real[d], scale: Real[d] }
 
+## The F distribution with df1 and df2 degrees of freedom, used for ratios of variances.
 type F               = { df1: Real[1], df2: Real[1] }
 
+## The negative binomial distribution: the number of failures before r successes, each trial succeeding with probability p. Counts start at 0.
 type NegativeBinomial = { r: Real[1], p: Real[1] }
 
+## The geometric distribution: the number of failures before the first success, each trial succeeding with probability p. Counts start at 0.
 type Geometric       = { p: Real[1] }
 
+## A probability distribution, built with one of its constructors, for example Normal({ mu = 0.0, sigma = 1.0 }). Pass it to pdf, cdf, sample and sample_n. Parameters carry dimensions, so a Normal of lengths has mu and sigma in metres and its density is per metre.
 type Distribution<d> =
     | Normal(Normal<d>)
     | Uniform(Uniform<d>)
@@ -50,7 +66,7 @@ type Distribution<d> =
     | NegativeBinomial(NegativeBinomial)
     | Geometric(Geometric)
 
-## Cumulative distribution function `P(X <= x)` of distribution `d` at point `x`.
+## cdf(dist, x) is the probability that a draw from the distribution is at most x: a dimensionless number between 0 and 1.
 ##
 ## **Signature:** `cdf : (Distribution<d>, Real[d]) -> Real[1]`
 ##
@@ -59,9 +75,15 @@ type Distribution<d> =
 ##
 ## **Dimensions:** kernel rule `Custom("")`
 ##
-## *Source: rssn operator `stats.cdf`.*
+## **Examples:**
+## ```text
+## import Stats.Distributions { Normal }
+## cdf(Normal({ mu = 0.0, sigma = 1.0 }), 0.0)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let cdf = cdf
-## Probability density function (or probability mass function) of distribution `d` at point `x`.
+## pdf(dist, x) is the probability density (or mass, for discrete distributions) of a distribution at x.
 ##
 ## **Signature:** `pdf : (Distribution<d>, Real[d]) -> Real[1/d]`
 ##
@@ -70,9 +92,41 @@ let cdf = cdf
 ##
 ## **Dimensions:** kernel rule `Custom("")`
 ##
-## *Source: rssn operator `stats.pdf`.*
+## Its dimension is the reciprocal of x's dimension. Distributions are built with constructors such as Normal and Uniform from Stats.Distributions.
+##
+## **Examples:**
+## ```text
+## import Stats.Distributions { Normal }
+## pdf(Normal({ mu = 0.0, sigma = 1.0 }), 0.0)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let pdf = pdf
+## Draws one random value from a distribution.
+##
 ## **Signature:** `sample : Distribution<d> -> IO Real[d]`
+##
+## It is an IO action because each call gives a different result; for a reproducible sequence use sample_n with a seed.
+##
+## **Examples:**
+## ```text
+## import Stats.Distributions { Normal }
+## sample(Normal({ mu = 0.0, sigma = 1.0 }))
+## ```
+##
+## *Source: Aevia standard library guide.*
 let sample = sample
+## sample_n(dist, n, seed) draws n values.
+##
 ## **Signature:** `sample_n : (Distribution<d>, Int, Option<Int>) -> Tensor<1, Real[d]>`
+##
+## With Some(seed) the result is reproducible; with None it is random.
+##
+## **Examples:**
+## ```text
+## import Stats.Distributions { Normal }
+## sample_n(Normal({ mu = 0.0, sigma = 1.0 }), 5, Some(42))
+## ```
+##
+## *Source: Aevia standard library guide.*
 let sample_n = sample_n

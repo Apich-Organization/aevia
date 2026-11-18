@@ -23,6 +23,7 @@ use super::num_is_zero;
 use super::record_of;
 use super::tuple_of;
 use super::zero_num;
+use crate::builtin_ids::BuiltinId;
 use crate::eval::EvalError;
 use crate::eval::Interp;
 use crate::eval::build_tensor;
@@ -290,39 +291,40 @@ pub(crate) fn call_typed(
 /// argument types) is not one the sparse runtime serves.
 pub(crate) fn call(
     interp: &mut Interp,
+    id: BuiltinId,
     name: &str,
     args: &[Value],
     span: Span,
 ) -> Option<R<Value>> {
-    let sparse_first = matches!(args.first(), Some(Value::Sparse(_)));
+    use BuiltinId as B;
     let always = matches!(
-        name,
-        "from_dense"
-            | "to_dense"
-            | "nnz"
-            | "density"
-            | "format_of"
-            | "convert"
-            | "to_bcsr"
-            | "block_size"
-            | "sparse_coo"
-            | "sparse_csr"
-            | "speye"
-            | "spdiag"
-            | "spsolve"
-            | "cg"
-            | "cg_with"
-            | "gmres_with"
-            | "bicgstab_with"
-            | "kron"
-            | "contract"
-            | "map_nonzero"
-            | "nonzeros"
+        id,
+        B::FromDense
+            | B::ToDense
+            | B::Nnz
+            | B::Density
+            | B::FormatOf
+            | B::Convert
+            | B::ToBcsr
+            | B::BlockSize
+            | B::SparseCoo
+            | B::SparseCsr
+            | B::Speye
+            | B::Spdiag
+            | B::Spsolve
+            | B::Cg
+            | B::CgWith
+            | B::GmresWith
+            | B::BicgstabWith
+            | B::Kron
+            | B::Contract
+            | B::MapNonzero
+            | B::Nonzeros
     );
     let polymorphic = matches!(
-        name,
-        "transpose" | "matmul" | "sum" | "get" | "shape" | "rank"
-    ) && sparse_first;
+        id,
+        B::Transpose | B::Matmul | B::Sum | B::Get | B::Shape | B::Rank
+    ) && matches!(args.first(), Some(Value::Sparse(_)));
     if !always && !polymorphic {
         return None;
     }

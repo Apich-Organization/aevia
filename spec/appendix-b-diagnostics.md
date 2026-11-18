@@ -189,7 +189,7 @@ error[E0401]: dimension mismatch
 | `W0301` | unresolved dimension defaulted to 1 |
 | `W0302` | `Real`/`Float` mix uses the exact `Real` path |
 | `W0303` | unused symbol |
-| `W0501` | display unit dropped（尚无发射点，§5.4.2） |
+| `W0501` | display unit dropped（保留码，§5.4.2） |
 | `W0601` | unused private declaration |
 | `W0602` | deprecated name used：声明上的 `@deprecated("...")`（§2.2.7/§13.8.1） |
 | `W0701` | 函数/变量名未使用 `snake_case`（`aevia lint`） |

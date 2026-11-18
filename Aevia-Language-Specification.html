@@ -51,7 +51,7 @@ pre.code{white-space:pre-wrap;break-inside:avoid}}
 <nav class="side" aria-label="目录">
 <h1>Aevia 语言规范</h1><p class="meta">单文件版 · 修订 23</p>
 <div class="tools"><a href="Aevia-Language-Specification.en.html">English</a><button id="theme" type="button">◐</button></div>
-<details><summary><a data-ch="ch-index" href="#ch-index">Aevia 语言规范</a></summary><a class="sub" href="#index--阅读指南">阅读指南</a><a class="sub" href="#index--规范用语">规范用语</a><a class="sub" href="#index--设计状态">设计状态</a><a class="sub" href="#index--一句话概括">一句话概括</a><a class="sub" href="#index--快速一瞥">快速一瞥</a></details><details><summary><a data-ch="ch-00-overview" href="#ch-00-overview">00 — 总览</a></summary><a class="sub" href="#00-overview--01-定义">0.1 定义</a><a class="sub" href="#00-overview--02-目标">0.2 目标</a><a class="sub" href="#00-overview--03-非目标">0.3 非目标</a><a class="sub" href="#00-overview--04-设计原则">0.4 设计原则</a><a class="sub" href="#00-overview--05-十分钟导览">0.5 十分钟导览</a><a class="sub" href="#00-overview--06-语言与后端的分层">0.6 语言与后端的分层</a><a class="sub" href="#00-overview--07-文档约定">0.7 文档约定</a></details><details><summary><a data-ch="ch-01-lexical" href="#ch-01-lexical">01 — 词法结构</a></summary><a class="sub" href="#01-lexical--11-源文件与编码">1.1 源文件与编码</a><a class="sub" href="#01-lexical--12-记号">1.2 记号</a><a class="sub" href="#01-lexical--13-注释">1.3 注释</a><a class="sub" href="#01-lexical--14-布局">1.4 布局</a><a class="sub" href="#01-lexical--15-标识符与关键字">1.5 标识符与关键字</a><a class="sub" href="#01-lexical--16-数值字面量">1.6 数值字面量</a><a class="sub" href="#01-lexical--17-字符串字面量">1.7 字符串字面量</a><a class="sub" href="#01-lexical--18-单位字面量">1.8 单位字面量</a><a class="sub" href="#01-lexical--19-运算符与标点">1.9 运算符与标点</a><a class="sub" href="#01-lexical--110-词法错误">1.10 词法错误</a></details><details><summary><a data-ch="ch-02-syntax" href="#ch-02-syntax">02 — 语法</a></summary><a class="sub" href="#02-syntax--21-源文件结构">2.1 源文件结构</a><a class="sub" href="#02-syntax--22-声明">2.2 声明</a><a class="sub" href="#02-syntax--23-表达式">2.3 表达式</a><a class="sub" href="#02-syntax--24-模式">2.4 模式</a><a class="sub" href="#02-syntax--25-类型语法">2.5 类型语法</a><a class="sub" href="#02-syntax--26-运算符优先级与结合性">2.6 运算符优先级与结合性</a><a class="sub" href="#02-syntax--27-歧义与解决">2.7 歧义与解决</a><a class="sub" href="#02-syntax--28-去糖">2.8 去糖</a><a class="sub" href="#02-syntax--29-完整例子">2.9 完整例子</a></details><details><summary><a data-ch="ch-03-types" href="#ch-03-types">03 — 类型系统</a></summary><a class="sub" href="#03-types--31-kind">3.1 Kind</a><a class="sub" href="#03-types--32-类型">3.2 类型</a><a class="sub" href="#03-types--33-环境与推断">3.3 环境与推断</a><a class="sub" href="#03-types--34-数值塔与提升">3.4 数值塔与提升</a><a class="sub" href="#03-types--35-张量类型">3.5 张量类型</a><a class="sub" href="#03-types--36-记录行与变体">3.6 记录、行与变体</a><a class="sub" href="#03-types--37-函数闭包与尾调用">3.7 函数、闭包与尾调用</a><a class="sub" href="#03-types--38-类型类">3.8 类型类</a><a class="sub" href="#03-types--39-效果io">3.9 效果：IO</a><a class="sub" href="#03-types--310-字面量与默认值">3.10 字面量与默认值</a><a class="sub" href="#03-types--311-动态量纲-dyn摘要">3.11 动态量纲 Dyn（摘要）</a><a class="sub" href="#03-types--312-类型错误">3.12 类型错误</a><a class="sub" href="#03-types--313-关键推断规则">3.13 关键推断规则</a></details><details><summary><a data-ch="ch-04-dimensions" href="#ch-04-dimensions">04 — 量纲</a></summary><a class="sub" href="#04-dimensions--41-基量纲">4.1 基量纲</a><a class="sub" href="#04-dimensions--42-量纲表达式">4.2 量纲表达式</a><a class="sub" href="#04-dimensions--43-量纲统一">4.3 量纲统一</a><a class="sub" href="#04-dimensions--44-量纲多态">4.4 量纲多态</a><a class="sub" href="#04-dimensions--45-运算符的量纲规则">4.5 运算符的量纲规则</a><a class="sub" href="#04-dimensions--46-单位值的量纲">4.6 单位值的量纲</a><a class="sub" href="#04-dimensions--47-零与无穷">4.7 零与无穷</a><a class="sub" href="#04-dimensions--48-量纲推断">4.8 量纲推断</a><a class="sub" href="#04-dimensions--49-动态量纲-dyn">4.9 动态量纲 Dyn</a><a class="sub" href="#04-dimensions--410-与-rssn-量纲层的关系">4.10 与 rssn 量纲层的关系</a><a class="sub" href="#04-dimensions--411-量纲错误与警告">4.11 量纲错误与警告</a><a class="sub" href="#04-dimensions--412-设计取舍">4.12 设计取舍</a></details><details><summary><a data-ch="ch-05-units" href="#ch-05-units">05 — 单位</a></summary><a class="sub" href="#05-units--51-单位声明">5.1 单位声明</a><a class="sub" href="#05-units--52-单位表达式">5.2 单位表达式</a><a class="sub" href="#05-units--53-单位表">5.3 单位表</a><a class="sub" href="#05-units--54-换算与显示">5.4 换算与显示</a><a class="sub" href="#05-units--55-角度与无量纲单位">5.5 角度与无量纲单位</a><a class="sub" href="#05-units--56-仿射单位与-point">5.6 仿射单位与 Point</a><a class="sub" href="#05-units--57-换算的实现">5.7 换算的实现</a><a class="sub" href="#05-units--58-物理常数">5.8 物理常数</a><a class="sub" href="#05-units--59-单位错误">5.9 单位错误</a><a class="sub" href="#05-units--510-与-rssn-单位层的衔接">5.10 与 rssn 单位层的衔接</a><a class="sub" href="#05-units--511-单位制">5.11 单位制</a></details><details><summary><a data-ch="ch-06-semantics" href="#ch-06-semantics">06 — 求值语义</a></summary><a class="sub" href="#06-semantics--61-求值策略">6.1 求值策略</a><a class="sub" href="#06-semantics--62-值">6.2 值</a><a class="sub" href="#06-semantics--63-精确浮点与符号">6.3 精确、浮点与符号</a><a class="sub" href="#06-semantics--64-微积分与方程的实现语义">6.4 微积分与方程的实现语义</a><a class="sub" href="#06-semantics--65-模式匹配">6.5 模式匹配</a><a class="sub" href="#06-semantics--66-张量运行时">6.6 张量运行时</a><a class="sub" href="#06-semantics--67-记录变体与集合">6.7 记录、变体与集合</a><a class="sub" href="#06-semantics--68-io">6.8 IO</a><a class="sub" href="#06-semantics--69-预算错误与资源">6.9 预算、错误与资源</a><a class="sub" href="#06-semantics--610-确定性与并行">6.10 确定性与并行</a><a class="sub" href="#06-semantics--611-模块初始化">6.11 模块初始化</a><a class="sub" href="#06-semantics--612-相等顺序与显示">6.12 相等、顺序与显示</a><a class="sub" href="#06-semantics--613-一个求值例子">6.13 一个求值例子</a></details><details><summary><a data-ch="ch-07-modules" href="#ch-07-modules">07 — 模块、包与可见性</a></summary><a class="sub" href="#07-modules--71-模块">7.1 模块</a><a class="sub" href="#07-modules--72-导入与打开">7.2 导入与打开</a><a class="sub" href="#07-modules--73-依赖接口与身份">7.3 依赖、接口与身份</a><a class="sub" href="#07-modules--74-类型类实例与模块">7.4 类型类实例与模块</a><a class="sub" href="#07-modules--75-包">7.5 包</a><a class="sub" href="#07-modules--76-版本与兼容性">7.6 版本与兼容性</a><a class="sub" href="#07-modules--77-模块错误">7.7 模块错误</a></details><details><summary><a data-ch="ch-08-stdlib" href="#ch-08-stdlib">08 — 标准库</a></summary><a class="sub" href="#08-stdlib--81-prelude">8.1 Prelude</a><a class="sub" href="#08-stdlib--82-math">8.2 Math</a><a class="sub" href="#08-stdlib--83-函数工具">8.3 函数工具</a><a class="sub" href="#08-stdlib--84-linearalgebra">8.4 LinearAlgebra</a><a class="sub" href="#08-stdlib--85-calculus">8.5 Calculus</a><a class="sub" href="#08-stdlib--86-solve--optimize">8.6 Solve / Optimize</a><a class="sub" href="#08-stdlib--87-stats">8.7 Stats</a><a class="sub" href="#08-stdlib--88-fft--interpolate">8.8 FFT / Interpolate</a><a class="sub" href="#08-stdlib--89-ode">8.9 ODE</a><a class="sub" href="#08-stdlib--891-sde">8.9.1 SDE</a><a class="sub" href="#08-stdlib--810-pde">8.10 PDE</a><a class="sub" href="#08-stdlib--811-data">8.11 Data</a><a class="sub" href="#08-stdlib--812-plot">8.12 Plot</a><a class="sub" href="#08-stdlib--813-test">8.13 Test</a><a class="sub" href="#08-stdlib--814-measurement">8.14 Measurement</a><a class="sub" href="#08-stdlib--815-complex">8.15 Complex</a><a class="sub" href="#08-stdlib--816-numbertheory--combinatorics--geometry">8.16 NumberTheory / Combinatorics / Geometry</a><a class="sub" href="#08-stdlib--817-physics--simulate">8.17 Physics / Simulate</a><a class="sub" href="#08-stdlib--818-device">8.18 Device</a><a class="sub" href="#08-stdlib--819-rssn-动态接口">8.19 Rssn 动态接口</a><a class="sub" href="#08-stdlib--820-库的组织">8.20 库的组织</a></details><details><summary><a data-ch="ch-09-runtime" href="#ch-09-runtime">09 — 运行时</a></summary><a class="sub" href="#09-runtime--91-组件">9.1 组件</a><a class="sub" href="#09-runtime--92-编译流水线">9.2 编译流水线</a><a class="sub" href="#09-runtime--93-解释器">9.3 解释器</a><a class="sub" href="#09-runtime--94-符号桥">9.4 符号桥</a><a class="sub" href="#09-runtime--95-张量运行时">9.5 张量运行时</a><a class="sub" href="#09-runtime--96-jit">9.6 JIT</a><a class="sub" href="#09-runtime--97-内存与并发">9.7 内存与并发</a><a class="sub" href="#09-runtime--98-repl">9.8 REPL</a><a class="sub" href="#09-runtime--99-cli">9.9 CLI</a><a class="sub" href="#09-runtime--910-lsp">9.10 LSP</a><a class="sub" href="#09-runtime--911-构建与包管理">9.11 构建与包管理</a><a class="sub" href="#09-runtime--912-测试与基准">9.12 测试与基准</a><a class="sub" href="#09-runtime--913-性能目标">9.13 性能目标</a><a class="sub" href="#09-runtime--914-安全与沙箱">9.14 安全与沙箱</a><a class="sub" href="#09-runtime--915-错误报告">9.15 错误报告</a></details><details><summary><a data-ch="ch-10-backend" href="#ch-10-backend">10 — rssn 后端映射</a></summary><a class="sub" href="#10-backend--100-反射优先没有手写算子绑定">10.0 反射优先：没有手写算子绑定</a><a class="sub" href="#10-backend--101-rssn-的能力边界">10.1 rssn 的能力边界</a><a class="sub" href="#10-backend--102-标量映射">10.2 标量映射</a><a class="sub" href="#10-backend--103-算子映射生成的-façade不是手写绑定">10.3 算子映射：生成的 façade，不是手写绑定</a><a class="sub" href="#10-backend--104-量纲桥">10.4 量纲桥</a><a class="sub" href="#10-backend--105-线程与生命周期">10.5 线程与生命周期</a><a class="sub" href="#10-backend--106-性能策略">10.6 性能策略</a><a class="sub" href="#10-backend--107-错误映射">10.7 错误映射</a><a class="sub" href="#10-backend--108-已知缺口与风险">10.8 已知缺口与风险</a><a class="sub" href="#10-backend--109-一个端到端的调用链">10.9 一个端到端的调用链</a></details><details><summary><a data-ch="ch-11-examples" href="#ch-11-examples">11 — 完整示例</a></summary><a class="sub" href="#11-examples--111-自由落体单位量纲与-float">11.1 自由落体：单位、量纲与 Float</a><a class="sub" href="#11-examples--112-抛体运动记录ode-与结构化状态">11.2 抛体运动：记录、ODE 与结构化状态</a><a class="sub" href="#11-examples--113-符号微积分精确值与-result">11.3 符号微积分：精确值与 Result</a><a class="sub" href="#11-examples--114-欧姆定律带量纲的线性代数">11.4 欧姆定律：带量纲的线性代数</a><a class="sub" href="#11-examples--115-温度仿射点与温差">11.5 温度：仿射点与温差</a><a class="sub" href="#11-examples--116-数据分析table-与动态列">11.6 数据分析：Table 与动态列</a><a class="sub" href="#11-examples--117-仿真类型化包装器">11.7 仿真：类型化包装器</a><a class="sub" href="#11-examples--118-量纲多态标准化与线性拟合">11.8 量纲多态：标准化与线性拟合</a><a class="sub" href="#11-examples--119-错误示例编译器如何拒绝">11.9 错误示例：编译器如何拒绝</a><a class="sub" href="#11-examples--1110-一个全特性程序">11.10 一个“全特性”程序</a></details><details><summary><a data-ch="ch-12-rationale" href="#ch-12-rationale">12 — 设计取舍、限制与路线图</a></summary><a class="sub" href="#12-rationale--121-为什么把量纲做成类型">12.1 为什么把量纲做成类型</a><a class="sub" href="#12-rationale--122-为什么单位不进类型">12.2 为什么单位不进类型</a><a class="sub" href="#12-rationale--123-为什么纯函数">12.3 为什么纯函数</a><a class="sub" href="#12-rationale--124-为什么严格求值">12.4 为什么严格求值</a><a class="sub" href="#12-rationale--125-为什么区分-real-与-float">12.5 为什么区分 Real 与 Float</a><a class="sub" href="#12-rationale--126-为什么用-hm-而不是依赖类型">12.6 为什么用 HM 而不是依赖类型</a><a class="sub" href="#12-rationale--127-与现有方案的比较">12.7 与现有方案的比较</a><a class="sub" href="#12-rationale--128-设计边界不是版本限制">12.8 设计边界（不是版本限制）</a><a class="sub" href="#12-rationale--129-已关闭的设计决策">12.9 已关闭的设计决策</a><a class="sub" href="#12-rationale--1210-实现进展">12.10 实现进展</a><a class="sub" href="#12-rationale--1211-成功标准">12.11 成功标准</a></details><details><summary><a data-ch="ch-13-extensibility" href="#ch-13-extensibility">13 — 可扩展性与 RSSN 集成</a></summary><a class="sub" href="#13-extensibility--131-三条公理">13.1 三条公理</a><a class="sub" href="#13-extensibility--132-kernel-manifest-与生成的-rssn-模块">13.2 Kernel Manifest 与生成的 Rssn 模块</a><a class="sub" href="#13-extensibility--133-动态值与动态调用">13.3 动态值与动态调用</a><a class="sub" href="#13-extensibility--134-重载签名与解析">13.4 重载、签名与解析</a><a class="sub" href="#13-extensibility--135-插件与用户扩展">13.5 插件与用户扩展</a><a class="sub" href="#13-extensibility--136-量纲与单位统一到-rssndim">13.6 量纲与单位：统一到 rssn::dim</a><a class="sub" href="#13-extensibility--137-中心包-registry">13.7 中心包 registry</a><a class="sub" href="#13-extensibility--138-稳定性与-capability取代-v1v2">13.8 稳定性与 capability（取代 v1/v2）</a><a class="sub" href="#13-extensibility--139-已决定的扩展设计">13.9 已决定的扩展设计</a><a class="sub" href="#13-extensibility--1310-兼容性与迁移">13.10 兼容性与迁移</a><a class="sub" href="#13-extensibility--1311-错误码">13.11 错误码</a></details><details><summary><a data-ch="ch-appendix-a-grammar" href="#ch-appendix-a-grammar">附录 A — 完整文法</a></summary><a class="sub" href="#appendix-a-grammar--a1-布局">A.1 布局</a><a class="sub" href="#appendix-a-grammar--a2-程序与声明">A.2 程序与声明</a><a class="sub" href="#appendix-a-grammar--a3-表达式">A.3 表达式</a><a class="sub" href="#appendix-a-grammar--a4-模式">A.4 模式</a><a class="sub" href="#appendix-a-grammar--a5-类型">A.5 类型</a><a class="sub" href="#appendix-a-grammar--a6-量纲与单位">A.6 量纲与单位</a><a class="sub" href="#appendix-a-grammar--a7-运算符优先级">A.7 运算符优先级</a><a class="sub" href="#appendix-a-grammar--a8-词法记号摘要">A.8 词法记号（摘要）</a></details><details><summary><a data-ch="ch-appendix-b-diagnostics" href="#ch-appendix-b-diagnostics">附录 B — 诊断目录</a></summary><a class="sub" href="#appendix-b-diagnostics--b1-格式">B.1 格式</a><a class="sub" href="#appendix-b-diagnostics--b2-严重级别">B.2 严重级别</a><a class="sub" href="#appendix-b-diagnostics--b3-词法错误e01xx">B.3 词法错误（E01xx）</a><a class="sub" href="#appendix-b-diagnostics--b4-语法错误e02xx">B.4 语法错误（E02xx）</a><a class="sub" href="#appendix-b-diagnostics--b5-类型错误e03xx">B.5 类型错误（E03xx）</a><a class="sub" href="#appendix-b-diagnostics--b6-量纲错误e04xx">B.6 量纲错误（E04xx）</a><a class="sub" href="#appendix-b-diagnostics--b7-单位错误e05xx">B.7 单位错误（E05xx）</a><a class="sub" href="#appendix-b-diagnostics--b8-模块错误e06xx">B.8 模块错误（E06xx）</a><a class="sub" href="#appendix-b-diagnostics--b9-效果错误e07xx">B.9 效果错误（E07xx）</a><a class="sub" href="#appendix-b-diagnostics--b10-运行时错误e08xx">B.10 运行时错误（E08xx）</a><a class="sub" href="#appendix-b-diagnostics--b11-io-错误e09xx">B.11 IO 错误（E09xx）</a><a class="sub" href="#appendix-b-diagnostics--b12-警告w0xxx">B.12 警告（W0xxx）</a><a class="sub" href="#appendix-b-diagnostics--b13-消息写作规范">B.13 消息写作规范</a><a class="sub" href="#appendix-b-diagnostics--b14-示例类型错误">B.14 示例：类型错误</a><a class="sub" href="#appendix-b-diagnostics--b15-示例单位错误">B.15 示例：单位错误</a><a class="sub" href="#appendix-b-diagnostics--b16-示例运行时形状错误">B.16 示例：运行时形状错误</a><a class="sub" href="#appendix-b-diagnostics--b17-扩展后端错误e10xx">B.17 扩展/后端错误（E10xx）</a></details><details><summary><a data-ch="ch-appendix-c-changelog" href="#ch-appendix-c-changelog">附录 C — 修订记录与已知实现边界</a></summary><a class="sub" href="#appendix-c-changelog--revision-232026-11-14规范全面审校与英文版">Revision 23（2026-11-14）：规范全面审校与英文版</a><a class="sub" href="#appendix-c-changelog--1-规范演进总结">1. 规范演进总结</a><a class="sub" href="#appendix-c-changelog--2-当前实现状态对齐旧审计文档的过时记录">2. 当前实现状态（对齐旧审计文档的过时记录）</a><a class="sub" href="#appendix-c-changelog--3-revision-122026-11-08缓存bcsr源码算子非交换-sde">3. Revision 12（2026-11-08）：缓存、Bcsr、源码算子、非交换 SDE</a><a class="sub" href="#appendix-c-changelog--4-revision-1322">4. Revision 13–22</a><a class="sub" href="#appendix-c-changelog--5-记录在案的未实现边界known-gaps">5. 记录在案的未实现边界（Known Gaps）</a></details></nav>
+<details><summary><a data-ch="ch-index" href="#ch-index">Aevia 语言规范</a></summary><a class="sub" href="#index--阅读指南">阅读指南</a><a class="sub" href="#index--规范用语">规范用语</a><a class="sub" href="#index--设计状态">设计状态</a><a class="sub" href="#index--一句话概括">一句话概括</a><a class="sub" href="#index--快速一瞥">快速一瞥</a></details><details><summary><a data-ch="ch-00-overview" href="#ch-00-overview">00 — 总览</a></summary><a class="sub" href="#00-overview--01-定义">0.1 定义</a><a class="sub" href="#00-overview--02-目标">0.2 目标</a><a class="sub" href="#00-overview--03-非目标">0.3 非目标</a><a class="sub" href="#00-overview--04-设计原则">0.4 设计原则</a><a class="sub" href="#00-overview--05-十分钟导览">0.5 十分钟导览</a><a class="sub" href="#00-overview--06-语言与后端的分层">0.6 语言与后端的分层</a><a class="sub" href="#00-overview--07-文档约定">0.7 文档约定</a></details><details><summary><a data-ch="ch-01-lexical" href="#ch-01-lexical">01 — 词法结构</a></summary><a class="sub" href="#01-lexical--11-源文件与编码">1.1 源文件与编码</a><a class="sub" href="#01-lexical--12-记号">1.2 记号</a><a class="sub" href="#01-lexical--13-注释">1.3 注释</a><a class="sub" href="#01-lexical--14-布局">1.4 布局</a><a class="sub" href="#01-lexical--15-标识符与关键字">1.5 标识符与关键字</a><a class="sub" href="#01-lexical--16-数值字面量">1.6 数值字面量</a><a class="sub" href="#01-lexical--17-字符串字面量">1.7 字符串字面量</a><a class="sub" href="#01-lexical--18-单位字面量">1.8 单位字面量</a><a class="sub" href="#01-lexical--19-运算符与标点">1.9 运算符与标点</a><a class="sub" href="#01-lexical--110-词法错误">1.10 词法错误</a></details><details><summary><a data-ch="ch-02-syntax" href="#ch-02-syntax">02 — 语法</a></summary><a class="sub" href="#02-syntax--21-源文件结构">2.1 源文件结构</a><a class="sub" href="#02-syntax--22-声明">2.2 声明</a><a class="sub" href="#02-syntax--23-表达式">2.3 表达式</a><a class="sub" href="#02-syntax--24-模式">2.4 模式</a><a class="sub" href="#02-syntax--25-类型语法">2.5 类型语法</a><a class="sub" href="#02-syntax--26-运算符优先级与结合性">2.6 运算符优先级与结合性</a><a class="sub" href="#02-syntax--27-歧义与解决">2.7 歧义与解决</a><a class="sub" href="#02-syntax--28-去糖">2.8 去糖</a><a class="sub" href="#02-syntax--29-完整例子">2.9 完整例子</a></details><details><summary><a data-ch="ch-03-types" href="#ch-03-types">03 — 类型系统</a></summary><a class="sub" href="#03-types--31-kind">3.1 Kind</a><a class="sub" href="#03-types--32-类型">3.2 类型</a><a class="sub" href="#03-types--33-环境与推断">3.3 环境与推断</a><a class="sub" href="#03-types--34-数值塔与提升">3.4 数值塔与提升</a><a class="sub" href="#03-types--35-张量类型">3.5 张量类型</a><a class="sub" href="#03-types--36-记录行与变体">3.6 记录、行与变体</a><a class="sub" href="#03-types--37-函数闭包与尾调用">3.7 函数、闭包与尾调用</a><a class="sub" href="#03-types--38-类型类">3.8 类型类</a><a class="sub" href="#03-types--39-效果io">3.9 效果：IO</a><a class="sub" href="#03-types--310-字面量与默认值">3.10 字面量与默认值</a><a class="sub" href="#03-types--311-动态量纲-dyn摘要">3.11 动态量纲 Dyn（摘要）</a><a class="sub" href="#03-types--312-类型错误">3.12 类型错误</a><a class="sub" href="#03-types--313-关键推断规则">3.13 关键推断规则</a></details><details><summary><a data-ch="ch-04-dimensions" href="#ch-04-dimensions">04 — 量纲</a></summary><a class="sub" href="#04-dimensions--41-基量纲">4.1 基量纲</a><a class="sub" href="#04-dimensions--42-量纲表达式">4.2 量纲表达式</a><a class="sub" href="#04-dimensions--43-量纲统一">4.3 量纲统一</a><a class="sub" href="#04-dimensions--44-量纲多态">4.4 量纲多态</a><a class="sub" href="#04-dimensions--45-运算符的量纲规则">4.5 运算符的量纲规则</a><a class="sub" href="#04-dimensions--46-单位值的量纲">4.6 单位值的量纲</a><a class="sub" href="#04-dimensions--47-零与无穷">4.7 零与无穷</a><a class="sub" href="#04-dimensions--48-量纲推断">4.8 量纲推断</a><a class="sub" href="#04-dimensions--49-动态量纲-dyn">4.9 动态量纲 Dyn</a><a class="sub" href="#04-dimensions--410-与-rssn-量纲层的关系">4.10 与 rssn 量纲层的关系</a><a class="sub" href="#04-dimensions--411-量纲错误与警告">4.11 量纲错误与警告</a><a class="sub" href="#04-dimensions--412-设计取舍">4.12 设计取舍</a></details><details><summary><a data-ch="ch-05-units" href="#ch-05-units">05 — 单位</a></summary><a class="sub" href="#05-units--51-单位声明">5.1 单位声明</a><a class="sub" href="#05-units--52-单位表达式">5.2 单位表达式</a><a class="sub" href="#05-units--53-单位表">5.3 单位表</a><a class="sub" href="#05-units--54-换算与显示">5.4 换算与显示</a><a class="sub" href="#05-units--55-角度与无量纲单位">5.5 角度与无量纲单位</a><a class="sub" href="#05-units--56-仿射单位与-point">5.6 仿射单位与 Point</a><a class="sub" href="#05-units--57-换算的实现">5.7 换算的实现</a><a class="sub" href="#05-units--58-物理常数">5.8 物理常数</a><a class="sub" href="#05-units--59-单位错误">5.9 单位错误</a><a class="sub" href="#05-units--510-与-rssn-单位层的衔接">5.10 与 rssn 单位层的衔接</a><a class="sub" href="#05-units--511-单位制">5.11 单位制</a></details><details><summary><a data-ch="ch-06-semantics" href="#ch-06-semantics">06 — 求值语义</a></summary><a class="sub" href="#06-semantics--61-求值策略">6.1 求值策略</a><a class="sub" href="#06-semantics--62-值">6.2 值</a><a class="sub" href="#06-semantics--63-精确浮点与符号">6.3 精确、浮点与符号</a><a class="sub" href="#06-semantics--64-微积分与方程的实现语义">6.4 微积分与方程的实现语义</a><a class="sub" href="#06-semantics--65-模式匹配">6.5 模式匹配</a><a class="sub" href="#06-semantics--66-张量运行时">6.6 张量运行时</a><a class="sub" href="#06-semantics--67-记录变体与集合">6.7 记录、变体与集合</a><a class="sub" href="#06-semantics--68-io">6.8 IO</a><a class="sub" href="#06-semantics--69-预算错误与资源">6.9 预算、错误与资源</a><a class="sub" href="#06-semantics--610-确定性与并行">6.10 确定性与并行</a><a class="sub" href="#06-semantics--611-模块初始化">6.11 模块初始化</a><a class="sub" href="#06-semantics--612-相等顺序与显示">6.12 相等、顺序与显示</a><a class="sub" href="#06-semantics--613-一个求值例子">6.13 一个求值例子</a></details><details><summary><a data-ch="ch-07-modules" href="#ch-07-modules">07 — 模块、包与可见性</a></summary><a class="sub" href="#07-modules--71-模块">7.1 模块</a><a class="sub" href="#07-modules--72-导入与打开">7.2 导入与打开</a><a class="sub" href="#07-modules--73-依赖接口与身份">7.3 依赖、接口与身份</a><a class="sub" href="#07-modules--74-类型类实例与模块">7.4 类型类实例与模块</a><a class="sub" href="#07-modules--75-包">7.5 包</a><a class="sub" href="#07-modules--76-版本与兼容性">7.6 版本与兼容性</a><a class="sub" href="#07-modules--77-模块错误">7.7 模块错误</a></details><details><summary><a data-ch="ch-08-stdlib" href="#ch-08-stdlib">08 — 标准库</a></summary><a class="sub" href="#08-stdlib--81-prelude">8.1 Prelude</a><a class="sub" href="#08-stdlib--82-math">8.2 Math</a><a class="sub" href="#08-stdlib--83-函数工具">8.3 函数工具</a><a class="sub" href="#08-stdlib--84-linearalgebra">8.4 LinearAlgebra</a><a class="sub" href="#08-stdlib--85-calculus">8.5 Calculus</a><a class="sub" href="#08-stdlib--86-solve--optimize">8.6 Solve / Optimize</a><a class="sub" href="#08-stdlib--87-stats">8.7 Stats</a><a class="sub" href="#08-stdlib--88-fft--interpolate">8.8 FFT / Interpolate</a><a class="sub" href="#08-stdlib--89-ode">8.9 ODE</a><a class="sub" href="#08-stdlib--891-sde">8.9.1 SDE</a><a class="sub" href="#08-stdlib--810-pde">8.10 PDE</a><a class="sub" href="#08-stdlib--811-data">8.11 Data</a><a class="sub" href="#08-stdlib--812-plot">8.12 Plot</a><a class="sub" href="#08-stdlib--813-test">8.13 Test</a><a class="sub" href="#08-stdlib--814-measurement">8.14 Measurement</a><a class="sub" href="#08-stdlib--815-complex">8.15 Complex</a><a class="sub" href="#08-stdlib--816-numbertheory--combinatorics--geometry">8.16 NumberTheory / Combinatorics / Geometry</a><a class="sub" href="#08-stdlib--817-physics--simulate">8.17 Physics / Simulate</a><a class="sub" href="#08-stdlib--818-device">8.18 Device</a><a class="sub" href="#08-stdlib--819-rssn-动态接口">8.19 Rssn 动态接口</a><a class="sub" href="#08-stdlib--820-库的组织">8.20 库的组织</a></details><details><summary><a data-ch="ch-09-runtime" href="#ch-09-runtime">09 — 运行时</a></summary><a class="sub" href="#09-runtime--91-组件">9.1 组件</a><a class="sub" href="#09-runtime--92-编译流水线">9.2 编译流水线</a><a class="sub" href="#09-runtime--93-解释器">9.3 解释器</a><a class="sub" href="#09-runtime--94-符号桥">9.4 符号桥</a><a class="sub" href="#09-runtime--95-张量运行时">9.5 张量运行时</a><a class="sub" href="#09-runtime--96-jit">9.6 JIT</a><a class="sub" href="#09-runtime--97-内存与并发">9.7 内存与并发</a><a class="sub" href="#09-runtime--98-repl">9.8 REPL</a><a class="sub" href="#09-runtime--99-cli">9.9 CLI</a><a class="sub" href="#09-runtime--910-lsp">9.10 LSP</a><a class="sub" href="#09-runtime--911-构建与包管理">9.11 构建与包管理</a><a class="sub" href="#09-runtime--912-测试与基准">9.12 测试与基准</a><a class="sub" href="#09-runtime--913-性能目标">9.13 性能目标</a><a class="sub" href="#09-runtime--914-安全与沙箱">9.14 安全与沙箱</a><a class="sub" href="#09-runtime--915-错误报告">9.15 错误报告</a></details><details><summary><a data-ch="ch-10-backend" href="#ch-10-backend">10 — rssn 后端映射</a></summary><a class="sub" href="#10-backend--100-反射优先没有手写算子绑定">10.0 反射优先：没有手写算子绑定</a><a class="sub" href="#10-backend--101-rssn-的能力边界">10.1 rssn 的能力边界</a><a class="sub" href="#10-backend--102-标量映射">10.2 标量映射</a><a class="sub" href="#10-backend--103-算子映射生成的-façade不是手写绑定">10.3 算子映射：生成的 façade，不是手写绑定</a><a class="sub" href="#10-backend--104-量纲桥">10.4 量纲桥</a><a class="sub" href="#10-backend--105-线程与生命周期">10.5 线程与生命周期</a><a class="sub" href="#10-backend--106-性能策略">10.6 性能策略</a><a class="sub" href="#10-backend--107-错误映射">10.7 错误映射</a><a class="sub" href="#10-backend--108-已知缺口与风险">10.8 已知缺口与风险</a><a class="sub" href="#10-backend--109-一个端到端的调用链">10.9 一个端到端的调用链</a></details><details><summary><a data-ch="ch-11-examples" href="#ch-11-examples">11 — 完整示例</a></summary><a class="sub" href="#11-examples--111-自由落体单位量纲与-float">11.1 自由落体：单位、量纲与 Float</a><a class="sub" href="#11-examples--112-抛体运动记录ode-与结构化状态">11.2 抛体运动：记录、ODE 与结构化状态</a><a class="sub" href="#11-examples--113-符号微积分精确值与-result">11.3 符号微积分：精确值与 Result</a><a class="sub" href="#11-examples--114-欧姆定律带量纲的线性代数">11.4 欧姆定律：带量纲的线性代数</a><a class="sub" href="#11-examples--115-温度仿射点与温差">11.5 温度：仿射点与温差</a><a class="sub" href="#11-examples--116-数据分析table-与动态列">11.6 数据分析：Table 与动态列</a><a class="sub" href="#11-examples--117-仿真类型化包装器">11.7 仿真：类型化包装器</a><a class="sub" href="#11-examples--118-量纲多态标准化与线性拟合">11.8 量纲多态：标准化与线性拟合</a><a class="sub" href="#11-examples--119-错误示例编译器如何拒绝">11.9 错误示例：编译器如何拒绝</a><a class="sub" href="#11-examples--1110-一个全特性程序">11.10 一个“全特性”程序</a></details><details><summary><a data-ch="ch-12-rationale" href="#ch-12-rationale">12 — 设计取舍与限制</a></summary><a class="sub" href="#12-rationale--121-为什么把量纲做成类型">12.1 为什么把量纲做成类型</a><a class="sub" href="#12-rationale--122-为什么单位不进类型">12.2 为什么单位不进类型</a><a class="sub" href="#12-rationale--123-为什么纯函数">12.3 为什么纯函数</a><a class="sub" href="#12-rationale--124-为什么严格求值">12.4 为什么严格求值</a><a class="sub" href="#12-rationale--125-为什么区分-real-与-float">12.5 为什么区分 Real 与 Float</a><a class="sub" href="#12-rationale--126-为什么用-hm-而不是依赖类型">12.6 为什么用 HM 而不是依赖类型</a><a class="sub" href="#12-rationale--127-与现有方案的比较">12.7 与现有方案的比较</a><a class="sub" href="#12-rationale--128-设计边界不是版本限制">12.8 设计边界（不是版本限制）</a><a class="sub" href="#12-rationale--129-已关闭的设计决策">12.9 已关闭的设计决策</a><a class="sub" href="#12-rationale--1210-成功标准">12.10 成功标准</a></details><details><summary><a data-ch="ch-13-extensibility" href="#ch-13-extensibility">13 — 可扩展性与 RSSN 集成</a></summary><a class="sub" href="#13-extensibility--131-三条公理">13.1 三条公理</a><a class="sub" href="#13-extensibility--132-kernel-manifest-与生成的-rssn-模块">13.2 Kernel Manifest 与生成的 Rssn 模块</a><a class="sub" href="#13-extensibility--133-动态值与动态调用">13.3 动态值与动态调用</a><a class="sub" href="#13-extensibility--134-重载签名与解析">13.4 重载、签名与解析</a><a class="sub" href="#13-extensibility--135-插件与用户扩展">13.5 插件与用户扩展</a><a class="sub" href="#13-extensibility--136-量纲与单位统一到-rssndim">13.6 量纲与单位：统一到 rssn::dim</a><a class="sub" href="#13-extensibility--137-中心包-registry">13.7 中心包 registry</a><a class="sub" href="#13-extensibility--138-稳定性与-capability取代-v1v2">13.8 稳定性与 capability（取代 v1/v2）</a><a class="sub" href="#13-extensibility--139-已决定的扩展设计">13.9 已决定的扩展设计</a><a class="sub" href="#13-extensibility--1310-兼容性与迁移">13.10 兼容性与迁移</a><a class="sub" href="#13-extensibility--1311-错误码">13.11 错误码</a></details><details><summary><a data-ch="ch-appendix-a-grammar" href="#ch-appendix-a-grammar">附录 A — 完整文法</a></summary><a class="sub" href="#appendix-a-grammar--a1-布局">A.1 布局</a><a class="sub" href="#appendix-a-grammar--a2-程序与声明">A.2 程序与声明</a><a class="sub" href="#appendix-a-grammar--a3-表达式">A.3 表达式</a><a class="sub" href="#appendix-a-grammar--a4-模式">A.4 模式</a><a class="sub" href="#appendix-a-grammar--a5-类型">A.5 类型</a><a class="sub" href="#appendix-a-grammar--a6-量纲与单位">A.6 量纲与单位</a><a class="sub" href="#appendix-a-grammar--a7-运算符优先级">A.7 运算符优先级</a><a class="sub" href="#appendix-a-grammar--a8-词法记号摘要">A.8 词法记号（摘要）</a></details><details><summary><a data-ch="ch-appendix-b-diagnostics" href="#ch-appendix-b-diagnostics">附录 B — 诊断目录</a></summary><a class="sub" href="#appendix-b-diagnostics--b1-格式">B.1 格式</a><a class="sub" href="#appendix-b-diagnostics--b2-严重级别">B.2 严重级别</a><a class="sub" href="#appendix-b-diagnostics--b3-词法错误e01xx">B.3 词法错误（E01xx）</a><a class="sub" href="#appendix-b-diagnostics--b4-语法错误e02xx">B.4 语法错误（E02xx）</a><a class="sub" href="#appendix-b-diagnostics--b5-类型错误e03xx">B.5 类型错误（E03xx）</a><a class="sub" href="#appendix-b-diagnostics--b6-量纲错误e04xx">B.6 量纲错误（E04xx）</a><a class="sub" href="#appendix-b-diagnostics--b7-单位错误e05xx">B.7 单位错误（E05xx）</a><a class="sub" href="#appendix-b-diagnostics--b8-模块错误e06xx">B.8 模块错误（E06xx）</a><a class="sub" href="#appendix-b-diagnostics--b9-效果错误e07xx">B.9 效果错误（E07xx）</a><a class="sub" href="#appendix-b-diagnostics--b10-运行时错误e08xx">B.10 运行时错误（E08xx）</a><a class="sub" href="#appendix-b-diagnostics--b11-io-错误e09xx">B.11 IO 错误（E09xx）</a><a class="sub" href="#appendix-b-diagnostics--b12-警告w0xxx">B.12 警告（W0xxx）</a><a class="sub" href="#appendix-b-diagnostics--b13-消息写作规范">B.13 消息写作规范</a><a class="sub" href="#appendix-b-diagnostics--b14-示例类型错误">B.14 示例：类型错误</a><a class="sub" href="#appendix-b-diagnostics--b15-示例单位错误">B.15 示例：单位错误</a><a class="sub" href="#appendix-b-diagnostics--b16-示例运行时形状错误">B.16 示例：运行时形状错误</a><a class="sub" href="#appendix-b-diagnostics--b17-扩展后端错误e10xx">B.17 扩展/后端错误（E10xx）</a></details></nav>
 <main><section class="chapter" id="ch-index"><h1>Aevia 语言规范</h1><p><strong>Aevia — 设计标准</strong></p>
 <p>Aevia 是一门面向科学计算的纯函数式语言，<strong>量纲是类型系统的一部分</strong>。一个量不是带运行时标签的数字，而是类型里记着物理量纲的值。编译器在任何代码运行之前就拒绝 <code>3 m + 2 s</code>、<code>sin(3 kg)</code> 和 <code>exp(1 m)</code>。</p>
 <p>语言建立在 <code>rssn</code> 计算机代数与科学计算引擎之上：符号与数值求值是同一个表达式的两个相位；单位、量纲推断、重写、数值内核、JIT 和物理仿真由后端提供。Aevia 不维护第二份算子表或单位表： 它读取 rssn 的 <strong>Kernel Manifest</strong> 与 <code>rssn::dim</code> 注册表，并由它们生成 <code>Rssn</code> 模块。见 <a href="#ch-13-extensibility">13 — 可扩展性</a> 与 rssn 仓库的 <code>docs/KERNEL.md</code>。</p>
@@ -130,8 +130,8 @@ pre.code{white-space:pre-wrap;break-inside:avoid}}
 <td>否</td>
 </tr>
 <tr>
-<td><a href="#ch-12-rationale">12 — 设计取舍、限制与路线图</a></td>
-<td>替代方案、取舍、设计边界、实现进展</td>
+<td><a href="#ch-12-rationale">12 — 设计取舍与限制</a></td>
+<td>替代方案、取舍、设计边界</td>
 <td>否</td>
 </tr>
 <tr>
@@ -149,18 +149,13 @@ pre.code{white-space:pre-wrap;break-inside:avoid}}
 <td>错误码与消息格式</td>
 <td>是</td>
 </tr>
-<tr>
-<td><a href="#ch-appendix-c-changelog">附录 C — 修订记录</a></td>
-<td>修订历史与已知边界</td>
-<td>资料性</td>
-</tr>
 </tbody>
 </table>
 <p>后端接口契约在 rssn 仓库的 <code>docs/KERNEL.md</code>（Kernel Manifest、动态调用 ABI、插件、单位与量纲）和 <code>docs/DIMENSIONS.md</code> 中；这是 Aevia 规范成立的前提，不是可选的实现细节。 实现的 crate 划分见仓库根目录的 <a href="https://github.com/Apich-Organization/aevia/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a>。每章另有英文版（<code>spec/en/</code>），写作与术语规则见 <code>spec/STYLE.md</code>。</p>
 <h2 id="index--规范用语">规范用语</h2>
 <p><strong>必须</strong>（MUST）、<strong>不得</strong>（MUST NOT）、<strong>应该</strong>（SHOULD）、<strong>可以</strong>（MAY）按 RFC 2119 理解。符合规范的实现必须接受本规范测试语料中的每个程序，必须拒绝每个标记为类型错误的程序， 并产生规定类别的诊断（具体措辞不是规范性的）。</p>
 <h2 id="index--设计状态">设计状态</h2>
-<p>这是<strong>设计标准</strong>，不是冻结的实现。标为规范性的章节意在按文实现；<a href="#ch-appendix-c-changelog">附录 C</a> 记录每次修订与已知缺口。当前文本是 <strong>Revision 23</strong>，对齐 <strong><code>rssn 3.0.0-rc.1</code></strong> （<code>api_version = 2</code>）。manifest 的规模是测量而不是常量，以 <code>aevia rssn</code> 的 live 输出为准（该版本为 1620 个算子、82 个单位、30 个常数）。分派与扩展遵循第 13 章的边界：没有运行时多方法、 没有多参数类、没有按类型的单态化；实例在检查期静态选定或由规范见证选定。</p>
+<p>这是<strong>设计标准</strong>，不是冻结的实现。标为规范性的章节意在按文实现。当前文本是 <strong>Revision 23</strong>，对齐 <strong><code>rssn 3.0.0-rc.1</code></strong> （<code>api_version = 2</code>）。manifest 的规模是测量而不是常量，以 <code>aevia rssn</code> 的 live 输出为准（该版本为 1620 个算子、82 个单位、30 个常数）。分派与扩展遵循第 13 章的边界：没有运行时多方法、 没有多参数类、没有按类型的单态化；实例在检查期静态选定或由规范见证选定。</p>
 <p><strong>没有 v1/v2 的语言分层</strong>：每项能力都已设计到位；后端尚未实现的能力报 capability 诊断（<code>E1001</code>），而不是删掉语言特性。</p>
 <h2 id="index--一句话概括">一句话概括</h2>
 <blockquote>
@@ -730,8 +725,8 @@ rational     ::= [&quot;-&quot;] number [&quot;/&quot; [&quot;-&quot;] number]</
 @op(&quot;mydomain/softplus&quot;)
 <span class="kw">fn</span> softplus(x: Real[<span class="n">1</span>]): Real[<span class="n">1</span>] = ln(<span class="n">1</span> + exp(x))</code></pre>
 <ul>
-<li>已知属性：<code>@stable</code>、<code>@experimental</code>、<code>@deprecated</code>（稳定性，§13.8）、<code>@jit</code>（请求 JIT； 后端没有 <code>core.jit</code> 时 <code>E1001</code>）、<code>@op</code>、<code>@rule</code>（注册 RSSN 算子与重写规则，§13.5）、 <code>@bench</code>（§9.12）。</li>
-<li>未知属性是 <code>E0210</code>；属性参数必须是编译期常量。</li>
+<li>已知属性：<code>@stable</code>、<code>@experimental</code>、<code>@deprecated</code>（稳定性，§13.8）、<code>@jit</code>（请求 JIT； 后端没有 <code>core.jit</code> 时 <code>E1001</code>）、<code>@op</code>、<code>@rule</code>（注册 RSSN 算子与重写规则，§13.5）、 <code>@bench</code>（§9.12）、<code>@allow</code>/<code>@warn</code>/<code>@deny</code>/<code>@forbid</code>（lint 级别，接收一个或多个 lint/组名与可选 <code>reason = "..."</code>）。</li>
+<li>未知属性是 <code>E0210</code>；属性参数必须是编译期常量（lint 属性允许直接写 <code>unused-variable</code> 等 lint/组名）；试图降低 <code>forbid</code> 级别是 <code>E0211</code>，未知 lint/组名是 <code>E0212</code>。</li>
 </ul>
 <h2 id="02-syntax--23-表达式">2.3 表达式</h2>
 <h3 id="02-syntax--231-块">2.3.1 块</h3>
@@ -2735,7 +2730,7 @@ type  = Scalar&lt;rep(number), dim(unit_expr)&gt;</code></pre>
 </tr>
 </tbody>
 </table>
-<p>状态：以上模块均可 <code>open</code>，内容从 kernel manifest 生成（<code>manifest.units</code>、<code>manifest.constants</code>、 <code>manifest.unit_systems</code>），每个 <code>UnitValue</code> 带 <code>aliases</code>/<code>prefixable</code>/<code>category</code>/<code>since</code>。单位是 <strong>session 私有</strong>的：<code>Session::register_unit</code> 注册的单位只出现在该 session 的 manifest 中。</p>
+<p>以上模块均可 <code>open</code>，内容从 kernel manifest 生成（<code>manifest.units</code>、<code>manifest.constants</code>、 <code>manifest.unit_systems</code>），每个 <code>UnitValue</code> 带 <code>aliases</code>/<code>prefixable</code>/<code>category</code>/<code>since</code>。单位是 <strong>session 私有</strong>的：<code>Session::register_unit</code> 注册的单位只出现在该 session 的 manifest 中。</p>
 <h2 id="05-units--54-换算与显示">5.4 换算与显示</h2>
 <h3 id="05-units--541-三个操作">5.4.1 三个操作</h3>
 <pre class="code" data-lang="aevia"><code><span class="kw">let</span> d = <span class="n">3.2</span> km              <span class="c"># Float[L]，值 3200.0</span>
@@ -2749,7 +2744,7 @@ type  = Scalar&lt;rep(number), dim(unit_expr)&gt;</code></pre>
 <li>单位量纲与值不符是 <code>E0509</code>。</li>
 <li><strong>仿射单位只接受 <code>Point[d]</code></strong>：<code>value_in(°C, point(298.15, K))</code> 是 <code>25</code>；对温差 （<code>Scalar&lt;ρ,Θ&gt;</code>）用仿射单位报 <code>E0510</code>，所以 <code>value_in(°C, 298.15 K)</code> 错误。温差的显示用 <code>delta_to(°C, dT)</code>，它只用尺度、不用偏移。</li>
 </ul>
-<p>状态：<code>delta_to(°C, 10.0 K)</code> 打印为 <code>-263.15 °C</code>（仍套用了偏移），与上述语义不符，属已知缺陷。</p>
+<p>例如 <code>delta_to(°C, 10.0 K)</code> 显示为 <code>10 °C</code>，而不是点 <code>-263.15 °C</code>。</p>
 <h3 id="05-units--542-显示单位的传播">5.4.2 显示单位的传播</h3>
 <p>运行时每个标量可带一个可选的显示单位：</p>
 <ul>
@@ -2758,7 +2753,7 @@ type  = Scalar&lt;rep(number), dim(unit_expr)&gt;</code></pre>
 <li><code>to</code> 显式设置，<code>base</code> 显式清除；函数调用默认丢弃（<code>abs</code> 等保持形状的除外）。</li>
 </ul>
 <p>显示单位是<strong>元数据</strong>，不参与相等、类型或序列化：<code>3.2 km == 3200 m</code> 为 <code>true</code>。</p>
-<p>状态：丢弃显示单位的警告 <code>W0501</code> 尚无发射点。</p>
+<p><code>W0501</code>（丢弃显示单位）是保留码，语言不会发出它。</p>
 <h3 id="05-units--543-打印">5.4.3 打印</h3>
 <ul>
 <li>有显示单位时按该单位换算后打印（<code>3.2 km</code>、<code>25 °C</code>）。</li>
@@ -2908,7 +2903,7 @@ lerp      : (Point[d], Point[d], Float[1]) -&gt; Point[d]</code></pre>
 </tr>
 </tbody>
 </table>
-<p>状态：<code>E0502</code>/<code>E0503</code>/<code>E0507</code> 是保留码，当前不可达：单位表是 kernel 全表加本地声明，没有模块级 单位命名空间，“未导入”“禁止前缀”“前缀/显式冲突”三种状态都不存在；编译器不会用别的错误冒充它们。</p>
+<p><code>E0502</code>/<code>E0503</code>/<code>E0507</code> 是保留码，不可达：单位表是 kernel 全表加本地声明，没有模块级 单位命名空间，“未导入”“禁止前缀”“前缀/显式冲突”三种状态都不存在；编译器不会用别的错误冒充它们。</p>
 <h2 id="05-units--510-与-rssn-单位层的衔接">5.10 与 rssn 单位层的衔接</h2>
 <ol type="1">
 <li><strong>单一事实来源。</strong> <code>Units.*</code> 是 <code>manifest.units</code> 的生成视图；用户 <code>dimension</code>/<code>unit</code> 声明注册进 同一个 registry 并回流到 manifest。<code>UnitRegistry</code> 只用于 <code>resolve</code>/<code>format</code> 这类运行时服务。</li>
@@ -3406,14 +3401,24 @@ random   : () -&gt; IO Float[1]</code></pre>
 <pre class="code" data-lang="toml"><code>[package]
 name = &quot;kinematics&quot;
 version = &quot;0.1.0&quot;
+edition = &quot;2026&quot;
 entry = &quot;src/main.aev&quot;      # 可选；默认 src/main.aev
+authors = [&quot;Your Name &lt;you@example.com&gt;&quot;]
+description = &quot;Kinematics solvers&quot;
+license = &quot;Apache-2.0&quot;
+readme = &quot;README.md&quot;
+repository = &quot;https://github.com/apich/kinematics&quot;
+homepage = &quot;https://aevia.org&quot;
+documentation = &quot;https://docs.aevia.org&quot;
+keywords = [&quot;physics&quot;]
+categories = [&quot;science&quot;]
 
 [dependencies]
 Units = &quot;^1.2&quot;                                        # 官方作用域：aevia/units
 Plot = { package = &quot;apich/plot&quot;, version = &quot;~2.1&quot; }   # registry 包
 Kinematics = { path = &quot;../kinematics&quot; }               # 本地路径包
 Dev = { path = &quot;../dev&quot;, package = &quot;apich/dev&quot;, version = &quot;^0.3&quot; }  # 本地开发用路径，发布后按版本</code></pre>
-<p>状态：清单读取器<strong>只</strong>读 <code>[package]</code>（键 <code>name</code>、<code>version</code>、<code>entry</code>）与 <code>[dependencies]</code>；其他表 （<code>[compat]</code>、<code>[capabilities]</code>、<code>[build]</code>、<code>[profile.*]</code>）与其他 <code>[package]</code> 键（<code>edition</code>、<code>authors</code>、 <code>description</code>）都是 <code>E0605</code>。说明、许可证、关键字、仓库地址在发布时由 <code>aevia publish</code> 的选项给出 （§9.9）。能力声明目前没有运行时权限检查，只有 <code>--caps</code>（§9.14）。<code>git</code> 依赖不存在（<code>E0605</code>）。</p>
+<p>清单读取器读 <code>[package]</code>（<code>name</code>、<code>version</code>、<code>edition</code>、<code>entry</code>、<code>authors</code>、<code>description</code>、<code>license</code>、 <code>license-file</code>、<code>readme</code>、<code>repository</code>、<code>homepage</code>、<code>documentation</code>、<code>keywords</code>、<code>categories</code>）与 <code>[dependencies]</code>；其他表（<code>[compat]</code>、<code>[capabilities]</code>、<code>[build]</code>、<code>[profile.*]</code>）与未知键都是 <code>E0605</code>。 发布到 registry 时强制要求非空的 <code>description</code>，以及非空的 <code>license</code> 或打包在归档内的非空 <code>license-file</code>； <code>aevia publish</code> 的选项（§9.9）和 <code>aevia-pkg.toml</code> 也可覆盖这些元数据。能力声明不作运行时权限检查， 权限通过 <code>--caps</code>（§9.14）控制。不支持 <code>git</code> 依赖（<code>E0605</code>）。</p>
 <ul>
 <li><code>name</code> 是包名，<code>version</code> 是 SemVer 2.0 的 <code>major.minor.patch</code>，可带 <code>-pre-release</code>；发布版本不得带 <code>+build</code>（两个仅 build 不同的版本优先级相同，registry 无法区分）。</li>
 <li>依赖有三种来源：registry、path，或两者并存。registry 是内容寻址 + 签名的。</li>
@@ -3515,7 +3520,7 @@ hash = &quot;fnv1a64:…&quot;           # 清单 + 源树 + 入口的摘要</co
 <li><code>aevia update</code> 无参数时忽略锁取最新；<code>aevia update owner/name…</code> 只移动指定的包。<code>aevia tree</code> 打印依赖树。 <code>aevia clean</code> 保留 <code>.aevia/registry</code>，<code>aevia clean --registry</code> 才删除。</li>
 <li><code>aevia add</code> 先解析完整候选图再暂存清单与锁；普通 I/O 失败会恢复原清单，失败的解析不改写输入。</li>
 </ul>
-<p>状态：解析层允许同一包的不兼容系列共存，但每个包拥有各自依赖名字空间（按包的 <code>Roots</code> 查找）尚未实现， 所以共存须用不同导入根。</p>
+<p>解析层允许同一包的不兼容系列共存，但共存须使用不同的导入根。</p>
 <h3 id="07-modules--753-目录布局">7.5.3 目录布局</h3>
 <pre class="code"><code>kinematics/
   aevia.toml
@@ -3985,9 +3990,7 @@ nonzeros      : Sparse&lt;F, shape, Scalar&lt;ρ,d&gt;&gt; -&gt; Tensor&lt;1, (T
 <p><code>sparse / sparse</code>、标量除以稀疏、<code>sparse + 标量</code> 没有定义（会稠密化或产生无穷零），报 <code>E0302</code>；需要时先 <code>to_dense</code>。<code>==</code>/<code>!=</code> 比较两个稀疏值的<strong>逻辑内容</strong>（形状相同且已存储项相同，数值按与稠密张量 相同的规则比较，所以 <code>1</code> 等于 <code>1.0</code>），<strong>与格式无关</strong>。<code>show</code> 写成 <code>sparse(Csr, [3, 3], { (0, 0) = 4.0, … })</code>；<code>repr</code> 是能重建同一个值的表达式 <code>convert&lt;Csr&gt;(sparse_coo([3, 3], [(0, 0), …], [4.0, …]))</code>， <code>Bcsr</code> 的 <code>repr</code> 带块形状：<code>to_bcsr(sparse_coo([4, 4], […], […]), 2, 2)</code>。</p>
 <p><strong>秩 N 与收缩。</strong> <code>contract(A, B, axes_a, axes_b)</code> 是成对张量收缩（<code>tensordot</code>）：<code>axes_a</code>/<code>axes_b</code> 是<strong>列表字面量</strong>（结果的秩由长度静态决定），结果的轴是 <code>A</code> 的自由轴再接 <code>B</code> 的自由轴。两个稀疏操作数得到 <code>Sparse&lt;Coo, …&gt;</code>；一个稀疏一个稠密得到稠密 <code>Tensor</code>；全部轴收缩得到标量；两个都稠密是类型错误。<code>map_nonzero(f, A)</code> 只对<strong>已存储项</strong>调用 <code>f</code>，因此要求 <code>f(0) = 0</code>（返回零的项被丢弃）； <code>nonzeros(A)</code> 返回 <code>(下标, 值)</code> 元组的列表。</p>
 <p><strong>与内核的边界。</strong> rssn 的 <code>TypeExpr::Sparse</code> 只有 <code>rank</code>，所以 <code>Sparse&lt;F, shape, τ&gt;</code> 在边界降为 rank + 运行时格式；<code>aevia-rssn</code> 的 <code>Val::Sparse</code> 与 rssn 的 <code>Value::Sparse</code> 一一对应，<strong>不稠密化</strong>。 rssn 的 <code>term_of_value</code> 不接受 <code>Value::Sparse</code> 进入项图（<code>manifest.value_kinds</code> 里 <code>in_term_graph = false</code>），所以稀疏值不能直接喂给通用重写算子；Aevia 负责布局转换，RSSN 负责稀疏算法与其 <code>faer</code> 稀疏 LU 后端。 用户自定义格式要等 rssn 开放 <code>Format</code>（§13.9.5）。</p>
-<blockquote>
-<p><strong>状态</strong>：以上全部已实现（测试 <code>aevia-core/tests/sparse.rs</code>、<code>sparse_block.rs</code>、<code>sparse_followup.rs</code>、<code>shape_refinement.rs</code>），能力 <code>storage.sparse</code> 已启用。<strong>剩余缺口</strong>：稀疏值不能进入 rssn 的项图； <code>gmres_with</code>/<code>bicgstab_with</code> 不接受精确元素；没有稀疏特征值/SVD。</p>
-</blockquote>
+<p>注：<code>storage.sparse</code> 能力启用稀疏运算；<code>gmres_with</code>/<code>bicgstab_with</code> 仅接受浮点元素；标准库不提供稀疏特征值与 SVD。</p>
 <h2 id="08-stdlib--85-calculus">8.5 Calculus</h2>
 <pre class="code"><code>diff          : (Real[d] -&gt; Real[e]) -&gt; (Real[d] -&gt; Real[e/d])
 diff_at       : ((Real[d] -&gt; Real[e]), Real[d]) -&gt; Real[e/d]
@@ -4447,7 +4450,7 @@ sde_ensemble_general : (((Float[T], s) -&gt; RateOf&lt;s&gt;), ((Float[T], s) -&
 <p><strong>确定性。</strong> 种子必须显式给出；固定/自适应的可交换 Brownian 路径使用语言 LCG/Box–Muller 流， 需要迭代面积的路径使用内核 xoshiro。种子与最细分辨率固定后，拒绝不改变已采样路径；系综种子只依赖 <code>(seed,index)</code>。只承诺同构建可复现。可运行断言见 <code>examples/sde_adaptive_*.aev</code>。</p>
 <p><strong>错误表</strong>：<code>E0802</code> 形状/参数（含 <code>General</code> 的 <code>m</code> 与扩散矩阵不符、非均匀网格、缺失必填项）；<code>E0806</code> 状态非有限；<code>E0807</code> 自适应步长塌缩或步数预算耗尽；<code>E1001</code> 保留给未实现的能力。<code>SdeError</code> 是不透明错误类型（像 <code>SimError</code>），语言层不暴露构造器。</p>
 <p><strong>不提供</strong>：用户自定义噪声结构、显式非均匀定步长网格、Brownian 桥稠密输出，以及标准 <code>sde_events</code> 在积分过程中的提前停止（它是事后截断）。回调求解器通过 §8.19 的高阶接口调用。 <code>Sde</code> 模块声明选项 ADT 并再导出本节入口；<code>terms</code>、<code>cells</code> 必须存在，值 <code>0</code> 选择默认值。 <code>sde_scheme_info</code> 只查询方案元数据；弱阶使用 <code>sde_order</code>/<code>sde_order_with</code>。</p>
-<p>状态：上述语言入口与列出的回调求解器已实现；原生 Rust API 的可达性由 §8.19 的清单与源码分类分别报告。</p>
+<p>原生 Rust API 的可达性由 §8.19 的清单与源码分类分别报告。</p>
 <h2 id="08-stdlib--810-pde">8.10 PDE</h2>
 <p>PDE 求解器的参数是记录，包含网格、系数、边界条件。签名较长，这里给出 入口：</p>
 <pre class="code"><code>solve_poisson : PoissonSpec -&gt; Result&lt;Field, PdeError&gt;
@@ -4540,9 +4543,7 @@ type ColumnInfo = { name: String, dtype: String, unit: Option&lt;String&gt; }</c
 <p><code>column</code> 的字段名必须是<strong>字符串字面量</strong>；类型检查器把字面量提升为 类型级 label，在 <code>ρ</code> 中查找 <code>ρ[name]</code> 并返回其元素类型。字段不存在报 <code>E0306</code>；量纲不匹配报 <code>E0401</code>。非字面量用 <code>column_dyn</code>（返回 <code>Tensor&lt;1, Value&gt;</code>），不走静态 schema。<code>select</code>/ <code>filter</code>/<code>join</code> 保持行多态；<code>join</code> 的结果行是 <code>ρ + σ</code>（<code>+</code> 是类型级行 并集；冲突字段报 <code>E0208</code>）。</p>
 <p><code>read_npy</code> 的秩无法从文件静态推断，必须写 <code>read_npy&lt;2&gt;(path)</code>；省略是 <code>E0314</code>。类型参数目前必须是具体自然数；文件的实际秩不一致时，IO 动作 返回 <code>Err(DataError)</code>，不会把错误秩的张量交给程序。</p>
 <p>CSV 表头可以带单位：<code>time [s]</code>、<code>velocity [m/s]</code>。<code>read_csv&lt;ρ&gt;</code> 解析 表头单位；<code>column(t, "time")</code> 在编译期用 <code>ρ</code> 的字段类型检查，运行时再做 一次防御性校验。没有表头单位时，列被当作无量纲；显式 <code>ρ</code> 可以覆盖， 但运行时校验失败报 <code>DataError.DimensionMismatch</code>。</p>
-<blockquote>
-<p><strong>状态</strong>：<code>read_csv</code>/<code>write_csv</code>/<code>read_json</code>/<code>write_json</code> 与 Table/column/select/filter/join 已实现。NPY 使用共享本地编解码：支持 NPY 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列 （Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；<code>read_npy&lt;n&gt;</code> 保存并验证具体秩，<code>write_npy</code> 接受任意秩的无量纲 <code>Float</code> 张量；未具体化的泛型秩报 <code>E0304</code>。 IO 错误码：文件不存在 <code>E0901</code>，非法参数 <code>E0902</code>，损坏/截断/秩不匹配/大小溢出 <code>E0903</code>，不支持的格式、dtype 或扩展名 <code>E0904</code>，绘图写出失败 <code>E0905</code>；NPY 错误在 IO 动作执行后作为 <code>Err(DataError)</code> 返回（<code>aevia-core/tests/io_taxonomy.rs</code>）。</p>
-</blockquote>
+<p>NPY 支持 1.0/2.0/3.0、小端与大端 float32/float64、C 与 Fortran 排列（Fortran 输入转换为行优先存储；写出用小端 float64、C 排列）；<code>read_npy&lt;n&gt;</code> 保存并验证具体秩，<code>write_npy</code> 接受任意秩的无量纲 <code>Float</code> 张量；未具体化的泛型秩报 <code>E0304</code>。 IO 错误码：文件不存在 <code>E0901</code>，非法参数 <code>E0902</code>，损坏/截断/秩不匹配/大小溢出 <code>E0903</code>，不支持的格式、dtype 或扩展名 <code>E0904</code>，绘图写出失败 <code>E0905</code>；NPY 错误在 IO 动作执行后作为 <code>Err(DataError)</code> 返回。</p>
 <h2 id="08-stdlib--812-plot">8.12 Plot</h2>
 <pre class="code"><code>type PlotSpec
 type Series
@@ -4565,9 +4566,7 @@ save      : (String, PlotSpec) -&gt; IO Unit
 
 default_plot_opts : PlotOpts</code></pre>
 <p><code>PlotOpts</code> 是完整记录：<code>{ label: Option&lt;String&gt;, color: Option&lt;String&gt;, xunit: Option&lt;String&gt;, yunit: Option&lt;String&gt;, xscale: AxisScale, yscale: AxisScale, xlim: Option&lt;(Float, Float)&gt;, ylim: Option&lt;(Float, Float)&gt; }</code>。 <code>line(x, y)</code> 使用默认值，自动从 <code>x</code>、<code>y</code> 的量纲生成轴标签 （<code>t / s</code>、<code>v / (m/s)</code>）；<code>line_with</code> 接受完整 <code>PlotOpts</code>；<code>label(series, "v(t)")</code> 是设置标签的快捷方式。<code>plot</code> 默认写 <code>plot.html</code>；<code>save</code> 指定文件名。</p>
-<blockquote>
-<p><strong>状态</strong>：只有 HTML/SVG-inline 一种渲染器：<code>plot</code> 与 <code>save</code> 生成同一段 HTML（内含 <code>&lt;svg&gt;</code>），<code>save</code> <strong>不按扩展名</strong>切换格式（写 <code>.svg</code> 文件时内容仍是 HTML 文档）。写失败是 <code>E0905</code>； <code>plot</code>/<code>save</code> 仍是 fatal 的 IO 动作（失败以诊断退出，不是 <code>Result</code>）。独立 <code>.svg</code> 输出与 PNG/JPEG 尚未实现。</p>
-</blockquote>
+<p><code>plot</code> 与 <code>save</code> 使用内嵌 <code>&lt;svg&gt;</code> 的 HTML 渲染器，生成同一格式的 HTML 文档，<code>save</code> <strong>不按扩展名</strong>切换格式（写 <code>.svg</code> 文件时内容仍是 HTML 文档）。写失败报 <code>E0905</code>，<code>plot</code>/<code>save</code> 为致命 IO 动作（失败以诊断退出，不返回 <code>Result</code>）。</p>
 <h2 id="08-stdlib--813-test">8.13 Test</h2>
 <pre class="code"><code>assert      : Bool -&gt; IO Unit
 assert_eq   : (Eq a, Show a) =&gt; (a, a) -&gt; IO Unit
@@ -4662,8 +4661,7 @@ from_json : Json -&gt; Result&lt;a, SimError&gt;            # 动态边界：解
 <span class="kw">fn</span> run(p: Params): Result&lt;IsingResult, SimError&gt; = ...</code></pre>
 <p><code>simulate</code> 是动态入口，接受 rssn 的场景名和 JSON；类型化包装器在 <code>Physics.*</code> 中，逐字段标注量纲。场景名以下面 rssn 的 live <code>SCENARIOS</code> 列表为准（2026-11-04 测量为 29 个）：<code>ising</code>、<code>ising_wolff</code>、<code>geodesic</code>、 <code>gpe</code>、<code>schrodinger</code>、<code>fdtd</code>、<code>elasticity</code>、<code>lid_driven_cavity</code>、 <code>channel_flow</code>、<code>sod_shock_tube</code>、<code>kepler_symplectic</code>、<code>poisson_multigrid</code>、 <code>heat_nd</code>、<code>wave_nd</code>、<code>euler_fv</code>、<code>dg_conservation</code>、<code>acoustics_pml</code>、 <code>yee_fdtd</code>、<code>navier_stokes_mac</code>、<code>split_step</code>、<code>fem_simplex</code>、 <code>elasticity_fem</code>、<code>bem_laplace</code>、<code>sph</code>、<code>dpd</code>、<code>md_lj</code>、<code>spin_model</code>、 <code>nbody_gravity</code>、<code>kerr_geodesic</code>。宿主不应手写第二份场景清单：运行时 从 <code>rssn::sim::scenario::SCENARIOS</code> 读。</p>
 <blockquote>
-<p><strong>生成的仿真模块</strong>：<code>import Rssn_Sim_&lt;Name&gt;</code>（如 <code>Rssn_Sim_PoissonMultigrid</code>、<code>Rssn_Sim_HeatNd</code>）在导入时由 rssn 的场景目录（<code>rssn::sim::schema</code>）生成类型化模块：<code>Params</code>/<code>Output</code> 记录、 每个方法名字段一个变体类型（<code>P.W</code>、<code>S.Metropolis</code>）、<code>defaults()</code> 与 <code>run(p)</code>。参数类型与默认值从场景自己的请求类型推断，结果类型来自一次见证运行，注解表补充推断看不到的部分； rssn 新增场景、参数或方法时无需手写代码。29 个场景全部可生成（参考测试 <code>tests/sim_catalog.aev</code>）。</p>
-<p><strong>状态</strong>：<code>simulate</code>、<code>to_json</code>/<code>from_json</code> 与 <code>Physics.Ising</code>/<code>Physics.Geodesic</code> 包装器（Aevia 源模块，<code>crates/aevia-std/stdlib/Physics/</code>）已实现，<code>import Physics.Ising</code> 经嵌入模块加载器直接可用。</p>
+<p><strong>生成的仿真模块</strong>：<code>import Rssn_Sim_&lt;Name&gt;</code>（如 <code>Rssn_Sim_PoissonMultigrid</code>、<code>Rssn_Sim_HeatNd</code>）在导入时由 rssn 的场景目录（<code>rssn::sim::schema</code>）生成类型化模块：<code>Params</code>/<code>Output</code> 记录、 每个方法名字段一个变体类型（<code>P.W</code>、<code>S.Metropolis</code>）、<code>defaults()</code> 与 <code>run(p)</code>。参数类型与默认值从场景自己的请求类型推断，结果类型来自一次见证运行，注解表补充推断看不到的部分； rssn 新增场景、参数或方法时无需手写代码。</p>
 </blockquote>
 <h2 id="08-stdlib--818-device">8.18 Device</h2>
 <pre class="code"><code>type Device = | Cpu | Gpu(Int) | Distributed(Cluster)
@@ -4843,12 +4841,7 @@ Physics
   Geodesic
   Schrodinger
   ...</code></pre>
-<p>标准库的模块在 <code>aevia-std</code> 包中；Prelude 自动导入，其他按需 <code>import</code>。 模块名就是路径：<code>import A.B</code> 解析 <code>A/B.aev</code>（§7），<code>import Math { sqrt }</code> 只引入 <code>sqrt</code>，<code>open Units.SI</code> 把 <code>Units.SI</code> 的导出名放进当前作用域。</p>
-<blockquote>
-<p><strong>状态</strong>：模块树已落地（<code>crates/aevia-std/stdlib/**.aev</code>，41 个模块文件，经 <code>include_str!</code> 嵌入；<code>aevia_std::stdlib</code> 暴露 <code>source</code>/<code>is_module_name</code>/<code>module_paths</code>）。加载器在普通根目录解析不到 模块时回退到嵌入模块，所以 <code>import Math { sqrt }</code>、<code>open Units.SI</code>、<code>import Data.Csv { read_csv, column, Table }</code>、<code>import Physics.Ising</code> 都能直接使用；本地文件优先于嵌入模块。标准库的名字也直接 作为 Prelude 内建可用。<code>Units/*</code> 是文档性模块：单位名本来就是 ambient 的 <code>Unit[d]</code> 值，导出数量绑定会遮蔽它们并改变 <code>Tensor / Unit</code> 的语义，因此不导出（§5.3.4）。<code>Sde</code> 模块 re-export §8.9.1 的五个入口并声明选项 ADT；<code>Physics.Ising</code>/<code>Physics.Geodesic</code> 提供 §8.17 的类型化包装器。函数名、<code>Sde</code> 的名义变体构造器与透明类型别名（<code>type X = { … }</code>，如 <code>Physics.Ising</code> 的 <code>Params</code>） 都可经 <code>import { X }</code>/<code>open</code> 引入。</p>
-<p><strong>一致性审计</strong>：本章每个声明的名字都有实现（<code>aevia-core</code> 的 <code>stdlib_coverage</code> 测试 <code>chapter_eight_has_no_capability_gaps</code>）；<code>aevia-std</code> 的 <code>spec_signatures</code> 测试把声明与 checker scheme 逐条对照 （presence、arity、return class；参数类型与顺序不逐字比较，因为规范与 scheme 的拼写不同，已记录的差异留档）；名字通过不代表签名逐字一致。第 11 章的九个完整程序全部通过检查（<code>spec_programs</code>）。</p>
-<p><strong>生成模块与 manifest 同步</strong>：<code>Rssn</code>/<code>Units</code>/<code>Constants</code> 是 Kernel Manifest 的生成视图。嵌入的 <code>Units/Constants.aev</code> 来自 live manifest；manifest 变化后必须用 <code>cargo run -p aevia-stdlib-gen -- --write</code> 重新生成，否则 <code>units_constants_is_the_live_manifest</code> 会失败。</p>
-</blockquote>
+<p>标准库的模块在 <code>aevia-std</code> 包中；Prelude 自动导入，其他按需 <code>import</code>。 模块名就是路径：<code>import A.B</code> 解析 <code>A/B.aev</code>（§7），<code>import Math { sqrt }</code> 只引入 <code>sqrt</code>，<code>open Units.SI</code> 把 <code>Units.SI</code> 的导出名放进当前作用域。本地文件优先于嵌入标准库模块。 <code>Units/*</code> 是文档性模块：单位名本来就是 ambient 的 <code>Unit[d]</code> 值，导出数量绑定会遮蔽它们并改变 <code>Tensor / Unit</code> 的语义，因此不导出（§5.3.4）。<code>Sde</code> 模块再导出 §8.9.1 的五个入口并声明选项 ADT；<code>Physics.Ising</code>/<code>Physics.Geodesic</code> 提供 §8.17 的类型化包装器。函数名、<code>Sde</code> 的名义变体构造器与透明类型别名（<code>type X = { … }</code>，如 <code>Physics.Ising</code> 的 <code>Params</code>） 都可经 <code>import { X }</code>/<code>open</code> 引入。</p>
 <p><code>Rssn</code> 是<strong>生成的模块</strong>，不是手写库：构建时从 Kernel Manifest 生成 <code>Rssn.&lt;op&gt;</code> 类型化声明和 <code>Rssn.dynamic</code> 动态入口（§13.2）。<code>Rssn</code> 的 内容随 RSSN 版本变化，Aevia 源码不硬编码算子清单。<code>Sparse</code> 提供 <code>Csr</code>/<code>Csc</code>/<code>Coo</code>/<code>Block</code>/<code>Bcsr</code> 格式标签与 §8.4.1 的全部稀疏内建 （<code>nnz</code>/<code>to_dense</code>/<code>from_dense</code>/<code>convert</code>、稀疏 <code>matmul</code>/<code>transpose</code>/<code>kron</code>、 <code>@</code> 的布局分派、<code>spsolve</code>/<code>cg</code>）；<code>Layout</code> 仍是内建函数集合而不是可实例化的 类型类（§13.9.5）；<code>Device</code> 提供 <code>Cpu</code>/<code>Gpu</code>/<code>Distributed</code> 与 <code>on</code>/<code>to_device</code>（§13.9.4，无 <code>core.gpu</code> 时 <code>E1001</code>）。</p>
 <p>下一章定义运行时：从源码到值，从值到 rssn 项，从 REPL 到 JIT。</p>
 </section><section class="chapter" id="ch-09-runtime"><h1>09 — 运行时</h1><p>运行时把源码变成值，把值变成 rssn 项，把项变成结果。目标：<strong>启动快、交互快、数值热点快、 符号操作可控</strong>。本章定义组件、数据流、线程模型和性能边界。</p>
@@ -5266,7 +5259,9 @@ sqrt : forall t0, d0. Scalar&lt;ρ0, d0&gt; -&gt; Scalar&lt;ρ0, d0^(1/2)&gt;</c
 <p>REPL 诊断显示原始输入，不显示生成的表达式绑定。当前输入按提交内行号定位，旧定义标记为 <code>&lt;repl #N&gt;</code>， <code>:load</code> 保留文件名与行号；<code>:source [N]</code> 查看对应快照。语法恢复保留独立错误；REPL 不检查语法损坏模块及其依赖者的类型， 也不重复已接受源码的警告。单独的 <code>:cancel</code> 可丢弃未完成的管道输入（字符串/注释内除外）。</p>
 <h2 id="09-runtime--99-cli">9.9 CLI</h2>
 <pre class="code"><code>aevia run [--example NAME] [file.aev] [-- args…]   运行包入口/文件/示例（`--` 之后是程序参数）
-aevia check [--all] [file.aev…]                    类型/量纲检查，不运行
+aevia check [--all] [-A|-W|-D|-F LINT] [file.aev…]  类型/量纲检查，不运行
+aevia lint [--all] [--fix] [--format human|json|sarif] [-A|-W|-D|-F LINT] [file.aev…]
+                                                   运行编译器/正确性/风格/pedantic lint（支持 `--list`、`--explain`）
 aevia watch [file] [--once | --runs N]             反复检查，只重检变化的模块（§9.11.1）
 aevia test [--filter PAT] [file.aev]               运行 `test` 声明
 aevia test --doc [--filter PAT] [files…]           编译 `##` 文档中的 aevia 代码块（§9.12）
@@ -5342,7 +5337,7 @@ aevia --version</code></pre>
 <ul>
 <li><strong>程序参数</strong>：<code>aevia run [file] -- args…</code> 只把 <code>--</code> <strong>之后</strong>的字符串交给程序，程序用 <code>args()</code> 读取 （§8.1.8，返回 <code>Tensor&lt;1, String&gt;</code>；无参数为 <code>[]</code>）。<code>check</code>/<code>test</code>/<code>bench</code> 不转发参数。</li>
 <li><strong>registry 命令</strong>：<code>login</code>、<code>search</code>、<code>info</code>、<code>yank</code>、<code>verify</code>、<code>key</code>、<code>status</code>、<code>lock</code>、<code>index</code> 直接转发给 <code>aevia-pkg</code>；<code>add</code>/<code>update</code>/<code>fetch</code>/<code>tree</code> 是工具链原生命令（改写 <code>aevia.toml</code> 与 <code>aevia.lock</code>，仅网络部分调用 客户端）；<code>publish</code> 也是原生的：先用本二进制执行 <code>aevia check --all</code> 与 <code>aevia fmt --check</code>，失败则在触碰密钥 之前拒绝（<code>--no-verify</code> 跳过），再交给 <code>aevia-pkg publish</code>。<code>aevia-pkg</code> 不在 PATH 时，可用 <code>AEVIA_PKG</code> 指向二进制，或 <code>cargo install --path platform/crates/aevia-pkg</code>。</li>
-<li><strong><code>aevia-pkg publish</code> 的选项</strong>：<code>--key FINGERPRINT</code>、<code>--description TEXT</code>、<code>--license SPDX</code>、 <code>--keyword K</code>（至多 5 个）、<code>--repository URL</code>、<code>--dry-run</code>（只打印声明与校验和，不签名）、<code>--allow-dirty</code>。 没有 API token：每个需认证的动作都是用发布者自己的 OpenPGP/SSH 密钥对一份服务器签发的短时声明做的分离签名， 声明指名一个归档并带一次性 nonce，五分钟内有效。</li>
+<li><strong><code>aevia-pkg publish</code> 的选项</strong>：<code>--key FINGERPRINT</code>、<code>--description TEXT</code>、<code>--license SPDX</code>、 <code>--keyword K</code>（至多 5 个）、<code>--repository URL</code>、<code>--dry-run</code>（只打印声明与校验和，不签名）、<code>--allow-dirty</code>。 没有 API token：每个需认证的动作都是用发布者自己的 OpenPGP（GPG）或 SSH（<code>ssh-ed25519</code>）密钥对一份 服务器签发的短时声明做的分离签名，声明指名一个归档并带一次性 nonce，五分钟内有效。支持注册并使用 <code>ssh-ed25519</code> 密钥发布/撤回，但客户端与注册表始终<strong>优先选用 OpenPGP 密钥</strong>，并在注册、列出或使用 SSH 密钥时发出警告，建议改用 OpenPGP（PGP）密钥及硬件安全密钥。</li>
 <li><code>aevia docs</code> 只打印文档地址（<code>&lt;registry&gt;/docs[/&lt;owner&gt;/&lt;name&gt;[/&lt;version&gt;]]</code>，registry 取 <code>--registry</code>、 <code>AEVIA_REGISTRY</code>、默认 <code>https://aevia.apich.org</code>）；<code>--open</code> 在终端中打开浏览器。</li>
 </ul>
 <p>状态：<code>aevia --help</code> 的“packages”段仍写着“there is no registry”，与上述 registry 依赖矛盾，应删除；<code>aevia</code> 的预编译二进制若早于 <code>publish</code>/<code>login</code>/<code>search</code>/<code>docs</code>，帮助中不会列出它们。</p>
@@ -5824,7 +5819,7 @@ pub fn kernel() -&gt; Rc&lt;Kernel&gt;;   // 当前线程的会话，首次使�
 </ul>
 <h3 id="10-backend--1062-缓存">10.6.2 缓存</h3>
 <ul>
-<li><code>Config</code> 按规则集/假设/模式缓存；项按结构哈希缓存；编译函数按项哈希 + 输入名缓存；单位表/量纲别名是编译期常量。 rssn 另有请求级答案缓存与可选的子项引理缓存（附录 C Revision 12）。</li>
+<li><code>Config</code> 按规则集/假设/模式缓存；项按结构哈希缓存；编译函数按项哈希 + 输入名缓存；单位表/量纲别名是编译期常量。 rssn 另有请求级答案缓存与可选的子项引理缓存。</li>
 </ul>
 <h3 id="10-backend--1063-批处理">10.6.3 批处理</h3>
 <ul>
@@ -6319,7 +6314,7 @@ error[E0405]: affine points cannot be multiplied
     plot(combine([spec]))</code></pre>
 <p>这个程序把单位、符号、线性代数、张量和绘图串在一起：<strong>一门语言覆盖从公式到图表的整个工作流</strong>，而不是在多个库之间搬运字符串。</p>
 <p>下一章解释这些设计选择的理由、替代方案和已知限制。</p>
-</section><section class="chapter" id="ch-12-rationale"><h1>12 — 设计取舍、限制与路线图</h1><p>本章解释 Aevia 为什么长成这样，和现有方案比有什么不同，哪些是刻意不做的，以及实现进展到哪里。本章是资料性的。</p>
+</section><section class="chapter" id="ch-12-rationale"><h1>12 — 设计取舍与限制</h1><p>本章解释 Aevia 为什么长成这样，和现有方案比有什么不同，以及哪些是刻意不做的。本章是资料性的。</p>
 <h2 id="12-rationale--121-为什么把量纲做成类型">12.1 为什么把量纲做成类型</h2>
 <p>科学计算中的错误，大多数不是“算法写错了”，而是单位/量纲搞错了：把 <code>kW</code> 当成 <code>W</code>（差 1000 倍）、把 <code>°C</code> 当成 <code>K</code>（差 273.15）、 把 <code>Hz</code> 当成 <code>rad/s</code>（差 <code>2π</code>）、把质量流量当成体积流量。运行时单位库（Pint、Unitful）能在测试中抓到这些错误，但错误可能在生产才出现。 类型系统在编译期抓到，而且能<strong>指导推断</strong>：<code>mean(xs)</code> 的量纲由 <code>xs</code> 决定，<code>var(xs)</code> 是 <code>xs</code> 的平方，<code>diff(f)</code> 是 <code>f</code> 除以自变量—— 这些规则库函数表达不了，必须进入类型。</p>
 <p>代价是类型系统更复杂。Aevia 的控制方式：</p>
@@ -6628,56 +6623,7 @@ error[E0405]: affine points cannot be multiplied
 </tr>
 </tbody>
 </table>
-<h2 id="12-rationale--1210-实现进展">12.10 实现进展</h2>
-<p>实现按依赖顺序推进，不是语言版本；每个阶段都保持第 13 章的 manifest/动态调用契约。历史按修订记录在附录 C。</p>
-<table>
-<thead>
-<tr>
-<th>阶段</th>
-<th>内容</th>
-<th>状态</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>M0</td>
-<td>词法/布局/解析；名字解析；类型/量纲代数；形状细化；诊断与格式化器</td>
-<td>已实现；第 11 章的九个完整程序全部通过检查</td>
-</tr>
-<tr>
-<td>M1</td>
-<td>Core IR、解释器、闭包/记录/变体/模式匹配；Kernel Manifest 与 <code>Rssn</code> 生成；rssn 桥；单位与 <code>Point</code></td>
-<td>已实现</td>
-</tr>
-<tr>
-<td>M2</td>
-<td>张量存储/广播/切片；线性代数内核；<code>Sparse</code></td>
-<td>已实现（<code>Bcsr</code>、Krylov 求解器、切片）</td>
-</tr>
-<tr>
-<td>M3</td>
-<td><code>diff</code>/<code>antiderivative</code>/<code>defint</code>/<code>limit</code>/<code>series</code>/<code>solve</code>/<code>sum</code>/<code>product</code>；预算与错误映射</td>
-<td>已实现</td>
-</tr>
-<tr>
-<td>M4</td>
-<td>模块/包/锁文件；registry 协议与客户端；REPL/CLI/格式化；LSP</td>
-<td>已实现；缺口见附录 C Revision 15</td>
-</tr>
-<tr>
-<td>M5</td>
-<td>CSV/NPY/JSON；<code>Table&lt;ρ&gt;</code>；Plot；<code>Device</code>；<code>simulate</code> 与 <code>Physics.*</code></td>
-<td>已实现（Plot 只有 HTML/SVG 渲染器；GPU 后端未接入）</td>
-</tr>
-<tr>
-<td>M6</td>
-<td>JIT（<code>jit</code> feature）；插件算子；基准</td>
-<td>部分：JIT 默认关闭；见 §9.6</td>
-</tr>
-</tbody>
-</table>
-<p><strong>首个稳定版验收标准</strong>：第 11 章所有例子可检查/可运行；量纲错误全部在编译期（除 <code>Dyn</code>/数据边界）；manifest 中的算子无手写绑定；与 rssn 的 conformance 测试通过；<code>rssn::dim</code>/<code>UnitRegistry</code> 往返一致；插件/registry 可用；形状细化、<code>Point</code> 张量、<code>Table&lt;ρ&gt;</code>、<code>Sparse</code>、<code>Device</code> 各有端到端示例；至少一个真实的 ODE/PDE/统计项目跑通。</p>
-<h2 id="12-rationale--1211-成功标准">12.11 成功标准</h2>
+<h2 id="12-rationale--1210-成功标准">12.10 成功标准</h2>
 <ol type="1">
 <li>物理/工程/数据科学用户能在一天内写出带单位、带符号推导、带数值求解的程序；</li>
 <li>量纲错误在编译期被抓住，错误信息能指导修正；</li>
@@ -6685,7 +6631,7 @@ error[E0405]: affine points cannot be multiplied
 <li>符号计算覆盖常见微积分/方程/线性代数；</li>
 <li>代码可读，像数学，而不是像配置。</li>
 </ol>
-<p>下一章是可扩展性与 rssn 集成；之后是完整文法、诊断目录和修订记录。</p>
+<p>下一章是可扩展性与 rssn 集成；之后是完整文法与诊断目录。</p>
 </section><section class="chapter" id="ch-13-extensibility"><h1>13 — 可扩展性与 RSSN 集成</h1><p>本章是规范的一部分，并且<strong>优先于</strong>其他章节中任何“暂不支持/以后评估”的表述。Aevia 不按 <code>v1</code>/<code>v2</code> 分层：语言能力一次设计到位；后端尚未实现的部分用 <strong>capability 诊断</strong>（<code>E1001</code>）报告，而不是删掉语言特性。</p>
 <p>后端接口的详细契约在 rssn 仓库的 <code>docs/KERNEL.md</code>（Kernel Manifest、动态调用 ABI、插件）、<code>docs/DIMENSIONS.md</code> 与 <code>docs/CALLBACKS.md</code>； 本章定义 Aevia 侧的规范性契约。</p>
 <hr />
@@ -7021,8 +6967,7 @@ abi = 1</code></pre>
 <p><code>DimArena</code> 在模板里是 <code>Arc&lt;RwLock&gt;</code>，<code>Graph::clone</code> <strong>共享</strong>它；写入时 <code>with_dim_arena_mut</code>/<code>define_base_dimension</code> 看到 <code>Arc::strong_count &gt; 1</code> 就克隆再写（写时复制）。因此： <code>Config::base_dimension(name)</code> 是安全路径（<code>prepare</code> 在克隆图上定义，请求之间互不影响）；不定义基量纲的请求共享模板 arena，不付拷贝成本；不要直接对 <code>Session</code> 的模板图调用 <code>define_base_dimension</code>；跨线程仍用 <code>Session::fork</code>/<code>merge</code>，不共享 <code>Session</code>（<code>RefCell</code>）。</p>
 <hr />
 <h2 id="13-extensibility--137-中心包-registry">13.7 中心包 registry</h2>
-<p>registry 是<strong>内容寻址 + 签名 + 能力声明</strong>的包索引，服务实现在 <code>platform/</code>（<code>aevia-registry-*</code> 与 <code>aevia-pkg</code>），部署为 <code>aevia.apich.org</code>。</p>
-<p><strong>状态</strong>：已实现——<code>aevia add owner/name[@req]</code>、<code>aevia update</code>、<code>aevia fetch</code>、<code>aevia tree</code>（均支持 <code>--offline</code>）与 <code>aevia pkg publish/yank/search/verify</code>；依赖解析由 <code>aevia-resolve</code>（SemVer 2.0、回溯求解、锁文件带 <code>checksum</code>，§7.5.1/§7.5.2）完成；git 依赖与未知清单键仍是 <code>E0605</code>。已知缺口见附录 C Revision 15。</p>
+<p>registry 是<strong>内容寻址 + 签名 + 能力声明</strong>的包索引，服务实现在 <code>platform/</code>（<code>aevia-registry-*</code> 与 <code>aevia-pkg</code>），部署为 <code>aevia.apich.org</code>。 CLI 提供 <code>aevia add owner/name[@req]</code>、<code>aevia update</code>、<code>aevia fetch</code>、<code>aevia tree</code>（均支持 <code>--offline</code>）与 <code>aevia pkg publish/yank/search/verify</code>；依赖解析使用 SemVer 2.0 与锁文件校验（§7.5.1/§7.5.2），git 依赖与未知清单键报 <code>E0605</code>。</p>
 <h3 id="13-extensibility--1371-包清单">13.7.1 包清单</h3>
 <pre class="code" data-lang="toml"><code>[package]
 name = &quot;aevia-thermo&quot;
@@ -7632,6 +7577,16 @@ DEDENT         ::= 由布局算法产生</code></pre>
 <td>unknown attribute</td>
 <td>检查属性名/参数</td>
 </tr>
+<tr>
+<td><code>E0211</code></td>
+<td>cannot lower forbidden lint</td>
+<td>移除内层 <code>@allow</code>/<code>@warn</code>/<code>@deny</code> 或放宽外层 <code>@forbid</code></td>
+</tr>
+<tr>
+<td><code>E0212</code></td>
+<td>unknown lint or group name</td>
+<td>运行 <code>aevia lint --list</code> 查看可用名称</td>
+</tr>
 </tbody>
 </table>
 <h2 id="appendix-b-diagnostics--b5-类型错误e03xx">B.5 类型错误（E03xx）</h2>
@@ -7808,7 +7763,7 @@ DEDENT         ::= 由布局算法产生</code></pre>
 </tr>
 </tbody>
 </table>
-<p>状态：<code>E0408</code>、<code>E0409</code> 是保留码，实现中不可达：量纲统一是自由阿贝尔群上的指数线性统一，含非零系数变量的残差总可解，唯一的失败是 非零常量残差，即 <code>E0401</code>；也不会出现 occurs 状态（证明见 <code>aevia-types/tests/diagnostics_coverage.rs</code>）。</p>
+<p>注：<code>E0408</code>、<code>E0409</code> 为保留码：量纲统一是自由阿贝尔群上的指数线性统一，含非零系数变量的残差总可解，唯一的失败是 非零常量残差（<code>E0401</code>），也不会出现 occurs 状态。</p>
 <h2 id="appendix-b-diagnostics--b7-单位错误e05xx">B.7 单位错误（E05xx）</h2>
 <table>
 <thead>
@@ -7881,7 +7836,7 @@ DEDENT         ::= 由布局算法产生</code></pre>
 </tr>
 </tbody>
 </table>
-<p>状态：<code>E0502</code>、<code>E0503</code>、<code>E0507</code> 是保留码：没有模块级单位命名空间（§5.9），对应状态不存在。</p>
+<p>注：<code>E0502</code>、<code>E0503</code>、<code>E0507</code> 为保留码：没有模块级单位命名空间（§5.9），对应状态不存在。</p>
 <h2 id="appendix-b-diagnostics--b8-模块错误e06xx">B.8 模块错误（E06xx）</h2>
 <table>
 <thead>
@@ -8021,7 +7976,7 @@ DEDENT         ::= 由布局算法产生</code></pre>
 </tr>
 </tbody>
 </table>
-<p>状态：个别内建函数借用 <code>E0806</code>–<code>E0809</code> 报告自己的参数/内部失败（例如 <code>approx_map</code>、<code>degree</code>），码的类别以上表为准，消息以内建 自述为准。</p>
+<p>注：个别内建函数借用 <code>E0806</code>–<code>E0809</code> 报告自己的参数/内部失败（例如 <code>approx_map</code>、<code>degree</code>），码的类别以上表为准，消息以内建 自述为准。</p>
 <h2 id="appendix-b-diagnostics--b11-io-错误e09xx">B.11 IO 错误（E09xx）</h2>
 <table>
 <thead>
@@ -8068,7 +8023,7 @@ DEDENT         ::= 由布局算法产生</code></pre>
 </tr>
 <tr>
 <td><code>W0102</code></td>
-<td>unused import（保留码）</td>
+<td>unused import（<code>aevia lint</code>）</td>
 </tr>
 <tr>
 <td><code>W0103</code></td>
@@ -8087,6 +8042,18 @@ DEDENT         ::= 由布局算法产生</code></pre>
 <td>unreachable code（保留码）</td>
 </tr>
 <tr>
+<td><code>W0204</code></td>
+<td>在 <code>@relax_result</code> 下丢弃 <code>Result</code> 值</td>
+</tr>
+<tr>
+<td><code>W0205</code></td>
+<td>在 <code>@relax_result</code> 下隐式解包 <code>Result</code>/<code>Option</code>（<code>?</code> 无法转换）</td>
+</tr>
+<tr>
+<td><code>W0206</code></td>
+<td>在 <code>@relax_result</code> 下 <code>Result</code>/<code>Option</code> 的 <code>match</code> 不穷尽</td>
+</tr>
+<tr>
 <td><code>W0301</code></td>
 <td>unresolved dimension defaulted to 1</td>
 </tr>
@@ -8100,7 +8067,7 @@ DEDENT         ::= 由布局算法产生</code></pre>
 </tr>
 <tr>
 <td><code>W0501</code></td>
-<td>display unit dropped（尚无发射点，§5.4.2）</td>
+<td>display unit dropped（保留码，§5.4.2）</td>
 </tr>
 <tr>
 <td><code>W0601</code></td>
@@ -8110,9 +8077,49 @@ DEDENT         ::= 由布局算法产生</code></pre>
 <td><code>W0602</code></td>
 <td>deprecated name used：声明上的 <code>@deprecated("...")</code>（§2.2.7/§13.8.1）</td>
 </tr>
+<tr>
+<td><code>W0701</code></td>
+<td>函数/变量名未使用 <code>snake_case</code>（<code>aevia lint</code>）</td>
+</tr>
+<tr>
+<td><code>W0702</code></td>
+<td>类型/类/构造器名未使用 <code>UpperCamelCase</code>（<code>aevia lint</code>）</td>
+</tr>
+<tr>
+<td><code>W0703</code></td>
+<td>公开声明缺少 <code>##</code> 文档注释（<code>aevia lint</code>，pedantic）</td>
+</tr>
+<tr>
+<td><code>W0704</code></td>
+<td>冗余类型标注（<code>aevia lint</code>，pedantic）</td>
+</tr>
+<tr>
+<td><code>W0705</code></td>
+<td>绑定遮蔽预置函数名（<code>aevia lint</code>）</td>
+</tr>
+<tr>
+<td><code>W0706</code></td>
+<td>对 <code>Float</code> 值使用严格相等 <code>==</code>/<code>!=</code>（<code>aevia lint</code>）</td>
+</tr>
+<tr>
+<td><code>W0707</code></td>
+<td>裸零字面量被隐式赋予量纲（<code>aevia lint</code>）</td>
+</tr>
+<tr>
+<td><code>W0708</code></td>
+<td>将表达式与其自身进行比较（<code>aevia lint</code>）</td>
+</tr>
+<tr>
+<td><code>W0709</code></td>
+<td>冗余的 <code>if</code> 表达式（<code>aevia lint</code>）</td>
+</tr>
+<tr>
+<td><code>W0710</code></td>
+<td>重复导入同一模块（<code>aevia lint</code>）</td>
+</tr>
 </tbody>
 </table>
-<p>状态：<code>W0102</code> 与 <code>W0203</code> 是保留码——检查器只看到打平的名字表，选择性导入与 <code>open M</code> 无法区分；语言没有 <code>return</code>/<code>break</code>，AST 无法表示 不可达语句。<code>W0501</code> 目前没有发射点。</p>
+<p>注：<code>W0203</code> 为保留码（语言没有 <code>return</code>/<code>break</code>，语法无法表示不可达语句）；<code>W0501</code> 为保留码。 <code>W0102</code> 与 <code>W0701</code>–<code>W0710</code> 由 <code>aevia lint</code> 发射；编译器警告与 lint 检查共同遵循 <code>aevia.toml [lints]</code>、<code>-A/-W/-D/-F</code> 与 <code>@allow/@warn/@deny/@forbid</code>。</p>
 <h2 id="appendix-b-diagnostics--b13-消息写作规范">B.13 消息写作规范</h2>
 <ol type="1">
 <li><strong>说人话。</strong> <code>expected Real[L], found Real[T]</code> 好于 <code>type unification failed</code>。</li>
@@ -8188,210 +8195,6 @@ help: did you mean `km`?</code></pre>
 </tbody>
 </table>
 <p>这些是<strong>环境/后端</strong>错误，不是用户程序的类型错误；诊断必须给出可执行的替代方案（例如“安装带 <code>core.gpu</code> 的 RSSN”或“用 <code>Rssn.dynamic</code>”）。</p>
-<p>下一附录记录规范的修订历史。</p>
-</section><section class="chapter" id="ch-appendix-c-changelog"><h1>附录 C — 修订记录与已知实现边界</h1><p>本附录记录 Aevia 规范与实现的演进、各章不再保留的“状态故事”，以及明确记录在案的未实现边界。规范正文只说<strong>现在是什么</strong>；历史在这里。本附录是资料性的。</p>
-<hr />
-<h2 id="appendix-c-changelog--revision-232026-11-14规范全面审校与英文版">Revision 23（2026-11-14）：规范全面审校与英文版</h2>
-<p>本轮把规范与实现逐章对照，压缩重复、把状态说明移出正文，并新增英文版（<code>spec/en/</code>，写作与术语规则见 <code>spec/STYLE.md</code>）。机器读取的两章（08、11）保持形态不变，由 <code>cargo test -p aevia-std --test spec_signatures --test spec_programs</code> 守住。</p>
-<ul>
-<li><code>08-stdlib.md</code>：合并实际求解器方法、物理容差、预算、回调、严格 <code>Option</code> 与原生数值模型契约；修正精确签名/动态入口的界限，并同步英文。</li>
-<li><code>09-runtime.md</code>：明确 RSSN 数值算法与后端依赖的所有权、Aevia 值/单位适配边界；原生源码覆盖与清单可达性分别报告。</li>
-</ul>
-<p><strong>全书层面</strong></p>
-<ul>
-<li>新增英文版：每个中文章节在 <code>spec/en/&lt;同名&gt;</code> 有对应英文文件，章节号、锚点、代码块与诊断码与中文一致。</li>
-<li>状态说明（“实现状态（日期）”、“Revision N 新增”、“task-NN 已闭合”）从正文移出，归入本附录；正文只保留一行 <em>状态</em>。</li>
-<li>实测数字（算子数、单位数、测试数）不再散落在各章：manifest 规模在 §10.8 一处给出，其余各章指向 <code>aevia rssn</code>。</li>
-</ul>
-<p><strong>本批章节（08、10–13、README、本附录）</strong></p>
-<table>
-<thead>
-<tr>
-<th>文件</th>
-<th>修正</th>
-<th>增补</th>
-<th>删除/移出</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>08-stdlib.md</code></td>
-<td>§8.19/§8.20 的 manifest 计数与“323/323”“309 条”“37 个模块”等过期数字（现为 1620 个算子、41 个模块文件，覆盖由测试断言）；<code>Rssn_Numeric</code> 的 typed 计数改为“全部 typed”；§8.7.1 中文段落里夹杂的英文句子</td>
-<td>稀疏、FFT、序列操作等小节合并为一次叙述，规则不变</td>
-<td>各节“实现状态”故事（<code>par_map</code>、<code>args</code>、SDE、稀疏、Plot、NPY、仿真）压缩为一行状态；Revision 号旁注；<code>.workbuddy-ai</code> 审计文档的引用</td>
-</tr>
-<tr>
-<td><code>10-backend.md</code></td>
-<td>§10.0/§10.8 的 manifest 数字（1382→1620，<code>manifest_hash</code> 变更）；§10.5.1“<code>par_map</code> 顺序执行”改为工作线程副本（§9.7.2）；§10.9 “量纲字面量折叠为精确有理数、打印 <code>sqrt(800000/196133) s</code>”的偏差说明（现 <code>fall_time(20.0 m)</code> 打印 <code>2.0196199771025523 s</code>）</td>
-<td>§10.3.7 指向生成的 <code>Rssn_Sim_&lt;Name&gt;</code> 模块；§10.8 缺口表合并重复项</td>
-<td>task-31/emit_typecheck 的叙述、重复的 SDE 状态段、双语混写的 §10.6.5 英文摘要</td>
-</tr>
-<tr>
-<td><code>11-examples.md</code></td>
-<td>11.1–11.5 输出改为 <code>aevia run</code> 的实际输出；11.2 终点时间改为 3 s（原 10 s 时抛体已落地、高度为负）；11.3 <code>series</code> 的结果形态与 <code>solve</code> 的 <code>Solutions</code> 记录；11.10 的变量遮蔽警告</td>
-<td>说明 11.8 是库模块（无 <code>main</code>）</td>
-<td>重复的“展示了…的好处”段落</td>
-</tr>
-<tr>
-<td><code>12-rationale.md</code></td>
-<td>12.8.7 并行符号值（<code>fork/merge</code> 的说法换成 §9.7.2 的实际行为）；12.10 路线图由工期估算改为实现进展表</td>
-<td>—</td>
-<td>M0–M6 的周数、验收清单的重复项</td>
-</tr>
-<tr>
-<td><code>13-extensibility.md</code></td>
-<td>§13.7 registry：此前写“设计完成、实现未开始、依赖报 <code>E0605</code>”，实际 <code>aevia add/update/fetch/tree</code>、<code>aevia pkg publish/yank/search/verify</code> 与解析器已实现（Revision 15）；§13.8.2 capability 表补上 <code>core.callback</code>、<code>core.plugin.source</code> 并以实际 12 行为准；§13.9.5 稀疏“只检查秩”改为已检查细化形状；删除不存在的 <code>aevia fix</code> 与 <code>tools/gen_rssn_module.aev</code></td>
-<td>13.2.2 精度分档表与 §13.4.1 评分规则合并</td>
-<td>manifest hash 变迁（<code>1920638b…→8ed92a22…→8d2c3764…</code>）、task-31/task-22 叙述、重复的 SDE 状态、各节“实现状态”长段</td>
-</tr>
-<tr>
-<td><code>README.md</code></td>
-<td>“Revision 13”→23；“1476 operators in 37 rule sets” 等计数改为指向 <code>aevia rssn</code>；阅读指南表与章节标题对齐</td>
-<td>中文版（原先 <code>spec/README.md</code> 只有英文）</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>appendix-c-changelog.md</code></td>
-<td>§2 的“37 个标准库模块”→41；§5 已知边界清单更新（SDE 事件、形状细化已实现，registry 已实现）</td>
-<td>本条目</td>
-<td>Revision 12–22 的细节压缩为要点</td>
-</tr>
-</tbody>
-</table>
-<p><strong>本批章节（01–04、附录 A）</strong></p>
-<table>
-<thead>
-<tr>
-<th>文件</th>
-<th>修正</th>
-<th>增补</th>
-<th>删除/移出</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>01-lexical.md</code></td>
-<td>NFC 只作用于标识符；反引号标识符未实现（E0105，改为状态说明）；<code>return</code> 不是 Prelude 函数（应为 <code>pure</code>）；<code>1e</code>、<code>1.</code> 非法字面量；未知转义是 E0105；<code>_</code> 只能作调用实参；后缀 <code>!</code> 须紧贴操作数</td>
-<td>E0104 空插值 <code>{}</code>、E0108/E0209 的 <code>3 (…)</code> 情形；µ/Ω/Å/° 特殊字符表与字面量默认类型表</td>
-<td>“Revision 13”旁注；与 §2.6 重复的优先级表</td>
-</tr>
-<tr>
-<td><code>02-syntax.md</code></td>
-<td><code>open</code> 不能打开 <code>import … as</code> 别名；<code>forall</code> 谓词只有一个参数；<code>return(())</code>→<code>pure(())</code>；<code>xs[1::2]</code> 是 cons；<code>do</code> 内不能声明 <code>fn</code>/<code>let rec</code>；单元素元组是 E0202；<code>(+)</code> 能解析但未绑定（状态）；<code>√x</code> 需已知操作数类型；浮点/负数字面量不是模式；已知属性集合（含 <code>@bench</code>）</td>
-<td>E0208、E0314、E0701、E1001；<code>match</code> 三种布局</td>
-<td>全部行内 EBNF（与附录 A 重复）；§2.7.1 重复段落</td>
-</tr>
-<tr>
-<td><code>03-types.md</code></td>
-<td><code>Int / Int</code> 为 <code>Real</code>；<code>Real</code> 比较得 <code>Prop</code>，<code>if</code> 中用 <code>Prop</code> 是 E0302；索引规则（标量下标消轴、切片保轴，旧“只接受全标量下标”有误）；<code>oo m</code> 非法（写 <code>oo * 1 m</code>）；<code>return</code>/<code>bind</code>/<code>panic</code> 不是用户函数；<code>TotalFloat</code> 未实现；E0307 与 E0315 的区分</td>
-<td>§3.5.5 归约与线性代数的量纲规则表；Nat 方程要点</td>
-<td>“Revision 12/13”与附录 C Revision 9 旁注；重复的签名表（留在 §8.4）；弱变量与 RSSN <code>Symbol</code> 的冗长叙述</td>
-</tr>
-<tr>
-<td><code>04-dimensions.md</code></td>
-<td><code>L^0.5</code> 非法（写 <code>L^(1/2)</code>）；E0408/E0409 保留未触发；E0411 含义；<code>Dyn</code> 不匹配是运行时 E0412 而非 <code>panic</code>；删除不存在的 <code>try_add</code>/<code>try_mul</code>/<code>unit_pow_dyn</code>/<code>lerp</code>；§4.9.5 示例改为 <code>det_unit</code>/<code>pow_dyn</code>/<code>check</code>；§4.3 统一算法重写</td>
-<td>E0318 与刚性参数入错误表；<code>pow_dyn</code>、<code>det_unit</code>、<code>value_of</code> 签名；<code>check</code> 结果类型须标注（E0304）</td>
-<td>与 §3.5.5 重复的张量表；含糊的伪代码；“此前被静默接受”的叙述</td>
-</tr>
-<tr>
-<td><code>appendix-a-grammar.md</code></td>
-<td><code>nat</code> 补 <code>*</code> 与括号；负数字面量不是模式；<code>dimension_decl</code> 多余的 <code>private</code>；<code>return</code>/上下文关键字的错误说法</td>
-<td>—</td>
-<td>与 §2.6 重复的优先级表</td>
-</tr>
-</tbody>
-</table>
-<p><strong>本批章节（05–07、09、附录 B）</strong></p>
-<table>
-<thead>
-<tr>
-<th>文件</th>
-<th>修正</th>
-<th>增补</th>
-<th>删除/移出</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>05-units.md</code></td>
-<td><code>kkm</code> 为 <code>E0501</code>（非 <code>E0503</code>）；<code>E0505</code> 是重复单位名（同一量纲可有多个尺度 1 单位）；<code>E0506</code> 是“尺度对该指数无精确值”（先用后声明为 <code>E0501</code>，不存在单位环）；单位全局可见、不能用 <code>Units.SI.km</code> 限定；<code>25.0 °C + 10 K</code> 合法，仅 <code>Real</code> 变量报 <code>E0302</code>；<code>100 u</code> 示例（<code>u</code> 是原子质量单位）；<code>e_charge</code> 不存在；<code>kat</code> 量纲</td>
-<td>保留码 <code>E0502</code>/<code>E0503</code>/<code>E0507</code>、<code>W0501</code> 无发射点的状态说明；<code>delta_to</code> 显示套用偏移的已知缺陷</td>
-<td>日期实现状态段、单位/常数计数、rssn 3.0.0-rc.1 旁注</td>
-</tr>
-<tr>
-<td><code>06-semantics.md</code></td>
-<td><code>decide : Prop -&gt; Option&lt;Bool&gt;</code>；<code>dsolve</code> 示例量纲错误；<code>point(300.0, K)</code> 须 <code>to(°C, …)</code> 才显示 <code>26.85 °C</code>；栈规则（CLI 默认 1024 MiB、深度改由剩余栈限制、库默认 2048、<code>max_io_depth</code>）；相位表</td>
-<td><code>E0804</code> 含 <code>assuming</code> 为假；<code>E0811</code> 入错误表</td>
-<td><code>with_budget</code> 冗述（留作状态）、重复示例</td>
-</tr>
-<tr>
-<td><code>07-modules.md</code></td>
-<td>清单只读 <code>[package]</code>（<code>name</code>/<code>version</code>/<code>entry</code>）与 <code>[dependencies]</code>，其余表/键为 <code>E0605</code>；<code>private</code> 仅限六类声明（<code>private instance</code> 为 <code>E0202</code>）；<code>E0603</code> 仅在同名异类型时；<code>E0608</code> 仅嵌入 API，CLI 缺 <code>main</code> 无码；单位不依赖 import；<code>aevia doc</code> 输出 Markdown</td>
-<td>名义身份规则凝练为要点</td>
-<td>约 40 行日期实现叙述</td>
-</tr>
-<tr>
-<td><code>09-runtime.md</code></td>
-<td>crate 表；<code>:dims</code> 的基量纲名；CLI 清单与 <code>--help</code>/源码一致；磁盘缓存状态不再称 registry 客户端未实现；默认栈 1024 MiB</td>
-<td><code>publish</code>/<code>login</code>/<code>search</code>/<code>info</code>/<code>yank</code>/<code>verify</code>/<code>docs</code>/<code>watch</code>、<code>aevia-pkg publish</code> 选项、<code>AEVIA_PKG</code>/<code>AEVIA_REGISTRY</code>；<code>--no-cache</code>/<code>--out</code>/<code>--jobs</code>；<code>--help</code> “no registry” 残句的状态说明</td>
-<td>日期注记、重复的 registry 文字</td>
-</tr>
-<tr>
-<td><code>appendix-b-diagnostics.md</code></td>
-<td>各码含义对照实际发射（<code>E0108</code>/<code>E0209</code>、<code>E0314</code>、<code>E0402</code>、<code>E0411</code>、<code>E0412</code>、<code>E0701</code>/<code>E0702</code>、<code>E0805</code>、<code>E0902</code>、<code>E1001</code>–<code>E1006</code>）；示例改为真实输出</td>
-<td><code>W0602</code> 入表；<code>W0102</code>/<code>W0203</code> 标保留；<code>E0806</code>–<code>E0809</code> 被内建借用的说明</td>
-<td>保留 B.1–B.17 编号，无整节删除</td>
-</tr>
-</tbody>
-</table>
-<p><strong>审校中发现、不在本批范围的陈旧点</strong>：<code>09-runtime.md</code> §9.11 末尾仍写“registry 客户端仍未实现（依赖只有 path 依赖）”，与 §13.7 和 Revision 15 不符，应由该章的批次更正。</p>
-<hr />
-<h2 id="appendix-c-changelog--1-规范演进总结">1. 规范演进总结</h2>
-<ul>
-<li><strong>Revision 0 (2026-10-31)</strong>：确立语言核心定位（纯函数式、量纲作为类型、静态秩与动态形状张量、符号/数值双相、rssn 后端）。</li>
-<li><strong>Revisions 1–6 (2026-11-01 ~ 2026-11-04)</strong>：双向类型检查、单位推导与仿射温标、行多态与模式匹配、ODE/PDE 统一接口、诊断码（E0100–E1000）。</li>
-<li><strong>Revisions 7–10 (2026-11-05 ~ 2026-11-07)</strong>：标准库模块树（§8.20）；原生 JIT（<code>aevia-core/src/jit.rs</code>，<code>jit</code> feature）；<code>par_map</code> 的工作线程副本求值（<code>--jobs N</code>）；<code>read_npy</code>/<code>write_npy</code>。</li>
-<li><strong>Revision 11 (2026-11-08)</strong>：修复 <code>BigRational</code> 零底负幂 panic 与超大幂次 DoS；词法支持 Unicode 上标括号；LSP 零长度消息死循环与 <code>did_change</code> 崩溃；符号引擎 <code>0^(-n)</code> 奇点与分数根保护；张量 Cons 维度校验；测量值零除；RSSN FFI 批量计算的机器可读 <code>diagnostic_codes</code>；稠密特征值 0×0/1×1 边界。</li>
-</ul>
-<h2 id="appendix-c-changelog--2-当前实现状态对齐旧审计文档的过时记录">2. 当前实现状态（对齐旧审计文档的过时记录）</h2>
-<ol type="1">
-<li><strong><code>par_map</code> 并行求值</strong>：已实现（Rayon + 独立求值器副本，输入序，<code>--jobs N</code>）。</li>
-<li><strong><code>@jit</code></strong>：已实现（<code>jit</code> feature；纯数值分支与自尾递归降为 Cranelift，不支持的结构回退解释器）；默认构建 <code>core.jit</code> 关闭。</li>
-<li><strong>标准库模块导入</strong>：已实现，41 个 <code>.aev</code> 模块文件在 <code>crates/aevia-std/stdlib/</code>。</li>
-<li><strong>NPY 读写</strong>：已实现（静态秩校验）。</li>
-</ol>
-<h2 id="appendix-c-changelog--3-revision-122026-11-08缓存bcsr源码算子非交换-sde">3. Revision 12（2026-11-08）：缓存、<code>Bcsr</code>、源码算子、非交换 SDE</h2>
-<ol type="1">
-<li><strong>缓存。</strong> rssn <code>Session</code> 请求级答案缓存（默认开启；键为请求结点、模板与配置指纹；撞到墙钟上限的运行不缓存；注册插件/单位时整体失效）与子项引理缓存（<code>CachePolicy::lemmas</code>，默认关闭）； Aevia 按模块的磁盘接口缓存 <code>.aevi</code>（§9.11，<code>AdtId</code> 落盘时换成符号键）。</li>
-<li><strong><code>Bcsr</code>（§8.4.1）。</strong> rssn 新增 <code>kernels::bsr::Bsr</code>；Aevia 新增 <code>SparseFormat::Bcsr</code>、<code>to_bcsr</code>/<code>block_size</code>、<code>convert&lt;Bcsr&gt;</code> 自动选块；<code>cg_with</code> 预条件共轭梯度、对称正定的 Cholesky 优先 <code>spsolve</code>、稀疏切片。 <code>E1001("storage.sparse.block")</code> 删除。</li>
-<li><strong>源码算子（§13.5.2）。</strong> <code>@op</code> 以检查得到的量纲注册量纲签名；模块绑定换成包装（数值实参执行函数体、符号实参构造算子结点）；<code>@rule</code> 在算子之后追踪；规则解析器接受 <code>ns/name</code>。</li>
-<li><strong>非交换 SDE（§8.9.1）。</strong> Stratonovich 非交换 Milstein、非交换 SRK、自适应 Stratonovich（精确 Itô 转换）；方法名选格式族与积分解释，噪声结构选内核；<code>terms</code>/<code>cells</code> 有默认值；记录状态 + 一般噪声。</li>
-<li><strong>使用即报错的功能。</strong> <code>symfun</code> 应用构造未定函数项；新增 <code>dsolve</code>（§6.4.5）；<code>@jit(target = Cpu)</code> 被接受，<code>Gpu</code>/<code>Distributed</code> 在检查期报 <code>E1001</code>；单文件规范改由 <code>tools/bundle_spec.py</code> 生成。</li>
-<li><strong>长张量字面量。</strong> 超过 128 个元素的字面量不再 <code>E0304</code>：变量链迭代跟随，重复数值约束去重，2000 元素字面量的检查从 ~7 s 降到 0.6 s。</li>
-<li><strong>rssn 极限。</strong> <code>limit(sqrt(x+1) - sqrt(x), x, oo)</code> 经 Puiseux 代换求出；修正 l'Hôpital 预判的一个错误（<code>limit(sqrt(x)*(sqrt(x+1) - sqrt(x)), x, oo)</code> 应为 1/2）。</li>
-</ol>
-<h2 id="appendix-c-changelog--4-revision-1322">4. Revision 13–22</h2>
-<p><strong>Revision 13（2026-11-07 ~ 11-09）：信任边界与规则收紧。</strong> 单位表达式的空白规则（§1.8.1）：空白是单位与算术的分界，<code>3 m * x</code> 是 <code>3 m</code> 乘 <code>x</code>，紧贴的 <code>3 m*x</code> 仍是单位表达式；未解出的量纲变量作指数底数时令其为 <code>1</code>（§3.4.3）；声明的量纲参数是刚性的， 违反是 <code>E0318</code>（§4.4.1）；<code>show</code> 保留 <code>Float</code> 的相位（<code>10.0</code> 与 <code>10</code> 不同，§6.12.3）；<code>Set&lt;τ&gt;</code> 有了值与操作（§8.1.5.1）；运行时信任边界（§9.2.3）：运行时执行检查器的证明而不重新证明； 字面量折叠（§3.10.4）：一个字面量只舍入一次，闭合的字面量算术树是编译期常量；单位制 <code>module M with units natural|planck|atomic|geometrized</code>（§5.11，<code>E0511</code>/<code>E0512</code>）；§9.9 命令与 flag 对齐实际 CLI。</p>
-<p><strong>Revision 14（11-10）：rssn 绑定自动化。</strong> 领域模块 <code>Rssn_&lt;Domain&gt;</code>（§10.3.8）：manifest + 声明式 overlay，泛型转换，错误走 <code>Result</code>，覆盖检查与报告；维度证据；丰富类型 <code>Zmod</code>/<code>Perm</code>/<code>Graph</code>/<code>Group</code>/<code>PermGroup</code>。 仍缺：<code>Zmod&lt;n&gt;</code>/<code>GF&lt;p&gt;</code> 的类型级模数与运算符重载（§10.3.8 列出所需的语言改动）。</p>
-<p><strong>Revision 15（11-10）：包平台与依赖解析。</strong> <code>aevia-resolve</code>（SemVer 2.0 <code>Version</code>/<code>VersionReq</code>、带冲突回跳的回溯解析器、稀疏索引读取器，与穷举搜索 2000 轮随机对照）；清单支持 <code>Units = "^1.2"</code> 与 <code>{ package = "owner/name", version = … }</code>， 锁文件新增 <code>checksum</code>（来源 <code>registry+aevia</code>），<code>E0605</code> 对 git/未知键仍拒绝；<code>platform/</code> 的索引记录 <code>deps</code>（<code>package</code>/<code>req</code>/可选 <code>import</code>），发布时校验（无纯 path 依赖、依赖存在且有未 yank 的满足版本）， 发布与 yank 各在一个事务内，<code>POST /api/v1/resolve</code>、dependents 端点；客户端 <code>aevia add/update/fetch/tree</code>（<code>--offline</code>）与 <code>aevia-pkg</code> 的 <code>index</code>/<code>vendor</code>/<code>lock [--check]</code>。 仍缺：按包的依赖名字空间（同名导入根指向不同版本仍是 <code>E0606</code>）；<code>[patch]</code> 覆盖；<code>aevia-pkg tree/lock</code> 只读根清单；镜像 <code>[source]</code> 替换；解压后的源树无逐文件摘要。</p>
-<p><strong>Revision 16（11-12）：见证式自动类型化（§10.3.8）。</strong> kernel 把引擎的等式判断（请求与答案同处一个等价类）记录为 sort 事实，经重放、聚类、变异探测生成 <code>signatures.witnessed.json</code>；Aevia 为没有 <code>sig</code> 的算子生成同形的类型化包装器 （dynamic 档从 1298 降到 871，新增 453 个自动类型化算子）；不透明句柄 <code>Value</code>；见证重载的量纲证据；精确/符号稀疏矩阵（<code>sp_*</code>）与 D-finite 判定（<code>holonomic_*</code>）随之可用。 仍缺：见证参数名由类型推出；元组与参差列表留在 dynamic 档；多重载以 <code>_int</code>/<code>_real</code>/<code>_float</code> 后缀区分。</p>
-<p><strong>Revision 17（11-12）：数值算子组、维度无关名字、GPU <code>f64</code>。</strong> <code>Rssn_Numeric</code> 吸收 rssn <code>numeric</code> 规则集新增的 73 个算子（稳健统计、窗与谱、小波、Krylov/稀疏/低秩/张量、有限差分、复变特殊函数、表达式算子）； 约定：结果是 <code>Float</code>（内核只编码浮点）、方法/小波/统计量是符号（每个名字只 <code>let</code> 一次）；维度无关的名字（<code>heat_fd</code> 等的空间维数是嵌套深度，符号 PDE 与仿射变换同理）； rssn 的 wgpu 设备以双单精度提供 <code>Dtype::F64</code>，新增启动融合规划器 <code>device::plan</code>（Aevia 侧 <code>Gpu(n)</code> 仍报 <code>E1001</code>）；见证包装器参数名由类型推出。</p>
-<p><strong>Revision 18（11-13）：按秩/维数命名的多签名。</strong> overlay 的 <code>sig op as name(..)</code> 可对同一算子重复；<code>codec Type - from_fn</code>（只解码类型）；有限差分的 <code>_2d</code>/<code>_3d</code>；秩多态张量算子 <code>tensor_norm_&lt;r&gt;</code>/<code>tensor_inner_&lt;r&gt;</code>/<code>tensordot_&lt;ra&gt;_&lt;rb&gt;_&lt;k&gt;</code> 与分解 <code>hosvd</code>/<code>hooi</code>/<code>cp_als</code>/<code>tt_svd</code>/<code>tt_dense</code>（r = 2–4）；混合列表与列表访问器 <code>from_value&lt;Tensor&lt;1, Value&gt;&gt;</code>；<code>Rssn_Numeric</code> 全部 typed。 仍缺：秩超过 4 的张量算子与分解仍走 <code>Rssn.dynamic</code>。</p>
-<p><strong>Revision 19（11-13）：语言侧补全。</strong> 秩 2–4 的 <code>sum</code>/<code>prod</code>/<code>mean</code>/…/<code>transpose</code>（秩 ≥ 2 反转轴序）；<code>Result</code> 的 <code>map</code>/<code>and_then</code>/<code>unwrap_or</code>/<code>is_ok</code>/<code>is_err</code>/<code>ok</code>/<code>ok_or</code>；<code>first</code>/<code>last</code>/<code>cumsum</code>/<code>cumprod</code>/<code>argmax</code>/<code>argmin</code>、 <code>round(x, n)</code>、<code>is_nan</code>/<code>is_finite</code>/<code>is_infinite</code>；诊断建议（<code>E0407</code> 指出 <code>m</code> 是单位、拼写建议、记录字段提示）；<code>aevia fmt</code> 保留语句间空行。</p>
-<p><strong>Revision 20（11-13）：FFT 族与序列操作。</strong> <code>fft</code>/<code>ifft</code> 接受 <code>Complex</code>/<code>Float</code>/<code>Int</code>；<code>fft2</code>/<code>fftn</code>/<code>fft_axis</code>/<code>fftn_axes</code>/<code>rfft2</code>/<code>rfftn</code>/<code>irfft*</code>/<code>fftshift</code> 等多维变换（行列分解）；<code>fft_norm(x, Forward)</code> 的归一化修正为正向 <code>1/N</code>； 秩 ≥ 2 的 <code>reverse</code>/<code>filter</code>/<code>any</code>/<code>all</code>/<code>find</code>/<code>first</code>/<code>last</code>/<code>take</code>/<code>drop</code>/<code>concat</code> 按第一轴的行（<code>reverse</code> 的语义变化：不再展平）、<code>reverse_axis</code>；单位建议的并列决胜（编辑距离 → 包含最小编辑 → 常用单位 → 字典序）。</p>
-<p><strong>Revision 21（11-13）：kernel 诊断进入 <code>Err(OpError)</code>。</strong> rssn 新增 <code>Diag</code>/<code>DiagKind</code> 与 <code>Session::explain</code>；桥在算子留下自己的未约化调用时取原因，<code>Rssn.dynamic</code> 的 <code>Err</code> 形如 <code>rssn.diag.&lt;kind&gt;: &lt;包装器名&gt;: argument </code>&lt;参数名&gt;<code> (#&lt;位置&gt;): &lt;消息&gt;</code>；类型化调用位置抛出 <code>E0807</code>；<code>Rssn_Numeric</code> 新增 <code>poisson_fd_bc</code>/<code>heat_fd_bc</code>/<code>wave_fd_bc</code>、<code>advect_fd_upwind</code>、<code>tensor_contract_*</code>、<code>tucker_dense_*</code>、<code>cp_dense_*</code> 等。仍缺：只有 <code>rules::numeric::TABLES</code> 的算子记录原因；<code>OpError</code> 没有 <code>code(e)</code>/<code>message(e)</code> 访问器。</p>
-<p><strong>Revision 22（11-13）：秩不再有上限。</strong> 秩多态操作的签名是以秩为参数的<strong>模板</strong>（<code>builtins::rank_schemes_for</code>），检查器在内置候选全部失败时按实参的秩实例化模板；秩 5、6 的 <code>fftn</code>/<code>sum</code> 与秩 2 走同一路径； <code>fold</code>/<code>fold_left</code>/<code>sort</code>/<code>sort_by</code>/<code>sort_float</code>/<code>zip</code>/<code>enumerate</code> 在秩 ≥ 2 上由元素级（展平）改为<strong>按行</strong>（语义变化）；新增 <code>sort_by_key</code>、<code>sort_axis</code>、<code>argsort</code>、<code>rfftn_axes</code>/<code>irfftn_axes</code>；<code>sort_by</code> 换成稳定归并排序。 仍缺：用户函数不能对秩多态；<code>cumsum</code>/<code>cumprod</code>/<code>argmax</code>/<code>argmin</code> 对秩 ≥ 2 没有按轴形式。</p>
-<h2 id="appendix-c-changelog--5-记录在案的未实现边界known-gaps">5. 记录在案的未实现边界（Known Gaps）</h2>
-<ol type="1">
-<li><strong>包依赖</strong>：registry 依赖、SemVer 解析和带校验的本地副本已实现（Revision 15）；<code>git</code> 依赖不存在；按包的依赖名字空间、<code>[patch]</code> 覆盖、镜像 <code>[source]</code> 替换尚未实现。</li>
-<li><strong>设备后端</strong>：<code>Gpu</code>/<code>Distributed</code> 只是可构造的运行时值；<code>on</code>/<code>to_device</code>/<code>@jit(target = Gpu(..))</code> 报 <code>E1001("core.gpu")</code>/<code>E1001("core.distributed")</code>；<code>Device.map</code> 等批量原语未作为语言原语暴露（§10.6.5）。</li>
-<li><strong>稀疏</strong>：稀疏值不能进入 rssn 项图；用户自定义格式要等 rssn 开放 <code>Format</code>；<code>gmres_with</code>/<code>bicgstab_with</code> 不接受精确元素；稀疏 SVD 未提供，特征值通过显式 RSSN 适配查询（§8.4.1、§13.9.5）。</li>
-<li><strong>SDE</strong>：Brownian 桥稠密输出与积分中途的终止事件未提供（<code>sde_at</code> 是线性弦，<code>sde_events</code> 是事后截断）；回调不可跨线程时，系综回退为顺序（§8.9.1）。</li>
-<li><strong>ODE</strong>：多重打靶/配置法 BVP；<code>AutoSwitch</code> 按步数预算判定而非特征值估计（§8.9）。</li>
-<li><strong>类型系统</strong>：<code>Zmod&lt;n&gt;</code>/<code>GF&lt;p&gt;</code> 类型级模数；用户函数对秩多态；符号指数（§12.8.2）。</li>
-<li><strong>Plot</strong>：只有 HTML/SVG-inline 渲染器，无独立 <code>.svg</code>/PNG/JPEG 输出（§8.12）。</li>
-<li><strong>REPL</strong>：Ctrl-C 已支持取消当前求值；取消是协作式的，没有检查点的编译器、原生库或系统调用可能在当前调用结束后才报告 <code>E0812</code>（§9.8）。</li>
-</ol>
 </section></main></div>
 <script>
 (function(){

@@ -49,6 +49,7 @@ bincode-next = { version = "3.2", features = ["serde"] }
 aevia-dim = { path = "crates/aevia-dim" }
 aevia-syntax = { path = "crates/aevia-syntax" }
 aevia-types = { path = "crates/aevia-types" }
+aevia-stdlib-model = { path = "crates/aevia-stdlib-model" }
 aevia-ir = { path = "crates/aevia-ir" }
 aevia-resolve = { path = "crates/aevia-resolve" }
 aevia-core = { path = "crates/aevia-core" }

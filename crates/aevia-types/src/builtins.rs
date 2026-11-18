@@ -4060,9 +4060,11 @@ fn base_schemes(name: &str) -> Option<Vec<Scheme>> {
         },
 
         // ----- §8.18 device -----------------------------------------------
+        // Both `var(0)` (the element type) and `var(1)` (the device) must be
+        // quantified, or the device unifies with a stale variable.
         | "to_device" => {
             vec![scheme(
-                1,
+                2,
                 0,
                 0,
                 func(vec![tensor(2, var(0)), var(1)], io(tensor(2, var(0)))),

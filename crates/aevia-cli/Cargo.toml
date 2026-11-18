@@ -21,6 +21,7 @@ npy = ["aevia-core/npy"]
 aevia-dim.workspace = true
 aevia-syntax.workspace = true
 aevia-types.workspace = true
+aevia-stdlib-model.workspace = true
 aevia-ir.workspace = true
 aevia-core.workspace = true
 aevia-resolve.workspace = true

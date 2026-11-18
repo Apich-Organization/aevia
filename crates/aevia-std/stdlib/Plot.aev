@@ -3,33 +3,182 @@
 # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Plot
 
+## Gathers a vector of series into one plot specification, drawn on shared axes.
+##
 ## **Signature:** `combine : Tensor<1, Series> -> PlotSpec`
+##
+## **Examples:**
+## ```text
+## combine([line([0.0, 1.0], [0.0, 1.0]), scatter([0.0, 1.0], [1.0, 0.0])])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let combine = combine
+## The plot options record with every field unset or linear: no label or colour, linear axes and automatic limits.
+##
 ## **Signature:** `default_plot_opts : PlotOpts`
+##
+## Copy it and override the fields you want, then pass it to line_with and the other *_with functions.
+##
+## **Examples:**
+## ```text
+## default_plot_opts
+## ```
+##
+## *Source: Aevia standard library guide.*
 let default_plot_opts = default_plot_opts
+## A series of points with vertical error bars: errorbar(x, y, err) draws y plus or minus err at each x.
+##
 ## **Signature:** `errorbar : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>) -> Series`
+##
+## The three vectors must have equal length, and err has y's dimension.
+##
+## **Examples:**
+## ```text
+## errorbar([0.0, 1.0, 2.0], [1.0, 2.0, 3.0], [0.1, 0.2, 0.1])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let errorbar = errorbar
+## Like errorbar, with a PlotOpts record for label, colour, units, scales and limits.
+##
 ## **Signature:** `errorbar_with : 同上 + PlotOpts`
+##
+## **Examples:**
+## ```text
+## errorbar_with([0.0, 1.0], [1.0, 2.0], [0.1, 0.2], default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let errorbar_with = errorbar_with
+## A heat-map series that colours each cell of a matrix by its value.
+##
 ## **Signature:** `heatmap : (Tensor<2, Scalar<ρ,d>>) -> Series`
+##
+## Row index runs down the picture and column index across.
+##
+## **Examples:**
+## ```text
+## heatmap([[1.0, 2.0], [3.0, 4.0]])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let heatmap = heatmap
+## Like heatmap, with a PlotOpts record for label, units, scales and limits.
+##
 ## **Signature:** `heatmap_with : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series`
+##
+## **Examples:**
+## ```text
+## heatmap_with([[1.0, 2.0], [3.0, 4.0]], default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let heatmap_with = heatmap_with
+## A histogram series: hist(data, bins) counts the data into that many equal-width bins and draws the counts as bars.
+##
 ## **Signature:** `hist : (Tensor<1, Scalar<ρ,d>>, Int) -> Series`
+##
+## **Examples:**
+## ```text
+## hist([1.0, 2.0, 2.5, 3.0, 9.0], 4)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let hist = hist
+## Like hist, with a PlotOpts record for label, colour, units, scales and limits.
+##
 ## **Signature:** `hist_with : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series`
+##
+## **Examples:**
+## ```text
+## hist_with([1.0, 2.0, 2.5, 3.0, 9.0], 4, default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let hist_with = hist_with
+## Returns the series with a legend label attached.
+##
 ## **Signature:** `label : (Series, String) -> Series`
+##
+## **Examples:**
+## ```text
+## label(line([0.0, 1.0], [0.0, 1.0]), "y = x")
+## ```
+##
+## *Source: Aevia standard library guide.*
 let label = label
+## Builds a line series from x and y vectors of equal length.
+##
 ## **Signature:** `line : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series`
+##
+## Axis labels are produced from the vectors' dimensions, so plotting a length against a time is labelled correctly. Combine one or more series with combine, then show them with plot or write them with save.
+##
+## **Examples:**
+## ```text
+## line([0.0, 1.0, 2.0], [0.0, 1.0, 4.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let line = line
+## Like line, with a PlotOpts record controlling label, colour, axis units, linear or log scales and axis limits.
+##
 ## **Signature:** `line_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series`
+##
+## Start from default_plot_opts and change the fields you need.
+##
+## **Examples:**
+## ```text
+## line_with([0.0, 1.0], [1.0, 10.0], default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let line_with = line_with
+## Renders a plot specification and presents it.
+##
 ## **Signature:** `plot : PlotSpec -> IO Unit`
+##
+## It is an IO action. Use save instead to write it to a file.
+##
+## **Examples:**
+## ```text
+## plot(combine([line([0.0, 1.0], [0.0, 1.0])]))
+## ```
+##
+## *Source: Aevia standard library guide.*
 let plot = plot
+## save(path, plot) writes a plot specification to a file as a self-contained HTML document with inline SVG.
+##
 ## **Signature:** `save : (String, PlotSpec) -> IO Unit`
+##
+## The file is HTML whatever the extension. A failed write stops the program with a diagnostic.
+##
+## **Examples:**
+## ```text
+## save("plot.html", combine([line([0.0, 1.0], [0.0, 1.0])]))
+## ```
+##
+## *Source: Aevia standard library guide.*
 let save = save
+## Builds a scatter series (points without a connecting line) from x and y vectors of equal length.
+##
 ## **Signature:** `scatter : 同上（默认参数）`
+##
+## **Examples:**
+## ```text
+## scatter([0.0, 1.0, 2.0], [0.0, 1.0, 4.0])
+## ```
+##
+## *Source: Aevia standard library guide.*
 let scatter = scatter
+## Like scatter, with a PlotOpts record for label, colour, units, scales and limits.
+##
 ## **Signature:** `scatter_with : 同上（带 PlotOpts）`
+##
+## **Examples:**
+## ```text
+## scatter_with([0.0, 1.0], [1.0, 10.0], default_plot_opts)
+## ```
+##
+## *Source: Aevia standard library guide.*
 let scatter_with = scatter_with

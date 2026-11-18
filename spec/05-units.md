@@ -210,7 +210,7 @@ type  = Scalar<rep(number), dim(unit_expr)>
 | `Units.Constants` | 物理常数（§5.8） |
 | `Units.Natural`、`Units.Planck`、`Units.Atomic`、`Units.Geometrized` | 单位制下的常数模块（§5.11.1） |
 
-状态：以上模块均可 `open`，内容从 kernel manifest 生成（`manifest.units`、`manifest.constants`、
+以上模块均可 `open`，内容从 kernel manifest 生成（`manifest.units`、`manifest.constants`、
 `manifest.unit_systems`），每个 `UnitValue` 带 `aliases`/`prefixable`/`category`/`since`。单位是
 **session 私有**的：`Session::register_unit` 注册的单位只出现在该 session 的 manifest 中。
 
@@ -233,7 +233,7 @@ let g = base(d)             # 值 3200.0，去掉显示单位
   （`Scalar<ρ,Θ>`）用仿射单位报 `E0510`，所以 `value_in(°C, 298.15 K)` 错误。温差的显示用
   `delta_to(°C, dT)`，它只用尺度、不用偏移。
 
-状态：`delta_to(°C, 10.0 K)` 打印为 `-263.15 °C`（仍套用了偏移），与上述语义不符，属已知缺陷。
+例如 `delta_to(°C, 10.0 K)` 显示为 `10 °C`，而不是点 `-263.15 °C`。
 
 ### 5.4.2 显示单位的传播
 
@@ -245,7 +245,7 @@ let g = base(d)             # 值 3200.0，去掉显示单位
 
 显示单位是**元数据**，不参与相等、类型或序列化：`3.2 km == 3200 m` 为 `true`。
 
-状态：丢弃显示单位的警告 `W0501` 尚无发射点。
+`W0501`（丢弃显示单位）是保留码，语言不会发出它。
 
 ### 5.4.3 打印
 
@@ -380,7 +380,7 @@ type ConstantInfo = {
 | `E0510` | 对温差使用仿射单位显示 |
 | `E0511`/`E0512` | 单位制错误（§5.11） |
 
-状态：`E0502`/`E0503`/`E0507` 是保留码，当前不可达：单位表是 kernel 全表加本地声明，没有模块级
+`E0502`/`E0503`/`E0507` 是保留码，不可达：单位表是 kernel 全表加本地声明，没有模块级
 单位命名空间，“未导入”“禁止前缀”“前缀/显式冲突”三种状态都不存在；编译器不会用别的错误冒充它们。
 
 ## 5.10 与 rssn 单位层的衔接

@@ -34,6 +34,7 @@ dependencies = [
  "aevia-lsp",
  "aevia-resolve",
  "aevia-rssn",
+ "aevia-stdlib-model",
  "aevia-syntax",
  "aevia-types",
  "crossterm",

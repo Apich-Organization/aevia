@@ -3,6 +3,7 @@
 # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Physics.Geodesic
 
+## The parameters of the `geodesic` simulation, one field per setting.
 type Params = {
     black_hole_mass: Float[M],
     initial_state: Tensor<1, Float[1]>,
@@ -10,10 +11,12 @@ type Params = {
     initial_dt: Float[T],
 }
 
+## What the `geodesic` simulation returns.
 type GeodesicResult = {
     orbit: Tensor<2, Float[1]>,
 }
 
+## Runs the `geodesic` simulation with the given parameters and returns its result, or `Err(SimError)` if the parameters are rejected.
 fn run(p: Params): Result<GeodesicResult, SimError> =
     match simulate("geodesic", to_json(p)) with
     | Ok(json) -> from_json(json)
