@@ -22,7 +22,6 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::One;
 use num_traits::Signed;
-use num_traits::ToPrimitive;
 use num_traits::Zero;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -31,13 +30,92 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
+/// Buffers at least this long are split across threads. Each element is
+/// computed independently, so the split never changes a result.
+const DENSE_PAR_MIN: usize = 1 << 17;
+
+/// `f` over the pairs of two equally long buffers, in parallel when long.
+fn zip_map(
+    left: &[f64],
+    right: &[f64],
+    f: impl Fn(f64, f64) -> f64 + Sync + Send,
+) -> Vec<f64> {
+    use rayon::prelude::*;
+    if left.len() >= DENSE_PAR_MIN {
+        left.par_iter()
+            .zip(right.par_iter())
+            .map(|(&a, &b)| f(a, b))
+            .collect()
+    } else {
+        left.iter().zip(right).map(|(&a, &b)| f(a, b)).collect()
+    }
+}
+
+/// `f` over a buffer, in parallel when long.
+fn map_each(
+    data: &[f64],
+    f: impl Fn(f64) -> f64 + Sync + Send,
+) -> Vec<f64> {
+    use rayon::prelude::*;
+    if data.len() >= DENSE_PAR_MIN {
+        data.par_iter().map(|&x| f(x)).collect()
+    } else {
+        data.iter().map(|&x| f(x)).collect()
+    }
+}
+
+/// `op` applied elementwise to two equally long `f64` buffers.
+///
+/// The operator is chosen once, outside the loop, so each arm is a plain
+/// `map` over the pair that the compiler vectorises. Every element is the
+/// same single IEEE operation as before, so the result is bit-identical to
+/// the scalar loop.
+fn dense_zip(
+    op: BinOp,
+    left: &[f64],
+    right: &[f64],
+) -> Option<Vec<f64>> {
+    Some(match op {
+        | BinOp::Add => zip_map(left, right, |a, b| a + b),
+        | BinOp::Sub => zip_map(left, right, |a, b| a - b),
+        | BinOp::Mul => zip_map(left, right, |a, b| a * b),
+        | BinOp::Div => zip_map(left, right, |a, b| a / b),
+        | BinOp::Pow => zip_map(left, right, f64::powf),
+        | _ => return None,
+    })
+}
+
+/// `op` between every element of `data` and `number` (`number op x` when
+/// `flipped`); see [`dense_zip`].
+fn dense_with_scalar(
+    op: BinOp,
+    data: &[f64],
+    number: f64,
+    flipped: bool,
+) -> Option<Vec<f64>> {
+    Some(match (op, flipped) {
+        | (BinOp::Add, false) => map_each(data, |x| x + number),
+        | (BinOp::Add, true) => map_each(data, |x| number + x),
+        | (BinOp::Sub, false) => map_each(data, |x| x - number),
+        | (BinOp::Sub, true) => map_each(data, |x| number - x),
+        | (BinOp::Mul, false) => map_each(data, |x| x * number),
+        | (BinOp::Mul, true) => map_each(data, |x| number * x),
+        | (BinOp::Div, false) => map_each(data, |x| x / number),
+        | (BinOp::Div, true) => map_each(data, |x| number / x),
+        | (BinOp::Pow, false) => map_each(data, |x| x.powf(number)),
+        | (BinOp::Pow, true) => map_each(data, |x| number.powf(x)),
+        | _ => return None,
+    })
+}
+
 /// The representation of a numeric value.
 #[derive(Clone, Debug)]
 pub enum NumKind {
-    /// An arbitrary-precision integer.
-    Int(BigInt),
-    /// An exact rational.
-    Exact(BigRational),
+    /// An arbitrary-precision integer (inline when it fits in `i64`).
+    Int(crate::int::Int),
+    /// An exact rational (shared: rarely on a hot path, and inline it
+    /// would make every `Value` four times larger).
+    Exact(Rc<BigRational>),
     /// An IEEE-754 double.
     Float(f64),
     /// A symbolic expression.
@@ -73,9 +151,9 @@ pub struct NumVal {
 impl NumVal {
     /// An exact integer.
     #[must_use]
-    pub fn int(value: BigInt) -> Self {
+    pub fn int(value: impl Into<crate::int::Int>) -> Self {
         Self {
-            kind: NumKind::Int(value),
+            kind: NumKind::Int(value.into()),
             dim: Dim::one(),
             display: None,
         }
@@ -88,7 +166,7 @@ impl NumVal {
         dim: Dim,
     ) -> Self {
         Self {
-            kind: NumKind::Exact(value),
+            kind: NumKind::Exact(Rc::new(value)),
             dim,
             display: None,
         }
@@ -134,7 +212,7 @@ impl NumVal {
     #[must_use]
     pub fn to_f64(&self) -> Option<f64> {
         match &self.kind {
-            | NumKind::Int(value) => value.to_f64(),
+            | NumKind::Int(value) => Some(value.to_f64()),
             | NumKind::Exact(value) => Some(aevia_dim::rat::to_f64(value)),
             | NumKind::Float(value) => Some(*value),
             | NumKind::Complex(re, im) => {
@@ -152,8 +230,8 @@ impl NumVal {
     #[must_use]
     pub fn to_rational(&self) -> Option<BigRational> {
         match &self.kind {
-            | NumKind::Int(value) => Some(BigRational::from_integer(value.clone())),
-            | NumKind::Exact(value) => Some(value.clone()),
+            | NumKind::Int(value) => Some(value.to_rational()),
+            | NumKind::Exact(value) => Some(value.as_ref().clone()),
             | NumKind::Float(value) => BigRational::from_float(*value),
             | _ => None,
         }
@@ -601,7 +679,7 @@ impl TensorData {
                     return None;
                 }
                 Some(Value::Num(NumVal {
-                    kind: NumKind::Int(value.to_integer()),
+                    kind: NumKind::Int(value.to_integer().into()),
                     dim: self.dim.clone(),
                     display: self.display.clone(),
                 }))
@@ -916,17 +994,7 @@ impl TensorData {
             },
             | _ => return None,
         };
-        let mut data = Vec::with_capacity(left_data.len());
-        for (a, b) in left_data.iter().zip(right_data.iter()) {
-            data.push(match op {
-                | BinOp::Add => a + b,
-                | BinOp::Sub => a - b,
-                | BinOp::Mul => a * b,
-                | BinOp::Div => a / b,
-                | BinOp::Pow => a.powf(*b),
-                | _ => return None,
-            });
-        }
+        let data = dense_zip(op, &left_data, &right_data)?;
         Some(self.dense_with(data, dim, None))
     }
 
@@ -972,22 +1040,7 @@ impl TensorData {
             | BinOp::Pow => self.dim.pow(&BigRational::from_float(number)?),
             | _ => return None,
         };
-        let mut out = Vec::with_capacity(data.len());
-        for element in data.iter() {
-            let (a, b) = if flipped {
-                (number, *element)
-            } else {
-                (*element, number)
-            };
-            out.push(match op {
-                | BinOp::Add => a + b,
-                | BinOp::Sub => a - b,
-                | BinOp::Mul => a * b,
-                | BinOp::Div => a / b,
-                | BinOp::Pow => a.powf(b),
-                | _ => return None,
-            });
-        }
+        let out = dense_with_scalar(op, &data, number, flipped)?;
         Some(self.dense_with(out, dim, None))
     }
 
@@ -2331,6 +2384,31 @@ pub struct KernelErrorValue {
     pub message: String,
 }
 
+/// A constructor, possibly partially applied (see [`Value::Ctor`]).
+#[derive(Clone, Debug)]
+pub struct CtorValue {
+    /// The type.
+    pub adt: AdtId,
+    /// The constructor index.
+    pub index: usize,
+    /// The name.
+    pub name: String,
+    /// How many fields it takes.
+    pub arity: usize,
+    /// Fields collected so far.
+    pub args: Vec<Value>,
+    /// Provenance for constructors resolved from checked source.
+    pub origin: Option<SourceCtorToken>,
+}
+
+impl Value {
+    /// A constructor value.
+    #[must_use]
+    pub fn ctor(ctor: CtorValue) -> Self {
+        Self::Ctor(Rc::new(ctor))
+    }
+}
+
 /// A runtime value.
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -2355,20 +2433,10 @@ pub enum Value {
     /// A Rust-implemented function.
     Native(Rc<NativeFn>),
     /// A constructor, possibly partially applied.
-    Ctor {
-        /// The type.
-        adt: AdtId,
-        /// The constructor index.
-        index: usize,
-        /// The name.
-        name: String,
-        /// How many fields it takes.
-        arity: usize,
-        /// Fields collected so far.
-        args: Vec<Value>,
-        /// Provenance for constructors resolved from checked source.
-        origin: Option<SourceCtorToken>,
-    },
+    ///
+    /// Shared: builtins are constructor values too (`arity == usize::MAX`),
+    /// so every reference to `map` or `mod` clones one.
+    Ctor(Rc<CtorValue>),
     /// A unit value such as `m`.
     UnitOf(Rc<UnitDef>),
     /// An IO action.
@@ -2585,7 +2653,7 @@ fn format_scalar_in(
         | (kind, Some(unit)) => {
             let text = match kind {
                 | NumKind::Int(value) => {
-                    display_exact(&BigRational::from_integer(value.clone()), unit, repr)
+                    display_exact(&value.to_rational(), unit, repr)
                 },
                 | NumKind::Exact(value) => display_exact(value, unit, repr),
                 | NumKind::Float(value) => {
@@ -2864,7 +2932,8 @@ fn render_at(
             }
         },
         | Value::Closure(_) | Value::Native(_) => "<fn>".to_string(),
-        | Value::Ctor { name, args, .. } => {
+        | Value::Ctor(ctor) => {
+            let CtorValue { name, args, .. } = &**ctor;
             if args.is_empty() {
                 name.clone()
             } else {
@@ -3383,6 +3452,16 @@ fn numbers_equal(
         | (NumKind::Complex(ar, ai), NumKind::Complex(br, bi)) => ar == br && ai == bi,
         | (NumKind::Complex(..), _) | (_, NumKind::Complex(..)) => false,
         | (NumKind::Float(a), NumKind::Float(b)) => a == b,
+        | (NumKind::Int(a), NumKind::Int(b)) => a == b,
+        // An integer of magnitude at most 2^53 is exactly an `f64`, so the
+        // float comparison is the exact one (and NaN/infinity compare
+        // unequal, as their missing rational does below).
+        | (NumKind::Float(x), NumKind::Int(crate::int::Int::Small(i)))
+        | (NumKind::Int(crate::int::Int::Small(i)), NumKind::Float(x))
+            if i.unsigned_abs() <= 1 << 53 =>
+        {
+            *x == *i as f64
+        },
         | _ => {
             match (left.to_rational(), right.to_rational()) {
                 | (Some(a), Some(b)) => a == b,
@@ -3433,23 +3512,17 @@ pub fn make_variant(
 /// Public host-created variants and `make_variant` never receive this proof.
 pub(crate) fn mark_source_ctor(value: &mut Value) {
     match value {
-        | Value::Ctor {
-            adt,
-            index,
-            name,
-            arity,
-            args,
-            origin,
-        } => {
-            let valid = args.is_empty()
-                && aevia_types::adt::get(*adt)
-                    .and_then(|entry| entry.ctors.get(*index).cloned())
-                    .is_some_and(|ctor| ctor.name == *name && ctor.fields.len() == *arity);
+        | Value::Ctor(ctor) => {
+            let valid = ctor.args.is_empty()
+                && aevia_types::adt::get(ctor.adt)
+                    .and_then(|entry| entry.ctors.get(ctor.index).cloned())
+                    .is_some_and(|c| c.name == ctor.name && c.fields.len() == ctor.arity);
             if valid {
-                *origin = Some(SourceCtorToken {
-                    adt: *adt,
-                    index: *index,
-                    name: name.clone(),
+                let ctor = Rc::make_mut(ctor);
+                ctor.origin = Some(SourceCtorToken {
+                    adt: ctor.adt,
+                    index: ctor.index,
+                    name: ctor.name.clone(),
                     selected_result: None,
                 });
             }

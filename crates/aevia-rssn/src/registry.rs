@@ -239,6 +239,13 @@ pub struct OpEntry {
     pub stability: Stability,
     /// Documentation.
     pub doc: String,
+    /// Where `doc` came from: the registration, or the rustdoc of the Rust
+    /// function behind the operator.
+    pub doc_source: rssn::kernel::manifest::DocSource,
+    /// The Rust function whose rustdoc completed `doc`, when one did.
+    pub doc_path: Option<String>,
+    /// The public Rust function the registration declares behind the operator.
+    pub rust_path: Option<String>,
     /// Worked examples from the kernel manifest.
     pub examples: Vec<rssn::kernel::signature::Example>,
     /// Accepted argument counts.
@@ -738,6 +745,9 @@ impl Registry {
                 backend_support: op.backend_support,
                 stability: op.stability,
                 doc: op.doc.clone(),
+                doc_source: op.doc_source,
+                doc_path: op.doc_path.clone(),
+                rust_path: op.rust_path.clone(),
                 examples: op.examples.clone(),
                 arity: (usize::from(op.arity.min), op.arity.max.map(usize::from)),
                 higher_order: op.higher_order,

@@ -1,11 +1,15 @@
 ## The `Test` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Test
 
+## **Signature:** `approx_eq : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Bool`
 let approx_eq = approx_eq
+## **Signature:** `assert : Bool -> IO Unit`
 let assert = assert
+## **Signature:** `assert_eq : (Eq a, Show a) => (a, a) -> IO Unit`
 let assert_eq = assert_eq
+## **Signature:** `compile_fail : String -> Bool`
 let compile_fail = compile_fail
+## **Signature:** `forall : Arbitrary a => (a -> Prop) -> Bool`
 let forall = forall

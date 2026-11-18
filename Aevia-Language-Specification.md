@@ -7932,6 +7932,9 @@ error[E0401]: dimension mismatch
 | `W0201` | redundant match arm |
 | `W0202` | discarded IO result |
 | `W0203` | unreachable code（保留码） |
+| `W0204` | 在 `@relax_result` 下丢弃 `Result` 值 |
+| `W0205` | 在 `@relax_result` 下隐式解包 `Result`/`Option`（`?` 无法转换） |
+| `W0206` | 在 `@relax_result` 下 `Result`/`Option` 的 `match` 不穷尽 |
 | `W0301` | unresolved dimension defaulted to 1 |
 | `W0302` | `Real`/`Float` mix uses the exact `Real` path |
 | `W0303` | unused symbol |

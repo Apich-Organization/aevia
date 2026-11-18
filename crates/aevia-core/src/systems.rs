@@ -71,8 +71,8 @@ pub(crate) fn convert(
         },
         | NumKind::Int(_) | NumKind::Exact(_) | NumKind::Sym(_) => {
             let value = match &num.kind {
-                | NumKind::Int(value) => Term::Num(BigRational::from_integer(value.clone())),
-                | NumKind::Exact(value) => Term::Num(value.clone()),
+                | NumKind::Int(value) => Term::Num(value.to_rational()),
+                | NumKind::Exact(value) => Term::Num(value.as_ref().clone()),
                 | NumKind::Sym(term) => (**term).clone(),
                 | _ => unreachable!("matched above"),
             };
@@ -84,7 +84,7 @@ pub(crate) fn convert(
                         num_traits::Inv::inv(scale.rat)
                     };
                     match value {
-                        | Term::Num(value) => NumKind::Exact(value * factor),
+                        | Term::Num(value) => NumKind::Exact(Rc::new(value * factor)),
                         | other => NumKind::Sym(Rc::new(Term::mul(other, Term::Num(factor)))),
                     }
                 },

@@ -1,10 +1,17 @@
 ## The `Data/Json` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Data.Json
 
+## **Signature:** `from_json : Json -> Result<a, SimError>`
 let from_json = from_json
+## **Signature:** `read_json : String -> IO (Result<Json, DataError>)`
 let read_json = read_json
+## **Signature:** `to_json : a -> Json`
 let to_json = to_json
+## Serialises JSON, compactly.
+##
+## **Signature:** `write_json : (String, Json) -> IO (Result<(), DataError>)`
+##
+## *Source: Rust documentation of the `aevia-std` function.*
 let write_json = write_json

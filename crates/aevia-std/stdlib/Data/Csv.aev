@@ -1,12 +1,20 @@
 ## The `Data/Csv` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Data.Csv
 
+## **Signature:** `column : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>`
 let column = column
+## **Signature:** `column_dyn : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>`
 let column_dyn = column_dyn
+## **Signature:** `read_csv : String -> IO (Result<Table<ρ>, DataError>)`
 let read_csv = read_csv
+## **Signature:** `read_csv_dyn : String -> IO (Result<Table<Dynamic>, DataError>)`
 let read_csv_dyn = read_csv_dyn
+## Serialises a table as CSV, with the unit back in the header.
+##
+## **Signature:** `write_csv : (String, Table<ρ>) -> IO (Result<(), DataError>)`
+##
+## *Source: Rust documentation of the `aevia-std` function.*
 let write_csv = write_csv
 type Table<a> = Table<a>

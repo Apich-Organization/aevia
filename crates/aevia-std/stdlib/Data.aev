@@ -1,27 +1,67 @@
 ## The `Data` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Data
 
+## **Signature:** `column : (Table<ρ>, String) -> Result<Tensor<1, ρ[name]>, DataError>`
 let column = column
+## **Signature:** `column_dyn : (Table<ρ>, String) -> Result<Tensor<1, Value>, DataError>`
 let column_dyn = column_dyn
+## **Signature:** `filter : ((a -> Bool), Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `filter : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>`
+##
+## **Signature:** `filter : ((ρ -> Bool), Table<ρ>) -> Table<ρ>`
 let filter = filter
+## **Signature:** `join : (String, Tensor<1, String>) -> String`
+##
+## **Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>`
 let join = join
+## **Signature:** `read_csv : String -> IO (Result<Table<ρ>, DataError>)`
 let read_csv = read_csv
+## **Signature:** `read_csv_dyn : String -> IO (Result<Table<Dynamic>, DataError>)`
 let read_csv_dyn = read_csv_dyn
-let read_gif = read_gif
+## **Signature:** `read_json : String -> IO (Result<Json, DataError>)`
 let read_json = read_json
+## Read a NumPy Float array in C or Fortran order, preserving its rank.
+##
+## **Signature:** `read_npy : String -> IO (Result<Tensor<n, Float>, DataError>)`
+##
+## **Errors**
+## Returns a domain error for unsupported or malformed data.
+##
+## *Source: Rust documentation of the `aevia-std` function.*
 let read_npy = read_npy
-let read_svg = read_svg
+## **Signature:** `row : (Table<ρ>, Int) -> Result<ρ, DataError>`
 let row = row
+## **Signature:** `schema : Table<ρ> -> Tensor<1, ColumnInfo>`
 let schema = schema
+## **Signature:** `select : (Table<ρ>, Tensor<1, String>) -> Table<σ>`
 let select = select
+## **Signature:** `to_dynamic : Table<ρ> -> Table<Dynamic>`
 let to_dynamic = to_dynamic
+## **Signature:** `to_table : Tensor<1, ρ> -> Result<Table<ρ>, DataError>`
 let to_table = to_table
+## Serialises a table as CSV, with the unit back in the header.
+##
+## **Signature:** `write_csv : (String, Table<ρ>) -> IO (Result<(), DataError>)`
+##
+## *Source: Rust documentation of the `aevia-std` function.*
 let write_csv = write_csv
-let write_gif = write_gif
+## Serialises JSON, compactly.
+##
+## **Signature:** `write_json : (String, Json) -> IO (Result<(), DataError>)`
+##
+## *Source: Rust documentation of the `aevia-std` function.*
 let write_json = write_json
+## Encode a valid NumPy Float array.
+##
+## **Signature:** `write_npy : (String, Tensor<n, Float>) -> IO (Result<(), DataError>)`
+##
+## **Panics**
+## Panics if the shape and data do not agree; use [`try_write_npy`] for
+## untrusted input and a recoverable error.
+##
+## *Source: Rust documentation of the `aevia-std` function.*
 let write_npy = write_npy
-let write_svg = write_svg
 type Table<a> = Table<a>

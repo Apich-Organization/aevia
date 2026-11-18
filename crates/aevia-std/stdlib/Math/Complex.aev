@@ -1,17 +1,86 @@
 ## The `Math/Complex` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Math.Complex
 
+## Principal argument (phase angle) of `z` in `(-pi, pi]`.
+##
+## **Signature:** `arg : Complex[d] -> Real[1]`
+##
+## **Kernel signature** (derived):
+## - `arg : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## The argument, `arg z`, in `(-π, π]`.
+##
+## *Source: rssn operator `complex.arg`; rustdoc of `crate::kernels::complex_scalar::arg` (by name).*
 let arg = arg
+## **Signature:** `complex : (Real[1], Real[1]) -> Complex[1]`
 let complex = complex
+## **Signature:** `complex_exp : Complex[1] -> Complex[1]`
 let complex_exp = complex_exp
+## **Signature:** `complex_ln : Complex[1] -> Complex[1]`
 let complex_ln = complex_ln
+## **Signature:** `complex_sin : Complex[1] -> Complex[1]`
 let complex_sin = complex_sin
+## **Signature:** `complex_sqrt : Complex[d] -> Complex[d^(1/2)]`
 let complex_sqrt = complex_sqrt
+## Complex conjugate `re(z) - I * im(z)` of `z`.
+##
+## **Signature:** `conj : Complex[d] -> Complex[d]`
+##
+## **Kernel signature** (derived):
+## - `conj : (Dyn<term>) -> Dyn<term>`
+## - `conj : (Int) -> Int`
+## - `conj : (Real) -> Real`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## - `conj(2)` returns a `Int`
+## - `conj(-1/3)` returns a `Rat`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `complex.conj`.*
 let conj = conj
+## Cosine of angle `x` in radians.
+##
+## **Signature:** `cos : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Signature:** `cos : Complex[1] -> Complex[1]`
+##
+## **Kernel signature** (derived):
+## - `cos : (Real) -> Real`
+## - `cos : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## `cos z`.
+##
+## *Source: rssn operator `elementary.cos`; rustdoc of `crate::kernels::complex_scalar::cos` (by name).*
 let cos = cos
+## Imaginary part of complex number `z`.
+##
+## **Signature:** `im : Complex[d] -> Real[d]`
+##
+## **Kernel signature** (derived):
+## - `im : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## *Source: rssn operator `complex.im`.*
 let im = im
+## **Signature:** `magnitude : Complex[d] -> Real[d]`
 let magnitude = magnitude
+## Real part of complex number `z`.
+##
+## **Signature:** `re : Complex[d] -> Real[d]`
+##
+## **Kernel signature** (derived):
+## - `re : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## *Source: rssn operator `complex.re`.*
 let re = re

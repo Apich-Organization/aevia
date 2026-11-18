@@ -76,7 +76,8 @@ fn the_embedding_table_matches_the_catalog() {
 #[test]
 fn the_generated_sources_are_the_specifications() {
     let spec = std::fs::read_to_string(spec_stdlib_path()).expect("spec/08-stdlib.md");
-    let expected = stdlib::spec_module_sources(&spec);
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let expected = generator_support::docs::module_sources(&spec, &crates);
     assert!(!expected.is_empty(), "no §8.20 module is generated");
     let mut drifted = Vec::new();
     for (path, source) in expected {

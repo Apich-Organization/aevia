@@ -1,119 +1,501 @@
 ## The `Prelude` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Prelude
 
+## Absolute value (or complex modulus) `|x|`.
+##
+## **Signature:** `abs : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `abs : (Real) -> Real`
+## - `abs : (Dyn<term>) -> Dyn<term>`
+## - `abs : (Int) -> Int`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## - `abs(0)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `elementary.abs`.*
 let abs = abs
+## **Signature:** `all : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool`
+##
+## **Signature:** `all : ((a -> Bool), Tensor<1, a>) -> Bool`
 let all = all
+## **Signature:** `and_then : ((a -> Option<b>), Option<a>) -> Option<b>`
+##
+## **Signature:** `and_then : ((a -> Result<b, e>), Result<a, e>) -> Result<b, e>`
 let and_then = and_then
+## **Signature:** `any : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Bool`
+##
+## **Signature:** `any : ((a -> Bool), Tensor<1, a>) -> Bool`
 let any = any
+## **Signature:** `apply : ((a -> b), a) -> b`
 let apply = apply
+## **Signature:** `argmax : Tensor<1, Scalar<ρ,d>> -> Int`
 let argmax = argmax
+## **Signature:** `argmin : Tensor<1, Scalar<ρ,d>> -> Int`
 let argmin = argmin
+## **Signature:** `argsort : TotalOrd a => Tensor<n, a> -> Tensor<1, Int>`
 let argsort = argsort
+## **Signature:** `assuming : (Prop, () -> a) -> a`
 let assuming = assuming
+## **Signature:** `by_cases : (Prop, () -> Real[d], () -> Real[d]) -> Real[d]`
 let by_cases = by_cases
+## Smallest integer greater than or equal to `x`.
+##
+## **Signature:** `ceil : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `ceil : (Real) -> Real`
+## - `ceil : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## - `ceil(7/2)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `special.ceil`.*
 let ceil = ceil
+## **Signature:** `clamp : (Scalar<ρ,d>, Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
 let clamp = clamp
+## **Signature:** `compare : Ord a => (a, a) -> Option<Ordering>`
 let compare = compare
+## **Signature:** `compose : ((b -> c), (a -> b)) -> (a -> c)`
 let compose = compose
+## **Signature:** `concat : (String, String) -> String`
+##
+## **Signature:** `concat : (Tensor<n, a>, Tensor<n, a>) -> Tensor<n, a>`
+##
+## **Signature:** `concat : (Tensor<1, a>, Tensor<1, a>) -> Tensor<1, a>`
 let concat = concat
+## **Signature:** `const : (a, b) -> a`
 let const = const
+## **Signature:** `contains : (String, String) -> Bool`
 let contains = contains
+## **Signature:** `cumprod : Tensor<1, Scalar<ρ,1>> -> Tensor<1, Scalar<ρ,1>>`
 let cumprod = cumprod
+## **Signature:** `cumsum : Tensor<1, Scalar<ρ,d>> -> Tensor<1, Scalar<ρ,d>>`
 let cumsum = cumsum
+## **Signature:** `curry : ((a, b) -> c) -> (a -> (b -> c))`
 let curry = curry
+## **Signature:** `decide : Prop -> Option<Bool>`
 let decide = decide
+## **Signature:** `div : (Int, Int) -> Int`
 let div = div
+## **Signature:** `drop : (Int, Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `drop : (Int, Tensor<n, a>) -> Tensor<n, a>`
 let drop = drop
+## **Signature:** `ends_with : (String, String) -> Bool`
 let ends_with = ends_with
+## **Signature:** `enumerate : Tensor<1, a> -> Tensor<1, (Int, a)>`
+##
+## **Signature:** `enumerate : Tensor<n, a> -> Tensor<1, (Int, Tensor<n-1, a>)>`
 let enumerate = enumerate
+## **Signature:** `eprintln : Show a => a -> IO Unit`
 let eprintln = eprintln
+## Factorial `n! = 1 * 2 * ...
+##
+## **Signature:** `factorial : Int -> Int`
+##
+## **Kernel signature** (derived):
+## - `factorial : (Real) -> Real`
+## - `factorial : (Dyn<term>) -> Dyn<term>`
+## - `factorial : (Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## * n` for non-negative integer `n`.
+##
+## Computes the factorial of `n` (`n!`) as an `f64`.
+##
+## **Arguments**
+## * `n` - The non-negative integer for which to compute the factorial.
+##
+## **Returns**
+## The factorial of `n` as an `f64`. Returns `f64::INFINITY` if `n` is too large to fit in `f64`.
+##
+## **Examples:**
+## - `factorial(0)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `combinatorics.factorial`; rustdoc of `crate::kernels::combinatorics::factorial` (by name).*
 let factorial = factorial
+## **Signature:** `filter : ((a -> Bool), Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `filter : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Tensor<n, a>`
+##
+## **Signature:** `filter : ((ρ -> Bool), Table<ρ>) -> Table<ρ>`
 let filter = filter
+## **Signature:** `find : ((Tensor<n-1, a> -> Bool), Tensor<n, a>) -> Option<Tensor<n-1, a>>`
+##
+## **Signature:** `find : ((a -> Bool), Tensor<1, a>) -> Option<a>`
 let find = find
+## **Signature:** `first : Tensor<n, a> -> Option<Tensor<n-1, a>>`
+##
+## **Signature:** `first : Tensor<1, a> -> Option<a>`
 let first = first
+## **Signature:** `flatten : Tensor<n, Tensor<m, a>> -> Tensor<n+m, a>`
+##
+## **Signature:** `flatten : Tensor<n, a> -> Tensor<1, a>`
 let flatten = flatten
+## **Signature:** `flip : ((a, b) -> c) -> ((b, a) -> c)`
 let flip = flip
+## Greatest integer less than or equal to `x`.
+##
+## **Signature:** `floor : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `floor : (Real) -> Real`
+## - `floor : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## - `floor(7/2)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `special.floor`.*
 let floor = floor
+## **Signature:** `fold : ((b, a) -> b, b, Tensor<1, a>) -> b`
+##
+## **Signature:** `fold : ((b, Tensor<n-1, a>) -> b, b, Tensor<n, a>) -> b`
 let fold = fold
+## **Signature:** `fold_left : 同上`
 let fold_left = fold_left
+## **Signature:** `format : (String, Tensor<1, String>) -> String`
 let format = format
+## Greatest common divisor of integers `a` and `b`.
+##
+## **Signature:** `gcd : (Int, Int) -> Int`
+##
+## **Kernel signature** (derived):
+## - `gcd : (Real, Real) -> Real`
+## - `gcd : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `gcd : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## Computes the greatest common divisor (GCD) of two numbers using the Euclidean algorithm.
+##
+## **Arguments**
+## * `a` - The first number.
+## * `b` - The second number.
+##
+## **Returns**
+## The greatest common divisor of `a` and `b`.
+##
+## **Examples:**
+## - `gcd(12, 18)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `number_theory.gcd`; rustdoc of `crate::kernels::number_theory::gcd` (by name).*
 let gcd = gcd
+## **Signature:** `id : a -> a`
 let id = id
-let input = input
+## **Signature:** `is_err : Result<a, e> -> Bool`
 let is_err = is_err
+## **Signature:** `is_finite : Scalar<ρ,d> -> Bool`
 let is_finite = is_finite
+## **Signature:** `is_infinite : Scalar<ρ,d> -> Bool`
 let is_infinite = is_infinite
+## **Signature:** `is_nan : Scalar<ρ,d> -> Bool`
 let is_nan = is_nan
+## **Signature:** `is_none : Option<a> -> Bool`
 let is_none = is_none
+## **Signature:** `is_ok : Result<a, e> -> Bool`
 let is_ok = is_ok
+## **Signature:** `is_some : Option<a> -> Bool`
 let is_some = is_some
+## **Signature:** `join : (String, Tensor<1, String>) -> String`
+##
+## **Signature:** `join : (Table<ρ>, Table<σ>, String) -> Table<ρ + σ>`
 let join = join
+## **Signature:** `last : Tensor<n, a> -> Option<Tensor<n-1, a>>`
+##
+## **Signature:** `last : Tensor<1, a> -> Option<a>`
 let last = last
+## Least common multiple of integers `a` and `b`.
+##
+## **Signature:** `lcm : (Int, Int) -> Int`
+##
+## **Kernel signature** (derived):
+## - `lcm : (Real, Real) -> Real`
+## - `lcm : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `lcm : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## Computes the least common multiple (LCM) of two numbers.
+##
+## Returns `0` when either argument is `0`, and `u64::MAX` when the true
+## value does not fit (use [`checked_lcm`] to tell the two apart).
+##
+## **Examples:**
+## - `lcm(4, 6)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `number_theory.lcm`; rustdoc of `crate::kernels::number_theory::lcm` (by name).*
 let lcm = lcm
+## **Signature:** `length : String -> Int`
+##
+## **Signature:** `length : Tensor<n, a> -> Int`
+##
+## **Signature:** `length : Set<a> -> Int`
 let length = length
+## **Signature:** `lower : String -> String`
 let lower = lower
+## **Signature:** `map : ((a -> b), Tensor<n, a>) -> Tensor<n, b>`
+##
+## **Signature:** `map : ((a -> b), Option<a>) -> Option<b>`
+##
+## **Signature:** `map : ((a -> b), Result<a, e>) -> Result<b, e>`
 let map = map
+## **Signature:** `map2 : ((a, b) -> c, Tensor<n, a>, Tensor<n, b>) -> Tensor<n, c>`
 let map2 = map2
+## **Signature:** `map_err : ((e -> f), Result<a, e>) -> Result<a, f>`
 let map_err = map_err
+## **Signature:** `max : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
 let max = max
+## Arithmetic mean of list `xs`.
+##
+## **Signature:** `mean : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+##
+## **Kernel signature** (derived):
+## - `mean : (Dyn<term>) -> Dyn<term>`
+## - `mean : (Tensor<1, Int>) -> Real`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## Computes the mean of a slice of data.
+##
+## **Arguments**
+## * `data` - A unmutable slice of `f64` data points.
+##
+## **Returns**
+## The mean of the data as an `f64`.
+##
+## **Examples:**
+## - `mean(list(1, 2, 4))` returns a `Rat`
+## - `mean(list(5))` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `stats.mean`; rustdoc of `crate::kernels::stats::mean` (by name).*
 let mean = mean
+## **Signature:** `min : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
 let min = min
+## Least non-negative residue of `x` modulo `m > 0`.
+##
+## **Signature:** `mod : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `mod : (Real, Real) -> Real`
+## - `mod : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `mod : (Int, Int) -> Int`
+##
+## **Dimensions:** the result is dimensionless
+##
+## **Examples:**
+## - `mod(17, 5)` returns a `Int`
+## - `mod(sqrtmod(2, 1000000007)^2, 1000000007)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `number_theory.mod`.*
 let mod = mod
+## Logical negation of `p`.
+##
+## **Signature:** `not : Bool -> Bool`
+##
+## **Kernel signature** (overlay):
+## - `not : (Bool) -> Bool`
+##
+## **Dimensions:** kernel rule `NonMetric`
+##
+## *Source: rssn operator `logic.not`.*
 let not = not
+## **Signature:** `ok : Result<a, e> -> Option<a>`
 let ok = ok
+## **Signature:** `ok_or : (Option<a>, e) -> Result<a, e>`
 let ok_or = ok_or
+## **Signature:** `par_map : Parallel a => ((a -> b), Tensor<1, a>) -> Tensor<1, b>`
 let par_map = par_map
+## **Signature:** `parse_float : String -> Result<Float, ParseError>`
 let parse_float = parse_float
+## **Signature:** `parse_int : String -> Result<Int, ParseError>`
 let parse_int = parse_int
+## **Signature:** `partial_compare : (Float, Float) -> Option<Ordering>`
 let partial_compare = partial_compare
+## **Signature:** `print : Show a => a -> IO Unit`
 let print = print
+## **Signature:** `println : Show a => a -> IO Unit`
 let println = println
+## **Signature:** `prod : Tensor<n, Scalar<ρ,1>> -> Scalar<ρ,1>`
 let prod = prod
+## **Signature:** `quot : (Int, Int) -> Int`
 let quot = quot
+## **Signature:** `range : (Int, Int) -> Tensor<1, Int>`
+##
+## **Signature:** `range : (Int, Int, Int) -> Tensor<1, Int>`
 let range = range
+## **Signature:** `rank : Tensor<n, a> -> Int`
+##
+## **Signature:** `rank : Tensor<2, a> -> Int`
 let rank = rank
-let read_line = read_line
+## **Signature:** `rem : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
 let rem = rem
+## **Signature:** `replace : (String, String, String) -> String`
 let replace = replace
+## **Signature:** `repr : Show a => a -> String`
 let repr = repr
+## **Signature:** `reverse : Tensor<1, a> -> Tensor<1, a>`
+##
+## **Signature:** `reverse : Tensor<n, a> -> Tensor<n, a>`
 let reverse = reverse
+## **Signature:** `reverse_axis : (Tensor<n, a>, Int) -> Tensor<n, a>`
 let reverse_axis = reverse_axis
+## **Signature:** `rng : Int -> (() -> Float[1])`
 let rng = rng
+## Nearest integer to `x`, rounding half away from zero.
+##
+## **Signature:** `round : Scalar<ρ,d> -> Scalar<ρ,d>`
+##
+## **Signature:** `round : (Scalar<ρ,d>, Int) -> Scalar<ρ,d>`
+##
+## **Kernel signature** (derived):
+## - `round : (Real) -> Real`
+## - `round : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result has the dimension of argument 1
+##
+## **Examples:**
+## - `round(7/2)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `special.round`.*
 let round = round
+## **Signature:** `shape : Tensor<n, a> -> Tensor<1, Int>`
 let shape = shape
+## **Signature:** `show : Show a => a -> String`
 let show = show
+## Signum function (`-1` for `x < 0`, `0` at `0`, `1` for `x > 0`).
+##
+## **Signature:** `sign : Scalar<ρ,d> -> Int`
+##
+## **Kernel signature** (derived):
+## - `sign : (Real) -> Real`
+## - `sign : (Dyn<term>) -> Dyn<term>`
+## - `sign : (Int) -> Int`
+##
+## **Dimensions:** kernel rule `Custom("")`
+##
+## **Examples:**
+## - `sign(0)` returns a `Int`
+## - `sign(-7/3)` returns a `Int`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `special.sign`.*
 let sign = sign
+## **Signature:** `sort : TotalOrd a => Tensor<1, a> -> Tensor<1, a>`
+##
+## **Signature:** `sort : TotalOrd a => Tensor<n, a> -> Tensor<n, a>`
 let sort = sort
+## **Signature:** `sort_axis : TotalOrd a => (Tensor<n, a>, Int) -> Tensor<n, a>`
 let sort_axis = sort_axis
+## **Signature:** `sort_by : ((a, a) -> Ordering, Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `sort_by : ((Tensor<n-1, a>, Tensor<n-1, a>) -> Ordering, Tensor<n, a>) -> Tensor<n, a>`
 let sort_by = sort_by
+## **Signature:** `sort_by_key : TotalOrd k => ((a -> k), Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `sort_by_key : TotalOrd k => ((Tensor<n-1, a> -> k), Tensor<n, a>) -> Tensor<n, a>`
 let sort_by_key = sort_by_key
+## **Signature:** `sort_float : (Tensor<1, Float>, Bool) -> Tensor<1, Float>`
+##
+## **Signature:** `sort_float : (Tensor<n, Float>, Bool) -> Tensor<n, Float>`
 let sort_float = sort_float
+## **Signature:** `split : (String, String) -> Tensor<1, String>`
 let split = split
+## **Signature:** `starts_with : (String, String) -> Bool`
 let starts_with = starts_with
+## Symbolic/numeric summation over bound index `k` from `lo` to `hi`, or tensor reduction along `axis`.
+##
+## **Signature:** `sum : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>`
+##
+## **Signature:** `sum : (Tensor<n, Scalar<ρ,d>>, Int) -> Tensor<n, Scalar<ρ,d>>`
+##
+## **Signature:** `sum : (Real[1] -> Real[d], Real[1], Real[1]) -> Real[d]`
+##
+## **Kernel signature** (overlay):
+## - `sum : (Tensor<_, Real>) -> Real`
+## - `sum : (Tensor<_, Real>, Int) -> Tensor<_, Real>`
+## - `sum : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
+## - `sum : (Dyn<term>) -> Dyn<term>`
+## - ... and 1 more overloads
+##
+## **Dimensions:** kernel rule `SumOver { f: 0, index: 1 }`
+##
+## *Source: rssn operator `calculus.sum`.*
 let sum = sum
+## **Signature:** `sym_eq : (Real[d], Real[d]) -> Prop`
 let sym_eq = sym_eq
+## **Signature:** `sym_lt : (Real[d], Real[d]) -> Prop`
 let sym_lt = sym_lt
+## **Signature:** `sym_ne : (Real[d], Real[d]) -> Prop`
 let sym_ne = sym_ne
+## **Signature:** `take : (Int, Tensor<1, a>) -> Tensor<1, a>`
+##
+## **Signature:** `take : (Int, Tensor<n, a>) -> Tensor<n, a>`
 let take = take
+## **Signature:** `to_float : Scalar<ρ,d> -> Result<Float[d], EvalError>`
 let to_float = to_float
+## **Signature:** `to_int : Scalar<ρ,1> -> Int`
 let to_int = to_int
-## Two-dimensional terminal mathematics; strings and other values remain human-readable.
-let to_pretty = to_pretty
+## **Signature:** `to_latex : Show a => a -> String`
 let to_latex = to_latex
+## **Signature:** `to_pretty : Show a => a -> String`
+let to_pretty = to_pretty
+## **Signature:** `to_real : Scalar<ρ,d> -> Real[d]`
 let to_real = to_real
+## **Signature:** `to_typst : Show a => a -> String`
 let to_typst = to_typst
+## **Signature:** `total_compare : TotalOrd a => (a, a) -> Ordering`
 let total_compare = total_compare
+## **Signature:** `trim : String -> String`
 let trim = trim
+## **Signature:** `trunc : Scalar<ρ,d> -> Scalar<ρ,d>`
 let trunc = trunc
+## **Signature:** `uncurry : ((a -> (b -> c))) -> ((a, b) -> c)`
+##
+## **Signature:** `uncurry : (a -> (b -> c)) -> ((a, b) -> c)`
 let uncurry = uncurry
+## **Signature:** `unwrap_or : (Option<a>, a) -> a`
+##
+## **Signature:** `unwrap_or : (Result<a, e>, a) -> a`
 let unwrap_or = unwrap_or
+## **Signature:** `upper : String -> String`
 let upper = upper
+## Variadic exclusive-or (parity), true when an odd number of operands are true.
+##
+## **Signature:** `xor : (Bool, Bool) -> Bool`
+##
+## **Kernel signature** (overlay):
+## - `xor : (Bool, Bool) -> Bool with 0... x Bool`
+##
+## **Dimensions:** kernel rule `NonMetric`
+##
+## *Source: rssn operator `logic.xor`.*
 let xor = xor
+## **Signature:** `zero : Scalar<ρ,d>`
 let zero = zero
+## **Signature:** `zip : (Tensor<1, a>, Tensor<1, b>) -> Tensor<1, (a, b)>`
+##
+## **Signature:** `zip : (Tensor<n, a>, Tensor<m, b>) -> Tensor<1, (Tensor<n-1, a>, Tensor<m-1, b>)>`
 let zip = zip
+## **Signature:** `zip_with : ((a, b) -> c, Tensor<n, a>, Tensor<n, b>) -> Tensor<n, c>`
 let zip_with = zip_with
 
 ## Not re-exported (see the module header of `tests/stdlib_modules.rs`):

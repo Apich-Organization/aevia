@@ -2,68 +2,257 @@
 
 Source: `stdlib/Stats.aev`
 
+The `Stats` module of §8.20.
+
 ## `let centroid`
 
 ```aevia
 let centroid = centroid
 ```
 
-The `Stats` module of §8.20.
-
-Generated standard library; do not edit.
-Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+**Signature:** `centroid : Tensor<1, Point[d]> -> Point[d]`
 ## `let corr`
 
 ```aevia
 let corr = corr
 ```
+
+The Pearson correlation coefficient of two equally long samples.
+
+**Signature:** `corr : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),1>`
+
+**Errors**
+
+[`NumericError::ShapeMismatch`] when the lengths differ, and
+[`NumericError::Domain`] when one sample has no spread.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let cov`
 
 ```aevia
 let cov = cov
 ```
+
+The sample covariance of two equally long samples.
+
+**Signature:** `cov : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<div_rep(ρ),d*e>`
+
+**Errors**
+
+[`NumericError::ShapeMismatch`] when the lengths differ, and
+[`NumericError::Empty`] when there are no elements.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let histogram`
 
 ```aevia
 let histogram = histogram
 ```
+
+A uniform histogram with `bins` buckets.
+
+**Signature:** `histogram : (Tensor<1, Scalar<ρ,d>>, Int) -> { counts: Tensor<1, Int>, edges: Tensor<1, Scalar<ρ,d>> }`
+
+Returns `(counts, edges)`; `edges` has `bins + 1` entries spanning the
+sample's range, and a value on an interior edge belongs to the bucket above
+it, so the last bucket is closed on both ends.
+
+**Errors**
+
+[`NumericError::Empty`] for an empty sample and [`NumericError::Domain`]
+when `bins` is zero.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let kurtosis`
 
 ```aevia
 let kurtosis = kurtosis
 ```
+
+Pearson kurtosis `m4 / m2^2` of list `xs`.
+
+**Signature:** `kurtosis : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
+
+**Kernel signature** (derived):
+- `kurtosis : (Dyn<term>) -> Dyn<term>`
+- `kurtosis : (Tensor<1, Int>) -> Real`
+
+**Dimensions:** the result is dimensionless
+
+Computes the unbiased sample excess kurtosis `G2` (the estimator used by
+Excel's `KURT` and `scipy.stats.kurtosis(fisher=True, bias=False)`); a
+normal distribution has expected value 0.
+
+With `g2 = m4 / m2^2 - 3` (central moments divided by `n`),
+`G2 = (n - 1) / ((n - 2)(n - 3)) * ((n + 1) g2 + 6)`.
+
+Returns `NaN` for fewer than four points and `0.0` for constant data.
+
+**Examples:**
+- `kurtosis(list(1, 2, 3, 4))` returns a `Rat`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `stats.kurtosis`; rustdoc of `crate::kernels::stats::kurtosis` (by name).*
 ## `let mean`
 
 ```aevia
 let mean = mean
 ```
+
+Arithmetic mean of list `xs`.
+
+**Signature:** `mean : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+
+**Kernel signature** (derived):
+- `mean : (Dyn<term>) -> Dyn<term>`
+- `mean : (Tensor<1, Int>) -> Real`
+
+**Dimensions:** the result has the dimension of argument 1
+
+Computes the mean of a slice of data.
+
+**Arguments**
+* `data` - A unmutable slice of `f64` data points.
+
+**Returns**
+The mean of the data as an `f64`.
+
+**Examples:**
+- `mean(list(1, 2, 4))` returns a `Rat`
+- `mean(list(5))` returns a `Int`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `stats.mean`; rustdoc of `crate::kernels::stats::mean` (by name).*
 ## `let median`
 
 ```aevia
 let median = median
 ```
+
+Median (50th percentile) of list `xs`.
+
+**Signature:** `median : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>`
+
+**Kernel signature** (derived):
+- `median : (Dyn<term>) -> Dyn<term>`
+- `median : (Tensor<1, Int>) -> Real`
+- `median : (Tensor<1, Real>) -> Real`
+
+**Dimensions:** the result has the dimension of argument 1
+
+Computes the median of a slice of data.
+
+**Arguments**
+* `data` - A mutable slice of `f64` data points.
+
+**Returns**
+The median of the data as an `f64`.
+
+**Examples:**
+- `median(list(4, 1, 3, 2))` returns a `Rat`
+- `median(list(3, 1, 2))` returns a `Int`
+- `median(list(-1, 1/2, 3))` returns a `Rat`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `stats.median`; rustdoc of `crate::kernels::stats::median` (by name).*
 ## `let mode`
 
 ```aevia
 let mode = mode
 ```
+
+Most frequent value (mode) of list `xs`.
+
+**Signature:** `mode : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,d>`
+
+**Kernel signature** (derived):
+- `mode : (Dyn<term>) -> Dyn<term>`
+- `mode : (Tensor<1, Int>) -> Int`
+- `mode : (Tensor<1, Symbol>) -> Symbol`
+
+**Dimensions:** the result has the dimension of argument 1
+
+Finds the mode (most frequent value) of a slice of data.
+For continuous data, rounds to a specified number of decimal places.
+Returns None if no mode exists (all values unique or empty).
+
+**Examples:**
+- `mode(list(1, 2, 2, 3))` returns a `Int`
+- `mode(list(a, b, a))` returns a `Sym`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `stats.mode`; rustdoc of `crate::kernels::stats::mode` (by name).*
 ## `let quantile`
 
 ```aevia
 let quantile = quantile
 ```
+
+`p`-th quantile (interpolated order statistic, `p in [0, 1]`) of list `xs`.
+
+**Signature:** `quantile : (Tensor<1, Scalar<ρ,d>>, Scalar<ρ,1>) -> Scalar<ρ,d>`
+
+**Kernel signature** (derived):
+- `quantile : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `quantile : (Tensor<1, Int>, Real) -> Real`
+- `quantile : (Tensor<1, Int>, Int) -> Int`
+- `quantile : (Tensor<1, Int>, Float) -> Float`
+
+**Dimensions:** the result has the dimension of argument 1
+
+**Examples:**
+- `quantile(list(1, 2, 3, 4, 5), 1/3)` returns a `Rat`
+- `quantile(list(1, 2, 3, 4, 5), 1/2)` returns a `Int`
+- `quantile(list(1, 2, 3, 4, 5), 0)` returns a `Int`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `stats.quantile`.*
 ## `let skewness`
 
 ```aevia
 let skewness = skewness
 ```
+
+Pearson skewness `m3 / m2^(3/2)` of list `xs`.
+
+**Signature:** `skewness : Tensor<1, Scalar<ρ,d>> -> Scalar<ρ,1>`
+
+**Kernel signature** (derived):
+- `skewness : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** the result is dimensionless
+
+Computes the adjusted Fisher-Pearson sample skewness coefficient `G1`
+(the estimator used by Excel's `SKEW` and by `scipy.stats.skew(bias=False)`).
+
+With `g1 = m3 / m2^(3/2)` (central moments divided by `n`),
+`G1 = sqrt(n (n - 1)) / (n - 2) * g1`.
+
+Returns `NaN` for fewer than three points and `0.0` for constant data.
+
+*Source: rssn operator `stats.skewness`; rustdoc of `crate::kernels::stats::skewness` (by name).*
 ## `let std`
 
 ```aevia
 let std = std
 ```
+
+Population standard deviation of list `xs`.
+
+**Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+
+**Kernel signature** (derived):
+- `std : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** the result has the dimension of argument 1
+
+*Source: rssn operator `stats.std`.*
 ## `let var`
 
 ```aevia
 let var = var
 ```
+
+**Signature:** `var : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>`
+
+**Signature:** `var : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>`

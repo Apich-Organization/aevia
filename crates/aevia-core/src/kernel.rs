@@ -72,8 +72,8 @@ pub fn to_val(value: &Value) -> Result<Val, EvalError> {
         | Value::Str(text) => Val::Str(text.to_string()),
         | Value::Num(number) => {
             match &number.kind {
-                | NumKind::Int(value) => Val::Num(Num::Int(value.clone())),
-                | NumKind::Exact(value) => Val::Num(Num::Rat(value.clone())),
+                | NumKind::Int(value) => Val::Num(Num::Int(value.to_big())),
+                | NumKind::Exact(value) => Val::Num(Num::Rat(value.as_ref().clone())),
                 | NumKind::Float(value) => Val::Num(Num::Float(*value)),
                 | NumKind::Complex(re, im) => Val::Complex { re: *re, im: *im },
                 | NumKind::Sym(term) => {
@@ -408,7 +408,7 @@ pub fn from_val(
     match value {
         | Val::Num(Num::Int(value)) => {
             Value::Num(NumVal {
-                kind: NumKind::Int(value.clone()),
+                kind: NumKind::Int(value.into()),
                 dim,
                 display: None,
             })
@@ -416,7 +416,7 @@ pub fn from_val(
         | Val::Num(Num::Rat(value)) => {
             if value.denom().is_one() {
                 Value::Num(NumVal {
-                    kind: NumKind::Int(value.numer().clone()),
+                    kind: NumKind::Int(value.numer().into()),
                     dim,
                     display: None,
                 })

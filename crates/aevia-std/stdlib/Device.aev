@@ -1,9 +1,11 @@
 ## The `Device` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Device
 
+## **Signature:** `device_of : Tensor<n,τ> -> Device`
 let device_of = device_of
+## **Signature:** `on : (Device, () -> a) -> IO a`
 let on = on
+## **Signature:** `to_device : (Tensor<n,τ>, Device) -> IO (Tensor<n,τ>)`
 let to_device = to_device

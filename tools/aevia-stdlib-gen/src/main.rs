@@ -56,8 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let write = mode == "--write";
     let spec_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/08-stdlib.md");
     let spec = std::fs::read_to_string(spec_path)?;
+    let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates");
     let mut expected: BTreeMap<PathBuf, String> =
-        aevia_stdlib_model::stdlib::spec_module_sources(&spec)
+        support::docs::module_sources(&spec, &crates_dir)
             .into_iter()
             .map(|(path, source)| (PathBuf::from(format!("stdlib/{path}.aev")), source))
             .collect();

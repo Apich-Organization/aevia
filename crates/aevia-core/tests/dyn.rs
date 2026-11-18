@@ -98,7 +98,7 @@ fn dim_of_and_value_of_are_total_on_a_dyn() {
             length(),
         )),
         Value::Num(NumVal {
-            kind: NumKind::Int(BigInt::from(7)),
+            kind: NumKind::Int(BigInt::from(7).into()),
             dim: length(),
             display: None,
         }),

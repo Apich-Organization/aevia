@@ -474,6 +474,8 @@ pub struct Interp {
     /// Inline cache of global references, by IR site; see
     /// [`Interp::lookup_global_at`].
     pub(crate) global_cache: crate::fxhash::FxHashMap<usize, GlobalCacheEntry>,
+    /// The environment epoch every entry of `global_cache` was filled in.
+    pub(crate) global_cache_epoch: u64,
     pub(crate) tensor_inputs: crate::generics::TensorInputCache,
     pub(crate) call_proofs: crate::generics::CallProofCache,
     /// Literal values per (site, bindings, module); see
@@ -703,7 +705,10 @@ pub struct Interp {
 /// to know about an operand, without cloning it into a `NumVal` first.
 #[derive(Clone, Copy)]
 pub(crate) enum Scalar<'a> {
-    Int(&'a BigInt),
+    /// An `Int` in the `i64` range.
+    Small(i64),
+    /// An `Int` outside it.
+    Big(&'a BigInt),
     Float(f64),
 }
 
@@ -716,16 +721,32 @@ impl<'a> Scalar<'a> {
             return None;
         }
         match &number.kind {
-            | NumKind::Int(value) => Some(Self::Int(value)),
+            | NumKind::Int(crate::int::Int::Small(value)) => Some(Self::Small(*value)),
+            | NumKind::Int(crate::int::Int::Big(value)) => Some(Self::Big(value)),
             | NumKind::Float(value) => Some(Self::Float(*value)),
             | _ => None,
         }
     }
 
+    /// The view of an integer literal.
+    pub(crate) fn of_int(value: &'a BigInt) -> Self {
+        num_traits::ToPrimitive::to_i64(value).map_or(Self::Big(value), Self::Small)
+    }
+
     fn to_f64(self) -> f64 {
         match self {
-            | Self::Int(value) => num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
+            | Self::Small(value) => value as f64,
+            | Self::Big(value) => num_traits::ToPrimitive::to_f64(value).unwrap_or(f64::NAN),
             | Self::Float(value) => value,
+        }
+    }
+
+    /// The integer, when this is one.
+    fn to_int(self) -> Option<crate::int::Int> {
+        match self {
+            | Self::Small(value) => Some(crate::int::Int::Small(value)),
+            | Self::Big(value) => Some(crate::int::Int::from(value)),
+            | Self::Float(_) => None,
         }
     }
 }
@@ -741,7 +762,29 @@ pub(crate) fn plain_scalar_binary(
     right: Scalar<'_>,
 ) -> Option<Value> {
     match (left, right) {
-        | (Scalar::Int(a), Scalar::Int(b)) => {
+        // The common case: two machine integers, no allocation anywhere.
+        | (Scalar::Small(a), Scalar::Small(b)) => {
+            let int = |value: Option<i64>, wide: fn(i128, i128) -> i128| {
+                Value::Num(NumVal::int(value.map_or_else(
+                    || crate::int::Int::from(wide(i128::from(a), i128::from(b))),
+                    crate::int::Int::Small,
+                )))
+            };
+            Some(match op {
+                | BinOp::Add => int(a.checked_add(b), |x, y| x + y),
+                | BinOp::Sub => int(a.checked_sub(b), |x, y| x - y),
+                | BinOp::Mul => int(a.checked_mul(b), |x, y| x * y),
+                | BinOp::Eq => Value::Bool(a == b),
+                | BinOp::Ne => Value::Bool(a != b),
+                | BinOp::Lt => Value::Bool(a < b),
+                | BinOp::Le => Value::Bool(a <= b),
+                | BinOp::Gt => Value::Bool(a > b),
+                | BinOp::Ge => Value::Bool(a >= b),
+                | _ => return None,
+            })
+        },
+        | (Scalar::Small(_) | Scalar::Big(_), Scalar::Small(_) | Scalar::Big(_)) => {
+            let (a, b) = (left.to_int()?, right.to_int()?);
             Some(match op {
                 | BinOp::Add => Value::Num(NumVal::int(a + b)),
                 | BinOp::Sub => Value::Num(NumVal::int(a - b)),
@@ -829,6 +872,7 @@ impl Interp {
             module_scopes: HashMap::new(),
             bindings: None,
             global_cache: crate::fxhash::FxHashMap::default(),
+            global_cache_epoch: 0,
             globals: HashMap::new(),
             units: checked.units.clone(),
             dims: checked.dims.clone(),
@@ -1589,6 +1633,14 @@ impl Interp {
         mut value: Value,
         span: Span,
     ) -> Value {
+        // Only a constructor or a variant can be specialised below; this runs
+        // on every `let`, return and argument, so everything else (numbers,
+        // above all) leaves before the evidence lookup.
+        if !matches!(&value, Value::Ctor(ctor) if ctor.origin.is_some())
+            && !matches!(value, Value::Variant(_))
+        {
+            return value;
+        }
         // Only actual checked constructor references may specialize a value.
         // Ordinary variable reads must not acquire proof from an annotation.
         let Some(source_constructor) = self.context.evidence.constructor_refs.get(&span).copied()
@@ -1599,28 +1651,22 @@ impl Interp {
             return value;
         };
         let source_constructor = Some(source_constructor);
-        if let (
-            aevia_types::Type::Fn(_, result),
-            Value::Ctor {
-                adt,
-                index,
-                name,
-                origin: Some(token),
-                ..
-            },
-        ) = (&ty, &mut value)
+        if let (aevia_types::Type::Fn(_, result), Value::Ctor(ctor)) = (&ty, &mut value)
+            && let Some(token) = &ctor.origin
             && let aevia_types::Type::Adt(result_id, _) = result.as_ref()
         {
+            let (adt, index) = (ctor.adt, ctor.index);
             let authentic = source_constructor.is_some_and(|(declared, declared_index)| {
-                declared_index == *index && adt::same_type(declared, *adt)
+                declared_index == index && adt::same_type(declared, adt)
             });
             if authentic
-                && token.adt == *adt
-                && token.index == *index
-                && token.name == *name
-                && adt::same_type(*result_id, *adt)
+                && token.adt == adt
+                && token.index == index
+                && token.name == ctor.name
+                && adt::same_type(*result_id, adt)
                 && !aevia_types::class::has_variables(result)
                 && token.selected_result.is_none()
+                && let Some(token) = &mut Rc::make_mut(ctor).origin
             {
                 token.selected_result = Some((**result).clone());
             }
@@ -2150,12 +2196,6 @@ impl Interp {
         self.lookup_global(name, Some(env), span)
     }
 
-    /// Resolves a name that is not a slot of the current frame.
-    ///
-    /// This is the tail of [`Interp::lookup`]: the module scope, the globals,
-    /// the unit table, constructors, class methods and the builtin names, in
-    /// the order the AST path uses. The IR passes the module scope explicitly
-    /// because its lexical chain is a slot vector rather than a `Scope`.
     /// Binds (or rebinds) a top-level name, invalidating cached lookups.
     pub fn define_global(
         &mut self,
@@ -2205,6 +2245,14 @@ impl Interp {
             && self.constants_seeded_for(name)
             && !self.method_classes.contains_key(name);
         if cacheable {
+            // Entries of an older epoch can never hit again; dropping them
+            // when the epoch moves keeps the cache from pinning values a
+            // rebinding replaced. The size cap bounds sites that are not IR
+            // nodes (the JIT's temporary references).
+            if self.global_cache_epoch != epoch || self.global_cache.len() >= 1 << 16 {
+                self.global_cache.clear();
+                self.global_cache_epoch = epoch;
+            }
             self.global_cache.insert(
                 site,
                 GlobalCacheEntry {
@@ -2229,6 +2277,12 @@ impl Interp {
         self.constants_seeded || !matches!(name, "pi" | "oo" | "e" | "nan" | "i")
     }
 
+    /// Resolves a name that is not a slot of the current frame.
+    ///
+    /// This is the tail of [`Interp::lookup`]: the module scope, the globals,
+    /// the unit table, constructors, class methods and the builtin names, in
+    /// the order the AST path uses. The IR passes the module scope explicitly
+    /// because its lexical chain is a slot vector rather than a `Scope`.
     pub(crate) fn lookup_global(
         &mut self,
         name: &str,
@@ -2297,7 +2351,7 @@ impl Interp {
         // meant; as a value it is still reachable through the unit table and
         // the `N unit` literal syntax.
         if aevia_types::builtins::is_builtin(name) || aevia_types::builtins::is_special(name) {
-            return Ok(Value::Ctor {
+            return Ok(Value::ctor(value::CtorValue {
                 adt: u32::MAX,
                 index: usize::MAX,
                 name: name.to_string(),
@@ -2309,7 +2363,7 @@ impl Interp {
                     name: name.to_string(),
                     selected_result: None,
                 }),
-            });
+            }));
         }
         let source_units = &self.context.evidence.units;
         if let Some(unit) = source_units.lookup(name) {
@@ -2616,7 +2670,7 @@ impl Interp {
                     | Value::Num(mut num) => {
                         num.kind = match num.kind {
                             | NumKind::Int(value) => NumKind::Int(-value),
-                            | NumKind::Exact(value) => NumKind::Exact(-value),
+                            | NumKind::Exact(value) => NumKind::Exact(Rc::new(-value.as_ref())),
                             | NumKind::Float(value) => NumKind::Float(-value),
                             | NumKind::Sym(term) => {
                                 NumKind::Sym(Rc::new(crate::sym::Term::neg((*term).clone())))
@@ -3258,6 +3312,24 @@ impl Interp {
         // rationals answers exactly, and one that is not answers symbolically.
         let both_int =
             matches!(left.kind, NumKind::Int(_)) && matches!(right.kind, NumKind::Int(_));
+        // `Int` arithmetic that stays `Int` needs no rationals: the same
+        // answers as the general path below, without a `gcd` per operation.
+        if let (NumKind::Int(a), NumKind::Int(b)) = (&left.kind, &right.kind) {
+            let value = match op {
+                | BinOp::Add => Some(a + b),
+                | BinOp::Sub => Some(a - b),
+                | BinOp::Mul => Some(a * b),
+                | BinOp::Pow => b.as_i64().and_then(|e| u32::try_from(e).ok()).map(|e| a.pow(e)),
+                | _ => None,
+            };
+            if let Some(value) = value {
+                return Ok(NumVal {
+                    kind: NumKind::Int(value),
+                    dim,
+                    display: None,
+                });
+            }
+        }
         let (Some(a), Some(b)) = (left.to_rational(), right.to_rational()) else {
             return Err(EvalError::new(
                 "E0302",
@@ -3304,7 +3376,7 @@ impl Interp {
                 && value.denom().is_one()
             {
                 return Ok(NumVal {
-                    kind: NumKind::Int(value.numer().clone()),
+                    kind: NumKind::Int(value.numer().into()),
                     dim,
                     display: None,
                 });
@@ -3510,9 +3582,9 @@ impl Interp {
     ) -> crate::sym::Term {
         match &num.kind {
             | NumKind::Int(value) => {
-                crate::sym::Term::Num(BigRational::from_integer(value.clone()))
+                crate::sym::Term::Num(value.to_rational())
             },
-            | NumKind::Exact(value) => crate::sym::Term::Num(value.clone()),
+            | NumKind::Exact(value) => crate::sym::Term::Num(value.as_ref().clone()),
             | NumKind::Float(value) => {
                 crate::sym::Term::Num(
                     BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
@@ -3749,7 +3821,15 @@ impl Interp {
                 }
                 let both_exact = matches!(a.kind, NumKind::Int(_) | NumKind::Exact(_))
                     && matches!(b.kind, NumKind::Int(_) | NumKind::Exact(_));
-                let result = if both_exact {
+                let result = if let (NumKind::Int(a), NumKind::Int(b)) = (&a.kind, &b.kind) {
+                    match op {
+                        | BinOp::Lt => a < b,
+                        | BinOp::Le => a <= b,
+                        | BinOp::Gt => a > b,
+                        | BinOp::Ge => a >= b,
+                        | _ => false,
+                    }
+                } else if both_exact {
                     let a = a.to_rational().unwrap_or_else(BigRational::zero);
                     let b = b.to_rational().unwrap_or_else(BigRational::zero);
                     match op {
@@ -3866,16 +3946,12 @@ impl Interp {
                 && !aevia_types::class::has_variables(result)
             {
                 match &function {
-                    | Value::Ctor {
-                        adt,
-                        index,
-                        name,
-                        origin: Some(origin),
-                        ..
-                    } if origin.adt == *adt
-                        && origin.index == *index
-                        && origin.name == *name
-                        && adt::same_type(*adt, *expected_id) =>
+                    | Value::Ctor(ctor)
+                        if let Some(origin) = &ctor.origin
+                            && origin.adt == ctor.adt
+                            && origin.index == ctor.index
+                            && origin.name == ctor.name
+                            && adt::same_type(ctor.adt, *expected_id) =>
                     {
                         if origin
                             .selected_result
@@ -3883,9 +3959,8 @@ impl Interp {
                             .is_none_or(|old| crate::host_witness::strict_schema_equal(old, result))
                         {
                             let mut selected = function.clone();
-                            if let Value::Ctor {
-                                origin: Some(origin), ..
-                            } = &mut selected
+                            if let Value::Ctor(ctor) = &mut selected
+                                && let Some(origin) = &mut Rc::make_mut(ctor).origin
                             {
                                 origin.selected_result = Some(result.clone());
                             }
@@ -3920,11 +3995,14 @@ impl Interp {
                 }
             }
         }
-        if let Value::Ctor { adt, index, name, .. } = &function {
-            if *adt == u32::MAX
-                && *index == usize::MAX
+        if let Value::Ctor(ctor) = &function {
+            let (adt, index, name) = (ctor.adt, ctor.index, &ctor.name);
+            if adt == u32::MAX
+                && index == usize::MAX
                 && name == "read_npy"
-                && matches!(&function, Value::Ctor { origin: Some(origin), .. } if origin.adt == *adt && origin.index == *index && origin.name == *name)
+                && ctor.origin.as_ref().is_some_and(|origin| {
+                    origin.adt == adt && origin.index == index && origin.name == *name
+                })
             {
                 let rank = match self.resolved_expr_type(span) {
                     | Some(aevia_types::Type::ReadNpyIntrinsic(Some(rank))) => Some(rank),
@@ -3938,7 +4016,7 @@ impl Interp {
                     crate::builtins::read_npy_ranked(&args, rank, span)
                 }))));
             }
-            if *adt == u32::MAX && *index == usize::MAX && name == "from_value" {
+            if adt == u32::MAX && index == usize::MAX && name == "from_value" {
                 let evidence = types
                     .first()
                     .and_then(|argument| self.reified_type(argument));
@@ -3971,7 +4049,7 @@ impl Interp {
                     )
                 }))));
             }
-            if *adt == u32::MAX && *index == usize::MAX && name == "type_rep" {
+            if adt == u32::MAX && index == usize::MAX && name == "type_rep" {
                 let evidence = types
                     .first()
                     .and_then(|argument| self.reified_type(argument));
@@ -3988,8 +4066,8 @@ impl Interp {
                     Ok(Value::TypeRep(Rc::new(witness)))
                 }))));
             }
-            if *adt == u32::MAX
-                && *index == usize::MAX
+            if adt == u32::MAX
+                && index == usize::MAX
                 && crate::builtins::takes_type_argument(name)
             {
                 let name = name.clone();
@@ -4018,38 +4096,29 @@ impl Interp {
             return self.apply_instantiated(function, args, span, instance);
         }
         let source_ctor = match &function {
-            | Value::Ctor {
-                adt,
-                index,
-                name,
-                origin: Some(origin),
-                ..
-            } if *adt != u32::MAX
-                && *adt == origin.adt
-                && *index == origin.index
-                && *name == origin.name =>
+            | Value::Ctor(ctor)
+                if let Some(origin) = &ctor.origin
+                    && ctor.adt != u32::MAX
+                    && ctor.adt == origin.adt
+                    && ctor.index == origin.index
+                    && ctor.name == origin.name =>
             {
                 Some(origin.selected_result.clone())
             },
             | _ => None,
         };
         let builtin = match &function {
-            | Value::Ctor {
-                adt,
-                index,
-                name,
-                arity,
-                args,
-                origin: Some(origin),
-            } if *adt == u32::MAX
-                && *index == usize::MAX
-                && *arity == usize::MAX
-                && args.is_empty()
-                && origin.adt == *adt
-                && origin.index == *index
-                && origin.name == *name =>
+            | Value::Ctor(ctor)
+                if let Some(origin) = &ctor.origin
+                    && ctor.adt == u32::MAX
+                    && ctor.index == usize::MAX
+                    && ctor.arity == usize::MAX
+                    && ctor.args.is_empty()
+                    && origin.adt == ctor.adt
+                    && origin.index == ctor.index
+                    && origin.name == ctor.name =>
             {
-                Some(name.clone())
+                Some(ctor.name.clone())
             },
             | _ => None,
         };
@@ -4471,14 +4540,20 @@ impl Interp {
         match function {
             | Value::Native(function) => (function.0)(self, args, span),
             | Value::Closure(closure) => self.apply_user_closure(closure, args, span, instance),
-            | Value::Ctor {
-                adt,
-                index,
-                name,
-                arity,
-                args: collected,
-                origin,
-            } => {
+            | Value::Ctor(ctor) => {
+                if ctor.arity == usize::MAX && ctor.args.is_empty() {
+                    // A builtin referenced as a value, called with all of
+                    // its arguments at once: no constructor state to copy.
+                    return self.call_named(&ctor.name, args, span);
+                }
+                let crate::value::CtorValue {
+                    adt,
+                    index,
+                    name,
+                    arity,
+                    args: collected,
+                    origin,
+                } = Rc::unwrap_or_clone(ctor);
                 if arity == usize::MAX {
                     // A builtin referenced as a value: merge any arguments it
                     // already collected with the new ones.
@@ -4489,14 +4564,14 @@ impl Interp {
                 let mut all = collected;
                 all.extend(args);
                 if all.len() < arity {
-                    return Ok(Value::Ctor {
+                    return Ok(Value::ctor(crate::value::CtorValue {
                         adt,
                         index,
                         name,
                         arity,
                         args: all,
                         origin,
-                    });
+                    }));
                 }
                 if all.len() > arity {
                     return Err(EvalError::new(
@@ -5616,10 +5691,13 @@ impl Interp {
                 },
                 | IoAction::ReadSvg(path) => {
                     let file_path = std::path::Path::new(path);
-                    last = match rssn::io::read_svg_file(file_path).and_then(|_| {
-                        std::fs::read_to_string(file_path)
-                            .map_err(|error| format!("{}: {error}", io_error_code(&error)))
-                    }) {
+                    // Read once, then validate the text that is returned.
+                    let read = std::fs::read_to_string(file_path)
+                        .map_err(|error| format!("{}: {error}", io_error_code(&error)))
+                        .and_then(|contents| {
+                            rssn::io::parse_svg(&contents).map(|_| contents)
+                        });
+                    last = match read {
                         | Ok(contents) => {
                             make_variant(adt::RESULT_ID, 0, "Ok", vec![Value::string(contents)])
                         },
@@ -7119,14 +7197,14 @@ pub fn ctor_value_at(
     if arity == 0 {
         return Some(make_variant(adt, index, name, Vec::new()));
     }
-    Some(Value::Ctor {
+    Some(Value::ctor(value::CtorValue {
         adt,
         index,
         name: name.to_string(),
         arity,
         args: Vec::new(),
         origin: None,
-    })
+    }))
 }
 
 pub(crate) fn source_ctor_value_at(
@@ -7708,7 +7786,7 @@ fn prelude_constant(name: &str) -> Option<Value> {
     let one = aevia_dim::Dim::one();
     match name {
         | "pi" | "oo" => crate::kernel::call(name, &[], one).ok(),
-        | "e" => crate::kernel::call("exp", &[Value::Num(NumVal::int(1.into()))], one).ok(),
+        | "e" => crate::kernel::call("exp", &[Value::Num(NumVal::int(1i64))], one).ok(),
         | "nan" => Some(Value::Num(NumVal::float(f64::NAN, one))),
         | "i" => {
             Some(Value::Num(NumVal {

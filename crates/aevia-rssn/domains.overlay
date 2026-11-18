@@ -181,8 +181,8 @@ sig permutation_sign(p: Perm) -> Result<Int, OpError>
 sig permutation_unrank(n: Int, rank: Int) -> Result<Perm, OpError>
 sig syt_count(shape: Tensor<1, Int>) -> Result<Int, OpError>
 dynamic period | argument is a rational or a sequence term, no integer-only form
-exclude expand_binomial gf_coeffs inclusion_exclusion rsolve | symbolic: they take and return expression terms; call Rssn.dynamic with Real terms
-exclude hook_lengths partition_list | ragged results (a list of lists); use Rssn.dynamic and from_value<Tensor<1, Tensor<1, Int>>>
+dynamic expand_binomial gf_coeffs inclusion_exclusion rsolve | symbolic: they take and return expression terms, so the wrapper passes Value terms through; there is no typed form
+dynamic hook_lengths partition_list | ragged results (a list of lists); decode the Value with from_value<Tensor<1, Tensor<1, Int>>>
 
 # --- FiniteField ------------------------------------------------------------
 # Polynomials are coefficient tensors, highest degree first, residues in [0, p).

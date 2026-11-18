@@ -108,6 +108,17 @@ the single-file specification.
    number (§6.3.1). Symbolic values are rssn terms handled by `aevia-core::sym`
    through `aevia-rssn`.
 
+   An `Int` is `aevia_core::int::Int`: an inline `i64` that moves to a shared
+   `BigInt` only when a result leaves the `i64` range (and back when it returns),
+   so integer arithmetic allocates nothing in the common case while keeping
+   arbitrary precision. Exact rationals (`NumKind::Exact`) and constructor values
+   (`Value::Ctor`, which also represents a builtin referenced as a value) are
+   behind an `Rc`, which keeps `Value` small and makes cloning a builtin
+   reference a counter increment. Dense `Float` tensor arithmetic picks the
+   operator once per call, so each elementwise loop vectorises, and splits
+   buffers of 2^17 elements or more across threads; every element is still one
+   IEEE operation, so results are bit-identical to the scalar loop.
+
 ## The rssn boundary
 
 `aevia-rssn` is the only crate that names an rssn type. It links `rssn` by

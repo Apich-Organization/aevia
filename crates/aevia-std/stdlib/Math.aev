@@ -1,35 +1,271 @@
 ## The `Math` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Math
 
+## Principal inverse cosine of `x`, in `[0, pi]` for real `x` in `[-1, 1]`.
+##
+## **Signature:** `acos : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `acos : (Real) -> Real`
+## - `acos : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.acos`.*
 let acos = acos
+## Principal inverse hyperbolic cosine `ln(x + sqrt(x^2 - 1))`.
+##
+## **Signature:** `acosh : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `acosh : (Real) -> Real`
+## - `acosh : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.acosh`.*
 let acosh = acosh
+## Principal inverse sine of `x`, in `[-pi/2, pi/2]` for real `x` in `[-1, 1]`.
+##
+## **Signature:** `asin : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `asin : (Real) -> Real`
+## - `asin : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.asin`.*
 let asin = asin
+## Inverse hyperbolic sine `ln(x + sqrt(x^2 + 1))`.
+##
+## **Signature:** `asinh : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `asinh : (Real) -> Real`
+## - `asinh : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.asinh`.*
 let asinh = asinh
+## Principal inverse tangent of `x`, in `(-pi/2, pi/2)` for real `x`.
+##
+## **Signature:** `atan : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `atan : (Real) -> Real`
+## - `atan : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.atan`.*
 let atan = atan
+## Two-argument arctangent of `(y, x)`, giving the angle in `(-pi, pi]` from the positive x-axis.
+##
+## **Signature:** `atan2 : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `atan2 : (Real, Real) -> Real`
+## - `atan2 : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is an angle (dimensionless)
+##
+## *Source: rssn operator `elementary.atan2`.*
 let atan2 = atan2
+## Inverse hyperbolic tangent `ln((1 + x) / (1 - x)) / 2`.
+##
+## **Signature:** `atanh : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `atanh : (Real) -> Real`
+## - `atanh : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.atanh`.*
 let atanh = atanh
+## **Signature:** `cbrt : Scalar<ρ,d> -> Scalar<ρ,d^(1/3)>`
 let cbrt = cbrt
+## Cosine of angle `x` in radians.
+##
+## **Signature:** `cos : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Signature:** `cos : Complex[1] -> Complex[1]`
+##
+## **Kernel signature** (derived):
+## - `cos : (Real) -> Real`
+## - `cos : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## `cos z`.
+##
+## *Source: rssn operator `elementary.cos`; rustdoc of `crate::kernels::complex_scalar::cos` (by name).*
 let cos = cos
+## Hyperbolic cosine `(e^x + e^-x) / 2`.
+##
+## **Signature:** `cosh : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `cosh : (Real) -> Real`
+## - `cosh : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.cosh`.*
 let cosh = cosh
+## **Signature:** `curry : ((a, b) -> c) -> (a -> (b -> c))`
 let curry = curry
+## **Signature:** `e : Real[1]`
 let e = e
+## Natural exponential function `e^x`.
+##
+## **Signature:** `exp : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `exp : (Real) -> Real`
+## - `exp : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.exp`.*
 let exp = exp
+## **Signature:** `hypot : (Scalar<ρ,d>, Scalar<ρ,d>) -> Scalar<ρ,d>`
 let hypot = hypot
+## **Signature:** `i : Complex[1]`
 let i = i
+## Natural logarithm (base `e`) of `x`.
+##
+## **Signature:** `ln : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `ln : (Real) -> Real`
+## - `ln : (Dyn<term>) -> Dyn<term>`
+## - `ln : (Float) -> Float`
+##
+## **Dimensions:** the result is dimensionless
+##
+## **Examples:**
+## - `ln(0.3)` returns a `Float`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `elementary.ln`.*
 let ln = ln
+## Logarithm of `x` to base `b`, equal to `ln(x) / ln(b)`.
+##
+## **Signature:** `log : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `log : (Real, Real) -> Real`
+## - `log : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.log`.*
 let log = log
+## **Signature:** `log10 : Scalar<ρ,1> -> Scalar<ρ,1>`
 let log10 = log10
+## **Signature:** `log2 : Scalar<ρ,1> -> Scalar<ρ,1>`
 let log2 = log2
+## **Signature:** `nan : Float[1]`
 let nan = nan
+## `oo`: positive real infinity (`+infinity`).
+##
+## **Signature:** `oo : Real[1]`
+##
+## **Kernel signature** (derived):
+## - `oo : () -> Real`
+## - `oo : () -> Dyn<term>`
+##
+## **Dimensions:** dimensionally polymorphic
+##
+## *Source: rssn operator `calculus.oo`.*
 let oo = oo
+## **Signature:** `partial : ((a, b) -> c, a) -> (b -> c)`
 let partial = partial
+## `pi`: Archimedes' constant, the ratio of a circle's circumference to its diameter.
+##
+## **Signature:** `pi : Real[1]`
+##
+## **Kernel signature** (derived):
+## - `pi : () -> Real`
+## - `pi : () -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.pi`.*
 let pi = pi
+## Sine of angle `x` in radians.
+##
+## **Signature:** `sin : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `sin : (Real) -> Real`
+## - `sin : (Dyn<term>) -> Dyn<term>`
+## - `sin : (Float) -> Float`
+##
+## **Dimensions:** the result is dimensionless
+##
+## `sin z`.
+##
+## **Examples:**
+## - `sin(0.5)` returns a `Float`
+##   (recorded kernel calls; the result is shown as its sort)
+##
+## *Source: rssn operator `elementary.sin`; rustdoc of `crate::kernels::complex_scalar::sin` (by name).*
 let sin = sin
+## Hyperbolic sine `(e^x - e^-x) / 2`.
+##
+## **Signature:** `sinh : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `sinh : (Real) -> Real`
+## - `sinh : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.sinh`.*
 let sinh = sinh
+## Principal square root of `x`.
+##
+## **Signature:** `sqrt : Scalar<ρ,d> -> Scalar<ρ,d^(1/2)>`
+##
+## **Kernel signature** (derived):
+## - `sqrt : (Real) -> Real`
+## - `sqrt : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** kernel rule `Root(2)`
+##
+## *Source: rssn operator `elementary.sqrt`.*
 let sqrt = sqrt
+## Tangent `sin(x) / cos(x)` of angle `x` in radians.
+##
+## **Signature:** `tan : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `tan : (Real) -> Real`
+## - `tan : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.tan`.*
 let tan = tan
+## Hyperbolic tangent `sinh(x) / cosh(x)`.
+##
+## **Signature:** `tanh : Scalar<ρ,1> -> Scalar<ρ,1>`
+##
+## **Kernel signature** (derived):
+## - `tanh : (Real) -> Real`
+## - `tanh : (Dyn<term>) -> Dyn<term>`
+##
+## **Dimensions:** the result is dimensionless
+##
+## *Source: rssn operator `elementary.tanh`.*
 let tanh = tanh
+## **Signature:** `uncurry : ((a -> (b -> c))) -> ((a, b) -> c)`
+##
+## **Signature:** `uncurry : (a -> (b -> c)) -> ((a, b) -> c)`
 let uncurry = uncurry

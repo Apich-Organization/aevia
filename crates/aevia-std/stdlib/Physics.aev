@@ -1,7 +1,16 @@
 ## The `Physics` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Physics
 
+## Runs a scenario with JSON parameters and returns its JSON result.
+##
+## **Signature:** `simulate : (String, Json) -> Result<Json, SimError>`
+##
+## **Errors**
+##
+## The backend's message: an unknown scenario, parameters that do not parse, or
+## a failed simulation.
+##
+## *Source: Rust documentation of the `aevia-std` function.*
 let simulate = simulate

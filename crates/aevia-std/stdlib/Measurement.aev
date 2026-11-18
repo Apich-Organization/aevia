@@ -1,9 +1,11 @@
 ## The `Measurement` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Measurement
 
+## **Signature:** `measure : (Real[d], Real[d]) -> Measurement<d>`
 let measure = measure
+## **Signature:** `uncertainty : Measurement<d> -> Real[d]`
 let uncertainty = uncertainty
+## **Signature:** `value : Measurement<d> -> Real[d]`
 let value = value

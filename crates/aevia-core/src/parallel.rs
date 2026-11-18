@@ -189,8 +189,8 @@ fn to_portable_at(
         | Value::Bool(value) => Portable::Bool(*value),
         | Value::Num(num) => {
             let payload = match &num.kind {
-                | NumKind::Int(value) => PNum::Int(value.clone()),
-                | NumKind::Exact(value) => PNum::Exact(value.clone()),
+                | NumKind::Int(value) => PNum::Int(value.to_big()),
+                | NumKind::Exact(value) => PNum::Exact(value.as_ref().clone()),
                 | NumKind::Float(value) => PNum::Float(*value),
                 | NumKind::Complex(re, im) => PNum::Complex(*re, *im),
                 // A symbolic term may hold a kernel handle owned by this
@@ -250,14 +250,15 @@ fn to_portable_at(
                 fields,
             }
         },
-        | Value::Ctor {
-            adt,
-            index,
-            name,
-            arity,
-            args,
-            ..
-        } => {
+        | Value::Ctor(ctor) => {
+            let crate::value::CtorValue {
+                adt,
+                index,
+                name,
+                arity,
+                args,
+                ..
+            } = &**ctor;
             let mut collected = Vec::with_capacity(args.len());
             for arg in args {
                 collected.push(to_portable_at(keys, arg, next)?);
@@ -411,8 +412,8 @@ fn from_portable(
         | Portable::Num(payload, dim, display) => {
             Value::Num(NumVal {
                 kind: match payload {
-                    | PNum::Int(value) => NumKind::Int(value),
-                    | PNum::Exact(value) => NumKind::Exact(value),
+                    | PNum::Int(value) => NumKind::Int(value.into()),
+                    | PNum::Exact(value) => NumKind::Exact(Rc::new(value)),
                     | PNum::Float(value) => NumKind::Float(value),
                     | PNum::Complex(re, im) => NumKind::Complex(re, im),
                 },
@@ -478,14 +479,14 @@ fn from_portable(
             for arg in args {
                 values.push(from_portable(interp, index, arg)?);
             }
-            Value::Ctor {
+            Value::ctor(crate::value::CtorValue {
                 adt,
                 index: ctor,
                 name,
                 arity,
                 args: values,
                 origin: None,
-            }
+            })
         },
         | Portable::Closure {
             module,

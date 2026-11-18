@@ -249,9 +249,7 @@ pub(crate) fn run_closure(
                         kind: crate::value::NumKind::Int(value),
                         dim,
                         display: None,
-                    } if dim == aevia_dim::Dim::one() => {
-                        i64::try_from(&value).ok().map(crate::jit::Lit::I)
-                    },
+                    } if dim == aevia_dim::Dim::one() => value.as_i64().map(crate::jit::Lit::I),
                     | _ => None,
                 }
             });
@@ -785,7 +783,7 @@ fn scalar_view<'a>(
                 | _ => None,
             }
         },
-        | Atom::Int(value) => Some(Scalar::Int(value)),
+        | Atom::Int(value) => Some(Scalar::of_int(value)),
         | Atom::Float(value) => Some(Scalar::Float(*value)),
         | _ => None,
     }
@@ -834,7 +832,7 @@ fn eval_atom(
             let site = std::ptr::from_ref(atom) as usize;
             interp.lookup_global_at(site, name, env.scope.as_ref(), span)?
         },
-        | Atom::Int(value) => Value::Num(NumVal::int(value.clone())),
+        | Atom::Int(value) => Value::Num(NumVal::int(value)),
         | Atom::Exact(value) => Value::Num(NumVal::exact(value.clone(), aevia_dim::Dim::one())),
         | Atom::Float(value) => Value::Num(NumVal::float(*value, aevia_dim::Dim::one())),
         | Atom::Complex { re, im } => {

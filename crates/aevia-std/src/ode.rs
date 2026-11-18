@@ -697,17 +697,6 @@ pub fn solve(
         hmax: options.h_max,
         max_steps: options.max_steps,
     };
-    let to_hits = |hits: &[ode_adaptive::EventHit]| -> Vec<Hit> {
-        hits.iter()
-            .map(|hit| {
-                Hit {
-                    index: hit.index,
-                    t: hit.t,
-                    y: hit.y.clone(),
-                }
-            })
-            .collect()
-    };
     let kernel = |method: Method, step_budget: usize| -> Result<Solution, NumericError> {
         let opts = OdeOptions {
             max_steps: step_budget,
@@ -735,15 +724,7 @@ pub fn solve(
             | Method::AdaptiveGaussLegendre6 => unreachable!("handled by the caller"),
         }
         .map_err(|_| NumericError::NotConverged)?;
-        Ok(Solution {
-            t: solution.t.clone(),
-            y: solution.y.clone(),
-            hits: to_hits(&solution.events),
-            nfev: solution.nfev,
-            rejected: solution.rejected,
-            method,
-            dense: Dense::Kernel(Box::new(solution)),
-        })
+        Ok(kernel_solution_to_solution(solution, method))
     };
     let result = (|| {
         match options.method {
@@ -821,28 +802,15 @@ pub fn solve(
                     ..opts
                 };
                 match ode_adaptive::dopri5(f, start, end, y0, &budgeted, &kernel_events) {
-                    | Ok(solution) => {
-                        Ok(Solution {
-                            t: solution.t.clone(),
-                            y: solution.y.clone(),
-                            hits: to_hits(&solution.events),
-                            nfev: solution.nfev,
-                            rejected: solution.rejected,
-                            method: Method::Dopri5,
-                            dense: Dense::Kernel(Box::new(solution)),
-                        })
-                    },
+                    | Ok(solution) => Ok(kernel_solution_to_solution(solution, Method::Dopri5)),
                     // A genuine failure (non-finite state, callback error) is not
                     // a stiffness signal; only an exhausted budget is.
                     | Err(ode_adaptive::OdeError::StepLimit) if failure.borrow().is_none() => {
-                        let remaining = options
-                            .max_steps
-                            .saturating_sub(options.max_steps.min(AUTO_STEP_BUDGET));
-                        if remaining == 0 {
-                            Err(NumericError::NotConverged)
-                        } else {
-                            kernel(Method::Radau, remaining)
-                        }
+                        // The stiff solver restarts from `t0` with its own full
+                        // budget: the explicit attempt's steps are not charged
+                        // against it (a budget at or below `AUTO_STEP_BUDGET`
+                        // would otherwise leave nothing for the fallback).
+                        kernel(Method::Radau, options.max_steps)
                     },
                     | Err(_) => Err(NumericError::NotConverged),
                 }
@@ -1306,6 +1274,34 @@ fn map_ode_err(err: rssn::kernels::ode_adaptive::OdeError) -> NumericError {
     }
 }
 
+/// The checks every ODE entry point makes before integrating: a finite state
+/// and span, a state to integrate, and a span that runs forward without
+/// overflowing. An empty span (`end == start`) passes; each caller decides what
+/// it means.
+fn validate_ode_problem(
+    y0: &[f64],
+    span: (f64, f64),
+) -> Result<(), NumericError> {
+    let (start, end) = span;
+    if !start.is_finite() || !end.is_finite() || !y0.iter().all(|x| x.is_finite()) {
+        return Err(NumericError::Domain("invalid ODE span or state".into()));
+    }
+    if end < start {
+        return Err(NumericError::Domain(
+            "the ODE span must run forward in time".into(),
+        ));
+    }
+    if !(end - start).is_finite() {
+        return Err(NumericError::Domain(
+            "the time interval is too large".into(),
+        ));
+    }
+    if y0.is_empty() {
+        return Err(NumericError::Domain("the ODE state is empty".into()));
+    }
+    Ok(())
+}
+
 fn kernel_solution_to_solution(
     solution: rssn::kernels::ode_adaptive::OdeSolution,
     method: Method,
@@ -1321,14 +1317,24 @@ fn kernel_solution_to_solution(
             }
         })
         .collect();
+    let (nfev, rejected) = (solution.nfev, solution.rejected);
+    // Move the samples out instead of cloning them: the kernel's continuous
+    // extension reads only the first and last time of `t` (its range check) and
+    // its own dense steps, so those two endpoints stay behind.
+    let mut kernel = solution;
+    let t = std::mem::take(&mut kernel.t);
+    let y = std::mem::take(&mut kernel.y);
+    if let (Some(&first), Some(&last)) = (t.first(), t.last()) {
+        kernel.t = vec![first, last];
+    }
     Solution {
-        t: solution.t.clone(),
-        y: solution.y.clone(),
+        t,
+        y,
         hits,
-        nfev: solution.nfev,
-        rejected: solution.rejected,
+        nfev,
+        rejected,
         method,
-        dense: Dense::Kernel(Box::new(solution)),
+        dense: Dense::Kernel(Box::new(kernel)),
     }
 }
 
@@ -1357,22 +1363,7 @@ pub fn solve_with_mode(
     use std::cell::RefCell;
 
     let (start, end) = span;
-    if !start.is_finite() || !end.is_finite() || !y0.iter().all(|x| x.is_finite()) {
-        return Err(NumericError::Domain("invalid ODE span or state".into()));
-    }
-    if end < start {
-        return Err(NumericError::Domain(
-            "the ODE span must run forward in time".into(),
-        ));
-    }
-    if !(end - start).is_finite() {
-        return Err(NumericError::Domain(
-            "the time interval is too large".into(),
-        ));
-    }
-    if y0.is_empty() {
-        return Err(NumericError::Domain("the ODE state is empty".into()));
-    }
+    validate_ode_problem(y0, span)?;
     if end == start {
         return Ok(Solution {
             t: vec![start],
@@ -1556,30 +1547,19 @@ pub fn solve_with_mode(
                     ) {
                         | Ok(sol) => Ok(kernel_solution_to_solution(sol, Method::Dopri5)),
                         | Err(OdeError::StepLimit) if failure.borrow().is_none() => {
-                            let remaining =
-                                max_steps.saturating_sub(max_steps.min(AUTO_STEP_BUDGET));
-                            if remaining == 0 {
-                                Err(NumericError::NotConverged)
-                            } else {
-                                let stiff_mode = StepMode::Adaptive {
-                                    rtol,
-                                    atol,
-                                    dt_init,
-                                    dt_min,
-                                    dt_max,
-                                    max_steps: remaining,
-                                };
-                                ode::solve_ode_events(
-                                    f,
-                                    y0,
-                                    span,
-                                    OdeMethod::Radau5,
-                                    stiff_mode,
-                                    &kernel_events,
-                                )
-                                .map(|sol| kernel_solution_to_solution(sol, Method::Radau))
-                                .map_err(map_ode_err)
-                            }
+                            // The stiff solver restarts from `t0` with the full
+                            // `max_steps` of its own (the explicit attempt is not
+                            // charged against it).
+                            ode::solve_ode_events(
+                                f,
+                                y0,
+                                span,
+                                OdeMethod::Radau5,
+                                step_mode,
+                                &kernel_events,
+                            )
+                            .map(|sol| kernel_solution_to_solution(sol, Method::Radau))
+                            .map_err(map_ode_err)
                         },
                         | Err(e) => Err(map_ode_err(e)),
                     }
@@ -1631,12 +1611,11 @@ pub fn solve_ode(
     use std::cell::Cell;
     use std::cell::RefCell;
 
-    let (start, end) = span;
-    if !start.is_finite() || !end.is_finite() || !y0.iter().all(|x| x.is_finite()) {
-        return Err(NumericError::Domain("invalid ODE span or state".into()));
-    }
-    if y0.is_empty() {
-        return Err(NumericError::Domain("the ODE state is empty".into()));
+    validate_ode_problem(y0, span)?;
+    if span.0 == span.1 {
+        // The kernel has no empty-span solution to hand back (`solve_with_mode`
+        // answers this case with a one-point `Solution`).
+        return Err(NumericError::Domain("the ODE span is empty".into()));
     }
 
     let rhs_cell = RefCell::new(rhs);

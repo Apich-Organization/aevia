@@ -193,6 +193,9 @@ message is whatever the built-in states.
 | `W0201` | redundant match arm |
 | `W0202` | discarded IO result |
 | `W0203` | unreachable code (reserved) |
+| `W0204` | `Result` value discarded under `@relax_result` |
+| `W0205` | implicit `Result`/`Option` unwrap under `@relax_result` (the `?` cannot be converted) |
+| `W0206` | non-exhaustive `Result`/`Option` match under `@relax_result` |
 | `W0301` | unresolved dimension defaulted to 1 |
 | `W0302` | `Real`/`Float` mix uses the exact `Real` path |
 | `W0303` | unused symbol |

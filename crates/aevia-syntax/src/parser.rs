@@ -1371,7 +1371,26 @@ impl<'a> Parser<'a> {
             };
             if self.diagnostics.items.len() > before {
                 failed = true;
-                self.recover_item();
+                // Inside the parentheses only `,` and `)` end a parameter:
+                // a stray `=` or `:` (an expression boundary elsewhere) is
+                // part of the bad parameter, not the start of the body.
+                loop {
+                    self.recover_item();
+                    let stray = self.operand_boundary()
+                        && !matches!(
+                            self.kind(),
+                            TokenKind::Eof
+                                | TokenKind::Newline
+                                | TokenKind::Dedent
+                                | TokenKind::Punct(
+                                    Punct::Comma | Punct::RParen | Punct::RBracket | Punct::RBrace
+                                )
+                        );
+                    if !stray {
+                        break;
+                    }
+                    self.bump();
+                }
             }
             params.push(Param {
                 pattern,

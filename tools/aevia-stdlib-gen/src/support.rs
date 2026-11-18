@@ -1,3 +1,7 @@
+#[path = "docs.rs"]
+#[allow(dead_code)]
+pub mod docs;
+
 /// The `Units.Constants` module, generated from the live Kernel Manifest.
 ///
 /// Header + the constants module aevia-rssn already generates (§13.6.5): this

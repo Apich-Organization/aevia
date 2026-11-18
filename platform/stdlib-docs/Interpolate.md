@@ -2,38 +2,101 @@
 
 Source: `stdlib/Interpolate.aev`
 
+The `Interpolate` module of §8.20.
+
 ## `let chebyshev_fit`
 
 ```aevia
 let chebyshev_fit = chebyshev_fit
 ```
 
-The `Interpolate` module of §8.20.
+The monomial coefficients of the polynomial interpolating `(xs, ys)` at `degree + 1` Chebyshev nodes of the sample's range.
 
-Generated standard library; do not edit.
-Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+**Signature:** `chebyshev_fit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tensor<1, Scalar<ρ,e>>`
+
+**Errors**
+
+[`NumericError::ShapeMismatch`] when the samples differ in length, and
+[`NumericError::Empty`] when there are none.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let interp1`
 
 ```aevia
 let interp1 = interp1
 ```
+
+Linear interpolation of `(xs, ys)` at `x`.
+
+**Signature:** `interp1 : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>`
+
+Outside the range the nearest endpoint is extended linearly from its own
+segment, which is what a piecewise-linear interpolant does at its ends.
+
+**Errors**
+
+[`NumericError::ShapeMismatch`] when the two samples differ in length, and
+[`NumericError::Empty`] when there are no points.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let interp2`
 
 ```aevia
 let interp2 = interp2
 ```
+
+Bilinear interpolation on a regular grid.
+
+**Signature:** `interp2 : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<2, Scalar<ρ,f>>, Scalar<ρ,d>, Scalar<ρ,e>) -> Scalar<ρ,f>`
+
+`grid` is `ny × nx` in row-major order, covering `xs × ys`.
+
+**Errors**
+
+[`NumericError::ShapeMismatch`] when the grid does not match the axes.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let polyfit`
 
 ```aevia
 let polyfit = polyfit
 ```
+
+The coefficients of the least-squares polynomial of `degree`, ascending.
+
+**Signature:** `polyfit : (Tensor<1, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,e>>, Int) -> Tensor<1, Scalar<ρ,e>>`
+
+**Errors**
+
+[`NumericError::ShapeMismatch`] when the samples differ in length, and
+[`NumericError::Domain`] when there are fewer points than coefficients.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let polyval`
 
 ```aevia
 let polyval = polyval
 ```
+
+Evaluates a polynomial given its coefficients in ascending order.
+
+**Signature:** `polyval : (Tensor<1, Scalar<ρ,e>>, Scalar<ρ,1>) -> Scalar<ρ,e>`
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let spline`
 
 ```aevia
 let spline = spline
 ```
+
+Natural cubic spline interpolation at `x`.
+
+**Signature:** `spline : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Scalar<ρ,d>) -> Scalar<ρ,e>`
+
+**Errors**
+
+[`NumericError::ShapeMismatch`] when the samples differ in length, and
+[`NumericError::Domain`] when fewer than three points are given (a natural
+spline needs a second derivative to pin down).
+
+*Source: Rust documentation of the `aevia-std` function.*

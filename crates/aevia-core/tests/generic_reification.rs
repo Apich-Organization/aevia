@@ -712,7 +712,7 @@ let promoted = increment(1)
                 panic!("{mode:?} {name} must be exact")
             };
             assert_eq!(
-                *actual,
+                **actual,
                 num_rational::BigRational::new(numerator.into(), denominator.into()),
                 "{mode:?} {name}"
             );
@@ -797,7 +797,7 @@ let literal_default = 1.0 + 2
                 panic!("{mode:?} {name}: expected Real, got {actual:?}")
             };
             assert_eq!(
-                *rational,
+                **rational,
                 num_rational::BigRational::new(numerator.into(), denominator.into()),
                 "{mode:?} {name}"
             );

@@ -158,7 +158,7 @@ fn dynamic_dimension_metadata_roundtrips_identity_and_hash_ignores_alias_hints()
         let aevia_core::value::NumKind::Int(value) = value.kind else {
             panic!("integer hash")
         };
-        value
+        value.into()
     }
     assert_eq!(hash(dynamic), hash(alias));
     let wrong = call(

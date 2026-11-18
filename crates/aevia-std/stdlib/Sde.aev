@@ -1,7 +1,6 @@
 ## The `Sde` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Sde
 
 type SdeMethod =
@@ -50,15 +49,27 @@ type SdeEvent<s> = {
 
 type SdeHit<s> = { index: Int, t: Float[T], y: s }
 
+## **Signature:** `sde_at : (SdePath<s>, Float[T]) -> s`
 let sde_at = sde_at
+## **Signature:** `sde_ensemble_diag : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> DiffusionOf<s>), s, SdeOpts<T>, Int) -> Tensor<1, Result<SdePath<s>, SdeError>>`
 let sde_ensemble_diag = sde_ensemble_diag
+## **Signature:** `sde_ensemble_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralDiffusionOf<s>), s, SdeOpts<T>, Int) -> Tensor<1, Result<SdePath<s>, SdeError>>`
 let sde_ensemble_general = sde_ensemble_general
+## **Signature:** `sde_ensemble_seed : (Int, Int) -> Int`
 let sde_ensemble_seed = sde_ensemble_seed
+## **Signature:** `sde_events : (SdePath<s>, Tensor<1, SdeEvent<s>>) -> { path: SdePath<s>, hits: Tensor<1, SdeHit<s>> }`
 let sde_events = sde_events
+## **Signature:** `sde_interp : SdePath<s> -> ((Float[T]) -> s)`
 let sde_interp = sde_interp
+## **Signature:** `sde_order : SdeMethod -> { strong: Float[1], weak: Float[1] }`
 let sde_order = sde_order
+## **Signature:** `sde_order_with : (SdeMethod, SdeStructure) -> { strong: Float[1], weak: Float[1] }`
 let sde_order_with = sde_order_with
+## **Signature:** `sde_resample : (SdePath<s>, Tensor<1, Float[T]>) -> Tensor<1, s>`
 let sde_resample = sde_resample
+## **Signature:** `sdeint_diag : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> DiffusionOf<s>), s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>`
 let sdeint_diag = sdeint_diag
+## **Signature:** `sdeint_general : (((Float[T], s) -> RateOf<s>), ((Float[T], s) -> GeneralDiffusionOf<s>), s, SdeOpts<T>) -> Result<SdePath<s>, SdeError>`
 let sdeint_general = sdeint_general
+## **Signature:** `wiener : (Int, Int, Int, Float[T]) -> Tensor<2, Float[T^(1/2)]>`
 let wiener = wiener

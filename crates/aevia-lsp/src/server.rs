@@ -114,6 +114,18 @@ impl Server {
             .map(str::to_string);
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         match (method, id) {
+            | (Some(method), Some(id)) if method == "workspace/executeCommand" => {
+                // The command runs on a worker thread that answers `id` itself,
+                // so a long or non-terminating program never blocks the loop.
+                let started = self
+                    .require_running()
+                    .and_then(|()| self.execute_command(&params));
+                match started {
+                    | Ok(job) => spawn_command(self.out.clone(), id, job),
+                    | Err(error) => self.fail(id, &error),
+                }
+                Control::Continue
+            },
             | (Some(method), Some(id)) => {
                 match self.request(&method, &params) {
                     | Ok(result) => self.respond(id, result),
@@ -180,10 +192,6 @@ impl Server {
             | "workspace/symbol" => {
                 self.require_running()?;
                 Ok(self.workspace_symbols(params))
-            },
-            | "workspace/executeCommand" => {
-                self.require_running()?;
-                self.execute_command(params)
             },
             | _ => {
                 self.require_running()?;
@@ -567,11 +575,16 @@ fn text_document_uri(params: &Value) -> Option<&str> {
 }
 
 impl Server {
-    /// Executes a server-advertised workspace command (`aevia.runFile` / `aevia.testFile`).
+    /// Validates a server-advertised workspace command (`aevia.runFile` /
+    /// `aevia.testFile`) and builds the process to run.
+    ///
+    /// Only the file URI of an open document is accepted: a client-supplied
+    /// string that is not one must never reach the command line (a value such
+    /// as `--no-cache` would otherwise become a flag).
     fn execute_command(
         &self,
         params: &Value,
-    ) -> Result<Value, RpcError> {
+    ) -> Result<CommandJob, RpcError> {
         let command = params
             .get("command")
             .and_then(Value::as_str)
@@ -581,8 +594,19 @@ impl Server {
             .and_then(|items| items.first())
             .and_then(Value::as_str)
             .ok_or_else(|| RpcError::new(INVALID_PARAMS, "expected a document URI argument"))?;
+        if self.documents.get(uri).is_none() {
+            return Err(RpcError::new(
+                INVALID_PARAMS,
+                "the command applies only to an open document",
+            ));
+        }
         let path = aevia_analysis::physical_source_path_from_uri(uri)
-            .unwrap_or_else(|| std::path::PathBuf::from(uri));
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| {
+                RpcError::new(INVALID_PARAMS, "the document is not a `file:` URI")
+            })?;
+        // The CLI reads `--` as the start of program arguments, so the path is
+        // not fenced with it; an absolute path can never be mistaken for a flag.
         let mut cmd = std::process::Command::new(aevia_executable());
         match command {
             | "aevia.runFile" => {
@@ -605,26 +629,10 @@ impl Server {
                 ));
             },
         }
-        let output = cmd.output().map_err(|error| {
-            RpcError::new(
-                REQUEST_FAILED,
-                format!("failed to run `{command}`: {error}"),
-            )
-        })?;
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        if !stdout.is_empty() {
-            eprintln!("[{command}] stdout:\n{stdout}");
-        }
-        if !stderr.is_empty() {
-            eprintln!("[{command}] stderr:\n{stderr}");
-        }
-        Ok(json!({
-            "success": output.status.success(),
-            "exitCode": output.status.code(),
-            "stdout": stdout,
-            "stderr": stderr,
-        }))
+        Ok(CommandJob {
+            command: command.to_string(),
+            process: cmd,
+        })
     }
 
     /// Answers from the opened documents' programs: every declaration of every
@@ -746,6 +754,84 @@ impl Server {
             | None => Analysis::new(document),
         }
     }
+}
+
+/// How long a client-requested `aevia run`/`aevia test` may run.
+const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// A validated workspace command, ready to run.
+struct CommandJob {
+    command: String,
+    process: std::process::Command,
+}
+
+/// Runs `job` on a worker thread and answers request `id` through `out`.
+fn spawn_command(
+    out: Sender<Value>,
+    id: Value,
+    job: CommandJob,
+) {
+    std::thread::spawn(move || {
+        let message = match run_with_timeout(job.process, COMMAND_TIMEOUT) {
+            | Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            | Err(error) => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": REQUEST_FAILED,
+                    "message": format!("failed to run `{}`: {error}", job.command),
+                },
+            }),
+        };
+        let _ = out.send(message);
+    });
+}
+
+/// Runs `process` with captured output, killing it after `timeout`.
+fn run_with_timeout(
+    mut process: std::process::Command,
+    timeout: std::time::Duration,
+) -> std::io::Result<Value> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = process
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Drain both pipes on their own threads so a chatty child cannot block on
+    // a full pipe while this thread waits for it.
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    }
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = std::time::Instant::now() + timeout;
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait()? {
+            break (status, false);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            break (child.wait()?, true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
+    Ok(json!({
+        "success": status.success() && !timed_out,
+        "exitCode": status.code(),
+        "timedOut": timed_out,
+        "stdout": stdout,
+        "stderr": stderr,
+    }))
 }
 
 /// Locates the `aevia` CLI binary, preferring the current executable when

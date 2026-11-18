@@ -416,7 +416,7 @@ fn call_inner(
             map_scalar(&args, name, span, |num| {
                 let kind = match num.kind {
                     | NumKind::Int(value) => NumKind::Int(value.abs()),
-                    | NumKind::Exact(value) => NumKind::Exact(value.abs()),
+                    | NumKind::Exact(value) => NumKind::Exact(Rc::new(value.abs())),
                     | NumKind::Float(value) => NumKind::Float(value.abs()),
                     | NumKind::Complex(re, im) => NumKind::Float(re.hypot(im)),
                     | NumKind::Sym(term) => {
@@ -530,7 +530,7 @@ fn call_inner(
             } else {
                 a / b
             };
-            Ok(Value::Num(NumVal::int(BigInt::from(value))))
+            Ok(Value::Num(NumVal::int(value)))
         },
         | "gcd" | "lcm" => {
             let a = expect_int(&args, 0, name, span)?;
@@ -542,7 +542,7 @@ fn call_inner(
             } else {
                 (a * b).abs() / gcd(a, b)
             };
-            Ok(Value::Num(NumVal::int(BigInt::from(value))))
+            Ok(Value::Num(NumVal::int(value)))
         },
         | "factorial" | "double_factorial" => {
             let n = expect_int(&args, 0, name, span)?;
@@ -1231,7 +1231,7 @@ fn call_inner(
                 .cloned()
                 .ok_or_else(|| arity(name, 2, args.len(), span))?;
             let inputs: Vec<Value> = (0..count)
-                .map(|index| Value::Num(NumVal::int(BigInt::from(index))))
+                .map(|index| Value::Num(NumVal::int(index)))
                 .collect();
             let parallel = interp.par_map_values(&function, &inputs);
             interp.check_cancelled().map_err(|error| error.at(span))?;
@@ -1900,7 +1900,7 @@ fn call_inner(
             let (index, _) = best.ok_or_else(|| {
                 EvalError::new("E0802", format!("`{name}` of an empty tensor")).at(span)
             })?;
-            Ok(Value::Num(NumVal::int(BigInt::from(index))))
+            Ok(Value::Num(NumVal::int(index)))
         },
         | "map_err" => {
             let function = args
@@ -2217,7 +2217,6 @@ fn call_inner(
         | "to_value" => {
             let value = args.first().ok_or_else(|| arity(name, 1, 0, span))?;
             let payload = bridge::to_val(value)?;
-            let witness = crate::rssn_module::host_dimension_witness(value);
             let host_witness = match value {
                 | Value::KernelValue(existing) => existing.host_witness.clone(),
                 | _ => {
@@ -2226,6 +2225,15 @@ fn call_inner(
                         .map(Rc::new)
                 },
             };
+            let mut witness = crate::rssn_module::host_dimension_witness(value);
+            // A tagged witness lets `from_value` decode an `Option` by its
+            // structure, which is right for what the kernel returned. A host
+            // variant without host evidence proves no element type, so its
+            // tags must not become that proof: `None` from an `Option<Int>`
+            // would otherwise read back as any `Option<T>`.
+            if host_witness.is_none() && !matches!(value, Value::KernelValue(_)) {
+                forget_variant_witnesses(&mut witness);
+            }
             Ok(Value::KernelValue(Rc::new(crate::value::KernelValue {
                 payload,
                 witness,
@@ -2419,7 +2427,7 @@ fn call_inner(
             let tolerance = NumVal {
                 kind: match tolerance.kind {
                     | NumKind::Int(value) => NumKind::Int(value.abs()),
-                    | NumKind::Exact(value) => NumKind::Exact(value.abs()),
+                    | NumKind::Exact(value) => NumKind::Exact(Rc::new(value.abs())),
                     | NumKind::Float(value) => NumKind::Float(value.abs()),
                     | other => other,
                 },
@@ -2489,8 +2497,13 @@ fn call_inner(
                 Ok(Value::Io(Rc::new(crate::value::IoAction::Plot(html))))
             } else {
                 let path = expect_str(&args, 0, name, span)?;
-                let clean_path = path.split(['?', '#']).next().unwrap_or(&path);
-                let html = if clean_path.to_ascii_lowercase().ends_with(".svg") {
+                // `?` and `#` are ordinary file-name characters on disk; only
+                // the path's own extension decides the format.
+                let svg = std::path::Path::new(&path)
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
+                let html = if svg {
                     render_plot_svg(&spec)
                 } else {
                     render_plot(&spec)
@@ -2505,19 +2518,19 @@ fn call_inner(
             let path = expect_str(&args, 0, name, span)?;
             let Some(Value::Tensor(specs)) = args.get(1) else {
                 return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                    Value::string("E0902: `save_gif` needs a list of plot specs"),
+                    Value::string("E0902: `plot_save_gif` needs a list of plot specs"),
                 )))));
             };
             let delay_cs = match args.get(2) {
                 | Some(value) => {
                     let Some(num) = value.as_num() else {
                         return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                            Value::string("E0902: `save_gif` delay_cs must be an Int"),
+                            Value::string("E0902: `plot_save_gif` delay_cs must be an Int"),
                         )))));
                     };
                     let Some(delay) = num.to_f64().map(|v| v.round() as i64) else {
                         return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                            Value::string("E0902: `save_gif` delay_cs must be a non-negative Int"),
+                            Value::string("E0902: `plot_save_gif` delay_cs must be a non-negative Int"),
                         )))));
                     };
                     u16::try_from(delay.max(0)).unwrap_or(u16::MAX)
@@ -2531,7 +2544,7 @@ fn call_inner(
                 .collect();
             if frames.is_empty() {
                 return Ok(Value::Io(Rc::new(crate::value::IoAction::Pure(err(
-                    Value::string("E0902: `save_gif` requires at least one plot frame"),
+                    Value::string("E0902: `plot_save_gif` requires at least one plot frame"),
                 )))));
             }
             let animation = rssn::io::GifAnimation {
@@ -3516,7 +3529,7 @@ fn call_inner(
             let payload = interp.apply_binary(
                 "^",
                 Value::Num(dynamic.payload()),
-                Value::Num(NumVal::int(BigInt::from(exponent))),
+                Value::Num(NumVal::int(exponent)),
                 span,
             )?;
             let Value::Num(powered) = payload else {
@@ -5909,6 +5922,28 @@ fn expect_float(
         })
 }
 
+/// Replaces every tagged-variant statement in `witness` by `Unknown`.
+fn forget_variant_witnesses(witness: &mut aevia_rssn::witness::DimensionWitness) {
+    use aevia_rssn::witness::DimensionWitness as W;
+    match witness {
+        | W::Variant { .. } => *witness = W::Unknown,
+        | W::Tensor {
+            element, elements, ..
+        } => {
+            if let Some(element) = element {
+                forget_variant_witnesses(element);
+            }
+            elements.iter_mut().for_each(forget_variant_witnesses);
+        },
+        | W::Record(fields) => {
+            fields
+                .iter_mut()
+                .for_each(|(_, field)| forget_variant_witnesses(field));
+        },
+        | W::Unknown | W::Scalar(_) => {},
+    }
+}
+
 fn expect_int(
     args: &[Value],
     index: usize,
@@ -5916,6 +5951,9 @@ fn expect_int(
     span: Span,
 ) -> Result<i64, EvalError> {
     let num = expect_num(args, index, name, span)?;
+    if let NumKind::Int(crate::int::Int::Small(value)) = num.kind {
+        return Ok(value);
+    }
     num.to_f64()
         .map(|value| value as i64)
         .ok_or_else(|| EvalError::new("E0302", format!("`{name}` expects an Int")).at(span))
@@ -6934,7 +6972,7 @@ fn exact_number(
 ) -> Value {
     if value.denom().is_one() {
         Value::Num(NumVal {
-            kind: NumKind::Int(value.numer().clone()),
+            kind: NumKind::Int(value.numer().into()),
             dim,
             display: None,
         })
@@ -7256,8 +7294,8 @@ pub(crate) fn value_to_term(value: &Value) -> Result<Term, EvalError> {
     match value {
         | Value::Num(num) => {
             match &num.kind {
-                | NumKind::Int(value) => Ok(Term::Num(BigRational::from_integer(value.clone()))),
-                | NumKind::Exact(value) => Ok(Term::Num(value.clone())),
+                | NumKind::Int(value) => Ok(Term::Num(value.to_rational())),
+                | NumKind::Exact(value) => Ok(Term::Num(value.as_ref().clone())),
                 | NumKind::Float(value) => {
                     Ok(Term::Num(
                         BigRational::from_float(*value).unwrap_or_else(BigRational::zero),
@@ -8655,7 +8693,7 @@ fn sde_ensemble_call(
         return Err(arity(name, 5, args.len(), span));
     }
     // A malformed policy is the members' `Err(SdeError)`, not a crash here.
-    let member = Value::Ctor {
+    let member = Value::ctor(crate::value::CtorValue {
         adt: u32::MAX,
         index: usize::MAX,
         name: "sde_member".to_string(),
@@ -8668,7 +8706,7 @@ fn sde_ensemble_call(
             args[3].clone(),
         ],
         origin: None,
-    };
+    });
     let inputs: Vec<Value> = (0..count)
         .map(|index| Value::int(i64::try_from(index).unwrap_or(0)))
         .collect();
@@ -8871,6 +8909,7 @@ fn exact_seed(value: &Value) -> Option<u64> {
             match &num.kind {
                 | NumKind::Int(int) => {
                     let modulus = BigInt::one() << 64;
+                    let int = int.to_big();
                     let reduced: BigInt = ((int % &modulus) + &modulus) % &modulus;
                     reduced.to_u64()
                 },
@@ -9232,14 +9271,14 @@ fn sde_integrate(
                     "y",
                     build_tensor(states, vec![len], crate::value::value_dim(&initial)),
                 ),
-                ("steps", Value::Num(NumVal::int(BigInt::from(path.steps)))),
+                ("steps", Value::Num(NumVal::int(path.steps))),
                 (
                     "rejected",
-                    Value::Num(NumVal::int(BigInt::from(path.rejected))),
+                    Value::Num(NumVal::int(path.rejected)),
                 ),
-                ("nfev", Value::Num(NumVal::int(BigInt::from(path.nfev)))),
-                ("seed", Value::Num(NumVal::int(BigInt::from(path.seed)))),
-                ("noise", Value::Num(NumVal::int(BigInt::from(noise)))),
+                ("nfev", Value::Num(NumVal::int(path.nfev))),
+                ("seed", Value::Num(NumVal::int(path.seed))),
+                ("noise", Value::Num(NumVal::int(noise))),
                 ("method", sde_method_value(path.method, method_adt)),
             ])))
         },
@@ -10321,7 +10360,7 @@ fn zero_like(tensor: &TensorData) -> Value {
         },
         | Storage::TypedExact(_, ExactRep::Int) => {
             Value::Num(NumVal {
-                kind: NumKind::Int(BigInt::zero()),
+                kind: NumKind::Int(crate::int::Int::ZERO),
                 dim: tensor.dim.clone(),
                 display: None,
             })
@@ -10348,8 +10387,8 @@ fn exact_values(tensor: &TensorData) -> Option<Vec<BigRational>> {
     for element in tensor.elements() {
         let num = element.as_num()?;
         match &num.kind {
-            | NumKind::Int(value) => out.push(BigRational::from_integer(value.clone())),
-            | NumKind::Exact(value) => out.push(value.clone()),
+            | NumKind::Int(value) => out.push(value.to_rational()),
+            | NumKind::Exact(value) => out.push(value.as_ref().clone()),
             | _ => return None,
         }
     }

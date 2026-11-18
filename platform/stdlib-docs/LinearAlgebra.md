@@ -2,223 +2,657 @@
 
 Source: `stdlib/LinearAlgebra.aev`
 
+The `LinearAlgebra` module of §8.20.
+
 ## `let approx_map`
 
 ```aevia
 let approx_map = approx_map
 ```
 
-The `LinearAlgebra` module of §8.20.
-
-Generated standard library; do not edit.
-Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+**Signature:** `approx_map : ((Real[d] -> Real[e]), Tensor<1, Real[d]>) -> Result<Tensor<1, Float[e]>, EvalError>`
 ## `let at`
 
 ```aevia
 let at = at
 ```
+
+**Signature:** `at : (Tensor<n, a>, Int) -> Tensor<n-1, a>`
 ## `let cholesky`
 
 ```aevia
 let cholesky = cholesky
 ```
+
+Lower-triangular Cholesky factor `L` with `A = L L^T` for positive-definite `A`.
+
+**Signature:** `cholesky : Tensor<2, Scalar<ρ,d>> -> Result<Tensor<2, Scalar<ρ,d^(1/2)>>, LinAlgError>`
+
+**Kernel signature** (derived):
+- `cholesky : (Dyn<term>) -> Dyn<term>`
+- `cholesky : (Tensor<2, Int>) -> Tensor<2, Dyn<term>>`
+
+**Dimensions:** kernel rule `Root(2)`
+
+Cholesky factor `L` (lower triangular) with `A = L L^T`.
+
+**Errors**
+[`DenseError::Singular`] if `A` is not symmetric positive definite.
+
+**Examples:**
+- `cholesky(list(list(4, 2), list(2, 3)))` returns a `[[Expr]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.cholesky`; rustdoc of `crate::kernels::dense::cholesky` (by name).*
 ## `let det`
 
 ```aevia
 let det = det
 ```
+
+Determinant of square matrix `A`.
+
+**Signature:** `det : Tensor<2, Scalar<ρ,1>> -> Scalar<ρ,1>`
+
+**Kernel signature** (overlay):
+- `det : (Tensor<2, Real>) -> Real`
+- `det : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** kernel rule `Custom("")`
+
+*Source: rssn operator `linalg.det`.*
 ## `let det_unit`
 
 ```aevia
 let det_unit = det_unit
 ```
+
+**Signature:** `det_unit : (Tensor<2, Scalar<ρ,d>>, Unit[d]) -> Dyn<ρ>`
 ## `let diag`
 
 ```aevia
 let diag = diag
 ```
+
+Build a diagonal matrix from vector `v`, or extract the main diagonal of matrix `A`.
+
+**Signature:** `diag : Tensor<1, a> -> Tensor<2, a>`
+
+**Signature:** `diag : Tensor<2, a> -> Tensor<1, a>`
+
+**Kernel signature** (derived):
+- `diag : (Dyn<term>) -> Dyn<term>`
+- `diag : (Tensor<1, Dyn<term>>) -> Tensor<2, Dyn<term>>`
+
+**Dimensions:** kernel rule `List`
+
+**Examples:**
+- `diag(list(1, a, 3))` returns a `[[Expr]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.diag`.*
 ## `let dot`
 
 ```aevia
 let dot = dot
 ```
+
+Euclidean dot product `sum_i u_i v_i` of vectors `u` and `v`.
+
+**Signature:** `dot : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Scalar<ρ,d*e>`
+
+**Kernel signature** (overlay):
+- `dot : (Tensor<_, Real>, Tensor<_, Real>) -> Real`
+- `dot : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** the result is the product of the argument dimensions
+
+Dimension-generic dot product: dispatches on the vector type.
+
+*Source: rssn operator `linalg.dot`; rustdoc of `crate::kernels::computer_graphics::dot` (by name).*
 ## `let eig`
 
 ```aevia
 let eig = eig
 ```
+
+The eigenvalues and eigenvectors of a square matrix.
+
+**Signature:** `eig : Tensor<2, Scalar<ρ,d>> -> (Tensor<1, Complex[d]>, Tensor<2, Complex<1>>)`
+
+The eigenvectors are the columns of the returned matrix: the result is
+`(values, vectors)` with `vectors` row-major `n × n`, and column `j` is the
+eigenvector of `values[j]`.
+
+**Errors**
+
+[`NumericError::NotSquare`] when the matrix is not square, and
+[`NumericError::NotConverged`] when the eigenvalue iteration fails.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let eigvals`
 
 ```aevia
 let eigvals = eigvals
 ```
+
+The eigenvalues of a square matrix.
+
+**Signature:** `eigvals : Tensor<2, Scalar<ρ,d>> -> Tensor<1, Complex[d]>`
+
+**Errors**
+
+[`NumericError::NotSquare`] when the matrix is not square.
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let eye`
 
 ```aevia
 let eye = eye
 ```
+
+**Signature:** `eye : Int -> Tensor<2, Float>`
 ## `let fill`
 
 ```aevia
 let fill = fill
 ```
+
+**Signature:** `fill : (Scalar<ρ,d>, Int, ..., Int) -> Tensor<n, Scalar<ρ,d>>`
 ## `let flatten`
 
 ```aevia
 let flatten = flatten
 ```
+
+**Signature:** `flatten : Tensor<n, Tensor<m, a>> -> Tensor<n+m, a>`
+
+**Signature:** `flatten : Tensor<n, a> -> Tensor<1, a>`
 ## `let inv`
 
 ```aevia
 let inv = inv
 ```
+
+**Signature:** `inv : Tensor<2, Scalar<ρ,d>> -> Result<Tensor<2, Scalar<div_rep(ρ),1/d>>, LinAlgError>`
 ## `let linsolve`
 
 ```aevia
 let linsolve = linsolve
 ```
+
+Solution `x` to the linear system `A x = b`.
+
+**Signature:** `linsolve : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>`
+
+**Kernel signature** (derived):
+- `linsolve : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `linsolve : (Tensor<2, Int>, Tensor<1, Int>) -> Tensor<1, Dyn<term>>`
+- `linsolve : (Tensor<2, Real>, Tensor<1, Real>) -> Tensor<1, Real>`
+- `linsolve : (Tensor<2, Dyn<term>>, Tensor<1, Dyn<term>>) -> Tensor<1, Dyn<term>>`
+
+**Dimensions:** kernel rule `Custom("")`
+
+**Examples:**
+- `linsolve(list(list(1, 1, 1)), list(3))` returns a `[Expr]`
+- `linsolve(list(list(1, 1), list(1, 1)), list(1, 2))` returns a `[Never]`
+- `linsolve(list(list(1, 1/2), list(1/2, 1/3)), list(1/3, 1/4))` returns a `[Rat]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.linsolve`.*
 ## `let linspace`
 
 ```aevia
 let linspace = linspace
 ```
+
+**Signature:** `linspace : (Scalar<ρ,d>, Scalar<ρ,d>, Int) -> Tensor<1, Scalar<ρ,d>>`
 ## `let lstsq`
 
 ```aevia
 let lstsq = lstsq
 ```
+
+Least-squares solution minimizing `||A x - b||_2`.
+
+**Signature:** `lstsq : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Result<Tensor<1, Scalar<div_rep(ρ),e/d>>, LinAlgError>`
+
+**Kernel signature** (derived):
+- `lstsq : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `lstsq : (Tensor<2, Int>, Tensor<1, Int>) -> Tensor<1, Real>`
+
+**Dimensions:** kernel rule `Custom("")`
+
+**Examples:**
+- `lstsq(list(list(1, 0), list(1, 1), list(1, 2)), list(1, 2, 2))` returns a `[Rat]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.lstsq`.*
 ## `let lu`
 
 ```aevia
 let lu = lu
 ```
+
+LU factorization `list(L, U, P)` with `P A = L U`.
+
+**Signature:** `lu : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,d>>)`
+
+**Kernel signature** (derived):
+- `lu : (Dyn<term>) -> Dyn<term>`
+- `lu : (Tensor<2, Int>) -> Tensor<3, Real>`
+
+**Dimensions:** kernel rule `Container`
+
+**Examples:**
+- `lu(list(list(0, 2, 1), list(1, 1, 0), list(2, 1, 3)))` returns a `[[[Rat]]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.lu`.*
 ## `let map_indexed`
 
 ```aevia
 let map_indexed = map_indexed
 ```
+
+**Signature:** `map_indexed : ((Int, a) -> b, Tensor<1, a>) -> Tensor<1, b>`
 ## `let matmul`
 
 ```aevia
 let matmul = matmul
 ```
+
+Matrix product of two or more matrices or vectors.
+
+**Signature:** `matmul : (Tensor<2, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,e>>) -> Tensor<2, Scalar<ρ,d*e>>`
+
+**Signature:** `matmul : (Sparse<F, [m,k], Scalar<ρ,d>>, Sparse<G, [k,n], Scalar<ρ,e>>) -> Sparse<Csr, [m,n], Scalar<ρ,d*e>>`
+
+**Kernel signature** (derived):
+- `matmul : () -> Dyn<term> with 0... x Dyn<term>`
+- `matmul : () -> Tensor<2, Dyn<term>> with 0... x Tensor<2, Dyn<term>>`
+- `matmul : () -> Tensor<2, Int> with 0... x Tensor<2, Int>`
+- `matmul : () -> Tensor<2, Real> with 0... x Tensor<2, Real>`
+
+**Dimensions:** the result is the product of the argument dimensions
+
+**Examples:**
+- `matmul(dirac_gamma(0), dirac_gamma(2))` returns a `[[Expr]]`
+- `matmul(dirac_gamma(2), dirac_gamma(0))` returns a `[[Expr]]`
+- `matmul(pauli_x, pauli_y)` returns a `[[Expr]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.matmul`.*
 ## `let matvec`
 
 ```aevia
 let matvec = matvec
 ```
+
+**Signature:** `matvec : (Tensor<2, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<1, Scalar<ρ,d*e>>`
 ## `let mean`
 
 ```aevia
 let mean = mean
 ```
+
+Arithmetic mean of list `xs`.
+
+**Signature:** `mean : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+
+**Kernel signature** (derived):
+- `mean : (Dyn<term>) -> Dyn<term>`
+- `mean : (Tensor<1, Int>) -> Real`
+
+**Dimensions:** the result has the dimension of argument 1
+
+Computes the mean of a slice of data.
+
+**Arguments**
+* `data` - A unmutable slice of `f64` data points.
+
+**Returns**
+The mean of the data as an `f64`.
+
+**Examples:**
+- `mean(list(1, 2, 4))` returns a `Rat`
+- `mean(list(5))` returns a `Int`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `stats.mean`; rustdoc of `crate::kernels::stats::mean` (by name).*
 ## `let norm`
 
 ```aevia
 let norm = norm
 ```
+
+Euclidean (L2) norm `||v||_2` of vector `v`.
+
+**Signature:** `norm : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>`
+
+**Signature:** `norm : (Tensor<n, Scalar<ρ,d>>, Int) -> Scalar<ρ,d>`
+
+**Kernel signature** (overlay):
+- `norm : (Tensor<_, Real>) -> Real`
+- `norm : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** the result has the dimension of argument 1
+
+*Source: rssn operator `linalg.norm`.*
 ## `let normalize`
 
 ```aevia
 let normalize = normalize
 ```
+
+Unit vector `v / ||v||_2` in the direction of `v`.
+
+**Signature:** `normalize : Tensor<n, Scalar<ρ,d>> -> Tensor<n, Scalar<ρ,1>>`
+
+**Kernel signature** (derived):
+- `normalize : (Dyn<term>) -> Dyn<term>`
+- `normalize : (Tensor<1, Int>) -> Tensor<1, Dyn<term>>`
+
+**Dimensions:** kernel rule `Custom("")`
+
+**Examples:**
+- `normalize(list(3, 4))` returns a `[Rat]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.normalize`.*
 ## `let ones`
 
 ```aevia
 let ones = ones
 ```
+
+**Signature:** `ones : (Int, ..., Int) -> Tensor<n, Float>`
 ## `let ones_of`
 
 ```aevia
 let ones_of = ones_of
 ```
+
+**Signature:** `ones_of : Tensor<shape, Float>`
 ## `let outer`
 
 ```aevia
 let outer = outer
 ```
+
+Outer product matrix `u v^T` of vectors `u` and `v`.
+
+**Signature:** `outer : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Tensor<2, Scalar<ρ,d*e>>`
+
+**Kernel signature** (derived):
+- `outer : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `outer : (Tensor<1, Int>, Tensor<1, Int>) -> Tensor<2, Int>`
+
+**Dimensions:** the result is the product of the argument dimensions
+
+**Examples:**
+- `outer(list(1, 2), list(3, 4))` returns a `[[Int]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.outer`.*
 ## `let qr`
 
 ```aevia
 let qr = qr
 ```
+
+QR factorization `list(Q, R)` with orthogonal `Q` and upper triangular `R`.
+
+**Signature:** `qr : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<2, Scalar<ρ,d>>)`
+
+**Kernel signature** (derived):
+- `qr : (Dyn<term>) -> Dyn<term>`
+- `qr : (Tensor<2, Int>) -> Tensor<3, Dyn<term>>`
+
+**Dimensions:** kernel rule `Container`
+
+**Examples:**
+- `qr(list(list(3, 1), list(4, 2)))` returns a `[[[Rat]]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.qr`.*
 ## `let rank`
 
 ```aevia
 let rank = rank
 ```
+
+Rank of matrix `A`.
+
+**Signature:** `rank : Tensor<n, a> -> Int`
+
+**Signature:** `rank : Tensor<2, a> -> Int`
+
+**Kernel signature** (overlay):
+- `rank : (Tensor<_, Real>) -> Int`
+- `rank : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** kernel rule `Custom("")`
+
+*Source: rssn operator `linalg.rank`.*
 ## `let refine_shape`
 
 ```aevia
 let refine_shape = refine_shape
 ```
+
+**Signature:** `refine_shape : Tensor<n, τ> -> Option<Tensor<shape, τ>>`
 ## `let reshape`
 
 ```aevia
 let reshape = reshape
 ```
+
+**Signature:** `reshape : Tensor<shape0, τ> -> Result<Tensor<shape, τ>, ShapeError>`
 ## `let reshape_dyn`
 
 ```aevia
 let reshape_dyn = reshape_dyn
 ```
+
+**Signature:** `reshape_dyn : (Tensor<n, τ>, Tensor<1, Int>) -> Result<Tensor<n, τ>, ShapeError>`
 ## `let set`
 
 ```aevia
 let set = set
 ```
+
+**Signature:** `set : (Tensor<n, a>, Tensor<1, Int>, a) -> Tensor<n, a>`
 ## `let std`
 
 ```aevia
 let std = std
 ```
+
+Population standard deviation of list `xs`.
+
+**Signature:** `std : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d>`
+
+**Kernel signature** (derived):
+- `std : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** the result has the dimension of argument 1
+
+*Source: rssn operator `stats.std`.*
 ## `let sum`
 
 ```aevia
 let sum = sum
 ```
+
+Symbolic/numeric summation over bound index `k` from `lo` to `hi`, or tensor reduction along `axis`.
+
+**Signature:** `sum : Tensor<n, Scalar<ρ,d>> -> Scalar<ρ,d>`
+
+**Signature:** `sum : (Tensor<n, Scalar<ρ,d>>, Int) -> Tensor<n, Scalar<ρ,d>>`
+
+**Signature:** `sum : (Real[1] -> Real[d], Real[1], Real[1]) -> Real[d]`
+
+**Kernel signature** (overlay):
+- `sum : (Tensor<_, Real>) -> Real`
+- `sum : (Tensor<_, Real>, Int) -> Tensor<_, Real>`
+- `sum : (Dyn<term>, Symbol, Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `sum : (Dyn<term>) -> Dyn<term>`
+- ... and 1 more overloads
+
+**Dimensions:** kernel rule `SumOver { f: 0, index: 1 }`
+
+*Source: rssn operator `calculus.sum`.*
 ## `let svd`
 
 ```aevia
 let svd = svd
 ```
+
+Singular value decomposition `list(U, S, V)` of matrix `A`.
+
+**Signature:** `svd : Tensor<2, Scalar<ρ,d>> -> (Tensor<2, Scalar<ρ,1>>, Tensor<1, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,1>>)`
+
+**Kernel signature** (derived):
+- `svd : (Dyn<term>) -> Dyn<term>`
+- `svd : (Tensor<2, Int>) -> { _0: Tensor<2, Float>, _1: Tensor<1, Float>, _2: Tensor<2, Float> }`
+
+**Dimensions:** kernel rule `Container`
+
+Thin singular-value decomposition using the bidiagonal SVD backend.
+
+Rank-deficient matrices retain orthonormal null-space columns. No Gram
+matrix is formed, so small singular values do not lose accuracy through
+squaring the condition number.
+
+**Errors**
+Returns [`DenseError::Shape`] for inconsistent storage or non-finite input,
+and [`DenseError::NoConvergence`] if the backend does not converge.
+
+**Examples:**
+- `svd(list(list(3, 0), list(0, -2)))` returns a `([[Float]],[Float],[[Float]])`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.svd`; rustdoc of `crate::kernels::dense::svd` (by name).*
 ## `let trace`
 
 ```aevia
 let trace = trace
 ```
+
+Trace `sum_i A_{ii}` of square matrix `A`.
+
+**Signature:** `trace : Tensor<2, Scalar<ρ,d>> -> Scalar<ρ,d>`
+
+**Kernel signature** (overlay):
+- `trace : (Tensor<2, Real>) -> Real`
+- `trace : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** the result has the dimension of argument 1
+
+Computes the trace of a square sparse matrix.
+
+**Errors**
+Returns an error if the matrix is not square.
+
+*Source: rssn operator `linalg.trace`; rustdoc of `crate::kernels::sparse::trace` (by name).*
 ## `let transpose`
 
 ```aevia
 let transpose = transpose
 ```
+
+Transpose `A^T` of matrix `A`.
+
+**Signature:** `transpose : Tensor<n, a> -> Tensor<n, a>`
+
+**Signature:** `transpose : Sparse<F, [m,n], τ> -> Sparse<F, [n,m], τ>`
+
+**Kernel signature** (overlay):
+- `transpose : (Tensor<_, Real>) -> Tensor<_, Real>`
+- `transpose : (Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** the result has the dimension of argument 1
+
+*Source: rssn operator `linalg.transpose`.*
 ## `let tril`
 
 ```aevia
 let tril = tril
 ```
+
+The lower triangle of a matrix, the rest zeroed.
+
+**Signature:** `tril : Tensor<2, a> -> Tensor<2, a>`
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let triu`
 
 ```aevia
 let triu = triu
 ```
+
+The upper triangle of a matrix, the rest zeroed.
+
+**Signature:** `triu : Tensor<2, a> -> Tensor<2, a>`
+
+*Source: Rust documentation of the `aevia-std` function.*
 ## `let var`
 
 ```aevia
 let var = var
 ```
+
+**Signature:** `var : Tensor<n, Scalar<ρ,d>> -> Scalar<div_rep(ρ),d^2>`
+
+**Signature:** `var : (Tensor<n, Scalar<ρ,d>>, Bool) -> Scalar<div_rep(ρ),d^2>`
 ## `let vecmat`
 
 ```aevia
 let vecmat = vecmat
 ```
+
+**Signature:** `vecmat : (Tensor<1, Scalar<ρ,d>>, Tensor<2, Scalar<ρ,e>>) -> Tensor<1, Scalar<ρ,d*e>>`
 ## `let zeros`
 
 ```aevia
 let zeros = zeros
 ```
+
+`m x n` zero matrix.
+
+**Signature:** `zeros : (Int, ..., Int) -> Tensor<n, Float>`
+
+**Kernel signature** (derived):
+- `zeros : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+- `zeros : (Int, Int) -> Tensor<2, Int>`
+
+**Dimensions:** kernel rule `List`
+
+The zero vector of length `n`.
+
+**Examples:**
+- `zeros(4, 4)` returns a `[[Int]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `linalg.zeros`; rustdoc of `crate::kernels::qlinalg::zeros` (by name).*
 ## `let zeros_of`
 
 ```aevia
 let zeros_of = zeros_of
 ```
+
+List of `list(q, order)` pairs for the zeros of `f(z)`.
+
+**Signature:** `zeros_of : Tensor<shape, Float>`
+
+**Kernel signature** (derived):
+- `zeros_of : (Dyn<term>, Dyn<term>) -> Dyn<term>`
+
+**Dimensions:** kernel rule `Custom("")`
+
+**Examples:**
+- `zeros_of(z^2 - 4, z)` returns a `[[Int]]`
+(recorded kernel calls; the result is shown as its sort)
+
+*Source: rssn operator `complex.zeros_of`.*

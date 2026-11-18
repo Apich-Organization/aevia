@@ -347,6 +347,36 @@ pub static W0202_DISCARDED_IO_RESULT: Lint = Lint {
     explanation: "An `IO` action or expression inside `do` returns a non-`()` value that is ignored. Bind it with `<-` or `let _ = ...`.",
 };
 
+pub static W0204_RELAXED_DISCARDED_RESULT: Lint = Lint {
+    code: "W0204",
+    name: "relaxed-discarded-result",
+    group: LintGroup::Correctness,
+    default_level: Level::Warn,
+    compiler_lint: true,
+    summary: "`Result` value discarded under `@relax_result`",
+    explanation: "A `Result` is bound to `_` in a declaration marked `@relax_result`. Handle the error or match on it.",
+};
+
+pub static W0205_RELAXED_IMPLICIT_UNWRAP: Lint = Lint {
+    code: "W0205",
+    name: "relaxed-implicit-unwrap",
+    group: LintGroup::Correctness,
+    default_level: Level::Warn,
+    compiler_lint: true,
+    summary: "implicit `Result`/`Option` unwrap under `@relax_result`",
+    explanation: "A `?` that cannot be converted to the enclosing return type is treated as an unwrap in a declaration marked `@relax_result`.",
+};
+
+pub static W0206_RELAXED_NON_EXHAUSTIVE_MATCH: Lint = Lint {
+    code: "W0206",
+    name: "relaxed-non-exhaustive-match",
+    group: LintGroup::Correctness,
+    default_level: Level::Warn,
+    compiler_lint: true,
+    summary: "non-exhaustive `Result`/`Option` match under `@relax_result`",
+    explanation: "A `match` on a `Result` or `Option` misses cases; the error is relaxed to a warning in a declaration marked `@relax_result`.",
+};
+
 pub static W0301_UNRESOLVED_DIMENSION_DEFAULT: Lint = Lint {
     code: "W0301",
     name: "unresolved-dimension-default",
@@ -514,6 +544,9 @@ static BUILTIN_LINTS: &[&Lint] = &[
     &W0103_SHADOWED_BINDING,
     &W0201_REDUNDANT_MATCH_ARM,
     &W0202_DISCARDED_IO_RESULT,
+    &W0204_RELAXED_DISCARDED_RESULT,
+    &W0205_RELAXED_IMPLICIT_UNWRAP,
+    &W0206_RELAXED_NON_EXHAUSTIVE_MATCH,
     &W0301_UNRESOLVED_DIMENSION_DEFAULT,
     &W0302_REAL_FLOAT_MIX,
     &W0303_UNUSED_SYMBOL,

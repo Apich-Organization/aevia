@@ -2,12 +2,6 @@
 
 Source: `stdlib/Units/Geometrized.aev`
 
-## `let f`
-
-```aevia
-let f: Real[Current*Time/Amount]
-```
-
 The constants in geometrized units: c = G = 1.
 
 geometrized units of general relativity: c = G = 1; mass and time are lengths.
@@ -16,6 +10,13 @@ Generated from the rssn Kernel Manifest (`manifest.unit_systems` and
 `manifest.constants`, §5.11.7). Do not edit; regenerate with
 `cargo run -p aevia-stdlib-gen -- --write`.
 rssn 3.0.0-rc.1, api 2
+
+## `let f`
+
+```aevia
+let f: Real[Current*Time/Amount]
+```
+
 Faraday constant (SI 2019 definition, exact)
 ## `let g`
 

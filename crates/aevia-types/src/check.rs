@@ -1405,7 +1405,8 @@ pub struct CheckOptions {
     /// The backend capabilities to check against (§13.8.2).
     pub capabilities: Capabilities,
     /// When true, `Result`/`Option` exhaustiveness and `?` unwrap checks are
-    /// relaxed to warnings (`W0309`, `W0702`, `W0203`).
+    /// relaxed to warnings (`W0204`, `W0205`, `W0206`). Set by the `@relax_result`
+    /// attribute; the CLI `--relax-result` flag is separate and only silences `W0202`.
     pub relax_result: bool,
 }
 
@@ -7006,7 +7007,7 @@ impl Checker {
                             Type::Adt(id, _) if id == adt::RESULT_ID
                         )
                     {
-                        self.warn("W0203", "discarded `Result` value", value.span);
+                        self.warn("W0204", "discarded `Result` value", value.span);
                     }
                     self.bind_local(pattern, &value_ty, *span, value.span);
                 },
@@ -11442,7 +11443,7 @@ impl Checker {
         let Some((boundary, target)) = destination else {
             if self.relax_result {
                 self.warn(
-                    "W0702",
+                    "W0205",
                     "implicit Result/Option unwrap in relaxed mode",
                     span,
                 );
@@ -11473,7 +11474,7 @@ impl Checker {
         if let Err(error) = self.infer.unify(&target, &output) {
             if self.relax_result {
                 self.warn(
-                    "W0702",
+                    "W0205",
                     "implicit Result/Option unwrap in relaxed mode",
                     span,
                 );
@@ -11534,7 +11535,7 @@ impl Checker {
                             Type::Adt(id, _) if id == adt::RESULT_ID
                         )
                     {
-                        self.warn("W0203", "discarded `Result` value", value.span);
+                        self.warn("W0204", "discarded `Result` value", value.span);
                     }
                     self.bind_pattern(pattern, &value_ty);
                     last_ty = Type::Unit;
@@ -11559,7 +11560,7 @@ impl Checker {
                             Type::Adt(id, _) if id == adt::RESULT_ID
                         )
                     {
-                        self.warn("W0203", "discarded `Result` value", value.span);
+                        self.warn("W0204", "discarded `Result` value", value.span);
                     }
                     self.bind_pattern(pattern, &inner);
                     last_ty = Type::Unit;
@@ -11577,7 +11578,7 @@ impl Checker {
                                         Type::Adt(id, _) if id == adt::RESULT_ID
                                     )
                                 {
-                                    self.warn("W0203", "discarded `Result` value", expr.span);
+                                    self.warn("W0204", "discarded `Result` value", expr.span);
                                 } else {
                                     self.warn(
                                         "W0202",
@@ -11888,7 +11889,7 @@ impl Checker {
         );
         if self.relax_result && is_result_or_option {
             self.warn(
-                "W0309",
+                "W0206",
                 format!("non-exhaustive match: missing {missing}"),
                 span,
             );

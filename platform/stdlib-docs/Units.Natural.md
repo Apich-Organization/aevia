@@ -2,12 +2,6 @@
 
 Source: `stdlib/Units/Natural.aev`
 
-## `let f`
-
-```aevia
-let f: Float[1/Amount]
-```
-
 The constants in natural units: c = hbar = k_B = epsilon_0 = 1.
 
 particle-physics natural units: c = hbar = k_B = epsilon_0 = 1 (Heaviside-Lorentz); every mechanical, thermal and electromagnetic dimension is a power of energy.
@@ -16,6 +10,13 @@ Generated from the rssn Kernel Manifest (`manifest.unit_systems` and
 `manifest.constants`, §5.11.7). Do not edit; regenerate with
 `cargo run -p aevia-stdlib-gen -- --write`.
 rssn 3.0.0-rc.1, api 2
+
+## `let f`
+
+```aevia
+let f: Float[1/Amount]
+```
+
 Faraday constant (SI 2019 definition, exact); an irrational power of the unity constants, so a Float
 ## `let g`
 

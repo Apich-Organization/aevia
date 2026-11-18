@@ -68,7 +68,6 @@ use aevia_dim::Dim;
 use aevia_dim::UnitDef;
 use aevia_syntax::Span;
 use indexmap::IndexMap;
-use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
@@ -395,8 +394,8 @@ pub(crate) fn zero_num(
     dim: &Dim,
 ) -> NumVal {
     let kind = match rank {
-        | 0 => NumKind::Int(BigInt::zero()),
-        | 1 => NumKind::Exact(BigRational::zero()),
+        | 0 => NumKind::Int(crate::int::Int::ZERO),
+        | 1 => NumKind::Exact(Rc::new(BigRational::zero())),
         | 2 => NumKind::Float(0.0),
         | _ => NumKind::Complex(0.0, 0.0),
     };

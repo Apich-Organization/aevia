@@ -1,22 +1,35 @@
 ## The `Plot` module of §8.20.
-##
-## Generated standard library; do not edit.
-## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
+# Generated standard library; do not edit.
+# Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.
 module Plot
 
+## **Signature:** `combine : Tensor<1, Series> -> PlotSpec`
 let combine = combine
+## **Signature:** `default_plot_opts : PlotOpts`
 let default_plot_opts = default_plot_opts
+## **Signature:** `errorbar : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, Tensor<1, Scalar<ρ,e>>) -> Series`
 let errorbar = errorbar
+## **Signature:** `errorbar_with : 同上 + PlotOpts`
 let errorbar_with = errorbar_with
+## **Signature:** `heatmap : (Tensor<2, Scalar<ρ,d>>) -> Series`
 let heatmap = heatmap
+## **Signature:** `heatmap_with : (Tensor<2, Scalar<ρ,d>>, PlotOpts) -> Series`
 let heatmap_with = heatmap_with
+## **Signature:** `hist : (Tensor<1, Scalar<ρ,d>>, Int) -> Series`
 let hist = hist
+## **Signature:** `hist_with : (Tensor<1, Scalar<ρ,d>>, Int, PlotOpts) -> Series`
 let hist_with = hist_with
+## **Signature:** `label : (Series, String) -> Series`
 let label = label
+## **Signature:** `line : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>) -> Series`
 let line = line
+## **Signature:** `line_with : (Tensor<1, Scalar<ρ,d>>, Tensor<1, Scalar<ρ,e>>, PlotOpts) -> Series`
 let line_with = line_with
+## **Signature:** `plot : PlotSpec -> IO Unit`
 let plot = plot
+## **Signature:** `save : (String, PlotSpec) -> IO Unit`
 let save = save
-let save_gif = plot_save_gif
+## **Signature:** `scatter : 同上（默认参数）`
 let scatter = scatter
+## **Signature:** `scatter_with : 同上（带 PlotOpts）`
 let scatter_with = scatter_with

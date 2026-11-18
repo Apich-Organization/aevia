@@ -152,6 +152,75 @@ pub fn sections(source: &str) -> Vec<Section> {
     out
 }
 
+/// The signature text the specification gives each name, `name -> [signature]`.
+///
+/// A name declared more than once (an overload in another section) keeps every
+/// distinct signature, in document order. A signature that wraps onto indented
+/// continuation lines is joined with single spaces; `#` comments are dropped.
+#[must_use]
+pub fn signatures(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut out: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    let mut in_fence = false;
+    let mut depth: i32 = 0;
+    let mut current: Option<(Vec<String>, String)> = None;
+    let mut flush = |current: &mut Option<(Vec<String>, String)>| {
+        if let Some((names, text)) = current.take() {
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            for name in names {
+                let entry = out.entry(name).or_default();
+                if !entry.contains(&text) {
+                    entry.push(text.clone());
+                }
+            }
+        }
+    };
+    for raw in source.lines() {
+        if raw.trim_start().starts_with("```") {
+            flush(&mut current);
+            in_fence = !in_fence;
+            depth = 0;
+            continue;
+        }
+        if !in_fence {
+            continue;
+        }
+        let line = raw.find('#').map_or(raw, |at| &raw[..at]);
+        let opens = i32::try_from(line.matches('{').count()).unwrap_or(0);
+        let closes = i32::try_from(line.matches('}').count()).unwrap_or(0);
+        if depth > 0 {
+            depth = (depth + opens - closes).max(0);
+            continue;
+        }
+        depth = (depth + opens - closes).max(0);
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with(char::is_whitespace) {
+            if let Some((_, text)) = &mut current {
+                text.push(' ');
+                text.push_str(line.trim());
+            }
+            continue;
+        }
+        flush(&mut current);
+        let trimmed = line.trim_start();
+        let head_word = trimmed.split_whitespace().next().unwrap_or("");
+        if matches!(
+            head_word,
+            "type" | "class" | "fn" | "module" | "instance" | "import" | "let"
+        ) {
+            continue;
+        }
+        if let Some(names) = declared_names(trimmed)
+            && let Some(colon) = trimmed.find(':')
+        {
+            current = Some((names, trimmed[colon + 1..].trim().to_owned()));
+        }
+    }
+    flush(&mut current);
+    out
+}
+
 /// The number and title of a `## 8.x …` or `### 8.x.y …` heading.
 fn chapter8_heading(line: &str) -> Option<(String, String)> {
     let rest = line

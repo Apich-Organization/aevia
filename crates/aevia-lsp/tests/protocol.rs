@@ -423,6 +423,19 @@ fn a_request_before_initialize_is_refused() {
 }
 
 #[test]
+fn execute_command_refuses_anything_but_an_open_file_document() {
+    let (_, replies) = run(&[
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"aevia.runFile","arguments":["--no-cache"]}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"aevia.runFile","arguments":["file:///not-open.aev"]}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#,
+        r#"{"jsonrpc":"2.0","method":"exit"}"#,
+    ]);
+    assert_eq!(reply(&replies, 2)["error"]["code"], -32602);
+    assert_eq!(reply(&replies, 3)["error"]["code"], -32602);
+}
+
+#[test]
 fn exit_without_shutdown_is_ungraceful() {
     let (exit, _) = run(&[
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,

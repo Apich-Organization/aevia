@@ -2,18 +2,19 @@
 
 Source: `stdlib/Units/Constants.aev`
 
-## `let f`
-
-```aevia
-let f: Real[Current*Time/Amount]
-```
-
 The `Units.Constants` module of §8.20.
 
 Generated from the rssn Kernel Manifest: one quantity per physical
 constant of `manifest.constants` (§13.6.5). Do not edit; regenerate with
 `cargo run -p aevia-stdlib-gen -- --write`.
 rssn 3.0.0-rc.1, api 2
+
+## `let f`
+
+```aevia
+let f: Real[Current*Time/Amount]
+```
+
 Faraday constant (SI 2019 definition, exact)
 ## `let g`
 

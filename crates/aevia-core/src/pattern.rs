@@ -66,7 +66,7 @@ fn literal(
         | (PatLit::Int(expected), Value::Num(number)) => {
             match &number.kind {
                 | NumKind::Int(actual) => actual == expected,
-                | NumKind::Exact(actual) => actual == &BigRational::from_integer(expected.clone()),
+                | NumKind::Exact(actual) => **actual == BigRational::from_integer(expected.clone()),
                 | NumKind::Float(actual) => {
                     BigRational::from_float(*actual)
                         == Some(BigRational::from_integer(expected.clone()))

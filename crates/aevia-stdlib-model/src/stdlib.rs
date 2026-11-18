@@ -366,7 +366,26 @@ fn validate_catalog() {
 /// `Units.Constants` is generated separately from the live RSSN manifest.
 #[must_use]
 pub fn spec_module_sources(spec_source: &str) -> Vec<(String, String)> {
+    spec_module_sources_with_docs(spec_source, &|_, _, _| None)
+}
+
+/// Supplies the `##` documentation of one re-exported name.
+///
+/// Called with the module path (`Math/NumberTheory`), the name, and the
+/// signatures chapter 8 states for that name; returns markdown (no `##`
+/// prefixes), or `None` to leave the name undocumented. The model has no
+/// dependency on the kernel, so whoever has the Kernel Manifest and the Rust
+/// sources of the library supplies this.
+pub type DocFn<'a> = &'a dyn Fn(&str, &str, &[String]) -> Option<String>;
+
+/// [`spec_module_sources`] with a documentation source for every name.
+#[must_use]
+pub fn spec_module_sources_with_docs(
+    spec_source: &str,
+    docs: DocFn<'_>,
+) -> Vec<(String, String)> {
     validate_catalog();
+    let signatures = spec::signatures(spec_source);
     let sections = spec::sections(spec_source);
     let declared = spec::names(spec_source);
     for module in TREE {
@@ -398,7 +417,10 @@ pub fn spec_module_sources(spec_source: &str) -> Vec<(String, String)> {
             names.extend(module.names.iter().copied());
             names.sort_unstable();
             names.dedup();
-            (module.path.to_string(), render_module(module, &names, spec_source))
+            (
+                module.path.to_string(),
+                render_module(module, &names, spec_source, &signatures, docs),
+            )
         })
         .collect()
 }
@@ -606,13 +628,16 @@ fn render_module(
     module: &ModuleDef,
     names: &[&str],
     spec_source: &str,
+    signatures: &std::collections::BTreeMap<String, Vec<String>>,
+    docs: DocFn<'_>,
 ) -> String {
     let mut out = String::new();
+    // The generated notice is a plain `#` comment: a `##` line would be
+    // documentation, and would be repeated on the page of every module.
     out.push_str(&format!(
         "## The `{}` module of §8.20.\n\
-         ##\n\
-         ## Generated standard library; do not edit.\n\
-         ## Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.\n\
+         # Generated standard library; do not edit.\n\
+         # Regenerate with `cargo run -p aevia-stdlib-gen -- --write`.\n\
          module {}\n\n",
         module.path,
         module.path.replace('/', ".")
@@ -636,6 +661,18 @@ fn render_module(
                 "constructor or qualified name: ambient from the Prelude",
             ));
             continue;
+        }
+        let found = signatures.get(*name).map_or(&[][..], Vec::as_slice);
+        if let Some(text) = docs(module.path, name, found) {
+            for line in text.lines() {
+                if line.is_empty() {
+                    out.push_str("##\n");
+                } else {
+                    out.push_str("## ");
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
         }
         out.push_str(&format!("let {name} = {name}\n"));
     }

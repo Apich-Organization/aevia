@@ -151,7 +151,7 @@ fn documented_codes() -> Vec<&'static str> {
     push!("E0901", "E0902", "E0903", "E0904", "E0905");
     // B.12 warnings.
     push!(
-        "W0101", "W0102", "W0103", "W0201", "W0202", "W0203", "W0301", "W0302", "W0303", "W0501",
+        "W0101", "W0102", "W0103", "W0201", "W0202", "W0203", "W0204", "W0205", "W0206", "W0301", "W0302", "W0303", "W0501",
         "W0601",
     );
     // B.17 extension/backend.
@@ -245,7 +245,9 @@ fn table() -> Vec<(&'static str, Cover)> {
         ),
         ("E0314", Front("let e = []\n")),
         ("E0315", Front("fn f(x: Int): Int = x\nlet y = f()\n")),
-        ("E0316", Front("fn f(): Int = 1\nfn f(): Int = 2\n")),
+        // A later top-level `fn` rebinds the name (the earlier value keeps
+        // its own declaration); a second type of one name is a duplicate.
+        ("E0316", Front("type T = Int\ntype T = Int\n")),
         (
             "E0317",
             Front("type F = | F(Int -> Int)\nderive Eq for F\n"),
@@ -476,6 +478,29 @@ fn table() -> Vec<(&'static str, Cover)> {
             Unreachable(
                 "the language has no `return`/`break`/`loop`: a block is statements followed by an obligatory tail expression (`E0201` when it is missing), so nothing can follow the exit and the AST cannot represent an unreachable statement. `match` arms after a wildcard are the redundant-pattern warning W0201, not W0203",
             ),
+        ),
+        (
+            "W0204",
+            Front("@relax_result
+fn f(): Result<Int, String> = Ok(1)
+@relax_result
+fn g(): Int =
+    let _ = f()
+    1
+"),
+        ),
+        (
+            "W0205",
+            Front("@relax_result
+fn f(r: Result<Int, String>): Int = r?
+"),
+        ),
+        (
+            "W0206",
+            Front("@relax_result
+fn f(o: Option<Int>): Int = match o with
+    | Some(a) -> a
+"),
         ),
         ("W0301", Front("let x = symbol(\"x\")\n")),
         (
