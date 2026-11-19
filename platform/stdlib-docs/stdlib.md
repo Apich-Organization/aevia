@@ -26386,7 +26386,11 @@ assert!((back[0] - input[0]).norm() < 1e-12);
 
 Native signal stft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.
 
-Short-Time Fourier Transform (STFT) of `x` with window `window` and hop size `hop`.
+Short-time Fourier transform of complete frames with starts `hop` samples apart.
+
+Returns full unnormalised complex spectra. The number of bins per frame is
+the window length. Incomplete trailing frames are discarded. Empty windows,
+zero hops and signals shorter than a window yield an empty result.
 
 ## `numerical_vector.num_analysis_simplex_scaled` (Experimental)
 
@@ -48724,7 +48728,9 @@ The number of vertices.
 
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
-Finds the connected components of the graph.
+Finds the connected components of an undirected graph stored as symmetric arcs.
+
+For directed reachability in both directions, use [`strongly_connected_components`].
 Returns a vector where each element corresponds to a node and contains its component ID.
 
 ## `numerical_vector.num_native_graph_dijkstra` (Experimental)

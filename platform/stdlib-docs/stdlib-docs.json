@@ -22896,7 +22896,7 @@
         "(Tensor<1, Float[_]>, Tensor<1, Float>, Int) -> Tensor<2, Complex[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Native signal stft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nShort-Time Fourier Transform (STFT) of `x` with window `window` and hop size `hop`.",
+      "doc": "Native signal stft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nShort-time Fourier transform of complete frames with starts `hop` samples apart.\n\nReturns full unnormalised complex spectra. The number of bins per frame is\nthe window length. Incomplete trailing frames are discarded. Empty windows,\nzero hops and signals shorter than a window yield an empty result.",
       "examples": []
     },
     {
@@ -41736,7 +41736,7 @@
         "(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nFinds the connected components of the graph.\nReturns a vector where each element corresponds to a node and contains its component ID.",
+      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nFinds the connected components of an undirected graph stored as symmetric arcs.\n\nFor directed reachability in both directions, use [`strongly_connected_components`].\nReturns a vector where each element corresponds to a node and contains its component ID.",
       "examples": []
     },
     {
