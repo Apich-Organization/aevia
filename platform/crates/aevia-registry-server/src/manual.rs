@@ -91,6 +91,14 @@ impl ManualStore {
         })
     }
 
+    pub(crate) fn edition(
+        &self,
+        kind: ManualKind,
+        language: Lang,
+    ) -> &[ManualChapter] {
+        self.manual(kind).edition(language)
+    }
+
     /// Whether a reload would remove an entire previously available manual.
     pub(crate) const fn loses_manual(
         &self,
@@ -206,6 +214,7 @@ fn render_edition(
             ManualChapter {
                 slug: slug.clone(),
                 title: source.title.clone(),
+                markdown: format!("# {}\n{}", source.title, source.body),
                 html,
                 toc,
                 combined_html,
@@ -317,9 +326,11 @@ async fn manual_chapter(
 ) -> PageResult<Response> {
     let snapshot = snapshot(&state).await;
     let edition = snapshot.manual(kind).edition(lang);
+    let markdown = slug.strip_suffix(".md");
+    let name = markdown.unwrap_or(&slug);
     let index = edition
         .iter()
-        .position(|chapter| chapter.slug == slug)
+        .position(|chapter| chapter.slug == name)
         .ok_or_else(|| {
             PageError::not_found(match lang {
                 | Lang::En => format!("This manual has no chapter `{slug}`."),
@@ -327,6 +338,14 @@ async fn manual_chapter(
             })
             .in_lang(lang)
         })?;
+    if markdown.is_some()
+        && let Some(chapter) = edition.get(index)
+    {
+        return Ok(crate::seo::markdown_response(
+            chapter.markdown.clone(),
+            lang,
+        ));
+    }
     let viewer = state.viewer(&headers).await;
     Ok(Html(aevia_registry_web::manual_chapter(
         kind,

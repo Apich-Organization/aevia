@@ -205,7 +205,8 @@ pub(crate) async fn site_policy(
     request: Request,
     next: Next,
 ) -> Response {
-    let path = request.uri().path();
+    let uri = request.uri().clone();
+    let path = uri.path();
     let auth = path.starts_with("/auth/")
         || path.starts_with("/api/v1/auth/")
         || matches!(path, "/login" | "/logout" | "/activate");
@@ -246,6 +247,16 @@ pub(crate) async fn site_policy(
     );
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    if is_secure(&state.config.base_url) {
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        );
+    }
+    headers.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static(if auth {
             "no-referrer"
@@ -268,6 +279,9 @@ pub(crate) async fn site_policy(
             header::CACHE_CONTROL,
             HeaderValue::from_static("private, no-store"),
         );
+    }
+    if html {
+        crate::seo::site_links(&state, &uri, lang, &mut response).await;
     }
     response
 }

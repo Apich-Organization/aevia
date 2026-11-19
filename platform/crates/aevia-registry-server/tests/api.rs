@@ -1352,6 +1352,105 @@ async fn the_machine_pages_and_the_cli_guide_are_served() {
 }
 
 #[tokio::test]
+async fn discovery_uses_the_public_origin_and_published_editions() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let (status, headers, body) = send(
+        &app.app,
+        Request::builder()
+            .uri("/book/01-start?lang=zh&tracking=example")
+            .header(header::HOST, "outside.invalid")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let links: Vec<_> = headers
+        .get_all(header::LINK)
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect();
+    assert!(links.contains(&"<http://127.0.0.1:8080/book/01-start?lang=zh>; rel=canonical"));
+    assert!(links.iter().any(|line| line.contains("hreflang=en")));
+    assert!(
+        links
+            .iter()
+            .any(|line| line.contains("01-start.md?lang=zh"))
+    );
+    assert!(String::from_utf8_lossy(&body).contains("name=\"description\""));
+
+    let (status, headers, body) = get(&app.app, "/book/01-start.md?lang=zh").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/markdown; charset=utf-8"
+    );
+    assert_eq!(headers[header::CONTENT_LANGUAGE], "zh");
+    assert_eq!(headers["x-robots-tag"], "noindex");
+    assert!(String::from_utf8_lossy(&body).starts_with("# 测试章节"));
+    assert_eq!(
+        get(&app.app, "/book/not-published.md").await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let (_, _, body) = get(&app.app, "/llms.txt?lang=en").await;
+    let body = String::from_utf8(body).unwrap();
+    assert!(body.contains("/book/01-start.md?lang=en"));
+    assert!(body.contains("/api/v1/search"));
+    assert!(!body.contains("/architecture/"));
+    let (_, _, sitemap) = get(&app.app, "/sitemap.xml").await;
+    let sitemap = String::from_utf8(sitemap).unwrap();
+    assert!(sitemap.contains("/book/01-start?lang=en"));
+    assert!(sitemap.contains("/book/01-start?lang=zh"));
+    assert!(!sitemap.contains("/architecture"));
+    assert_eq!(get(&app.app, "/login").await.1["x-robots-tag"], "noindex");
+    assert_eq!(
+        get(&app.app, "/stdlib/catalog.json").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn reload_preserves_previous_complete_editions_and_recovers() {
+    let Some(app) = start().await else {
+        return;
+    };
+    let root = &app.state.config.spec_dir;
+    let english = root.join("en");
+    std::fs::create_dir_all(&english).unwrap();
+    let title = root.join("00-overview.md");
+    let translation = english.join("00-overview.md");
+    std::fs::write(&title, "# 概述\n\n原始版。\n").unwrap();
+    std::fs::write(&translation, "# Overview\n\nFirst edition.\n").unwrap();
+    assert_eq!(app.state.reload_spec().await.unwrap(), 1);
+    std::fs::remove_file(&translation).unwrap();
+    assert!(app.state.reload_spec().await.is_err());
+    let (_, _, old) = get(&app.app, "/spec/00-overview.md?lang=en").await;
+    assert!(String::from_utf8_lossy(&old).contains("First edition."));
+    std::fs::write(&translation, "# Overview\n\nRevised edition.\n").unwrap();
+    assert_eq!(app.state.reload_spec().await.unwrap(), 1);
+    let (_, _, revised) = get(&app.app, "/spec/00-overview.md?lang=en").await;
+    assert!(String::from_utf8_lossy(&revised).contains("Revised edition."));
+
+    let bundle = app.state.config.stdlib_docs_dir.join("stdlib-docs.json");
+    let raw = br#"{"modules":[{"path":"Prelude","doc":"English","decls":[]}],"zh_modules":[{"path":"Prelude","doc":"Chinese","decls":[]}]}"#;
+    std::fs::write(&bundle, raw).unwrap();
+    assert_eq!(app.state.reload_stdlib_docs().await.unwrap(), 1);
+    std::fs::write(&bundle, "{").unwrap();
+    assert!(app.state.reload_stdlib_docs().await.is_err());
+    let (status, headers, body) = get(&app.app, "/stdlib/catalog.json").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+    assert_eq!(&body[..], raw);
+    let (_, headers, _) = get(&app.app, "/stdlib/prelude?lang=zh").await;
+    assert_eq!(
+        headers[header::LINK],
+        "<http://127.0.0.1:8080/stdlib/Prelude?lang=zh>; rel=canonical"
+    );
+}
+
+#[tokio::test]
 async fn manuals_serve_localized_chapters_and_a_standalone_download() {
     let Some(app) = start().await else {
         return;

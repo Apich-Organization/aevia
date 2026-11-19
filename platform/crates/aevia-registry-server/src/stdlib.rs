@@ -24,6 +24,7 @@ pub struct StdlibDocStore {
     book: StdlibBook,
     chinese: Option<StdlibBook>,
     directory: PathBuf,
+    catalog: Option<axum::body::Bytes>,
 }
 
 impl StdlibDocStore {
@@ -33,14 +34,14 @@ impl StdlibDocStore {
     ///
     /// `E_STDLIB` when the path exists but cannot be read or parsed.
     pub fn load(directory: &Path) -> Result<Self, Error> {
-        let (mut book, mut chinese) = if directory.is_file() {
+        let (mut book, mut chinese, catalog) = if directory.is_file() {
             load_json_file(directory)?
         } else if directory.is_dir() {
             let json_path = directory.join("stdlib-docs.json");
             if json_path.is_file() {
                 load_json_file(&json_path)?
             } else {
-                (load_markdown_dir(directory)?, None)
+                (load_markdown_dir(directory)?, None, None)
             }
         } else {
             tracing::warn!(
@@ -51,6 +52,7 @@ impl StdlibDocStore {
                 book: StdlibBook::default(),
                 chinese: None,
                 directory: directory.to_path_buf(),
+                catalog: None,
             });
         };
         let slugs = render_book(&mut book)?;
@@ -90,6 +92,7 @@ impl StdlibDocStore {
             book,
             chinese,
             directory: directory.to_path_buf(),
+            catalog,
         })
     }
 
@@ -115,6 +118,26 @@ impl StdlibDocStore {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.book.modules.is_empty()
+    }
+
+    pub(crate) fn catalog(&self) -> Option<axum::body::Bytes> {
+        self.catalog.clone()
+    }
+
+    pub(crate) const fn is_bilingual(&self) -> bool {
+        self.chinese.is_some()
+    }
+
+    pub(crate) fn loses_edition(
+        &self,
+        previous: &Self,
+    ) -> bool {
+        (previous.is_bilingual() && !self.is_bilingual())
+            || previous
+                .book
+                .modules
+                .iter()
+                .any(|module| self.book.module(&module.slug).is_none())
     }
 
     /// The directory or file it was loaded from.
@@ -223,13 +246,16 @@ impl From<GeneratedModule> for StdlibModule {
     }
 }
 
-fn load_json_file(path: &Path) -> Result<(StdlibBook, Option<StdlibBook>), Error> {
-    let raw = std::fs::read_to_string(path).map_err(|error| {
-        Error::new(
-            E_STDLIB,
-            format!("cannot read `{}`: {error}", path.display()),
-        )
-    })?;
+type LoadedBooks = (StdlibBook, Option<StdlibBook>, Option<axum::body::Bytes>);
+
+fn load_json_file(path: &Path) -> Result<LoadedBooks, Error> {
+    let raw =
+        crate::reload::read_document(path, crate::reload::CATALOG_LIMIT).map_err(|error| {
+            Error::new(
+                E_STDLIB,
+                format!("cannot read `{}`: {error}", path.display()),
+            )
+        })?;
     if let Ok(book) = serde_json::from_str::<GeneratedBook>(&raw) {
         let convert = |modules: Vec<GeneratedModule>| {
             StdlibBook {
@@ -238,7 +264,7 @@ fn load_json_file(path: &Path) -> Result<(StdlibBook, Option<StdlibBook>), Error
             }
         };
         let chinese = (!book.zh_modules.is_empty()).then(|| convert(book.zh_modules));
-        return Ok((convert(book.modules), chinese));
+        return Ok((convert(book.modules), chinese, Some(raw.into())));
     }
     if let Ok(book) = serde_json::from_str::<LegacyBook>(&raw)
         && book
@@ -251,6 +277,7 @@ fn load_json_file(path: &Path) -> Result<(StdlibBook, Option<StdlibBook>), Error
                 version: book.version,
                 modules: book.modules,
             },
+            None,
             None,
         ));
     }
@@ -265,6 +292,7 @@ fn load_json_file(path: &Path) -> Result<(StdlibBook, Option<StdlibBook>), Error
             version: String::new(),
             modules,
         },
+        None,
         None,
     ))
 }
@@ -304,12 +332,14 @@ fn load_markdown_dir(directory: &Path) -> Result<StdlibBook, Error> {
 
     let mut modules = Vec::with_capacity(files.len());
     for path in files {
-        let raw = std::fs::read_to_string(&path).map_err(|error| {
-            Error::new(
-                E_STDLIB,
-                format!("cannot read `{}`: {error}", path.display()),
-            )
-        })?;
+        let raw = crate::reload::read_document(&path, crate::reload::MARKDOWN_LIMIT).map_err(
+            |error| {
+                Error::new(
+                    E_STDLIB,
+                    format!("cannot read `{}`: {error}", path.display()),
+                )
+            },
+        )?;
         let text = raw.replace("\r\n", "\n");
         let slug = path
             .file_stem()

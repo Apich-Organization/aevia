@@ -746,8 +746,23 @@ pub async fn spec_chapter(
     Language(lang): Language,
     Path(slug): Path<String>,
     headers: HeaderMap,
-) -> PageResult<Html<String>> {
+) -> PageResult<Response> {
     let spec = state.spec.read().await.clone();
+    if let Some(name) = slug.strip_suffix(".md") {
+        let name = if name == "README" {
+            "index"
+        } else {
+            name
+        };
+        let markdown = spec.markdown(name, lang).ok_or_else(|| {
+            PageError::not_found(match lang {
+                | Lang::En => "This chapter has no Markdown edition in English.",
+                | Lang::Zh => "本章没有中文 Markdown 版本。",
+            })
+            .in_lang(lang)
+        })?;
+        return Ok(crate::seo::markdown_response(markdown.to_owned(), lang));
+    }
     let book = spec.book();
     let Some(chapter) = book.chapter(&slug) else {
         return Err(
@@ -760,7 +775,8 @@ pub async fn spec_chapter(
         chapter,
         lang,
         state.viewer(&headers).await.as_ref(),
-    )))
+    ))
+    .into_response())
 }
 
 // ------------------------------------------------------------------- stdlib
@@ -816,12 +832,18 @@ pub async fn stdlib_module(
 const EMBEDDED_INSTALL_SH: &str = include_str!("../../../install.sh");
 const EMBEDDED_INSTALL_PS1: &str = include_str!("../../../install.ps1");
 
-/// `GET /install.sh`
-pub async fn install_sh(State(state): State<AppState>) -> impl IntoResponse {
-    let path = state.config.install_dir.join("install.sh");
-    let body = tokio::fs::read_to_string(&path)
-        .await
-        .unwrap_or_else(|_| EMBEDDED_INSTALL_SH.to_string());
+async fn installer_script(
+    path: std::path::PathBuf,
+    fallback: &'static str,
+) -> impl IntoResponse {
+    let body = tokio::task::spawn_blocking(move || {
+        crate::reload::read_document(&path, crate::reload::MARKDOWN_LIMIT)
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .filter(|script| !script.trim().is_empty())
+    .unwrap_or_else(|| fallback.to_owned());
     (
         StatusCode::OK,
         [
@@ -832,20 +854,22 @@ pub async fn install_sh(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+/// `GET /install.sh`
+pub async fn install_sh(State(state): State<AppState>) -> impl IntoResponse {
+    installer_script(
+        state.config.install_dir.join("install.sh"),
+        EMBEDDED_INSTALL_SH,
+    )
+    .await
+}
+
 /// `GET /install.ps1`
 pub async fn install_ps1(State(state): State<AppState>) -> impl IntoResponse {
-    let path = state.config.install_dir.join("install.ps1");
-    let body = tokio::fs::read_to_string(&path)
-        .await
-        .unwrap_or_else(|_| EMBEDDED_INSTALL_PS1.to_string());
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=60"),
-        ],
-        body,
+    installer_script(
+        state.config.install_dir.join("install.ps1"),
+        EMBEDDED_INSTALL_PS1,
     )
+    .await
 }
 
 /// `GET /lang/{code}` — remembers a language and returns to the page.

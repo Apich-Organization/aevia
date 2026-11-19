@@ -136,7 +136,10 @@ pub fn manual_chapter(
                 {chapters(kind, edition, lang, Some(&chapter.slug), false)}
             </aside>
             <article class="spec-body">
-                <header class="spec-head"><h1>{chapter.title.clone()}</h1></header>
+                <header class="spec-head">
+                    <h1>{chapter.title.clone()}</h1>
+                    <a href=chapter_link(kind, &format!("{}.md", chapter.slug), lang)>"Markdown"</a>
+                </header>
                 {(!chapter.toc.is_empty()).then(|| view! {
                     <nav class="manual-local-toc" aria-label=ON_PAGE.of(lang)>
                         <p>{ON_PAGE.of(lang)}</p>

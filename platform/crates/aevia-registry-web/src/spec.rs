@@ -38,12 +38,8 @@ use crate::thousands;
 
 const TITLE: Msg = Msg::new("language specification", "语言规范");
 const LEDE: Msg = Msg::new(
-    "The normative design of Aevia: grammar, typing rules, dimensions, units, \
-     runtime and the rssn backend. The Chinese text is normative; \
-     English editions are published chapter by chapter, and a chapter without one \
-     carries an English abstract.",
-    "Aevia 的规范设计：文法、类型规则、量纲、单位、运行时与 rssn 后端。以中文为准，\
-     英文版逐章提供；尚无英文版的章节附英文摘要。",
+    "Aevia's grammar, type system, units, runtime and RSSN interface. The Chinese edition is normative. The English edition provides a reference.",
+    "Aevia 的文法、类型系统、单位、运行时与 RSSN 接口。中文为规范文本，英文供参考。",
 );
 const SINGLE_PAGE: Msg = Msg::new("read it as one page", "单页阅读全文");
 const BACK_TO_INDEX: Msg = Msg::new("all chapters", "全部章节");
@@ -57,10 +53,9 @@ const PREVIOUS: Msg = Msg::new("previous", "上一章");
 const NEXT: Msg = Msg::new("next", "下一章");
 const CONTENTS: Msg = Msg::new("contents", "目录");
 const REVISION: Msg = Msg::new("revision", "修订版");
-const NO_ENGLISH_YET: Msg = Msg::new(
-    "This chapter has no English edition yet. The Chinese text, which is normative, is shown \
-     below.",
-    "本章尚无英文版。",
+const ENGLISH_ABSTRACT: Msg = Msg::new(
+    "The English abstract precedes the Chinese text.",
+    "英文摘要之后是中文原文。",
 );
 const NOT_NORMATIVE_NOTE: Msg = Msg::new(
     "The Chinese text below is normative. The abstract is a reading aid, not a \
@@ -210,7 +205,7 @@ pub fn spec_page(
                 <aside class="abstract">
                     <h2>{ABSTRACT.of(lang)}</h2>
                     <p>{summary.clone()}</p>
-                    <p class="note">{NO_ENGLISH_YET.of(lang)}</p>
+                    <p class="note">{ENGLISH_ABSTRACT.of(lang)}</p>
                     <p class="note">{NOT_NORMATIVE_NOTE.of(lang)}</p>
                 </aside>
             }
@@ -246,6 +241,9 @@ pub fn spec_page(
                     <header class="spec-head">
                         <p class="eyebrow">{chapter_label(lang, &number)}</p>
                         <h1>{title.clone()}</h1>
+                        {(english.is_some() || lang == Lang::Zh).then(|| view! {
+                            <a href=format!("/spec/{}.md?lang={}", chapter.slug, lang.code())>"Markdown"</a>
+                        })}
                         <p class="subtitle">{other}</p>
                         <p class="meta">
                             {badge}

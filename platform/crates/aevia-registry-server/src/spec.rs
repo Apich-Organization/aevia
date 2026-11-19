@@ -203,6 +203,7 @@ fn normative(slug: &str) -> bool {
 #[derive(Clone, Debug)]
 pub struct SpecStore {
     book: SpecBook,
+    sources: std::collections::BTreeMap<String, [Option<String>; 2]>,
     directory: PathBuf,
 }
 
@@ -220,39 +221,61 @@ impl SpecStore {
             );
             return Ok(Self {
                 book: SpecBook::default(),
+                sources: std::collections::BTreeMap::new(),
                 directory: directory.to_path_buf(),
             });
         }
         let mut chapters = Vec::new();
+        let mut sources = std::collections::BTreeMap::new();
         let mut revision = String::new();
         for name in ORDER {
             let path = directory.join(name);
             if !path.is_file() {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).map_err(|error| {
-                Error::new(E_SPEC, format!("cannot read `{}`: {error}", path.display()))
-            })?;
+            let text = crate::reload::read_document(&path, crate::reload::MARKDOWN_LIMIT).map_err(
+                |error| Error::new(E_SPEC, format!("cannot read `{}`: {error}", path.display())),
+            )?;
             let text = text.replace("\r\n", "\n");
             if let Some(found) = highest_revision(&text)
                 && found > revision
             {
                 revision = found;
             }
+            if first_heading(&text).is_none() {
+                return Err(Error::new(
+                    E_SPEC,
+                    format!("`{}` has no chapter title", path.display()),
+                ));
+            }
             let slug = slug_of(name);
             let mut chapter = render_chapter(&slug, &text);
             // The English edition sits beside the Chinese one in `en/` and has
             // the same file name; a chapter without it stays Chinese-only.
             let english = directory.join("en").join(name);
-            if english.is_file() {
-                let translated = std::fs::read_to_string(&english).map_err(|error| {
-                    Error::new(
+            let translated = if english.is_file() {
+                let translated =
+                    crate::reload::read_document(&english, crate::reload::MARKDOWN_LIMIT).map_err(
+                        |error| {
+                            Error::new(
+                                E_SPEC,
+                                format!("cannot read `{}`: {error}", english.display()),
+                            )
+                        },
+                    )?;
+                let translated = translated.replace("\r\n", "\n");
+                if first_heading(&translated).is_none() {
+                    return Err(Error::new(
                         E_SPEC,
-                        format!("cannot read `{}`: {error}", english.display()),
-                    )
-                })?;
-                attach_english(&mut chapter, &translated.replace("\r\n", "\n"));
-            }
+                        format!("`{}` has no chapter title", english.display()),
+                    ));
+                }
+                attach_english(&mut chapter, &translated);
+                Some(translated)
+            } else {
+                None
+            };
+            sources.insert(slug, [translated, Some(text)]);
             chapters.push(chapter);
         }
         tracing::info!(
@@ -263,6 +286,7 @@ impl SpecStore {
         );
         Ok(Self {
             book: SpecBook { revision, chapters },
+            sources,
             directory: directory.to_path_buf(),
         })
     }
@@ -277,6 +301,29 @@ impl SpecStore {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.book.chapters.is_empty()
+    }
+
+    pub(crate) fn markdown(
+        &self,
+        slug: &str,
+        lang: aevia_registry_core::Lang,
+    ) -> Option<&str> {
+        let [english, chinese] = self.sources.get(slug)?;
+        match lang {
+            | aevia_registry_core::Lang::En => english.as_deref(),
+            | aevia_registry_core::Lang::Zh => chinese.as_deref(),
+        }
+    }
+
+    pub(crate) fn loses_chapter(
+        &self,
+        previous: &Self,
+    ) -> bool {
+        previous.book.chapters.iter().any(|chapter| {
+            self.book
+                .chapter(&chapter.slug)
+                .is_none_or(|next| chapter.html_en.is_some() && next.html_en.is_none())
+        })
     }
 
     /// Where it was read from, for the log line and the "not mounted" notice.

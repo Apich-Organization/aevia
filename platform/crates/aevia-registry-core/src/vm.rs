@@ -527,6 +527,8 @@ pub struct ManualChapter {
     pub slug: String,
     /// Its localized title.
     pub title: String,
+    /// The localized Markdown source, including the title.
+    pub markdown: String,
     /// The chapter body for its own route.
     pub html: String,
     /// Headings on the chapter page.

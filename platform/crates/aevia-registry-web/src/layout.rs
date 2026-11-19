@@ -9,10 +9,9 @@
 //! # Language
 //!
 //! Every label in the chrome is a [`Msg`], so the top bar, the footer and the
-//! skip link are translated. The switcher is a link to `/lang/{code}`, which
-//! sets a cookie and sends the reader back to the page they were on: a language
-//! is a preference about a reader, not about a URL, so it belongs in a cookie
-//! rather than in every link on the site.
+//! skip link are translated. The language switch stores the reader's
+//! preference, while explicit documentation URLs carry `?lang=en` or
+//! `?lang=zh` so links are stable when shared.
 
 use aevia_registry_core::Lang;
 use aevia_registry_core::vm::OwnerView;
@@ -38,6 +37,7 @@ const SIGN_IN: Msg = Msg::new("sign in", "登录");
 const ACCOUNT: Msg = Msg::new("account", "账户");
 const SIGN_OUT: Msg = Msg::new("sign out", "退出");
 const FOOTER_WHAT: Msg = Msg::new("Aevia package registry", "Aevia 包注册中心");
+const FOOTER_TEXT: Msg = Msg::new("Documentation in plain text", "纯文本文档");
 const FOOTER_SITES: Msg = Msg::new("Sibling sites", "相关站点");
 const SWITCH_TO: Msg = Msg::new("switch language", "切换语言");
 
@@ -56,10 +56,19 @@ pub fn page<V>(
 where
     V: RenderHtml,
 {
+    let description = match lang {
+        | Lang::En => {
+            format!(
+                "{title}. Aevia scientific computing language, documentation and package registry."
+            )
+        },
+        | Lang::Zh => format!("{title}。Aevia 科学计算语言、文档与包注册中心。"),
+    };
     let document = view! {
         <html lang=lang_attr(lang)>
             <head>
                 <meta charset="utf-8"/>
+                <meta name="description" content=description/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
                 <title>{format!("{title} · aevia")}</title>
                 <link rel="stylesheet" href="/static/site.css"/>
@@ -93,6 +102,7 @@ where
                         <nav aria-label=FOOTER_SITES.of(lang)>
                             <a href="https://aevia.apich.org">"aevia.apich.org"</a>
                             <a href="https://rssn.apich.org">"rssn.apich.org"</a>
+                            <a href=format!("/llms.txt?lang={}", lang.code())>{FOOTER_TEXT.of(lang)}</a>
                         </nav>
                     </div>
                 </footer>

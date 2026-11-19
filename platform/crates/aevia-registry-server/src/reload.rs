@@ -2,12 +2,22 @@
 
 use std::fs;
 use std::io;
+use std::io::Read as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use aevia_registry_core::Error;
+
 use crate::state::AppState;
+
+const MAX_DOCUMENT_FILES: usize = 4096;
+const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum decoded size of one chapter or module.
+pub const MARKDOWN_LIMIT: u64 = 1024 * 1024;
+/// Maximum size of the generated bilingual catalog.
+pub const CATALOG_LIMIT: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 enum Source {
@@ -75,6 +85,7 @@ async fn watch(
     let mut interval = tokio::time::interval(Duration::from_secs(2));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut published = None;
+    let mut observed = None;
     let mut last_error = None;
     let mut retry_at = tokio::time::Instant::now();
     loop {
@@ -93,6 +104,11 @@ async fn watch(
                 continue;
             },
         };
+        if observed.as_ref() != Some(&next) {
+            observed = Some(next);
+            // Observe a stable candidate across two polls before opening it.
+            continue;
+        }
         if published.as_ref() == Some(&next) || tokio::time::Instant::now() < retry_at {
             continue;
         }
@@ -130,7 +146,7 @@ struct FileStamp {
     len: u64,
     modified: Option<SystemTime>,
     #[cfg(unix)]
-    inode: u64,
+    identity: (u64, u64, i64, i64),
 }
 
 #[allow(
@@ -142,7 +158,17 @@ fn fingerprint(
     max_depth: usize,
 ) -> io::Result<Vec<FileStamp>> {
     let mut files = Vec::new();
-    collect(path, max_depth, true, &mut files)?;
+    let mut remaining = MAX_DOCUMENT_FILES;
+    collect(path, max_depth, true, &mut files, &mut remaining)?;
+    if files
+        .iter()
+        .fold(0u64, |sum, stamp| sum.saturating_add(stamp.len))
+        > MAX_SOURCE_BYTES
+    {
+        return Err(io::Error::other(
+            "documentation source exceeds the total byte limit",
+        ));
+    }
     files.sort_unstable();
     Ok(files)
 }
@@ -152,7 +178,11 @@ fn collect(
     depth: usize,
     root: bool,
     files: &mut Vec<FileStamp>,
+    remaining: &mut usize,
 ) -> io::Result<()> {
+    *remaining = remaining
+        .checked_sub(1)
+        .ok_or_else(|| io::Error::other("too many entries in the documentation source"))?;
     let metadata = match fs::metadata(path) {
         | Ok(metadata) => metadata,
         | Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -160,7 +190,13 @@ fn collect(
     };
     if metadata.is_dir() && depth > 0 {
         for entry in fs::read_dir(path)? {
-            collect(&entry?.path(), depth.saturating_sub(1), false, files)?;
+            collect(
+                &entry?.path(),
+                depth.saturating_sub(1),
+                false,
+                files,
+                remaining,
+            )?;
         }
     } else if metadata.is_file()
         && (root
@@ -177,15 +213,97 @@ fn collect(
             len: metadata.len(),
             modified: metadata.modified().ok(),
             #[cfg(unix)]
-            inode: metadata.ino(),
+            identity: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ),
         });
     }
     Ok(())
 }
 
+/// Samples the inputs on both sides of a render so a concurrent deployment
+/// cannot publish a snapshot assembled from files that changed while loading.
+///
+/// # Errors
+/// Returns the filesystem or validation error for an inconsistent candidate.
+pub fn checked_load<T>(
+    path: &Path,
+    depth: usize,
+    code: &'static str,
+    load: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    let stamp = || {
+        fingerprint(path, depth).map_err(|error| {
+            Error::new(
+                code,
+                format!(
+                    "cannot inspect documentation source `{}`: {error}",
+                    path.display()
+                ),
+            )
+        })
+    };
+    let before = stamp()?;
+    let candidate = load()?;
+    if stamp()? != before {
+        return Err(Error::new(
+            code,
+            "documentation files changed while loading; retrying",
+        ));
+    }
+    Ok(candidate)
+}
+
+/// Reads one regular UTF-8 file up to the limit even if it grows after opening.
+///
+/// # Errors
+/// Returns an IO error for non-files, invalid UTF-8 or oversized inputs.
+pub fn read_document(
+    path: &Path,
+    limit: u64,
+) -> io::Result<String> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Err(io::Error::other(
+            "expected a regular document within the size limit",
+        ));
+    }
+    let file = fs::File::open(path)?;
+    let mut text = String::new();
+    let bytes = file
+        .take(limit.saturating_add(1))
+        .read_to_string(&mut text)?;
+    if u64::try_from(bytes).map_or(true, |size| size > limit) {
+        return Err(io::Error::other("document exceeds the size limit"));
+    }
+    Ok(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_changes_reject_the_candidate() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("spec.md");
+        fs::write(&path, "# stable").unwrap();
+        assert!(
+            checked_load(root.path(), 1, "E_TEST", || {
+                fs::write(&path, "# edited while loading").unwrap();
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(
+            read_document(&path, 3).unwrap_err().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(checked_load(root.path(), 1, "E_TEST", || Ok(())).is_ok());
+    }
 
     #[test]
     fn only_document_files_affect_the_snapshot() {

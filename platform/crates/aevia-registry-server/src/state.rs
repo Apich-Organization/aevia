@@ -97,20 +97,22 @@ impl AppState {
     /// Returns an error if the directory cannot be read or the blocking task panics.
     pub async fn reload_spec(&self) -> Result<usize, aevia_registry_core::Error> {
         let dir = self.config.spec_dir.clone();
-        let loaded = tokio::task::spawn_blocking(move || SpecStore::load(&dir))
-            .await
-            .map_err(|error| {
-                aevia_registry_core::Error::new(
-                    crate::spec::E_SPEC,
-                    format!("spec reload task failed: {error}"),
-                )
-            })??;
+        let loaded = tokio::task::spawn_blocking(move || {
+            crate::reload::checked_load(&dir, 2, crate::spec::E_SPEC, || SpecStore::load(&dir))
+        })
+        .await
+        .map_err(|error| {
+            aevia_registry_core::Error::new(
+                crate::spec::E_SPEC,
+                format!("spec reload task failed: {error}"),
+            )
+        })??;
         let count = loaded.book().chapters.len();
         let mut previous = self.spec.write().await;
-        if loaded.is_empty() && !previous.is_empty() {
+        if loaded.loses_chapter(&previous) {
             return Err(aevia_registry_core::Error::new(
                 crate::spec::E_SPEC,
-                "the specification reload would remove all chapters",
+                "the specification reload would remove a published chapter or translation",
             ));
         }
         *previous = Arc::new(loaded);
@@ -125,20 +127,24 @@ impl AppState {
     /// Returns an error if the directory cannot be read/parsed or the blocking task panics.
     pub async fn reload_stdlib_docs(&self) -> Result<usize, aevia_registry_core::Error> {
         let dir = self.config.stdlib_docs_dir.clone();
-        let loaded = tokio::task::spawn_blocking(move || StdlibDocStore::load(&dir))
-            .await
-            .map_err(|error| {
-                aevia_registry_core::Error::new(
-                    crate::stdlib::E_STDLIB,
-                    format!("stdlib reload task failed: {error}"),
-                )
-            })??;
+        let loaded = tokio::task::spawn_blocking(move || {
+            crate::reload::checked_load(&dir, 1, crate::stdlib::E_STDLIB, || {
+                StdlibDocStore::load(&dir)
+            })
+        })
+        .await
+        .map_err(|error| {
+            aevia_registry_core::Error::new(
+                crate::stdlib::E_STDLIB,
+                format!("stdlib reload task failed: {error}"),
+            )
+        })??;
         let count = loaded.book().modules.len();
         let mut previous = self.stdlib_docs.write().await;
-        if loaded.is_empty() && !previous.is_empty() {
+        if loaded.loses_edition(&previous) {
             return Err(aevia_registry_core::Error::new(
                 crate::stdlib::E_STDLIB,
-                "the standard library documentation reload would remove all modules",
+                "the standard library documentation reload would remove a published edition",
             ));
         }
         *previous = Arc::new(loaded);
@@ -149,7 +155,9 @@ impl AppState {
     pub(crate) async fn reload_manuals(&self) -> Result<(), aevia_registry_core::Error> {
         let config = self.config.clone();
         let loaded = tokio::task::spawn_blocking(move || {
-            ManualStore::load(&config.manuals_dir, &config.base_url)
+            crate::reload::checked_load(&config.manuals_dir, 3, "E_MANUAL", || {
+                ManualStore::load(&config.manuals_dir, &config.base_url)
+            })
         })
         .await
         .map_err(|error| {
