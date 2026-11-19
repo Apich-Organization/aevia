@@ -195,6 +195,29 @@ fn yanked_versions_are_skipped_unless_locked() {
 }
 
 #[test]
+fn occupying_a_series_updates_the_pending_requirement_priority() {
+    let mut index = MemoryIndex::new();
+    index
+        .add("o/x", "1.0.0", &[])
+        .add("o/x", "1.1.0", &[])
+        .add("o/y", "1.0.0", &[]);
+    let roots = [root(&[("o/x", "=1.1.0"), ("o/y", "*"), ("o/x", "=1.0.0")])];
+    let options = Options {
+        max_activations: 1,
+        ..Options::default()
+    };
+
+    // All three start with one choice, so the first one occupies x's 1.x
+    // slot. The third must now outrank y and report its conflict without
+    // spending a second activation.
+    let error = resolve(&roots, &index, &options).expect_err("x versions conflict");
+    assert!(matches!(error, ResolveError::Unsatisfiable(_)), "{error}");
+    let explanation = error.to_string();
+    assert!(explanation.contains("1.0.0"), "{explanation}");
+    assert!(explanation.contains("1.1.0"), "{explanation}");
+}
+
+#[test]
 fn only_yanked_matches_are_explained_as_such() {
     let mut index = MemoryIndex::new();
     index

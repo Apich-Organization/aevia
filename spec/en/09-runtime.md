@@ -764,7 +764,8 @@ miss and is overwritten; at most 4 revisions per module name are kept.
 
 - The **key** is a stable 128-bit hash (two-lane FNV-1a, not `DefaultHasher`) of: the module
   source, `FileId`, the module path and the nominal identity the loader gives (including package
-  origin), import bindings, the **interface digest of every module in the dependency closure**,
+  origin), import bindings, the resolved origin of each re-export declaration,
+  the **interface digest of every module in the dependency closure**,
   the check options (capability set) and the compiler identity (`aevia-core` version,
   `FORMAT_VERSION`, the RSSN manifest hash, the executable's size and modification time). In
   the interface digest every ADT is replaced by its symbolic definition, so it contains no

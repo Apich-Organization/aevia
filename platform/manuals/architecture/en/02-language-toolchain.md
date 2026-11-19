@@ -13,6 +13,10 @@ source + package context
 
 The lexer records source spans and the parser turns layout into module and expression structure. Name lookup, dimensional interpretation and overload selection depend on the import environment, so they take place in the checker. The module driver resolves imports by context and visits dependencies in post-order. The diagnostics can report a resolved cycle with its import edges, even if the same short module name exists in several packages. CLI, REPL and LSP provide different initial source sets and share this loader.
 
+The checker borrows imported interfaces and indexes direct module bindings by nominal identity. Each re-export uses the identity resolved for its declaration and forwards type and callable evidence from that source. Opening a name uses an indexed lookup for conflict detection, with diagnostics emitted in import order.
+
+The package resolver reuses candidate counts while a package has no occupied version slot. Occupied slots trigger a fresh count, which can stop when the requirement can no longer outrank the current choice. The resolver builds candidate and conflict lists only for the requirement it selects.
+
 ```text
 Module graph in dependency order
     → declarations: dimensions, units, types
@@ -42,3 +46,5 @@ Parallel evaluation uses interpreter replicas, because the regular value graph c
 | Runtime breakpoints, stepping and exception information | `aevia-core/src/debugger.rs` and `aevia-cli/src/debugger.rs` |
 
 The editor analysis tracks edit overlays and positions in the protocol encoding. Source operations such as formatting and documentation derive from the syntax tree. Runtime debugging uses executing frames and spans, while run and test commands launch the toolchain against saved sources. This keeps a stale buffer from silently replacing the file selected for execution. [Debugging tutorial](/book/14-diagnostics-and-debugging?lang=en)
+
+Repeated queries reuse syntax tables attached to the cached program snapshot. Each module's declaration, occurrence and line tables are built when first needed. A change to a loaded input creates a new snapshot with its own tables.

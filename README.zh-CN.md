@@ -87,7 +87,7 @@ cargo build --locked --manifest-path platform/Cargo.toml -p aevia-pkg
 
 平台有独立 Cargo 工作区和[部署指南](platform/docs/DEPLOY.zh.md)。语言工作区使用 `cargo test --locked --workspace` 验证。定向检查时选定所改 crate 或特定测试目标。`cargo +nightly fmt --all --check` 检查语言工作区的格式。
 
-使用 `python3 tools/bundle_spec.py` 与 Pandoc 生成单页规范。使用 `aevia-stdlib-gen` 生成并检查标准库源码。`aevia doc --stdlib --json` 生成平台的双语标准库参考。添加 `--lang zh` 可以输出中文 Markdown 页面。
+使用 `python3 tools/bundle_spec.py` 与 Pandoc 生成单页规范。使用 `aevia-stdlib-gen` 生成并检查标准库源码。`aevia doc --stdlib --json` 生成参考页面及 JSON 索引。用 `--lang en` 生成仓库中的参考文件，用 `--lang zh` 输出中文页面。 [双语参考检查](tools/check_stdlib_docs.py)
 
 ## 许可
 

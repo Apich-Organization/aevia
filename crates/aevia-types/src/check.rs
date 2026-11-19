@@ -106,6 +106,8 @@ use num_rational::BigRational;
 use num_traits::One;
 use num_traits::Signed;
 use num_traits::Zero;
+use std::cell::OnceCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -1597,27 +1599,80 @@ pub fn check_module_with_identity(
     identity: Option<ModulePath>,
     bindings: &[InterfaceBinding],
 ) -> CheckResult {
+    check_with_import_sources(
+        file,
+        module,
+        &ImportSources {
+            exports: imports,
+            interfaces,
+            ..ImportSources::default()
+        },
+        options,
+        identity,
+        bindings,
+    )
+}
+
+/// Checks a module using the loader's resolved nominal identity for each re-export.
+///
+/// Each key in `reexport_origins` is the span of the complete import declaration.
+/// Entries omitted by the loader contribute no re-exports.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "loader-provided re-export origins supplement the existing checker inputs"
+)]
+pub fn check_module_with_resolved_imports(
+    file: FileId,
+    module: &Module,
+    imports: &[Import],
+    interfaces: &[ModuleInterface],
+    options: &CheckOptions,
+    identity: Option<ModulePath>,
+    bindings: &[InterfaceBinding],
+    reexport_origins: &BTreeMap<Span, ModulePath>,
+) -> CheckResult {
+    check_with_import_sources(
+        file,
+        module,
+        &ImportSources {
+            exports: imports,
+            interfaces,
+            reexport_origins: Some(reexport_origins),
+            ..ImportSources::default()
+        },
+        options,
+        identity,
+        bindings,
+    )
+}
+
+fn check_with_import_sources(
+    file: FileId,
+    module: &Module,
+    sources: &ImportSources<'_>,
+    options: &CheckOptions,
+    identity: Option<ModulePath>,
+    bindings: &[InterfaceBinding],
+) -> CheckResult {
     let mut checker = Checker::new(file, options.clone());
     checker.checked.identity = identity;
-    checker.imported_exports = imports.to_vec();
-    checker.imported_interfaces = interfaces.to_vec();
-    checker.add_imports(imports);
-    for interface in interfaces {
-        let explicit_bindings = !bindings.is_empty();
-        let direct = bindings
-            .iter()
-            .any(|binding| binding.module == interface.name);
+    let explicit_bindings = !bindings.is_empty();
+    checker.add_imports(
+        sources.exports,
+        !explicit_bindings && !sources.interfaces.is_empty(),
+    );
+    let direct_modules: HashSet<_> = bindings.iter().map(|binding| &binding.module).collect();
+    for interface in sources.interfaces {
+        let direct = direct_modules.contains(&interface.name);
         checker.merge_interface(interface, !explicit_bindings, !explicit_bindings || direct);
     }
     for binding in bindings {
-        if let Some(interface) = interfaces
-            .iter()
-            .find(|interface| interface.name == binding.module)
-        {
+        if let Some(interface) = sources.by_identity(&binding.module) {
             checker.bind_interface(interface, binding);
         }
     }
-    checker.run(module);
+    checker.run(module, sources);
     checker.checked.aliases = checker
         .aliases
         .iter()
@@ -1847,18 +1902,100 @@ pub fn check_module_with_options(
     imports: &[Import],
     options: &CheckOptions,
 ) -> CheckResult {
-    let mut checker = Checker::new(file, options.clone());
-    checker.add_imports(imports);
-    checker.run(module);
-    checker.checked.aliases = checker
-        .aliases
-        .iter()
-        .map(|(name, def)| (name.clone(), def.ty.clone()))
-        .collect();
-    CheckResult {
-        diagnostics: checker.diagnostics,
-        module: checker.checked,
+    check_module_with_identity(file, module, imports, &[], options, None, &[])
+}
+
+/// Incoming exports and interfaces are borrowed throughout the declaration
+/// pass. Build each index only when its kind of lookup is required.
+#[derive(Default)]
+struct ImportSources<'a> {
+    exports: &'a [Import],
+    interfaces: &'a [ModuleInterface],
+    reexport_origins: Option<&'a BTreeMap<Span, ModulePath>>,
+    by_identity: OnceCell<HashMap<&'a ModulePath, &'a ModuleInterface>>,
+    by_spelling: OnceCell<HashMap<String, &'a ModuleInterface>>,
+}
+
+impl<'a> ImportSources<'a> {
+    fn by_identity(
+        &self,
+        module: &ModulePath,
+    ) -> Option<&'a ModuleInterface> {
+        self.by_identity
+            .get_or_init(|| {
+                let mut by_identity = HashMap::with_capacity(self.interfaces.len());
+                for interface in self.interfaces {
+                    by_identity.entry(&interface.name).or_insert(interface);
+                }
+                by_identity
+            })
+            .get(module)
+            .copied()
     }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "building the lookup is deferred until the first re-export"
+    )]
+    fn by_spelling(
+        &self,
+        dotted: &str,
+    ) -> Option<&'a ModuleInterface> {
+        if self.interfaces.is_empty() {
+            return None;
+        }
+        self.by_spelling
+            .get_or_init(|| {
+                let mut by_spelling = HashMap::with_capacity(self.interfaces.len());
+                for interface in self.interfaces {
+                    by_spelling
+                        .entry(interface.name.dotted())
+                        .or_insert(interface);
+                }
+                by_spelling
+            })
+            .get(dotted)
+            .copied()
+    }
+}
+
+fn import_key(
+    prefix: &str,
+    name: &str,
+) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
+/// A selective import probes its named entries directly and retains interface
+/// order for alias instantiation and diagnostics.
+fn import_entries<'a, T>(
+    entries: &'a IndexMap<String, T>,
+    names: Option<&[String]>,
+) -> impl Iterator<Item = (&'a String, &'a T)> {
+    let indices = names.map(|names| {
+        let mut indices: Vec<_> = names
+            .iter()
+            .filter_map(|name| entries.get_index_of(name))
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    });
+    let all_count = if indices.is_none() {
+        entries.len()
+    } else {
+        0
+    };
+    entries.iter().take(all_count).chain(
+        indices
+            .into_iter()
+            .flatten()
+            .filter_map(move |index| entries.get_index(index)),
+    )
 }
 
 /// The `<...>` binders of one top-level function, captured in pass B so a type
@@ -2076,9 +2213,6 @@ struct Checker {
     private_class_methods: HashSet<(String, String)>,
     /// Instance methods declared `private`: `(instance_key, method_name)`.
     private_instance_methods: HashSet<(InstanceKey, String)>,
-    /// Raw imports and interfaces passed to the checker, used for `export import`/`export open`.
-    imported_exports: Vec<Import>,
-    imported_interfaces: Vec<ModuleInterface>,
     /// Whether relaxed `Result`/`Option` mode is active.
     relax_result: bool,
     instance_declarations: HashMap<Span, InstanceKey>,
@@ -2117,7 +2251,7 @@ struct Checker {
     /// The export-name sets of the prefix-less `import`/`open` statements of
     /// this module. Used to tell which interface is the source of an
     /// unqualified name when the flat import table has no module identity.
-    unqualified_import_names: Vec<HashSet<String>>,
+    unqualified_import_names: Vec<Vec<String>>,
     /// Every name imported unqualified (§7.2.1/§7.2.2).
     requested_unqualified: HashSet<String>,
     /// The type a top-level `let` was given in pass B, so pass C checks
@@ -2186,6 +2320,10 @@ struct Checker {
 }
 
 impl Checker {
+    #[allow(
+        clippy::single_call_fn,
+        reason = "all checker entry points share one construction of the checker state"
+    )]
     fn new(
         file: FileId,
         options: CheckOptions,
@@ -2201,8 +2339,6 @@ impl Checker {
             private_classes: HashSet::new(),
             private_class_methods: HashSet::new(),
             private_instance_methods: HashSet::new(),
-            imported_exports: Vec::new(),
-            imported_interfaces: Vec::new(),
             relax_result,
             instance_declarations: HashMap::new(),
             method_bindings: HashMap::new(),
@@ -2270,28 +2406,25 @@ impl Checker {
     ///
     /// Opening the same module twice is idempotent (§7.2.1), so an identical
     /// scheme is not a clash.
-    fn note_opened(
+    fn note_opened<'a>(
         &mut self,
-        opened: &mut Vec<(String, Type)>,
+        opened: &mut HashMap<&'a str, &'a Type>,
         prefix: &str,
-        key: &str,
-        scheme: &Scheme,
+        name: &'a str,
+        scheme: &'a Scheme,
     ) {
         if !prefix.is_empty() {
             return;
         }
-        if let Some((_, previous)) = opened.iter().find(|(name, _)| name == key) {
-            if previous != &scheme.ty {
-                self.error_help(
-                    "E0603",
-                    format!("`{key}` is opened by two modules"),
-                    Span::default(),
-                    "qualify the name, or import the modules without `open`",
-                );
-            }
-            return;
+        let previous = opened.entry(name).or_insert(&scheme.ty);
+        if *previous != &scheme.ty {
+            self.error_help(
+                "E0603",
+                format!("`{name}` is opened by two modules"),
+                Span::default(),
+                "qualify the name, or import the modules without `open`",
+            );
         }
-        opened.push((key.to_string(), scheme.ty.clone()));
     }
 
     /// Puts imported names in scope.
@@ -2301,12 +2434,13 @@ impl Checker {
     fn add_imports(
         &mut self,
         imports: &[Import],
+        infer_legacy_open_sources: bool,
     ) {
         // Names an earlier import in this call already brought in, with the
         // type it gave them: a second, different one is ambiguous (§7.2.2).
-        let mut opened: Vec<(String, Type)> = Vec::new();
+        let mut opened = HashMap::new();
         for (prefix, exports) in imports {
-            if prefix.is_empty() {
+            if prefix.is_empty() && infer_legacy_open_sources {
                 self.unqualified_import_names
                     .push(exports.keys().cloned().collect());
                 self.requested_unqualified.extend(exports.keys().cloned());
@@ -2318,20 +2452,12 @@ impl Checker {
                     && dim.factors().count() == 1
                     && power.is_one()
                 {
-                    let display = if prefix.is_empty() {
-                        name.clone()
-                    } else {
-                        format!("{prefix}.{name}")
-                    };
+                    let display = import_key(prefix, name);
                     dimension_names.entry(base.clone()).or_insert(display);
                 }
             }
             for (name, export) in exports {
-                let key = if prefix.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{prefix}.{name}")
-                };
+                let key = import_key(prefix, name);
                 self.method_bindings.remove(&key);
                 self.constructor_bindings.remove(&key);
                 if let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
@@ -2342,14 +2468,14 @@ impl Checker {
                 }
                 match export {
                     | Export::Value { scheme, .. } | Export::Ctor { scheme, .. } => {
-                        self.note_opened(&mut opened, prefix, &key, scheme);
+                        self.note_opened(&mut opened, prefix, name, scheme);
                         self.globals.insert(
                             key.clone(),
                             import_dimension_display(scheme, &dimension_names),
                         );
                     },
                     | Export::TypeCtor { adt, scheme, .. } => {
-                        self.note_opened(&mut opened, prefix, &key, scheme);
+                        self.note_opened(&mut opened, prefix, name, scheme);
                         self.globals.insert(
                             key.clone(),
                             import_dimension_display(scheme, &dimension_names),
@@ -2399,30 +2525,35 @@ impl Checker {
     )]
     fn reexport_import(
         &mut self,
+        sources: &ImportSources<'_>,
         path: &[String],
         alias: Option<&str>,
         names: Option<&[String]>,
         open: bool,
+        span: Span,
     ) {
-        let dotted = path.join(".");
-        if let Some(interface) = self
-            .imported_interfaces
-            .iter()
-            .find(|iface| iface.name.dotted() == dotted)
-            .cloned()
-        {
+        let dotted = sources.reexport_origins.is_none().then(|| path.join("."));
+        let interface = sources.reexport_origins.map_or_else(
+            || dotted.as_deref().and_then(|path| sources.by_spelling(path)),
+            |origins| {
+                origins
+                    .get(&span)
+                    .and_then(|origin| sources.by_identity(origin))
+            },
+        );
+        if let Some(interface) = interface {
             match names {
                 | Some(selected) => {
                     for name in selected {
                         if let Some(export) = interface.exports.get(name) {
                             self.checked.exports.insert(name.clone(), export.clone());
-                            if let Export::Type { adt } = export {
+                            if let Export::Type { adt } | Export::TypeCtor { adt, .. } = export {
                                 for (ctor_name, ctor_export) in &interface.exports {
                                     if matches!(
                                         ctor_export,
                                         Export::Ctor { adt: id, .. }
                                             | Export::TypeCtor { adt: id, .. }
-                                            if id == adt
+                                            if id == adt && ctor_name != name
                                     ) {
                                         self.checked
                                             .exports
@@ -2455,7 +2586,7 @@ impl Checker {
                         }
                     }
                 },
-                | None if open => {
+                | None => {
                     for (name, export) in &interface.exports {
                         self.checked.exports.insert(name.clone(), export.clone());
                     }
@@ -2480,30 +2611,18 @@ impl Checker {
                             .insert(class_key.clone(), class_export.clone());
                     }
                 },
-                | None => {
-                    for (name, export) in &interface.exports {
-                        self.checked.exports.insert(name.clone(), export.clone());
-                    }
-                    for (name, alias_def) in &interface.aliases {
-                        self.checked
-                            .alias_defs
-                            .insert(name.clone(), alias_def.clone());
-                    }
-                    for (class_key, class_export) in &interface.classes {
-                        self.checked
-                            .classes
-                            .insert(class_key.clone(), class_export.clone());
-                    }
-                },
             }
             return;
         }
+        let Some(dotted) = dotted.as_deref() else {
+            return;
+        };
         let expected_prefix = if open || names.is_some() {
             ""
         } else {
-            alias.unwrap_or(&dotted)
+            alias.unwrap_or(dotted)
         };
-        for (prefix, exports) in &self.imported_exports.clone() {
+        for (prefix, exports) in sources.exports {
             if prefix != expected_prefix {
                 continue;
             }
@@ -2512,13 +2631,13 @@ impl Checker {
                     for name in selected {
                         if let Some(export) = exports.get(name) {
                             self.checked.exports.insert(name.clone(), export.clone());
-                            if let Export::Type { adt } = export {
+                            if let Export::Type { adt } | Export::TypeCtor { adt, .. } = export {
                                 for (ctor_name, ctor_export) in exports {
                                     if matches!(
                                         ctor_export,
                                         Export::Ctor { adt: id, .. }
                                             | Export::TypeCtor { adt: id, .. }
-                                            if id == adt
+                                            if id == adt && ctor_name != name
                                     ) {
                                         self.checked
                                             .exports
@@ -2577,15 +2696,16 @@ impl Checker {
         visible_names: bool,
         publish_methods: bool,
     ) {
-        let module = interface.name.clone();
+        let module = &interface.name;
+        let prefix = if visible_names && !module.is_prelude() {
+            module.dotted()
+        } else {
+            String::new()
+        };
         // Qualified alias definitions: a source reference `A.Vec2` expands.
         if visible_names {
             for (name, alias) in &interface.aliases {
-                let qualified = if module.is_prelude() {
-                    name.clone()
-                } else {
-                    format!("{}.{}", module.dotted(), name)
-                };
+                let qualified = import_key(&prefix, name);
                 let def = self.imported_alias_def(alias);
                 self.aliases.entry(qualified).or_insert(def);
             }
@@ -2619,7 +2739,7 @@ impl Checker {
                 }
             })
             .collect();
-        if let Err(error) = self.classes.merge_imported(&module, &classes, &instances) {
+        if let Err(error) = self.classes.merge_imported(module, &classes, &instances) {
             let message = match error {
                 | InstanceError::Overlapping { incoming, existing } => {
                     format!("imported instance `{incoming}` overlaps `{existing}`")
@@ -2662,11 +2782,7 @@ impl Checker {
             return;
         }
         for (name, projection) in &interface.callable_exports {
-            let qualified = if module.is_prelude() {
-                name.clone()
-            } else {
-                format!("{}.{}", module.dotted(), name)
-            };
+            let qualified = import_key(&prefix, name);
             self.global_callables
                 .entry(qualified)
                 .or_insert_with(|| projection.clone());
@@ -2677,11 +2793,7 @@ impl Checker {
             }
         }
         for (name, headers) in &interface.function_headers {
-            let qualified = if module.is_prelude() {
-                name.clone()
-            } else {
-                format!("{}.{}", module.dotted(), name)
-            };
+            let qualified = import_key(&prefix, name);
             self.generic_bindings
                 .entry(qualified)
                 .or_insert_with(|| headers.clone());
@@ -2697,11 +2809,7 @@ impl Checker {
         // interface is the only source of an alias *body* and of an ADT
         // identity, so this is where imported type names become visible.
         for (name, export) in &interface.exports {
-            let qualified = if module.is_prelude() {
-                name.clone()
-            } else {
-                format!("{}.{}", module.dotted(), name)
-            };
+            let qualified = import_key(&prefix, name);
             if !self.globals.contains_key(&qualified)
                 && let Export::Ctor { adt, index, .. } | Export::TypeCtor { adt, index, .. } =
                     export
@@ -2797,56 +2905,24 @@ impl Checker {
         interface: &ModuleInterface,
         binding: &InterfaceBinding,
     ) {
-        for (name, projection) in &interface.callable_exports {
-            if binding
-                .names
-                .as_ref()
-                .is_some_and(|names| !names.contains(name))
-            {
-                continue;
-            }
-            let key = if binding.prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", binding.prefix)
-            };
+        let selected_names = binding.names.as_deref();
+        for (name, projection) in import_entries(&interface.callable_exports, selected_names) {
+            let key = import_key(&binding.prefix, name);
             self.global_callables.insert(key, projection.clone());
         }
-        for (name, headers) in &interface.function_headers {
-            if binding
-                .names
-                .as_ref()
-                .is_some_and(|names| !names.contains(name))
-            {
-                continue;
-            }
-            let key = if binding.prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", binding.prefix)
-            };
+        for (name, headers) in import_entries(&interface.function_headers, selected_names) {
+            let key = import_key(&binding.prefix, name);
             self.generic_bindings.insert(key, headers.clone());
         }
-        for (name, alias) in &interface.aliases {
-            if binding
-                .names
-                .as_ref()
-                .is_some_and(|names| !names.contains(name))
-            {
-                continue;
-            }
-            let key = if binding.prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", binding.prefix)
-            };
+        for (name, alias) in import_entries(&interface.aliases, selected_names) {
+            let key = import_key(&binding.prefix, name);
             let def = self.imported_alias_def(alias);
             self.aliases.insert(key, def);
         }
         // Selecting a type imports its public constructors as specified by
         // §7.1. The same expansion is used by the runtime import binding.
-        if let Some(names) = &binding.names {
-            let selected: Vec<_> = names
+        if let Some(names) = selected_names {
+            let selected: HashSet<_> = names
                 .iter()
                 .filter_map(|name| {
                     match interface.exports.get(name) {
@@ -2855,6 +2931,9 @@ impl Checker {
                     }
                 })
                 .collect();
+            if selected.is_empty() {
+                return;
+            }
             for (name, export) in &interface.exports {
                 match export {
                     | Export::Ctor {
@@ -3157,6 +3236,7 @@ impl Checker {
     fn run(
         &mut self,
         module: &Module,
+        imports: &ImportSources<'_>,
     ) {
         self.checked.name.clone_from(&module.name);
         self.checked.anonymous_file = self.file;
@@ -3188,7 +3268,7 @@ impl Checker {
             }
         }
 
-        self.declare_module_types(module);
+        self.declare_module_types(module, imports);
         let inherited_values = self.inherited_initializers(module);
         let signatures = self.seed_module_signatures(module);
         let schemes = self.check_module_bodies(module, &signatures, &inherited_values);
@@ -3199,7 +3279,7 @@ impl Checker {
         self.default_function_evidence(&lexical);
         self.publish_expression_evidence(&lexical);
         self.publish_callable_evidence(&signatures.pending);
-        self.publish_module_interface();
+        self.publish_module_interface(module);
         self.finalize_registrations(module);
         self.checked.errors = self.diagnostics.error_count();
     }
@@ -3211,6 +3291,7 @@ impl Checker {
     fn declare_module_types(
         &mut self,
         module: &Module,
+        imports: &ImportSources<'_>,
     ) {
         // Pass A: types, dimensions and units.
         //
@@ -3229,7 +3310,14 @@ impl Checker {
                     open,
                     export: true,
                 } => {
-                    self.reexport_import(path, alias.as_deref(), names.as_deref(), *open);
+                    self.reexport_import(
+                        imports,
+                        path,
+                        alias.as_deref(),
+                        names.as_deref(),
+                        *open,
+                        decl.span,
+                    );
                 },
                 | DeclKind::Dimension { name, value } => {
                     self.declare_dimension(name, value.as_ref(), decl.span, decl.private);
@@ -4041,7 +4129,10 @@ impl Checker {
         clippy::single_call_fn,
         reason = "the interface publishes only this module’s local public types and class evidence"
     )]
-    fn publish_module_interface(&mut self) {
+    fn publish_module_interface(
+        &mut self,
+        module: &Module,
+    ) {
         // §7.1.3/§7.4, round-2 decision 1b: classes, instances and alias
         // definitions travel with the interface. Only what *this* module
         // declares is exported — a prelude instance or an imported one is not
@@ -4110,8 +4201,18 @@ impl Checker {
         }
         // Alias bodies are already resolved templates: public aliases may
         // refer to private helpers without exporting those helper names.
-        for (name, alias) in &self.aliases {
-            if matches!(self.checked.exports.get(name), Some(Export::Alias { .. })) {
+        // A re-export already has its source alias body. An unrelated opened
+        // alias with the same spelling must not overwrite that evidence.
+        for decl in &module.decls {
+            if let DeclKind::Type {
+                name,
+                body: aevia_syntax::ast::TypeBody::Alias(_),
+                ..
+            } = &decl.kind
+                && !decl.private
+                && matches!(self.checked.exports.get(name), Some(Export::Alias { .. }))
+                && let Some(alias) = self.aliases.get(name)
+            {
                 self.checked
                     .alias_defs
                     .insert(name.clone(), Self::canonical_alias_export(alias));
@@ -11982,7 +12083,7 @@ mod literal_region_tests {
                         let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
                         assert!(!diagnostics.has_errors(), "{:?}", diagnostics.items);
                         let mut checker = Checker::new(0, CheckOptions::default());
-                        checker.run(&module);
+                        checker.run(&module, &ImportSources::default());
                         assert!(
                             !checker.diagnostics.has_errors(),
                             "{:?}",
@@ -12021,7 +12122,7 @@ mod literal_region_tests {
                         let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
                         assert!(!diagnostics.has_errors());
                         let mut checker = Checker::new(0, CheckOptions::default());
-                        checker.run(&module);
+                        checker.run(&module, &ImportSources::default());
                         assert!(
                             !checker.diagnostics.has_errors(),
                             "{:?}",
@@ -12059,7 +12160,7 @@ mod literal_region_tests {
             let (module, diagnostics) = aevia_syntax::parse_module(0, &source, &lexed);
             assert!(!diagnostics.has_errors());
             let mut checker = Checker::new(0, CheckOptions::default());
-            checker.run(&module);
+            checker.run(&module, &ImportSources::default());
             assert!(
                 !checker.diagnostics.has_errors(),
                 "{:?}",
@@ -12082,7 +12183,7 @@ mod literal_region_tests {
                 assert!(!diagnostics.has_errors());
                 let mut checker = Checker::new(0, CheckOptions::default());
                 let started = std::time::Instant::now();
-                checker.run(&module);
+                checker.run(&module, &ImportSources::default());
                 assert!(
                     !checker.diagnostics.has_errors(),
                     "{:?}",

@@ -36,7 +36,7 @@ fn zip_map(
     f: impl Fn(f64, f64) -> f64 + Sync + Send,
 ) -> Vec<f64> {
     use rayon::prelude::*;
-    if left.len() >= DENSE_PAR_MIN {
+    if aevia_rssn::execution::should_split(left.len(), DENSE_PAR_MIN) {
         left.par_iter()
             .zip(right.par_iter())
             .map(|(&a, &b)| f(a, b))
@@ -52,7 +52,7 @@ fn map_each(
     f: impl Fn(f64) -> f64 + Sync + Send,
 ) -> Vec<f64> {
     use rayon::prelude::*;
-    if data.len() >= DENSE_PAR_MIN {
+    if aevia_rssn::execution::should_split(data.len(), DENSE_PAR_MIN) {
         data.par_iter().map(|&x| f(x)).collect()
     } else {
         data.iter().map(|&x| f(x)).collect()

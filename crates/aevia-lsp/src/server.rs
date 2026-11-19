@@ -860,7 +860,7 @@ impl Server {
             );
         }
         match program {
-            | Some(program) => Analysis::from_program(document, program),
+            | Some(program) => self.cache.borrow().analyze_program(document, program),
             | None => Analysis::new(document),
         }
     }

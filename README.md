@@ -87,7 +87,7 @@ cargo build --locked --manifest-path platform/Cargo.toml -p aevia-pkg
 
 The platform has a separate Cargo workspace and a [deployment guide](platform/docs/DEPLOY.md). The language workspace runs tests with `cargo test --locked --workspace`. For a focused check, select the modified package or a named test target. `cargo +nightly fmt --all --check` checks the language workspace's formatting.
 
-Generate the standalone specification with `python3 tools/bundle_spec.py` and Pandoc. Generate and check the standard library sources with `aevia-stdlib-gen`. `aevia doc --stdlib --json` generates the bilingual platform reference bundle. Add `--lang zh` to write the Markdown pages in Chinese.
+Generate the standalone specification with `python3 tools/bundle_spec.py` and Pandoc. Generate and check the standard library sources with `aevia-stdlib-gen`. `aevia doc --stdlib --json` writes the reference pages and their JSON index. Use `--lang en` for the checked-in reference or `--lang zh` for the Chinese pages. [Bilingual reference check](tools/check_stdlib_docs.py)
 
 ## License
 

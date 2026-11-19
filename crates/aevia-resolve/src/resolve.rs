@@ -586,6 +586,22 @@ enum Origin {
 struct Pending {
     from: Origin,
     dep: Rc<Dependency>,
+    /// Counts depend only on the immutable index and lock until a slot for this
+    /// package is occupied. Cloning the pending queue preserves this work.
+    unoccupied_choices: Option<usize>,
+}
+
+impl Pending {
+    fn new(
+        from: Origin,
+        dependency: &Dependency,
+    ) -> Self {
+        Self {
+            from,
+            dep: Rc::new(dependency.clone()),
+            unoccupied_choices: None,
+        }
+    }
 }
 
 struct Active {
@@ -606,6 +622,12 @@ struct Fail {
 }
 
 type Summaries = Rc<[Rc<Summary>]>;
+
+enum Availability {
+    Free,
+    Taken(usize),
+    Yanked,
+}
 
 struct Classified {
     /// Selectable candidates, in preference order.
@@ -736,39 +758,91 @@ impl Solver<'_> {
             .is_some_and(|versions| versions.contains(version))
     }
 
+    fn availability(
+        &self,
+        dep: &Dependency,
+        summary: &Summary,
+        slots: Option<&BTreeMap<Series, usize>>,
+    ) -> Option<Availability> {
+        if !dep.req.matches(&summary.version) {
+            return None;
+        }
+        if summary.yanked && !self.is_locked(&dep.package, &summary.version) {
+            return Some(Availability::Yanked);
+        }
+        Some(
+            slots
+                .and_then(|slots| slots.get(&self.slot_key(&summary.version)))
+                .map_or(Availability::Free, |occupant| {
+                    Availability::Taken(*occupant)
+                }),
+        )
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "counting for the decision heuristic does not allocate conflict evidence"
+    )]
+    fn choice_count(
+        &mut self,
+        pending: &mut Pending,
+        limit: usize,
+    ) -> usize {
+        let dep = &pending.dep;
+        let occupied = self
+            .slots
+            .get(&dep.package)
+            .is_some_and(|slots| !slots.is_empty());
+        if !occupied && let Some(count) = pending.unoccupied_choices {
+            return count;
+        }
+        let summaries = self.summaries(&dep.package);
+        let slots = self
+            .slots
+            .get(&dep.package)
+            .filter(|slots| !slots.is_empty());
+        let free = summaries.iter().filter(|summary| {
+            matches!(
+                self.availability(dep, summary, slots),
+                Some(Availability::Free)
+            )
+        });
+        if occupied {
+            // A tie cannot displace the earlier requirement. Counts reaching
+            // the current best only need to serve as a lower bound.
+            free.take(limit).count()
+        } else {
+            let count = free.count();
+            pending.unoccupied_choices = Some(count);
+            count
+        }
+    }
+
+    #[allow(
+        clippy::single_call_fn,
+        reason = "only the selected requirement needs candidate order and conflict evidence"
+    )]
     fn classify(
         &mut self,
         dep: &Dependency,
     ) -> (Summaries, Classified) {
         let summaries = self.summaries(&dep.package);
+        let slots = self.slots.get(&dep.package);
         let mut free = Vec::new();
         let mut taken = Vec::new();
         let mut yanked = Vec::new();
-        for summary in summaries.iter() {
-            if !dep.req.matches(&summary.version) {
-                continue;
-            }
-            let locked = self.is_locked(&dep.package, &summary.version);
-            if summary.yanked && !locked {
-                yanked.push(summary.version.clone());
-                continue;
-            }
-            let key = self.slot_key(&summary.version);
-            match self
-                .slots
-                .get(&dep.package)
-                .and_then(|slots| slots.get(&key))
-            {
-                | Some(occupant) => taken.push((Rc::clone(summary), *occupant)),
-                | None => free.push(Rc::clone(summary)),
+        for summary in summaries.iter().rev() {
+            match self.availability(dep, summary, slots) {
+                | Some(Availability::Free) => free.push(Rc::clone(summary)),
+                | Some(Availability::Taken(occupant)) => taken.push((Rc::clone(summary), occupant)),
+                | Some(Availability::Yanked) => yanked.push(summary.version.clone()),
+                | None => {},
             }
         }
-        // Locked first, then newest first. `summaries` is ascending, so a
-        // reverse gives the newest; the stable sort keeps that within a group.
-        free.reverse();
-        free.sort_by_key(|summary| !self.is_locked(&dep.package, &summary.version));
-        taken.reverse();
-        yanked.reverse();
+        // Newest first within each group, with locked versions tried first.
+        if let Some(locked) = self.options.locked.get(&dep.package) {
+            free.sort_by_key(|summary| !locked.contains(&summary.version));
+        }
         (summaries, Classified { free, taken, yanked })
     }
 
@@ -835,27 +909,26 @@ impl Solver<'_> {
             .into_iter()
             .filter(|pending| !self.satisfied(&pending.dep))
             .collect();
-        let mut best: Option<(usize, Summaries, Classified)> = None;
-        for (position, pending) in remaining.iter().enumerate() {
-            let (summaries, class) = self.classify(&pending.dep);
+        let mut best: Option<(usize, usize)> = None;
+        for (position, pending) in remaining.iter_mut().enumerate() {
+            let limit = best.map_or(usize::MAX, |(_, count)| count);
+            let count = self.choice_count(pending, limit);
             if self.abort.is_some() {
                 return Err(());
             }
-            let better = best
-                .as_ref()
-                .is_none_or(|(_, _, held)| class.free.len() < held.free.len());
-            let stop = class.free.is_empty();
-            if better {
-                best = Some((position, summaries, class));
+            if best.is_none() || count < limit {
+                best = Some((position, count));
             }
-            if stop {
+            if count == 0 {
                 break;
             }
         }
         // The position came from enumerating this same, unmodified vector.
-        Ok(best.map(|(position, summaries, mut class)| {
+        Ok(best.map(|(position, _)| {
+            let chosen = remaining.remove(position);
+            let (summaries, mut class) = self.classify(&chosen.dep);
             Decision {
-                chosen: remaining.remove(position),
+                chosen,
                 summaries,
                 remaining,
                 options: std::mem::take(&mut class.free).into_iter(),
@@ -939,12 +1012,12 @@ impl Solver<'_> {
                     } else {
                         decision.remaining.clone()
                     };
-                    pending.extend(summary.dependencies.iter().map(|dependency| {
-                        Pending {
-                            from: Origin::Active(level),
-                            dep: Rc::new(dependency.clone()),
-                        }
-                    }));
+                    pending.extend(
+                        summary
+                            .dependencies
+                            .iter()
+                            .map(|dependency| Pending::new(Origin::Active(level), dependency)),
+                    );
                     decision.activation = Some(Activation { summary, key, level });
                     stack.push(decision);
                     continue 'requirements;
@@ -1195,10 +1268,7 @@ pub fn resolve(
     let mut pending = Vec::new();
     for (position, root) in roots.iter().enumerate() {
         for dependency in &root.dependencies {
-            pending.push(Pending {
-                from: Origin::Root(position),
-                dep: Rc::new(dependency.clone()),
-            });
+            pending.push(Pending::new(Origin::Root(position), dependency));
         }
     }
     match solver.solve(pending) {

@@ -53,6 +53,13 @@ checked `Value` interface and `from_value<T>` for explicit recovery.
 Exact native zero-argument operations use `f()` and return `Result`; importing
 their module does not run constructors or probe optional backends.
 
+`Rssn_numerical_vector` exposes `num_signal_hilbert`,
+`num_signal_analytic_signal`, `num_signal_analytic_envelope`, and
+`num_signal_zoom_fft`. It also exposes native weighted-graph operations for
+Bellman–Ford, shortest paths on directed acyclic graphs, and maximum flow with
+its cut. The generated `Rssn_Numeric` module includes Welch coherence and
+forward/inverse wavelet packets.
+
 Polynomial coefficients for a physical coordinate generally have different
 units at each degree. `num_polyfit_normalized` instead fits powers of
 `x/coordinate_scale`, keeping every coefficient in ordinate units. Scaled AD

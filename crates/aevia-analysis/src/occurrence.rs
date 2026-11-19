@@ -168,6 +168,13 @@ fn lookup_binding(
 /// enclosing scope and `let x = x` must resolve the right-hand `x` to the
 /// outer binding.
 #[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "the shared query cache is the only caller of the lexical walk"
+    )
+)]
 pub fn collect(
     module: &Module,
     text: &str,

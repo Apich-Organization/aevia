@@ -3222,7 +3222,9 @@ import Data.Csv { read_csv, Table }
 ### 7.2.2 `open`
 
 - `open M` 把 `M` 的所有导出名字不加限定地引入当前作用域；`open M { f, g }` 只引入指定名字。
-- `open` 只影响当前模块，不传递（没有 re-export）。
+- 普通 `open` 只影响当前模块的查找作用域。用 `export open M` 或 `export import M` 把导入的名字加入
+  当前模块的接口。每个重新导出都沿实际解析出的导入边查找，保留定义模块的类型和可调用对象身份。
+  选择性重新导出变体类型时，其公开构造器一并导出。
 - 本地定义遮蔽打开的名字。两个模块 `open` 进同名**且类型不同**的名字时报 `E0603`；类型相同（同一模块
   打开两次）不算冲突。
 - `import`/`open` 可引入值（函数、常量、单位值）、名义变体构造器与**透明类型别名**
@@ -3354,7 +3356,7 @@ Dev = { path = "../dev", package = "apich/dev", version = "^0.3" }  # 本地开�
    两个版本）。
 3. 偏好**已锁定**的版本，其余取**最高**的兼容版本；`yanked` 版本只在锁文件已包含它时可被选中。
 4. 结果与索引迭代顺序无关；不可满足时给出推导式说明：哪个需求无法满足、试过哪些候选及失败原因。
-5. 实现是带冲突导向回跳的回溯求解器（不是 PubGrub：一个需求可由多个系列满足）。
+5. 实现使用冲突导向回跳。求解器优先处理可选版本最少的需求，数量相同则按待处理顺序选择。
 
 registry 包的索引 `deps` 只记录 `package`、`req` 和（与默认导入根不同时）`import`。
 
@@ -5692,7 +5694,7 @@ LSP 复用 `aevia-syntax`/`aevia-types`，不启动运行时。文件已保存�
 保留 4 个修订。
 
 - **键**是下列输入的稳定 128 位哈希（两路 FNV-1a，不是 `DefaultHasher`）：模块源码、`FileId`、模块路径与加载器给的名义
-  身份（含包来源）、导入绑定、**依赖闭包中每个模块的接口摘要**、检查选项（能力集）、编译器身份（`aevia-core` 版本、
+  身份（含包来源）、导入绑定、各再导出声明解析到的来源、**依赖闭包中每个模块的接口摘要**、检查选项（能力集）、编译器身份（`aevia-core` 版本、
   `FORMAT_VERSION`、RSSN 清单哈希、可执行文件大小与修改时间）。接口摘要中每个 ADT 已换成其符号定义，不含 `AdtId`。
   因此不改变接口的编辑只重查被编辑的模块，改变接口则重查全部依赖者；改能力集、导入绑定或编译器构建都是未命中。
 - **`AdtId` 不进入文件（§7.3）。** 编码时每个出现的 `AdtId` 在文件内分配下标，ADT 表写下完整定义（`AdtKey` = 模块路径 +
@@ -7369,9 +7371,8 @@ program        ::= [ module_decl ] { import_decl } { top_decl } EOF
 module_decl    ::= "module" module_path NEWLINE
 module_path    ::= UIDENT { "." UIDENT }
 
-import_decl    ::= "import" module_path [ "as" UIDENT ]
-                   [ "{" name_list "}" ] NEWLINE
-                 | "open" module_path [ "{" name_list "}" ] NEWLINE
+import_decl    ::= [ "export" | "pub" ] ( "import" | "open" ) module_path
+                   [ "as" UIDENT ] [ "{" name_list "}" ] NEWLINE
 name_list      ::= name { "," name }
 name           ::= IDENT | UIDENT
 

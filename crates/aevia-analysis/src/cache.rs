@@ -5,6 +5,9 @@
 //! identity and package resolution context. No directory walk, timestamp
 //! assumption or unrelated open buffer can keep stale types alive or force a
 //! reload. Unsaved entry and imported buffers share one source snapshot.
+use crate::analysis::Analysis;
+use crate::analysis::ProgramQueryIndex;
+use crate::document::Document;
 use aevia_core::driver::Program;
 use aevia_core::driver::{
     self,
@@ -12,6 +15,7 @@ use aevia_core::driver::{
 use aevia_core::manifest::Package;
 use aevia_core::manifest::Roots;
 use aevia_core::source::SourceOverlays;
+use std::cell::OnceCell;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -23,6 +27,7 @@ struct CacheEntry {
     path: PathBuf,
     resolution: String,
     program: Rc<Program>,
+    query_index: OnceCell<Rc<ProgramQueryIndex>>,
 }
 
 fn roots_for(path: &Path) -> Roots {
@@ -107,6 +112,28 @@ impl AnalysisCache {
         self.entries.clear();
     }
 
+    /// Answers queries from `program`, sharing its lazily built syntax tables
+    /// when it is the exact snapshot retained by this cache.
+    #[must_use]
+    pub fn analyze_program<'a>(
+        &self,
+        document: &'a Document,
+        program: Rc<Program>,
+    ) -> Analysis<'a> {
+        let index = self
+            .entries
+            .iter()
+            .find(|entry| Rc::ptr_eq(&entry.program, &program))
+            .map(|entry| {
+                Rc::clone(
+                    entry
+                        .query_index
+                        .get_or_init(|| Rc::new(ProgramQueryIndex::new(&entry.program))),
+                )
+            });
+        Analysis::from_indexed_program(document, program, index)
+    }
+
     /// Loads a saved entry and its effective disk imports.
     pub fn program(
         &mut self,
@@ -173,6 +200,7 @@ impl AnalysisCache {
                 path: path.to_path_buf(),
                 resolution,
                 program: program.clone(),
+                query_index: OnceCell::new(),
             });
             while self.entries.len() > CAPACITY {
                 self.entries.remove(0);

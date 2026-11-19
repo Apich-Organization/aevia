@@ -7494,6 +7494,17 @@
       ]
     },
     {
+      "name": "coherence",
+      "rule_set": "numeric",
+      "signatures": [
+        "(Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>, Int, Real) -> Tensor<1, Real>",
+        "(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>"
+      ],
+      "stability": "Stable",
+      "doc": "`coherence(x, y, window, hop, sample_rate)`: one-sided magnitude-squared Welch coherence. Bins with zero power have zero coherence.",
+      "examples": []
+    },
+    {
       "name": "collect",
       "rule_set": "poly",
       "signatures": [
@@ -14383,7 +14394,7 @@
         "(Int) -> Tensor<2, Real>"
       ],
       "stability": "Stable",
-      "doc": "`hilbert(n)`: `n x n` Hilbert matrix `H_{ij} = 1 / (i + j + 1)`.",
+      "doc": "`hilbert(n)` constructs the `n × n` Hilbert matrix.\n\nWith zero-based row and column indices its entries are `H_{ij} = 1 / (i + j + 1)`.\nThe entries are exact rational numbers.",
       "examples": [
         [
           "hilbert(2)",
@@ -15037,6 +15048,17 @@
       ],
       "stability": "Stable",
       "doc": "`inverse_laplace(F, s, t)`: inverse Laplace transform recovering `f(t)` from `F(s)`.",
+      "examples": []
+    },
+    {
+      "name": "inverse_wavelet_packet",
+      "rule_set": "numeric",
+      "signatures": [
+        "(Tensor<2, Real>, Symbol) -> Tensor<1, Real>",
+        "(Dyn<term>, Dyn<term>) -> Dyn<term>"
+      ],
+      "stability": "Stable",
+      "doc": "`inverse_wavelet_packet(bands, wavelet)`: reconstruct the signal from the equal-width leaf bands of `wavelet_packet`.\n\nReconstructs a signal from the complete leaf level of [`wavelet_packet`].\n\n# Errors\n[`WaveletError::Shape`] when the number of bands is not a power of two,\ntheir lengths differ, or they are empty.",
       "examples": []
     },
     {
@@ -19696,7 +19718,7 @@
         "(Dyn<term>, Tensor<1, Dyn<term>>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Int) -> Tensor<1, Dyn<term>>"
       ],
       "stability": "Experimental",
-      "doc": "Actual native fixed-delay RK4 method of steps. History tape(time)->state sets the initial condition; RHS tape receives(time,state,delayed state). tau/h are physical times, tau>=h, and the final native step clips the endpoint. Returned samples carry true physical coordinates, not an invented dense interpolant.\n\nConstant-delay DDE integrator (method of steps with RK4).\n\nConstant-delay DDE `y'(t) = f(t, y(t), y(t - tau))` with history\n`hist(t)` for `t <= t0`, integrated by classical RK4 (method of steps)\nwith cubic Hermite interpolation of the stored solution. Requires\n`tau >= h`. Returns the grid and states.\n\n# Errors\n[`OdeError::Invalid`] if `tau < h` or `h <= 0`.",
+      "doc": "Actual native fixed-delay RK4 method of steps. History tape(time)->state sets the initial condition; RHS tape receives(time,state,delayed state). tau/h are physical times, tau>=h, and the final native step clips the endpoint. Returned samples carry true physical coordinates, not an invented dense interpolant.\n\nConstant-delay DDE integrator (method of steps with RK4).\n\nConstant-delay DDE `y'(t) = f(t, y(t), y(t - tau))` with history\n`hist(t)` for `t <= t0`, integrated by classical RK4 (method of steps)\nwith cubic Hermite interpolation of the stored solution. Requires\n`tau >= h`. Returns the grid and states.\n\n# Errors\n[`OdeError::Invalid`] for invalid span, delay or step size, or\n[`OdeError::StepLimit`] when the requested grid cannot advance in\nfloating-point time.",
       "examples": []
     },
     {
@@ -22876,7 +22898,7 @@
         "(Tensor<1, Complex[_]>) -> Tensor<1, Complex[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Native signal fft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the one-dimensional discrete Fourier Transform.\n\nThis function uses the `rustfft` library to perform the FFT.\n\n# Arguments\n* `input` - A mutable slice of complex numbers.\n\n# Returns\nA vector of complex numbers representing the FFT of the input.\n\n# Example\n```rust\nuse rssn::kernels::signal::fft;\nuse rustfft::num_complex::Complex;\n\nlet mut input = vec![\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n];\n\nlet output = fft(&mut input);\n\nassert!((output[0].re - 4.0).abs() < 1e-9);\n```",
+      "doc": "Native signal fft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the one-dimensional discrete Fourier Transform.\n\nThis function uses the `rustfft` library to perform the FFT.\n\n# Arguments\n* `input` - A slice of complex samples. Its contents are preserved.\n\n# Returns\nA vector of complex numbers representing the FFT of the input.\n\n# Example\n```rust\nuse rssn::kernels::signal::fft;\nuse rustfft::num_complex::Complex;\n\nlet mut input = vec![\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n    Complex::new(1.0, 0.0),\n];\n\nlet output = fft(&mut input);\n\nassert!((output[0].re - 4.0).abs() < 1e-9);\n```",
       "examples": []
     },
     {
@@ -22886,7 +22908,7 @@
         "(Tensor<1, Complex[_]>) -> Tensor<1, Complex[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Native signal ifft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the one-dimensional inverse discrete Fourier Transform.\n\nThis is the unnormalised forward transform followed by the `1/n`\nnormalisation, so `ifft(fft(x)) == x` (up to round-off) for every length.\n\n# Arguments\n* `input` - A mutable slice of complex frequency-domain samples.\n\n# Returns\nA vector of complex numbers representing the inverse transform.\n\n# Example\n```rust\nuse rssn::kernels::signal::fft;\nuse rssn::kernels::signal::ifft;\nuse rustfft::num_complex::Complex;\n\nlet mut input = vec![Complex::new(1.0, 0.5), Complex::new(-2.0, 0.0)];\n\nlet spectrum = fft(&mut input);\n\nlet back = ifft(&mut spectrum.clone());\n\nassert!((back[0] - input[0]).norm() < 1e-12);\n```",
+      "doc": "Native signal ifft; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nComputes the one-dimensional inverse discrete Fourier Transform.\n\nThis is the positive-sign transform followed by the `1/n`\nnormalisation, so `ifft(fft(x)) == x` (up to round-off) for every length.\n\n# Arguments\n* `input` - A mutable slice of complex frequency-domain samples.\n\n# Returns\nA vector of complex numbers representing the inverse transform.\n\n# Example\n```rust\nuse rssn::kernels::signal::fft;\nuse rssn::kernels::signal::ifft;\nuse rustfft::num_complex::Complex;\n\nlet mut input = vec![Complex::new(1.0, 0.5), Complex::new(-2.0, 0.0)];\n\nlet spectrum = fft(&mut input);\n\nlet back = ifft(&mut spectrum.clone());\n\nassert!((back[0] - input[0]).norm() < 1e-12);\n```",
       "examples": []
     },
     {
@@ -23876,7 +23898,7 @@
         "(Tensor<1, Float[_]>, Int, String) -> Float[_]"
       ],
       "stability": "Experimental",
-      "doc": "Native wavelets extend; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nSample `i` of the boundary extension of `x` in mode `b`.\n\n`Periodic` has period `n`, `Symmetric` period `2n` (mirror with the edge sample repeated) and\n`Reflect` period `2(n-1)` (mirror without repeating it); `Zero` returns `0.0` outside\n`[0, n)`. For `n = 1` every mode returns `x[0]`, and an empty signal has no samples.",
+      "doc": "Native wavelets extend; normalized dimensionless arguments unless the declared contract preserves measured signal units. Enum arguments use exact Rust variant names.\n\nSample `i` of the boundary extension of `x` in mode `b`.\n\n`Periodic` has period `n`, `Symmetric` period `2n` (mirror with the edge sample repeated) and\n`Reflect` period `2(n-1)` (mirror without repeating it); `Zero` returns `0.0` outside\n`[0, n)`. For `n = 1` the nonzero extension modes return `x[0]`, and an empty signal has no samples.",
       "examples": []
     },
     {
@@ -34740,6 +34762,16 @@
       "examples": []
     },
     {
+      "name": "num_linear_interpolative_decomposition",
+      "rule_set": "numerical_matrix",
+      "signatures": [
+        "(rssn/native/array/v1, Int) -> { columns: Tensor<1, Int>, coefficients: Tensor<2, Float> }"
+      ],
+      "stability": "Experimental",
+      "doc": "Approximates a matrix using a subset of its original columns and dimensionless interpolation coefficients. Returns zero-based column indices and a coefficient matrix in the original column order.\n\nComputes a column interpolative decomposition by truncated pivoted QR.\n\nThe actual rank is at most `max_rank`. The leading triangular block\ndetermines the interpolation coefficients; selected columns have identity\ncoefficients. A zero-rank result has a zero-row coefficient matrix.\n\n# Errors\n\nReturns an error when the input has inconsistent storage or non-finite\nentries, the requested rank exceeds either extent, or the coefficients\ncannot be represented as finite floats.",
+      "examples": []
+    },
+    {
       "name": "num_linear_lagrange_interpolation",
       "rule_set": "numerical_matrix",
       "signatures": [
@@ -34996,7 +35028,7 @@
         "(rssn/native/array/v1) -> rssn/native/pivoted-qr/v1"
       ],
       "stability": "Experimental",
-      "doc": "Actual native low-rank/operator method. Matrices and state arrays retain explicit physical references; orthonormal factors are dimensionless. Shapes, iterations, callbacks and allocations are bounded.\n\nColumn-pivoted Householder QR (Businger and Golub).\n\nAt each step the remaining column of largest norm is brought forward, so\nthe diagonal of `R` decreases in magnitude and its decay reveals the\nnumerical rank. Column norms are downdated and recomputed when\ncancellation makes the downdate unreliable.\n\n# Errors\n[`LowRankError::Shape`] for inconsistent storage or non-finite entries.",
+      "doc": "Actual native low-rank/operator method. Matrices and state arrays retain explicit physical references; orthonormal factors are dimensionless. Shapes, iterations, callbacks and allocations are bounded.\n\nColumn-pivoted Householder QR (Businger and Golub).\n\nAt each step the remaining column of largest norm is brought forward, so\nthe diagonal of `R` decreases in magnitude and its decay reveals the\nnumerical rank. Column norms are downdated and recomputed when\ncancellation makes the downdate unreliable.\n\n# Errors\n[`LowRankError::Shape`] for inconsistent storage or non-finite entries,\nand [`LowRankError::NoConvergence`] if the resulting factor exceeds the\nrepresentable floating-point range.",
       "examples": []
     },
     {
@@ -35476,7 +35508,7 @@
         "(rssn/native/csr/v1, rssn/native/array/v1, Float, Int) -> Dyn<term>"
       ],
       "stability": "Experimental",
-      "doc": "Native sparse solver with explicit matrix/RHS reference domains. Solutions retain RHS/matrix units; initial vectors use that normalized solution reference. Native method/preconditioner choices, residuals and convergence reports are preserved; shape and work budgets are checked.\n\nUnpreconditioned conjugate gradients for a symmetric positive-definite\nmatrix, starting from zero.\n\n# Errors\n[`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].",
+      "doc": "Native sparse solver with explicit matrix/RHS reference domains. Solutions retain RHS/matrix units; initial vectors use that normalized solution reference. Native method/preconditioner choices, residuals and convergence reports are preserved; shape and work budgets are checked.\n\nUnpreconditioned conjugate gradients for a symmetric positive-definite\nmatrix, starting from zero.\n\n# Errors\nReturns shape and input-domain errors, or [`NumericError::NotPositiveDefinite`]\nwhen a search direction has nonpositive curvature or the iteration breaks down.",
       "examples": []
     },
     {
@@ -35856,7 +35888,7 @@
         "(Tensor<2, Float[_]>) -> { q: Tensor<2, Float>, r: Tensor<2, Float[_]>, perm: Tensor<1, Int> }"
       ],
       "stability": "Experimental",
-      "doc": "Column-pivoted Householder QR (Businger and Golub).\n\nAt each step the remaining column of largest norm is brought forward, so\nthe diagonal of `R` decreases in magnitude and its decay reveals the\nnumerical rank. Column norms are downdated and recomputed when\ncancellation makes the downdate unreliable.\n\n# Errors\n[`LowRankError::Shape`] for inconsistent storage or non-finite entries.",
+      "doc": "Column-pivoted Householder QR (Businger and Golub).\n\nAt each step the remaining column of largest norm is brought forward, so\nthe diagonal of `R` decreases in magnitude and its decay reveals the\nnumerical rank. Column norms are downdated and recomputed when\ncancellation makes the downdate unreliable.\n\n# Errors\n[`LowRankError::Shape`] for inconsistent storage or non-finite entries,\nand [`LowRankError::NoConvergence`] if the resulting factor exceeds the\nrepresentable floating-point range.",
       "examples": []
     },
     {
@@ -38746,7 +38778,7 @@
         "(rssn/native/device-registry/v1) -> None | Some(rssn/native/device/v1)"
       ],
       "stability": "Experimental",
-      "doc": "Explicit checked native device adapter. Machine IR and buffers use normalized coordinates; use physical map for independently measured columns. Session, shape and bounded work are validated before native execution.\n\nThe device to use when the caller names none: the first GPU, else the\nparallel CPU, else any.",
+      "doc": "Explicit checked native device adapter. Machine IR and buffers use normalized coordinates; use physical map for independently measured columns. Session, shape and bounded work are validated before native execution.\n\nThe device to use when the caller names none: the first GPU, else the\nparallel CPU with at least two workers, else the sequential CPU or\nany registered device.",
       "examples": []
     },
     {
@@ -41496,7 +41528,7 @@
         "(rssn/native/discrete/graph-graph/v1, Int, Int, Dyn<term>) -> Bool"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nAdds a directed edge with a weight between two nodes.\n\n# Arguments\n* `u` - The index of the source node.\n* `v` - The index of the destination node.\n* `weight` - The weight of the edge.",
+      "doc": "Appends one directed arc with a finite weight in the graph’s declared physical dimension. Loops and parallel arcs are retained.\n\nAdds a directed edge with a weight between two nodes.\n\n# Arguments\n* `u` - The index of the source node.\n* `v` - The index of the destination node.\n* `weight` - The weight of the edge.\n\nThe caller must supply a valid destination and a weight in the domain\nof each algorithm it will call. [`Self::from_edges`] validates input.\n\n# Panics\n\nPanics when `u` is outside the vertex range.",
       "examples": []
     },
     {
@@ -41506,7 +41538,17 @@
         "(rssn/native/discrete/graph-graph/v1, Int) -> Dyn<term>"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nReturns an immutable slice of the neighbors and edge weights for a given node.\n\n# Arguments\n* `u` - The index of the node.\n\n# Returns\nA slice of `(usize, f64)` tuples, where each tuple is `(neighbor_index, edge_weight)`.",
+      "doc": "Returns one vertex’s outgoing endpoints and matching coherent weights, in insertion order.\n\nReturns an immutable slice of the neighbors and edge weights for a given node.\n\n# Arguments\n* `u` - The index of the node.\n\n# Returns\nA slice of `(usize, f64)` tuples, where each tuple is `(neighbor_index, edge_weight)`.",
+      "examples": []
+    },
+    {
+      "name": "num_native_graph_bellman_ford",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/graph-graph/v1, Int) -> { distances: Tensor<1, Dyn<term>>, previous: Tensor<1, None | Some(Int)> }"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns shortest distances and optional predecessors from one source. Distances retain the graph’s edge units and are infinite for unreachable vertices. A reachable negative cycle is rejected.",
       "examples": []
     },
     {
@@ -41516,7 +41558,7 @@
         "(rssn/native/discrete/graph-graph/v1, Int) -> Tensor<1, Int>"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nPerforms a Breadth-First Search (BFS) starting from a node.\nReturns the unweighted shortest path distances from the start node to all other reachable nodes.\nReturns `usize::MAX` for unreachable nodes.",
+      "doc": "Returns unweighted distance by vertex from the start vertex. Unreachable vertices have the native usize maximum sentinel.\n\nPerforms a Breadth-First Search (BFS) starting from a node.\nReturns the unweighted shortest path distances from the start node to all other reachable nodes.\nReturns `usize::MAX` for unreachable nodes.\n\n# Panics\n\nPanics on an out-of-range start vertex or encountered edge endpoint.",
       "examples": []
     },
     {
@@ -41526,7 +41568,7 @@
         "(rssn/native/discrete/graph-canonicallabelling/v1) -> Tensor<1, Int>"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nThe canonical code: the `n` vertex colours in canonical order,\nfollowed by the `n * n` adjacency matrix rows in canonical order.\n\nTwo graphs are isomorphic if and only if their canonical codes are\nequal, provided both searches were exact.",
+      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nThe canonical code: the `n` vertex colours in canonical order,\nfollowed by the `n * n` adjacency matrix rows in canonical order.\n\nFor graphs of the same directedness, equality of exact canonical codes\nis equivalent to isomorphism.",
       "examples": []
     },
     {
@@ -41566,7 +41608,7 @@
         "(rssn/native/discrete/graph-colourgraph/v1, rssn/native/discrete/graph-searchbudget/v1) -> rssn/native/discrete/graph-canonicallabelling/v1"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nSearches for the canonical labelling of `graph` and its automorphism\ngroup.\n\nReturns the labelling with the smallest code found within `budget` nodes,\nthe generators and orbits of the automorphism group found on the way, and\nwhether the search was exact (see the module docs for the fallback).\n\n# Complexity\n\nA node costs one equitable refinement, `O(n + m)` (times the number of\nrounds, at most `n`), and a leaf costs one code, `O(n^2)`. The number of\nnodes is that of the individualisation tree after automorphism pruning;\nfor a graph whose colouring is discrete it is one.",
+      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nSearches for the canonical labelling of `graph` and its automorphism\ngroup.\n\nReturns the labelling with the smallest code found within `budget` nodes,\nthe generators and orbits of the automorphism group found on the way, and\nwhether the search was exact (see the module docs for the fallback).\n\n# Complexity\n\nEach node refines the partition by sorting vertex signatures until it\nbecomes equitable. Comparing a leaf takes up to `O(n^2)`. The search\nvisits the individualisation tree after automorphism pruning, with just\none node for a graph whose colouring is already discrete.",
       "examples": []
     },
     {
@@ -41736,7 +41778,17 @@
         "(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nFinds the connected components of an undirected graph stored as symmetric arcs.\n\nFor directed reachability in both directions, use [`strongly_connected_components`].\nReturns a vector where each element corresponds to a node and contains its component ID.",
+      "doc": "Labels an undirected graph represented by symmetric arcs. For asymmetric arcs, use the weakly or strongly connected components operator.\n\nFinds the connected components of an undirected graph stored as symmetric arcs.\n\nFor directed reachability in both directions, use [`strongly_connected_components`].\nFor weak connectivity of asymmetric arcs, use [`weakly_connected_components`].\nReturns a vector where each element corresponds to a node and contains its component ID.",
+      "examples": []
+    },
+    {
+      "name": "num_native_graph_dag_shortest_paths",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/graph-graph/v1, Int) -> { distances: Tensor<1, Dyn<term>>, previous: Tensor<1, None | Some(Int)> }"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns shortest distances and optional predecessors in linear time for a directed acyclic graph. Distances retain the graph’s edge units. Negative weights are supported and all directed cycles are rejected.",
       "examples": []
     },
     {
@@ -41746,7 +41798,7 @@
         "(rssn/native/discrete/graph-graph/v1, Int) -> Dyn<term>"
       ],
       "stability": "Experimental",
-      "doc": "Native Dijkstra with nonnegative coherent edge weights; infinity denotes unreachable vertices, and predecessor entries are native Options. Finite edge/path representation and allocation bounds are checked.\n\nFinds the shortest paths from a single source node to all other nodes\nusing Dijkstra's algorithm.\n\nDijkstra's algorithm is a greedy algorithm that solves the single-source\nshortest path problem for a graph with non-negative edge weights.\n\n# Arguments\n* `graph` - The graph to search.\n* `start_node` - The index of the starting node.\n\n# Returns\nA tuple containing:\n  - A vector of distances from the start node to each node.\n  - A vector of predecessors to reconstruct the shortest paths.",
+      "doc": "Native Dijkstra with nonnegative coherent edge weights; infinity denotes unreachable vertices, and predecessor entries are native Options. Finite edge/path representation and allocation bounds are checked.\n\nFinds the shortest paths from a single source node to all other nodes\nusing Dijkstra's algorithm.\n\nDijkstra's algorithm is a greedy algorithm that solves the single-source\nshortest path problem for a graph with non-negative edge weights.\n\n# Arguments\n* `graph` - The graph to search.\n* `start_node` - The index of the starting node.\n\n# Returns\nA tuple containing:\n  - A vector of distances from the start node to each node.\n  - A vector of predecessors to reconstruct the shortest paths.\n\nUnreachable vertices have infinite distance and no predecessor. When\ncosts tie, the queue visits vertices in increasing vertex order.\n\n# Panics\n\nPanics on an out-of-range start vertex or encountered edge endpoint.",
       "examples": []
     },
     {
@@ -41756,7 +41808,17 @@
         "(rssn/native/discrete/graph-graph/v1) -> Dyn<term>"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nSolves the All-Pairs Shortest Path problem using the Floyd-Warshall algorithm.\n\n# Returns\nA flattened vector of size `n * n` representing the distance matrix.\n`dist[i * n + j]` is the distance from i to j.",
+      "doc": "Returns a row-major all-pairs distance matrix in the graph’s edge units. Unreachable vertices have infinite distance. Negative cycles are rejected.\n\nSolves the all-pairs shortest path problem using Floyd–Warshall.\n\nThe result is a row-major distance matrix. Element `i * n + j` is the\ndistance from `i` to `j`, or positive infinity when `j` is unreachable.\nA negative diagonal entry detects a negative cycle, in which case\ndistances that can traverse a cycle are undefined.\n\n# Panics\n\nPanics on an out-of-range edge endpoint or a matrix too large to allocate.",
+      "examples": []
+    },
+    {
+      "name": "num_native_graph_from_edges",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Int, Tensor<2, Int>, Tensor<1, Float[_]>) -> rssn/native/discrete/graph-graph/v1"
+      ],
+      "stability": "Experimental",
+      "doc": "Constructs a directed graph from a two-column endpoint matrix and an equally long weight vector. The vector declares coherent edge units. Loops and parallel arcs are retained in input order.",
       "examples": []
     },
     {
@@ -41770,13 +41832,23 @@
       "examples": []
     },
     {
+      "name": "num_native_graph_maximum_flow",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/graph-graph/v1, Int, Int) -> { value: Dyn<term>, source_side: Tensor<1, Bool> }"
+      ],
+      "stability": "Experimental",
+      "doc": "Computes a maximum source-to-sink flow and returns its value in capacity units and a Boolean mask for the source side of a minimum cut. Distinct terminals and nonnegative capacities are required.",
+      "examples": []
+    },
+    {
       "name": "num_native_graph_minimum_spanning_tree",
       "rule_set": "numerical_vector",
       "signatures": [
         "(rssn/native/discrete/graph-graph/v1) -> rssn/native/discrete/graph-graph/v1"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nComputes the Minimum Spanning Tree (MST) using Prim's algorithm.\nReturns a Graph representing the MST.\nAssumes graph is connected (or computes MST forest).",
+      "doc": "Computes a minimum spanning forest with Prim’s algorithm. The input contains symmetric, equally weighted arcs and the result retains their physical dimension.\n\nComputes a minimum spanning forest using Prim's algorithm.\n\nThe input is an undirected graph represented by equally weighted arcs\nin both directions. Every selected arc is included in both directions\nin the result. Disconnected vertices and components are retained.",
       "examples": []
     },
     {
@@ -41790,13 +41862,23 @@
       "examples": []
     },
     {
+      "name": "num_native_graph_num_edges",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/graph-graph/v1) -> Int"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns the number of directed arcs, counting loops and parallel arcs.\n\nReturns the number of directed arcs, including loops and parallel arcs.",
+      "examples": []
+    },
+    {
       "name": "num_native_graph_num_nodes",
       "rule_set": "numerical_vector",
       "signatures": [
         "(rssn/native/discrete/graph-graph/v1) -> Int"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nReturns the total number of nodes in the graph.",
+      "doc": "Returns the number of vertices in the weighted graph.\n\nReturns the total number of nodes in the graph.",
       "examples": []
     },
     {
@@ -41806,7 +41888,7 @@
         "(rssn/native/discrete/graph-graph/v1, Float, Float, Int) -> Tensor<1, Float>"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nComputes the `PageRank` of the nodes in the graph.\n\n# Arguments\n* `graph` - The graph.\n* `damping_factor` - The probability of continuing following links (usually 0.85).\n* `tolerance` - The convergence tolerance.\n* `max_iter` - The maximum number of iterations.\n\n# Returns\nA vector of scores summing to 1.",
+      "doc": "Returns dimensionless PageRank scores. Each outgoing arc counts equally and dangling mass is distributed uniformly. Work is bounded by the graph size and iteration count.\n\nComputes the `PageRank` of the nodes in the graph.\n\n# Arguments\n* `graph` - The graph.\n* `damping_factor` - The probability of continuing following links (usually 0.85).\n* `tolerance` - The convergence tolerance.\n* `max_iter` - The maximum number of iterations.\n\n# Returns\nA vector of scores summing to 1, or an empty vector for an empty graph.\nParallel arcs each contribute an equal share, and weights are ignored.\n\n# Panics\n\nPanics on an encountered out-of-range edge endpoint.",
       "examples": []
     },
     {
@@ -42006,7 +42088,7 @@
         "(rssn/native/discrete/graph-refinement/v1, rssn/native/discrete/graph-colourgraph/v1) -> Bool"
       ],
       "stability": "Experimental",
-      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nChecks the result against a graph: the cells partition the vertices,\neach cell has one colour, and each cell is equitable — every vertex of\na cell has the same neighbour counts (per label) into every cell.\n\nReturns `false` when `graph` is not the graph the partition came from\n(a different number of vertices, or a vertex out of range).",
+      "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nChecks the result against a graph: the cells partition the vertices,\neach cell has one colour, and each cell is equitable — every vertex of\na cell has the same neighbour counts (per label) into every cell.\n\nReturns `false` when the stated partition conditions fail for `graph`.",
       "examples": []
     },
     {
@@ -42037,6 +42119,36 @@
       ],
       "stability": "Experimental",
       "doc": "Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.\n\nA budget of `max_nodes` search nodes.",
+      "examples": []
+    },
+    {
+      "name": "num_native_graph_strongly_connected_components",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns a dense strongly connected component label per vertex, numbered in topological order. Weights are ignored.",
+      "examples": []
+    },
+    {
+      "name": "num_native_graph_topological_sort",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns a vertex ordering in which every source precedes its targets. A directed cycle is rejected and weights are ignored.",
+      "examples": []
+    },
+    {
+      "name": "num_native_graph_weakly_connected_components",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns a dense component label per vertex after ignoring arc directions and weights. Components are ordered by their smallest vertex.",
       "examples": []
     },
     {
@@ -52920,6 +53032,26 @@
       "examples": []
     },
     {
+      "name": "num_signal_analytic_envelope",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns the amplitude envelope `hypot(x, hilbert(x))` of real samples.\n\n# Errors\nReturns an error for non-finite samples or an unrepresentable envelope.",
+      "examples": []
+    },
+    {
+      "name": "num_signal_analytic_signal",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>) -> Tensor<1, Complex[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Forms the complex analytic signal of real periodic samples.\n\nThe real part is the original signal and the imaginary part is its\ndiscrete Hilbert transform. Positive-frequency bins are doubled and\nnegative bins removed. DC and the Nyquist bin of an even-length signal\nare preserved. An empty input gives an empty result.\n\n# Errors\nReturns an error for non-finite samples or an unrepresentable transform.",
+      "examples": []
+    },
+    {
       "name": "num_signal_blackman_window",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -52966,7 +53098,7 @@
         "(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Orthonormal Type-II Discrete Cosine Transform (DCT-II).",
+      "doc": "Orthonormal Type-II Discrete Cosine Transform (DCT-II) in `O(n log n)`.",
       "examples": []
     },
     {
@@ -52976,7 +53108,7 @@
         "(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Orthonormal Type-II Discrete Sine Transform (DST-II).",
+      "doc": "Orthonormal Type-II Discrete Sine Transform (DST-II) in `O(n log n)`.",
       "examples": []
     },
     {
@@ -53000,6 +53132,16 @@
       "examples": []
     },
     {
+      "name": "num_signal_hilbert",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Returns the discrete Hilbert transform of real periodic samples.\n\nA positive-frequency cosine becomes a sine, and DC and Nyquist components\ncontribute zero. See [`analytic_signal`] for the boundary convention.\n\n# Errors\nReturns an error for non-finite samples or an unrepresentable transform.",
+      "examples": []
+    },
+    {
       "name": "num_signal_idct",
       "rule_set": "numerical_vector",
       "signatures": [
@@ -53020,13 +53162,23 @@
       "examples": []
     },
     {
+      "name": "num_signal_inverse_stft",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<2, Complex[_]>, Tensor<1, Float[_]>, Int) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Reconstructs a real signal from full [`stft`] spectra.\n\nApplies the same window on synthesis and divides each sample by its sum of\nsquared window weights. Returns the interval covered by the frames, of\nlength `(frames.len() - 1) * hop + window.len()`. The imaginary part after\nthe inverse transform is discarded. Use a window and hop that have\nnonzero overlap weights across that interval, or pad the analysis when\nendpoint samples must be preserved.\n\n# Errors\n\nReturns an error for invalid parameters, inconsistent or non-finite frames,\nuncovered samples, output size overflow or non-finite reconstruction.",
+      "examples": []
+    },
+    {
       "name": "num_signal_kaiser_window",
       "rule_set": "numerical_vector",
       "signatures": [
         "(Int, Float) -> Tensor<1, Float>"
       ],
       "stability": "Experimental",
-      "doc": "Generates a Kaiser window of length `n` with shape parameter `beta`.",
+      "doc": "Generates a symmetric Kaiser window with shape parameter `beta`.\n\nEither sign of a finite `beta` produces the same coefficients. For\n`n > 1`, a non-finite shape parameter returns NaNs.",
       "examples": []
     },
     {
@@ -53067,6 +53219,46 @@
       ],
       "stability": "Experimental",
       "doc": "Power spectrogram `|STFT|^2` of `x` with `window` and `hop`.",
+      "examples": []
+    },
+    {
+      "name": "num_signal_upfirdn",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Int, Int) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Upsamples, applies a finite impulse response filter and downsamples.\n\nThis implements zero insertion by `up`, linear convolution with `taps`,\nthen retention of every `down`th sample starting at index zero. It works\ndirectly on filter phases without allocating the upsampled signal or\nmultiplying by its inserted zeros. The boundaries are zero extended. The\nsupplied taps determine gain, passband, alias rejection and delay.\n\nIf either input slice is empty the result is empty. Otherwise the output\nlength is `floor(((samples.len() - 1) * up + taps.len() - 1) / down) + 1`.\n\n# Errors\n\nReturns an error for a zero factor, non-finite data, non-finite output\nor an output extent that overflows or cannot be allocated.",
+      "examples": []
+    },
+    {
+      "name": "num_signal_welch_cross_spectrum",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Tensor<1, Float[_]>, Int, Float[_]) -> { frequencies: Tensor<1, Float[_]>, density: Tensor<1, Complex[_]>, coherence: Tensor<1, Float> }"
+      ],
+      "stability": "Experimental",
+      "doc": "Estimates one-sided cross-spectral density and magnitude-squared coherence.\n\nApplies the same complete-frame Welch convention as [`welch_psd`] to\nboth inputs. For the Fourier bins `X` and `Y`, it averages `conj(X) * Y`\nacross frames to obtain the cross-spectral density `Pxy`, and computes\n`abs(Pxy)^2 / (Pxx * Pyy)`. Auto-spectra and cross-spectra share the\nsame window energy and one-sided scaling.\n\n# Errors\nReturns an error on unequal lengths or on the invalid input domains\ndescribed by [`welch_psd`].",
+      "examples": []
+    },
+    {
+      "name": "num_signal_welch_psd",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Int, Float[_]) -> { frequencies: Tensor<1, Float[_]>, density: Tensor<1, Float[_]> }"
+      ],
+      "stability": "Experimental",
+      "doc": "Estimates the one-sided power spectral density of real samples by Welch's method.\n\nAverages the periodograms of complete windowed frames, whose starts are\n`hop` samples apart. Pass the window coefficients explicitly, for example\nwith [`hann_window`]. The transform uses the window length and\nperforms no detrending. Frequencies have the same unit as `sample_rate`.\nOnly bins with a negative-frequency partner are doubled. Multiplying each\nbin by the frequency spacing and summing gives the mean window-weighted\nframe power. Trailing samples that do not complete a frame are ignored.\n\n# Errors\n\nReturns an error for an invalid window, hop or sample rate, insufficient\nsamples, non-finite data in a complete frame or non-finite computed power.",
+      "examples": []
+    },
+    {
+      "name": "num_signal_zoom_fft",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Complex[_]>, Float, Float, Int) -> Tensor<1, Complex[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Computes arbitrary equally spaced Fourier samples using a chirp convolution.\n\nBin `k` is `sum_n x[n] exp(-2 pi i (start + k * step) n)` with `start`\nand `step` measured in cycles per input sample. Frequencies are periodic\nmodulo one. This is the unit-circle chirp z-transform. It can resolve a\nsub-band without evaluating the rest of the spectrum. A zero step repeats\none frequency. Zero bins give an empty result and an empty input gives\n`bins` zeros. Time and storage scale with the input and output extents,\nusing an FFT of length `next_power_of_two(x.len() + bins - 1)`.\n\n# Errors\nReturns an error for non-finite frequencies or input, unrepresentable\nintermediate arithmetic, or an output or work extent that is too large.",
       "examples": []
     },
     {
@@ -53317,6 +53509,16 @@
       ],
       "stability": "Experimental",
       "doc": "Modified Bessel function of the first kind `I_ν(x)`, by `(1/π)∫_0^π e^{x cos θ} cos νθ dθ - (sin νπ/π)∫_0^∞ e^{-x cosh t - νt} dt` (`x < 0` for integer orders by parity).",
+      "examples": []
+    },
+    {
+      "name": "num_special_bessel_i0e",
+      "rule_set": "numerical_special",
+      "signatures": [
+        "(Float) -> Float"
+      ],
+      "stability": "Experimental",
+      "doc": "Exponentially scaled modified Bessel I₀, `exp(-|x|) I₀(x)`.\n\nThe scaled form stays finite when the unscaled function overflows.\nBoth infinities map to zero and NaN is propagated.",
       "examples": []
     },
     {
@@ -54676,7 +54878,7 @@
         "(Tensor<1, Complex[_]>, Float) -> Tensor<1, Complex[_]>"
       ],
       "stability": "Experimental",
-      "doc": "Discrete fractional Fourier transform of order `a` of the complex signal `x`.\n\n# Errors\nAs [`frft_matrix`].",
+      "doc": "Discrete fractional Fourier transform of order `a` of the complex signal `x`.",
       "examples": []
     },
     {
@@ -54686,7 +54888,27 @@
         "(Int, Float) -> Tensor<1, Complex>"
       ],
       "stability": "Experimental",
-      "doc": "The `n x n` matrix of the discrete fractional Fourier transform of order `a` (row-major).\n\n`a = 1` is the unitary DFT; the matrix is unitary and `frft_matrix(n, a) * frft_matrix(n, b)\n= frft_matrix(n, a + b)`.\n\n# Errors\n`Err` for `n < 2` or when the eigensolver fails.",
+      "doc": "The row-major matrix of the discrete fractional Fourier transform of order `a`.\n\n`a = 1` is the unitary DFT. The unitary transforms compose by addition\nof their orders. For repeated orders, construct one [`FrftPlan`].\n\n# Errors\nReturns an error for `n < 2`, a non-finite order, an unrepresentable matrix\nsize or an eigensolver failure.",
+      "examples": []
+    },
+    {
+      "name": "num_wavelets_inverse_wavelet_packet",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<2, Float[_]>, String) -> Tensor<1, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Reconstructs a signal from the complete leaf level of [`wavelet_packet`].\n\n# Errors\n[`WaveletError::Shape`] when the number of bands is not a power of two,\ntheir lengths differ, or they are empty.",
+      "examples": []
+    },
+    {
+      "name": "num_wavelets_wavelet_packet",
+      "rule_set": "numerical_vector",
+      "signatures": [
+        "(Tensor<1, Float[_]>, String, Int) -> Tensor<2, Float[_]>"
+      ],
+      "stability": "Experimental",
+      "doc": "Decomposes both the low and high branches of a periodic wavelet transform.\n\nReturns `2^levels` equally sized leaf bands in tree order, with each low\nchild before its high sibling. For example, level two returns `LL`, `LH`,\n`HL`, `HH`. Level zero returns one band containing the input.\n\n# Errors\n[`WaveletError::TooManyLevels`] when the signal is empty or its length is\nincompatible with the requested depth.",
       "examples": []
     },
     {
@@ -61802,6 +62024,17 @@
           "[[Float]]"
         ]
       ]
+    },
+    {
+      "name": "wavelet_packet",
+      "rule_set": "numeric",
+      "signatures": [
+        "(Tensor<1, Real>, Symbol, Int) -> Tensor<2, Real>",
+        "(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>"
+      ],
+      "stability": "Stable",
+      "doc": "`wavelet_packet(x, wavelet, levels)`: equal-width leaf bands of a complete periodic wavelet packet tree, with each low child before its high sibling.\n\nDecomposes both the low and high branches of a periodic wavelet transform.\n\nReturns `2^levels` equally sized leaf bands in tree order, with each low\nchild before its high sibling. For example, level two returns `LL`, `LH`,\n`HL`, `HH`. Level zero returns one band containing the input.\n\n# Errors\n[`WaveletError::TooManyLevels`] when the signal is empty or its length is\nincompatible with the requested depth.",
+      "examples": []
     },
     {
       "name": "waverec",

@@ -794,6 +794,15 @@ crate::kernels::geometry::segment_intersection_2d	declared	num_geometry_segment_
 crate::kernels::geometry::segment_triangle_intersection_3d	declared	num_geometry_segment_triangle_intersection_3d		fn segment_triangle_intersection_3d (p0 : [f64 ; 3] , p1 : [f64 ; 3] , v0 : [f64 ; 3] , v1 : [f64 ; 3] , v2 : [f64 ; 3] ,) -> Option < [f64 ; 3] >
 crate::kernels::geometry::tetrahedron_volume	declared	num_geometry_tetrahedron_volume		fn tetrahedron_volume (points : & [f64]) -> f64
 crate::kernels::geometry::voronoi_2d	declared	num_voronoi_2d		fn voronoi_2d (points : & [[f64 ; 2]]) -> VoronoiDiagram
+crate::kernels::graph::<reexport:00dfc4c1ac0adcc2>	unresolved-reexport			paths :: bellman_ford
+crate::kernels::graph::<reexport:4475a5b7b1e8aea3>	unresolved-reexport			paths :: ShortestPaths
+crate::kernels::graph::<reexport:62b76c7b54068d81>	unresolved-reexport			flow :: MaxFlow
+crate::kernels::graph::<reexport:75f45a7ef143460a>	unresolved-reexport			directed :: GraphStructureError
+crate::kernels::graph::<reexport:84541d27d1015636>	unresolved-reexport			directed :: strongly_connected_components
+crate::kernels::graph::<reexport:a257507c5a4ec47b>	unresolved-reexport			directed :: weakly_connected_components
+crate::kernels::graph::<reexport:a875c5aceb51e289>	unresolved-reexport			directed :: topological_sort
+crate::kernels::graph::<reexport:c63847e760c01067>	unresolved-reexport			paths :: dag_shortest_paths
+crate::kernels::graph::<reexport:eaf16307e3cfabae>	unresolved-reexport			flow :: maximum_flow
 crate::kernels::graph::CanonicalLabelling::code	declared	num_native_graph_canonical_code		fn code (& self) -> & [u32]
 crate::kernels::graph::CanonicalLabelling::generators	declared	num_native_graph_canonical_generators		fn generators (& self) -> & [Permutation]
 crate::kernels::graph::CanonicalLabelling::group_order	declared	num_native_graph_canonical_group_order		const fn group_order (& self) -> & BigInt
@@ -823,7 +832,9 @@ crate::kernels::graph::ColourGraph::set_edge	declared	num_native_colour_graph_se
 crate::kernels::graph::ColourGraph::with_colours	declared	num_native_colour_graph_with_colours		fn with_colours (n : usize , directed : bool , colours : & [u32] ,) -> Option < Self >
 crate::kernels::graph::Graph::add_edge	declared	num_native_graph_add_edge		fn add_edge (& mut self , u : usize , v : usize , weight : f64 ,)
 crate::kernels::graph::Graph::adj	declared	num_native_graph_adj		fn adj (& self , u : usize ,) -> & [(usize , f64)]
+crate::kernels::graph::Graph::from_edges	declared	num_native_graph_from_edges		fn from_edges (num_nodes : usize , edges : & [(usize , usize , f64)] ,) -> Result < Self , GraphStructureError >
 crate::kernels::graph::Graph::new	declared	num_native_graph_new		fn new (num_nodes : usize) -> Self
+crate::kernels::graph::Graph::num_edges	declared	num_native_graph_num_edges		const fn num_edges (& self) -> usize
 crate::kernels::graph::Graph::num_nodes	declared	num_native_graph_num_nodes		const fn num_nodes (& self) -> usize
 crate::kernels::graph::Permutation::apply	declared	num_native_graph_permutation_apply		fn apply (& self , v : usize ,) -> Option < usize >
 crate::kernels::graph::Permutation::compose	declared	num_native_graph_permutation_compose		fn compose (& self , other : & Self ,) -> Option < Self >
@@ -853,15 +864,21 @@ crate::kernels::graph::RefinementCertificate::num_nodes	declared	num_native_grap
 crate::kernels::graph::SearchBudget::for_size	declared	num_native_graph_search_budget_for_size		const fn for_size (n : usize) -> Self
 crate::kernels::graph::SearchBudget::max_nodes	declared	num_native_graph_search_budget_max_nodes		const fn max_nodes (& self) -> usize
 crate::kernels::graph::SearchBudget::nodes	declared	num_native_graph_search_budget_nodes		const fn nodes (max_nodes : usize) -> Self
+crate::kernels::graph::bellman_ford	declared	num_native_graph_bellman_ford		fn bellman_ford (graph : & Graph , start : usize ,) -> Result < ShortestPaths , GraphStructureError >
 crate::kernels::graph::bfs	declared	num_native_graph_bfs		fn bfs (graph : & Graph , start_node : usize ,) -> Vec < usize >
 crate::kernels::graph::canonical_labelling	declared	num_native_graph_canonical_labelling		fn canonical_labelling (graph : & ColourGraph , budget : SearchBudget ,) -> CanonicalLabelling
 crate::kernels::graph::connected_components	declared	num_native_graph_connected_components		fn connected_components (graph : & Graph) -> Vec < usize >
+crate::kernels::graph::dag_shortest_paths	declared	num_native_graph_dag_shortest_paths		fn dag_shortest_paths (graph : & Graph , start : usize ,) -> Result < ShortestPaths , GraphStructureError >
 crate::kernels::graph::dijkstra	declared	num_native_graph_dijkstra		fn dijkstra (graph : & Graph , start_node : usize ,) -> (Vec < f64 > , Vec < Option < usize > >)
 crate::kernels::graph::floyd_warshall	declared	num_native_graph_floyd_warshall		fn floyd_warshall (graph : & Graph) -> Vec < f64 >
 crate::kernels::graph::isomorphic	declared	num_native_graph_isomorphic		fn isomorphic (a : & ColourGraph , b : & ColourGraph , budget : SearchBudget ,) -> Option < bool >
+crate::kernels::graph::maximum_flow	declared	num_native_graph_maximum_flow		fn maximum_flow (graph : & Graph , source : usize , sink : usize ,) -> Result < MaxFlow , GraphStructureError >
 crate::kernels::graph::minimum_spanning_tree	declared	num_native_graph_minimum_spanning_tree		fn minimum_spanning_tree (graph : & Graph) -> Graph
 crate::kernels::graph::page_rank	declared	num_native_graph_page_rank		fn page_rank (graph : & Graph , damping_factor : f64 , tolerance : f64 , max_iter : usize ,) -> Vec < f64 >
 crate::kernels::graph::refine	declared	num_native_graph_refine		fn refine (graph : & ColourGraph) -> Refinement
+crate::kernels::graph::strongly_connected_components	declared	num_native_graph_strongly_connected_components		fn strongly_connected_components (graph : & Graph) -> Result < Vec < usize > , GraphStructureError >
+crate::kernels::graph::topological_sort	declared	num_native_graph_topological_sort		fn topological_sort (graph : & Graph) -> Result < Vec < usize > , GraphStructureError >
+crate::kernels::graph::weakly_connected_components	declared	num_native_graph_weakly_connected_components		fn weakly_connected_components (graph : & Graph) -> Result < Vec < usize > , GraphStructureError >
 crate::kernels::graph::wl_equivalent	declared	num_native_graph_wl_equivalent		fn wl_equivalent (a : & ColourGraph , b : & ColourGraph ,) -> bool
 crate::kernels::holonomic::Atom::annihilator	declared	num_analysis_holonomic_atom_annihilator		fn annihilator (& self) -> Option < Operator >
 crate::kernels::holonomic::Atom::is_valid	declared	num_analysis_holonomic_atom_is_valid		fn is_valid (& self) -> bool
@@ -1106,6 +1123,7 @@ crate::kernels::lowrank::Gaussian::sample	declared	num_linear_gaussian_sample		f
 crate::kernels::lowrank::PivotedQr::rank	declared	num_linear_pivoted_qr_rank		fn rank (& self , tol : Option < f64 > ,) -> usize
 crate::kernels::lowrank::PivotedQr::solve	declared	num_linear_pivoted_qr_solve		fn solve (& self , b : & [f64] , tol : Option < f64 > ,) -> Result < Vec < f64 > , LowRankError >
 crate::kernels::lowrank::anderson	declared	num_linear_anderson		fn anderson (g : & dyn Fn (& [f64]) -> Vec < f64 > , start : & [f64] , window : usize , damping : f64 , tol : f64 , max_evaluations : usize ,) -> Result < FixedPoint , LowRankError >
+crate::kernels::lowrank::interpolative_decomposition	declared	num_linear_interpolative_decomposition		fn interpolative_decomposition (a : & Mat , max_rank : usize ,) -> Result < ColumnInterpolation , LowRankError >
 crate::kernels::lowrank::lobpcg	declared	num_linear_lobpcg		fn lobpcg (apply : & dyn Fn (& [f64] , & mut [f64]) , precondition : Preconditioner < '_ > , n : usize , k : usize , tol : f64 , max_iterations : usize , seed : u64 ,) -> Result < Eigenpairs , LowRankError >
 crate::kernels::lowrank::lobpcg_generalized	callback			fn lobpcg_generalized (apply : & dyn Fn (& [f64] , & mut [f64]) , mass : & dyn Fn (& [f64] , & mut [f64]) , precondition : Preconditioner < '_ > , n : usize , k : usize , options : LobpcgOptions ,) -> Result < Eigenpairs , LowRankError >
 crate::kernels::lowrank::qr_pivoted	declared	num_linear_pivoted_qr,num_lowrank_qr_pivoted		fn qr_pivoted (a : & Mat) -> Result < PivotedQr , LowRankError >
@@ -1547,6 +1565,12 @@ crate::kernels::real_roots::find_roots	declared	num_native_real_roots_find_roots
 crate::kernels::real_roots::isolate_real_roots	declared	num_native_real_roots_isolate_real_roots		fn isolate_real_roots (poly : & Polynomial , precision : f64 ,) -> Result < Vec < (f64 , f64) > , String >
 crate::kernels::real_roots::refine_root_bisection	declared	num_native_real_roots_refine_root_bisection		fn refine_root_bisection (poly : & Polynomial , interval : (f64 , f64) , tolerance : f64 ,) -> f64
 crate::kernels::real_roots::sturm_sequence	declared	num_native_real_roots_sturm_sequence		fn sturm_sequence (poly : & Polynomial) -> Vec < Polynomial >
+crate::kernels::reuse::PlanCache<K,V>::get_or_insert_with	callback			fn get_or_insert_with (& self , key : K , build : impl FnOnce () -> Arc < V > ,) -> Arc < V >
+crate::kernels::reuse::PlanCache<K,V>::new	generic			const fn new (capacity : usize) -> Self
+crate::kernels::reuse::ScratchPool<T>::checkout	generic			fn checkout (& self) -> Scratch < '_ , T >
+crate::kernels::reuse::ScratchPool<T>::new	generic			const fn new (max_idle : usize , max_buffer_bytes : usize ,) -> Self
+crate::kernels::reuse::fft_plan	opaque			fn fft_plan (length : usize , direction : FftDirection ,) -> Arc < dyn Fft < f64 > >
+crate::kernels::reuse::fft_scratch	opaque			fn fft_scratch () -> Scratch < 'static , Complex64 >
 crate::kernels::robust::bandwidth_scott	declared	num_robust_bandwidth_scott		fn bandwidth_scott (data : & [f64]) -> f64
 crate::kernels::robust::bandwidth_silverman	declared	num_robust_bandwidth_silverman		fn bandwidth_silverman (data : & [f64]) -> f64
 crate::kernels::robust::biweight_location	declared	num_robust_biweight_location		fn biweight_location (data : & [f64] , c : f64 ,) -> f64
@@ -1625,6 +1649,11 @@ crate::kernels::sde_ext::sample_poisson_with	declared	num_analysis_sde_sample_po
 crate::kernels::series::evaluate_power_series	declared	num_series_evaluate_power_series		fn evaluate_power_series (coefficients : & [f64] , center : f64 , x : f64 ,) -> f64
 crate::kernels::series::sum_range	declared	num_analysis_series_sum_range_scaled		fn sum_range (term : impl Fn (f64) -> f64 , from : i64 , to : i64 ,) -> f64
 crate::kernels::series::sum_to_infinity	declared	num_analysis_series_sum_infinity_scaled		fn sum_to_infinity (term : impl Fn (f64) -> f64 , from : i64 , tolerance : f64 , max_terms : usize ,) -> SeriesSum
+crate::kernels::signal::<reexport:484d8048a1f26a3c>	unresolved-reexport			framed :: PowerSpectrum
+crate::kernels::signal::<reexport:97ed79976dd6d20d>	unresolved-reexport			framed :: CrossSpectrum
+crate::kernels::signal::<reexport:d42ffc964ae0a904>	unresolved-reexport			framed :: SignalError
+crate::kernels::signal::analytic_envelope	declared	num_signal_analytic_envelope		fn analytic_envelope (samples : & [f64]) -> Result < Vec < f64 > , SignalError >
+crate::kernels::signal::analytic_signal	declared	num_signal_analytic_signal		fn analytic_signal (samples : & [f64]) -> Result < Vec < Complex64 > , SignalError >
 crate::kernels::signal::blackman_window	declared	num_signal_blackman_window		fn blackman_window (n : usize) -> Vec < f64 >
 crate::kernels::signal::butterworth_lowpass	declared	num_signal_butterworth_lowpass		fn butterworth_lowpass (order : usize , cutoff : f64 ,) -> (Vec < f64 > , Vec < f64 >)
 crate::kernels::signal::convolve	declared	num_signal_convolve		fn convolve (a : & [f64] , v : & [f64] ,) -> Vec < f64 >
@@ -1634,15 +1663,21 @@ crate::kernels::signal::dst	declared	num_signal_dst		fn dst (x : & [f64]) -> Vec
 crate::kernels::signal::fft	declared	num_analysis_signal_fft		fn fft (input : & mut [Complex < f64 >]) -> Vec < Complex < f64 > >
 crate::kernels::signal::hamming_window	declared	num_signal_hamming_window		fn hamming_window (n : usize) -> Vec < f64 >
 crate::kernels::signal::hann_window	declared	num_signal_hann_window		fn hann_window (n : usize) -> Vec < f64 >
+crate::kernels::signal::hilbert	declared	num_signal_hilbert		fn hilbert (samples : & [f64]) -> Result < Vec < f64 > , SignalError >
 crate::kernels::signal::idct	declared	num_signal_idct		fn idct (x : & [f64]) -> Vec < f64 >
 crate::kernels::signal::idst	declared	num_signal_idst		fn idst (x : & [f64]) -> Vec < f64 >
 crate::kernels::signal::ifft	declared	num_analysis_signal_ifft		fn ifft (input : & mut [Complex < f64 >]) -> Vec < Complex < f64 > >
+crate::kernels::signal::inverse_stft	declared	num_signal_inverse_stft		fn inverse_stft (frames : & [Vec < Complex64 >] , window : & [f64] , hop : usize ,) -> Result < Vec < f64 > , SignalError >
 crate::kernels::signal::kaiser_window	declared	num_signal_kaiser_window		fn kaiser_window (n : usize , beta : f64 ,) -> Vec < f64 >
 crate::kernels::signal::lfilter	declared	num_signal_lfilter		fn lfilter (b : & [f64] , a : & [f64] , x : & [f64] ,) -> Vec < f64 >
 crate::kernels::signal::savgol_coeffs	declared	num_signal_savgol_coeffs		fn savgol_coeffs (window_len : usize , poly_order : usize ,) -> Vec < f64 >
 crate::kernels::signal::savgol_filter	declared	num_signal_savgol_filter		fn savgol_filter (x : & [f64] , window_len : usize , poly_order : usize ,) -> Vec < f64 >
 crate::kernels::signal::spectrogram	declared	num_signal_spectrogram		fn spectrogram (x : & [f64] , window : & [f64] , hop : usize ,) -> Vec < Vec < f64 > >
 crate::kernels::signal::stft	declared	num_analysis_signal_stft		fn stft (x : & [f64] , window : & [f64] , hop : usize ,) -> Vec < Vec < Complex < f64 > > >
+crate::kernels::signal::upfirdn	declared	num_signal_upfirdn		fn upfirdn (samples : & [f64] , taps : & [f64] , up : usize , down : usize ,) -> Result < Vec < f64 > , SignalError >
+crate::kernels::signal::welch_cross_spectrum	declared	num_signal_welch_cross_spectrum		fn welch_cross_spectrum (x : & [f64] , y : & [f64] , window : & [f64] , hop : usize , sample_rate : f64 ,) -> Result < CrossSpectrum , SignalError >
+crate::kernels::signal::welch_psd	declared	num_signal_welch_psd		fn welch_psd (samples : & [f64] , window : & [f64] , hop : usize , sample_rate : f64 ,) -> Result < PowerSpectrum , SignalError >
+crate::kernels::signal::zoom_fft	declared	num_signal_zoom_fft		fn zoom_fft (samples : & [Complex64] , start : f64 , step : f64 , bins : usize ,) -> Result < Vec < Complex64 > , SignalError >
 crate::kernels::simplex_quadrature::integrate_simplex	declared	num_linear_integrate_simplex		fn integrate_simplex < F : Fn (& [f64]) -> f64 > (f : F , vertices : & [Vec < f64 >] , abs_tol : f64 , rel_tol : f64 , max_evals : usize ,) -> Result < Integral , SimplexError >
 crate::kernels::solve::solve_linear_system	declared	num_linear_solve_linear_system		fn solve_linear_system (a : & Matrix < f64 > , b : & [f64] ,) -> Result < LinearSolution , String >
 crate::kernels::solve::solve_nonlinear_system	declared	num_analysis_solve_nonlinear_scaled		fn solve_nonlinear_system (f : impl Fn (& [f64] , & mut [f64]) , start : & [f64] , tolerance : f64 , max_iter : usize ,) -> Result < Vec < f64 > , String >
@@ -1718,6 +1753,7 @@ crate::kernels::special::bernoulli_number	declared	num_special_bernoulli_number	
 crate::kernels::special::bernoulli_poly	declared	num_special_bernoulli_poly		fn bernoulli_poly (n : u32 , x : f64 ,) -> f64
 crate::kernels::special::bessel_i	declared	num_special_bessel_i		fn bessel_i (nu : f64 , x : f64 ,) -> f64
 crate::kernels::special::bessel_i0	declared	num_bessel_i0		fn bessel_i0 (x : f64) -> f64
+crate::kernels::special::bessel_i0e	declared	num_special_bessel_i0e		fn bessel_i0e (x : f64) -> f64
 crate::kernels::special::bessel_i1	declared	num_bessel_i1		fn bessel_i1 (x : f64) -> f64
 crate::kernels::special::bessel_j	declared	num_special_bessel_j		fn bessel_j (nu : f64 , x : f64 ,) -> f64
 crate::kernels::special::bessel_j0	declared	num_bessel_j0		fn bessel_j0 (x : f64) -> f64
@@ -1962,6 +1998,9 @@ crate::kernels::vector::reflect	declared	num_reflect		fn reflect (v : & [f64] , 
 crate::kernels::vector::scalar_mul	declared	num_scalar_mul		fn scalar_mul (v : & [f64] , s : f64 ,) -> Vec < f64 >
 crate::kernels::vector::vec_add	declared	num_vector_add		fn vec_add (v1 : & [f64] , v2 : & [f64] ,) -> Result < Vec < f64 > , String >
 crate::kernels::vector::vec_sub	declared	num_vector_sub		fn vec_sub (v1 : & [f64] , v2 : & [f64] ,) -> Result < Vec < f64 > , String >
+crate::kernels::wavelets::FrftPlan::matrix	associated-method			fn matrix (& self , a : f64 ,) -> Result < Vec < Complex64 > , String >
+crate::kernels::wavelets::FrftPlan::new	associated-method			fn new (n : usize) -> Result < Self , String >
+crate::kernels::wavelets::FrftPlan::transform	associated-method			fn transform (& self , x : & [Complex64] , a : f64 ,) -> Result < Vec < Complex64 > , String >
 crate::kernels::wavelets::Wavelet::analysis_high	declared	num_analysis_wavelets_method_analysis_high		fn analysis_high (self) -> Vec < f64 >
 crate::kernels::wavelets::Wavelet::analysis_low	declared	num_analysis_wavelets_method_analysis_low		fn analysis_low (self) -> Vec < f64 >
 crate::kernels::wavelets::Wavelet::coeff_len	declared	num_analysis_wavelets_method_coeff_len		fn coeff_len (self , n : usize , b : Boundary ,) -> usize
@@ -1970,7 +2009,7 @@ crate::kernels::wavelets::Wavelet::is_orthogonal	declared	num_analysis_wavelets_
 crate::kernels::wavelets::Wavelet::low_pass	declared	num_analysis_wavelets_method_low_pass		fn low_pass (self) -> Vec < f64 >
 crate::kernels::wavelets::Wavelet::synthesis_high	declared	num_analysis_wavelets_method_synthesis_high		fn synthesis_high (self) -> Vec < f64 >
 crate::kernels::wavelets::Wavelet::synthesis_low	declared	num_analysis_wavelets_method_synthesis_low		fn synthesis_low (self) -> Vec < f64 >
-crate::kernels::wavelets::Wavelet::taps	declared	num_analysis_wavelets_method_taps		fn taps (self) -> usize
+crate::kernels::wavelets::Wavelet::taps	declared	num_analysis_wavelets_method_taps		const fn taps (self) -> usize
 crate::kernels::wavelets::Wavelet::vanishing_moments	declared	num_analysis_wavelets_method_vanishing_moments		const fn vanishing_moments (self) -> (usize , usize)
 crate::kernels::wavelets::dwt	declared	num_analysis_wavelets_dwt		fn dwt (x : & [f64] , w : Wavelet ,) -> Result < (Vec < f64 > , Vec < f64 >) , WaveletError >
 crate::kernels::wavelets::dwt2	declared	num_analysis_wavelets_dwt2		fn dwt2 (x : & [f64] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >
@@ -1981,10 +2020,12 @@ crate::kernels::wavelets::frft_matrix	declared	num_wavelets_frft_matrix		fn frft
 crate::kernels::wavelets::idwt	declared	num_analysis_wavelets_idwt		fn idwt (a : & [f64] , d : & [f64] , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::idwt2	declared	num_analysis_wavelets_idwt2		fn idwt2 (c : & [f64] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::idwt_with	declared	num_analysis_wavelets_idwt_with		fn idwt_with (a : & [f64] , d : & [f64] , w : Wavelet , b : Boundary , n : usize ,) -> Result < Vec < f64 > , WaveletError >
+crate::kernels::wavelets::inverse_wavelet_packet	declared	num_wavelets_inverse_wavelet_packet		fn inverse_wavelet_packet (bands : & [Vec < f64 >] , wavelet : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::wavedec	declared	num_analysis_wavelets_wavedec		fn wavedec (x : & [f64] , w : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
 crate::kernels::wavelets::wavedec2	declared	num_analysis_wavelets_wavedec2		fn wavedec2 (x : & [f64] , rows : usize , cols : usize , w : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
 crate::kernels::wavelets::wavedec2_with	declared	num_analysis_wavelets_wavedec2_with		fn wavedec2_with (x : & [f64] , rows : usize , cols : usize , w : Wavelet , levels : usize , b : Boundary ,) -> Result < Vec < Vec < f64 > > , WaveletError >
 crate::kernels::wavelets::wavedec_with	declared	num_analysis_wavelets_wavedec_with		fn wavedec_with (x : & [f64] , w : Wavelet , levels : usize , b : Boundary ,) -> Result < Vec < Vec < f64 > > , WaveletError >
+crate::kernels::wavelets::wavelet_packet	declared	num_wavelets_wavelet_packet		fn wavelet_packet (signal : & [f64] , wavelet : Wavelet , levels : usize ,) -> Result < Vec < Vec < f64 > > , WaveletError >
 crate::kernels::wavelets::waverec	declared	num_analysis_wavelets_waverec		fn waverec (coeffs : & [Vec < f64 >] , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::waverec2	declared	num_analysis_wavelets_waverec2		fn waverec2 (coeffs : & [Vec < f64 >] , rows : usize , cols : usize , w : Wavelet ,) -> Result < Vec < f64 > , WaveletError >
 crate::kernels::wavelets::waverec2_with	declared	num_analysis_wavelets_waverec2_with		fn waverec2_with (coeffs : & [Vec < f64 >] , rows : usize , cols : usize , w : Wavelet , b : Boundary ,) -> Result < Vec < f64 > , WaveletError >

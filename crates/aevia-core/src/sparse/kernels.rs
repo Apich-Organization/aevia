@@ -744,7 +744,9 @@ pub(super) fn spmm_f64(
         }
         Some(())
     };
-    if a.vals.len().saturating_mul(n) >= PARALLEL_WORK {
+    if aevia_rssn::execution::should_split(a.vals.len().saturating_mul(n), PARALLEL_WORK)
+        && a.rows > block_rows
+    {
         out.par_chunks_mut(block_size)
             .enumerate()
             .try_for_each(block)
@@ -845,7 +847,9 @@ pub(super) fn bsr_spmm_f64(
         }
         Some(())
     };
-    if vals.len().saturating_mul(n) >= PARALLEL_WORK {
+    if aevia_rssn::execution::should_split(vals.len().saturating_mul(n), PARALLEL_WORK)
+        && block_rows > 1
+    {
         out.par_chunks_mut(block_size)
             .enumerate()
             .try_for_each(block_row)

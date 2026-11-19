@@ -6,7 +6,7 @@ RSSN associates symbolic variants of an expression in an equivalence graph. Nume
 
 A session owns its term arena, rules and units. Hash consing gives equal nodes the same identity within a store. Rewriting unions classes, updates analysis facts and rebuilds affected parent relationships. Extraction walks the classes reachable from the requested term and chooses a result under the active cost model. Shape, sort and dimension evidence travel with the operation where the graph has enough information to derive them.
 
-`Session::compute` prepares a private computation graph from the installed template, runs the reduction, and imports the answer. `compute_all` prepares on the owning thread, executes jobs on independent graphs, and finishes in input order. Sharing immutable configuration across workers keeps mutable graph state local. Cache identity includes the request and result-relevant configuration. Registration changes invalidate cached results tied to the old environment.
+`Session::compute` prepares a private computation graph from the installed template, runs the reduction, and imports the answer. `compute_all` snapshots its cache inputs at entry. Workers prepare and run requests on independent graphs in batches sized by the active Rayon pool. The owning thread imports answers in input order. Cache identity includes the request and result-relevant configuration. Registration changes invalidate cached results tied to the old environment.
 
 ## Scheduling rules and kernels
 
@@ -17,6 +17,10 @@ Budget and cancellation are distinct. Budget limits the work of a request. A can
 ## Numerical execution
 
 Typed kernels cover dense and sparse linear algebra, quadrature, ODE/SDE/PDE integration, statistics, FFT and simulation. Direct algorithms own their validation and result types. Their term rules and typed ABI adapters translate arguments and outcomes at the boundary.
+
+`Rssn_Numeric.coherence` computes one-sided Welch coherence. `Rssn_Numeric.wavelet_packet` decomposes both branches of the wavelet transform and returns an equal-width matrix of leaf bands. `Rssn_Numeric.inverse_wavelet_packet` reconstructs the input from those bands. The typed `num_signal_*` operators expose the analytic signal, Hilbert transform, amplitude envelope and zoom FFT through the native numerical ABI.
+
+CPU parallelism uses the active Rayon pool and workload thresholds. The global pool detects available CPUs and respects `RAYON_NUM_THREADS`. Inside Aevia's parallel language workers, RSSN uses the enclosing pool. `kernels::reuse` stores shared immutable plans and leases exclusive scratch buffers under retention limits. FFT routines share plans by length and direction and select CPU instructions at run time.
 
 Compiled evaluation can use a tape with scalar, batched, automatic-differentiation or interval execution. LIR provides typed registers, branches, calls and a fallback exit. Cranelift compiles eligible work behind the JIT feature. The optional device backend adds an explicit buffer and launch model. Numeric algorithms that need reproducibility should treat precision, reduction order and backend choice as part of the experiment.
 

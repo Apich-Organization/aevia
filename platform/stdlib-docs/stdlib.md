@@ -11836,6 +11836,15 @@ Useful for comparing variability across datasets with different means.
 
 - `cofactors(list(list(1, 2), list(3, 4)))` → `[[Int]]`
 
+## `numeric.coherence` (Stable)
+
+```aevia
+(Tensor<1, Real>, Tensor<1, Real>, Tensor<1, Real>, Int, Real) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`coherence(x, y, window, hop, sample_rate)`: one-sided magnitude-squared Welch coherence. Bins with zero power have zero coherence.
+
 ## `poly.collect` (Stable)
 
 ```aevia
@@ -17407,7 +17416,10 @@ Computes an `n`-step orbit of the 2D Henon map `(p0, n, a, b)` starting from `p0
 (Int) -> Tensor<2, Real>
 ```
 
-`hilbert(n)`: `n x n` Hilbert matrix `H_{ij} = 1 / (i + j + 1)`.
+`hilbert(n)` constructs the `n × n` Hilbert matrix.
+
+With zero-based row and column indices its entries are `H_{ij} = 1 / (i + j + 1)`.
+The entries are exact rational numbers.
 
 ### Examples
 
@@ -17998,6 +18010,21 @@ relative accuracy for small `p`.
 ```
 
 `inverse_laplace(F, s, t)`: inverse Laplace transform recovering `f(t)` from `F(s)`.
+
+## `numeric.inverse_wavelet_packet` (Stable)
+
+```aevia
+(Tensor<2, Real>, Symbol) -> Tensor<1, Real>
+(Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`inverse_wavelet_packet(bands, wavelet)`: reconstruct the signal from the equal-width leaf bands of `wavelet_packet`.
+
+Reconstructs a signal from the complete leaf level of [`wavelet_packet`].
+
+# Errors
+[`WaveletError::Shape`] when the number of bands is not a power of two,
+their lengths differ, or they are empty.
 
 ## `transforms.inverse_ztransform` (Stable)
 
@@ -22074,7 +22101,9 @@ with cubic Hermite interpolation of the stored solution. Requires
 `tau >= h`. Returns the grid and states.
 
 # Errors
-[`OdeError::Invalid`] if `tau < h` or `h <= 0`.
+[`OdeError::Invalid`] for invalid span, delay or step size, or
+[`OdeError::StepLimit`] when the requested grid cannot advance in
+floating-point time.
 
 ## `numerical_vector.num_analysis_dde_state_dependent` (Experimental)
 
@@ -26322,7 +26351,7 @@ Computes the one-dimensional discrete Fourier Transform.
 This function uses the `rustfft` library to perform the FFT.
 
 # Arguments
-* `input` - A mutable slice of complex numbers.
+* `input` - A slice of complex samples. Its contents are preserved.
 
 # Returns
 A vector of complex numbers representing the FFT of the input.
@@ -26354,7 +26383,7 @@ Native signal ifft; normalized dimensionless arguments unless the declared contr
 
 Computes the one-dimensional inverse discrete Fourier Transform.
 
-This is the unnormalised forward transform followed by the `1/n`
+This is the positive-sign transform followed by the `1/n`
 normalisation, so `ifft(fft(x)) == x` (up to round-off) for every length.
 
 # Arguments
@@ -27746,7 +27775,7 @@ Sample `i` of the boundary extension of `x` in mode `b`.
 
 `Periodic` has period `n`, `Symmetric` period `2n` (mirror with the edge sample repeated) and
 `Reflect` period `2(n-1)` (mirror without repeating it); `Zero` returns `0.0` outside
-`[0, n)`. For `n = 1` every mode returns `x[0]`, and an empty signal has no samples.
+`[0, n)`. For `n = 1` the nonzero extension modes return `x[0]`, and an empty signal has no samples.
 
 ## `numerical_vector.num_analysis_wavelets_idwt` (Experimental)
 
@@ -41174,6 +41203,26 @@ with the chosen [`TensorOrder`]; see [`multilinear_interpolation`] and
 # Errors
 As the underlying routine.
 
+## `numerical_matrix.num_linear_interpolative_decomposition` (Experimental)
+
+```aevia
+(rssn/native/array/v1, Int) -> { columns: Tensor<1, Int>, coefficients: Tensor<2, Float> }
+```
+
+Approximates a matrix using a subset of its original columns and dimensionless interpolation coefficients. Returns zero-based column indices and a coefficient matrix in the original column order.
+
+Computes a column interpolative decomposition by truncated pivoted QR.
+
+The actual rank is at most `max_rank`. The leading triangular block
+determines the interpolation coefficients; selected columns have identity
+coefficients. A zero-rank result has a zero-row coefficient matrix.
+
+# Errors
+
+Returns an error when the input has inconsistent storage or non-finite
+entries, the requested rank exceeds either extent, or the coefficients
+cannot be represented as finite floats.
+
 ## `numerical_matrix.num_linear_lagrange_interpolation` (Experimental)
 
 ```aevia
@@ -41617,7 +41666,9 @@ numerical rank. Column norms are downdated and recomputed when
 cancellation makes the downdate unreliable.
 
 # Errors
-[`LowRankError::Shape`] for inconsistent storage or non-finite entries.
+[`LowRankError::Shape`] for inconsistent storage or non-finite entries,
+and [`LowRankError::NoConvergence`] if the resulting factor exceeds the
+representable floating-point range.
 
 ## `numerical_matrix.num_linear_pivoted_qr_rank` (Experimental)
 
@@ -42136,7 +42187,8 @@ Unpreconditioned conjugate gradients for a symmetric positive-definite
 matrix, starting from zero.
 
 # Errors
-[`NumericError::NotSquare`] and [`NumericError::ShapeMismatch`].
+Returns shape and input-domain errors, or [`NumericError::NotPositiveDefinite`]
+when a search direction has nonpositive curvature or the iteration breaks down.
 
 ## `numerical_matrix.num_linear_sparse_native_cg_precond` (Experimental)
 
@@ -42620,7 +42672,9 @@ numerical rank. Column norms are downdated and recomputed when
 cancellation makes the downdate unreliable.
 
 # Errors
-[`LowRankError::Shape`] for inconsistent storage or non-finite entries.
+[`LowRankError::Shape`] for inconsistent storage or non-finite entries,
+and [`LowRankError::NoConvergence`] if the resulting factor exceeds the
+representable floating-point range.
 
 ## `numerical_vector.num_lp_norm` (Experimental)
 
@@ -45760,7 +45814,8 @@ column.
 Explicit checked native device adapter. Machine IR and buffers use normalized coordinates; use physical map for independently measured columns. Session, shape and bounded work are validated before native execution.
 
 The device to use when the caller names none: the first GPU, else the
-parallel CPU, else any.
+parallel CPU with at least two workers, else the sequential CPU or
+any registered device.
 
 ## `numerical_vector.num_native_device_registry_empty` (Experimental)
 
@@ -48443,7 +48498,7 @@ Gradient of `f` at `point`.
 (rssn/native/discrete/graph-graph/v1, Int, Int, Dyn<term>) -> Bool
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Appends one directed arc with a finite weight in the graph’s declared physical dimension. Loops and parallel arcs are retained.
 
 Adds a directed edge with a weight between two nodes.
 
@@ -48452,13 +48507,20 @@ Adds a directed edge with a weight between two nodes.
 * `v` - The index of the destination node.
 * `weight` - The weight of the edge.
 
+The caller must supply a valid destination and a weight in the domain
+of each algorithm it will call. [`Self::from_edges`] validates input.
+
+# Panics
+
+Panics when `u` is outside the vertex range.
+
 ## `numerical_vector.num_native_graph_adj` (Experimental)
 
 ```aevia
 (rssn/native/discrete/graph-graph/v1, Int) -> Dyn<term>
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Returns one vertex’s outgoing endpoints and matching coherent weights, in insertion order.
 
 Returns an immutable slice of the neighbors and edge weights for a given node.
 
@@ -48468,17 +48530,29 @@ Returns an immutable slice of the neighbors and edge weights for a given node.
 # Returns
 A slice of `(usize, f64)` tuples, where each tuple is `(neighbor_index, edge_weight)`.
 
+## `numerical_vector.num_native_graph_bellman_ford` (Experimental)
+
+```aevia
+(rssn/native/discrete/graph-graph/v1, Int) -> { distances: Tensor<1, Dyn<term>>, previous: Tensor<1, None | Some(Int)> }
+```
+
+Returns shortest distances and optional predecessors from one source. Distances retain the graph’s edge units and are infinite for unreachable vertices. A reachable negative cycle is rejected.
+
 ## `numerical_vector.num_native_graph_bfs` (Experimental)
 
 ```aevia
 (rssn/native/discrete/graph-graph/v1, Int) -> Tensor<1, Int>
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Returns unweighted distance by vertex from the start vertex. Unreachable vertices have the native usize maximum sentinel.
 
 Performs a Breadth-First Search (BFS) starting from a node.
 Returns the unweighted shortest path distances from the start node to all other reachable nodes.
 Returns `usize::MAX` for unreachable nodes.
+
+# Panics
+
+Panics on an out-of-range start vertex or encountered edge endpoint.
 
 ## `numerical_vector.num_native_graph_canonical_code` (Experimental)
 
@@ -48491,8 +48565,8 @@ Checked native method over explicitly normalized values. Session/kind, shape and
 The canonical code: the `n` vertex colours in canonical order,
 followed by the `n * n` adjacency matrix rows in canonical order.
 
-Two graphs are isomorphic if and only if their canonical codes are
-equal, provided both searches were exact.
+For graphs of the same directedness, equality of exact canonical codes
+is equivalent to isomorphism.
 
 ## `numerical_vector.num_native_graph_canonical_generators` (Experimental)
 
@@ -48547,10 +48621,10 @@ whether the search was exact (see the module docs for the fallback).
 
 # Complexity
 
-A node costs one equitable refinement, `O(n + m)` (times the number of
-rounds, at most `n`), and a leaf costs one code, `O(n^2)`. The number of
-nodes is that of the individualisation tree after automorphism pruning;
-for a graph whose colouring is discrete it is one.
+Each node refines the partition by sorting vertex signatures until it
+becomes equitable. Comparing a leaf takes up to `O(n^2)`. The search
+visits the individualisation tree after automorphism pruning, with just
+one node for a graph whose colouring is already discrete.
 
 ## `numerical_vector.num_native_graph_canonical_matrix` (Experimental)
 
@@ -48726,12 +48800,21 @@ The number of vertices.
 (rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Labels an undirected graph represented by symmetric arcs. For asymmetric arcs, use the weakly or strongly connected components operator.
 
 Finds the connected components of an undirected graph stored as symmetric arcs.
 
 For directed reachability in both directions, use [`strongly_connected_components`].
+For weak connectivity of asymmetric arcs, use [`weakly_connected_components`].
 Returns a vector where each element corresponds to a node and contains its component ID.
+
+## `numerical_vector.num_native_graph_dag_shortest_paths` (Experimental)
+
+```aevia
+(rssn/native/discrete/graph-graph/v1, Int) -> { distances: Tensor<1, Dyn<term>>, previous: Tensor<1, None | Some(Int)> }
+```
+
+Returns shortest distances and optional predecessors in linear time for a directed acyclic graph. Distances retain the graph’s edge units. Negative weights are supported and all directed cycles are rejected.
 
 ## `numerical_vector.num_native_graph_dijkstra` (Experimental)
 
@@ -48756,19 +48839,39 @@ A tuple containing:
   - A vector of distances from the start node to each node.
   - A vector of predecessors to reconstruct the shortest paths.
 
+Unreachable vertices have infinite distance and no predecessor. When
+costs tie, the queue visits vertices in increasing vertex order.
+
+# Panics
+
+Panics on an out-of-range start vertex or encountered edge endpoint.
+
 ## `numerical_vector.num_native_graph_floyd_warshall` (Experimental)
 
 ```aevia
 (rssn/native/discrete/graph-graph/v1) -> Dyn<term>
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Returns a row-major all-pairs distance matrix in the graph’s edge units. Unreachable vertices have infinite distance. Negative cycles are rejected.
 
-Solves the All-Pairs Shortest Path problem using the Floyd-Warshall algorithm.
+Solves the all-pairs shortest path problem using Floyd–Warshall.
 
-# Returns
-A flattened vector of size `n * n` representing the distance matrix.
-`dist[i * n + j]` is the distance from i to j.
+The result is a row-major distance matrix. Element `i * n + j` is the
+distance from `i` to `j`, or positive infinity when `j` is unreachable.
+A negative diagonal entry detects a negative cycle, in which case
+distances that can traverse a cycle are undefined.
+
+# Panics
+
+Panics on an out-of-range edge endpoint or a matrix too large to allocate.
+
+## `numerical_vector.num_native_graph_from_edges` (Experimental)
+
+```aevia
+(Int, Tensor<2, Int>, Tensor<1, Float[_]>) -> rssn/native/discrete/graph-graph/v1
+```
+
+Constructs a directed graph from a two-column endpoint matrix and an equally long weight vector. The vector declares coherent edge units. Loops and parallel arcs are retained in input order.
 
 ## `numerical_vector.num_native_graph_isomorphic` (Experimental)
 
@@ -48784,17 +48887,27 @@ Returns `None` when the budget ran out before either search finished: the
 graphs then remain undecided. A `Some(false)` answer may also be reached
 from the refinement certificate alone, which is cheaper.
 
+## `numerical_vector.num_native_graph_maximum_flow` (Experimental)
+
+```aevia
+(rssn/native/discrete/graph-graph/v1, Int, Int) -> { value: Dyn<term>, source_side: Tensor<1, Bool> }
+```
+
+Computes a maximum source-to-sink flow and returns its value in capacity units and a Boolean mask for the source side of a minimum cut. Distinct terminals and nonnegative capacities are required.
+
 ## `numerical_vector.num_native_graph_minimum_spanning_tree` (Experimental)
 
 ```aevia
 (rssn/native/discrete/graph-graph/v1) -> rssn/native/discrete/graph-graph/v1
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Computes a minimum spanning forest with Prim’s algorithm. The input contains symmetric, equally weighted arcs and the result retains their physical dimension.
 
-Computes the Minimum Spanning Tree (MST) using Prim's algorithm.
-Returns a Graph representing the MST.
-Assumes graph is connected (or computes MST forest).
+Computes a minimum spanning forest using Prim's algorithm.
+
+The input is an undirected graph represented by equally weighted arcs
+in both directions. Every selected arc is included in both directions
+in the result. Disconnected vertices and components are retained.
 
 ## `numerical_vector.num_native_graph_new` (Experimental)
 
@@ -48814,13 +48927,23 @@ The graph is initialized with no edges.
 # Returns
 A new `Graph` instance.
 
+## `numerical_vector.num_native_graph_num_edges` (Experimental)
+
+```aevia
+(rssn/native/discrete/graph-graph/v1) -> Int
+```
+
+Returns the number of directed arcs, counting loops and parallel arcs.
+
+Returns the number of directed arcs, including loops and parallel arcs.
+
 ## `numerical_vector.num_native_graph_num_nodes` (Experimental)
 
 ```aevia
 (rssn/native/discrete/graph-graph/v1) -> Int
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Returns the number of vertices in the weighted graph.
 
 Returns the total number of nodes in the graph.
 
@@ -48830,7 +48953,7 @@ Returns the total number of nodes in the graph.
 (rssn/native/discrete/graph-graph/v1, Float, Float, Int) -> Tensor<1, Float>
 ```
 
-Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
+Returns dimensionless PageRank scores. Each outgoing arc counts equally and dangling mass is distributed uniformly. Work is bounded by the graph size and iteration count.
 
 Computes the `PageRank` of the nodes in the graph.
 
@@ -48841,7 +48964,12 @@ Computes the `PageRank` of the nodes in the graph.
 * `max_iter` - The maximum number of iterations.
 
 # Returns
-A vector of scores summing to 1.
+A vector of scores summing to 1, or an empty vector for an empty graph.
+Parallel arcs each contribute an equal share, and weights are ignored.
+
+# Panics
+
+Panics on an encountered out-of-range edge endpoint.
 
 ## `numerical_vector.num_native_graph_permutation_apply` (Experimental)
 
@@ -49052,8 +49180,7 @@ Checks the result against a graph: the cells partition the vertices,
 each cell has one colour, and each cell is equitable — every vertex of
 a cell has the same neighbour counts (per label) into every cell.
 
-Returns `false` when `graph` is not the graph the partition came from
-(a different number of vertices, or a vertex out of range).
+Returns `false` when the stated partition conditions fail for `graph`.
 
 ## `numerical_vector.num_native_graph_search_budget_for_size` (Experimental)
 
@@ -49088,6 +49215,30 @@ The maximum number of search nodes.
 Checked native method over explicitly normalized values. Session/kind, shape and work/allocation bounds are enforced.
 
 A budget of `max_nodes` search nodes.
+
+## `numerical_vector.num_native_graph_strongly_connected_components` (Experimental)
+
+```aevia
+(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>
+```
+
+Returns a dense strongly connected component label per vertex, numbered in topological order. Weights are ignored.
+
+## `numerical_vector.num_native_graph_topological_sort` (Experimental)
+
+```aevia
+(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>
+```
+
+Returns a vertex ordering in which every source precedes its targets. A directed cycle is rejected and weights are ignored.
+
+## `numerical_vector.num_native_graph_weakly_connected_components` (Experimental)
+
+```aevia
+(rssn/native/discrete/graph-graph/v1) -> Tensor<1, Int>
+```
+
+Returns a dense component label per vertex after ignoring arc directions and weights. Components are ordered by their smallest vertex.
 
 ## `numerical_vector.num_native_graph_wl_equivalent` (Experimental)
 
@@ -61137,6 +61288,33 @@ Logistic sigmoid.
 
 Computes the logistic (sigmoid) function σ(x) = 1 / (1 + e^(-x)).
 
+## `numerical_vector.num_signal_analytic_envelope` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Returns the amplitude envelope `hypot(x, hilbert(x))` of real samples.
+
+# Errors
+Returns an error for non-finite samples or an unrepresentable envelope.
+
+## `numerical_vector.num_signal_analytic_signal` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>) -> Tensor<1, Complex[_]>
+```
+
+Forms the complex analytic signal of real periodic samples.
+
+The real part is the original signal and the imaginary part is its
+discrete Hilbert transform. Positive-frequency bins are doubled and
+negative bins removed. DC and the Nyquist bin of an even-length signal
+are preserved. An empty input gives an empty result.
+
+# Errors
+Returns an error for non-finite samples or an unrepresentable transform.
+
 ## `numerical_vector.num_signal_blackman_window` (Experimental)
 
 ```aevia
@@ -61226,7 +61404,7 @@ let res = cross_correlation(&a, &v);
 (Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
 ```
 
-Orthonormal Type-II Discrete Cosine Transform (DCT-II).
+Orthonormal Type-II Discrete Cosine Transform (DCT-II) in `O(n log n)`.
 
 ## `numerical_vector.num_signal_dst` (Experimental)
 
@@ -61234,7 +61412,7 @@ Orthonormal Type-II Discrete Cosine Transform (DCT-II).
 (Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
 ```
 
-Orthonormal Type-II Discrete Sine Transform (DST-II).
+Orthonormal Type-II Discrete Sine Transform (DST-II) in `O(n log n)`.
 
 ## `numerical_vector.num_signal_hamming_window` (Experimental)
 
@@ -61258,6 +61436,20 @@ Generates a Hann window of length `n`.
 # Arguments
 * `n` - The number of points in the output window.
 
+## `numerical_vector.num_signal_hilbert` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>) -> Tensor<1, Float[_]>
+```
+
+Returns the discrete Hilbert transform of real periodic samples.
+
+A positive-frequency cosine becomes a sine, and DC and Nyquist components
+contribute zero. See [`analytic_signal`] for the boundary convention.
+
+# Errors
+Returns an error for non-finite samples or an unrepresentable transform.
+
 ## `numerical_vector.num_signal_idct` (Experimental)
 
 ```aevia
@@ -61274,13 +61466,36 @@ Inverse of [`dct`] (orthonormal Type-III DCT).
 
 Inverse of [`dst`] (orthonormal Type-III DST).
 
+## `numerical_vector.num_signal_inverse_stft` (Experimental)
+
+```aevia
+(Tensor<2, Complex[_]>, Tensor<1, Float[_]>, Int) -> Tensor<1, Float[_]>
+```
+
+Reconstructs a real signal from full [`stft`] spectra.
+
+Applies the same window on synthesis and divides each sample by its sum of
+squared window weights. Returns the interval covered by the frames, of
+length `(frames.len() - 1) * hop + window.len()`. The imaginary part after
+the inverse transform is discarded. Use a window and hop that have
+nonzero overlap weights across that interval, or pad the analysis when
+endpoint samples must be preserved.
+
+# Errors
+
+Returns an error for invalid parameters, inconsistent or non-finite frames,
+uncovered samples, output size overflow or non-finite reconstruction.
+
 ## `numerical_vector.num_signal_kaiser_window` (Experimental)
 
 ```aevia
 (Int, Float) -> Tensor<1, Float>
 ```
 
-Generates a Kaiser window of length `n` with shape parameter `beta`.
+Generates a symmetric Kaiser window with shape parameter `beta`.
+
+Either sign of a finite `beta` produces the same coefficients. For
+`n > 1`, a non-finite shape parameter returns NaNs.
 
 ## `numerical_vector.num_signal_lfilter` (Experimental)
 
@@ -61313,6 +61528,87 @@ Applies a Savitzky-Golay smoothing filter of odd `window_len` and degree `poly_o
 ```
 
 Power spectrogram `|STFT|^2` of `x` with `window` and `hop`.
+
+## `numerical_vector.num_signal_upfirdn` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Int, Int) -> Tensor<1, Float[_]>
+```
+
+Upsamples, applies a finite impulse response filter and downsamples.
+
+This implements zero insertion by `up`, linear convolution with `taps`,
+then retention of every `down`th sample starting at index zero. It works
+directly on filter phases without allocating the upsampled signal or
+multiplying by its inserted zeros. The boundaries are zero extended. The
+supplied taps determine gain, passband, alias rejection and delay.
+
+If either input slice is empty the result is empty. Otherwise the output
+length is `floor(((samples.len() - 1) * up + taps.len() - 1) / down) + 1`.
+
+# Errors
+
+Returns an error for a zero factor, non-finite data, non-finite output
+or an output extent that overflows or cannot be allocated.
+
+## `numerical_vector.num_signal_welch_cross_spectrum` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Tensor<1, Float[_]>, Int, Float[_]) -> { frequencies: Tensor<1, Float[_]>, density: Tensor<1, Complex[_]>, coherence: Tensor<1, Float> }
+```
+
+Estimates one-sided cross-spectral density and magnitude-squared coherence.
+
+Applies the same complete-frame Welch convention as [`welch_psd`] to
+both inputs. For the Fourier bins `X` and `Y`, it averages `conj(X) * Y`
+across frames to obtain the cross-spectral density `Pxy`, and computes
+`abs(Pxy)^2 / (Pxx * Pyy)`. Auto-spectra and cross-spectra share the
+same window energy and one-sided scaling.
+
+# Errors
+Returns an error on unequal lengths or on the invalid input domains
+described by [`welch_psd`].
+
+## `numerical_vector.num_signal_welch_psd` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, Tensor<1, Float[_]>, Int, Float[_]) -> { frequencies: Tensor<1, Float[_]>, density: Tensor<1, Float[_]> }
+```
+
+Estimates the one-sided power spectral density of real samples by Welch's method.
+
+Averages the periodograms of complete windowed frames, whose starts are
+`hop` samples apart. Pass the window coefficients explicitly, for example
+with [`hann_window`]. The transform uses the window length and
+performs no detrending. Frequencies have the same unit as `sample_rate`.
+Only bins with a negative-frequency partner are doubled. Multiplying each
+bin by the frequency spacing and summing gives the mean window-weighted
+frame power. Trailing samples that do not complete a frame are ignored.
+
+# Errors
+
+Returns an error for an invalid window, hop or sample rate, insufficient
+samples, non-finite data in a complete frame or non-finite computed power.
+
+## `numerical_vector.num_signal_zoom_fft` (Experimental)
+
+```aevia
+(Tensor<1, Complex[_]>, Float, Float, Int) -> Tensor<1, Complex[_]>
+```
+
+Computes arbitrary equally spaced Fourier samples using a chirp convolution.
+
+Bin `k` is `sum_n x[n] exp(-2 pi i (start + k * step) n)` with `start`
+and `step` measured in cycles per input sample. Frequencies are periodic
+modulo one. This is the unit-circle chirp z-transform. It can resolve a
+sub-band without evaluating the rest of the spectrum. A zero step repeats
+one frequency. Zero bins give an empty result and an empty input gives
+`bins` zeros. Time and storage scale with the input and output extents,
+using an FFT of length `next_power_of_two(x.len() + bins - 1)`.
+
+# Errors
+Returns an error for non-finite frequencies or input, unrepresentable
+intermediate arithmetic, or an output or work extent that is too large.
 
 ## `numerical_special.num_sinc` (Experimental)
 
@@ -61602,6 +61898,17 @@ Computes the n-th Bernoulli polynomial `B_n(x)`.
 ```
 
 Modified Bessel function of the first kind `I_ν(x)`, by `(1/π)∫_0^π e^{x cos θ} cos νθ dθ - (sin νπ/π)∫_0^∞ e^{-x cosh t - νt} dt` (`x < 0` for integer orders by parity).
+
+## `numerical_special.num_special_bessel_i0e` (Experimental)
+
+```aevia
+(Float) -> Float
+```
+
+Exponentially scaled modified Bessel I₀, `exp(-|x|) I₀(x)`.
+
+The scaled form stays finite when the unscaled function overflows.
+Both infinities map to zero and NaN is propagated.
 
 ## `numerical_special.num_special_bessel_j` (Experimental)
 
@@ -63076,22 +63383,48 @@ Computes the 2D Voronoi diagram of `points` as the dual of [`delaunay_2d`].
 
 Discrete fractional Fourier transform of order `a` of the complex signal `x`.
 
-# Errors
-As [`frft_matrix`].
-
 ## `numerical_vector.num_wavelets_frft_matrix` (Experimental)
 
 ```aevia
 (Int, Float) -> Tensor<1, Complex>
 ```
 
-The `n x n` matrix of the discrete fractional Fourier transform of order `a` (row-major).
+The row-major matrix of the discrete fractional Fourier transform of order `a`.
 
-`a = 1` is the unitary DFT; the matrix is unitary and `frft_matrix(n, a) * frft_matrix(n, b)
-= frft_matrix(n, a + b)`.
+`a = 1` is the unitary DFT. The unitary transforms compose by addition
+of their orders. For repeated orders, construct one [`FrftPlan`].
 
 # Errors
-`Err` for `n < 2` or when the eigensolver fails.
+Returns an error for `n < 2`, a non-finite order, an unrepresentable matrix
+size or an eigensolver failure.
+
+## `numerical_vector.num_wavelets_inverse_wavelet_packet` (Experimental)
+
+```aevia
+(Tensor<2, Float[_]>, String) -> Tensor<1, Float[_]>
+```
+
+Reconstructs a signal from the complete leaf level of [`wavelet_packet`].
+
+# Errors
+[`WaveletError::Shape`] when the number of bands is not a power of two,
+their lengths differ, or they are empty.
+
+## `numerical_vector.num_wavelets_wavelet_packet` (Experimental)
+
+```aevia
+(Tensor<1, Float[_]>, String, Int) -> Tensor<2, Float[_]>
+```
+
+Decomposes both the low and high branches of a periodic wavelet transform.
+
+Returns `2^levels` equally sized leaf bands in tree order, with each low
+child before its high sibling. For example, level two returns `LL`, `LH`,
+`HL`, `HH`. Level zero returns one band containing the input.
+
+# Errors
+[`WaveletError::TooManyLevels`] when the signal is empty or its length is
+incompatible with the requested depth.
 
 ## `numerical_stats.num_z_scores` (Experimental)
 
@@ -68926,6 +69259,25 @@ shorter than the filter at some level.
 
 - `wavedec(list(1, 1, 1, 1, 1, 1, 1, 1), haar, 2)` → `[[Float]]~`
 - `wavedec(list(3, 1, 4, 1, 5, 9, 2, 6), db2, 1)` → `[[Float]]`
+
+## `numeric.wavelet_packet` (Stable)
+
+```aevia
+(Tensor<1, Real>, Symbol, Int) -> Tensor<2, Real>
+(Dyn<term>, Dyn<term>, Dyn<term>) -> Dyn<term>
+```
+
+`wavelet_packet(x, wavelet, levels)`: equal-width leaf bands of a complete periodic wavelet packet tree, with each low child before its high sibling.
+
+Decomposes both the low and high branches of a periodic wavelet transform.
+
+Returns `2^levels` equally sized leaf bands in tree order, with each low
+child before its high sibling. For example, level two returns `LL`, `LH`,
+`HL`, `HH`. Level zero returns one band containing the input.
+
+# Errors
+[`WaveletError::TooManyLevels`] when the signal is empty or its length is
+incompatible with the requested depth.
 
 ## `numeric.waverec` (Stable)
 

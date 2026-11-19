@@ -47,6 +47,7 @@ pub mod codegen;
 pub mod device;
 pub mod domains;
 pub mod error;
+pub use rssn::execution;
 #[cfg(feature = "jit")]
 pub mod jit;
 pub mod kernel;

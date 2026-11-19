@@ -10,9 +10,9 @@
 //! text alone — the right choice for a buffer that is not on disk. For a saved
 //! file, [`Analysis::from_path`] loads the file **and its import graph**
 //! through `aevia_core::driver`, so imported qualified names, `open`ed names
-//! and their definitions resolve instead of being reported as unbound. The
-//! multi-module answer is only used while the editor's text still matches the
-//! file on disk: a stale disk answer is worse than the single-file fallback.
+//! and their definitions resolve. Unsaved buffers are loaded as source
+//! overlays. A cached program answers queries for the exact source snapshot
+//! it compiled.
 //!
 //! Nothing here knows what a client is. There is no request vocabulary, no
 //! numeric severity, no JSON: a query takes a byte offset and returns a Rust
@@ -77,6 +77,7 @@ use aevia_types::Type;
 use aevia_types::builtins;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::Export;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -89,11 +90,80 @@ use unicode_ident::is_xid_continue;
 enum Source {
     /// The document's text alone — the unsaved-buffer fallback.
     Single(aevia_core::Compilation),
-    /// The file and everything it imports, loaded from disk.
+    /// The file and everything it imports, loaded from disk and overlays.
     ///
     /// Shared with [`crate::AnalysisCache`] so a cached program can be answered
     /// from without copying it.
-    Program(Rc<Program>),
+    Program(Rc<Program>, Rc<ProgramQueryIndex>),
+}
+
+type ModuleImport = (String, usize, Option<Vec<String>>);
+
+#[derive(Default)]
+struct ModuleQueries {
+    occurrences: OnceCell<occurrence::Occurrences>,
+    definitions: OnceCell<HashMap<String, Span>>,
+    imports: OnceCell<Vec<ModuleImport>>,
+    lines: OnceCell<LineIndex>,
+}
+
+impl ModuleQueries {
+    fn occurrences(
+        &self,
+        module: Option<&Module>,
+        text: &str,
+    ) -> &occurrence::Occurrences {
+        self.occurrences.get_or_init(|| {
+            module.map_or_else(occurrence::Occurrences::default, |module| {
+                occurrence::collect(module, text)
+            })
+        })
+    }
+
+    fn definitions(
+        &self,
+        module: Option<&Module>,
+        text: &str,
+    ) -> &HashMap<String, Span> {
+        self.definitions
+            .get_or_init(|| module.map_or_else(HashMap::new, |module| declarations(module, text)))
+    }
+}
+
+/// Query tables belong to one immutable program snapshot. Per-module syntax
+/// tables are walked on first use so a local query need not scan dependencies.
+pub(crate) struct ProgramQueryIndex {
+    by_file: HashMap<FileId, usize>,
+    modules: Vec<Rc<ModuleQueries>>,
+}
+
+impl ProgramQueryIndex {
+    pub(crate) fn new(program: &Program) -> Self {
+        let mut by_file = HashMap::with_capacity(program.modules.len());
+        let mut modules = Vec::with_capacity(program.modules.len());
+        for (index, module) in program.modules.iter().enumerate() {
+            by_file.entry(module.file).or_insert(index);
+            modules.push(Rc::new(ModuleQueries::default()));
+        }
+        Self { by_file, modules }
+    }
+
+    fn imports<'a>(
+        &self,
+        queries: &'a ModuleQueries,
+        module: &LoadedModule,
+    ) -> &'a [ModuleImport] {
+        queries.imports.get_or_init(|| {
+            module
+                .imports
+                .iter()
+                .filter_map(|edge| {
+                    let index = *self.by_file.get(&edge.file)?;
+                    Some((edge.prefix.clone(), index, edge.names.clone()))
+                })
+                .collect()
+        })
+    }
 }
 
 /// One compiled document, ready to answer questions.
@@ -103,12 +173,7 @@ pub struct Analysis<'a> {
     /// The file the compiler gave this document. A diagnostic in any other
     /// file is not this document's to report.
     file: FileId,
-    occurrences: occurrence::Occurrences,
-    /// Where each name declared by the module is written.
-    definitions: HashMap<String, Span>,
-    /// In program mode, one declaration table per loaded module (in the
-    /// program's dependency order), for jumping into an imported file.
-    module_definitions: Vec<HashMap<String, Span>>,
+    queries: Rc<ModuleQueries>,
     /// In program mode, every prefix a module's names are reachable under
     /// (`A`, an alias, or the empty string for an `open`) to its index.
     prefixes: HashMap<String, usize>,
@@ -124,24 +189,11 @@ impl<'a> Analysis<'a> {
     pub fn new(document: &'a Document) -> Self {
         let compilation = compile(document.name(), document.text());
         let file = compilation.module.as_ref().map_or(0, |module| module.file);
-        let occurrences = compilation
-            .module
-            .as_ref()
-            .map_or_else(occurrence::Occurrences::default, |module| {
-                occurrence::collect(module, document.text())
-            });
-        let definitions = compilation
-            .module
-            .as_ref()
-            .map_or_else(HashMap::new, |module| declarations(module, document.text()));
-        let module_definitions = vec![definitions.clone()];
         Self {
             document,
             source: Source::Single(compilation),
             file,
-            occurrences,
-            definitions,
-            module_definitions,
+            queries: Rc::new(ModuleQueries::default()),
             prefixes: HashMap::new(),
         }
     }
@@ -188,38 +240,38 @@ impl<'a> Analysis<'a> {
         document: &'a Document,
         program: Rc<Program>,
     ) -> Self {
+        Self::from_indexed_program(document, program, None)
+    }
+
+    pub(crate) fn from_indexed_program(
+        document: &'a Document,
+        program: Rc<Program>,
+        index: Option<Rc<ProgramQueryIndex>>,
+    ) -> Self {
         let Some(entry) = program.entry() else {
             return Self::new(document);
         };
-        let entry_text = program
-            .sources
-            .file(entry.file)
-            .map_or("", |source| source.text.as_str());
-        if entry_text != document.text() {
+        let Some(entry_source) = program.sources.file(entry.file) else {
+            return Self::new(document);
+        };
+        if entry_source.text != document.text() {
             return Self::new(document);
         }
         let file = entry.file;
-        let occurrences = occurrence::collect(&entry.module, document.text());
-        let definitions = declarations(&entry.module, document.text());
-        let module_definitions = program
-            .modules
-            .iter()
-            .map(|module| {
-                let text = program
-                    .sources
-                    .file(module.file)
-                    .map_or("", |file| file.text.as_str());
-                declarations(&module.module, text)
-            })
-            .collect();
-        let prefixes = prefixes(&program, file);
+        let index = index.unwrap_or_else(|| Rc::new(ProgramQueryIndex::new(&program)));
+        let Some(queries) = index.modules.last().cloned() else {
+            return Self::new(document);
+        };
+        let prefixes = prefixes(
+            entry,
+            program.modules.len().saturating_sub(1),
+            &index.by_file,
+        );
         Self {
             document,
-            source: Source::Program(program),
+            source: Source::Program(program, index),
             file,
-            occurrences,
-            definitions,
-            module_definitions,
+            queries,
             prefixes,
         }
     }
@@ -228,7 +280,7 @@ impl<'a> Analysis<'a> {
     /// the document alone.
     #[must_use]
     pub const fn is_multi_module(&self) -> bool {
-        matches!(self.source, Source::Program(_))
+        matches!(self.source, Source::Program(..))
     }
 
     /// The document being analysed.
@@ -248,7 +300,7 @@ impl<'a> Analysis<'a> {
     fn module(&self) -> Option<&Module> {
         match &self.source {
             | Source::Single(compilation) => compilation.module.as_ref(),
-            | Source::Program(program) => program.entry().map(|entry| &entry.module),
+            | Source::Program(program, _) => program.entry().map(|entry| &entry.module),
         }
     }
 
@@ -265,7 +317,7 @@ impl<'a> Analysis<'a> {
             | Source::Single(compilation) => &compilation.checked,
             // `from_path` only builds the program variant when it has an
             // entry module, and the loader keeps the entry last.
-            | Source::Program(program) => {
+            | Source::Program(program, _) => {
                 &program
                     .modules
                     .last()
@@ -279,7 +331,7 @@ impl<'a> Analysis<'a> {
     fn sources(&self) -> &SourceMap {
         match &self.source {
             | Source::Single(compilation) => &compilation.sources,
-            | Source::Program(program) => &program.sources,
+            | Source::Program(program, _) => &program.sources,
         }
     }
 
@@ -287,7 +339,7 @@ impl<'a> Analysis<'a> {
     fn compiler_diagnostics(&self) -> &Diagnostics {
         match &self.source {
             | Source::Single(compilation) => &compilation.diagnostics,
-            | Source::Program(program) => &program.diagnostics,
+            | Source::Program(program, _) => &program.diagnostics,
         }
     }
 
@@ -295,8 +347,18 @@ impl<'a> Analysis<'a> {
     fn program(&self) -> Option<&Program> {
         match &self.source {
             | Source::Single(_) => None,
-            | Source::Program(program) => Some(program),
+            | Source::Program(program, _) => Some(program),
         }
+    }
+
+    fn occurrences(&self) -> &occurrence::Occurrences {
+        self.queries
+            .occurrences(self.module(), self.document.text())
+    }
+
+    fn definitions(&self) -> &HashMap<String, Span> {
+        self.queries
+            .definitions(self.module(), self.document.text())
     }
 
     /// The declaration table of loaded module `index`.
@@ -304,7 +366,19 @@ impl<'a> Analysis<'a> {
         &self,
         index: usize,
     ) -> Option<&HashMap<String, Span>> {
-        self.module_definitions.get(index)
+        match &self.source {
+            | Source::Single(_) => (index == 0).then(|| self.definitions()),
+            | Source::Program(program, queries) => {
+                let module = program.modules.get(index)?;
+                let source = program.sources.file(module.file)?;
+                Some(
+                    queries
+                        .modules
+                        .get(index)?
+                        .definitions(Some(&module.module), &source.text),
+                )
+            },
+        }
     }
 
     /// Resolves a dotted name such as `Math.sqrt` to the module that exports
@@ -333,11 +407,10 @@ impl<'a> Analysis<'a> {
         &self,
         name: &str,
     ) -> Option<(usize, &Export)> {
-        let program = self.program()?;
-        let entry = program
-            .modules
-            .iter()
-            .find(|module| module.file == self.file)?;
+        let Source::Program(program, index) = &self.source else {
+            return None;
+        };
+        let entry = program.entry()?;
         for edge in entry.imports.iter().rev() {
             if !edge.prefix.is_empty()
                 || edge
@@ -347,11 +420,8 @@ impl<'a> Analysis<'a> {
             {
                 continue;
             }
-            let (index, module) = program
-                .modules
-                .iter()
-                .enumerate()
-                .find(|(_, module)| module.file == edge.file)?;
+            let index = *index.by_file.get(&edge.file)?;
+            let module = program.modules.get(index)?;
             if let Some(export) = module.checked.exports.get(name) {
                 return Some((index, export));
             }
@@ -463,7 +533,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<Hover> {
-        if let Some(occurrence) = occurrence::at(&self.occurrences, offset) {
+        if let Some(occurrence) = occurrence::at(self.occurrences(), offset) {
             if let Some(contents) = self.describe(occurrence) {
                 return Some(Hover {
                     contents,
@@ -605,7 +675,7 @@ impl<'a> Analysis<'a> {
         declared: &mut HashSet<String>,
     ) -> Vec<Completion> {
         let mut items: Vec<_> = self
-            .occurrences
+            .occurrences()
             .local_bindings(offset)
             .filter(|(name, _, _)| declared.insert((*name).to_owned()))
             .map(|(name, span, function)| {
@@ -648,7 +718,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<Location> {
-        let occurrence = occurrence::at(&self.occurrences, offset)?;
+        let occurrence = occurrence::at(self.occurrences(), offset)?;
         match &occurrence.role {
             | Role::Qualified(path) => {
                 if path.first().map(String::as_str) == Some("Rssn") {
@@ -667,7 +737,7 @@ impl<'a> Analysis<'a> {
                         range: self.range(binding),
                     });
                 }
-                if let Some(span) = self.definitions.get(name).copied() {
+                if let Some(span) = self.definitions().get(name).copied() {
                     return Some(Location {
                         document: self.document.name().to_string(),
                         range: self.range(span),
@@ -679,7 +749,7 @@ impl<'a> Analysis<'a> {
             | Role::Method { name, .. } => {
                 let span = occurrence
                     .binding
-                    .or_else(|| self.definitions.get(name).copied())?;
+                    .or_else(|| self.definitions().get(name).copied())?;
                 Some(Location {
                     document: self.document.name().to_string(),
                     range: self.range(span),
@@ -726,7 +796,7 @@ impl<'a> Analysis<'a> {
                     &mut symbols,
                 );
             },
-            | Source::Program(program) => {
+            | Source::Program(program, _) => {
                 for module in &program.modules {
                     let Some(source) = program.sources.file(module.file) else {
                         continue;
@@ -800,7 +870,7 @@ impl<'a> Analysis<'a> {
         tokens::tokens(
             self.document,
             self.file,
-            &self.occurrences,
+            self.occurrences(),
             self.checked_module(),
         )
     }
@@ -822,7 +892,7 @@ impl<'a> Analysis<'a> {
             return None;
         };
         let name = aevia_types::adt::name_of(*id);
-        if let Some(span) = self.definitions.get(&name).copied() {
+        if let Some(span) = self.definitions().get(&name).copied() {
             return Some(Location {
                 document: self.document.name().to_string(),
                 range: self.range(span),
@@ -916,7 +986,7 @@ impl<'a> Analysis<'a> {
             }
             // A local name can shadow a declaration in the module.
             let declared_span = occurrence::name_span(view.text, decl.span, declared);
-            if occurrence::at(&self.occurrences, callee.span.start)
+            if occurrence::at(self.occurrences(), callee.span.start)
                 .and_then(|found| found.binding)
                 .is_some_and(|span| span != declared_span)
             {
@@ -1041,8 +1111,8 @@ impl<'a> Analysis<'a> {
     /// Every use of the name at `offset`, across every loaded module (§9.10).
     ///
     /// The search is over the **loaded program**: each module's parsed tree is
-    /// walked again in its own text, so a use in an importer is found without
-    /// assuming it looks like the declaration. `include_declaration` adds the
+    /// indexed on demand in its own text, so a use in an importer is found
+    /// without assuming it looks like the declaration. `include_declaration` adds the
     /// declaration site itself, the way editors ask for it. The order is stable
     /// (file, then line) and duplicates are removed.
     ///
@@ -1085,7 +1155,7 @@ impl<'a> Analysis<'a> {
             let view = views.get(entry).ok_or_else(|| {
                 RenameError::NotRenamable("the document has no module to rename in".to_string())
             })?;
-            let occurrence = occurrence::at(&view.occurrences, offset).ok_or_else(|| {
+            let occurrence = occurrence::at(view.occurrences(), offset).ok_or_else(|| {
                 RenameError::NotRenamable("there is no name here to rename".to_string())
             })?;
             let Some(name) = occurrence_name(&occurrence.role) else {
@@ -1095,7 +1165,7 @@ impl<'a> Analysis<'a> {
             };
             let span = occurrence_edit_span(view.text, occurrence, name);
             return Ok(RenamePlaceholder {
-                range: range_in_file(view.text, span),
+                range: view.range(span),
                 placeholder: target.name,
             });
         }
@@ -1104,7 +1174,7 @@ impl<'a> Analysis<'a> {
             RenameError::NotRenamable("the document has no module to rename in".to_string())
         })?;
         Ok(RenamePlaceholder {
-            range: range_in_file(view.text, field.span),
+            range: view.range(field.span),
             placeholder: field.name,
         })
     }
@@ -1159,19 +1229,18 @@ impl<'a> Analysis<'a> {
                     text,
                     module,
                     checked: &compilation.checked,
-                    definitions: &self.definitions,
-                    occurrences: occurrence::collect(module, text),
-                    imports: Vec::new(),
+                    queries: &self.queries,
+                    imports: &[],
                 };
                 (vec![view], 0)
             },
-            | Source::Program(program) => {
-                let mut views = Vec::new();
-                for (index, module) in program.modules.iter().enumerate() {
+            | Source::Program(program, queries) => {
+                let mut views = Vec::with_capacity(program.modules.len());
+                let entry = program.modules.len().saturating_sub(1);
+                for (index, (module, query)) in
+                    program.modules.iter().zip(&queries.modules).enumerate()
+                {
                     let Some(source) = program.sources.file(module.file) else {
-                        continue;
-                    };
-                    let Some(definitions) = self.module_definitions.get(index) else {
                         continue;
                     };
                     views.push(ModuleView {
@@ -1179,7 +1248,7 @@ impl<'a> Analysis<'a> {
                         file: module.file,
                         // The open buffer keeps the name its client gave it
                         // (the loader names a physical file canonically).
-                        document: if module.file == self.file {
+                        document: if index == entry {
                             self.document.name()
                         } else {
                             source.name.as_str()
@@ -1187,14 +1256,13 @@ impl<'a> Analysis<'a> {
                         text: source.text.as_str(),
                         module: &module.module,
                         checked: &module.checked,
-                        definitions,
-                        occurrences: occurrence::collect(&module.module, &source.text),
-                        imports: module_imports(program, module),
+                        queries: query,
+                        imports: queries.imports(query, module),
                     });
                 }
                 let entry = views
                     .iter()
-                    .position(|view| view.file == self.file)
+                    .position(|view| view.index == entry)
                     .unwrap_or_else(|| views.len().saturating_sub(1));
                 (views, entry)
             },
@@ -1211,7 +1279,7 @@ impl<'a> Analysis<'a> {
         &self,
         offset: u32,
     ) -> Option<&aevia_types::Type> {
-        if let Some(occurrence) = occurrence::at(&self.occurrences, offset) {
+        if let Some(occurrence) = occurrence::at(self.occurrences(), offset) {
             if let Some(ty) = self.recorded_type(occurrence.span) {
                 return Some(ty);
             }
@@ -1912,28 +1980,19 @@ fn flatten(
     )
 )]
 fn prefixes(
-    program: &Program,
-    file: FileId,
+    module: &LoadedModule,
+    index: usize,
+    by_file: &HashMap<FileId, usize>,
 ) -> HashMap<String, usize> {
     let mut map = HashMap::new();
-    if let Some((index, module)) = program
-        .modules
-        .iter()
-        .enumerate()
-        .find(|(_, module)| module.file == file)
-    {
-        if !module.path.is_empty() {
-            map.insert(module.path.join("."), index);
-        }
-        for edge in &module.imports {
-            if !edge.prefix.is_empty()
-                && let Some(target) = program
-                    .modules
-                    .iter()
-                    .position(|target| target.file == edge.file)
-            {
-                map.insert(edge.prefix.clone(), target);
-            }
+    if !module.path.is_empty() {
+        map.insert(module.path.join("."), index);
+    }
+    for edge in &module.imports {
+        if !edge.prefix.is_empty()
+            && let Some(&target) = by_file.get(&edge.file)
+        {
+            map.insert(edge.prefix.clone(), target);
         }
     }
     map
@@ -1944,7 +2003,14 @@ fn range_in_file(
     text: &str,
     span: Span,
 ) -> Range {
-    let index = LineIndex::new(text);
+    range_in_lines(&LineIndex::new(text), text, span)
+}
+
+fn range_in_lines(
+    index: &LineIndex,
+    text: &str,
+    span: Span,
+) -> Range {
     Range::new(
         index.position(text, span.start),
         index.position(text, span.end),
@@ -1983,6 +2049,13 @@ fn export_scheme(export: &Export) -> Option<&aevia_types::Type> {
 /// that name: with two, the source alone cannot say which one a call reaches —
 /// the checker's `DictionaryUse` is what knows — and pointing at a coin flip
 /// would be worse than pointing at nothing.
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::single_call_fn,
+        reason = "walk declarations behind the shared per-module query cache"
+    )
+)]
 fn declarations(
     module: &Module,
     text: &str,
@@ -2168,7 +2241,7 @@ const fn export_kind(export: &Export) -> ExportKind {
     }
 }
 
-/// One loaded module, re-walked in its own text for a reference search.
+/// One loaded module and the syntax tables for its own source snapshot.
 struct ModuleView<'a> {
     /// Its position in the program's module list, the index the declaration
     /// tables use.
@@ -2180,17 +2253,37 @@ struct ModuleView<'a> {
     /// The parsed module, for the field-label walk.
     module: &'a Module,
     checked: &'a CheckedModule,
-    definitions: &'a HashMap<String, Span>,
-    occurrences: occurrence::Occurrences,
+    queries: &'a ModuleQueries,
     /// The prefixes this module's imports bring other modules in under.
-    imports: Vec<(String, usize, Option<Vec<String>>)>,
+    imports: &'a [ModuleImport],
+}
+
+impl ModuleView<'_> {
+    fn definitions(&self) -> &HashMap<String, Span> {
+        self.queries.definitions(Some(self.module), self.text)
+    }
+
+    fn occurrences(&self) -> &occurrence::Occurrences {
+        self.queries.occurrences(Some(self.module), self.text)
+    }
+
+    fn range(
+        &self,
+        span: Span,
+    ) -> Range {
+        let lines = self.queries.lines.get_or_init(|| LineIndex::new(self.text));
+        range_in_lines(lines, self.text, span)
+    }
 }
 
 fn view_of<'v, 'a>(
     views: &'v [ModuleView<'a>],
     module: usize,
 ) -> Option<&'v ModuleView<'a>> {
-    views.iter().find(|view| view.index == module)
+    views
+        .get(module)
+        .filter(|view| view.index == module)
+        .or_else(|| views.iter().find(|view| view.index == module))
 }
 
 fn view_of_file<'v, 'a>(
@@ -2198,31 +2291,6 @@ fn view_of_file<'v, 'a>(
     file: FileId,
 ) -> Option<&'v ModuleView<'a>> {
     views.iter().find(|view| view.file == file)
-}
-
-/// The prefixes `module`'s imports bring other modules in under.
-#[cfg_attr(
-    not(test),
-    expect(
-        clippy::single_call_fn,
-        reason = "translate loader paths into analysis module identities"
-    )
-)]
-fn module_imports(
-    program: &Program,
-    module: &LoadedModule,
-) -> Vec<(String, usize, Option<Vec<String>>)> {
-    module
-        .imports
-        .iter()
-        .filter_map(|edge| {
-            let index = program
-                .modules
-                .iter()
-                .position(|target| target.file == edge.file)?;
-            Some((edge.prefix.clone(), index, edge.names.clone()))
-        })
-        .collect()
 }
 
 /// The name a role carries, when it names a declaration or use.
@@ -2269,7 +2337,7 @@ fn decl_span_in(
     name: &str,
 ) -> Option<(FileId, Span)> {
     let view = view_of(views, module)?;
-    let span = *view.definitions.get(name)?;
+    let span = *view.definitions().get(name)?;
     Some((view.file, occurrence::name_span(view.text, span, name)))
 }
 
@@ -2375,7 +2443,7 @@ fn resolve_target(
     offset: u32,
 ) -> Option<Target> {
     let view = views.get(entry)?;
-    let occurrence = occurrence::at(&view.occurrences, offset)?;
+    let occurrence = occurrence::at(view.occurrences(), offset)?;
     let name = occurrence_name(&occurrence.role)?.to_string();
     if let Role::Qualified(path) = &occurrence.role
         && path.first().map(String::as_str) == Some("Rssn")
@@ -2391,7 +2459,7 @@ fn resolve_target(
         // apart. A module declaration renames program-wide; a parameter or
         // `let` renames in its file.
         let declaration = view
-            .definitions
+            .definitions()
             .get(&name)
             .map(|span| occurrence::name_span(view.text, *span, &name));
         if declaration == Some(binding)
@@ -2463,7 +2531,7 @@ fn check_physical_rename(
     check_collision(views, target, new_name)?;
     let mut edited = std::collections::HashSet::new();
     for view in views {
-        for occurrence in &view.occurrences {
+        for occurrence in view.occurrences() {
             let Some(name) = occurrence_name(&occurrence.role) else {
                 continue;
             };
@@ -2475,7 +2543,7 @@ fn check_physical_rename(
             }
             if new_name != target.name
                 && matches!(occurrence.role, Role::Name(_))
-                && let Some(binding) = view.occurrences.lookup(occurrence, new_name)
+                && let Some(binding) = view.occurrences().lookup(occurrence, new_name)
                 && physical_declaration(views, view.file, binding) != Some(target_key)
             {
                 return Err(RenameError::Collision(format!(
@@ -2516,15 +2584,15 @@ fn check_physical_rename(
     // parameter renamed to an opened function already used inside its body.
     if new_name != target.name {
         for view in views {
-            for occurrence in &view.occurrences {
+            for occurrence in view.occurrences() {
                 if !matches!(&occurrence.role, Role::Name(name) if name == new_name)
-                    || view.occurrences.lookup(occurrence, new_name).is_some()
+                    || view.occurrences().lookup(occurrence, new_name).is_some()
                 {
                     continue;
                 }
                 let mut old_name = occurrence.clone();
                 old_name.role = Role::Name(target.name.clone());
-                old_name.binding = view.occurrences.lookup(occurrence, &target.name);
+                old_name.binding = view.occurrences().lookup(occurrence, &target.name);
                 let reachable = canonical_decl_of(views, view, &old_name)
                     .and_then(|(file, span)| physical_declaration(views, file, span));
                 if reachable == Some(target_key) {
@@ -2539,7 +2607,7 @@ fn check_physical_rename(
     // The same bytes can be interpreted differently by another owner. Editing
     // that use for one interpretation would silently break the other one.
     for view in views {
-        for occurrence in &view.occurrences {
+        for occurrence in view.occurrences() {
             let Some(name) = occurrence_name(&occurrence.role) else {
                 continue;
             };
@@ -2569,7 +2637,7 @@ fn collect_references(
     let mut locations: Vec<Location> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for view in views {
-        for occurrence in &view.occurrences {
+        for occurrence in view.occurrences() {
             let Some(name) = occurrence_name(&occurrence.role) else {
                 continue;
             };
@@ -2593,7 +2661,7 @@ fn collect_references(
             }
             locations.push(Location {
                 document: view.document.to_string(),
-                range: range_in_file(view.text, span),
+                range: view.range(span),
             });
         }
     }
@@ -2698,13 +2766,13 @@ fn check_collision(
             let Some(view) = view_of_file(views, target.file) else {
                 return Ok(());
             };
-            if view.definitions.contains_key(new_name) {
+            if view.definitions().contains_key(new_name) {
                 return Err(RenameError::Collision(format!(
                     "`{new_name}` is already declared in `{}`",
                     view.document
                 )));
             }
-            let taken = view.occurrences.iter().any(|occurrence| {
+            let taken = view.occurrences().iter().any(|occurrence| {
                 let (Role::Name(name) | Role::TypeName(name) | Role::Constructor(name)) =
                     &occurrence.role
                 else {
@@ -2977,7 +3045,7 @@ fn field_or_refusal(
         | Ok(field) => Ok(field),
         | Err(error) => {
             match views.get(entry) {
-                | Some(view) if occurrence::at(&view.occurrences, offset).is_some() => {
+                | Some(view) if occurrence::at(view.occurrences(), offset).is_some() => {
                     Err(undeclarable_error(view, offset))
                 },
                 | _ => Err(error),
@@ -2998,7 +3066,7 @@ fn undeclarable_error(
     view: &ModuleView<'_>,
     offset: u32,
 ) -> RenameError {
-    let Some(occurrence) = occurrence::at(&view.occurrences, offset) else {
+    let Some(occurrence) = occurrence::at(view.occurrences(), offset) else {
         return RenameError::NotRenamable(
             "there is no declaration here that a rename could change".to_string(),
         );
@@ -3058,7 +3126,7 @@ fn field_references(
         }
         locations.push(Location {
             document: view.document.to_string(),
-            range: range_in_file(view.text, label.span),
+            range: view.range(label.span),
         });
     }
     locations.sort_by(|left, right| {
@@ -3686,7 +3754,7 @@ impl Analysis<'_> {
         let ExprKind::Var(_) = &receiver.kind else {
             return None;
         };
-        let binding = occurrence::at(&self.occurrences, receiver.span.start)?.binding?;
+        let binding = occurrence::at(self.occurrences(), receiver.span.start)?.binding?;
         let annotation = binding_annotation(view.module, binding)?;
         annotation_fields(views, view, annotation)
     }

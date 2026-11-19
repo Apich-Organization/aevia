@@ -49,6 +49,11 @@ cargo run -p aevia-cli -- test examples/dimensioned_numerics.aev
 静态可表达的原生零参数操作使用 `f()` 并返回 `Result`；导入模块不会执行
 构造器或探测可选后端。
 
+`Rssn_numerical_vector` 提供 `num_signal_hilbert`、
+`num_signal_analytic_signal`、`num_signal_analytic_envelope` 和
+`num_signal_zoom_fft`，也提供 Bellman–Ford、有向无环图最短路径、最大流及最小割等带权图原生算子。
+生成的 `Rssn_Numeric` 模块提供 Welch 相干度和正逆小波包变换。
+
 同一个数值张量只有一个元素量纲。混合位置、速度等数据应使用记录、元组，
 或包含独立量纲见证的 `Tensor<1, Value>`。原生表达式带为每个坐标、参数和
 输出分别声明正参考量；梯度分量恢复输出/相应输入量纲，Hessian 的 `(i, j)`

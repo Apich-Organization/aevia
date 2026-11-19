@@ -82,6 +82,49 @@ fn field<'a>(
 }
 
 #[test]
+fn signal_wrappers_agree_in_both_engines() {
+    let samples = &["[1.0, 0.0, -1.0, 0.0]"];
+    let (hilbert, hilbert_dynamic) = call("num_signal_hilbert", "S", samples);
+    let (envelope, envelope_dynamic) = call("num_signal_analytic_envelope", "S", samples);
+    let source = format!(
+        "import Rssn_numerical_vector as S\nlet hilbert = {hilbert}\nlet envelope = {envelope}\n"
+    );
+    let dir = std::env::temp_dir().join(format!("aevia-signal-codecs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.aev");
+    std::fs::write(&path, source).unwrap();
+    let program = driver::load(&path);
+    assert!(
+        !program.diagnostics.has_errors(),
+        "{:?}",
+        program.diagnostics.items
+    );
+    for mode in [Mode::Ast, Mode::Ir] {
+        let mut interp = Interp::new(&program.entry().unwrap().checked).with_mode(mode);
+        let diagnostics = driver::run_modules(&mut interp, &program);
+        assert!(
+            !diagnostics.has_errors(),
+            "{mode:?}: {:?}",
+            diagnostics.items
+        );
+        for (name, dynamic, expected) in [
+            ("hilbert", hilbert_dynamic, [0.0, 1.0, 0.0, -1.0]),
+            ("envelope", envelope_dynamic, [1.0; 4]),
+        ] {
+            let Val::Tensor { shape, data } = payload(interp.eval_toplevel(name).unwrap(), dynamic)
+            else {
+                panic!("expected a signal tensor");
+            };
+            assert_eq!(shape, [4]);
+            for (value, expected) in data.iter().map(scalar).zip(expected) {
+                assert!((value - expected).abs() < 1e-12, "{name}: {value}");
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn source_generated_geometry_statistics_numbers_and_specials_run_in_both_engines() {
     let (hull, hull_dynamic) = call(
         "num_geometry_convex_hull_2d",

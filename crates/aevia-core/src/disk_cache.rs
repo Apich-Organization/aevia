@@ -40,6 +40,7 @@
 
 use aevia_syntax::Diagnostics;
 use aevia_syntax::FileId;
+use aevia_syntax::Span;
 use aevia_types::check::CheckOptions;
 use aevia_types::check::CheckedModule;
 use aevia_types::check::ModuleInterface;
@@ -53,8 +54,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-/// The `.aevi` layout version; bump it with any change to the encoded types.
-pub const FORMAT_VERSION: u32 = 3;
+/// Version of the `.aevi` layout and key inputs.
+pub const FORMAT_VERSION: u32 = 4;
 
 const MAGIC: &[u8; 4] = b"AEVI";
 const HEADER_LEN: usize = 40;
@@ -197,8 +198,8 @@ pub struct KeyInputs<'a> {
     pub identity: &'a Option<aevia_types::ModulePath>,
     /// The import bindings (module, prefix, names).
     pub bindings: &'a [aevia_types::check::InterfaceBinding],
-    /// The prefixes of the flat import table.
-    pub prefixes: &'a [String],
+    /// Resolved re-export origins, in declaration order.
+    pub reexports: &'a [(Span, aevia_types::ModulePath)],
     /// The checker options (capability set).
     pub options: &'a CheckOptions,
     /// The interface digests of its dependency closure, in checker order.
@@ -323,7 +324,7 @@ impl DiskCache {
         hasher.field(&bincode_bytes(inputs.path)?);
         hasher.field(&bincode_bytes(inputs.identity)?);
         hasher.field(&bincode_bytes(inputs.bindings)?);
-        hasher.field(&bincode_bytes(inputs.prefixes)?);
+        hasher.field(&bincode_bytes(inputs.reexports)?);
         hasher.field(&bincode_bytes(inputs.options)?);
         for digest in inputs.interfaces {
             hasher.field(digest);
@@ -468,7 +469,6 @@ impl DiskCache {
 mod tests {
     use super::*;
     use aevia_syntax::Diagnostic;
-    use aevia_syntax::Span;
 
     #[test]
     fn round_trip_and_corruption_handling() {
@@ -486,7 +486,7 @@ mod tests {
                 path: &path,
                 identity: &None,
                 bindings: &[],
-                prefixes: &[],
+                reexports: &[],
                 options: &options,
                 interfaces: &[],
             })

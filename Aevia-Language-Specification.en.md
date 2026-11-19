@@ -3646,7 +3646,11 @@ import Data.Csv { read_csv, Table }
 
 - `open M` brings every exported name of `M` into scope unqualified; `open M { f, g }` brings
   only the listed names.
-- `open` affects only the current module and is not transitive (there is no re-export).
+- A plain `open` affects the current module's lookup scope. Use `export open M` or
+  `export import M` to include the imported names in this module's own interface.
+  Each re-export follows its resolved import edge and preserves the defining module's
+  type and callable identities. A selective re-export of a variant type includes its
+  public constructors.
 - A local definition shadows an opened name. If two modules `open` the same name **with
   different types**, the error is `E0603`; the same type (one module opened twice) is not a
   clash.
@@ -3817,8 +3821,8 @@ registry):
 4. The result does not depend on index iteration order; when unsatisfiable, the explanation is
    derivation-style: which requirement could not be met, which candidates were tried and why
    each failed.
-5. The implementation is a backtracking solver with conflict-directed backjumping (not PubGrub,
-   because one requirement can be satisfied by several series).
+5. The implementation uses conflict-directed backjumping. It examines the requirement with
+   the fewest selectable versions first, with pending order breaking ties.
 
 The index `deps` of a registry package records only `package`, `req` and, when it differs from
 the default import root, `import`.
@@ -6100,7 +6104,8 @@ miss and is overwritten; at most 4 revisions per module name are kept.
 
 - The **key** is a stable 128-bit hash (two-lane FNV-1a, not `DefaultHasher`) of: the module
   source, `FileId`, the module path and the nominal identity the loader gives (including package
-  origin), import bindings, the **interface digest of every module in the dependency closure**,
+  origin), import bindings, the resolved origin of each re-export declaration,
+  the **interface digest of every module in the dependency closure**,
   the check options (capability set) and the compiler identity (`aevia-core` version,
   `FORMAT_VERSION`, the RSSN manifest hash, the executable's size and modification time). In
   the interface digest every ADT is replaced by its symbolic definition, so it contains no
@@ -7652,9 +7657,8 @@ program        ::= [ module_decl ] { import_decl } { top_decl } EOF
 module_decl    ::= "module" module_path NEWLINE
 module_path    ::= UIDENT { "." UIDENT }
 
-import_decl    ::= "import" module_path [ "as" UIDENT ]
-                   [ "{" name_list "}" ] NEWLINE
-                 | "open" module_path [ "{" name_list "}" ] NEWLINE
+import_decl    ::= [ "export" | "pub" ] ( "import" | "open" ) module_path
+                   [ "as" UIDENT ] [ "{" name_list "}" ] NEWLINE
 name_list      ::= name { "," name }
 name           ::= IDENT | UIDENT
 

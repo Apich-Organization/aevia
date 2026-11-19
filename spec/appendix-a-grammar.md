@@ -36,9 +36,8 @@ program        ::= [ module_decl ] { import_decl } { top_decl } EOF
 module_decl    ::= "module" module_path NEWLINE
 module_path    ::= UIDENT { "." UIDENT }
 
-import_decl    ::= "import" module_path [ "as" UIDENT ]
-                   [ "{" name_list "}" ] NEWLINE
-                 | "open" module_path [ "{" name_list "}" ] NEWLINE
+import_decl    ::= [ "export" | "pub" ] ( "import" | "open" ) module_path
+                   [ "as" UIDENT ] [ "{" name_list "}" ] NEWLINE
 name_list      ::= name { "," name }
 name           ::= IDENT | UIDENT
 

@@ -9,6 +9,8 @@ The entries cover the language toolchain, the package registry and their documen
 - The checked Core IR interpreter handles typed operator dispatch, explicit tail calls and dimension evidence. Integer division, remainders, `gcd`, `lcm` and `to_int` preserve arbitrary precision. Exact rational inputs keep exact remainders. `range` accepts arbitrary-precision endpoints and checks the result size before allocating. Floating-point tensor execution can use vectorized and parallel kernels.
 - The RSSN Kernel Manifest drives Aevia adapters for dimensioned values, numerical callbacks, structured model results and session-owned objects.
 - The module cache encodes checked interfaces and types with native bincode-next traits and a schema fingerprint. The toolchain rebuilds incompatible entries.
+- Dependency resolution eliminates candidate lists early where another package already has fewer choices. The module loader indexes resolved dependency edges and includes exact re-export origins in cache keys. Editor queries reuse lazily built module indexes for each checked snapshot.
+- Generated RSSN interfaces expose new signal processing, weighted graph and low-rank algorithms. Dense and sparse numeric dispatch uses the active CPU pool's size.
 - Mixed tensor selectors keep the extents of surviving axes. Slice indices, bounds and steps keep integer precision at runtime. Dense tensor views check their shape and storage boundaries before indexing or materializing the tensor. Dense constructors validate output size, `diag` preserves the element representation, and `linspace` preserves endpoints across large finite intervals.
 - Square matrix determinants, inverses and solves keep exact operands exact at every size. Floating-point factorizations reject non-finite input, and eigenvalue and Cholesky routines validate both matrix extents. Floating-point transposes of any rank share their backing storage. Reshaping checks every runtime extent and returns `Result`. Tensor sequence operations retain the element type, including for empty selections.
 - Floating-point mean and standard deviation stay finite where the result is representable across extreme scales. FFT axes use exact integer indices. The inverse real transform restores the requested extent even with empty untransformed axes. SVG, HTML and GIF render lines, scatter plots, error bars, histograms and heatmaps using the same coordinate geometry.
@@ -39,6 +41,8 @@ The entries cover the language toolchain, the package registry and their documen
 - 经过检查的 Core IR 解释器处理类型化算子分派、显式尾调用和量纲依据。整数除法、余数、`gcd`、`lcm` 和 `to_int` 保持任意精度。精确有理数输入保留精确余数。`range` 接受任意精度端点，并在分配前检查结果大小。浮点张量运算可以使用矢量化与并行内核。
 - Aevia 根据 RSSN 内核清单生成适配器，覆盖带量纲值、数值回调、结构化模型结果和会话所属对象。
 - 模块缓存用 bincode-next 原生编码和模式指纹保存已检查的接口与类型。工具链会重建不兼容的缓存项。
+- 依赖解析可提早排除候选项更多的包。模块加载器索引已解析的依赖边，缓存键包含各再导出声明的准确来源。编辑器查询复用同一检查快照中按需建立的模块索引。
+- 从 RSSN 清单生成的接口增加信号处理、带权图和低秩分解算法。稠密与稀疏数值任务按当前 CPU 线程池大小调度。
 - 张量混合索引保留剩余轴的大小。切片下标、端点和步长在运行时保持整数精度。密集张量视图在索引或物化前检查形状和存储边界。密集张量构造函数检查输出大小，`diag` 保留元素表示，`linspace` 在跨度很大的有限区间上保留端点。
 - 精确方阵的行列式、逆矩阵和线性求解在任意阶数下保持精确。浮点分解拒绝非有限输入，特征值和 Cholesky 例程检查矩阵的两个轴。任意秩浮点张量的转置共享底层存储。动态重塑会检查各轴长度并返回 `Result`。张量序列操作保留元素类型，包括结果为空的选择。
 - 浮点均值和标准差在结果可表示时可处理极端数值。FFT 使用精确整数轴索引，即使未变换的轴为空，实数逆变换也会恢复指定的轴长。SVG、HTML 与 GIF 使用同一套坐标几何绘制线图、散点图、误差棒、直方图和热图。

@@ -40,9 +40,12 @@ use aevia_types::check::CheckedModule;
 use aevia_types::check::Import;
 use aevia_types::check::InterfaceBinding;
 use aevia_types::check::ModuleInterface;
-use aevia_types::check::check_module_with_identity;
+use aevia_types::check::check_module_with_resolved_imports;
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -1169,14 +1172,16 @@ struct Parsed {
     module: Module,
     syntax_failed: bool,
     path: Vec<String>,
-    imports: Vec<(
-        ModuleKey,
-        Vec<String>,
-        Option<String>,
-        bool,
-        Option<Vec<String>>,
-        bool,
-    )>,
+    imports: Vec<ParsedImport>,
+}
+
+struct ParsedImport {
+    target: ModuleKey,
+    path: Vec<String>,
+    prefix: String,
+    names: Option<Vec<String>>,
+    export: bool,
+    span: Span,
 }
 
 // A physical file can be instantiated by distinct owning packages. Dependency
@@ -1612,14 +1617,19 @@ impl Loader {
                         decl.span,
                     ));
                 }
-                imports.push((
-                    resolved,
-                    import_path.clone(),
-                    alias.clone(),
-                    *open,
-                    names.clone(),
-                    *export,
-                ));
+                let prefix = if *open || names.is_some() {
+                    String::new()
+                } else {
+                    alias.clone().unwrap_or_else(|| import_path.join("."))
+                };
+                imports.push(ParsedImport {
+                    target: resolved,
+                    path: import_path.clone(),
+                    prefix,
+                    names: names.clone(),
+                    export: *export,
+                    span: decl.span,
+                });
             }
         }
 
@@ -1661,21 +1671,18 @@ impl Loader {
         };
         // Every prefix each module is imported under, across all importers.
         let mut prefixes: HashMap<ModuleKey, Vec<String>> = HashMap::new();
-        for parsed in self.parsed.values() {
-            for (target, import_path, alias, open, names, _) in &parsed.imports {
-                let prefix = if *open || names.is_some() {
-                    String::new()
-                } else {
-                    alias.clone().unwrap_or_else(|| import_path.join("."))
-                };
-                let entry = prefixes.entry(target.clone()).or_default();
-                if !entry.contains(&prefix) {
-                    entry.push(prefix);
+        for parsed in self.order.iter().filter_map(|path| self.parsed.get(path)) {
+            for import in &parsed.imports {
+                let entry = prefixes.entry(import.target.clone()).or_default();
+                if !entry.contains(&import.prefix) {
+                    entry.push(import.prefix.clone());
                 }
             }
         }
         let mut modules: Vec<LoadedModule> = Vec::new();
-        let mut syntax_blocked = std::collections::HashSet::new();
+        let mut by_path: HashMap<ModuleKey, usize> = HashMap::new();
+        let mut by_file: HashMap<FileId, usize> = HashMap::new();
+        let mut syntax_blocked = HashSet::new();
         // The interface digest of each module already resolved (`None` when it
         // could not be digested), for the on-disk cache keys.
         let mut digests: HashMap<FileId, Option<Digest>> = HashMap::new();
@@ -1683,16 +1690,18 @@ impl Loader {
         // order (§7.4). They carry classes, instances and alias definitions, so
         // an importer can use a class it did not declare and expand an imported
         // alias instead of treating it as opaque.
-        for path in self.order.clone() {
+        for path in std::mem::take(&mut self.order) {
             let Some(parsed) = self.parsed.remove(&path) else {
                 continue;
             };
+            by_path.insert(path.clone(), modules.len());
+            by_file.insert(parsed.file, modules.len());
             if self.skip_malformed_checks
                 && (parsed.syntax_failed
                     || parsed
                         .imports
                         .iter()
-                        .any(|(target, ..)| syntax_blocked.contains(target)))
+                        .any(|import| syntax_blocked.contains(&import.target)))
             {
                 syntax_blocked.insert(path);
                 let checked = CheckedModule {
@@ -1720,34 +1729,22 @@ impl Loader {
             // Materialised only when the checker (or the in-memory fingerprint)
             // needs them: a module restored from disk never clones its
             // dependencies' export tables.
-            let mut import_specs: Vec<(String, &CheckedModule, Option<Vec<String>>)> = Vec::new();
-            let mut reexports: Vec<(&CheckedModule, Option<Vec<String>>)> = Vec::new();
+            let mut import_specs = Vec::new();
+            let mut reexports = Vec::new();
             let mut runtime_imports = Vec::new();
             let mut bindings = Vec::new();
-            for (target, import_path, alias, open, names, export) in &parsed.imports {
-                let Some(other) = self
-                    .order
-                    .iter()
-                    .position(|candidate| candidate == target)
-                    .and_then(|index| modules.get(index))
-                else {
+            for import in &parsed.imports {
+                let ParsedImport {
+                    target,
+                    path: import_path,
+                    prefix,
+                    names,
+                    export,
+                    span,
+                } = import;
+                let Some(other) = by_path.get(target).and_then(|&index| modules.get(index)) else {
                     continue;
                 };
-                // `open` and a name list both bring names in unqualified;
-                // an alias or the module path qualifies them.
-                let prefix = if *open || names.is_some() {
-                    String::new()
-                } else {
-                    alias.clone().unwrap_or_else(|| import_path.join("."))
-                };
-                let span = parsed
-                    .module
-                    .decls
-                    .iter()
-                    .find(|decl| {
-                        matches!(&decl.kind, DeclKind::Import { path, .. } if path == import_path)
-                    })
-                    .map_or_else(Span::default, |decl| decl.span);
                 let exports = &other.checked.exports;
                 if let Some(selected) = names {
                     // `import A.B { a, b }` brings only those names in, and a
@@ -1764,69 +1761,91 @@ impl Loader {
                                         "module `{}` does not export `{name}`",
                                         import_path.join(".")
                                     ),
-                                    span,
+                                    *span,
                                 )
                                 .with_note(note),
                             );
                         }
                     }
                 }
+                let module = other.checked.module_path();
+                if *export {
+                    reexports.push((*span, module.clone()));
+                }
                 bindings.push(InterfaceBinding {
-                    module: other.checked.module_path(),
+                    module,
                     prefix: prefix.clone(),
                     names: names.clone(),
                 });
                 let runtime_names = names.as_ref().map(|names| {
-                    let selected: Vec<_> = names.iter().filter_map(|name| match other.checked.exports.get(name) {
-                        Some(aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. }) => Some(*adt),
-                        _ => None,
+                    let selected: HashSet<_> = names.iter().filter_map(|name| {
+                        match other.checked.exports.get(name) {
+                            | Some(aevia_types::Export::Type { adt } | aevia_types::Export::TypeCtor { adt, .. }) => Some(*adt),
+                            | _ => None,
+                        }
                     }).collect();
                     let mut expanded = names.clone();
-                    for (name, export) in &other.checked.exports {
-                        if matches!(export, aevia_types::Export::Ctor { adt, .. } | aevia_types::Export::TypeCtor { adt, .. } if selected.contains(adt)) && !expanded.contains(name) { expanded.push(name.clone()); }
+                    if !selected.is_empty() {
+                        for (name, export) in &other.checked.exports {
+                            if matches!(export, aevia_types::Export::Ctor { adt, .. } | aevia_types::Export::TypeCtor { adt, .. } if selected.contains(adt))
+                                && !expanded.contains(name)
+                            {
+                                expanded.push(name.clone());
+                            }
+                        }
                     }
                     expanded
                 });
-                if *export {
-                    reexports.push((&other.checked, runtime_names.clone()));
-                }
                 runtime_imports.push(ResolvedImport {
                     file: other.file,
                     prefix: prefix.clone(),
                     names: runtime_names,
                     export: *export,
                 });
-                import_specs.push((prefix, &other.checked, names.clone()));
+                import_specs.push((import, &other.checked));
             }
             // A module sees its dependency closure, never unrelated modules
             // merely checked earlier in the package traversal.
-            let mut reachable = std::collections::HashSet::new();
+            let mut reachable = BTreeSet::new();
             let mut pending: Vec<_> = runtime_imports.iter().map(|import| import.file).collect();
             while let Some(file) = pending.pop() {
-                if reachable.insert(file)
-                    && let Some(module) = modules.iter().find(|module| module.file == file)
+                if let Some(&index) = by_file.get(&file)
+                    && reachable.insert(index)
+                    && let Some(module) = modules.get(index)
                 {
                     pending.extend(module.imports.iter().map(|import| import.file));
                 }
             }
-            let interfaces = || -> Vec<ModuleInterface> {
-                modules
-                    .iter()
-                    .filter(|module| reachable.contains(&module.file))
-                    .map(|module| module.checked.interface())
-                    .collect()
+            let reachable = || reachable.iter().filter_map(|&index| modules.get(index));
+            let interfaces = OnceCell::<Vec<ModuleInterface>>::new();
+            let interfaces = || {
+                interfaces.get_or_init(|| {
+                    reachable()
+                        .map(|module| module.checked.interface())
+                        .collect()
+                })
             };
-            let imports = || -> Vec<Import> {
-                import_specs
-                    .iter()
-                    .map(|(prefix, checked, names)| {
-                        let mut exports = checked.exports.clone();
-                        if let Some(selected) = names {
-                            exports.retain(|name, _| selected.contains(name));
-                        }
-                        (prefix.clone(), exports)
-                    })
-                    .collect()
+            let imports = OnceCell::<Vec<Import>>::new();
+            let imports = || {
+                imports.get_or_init(|| {
+                    import_specs
+                        .iter()
+                        .map(|(import, checked)| {
+                            let exports = match &import.names {
+                                | Some(selected) => {
+                                    checked
+                                        .exports
+                                        .iter()
+                                        .filter(|(name, _)| selected.contains(name))
+                                        .map(|(name, export)| (name.clone(), export.clone()))
+                                        .collect()
+                                },
+                                | None => checked.exports.clone(),
+                            };
+                            (import.prefix.clone(), exports)
+                        })
+                        .collect()
+                })
             };
             let identity = if let Some(identity) = self.source_identities.get(&path) {
                 Some(identity.clone())
@@ -1854,6 +1873,7 @@ impl Loader {
                     &interfaces(),
                     &identity,
                     &bindings,
+                    &reexports,
                     &self.options,
                 ])
             });
@@ -1877,9 +1897,7 @@ impl Loader {
             // be digested is simply not cacheable.
             let disk_key = match &self.disk {
                 | Some(disk) if !self.kernel_modules.contains_key(&path.path) => {
-                    let closure: Option<Vec<Digest>> = modules
-                        .iter()
-                        .filter(|module| reachable.contains(&module.file))
+                    let closure: Option<Vec<Digest>> = reachable()
                         .map(|module| digests.get(&module.file).copied().flatten())
                         .collect();
                     closure.and_then(|closure| {
@@ -1887,17 +1905,13 @@ impl Loader {
                             .sources
                             .file(parsed.file)
                             .map_or("", |file| file.text.as_str());
-                        let prefixes: Vec<String> = import_specs
-                            .iter()
-                            .map(|(prefix, _, _)| prefix.clone())
-                            .collect();
                         disk.key(&KeyInputs {
                             text,
                             file: parsed.file,
                             path: &parsed.path,
                             identity: &identity,
                             bindings: &bindings,
-                            prefixes: &prefixes,
+                            reexports: &reexports,
                             options: &self.options,
                             interfaces: &closure,
                         })
@@ -1930,7 +1944,7 @@ impl Loader {
                     }
                 },
             };
-            let mut checked = match restored {
+            let checked = match restored {
                 | Some(checked) => {
                     if from_memory && let Some(cache) = &self.cache {
                         let mut cache = cache.borrow_mut();
@@ -1939,14 +1953,15 @@ impl Loader {
                     checked
                 },
                 | None => {
-                    let checked = check_module_with_identity(
+                    let checked = check_module_with_resolved_imports(
                         parsed.file,
                         &parsed.module,
-                        &imports(),
-                        &interfaces(),
+                        imports(),
+                        interfaces(),
                         &self.options,
                         identity,
                         &bindings,
+                        &reexports.into_iter().collect(),
                     );
                     Counters::bump(&self.counters.checked);
                     if let Some(cache) = &self.cache {
@@ -1956,32 +1971,6 @@ impl Loader {
                     checked
                 },
             };
-            for (other, selected) in &reexports {
-                for (name, export) in &other.exports {
-                    if selected.as_ref().is_some_and(|names| !names.contains(name)) {
-                        continue;
-                    }
-                    checked
-                        .module
-                        .exports
-                        .entry(name.clone())
-                        .or_insert_with(|| export.clone());
-                    if let Some(proj) = other.callable_exports.get(name) {
-                        checked
-                            .module
-                            .callable_exports
-                            .entry(name.clone())
-                            .or_insert_with(|| proj.clone());
-                    }
-                    if let Some(alias_def) = other.alias_defs.get(name) {
-                        checked
-                            .module
-                            .alias_defs
-                            .entry(name.clone())
-                            .or_insert_with(|| alias_def.clone());
-                    }
-                }
-            }
             if self.disk.is_some() {
                 if own_digest.is_none() {
                     own_digest = crate::disk_cache::interface_digest(&checked.module.interface());

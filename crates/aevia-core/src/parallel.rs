@@ -1047,7 +1047,8 @@ pub fn default_jobs() -> usize {
     std::env::var("AEVIA_JOBS")
         .ok()
         .and_then(|text| text.parse().ok())
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from))
+        .unwrap_or_else(aevia_rssn::execution::detected_cpu_threads)
+        .max(1)
 }
 
 /// Inputs below this size are mapped sequentially: the replica round trip

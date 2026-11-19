@@ -3348,7 +3348,7 @@ random   : () -&gt; IO Float[1]</code></pre>
 <h3 id="07-modules--722-open">7.2.2 <code>open</code></h3>
 <ul>
 <li><code>open M</code> 把 <code>M</code> 的所有导出名字不加限定地引入当前作用域；<code>open M { f, g }</code> 只引入指定名字。</li>
-<li><code>open</code> 只影响当前模块，不传递（没有 re-export）。</li>
+<li>普通 <code>open</code> 只影响当前模块的查找作用域。用 <code>export open M</code> 或 <code>export import M</code> 把导入的名字加入 当前模块的接口。每个重新导出都沿实际解析出的导入边查找，保留定义模块的类型和可调用对象身份。 选择性重新导出变体类型时，其公开构造器一并导出。</li>
 <li>本地定义遮蔽打开的名字。两个模块 <code>open</code> 进同名<strong>且类型不同</strong>的名字时报 <code>E0603</code>；类型相同（同一模块 打开两次）不算冲突。</li>
 <li><code>import</code>/<code>open</code> 可引入值（函数、常量、单位值）、名义变体构造器与<strong>透明类型别名</strong> （<code>import A { Pair }</code>、<code>open Physics.Ising</code> 后直接写 <code>Params</code>）；别名随接口导出并在导入者展开。</li>
 </ul>
@@ -3484,7 +3484,7 @@ Dev = { path = &quot;../dev&quot;, package = &quot;apich/dev&quot;, version = &q
 <li><strong>每个包的每个兼容系列至多选一个版本</strong>。兼容系列：<code>&gt;=1.0</code> 取主版本（<code>1.x</code>），<code>0.y</code> 取 <code>0.y</code>，<code>0.0.z</code> 取 <code>0.0.z</code>。所以 <code>1.4</code> 与 <code>1.9</code> 不会同时出现，<code>1.x</code> 与 <code>2.x</code> 可以共存并各有名义类型（§7.3）。共存的前提是 两条边用<strong>不同的导入根</strong>；程序范围的导入根表仍只允许一个根名对应一个包，否则 <code>E0606</code>（消息列出争用的 两个版本）。</li>
 <li>偏好<strong>已锁定</strong>的版本，其余取<strong>最高</strong>的兼容版本；<code>yanked</code> 版本只在锁文件已包含它时可被选中。</li>
 <li>结果与索引迭代顺序无关；不可满足时给出推导式说明：哪个需求无法满足、试过哪些候选及失败原因。</li>
-<li>实现是带冲突导向回跳的回溯求解器（不是 PubGrub：一个需求可由多个系列满足）。</li>
+<li>实现使用冲突导向回跳。求解器优先处理可选版本最少的需求，数量相同则按待处理顺序选择。</li>
 </ol>
 <p>registry 包的索引 <code>deps</code> 只记录 <code>package</code>、<code>req</code> 和（与默认导入根不同时）<code>import</code>。</p>
 <h3 id="07-modules--752-锁文件">7.5.2 锁文件</h3>
@@ -5400,7 +5400,7 @@ aevia --version</code></pre>
 <h3 id="09-runtime--9113-按模块的磁盘缓存aevi">9.11.3 按模块的磁盘缓存（<code>.aevi</code>）</h3>
 <p>每个已检查模块一个文件，位于入口旁的 <code>.aevia/cache/modules/&lt;模块路径&gt;-&lt;键的 16 位十六进制&gt;.aevi</code>；标准库模块也缓存， 由 RSSN 清单即时生成的内核命名空间与含错误的检查结果不缓存。文件：魔数 <code>AEVI</code>、格式版本（<code>FORMAT_VERSION</code>，小端 u32）、 128 位键、正文长度与 FNV-1a 校验、正文。正文使用 bincode-next 3.2 原生编码，采用确定性排序与模式指纹， 内容包括入口的 <code>FileId</code>、接口摘要、诊断和完整的 <code>CheckedModule</code>。写入先写临时文件再改名；缺失、截断、校验失败、键或版本不符一律是静默未命中并被覆盖；同一模块名最多 保留 4 个修订。</p>
 <ul>
-<li><strong>键</strong>是下列输入的稳定 128 位哈希（两路 FNV-1a，不是 <code>DefaultHasher</code>）：模块源码、<code>FileId</code>、模块路径与加载器给的名义 身份（含包来源）、导入绑定、<strong>依赖闭包中每个模块的接口摘要</strong>、检查选项（能力集）、编译器身份（<code>aevia-core</code> 版本、 <code>FORMAT_VERSION</code>、RSSN 清单哈希、可执行文件大小与修改时间）。接口摘要中每个 ADT 已换成其符号定义，不含 <code>AdtId</code>。 因此不改变接口的编辑只重查被编辑的模块，改变接口则重查全部依赖者；改能力集、导入绑定或编译器构建都是未命中。</li>
+<li><strong>键</strong>是下列输入的稳定 128 位哈希（两路 FNV-1a，不是 <code>DefaultHasher</code>）：模块源码、<code>FileId</code>、模块路径与加载器给的名义 身份（含包来源）、导入绑定、各再导出声明解析到的来源、<strong>依赖闭包中每个模块的接口摘要</strong>、检查选项（能力集）、编译器身份（<code>aevia-core</code> 版本、 <code>FORMAT_VERSION</code>、RSSN 清单哈希、可执行文件大小与修改时间）。接口摘要中每个 ADT 已换成其符号定义，不含 <code>AdtId</code>。 因此不改变接口的编辑只重查被编辑的模块，改变接口则重查全部依赖者；改能力集、导入绑定或编译器构建都是未命中。</li>
 <li><strong><code>AdtId</code> 不进入文件（§7.3）。</strong> 编码时每个出现的 <code>AdtId</code> 在文件内分配下标，ADT 表写下完整定义（<code>AdtKey</code> = 模块路径 + 名字 + 声明 schema、参数、参数种类、构造器及字段类型，环用下标表达）；保留的 <code>Option</code>/<code>Result</code>/<code>Ordering</code>（0/1/2）按原值 写。解码时先把 ADT 表<strong>重新驻留</strong>到本进程注册表（已有完整且 <code>AdtKey</code> 相同的类型就复用 <code>AdtId</code>，否则新建；宿主/不透明类型 按名字 <code>intern</code>），再解码正文。</li>
 <li>缓存项只在同一 <code>FileId</code> 下复用，<code>FileId</code> 同时在键和文件里。<code>LoadStats</code> 增加 <code>disk_hits</code>/<code>disk_writes</code>；入口函数是 <code>driver::load_with_disk_cache</code> 与 <code>driver::load_incremental_with_disk_cache</code>（<code>DiskCache::beside(entry)</code>）。</li>
 </ul>
@@ -7053,9 +7053,8 @@ block_stmt   ::= let_decl | fn_decl</code></pre>
 module_decl    ::= &quot;module&quot; module_path NEWLINE
 module_path    ::= UIDENT { &quot;.&quot; UIDENT }
 
-import_decl    ::= &quot;import&quot; module_path [ &quot;as&quot; UIDENT ]
-                   [ &quot;{&quot; name_list &quot;}&quot; ] NEWLINE
-                 | &quot;open&quot; module_path [ &quot;{&quot; name_list &quot;}&quot; ] NEWLINE
+import_decl    ::= [ &quot;export&quot; | &quot;pub&quot; ] ( &quot;import&quot; | &quot;open&quot; ) module_path
+                   [ &quot;as&quot; UIDENT ] [ &quot;{&quot; name_list &quot;}&quot; ] NEWLINE
 name_list      ::= name { &quot;,&quot; name }
 name           ::= IDENT | UIDENT
 

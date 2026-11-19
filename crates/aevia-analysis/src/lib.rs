@@ -27,8 +27,9 @@
 //! edit can be loaded with an entry overlay, or [`SourceOverlays`] can supply
 //! every unsaved physical source in one snapshot. [`Analysis::from_program`]
 //! answers from a program a caller already has. [`AnalysisCache`] compares the
-//! exact source reads and import candidates observed by the loader, without
-//! walking unrelated package files or relying on timestamps.
+//! exact source reads and import candidates observed by the loader. Use
+//! [`AnalysisCache::analyze_program`] to share lazily built declaration,
+//! occurrence and position tables between queries of a retained snapshot.
 //!
 //! [`Analysis::workspace_symbols`] returns declarations from every module of the
 //! loaded program, each with its own file and range — the analysis half of a

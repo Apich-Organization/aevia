@@ -91,6 +91,7 @@ pub use check::check_module;
 pub use check::check_module_with_imports;
 pub use check::check_module_with_interfaces;
 pub use check::check_module_with_options;
+pub use check::check_module_with_resolved_imports;
 pub use class::ClassTable;
 pub use class::Origin;
 pub use class::Resolution;

@@ -104,16 +104,27 @@ fn editing_an_import_invalidates_and_the_new_value_is_seen() {
     let mut cache = AnalysisCache::new();
     let first = cache.program(&path);
     let document = document(&source);
-    let before = hover(&Analysis::from_program(&document, first), &source, "value");
+    let old_analysis = cache.analyze_program(&document, first);
+    let before = hover(&old_analysis, &source, "value");
     assert!(before.contains("Int"), "{before}");
+    let offset = u32::try_from(source.find("value").expect("call site")).expect("offset");
+    let old_references = old_analysis.references(offset, true);
+    assert_eq!(old_references.len(), 2);
 
-    // A new return type changes the import's content and length.
-    package.write("src/A.aev", "module A\n\nfn value(): Float = 1.0\n");
+    // The imported declaration changes type and moves down a line.
+    package.write("src/A.aev", "module A\n\n\nfn value(): Float = 1.0\n");
     let second = cache.program(&path);
     assert_eq!(cache.loads(), 2, "the changed import did not invalidate");
-    let after = hover(&Analysis::from_program(&document, second), &source, "value");
+    let new_analysis = cache.analyze_program(&document, second);
+    let after = hover(&new_analysis, &source, "value");
     assert!(after.contains("Float"), "{after}");
     assert!(!after.contains("Int"), "the old scheme was served: {after}");
+    let previous = old_analysis.definition(offset).expect("old definition");
+    let current = new_analysis.definition(offset).expect("new definition");
+    assert_eq!(current.document, previous.document);
+    assert_eq!(current.range.start.line, previous.range.start.line + 1);
+    assert_eq!(old_analysis.references(offset, true), old_references);
+    assert!(new_analysis.references(offset, true).contains(&current));
 }
 
 #[test]

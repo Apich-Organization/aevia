@@ -97,7 +97,11 @@ import Data.Csv { read_csv, Table }
 
 - `open M` brings every exported name of `M` into scope unqualified; `open M { f, g }` brings
   only the listed names.
-- `open` affects only the current module and is not transitive (there is no re-export).
+- A plain `open` affects the current module's lookup scope. Use `export open M` or
+  `export import M` to include the imported names in this module's own interface.
+  Each re-export follows its resolved import edge and preserves the defining module's
+  type and callable identities. A selective re-export of a variant type includes its
+  public constructors.
 - A local definition shadows an opened name. If two modules `open` the same name **with
   different types**, the error is `E0603`; the same type (one module opened twice) is not a
   clash.
@@ -268,8 +272,8 @@ registry):
 4. The result does not depend on index iteration order; when unsatisfiable, the explanation is
    derivation-style: which requirement could not be met, which candidates were tried and why
    each failed.
-5. The implementation is a backtracking solver with conflict-directed backjumping (not PubGrub,
-   because one requirement can be satisfied by several series).
+5. The implementation uses conflict-directed backjumping. It examines the requirement with
+   the fewest selectable versions first, with pending order breaking ties.
 
 The index `deps` of a registry package records only `package`, `req` and, when it differs from
 the default import root, `import`.

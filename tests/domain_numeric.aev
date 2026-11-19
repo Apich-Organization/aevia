@@ -93,6 +93,8 @@ test "the fractional transform of order 1 is the unitary DFT" = vec_close(N.frft
 
 test "convolution through the FFT is polynomial multiplication" = vec_close(N.fftconv([1.0, 2.0], [1.0, 3.0]), [1.0, 5.0, 6.0], 1e-9)
 
+test "Welch coherence is one at the shared frequency and zero at empty bins" = vec_close(N.coherence([1.0, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, -1.0], [1.0, 1.0, 1.0, 1.0], 4, 4.0), [0.0, 1.0, 0.0], 1e-12)
+
 ## --- wavelets (the wavelet is a symbol) ---------------------------------------
 test "one Haar level of 1, 2, 3, 4 is the scaled pair sums and differences" = vec_close(N.dwt_approx([1.0, 2.0, 3.0, 4.0], haar), [2.1213203435596424, 4.949747468305833], 1e-9) && vec_close(N.dwt_detail([1.0, 2.0, 3.0, 4.0], haar), [-0.7071067811865476, -0.7071067811865476], 1e-9)
 
@@ -105,6 +107,11 @@ test "waverec(wavedec(x)) returns x over three levels" =
     match N.wavedec([1.0, 4.0, 2.0, 8.0, 5.0, 7.0, 3.0, 6.0], haar, 3) with
     | Err(_) -> false
     | Ok(coefficients) -> length(coefficients) == 4 && vec_close(N.waverec(coefficients, haar), [1.0, 4.0, 2.0, 8.0, 5.0, 7.0, 3.0, 6.0], 1e-9)
+
+test "the Haar wavelet packet splits both branches and reconstructs the signal" =
+    match N.wavelet_packet([1.0, 2.0, 3.0, 4.0], haar, 2) with
+    | Err(_) -> false
+    | Ok(bands) -> near(flatten(bands), [5.0, -2.0, -1.0, 0.0], 1e-12) && vec_close(N.inverse_wavelet_packet(bands, haar), [1.0, 2.0, 3.0, 4.0], 1e-12)
 
 test "idwt2(dwt2(m)) returns the matrix, with four sub-bands in between" =
     match N.dwt2([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0], [13.0, 14.0, 15.0, 17.0]], haar) with

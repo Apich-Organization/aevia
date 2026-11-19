@@ -3351,7 +3351,7 @@ random   : () -&gt; IO Float[1]</code></pre>
 <h3 id="07-modules--722-open">7.2.2 <code>open</code></h3>
 <ul>
 <li><code>open M</code> brings every exported name of <code>M</code> into scope unqualified; <code>open M { f, g }</code> brings only the listed names.</li>
-<li><code>open</code> affects only the current module and is not transitive (there is no re-export).</li>
+<li>A plain <code>open</code> affects the current module's lookup scope. Use <code>export open M</code> or <code>export import M</code> to include the imported names in this module's own interface. Each re-export follows its resolved import edge and preserves the defining module's type and callable identities. A selective re-export of a variant type includes its public constructors.</li>
 <li>A local definition shadows an opened name. If two modules <code>open</code> the same name <strong>with different types</strong>, the error is <code>E0603</code>; the same type (one module opened twice) is not a clash.</li>
 <li><code>import</code> and <code>open</code> can bring in values (functions, constants, unit values), nominal variant constructors and <strong>transparent type aliases</strong> (after <code>import A { Pair }</code> or <code>open Physics.Ising</code> you can write <code>Params</code>); an alias is exported with the interface and expanded in the importer.</li>
 </ul>
@@ -3487,7 +3487,7 @@ Dev = { path = &quot;../dev&quot;, package = &quot;apich/dev&quot;, version = &q
 <li><strong>At most one version per compatibility series of each package.</strong> The series is the major version for <code>&gt;=1.0</code> (<code>1.x</code>), <code>0.y</code> for <code>0.y</code>, and <code>0.0.z</code> for <code>0.0.z</code>. So <code>1.4</code> and <code>1.9</code> never appear together, while <code>1.x</code> and <code>2.x</code> can coexist with distinct nominal types (§7.3). Coexistence needs the two edges to use <strong>different import roots</strong>; the program-wide import-root table still maps one root name to one package, otherwise <code>E0606</code> (the message names the two contending versions).</li>
 <li>A <strong>locked</strong> version is preferred; otherwise the <strong>highest</strong> compatible version is chosen. A <code>yanked</code> version can be selected only if the lock file already contains it.</li>
 <li>The result does not depend on index iteration order; when unsatisfiable, the explanation is derivation-style: which requirement could not be met, which candidates were tried and why each failed.</li>
-<li>The implementation is a backtracking solver with conflict-directed backjumping (not PubGrub, because one requirement can be satisfied by several series).</li>
+<li>The implementation uses conflict-directed backjumping. It examines the requirement with the fewest selectable versions first, with pending order breaking ties.</li>
 </ol>
 <p>The index <code>deps</code> of a registry package records only <code>package</code>, <code>req</code> and, when it differs from the default import root, <code>import</code>.</p>
 <h3 id="07-modules--752-lock-file">7.5.2 Lock file</h3>
@@ -5403,7 +5403,7 @@ aevia --version</code></pre>
 <h3 id="09-runtime--9113-per-module-disk-cache-aevi">9.11.3 Per-module disk cache (<code>.aevi</code>)</h3>
 <p>One file per checked module, at <code>.aevia/cache/modules/&lt;module path&gt;-&lt;16 hex digits of the key&gt;.aevi</code> beside the entry; standard library modules are cached too, while the kernel namespace generated on the fly from the RSSN manifest and check results containing errors are not. File layout: magic <code>AEVI</code>, format version (<code>FORMAT_VERSION</code>, little-endian u32), a 128-bit key, the body length and an FNV-1a checksum, and the body. The body uses native bincode-next 3.2 encoding with deterministic ordering and a schema fingerprint. It contains the entry's <code>FileId</code>, the interface digest, diagnostics and the complete <code>CheckedModule</code>. Writes go to a temporary file and are renamed; a missing, truncated, checksum-failing or key- or version-mismatched file is a silent miss and is overwritten; at most 4 revisions per module name are kept.</p>
 <ul>
-<li>The <strong>key</strong> is a stable 128-bit hash (two-lane FNV-1a, not <code>DefaultHasher</code>) of: the module source, <code>FileId</code>, the module path and the nominal identity the loader gives (including package origin), import bindings, the <strong>interface digest of every module in the dependency closure</strong>, the check options (capability set) and the compiler identity (<code>aevia-core</code> version, <code>FORMAT_VERSION</code>, the RSSN manifest hash, the executable's size and modification time). In the interface digest every ADT is replaced by its symbolic definition, so it contains no <code>AdtId</code>. Hence an edit that leaves the interface unchanged re-checks only the edited module, an interface change re-checks all dependants, and a change of capability set, import bindings or compiler build is a miss.</li>
+<li>The <strong>key</strong> is a stable 128-bit hash (two-lane FNV-1a, not <code>DefaultHasher</code>) of: the module source, <code>FileId</code>, the module path and the nominal identity the loader gives (including package origin), import bindings, the resolved origin of each re-export declaration, the <strong>interface digest of every module in the dependency closure</strong>, the check options (capability set) and the compiler identity (<code>aevia-core</code> version, <code>FORMAT_VERSION</code>, the RSSN manifest hash, the executable's size and modification time). In the interface digest every ADT is replaced by its symbolic definition, so it contains no <code>AdtId</code>. Hence an edit that leaves the interface unchanged re-checks only the edited module, an interface change re-checks all dependants, and a change of capability set, import bindings or compiler build is a miss.</li>
 <li><strong><code>AdtId</code> does not enter the file (§7.3).</strong> On encoding, each <code>AdtId</code> that occurs gets an in-file index and the ADT table records its full definition (<code>AdtKey</code> = module path + name + declaration schema, parameters, parameter kinds, constructors and field types, with cycles expressed by index); the reserved <code>Option</code>/<code>Result</code>/<code>Ordering</code> (0/1/2) are written as is. On decoding, the ADT table is first <strong>re-interned</strong> into this process's registry (a complete type with the same <code>AdtKey</code> reuses its <code>AdtId</code>, otherwise one is created; host and opaque types are <code>intern</code>ed by name) and only then is the body decoded.</li>
 <li>An entry is reused only under the same <code>FileId</code>, which is in both the key and the file. <code>LoadStats</code> gains <code>disk_hits</code> and <code>disk_writes</code>; the entry points are <code>driver::load_with_disk_cache</code> and <code>driver::load_incremental_with_disk_cache</code> (<code>DiskCache::beside(entry)</code>).</li>
 </ul>
@@ -7056,9 +7056,8 @@ block_stmt   ::= let_decl | fn_decl</code></pre>
 module_decl    ::= &quot;module&quot; module_path NEWLINE
 module_path    ::= UIDENT { &quot;.&quot; UIDENT }
 
-import_decl    ::= &quot;import&quot; module_path [ &quot;as&quot; UIDENT ]
-                   [ &quot;{&quot; name_list &quot;}&quot; ] NEWLINE
-                 | &quot;open&quot; module_path [ &quot;{&quot; name_list &quot;}&quot; ] NEWLINE
+import_decl    ::= [ &quot;export&quot; | &quot;pub&quot; ] ( &quot;import&quot; | &quot;open&quot; ) module_path
+                   [ &quot;as&quot; UIDENT ] [ &quot;{&quot; name_list &quot;}&quot; ] NEWLINE
 name_list      ::= name { &quot;,&quot; name }
 name           ::= IDENT | UIDENT
 
