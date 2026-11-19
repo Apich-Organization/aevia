@@ -27,3 +27,7 @@ Run `aevia check fall.aev` to check it without starting `main`. Then run `aevia 
 A runnable block is a complete program. Browser runs can print results and diagnostics with bounded execution and no file or network access. Use the CLI for import trees, input files, and long-running computations. The single-page and downloadable editions contain the same lessons. Save each runnable example as its own file when working offline.
 
 Next, learn how Aevia represents a calculation in [Values and functions](02-values-and-functions.md).
+
+## Check your understanding
+
+Save the same source you run in the browser and compare the two results. Use `aevia check` first after editing. If the checker reports a span, fix the first diagnostic and rerun before chasing later messages. If checking succeeds and running fails, change the input for a second run to distinguish a runtime domain error from a command-line mistake. Try one edit that produces a type error and one edit that only changes the result.

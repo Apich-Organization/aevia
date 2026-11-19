@@ -81,6 +81,12 @@ Compose and Quadlet mount these directories read-only. The registry polls for ch
 
 Both manual editions use matching chapter filenames, each with an H1 title and a chapter body. `/book/download` and `/architecture/download` provide standalone HTML in the requested language. Compiler-rendered documentation for published packages is stored in PostgreSQL and built from the signed archive. `AEVIA_DOCS_ENABLED=false` skips package documentation for new releases.
 
+## Verify public discovery
+
+Set `AEVIA_BASE_URL` to the public HTTPS origin before publishing links. Fetch `/sitemap.xml` and check that public chapter URLs include the language parameter. Inspect the `Link` headers of a chapter to check its canonical URL and translated alternatives. `/llms.txt?lang=en` links to chapter Markdown and the generated catalog at `/stdlib/catalog.json`. A site with local Markdown-only stdlib files serves the rendered modules and omits the catalog.
+
+Stage related files together and rotate the mount's directory entries atomically. Keep each edition intact until it has been loaded. To observe recovery, deploy an invalid bundle on a staging instance, confirm that the previous text and catalog remain available, and replace it with a valid bundle. For hot-swapped documents use read-only directory mounts so both renames and file changes are visible to the registry.
+
 ## Enable book execution
 
 Run `aevia-playground` on a dedicated Linux host or dedicated rootless Podman account with cgroup v2 and a subordinate UID/GID range. Build or install the Linux `aevia` executable for that host architecture. From the checkout root, build the worker and a local image containing the matching CLI.

@@ -25,3 +25,21 @@ A versioned release begins when a matching `vMAJOR.MINOR.PATCH` tag is pushed. A
 Nightly builds run on the repository's default branch and publish a new immutable prerelease under `nightly-YYYY-MM-DD` in UTC. Each dated tag is used once. Nightly runs do not publish to crates.io or update the registry container. Aevia pins the RSSN checkout to an exact commit. For versioned publication the RSSN tag must match Aevia's locked RSSN version. A nightly uses the configured `RSSN_REF` or the RSSN `v0.3` branch, and still checks its package version against the lockfile.
 
 The installers match the Aevia archive name to the Rust target triple, using ZIP on Windows and tar.gz on Linux and macOS. They verify the SHA-256 sidecar and the immutable release attestation before passing anything to the toolchain manager. Managed executables keep each installed tag in its own directory and select all three tools through one active version. The `stable` selector follows the latest published stable release, `nightly` follows the newest dated build for the target, and an explicit version stays pinned.
+
+## Artifact lineage
+
+~~~text
+source commit + lockfiles + pinned kernel
+    ├→ lint, Rust tests, PostgreSQL and portable C/C++ contracts
+    ├→ generated references and executable examples
+    ├→ editor protocol tests → verified editor extension packages
+    └→ native matrix → runtime probes → archives and SHA-256
+                         ↓ all required gates succeed
+                 versioned draft or dated nightly
+~~~
+
+Default and all-feature language jobs have distinct cache keys. Platform tests can require real database and signing fixtures. RSSN exercises native numerical code and the software Vulkan path on Linux. Each C/C++ smoke runs with the platform linker and ABI. These executable boundaries complement reference values, metamorphic tests and checked error contracts.
+
+The manual checker pairs chapter sources, assembles multi-file examples and invokes the toolchain. Standard-library gates compare generated source, rendered declarations and the reference used by the site. LSP and DAP checks drive real protocol processes. Release packaging consumes the editor builds that passed CI. It also probes native toolchain archives and validates names and sidecars against the installer contract.
+
+A failed release gate identifies the producer to examine. Check registration and generator tables for kernel contract diffs, CLI rendering and source comments for reference diffs, and the target triple and archive contents for packaging failures. Hosted release jobs check tag identity and existing releases before upload. A later release uses its own immutable tag, and the installer can keep and run previous published versions alongside it.

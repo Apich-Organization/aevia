@@ -33,6 +33,8 @@ aevia run examples/kinematics.aev
 
 用 `aevia docs --section book --lang zh --open` 打开在线教程，添加 `--download` 获取独立 HTML 的地址。用 `aevia doc --stdlib --lang zh` 生成中文标准库参考。`aevia <command> --help` 说明命令及其选项。
 
+文本客户端可从[文档索引](https://aevia.apich.org/llms.txt?lang=zh)读取本地化 Markdown 章节和生成的标准库目录。
+
 ## 使用包
 
 ```console
@@ -83,7 +85,7 @@ cargo build --locked -p aevia-cli
 cargo build --locked --manifest-path platform/Cargo.toml -p aevia-pkg
 ```
 
-平台有独立 Cargo 工作区和[部署指南](platform/docs/DEPLOY.md)。语言工作区使用 `cargo test --locked --workspace` 验证。定向检查时选定所改 crate 或特定测试目标。`cargo +nightly fmt --all --check` 检查语言工作区的格式。
+平台有独立 Cargo 工作区和[部署指南](platform/docs/DEPLOY.zh.md)。语言工作区使用 `cargo test --locked --workspace` 验证。定向检查时选定所改 crate 或特定测试目标。`cargo +nightly fmt --all --check` 检查语言工作区的格式。
 
 使用 `python3 tools/bundle_spec.py` 与 Pandoc 生成单页规范。使用 `aevia-stdlib-gen` 生成并检查标准库源码。`aevia doc --stdlib --json` 生成平台的双语标准库参考。添加 `--lang zh` 可以输出中文 Markdown 页面。
 

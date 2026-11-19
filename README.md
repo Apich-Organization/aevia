@@ -33,6 +33,8 @@ The model compares an exact expression for fall time with its floating-point app
 
 Use `aevia docs --section book --open` to open the hosted manual, or add `--download` to resolve the standalone HTML. `aevia <command> --help` describes a command and its options.
 
+For text clients, the [documentation index](https://aevia.apich.org/llms.txt) links to localized Markdown chapters and the generated standard-library catalog.
+
 ## Work with packages
 
 ```console

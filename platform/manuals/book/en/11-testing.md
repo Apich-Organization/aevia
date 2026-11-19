@@ -28,3 +28,7 @@ A `##` documentation comment supports fenced Aevia examples. `aevia test --doc` 
 ## Use a consistent error scale
 
 Choose a tolerance from the problem and report it in the same dimension as the residual. A relative test works away from zero. Near zero, choose a meaningful absolute scale. For algorithms with branches, include a representative case for each branch and a value on either side of its boundary. When work is parallel, test the output with one worker and several workers.
+
+## Check your understanding
+
+For a numerical regression, keep an expected result obtained independently, such as a hand derivation or an exact solution. Exercise at least one boundary and one relation that should survive changes to representation. A dimension-specific tolerance states how much error is acceptable and guards against comparing an error to an unrelated unit.

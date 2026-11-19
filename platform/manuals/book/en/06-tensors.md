@@ -29,3 +29,7 @@ Use sparse representations for matrices with few nonzero entries, such as graph 
 ## Practice with an altered model
 
 Add a third sensor and write down the new shape before changing the literal. Then test whether one row sums to one, the invariant that makes its prediction a weighted average. Look up axis-specific reductions before applying a global reduction to a multidimensional dataset.
+
+## Check your understanding
+
+Label each axis with its meaning and units where applicable. Calculate one row by hand before comparing the full result. Swap the two columns without changing the readings and explain the changed result. The shape checker verifies extents, while the hand calculation verifies which sensor each column represents. [Solve and check a residual](20-solve-with-a-residual.md)

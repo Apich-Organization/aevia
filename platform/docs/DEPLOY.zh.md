@@ -81,6 +81,12 @@ Compose 和 Quadlet 以只读方式挂载下列目录。注册中心定期检查
 
 手册的两个版本使用相同的章节文件名，每篇以一级标题开头并包含正文。`/book/download` 和 `/architecture/download` 提供对应语言的独立 HTML。已发布包的 API 文档由编译器根据签名归档生成，存入 PostgreSQL。`AEVIA_DOCS_ENABLED=false` 使后续发布跳过包文档生成。
 
+## 验证公开发现入口
+
+先将 `AEVIA_BASE_URL` 设为公共 HTTPS 源，再发布链接。读取 `/sitemap.xml`，核对章节 URL 的语言参数。检查章节的 `Link` 响应头，核对规范 URL 和译本链接。`/llms.txt?lang=zh` 提供 Markdown 章节及 `/stdlib/catalog.json`。只挂载 Markdown 标准库时提供渲染页面，并省略 JSON 目录。
+
+将关联文件一起准备，通过目录内原子重命名进行切换。加载完成前保留各语言的完整版本。在预演部署中换入损坏内容，确认原文和目录仍可读，再换回有效内容。对热更新文档使用只读目录挂载，使重命名和文件更改都能被注册中心观察到。
+
 ## 启用教程运行功能
 
 在专用 Linux 主机或专用无根 Podman 账户下运行 `aevia-playground`。环境需要 cgroup v2，并为账户分配从属 UID 和 GID 范围。准备适用于该主机架构的 Linux `aevia` 可执行文件。从仓库根目录构建工作进程及使用匹配 CLI 的镜像。

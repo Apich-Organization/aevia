@@ -51,3 +51,7 @@ Move the three measurement times into a second tensor and check their difference
 Move the estimator and its test cases into `src/Cart.aev` in a package created with `aevia init`. Keep the report and file input in the entry module. Add a small input fixture with a documented expected result. A larger dataset should include sample identifiers and enough metadata to reconstruct the spacing. Add a documentation example and run `aevia test --doc src` before sharing the package.
 
 These steps give you a pattern for a larger project: express physical constraints at the boundary, keep the core pure, verify known cases, and report errors where the caller can act on them.
+
+## Check your understanding
+
+For uniform spacing, translate all three positions by the same distance and predict the result. Repeat after adding a constant velocity term to each sampled position. The second difference cancels both. Next add a known perturbation to the middle sample and calculate its effect on the estimate before running the model. These checks expose both the invariant and the sensitivity of the estimator.

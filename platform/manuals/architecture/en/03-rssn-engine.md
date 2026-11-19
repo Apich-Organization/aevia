@@ -19,3 +19,37 @@ Budget and cancellation are distinct. Budget limits the work of a request. A can
 Typed kernels cover dense and sparse linear algebra, quadrature, ODE/SDE/PDE integration, statistics, FFT and simulation. Direct algorithms own their validation and result types. Their term rules and typed ABI adapters translate arguments and outcomes at the boundary.
 
 Compiled evaluation can use a tape with scalar, batched, automatic-differentiation or interval execution. LIR provides typed registers, branches, calls and a fallback exit. Cranelift compiles eligible work behind the JIT feature. The optional device backend adds an explicit buffer and launch model. Numeric algorithms that need reproducibility should treat precision, reduction order and backend choice as part of the experiment.
+
+## The two identities in the arena
+
+A `NodeId` identifies a concrete term. The structural hash table interns an operator, payload and ordered concrete children so repeated subtrees share storage. A `ClassId` identifies an equivalence class. Union-find finds its canonical representative, and a linked member ring permits class merges without rewriting all concrete nodes. The congruence table compares operators over canonical child classes. A use list records parents affected by a merge. Rebuilding those parents can identify more congruent nodes while preserving existing term handles.
+
+```text
+Term creation → structural intern → concrete NodeId
+                                    ↓
+Rewrite or kernel proves equality → union classes → dirty parent use lists
+                                          ↑                   ↓
+                                   congruent parents ← rebuild canonical children
+                                          ↓
+                              cost extraction → concrete result
+```
+
+Facts travel with classes. Numeric witnesses, sort, dimensional and structural facts provide evidence to rule guards and kernels. A rule guard is part of the identity's domain. Missing evidence can keep the request symbolic. A rejected numerical domain is reported through the typed call boundary rather than passed to an algorithm with invalid inputs.
+
+## Why the scheduler has stages
+
+The scheduler starts from requested roots and limits search to reachable classes. Reduce tiers handle operators such as differentiation before normalization. Tree windows perform destructive simplifying passes inside small expressions. Exploratory identities can grow the graph, so they run behind budgets and rule back-off. A goal can stop a run early when extraction has a closed form or numeric witness. Matching a frozen snapshot can use parallel workers. Merging matches, performing unions and repairing congruence take place on the graph's owning thread in stable order.
+
+The concrete expression and the equivalence class have different lifetimes. Extraction compares candidate costs over reachable classes and returns a concrete representative. A fixed-point stop describes what this rule set and budget reached. It is not a claim that every possible equivalent form has been enumerated. For numerical requests, the report separates the phase's result, stopping condition and available error or diagnostic information.
+
+## Dispatch among symbolic, native and compiled paths
+
+| Boundary | State and use |
+|---|---|
+| `src/api/mod.rs` and `src/graph/schedule.rs` | Session configuration, duplicated computation graphs, rewrite budgets and results |
+| `src/graph/store.rs`, `facts.rs`, `extract.rs` | Structural and congruence stores, analysis facts and representative selection |
+| `src/rules` | Term definitions, guarded identities and typed bridges to numerical methods |
+| `src/kernels` and `src/sim` | Direct algorithms with sizes, tolerances, domain checks and result types |
+| `src/backend/tape`, `lir.rs`, `lir_jit.rs`, `device` | Scalar/batched tapes, register code, native entry points and launch buffers |
+
+An integrator that needs adaptive time stepping owns its work arrays and termination criteria. A graph routine may call it through a typed adapter. Compiled scalar code takes a separate register-and-buffer path. Choosing that path can change supported precision or execution resources. The backend feature and capability predicates therefore belong in a reproducible numerical run. [Call and ownership contracts](04-abi-and-persistence.md)

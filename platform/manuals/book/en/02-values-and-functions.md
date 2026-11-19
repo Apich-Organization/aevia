@@ -39,3 +39,7 @@ fn main(): IO Unit = do
 Try `:type adjusted` in the REPL after entering the function. Then call it with a scalar. The error reports the argument boundary, rather than attempting to reinterpret the number as a one-element tensor. In a checked file, add narrow signatures at model boundaries and allow the checker to infer intermediate bindings.
 
 For practice, add a `ratio` field to the forecasting record and write a function that produces both the seventh-day prediction and the ratio to the initial value. Use [Dimensions and units](03-dimensions-and-units.md) when the forecast carries a physical unit.
+
+## Check your understanding
+
+Give a pure function a name, bind two inputs, and call it twice. Add a local binding with the same name in an inner scope and predict which value the function observes. Then give the function an explicit parameter for the value instead of capturing it. Use the explicit parameter when callers need to vary it or when the inputs read more clearly at the call site.

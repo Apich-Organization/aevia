@@ -28,3 +28,7 @@ When differentiating with units, the result has the output dimension divided by 
 ## Change the experiment
 
 Replace the constant acceleration term with a cubic term representing a constant jerk. Choose its units to make position a length again. Predict the derivative's dimensions and its value at 0 s before running the modified example.
+
+## Check your understanding
+
+Choose a point away from singularities and evaluate the symbolic derivative there. Approximate the same derivative with a centered difference using the original function. Halve the step and compare again. Agreement checks your model in that neighborhood. Domain assumptions and a successful evaluation at one point have distinct roles in the symbolic calculation.

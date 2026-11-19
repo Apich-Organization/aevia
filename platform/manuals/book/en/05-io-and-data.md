@@ -26,3 +26,9 @@ The execution capability for local file actions is `fs`. To try a script with on
 Return a structured result from the model layer, such as `{ value = estimate, samples = n }`. Present it with `println` in `main`, or produce a dataset with the standard library. When a pipeline evaluates many inputs, preserve the originating label for each error. A message that identifies the invalid file or column is more actionable than a general failure.
 
 The exercise is to write a pure validator for a record containing a station label and a reading. Feed it three explicit examples before connecting any file input. See [Checking scientific results](11-testing.md) for test declarations.
+
+## Check your understanding
+
+Make a small input fixture with a known valid reading, a missing value, and one invalid number. Record the expected result for each row before reading the file. Apply the same pure validation to the in-memory fixture and to the parsed rows. That gives you separate tests for file decoding and policy. [Validate external input](19-validate-external-input.md)
+
+[Follow a complete CSV analysis](22-import-a-measurement-file.md).

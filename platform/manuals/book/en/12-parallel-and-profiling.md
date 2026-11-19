@@ -27,3 +27,7 @@ An optimized build of the toolchain and the CLI option `--release` address diffe
 ## Explore further
 
 Increase the number of inputs and the cost per input separately. Record where the parallel version becomes faster, and whether memory consumption increases. For tasks that perform IO, inspect the semantics of `spawn` and `await` and keep the side effects independent.
+
+## Check your understanding
+
+Run the same fixed task with two worker counts and save the results before measuring. Then increase the task size while keeping the model constant. Compare where parallel execution starts to help, and record the workload and feature flags with the timing. [Reproducible parameter sweeps](21-sweep-and-compare.md)

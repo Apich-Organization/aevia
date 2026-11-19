@@ -33,3 +33,7 @@ Use a local path dependency while two packages evolve together. Keep `aevia.lock
 ## Prepare to share
 
 Describe each public parameter in its physical terms, explain failure conditions, and include a small example with an expected result. `aevia publish --dry-run` prepares and validates a package without uploading it. Registry publishing uses a registered signing key. The [registry documentation](/docs?lang=en) shows the published versions and their generated API pages.
+
+## Check your understanding
+
+Change the imported function body but keep its public signature. Confirm that callers still check. Next change a public parameter type, and use the call-site diagnostic to find every affected consumer. Run `aevia check --locked` after restoring the intended dependency state, before distributing a reproducible package checkout.

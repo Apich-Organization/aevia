@@ -17,3 +17,33 @@ Aevia's checked-module cache uses bincode-next 3.2 native traits and schema fing
 ## Compatibility checks
 
 A wire change must account for data produced by an older binary and for language bindings built from an older manifest. Contract tests exercise deterministic hashes and round trips. Generated adapters are compared to source declarations and replayed signatures. Performance tests should measure encode, decode, and total workload separately so allocation or validation costs remain visible.
+
+## Operation identity travels with the call
+
+~~~text
+Registered operators + signatures + units → sorted manifest → BLAKE3 identity
+                                                   ↓
+Source call → checked overload → typed value conversion → RSSN call
+                                                             ↓
+                                                value, witness or diagnostic
+~~~
+
+A named call supports dynamic dispatch. An `OpKey` pins the expected signature so a caller cannot silently select a different overload with the same spelling. The adapter lowers arguments and validates retrieved values against the declared representation, shape and dimensions. A callback handle is meaningful through its active callback bank. A term or native-object handle is scoped to the session that registered it.
+
+| Boundary | Ownership |
+|---|---|
+| Direct Rust API | Rust values and typed error results |
+| C interface | Opaque handles and byte buffers with matching release functions |
+| Shared library plugin | Versioned ABI and native binary messages. Machine code runs in the host process |
+| Source plugin | Traced symbolic definitions and rules under the caller's capability scope |
+| Package archive | Verification authenticates the publisher and the bytes named by the signed statement |
+
+A manifest hash identifies one installation of rule sets and operator tables. It makes changes observable to bindings and caches. It does not authenticate a shared library or represent the inputs to an individual experiment.
+
+## A cache hit step by step
+
+The driver hashes the source, resolved import bindings, capabilities and compiler identity, together with the digest of each dependency interface in the closure. The `.aevi` envelope carries a format version, key, length and body checksum. Native bincode-next encoding checks the body schema. Nominal declarations are stored with symbolic keys and are interned in the receiving process before the decoder resolves references. An entry with a truncated body or incompatible schema becomes a cache miss. A changed implementation can leave its public interface digest intact, allowing consumers to keep their checked results.
+
+## Source map
+
+In RSSN, follow `kernel/{manifest,signature,codec}.rs` for identity and encoding, then `kernel/{call,callback,native_objects}.rs` and `ffi/mod.rs` for call and ownership checks. Aevia uses `aevia-rssn/src/{codegen,kernel,value}.rs` and `aevia-types/src/rssn_resolve.rs` to connect these records to language types. `aevia-types/src/persist.rs` defines the persisted body. `aevia-core/src/disk_cache.rs` defines the file envelope and lookup identity. [Verification map](07-quality-and-delivery.md)

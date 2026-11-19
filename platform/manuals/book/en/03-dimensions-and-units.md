@@ -40,3 +40,7 @@ Expect approximately 298.15 for the absolute temperature in kelvin and a differe
 Use exact expressions for known rational factors and unit identities. Give numeric solver interfaces floating-point values with the correct dimension. For functions such as `exp`, the argument must be dimensionless. In a decay model, write `exp(-t / lifetime)` with `t` and `lifetime` both in time units.
 
 Try to call `pace` with pressure and time. Keep the diagnostic as a reminder of the dimensional contract. Then modify the temperature example to report the difference between 15 °C and 20 °C. Consult [Tensors and linear algebra](06-tensors.md) for arrays of dimensioned readings.
+
+## Check your understanding
+
+Compare `100 cm` with `1 m`, and write down what should agree before evaluating both. Repeat with the physical expression `2.0 m / 4.0 s` and a deliberately mismatched input. The first pair checks conversion, while the second checks compatibility. Keep dimensions on the public function, and choose the display unit where you report the result.

@@ -2,18 +2,34 @@
 
 The Axum server serves an API for clients and HTML for browsers. PostgreSQL stores the catalogue, identities and append-only transparency records. A separate archive store holds package contents identified by version and checksum. Leptos builds HTML from view models and the language docs renderer turns public source comments into Markdown and sanitized HTML.
 
-## Publish a release
+## The publication transaction
 
-A client compresses the package and requests a challenge for its name, version and checksum. It signs precisely the statement returned by the server. The server consumes a short-lived nonce once, verifies the statement and signature against the publisher's registered key, and confirms that the package metadata matches the archive. Authorizations are scoped to the named package owner. OpenPGP and supported SSH signatures are verified against the same canonical statement format.
+~~~text
+name + version + SHA-256 → challenge → canonical statement ← signing key
+    signed statement + archive
+        → verify and consume nonce → check owner, archive and dependencies
+        → DB transaction → insert catalogue rows and pending docs state
+        → write durable archive → append transparency record → commit
+                                                             → wake docs worker
+~~~
 
-The catalogue row, index information and transparency-log record describe the same release. Downloads check content identity using the published checksum. Yanking is a version-state change. Consumers retain the information needed to verify a version resolved earlier. Package archive extraction and validation enforce structural limits before documentation is generated.
+The authorization checks the signing key, publisher and package owner, including explicitly authorized organization ownership. Archive structure and size are checked before source parsing. The database transaction commits the version, relations and transparency entry only after archive storage succeeds. A transaction failure can leave an unreferenced digest, which a retry with identical bytes can reuse. A consumed challenge cannot be replayed. Downloads serve the recorded checksum and implement conditional requests and HEAD. Counts are batched separately from package publication.
 
-## Serve different sources as one documentation site
+The documentation worker claims pending versions within a database transaction. It verifies the durable archive, extracts public declarations and sanitizes rendered Markdown in a bounded blocking task. The generated pages and build result commit together. An error is recorded for the affected version and other jobs can proceed. An interrupted database transaction releases its pending claim.
 
-Package pages derive from archive source and persisted build results. The specification and manuals derive from mounted bilingual sources. The standard-library reference is rendered from the CLI's bundle, which carries modules and public declarations from the same embedded sources that users import. Operator implementation documentation belongs to the kernel catalog.
+## Public reading and private execution
 
-The site swaps in a freshly built document snapshot after a successful reload. In-flight requests can finish reading an earlier snapshot. The standalone HTML downloads combine the same chapters without execution controls.
+The first-party Markdown representations and the JSON standard-library catalog come from the same validated snapshots as the public HTML. Readers can discover them through `/llms.txt` or HTML response links. The sitemap lists published chapters and translations. Package data has independent JSON search, resolution and index routes. These endpoints publish data and require no execution permissions.
 
-## Run short book programs
+~~~text
+browser POST /api/v1/playground/run
+    → origin, rate and size checks → authenticated private worker
+    → rootless Podman, no network, read-only image, small writable /work
+    → capped output, timeout or process exit → text in browser
+~~~
 
-When configured, the web server delegates an example to the private, bounded execution service. The worker invokes an Aevia toolchain in a separate Podman container, with a read-only image, no network and explicit CPU, memory, process and wall-time limits. The web worker returns stdout, stderr and status. It receives no production database credentials. The interactive edition can be served without that service and the static edition remains available.
+The registry has no container-control socket. The worker accepts source, not a host path, and starts a fixed entry point in a locally available image. A user namespace, capability dropping and CPU, memory, process and output limits constrain the child independently of language capabilities.
+
+## Source map
+
+Start in `aevia-registry-server/src/api/publish.rs`, then follow the signed format and archive rules in `aevia-registry-core/src/{statement,tarball}.rs`. The catalogue, log and queue are implemented by `aevia-registry-db`, `docs_queue.rs` and `storage.rs`. The request boundaries live in `http.rs`, `limits.rs`, `playground.rs` and `sandbox.rs`. `seo.rs` describes data discovery and canonical links. [Deployment lifecycle](06-operations.md)

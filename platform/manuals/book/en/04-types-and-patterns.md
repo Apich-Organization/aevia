@@ -34,3 +34,7 @@ A useful initial policy is to surface a failure in a `match`. Choosing a replace
 ## Add a regression case
 
 Add an `OutOfRange` variant for measurements over 2 m, then update `describe` and add a `test` that exercises the boundary. Check a value just below and just above the limit. Continue with [IO, data and errors](05-io-and-data.md) for returning and reporting failures during file processing.
+
+## Check your understanding
+
+Add a variant case for a missing sensor. Update a match by handling the new case explicitly, then test one value of each case. A catch-all is useful when the remaining cases have a shared policy. For a model with distinct failure decisions, give each case its own branch so a later addition has an obvious place to be handled.

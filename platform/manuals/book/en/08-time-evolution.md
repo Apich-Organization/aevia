@@ -28,3 +28,7 @@ Browse [Ode](/stdlib/Ode?lang=en) for ordinary differential equations. The repos
 ## Decide whether a result is adequate
 
 Compare the end time and endpoint to expectations. Repeat with tighter tolerances and observe how the answer and the accepted step count change. Check constraints at several points where the model predicts a conservation law. A smaller requested tolerance does not correct a mistaken equation or a wrong initial condition.
+
+## Check your understanding
+
+Use the reference solution to track one final-time error. Hold the time interval fixed while making the solver tolerance stricter or reducing the step, depending on the method. Compare the final-state error and work separately. A method may terminate early at an event or return a convergence diagnostic. Check the result before taking the last time sample.

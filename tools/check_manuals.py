@@ -14,10 +14,28 @@ REGISTRY_DOCS = ROOT / "platform/docs"
 LANGUAGES = ("en", "zh")
 OPEN_FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 PROJECT_FILE = re.compile(r"aevia,file=((?:[a-zA-Z][a-zA-Z0-9_]*/)*[a-zA-Z][a-zA-Z0-9_]*\.aev)")
+DRAFT_MARKER = re.compile(
+    r"^\s*(?:>\s*)?(?:#{1,6}\s*)?(?:(?:status|wip|todo)\s*[:：]|(?:状态|待办)\s*[:：]|(?:wip|todo)\s*$)",
+    re.IGNORECASE,
+)
+CHAPTER_LINK = re.compile(r"\]\(\.?/?([0-9]{2}-[a-z0-9-]+)\.md(?:#[^ )]+)?\)")
 API_ROUTE = re.compile(r"`((?:(?:GET|POST) )?/[^`\s]+)`")
 API_WIRE_EXAMPLE = re.compile(
     r"^```(?:json\n|\n(?=aevia-(?:publish|yank)-v\d+\n))(.*?)^```$", re.M | re.S
 )
+
+
+def verify_finished_prose(path: Path, text: str) -> None:
+    fence = ""
+    for number, line in enumerate(text.splitlines(), start=1):
+        if fence:
+            if re.fullmatch(re.escape(fence[0]) + "{" + str(len(fence)) + ",} *", line):
+                fence = ""
+        elif match := OPEN_FENCE.fullmatch(line):
+            fence = match[1]
+        elif DRAFT_MARKER.match(line):
+            raise ValueError(f"{path}:{number}: describe the behavior or requirement directly")
+
 
 
 def chapters(root: Path) -> dict[str, str]:
@@ -28,9 +46,14 @@ def chapters(root: Path) -> dict[str, str]:
             raise ValueError(f"{path}: chapter needs a numbered URL slug")
         if not text.splitlines() or not text.startswith("# "):
             raise ValueError(f"{path}: chapter must begin with a title")
+        verify_finished_prose(path, text)
         result[path.stem] = text
     if not result:
         raise ValueError(f"{root}: no chapters")
+    for slug, text in result.items():
+        for target in CHAPTER_LINK.findall(text):
+            if target not in result:
+                raise ValueError(f"{root / slug}: missing chapter link {target}")
     return result
 
 
@@ -105,6 +128,8 @@ def main() -> None:
     parser.add_argument("--aevia", type=Path, help="path to a built aevia executable")
     args = parser.parse_args()
     verify_registry_api(REGISTRY_DOCS)
+    for path in sorted((ROOT / "spec").rglob("*.md")) + sorted(REGISTRY_DOCS.glob("*.md")):
+        verify_finished_prose(path, path.read_text(encoding="utf-8"))
     total = 0
     for name in ("book", "architecture"):
         en, zh = (chapters(MANUALS / name / language) for language in LANGUAGES)

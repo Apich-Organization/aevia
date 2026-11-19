@@ -24,3 +24,7 @@ A stated instrumental uncertainty describes a measurement process. A standard de
 ## Check small and extreme samples
 
 Try a one-element tensor, an even-length tensor, and a tensor with all values equal. Compare empty-input behavior against the individual operation's documentation. Values near a rejection threshold should be tested on both sides. For randomized work, record seeds and sample sizes together with the method.
+
+## Check your understanding
+
+Add a known constant offset to every reading. Predict how the mean and spread change, and use that relation as a test. Then add one extreme observation and compare a median with the mean. Keep a missing-data policy alongside any aggregation so readers can reproduce the population that contributed to the result.
